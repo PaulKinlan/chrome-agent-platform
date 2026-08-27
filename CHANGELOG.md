@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.324] — 2026-08-27
+- Internal: the task tracker now shows only live work — 13 finished items were still sitting in it looking unfinished (five had actually shipped and never got closed), and the known-issues file had become a second copy of the same list
+
 ## [0.2.323] — 2026-08-27
 - Tracker bookkeeping: recorded the exact public commits for the work pushed today
 

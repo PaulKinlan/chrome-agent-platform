@@ -38,6 +38,8 @@ const REQUIRED = [
 // them — a rule the fleet had already voted against in practice. TASKS.md
 // § Entry schema states this explicitly.
 
+// MERGED is legacy (collapsed into DONE on 2026-08-28, see AGENTS.md) — still
+// accepted so the archived entries in TASKS-DONE.md validate. New entries use DONE.
 const STATUSES = new Set(["OPEN", "IN_REVIEW", "MERGED", "DONE", "BLOCKED", "ABANDONED"]);
 const PRIORITIES = new Set(["P0", "P1", "P2", "P3"]);
 

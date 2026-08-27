@@ -25,7 +25,7 @@ there. The reviewer agents check against it.
 5. Push only after re-review clears.
 
 ## Hard rules
-- **TASKS.md is the source of truth for task state — update it after EVERY completion.** Whenever a task lands, is reviewed, changes state, or a bug is captured, update its TASKS.md entry in the SAME commit cycle (status, Shipping `origin/main@<sha>`, a dated History line). A completion that does not update TASKS.md is not complete. Mark landed work MERGED with the exact public commit; never leave landed work marked OPEN/IN_REVIEW.
+- **TASKS.md is the source of truth for task state — update it after EVERY completion.** Whenever a task lands, is reviewed, changes state, or a bug is captured, update its TASKS.md entry in the SAME commit cycle (status, Shipping `origin/main@<sha>`, a dated History line). A completion that does not update TASKS.md is not complete. Mark landed work DONE with the exact public commit and archive it to `TASKS-DONE.md` at triage; never leave landed work marked OPEN/IN_REVIEW.
 - Never accept "it serves" as "it works" — drive the real behavior in a browser
   (CDP) with screenshots as evidence.
 - Real libraries, not patterns (agent-do is imported, not reimplemented).
@@ -137,8 +137,11 @@ alone. Two behaviours the review calls out specifically:
 ## Repository-local task recovery (2026-08-19)
 
 Root [`TASKS.md`](TASKS.md) is the durable, public-safe product task record.
-Root [`KNOWN-ISSUES.md`](KNOWN-ISSUES.md) is the canonical review/system issue
-record; `docs/KNOWN-ISSUES.md` remains a compatibility link.
+Root [`KNOWN-ISSUES.md`](KNOWN-ISSUES.md) is a THIN VIEW over `TASKS.md` — gate state plus
+the few open findings that are not obvious from a task title. `TASKS.md` is the authority
+for every open item; keeping two trackers is what let both drift. Twenty-seven rounds of
+historical review findings are archived in `docs/KNOWN-ISSUES-ARCHIVE.md` (do not add to
+it).
 
 - Create a stable `CAP-FB-YYYYMMDD-SLUG-NN` entry when feedback arrives. Never
   rename, reuse, or delete an ID; archive the complete entry only after its
@@ -177,15 +180,20 @@ record; `docs/KNOWN-ISSUES.md` remains a compatibility link.
 
 ## Review and delivery lifecycle (Paul, 2026-08-21 — replaces the nine-state model)
 
-**`OPEN → IN_REVIEW → MERGED → DONE`**, with `BLOCKED` and `ABANDONED` as the two
-off-ramps. That is the whole lifecycle.
+**`OPEN → IN_REVIEW → DONE`**, with `BLOCKED` and `ABANDONED` as the two off-ramps.
+That is the whole lifecycle.
+
+**Merged is done (Paul, 2026-08-28).** `MERGED` and `DONE` were separate states whose only
+difference was a gate that is checked on every commit anyway. The split did nothing except
+leave finished work sitting in `TASKS.md` looking unfinished. Work on `origin/main` with the
+suite green is DONE, and DONE entries are moved to `TASKS-DONE.md` at triage. `TASKS.md`
+holds ONLY what is in progress or still to do. Legacy `MERGED` entries read as `DONE`.
 
 | State | Means | To leave it you need |
 |---|---|---|
-| `OPEN` | Not started, or being worked on. | A candidate commit and a reviewer. |
+| `OPEN` | Not started, or being worked on. | A candidate commit and a review pass. |
 | `IN_REVIEW` | A candidate exists and is under review — a fresh session on the diff where possible, an author review with the falsification gates otherwise. The `Review:` field says which. | A review verdict. A failed review stays `IN_REVIEW` with the findings recorded — it does not need its own state. |
-| `MERGED` | On `origin/main`. | The Chrome journey suite green at that tip. |
-| `DONE` | Merged **and** the journey suite green at that tip. Terminal. | — |
+| `DONE` | On `origin/main` with the journey suite green at that tip. Terminal — archived to `TASKS-DONE.md` at the next triage. | — |
 | `BLOCKED` | Stopped on something external. Records an owner, the reason, and one next action. | Resolution of the named blocker. |
 | `ABANDONED` | Will not be done. Records why. Terminal. | — |
 
@@ -196,7 +204,7 @@ bar. Paul reviews what landed when he wants to, not as a gate on every entry.
 
 Legacy entries written under the old model map as: `IN_PROGRESS`/`FIX_REQUESTED` → `OPEN`;
 `REVIEWING`/`REVIEW_PASSED`/`READY_FOR_BROWSER`/`INTEGRATING`/`GATED` → `IN_REVIEW`;
-`PUSHED` → `MERGED`; `CONFIRMED` → `DONE`. Existing entries are **not** rewritten — read
+`PUSHED`/`MERGED` → `DONE`; `CONFIRMED` → `DONE`. Existing entries are **not** rewritten — read
 them through this mapping.
 
 ### The rules that survive, and the ones that went

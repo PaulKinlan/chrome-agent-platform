@@ -191,15 +191,16 @@ This README is the overview. The document map, in precedence order:
 
 | Document | What it is authoritative for |
 |---|---|
-| **[TASKS.md](TASKS.md)** | **Task state.** The stable `CAP-FB-*` ID, its status, owner, evidence and history. The entry always wins over any summary of it. |
+| **[TASKS.md](TASKS.md)** | **Task state, and the only authority for it.** Holds ONLY what is in progress or still to do — merged is done, and done is archived to `TASKS-DONE.md` at triage. The entry always wins over any summary of it. |
 | **[PLAN.md](PLAN.md)** | The roadmap view — what has landed, what is next, and the current gate results. |
 | **[CHANGELOG.md](CHANGELOG.md)** | What shipped, in plain English, one line per release. |
-| **[KNOWN-ISSUES.md](KNOWN-ISSUES.md)** | Open review/system findings. |
+| **[KNOWN-ISSUES.md](KNOWN-ISSUES.md)** | Gate state and the few open findings not obvious from a task title. A thin view over TASKS.md, not a second tracker. |
 | **[docs/UI-FIXES-TRACKER.md](docs/UI-FIXES-TRACKER.md)** | UI-detail asks and their fix state. |
+| **[TASKS-DONE.md](TASKS-DONE.md)** | Completed work, archived at triage. |
 | **[docs/CONSTITUTION.md](docs/CONSTITUTION.md)** | The non-negotiable security/a11y/design/perf constraints. |
 | **[docs/DESIGN.md](docs/DESIGN.md)** + **[PRODUCT.md](PRODUCT.md)** | The visual system and the product's voice. |
 | **[REVIEW-2026-08-21.md](REVIEW-2026-08-21.md)** | The 2026-08-21 independent architectural review. Its *delivery* diagnosis has since been acted on (`0.2.105 → 0.2.319`); read it for the method, not for current status. |
 
-**Current gate status (2026-08-27, `0.2.319`):** build clean · unit **1779/0** ·
-Chrome journeys **127/127** · security suite **PASS**. The journey suite had been red at
-26/127 since `0.2.313`; the three causes are described at the top of [PLAN.md](PLAN.md).
+**Current gate status:** build clean · unit **1779/0** · Chrome journeys **127/127** ·
+security suite **PASS**. The journey suite had been red at 26/127 from `0.2.313` until
+`0.2.320`; the causes are at the top of [PLAN.md](PLAN.md).

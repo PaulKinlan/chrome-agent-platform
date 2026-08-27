@@ -70,8 +70,10 @@ was: landed commits per day had fallen 83 → 65 → 20 → 3 → 0 between 17 a
 stall is resolved; the ordering discipline it introduced (CAP-FB IDs in commit subjects,
 no `-vN+1` without a commit in `-vN`, durable worktrees) stands.
 
-**Lifecycle:** `OPEN → IN_REVIEW → MERGED → DONE` with `BLOCKED`/`ABANDONED` off-ramps.
-`DONE` = merged **and** the journey suite green at that tip; it does not require a
+**Lifecycle:** `OPEN → IN_REVIEW → DONE` with `BLOCKED`/`ABANDONED` off-ramps.
+**Merged is done** (Paul, 2026-08-28) — work on `origin/main` with the suite green is
+complete and is archived to `TASKS-DONE.md`, so `TASKS.md` holds only live work.
+`DONE` does not require a
 per-task owner interaction. Real-browser verification is retained unchanged; the
 different-model review requirement was replaced on 2026-08-27 by a labelled review plus
 mechanical falsification gates, because no second model is available and a rule satisfied

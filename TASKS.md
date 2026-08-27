@@ -49,28 +49,6 @@ and `scripts/check-tasks-baseline.json` must only ever shrink.
 ```markdown
 
 
-## [CAP-FB-20260825-USAGE-AUTHORITY-PROBE-FAIL-01] usage-authority.test.ts PROBE-2/4 failing on main (usage-store CAS subsystem)
-
-- Feedback: 2026-08-25 — discovered during independent review: `usage-authority.test.ts` PROBE-2 and PROBE-4 FAIL at exact base cde1166 AND at 7aaf8c6 (reproduced in clean worktrees). Pre-existing, NOT attributable to the persistence log-redesign (confirmed by two independent reviewers).
-- Updated: 2026-08-25 12:55 UTC
-- Status: MERGED
-- Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `7aaf8c6`
-- Candidate: —
-- Shipping: `origin/main@ced852d` (0.2.259)
-- Acceptance: usage-authority.test.ts PROBE-2/4 pass on main; the usage-store CAS subsystem's failing invariant identified and fixed (or the probe corrected if the expectation drifted); no other usage-authority probes regressed; full suite green.
-- Review: pending independent review
-- Gates: reproduce PROBE-2/4 on clean base; root-cause; fix + KAT; full suite green
-- Blockers: —
-- Next: reproduce PROBE-2/4 with verbose output, identify the failing usage-store CAS invariant
-- Recover: `deno test -A tests/usage-authority.test.ts`
-- History:
-  - 2026-08-25 13:2x UTC — LANDED at 0.2.259. Root cause: probe expectation DRIFT (store correct, untouched) — the shared mkRow fixture hardcoded timestamp 2026-08-18, which aged past the deliberate RETENTION_MS=7-day retention, so sanitizeRow correctly discarded every fixture row at write time (PROBE-2/4 failed; PROBE-1/5/7 were passing vacuously asserting absence). Fix test-only: mkRow uses fresh timestamps; new PROBE-FIXTURE-GUARD pins the deliberate retention drop (8-day row discarded, fresh row lands) so the class fails loudly next time. Review PASS (Gemini cd381a1b), 1577/1577. Full suite now green.
-
-  - 2026-08-25 12:55 UTC — captured from independent review evidence (k3 + Pro both reproduced on clean base).
 
 ## [CAP-FB-YYYYMMDD-SLUG-NN] Title
 - Feedback: YYYY-MM-DD — public-safe source and summary
@@ -182,7 +160,7 @@ On resume after a coordinator or worker loss:
 
 ## Open work queue
 
-Every task in this file that is not in a terminal state, most urgent first. **39 open** (regenerated 2026-08-27). The entry itself is always the authority; where it disagrees with this table, the entry wins.
+**This file holds only what is in progress or still to do — 33 entries.** Completed work is archived in [TASKS-DONE.md](TASKS-DONE.md) at triage; **merged is done** (Paul, 2026-08-28), so nothing sits in a terminal state here. Most urgent first (regenerated 2026-08-28). The entry itself is always the authority; where it disagrees with this table, the entry wins.
 
 Regenerate after any status change (this exact command reproduces the table below):
 
@@ -192,8 +170,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 | Priority | Status | Task | What it is |
 |---|---|---|---|
-| P0 | IN_REVIEW | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
-| P0 | IN_REVIEW | [`CAP-FB-20260827-MAIN-GATES-RED-02`](#cap-fb-20260827-main-gates-red-02-main-is-red-again-the-journey-suite-drives-a-deleted-settings-section) | Main is red again: the journey suite drives a deleted Settings section |
+| P0 | OPEN | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
 | P0 | OPEN | [`CAP-FB-20260827-HUB-FIRST-RUN-01`](#cap-fb-20260827-hub-first-run-01-the-first-screen-is-an-onboarding-wall-not-a-command-center) | The first screen is an onboarding wall, not a command center |
 | P0 | OPEN | [`CAP-FB-20260827-THREAD-OPEN-SEQUENTIAL-READS-01`](#cap-fb-20260827-thread-open-sequential-reads-01-thread-open-serializes-25-opfs-reads-before-first-paint) | Thread open serializes 25 OPFS reads before first paint |
 | P0 | OPEN | [`CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01`](#cap-fb-20260827-tool-call-legibility-01-tool-call-cards-show-shape-not-answers) | Tool-call cards show shape, not answers |
@@ -202,8 +179,6 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | OPEN | [`CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`](#cap-fb-20260819-permission-remediation-ux-01-user-facing-permission-management-and-run-remediation) | User-facing permission management and run remediation |
 | P1 | OPEN | [`CAP-FB-20260819-UI-FLASH-RELAYOUT-01`](#cap-fb-20260819-ui-flash-relayout-01-intermittent-extension-wide-ui-flash-and-relayout-investigation) | Intermittent extension-wide UI flash and relayout investigation |
 | P1 | OPEN | [`CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01`](#cap-fb-20260820-semantic-tool-search-01-local-semantic-search-over-the-complete-tool-catalog) | Local semantic search over the complete tool catalog |
-| P1 | OPEN | [`CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01`](#cap-fb-20260823-comprehensive-chrome-tools-01-comprehensive-chrome-extension-api-tool-coverage) | Comprehensive Chrome extension API tool coverage |
-| P1 | OPEN | [`CAP-FB-20260823-DIALOG-CONFIRM-MODERNIZATION-01`](#cap-fb-20260823-dialog-confirm-modernization-01-replace-all-windowconfirm-with-native-dialog-modals) | Replace all window.confirm with native dialog modals |
 | P1 | OPEN | [`CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01`](#cap-fb-20260823-extended-tool-families-01-extended-unixsystem-tool-family-admissions) | Extended Unix/system tool family admissions |
 | P1 | OPEN | [`CAP-FB-20260823-PYODIDE-PYTHON-01`](#cap-fb-20260823-pyodide-python-01-python-in-the-browser-via-pyodide) | Python in the browser via Pyodide |
 | P1 | OPEN | [`CAP-FB-20260825-DATA-EXPORT-IMPORT-01`](#cap-fb-20260825-data-export-import-01-owner-export-and-import-of-all-agent-data) | Owner export and import of all agent data |
@@ -216,9 +191,6 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | OPEN | [`CAP-FB-20260827-SETTINGS-MONOLITH-01`](#cap-fb-20260827-settings-monolith-01-settings-is-one-88-screen-scroll-with-a-nav-that-only-scrolls) | Settings is one 8.8-screen scroll with a nav that only scrolls |
 | P2 | **BLOCKED** | [`CAP-FB-20260822-MV3-WASM-RUNTIME-PROBE-01`](#cap-fb-20260822-mv3-wasm-runtime-probe-01-loaded-mv3-wasm-runtime-and-termination-probe) | Loaded-MV3 Wasm runtime and termination probe |
 | P2 | **BLOCKED** | [`CAP-FB-20260822-OWNER-WASM-INSTALL-01`](#cap-fb-20260822-owner-wasm-install-01-owner-selected-wasm-package-lifecycle) | Owner-selected Wasm package lifecycle |
-| P2 | IN_REVIEW | [`CAP-FB-20260822-WASM-EXECUTION-HOST-02`](#cap-fb-20260822-wasm-execution-host-02-gate-2-source-only-fresh-worker-host-recomposed) | Gate 2 source-only fresh-Worker host (recomposed) |
-| P2 | IN_REVIEW | [`CAP-FB-20260823-AGENT-ICON-ON-CREATE-01`](#cap-fb-20260823-agent-icon-on-create-01-generate-the-agent-icon-at-creation-not-on-click) | Generate the agent icon at creation, not on click |
-| P2 | IN_REVIEW | [`CAP-FB-20260825-AGENT-ROLE-PREVIEW-01`](#cap-fb-20260825-agent-role-preview-01-the-hub-agent-list-prints-the-whole-role) | The hub agent list prints the whole role |
 | P2 | OPEN | [`CAP-FB-20260822-BUILTIN-WASM-TOOLS-01`](#cap-fb-20260822-builtin-wasm-tools-01-provenance-clean-bundled-wasm-tool-tranche) | Provenance-clean bundled Wasm tool tranche |
 | P2 | OPEN | [`CAP-FB-20260822-SPREADSHEET-TOOLKIT-01`](#cap-fb-20260822-spreadsheet-toolkit-01-bounded-spreadsheet-and-table-workflow-toolkit) | Bounded spreadsheet and table workflow toolkit |
 | P2 | OPEN | [`CAP-FB-20260822-TABULAR-DIFF-ARTIFACTS-01`](#cap-fb-20260822-tabular-diff-artifacts-01-read-only-tabular-diff-artifact-custody) | Read-only tabular-diff artifact custody |
@@ -247,90 +219,6 @@ evidence every other task depends on).
 
 ## Active
 
-## [CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01] Comprehensive Chrome extension API tool coverage
-
-- Updated: 2026-08-26 — OWNER OVERRIDE: "add in them all if available on chrome
-  (not Chrome os)". Scope expanded from the 16 named APIs to ALL desktop-Chrome
-  extension APIs. Tranches: T1 windows/action/commands LANDED 0.2.205; T2
-  alarms/bookmarks/notifications/idle/contextMenus LANDED 0.2.225; T3 tabGroups
-  + T4 downloads DISPATCHED (flash lane); T5 system/topSites/permissions + T6
-  readingList/pageCapture DISPATCHED (k3 lane); wave-2 batch 1 DISPATCHED
-  (subagent workers): T7 sessions+history, T8 cookies/browsingData/contentSettings,
-  T13 deep tab control (move/duplicate/pin/reload/back-forward/zoom/discard/highlight
-  + action enable/disable + sidePanel options). Wave-2 batch 2 QUEUED: T9
-  privacy/proxy/fontSettings/power/search/tts, T10 declarativeNetRequest/webNavigation/
-  webRequest-observation, T11 management/runtime/sidePanel, T12 debugger-CDP/
-  userScripts/scripting-registerContentScripts (+desktopCapture best-effort).
-  EXCLUDED with rationale (not desktop-Chrome or dead): Chrome OS-only APIs
-  (wallpaper, fileSystemProvider, fileBrowserHandler, networking.onc/config,
-  vpnProvider, documentScan, printerProvider, loginState), enterprise.* policy APIs,
-  MV2-only browserAction/pageAction, Chrome-App-era serial/usb/bluetooth/socket,
-  identity/gcm (no local utility), processes (removed), speechRecognitionPrivate/
-  metricsPrivate (private APIs). Prior Phase-1 exclusions (downloads.open, history,
-  cookies, declarativeNetRequest, contentSettings) OVERRIDDEN by owner — all now
-  included, grant-gated. Silent-broad-host-access and model-chosen-navigate-URL
-  exclusions REMAIN (security invariants, need explicit per-origin consent flows).
-- Feedback: 2026-08-23 — product owner (early request, still missing): the
-  browser tools are NOT a comprehensive set of Chrome extension APIs. The
-  tool is supposed to manage the entire browser, so the Chrome extension APIs
-  should be available as tools. Missing examples named: chrome.action
-  (icon/badge/background colour), alarms, bookmarks, downloads, contextMenus,
-  commands, idle, notifications, pageCapture, permissions, readingList,
-  scripting, sidePanel, system.memory, system.display, system.cpu, windows
-  (create/manage), tabGroups, topSites. Example: a "sorting hat" background
-  agent needs tabGroups but there's no tabGroups tool. The existing
-  management tools are liked; the rest is missing
-- Status: OPEN
-- Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `bd85bf7`
-- Candidate: —
-- Shipping: —
-- Acceptance: an inventory of ALL chrome.* extension APIs, marking which are
-  already exposed as tools and which are missing; the missing high-value APIs
-  (action, alarms, bookmarks, downloads, contextMenus, commands, idle,
-  notifications, pageCapture, permissions, readingList, scripting, sidePanel,
-  system.*, windows, tabGroups, topSites) become bounded, permission-gated
-  tools with truthful schemas; each respects the owner-permission model and
-  does not silently broaden grants; dangerous/irrelevant APIs explicitly
-  excluded with rationale
-- Review: pending independent API-coverage/permissions/schema review
-- Gates: coverage inventory table; per-API bounded schema; permission gating;
-  no silent grant broadening; exclusion rationale for unsafe APIs
-- Blockers: needs a design/inventory phase before implementation; composes
-  with the permission model and the lazy tool catalog
-- Next: produce the chrome.* API inventory + gap plan + per-API tool design
-- Recover: `git grep -n "chrome\.\|browserToolset\|managementToolset" -- extension/lib`
-- History:
-  - 2026-08-23 23:20 UTC — Phase 1 inventory DONE (Pro,
-    /tmp/cap-chrome-api-coverage/PRO.md 16505d51): exposed today = tabs,
-    sidePanel, scripting.executeScript(read_page), storage via 9 browser + 27
-    management tools; ALL 16 owner-named APIs missing. Tranche plan:
-    T1 windows+action+commands (read-only, no new permission) →
-    T2 alarms+bookmarks+notifications+idle+contextMenus (already declared) →
-    T3 tabGroups (sorting-hat unlock) → T4 downloads+scripting-register →
-    T5 system.memory/display/cpu+topSites+permissions-read →
-    T6 readingList+pageCapture (most sensitive). 10 explicit exclusions
-    (silent broad host access, declarativeNetRequest, webNavigation, history,
-    proxy/vpn, downloads.open, model-chosen navigate URLs,
-    notification-onclick-to-model-URL, contentSettings/cookies,
-    enterprise.management.install). TRANCHE 1 DELIVERED (K3, 797f101, in
-    review): 8 tools — windows list/create/focus/close/move, action
-    set/get state, commands list — zero new manifest permissions, grant-lock
-    origin re-reads (smuggle-class defense), owner-scoped action state,
-    registry parity 46 tools, 1309/1309 suite. LANDED as 0.2.205 (`origin/main@0d308ce`)
-  - 2026-08-24 15:55 UTC — TRANCHE 2 LANDED (0.2.225,
-    origin/main@4e4cdee967d6355f0d9b4246000e343d2f29b100): 12 tools — alarms
-    create/list/clear, bookmarks create/list/remove, notifications
-    notify/clear, idle query, contextMenus create/list/remove; all five
-    permissions already-declared (manifest version-only); 58 total platform
-    tools; dangerous-pair verified (context enum only, no onclick/click-URL
-    authority).
-  - 2026-08-23 23:05 UTC — captured from product-owner voice feedback;
-    revives the early "go through all Chrome extension APIs and create tools"
-    request.
 
 ## [CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01] Extended Unix/system tool family admissions
 
@@ -450,83 +338,7 @@ evidence every other task depends on).
   - 2026-08-23 22:05 UTC — captured from direct product-owner feedback.
 
 
-## [CAP-FB-20260823-AGENT-ICON-ON-CREATE-01] Generate the agent icon at creation, not on click
 
-- Feedback: 2026-08-23 — product owner: when an agent is created, its icon
-  should be generated immediately, not lazily on click
-- Updated: 2026-08-23 20:35 UTC
-- Status: IN_REVIEW
-- Resume: —
-- Priority: P2
-- Owner: unassigned
-- Workspace: `/home/paulkinlan/worktrees/cap-agent-icon-1dfcb86`
-- Branch: detached
-- Base: `1dfcb865a064ded345ab661dbb26dff31db0dca9`
-- Candidate: GLM implementation (bounded creation-time avatar follow-up)
-- Shipping: —
-- Acceptance: agent creation produces the icon as part of the creation
-  transaction (or bounded immediate follow-up) so every surface shows the
-  final icon without a click-triggered generation; failure falls back to a
-  deterministic placeholder, never a broken image
-- Review: pending independent storage, failure-fallback and loaded-MV3 review
-- Gates: create-then-list shows icon; generation failure placeholder;
-  no click dependency; storage bound
-- Blockers: —
-- Next: locate the lazy icon generation call site and move it into creation
-- Recover: `git grep -n "icon" -- extension/lib extension/shared`
-- History:
-  - 2026-08-23 20:35 UTC — captured from direct product-owner feedback.
-  - 2026-08-23 21:20 UTC — diagnosis: the ONLY generator was the edit-dialog
-    "Regenerate avatar" button (named-agent.avatar returns a preview; the icon
-    persisted only when the owner clicked). Fix: `generateAvatarForCreatedAgent`
-    (lib/named-agents.js, dependency-injected + time-bounded 20s) runs as a
-    bounded immediate follow-up inside the SW `named-agent.create` handler —
-    never blocking the create response, only when the created agent has no
-    avatar, persisting ONLY if the stored agent still has none (a concurrent
-    owner edit always wins). No key / generation failure / timeout / agent
-    gone → avatar stays null and every render surface keeps the deterministic
-    initialAvatar placeholder (data:image/svg+xml — never a broken image,
-    existing onerror fallback unchanged). Storage bounded: the existing
-    128px-JPEG downscale. Covers BOTH creation paths (UI dialog + the model's
-    named_agent.create management tool — same route). Gates:
-    agent-icon-on-create (new, 6) + named-agents + named-agents-provider +
-    agent-registry + named-agent-provider-route + sw-route-modularization +
-    owner-approval-security + dialog-confirm-modernization + tools-management —
-    107/107.
-
-
-## [CAP-FB-20260823-DIALOG-CONFIRM-MODERNIZATION-01] Replace all window.confirm with native dialog modals
-
-- Feedback: 2026-08-23 — product owner: per modern web guidance, every
-  `window.confirm` usage should become a native `<dialog>` modal popup
-- Updated: 2026-08-23 20:08 UTC
-- Status: OPEN
-- Resume: —
-- Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `aca0759e6a8ebfe82c9dba0650566eeeb15334d0`
-- Candidate: —
-- Shipping: —
-- Acceptance: an exhaustive inventory of blocking prompt/confirm usage is
-  replaced by native `<dialog>` elements with focus trapping, Escape/cancel
-  semantics, promise-based results, and theme/RTL/narrow correctness; no
-  blocking synchronous dialogs remain; destructive confirmations name the
-  exact object being acted on
-- Review: pending independent UX, accessibility, focus-management and
-  loaded-MV3 review
-- Gates: full inventory before/after; dialog AX labels and focus order;
-  cancel/deny mutate nothing; keyboard-only flows; narrow/RTL/theme
-  screenshots
-- Blockers: —
-- Next: inventory every window.confirm/window.prompt/alert call site in
-  extension pages and side panel
-- Recover: `git grep -n "window.confirm\|window.prompt\|window.alert" -- extension`
-- History:
-  - 2026-08-27 23:35 UTC — **audited: the window.confirm half of this task is DONE.** `window.confirm` / `window.alert` / `window.prompt` no longer appear anywhere in `extension/` — the only match is the explanatory comment above `confirmActionDialog`. What remains is not modernization but CONSOLIDATION: three hand-rolled `document.createElement("dialog")` sites still live outside the component system (`extension/artifacts/index.js:83`, `extension/options/options.js:1236`, `extension/options/options.js:1555`), each owning its own focus/dismiss/overflow behaviour. That remainder is tracked as `CAP-FB-20260827-DIALOG-CONSOLIDATION-01`; this entry covers the native-dialog replacement itself and should close once that one is scoped.
-  - 2026-08-23 20:08 UTC — captured from direct product-owner feedback with
-    the explicit instruction to follow modern web guidance.
 
 ## [CAP-FB-20260818-WIDER-REVIEW-01] Wider-goal review remediation umbrella
 - Feedback: 2026-08-18 — recovered independent review found omitted security, concurrency, bounds, and accessibility work
@@ -1062,7 +874,7 @@ evidence every other task depends on).
 ## [CAP-FB-20260821-WORKTREE-HYGIENE-01] Durable worktrees and evidence off the RAM-backed temp filesystem
 - Feedback: 2026-08-21 — independent architectural review found the build host's temporary filesystem at 100% inode use, which failed the unit suite, and found reviewed work and retained gate evidence stored only on tmpfs
 - Updated: 2026-08-22 07:30 UTC
-- Status: IN_REVIEW
+- Status: OPEN
 - Resume: OPEN
 - Priority: P0
 - Owner: unassigned
@@ -1078,6 +890,7 @@ evidence every other task depends on).
 - Next: Residual: no candidate commit exists; the 18 dirty worktrees (tracked + untracked) must be preserved or consciously reconciled before any destructive cleanup, and the durable/tmpfs relocation is deferred until then. Next action: run `node scripts/worktree-audit.mjs` (read-only), agree the dirty-preservation plan with the owner, then (a) remove the clean worktrees holding nothing beyond origin/main + `git worktree prune`, (b) bind the unreachable detached heads under `rescue/*` tags, (c) move the durable evidence off the RAM-backed tmpfs.
 - Recover: `git worktree list --porcelain && git tag -l 'rescue/*' && git fsck --unreachable`
 - History:
+  - 2026-08-28 — corrected to OPEN at triage. It was recorded IN_REVIEW while its own `Candidate:` field reads `—`; the lifecycle requires a candidate commit to be in review, so the state was not truthful. Nothing about the work changed.
   - 2026-08-22 — the public-safe AGENTS.md convention + the read-only worktree-audit script shipped; the audit inventories every registered worktree (HEAD/branch/dirty tracked+untracked/reachability/rescue/location class) and refuses destructive operations; private paths stay out of the repo.
   - Git reconcile at 2026-08-22 07:50 UTC: VERIFIED current facts — after the prior cleanup 19 worktrees remained (18 dirty, preserved, + the clean main worktree); two clean worktrees were later added for the tracker and the product work, so the current 21 = 18 dirty + 3 clean; 151 tracked changes + 26 untracked paths sit in the dirty worktrees; the cleanup removed 133 clean worktrees and 126 obsolete local branches, left 10 rescue tags, and touched no remote refs. No further destructive action until the dirty-preservation decisions.
   - Git reconcile at 2026-08-22 07:30 UTC: legacy state `OPEN` mapped to `OPEN` (unchanged semantics).
@@ -1276,32 +1089,6 @@ evidence every other task depends on).
 - History:
   - 2026-08-25 09:40 UTC — opened. The fundamental cooperative-cancellation limit documented alongside these four is explicitly **not** in scope: an already-started page side effect cannot be unwound, that is a browser constraint, and it is documented in `docs/DESIGN.md` rather than treated as a defect.
 
-## [CAP-FB-20260825-KEYBOARD-COMMANDS-01] No keyboard shortcuts anywhere
-- Feedback: 2026-08-25 — independent gap review found the manifest declares no `commands`, so a power-user tool aimed at people who return to it repeatedly across a day cannot be reached or driven from the keyboard
-- Updated: 2026-08-25 17:10 UTC
-- Status: DONE
-- Resume: —
-- Priority: P2
-- Owner: claude-opus-5 implementer session
-- Workspace: active (local path private)
-- Branch: detached candidate on `origin/main`
-- Base: `784cd7f7275a7f63db856ee4231e523700bc861b`
-- Candidate: this commit
-- Shipping: —
-- Acceptance: a small, deliberate set of shortcuts — open the hub, start a task, open the side panel, focus the composer — declared in the manifest, remappable through Chrome's own shortcut settings, and discoverable in-product; the set is small enough to be memorable rather than exhaustive; no shortcut fires a destructive or permission-granting action; nothing conflicts with a common browser default
-- Review: author self-review 2026-08-25 (findings recorded in History and fixed); **no independent review** — the product owner asked the author to review directly
-- Gates: 18/18 loaded-MV3 checks on a fresh profile — `chrome.commands.getAll()` reports all three with real bound chords; `#compose` focuses the composer on BOTH the already-open-tab path and the fresh-tab boot path; no command injects task text; the side-panel command finds `sidePanel` ungranted and fails closed without requesting it; Settings lists the chords Chrome actually reports. Plus 6 unit tests, full unit suite, gallery drift, changelog and tasks-schema gates
-- Blockers: —
-- Next: an independent pass on the permission and payload constraints if one becomes cheap; otherwise closed
-- Recover: `git grep -n "KEYBOARD_COMMANDS\|hubUrlForCommand" -- extension && python3 -c "import json;print(json.load(open('extension/manifest.json'))['commands'])"`
-- History:
-  - 2026-08-25 17:10 UTC — **AUTHOR SELF-REVIEW, not the independent review the lifecycle requires.** The product owner asked for the review directly, so it was done by the same session that wrote the change. Recorded as such: a self-review cannot cover what the author was blind to, which is the whole point of the different-model rule. Four defects were found across the three changes and fixed in one commit; details in each entry below. An independent pass is still worth having on the permission and payload constraints.
-  - 2026-08-25 17:10 UTC — self-review found one defect. **MEDIUM:** the side-panel command's permission guard did not guard — `chrome.permissions?.contains?.(…).catch(…)` yields `undefined` when `contains` is missing and `.catch` on `undefined` throws, so the fail-closed-with-a-reason path could never run in precisely the situation it existed for. Rewritten as try/catch with an explicit `=== true`; the active-tab lookup had the same shape and was fixed with it. Re-verified 18/18 in a loaded extension afterwards. Fixed in `6320fd8`.
-  - 2026-08-25 14:10 UTC — implemented and verified in a real loaded extension. Three commands: `open-hub` (`Alt+Shift+H`), `new-task` (`Alt+Shift+K`, lands on the hub with the composer focused) and `open-side-panel` (`Alt+Shift+S`). The acceptance named four; "start a task" and "focus the composer" collapse into the same action, so shipping a fourth redundant chord was rejected rather than padded to match the wording.
-  - 2026-08-25 14:10 UTC — **the browser run caught two real defects that source review would not have.** (1) Chrome SILENTLY DROPPED `Alt+Shift+A`, `Alt+Shift+N`, `Alt+Shift+T` and `Alt+Shift+C` — a dropped `suggested_key` produces no error and no binding, so the shortcuts would simply never have fired. The shipped chords were chosen by probing what Chrome actually binds, not by reading a reserved-key list. (2) `#compose` did nothing when a hub tab was already open: setting the hash is a `push` navigation and `shouldDispatchForNavigationType` deliberately suppresses those, so the router never saw it. A `hashchange` listener now handles that one focus-only route; it touches no view state, so it cannot race the dispatcher.
-  - 2026-08-25 14:10 UTC — constraints enforced in code, not just documented: no command is destructive; none calls `chrome.permissions.request` (a key chord is not a gesture aimed at a specific grant, so a prompt from one would be a consent dark pattern); the side-panel command checks `permissions.contains` and fails closed with an actionable diagnostic; no command carries a payload, so a shortcut can never inject task text. Settings renders `chrome.commands.getAll()` rather than the manifest's suggested keys, so it stays truthful after an owner remaps or clears a binding.
-  - 2026-08-25 12:30 UTC — ownership: unassigned → claude-opus-5 implementer session (taking the lane; no other session is on it per the 00:14 fleet board)
-  - 2026-08-25 09:40 UTC — opened. Verified absent: `extension/manifest.json` contains no `commands` key.
 
 ## [CAP-FB-20260825-I18N-FOUNDATION-01] No internationalisation foundation
 - Feedback: 2026-08-25 — independent gap review found no `_locales` directory and no `default_locale`; every user-visible string is hardcoded English across the hub, Settings, side panel, chat and components
@@ -1345,190 +1132,7 @@ evidence every other task depends on).
 - History:
   - 2026-08-25 09:40 UTC — opened. Verified in current source: `extension/ntp/ntp.js` uses `capability-row` five times and `agent-picker` zero times.
 
-## [CAP-FB-20260825-TRACKER-INTEGRITY-01] Enforce the tracker's own entry schema
-- Feedback: 2026-08-25 — a gap sweep found three entries violating the schema this file defines: two headings with no body at all, and one heading carrying three complete field sets with conflicting statuses
-- Updated: 2026-08-25 17:10 UTC
-- Status: DONE
-- Resume: —
-- Priority: P2
-- Owner: claude-opus-5 implementer session
-- Workspace: none
-- Branch: `origin/main`
-- Base: `784cd7f7275a7f63db856ee4231e523700bc861b`
-- Candidate: this commit
-- Shipping: —
-- Acceptance: `CAP-FB-20260822-WASI-FDSTAT-FLAGS-01` is resolved — it holds **three** field sets under one heading (`DONE`, `IN_REVIEW`, `DONE`), so its real state is unreadable and any tool or reader gets a different answer depending on which one it takes. The 2026-08-25 archive split read only the first and moved it to `TASKS-DONE.md`, so a field set reading `IN_REVIEW` is now filed as completed work. Either split it into distinct IDs for the distinct pieces of work, or reconcile it to a single authoritative field set with the superseded history moved into `History`. Separately, a check runs as the first step of `npm run test:all` (this repository has no CI) and fails when any heading does not carry exactly one of each schema field, when a `Status` or `Priority` value is outside the declared set, or when a `CAP-FB` ID is duplicated or reused across `TASKS.md` and `TASKS-DONE.md`
-- Review: author self-review 2026-08-25 (findings recorded in History and fixed); **no independent review** — the product owner asked the author to review directly
-- Gates: the schema check run against the current file, demonstrated failing on a deliberately malformed entry and passing on the corrected file; the `Open work queue` index regenerated and matching the checker's output exactly
-- Blockers: —
-- Next: an independent pass on the FDSTAT field-set split if one becomes cheap; otherwise closed
-- Recover: `awk '/^## \[CAP-FB/{id=$0} /^- Status:/{print id}' TASKS.md TASKS-DONE.md | uniq -c | awk '$1!=1'`
-- History:
-  - 2026-08-25 17:10 UTC — **AUTHOR SELF-REVIEW, not the independent review the lifecycle requires.** The product owner asked for the review directly, so it was done by the same session that wrote the change. Recorded as such: a self-review cannot cover what the author was blind to, which is the whole point of the different-model rule. Four defects were found across the three changes and fixed in one commit; details in each entry below. An independent pass is still worth having on the FDSTAT field-set split.
-  - 2026-08-25 17:10 UTC — self-review found one defect. **LOW:** the gate was wired to nothing. Its acceptance said "a check runs in CI", but this repository has no CI, so that was unachievable as written rather than merely unfinished. It is now the first step of `npm run test:all`, the aggregate gate that is actually run. Fixed in `6320fd8`.
-  - 2026-08-25 12:55 UTC — **root cause found and repaired.** The three field sets under the `CAP-FB-20260822-WASI-FDSTAT-FLAGS-01` heading were not duplicates: they were the missing bodies of the two headings that had none. The `IN_REVIEW` set is verbatim `CAP-FB-20260822-WASM-EXECUTION-HOST-02` (Gate-2 recomposed source, branch `recompose/gate2-6662dfa`, candidate `086ee3d`) and the `DONE` set is verbatim `CAP-FB-20260822-WASM-EXECUTION-HOST-01` (pure WASI host contract, shipped `462d21d`). Each was moved to its own heading with no field value altered, replacing the conservative placeholders written on 2026-08-25 09:40. `-02` is therefore genuinely `IN_REVIEW` with real reviewed work behind it, not the unknown-scope `BLOCKED` recorded earlier. A stray `- Next:` line describing `086ee3d` had also been dropped mid-Gates inside the `-01` text; it moved to `-02` where its candidate lives. FDSTAT now carries exactly one field set, describing `fd_fdstat_set_flags` only, with its own fields unchanged.
-  - 2026-08-25 12:55 UTC — gate landed: `scripts/check-tasks.mjs` / `npm run check:tasks`, proven to fail on both real defects (a body-less heading and the three-field-set entry) and to pass on the repaired files. 37 violations predating the gate are baselined rather than mass-edited, because they sit in entries owned by live lanes; the gate is strict for anything new. `Resume` is now required only on `BLOCKED` entries — it was omitted on 23 entries, which is the fleet having already voted against requiring it everywhere.
-  - 2026-08-25 12:30 UTC — ownership: unassigned → claude-opus-5 implementer session (taking the lane; documentation/tooling only, no code-lane collision)
-  - 2026-08-25 09:40 UTC — opened. The two empty headings (`CAP-FB-20260822-WASM-EXECUTION-HOST-01` and `-02`) were recovered in this same commit and are not part of this task; the FDSTAT merged-heading defect and the missing check are.
 
-## [CAP-FB-20260822-WASM-EXECUTION-HOST-02] Gate 2 source-only fresh-Worker host (recomposed)
-- Feedback: 2026-08-22 — the reviewed package host needs hard termination,
-  byte-bounded sync workspaces, an audit-before-instantiate scan and a bounded
-  result envelope before any route can reach it
-- Updated: 2026-08-22 20:30 UTC
-- Status: IN_REVIEW
-- Resume: —
-- Priority: P2
-- Owner: recomposed source candidate on this branch
-- Workspace: active (local path private)
-- Branch: `recompose/gate2-6662dfa`
-- Base: `6662dfa2870ef1729b7e3ba68c3393d40f7db474`
-- Candidate: this commit (`086ee3d` PASSed source, renumbered `0.2.159`)
-- Shipping: —
-- Acceptance: the recomposed source tree preserves the PASSed Gate-2 facts —
-  synchronous per-job workspace, audit-before-instantiate, the exact 15-key
-  result envelope with bounded stdout/stderr content, one finish() for
-  timeout/abort, scanner-owned execution-host exemption (fixed canonical path
-  + exact call shape) and the scanner-owned worker-host exemption (the one
-  non-literal fresh-Worker construction); executor/offscreen host remain
-  UNREACHABLE source-only until a separately reviewed route successor lands
-- Review: the recomposed source PASSed independent review as `086ee3d`; that exact object was renumbered to the `0.2.159`/`0.2.160` landing, so the recorded candidate is not an ancestor of main and the review verdict is not yet bound to a reachable commit
-- Gates: final independent review PASS on `086ee3d` (26/26 focused, full
-  1056/1056, build rc 0); recomposed gates re-run on this commit
-
-- History:
-  - 2026-08-27 23:55 UTC — priority changed by owner decision: the demo path is the only P0 lane until the exec demo. This entry is not on the path an exec walks and is not blocked by anything on it; it resumes at its recorded priority afterwards. No scope, acceptance or evidence changed.
-  - 2026-08-25 12:30 UTC — recovered by `CAP-FB-20260825-TRACKER-INTEGRITY-01`. This field set had been concatenated under the `CAP-FB-20260822-WASI-FDSTAT-FLAGS-01` heading, which carried three complete field sets while this entry's own heading carried none. Restored verbatim; no field value was altered by the move.
-  - 2026-08-22 20:40 UTC — Store package scan after the recomposed push passed
-    ABSOLUTE source paths to the scanner; the canonical exemptions compared only
-    relative paths and flagged the execution-host Wasm + worker-host Worker
-    constructions. Fixed with a scanner-owned canonical path matcher
-    (`isCanonicalScannedPath`) that accepts the exact normalized repo tail
-    (relative or absolute) and rejects lookalikes/suffix tricks; added
-    absolute-positive + lookalike-negative tests for BOTH exemptions. Store
-    package build/package/validate pass on `0.2.160`.
-- Blockers: the recorded candidate `086ee3d` is not an ancestor of `origin/main`; the Gate-2 semantics it carries are byte-contained on main at `aca0759` under the renumbered landing, so the candidate reference must be reconciled before this entry can advance
-- Next: the Gate-2 semantics (wasm-execution-worker/executor/bounds/offscreen-host/sync-workspace + the scanner-owned canonical exemptions) are byte-contained on main at aca0759; the recorded candidate 086ee3d is NOT an ancestor (renumbered to the 0.2.159/0.2.160 landing). Next action: reconcile the Candidate field to the renumbered tip, confirm the supersession, then advance to MERGED.
-- Recover: `git show 086ee3d -- extension/lib/wasm-execution-worker.js
-  extension/lib/wasm-executor.js extension/lib/wasm-executor-bounds.js
-  extension/lib/wasm-offscreen-host.js extension/lib/wasm-sync-workspace.js
-  tests/wasm-fixture-builder.mjs tests/wasm-host-gate2.test.ts
-  scripts/scan-shipped.mjs build.mjs`
-
-## [CAP-FB-20260825-MAIN-GATES-RED-01] Main is red: Chrome journeys abort and two usage probes fail
-- Feedback: 2026-08-25 — an unrelated lane ran the full gates before landing and found three failures already on `origin/main`; both suites reproduce identically with all local work stashed
-- Updated: 2026-08-25 17:10 UTC
-- Status: DONE
-- Resume: —
-- Priority: P0
-- Owner: claude-opus-5 implementer session
-- Workspace: active (local path private)
-- Branch: detached candidate on `origin/main`
-- Base: `0626e6b`
-- Candidate: this commit and its parent
-- Shipping: —
-- Acceptance: `deno run -A scripts/chrome-journeys.ts` reaches 126/126 again, and `tests/usage-authority.test.ts` PROBE-2 and PROBE-4 pass. Each failure is traced to the commit that introduced it and fixed there, or explicitly reclassified with evidence if the assertion — not the product — is what is wrong
-- Review: author self-review 2026-08-25 (findings recorded in History and fixed); **no independent review** — the product owner asked the author to review directly
-- Gates: Chrome journeys **127/127** (was 91/126 on untouched main); unit **1584/0**; security suite PASS; build, gallery drift, changelog and tasks-schema green. The regression test was verified to fail against the unfixed router with the exact production error
-- Blockers: —
-- Next: an independent pass on the durable key routing and thread-id validation if one becomes cheap; otherwise closed
-- Recover: `deno run -A scripts/chrome-journeys.ts 2>&1 | tail -5 && deno test -A tests/usage-authority.test.ts 2>&1 | tail -5`
-- History:
-  - 2026-08-25 17:10 UTC — **AUTHOR SELF-REVIEW, not the independent review the lifecycle requires.** The product owner asked for the review directly, so it was done by the same session that wrote the change. Recorded as such: a self-review cannot cover what the author was blind to, which is the whole point of the different-model rule. Four defects were found across the three changes and fixed in one commit; details in each entry below. An independent pass is still worth having on the durable key routing and thread-id validation.
-  - 2026-08-25 17:10 UTC — self-review found two defects in this change. **HIGH:** the durable thread-id charset admitted `..`; `encodeURIComponent("..")` is `".."`, so the key reached a directory name and was refused only because OPFS happens to reject it. The original test covered `../escape` (already rejected for the slash) and not the bare form — the test looked thorough and was not. Dots removed from the charset; `..`, `.` and the length bound are now covered. **MEDIUM:** making the index persist meant every deleted thread leaked `durable/threads/<id>` forever, against the memory-resilience constraint; `deleteThread` now reclaims it best-effort. Both fixed in `6320fd8`.
-  - 2026-08-25 16:05 UTC — **all three failures resolved; the suite is green.** The usage-authority probes were fixed independently by another lane (`ced852d`). The remaining two were one product bug and one stale test, not the same thing.
-  - 2026-08-25 16:05 UTC — **P0 product bug.** `agent.run` returned `invalid durable-run key: thread-runs:<threadId>` for EVERY task. The 0.2.257 log redesign (`ee970b3`) added a `thread-runs:<threadId>` reverse index written through `durableRunMemory`, but the durable key router only understood `run-registry` and the five `run*:<executionId>` prefixes; a thread id is not an execution id, so `durableStoreForKey` threw, and because every run links its thread on the way in the throw took the run with it. The router now gives `thread-runs:` its own bounded per-thread store mirroring the per-execution layout, `keys()` enumerates them, and thread ids are validated against a bounded safe charset (`thread-runs:../escape` and an empty id are rejected). No migration: the feature never successfully wrote a key. This single bug was killing the five journey checks that ask the agent to actually produce a result.
-  - 2026-08-25 16:05 UTC — **stale test, product correct.** The suite aborted at "pending owner approval did not render in exact Settings" and lost the last 30 checks. `ab02213` made `asset.delete`/`agent.delete`/`named-agent.delete`/`recipe.delete` owner-direct, so an owner surface click no longer queues an approval; three journey steps still waited for a row that is now correctly never created. Disenroll now asserts the new behaviour POSITIVELY (a genuine owner click leaves no `agent.delete` approval queued) rather than simply dropping the old assertion, and the deny/worker-restart paths moved to `asset.update`, which is still gated and exercises the identical deny flow — coverage preserved, not removed.
-  - 2026-08-25 14:40 UTC — opened with attribution evidence. **Chrome journeys: 96/126**, aborting at `journey failure: pending owner approval did not render in exact Settings`, immediately after `Settings: Disenroll button present for an enrolled agent`; the remaining 30 checks report `(not reached)`. **Unit: `tests/usage-authority.test.ts` PROBE-2** ("a concurrent initializer loser must mirror the WINNING authority, not its own" — `authority holds the migrated legacy row exactly once`) **and PROBE-4** ("after corruption repair, a valid write succeeds") fail. All three were reproduced on pristine `0626e6b` with unrelated local work stashed, and again with it restored, at the identical abort point — so they predate that work and are not caused by it. Filed rather than fixed in passing: the journey abort sits in the approvals/enrollment path and the usage probes in the ledger, both owned by other lanes.
-
-## [CAP-FB-20260825-DATA-MEMORY-CLEAR-01] Data & memory Clear looks like it does nothing
-- Feedback: 2026-08-25 — product owner: "The clear button doesn't work in Data & memory (at least for site agents)."
-- Updated: 2026-08-25 19:20 UTC
-- Status: DONE
-- Resume: —
-- Priority: P1
-- Owner: claude-opus-5 implementer session
-- Workspace: active (local path private)
-- Branch: detached candidate on `origin/main`
-- Base: `2c25e82`
-- Candidate: this commit
-- Shipping: this commit on `origin/main`
-- Acceptance: clicking Clear on a site agent's row in Settings → Data & memory visibly empties that store without a reload — the memory explorer's key count for the origin drops to zero; the store really is empty; the agent stays enrolled, because clearing memory is not a revocation; and the owner is told what actually happened rather than being shown a success message the code never checked
-- Review: author self-review 2026-08-25 (two further defects found and fixed, below); **no independent review** — the product owner asked the author to review directly
-- Gates: `scripts/data-memory-clear.ts` **13/13** on a clean profile, with both regressions verified to FAIL against the unfixed code (`before=4 after=4` for the stale count, `after=[]` for the collapsed tree); unit 1591/0; Chrome journeys 127/127; security suite PASS
-- Blockers: —
-- Next: an independent pass if one becomes cheap; otherwise closed. `extension/memory/explorer.js` is a separate removal candidate, not a fix for this report
-- Recover: `npm run test:data-clear && git grep -n "renderMemoryExplorer" -- extension/options/options.js`
-- History:
-  - 2026-08-25 19:20 UTC — **author self-review, not independent.** Two further defects found in my own fix, both fixed here. **(1) I introduced a UX regression:** making the explorer refresh meant it rebuilt the whole tree with every node collapsed, so clearing snapped shut whatever the owner had expanded — on precisely the refresh where they are looking at that store. Expansion is now keyed by a stable `data-mem-id` and restored across the rebuild, and a restored store re-fetches its (now empty) keys. Individual key/value nodes are deliberately NOT restored: their content can be stale after a clear, and collapsing one is far less disruptive than losing the tree. **(2) A third Clear button exists** in `extension/memory/explorer.js` with the same ignore-the-result shape. It is NOT reachable — nothing in the extension, tests or scripts links `memory/explorer.html` — so it is not the button in this report and is recorded as a removal candidate rather than fixed in place, which would have meant maintaining a dead surface.
-  - 2026-08-25 19:20 UTC — also checked and found clean: every other `memory.clear` caller tolerates the new result shape (`scripts/opfs-real-browser.ts`, `scripts/chrome-journeys.ts` and the route-modularization test all ignore or destructure it safely).
-  - 2026-08-25 18:30 UTC — reproduced exactly as reported and fixed. The data WAS being cleared; the UI just never showed it. The origin-row handler called `renderData()` (which redraws the enrolled-origins list, unchanged by a clear) but not `renderMemoryExplorer()` — and the explorer is the surface that displays keys and counts, so it kept showing the cleared store's old count until a reload. Both Clear handlers now refresh both surfaces.
-  - 2026-08-25 18:30 UTC — second defect found while fixing the first: `memory.clear` resolved to `undefined`, so neither handler could tell success from failure and both flashed "Cleared…" unconditionally. The route now returns `{ok:true, origin}` or `{ok:false, error}`, and both handlers report the real outcome. A button that lies about having worked is the same class of bug as one that does nothing.
-  - 2026-08-25 18:30 UTC — checked and ruled out a worse possibility: `clear()` does remove the site store's `enrolled` key, but enrollment authority does not live there, so a clear never silently disenrolls a Site Agent. Asserted in the new script so it stays true.
-  - 2026-08-25 18:30 UTC — coverage lives in a dedicated `scripts/data-memory-clear.ts` on a clean profile rather than inside the 127-check journey suite. Adding it there first was tried and rejected: the fixture had to be created mid-suite, where accumulated global state (a revoked `storage` capability, several enrolled origins) made the explorer assertions unreliable, and the extra enrolled origin made a later step's first-match `.origin-row .disenroll-origin` click remove the wrong agent. A focused script tests the button instead of the suite's history.
-
-
-## [CAP-FB-20260825-SITE-DISCOVERABILITY-01] Site-agent discoverability + content-script boot reconciliation
-
-- Feedback: 2026-08-25 — product owner: "I can't work out how site agents get discovered and approved any more... I'm refreshing a site and it doesn't appear and I don't see any console logs."
-- Updated: 2026-08-25 20:3x UTC
-- Status: MERGED
-- Priority: P1
-- Owner: Gemini
-- Workspace: cap-site-discovery-2c25e82
-- Branch: —
-- Base: `2c25e82`
-- Candidate: `e152f7c0`
-- Shipping: `origin/main@2bff0af` (0.2.267)
-- Root cause: (a) chicken-and-egg — discovery required the content script to run, which only ran on ENROLLED origins (ensureOriginScriptsRegistered registers per-origin + host permission, transactional), so an un-enrolled site surfaced nothing; (b) enrolled origins' dynamic content scripts were not reconciled on SW startup/browser boot, so an enrolled site went silent after a restart ("no logs").
-- Fix: proactive discovery — NTP + Settings surface open discoverable pages with one-click "Add Site Agent"/"Enroll" (explicit owner gesture, host-permission request, no typing origins) + discovered-but-not-enrolled listing; reconcileEnrolledOriginScriptsOnBoot() re-registers enrolled origins' scripts on boot. Security model verified hard (Pro e384c626): zero broad injection, host-permission grant stays owner-gesture, transactional enroll/rollback intact.
-- Acceptance: an owner can see which open pages are discoverable and enroll one with a single explicit gesture, without typing an origin; discovery no longer requires the origin to be enrolled first; an already-enrolled origin's content scripts are re-registered on service-worker/browser boot so it does not go silent after a restart; no broad injection is introduced and the host-permission grant stays behind an owner gesture with transactional enroll/rollback intact
-- Review: PASS (Pro e384c626), 1595/1595, manifest untouched.
-- Gates: independent security review (Pro `e384c626`) confirming zero broad injection, owner-gesture host-permission grant and intact transactional enroll/rollback; 1595/1595 unit; manifest unchanged
-- Blockers: —
-- Next: — (MERGED at `0.2.267`; move to Archive on the next reconciliation)
-- Recover: `git show 2bff0af --stat && git grep -n "reconcileEnrolledOriginScriptsOnBoot" -- extension`
-- History:
-  - 2026-08-25 22:45 UTC — schema fields completed by an unrelated lane so `npm run check:tasks` passes. This entry used `Root cause:`/`Fix:` in place of the schema's `Acceptance`/`Gates`/`Blockers`/`Next`/`Recover`; the missing fields were filled in FROM the text already present. No status, owner, candidate, shipping ref, review verdict or history event was altered, and no custody was taken.
-  - 2026-08-25 20:3x UTC — LANDED at 0.2.267. Discovery is now discoverable and enrolled sites survive restart.
-- id: CAP-FB-20260825-CAIRN-DOMEXC-01
-  severity: P1
-  status: done
-  landed_version: 0.2.270
-  summary: "Renamed ALL ~40 foreign 'cairn' identifiers to cap-* consistently (bridge channel __cap_bridge, CapBridgeAuth, __capInternal/__capHook markers, __capMainWorldBootstrap SW↔main-world handoff) across all 8 files; zero cairn refs remain except the intentional legacy storage key 'cairn:usage' (preserved as immutable migration read-source so pre-rename usage rows aren't orphaned). MAC/auth semantics untouched (pure rename). Also: DOMException now reports its bounded spec NAME (33-name WebIDL allowlist, genuineness via instanceof against native constructor captured at document_start, .message NEVER crosses) — so 'tool failed (DOMException)' now says e.g. 'DOMException: NotAllowedError'. KATs: cairn-rename.test.ts + 3 DOMException tests. 1601/1601."
-- id: CAP-FB-20260825-MIC-VIEWTRANSITION-01
-  severity: P1
-  status: done
-  landed_version: 0.2.272
-  summary: "Create-agent dialog mic now REPLACES the field with the cumulative transcript (matches composer/prompt-bar) instead of appending it — dictating two utterances no longer doubles the text. View transitions removed: navigation now applies update() synchronously (no document.startViewTransition), making navigation instant/not janky, while focus routing (generation-guarded routeFocus + focusExplicitRouteTarget) is preserved so keyboard focus isn't lost. KATs: mic-transcript.test.ts + view-transition.test.ts. NOTE: during integration a worktree-overwrite briefly lost the cairn rename; it was restored from the reviewed commit and both fixes landed together at 0.2.272 (1593/1593)."
-- id: CAP-FB-20260825-INVENTORY-DRIFT-01
-  severity: P0
-  status: done
-  landed_version: 0.2.275
-  summary: "npm run build failed with 'bundled-tool VERIFY FAILED — byte-drift: extension/lib/bundled-inventory-data.js'. Root cause: the inventory embeds a top-level 'release' field derived from package.json, but the machine-local post-commit hook bumps package.json AFTER the inventory is committed, so every version bump drifted the inventory and the build's verify gate failed closed. FIX: (1) regenerated the inventory to the current version (full regen — only bundled-inventory-data.js changed, the 26 Wasm binaries are reproducible/byte-identical); (2) STRUCTURAL: scripts/bump-version.mjs now keeps the inventory's 'release' field in lockstep on every bump (targeted patch, byte-equivalent to regen for a version-only change) AND stages it so the post-commit hook's amend bundles it — this fixes every machine since bump-version.mjs is committed. Also adopted: run 'npm run build' before every commit. 80 generated files byte-identical; full build RC=0."
-
-## [CAP-FB-20260825-AGENT-ROLE-PREVIEW-01] The hub agent list prints the whole role
-- Feedback: 2026-08-25 — product owner: "The agent list on the ntp page doesn't have a truncated role/description, it contains pretty much all of the description and it looks terrible."
-- Updated: 2026-08-25 22:40 UTC
-- Status: IN_REVIEW
-- Resume: —
-- Priority: P2
-- Owner: claude-opus-5 implementer session
-- Workspace: active (local path private)
-- Branch: detached candidate on `origin/main`
-- Base: `7642f76`
-- Candidate: this commit
-- Shipping: this commit on `origin/main`
-- Acceptance: a long agent role in the hub's Named agents list renders as a short, scannable preview rather than a paragraph — at most two lines, the row no taller than ~90px — while the full role remains in the DOM for screen readers and reachable on hover; the fix lives in the shared row component so every list using it behaves the same; the sidebar's existing short preview is unaffected
-- Review: pending — a different model/session should confirm the clamp does not harm any other `capability-row` consumer and that the full text really does stay available to assistive technology
-- Gates: `scripts/agent-role-preview.ts` 7/7 on a clean profile, verified to FAIL against the unclamped component with exactly the reported symptom (`lines: 4`, `rowHeight: 111`); unit 1595/0; Chrome journeys 127/127; gallery drift clean
-- Blockers: —
-- Next: obtain the independent review, then close
-- Recover: `npm run test:role-preview && git grep -n "line-clamp" -- extension/shared/components.js`
-- History:
-  - 2026-08-25 22:40 UTC — reproduced and fixed. `6986082` had truncated the SIDEBAR list and missed the main Named agents panel, which passes the role straight into `capability-row`'s `description`. A 334-character role rendered as five lines and grew the row to 111px; measured before/after 111px → 79px.
-  - 2026-08-25 22:40 UTC — fixed in the shared component rather than at the one call site: `capability-row`'s `.desc` now clamps to two lines. That fixes every consumer at once, which is what the heavy-componentization rule in `AGENTS.md` asks for, and it CLAMPS rather than truncates — the full role stays in the DOM so a screen reader still reads it, and a `title` exposes it on hover. Cutting the string at the call site would have thrown the rest away.
-  - 2026-08-25 22:40 UTC — coverage is a focused `scripts/agent-role-preview.ts`. Adding the checks to `scripts/ui-integration.ts` was tried and abandoned: that suite is already red on main (five failures, identical values with all local work stashed — a demo task does not create a thread, and three overlay checks cascade off it) and does not reach its own end inside 1800s, so checks appended there can never run. Filed separately as `CAP-FB-20260825-UI-INTEGRATION-RED-01`.
 
 ## [CAP-FB-20260825-UI-INTEGRATION-RED-01] scripts/ui-integration.ts is red and never finishes
 - Feedback: 2026-08-25 — found while adding coverage for an unrelated UI fix; the suite fails five checks and exceeds its time budget before reaching its own end
@@ -1678,114 +1282,4 @@ evidence every other task depends on).
 - History:
   - 2026-08-27 23:30 UTC — five custom elements are defined and shipped in `extension/shared/components.js` but referenced only by `docs/components.html`, never by any extension page: `theme-picker`, `run-task-button`, `tool-chips`, `prompt-bar`, `agent-nav`. `theme-picker` is straightforward dead code — theme switching was removed at `0.2.301` and the component was left behind, which is a miss against the owner's own cross-subsystem-consistency rule. The others are unbuilt primitives; `tool-chips` in particular may be exactly what the tool-card redesign needs, so it is called out as a blocker rather than deleted.
 
-## [CAP-FB-20260827-MAIN-GATES-RED-02] Main is red again: the journey suite drives a deleted Settings section
-- Feedback: 2026-08-27 — found by running the gates during a documentation reconciliation, not by reading trackers. `npm run test:chrome` reports **26/127** on clean `origin/main@139b6f92` (`0.2.319`) with no local changes
-- Updated: 2026-08-27 22:40 UTC
-- Status: MERGED
-- Priority: P0
-- Owner: claude-opus-5 implementer session
-- Workspace: active (local path private)
-- Branch: working tree on `origin/main`
-- Base: `139b6f92`
-- Candidate: `9f02f9fc` (0.2.320)
-- Shipping: `origin/main@9f02f9fc` (0.2.320, pushed 2026-08-28)
-- Acceptance: `npm run test:chrome` reaches 127/127 (or an honestly re-baselined count) on a clean profile. Each of the three failures is resolved at the layer that actually broke — the deleted-section drive is repointed at the in-context approval path so the deny/restart coverage it carried is **preserved, not deleted**; the capability-count assertion is derived from `CAPABILITIES` rather than hard-coded; and the `debugger` assertion is left failing until Q17 is decided, then made to match the decision. No assertion is weakened to make the suite pass
-- Review: **author review 2026-08-27 with the falsification gates** (the review rule changed the same day — no second model is available; see AGENTS.md "Review without a second model"). The gates caught a real defect in my own change: see the History entry below
-- Gates: Chrome journeys **127/127** · unit **1779/0** · security suite **PASS** · build clean · changelog in sync · gallery drift clean · tasks schema clean
-- Blockers: —
-- Next: closed. The remaining follow-up is generic — keep applying the falsification gate to every future assertion change
-- Recover: `npm run test:chrome 2>&1 | grep -E "^FAIL|journey failure" | head`
-- History:
-  - 2026-08-28 00:30 UTC — **the falsification gate immediately caught a defect in my own fix, which is the whole argument for it.** Under the new rule every changed assertion must be shown going RED against the unfixed product. Two were checked. **(a) The debugger removal guard passed:** re-adding `"debugger"` to the manifest turned `T12 GUARD` red (13 passed / 1 failed), restoring it turned it green — so the guard genuinely protects the ten deleted tests. **(b) The capability assertion FAILED its falsification and had to be rewritten.** I had replaced the rotted literal `length === 7` with `capState0.length === CAPABILITIES.length`. Adding a phantom capability to `CAPABILITIES` and re-running left the journey at **127/127** — the check still passed. It was tautological: Settings renders its rows straight from `CAPABILITIES`, so both sides of the comparison move together and the count half can never fail. My "fix" was weaker than the hard-coded literal it replaced, and a plain reading of the diff would not have shown that. Rewritten to assert what is actually falsifiable — that the extension boots with zero capabilities granted, and that every capability this suite goes on to DRIVE is present by id. Falsified properly: renaming `sidePanel` to `sidePanelRENAMED` takes the suite to **125/127** with that exact check FAIL; restoring returns **127/127**.
-  - 2026-08-27 21:15 UTC — opened with reproduction on clean main. **(1) The abort, and the reason the number is 26.** `scripts/chrome-journeys.ts:749` `resolveNextApproval` clicks `.nav-item[data-section="approvals"]` and throws `pending owner approval did not render in exact Settings`. `0.2.313` (`5f8931f3`) deliberately deleted that Settings section — approvals moved in-context, which was the right product change — but the journey was never repointed, so the throw takes the remaining 100 checks with it. The suite is reporting far worse than the product is, and that gap is itself the danger: a red number nobody trusts is a gate nobody reads. **(2) `manifest: debugger absent everywhere` fails honestly.** `0.2.286` (`38641974`) re-declared `"debugger"` in `optional_permissions` for the allowlisted CDP tools, reversing its deliberate removal at `c5ccb2d0`. The assertion is correct and the posture changed under it; this is an owner decision (Q17), not a test defect. **(3) `permissions: all seven capabilities start ungranted` fails.** `extension/lib/capabilities.js` now defines **18** capabilities, up from 7 across the `0.2.278`–`0.2.290` tool waves; the assertion hard-codes `length === 7`.
-  - 2026-08-27 22:40 UTC — **all three fixed; the full suite is green (127/127, 1779/0, security PASS).** Deliberately NOT by relaxing assertions: **(1)** the approvals drive was repointed onto the product's real contract. `management.resolve-approval` is still gated on `context.principal === "owner-options"`, so resolving still demands the Settings surface; the Settings control now completes in ONE click through its native `confirmActionDialog`, driven with a genuine CDP click, matching what `runOwnerApprovedMutation` actually does. The two DOM-scraping approval assertions moved onto the **payload**, which is strictly stronger than scraping one rendering of it — the row must be singular, expose exactly `action,approvalId,at,targetRef`, carry a 32-char opaque `targetRef`, and leak no asset id, digest or raw target. The embedded-iframe deny check now evaluates inside the Settings frame's OWN execution context, because calling another frame's `chrome.runtime` from the parent realm does not adopt that frame's principal — so it now genuinely proves the embedded Settings surface is an owner principal, which the old version did not. **(2)** `debugger` removed per the owner decision (Q17): the optional permission, the four CDP tools, the capability row, the Settings label. Browser tools 130 → 126, capability table 159 → 155; the user-scripts half of T12 is untouched. A removal guard was ADDED (`tests/chrome-tools-t12.test.ts`) asserting absence from the manifest, the toolset, the scoped toolset, `BROWSER_TOOL_NAMES`, the capability table and the Settings capability list — deleting 10 tests without leaving a guard would have been the quiet way to lose this. **(3)** the capability count now reads `CAPABILITIES.length` from the product's own table instead of the literal `7`, so the next tool tranche cannot rot it.
-  - 2026-08-27 21:15 UTC — **process finding, recorded because the defect is the symptom.** This is the second instance of the identical class: `CAP-FB-20260825-MAIN-GATES-RED-01` was opened on 08-25 for a journey suite left behind by a shipped change, fixed, and the same thing happened again within two days. The full-suite-green rule in `AGENTS.md` is not being applied at the moment work lands. Consequence: **no task merged since 2026-08-25 can legitimately be `DONE`**, since `DONE` requires the journey suite green at that tip — several entries claim it against a gate that was not actually green.
 
-## [CAP-FB-20260826-OWNER-BATCH-01] Owner bug/feature batch (2026-08-26, Telegram)
-
-Owner-described batch of bugs + UX issues. Each entry: analysis + acceptance. Prioritize + delegate.
-
-- Feedback: 2026-08-26 — product owner (Telegram): a batch of bugs and UX issues. Each child entry below carries its own analysis + acceptance.
-- Updated: 2026-08-27 21:20 UTC
-- Status: MERGED
-- Resume: —
-- Priority: P0
-- Owner: coordinator
-- Workspace: none
-- Branch: none
-- Base: `c224d28b`
-- Candidate: —
-- Shipping: `origin/main@139b6f92` (all 15 children landed across `0.2.290`–`0.2.313`); tracker reconciliation pushed at `origin/main@e94d182e`
-- Acceptance: every child is prioritized and delegated with its analysis + acceptance; each child's own acceptance criteria are recorded per child below
-- Review: per-child — each child that becomes a candidate gets an independent review by a different model/session (standing rule); children carry their own review state
-- Gates: per-child gates — each child lands behind its own acceptance and the full-suite-green gate
-- Blockers: —
-- Next: prioritize the P0 children — usage/token accounting, permission-model simplification, and the agent-worker architecture decision — and delegate each with its recorded analysis + acceptance
-- Recover: `grep -n "^- id: CAP-FB-20260826" TASKS.md`
-- History:
-  - 2026-08-26 20:26 UTC — batch captured from product-owner Telegram (ea800309, 12 items)
-  - 2026-08-26 20:58 UTC — permission-system simplification recorded as P0 (c8f06bbe)
-  - 2026-08-27 21:20 UTC — **reconciled: all 15 children are MERGED; the batch is complete.** Every child still read `status: open` while the work had shipped across `0.2.290`–`0.2.313` — the tracker had drifted from the code by roughly two weeks of releases, which is exactly what the update-after-every-completion rule exists to prevent. Each child now carries its landing version and commit. Highlights: the owner's top-priority usage/token bug was a single missing `stream_options.include_usage` (`0.2.297`); the permission mess became in-context approval cards (`0.2.303`) plus deletion of the orphaned Settings section (`0.2.313`); the agent-worker architecture landed all four phases (`0.2.308`–`0.2.310`). **Held at MERGED, not DONE, deliberately** — `DONE` requires the Chrome journey suite green at the tip and it is currently red (`CAP-FB-20260827-MAIN-GATES-RED-02`), which the `0.2.313` child is itself a cause of.
-  - 2026-08-26 23:30 UTC — agent-worker shared-worker architecture decision recorded as P0, phased (680c8904)
-
-- id: CAP-FB-20260826-BACK-STACK-01
-  severity: P1
-  status: merged
-  summary: "Back-button stack management broken. Settings → Back goes to a BLANK screen; must press Back twice. Happens for multiple surfaces (click assets, click back twice). ALSO: inside Settings there's no easy way to get Home without clicking Back for every settings sub-page. Owner's steer: once inside the settings page, use history.replaceState (don't push every settings sub-view onto history) — but still allow linking to individual parts of the settings page. ANALYSIS: the route/view state machine pushes sub-views onto history (or fails to restore the prior view), producing a blank intermediate state. FIX: settings sub-navigation uses replaceState (one history entry for the whole settings surface) + back from settings returns to the prior home view in one step; deep-linkable settings sections still get their own addressable state. ACCEPTANCE: Settings→(any sub-page)→Back returns to Home in ONE press, no blank screen; assets→Back works in one press; each settings section is still linkable. LANDED 0.2.296 (c8730513) + 0.2.304 (2fea7454) — fixed at the TOP frame: hideViewInner no longer navigates the view iframe to about:blank, openView uses location.replace so the pushState is a single history entry, and Settings sub-navigation uses replaceState. Settings/Assets/Directory/Skills return to the hub in ONE press, no blank screen. Harness: scripts/kat-back-stack.ts."
-- id: CAP-FB-20260826-NTP-ADD-AGENT-01
-  severity: P2
-  status: merged
-  summary: "NTP agents folder '+' button (on the settings panel, not side panel) to add an agent should be scoped to YOUR named agent. Owner likes the empty-state affordance: 'No named agents yet — create one in Tasks / Create an agent / or /agent create / or click button'. ACCEPTANCE: the agents-folder '+' creates a named agent; the empty state shows that affordance text + the create paths. LANDED 0.2.312 (d7ed500e) — the add-agent empty state shows the requested affordance text and the + creates a named agent."
-- id: CAP-FB-20260826-DISCOVERED-SITE-SPACING-01
-  severity: P2
-  status: merged
-  summary: "'Discovered open pages — click to add site' grey dialog box butts straight against the edge of the main agents container (no padding/margin) — looks terrible. FIX: add proper padding/margin around the discovered-sites box inside the agents container. LANDED 0.2.312 (d7ed500e) — the discovered-sites box has proper spacing inside the agents container."
-- id: CAP-FB-20260826-RECENT-ACTIVITY-FILTER-01
-  severity: P1
-  status: merged
-  summary: "Recent activity: the search text box + the 'all agents' button + the filter don't work. ACCEPTANCE: typing in search filters the recent-activity list; 'all agents' + the per-agent filter actually filter. LANDED 0.2.298 (3c40f71b) — root cause was not the controls: with many background agents the activity feed hung forever, so search and the agent filter appeared dead. Now loads with per-store fault isolation and an honest timeout + Retry."
-- id: CAP-FB-20260826-USAGE-TOKENS-01
-  severity: P0
-  status: merged
-  assign: best-agent
-  summary: "Usage calls + token numbers STILL aren't working (owner: works on his other projects incl. the chaos extension). The usage/token attribution isn't surfacing real numbers. This is the owner's explicit top-priority in the batch — assign to the strongest agent. ANALYSIS: the onUsage hook → usage-store path exists (usage.js); the tokens/calls either aren't being recorded from agent-do or aren't being read back into the UI. Compare against the chaos extension's working usage accounting. ACCEPTANCE: per-run + per-agent token/call counts are real, match the provider's actual usage, and render in the UI (and survive reload). LANDED 0.2.297 (a18de46e) — ROOT CAUSE: without stream_options.include_usage the provider omits usage from the stream, so agent-do onStepEnd saw step.usage undefined, recorded 0, and recordUsage dropped it. Every real provider routes through this adapter. Unreported usage is now recorded as unknown, never faked."
-- id: CAP-FB-20260826-BACKGROUND-AGENTS-UNIFY-01
-  severity: P2
-  status: merged
-  summary: "Background agents are separate from the agents box — owner wants them UNIFIED: background agents appear IN the agents list (with a 'runs in background' indicator), always accessible from there, and mentionable in the chat text box (@-mention) if not already. ACCEPTANCE: the agents list (side panel + NTP) includes background agents with a background indicator; they can be opened/messaged/@-mentioned like named agents. LANDED 0.2.306 (b779a88a) — background agents appear in the agents list (NTP + side panel) with a runs-in-the-background marker, schedule and toggle."
-- id: CAP-FB-20260826-DELETE-AGENT-FOLDER-01
-  severity: P2
-  status: merged
-  summary: "After deleting all of an agent's data (memory + OPFS), the owner can't delete the named agent's folder/record itself (had 'sorting hat', deleted all data, wants the agent folder gone too). Add the ability to fully delete a named agent (its folder + record), not just its data. ACCEPTANCE: from the agent, the owner can delete the named agent entirely (folder + registry record + memory + OPFS), with confirmation. LANDED 0.2.306 (b779a88a) — full named-agent delete removes folder, registry record, memory and OPFS store; verified by KAT. Instant delete/disable landed at 0.2.305 (bdc90bd2)."
-- id: CAP-FB-20260826-TOOL-LIBRARY-COUNT-01
-  severity: P2
-  status: merged
-  summary: "Tool library says 'browser tools: 130' but the list clearly doesn't show 130. The bundled-packages count should be double-checked too. ANALYSIS: the count comes from the registry bounds (130) but the rendered list is filtered/truncated or groups differently, so the visible rows << 130. ACCEPTANCE: the tool library shows all 130 browser tools (or honestly labels the grouping), and the bundled-package count is verified against the actual shipped packages. LANDED 0.2.312 (d7ed500e) — the tool library lists all 130 browser tools; the count and the rows agree."
-- id: CAP-FB-20260826-LOCAL-MODELS-HIDE-01
-  severity: P2
-  status: merged
-  summary: "Hide the local-models feature — the download never works (Chrome built-in AI ~10GB storage cap: 'insufficient storage available, 10GB below required payload 10.53GB' even though it claims a 5.72GB install payload). Owner's steer: remove/simplify the local-model download code now; LATER, load models (gguf) from the user's local drive via OPFS using the directory handle + file handle. ACCEPTANCE: the local-models UI is hidden/removed and the dead download code simplified; a follow-up note records the OPFS-file-handle model-loading idea. LANDED 0.2.307 (49fd4ef5) — removed outright rather than hidden: the UI and the dead download machinery are gone. The architecture and the future load-gguf-from-your-own-drive direction are logged in docs/LOCAL-MODELS-ARCHITECTURE.md. Ollama still works as a local OpenAI-compatible provider."
-- id: CAP-FB-20260826-APPROVALS-REMOVE-01
-  severity: P2
-  status: merged
-  summary: "The 'approval session' section inside the settings panel — is it still used? Owner thinks the whole interface doesn't work: if the agent requests access, going to a weird settings page to approve doesn't work. Approvals should be IN the context of the agent or the task being done, not a settings page. ACCEPTANCE: the orphaned approvals settings section is removed; approval prompts surface in-context (in the agent/task that needs them). LANDED 0.2.313 (5f8931f3) — the orphaned Settings Approvals section, nav and wiring are removed; revoking a permission confirms in-context via runOwnerApprovedMutation. NOTE: this is the change that left scripts/chrome-journeys.ts driving a deleted section — see CAP-FB-20260827-MAIN-GATES-RED-02."
-- id: CAP-FB-20260826-SYSTEM-PROMPT-01
-  severity: P2
-  status: merged
-  summary: "Update the built-in default system prompt to be more accurate to the types of tasks it can do (now that the toolset grew to 130 tools). Also: the agent should ALWAYS search for the tool first — we have a search/list-tools (query_tools) capability; give more examples of search-then-execute, WITHOUT bloating the system prompt context. ACCEPTANCE: the default system prompt reflects the real toolset, instructs search-then-execute with query_tools examples, and stays context-bounded. LANDED 0.2.312 (d7ed500e) — the default system prompt instructs search-then-execute and carries accurate tool signatures."
-- id: CAP-FB-20260826-HEADER-HOME-01
-  severity: P3
-  status: merged
-  summary: "In the settings panel, clicking the 'Chrome agent platform' header should take you back to the homepage. Small UX affordance; pairs with BACK-STACK-01. LANDED 0.2.296 (c8730513) — the Settings brand click goes Home."
-- id: CAP-FB-20260826-PERMISSIONS-SIMPLIFY-01
-  severity: P0
-  status: merged
-  summary: "Owner (frustrated, P0): the permission system is a MESS. (1) The sorting-hat demo failed with 'Tab grouping write operations are pending owner tab-management permission enrollment in Settings' EVEN THOUGH all permissions are enabled — there are TWO confusing layers (the chrome API permission AND the separate expiring browser-control GRANT) and the owner can't tell which one to grant. (2) 'It should be asking me in context' — when a tool needs a permission/grant, the approval must surface IN the agent/task context, not send the owner to a Settings page. (3) Settings UI can't REMOVE a permission; the 'needs permission' security label never surfaces where to manage it. GOAL (owner's words): 'make it super simple and easy to use and understand.' REDESIGN: (a) ONE coherent mental model — when a tool needs something, an approval surfaces in-context ('This agent wants to group tabs — Allow?') and one click grants what's needed; (b) diagnose why the demo said 'pending enrollment' despite enabled permissions (which layer failed — is the grant expiring/not-set, is tabGroups separate from tabs and un-granted, or a real detection bug?); (c) Settings becomes a clear inventory — every permission with a plain-English label + what it enables + a working add/remove toggle, and 'needs permission' labels link to the exact control; (d) the in-context approval is the primary path, Settings is the management/inventory path. ACCEPTANCE: the sorting-hat demo works after a single in-context approval; every permission is add/removable in Settings with a plain-English label; no 'pending enrollment' dead-ends. LANDED 0.2.303 (0856225f) + 0.2.313 (5f8931f3) — in-context approval cards for tool permission/grant denials; one click grants exactly the needed scope and retries; deny is sticky; the Settings dead-end is gone. The tabGroups half of the sorting-hat failure was a genuinely undeclared permission, fixed at 0.2.290."
-- id: CAP-FB-20260826-BROWSER-SINGLE-DRIVER-01
-  severity: P1
-  status: merged
-  summary: "Owner requirement (2026-08-26): with many NTPs/surfaces open, ONLY ONE may issue browser commands at a time. Today the grantMutex serializes the grant-check+mutation per-tool in the SW realm, but nothing arbitrates WHICH surface drives — multiple NTPs can interleave destructive commands from different agents. DESIGN: a SW-owned, durable, expiring BROWSER-CONTROL SESSION LEASE — a single holder keyed by surface/run; a surface must hold the lease to issue destructive browser commands; a competing surface gets an honest 'another surface is driving the browser' result (or a bounded queue); released on task end / surface close / expiry. In the worker architecture the lease authority stays in the SW and each agent worker requests the lease before driving the browser (recorded in docs/AGENT-EXECUTION-ARCHITECTURE.md). ACCEPTANCE: two NTPs drive concurrently → exactly one succeeds, the other is honestly told why; the lease survives the issuing surface closing (expiry-based release); no deadlock on lease release. LANDED 0.2.310 (a7612031, b8896f0d, 95521139) — a SW-owned, durable, expiring single-driver lease. Both the worker and the interactive paths go through withGrantLock; the check is DESTRUCTIVE-only so capture_screenshot stays an ungated read."
-- id: CAP-FB-20260826-AGENT-WORKERS-01
-  severity: P0
-  status: merged
-  summary: "Owner DECISION (2026-08-26): adopt the per-agent SHARED WORKER execution architecture (docs/AGENT-EXECUTION-ARCHITECTURE.md). Each agent (background/named/site) = its own shared worker ({name: agentId}), hosted by the single offscreen document (reason WORKERS — the SW cannot create workers directly), bootstrapped through the SW (alarms wake SW → SW ensures offscreen host + worker alive → dispatch). MessagePorts passed to CLIENTS (NTP/sidepanel) via a SW-validated handshake so the UI holds a live port and keeps the worker alive 'as much as possible'. BroadcastChannel (cap:agent:<id>) for state. SW stays the authority for routing/auth/grant-lock/redaction/storage. PHASES: P1 foundation (offscreen host bootstrap + agent-worker shared-worker shell + SW connect/port handshake + alive-set reconciliation + documented pattern) → P2 migrate the agent-do run loop into the worker (tool exec, provider calls, durable-run interaction from the worker context) → P3 durability mapping (run progress/logs survive worker death via durable-runs/OPFS) → P4 UI ports everywhere + background agents fully on workers. Acceptance per phase; P1 KATs: bootstrap, port handshake, keep-alive across host/client death, reconcile-on-wake. LANDED — all four phases: P1 0.2.308 (d0060d28), P2 0.2.309 (e7bf6b81, 90d32754), P3 (1e0588c4), P4 0.2.310 (a7612031). Each agent runs in its own shared worker with authority staying in the SW."
