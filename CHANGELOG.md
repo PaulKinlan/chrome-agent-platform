@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.323] — 2026-08-27
+- Tracker bookkeeping: recorded the exact public commits for the work pushed today
+
 ## [0.2.322] — 2026-08-27
 - Internal process change: reviews no longer require a second model (there isn't one) — instead a changed test now has to be proven capable of failing before it counts as evidence. It caught a bug on its first use: a check I'd 'fixed' the day before turned out to be one that could never fail
 

@@ -1688,7 +1688,7 @@ evidence every other task depends on).
 - Branch: working tree on `origin/main`
 - Base: `139b6f92`
 - Candidate: `9f02f9fc` (0.2.320)
-- Shipping: `origin/main@9f02f9fc` (0.2.320)
+- Shipping: `origin/main@9f02f9fc` (0.2.320, pushed 2026-08-28)
 - Acceptance: `npm run test:chrome` reaches 127/127 (or an honestly re-baselined count) on a clean profile. Each of the three failures is resolved at the layer that actually broke — the deleted-section drive is repointed at the in-context approval path so the deny/restart coverage it carried is **preserved, not deleted**; the capability-count assertion is derived from `CAPABILITIES` rather than hard-coded; and the `debugger` assertion is left failing until Q17 is decided, then made to match the decision. No assertion is weakened to make the suite pass
 - Review: **author review 2026-08-27 with the falsification gates** (the review rule changed the same day — no second model is available; see AGENTS.md "Review without a second model"). The gates caught a real defect in my own change: see the History entry below
 - Gates: Chrome journeys **127/127** · unit **1779/0** · security suite **PASS** · build clean · changelog in sync · gallery drift clean · tasks schema clean
@@ -1715,7 +1715,7 @@ Owner-described batch of bugs + UX issues. Each entry: analysis + acceptance. Pr
 - Branch: none
 - Base: `c224d28b`
 - Candidate: —
-- Shipping: `origin/main@139b6f92` (all 15 children landed across `0.2.290`–`0.2.313`)
+- Shipping: `origin/main@139b6f92` (all 15 children landed across `0.2.290`–`0.2.313`); tracker reconciliation pushed at `origin/main@e94d182e`
 - Acceptance: every child is prioritized and delegated with its analysis + acceptance; each child's own acceptance criteria are recorded per child below
 - Review: per-child — each child that becomes a candidate gets an independent review by a different model/session (standing rule); children carry their own review state
 - Gates: per-child gates — each child lands behind its own acceptance and the full-suite-green gate
