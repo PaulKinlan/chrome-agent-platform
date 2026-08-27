@@ -36,6 +36,9 @@
         <a href="#permissions" class="nav-item" data-section="permissions">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
         Permissions</a>
+        <a href="#approvals" class="nav-item" data-section="approvals">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>
+        Approvals</a>
         <a href="#hooks" class="nav-item" data-section="hooks">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
         Hooks</a>
@@ -180,6 +183,13 @@
         <p
           class="muted">Every permission is optional. The hub runs with none of these; enable each capability when you need it. Each Enable button asks Chrome for just that permission.</p>
         <div id="permission-list" class="permission-list"></div>
+      </section>
+
+      <section id="approvals" class="panel">
+        <h2>Approvals</h2>
+        <p class="muted">Destructive <strong>agent-initiated</strong> operations pause here until you approve the exact action. References are private, install-scoped and reveal neither content nor origin. Actions you start yourself in the hub UI — such as deleting an artifact from the artifact view — never wait here: your own click is the approval.</p>
+        <div id="approval-status" class="muted" role="status" aria-live="polite"></div>
+        <div id="approval-list" class="approval-list" aria-label="Pending destructive-operation approvals"></div>
       </section>
 
       <section id="hooks" class="panel">

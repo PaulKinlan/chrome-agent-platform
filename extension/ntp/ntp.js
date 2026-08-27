@@ -592,7 +592,7 @@ async function renderNamedAgents() {
   if (el) {
     el.replaceChildren();
     if (!agents.length && !background.length) {
-      el.innerHTML = `<div class="empty">No agents yet. Create one in a task ("create an agent…"), enable a background agent in Settings, or use /agent:create.</div>`;
+      el.innerHTML = `<div class="empty">No named agents yet. Create one in a task ("create an agent…") or with /agent:create.</div>`;
     } else {
       for (const a of agents.slice(0, 6)) {
         const row = document.createElement("capability-row");
