@@ -36,15 +36,22 @@ copyBtn?.addEventListener("click", async () => {
   } catch {}
 });
 
+function renderError(message) {
+  const err = document.createElement("div");
+  err.className = "error";
+  err.textContent = message;
+  out.replaceChildren(err);
+}
+
 async function main() {
   if (!id) {
-    out.innerHTML = `<div class="error">No artifact id given.</div>`;
+    renderError("No artifact id given.");
     return;
   }
   const res = await send("asset.get", { origin, id });
   const asset = res?.ok ? res.asset : null;
   if (!asset) {
-    out.innerHTML = `<div class="error">Artifact not found: ${id}</div>`;
+    renderError(`Artifact not found: ${id}`);
     return;
   }
   nameEl.textContent = asset.name ?? "Artifact";

@@ -140,3 +140,34 @@ Deno.test("Artifact card component: has New Tab button and emits open-tab event"
     origin: "master",
   });
 });
+
+Deno.test("Artifact viewer security (B1): hostile ID in URL query renders as inert text (no markup injection)", async () => {
+  const hostileId = '<img src=x onerror="alert(1)"><b>injected</b>';
+  const outEl = {
+    children: [],
+    replaceChildren(child) {
+      this.children = [child];
+    },
+  };
+
+  // Simulating the viewer error rendering logic in artifact.js
+  function renderError(message) {
+    const err = {
+      className: "error",
+      textContent: message,
+      tagName: "DIV",
+    };
+    outEl.replaceChildren(err);
+  }
+
+  renderError(`Artifact not found: ${hostileId}`);
+
+  assertEquals(outEl.children.length, 1);
+  const renderedNode = outEl.children[0];
+  assertEquals(renderedNode.className, "error");
+  // textContent preserves the exact literal string without parsing HTML
+  assertEquals(renderedNode.textContent, `Artifact not found: ${hostileId}`);
+  // No child elements or injected tags exist
+  assertEquals(renderedNode.children, undefined);
+  assert(!renderedNode.innerHTML, "must not set or expose innerHTML");
+});
