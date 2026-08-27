@@ -18,7 +18,7 @@
 import { capLog } from "../../lib/cap-log.js";
 
 const ALIVE_KEY = "cap:agent-workers:alive";
-const WORKER_PATH = "workers/agent-worker.js";
+const WORKER_PATH = "dist/workers/agent-worker.js";
 const MAX_PREVIEW_CHARS = 240;
 
 const log = capLog("agent-workers");
@@ -101,6 +101,7 @@ export function createAgentWorkerRoutes({
   ensureOffscreen,
   kvGet,
   kvSet,
+  executeTool,
   durableRegistry = null,
   broadcastProgress = null,
   markScheduledDone = null,
@@ -139,6 +140,60 @@ export function createAgentWorkerRoutes({
       if (!alive.includes(agentId)) await writeAliveSet([...alive, agentId]);
 
       return { ok: true, agentId, workerUrl: workerUrl(), name: agentId, created: ensured.created };
+    },
+
+    /** PHASE-2 run kick (SW → host → worker run descriptor). Validated: only
+     * extension surfaces may start a worker run. The worker holds NO authority
+     * — its tools RPC back here via `agent-worker.tool`. */
+    async "agent-worker.run"(m, context) {
+      if (!authorized(context)) return { ok: false, error: "unauthorized_principal" };
+      const agentId = String(m?.agentId ?? "");
+      if (!agentId || agentId.length > 200) return { ok: false, error: "invalid agentId" };
+      const runId = String(m?.runId ?? "").slice(0, 200);
+      if (!runId) return { ok: false, error: "invalid runId" };
+
+      const ensured = await this["agent-worker.ensure"]({ agentId }, context);
+      if (!ensured?.ok) return ensured;
+
+      const descriptor = {
+        runId,
+        task: String(m?.task ?? "").slice(0, 4000),
+        system: String(m?.system ?? "").slice(0, 16000),
+        modelKind: String(m?.modelKind ?? "demo").slice(0, 32),
+        maxIterations: Math.min(Number(m?.maxIterations ?? 12) || 12, 64),
+        toolSpecs: Array.isArray(m?.toolSpecs) ? m.toolSpecs.slice(0, 200) : [],
+      };
+      let posted;
+      try {
+        posted = await chrome.runtime.sendMessage({
+          type: "agent-worker-host:post",
+          agentId,
+          msg: { type: "agent-worker:run", ...descriptor },
+        });
+      } catch (e) {
+        return { ok: false, error: `worker host unreachable: ${e?.message ?? e}` };
+      }
+      if (!posted?.ok) return { ok: false, error: posted?.error || "worker run not posted" };
+      return { ok: true, runId, agentId };
+    },
+
+    /** PHASE-2 tool bridge — the worker's RPC proxy resolves here. THIS is the
+     * authority boundary: the worker cannot execute any tool itself; the SW
+     * validates + executes the real tool (grant-lock / run-fence / redaction).
+     * The full 130-tool grant-lock mapping is P3 — this route is the single
+     * choke point. */
+    async "agent-worker.tool"(m, context) {
+      if (!authorized(context)) return { ok: false, error: "unauthorized_principal" };
+      const toolName = String(m?.toolName ?? "").slice(0, 128);
+      if (!toolName) return { ok: false, error: "invalid toolName" };
+      if (typeof executeTool !== "function") {
+        return { ok: false, error: "tool execution not wired in this context" };
+      }
+      try {
+        return await executeTool(toolName, m?.args ?? {});
+      } catch (e) {
+        return { ok: false, error: String(e?.message ?? e).slice(0, 200) };
+      }
     },
 
     /** List the durable alive-set (which agents the SW believes should be up). */
