@@ -1,105 +1,90 @@
 htmlq bundled-package notices
 
-htmlq (v0.4.0, MIT) bundles its full Rust dependency tree (110 resolved
-packages from Cargo.lock). Every dependency's licence was enumerated from
-`cargo metadata` (each crate's declared SPDX `license` field).
+htmlq (v0.4.0, MIT) bundles its full Rust dependency tree. This audit is
+generated from `cargo metadata --locked` against the COMMITTED Cargo.lock of
+htmlq v0.4.0 (pinned commit 1361c8c46811dd7b961c3fe9c6b04f9318a345e8) — i.e. the
+EXACT 77 packages the pinned build actually compiles and links into the binary
+(NOT a `cargo update` re-resolution).
 
-Package licence expression (htmlq + dependency tree):
+Package licence expression (htmlq + the 77-package locked tree):
 
-  "MIT AND Apache-2.0 AND BSD-2-Clause AND Unicode-3.0 AND MPL-2.0 AND Unlicense"
+  "MIT AND Apache-2.0 AND MPL-2.0 AND Zlib AND Unlicense"
 
-  Note: each dependency is itself dual/tri-licensed as listed below; the
-  effective grant for the bundled build is the permissive side of each.
+  Every crate is permissive (MIT / Apache-2.0 / Zlib / Unlicense) EXCEPT the
+  five MPL-2.0 crates, which are file-level weak copyleft (admissible, flagged).
 
 ======================================================================
 
-Licence census (110 packages, by declared licence):
+Licence census (77 packages, by declared licence, locked versions):
 
-  MIT OR Apache-2.0 (43): bitflags@2.13.1, cfg-if@1.0.4, displaydoc@0.2.7,
-    dtoa@1.0.11, form_urlencoded@1.2.2, getrandom@0.1.16, html5ever@0.25.2,
-    idna@1.1.0, itoa@0.4.8, lazy_static@1.5.0, libc@0.2.189, lock_api@0.4.14,
-    log@0.4.34, parking_lot@0.12.5, parking_lot_core@0.9.12, percent-encoding@2.3.2,
-    ppv-lite86@0.2.21, proc-macro-hack@0.5.20+deprecated, proc-macro2@1.0.107,
-    quote@1.0.47, rand@0.7.3, rand@0.8.8, rand_chacha@0.2.2, rand_core@0.5.1,
-    rand_core@0.6.4, rand_pcg@0.2.1, rustc_version@0.4.1, scopeguard@1.2.0,
-    semver@1.0.28, serde@1.0.229, serde_core@1.0.229, serde_derive@1.0.229,
-    smallvec@1.15.2, stable_deref_trait@1.2.1, string_cache@0.8.9,
-    string_cache_codegen@0.5.4, syn@1.0.109, syn@2.0.119, syn@3.0.4,
-    unicode-width@0.1.14, url@2.5.8, utf-8@0.7.6, windows-link@0.2.1
+  MIT/Apache-2.0 (28): bitflags@1.3.2, cfg-if@1.0.0, form_urlencoded@1.0.1,
+    hermit-abi@0.1.19, idna@0.2.3, lazy_static@1.4.0, mac@0.1.1, nodrop@0.1.14,
+    percent-encoding@2.1.0, pest@2.1.3, ppv-lite86@0.2.10, rand_hc@0.2.0,
+    rustc_version@0.3.3, semver@0.11.0, semver-parser@0.10.2, servo_arc@0.1.1,
+    siphasher@0.3.7, smallvec@1.6.1, stable_deref_trait@1.2.0, tendril@0.4.2,
+    ucd-trie@0.1.3, unicode-normalization@0.1.19, unicode-width@0.1.8,
+    url@2.2.2, vec_map@0.8.2, winapi@0.3.9, winapi-i686-pc-windows-gnu@0.4.0,
+    winapi-x86_64-pc-windows-gnu@0.4.0
 
-  MIT (21): ansi_term@0.12.1, atty@0.2.14, clap@2.34.0, convert_case@0.4.0,
-    derive_more@0.99.20, htmlq@0.4.0, kuchiki@0.8.1, matches@0.1.10,
-    new_debug_unreachable@1.0.6, phf@0.8.0, phf_codegen@0.8.0, phf_generator@0.8.0,
-    phf_generator@0.11.3, phf_macros@0.8.0, phf_shared@0.8.0, phf_shared@0.11.3,
-    precomputed-hash@0.1.1, redox_syscall@0.5.18, strsim@0.8.0, synstructure@0.13.2,
+  MIT (17): ansi_term@0.11.0, atty@0.2.14, clap@2.33.3, convert_case@0.4.0,
+    derive_more@0.99.16, htmlq@0.4.0, kuchiki@0.8.1, matches@0.1.9,
+    new_debug_unreachable@1.0.4, phf@0.8.0, phf_codegen@0.8.0, phf_generator@0.8.0,
+    phf_macros@0.8.0, phf_shared@0.8.0, precomputed-hash@0.1.1, strsim@0.8.0,
     textwrap@0.11.0
 
-  Unicode-3.0 (18): icu_collections@2.3.0, icu_locale_core@2.3.0,
-    icu_normalizer@2.3.0, icu_normalizer_data@2.3.0, icu_properties@2.3.0,
-    icu_properties_data@2.3.0, icu_provider@2.3.1, litemap@0.8.3,
-    potential_utf@0.1.6, tinystr@0.8.4, writeable@0.6.4, yoke@0.8.3,
-    yoke-derive@0.8.2, zerofrom@0.1.8, zerofrom-derive@0.1.7, zerotrie@0.2.5,
-    zerovec@0.11.8, zerovec-derive@0.11.6
+  MIT OR Apache-2.0 (16): dtoa@0.4.8, getrandom@0.1.16, itoa@0.4.8,
+    libc@0.2.101, log@0.4.14, proc-macro-hack@0.5.19, proc-macro2@1.0.29,
+    quote@1.0.9, rand@0.7.3, rand_chacha@0.2.2, rand_core@0.5.1, rand_pcg@0.2.1,
+    serde@1.0.130, syn@1.0.76, unicode-xid@0.2.2, utf-8@0.7.6
 
-  MIT/Apache-2.0 (13): bitflags@1.3.2, hermit-abi@0.1.19, mac@0.1.1,
-    nodrop@0.1.14, rand_hc@0.2.0, servo_arc@0.1.1, siphasher@0.3.11,
-    siphasher@1.0.3, tendril@0.4.3, vec_map@0.8.2, winapi@0.3.9,
-    winapi-i686-pc-windows-gnu@0.4.0, winapi-x86_64-pc-windows-gnu@0.4.0
+  MIT / Apache-2.0 (6): futf@0.1.4, html5ever@0.25.1, markup5ever@0.10.1,
+    string_cache@0.8.1, string_cache_codegen@0.5.1, unicode-bidi@0.3.6
 
-  MPL-2.0 (5): cssparser@0.27.2, cssparser-macros@0.6.1, dtoa-short@0.3.5,
+  MPL-2.0 (5): cssparser@0.27.2, cssparser-macros@0.6.0, dtoa-short@0.3.3,
     selectors@0.22.0, thin-slice@0.1.1
 
-  MIT / Apache-2.0 (2): futf@0.1.5, markup5ever@0.10.1
-
-  Apache-2.0 OR MIT (2): idna_adapter@1.2.2, utf8_iter@1.0.4
-
-  BSD-2-Clause OR Apache-2.0 OR MIT (2): zerocopy@0.8.56, zerocopy-derive@0.8.56
-
-  Unlicense OR MIT (1): byteorder@1.5.0
+  Unlicense OR MIT (1): byteorder@1.4.3
   Apache-2.0/MIT (1): fxhash@0.2.1
-  (MIT OR Apache-2.0) AND Unicode-3.0 (1): unicode-ident@1.0.24
+  Zlib OR Apache-2.0 OR MIT (1): tinyvec@1.3.1
+  MIT OR Apache-2.0 OR Zlib (1): tinyvec_macros@0.1.0
   Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT (1): wasi@0.9.0+wasi-snapshot-preview1
 
 ======================================================================
 
-FLAG (admissible, but noted): the five MPL-2.0 crates (cssparser, cssparser-macros,
-dtoa-short, selectors, thin-slice) are MPL-2.0 — a file-level weak copyleft.
-MPL-2.0 permits static linking into a larger binary and redistribution under the
-overall package licence; only files derived from MPL-2.0 sources must retain
-MPL-2.0. This is NOT a GPL-family viral licence and does NOT block admission, but
-it is surfaced here per the house convention that every non-permissive component
-is flagged honestly.
+FLAG (admissible, but noted): the five MPL-2.0 crates (cssparser@0.27.2,
+cssparser-macros@0.6.0, dtoa-short@0.3.3, selectors@0.22.0, thin-slice@0.1.1)
+are MPL-2.0 — file-level weak copyleft. MPL-2.0 permits static linking into a
+larger binary and redistribution under the overall package licence; only files
+derived from MPL-2.0 sources must retain MPL-2.0. NOT a GPL-family viral
+licence; does NOT block admission.
 
-No GPL / AGPL / LGPL / copyleft-viral licences appear in the tree.
+No GPL / AGPL / LGPL licences appear in the locked tree.
 
 ======================================================================
 
 Full licence texts:
 
-MIT (htmlq + the MIT-licensed set) — see MIT.txt in this directory.
+MIT (htmlq + the MIT-licensed set) — see MIT.txt (vendored alongside this file).
 
-Apache-2.0 (the Apache-2.0-licensed set) — see Apache-2.0.txt in this directory.
+Apache-2.0 (the Apache-2.0-licensed set) — see Apache-2.0.txt (vendored
+alongside this file).
 
---- MPL-2.0 (full text) ---
-Mozilla Public License Version 2.0
+--- MPL-2.0 ---
+Mozilla Public License Version 2.0 — full text at
+https://www.mozilla.org/en-US/MPL/2.0/ (SPDX: MPL-2.0). Covers the five crates
+listed above.
 
-1. Definitions
-   ... (full MPL-2.0 text follows; see https://www.mozilla.org/en-US/MPL/2.0/)
-   The complete text is available at https://www.mozilla.org/en-US/MPL/2.0/ and
-   is incorporated by reference here (SPDX: MPL-2.0). Files covered: the five
-   crates listed above.
+--- Zlib ---
+The zlib license — full text at https://opensource.org/license/zlib
+(SPDX: Zlib). Covers tinyvec@1.3.1 and tinyvec_macros@0.1.0 (each also offers
+Apache-2.0 OR MIT).
 
---- Unicode-3.0 (Unicode Data Files and Software) ---
-UNICODE, INC. LICENSE AGREEMENT - DATA FILES AND SOFTWARE
-See https://www.unicode.org/license.txt for the full text (SPDX: Unicode-3.0).
-Covers the 18 icu_*/zerofrom/yoke/zerovec/tinystr/etc. crates.
+--- Unlicense ---
+This is free and unencumbered software released into the public domain
+(SPDX: Unlicense). See https://unlicense.org/ for the full text. Covers
+byteorder@1.4.3 (also offers MIT).
 
---- BSD-2-Clause (zerocopy, zerocopy-derive) ---
-Copyright (c) the zerocopy authors.
-Redistribution and use in source and binary forms, with or without modification,
-are permitted provided that the following conditions are met: [full BSD-2-Clause
-text at https://opensource.org/license/bsd-2-clause; SPDX: BSD-2-Clause].
-
---- Unlicense (byteorder) ---
-This is free and unencumbered software released into the public domain (SPDX:
-Unlicense). See https://unlicense.org/ for the full text.
+--- Apache-2.0 WITH LLVM-exception ---
+wasi@0.9.0+wasi-snapshot-preview1 (the WASI Preview 1 ABI crate) — see
+https://github.com/rust-lang/wasi (SPDX: Apache-2.0 WITH LLVM-exception; also
+offers Apache-2.0 OR MIT).
