@@ -1,0 +1,9 @@
+[package]
+name = "home"
+version = "0.5.9"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "WASI stub for the home crate (home_dir only, env-based)"
+
+[lib]
+path = "src/lib.rs"
