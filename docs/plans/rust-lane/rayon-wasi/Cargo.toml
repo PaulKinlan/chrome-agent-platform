@@ -1,0 +1,8 @@
+[package]
+name = "rayon"
+version = "1.12.0"
+edition = "2021"
+description = "Serial WASI fallback shim for rayon (wasi-preview1 has no threads). Delegates parallel iterators and sorts to the serial std equivalents — semantics preserved for the tools' usage, no thread spawn."
+license = "MIT OR Apache-2.0"
+
+[dependencies]

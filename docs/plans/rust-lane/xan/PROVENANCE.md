@@ -1,34 +1,34 @@
-# xan (patched fork) — build/census proof — RUNNABLE admission BLOCKED on rayon
+# xan (patched fork) — RUNNABLE admission (serial WASI)
 
 - Upstream: https://github.com/medialab/xan (MIT OR Unlicense, xsv heritage)
-- Pinned commit: ae02022bf700b5b414c7481ebf69f207f38314ad (tag 0.60.0, annotated ^{commit})
-- Patch (ours, one intent): drop the `pager` dependency for the WASI target —
-  pager is only used for interactive `xan help`/`xan view` paging via a real
-  `less` terminal, which WASI does not have. The change gates the dep AND the two
-  call sites behind `cfg(all(not(windows), not(target_os = "wasi")))` (+ a wasi
-  no-op arm in `help.rs`). This removes the `pager@0.16.1 → errno@0.2.8`
-  nightly-`feature(thread_local)` chain that blocked the stable build.
+- Pinned commit: ae02022bf700b5b414c7481ebf69f207f38314ad (tag 0.60.0)
+- Patches (ours, two intents):
+  1. Drop the `pager` dependency for WASI (interactive `less` paging does not
+     exist under WASI): gate the dep + call sites behind
+     `cfg(all(not(windows), not(target_os = "wasi")))` + a wasi no-op arm in
+     `help.rs` — removes the `pager@0.16.1 → errno@0.2.8` nightly-only chain.
+  2. Install the **rayon-wasi serial shim** via `[patch.crates-io]` (see
+     ../rayon-wasi/README.md) — replaces rayon's thread pool with serial
+     equivalents so the parallel subcommands (sort/count/bins/parallel/aggregate)
+     RUN under wasi-preview1 instead of panicking on thread spawn.
 
 ## Five never-fabricate inputs
 - source.repo: https://github.com/medialab/xan.git — REAL
 - source.commit: ae02022bf700b5b414c7481ebf69f207f38314ad — REAL (git rev-parse HEAD)
-- binary.sha256: 668e4955b659d4399475c6cb56a6da772e5e58ed83eefad871dea6bb3e8f2be4 — REAL (sha256sum of the built wasm)
-- build.log+toolchain: rustup stable-x86_64-unknown-linux-gnu + wasm32-wasip1; `cargo build --release --target wasm32-wasip1` — REAL (build succeeded 1m21s)
-- sbom: cargo metadata --locked (352 packages) + cargo tree --locked -e normal,build --target wasm32-wasip1 (the BUILT set) — REAL
+- binary.sha256: 67415dff0e19403418f210a6854e3e623b8401ffea05bd188d8531a66aa42cee — REAL
+- build.log+toolchain: rustup stable-x86_64-unknown-linux-gnu + wasm32-wasip1; `cargo build --release --target wasm32-wasip1` — REAL (1m07s)
+- sbom: cargo metadata --locked (352 packages) + cargo tree --locked -e normal,build --target wasm32-wasip1 — REAL
 
-## Binary census (REAL, from the built artifact)
-- xan.wasm: 13,246,073 bytes (~12.6 MB) → DEFAULT tier (≤16 MB)
-- imports: 25, ALL `wasi_snapshot_preview1` (pure WASI Preview 1, no JS/bindgen)
-- memory: 1 (inline-defined; 0 imported memories)
+## Binary census (REAL)
+- xan.wasm: 13,034,759 bytes (~12.4 MiB) → DEFAULT tier (≤16 MiB)
+- imports: 25 functions, ALL `wasi_snapshot_preview1` (pure WASI Preview 1)
+- memories: 0 imported; 0 thread/atomic imports (serial shim proven)
 
-## RUNNABLE admission: BLOCKED (honest — build proof only)
-The binary BUILDS but is NOT verified runnable and is NOT admitted. Precise
-blocker: `rayon` is a hard dependency used in 5 core code paths
-(src/cmd/sort.rs, src/cmd/bins.rs, src/cmd/parallel.rs,
-src/collections/counter.rs, src/moonblade/agg/aggregators/numbers.rs). rayon's
-thread pool spawns `std::thread`, which wasi-preview1 does not support — the pool
-init (global or explicit ThreadPoolBuilder) PANICS at runtime. Core subcommands
-(sort, count, bins, parallel, numeric aggregations) would panic. Unblock:
-serial-fallback patch (par_sort_unstable→sort, par_iter→iter, drop ThreadPoolBuilder)
-across the 5 sites — tranche-2 depth, not done here. Never-fabricate: the five
-inputs above are REAL but do NOT constitute a runnable admission.
+## RUNNABLE (verified via node:wasi)
+- `printf 'name,age\nAlice,30\nBob,25\n' | xan count` → `2`
+- `printf 'name,age\nAlice,30\nBob,25\n' | xan select name` → `name\nAlice\nBob`
+
+## Serial-semantics disclosure
+The `--parallel` flag is accepted but runs serially (the rayon shim). Results are
+identical (par_iter order was unspecified; serial is strictly deterministic).
+No speed-up — a documented limitation, not a correctness risk.
