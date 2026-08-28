@@ -53,6 +53,35 @@
     }
     /* collapsed → a narrow icon rail */
     .side.collapsed { inline-size: 60px; flex-basis: 60px; padding-inline: 10px; }
+    /* UX-004 REVISE: below the narrow breakpoint the manual expansion may NOT
+       restore the inline 240px rail (it overflows a 360px viewport). The
+       policy-sanctioned expansion is an off-canvas overlay: the icon rail
+       stays in flow, the expanded panel floats above the content, and the
+       scrim closes it — zero horizontal overflow in every state. */
+    .side-scrim { display: none; }
+    @media (max-width: 599.98px) {
+      .side.overlay {
+        position: fixed;
+        inset-block: 0;
+        inset-inline-start: 0;
+        inline-size: min(240px, 78vw);
+        flex: 0 0 auto;
+        block-size: 100vh;
+        z-index: 105; /* above content, below the edge nub (110) */
+        box-shadow: 0 0 24px rgb(0 0 0 / .25);
+      }
+      .side.overlay ~ .side-toggle { left: 60px; }
+      .side-scrim {
+        display: block;
+        position: fixed;
+        inset: 0;
+        z-index: 104; /* under the overlay panel, over the page */
+        border: 0;
+        padding: 0;
+        background: rgb(0 0 0 / .4);
+        cursor: pointer;
+      }
+    }
     .brand-row { display: flex; align-items: center; gap: 6px; block-size: 40px; min-block-size: 40px; flex: 0 0 40px; margin-block-end: 4px; }
     .brand-row .brand { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
     /* The collapse/expand control is an edge NUB protruding from the sidebar's

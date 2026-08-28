@@ -40,7 +40,7 @@ import {
   focusExplicitRouteTarget,
   VIEW_ROUTE,
 } from "./view-transition.js";
-import { applySidebarNubPolicy } from "./view-policy.js";
+import { applySidebarNubPolicy, SIDEBAR_NARROW_QUERY, sidebarWidthPolicy } from "./view-policy.js";
 import { parseNtpHash, resolveEntryMeta, shouldDispatchForNavigationType } from "../lib/navigation-controller.js";
 import { actionableRunsForSurface, latestRunForSurface } from "../lib/run-scope.js";
 import {
@@ -2234,26 +2234,120 @@ function persistSidebar(collapsed) {
   }).catch(() => {});
   return sidebarWriteQueue;
 }
-function setSidebarCollapsed(collapsed) {
+// `auto` marks a form-factor-driven change (the narrow-width policy): it moves
+// the rail without overwriting the user's persisted preference.
+let persistedSidebarCollapsed = false;
+// UX-004 REVISE: the narrow manual expansion is an OFF-CANVAS overlay, never
+// the inline 240px rail (which overflows a 360px viewport). The overlay is
+// transient (never persisted) and closes on scrim tap, Escape, or leaving the
+// narrow width.
+let sidebarOverlayOpen = false;
+// Transient capture of the rail's collapsed state while the overlay drawer is
+// open — restored on close, never persisted (the saved preference is untouched).
+let sidebarOverlayWasCollapsed = false;
+let sideScrim = null;
+function setSideToggleExpanded(expanded) {
+  sideToggle.setAttribute("aria-expanded", String(expanded));
+}
+// The toggle's label must track the EFFECTIVE expanded state (at narrow width
+// that is the overlay, not the rail class).
+function updateSideToggleLabels(expanded) {
+  const label = expanded ? "Collapse sidebar" : "Expand sidebar";
+  sideToggle.setAttribute("aria-label", label);
+  sideToggle.setAttribute("title", label);
+}
+function ensureSideScrim() {
+  if (sideScrim) return sideScrim;
+  sideScrim = document.createElement("button");
+  sideScrim.className = "side-scrim";
+  sideScrim.type = "button";
+  sideScrim.setAttribute("aria-label", "Close sidebar");
+  sideScrim.hidden = true;
+  sideScrim.addEventListener("click", () => withViewTransition(() => setSidebarOverlay(false)));
+  side.after(sideScrim);
+  return sideScrim;
+}
+function setSidebarOverlay(open) {
+  const next = open === true && (narrowSidebarMq?.matches === true);
+  if (next && !sidebarOverlayOpen) {
+    sidebarOverlayWasCollapsed = sidebarCollapsed;
+  }
+  sidebarOverlayOpen = next;
+  side.classList.toggle("overlay", next);
+  // UX-004 REVISE 2: while the overlay drawer is open the FULL nav must be
+  // visible (brand, section labels, item text) — the collapsed class comes
+  // OFF for the drawer's lifetime. On close the captured rail state goes back
+  // on (at narrow that is the icon rail again; at wide the width policy owns
+  // the class, so fall back to the live state until it applies).
+  side.classList.toggle(
+    "collapsed",
+    next ? false : ((narrowSidebarMq?.matches === true) ? sidebarOverlayWasCollapsed : sidebarCollapsed),
+  );
+  const scrim = ensureSideScrim();
+  scrim.hidden = !next;
+  // expanded-ness is the overlay at narrow width, so aria-expanded + the
+  // toggle label track IT.
+  setSideToggleExpanded(next);
+  updateSideToggleLabels(next);
+}
+function setSidebarCollapsed(collapsed, { auto = false } = {}) {
   sidebarCollapsed = collapsed;
-  side.classList.toggle("collapsed", collapsed);
-  sideToggle.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
-  sideToggle.setAttribute("title", collapsed ? "Expand sidebar" : "Collapse sidebar");
-  sideToggle.setAttribute("aria-expanded", String(!collapsed));
+  // While the overlay drawer is open it owns the collapsed class (the drawer
+  // shows the full nav); the variable still updates so close() restores it.
+  if (!sidebarOverlayOpen) side.classList.toggle("collapsed", collapsed);
+  const expandedNow = (narrowSidebarMq?.matches === true) ? sidebarOverlayOpen : !collapsed;
+  updateSideToggleLabels(expandedNow);
+  setSideToggleExpanded(expandedNow);
   renderDurability();
+  if (auto) return; // form-factor state — the user's saved choice stands
+  persistedSidebarCollapsed = collapsed;
   persistSidebar(collapsed); // serialized + ordered
 }
 sideToggle?.addEventListener("click", () => {
+  // UX-004 REVISE: the toggle goes THROUGH the narrow policy — below the
+  // breakpoint expansion is the off-canvas overlay, never the inline rail.
+  if (narrowSidebarMq?.matches === true) {
+    withViewTransition(() => setSidebarOverlay(!sidebarOverlayOpen));
+    return;
+  }
   withViewTransition(() => setSidebarCollapsed(!sidebarCollapsed));
 });
-// Restore the persisted rail state on load (session or durable).
+// Escape closes the overlay. Optional-chained: the unit-thread harnesses
+// evaluate this module against a partial DOM shim without addEventListener.
+document.addEventListener?.("keydown", (event) => {
+  if (event.key === "Escape" && sidebarOverlayOpen) {
+    withViewTransition(() => setSidebarOverlay(false));
+  }
+});
+// Narrow-width auto-collapse (UX-004): the expanded 240px rail overflows a
+// 360px viewport, so below the breakpoint the rail collapses to the icon rail
+// without persisting; crossing back restores the user's own last choice.
+const narrowSidebarMq = window.matchMedia?.(SIDEBAR_NARROW_QUERY) ?? null;
+function applySidebarForWidth() {
+  const narrow = narrowSidebarMq?.matches === true;
+  // The overlay exists only at narrow width — leaving the breakpoint closes it.
+  if (!narrow && sidebarOverlayOpen) setSidebarOverlay(false);
+  const policy = sidebarWidthPolicy({
+    narrow,
+    persistedCollapsed: persistedSidebarCollapsed,
+  });
+  if (policy.collapsed !== sidebarCollapsed) {
+    setSidebarCollapsed(policy.collapsed, { auto: !policy.persist });
+  }
+  setSideToggleExpanded(narrow ? sidebarOverlayOpen : !policy.collapsed);
+}
+narrowSidebarMq?.addEventListener?.("change", applySidebarForWidth);
+// Restore the persisted rail state on load (session or durable), then let the
+// width policy decide the effective state (a narrow viewport collapses even
+// when the saved choice was expanded).
 async function restoreSidebar() {
   try {
     const s = await send("kv.get", { keys: SIDEBAR_KEY });
-    if (s?.[SIDEBAR_KEY] === true) setSidebarCollapsed(true);
+    persistedSidebarCollapsed = s?.[SIDEBAR_KEY] === true;
   } catch {
-    // worker unreachable — default expanded.
+    persistedSidebarCollapsed = false; // worker unreachable — default expanded.
   }
+  applySidebarForWidth();
 }
 restoreSidebar();
 
