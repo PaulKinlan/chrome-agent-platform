@@ -35,7 +35,7 @@ const MAX_CORE_ASSETS = 8;
 const MAX_CORE_ASSET_BYTES = 131072; // 128 KiB per core asset
 const MAX_PROFILE_GRANTS = 8;
 
-const VALID_PROFILE_GRANTS = new Set([
+export const VALID_PROFILE_GRANTS = new Set([
   "profile:basic",
   "profile:work_history",
   "profile:education",
@@ -48,14 +48,21 @@ const VALID_PROFILE_GRANTS = new Set([
   "disclosures",
 ]);
 
-/** Normalize and bound an agent's explicit profile grants. */
-export function normalizeProfileGrants(grants) {
-  if (!Array.isArray(grants)) return [];
+/** Validate, normalize, and bound an agent's explicit profile grants. Fails closed on malformed input. */
+export function validateProfileGrants(grants) {
+  if (!Array.isArray(grants)) {
+    return { ok: false, error: "profileGrants must be an array of grant strings" };
+  }
   const out = [];
-  for (const g of grants) {
-    if (typeof g !== "string") continue;
+  for (let i = 0; i < grants.length; i++) {
+    const g = grants[i];
+    if (typeof g !== "string") {
+      return { ok: false, error: `profileGrants entry at index ${i} must be a string` };
+    }
     const clean = g.trim().toLowerCase();
-    if (!VALID_PROFILE_GRANTS.has(clean)) continue;
+    if (!clean || !VALID_PROFILE_GRANTS.has(clean)) {
+      return { ok: false, error: `invalid profile grant: "${g}"` };
+    }
     const canonical = clean.startsWith("profile:") || clean === "*"
       ? clean
       : `profile:${clean}`;
@@ -64,7 +71,13 @@ export function normalizeProfileGrants(grants) {
       if (out.length >= MAX_PROFILE_GRANTS) break;
     }
   }
-  return out;
+  return { ok: true, grants: out };
+}
+
+/** Normalize profile grants safely (fallback helper). */
+export function normalizeProfileGrants(grants) {
+  const res = validateProfileGrants(grants);
+  return res.ok ? res.grants : [];
 }
 
 /** Normalize the core assets (files the owner attaches as the agent's core
@@ -206,6 +219,14 @@ export async function createNamedAgent(
   }
   const skillList = Array.isArray(skills) ? skills.slice(0, MAX_SKILLS) : [];
   const assetList = normalizeCoreAssets(coreAssets);
+
+  let cleanProfileGrants = [];
+  if (profileGrants !== undefined && profileGrants !== null) {
+    const validatedGrants = validateProfileGrants(profileGrants);
+    if (!validatedGrants.ok) return validatedGrants;
+    cleanProfileGrants = validatedGrants.grants;
+  }
+
   return await withAgentsLock(async () => {
     const map = await agentsMap();
     const slug = slugifyAgentId(id) || slugifyAgentId(cleanName) || `agent-${Date.now()}`;
@@ -220,7 +241,9 @@ export async function createNamedAgent(
       avatar: avatar ? String(avatar) : (existing?.avatar ?? null),
       skills: skillList,
       coreAssets: assetList,
-      profileGrants: normalizeProfileGrants(profileGrants ?? existing?.profileGrants),
+      profileGrants: profileGrants !== undefined && profileGrants !== null
+        ? cleanProfileGrants
+        : (existing?.profileGrants ?? []),
       provider: normalizeAgentProvider(provider) ?? (existing?.provider ?? null),
       // Non-reusable row identity + monotonic per-row revision let an owner
       // approval bind the exact current agent without hashing large avatars or
@@ -273,7 +296,15 @@ export async function updateNamedAgent(id, patch = {}, { gateBeforeMutation = nu
     if (patch.avatar !== undefined) next.avatar = patch.avatar ? String(patch.avatar) : null;
     if (patch.skills !== undefined) next.skills = Array.isArray(patch.skills) ? patch.skills.slice(0, MAX_SKILLS) : [];
     if (patch.coreAssets !== undefined) next.coreAssets = normalizeCoreAssets(patch.coreAssets);
-    if (patch.profileGrants !== undefined) next.profileGrants = normalizeProfileGrants(patch.profileGrants);
+    if (patch.profileGrants !== undefined) {
+      if (patch.profileGrants === null) {
+        next.profileGrants = [];
+      } else {
+        const validatedGrants = validateProfileGrants(patch.profileGrants);
+        if (!validatedGrants.ok) return validatedGrants;
+        next.profileGrants = validatedGrants.grants;
+      }
+    }
     if (patch.provider !== undefined) {
       // `null` clears the override (inherit the global); a complete config sets it.
       next.provider = normalizeAgentProvider(patch.provider);

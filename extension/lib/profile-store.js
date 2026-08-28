@@ -11,7 +11,7 @@
 //   - Per-agent readable with explicit grants from the authoritative agent registry (getNamedAgent).
 //   - Reserved namespace: profile:* keys are reserved and protected from raw model memory tools.
 //   - Write-audited with actual change diffs (mutations fail closed and roll back if auditing fails).
-//   - Atomic bulk updates: pre-validated before mutation with rollback compensation.
+//   - Atomic bulk updates: pre-validated before mutation with rollback compensation under a single transaction lock.
 
 import { masterMemory } from "./memory.js";
 import { getNamedAgent } from "./named-agents.js";
@@ -30,6 +30,16 @@ export const MAX_LINKS_COUNT = 16;
 export const MAX_CUSTOM_ANSWERS = 32;
 export const MAX_AUDIT_LOG_ENTRIES = 100;
 export const PROFILE_AUDIT_KEY = "profile:audit_log";
+
+const RESERVED_AGENT_SLUGS = new Set([
+  "owner",
+  "master",
+  "unnamed",
+  "admin",
+  "system",
+  "hub",
+  "root",
+]);
 
 let auditMutex = Promise.resolve();
 function withAuditLock(fn) {
@@ -510,6 +520,43 @@ export async function getProfileSection(sectionKey, options = {}) {
   return { ok: true, section: normSection, data: data ?? null };
 }
 
+/** Internal unlocked single-section write + audit. Used by setProfileSection and setWholeProfile. */
+async function setProfileSectionInner(mem, normSection, validatedData, options = {}) {
+  const previous = await readTrustedMemory(mem, normSection);
+  const action = previous ? "update" : "create";
+  const diffFields = computeDiff(previous, validatedData);
+
+  // Commit section write
+  await mem.setTrusted(normSection, validatedData);
+
+  // Audit logging: fail the mutation closed if audit log cannot be committed
+  try {
+    await recordAudit(mem, {
+      action,
+      section: normSection,
+      actor: options.actor ?? "owner",
+      fields: diffFields,
+    });
+  } catch (auditErr) {
+    // Revert write on audit failure
+    try {
+      if (previous !== null && previous !== undefined) {
+        await mem.setTrusted(normSection, previous);
+      } else {
+        await mem.delete(normSection);
+      }
+    } catch (rollbackErr) {
+      return {
+        ok: false,
+        error: `audit write failed: ${auditErr?.message ?? String(auditErr)}; rollback failed: ${rollbackErr?.message ?? String(rollbackErr)}`,
+      };
+    }
+    return { ok: false, error: `audit write failed: ${auditErr?.message ?? String(auditErr)}` };
+  }
+
+  return { ok: true, section: normSection, data: validatedData };
+}
+
 /** Write and audit a profile section. Serialized under audit lock with rollback on audit failure. */
 export async function setProfileSection(sectionKey, data, options = {}) {
   const normSection = normalizeSectionKey(sectionKey);
@@ -532,43 +579,11 @@ export async function setProfileSection(sectionKey, data, options = {}) {
   const mem = options.memory ?? masterMemory();
 
   return await withAuditLock(async () => {
-    const previous = await readTrustedMemory(mem, normSection);
-    const action = previous ? "update" : "create";
-    const diffFields = computeDiff(previous, validation.data);
-
-    // Commit section write
-    await mem.setTrusted(normSection, validation.data);
-
-    // Audit logging: fail the mutation closed if audit log cannot be committed
-    try {
-      await recordAudit(mem, {
-        action,
-        section: normSection,
-        actor: options.actor ?? "owner",
-        fields: diffFields,
-      });
-    } catch (auditErr) {
-      // Revert write on audit failure
-      try {
-        if (previous !== null && previous !== undefined) {
-          await mem.setTrusted(normSection, previous);
-        } else {
-          await mem.delete(normSection);
-        }
-      } catch (rollbackErr) {
-        return {
-          ok: false,
-          error: `audit write failed: ${auditErr?.message ?? String(auditErr)}; rollback failed: ${rollbackErr?.message ?? String(rollbackErr)}`,
-        };
-      }
-      return { ok: false, error: `audit write failed: ${auditErr?.message ?? String(auditErr)}` };
-    }
-
-    return { ok: true, section: normSection, data: validation.data };
+    return await setProfileSectionInner(mem, normSection, validation.data, options);
   });
 }
 
-/** Delete and audit a profile section. Serialized under audit lock with rollback on audit failure. */
+/** Delete and audit a profile section. Serialized under audit lock with rollback on delete/audit failure. */
 export async function deleteProfileSection(sectionKey, options = {}) {
   const normSection = normalizeSectionKey(sectionKey);
   if (!normSection) {
@@ -580,25 +595,25 @@ export async function deleteProfileSection(sectionKey, options = {}) {
   return await withAuditLock(async () => {
     const existing = await readTrustedMemory(mem, normSection);
     if (existing !== null && existing !== undefined) {
-      await mem.delete(normSection);
       try {
+        await mem.delete(normSection);
         await recordAudit(mem, {
           action: "delete",
           section: normSection,
           actor: options.actor ?? "owner",
           fields: ["deleted"],
         });
-      } catch (auditErr) {
-        // Restore on audit failure
+      } catch (err) {
+        // Restore snapshot on ANY deletion or audit failure
         try {
           await mem.setTrusted(normSection, existing);
-        } catch (rollbackErr) {
+        } catch (restoreErr) {
           return {
             ok: false,
-            error: `audit write failed: ${auditErr?.message ?? String(auditErr)}; rollback failed: ${rollbackErr?.message ?? String(rollbackErr)}`,
+            error: `delete/audit failed: ${err?.message ?? String(err)}; restoration failed: ${restoreErr?.message ?? String(restoreErr)}`,
           };
         }
-        return { ok: false, error: `audit write failed: ${auditErr?.message ?? String(auditErr)}` };
+        return { ok: false, error: `delete/audit failed: ${err?.message ?? String(err)}` };
       }
     }
 
@@ -609,7 +624,7 @@ export async function deleteProfileSection(sectionKey, options = {}) {
 /**
  * Read a profile section scoped to an agent's explicit grants.
  * Identity is authenticated against the authoritative agent registry (getNamedAgent).
- * Fails closed if the agent slug is missing, unknown, or lacks explicit grants.
+ * Fails closed if the agent slug is missing, unknown, reserved sentinel, or lacks explicit grants.
  */
 export async function readAgentProfileSection(agentSlug, sectionKey, options = {}) {
   const normSection = normalizeSectionKey(sectionKey);
@@ -621,7 +636,11 @@ export async function readAgentProfileSection(agentSlug, sectionKey, options = {
     return { ok: false, error: "readAgentProfileSection requires an agent slug string" };
   }
 
-  const slug = agentSlug.trim();
+  const slug = agentSlug.trim().toLowerCase();
+  if (RESERVED_AGENT_SLUGS.has(slug)) {
+    return { ok: false, error: `unauthorized: reserved sentinel slug "${slug}" cannot be used as an agent grant subject` };
+  }
+
   const agent = await getNamedAgent(slug);
   if (!agent) {
     return {
@@ -648,7 +667,11 @@ export async function readAgentProfile(agentSlug, options = {}) {
     return { ok: false, error: "readAgentProfile requires an agent slug string" };
   }
 
-  const slug = agentSlug.trim();
+  const slug = agentSlug.trim().toLowerCase();
+  if (RESERVED_AGENT_SLUGS.has(slug)) {
+    return { ok: false, error: `unauthorized: reserved sentinel slug "${slug}" cannot be used as an agent grant subject` };
+  }
+
   const agent = await getNamedAgent(slug);
   if (!agent) {
     return {
@@ -696,8 +719,8 @@ export async function getWholeProfile(options = {}) {
 
 /**
  * Set multiple profile sections in bulk.
- * Pre-validates ALL sections upfront before committing any writes.
- * If any section fails validation or writing, fails closed and rolls back previously committed writes.
+ * Pre-validates ALL sections upfront. Operates inside a single transaction lock
+ * around snapshot + writes + audits with full rollback compensation on any failure.
  */
 export async function setWholeProfile(profileObject, options = {}) {
   if (!isPlainObject(profileObject)) {
@@ -729,48 +752,51 @@ export async function setWholeProfile(profileObject, options = {}) {
   }
 
   const mem = options.memory ?? masterMemory();
-  const snapshots = new Map();
-  const committed = [];
 
-  // Capture snapshots of previous states for rollback safety
-  for (const { section } of validatedSections) {
-    const prev = await readTrustedMemory(mem, section);
-    snapshots.set(section, prev);
-  }
+  return await withAuditLock(async () => {
+    const snapshots = new Map();
+    const committed = [];
 
-  // Commit writes sequentially with catch and rollback
-  try {
-    for (const { section, data } of validatedSections) {
-      const writeRes = await setProfileSection(section, data, options);
-      if (!writeRes?.ok) {
-        throw new Error(writeRes?.error ?? `write failed at ${section}`);
-      }
-      committed.push(section);
+    // Capture snapshots inside the transaction lock
+    for (const { section } of validatedSections) {
+      const prev = await readTrustedMemory(mem, section);
+      snapshots.set(section, prev);
     }
-  } catch (err) {
-    // Rollback committed sections
-    const rollbackErrors = [];
-    for (const rolled of committed) {
-      const prev = snapshots.get(rolled);
-      try {
-        if (prev !== null && prev !== undefined) {
-          await mem.setTrusted(rolled, prev);
-        } else {
-          await mem.delete(rolled);
+
+    // Commit writes sequentially inside the transaction lock
+    try {
+      for (const { section, data } of validatedSections) {
+        const writeRes = await setProfileSectionInner(mem, section, data, options);
+        if (!writeRes?.ok) {
+          throw new Error(writeRes?.error ?? `write failed at ${section}`);
         }
-      } catch (rbErr) {
-        rollbackErrors.push(`rollback ${rolled}: ${rbErr?.message ?? String(rbErr)}`);
+        committed.push(section);
       }
+    } catch (err) {
+      // Rollback committed sections
+      const rollbackErrors = [];
+      for (const rolled of committed) {
+        const prev = snapshots.get(rolled);
+        try {
+          if (prev !== null && prev !== undefined) {
+            await mem.setTrusted(rolled, prev);
+          } else {
+            await mem.delete(rolled);
+          }
+        } catch (rbErr) {
+          rollbackErrors.push(`rollback ${rolled}: ${rbErr?.message ?? String(rbErr)}`);
+        }
+      }
+
+      const baseMsg = `bulk commit failed: ${err?.message ?? String(err)}`;
+      if (rollbackErrors.length > 0) {
+        return { ok: false, error: `${baseMsg}; compensation errors: ${rollbackErrors.join("; ")}` };
+      }
+      return { ok: false, error: baseMsg };
     }
 
-    const baseMsg = `bulk commit failed: ${err?.message ?? String(err)}`;
-    if (rollbackErrors.length > 0) {
-      return { ok: false, error: `${baseMsg}; compensation errors: ${rollbackErrors.join("; ")}` };
-    }
-    return { ok: false, error: baseMsg };
-  }
-
-  return { ok: true, writtenSections: committed };
+    return { ok: true, writtenSections: committed };
+  });
 }
 
 /** Clear all profile sections and record audit log with rollback compensation. */
@@ -784,11 +810,9 @@ export async function clearProfile(options = {}) {
       snapshots.set(sec, await readTrustedMemory(mem, sec));
     }
 
-    const deleted = [];
     try {
       for (const sec of PROFILE_SECTIONS) {
         await mem.delete(sec);
-        deleted.push(sec);
       }
 
       await recordAudit(mem, {

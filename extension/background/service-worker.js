@@ -162,6 +162,7 @@ import {
   listNamedAgents,
   normalizeAgentProvider,
   normalizeCoreAssets,
+  normalizeProfileGrants,
   preserveExistingProviderKey,
   MAX_ROLE_LEN,
   MAX_SKILLS,
@@ -2835,10 +2836,11 @@ function namedCandidatePayload(candidate) {
     canonicalField("avatar", canonicalScalar(candidate.avatar)),
     canonicalField("skills", payloadStringArray(candidate.skills)),
     canonicalField("coreAssets", canonicalArray(...assetNodes)),
+    canonicalField("profileGrants", payloadStringArray(candidate.profileGrants)),
   );
 }
 
-function normalizedNamedPatch({ name, role, avatar, skills, coreAssets }) {
+function normalizedNamedPatch({ name, role, avatar, skills, coreAssets, profileGrants }) {
   const patch = Object.create(null);
   patch.name = name === undefined ? undefined : String(name).trim();
   // CAP-FB-20260824-AGENT-ROLE-TRUNCATION-01 r2 (Gemini review): NO slice here —
@@ -2851,6 +2853,7 @@ function normalizedNamedPatch({ name, role, avatar, skills, coreAssets }) {
   patch.avatar = avatar === undefined ? undefined : (avatar ? String(avatar) : null);
   patch.skills = skills === undefined ? undefined : (Array.isArray(skills) ? skills.slice(0, MAX_SKILLS) : []);
   patch.coreAssets = coreAssets === undefined ? undefined : normalizeCoreAssets(coreAssets);
+  patch.profileGrants = profileGrants === undefined ? undefined : normalizeProfileGrants(profileGrants);
   return patch;
 }
 
@@ -2864,6 +2867,7 @@ function namedPatchPayload(id, patch) {
     canonicalField("type", canonicalScalar(asset.type)),
     canonicalField("content", canonicalScalar(asset.content)),
   )))));
+  fields.push(canonicalField("profileGrants", patch.profileGrants === undefined ? canonicalScalar(undefined) : payloadStringArray(patch.profileGrants)));
   return canonicalRecord(...fields);
 }
 
@@ -3759,9 +3763,9 @@ const handlers = mergeRouteMaps(
     const agent = await getNamedAgent(id);
     return agent ? { ok: true, agent } : { ok: false, error: `no agent ${id}` };
   },
-  async "named-agent.create"({ id, name, role, avatar, skills, coreAssets }, context) {
+  async "named-agent.create"({ id, name, role, avatar, skills, coreAssets, profileGrants }, context) {
     const r = await createNamedAgent(
-      { id, name, role, avatar, skills, coreAssets },
+      { id, name, role, avatar, skills, coreAssets, profileGrants },
       {
         gateOnReplace: async ({ slug, existing, candidate }) => {
           let payload;
@@ -3802,8 +3806,8 @@ const handlers = mergeRouteMaps(
     }
     return r;
   },
-  async "named-agent.update"({ id, name, role, avatar, skills, coreAssets }, context) {
-    const patch = normalizedNamedPatch({ name, role, avatar, skills, coreAssets });
+  async "named-agent.update"({ id, name, role, avatar, skills, coreAssets, profileGrants }, context) {
+    const patch = normalizedNamedPatch({ name, role, avatar, skills, coreAssets, profileGrants });
     const r = await updateNamedAgent(id, patch, {
       gateBeforeMutation: async ({ slug, existing }) => {
         let payload;
