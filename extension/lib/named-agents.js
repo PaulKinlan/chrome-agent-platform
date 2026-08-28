@@ -445,6 +445,17 @@ export function agentMemory(id) {
  * durable targets, grants, or worker keys must address the agent through
  * THIS list — the slug alone stopped being the live identity once instanceId
  * namespacing landed (review P1-2). */
+/** review r4 P1-3: the read-only agent memory selectors. Legacy/orphan dirs
+ * resolve LITERALLY and are declared read-only — the ONLY thing that removes
+ * them is agent teardown (which purges BOTH namespaces). The SW's memory
+ * set/clear routes gate on this predicate so a post-purge write can never
+ * recreate a "read-only" dir. Single source of truth: the routes and the
+ * classification UI (and the tests) all call this. */
+export function readOnlyAgentMemorySelector(origin) {
+  return typeof origin === "string" &&
+    (origin.startsWith("agent-legacy:") || origin.startsWith("agent-orphan:"));
+}
+
 export function agentStateNamespaces(agent) {
   const slug = slugifyAgentId(agent?.id ?? agent?.slug ?? "");
   const instanceId = String(agent?.instanceId ?? "").trim();

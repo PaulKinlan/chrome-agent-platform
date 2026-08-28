@@ -797,3 +797,146 @@ Deno.test("pending replay r3: schedules, grants, worker close AND durable family
     if (prevChrome1 === undefined) delete g1.chrome; else g1.chrome = prevChrome1;
   }
 });
+
+// ================= review r4 =================
+
+// ---- r4 P1-2: single admission fence — a refusal destroys NOTHING (row +
+// prompt override + memory + dir all intact; the r3 bug removed prompt+row
+// and then reported a refusal from the second fence). ----
+Deno.test("delete r4: a refused fence leaves the ROW, the PROMPT OVERRIDE, and all state intact", async () => {
+  const { describePrompt, setPromptOverride } = await import("../extension/lib/system-prompts.js");
+  const created = await createNamedAgent({ name: "NothingRemoved" });
+  assert(created.ok);
+  const slug = created.agent.id;
+  const inst = created.agent.instanceId;
+  await namedAgentMemory(inst).set("memory:keep", "precious");
+  const d = await describePrompt(`agent:${slug}`);
+  const saved = await setPromptOverride(`agent:${slug}`, { mode: "append", text: "OVERRIDE-KEEP" }, { expectedRevision: d.revision });
+  assert(saved?.ok !== false, "override seeded (" + (saved?.error ?? "") + ")");
+
+  const refused = await deleteNamedAgent(slug, {
+    fenceActiveRuns: async () => ({ ok: false, error: "writers live" }),
+  });
+  assertEquals(refused.ok, false, "the delete reports refusal");
+  assertEquals(refused.retryable, true);
+  assert(String(refused.error).includes("NOT deleted"), "honest: the refusal says nothing was deleted");
+  const rows = await listNamedAgents();
+  assert(rows.some((a) => a.id === slug), "the ROW survives");
+  const dAfter = await describePrompt(`agent:${slug}`);
+  assert(dAfter.override?.text?.includes("OVERRIDE-KEEP"), "the PROMPT OVERRIDE survives");
+  assertEquals(await namedAgentMemory(inst).get("memory:keep"), "precious", "agent memory survives");
+  assert(dirExists(["memory", "agents", encodeURIComponent(inst)]), "the sandbox dir survives");
+});
+
+// ---- r4 P1-1: the fence must NOT resolve while the aborted writer has not
+// settled (the r3 bug retired the writer at cancellation-outbox processing,
+// letting teardown race the orchestrator's final flush). ----
+Deno.test("fence r4: the fence promise stays pending until the orchestrator settles", async () => {
+  const created = await createNamedAgent({ name: "LateSettle" });
+  assert(created.ok);
+  const slug = created.agent.id;
+  const inst = created.agent.instanceId;
+  const exec = "exec:11111111-2222-4733-8444-555555555555";
+  assert(await durableRuns.start({
+    executionId: exec,
+    journalTarget: "agent:" + inst,
+    kind: "agent",
+    agentId: "named:" + slug,
+    taskPreview: "abort fired; settle is late",
+  }), "run started");
+
+  const fence = fenceAgentActiveRuns({
+    registry: durableRuns,
+    slug,
+    instanceId: inst,
+    timeoutMs: 8000,
+    resolveAborter: () => () => {},
+  });
+  let resolved = false;
+  fence.then(() => { resolved = true; }, () => { resolved = true; });
+  // The abort fires on the first poll; give the fence several poll cycles.
+  // The simulated orchestrator has NOT settled, so the writer projection is
+  // retained and the fence must still be waiting.
+  await new Promise((r) => setTimeout(r, 900));
+  assertEquals(resolved, false, "the fence stayed pending while settlement was outstanding");
+  // The orchestrator's finally: settle() IS the completion acknowledgement.
+  await durableRuns.settle(exec, { ok: true, result: "aborted cleanly", at: Date.now() });
+  const f = await fence;
+  assertEquals(f.ok, true, "the fence resolves once the writer settled");
+});
+
+// ---- r4 P2: the durable refusal→retry flow drives REAL durable runs ----
+Deno.test("retry r4: a real durable run survives a refused delete and is purged by the retry", async () => {
+  const created = await createNamedAgent({ name: "RealRuns" });
+  assert(created.ok);
+  const slug = created.agent.id;
+  const inst = created.agent.instanceId;
+  const exec = "exec:22222222-3333-4744-8666-555555555555";
+  assert(await durableRuns.start({
+    executionId: exec,
+    journalTarget: "agent:" + inst,
+    kind: "agent",
+    agentId: "named:" + slug,
+    taskPreview: "real run, refused delete",
+  }), "run started");
+
+  const refused = await deleteNamedAgent(slug, {
+    fenceActiveRuns: async () => ({ ok: false, error: "writers live" }),
+  });
+  assertEquals(refused.ok, false);
+  const stillLive = (await durableRuns.list()).runs.some((r) => r.executionId === exec);
+  assert(stillLive, "the REAL run survives the refused delete");
+
+  const retried = await deleteNamedAgent(slug, { fenceActiveRuns: async () => ({ ok: true }) });
+  assertEquals(retried.ok, true, "the retry completes (" + (retried?.error ?? "") + ")");
+  const gone = !(await durableRuns.list()).runs.some((r) => r.executionId === exec);
+  assert(gone, "the REAL run is purged by the successful retry");
+});
+
+// ---- r4 P2: the worker close runs the REAL alive-set machinery (real key
+// `cap:agent-workers:alive`, real kv), for BOTH identity spellings. ----
+Deno.test("worker close r4: the real closeAgentWorkerFor removes both identities from the real alive-set key", async () => {
+  const { closeAgentWorkerFor } = await import("../extension/background/routes/agent-worker.js");
+  const created = await createNamedAgent({ name: "AliveSet" });
+  assert(created.ok);
+  const slug = created.agent.id;
+  const inst = created.agent.instanceId;
+  const ALIVE_KEY = "cap:agent-workers:alive";
+  await kvSet({ [ALIVE_KEY]: [inst, slug, "someone-else"] });
+
+  const del = await deleteNamedAgent(slug, {
+    closeAgentWorker: (agentId) => closeAgentWorkerFor(agentId, { kvGet, kvSet }),
+  });
+  assertEquals(del.ok, true, "delete completes (" + (del?.error ?? "") + ")");
+  const alive = (await kvGet(ALIVE_KEY))?.[ALIVE_KEY] ?? [];
+  assertEquals(alive, ["someone-else"], "BOTH the instanceId and the slug alive-set entries are gone; others kept");
+});
+
+// ---- r4 P2: classification drives BEHAVIOR — the read-only predicate the
+// SW routes gate on, and the literal-dir resolution + clear preservation. ----
+Deno.test("classification r4: the read-only predicate gates writes; legacy dirs resolve literally and survive a clear", async () => {
+  const { readOnlyAgentMemorySelector } = await import("../extension/lib/named-agents.js");
+  assertEquals(readOnlyAgentMemorySelector("agent-legacy:alpha"), true);
+  assertEquals(readOnlyAgentMemorySelector("agent-orphan:ghost"), true);
+  assertEquals(readOnlyAgentMemorySelector("agent:inst-alpha"), false);
+  assertEquals(readOnlyAgentMemorySelector("master"), false);
+  assertEquals(readOnlyAgentMemorySelector(undefined), false);
+
+  // Literal resolution: a write via the legacy selector lands in the LITERAL
+  // dir (never canonicalized into a live instanceId dir).
+  const legacy = namedAgentMemory("legacy-literal");
+  await legacy.set("k", "v");
+  assert(dirExists(["memory", "agents", encodeURIComponent("legacy-literal")]), "the literal dir exists");
+  const classification = (await import("../extension/lib/named-agents.js")).classifyAgentMemoryDirs({
+    dirs: ["legacy-literal"],
+    agents: [],
+  });
+  assertEquals(classification[0]?.state, "orphan", "a dir with no live row classifies as orphan");
+  assertEquals(classification[0]?.selector, "agent-orphan:legacy-literal");
+  assertEquals(classification[0]?.readOnly, false, "orphan dirs are clearable (Settings purge)");
+
+  // clear() removes KEYS but never the directory (deletion is teardown's job).
+  await legacy.clear();
+  assertEquals(await legacy.get("k"), null, "keys cleared");
+  assert(dirExists(["memory", "agents", encodeURIComponent("legacy-literal")]), "the dir survives clear (only teardown removes it)");
+});

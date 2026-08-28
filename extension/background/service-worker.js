@@ -162,6 +162,7 @@ import {
   MAX_ROLE_LEN,
   MAX_SKILLS,
   resolveAgentInstanceId,
+  readOnlyAgentMemorySelector,
   resolveNamedAgentStore,
   setNamedAgentProvider,
   slugifyAgentId,
@@ -4566,8 +4567,9 @@ const handlers = mergeRouteMaps(
     // review r4 P1-3: the legacy/orphan selectors resolve to the LITERAL dir
     // and are declared READ-ONLY (only agent teardown removes them). A set
     // here would recreate the dir after the purge — refuse, mirroring
-    // memory.clear.
-    if (typeof origin === "string" && (origin.startsWith("agent-legacy:") || origin.startsWith("agent-orphan:"))) {
+    // memory.clear. The predicate is shared with the classification UI so
+    // the rule cannot drift between route and panel.
+    if (readOnlyAgentMemorySelector(origin)) {
       return { ok: false, error: "legacy store is read-only — delete the agent; teardown removes it" };
     }
     // review r3 P1-1: non-durable memory writes are tracked so teardown can
@@ -4583,7 +4585,10 @@ const handlers = mergeRouteMaps(
     // review r3 P1-3: a live agent's legacy slug dir is READ-ONLY — the only
     // thing that removes it is agent teardown (which purges BOTH
     // namespaces). Clearing it would either be a no-op lie or (pre-fix) the
-    // canonicalizing resolver wiping the agent's LIVE store.
+    // canonicalizing resolver wiping the agent's LIVE store. Orphan dirs stay
+    // CLEARABLE here (classification: readOnly:false) — the Settings purge
+    // removes them; the shared predicate's WRITE refusal (set) still covers
+    // both spellings.
     if (typeof origin === "string" && origin.startsWith("agent-legacy:")) {
       return { ok: false, error: "legacy store is read-only — delete the agent; teardown removes it" };
     }
