@@ -32,6 +32,8 @@ import {
   reconcileAgentWorkers,
   createProviderRoutes,
   createSchedulerRoutes,
+  createAgentScheduleRoutes,
+  createNamedAgentDeleteGate,
   kvRoutes,
   mergeRouteMaps,
   permLeaseRoutes,
@@ -382,6 +384,21 @@ async function resolveAgentSkills(agent) {
 
 // ── agent schedules (ONE agent concept: persona + skills + memory + OPTIONAL
 // schedule — owner directive 2026-08-28) ────────────────────────────────────
+// The ONE schedule enrichment, shared by named-agent.list AND named-agent.get
+// (the edit dialog reads get — the schedule field must show the live schedule
+// wherever the record is read). Derived from the scheduled-task store, never
+// a stale flag; a cancelling task is already gone for UI purposes.
+async function enrichAgentsWithSchedules(agents) {
+  const list = Array.isArray(agents) ? agents : [];
+  const tasks = await listScheduledTasks().catch(() => []);
+  const byName = new Map((Array.isArray(tasks) ? tasks : []).map((t) => [t.name, t]));
+  return list.map((a) => {
+    const t = byName.get(`agent:${a.id}`);
+    return t && !t.cancelling
+      ? { ...a, schedule: { periodInMinutes: t.periodInMinutes ?? null, task: t.task ?? "" } }
+      : a;
+  });
+}
 // The single schedule code path for named agents: create-with-schedule and
 // edit-schedule both land here. A scheduled agent fires as a REAL named-agent
 // run (its own OPFS memory, its role layer, its saved skills — the fire
@@ -3045,6 +3062,17 @@ const schedulerRoutes = createSchedulerRoutes({
   payloadFields,
 });
 
+// The named-agent schedule route (extracted so tests drive the REAL route with
+// synthetic principals — the approval binds id + period + the normalized
+// recurring prompt).
+const agentScheduleRoutes = createAgentScheduleRoutes({
+  applyAgentSchedule,
+  requireOwnerApproval,
+  canonicalOperationTarget,
+  payloadFields,
+  slugifyAgentId,
+});
+
 // The activity-log explorer aggregation (extracted from the inline handler so
 // it is fault-isolated + bounded on real profiles — a slow/failing store can
 // never hang the route past the MV3 worker's lifetime).
@@ -3090,6 +3118,7 @@ function executeWorkerTool(toolName, args, context) {
 const handlers = mergeRouteMaps(
   activityRoutes,
   schedulerRoutes,
+  agentScheduleRoutes,
   createAgentWorkerRoutes({
     ensureOffscreen,
     kvGet,
@@ -3850,39 +3879,16 @@ const handlers = mergeRouteMaps(
     // skills + memory + an OPTIONAL schedule. The list enriches each agent
     // with its live schedule (derived from the scheduled-task store, never a
     // stale flag) so the UI shows one agents list with a schedule chip.
-    const tasks = await listScheduledTasks().catch(() => []);
-    const byName = new Map((Array.isArray(tasks) ? tasks : []).map((t) => [t.name, t]));
-    const agents = await listNamedAgents();
-    return {
-      agents: agents.map((a) => {
-        const t = byName.get(`agent:${a.id}`);
-        return t && !t.cancelling
-          ? { ...a, schedule: { periodInMinutes: t.periodInMinutes ?? null, task: t.task ?? "" } }
-          : a;
-      }),
-    };
-  },
-  async "named-agent.set-schedule"({ id, periodInMinutes, task }, context) {
-    // Add/edit/remove an agent's schedule (the ONE creation flow's schedule
-    // backing). Set: the agent runs on a recurring alarm as a REAL named-agent
-    // run (its own memory, role layer, saved skills — the fire path's `agent:`
-    // branch). Remove (null): the alarm goes, the agent stays. The owner's
-    // in-dialog click approves directly; a model-initiated call pends.
-    const gate = await requireOwnerApproval(
-      context,
-      "named-agent.set-schedule",
-      canonicalOperationTarget("named", { id: slugifyAgentId(id) }),
-      payloadFields([
-        ["id", String(id ?? "")],
-        ["periodInMinutes", periodInMinutes == null ? "none" : String(periodInMinutes)],
-      ]),
-    );
-    if (!gate?.ok) return gate;
-    return await applyAgentSchedule(id, periodInMinutes, task);
+    return { agents: await enrichAgentsWithSchedules(await listNamedAgents()) };
   },
   async "named-agent.get"({ id }) {
+    // The SAME schedule enrichment as the list (the REVISE-2 P1: the edit
+    // dialog reads get() — without the enrichment a scheduled agent reopened
+    // there shows an EMPTY schedule field and its schedule can't be edited).
     const agent = await getNamedAgent(id);
-    return agent ? { ok: true, agent } : { ok: false, error: `no agent ${id}` };
+    if (!agent) return { ok: false, error: `no agent ${id}` };
+    const [enriched] = await enrichAgentsWithSchedules([agent]);
+    return { ok: true, agent: enriched };
   },
   async "named-agent.create"({ id, name, role, avatar, skills, coreAssets, schedule }, context) {
     const r = await createNamedAgent(
@@ -3997,32 +4003,18 @@ const handlers = mergeRouteMaps(
   async "named-agent.delete"({ id }, context) {
     const slug = slugifyAgentId(id);
     const r = await deleteNamedAgent(slug, {
-      gateBeforeDelete: async ({ existing }) => {
-        let payload;
-        try { payload = namedBoundMutationPayload(payloadFields([["id", slug]]), existing); }
-        catch { return { ok: false, error: "delete payload is not approvable" }; }
-        return await requireOwnerApproval(
-          context,
-          "named-agent.delete",
-          canonicalOperationTarget("named", { id: slug }),
-          payload,
-        );
-      },
+      // Approval → durable schedule mark → row/OPFS deletion is STRUCTURAL
+      // (the extracted gate, routes/agent-schedule.js): a marking failure
+      // aborts the deletion with the agent recoverable.
+      gateBeforeDelete: createNamedAgentDeleteGate(context, {
+        requireOwnerApproval,
+        canonicalOperationTarget,
+        namedBoundMutationPayload,
+        payloadFields,
+        cancelScheduledTaskBackground,
+      }),
     });
     if (r?.ok !== false) {
-      // Deletion-time alarm cleanup (owner P1: alarms must not outlive the
-      // agent). If this agent was enabled as a BACKGROUND agent it has a
-      // deterministic `recipe:<slug>` scheduled task; deleting the agent must
-      // disarm it, else its alarm keeps firing forever as an orphan. Best-effort
-      // — "no such task" just means it wasn't scheduled.
-      // Non-blocking disarm (owner: deleting an agent must be instant). The
-      // payload is marked cancelling (inert) + the live run aborted NOW; the
-      // alarm-clear + payload cleanup finishes in the background.
-      cancelScheduledTaskBackground(`recipe:${slug}`);
-      // An agent created/edited with a schedule (the unified agent model:
-      // persona + skills + memory + OPTIONAL schedule) has an `agent:<slug>`
-      // schedule — tearing the agent down tears its schedule down too.
-      cancelScheduledTaskBackground(`agent:${slug}`);
       // Failed-runs cascade (owner 2026-08-28): the deleted agent's terminal
       // failed records are purged from the durable registry (record, index,
       // stored prompt payload, logs) so the Tasks sidebar neither shows them

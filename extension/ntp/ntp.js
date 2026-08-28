@@ -7,6 +7,7 @@
 
 import { send } from "../lib/messages.js";
 import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, templatePrefill } from "../lib/agent-templates.js";
+import { projectUnifiedAgents } from "../lib/named-agents.js";
 import { schedulePreviewText } from "../lib/schedule-preview.js";
 import { selectFailedRuns } from "../lib/run-retry.js";
 import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript } from "../shared/conversation.js";
@@ -581,9 +582,13 @@ async function renderNamedAgents() {
   ]);
   const agents = Array.isArray(namedRes.agents) ? namedRes.agents : [];
   const background = (Array.isArray(bgRes.agents) ? bgRes.agents : []).filter((a) => a.enabled);
+  // ONE projection keyed by agent id (owner directive — the unified agent
+  // model): a record present in both stores renders EXACTLY ONCE; the named
+  // record wins and a recipe-side schedule fills in when it has none.
+  const unified = projectUnifiedAgents(agents, background);
   if (el) {
     el.replaceChildren();
-    if (!agents.length && !background.length) {
+    if (!unified.length) {
       // First-run / empty state: ONE click seeds the curated starter set
       // (never automatic — the owner chooses).
       const empty = document.createElement("div");
@@ -598,41 +603,32 @@ async function renderNamedAgents() {
       empty.append(document.createElement("br"), starterBtn);
       el.append(empty);
     } else {
-      for (const a of agents) {
+      for (const a of unified) {
         const row = document.createElement("capability-row");
         row.setAttribute("name", a.name || a.id);
-        row.setAttribute("description", a.role || "a named agent");
+        row.setAttribute("description", a.role || a.description || "an agent");
         row.setAttribute(
           "icon",
-          `<img src="${escapeHtml(a.avatar || initialAvatar(a.name || a.id))}" alt="" style="width:28px;height:28px;border-radius:50%;object-fit:cover;display:block;" />`,
+          a.kind === "named"
+            ? `<img src="${escapeHtml(a.avatar || initialAvatar(a.name || a.id))}" alt="" style="width:28px;height:28px;border-radius:50%;object-fit:cover;display:block;" />`
+            : "",
         );
         // Item 55: the WHOLE row opens the agent's view (history + run log) +
         // lets you talk to it — a chevron affordance, not a misleading "Run".
-        row.setAttribute("action", "open");
+        // A recipe-store-only agent additionally carries its Delete (the
+        // enable/disable toggle was the wrong primitive).
+        row.setAttribute("action", a.kind === "named" ? "open" : "open-delete");
         // ONE agents list (owner directive): a scheduled agent carries a small
         // schedule chip — no other distinction from an on-demand agent.
         if (a.schedule?.periodInMinutes) {
           row.setAttribute("last-run", `every ${a.schedule.periodInMinutes} min`);
         }
-        row.addEventListener("open", () => openAgentChat(a.id || a.name));
-        el.append(row);
-      }
-      for (const a of background) {
-        const row = document.createElement("capability-row");
-        row.setAttribute("name", a.name || a.id);
-        row.setAttribute("description", a.description || "a scheduled agent");
-        row.setAttribute("icon", "");
-        // A background agent is an INDEPENDENT agent — a chevron opens its view
-        // (history + chat) and a destructive DELETE removes it (an enable/
-        // disable toggle was the wrong primitive: an enabled background agent
-        // exists and runs; the owner's control is delete, and per-agent
-        // schedule pausing lands separately as an alarm control).
-        row.setAttribute("action", "open-delete");
-        if (a.schedule?.periodInMinutes) {
-          row.setAttribute("last-run", `every ${a.schedule.periodInMinutes} min`);
-        }
-        row.addEventListener("open", () => openBackgroundAgentChat(a.id, a.name));
-        row.addEventListener("delete", async () => {
+        row.addEventListener("open", () => {
+          if (a.kind === "named") openAgentChat(a.id || a.name);
+          else openBackgroundAgentChat(a.id, a.name);
+        });
+        if (a.kind !== "named") {
+          row.addEventListener("delete", async () => {
           const name = a.name || a.id;
           const confirmed = await confirmActionDialog({
             title: `Delete “${name}”?`,
@@ -670,22 +666,14 @@ async function renderNamedAgents() {
             el.setAttribute("tabindex", "-1");
           }
           focusEl?.focus?.({ preventScroll: true });
-        });
+          });
+        }
         el.append(row);
-      }
-      if (agents.length > 6) {
-        const more = document.createElement("div");
-        more.className = "empty";
-        more.textContent = `+ ${agents.length - 6} more`;
-        el.append(more);
       }
     }
   }
-  renderSidebarAgents([
-    ...agents.map((a) => ({ ...a, kind: "named" })),
-    ...background.map((a) => ({ ...a, kind: "background" })),
-  ]);
-  refreshAgentCount();
+  renderSidebarAgents(unified);
+  refreshAgentCount(unified);
 }
 
 // ── the named agents in the SIDEBAR (a created agent must appear here, not
@@ -704,10 +692,13 @@ async function renderSidebarAgents(agents) {
   }
   for (const a of rows) {
     const isBackground = a.kind === "background";
+    const scheduleMin = a.schedule?.periodInMinutes ?? null;
     const item = document.createElement("button");
     item.type = "button";
     item.className = "agent-item";
-    item.title = (a.name || a.id) + (isBackground ? " — runs in the background" : (a.role ? " — " + a.role : ""));
+    // ONE agent concept: no "background" label — the only distinction is the
+    // small schedule marker; the tooltip carries the role/description.
+    item.title = (a.name || a.id) + (a.role ? " — " + a.role : a.description ? " — " + a.description : "") + (scheduleMin ? ` — every ${scheduleMin} min` : "");
     const avatar = document.createElement("img");
     avatar.className = "a-avatar";
     avatar.alt = "";
@@ -716,20 +707,22 @@ async function renderSidebarAgents(agents) {
     const label = document.createElement("span");
     label.className = "a-name";
     label.append(document.createTextNode(a.name || a.id));
-    if (isBackground) {
-      const role = document.createElement("span");
-      role.className = "a-role";
-      role.textContent = "background";
-      label.append(role);
-    } else if (a.role) {
+    const snippet = a.role ?? a.description ?? "";
+    if (snippet) {
       const role = document.createElement("span");
       role.className = "a-role";
       // The full role is stored intact (no limit) and shown on hover via
       // item.title; the visible list line stays short so the list is scannable
       // (mirrors the side panel's truncated role preview).
-      const full = String(a.role);
+      const full = String(snippet);
       role.textContent = full.length > 88 ? full.slice(0, 88).trimEnd() + "…" : full;
       label.append(role);
+    }
+    if (scheduleMin) {
+      const chip = document.createElement("span");
+      chip.className = "a-role";
+      chip.textContent = `every ${scheduleMin} min`;
+      label.append(chip);
     }
     item.append(avatar, label);
     item.addEventListener("click", () => {
@@ -752,18 +745,26 @@ async function renderBackgroundAgents() {
   await renderNamedAgents();
 }
 
-async function refreshAgentCount() {
+async function refreshAgentCount(unified = null) {
   const el = document.getElementById("agent-count");
   if (!el) return;
-  const [dir, bg, named] = await Promise.all([
-    send("agent.directory").catch(() => ({ agents: [] })),
-    send("background-agent.list").catch(() => ({ agents: [] })),
-    send("named-agent.list").catch(() => ({ agents: [] })),
-  ]);
+  // The unified projection (owner directive): one count, no named/background
+  // split. The caller passes the projection it already built; a standalone
+  // refresh re-derives it through the same helper.
+  const dir = await send("agent.directory").catch(() => ({ agents: [] }));
   const siteN = Array.isArray(dir.agents) ? dir.agents.length : 0;
-  const bgN = (Array.isArray(bg.agents) ? bg.agents : []).filter((a) => a.enabled).length;
-  const namedN = Array.isArray(named.agents) ? named.agents.length : 0;
-  el.textContent = `${namedN} named · ${bgN} background · ${siteN} site`;
+  let rows = unified;
+  if (!rows) {
+    const [bg, named] = await Promise.all([
+      send("background-agent.list").catch(() => ({ agents: [] })),
+      send("named-agent.list").catch(() => ({ agents: [] })),
+    ]);
+    rows = projectUnifiedAgents(
+      Array.isArray(named.agents) ? named.agents : [],
+      (Array.isArray(bg.agents) ? bg.agents : []).filter((a) => a.enabled),
+    );
+  }
+  el.textContent = `${rows.length} agent${rows.length === 1 ? "" : "s"} · ${siteN} site`;
 }
 
 // ── recent artifacts ──────────────────────────────────────────────────────

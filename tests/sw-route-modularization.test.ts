@@ -6,6 +6,7 @@ import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/asse
 import * as acorn from "npm:acorn";
 import {
   createActivityRoutes,
+  createAgentScheduleRoutes,
   createProviderRoutes,
   createSchedulerRoutes,
   kvRoutes,
@@ -263,6 +264,14 @@ const SCHEDULER_STUB_DEPS = {
   payloadFields: () => ({}),
 };
 
+const AGENT_SCHEDULE_STUB_DEPS = {
+  applyAgentSchedule: () => {},
+  requireOwnerApproval: () => {},
+  canonicalOperationTarget: () => "",
+  payloadFields: () => ({}),
+  slugifyAgentId: (v) => String(v ?? ""),
+};
+
 Deno.test("sw routes: AST verification of route registration across service-worker and modules", () => {
   const swSrc = Deno.readTextFileSync(new URL("../extension/background/service-worker.js", import.meta.url).pathname);
   const ast = acorn.parse(swSrc, { ecmaVersion: "latest", sourceType: "module" });
@@ -310,6 +319,10 @@ Deno.test("sw routes: AST verification of route registration across service-work
         // Per-agent schedule routes (schedules.list / task.pause / task.resume /
         // task.update / task.retry).
         registeredRouteKeys.push(...Object.keys(createSchedulerRoutes(SCHEDULER_STUB_DEPS)));
+      } else if (arg.name === "agentScheduleRoutes") {
+        // The named-agent schedule route (named-agent.set-schedule), extracted
+        // for principal-synthetic testing (REVISE-2).
+        registeredRouteKeys.push(...Object.keys(createAgentScheduleRoutes(AGENT_SCHEDULE_STUB_DEPS)));
       }
     }
   }

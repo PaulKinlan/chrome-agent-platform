@@ -207,7 +207,11 @@ Deno.test("P1-c wiring: named-agent.run resolves saved skills and runTask merges
     "named-agent.run must pass the agent's resolved saved skills into runTask");
   assert(/mergeRunSkills\(agentSkills, await resolveSkillRefs\(task\)\)/.test(sw),
     "runTask must merge saved skills with /skill:<id> references");
-  assert(/async\s+"named-agent\.set-schedule"/.test(sw), "the set-schedule route exists");
+  // The set-schedule route is the extracted factory (routes/agent-schedule.js),
+  // merged into the SW handlers.
+  const routeSrc = await Deno.readTextFile(new URL("../extension/background/routes/agent-schedule.js", import.meta.url));
+  assert(/async\s+"named-agent\.set-schedule"/.test(routeSrc), "the set-schedule route exists (extracted factory)");
+  assert(sw.includes("agentScheduleRoutes"), "the SW merges the extracted schedule routes");
   assert(/alarm\.name\.startsWith\("agent:"\)/.test(sw),
     "the scheduler fire path routes agent:<slug> schedules as real named-agent runs");
 });

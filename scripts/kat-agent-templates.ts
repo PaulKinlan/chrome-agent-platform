@@ -267,6 +267,22 @@ const chipRow = await ev(`(() => {
 })()`);
 check("the agents list shows the schedule chip ('every 120 min') with no background segregation", chipRow?.lastRun === "every 120 min", chipRow);
 
+// 6b. P1-b: REOPENING the scheduled agent's edit dialog shows the real
+//     schedule (named-agent.get shares the list's enrichment). The create
+//     flow left us in Tab Janitor's agent view — open its Edit dialog.
+await ev(`document.getElementById('edit-agent')?.click()`);
+await sleep(700);
+const reopen = await ev(`(() => {
+  const f = document.getElementById('agent-schedule-minutes');
+  return { field: f?.value ?? null };
+})()`);
+check("reopening a SCHEDULED agent's edit dialog shows the real schedule (120)", reopen?.field === "120", reopen);
+// Close without saving (Cancel) — the schedule must remain untouched.
+await ev(`(() => { const b = [...document.querySelectorAll('agent-dialog button')].find(x => /^cancel$/i.test((x.textContent ?? '').trim())); b?.click(); })()`);
+await sleep(400);
+const janitorAfterCancel = (await alarms()).find((a: any) => a.name === "agent:tab-janitor");
+check("Cancel leaves the schedule untouched", janitorAfterCancel?.periodInMinutes === 120, janitorAfterCancel);
+
 // 7. SCHEDULE EDIT on an existing ON-DEMAND agent (add → alarm appears; remove
 //    → alarm gone, agent stays) — driven through the real edit dialog.
 await ev(`document.getElementById('thread-back')?.click()`);
@@ -306,6 +322,51 @@ const stillThere = await ev(`(async () => {
 })()`);
 check("removing the schedule clears the alarm (agent:my-chief-of-staff gone)", !afterRemove, afterRemove);
 check("the agent itself SURVIVES the schedule removal", stillThere === true, stillThere);
+
+// 8. P1-c COLLISION (the unified list renders a same-id record ONCE):
+//    `price-watcher` exists as BOTH a background recipe AND a template. Enable
+//    the recipe AND create the agent from the template — one row, one sidebar
+//    item, named record wins (avatar + chat), schedule chip from the agent.
+await ev(`document.getElementById('thread-back')?.click()`);
+await sleep(300);
+await ev(`(async () => { await chrome.runtime.sendMessage({ type: 'background-agent.set', id: 'price-watcher', enabled: true }); })()`);
+await sleep(600);
+await ev(`document.getElementById('new-agent')?.click()`);
+await sleep(700);
+await ev(`(() => { const s = document.getElementById('agent-template-picker');
+  s.value = 'price-watcher'; s.dispatchEvent(new Event('change')); })()`);
+await sleep(200);
+const pwPrefill = await ev(`document.getElementById('agent-schedule-minutes')?.value ?? null`);
+check("the price-watcher template prefills its schedule (60 min)", pwPrefill === "60", pwPrefill);
+// Force the REAL collision: the agent's id derives from its NAME — rename to
+// the recipe's exact name ("Price watcher") so the agent id IS the recipe id.
+await ev(`(() => {
+  const nameInput = [...document.querySelectorAll('.agent-config-scroll label')].find(l => l.textContent.startsWith('Name'))?.querySelector('input');
+  nameInput.value = 'Price watcher';
+  nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+})()`);
+await ev(`(() => {
+  const btns = [...document.querySelectorAll('button')];
+  (btns.find(b => /create agent/i.test(b.textContent ?? "")) ?? btns.at(-1))?.click();
+})()`);
+await sleep(1500);
+const collision = await ev(`(() => {
+  const main = [...document.querySelectorAll('#named-agents capability-row')].filter(r => (r.getAttribute('name') ?? '') === 'Price watcher');
+  const side = [...document.querySelectorAll('#side-agents .agent-item')].filter(b => (b.textContent ?? '').includes('Price watcher'));
+  return { mainRows: main.length, mainChip: main[0]?.getAttribute('last-run') ?? null,
+           mainHasAvatar: !!main[0]?.getAttribute('icon'), sideRows: side.length,
+           sideHasBackgroundLabel: side.some(b => (b.textContent ?? '').includes('background')) };
+})()`);
+check("a same-id record in BOTH stores renders exactly ONCE in the main list", collision?.mainRows === 1, collision);
+check("the collision row is the NAMED agent (avatar + its own 60-min schedule chip beats the recipe's 360)",
+  collision?.mainHasAvatar === true && collision?.mainChip === "every 60 min", collision);
+check("the sidebar renders the collision once, with no 'background' label",
+  collision?.sideRows === 1 && collision?.sideHasBackgroundLabel === false, collision);
+const bothAlarms = (await alarms()).filter((a: any) => a.name === "agent:price-watcher" || a.name === "recipe:price-watcher");
+check("both schedules genuinely exist under the hood (agent: + recipe: families)",
+  bothAlarms.length === 2, bothAlarms);
+const countText = await ev(`document.getElementById('agent-count')?.textContent ?? ''`);
+check("the agent count is unified (no named/background split)", /agents? ·/.test(countText) && !/background/.test(countText), countText);
 
 console.log(`\nKAT agent-templates: ${pass} passed, ${fail} failed`);
 proc.kill();
