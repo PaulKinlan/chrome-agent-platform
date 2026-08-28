@@ -128,6 +128,7 @@ const BASELINE_ROUTES = [
   "task.list",
   "task.retry",
   "task.cancel",
+  "schedule.cancelOrphans",
   "task.cancelBackground",
   "recipe.list",
   "skill.list",

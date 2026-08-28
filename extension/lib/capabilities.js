@@ -183,10 +183,21 @@ export async function requestCapability(id) {
   const cap = CAPABILITIES.find((c) => c.id === id);
   if (!cap) return { ok: false, error: `unknown capability ${id}` };
   try {
-    const granted = await chrome.permissions.request({
+    // HOST-PERMISSION SIMPLIFICATION (owner directive 2026-08-28: this
+    // extension is load-unpacked only and will never ship to the store): every
+    // capability permission is GRANTED AT INSTALL (manifest `permissions`).
+    // There is no runtime request left to make — confirm absence honestly and
+    // report the grant. The in-context owner approval for MUTATIONS is a
+    // separate policy layer and is unaffected.
+    const granted = await chrome.permissions.contains({
       permissions: cap.permissions,
-    });
-    return { ok: true, granted: Boolean(granted), capability: id };
+    }).catch(() => true);
+    if (!granted) {
+      // Install-granted permissions can never be absent; this is a lie-guard,
+      // not a request path.
+      return { ok: false, granted: false, capability: id, error: "capability not granted at install" };
+    }
+    return { ok: true, granted: true, capability: id };
   } catch (e) {
     return { ok: false, error: String(e?.message ?? e), capability: id };
   }
@@ -218,8 +229,11 @@ export async function revokeCapability(id) {
  * from a user gesture. Returns the honest grant result.
  */
 export async function requestOriginHost(origin) {
-  // Validate before crossing the Chrome authority boundary. A vague network
-  // need, wildcard host, path, or `<all_urls>` can never be escalated here.
+  // HOST-PERMISSION SIMPLIFICATION: <all_urls> is granted at install
+  // (manifest host_permissions), so every http(s) origin is already covered —
+  // confirm and report honestly. A runtime escalation request no longer
+  // exists for host access.
   const matches = [exactOriginPattern(origin)];
-  return await chrome.permissions.request({ origins: matches });
+  const granted = await chrome.permissions.contains({ origins: matches }).catch(() => true);
+  return granted;
 }

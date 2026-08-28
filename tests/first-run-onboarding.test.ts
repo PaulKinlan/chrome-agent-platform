@@ -263,8 +263,8 @@ Deno.test("first run: options blocks session-only credentials before provider.se
       new URL("../extension/manifest.json", import.meta.url),
     ),
   );
-  assertEquals(manifest.permissions, []);
-  assert(manifest.optional_permissions.includes("storage"));
+  // HOST-PERMISSION SIMPLIFICATION: storage is granted at install
+  assert(manifest.permissions.includes("storage"));
 });
 
 Deno.test("first run: browser control request requires a genuine active owner click", async () => {

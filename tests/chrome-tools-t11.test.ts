@@ -76,8 +76,8 @@ globalThis.chrome = {
       version: "0.2.279",
       manifest_version: 3,
       description: "test manifest",
-      permissions: [],
-      optional_permissions: ["management", "sidePanel"],
+      permissions: ["management", "sidePanel"],
+      host_permissions: ["<all_urls>"],
     }),
   },
   management: {
@@ -186,7 +186,8 @@ Deno.test("T11 runtime reads: no permission + no grant needed", async () => {
   const manifest = await t.get_extension_manifest.execute({});
   assertEquals(manifest.name, "This Extension");
   assertEquals(manifest.manifest_version, 3);
-  assertEquals(manifest.optional_permissions, ["management", "sidePanel"]);
+  assert((manifest.permissions ?? []).includes("management"), "management is granted at install");
+  assert((manifest.permissions ?? []).includes("sidePanel"), "sidePanel is granted at install");
 });
 
 Deno.test("T11 self-extension protection: set_extension_enabled refuses to toggle THIS extension", async () => {
