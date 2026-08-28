@@ -316,11 +316,9 @@ export function managementToolset({ callRoute }) {
     // its own approval).
     schedules_list: tool({
       description:
-        "List your scheduled tasks (alarms you created with schedule_task): prompt preview, next fire time, period, and state (active/paused/quarantined). Defaults to YOUR OWN tasks; pass all:true to include every agent's tasks.",
-      inputSchema: z.object({
-        all: z.boolean().optional().describe("include every agent's tasks, not just your own"),
-      }),
-      execute: ({ all }) => call("schedules.list", { all: all === true }),
+        "List YOUR scheduled tasks (alarms you created with schedule_task): prompt preview, next fire time, period, and state (active/paused/quarantined). Always scoped to your own tasks — you can never see another agent's tasks.",
+      inputSchema: z.object({}),
+      execute: () => call("schedules.list", {}),
     }),
     schedules_pause: tool({
       description:

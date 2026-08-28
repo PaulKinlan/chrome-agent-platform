@@ -7,6 +7,7 @@ import * as acorn from "npm:acorn";
 import {
   createActivityRoutes,
   createProviderRoutes,
+  createSchedulerRoutes,
   kvRoutes,
   mergeRouteMaps,
   permLeaseRoutes,
@@ -16,7 +17,7 @@ import { PAGE_ALLOWED_ROUTES } from "../extension/lib/pure.js";
 import { ATTESTATION_KEY_STORE } from "../extension/lib/system-prompts.js";
 import { kvSet } from "../extension/lib/kv.js";
 
-// Canonical baseline route list (138 exact routes: 135 preserved + 3 notification-click routes)
+// Canonical baseline route list (the exact registered routes; grows only with a deliberate route addition)
 const BASELINE_ROUTES = [
   "cap:fetch",
   "capabilities.status",
@@ -245,6 +246,19 @@ Deno.test("sw routes: requireSettingsSender owner gate rejects non-owner-options
   }
 });
 
+const SCHEDULER_STUB_DEPS = {
+  pauseScheduledTask: () => {},
+  resumeScheduledTask: () => {},
+  updateScheduledTask: () => {},
+  listScheduledTasks: () => {},
+  requireOwnerApproval: () => {},
+  currentRunContext: () => null,
+  broadcastProgress: () => {},
+  canonicalOperationTarget: () => "",
+  canonicalScalar: (v) => v,
+  payloadFields: () => ({}),
+};
+
 Deno.test("sw routes: AST verification of route registration across service-worker and modules", () => {
   const swSrc = Deno.readTextFileSync(new URL("../extension/background/service-worker.js", import.meta.url).pathname);
   const ast = acorn.parse(swSrc, { ecmaVersion: "latest", sourceType: "module" });
@@ -288,6 +302,10 @@ Deno.test("sw routes: AST verification of route registration across service-work
         registeredRouteKeys.push(...Object.keys(providerRoutes));
       } else if (arg.name === "activityRoutes") {
         registeredRouteKeys.push(...Object.keys(activityRoutes));
+      } else if (arg.name === "schedulerRoutes") {
+        // Per-agent schedule routes (schedules.list / task.pause / task.resume /
+        // task.update / task.retry).
+        registeredRouteKeys.push(...Object.keys(createSchedulerRoutes(SCHEDULER_STUB_DEPS)));
       }
     }
   }

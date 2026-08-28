@@ -411,7 +411,21 @@ export function normalizePermissionRequirement(result) {
   const grantOrigins = [...new Set(cleanStrings(req.grantOrigins, 50))]
     .filter((origin) => /^https?:\/\//.test(origin));
   const grantGlobal = req.grantGlobal === true;
-  if (!permissions.length && !grantOrigins.length && !grantGlobal) return null;
+  // Owner-approval card requirements (schedule mutations et al.): a bounded
+  // list of pending-approval ids the owner's Allow resolves — a DESCRIPTION
+  // only; the real decision is the owner's card click (P1-3). A malformed
+  // entry fails the whole requirement closed (never a card for a forged
+  // shape).
+  const approvals = Array.isArray(req.approvals)
+    ? req.approvals
+      .filter((a) => a && typeof a === "object" && !Array.isArray(a)
+        && typeof a.approvalId === "string" && a.approvalId.length > 0 && a.approvalId.length <= 160
+        && typeof a.action === "string" && a.action.length > 0 && a.action.length <= 80)
+      .slice(0, 4)
+      .map((a) => ({ approvalId: a.approvalId, action: a.action }))
+    : [];
+  if (Array.isArray(req.approvals) && req.approvals.length > 0 && approvals.length === 0) return null;
+  if (!permissions.length && !grantOrigins.length && !grantGlobal && !approvals.length) return null;
   const reason = typeof req.reason === "string" && req.reason.trim()
     ? req.reason.trim().slice(0, 240)
     : "perform this action";
@@ -420,7 +434,10 @@ export function normalizePermissionRequirement(result) {
     permissions,
     grantOrigins,
     grantGlobal,
-    key: [...permissions].sort().join(",") + "|" + (grantGlobal ? "<global>" : [...grantOrigins].sort().join(",")),
+    approvals,
+    key: approvals.length
+      ? "approvals|" + approvals.map((a) => a.approvalId).sort().join(",")
+      : [...permissions].sort().join(",") + "|" + (grantGlobal ? "<global>" : [...grantOrigins].sort().join(",")),
   };
 }
 
@@ -440,6 +457,21 @@ export async function approvePermissionRequirement(requirement, {
   requestPermissions = (permissions) => chrome.permissions.request({ permissions }),
 } = {}) {
   const out = { ok: true, permissionsGranted: true, grantSet: false, storagePersisted: null, errors: [] };
+  // Owner-approval card requirements (P1-3): resolve each pending approval by
+  // id through the service worker's authority. The resolver surface enforces
+  // run-bound-only for extension principals — this call carries the owner's
+  // card-click authority, nothing else.
+  if (requirement?.approvals?.length) {
+    for (const a of requirement.approvals) {
+      const res = await sendFn("management.resolve-approval", { approvalId: a.approvalId, approve: true })
+        .catch((e) => ({ error: String(e?.message ?? e) }));
+      if (res?.ok !== true) {
+        out.ok = false;
+        out.errors.push(res?.error ?? `approval ${a.approvalId} could not be resolved`);
+      }
+    }
+    return out;
+  }
   if (requirement?.permissions?.length) {
     try {
       out.permissionsGranted = (await requestPermissions([...requirement.permissions])) === true;

@@ -434,3 +434,67 @@ Deno.test("P0 conversation: Deny grants nothing and never retries; a forged (unt
   assertEquals(sw.runCount, 1, "Deny never retries the turn");
   assertEquals(card.getAttribute("state"), "denied");
 });
+
+// ── per-agent alarms P1-3: approval-card requirements (schedule mutations) ──
+
+Deno.test("P1-3: a schedule-approval requirement (approvals[], no permissions) normalizes and APPROVES via the resolve authority", async () => {
+  const { normalizePermissionRequirement, approvePermissionRequirement } = await import(
+    `../extension/shared/conversation.js?conv-p13=${Date.now()}`
+  );
+  const raw = {
+    ok: false,
+    error: "This operation requires owner approval in Settings.",
+    waitingForPermission: true,
+    permissionRequirement: {
+      reason: "task.pause: scheduled:10:task_1_abc",
+      approvals: [{ approvalId: "ap_123", action: "task.pause" }],
+    },
+  };
+  const req = normalizePermissionRequirement(raw);
+  assert(req, "the approval-card requirement normalizes");
+  assertEquals(req.approvals, [{ approvalId: "ap_123", action: "task.pause" }]);
+  assertEquals(req.permissions, [], "no Chrome permissions are involved in a schedule approval");
+  assert(req.key.startsWith("approvals|"), "the card key is approval-id derived (one card per approval)");
+
+  const resolved = [];
+  const sendFn = async (type, body) => {
+    resolved.push([type, body]);
+    return { ok: true };
+  };
+  const out = await approvePermissionRequirement(req, { sendFn, requestPermissions: async () => {
+    throw new Error("a schedule approval must NEVER touch chrome.permissions");
+  } });
+  assertEquals(out.ok, true);
+  assertEquals(resolved, [["management.resolve-approval", { approvalId: "ap_123", approve: true }]],
+    "Allow resolves the EXACT pending approval through the SW authority");
+});
+
+Deno.test("P1-3: a malformed or failed approval requirement fails closed (no card, honest errors)", async () => {
+  const { normalizePermissionRequirement, approvePermissionRequirement } = await import(
+    `../extension/shared/conversation.js?conv-p13b=${Date.now()}`
+  );
+  // Forged/hostile shapes never become cards.
+  assertEquals(normalizePermissionRequirement({
+    waitingForPermission: true,
+    permissionRequirement: { reason: "x", approvals: [{ approvalId: 42, action: "task.pause" }] },
+  }), null, "a non-string approvalId is refused");
+  assertEquals(normalizePermissionRequirement({
+    waitingForPermission: true,
+    permissionRequirement: { reason: "x", approvals: "ap_123" },
+  }), null, "a non-array approvals field is refused");
+  assertEquals(normalizePermissionRequirement({
+    waitingForPermission: true,
+    permissionRequirement: { reason: "x", approvals: [{ approvalId: "a".repeat(200), action: "task.pause" }] },
+  }), null, "an over-long approvalId is refused");
+
+  // A resolver failure surfaces honestly (never swallowed as success).
+  const req = normalizePermissionRequirement({
+    waitingForPermission: true,
+    permissionRequirement: { reason: "task.pause: x", approvals: [{ approvalId: "ap_x", action: "task.pause" }] },
+  });
+  const out = await approvePermissionRequirement(req, {
+    sendFn: async () => ({ ok: false, error: "approval expired" }),
+  });
+  assertEquals(out.ok, false);
+  assert(out.errors[0].includes("approval expired"), "the resolver error is surfaced to the card");
+});

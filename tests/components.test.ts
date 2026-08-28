@@ -670,3 +670,32 @@ Deno.test("asset quick drawer: owner, exact size and absolute time metadata stay
     throw new Error("invalid time was presented as factual");
   }
 });
+
+Deno.test("task-row: pause and retry are DISTINCT controls — exactly one dispatch per click (P1-2)", async () => {
+  await import("../extension/shared/components.js");
+  const Klass = registry.get("task-row");
+  const element = new Klass();
+  // A fake shadow root whose querySelector hands back listener-capturing stubs,
+  // so _wire() can be driven exactly like a real DOM without one.
+  const wired = new Map();
+  element._root = {
+    querySelector: (sel) => {
+      if (!wired.has(sel)) wired.set(sel, { addEventListener: (_t, fn) => { wired.get(sel)._fn = fn; } });
+      return wired.get(sel);
+    },
+  };
+  const emissions = [];
+  element._emit = (name) => emissions.push(name);
+  element._wire();
+  wired.get(".psep")._fn(); // the Pause/Resume control
+  wired.get(".retry")._fn(); // the Retry control
+  wired.get(".row-open")._fn(); // the open affordance
+  if (JSON.stringify(emissions) !== JSON.stringify(["toggle-pause", "retry", "open"])) {
+    throw new Error(`wrong dispatches: ${JSON.stringify(emissions)}`);
+  }
+  // Source pin: the pause button must NOT carry the retry class (the r1 defect
+  // was `class="retry psep"` — one click fired both handlers).
+  const source = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  if (source.includes('class="retry psep"')) throw new Error("the pause button still carries the retry class");
+  if (!source.includes('class="psep"')) throw new Error("the pause button lost its own class");
+});

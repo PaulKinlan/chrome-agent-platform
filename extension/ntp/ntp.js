@@ -42,6 +42,7 @@ import {
   VIEW_ROUTE,
 } from "./route-focus.js";
 import { applySidebarNubPolicy, SIDEBAR_NARROW_QUERY, sidebarWidthPolicy } from "./view-policy.js";
+import { redactSecretText } from "../lib/pure.js";
 import { parseNtpHash, resolveEntryMeta, shouldDispatchForNavigationType } from "../lib/navigation-controller.js";
 import { actionableRunsForSurface, latestRunForSurface } from "../lib/run-scope.js";
 import {
@@ -972,7 +973,9 @@ function agentScheduleRow(t) {
   row.className = "fr-row";
   const text = document.createElement("span");
   text.className = "fr-text";
-  const preview = String(t.task || "(no prompt)").slice(0, 80);
+  // Credential-shaped content is redacted BEFORE the bounded preview
+  // (P1-4: the per-agent schedule preview rendered raw prompt text).
+  const preview = redactSecretText(String(t.task || "(no prompt)")).slice(0, 80);
   text.textContent = preview;
   const when = t.paused
     ? "paused"

@@ -419,12 +419,18 @@ export async function blockScheduledTaskForStorage(name, error) {
 
 /** Explicit owner retry for a storage-blocked schedule. Reuses the same logical
  * name/configuration but creates a fresh alarm after clearing blocked state. */
-export async function retryScheduledTask(name) {
+export async function retryScheduledTask(name, { expectedOwner } = {}) {
   const task = await withLock(async () => {
     const store = await kvGet(TASK_KEY);
-    return structuredClone(store[TASK_KEY]?.[name] ?? null);
+    const found = structuredClone(store[TASK_KEY]?.[name] ?? null);
+    if (found) {
+      const scopeError = assertOwnerScope(found, expectedOwner);
+      if (scopeError) return { scopeError };
+    }
+    return found;
   });
   if (!task) return { ok: false, name, error: "no such task" };
+  if (task.scopeError) return { ok: false, name, error: task.scopeError };
   if (!task.storageBlocked && !task.quarantined) {
     return { ok: false, name, error: "task is not blocked" };
   }
@@ -454,14 +460,57 @@ export async function retryScheduledTask(name) {
  * cannot be CONFIRMED via alarms.get, the pause still holds (the firing path
  * skips paused payloads) but the result reports alarmAbsent:false so the
  * caller knows a slot may still be occupied. */
-export async function pauseScheduledTask(name) {
+/** Owner-scope equality: the SAME attribution the per-agent list filter uses
+ * (agentRole + agentSurfaceRef exactly). A model principal may only mutate a
+ * task whose persisted owner matches ITS run context — never another agent's
+ * task, and never an ownerless (hub/legacy) task (P1-1: cross-agent
+ * authority). Owner-extension callers omit expectedOwner entirely. */
+export function scheduledTaskOwnerMatches(task, expected) {
+  const o = task?.owner;
+  if (!o) return false; // ownerless tasks are owner-extension-managed only
+  if (!expected || typeof expected !== "object") return false;
+  return o.agentRole === expected.agentRole &&
+    (o.agentSurfaceRef ?? null) === (expected.agentSurfaceRef ?? null);
+}
+function assertOwnerScope(task, expectedOwner) {
+  if (expectedOwner === undefined) return null; // owner-extension: no scope check
+  if (!scheduledTaskOwnerMatches(task, expectedOwner)) {
+    return task?.owner
+      ? "task belongs to another agent"
+      : "task has no owning agent — manage it in Settings";
+  }
+  return null;
+}
+export async function pauseScheduledTask(name, { expectedOwner } = {}) {
   return withLock(async () => {
     const store = await kvGet(TASK_KEY);
     const tasks = { ...(store[TASK_KEY] ?? {}) };
     const task = tasks[name];
     if (!task) return { ok: false, name, error: "no such task" };
+    const scopeError = assertOwnerScope(task, expectedOwner);
+    if (scopeError) return { ok: false, name, error: scopeError };
     if (task.cancelling) return { ok: false, name, error: "task is cancelling — cannot pause" };
-    if (task.paused) return { ok: true, name, paused: true, newlyPaused: false, alarmAbsent: null };
+    if (task.paused) {
+      // P2-1: a first pause that could not CONFIRM the alarm's absence (a
+      // transient alarms.get/clear failure) used to exit early forever — the
+      // paused flag short-circuited before any retry. Retry the disarm here
+      // until absence is confirmed (idempotent, bounded to one extra attempt
+      // per call); the firing-skip stays the safety net throughout.
+      if (task.alarmUnconfirmed !== true) return { ok: true, name, paused: true, newlyPaused: false, alarmAbsent: null };
+      const alarms = alarmsApi();
+      let alarmAbsent = true;
+      if (alarms) {
+        try { await alarms.clear(name); } catch { /* get below is the authority */ }
+        try {
+          alarmAbsent = (await alarms.get(name)) == null;
+        } catch {
+          alarmAbsent = false;
+        }
+      }
+      tasks[name] = { ...task, ...(alarmAbsent ? { alarmUnconfirmed: false } : {}) };
+      await kvSet({ [TASK_KEY]: tasks });
+      return { ok: true, name, paused: true, newlyPaused: false, alarmAbsent, retriedDisarm: true };
+    }
     tasks[name] = { ...task, paused: true, pausedAt: Date.now() };
     await kvSet({ [TASK_KEY]: tasks });
     const alarms = alarmsApi();
@@ -474,6 +523,10 @@ export async function pauseScheduledTask(name) {
         alarmAbsent = false; // cannot confirm — the firing skip still protects the run
       }
     }
+    // Persist the confirmation state so a later pause can RETRY the disarm
+    // (P2-1) instead of trusting an unconfirmed absence forever.
+    tasks[name] = { ...tasks[name], alarmUnconfirmed: alarms ? !alarmAbsent : false };
+    await kvSet({ [TASK_KEY]: tasks });
     return { ok: true, name, paused: true, newlyPaused: true, alarmAbsent };
   });
 }
@@ -487,12 +540,18 @@ export async function pauseScheduledTask(name) {
  * failed re-arm leaves the task paused + reports an honest error (never a
  * silently-unpaused task with no alarm, which reconcile would then re-arm
  * with stale semantics). */
-export async function resumeScheduledTask(name) {
+export async function resumeScheduledTask(name, { expectedOwner } = {}) {
   const task = await withLock(async () => {
     const store = await kvGet(TASK_KEY);
-    return structuredClone(store[TASK_KEY]?.[name] ?? null);
+    const found = structuredClone(store[TASK_KEY]?.[name] ?? null);
+    if (found) {
+      const scopeError = assertOwnerScope(found, expectedOwner);
+      if (scopeError) return { scopeError };
+    }
+    return found;
   });
   if (!task) return { ok: false, name, error: "no such task" };
+  if (task.scopeError) return { ok: false, name, error: task.scopeError };
   if (!task.paused) return { ok: false, name, error: "task is not paused" };
   if (task.cancelling) return { ok: false, name, error: "task is cancelling — cannot resume" };
   if (task.quarantined) return { ok: false, name, error: "task is quarantined — retry or cancel it instead" };
@@ -563,12 +622,15 @@ export async function resumeScheduledTask(name) {
 export async function updateScheduledTask(
   name,
   { task, at, delayMs, periodInMinutes, attachments, scriptId } = {},
+  { expectedOwner } = {},
 ) {
   return withLock(async () => {
     const store = await kvGet(TASK_KEY);
     const tasks = { ...(store[TASK_KEY] ?? {}) };
     const existing = tasks[name];
     if (!existing) return { ok: false, name, error: "no such task" };
+    const scopeError = assertOwnerScope(existing, expectedOwner);
+    if (scopeError) return { ok: false, name, error: scopeError };
     if (existing.cancelling) return { ok: false, name, error: "task is cancelling — cannot update" };
     if (existing.quarantined) return { ok: false, name, error: "task is quarantined — retry or cancel it instead" };
     if (existing.storageBlocked) return { ok: false, name, error: "task is storage-blocked — retry or cancel it instead" };
@@ -608,6 +670,15 @@ export async function updateScheduledTask(
     // A PAUSED task keeps no alarm: persist the new schedule, arm nothing.
     if (existing.paused) {
       return { ok: true, name, updated: true, when, paused: true, alarmTouched: false };
+    }
+    // P1-5 (anchor reset): a payload-only change (no at/delayMs input) keeps
+    // the existing `at` — and must ALSO keep the LIVE alarm untouched.
+    // Replacing it via alarms.create(name, { when: existing.at }) would
+    // restart a periodic task's advance anchor (and expedite a periodic whose
+    // `at` anchor is in the past), so editing only the text of an advanced
+    // task must never re-arm it.
+    if (!timingChanged) {
+      return { ok: true, name, updated: true, when, timingChanged: false, paused: false, alarmTouched: false };
     }
     const alarms = alarmsApi();
     if (!alarms) {

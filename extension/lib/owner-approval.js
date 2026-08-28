@@ -34,6 +34,13 @@ export const DESTRUCTIVE_ACTIONS = new Set([
   "named-agent.update",
   "script.delete",
   "script.update",
+  // Per-agent schedule controls are approvable mutations: a MODEL-initiated
+  // pause/resume/update creates a pending approval (the in-context card flow,
+  // per-agent alarms P1-3). Without membership here createPendingApproval
+  // refuses and no approval could ever be requested.
+  "task.pause",
+  "task.resume",
+  "task.update",
 ]);
 
 export class CanonicalPayloadError extends Error {
@@ -418,4 +425,36 @@ export function listPendingApprovals(store) {
 
 export function approvalPendingCount(store) {
   return listPendingApprovals(store).length;
+}
+
+/** The STRUCTURED in-context denial for a just-created pending approval
+ * (per-agent alarms P1-3): the conversation renders `permissionRequirement`
+ * as an approval card; the owner's Allow resolves `approvalId` through the
+ * resolve-approval authority and the EXACT retry consumes it by digest match.
+ * The requirement is a bounded DESCRIPTION (action + opaque target ref) — it
+ * grants nothing by itself. Returns null for an unusable tuple (fail closed). */
+export function approvalCardDenial({ approvalId, action, targetRef }) {
+  if (typeof approvalId !== "string" || !approvalId || approvalId.length > 160) return null;
+  if (typeof action !== "string" || !DESTRUCTIVE_ACTIONS.has(action)) return null;
+  return {
+    ok: false,
+    waitingForPermission: true,
+    permissionRequirement: {
+      reason: `${action}: ${String(targetRef ?? "").slice(0, 200)}`,
+      approvals: [{ approvalId, action }],
+    },
+  };
+}
+
+/** Which surface may resolve WHICH approval (per-agent alarms P1-3): Settings
+ * (owner-options) resolves anything; an extension surface (the conversation's
+ * approval card) may resolve ONLY run-bound approvals — a model-initiated
+ * action awaiting its owner — never a `ui:`-bound one, which stays an exact
+ * Settings-document decision. Every other principal resolves nothing. */
+export function mayResolveApproval(row, principal) {
+  if (principal === "owner-options") return Boolean(row);
+  if (principal === "extension") {
+    return Boolean(row) && typeof row.runId === "string" && !row.runId.startsWith("ui:");
+  }
+  return false;
 }

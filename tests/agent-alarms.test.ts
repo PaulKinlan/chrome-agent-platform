@@ -217,3 +217,175 @@ Deno.test("racing alarm: a delivered alarm for a paused payload never runs it (r
   }
   assertEquals(oa.canonicalOperationTarget("scheduled", { id: "task_1_abc" }), "scheduled:10:task_1_abc"); // length-prefixed canonical form
 });
+
+// ── Part 5 — P1-1 cross-agent authority: owner scope under the lock ─────────
+Deno.test("owner scope: an agent can never pause/update/resume another agent's (or an ownerless) task; owner-extension bypasses", async () => {
+  installAlarmsChromeMock();
+  const s = await freshScheduler();
+  const ownerA = { threadId: "t-a", agentRole: "hub", agentSurfaceRef: "named:alpha" };
+  const ownerB = { threadId: "t-b", agentRole: "hub", agentSurfaceRef: "named:beta" };
+  const { name: aName } = await s.scheduleTask({ task: "alpha's task", delayMs: 60_000, owner: ownerA });
+  const { name: bName } = await s.scheduleTask({ task: "beta's task", delayMs: 60_000, owner: ownerB });
+  const { name: orphanName } = await s.scheduleTask({ task: "ownerless", delayMs: 60_000 });
+
+  // Agent B cannot touch agent A's task — pause, update, resume all refuse.
+  const p = await s.pauseScheduledTask(aName, { expectedOwner: ownerB });
+  assertEquals(p.ok, false);
+  assertEquals(p.error, "task belongs to another agent");
+  assertEquals((await s.listScheduledTasks()).find((t) => t.name === aName).paused, false, "the refused pause mutated nothing");
+  const u = await s.updateScheduledTask(aName, { task: "hijacked" }, { expectedOwner: ownerB });
+  assertEquals(u.ok, false);
+  assertEquals(u.error, "task belongs to another agent");
+  assertEquals((await s.listScheduledTasks()).find((t) => t.name === aName).task, "alpha's task", "the refused update mutated nothing");
+  await s.pauseScheduledTask(aName, { expectedOwner: ownerA });
+  const r = await s.resumeScheduledTask(aName, { expectedOwner: ownerB });
+  assertEquals(r.ok, false);
+  assertEquals(r.error, "task belongs to another agent");
+
+  // An ownerless (hub/legacy) task is owner-extension-managed only.
+  const o = await s.pauseScheduledTask(orphanName, { expectedOwner: ownerA });
+  assertEquals(o.ok, false);
+  assertEquals(o.error, "task has no owning agent — manage it in Settings");
+
+  // The owner itself proceeds (same expectedOwner as the persisted owner).
+  const self = await s.pauseScheduledTask(aName, { expectedOwner: ownerA });
+  assertEquals(self.ok, true);
+  // Wait — aName is already paused from the scope test above; resume with A then pause again for honesty.
+  const backUp = await s.resumeScheduledTask(aName, { expectedOwner: ownerA });
+  assertEquals(backUp.ok, true);
+
+  // Owner-extension (no expectedOwner) bypasses the scope check entirely.
+  const ext = await s.pauseScheduledTask(bName);
+  assertEquals(ext.ok, true, "owner-extension pauses any task");
+});
+
+// ── Part 6 — P2-1 pause disarm retry ────────────────────────────────────────
+Deno.test("pause: an unconfirmed disarm is retried by a later pause until absence is confirmed", async () => {
+  installAlarmsChromeMock();
+  const s = await freshScheduler();
+  const { name } = await s.scheduleTask({ task: "flaky alarms", delayMs: 60_000 });
+  // First pause: alarms.get throws (transient alarms failure) → absence is
+  // UNCONFIRMED, honestly reported, and PERSISTED for a later retry.
+  const realGet = globalThis.chrome.alarms.get;
+  globalThis.chrome.alarms.get = async () => { throw new Error("transient alarms failure"); };
+  const first = await s.pauseScheduledTask(name);
+  globalThis.chrome.alarms.get = realGet;
+  assertEquals(first.ok, true);
+  assertEquals(first.alarmAbsent, false, "the failure is reported honestly");
+  assertEquals((kvStore.get("cap:scheduledTasks") ?? {})[name].alarmUnconfirmed, true, "the unconfirmed state is persisted");
+  // Second pause: the already-paused path RETRIES the disarm and now confirms.
+  const second = await s.pauseScheduledTask(name);
+  assertEquals(second.ok, true);
+  assertEquals(second.retriedDisarm, true, "the retry actually re-attempted the disarm");
+  assertEquals(second.alarmAbsent, true, "absence is now confirmed");
+  assertEquals((kvStore.get("cap:scheduledTasks") ?? {})[name].alarmUnconfirmed, false, "the confirmation is persisted");
+  // A settled pause does not re-attempt anything.
+  const third = await s.pauseScheduledTask(name);
+  assertEquals(third.retriedDisarm, undefined);
+});
+
+// ── Part 7 — P1-5 payload-only update never touches the live alarm ─────────
+Deno.test("update: a prompt-only change keeps the live alarm's advanced anchor (no restart/expedite)", async () => {
+  installAlarmsChromeMock();
+  const s = await freshScheduler();
+  const { name } = await s.scheduleTask({ task: "periodic", delayMs: 60_000, periodInMinutes: 30 });
+  // Simulate Chrome's periodic advance: the live alarm's anchor moved past the
+  // persisted `at` long ago.
+  const advanced = Date.now() + 20 * 60 * 1000;
+  alarmRegistry.set(name, { name, scheduledTime: advanced, periodInMinutes: 30 });
+  const r = await s.updateScheduledTask(name, { task: "reworded prompt only" });
+  assertEquals(r.ok, true);
+  assertEquals(r.timingChanged, false);
+  assertEquals(r.alarmTouched, false, "the live alarm is NOT replaced");
+  assertEquals(alarmRegistry.get(name).scheduledTime, advanced, "the advanced anchor survives — no restart, no expedite");
+  assertEquals((await s.listScheduledTasks()).find((t) => t.name === name).task, "reworded prompt only");
+});
+
+// ── Part 8 — P1-4 credential redaction in the schedule preview path ────────
+Deno.test("schedule preview: credential-shaped prompt text is redacted before the bounded slice", async () => {
+  const { redactSecretText } = await import("../extension/lib/pure.js");
+  const raw = 'check the garden API — api_key=sk-ant-abcdef123456 and Bearer tok_9f8e7d6c5b4a run hourly';
+  const preview = redactSecretText(raw).slice(0, 80);
+  assert(!preview.includes("sk-ant-abcdef123456"), "the api key value never reaches the preview");
+  assert(!preview.includes("tok_9f8e7d6c5b4a"), "the bearer token never reaches the preview");
+  assert(preview.includes("[REDACTED]"), "the redaction marker is present");
+});
+
+// ── Part 9 — P1-3 route/card flow (extracted routes + helpers) ──────────────
+Deno.test("schedule routes: owner-scoped plumbing + structured approval-card denial + resolve authority", async () => {
+  const oa = await import(`../extension/lib/owner-approval.js?oa2=${Date.now()}`);
+  const { setRunContext, clearRunContext, currentRunContext } = await import(
+    `../extension/lib/run-context.js?rc=${Date.now()}`
+  );
+  const { createSchedulerRoutes } = await import(
+    `../extension/background/routes/scheduler.js?sr=${Date.now()}`
+  );
+  const ownerA = { agentRole: "hub", agentSurfaceRef: "named:alpha" };
+  const ownerB = { agentRole: "hub", agentSurfaceRef: "named:beta" };
+  const calls = [];
+  const primitives = {
+    pauseScheduledTask: async (name, opts) => { calls.push(["pause", name, opts]); return { ok: true, name, paused: true }; },
+    resumeScheduledTask: async (name, opts) => { calls.push(["resume", name, opts]); return { ok: true, name }; },
+    updateScheduledTask: async (name, body, opts) => { calls.push(["update", name, opts]); return { ok: true, name }; },
+    listScheduledTasks: async () => [
+      { name: "a", owner: { ...ownerA, threadId: "t-a" } },
+      { name: "b", owner: { ...ownerB, threadId: "t-b" } },
+      { name: "orphan" },
+    ],
+    requireOwnerApproval: (...a) => approvalStub(...a),
+    currentRunContext,
+    broadcastProgress: () => {},
+    canonicalOperationTarget: (kind, parts) => `${kind}:${parts.id ?? ""}`,
+    canonicalScalar: (v) => v,
+    payloadFields: (entries) => Object.fromEntries(entries),
+  };
+  let approvalStub = async () => ({ ok: true });
+  const routes = createSchedulerRoutes(primitives);
+
+  // Model principal → the run context becomes the expectedOwner for every mutation.
+  setRunContext({ threadId: "t-a", agentRole: "hub", agentSurfaceRef: "named:alpha" });
+  const modelCtx = { principal: "model" };
+  await routes["task.pause"]({ name: "a" }, modelCtx);
+  assertEquals(calls.at(-1), ["pause", "a", { expectedOwner: ownerA }]);
+  await routes["task.update"]({ name: "a", task: "x" }, modelCtx);
+  assertEquals(calls.at(-1), ["update", "a", { expectedOwner: ownerA }]);
+  // schedules.list is scoped to the run context, and there is NO all flag.
+  const own = await routes["schedules.list"]({}, modelCtx);
+  assertEquals(own.tasks.map((t) => t.name), ["a"]);
+  assertEquals(own.scoped, true);
+
+  // Extension (owner-direct) → no scope check (undefined expectedOwner).
+  await routes["task.resume"]({ name: "b" }, { principal: "extension", documentId: "doc-1" });
+  assertEquals(calls.at(-1), ["resume", "b", { expectedOwner: undefined }]);
+
+  // A model call with NO run context can never own a task — refused before approval.
+  clearRunContext();
+  const noCtx = await routes["task.pause"]({ name: "a" }, modelCtx);
+  assertEquals(noCtx.ok, false);
+  assertEquals(calls.some((c) => c[0] === "pause" && c[2] === null), false, "the refused call never reached the primitive");
+
+  // Structured card denial: requireOwnerApproval's pending-approval result is
+  // passed through VERBATIM so the conversation renders the card (P1-3).
+  const structured = { ok: false, waitingForPermission: true, permissionRequirement: { reason: "task.pause: scheduled:x", approvals: [{ approvalId: "ap_1", action: "task.pause" }] } };
+  approvalStub = async () => structured;
+  approvalStub = async () => structured;
+  setRunContext({ threadId: "t-a", agentRole: "hub", agentSurfaceRef: "named:alpha" });
+  const denied = await routes["task.pause"]({ name: "a" }, modelCtx);
+    assertEquals(denied, structured, "the card requirement is passed through untouched");
+
+  // approvalCardDenial: bounded, action-validated, fail-closed.
+  const card = oa.approvalCardDenial({ approvalId: "ap_9", action: "task.pause", targetRef: "scheduled:10:task_1" });
+  assertEquals(card.waitingForPermission, true);
+  assertEquals(card.permissionRequirement.approvals[0].approvalId, "ap_9");
+  assertEquals(oa.approvalCardDenial({ approvalId: "ap_9", action: "not-a-real-action", targetRef: "x" }), null);
+  assertEquals(oa.approvalCardDenial({ approvalId: "", action: "task.pause", targetRef: "x" }), null);
+
+  // Resolve authority: Settings resolves anything; extension resolves RUN-bound
+  // only; ui:-bound rows and unknown principals refuse.
+  assertEquals(oa.mayResolveApproval({ runId: "exec-1" }, "owner-options"), true);
+  assertEquals(oa.mayResolveApproval({ runId: "exec-1" }, "extension"), true);
+  assertEquals(oa.mayResolveApproval({ runId: "ui:doc-1" }, "extension"), false, "ui-bound approvals stay Settings-only");
+  assertEquals(oa.mayResolveApproval({ runId: "ui:doc-1" }, "owner-options"), true);
+  assertEquals(oa.mayResolveApproval(undefined, "extension"), false);
+  assertEquals(oa.mayResolveApproval({ runId: "exec-1" }, "model"), false);
+});

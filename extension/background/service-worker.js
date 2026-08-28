@@ -31,6 +31,7 @@ import {
   createAgentWorkerRoutes,
   reconcileAgentWorkers,
   createProviderRoutes,
+  createSchedulerRoutes,
   kvRoutes,
   mergeRouteMaps,
   permLeaseRoutes,
@@ -445,6 +446,8 @@ import {
   canonicalScalar,
   bindModelApprovalDispatcher,
   consumeApproved,
+  approvalCardDenial,
+  mayResolveApproval,
   createApprovalStore,
   createPendingApproval,
   isOwnerDirectApproval,
@@ -2748,7 +2751,7 @@ function approvalExecutionId(context) {
   return "";
 }
 
-async function requireOwnerApproval(context, action, target, payload) {
+async function requireOwnerApproval(context, action, target, payload, { card = false } = {}) {
   const executionId = approvalExecutionId(context);
   if (!executionId || !target) return { ok: false, error: "This operation requires owner approval in Settings." };
   // Owner-DIRECT actions: the owner's own click in an extension UI document IS
@@ -2781,6 +2784,15 @@ async function requireOwnerApproval(context, action, target, payload) {
     const row = ownerApprovalStore.approvals.get(pending.approvalId);
     if (row) row.targetRef = targetRef;
     if (!pending.deduped) securityApprovalEvent("requested", action, targetRef);
+  }
+  // Card mode (P1-3): surface the pending approval as a STRUCTURED in-context
+  // denial the conversation renders as an approval card — instead of a
+  // dead-end Settings pointer. Bounded: the requirement is a DESCRIPTION
+  // (action + opaque target ref); the real owner click resolves the exact
+  // pending approval id and the EXACT retry consumes it by digest match.
+  if (card && pending.ok) {
+    return approvalCardDenial({ approvalId: pending.approvalId, action, targetRef }) ??
+      { ok: false, error: "This operation requires owner approval in Settings." };
   }
   return { ok: false, error: "This operation requires owner approval in Settings." };
 }
@@ -2906,6 +2918,23 @@ function dispatchRoute(type, body, context) {
 
 const providerRoutes = createProviderRoutes({ invalidateAgent });
 
+// Per-agent schedule routes (schedules.list / task.pause / task.resume / task
+// .update) — extracted for unit-drivability. The card flag turns a model-
+// initiated approval denial into the STRUCTURED in-context card requirement.
+const schedulerRoutes = createSchedulerRoutes({
+  pauseScheduledTask,
+  resumeScheduledTask,
+  updateScheduledTask,
+  retryScheduledTask,
+  listScheduledTasks,
+  requireOwnerApproval,
+  currentRunContext,
+  broadcastProgress,
+  canonicalOperationTarget,
+  canonicalScalar,
+  payloadFields,
+});
+
 // The activity-log explorer aggregation (extracted from the inline handler so
 // it is fault-isolated + bounded on real profiles — a slow/failing store can
 // never hang the route past the MV3 worker's lifetime).
@@ -2947,6 +2976,7 @@ function executeWorkerTool(toolName, args, context) {
 
 const handlers = mergeRouteMaps(
   activityRoutes,
+  schedulerRoutes,
   createAgentWorkerRoutes({
     ensureOffscreen,
     kvGet,
@@ -4492,8 +4522,15 @@ const handlers = mergeRouteMaps(
     return { ok: true, approvals: await ownerApprovalRows() };
   },
   async "management.resolve-approval"({ approvalId, approve }, context) {
-    if (context?.principal !== "owner-options") return { ok: false, error: "approvals are available only in Settings" };
+    // Two resolver surfaces, strictly partitioned by WHICH approvals each may
+    // resolve: Settings (owner-options) resolves anything; an extension
+    // surface (the NTP conversation's approval card) may resolve ONLY run-
+    // bound approvals (a model-initiated action awaiting its owner) — never
+    // a ui:-bound one, which stays an exact-Settings-document decision.
     const before = ownerApprovalStore.approvals.get(String(approvalId ?? ""));
+    if (!mayResolveApproval(before, context?.principal)) {
+      return { ok: false, error: "approvals are available only in Settings" };
+    }
     const result = resolvePendingApproval(ownerApprovalStore, String(approvalId ?? ""), approve === true);
     if (result.ok && before) {
       securityApprovalEvent(result.decision, before.action, before.targetRef ?? "");
@@ -4829,86 +4866,6 @@ const handlers = mergeRouteMaps(
     // delivery blocker: a quarantined task must not run, but it must be VISIBLE
     // and CANCELLABLE).
     return { tasks: await listScheduledTasks() };
-  },
-  async "schedules.list"(m) {
-    // The schedules_list agent tool: the CALLING agent's own scheduled tasks by
-    // default (owner attribution matches this run's agentRole + agentSurfaceRef
-    // exactly — never another agent's without the explicit all:true scope). A
-    // read-only route; no approval gate (the global list is owner-visible too).
-    const tasks = await listScheduledTasks();
-    if (m?.all === true) return { tasks };
-    const ctx = currentRunContext();
-    if (!ctx) return { tasks: [], scoped: true };
-    const own = tasks.filter((t) => {
-      const o = t.owner;
-      if (!o) return false;
-      return o.agentRole === ctx.agentRole && (o.agentSurfaceRef ?? null) === (ctx.agentSurfaceRef ?? null);
-    });
-    return { tasks: own, scoped: true };
-  },
-  async "task.retry"(m) {
-    const name = String(m?.name ?? "");
-    if (!name) return { ok: false, error: "task name is required" };
-    return await retryScheduledTask(name);
-  },
-  async "task.pause"(m, context) {
-    // Pause a scheduled task: retained payload + schedule, cleared alarm, never
-    // fires. Owner-direct UI clicks approve themselves; a model-initiated call
-    // creates a pending approval resolved in-context (the 0.2.303 card flow).
-    const name = String(m?.name ?? "");
-    if (!name) return { ok: false, error: "task name is required" };
-    const approval = await requireOwnerApproval(
-      context,
-      "task.pause",
-      canonicalOperationTarget("scheduled", { id: name }),
-      payloadFields([["name", canonicalScalar(name)]]),
-    );
-    if (approval?.ok !== true) return approval?.ok === false ? approval : { ok: false, error: approval?.error ?? "This operation requires owner approval in Settings." };
-    const r = await pauseScheduledTask(name);
-    if (r?.ok) broadcastProgress({ type: "scheduled-tasks-changed" });
-    return r;
-  },
-  async "task.resume"(m, context) {
-    const name = String(m?.name ?? "");
-    if (!name) return { ok: false, error: "task name is required" };
-    const approval = await requireOwnerApproval(
-      context,
-      "task.resume",
-      canonicalOperationTarget("scheduled", { id: name }),
-      payloadFields([["name", canonicalScalar(name)]]),
-    );
-    if (approval?.ok !== true) return approval?.ok === false ? approval : { ok: false, error: approval?.error ?? "This operation requires owner approval in Settings." };
-    const r = await resumeScheduledTask(name);
-    if (r?.ok) broadcastProgress({ type: "scheduled-tasks-changed" });
-    return r;
-  },
-  async "task.update"(m, context) {
-    const name = String(m?.name ?? "");
-    if (!name) return { ok: false, error: "task name is required" };
-    const fields = [];
-    if (m?.task !== undefined) fields.push(["task", canonicalScalar(String(m.task).slice(0, 4000))]);
-    if (m?.at !== undefined) fields.push(["at", canonicalScalar(Number(m.at))]);
-    if (m?.delayMs !== undefined) fields.push(["delayMs", canonicalScalar(Number(m.delayMs))]);
-    if (m?.periodInMinutes !== undefined) fields.push(["periodInMinutes", canonicalScalar(Number(m.periodInMinutes))]);
-    const approval = await requireOwnerApproval(
-      context,
-      "task.update",
-      canonicalOperationTarget("scheduled", { id: name }),
-      payloadFields(fields),
-    );
-    if (approval?.ok !== true) return approval?.ok === false ? approval : { ok: false, error: approval?.error ?? "This operation requires owner approval in Settings." };
-    try {
-      const r = await updateScheduledTask(name, {
-        task: m?.task !== undefined ? String(m.task) : undefined,
-        at: m?.at !== undefined ? Number(m.at) : undefined,
-        delayMs: m?.delayMs !== undefined ? Number(m.delayMs) : undefined,
-        periodInMinutes: m?.periodInMinutes !== undefined ? Number(m.periodInMinutes) : undefined,
-      });
-      if (r?.ok) broadcastProgress({ type: "scheduled-tasks-changed" });
-      return r;
-    } catch (e) {
-      return { ok: false, error: String(e?.message ?? e) };
-    }
   },
   async "task.cancel"(m) {
     // Authoritative owner cancellation of a scheduled (or quarantined) task:

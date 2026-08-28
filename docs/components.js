@@ -4287,15 +4287,15 @@ class TaskRow extends Component {
       .name { flex:1; min-width:0; font-size:14px; color:var(--ink,#1d1b18); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .time { flex:0 0 auto; font-size:12px; color:var(--muted,#635e56); font-variant-numeric:tabular-nums; }
       .retry, .del { flex:0 0 auto; border:0; background:transparent; color:var(--muted,#635e56); cursor:pointer; padding:2px 4px; font:inherit; line-height:1; border-radius:6px; }
-      .retry { color:var(--accent,#0e6e63); font-size:12px; font-weight:650; }
+      .retry, .psep { color:var(--accent,#0e6e63); font-size:12px; font-weight:650; }
       .del { font-size:15px; }
-      .retry:hover, .del:hover { background:var(--panel-2,#efede8); }
+      .retry:hover, .psep:hover, .del:hover { background:var(--panel-2,#efede8); }
       .del:hover { color:var(--danger,#b3261e); }
-      .retry:focus-visible, .del:focus-visible, .row-open:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .retry:focus-visible, .psep:focus-visible, .del:focus-visible, .row-open:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       @keyframes cap-spin { to { transform:rotate(360deg); } }
       @media (prefers-reduced-motion: reduce) { .spin { animation:none; } }
     `, `<div class="row" aria-current="${active ? "true" : "false"}">
-        <button type="button" class="row-open">${indicator}<span class="name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>${time ? `<span class="time">${escapeHtml(time)}</span>` : ""}</button>${pausable ? `<button type="button" class="retry psep" aria-label="${paused ? "Resume" : "Pause"} ${escapeHtml(name)}">${paused ? "Resume" : "Pause"}</button>` : ""}${retryable ? `<button type="button" class="retry" aria-label="Retry ${escapeHtml(name)}">Retry</button>` : ""}<button type="button" class="del" aria-label="Delete ${escapeHtml(name)}">×</button></div>`);
+        <button type="button" class="row-open">${indicator}<span class="name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>${time ? `<span class="time">${escapeHtml(time)}</span>` : ""}</button>${pausable ? `<button type="button" class="psep" aria-label="${paused ? "Resume" : "Pause"} ${escapeHtml(name)}">${paused ? "Resume" : "Pause"}</button>` : ""}${retryable ? `<button type="button" class="retry" aria-label="Retry ${escapeHtml(name)}">Retry</button>` : ""}<button type="button" class="del" aria-label="Delete ${escapeHtml(name)}">×</button></div>`);
   }
   _wire() {
     this._root.querySelector(".row-open")?.addEventListener("click", () => this._emit("open"));
