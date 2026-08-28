@@ -100,6 +100,10 @@ export function buildTree(value, opts = {}) {
   const maxDepth = opts.maxDepth ?? TOOL_TREE_MAX_DEPTH;
   const maxNodes = opts.maxNodes ?? TOOL_TREE_MAX_NODES;
   const containerCap = opts.containerCap ?? TOOL_TREE_CONTAINER_CAP;
+  // Nested JSON-string decodes allowed for the WHOLE tree (one logical
+  // payload could nest several times; the budget stops a hostile
+  // string-of-string-of-string from recursing without bound).
+  const decodeBudget = { n: opts.maxNestedDecodes ?? 8 };
   const rows = [];
   let budget = maxNodes;
   let truncated = false;
@@ -160,6 +164,20 @@ export function buildTree(value, opts = {}) {
       return;
     }
     // scalars
+    // A leaf string that is itself an embedded JSON payload (a tool result
+    // double-encoded into a field) is DECODED and rendered as a subtree — the
+    // owner's "big unreadable JSON blob" complaint. Bounded: the string must
+    // clearly begin a JSON value, fit the parse budget, and the per-tree
+    // decode budget (shared across the whole tree) stops pathological nesting.
+    if (typeof v === "string" && decodeBudget.n > 0 && v.length <= TOOL_TREE_PARSE_LIMIT && looksJsonish(v)) {
+      let decoded;
+      try { decoded = JSON.parse(v); } catch { decoded = undefined; }
+      if (decoded !== null && typeof decoded === "object") {
+        decodeBudget.n -= 1;
+        visit(segments, key, decoded, depth, chain);
+        return;
+      }
+    }
     const kind = typeof v === "string" ? "string" : typeof v === "number" ? "number" : typeof v === "boolean" ? "boolean" : "string";
     push({ segments, key, kind, depth, leaf: true, text: primitiveText(v), full: isTruncatedString(v) ? String(v) : undefined, source: "json" });
   };
@@ -187,7 +205,7 @@ export function buildTree(value, opts = {}) {
 // The CANONICAL secret-key matcher (shared with lib/pure.js — one semantic,
 // never a divergent anchored copy): any key matching it is redacted before it
 // reaches the UI/serializer or a truncation preview.
-import { SECRET_KEY_RE } from "../lib/pure.js";
+import { SECRET_KEY_RE, redactSecretText } from "../lib/pure.js";
 const SECRET_KEY = SECRET_KEY_RE;
 
 /** The smallest maxBytes the serializer can honor (the fixed envelope + a
@@ -362,4 +380,53 @@ function boundSubtree(v, containerCap, depth = 0, cappedRef = { v: false }) {
     return { value: out, capped: cappedRef.v };
   }
   return { value: v, capped: cappedRef.v };
+}
+
+/**
+ * journalJson — the ONE serializer for persisted/broadcast tool-call payloads
+ * (the tool-call clarity fix). The old journal path did
+ * `JSON.stringify(v).slice(0, 2000) + "…"` — MID-STRING truncation that
+ * corrupted JSON, so the structured renderer could never parse a journaled
+ * payload and fell back to a raw one-line blob. This helper:
+ *   1. redacts credential-shaped strings (redactSecretText — key: sk-…,
+ *      Bearer …, apiKey=… patterns) at the text level,
+ *   2. serializes with safeJsonStringify (secret KEYS → "[redacted]", bounded
+ *      nodes/strings) so the output is ALWAYS valid parseable JSON for
+ *      objects (plain strings pass through as redacted bounded text),
+ *   3. serializes with headroom so the post-redaction text stays ≤ maxBytes
+ *      without a second (corrupting) truncation — redaction only ever
+ *      shortens or marks, and the headroom absorbs the marker delta.
+ * Never throws.
+ */
+export function journalJson(value, opts = {}) {
+  const maxBytes = opts.maxBytes ?? 2000;
+  const headroom = Math.max(SAFE_JSON_MIN_MAX_BYTES, maxBytes - 64);
+  let s;
+  if (typeof value === "string") {
+    // A PRE-STRINGIFIED JSON payload must never be slice-truncated (that
+    // corrupts it — the exact bug this replaces): decode then re-serialize
+    // bounded so the journal stays parseable; genuinely plain text is simply
+    // bounded as text.
+    const t = value.trim();
+    const maybeJson = (looksJsonish(t) || (t.startsWith('"') && t.endsWith('"'))) && t.length <= TOOL_TREE_PARSE_LIMIT;
+    let parsed;
+    if (maybeJson) { try { parsed = JSON.parse(t); } catch { parsed = undefined; } }
+    if (parsed !== undefined) {
+      try { s = safeJsonStringify(parsed, { maxBytes: headroom, maxNodes: 80, maxString: 400 }); }
+      catch { s = "\"[unserializable value]\""; }
+    } else {
+      s = value.length > headroom ? value.slice(0, headroom) + "…" : value;
+    }
+  } else {
+    try {
+      s = safeJsonStringify(value, { maxBytes: headroom, maxNodes: 80, maxString: 400 });
+    } catch {
+      s = "\"[unserializable value]\"";
+    }
+  }
+  try {
+    return redactSecretText(s);
+  } catch {
+    return s;
+  }
 }

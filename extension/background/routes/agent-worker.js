@@ -16,6 +16,8 @@
 // the SW (the design invariant): only extension surfaces may ensure/close.
 
 import { capLog } from "../../lib/cap-log.js";
+import { journalJson } from "../../shared/tool-tree.js";
+import { redactSecretText } from "../../lib/pure.js";
 import {
   acquireBrowserCommandLease,
   enterBrowserCommandContext,
@@ -101,9 +103,8 @@ function bounded(value, max = MAX_PREVIEW_CHARS) {
 }
 
 function redactedPreview(value, max = MAX_PREVIEW_CHARS) {
-  return bounded(value, max)
-    .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, "Bearer [redacted]")
-    .replace(/\b(api[_-]?key|token|secret|password|credential|access[_-]?key)\b\s*[:=]\s*\S+/gi, "$1=[redacted]");
+  // The CANONICAL redactor (the local regex missed the bare-whitespace form).
+  return redactSecretText(bounded(value, max));
 }
 
 function sanitizeProgressEvent(event) {
@@ -112,15 +113,16 @@ function sanitizeProgressEvent(event) {
   const out = { type };
   if (event.toolName != null) out.toolName = String(event.toolName).slice(0, 128);
   if (event.toolArgs != null) {
-    let raw;
-    try { raw = JSON.stringify(event.toolArgs); } catch { raw = String(event.toolArgs); }
-    out.toolArgs = redactedPreview(raw, 2048);
+    // journalJson: ALWAYS valid bounded JSON (never a mid-string slice that
+    // corrupts the payload — the replay-blob bug) with canonical redaction.
+    out.toolArgs = journalJson(event.toolArgs, { maxBytes: 2048 });
   }
   if (event.result != null) {
-    let raw;
-    try { raw = typeof event.result === "string" ? event.result : JSON.stringify(event.result); } catch { raw = String(event.result); }
-    out.result = redactedPreview(raw, 2048);
+    out.result = journalJson(event.result, { maxBytes: 2048 });
   }
+  // The lazy protocol's resolved tool name rides the event so the UI card can
+  // correct `execute_tool` to the tool that actually ran.
+  if (event.selectedTool != null) out.selectedTool = String(event.selectedTool).slice(0, 128);
   if (event.text != null) out.text = redactedPreview(event.text, 2048);
   if (event.step != null && Number.isFinite(event.step)) out.step = event.step;
   if (event.totalSteps != null && Number.isFinite(event.totalSteps)) out.totalSteps = event.totalSteps;
@@ -136,12 +138,11 @@ function sanitizeJournalEntry(entry, executionId) {
   const out = { type, id, executionId };
   if (entry.task != null) out.task = redactedPreview(entry.task, 4096);
   if (entry.result != null) {
-    let raw;
-    try { raw = typeof entry.result === "string" ? entry.result : JSON.stringify(entry.result); } catch { raw = String(entry.result); }
-    out.result = redactedPreview(raw, 65536);
+    out.result = journalJson(entry.result, { maxBytes: 65536 });
   }
   if (entry.tool != null) out.tool = String(entry.tool).slice(0, 128);
-  if (entry.args != null) out.args = redactedPreview(entry.args, 4096);
+  if (entry.selectedTool != null) out.selectedTool = String(entry.selectedTool).slice(0, 128);
+  if (entry.args != null) out.args = journalJson(entry.args, { maxBytes: 4096 });
   if (entry.callId != null) out.callId = String(entry.callId).slice(0, 200);
   if (entry.run != null) out.run = String(entry.run).slice(0, 200);
   if (entry.ok !== undefined) out.ok = Boolean(entry.ok);

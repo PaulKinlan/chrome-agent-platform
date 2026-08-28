@@ -166,7 +166,8 @@ Deno.test("agent-worker.progress: validates executionId and bounds/redacts event
   const bc = broadcastEvents[0];
   assertEquals(bc.runId, executionId);
   assertEquals(bc.agentId, "test-agent");
-  assert(bc.text.includes("Bearer [redacted]"));
+  // The canonical redactor (redactSecretText) marks "Bearer [REDACTED]" — the old local regex produced "Bearer [redacted]".
+  assert(bc.text.includes("Bearer [REDACTED]"));
   assert(!bc.text.includes("secret-token-12345"));
   assert(!bc.toolArgs.includes("secret-token-12345"));
   assert(bc.text.length <= 2050, "text is bounded");
@@ -290,8 +291,8 @@ Deno.test("agent-worker.journal-append: appends bounded/redacted entries to targ
   // Target memory has the appended entry with redacted tokens
   const entries = targetMemory.get("agent:coder");
   assertEquals(entries.length, 1);
-  assert(entries[0].result.includes("Bearer [redacted]"));
-  assert(entries[0].result.includes("password=[redacted]"));
+  assert(entries[0].result.includes("Bearer [REDACTED]"));
+  assert(entries[0].result.includes("password=[REDACTED]"));
   assert(!entries[0].result.includes("secret-auth-token"));
 
   // Durable log has the execution-linked log

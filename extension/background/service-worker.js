@@ -434,6 +434,7 @@ import {
   PAGE_ALLOWED_ROUTES,
   parseOmniboxContent,
   redactSecrets,
+  redactDeep,
   safeProviderError,
   sanitizeToolName as safeToolName,
   seedSnapshotGate,
@@ -465,6 +466,7 @@ import {
   resolvePendingApproval,
 } from "../lib/owner-approval.js";
 import { bridgeAndAuditApprovalBindings } from "../lib/approval-bridge-audit.js";
+import { journalJson } from "../shared/tool-tree.js";
 import { capLog, dumpLogBuffer, clearLogBuffer, getLogVerbosity, setLogVerbosity } from "../lib/cap-log.js";
 import { perfSpan, perfSummary, perfClear } from "../lib/cap-perf.js";
 
@@ -2080,6 +2082,20 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     const callQueue = new Map(); // per-run: toolName -> pending callId FIFO (tool-result side)
     const orphanSeq = new Map(); // per-run: toolName -> orphan-result counter (unique ids)
     const journalingProgress = async (event) => {
+      // Redact credentials at the SINGLE progress chokepoint so BOTH the live
+      // broadcast and the persisted journal never carry them (the tool-call
+      // clarity finding: raw args/results — including credential-shaped
+      // values — flowed to the UI + the journal unredacted). The tool itself
+      // already received its real args before this event exists, so this is
+      // purely presentational/telemetry.
+      if (event && (event.type === "tool-call" || event.type === "tool-result")) {
+        try {
+          event = {
+            ...event,
+            ...(event.type === "tool-call" ? { toolArgs: redactDeep(event.toolArgs) } : { result: redactDeep(event.result) }),
+          };
+        } catch { /* redaction failure must never break the run */ }
+      }
       try { onProgress?.(event); } catch { /* broadcast must not break telemetry */ }
       const type = event?.type;
       if (type === "tool-call") {
@@ -2105,18 +2121,15 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         const cq = callQueue.get(event.toolName) ?? [];
         cq.push(callId); // the result side shifts the OLDEST pending id (FIFO)
         callQueue.set(event.toolName, cq);
-        let args = "";
-        try { args = event.toolArgs != null ? JSON.stringify(event.toolArgs) : ""; } catch { args = String(event.toolArgs ?? ""); }
-        if (args && args.length > 2000) args = args.slice(0, 2000) + "…";
+        // The journaled payload is ALWAYS valid bounded JSON (never the old
+        // mid-string slice that corrupted it — the replay blob bug) with
+        // credential-shaped values redacted (journalJson).
+        const args = event.toolArgs != null ? journalJson(event.toolArgs) : "";
         const log = { type: "tool-call", id: taskId, executionId, run: runInstance, callId, tool: event.toolName ?? "tool", args };
         journalAppend(mem, log).catch(() => {});
         durableRuns.appendLog(executionId, log, `tool-call:${callId}`).catch(() => {});
       } else if (type === "tool-result") {
-        let result;
-        if (event.result == null) result = "";
-        else if (typeof event.result === "string") result = event.result;
-        else { try { result = JSON.stringify(event.result); } catch { result = String(event.result); } }
-        if (result && result.length > 2000) result = result.slice(0, 2000) + "…";
+        const result = event.result != null ? journalJson(event.result) : "";
         // Match the OLDEST pending callId for this tool name (FIFO — parallel
         // same-name calls pair in order) + persist the ok flag so a replay can
         // restore failed/blocked results as ERROR cards (the journal discarded
@@ -2127,7 +2140,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         // An unmatched result gets a UNIQUE id (never a repeated ":1" that
         // would collapse multiple orphan results into one card).
         const callId = q.shift() ?? `${taskId}:${runInstance}:${event.toolName ?? "tool"}:orphan:${orphanN}`;
-        const log = { type: "tool-result", id: taskId, executionId, run: runInstance, callId, tool: event.toolName ?? "tool", result, ok: event.ok ?? null };
+        const log = { type: "tool-result", id: taskId, executionId, run: runInstance, callId, tool: event.toolName ?? "tool", result, ok: event.ok ?? null, ...(typeof event.selectedTool === "string" && event.selectedTool ? { selectedTool: event.selectedTool } : {}) };
         journalAppend(mem, log).catch(() => {});
         durableRuns.appendLog(executionId, log, `tool-result:${callId}`).catch(() => {});
         durableRuns.heartbeat(executionId, { progressed: true }).catch(() => {

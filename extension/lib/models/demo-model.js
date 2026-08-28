@@ -18,6 +18,13 @@ const TOOLS_MARKER = "@demo-tools";
 // call (the production model-facing delegate) — the delegated worker runs
 // "@demo-tools" and the final text reflects the delegation result.
 const DELEGATE_MARKER = "@demo-delegate";
+// The agent-creation KAT marker: "@demo-create-agent name=\"X\" role=\"Y\""
+// drives the REAL lazy-protocol path (search_tools → execute_tool →
+// create_named_agent) so the browser KAT attests the hub can genuinely create
+// a named agent — the owner's "it said it created one but no agent appears"
+// bug. A credential-carrying value rides the args to prove journal/UI
+// redaction end-to-end.
+const CREATE_AGENT_MARKER = "@demo-create-agent";
 // @demo-slow: the FIRST model step is delayed (a deterministic mid-run window
 // for abort tests).
 const SLOW_MARKER = "@demo-slow";
@@ -84,6 +91,20 @@ function wantsDemoTools(prompt) {
   return !!latestRunSlice(prompt)?.marker?.tools;
 }
 
+function wantsCreateAgent(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.createAgent;
+}
+
+/** Parse the deterministic name/role out of the marker turn (bounded). */
+function createAgentSpec(prompt) {
+  const msgs = latestRunSlice(prompt)?.slice ?? [];
+  const lastUserMsg = [...msgs].reverse().find((m) => m?.role === "user");
+  const lastUser = extractText(lastUserMsg ? [lastUserMsg] : []);
+  const name = /name="([^"]{1,60})"/u.exec(lastUser)?.[1] ?? "KAT Demo Agent";
+  const role = /role="([^"]{1,120})"/u.exec(lastUser)?.[1] ?? "a deterministic KAT agent";
+  return { name, role };
+}
+
 /** STATELESS, run-scoped demo sequencing: the step is derived from the CURRENT
  * prompt's tool history — never from counters on a shared model (which would
  * leak across concurrent/multi-agent runs and consecutive marker runs). With
@@ -122,6 +143,7 @@ function latestRunSlice(prompt) {
     marker: {
       tools: lastUser.includes(TOOLS_MARKER),
       delegate: lastUser.includes(DELEGATE_MARKER),
+      createAgent: lastUser.includes(CREATE_AGENT_MARKER),
     },
   };
 }
@@ -164,6 +186,22 @@ function lazyDemoCall(prompt, { delegate = false } = {}) {
     }
     return null;
   }
+  if (wantsCreateAgent(prompt)) {
+    // search → execute create_named_agent with the parsed name/role. The args
+    // carry a credential-SHAPED note so the journal + the live card must both
+    // show it redacted (the tool-call clarity KAT's redaction leg).
+    if (step === 0) {
+      return { id: "search_create_agent", name: "search_tools", input: { query: "create_named_agent", limit: 1 } };
+    }
+    if (step === 1) {
+      const selectionRef = latestSelectionRef(prompt);
+      const { name, role } = createAgentSpec(prompt);
+      return selectionRef
+        ? { id: "execute_create_agent", name: "execute_tool", input: { selectionRef, arguments: { name, role, note: "kat marker — apiKey: sk-kat-redaction-check-123456" } } }
+        : null;
+    }
+    return null;
+  }
   const plan = [
     { type: "search", tool: "memory_set" },
     { type: "execute", args: DEMO_ARGS },
@@ -188,6 +226,30 @@ function demoAlreadyFinal(prompt) {
     m?.role === "assistant" &&
     Array.isArray(m?.content) &&
     m.content.some((p) => p?.type === "text" && /\[demo model\] Tool calls executed in sequence/.test(p.text ?? "")));
+}
+
+function createAgentFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" &&
+    Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && /\[demo model\] (Created agent|Agent creation failed)/.test(p.text ?? "")));
+}
+
+/** The create-agent final text: honest about the outcome (the tool result in
+ * the slice decides — a failed create must never read as a success). */
+function createAgentFinalText(prompt) {
+  const { name } = createAgentSpec(prompt);
+  const slice = runSlice(prompt);
+  const results = slice
+    .filter((m) => m?.role === "tool")
+    .flatMap((m) => Array.isArray(m.content) ? m.content : [])
+    .map((p) => p?.result ?? p?.output ?? null);
+  const executeResult = results[results.length - 1];
+  const text = typeof executeResult === "string" ? executeResult : JSON.stringify(executeResult ?? "");
+  const failed = /"ok"\s*:\s*false|error/i.test(text) && !/"ok"\s*:\s*true/.test(text);
+  return failed
+    ? `[demo model] Agent creation failed honestly: ${text.slice(0, 160)}`
+    : `[demo model] Created agent "${name}" via create_named_agent.`;
 }
 
 function delegateAlreadyFinal(prompt) {
@@ -221,8 +283,12 @@ export function createDemoModel() {
 
     doGenerate(options) {
       const text = extractText(options.prompt);
+      const createAgentDone = wantsCreateAgent(options.prompt) &&
+        (createAgentFinal(options.prompt) || toolResultCount(options.prompt) >= 2);
       const lazyCall = wantsDelegate(options.prompt)
         ? lazyDemoCall(options.prompt, { delegate: true })
+        : wantsCreateAgent(options.prompt) && !createAgentDone
+        ? lazyDemoCall(options.prompt)
         : wantsDemoTools(options.prompt) && !demoAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt)
         : null;
@@ -236,6 +302,17 @@ export function createDemoModel() {
           }],
           finishReason: "tool-calls",
           usage: { inputTokens: 8, outputTokens: 12, totalTokens: 20 },
+          warnings: [],
+        });
+      }
+      // The create-agent final/continuation text: honest about the outcome, and
+      // the marker text lets the stripped-history continuation re-emit it so
+      // the loop ends (mirrors the @demo-tools alreadyFinal pattern).
+      if (wantsCreateAgent(options.prompt)) {
+        return Promise.resolve({
+          content: [{ type: "text", text: createAgentFinalText(options.prompt) }],
+          finishReason: "stop",
+          usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
           warnings: [],
         });
       }
@@ -266,8 +343,12 @@ export function createDemoModel() {
         start(controller) {
           controller.enqueue({ type: "stream-start", warnings: [] });
           let response = "";
+          const createAgentDone = wantsCreateAgent(options.prompt) &&
+            (createAgentFinal(options.prompt) || toolResultCount(options.prompt) >= 2);
           const lazyCall = wantsDel
             ? lazyDemoCall(options.prompt, { delegate: true })
+            : wantsCreateAgent(options.prompt) && !createAgentDone
+            ? lazyDemoCall(options.prompt)
             : wantsTools && !demoAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt)
             : null;
@@ -343,7 +424,11 @@ export function createDemoModel() {
             controller.close();
             return;
           }
-          if (wantsTools && (toolResultCount(options.prompt) >= 6 || demoAlreadyFinal(options.prompt))) {
+          if (wantsCreateAgent(options.prompt)) {
+            // the create-agent final/continuation text (honest outcome; the
+            // marker lets the stripped-history continuation re-emit + stop)
+            response = createAgentFinalText(options.prompt);
+          } else if (wantsTools && (toolResultCount(options.prompt) >= 6 || demoAlreadyFinal(options.prompt))) {
             // STEP 4 (tools): the final summary — the reads' VALUES speak for
             // themselves (the run's tool results are the assertion target). The
             // continuation step (tool history stripped) re-emits the same

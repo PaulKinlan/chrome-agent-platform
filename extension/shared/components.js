@@ -24,6 +24,7 @@ import {
 import { parseMentionToken, parseSlashCommand } from "./command-parser.js";
 import { normalizeConversationRunStatus } from "./run-status.js";
 import { safeParse, buildTree, subtreeJson, safeJsonStringify } from "./tool-tree.js";
+import { describeToolCall } from "../lib/tool-summary.js";
 
 const ARIA_HIDDEN = "aria-hidden";
 const TRUE = ""; // boolean-attribute present marker
@@ -2529,6 +2530,22 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
   nameEl.className = "tool-name";
   nameEl.textContent = name || "tool";
   summary.appendChild(nameEl);
+  // The human line on the COLLAPSED row (the owner's tool-call clarity
+  // finding): "Searching tools for “daily notes”", "Opening https://…" —
+  // computed from the tool name + its (already-redacted) arguments. The args
+  // attribute is a JSON string when structured; a parse failure just means no
+  // argument interpolation, never a broken card.
+  let what = "";
+  try {
+    const parsedArgs = args != null && args !== "" ? safeParse(args) : null;
+    what = describeToolCall(name, parsedArgs && parsedArgs.kind === "json" ? parsedArgs.value : args);
+  } catch { what = ""; }
+  if (what) {
+    const whatEl = document.createElement("span");
+    whatEl.className = "tool-what";
+    whatEl.textContent = what;
+    summary.appendChild(whatEl);
+  }
   const statusEl = document.createElement("span");
   statusEl.className = `tool-status ${status}`;
   statusEl.setAttribute("role", "status");
@@ -2695,6 +2712,8 @@ class MessageBubble extends Component {
       .tool:not([open]) .tool-head { border-bottom:0; }
       .tool .tool-body { display:flex; flex-direction:column; }
       .tool .tool-name { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12.5px; font-weight:600; color:var(--ink,#1d1b18); }
+      /* the collapsed row's human line (what the tool is DOING, not just its id) */
+      .tool .tool-what { font-size:12.5px; color:var(--muted,#635e56); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1 1 auto; }
       .tool .tool-status { margin-left:auto; display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:1px 8px; border-radius:999px; }
       .tool .tool-status::before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor; }
       .tool .tool-status.running { color:var(--muted,#635e56); background:var(--panel,#ffffff); }

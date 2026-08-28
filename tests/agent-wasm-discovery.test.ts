@@ -140,11 +140,13 @@ Deno.test("master-skill: every cited tool name resolves to a real registry entry
         return [raw, raw.replace(/\./g, "_")];
       }),
   );
+  // The management set derives from the REAL toolset (the hardcoded list
+  // drifted — it lacked the named-agent tools that genuinely exist), unioned
+  // with the lazy-protocol + builtin agent tools (search_tools/execute_tool/
+  // list_tools/delegate_task/memory_*) that live outside the management map.
+  const { managementToolset } = await import("../extension/lib/management-tools.js");
   const management = new Set([
-    "create_agent", "update_agent", "delete_agent", "get_agent", "list_agents",
-    "disenroll_origin", "create_asset", "update_asset", "delete_asset",
-    "list_assets", "get_asset", "create_script", "update_script",
-    "delete_script", "list_scripts", "get_script", "run_script",
+    ...Object.keys(managementToolset({ callRoute: () => Promise.resolve({ ok: true }) })),
     "schedule_task", "delegate_task", "memory_get", "memory_set",
     "memory_list", "get_usage", "get_memory_overview", "search_tools",
     "list_tools", "execute_tool", "read_page", "capture_screenshot",

@@ -987,6 +987,32 @@ export function redactSecrets(value) {
   return value;
 }
 
+/** redactDeep — BOTH redaction layers for a structured value crossing a
+ * UI/broadcast/journal boundary (the tool-call clarity fix): secret-valued
+ * KEYS (SECRET_KEY_RE) AND credential-SHAPED string values (redactSecretText:
+ * `key: sk-…`, Bearer …, apiKey=… patterns). Bounded depth so a hostile deep
+ * object cannot recurse without limit; never throws on hostile input. */
+export function redactDeep(value, depth = 0) {
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string") {
+    try { return redactSecretText(value); } catch { return value; }
+  }
+  if (depth > 8) return "[depth-capped]";
+  if (Array.isArray(value)) {
+    return value.slice(0, 200).map((v) => redactDeep(v, depth + 1));
+  }
+  if (typeof value === "object") {
+    const out = {};
+    let n = 0;
+    for (const [k, v] of Object.entries(value)) {
+      if (n++ >= 200) { out["…"] = "[truncated]"; break; }
+      out[k] = SECRET_KEY_RE.test(k) ? "[REDACTED]" : redactDeep(v, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+
 /** The exact message types a page's content script is allowed to route. */
 // The exact message types a page's content script is allowed to route.
 // NOTE: approval is an OWNER security decision and stays extension-only — a

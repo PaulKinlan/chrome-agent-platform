@@ -119,3 +119,138 @@ function renderToolSummary(name, data) {
   if (d == null) return "done";
   return short(JSON.stringify(d), 120);
 }
+
+/* ── describeToolCall — the collapsed tool-card's human line ──────────────
+ * The owner reads the COLLAPSED row far more often than the expanded tree:
+ * the row must say WHAT is happening ("Searching tools for “daily notes”"),
+ * not just the tool's identifier. Data-driven per-tool map + a generic
+ * fallback (verb-ized name + the primary scalar argument). Pure; bounded
+ * interpolations; never throws. */
+
+/** Bound one interpolated argument value for the summary line. */
+function clipArg(v, max = 48) {
+  const s = String(v ?? "").replace(/\s+/g, " ").trim();
+  if (!s) return "";
+  return s.length > max ? s.slice(0, max - 1) + "…" : s;
+}
+
+/** The first present, short, scalar argument among the preferred keys. */
+function pickArg(args, keys) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return "";
+  for (const k of keys) {
+    const v = args[k];
+    if (typeof v === "string" && v.trim()) return clipArg(v);
+    if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  }
+  return "";
+}
+
+/** Human sentence for the collapsed tool card. Returns "" when the tool is
+ * unknown AND no useful argument exists (the caller then shows the name). */
+export function describeToolCall(name, args) {
+  const n = String(name ?? "");
+  switch (n) {
+    case "search_tools": {
+      const q = pickArg(args, ["query"]);
+      return q ? `Searching tools for “${q}”` : "Searching available tools";
+    }
+    case "execute_tool": {
+      // Pre-result the invoked tool's name is behind the selectionRef; the
+      // card's header is corrected to the real tool when the result lands
+      // (effectiveToolCall), at which point THIS gets the real name + args.
+      return "Running the selected tool";
+    }
+    case "navigate": case "open_url": case "open_tab": {
+      const u = pickArg(args, ["url"]);
+      return u ? `Opening ${u}` : "Opening a page";
+    }
+    case "navigate_back": return "Going back";
+    case "navigate_forward": return "Going forward";
+    case "reload_tab": case "reload": return "Reloading the page";
+    case "close_tab": return "Closing the tab";
+    case "read_page": case "get_page_text": case "get_page_snapshot": case "read_tab": {
+      const u = pickArg(args, ["url", "tabId"]);
+      return u ? `Reading the page (${u})` : "Reading the page";
+    }
+    case "click": case "click_element": {
+      const t = pickArg(args, ["selector", "text", "target"]);
+      return t ? `Clicking ${t}` : "Clicking an element";
+    }
+    case "fill": case "fill_field": case "type_text": {
+      const t = pickArg(args, ["selector", "field", "name"]);
+      return t ? `Filling ${t}` : "Filling a field";
+    }
+    case "screenshot": case "capture_screenshot": return "Taking a screenshot";
+    case "search_history": {
+      const q = pickArg(args, ["query", "text"]);
+      return q ? `Searching history for “${q}”` : "Searching history";
+    }
+    case "search_bookmarks": {
+      const q = pickArg(args, ["query"]);
+      return q ? `Searching bookmarks for “${q}”` : "Searching bookmarks";
+    }
+    case "memory_get": {
+      const k = pickArg(args, ["key"]);
+      return k ? `Reading memory “${k}”` : "Reading memory";
+    }
+    case "memory_set": {
+      const k = pickArg(args, ["key"]);
+      return k ? `Saving “${k}” to memory` : "Saving to memory";
+    }
+    case "memory_list": return "Listing memory";
+    case "memory_grep": {
+      const p = pickArg(args, ["pattern", "query"]);
+      return p ? `Searching memory for “${p}”` : "Searching memory";
+    }
+    case "create_named_agent": {
+      const nm = pickArg(args, ["name"]);
+      return nm ? `Creating agent “${nm}”` : "Creating an agent";
+    }
+    case "update_named_agent": {
+      const id = pickArg(args, ["id", "name"]);
+      return id ? `Updating agent ${id}` : "Updating an agent";
+    }
+    case "delete_named_agent": {
+      const id = pickArg(args, ["id"]);
+      return id ? `Deleting agent ${id}` : "Deleting an agent";
+    }
+    case "list_named_agents": return "Listing your agents";
+    case "get_named_agent": return "Reading an agent's details";
+    case "create_agent": {
+      const o = pickArg(args, ["origin"]);
+      return o ? `Enrolling site agent for ${o}` : "Enrolling a site agent";
+    }
+    case "list_agents": return "Listing site agents";
+    case "schedule_task": {
+      const t = pickArg(args, ["name", "task", "id"]);
+      return t ? `Scheduling “${t}”` : "Scheduling a task";
+    }
+    case "cancel_scheduled_task": case "cancel_schedule": return "Cancelling a schedule";
+    case "list_scheduled_tasks": case "list_schedules": return "Listing schedules";
+    case "create_asset": {
+      const nm = pickArg(args, ["name", "key"]);
+      return nm ? `Creating artifact “${nm}”` : "Creating an artifact";
+    }
+    case "update_asset": return "Updating an artifact";
+    case "get_asset": return "Reading an artifact";
+    case "list_assets": return "Listing artifacts";
+    case "generate_ui": return "Generating UI";
+    case "create_script": {
+      const nm = pickArg(args, ["name", "id"]);
+      return nm ? `Writing script “${nm}”` : "Writing a script";
+    }
+    case "run_script": return "Running a script";
+    case "delegate_task": {
+      const a = pickArg(args, ["agentId", "agent"]);
+      return a ? `Delegating to ${a}` : "Delegating a task";
+    }
+    case "import_skill": return "Importing a skill";
+    case "list_skills": case "list_recipes": return "Listing skills";
+    default: {
+      if (!n) return "";
+      const verb = n.split("_").filter(Boolean).join(" ");
+      const arg = pickArg(args, ["query", "url", "name", "key", "id", "title"]);
+      return arg ? `Running ${verb} — ${arg}` : `Running ${verb}`;
+    }
+  }
+}
