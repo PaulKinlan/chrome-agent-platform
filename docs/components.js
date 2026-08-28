@@ -2300,6 +2300,63 @@ customElements.define("code-block", CodeBlock);
  * fails; depth/size bounds prevent a huge or deep payload from hanging the UI.
  * The tree is a flat row list inside one <details> per block — keyboard
  * accessible (<button> toggles + copy buttons), no emoji (SVG caret). */
+/** Remove the parts of a tool payload the card already communicates, so the tree
+ *  shows the ANSWER rather than the envelope around it. `ok` is the status chip;
+ *  `summary`/`error` are the collapsed headline. Returns undefined when nothing
+ *  substantive is left, so the block is skipped entirely rather than rendering
+ *  an empty tree. */
+function stripToolEnvelope(value, status) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const drop = new Set(["ok", "summary", "error"]);
+  const kept = {};
+  let keptCount = 0;
+  for (const [k, v] of Object.entries(value)) {
+    if (drop.has(k)) continue;
+    kept[k] = v;
+    keptCount += 1;
+  }
+  if (keptCount === 0) return undefined;
+  // A single remaining wrapper key adds a level of nesting for nothing: a
+  // result of {tabs:[...]} reads better as the tabs themselves, labelled by the
+  // block. Only unwrap when the value is itself a container.
+  const keys = Object.keys(kept);
+  if (keys.length === 1) {
+    const only = kept[keys[0]];
+    if (only && typeof only === "object") return only;
+  }
+  return kept;
+}
+
+/** The one line a collapsed tool card shows: for a failure the actual error, for
+ *  a success the short summary the caller already computed. Bounded, because
+ *  this sits on one line in a transcript. */
+function toolHeadline(status, result, detail) {
+  const pick = (v) => {
+    if (v == null || v === "") return "";
+    if (typeof v === "string") {
+      const t = v.trim();
+      if (!t.startsWith("{") && !t.startsWith("[")) return t;
+      try {
+        const o = JSON.parse(t);
+        if (o && typeof o === "object" && !Array.isArray(o)) {
+          if (typeof o.error === "string" && o.error) return o.error;
+          if (typeof o.summary === "string" && o.summary) return o.summary;
+        }
+      } catch { /* not JSON — fall through */ }
+      return "";
+    }
+    if (typeof v === "object" && !Array.isArray(v)) {
+      if (typeof v.error === "string" && v.error) return v.error;
+      if (typeof v.summary === "string" && v.summary) return v.summary;
+    }
+    return "";
+  };
+  const text = pick(result) || pick(detail);
+  if (!text) return "";
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  return oneLine.length > 140 ? `${oneLine.slice(0, 139)}…` : oneLine;
+}
+
 function formatToolDurationMs(ms) {
   // Only a REAL duration is shown — null/""/0/NaN must never render "0ms"
   // (the phantom-timing finding: Number(null) === 0).
@@ -2328,7 +2385,8 @@ function segKey(segments) {
 /** A collapsible tree BLOCK (<details> + bounded flat rows) for a parsed value.
  * The expansion state PERSISTS across re-renders (attribute updates rebuild
  * the bubble): `expandedState` is a Map label → Set of segment-address keys. */
-function buildToolTreeBlock(label, value, rows, maxNodes, expandedState) {
+function buildToolTreeBlock(label, value, rowsIn, maxNodes, expandedState) {
+  let rows = rowsIn;
   const details = document.createElement("details");
   details.className = "tt-block";
   details.open = true;
@@ -2343,16 +2401,100 @@ function buildToolTreeBlock(label, value, rows, maxNodes, expandedState) {
   meta.textContent = rows.length ? toolKindLabel(rows[0]) : "";
   if (rows.length >= maxNodes) meta.textContent += " · truncated";
   if (meta.textContent) summary.appendChild(meta);
+
+  // RAW JSON + COPY (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01). The owner asked
+  // for "the ability to see JSON input and response better" — before this there
+  // was no raw view and no copy button anywhere on the normal tool path, only
+  // the structured tree. The toggle lives in the block header so both inputs
+  // and result get one, and the choice is remembered per block for the session.
+  const controls = document.createElement("span");
+  controls.className = "tt-block-controls";
+  const rawBtn = document.createElement("button");
+  rawBtn.type = "button";
+  rawBtn.className = "tt-raw-toggle";
+  rawBtn.textContent = "JSON";
+  rawBtn.title = "Show the raw JSON";
+  rawBtn.setAttribute("aria-pressed", "false");
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "tt-copy-all";
+  copyBtn.textContent = "Copy";
+  copyBtn.title = `Copy the ${label} as JSON`;
+  controls.appendChild(rawBtn);
+  controls.appendChild(copyBtn);
+  summary.appendChild(controls);
   details.appendChild(summary);
+
+  const rawPre = document.createElement("pre");
+  rawPre.className = "tt-raw";
+  rawPre.textContent = safeJsonStringify(value);
+
+  // Which view the owner last chose, remembered per block. It rides in the same
+  // Map as the expansion state under a namespaced key that can never collide
+  // with a block label, so the choice survives the attribute updates that
+  // rebuild the card while a tool is still running — without a second store.
+  const rawStateKey = `__raw__:${label}`;
+  const rawWanted = expandedState?.get(rawStateKey) === true;
+  rawPre.hidden = !rawWanted;
+
+  // A click on a control inside <summary> must not also toggle the <details>.
+  const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+  rawBtn.addEventListener("click", (e) => {
+    stop(e);
+    const showRaw = rawPre.hidden;
+    rawPre.hidden = !showRaw;
+    rawBtn.setAttribute("aria-pressed", showRaw ? "true" : "false");
+    rawBtn.className = showRaw ? "tt-raw-toggle on" : "tt-raw-toggle";
+    const treeEl = details.querySelector(".tt-tree");
+    if (treeEl) treeEl.hidden = showRaw;
+    if (!details.open) details.open = true;
+    expandedState?.set(rawStateKey, showRaw);
+  });
+  copyBtn.addEventListener("click", async (e) => {
+    stop(e);
+    const text = safeJsonStringify(value);
+    try {
+      await navigator.clipboard.writeText(text);
+      copyBtn.textContent = "Copied";
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); copyBtn.textContent = "Copied"; } catch { copyBtn.textContent = "Copy"; }
+      ta.remove();
+    }
+    setTimeout(() => { copyBtn.textContent = "Copy"; }, 1600);
+  });
 
   const tree = document.createElement("div");
   tree.className = "tt-tree";
+  // Honour the remembered choice on the FIRST paint, not only after a click —
+  // otherwise the tree flashes in before being replaced by the raw view.
+  tree.hidden = rawWanted;
+  if (rawWanted) {
+    rawBtn.setAttribute("aria-pressed", "true");
+    rawBtn.className = "tt-raw-toggle on";
+  }
+  details.appendChild(rawPre);
+
+  // Drop the synthetic ROOT container row. It rendered as `{keys} object · N`,
+  // which is not a word, adds a level of indentation to everything beneath it,
+  // and says only what the block label ("inputs" / "result") plus the meta
+  // ("object · N") already say. Its CHILDREN are promoted a level so the tree
+  // starts at the data.
+  const rootKey = segKey([]);
+  const hasSyntheticRoot = rows.length > 0 && rows[0].segments.length === 0 && !rows[0].leaf;
+  if (hasSyntheticRoot) rows = rows.slice(1);
 
   // Initial expansion: the PERSISTED state for this label when present (the
   // card re-renders on tool-status/result/duration attribute updates — the
   // owner's collapsed/expanded choices survive), else containers at depth < 2.
   const saved = expandedState?.get(label);
   const expanded = new Set();
+  // The removed root is implicitly expanded — every visible row descends from
+  // it, and isVisible() walks every ancestor including the root address.
+  if (hasSyntheticRoot) expanded.add(rootKey);
   for (const r of rows) {
     if (!r.leaf) {
       const k = segKey(r.segments);
@@ -2411,8 +2553,19 @@ function buildToolTreeBlock(label, value, rows, maxNodes, expandedState) {
       key.className = "tt-key";
       key.textContent = r.key || (r.kind === "array" ? "[items]" : "{keys}");
       row.appendChild(key);
+      // CONTENT before shape (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 §4). An
+      // array of ten tabs used to render as ten identical `object · 10` rows,
+      // so finding one meant opening all ten. The preview is the row's
+      // identity; the type label stays, demoted, because the count is still
+      // worth knowing.
+      if (r.preview) {
+        const prev = document.createElement("span");
+        prev.className = "tt-preview";
+        prev.textContent = r.preview;
+        row.appendChild(prev);
+      }
       const kind = document.createElement("span");
-      kind.className = "tt-kind";
+      kind.className = r.preview ? "tt-kind muted" : "tt-kind";
       kind.textContent = toolKindLabel(r);
       row.appendChild(kind);
     } else {
@@ -2529,6 +2682,22 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
   nameEl.className = "tool-name";
   nameEl.textContent = name || "tool";
   summary.appendChild(nameEl);
+
+  // THE COLLAPSED CARD MUST ANSWER "what happened" WITHOUT A CLICK
+  // (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01). It used to show only the tool
+  // name, a status chip and a duration — so a successful call said nothing
+  // (the one-line summary was already computed and simply not rendered), and a
+  // FAILED call showed no error text at all, which is backwards for the one
+  // state the owner most needs to read.
+  const headline = toolHeadline(status, result, detail);
+  if (headline) {
+    const lead = document.createElement("span");
+    lead.className = status === "error" ? "tool-lead error" : "tool-lead";
+    lead.textContent = headline;
+    lead.title = headline; // the full text on hover when the line is clipped
+    summary.appendChild(lead);
+  }
+
   const statusEl = document.createElement("span");
   statusEl.className = `tool-status ${status}`;
   statusEl.setAttribute("role", "status");
@@ -2543,6 +2712,10 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
   }
   card.appendChild(summary);
 
+  // A failure opens by default. Everything else stays closed: the transcript is
+  // a conversation, and an expanded call is 400+ pixels of it.
+  if (status === "error" && cardExpanded !== true) card.open = true;
+
   const body = document.createElement("div");
   body.className = "tool-body";
 
@@ -2550,9 +2723,16 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
     if (raw == null || raw === "") return;
     const parsed = safeParse(raw);
     if (parsed.kind === "json") {
-      const tree = buildTree(parsed.value);
+      // Strip the protocol envelope before rendering
+      // (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01). `ok:true` is already said by
+      // the green status chip, and `summary`/`error` are already the card's
+      // headline — rendering them again as tree rows is duplication that costs
+      // vertical space in a transcript.
+      const shown = stripToolEnvelope(parsed.value, status);
+      if (shown === undefined) return;
+      const tree = buildTree(shown);
       if (tree.rows.length >= 1) {
-        body.appendChild(buildToolTreeBlock(label, parsed.value, tree.rows, tree.maxNodes, expandedState));
+        body.appendChild(buildToolTreeBlock(label, shown, tree.rows, tree.maxNodes, expandedState));
         return;
       }
     }
@@ -2568,10 +2748,17 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
   const detailParsed = detail != null && detail !== "" ? safeParse(detail) : null;
 
   if (resultParsed && resultParsed.kind === "json") {
-    // result itself is structured JSON -> render as "result" tree block
-    const tree = buildTree(resultParsed.value);
+    // result itself is structured JSON -> render as "result" tree block.
+    // Strip the envelope here too: this branch bypasses addBlock, which is why
+    // an error result still rendered `ok false` and repeated its own message as
+    // tree rows under the headline that already said it.
+    const shownResult = stripToolEnvelope(resultParsed.value, status);
+    const tree = shownResult === undefined ? { rows: [], maxNodes: 0 } : buildTree(shownResult);
     if (tree.rows.length >= 1) {
-      body.appendChild(buildToolTreeBlock("result", resultParsed.value, tree.rows, tree.maxNodes, expandedState));
+      body.appendChild(buildToolTreeBlock("result", shownResult, tree.rows, tree.maxNodes, expandedState));
+    } else if (shownResult === undefined) {
+      // Everything the payload carried is already in the head. Render nothing
+      // rather than an empty block.
     } else {
       const div = document.createElement("div");
       div.className = "tool-plain tool-plain-result";
@@ -2583,12 +2770,8 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
     }
   } else if (detailParsed && detailParsed.kind === "json") {
     // detail is structured JSON and result is a readable summary text
-    if (result != null && result !== "") {
-      const div = document.createElement("div");
-      div.className = "tool-plain tool-plain-summary";
-      div.textContent = String(resultParsed?.value ?? result ?? "");
-      body.appendChild(div);
-    }
+    // The summary already IS the collapsed headline — repeating it here was
+    // the same sentence twice on every card.
     const tree = buildTree(detailParsed.value);
     if (tree.rows.length >= 1) {
       body.appendChild(buildToolTreeBlock("result", detailParsed.value, tree.rows, tree.maxNodes, expandedState));
@@ -2711,27 +2894,51 @@ class MessageBubble extends Component {
       .tool .tool-duration { margin-left:auto; font-size:11px; color:var(--muted,#635e56); font-variant-numeric:tabular-nums; }
       .tool .tool-status + .tool-duration { margin-left:8px; }
       .tool .tt-block { border-top:1px solid var(--border,#e3e0d9); }
-      .tool .tt-block summary { list-style:none; cursor:pointer; display:flex; align-items:baseline; gap:8px; padding:6px 10px; color:var(--muted,#635e56); font-size:12px; user-select:none; }
+      .tool .tt-block summary { list-style:none; cursor:pointer; display:flex; align-items:baseline; gap:8px; padding:4px 10px; color:var(--muted,#635e56); font-size:12px; user-select:none; }
       .tool .tt-block summary::-webkit-details-marker { display:none; }
       .tool .tt-block summary:hover { color:var(--text,#1d1b18); }
       .tool .tt-block-label { font-weight:600; color:var(--ink,#1d1b18); }
       .tool .tt-block-meta { color:var(--muted,#635e56); }
-      .tool .tt-tree { padding:2px 6px 8px; max-height:260px; overflow:auto; }
-      .tool .tt-row { display:flex; align-items:center; gap:6px; padding:2px 4px; border-radius:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; line-height:1.5; min-height:22px; }
+      /* The tree scrolls internally so ONE tool call can never flood the
+         transcript (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 §7). At the row
+         density below this cap holds ~9 rows — the same number the old, looser
+         260px cap held, in 60px less. */
+      .tool .tt-tree { padding:2px 6px 6px; max-height:200px; overflow:auto; }
+      .tool .tt-row { display:flex; align-items:center; gap:6px; padding:0 4px; border-radius:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; line-height:1.35; min-height:20px; }
       .tool .tt-row:hover { background:var(--panel-2,#efede8); }
       .tool .tt-row[hidden] { display:none; }
-      .tool .tt-toggle { display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; padding:0; border:0; background:transparent; color:var(--muted,#635e56); cursor:pointer; border-radius:4px; flex:0 0 auto; }
+      .tool .tt-toggle { display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; padding:0; border:0; background:transparent; color:var(--muted,#635e56); cursor:pointer; border-radius:4px; flex:0 0 auto; }
       .tool .tt-toggle:hover { color:var(--ink,#1d1b18); background:var(--panel-2,#efede8); }
       .tool .tt-toggle:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:0; }
       .tool .tt-toggle .tt-caret { transition:transform .15s ease; }
       .tool .tt-toggle[aria-expanded="true"] .tt-caret { transform:rotate(90deg); }
       .tool .tt-ic { width:18px; height:18px; flex:0 0 auto; }
+      /* The collapsed head reads as a sentence: name, then what happened. */
+      .tool .tool-head { display:flex; align-items:baseline; gap:8px; }
+      .tool .tool-lead { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis;
+        white-space:nowrap; color:var(--muted,#635e56); font-size:12.5px; }
+      .tool .tool-lead.error { color:var(--danger,#b3261e); }
+      .tool .tt-block-controls { margin-inline-start:auto; display:inline-flex; gap:4px; }
+      .tool .tt-block-controls button { font:inherit; font-size:11px; line-height:1;
+        padding:3px 7px; border:1px solid var(--border,#e3e0d9); border-radius:999px;
+        background:var(--panel,#ffffff); color:var(--muted,#635e56); cursor:pointer; }
+      .tool .tt-block-controls button:hover { border-color:var(--accent,#0e6e63); color:var(--ink,#1d1b18); }
+      .tool .tt-block-controls button:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .tool .tt-block-controls button.on { background:var(--accent,#0e6e63); border-color:transparent; color:var(--btn-fg,#ffffff); }
+      .tool .tt-raw { margin:0; padding:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+        font-size:11.5px; line-height:1.45; color:var(--ink,#1d1b18); background:var(--panel-2,#efede8);
+        white-space:pre-wrap; word-break:break-word; overflow-x:auto; max-height:320px; }
       .tool .tt-key { color:var(--accent,#0e6e63); font-weight:600; white-space:nowrap; }
       .tool .tt-val { color:var(--ink,#1d1b18); overflow-wrap:anywhere; min-width:0; }
       .tool .tt-val-string { color:var(--ink,#1d1b18); }
       .tool .tt-val-number, .tool .tt-val-boolean { color:var(--accent,#0e6e63); }
       .tool .tt-val-null { color:var(--muted,#635e56); font-style:italic; }
       .tool .tt-kind { color:var(--muted,#635e56); font-size:11px; margin-left:2px; }
+      /* The row's identity. It takes the width so the type label is what gets
+         squeezed on a narrow card, not the content. */
+      .tool .tt-preview { color:var(--fg,#1c1a17); font-size:11px; margin-left:6px;
+        overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1 1 auto; }
+      .tool .tt-kind.muted { opacity:.6; flex:0 0 auto; }
       .tool .tt-copy { margin-left:auto; flex:0 0 auto; font:inherit; font-size:11px; color:var(--muted,#635e56); background:transparent; border:1px solid var(--border,#e3e0d9); border-radius:5px; padding:1px 7px; cursor:pointer; opacity:0; transition:opacity .12s ease; }
       .tool .tt-row:hover .tt-copy, .tool .tt-copy:focus-visible { opacity:1; }
       .tool .tt-copy:hover { color:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); }

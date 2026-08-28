@@ -1291,12 +1291,12 @@ evidence every other task depends on).
 
 ## [CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01] Tool-call cards show shape, not answers
 - Feedback: 2026-08-27 — product owner: "the tools calling bubbles don't help as much, I'd expect some better info, then formatted and ability to see JSON input and response better"
-- Updated: 2026-08-27 23:30 UTC
-- Status: OPEN
+- Updated: 2026-08-28 UTC
+- Status: OPEN — 7 of 8 acceptance items delivered and gated; ONE remains (the in-context grant card for a permission denial, §2b)
 - Priority: P0
-- Owner: unassigned
-- Workspace: none
-- Branch: none
+- Owner: coordinator session
+- Workspace: main
+- Branch: main
 - Base: `139b6f92`
 - Candidate: —
 - Shipping: —
@@ -1304,10 +1304,11 @@ evidence every other task depends on).
 - Review: independent review by a different model/session; visual verification in a real loaded extension with before/after screenshots at 1440px and at a narrow width
 - Gates: full unit suite; Chrome journeys green; a11y pass (the card is a `<details>`, the status chip is the live region — that must survive); the impeccable design pass
 - Blockers: —
-- Next: fix the collapsed head first — it is the highest value per line changed and needs no redesign of the tree
+- Next: §2b only — when a tool fails because a permission was never granted, render the existing in-context approval card instead of the error prose, so the owner can grant it from the transcript. Everything else in the acceptance list is landed and gated
 - Recover: `git grep -n "buildToolCardDom" -- extension/shared/components.js`
 - History:
   - 2026-08-27 23:30 UTC — captured with measured evidence from a real loaded extension (headless Chrome, 1440x1600, realistic payloads). **Measured:** one expanded `list_tabs` card is **462px** tall, `search_tools` **436px**; collapsed they are 33px each. Four tool calls expanded fill 1,316px — more than a 900px viewport, on the surface that is supposed to be the conversation. **The collapsed head shows only name + status + duration.** The `tool-result` summary ("8 tabs", "5 matches") is already computed and passed to the card, and is not shown in the head — so a collapsed row communicates almost nothing, while an expanded one floods. **An error card collapsed shows no error text at all:** a `group_tabs` failure renders as `group_tabs · error · 9ms`, and the actual message ("Tab grouping write operations are pending owner tab-management permission enrollment in Settings") is hidden behind a click — backwards for the one state the owner most needs to read. **The tree shows shape, not content:** an 8-tab result renders as eight `0 object · 10` rows, hiding every tab title behind eight more clicks. Every block carries a synthetic `{keys} object · N` root node that is pure noise and costs a level of indentation, and the `ok true` envelope field is rendered as a data row even though the green "done" chip already says it. The summary is duplicated — an "8 tabs" row, then the same thing structurally in the result tree. **There is no raw JSON view and no copy button** on the normal tool path at all; only the generate_ui branch has a "Raw payload" `<pre>`. That is the owner's exact ask and it is simply absent. Tool names render as raw snake_case (`memory_grep`) with no human label.
+  - 2026-08-28 — **landed items 1, 2a, 3, 4, 5, 6, 7 and 8.** Measured in a real loaded extension, before → after on the same payloads: one expanded `list_tabs` card **462px → 328px** (under the §7 budget of ~40% of a 900px viewport) while showing the SAME 11 visible rows and strictly more information. (1) The collapsed head now carries the one-line summary — `list_tabs  8 tabs · done · 184ms` — and for a failure the actual error text in red rather than a bare chip; (2a) an error card styles as an error and opens itself; (3) every block has a JSON toggle and a Copy button, and the chosen view is remembered per block across the re-renders that rebuild a running card; (4) container rows preview their CONTENT (`tabIds  1800, 1801, 1802`, `0  Inbox — Gmail`) via the new `containerPreview` in `extension/shared/tool-tree.js`, so an array of objects is no longer ten identical `object · 10` rows; (5) the synthetic `{keys}` root row is gone and its children promoted; (6) `ok`/`summary`/`error` are stripped from the tree since the chip and the headline already carry them, and a block left with nothing substantive renders no block at all; (8) the duplicated summary row is gone. Row density tightened (27px → 22px per row) so the 200px scroll cap holds the same rows the old 260px cap did. Two findings came out of writing the tests, both fixed in the code rather than the assertions: a bare numeric `id` outranked `status` in the preview order (a row reading `7` says nothing), and `kind` was unrecognised. **Gates:** build clean; unit **1950 pass / 0 fail**; Chrome journeys **127/127**; gallery drift green. **Falsification:** nine deliberate regressions — neutered headline, un-stripped envelope, restored `{keys}`, no auto-open on error, empty previews, `id`-first ordering, containers stringified into previews, unpersisted view choice, and a globally-shared view choice — each drove exactly its own assertions red before being reverted.
   - 2026-08-27 23:30 UTC — note for the implementer: `<tool-chips>` already exists in `extension/shared/components.js` as a compact chip-row primitive and is currently used ONLY by the gallery, never by the product. It may be the right collapsed representation for a run of successful calls, with full cards reserved for failures and for the call the owner opens. Reuse it rather than adding a sixth representation.
 
 

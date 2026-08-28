@@ -123,10 +123,20 @@ Deno.test("tool-result-pretty: summary result + JSON detail renders summary text
   const body = card.children.find((c) => c.className === "tool-body");
   assert(body, "tool card must have tool-body");
 
-  // Should have summary text
-  const summaryDiv = body.children.find((c) => c.className?.includes("tool-plain-summary"));
-  assert(summaryDiv, "must have tool-plain-summary text");
-  assertEquals(summaryDiv.textContent, "found 2 hotels in Paris");
+  // The summary MOVED from the body into the collapsed head
+  // (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01): it is the one line that answers
+  // "what happened" without expanding the card, and repeating it in the body
+  // printed the same sentence twice. The property — the owner can read the
+  // summary — is asserted in its new place, not dropped.
+  const head = card.children.find((c) => c.className === "tool-head");
+  assert(head, "tool card must have a head");
+  const lead = head.children.find((c) => c.className?.includes("tool-lead"));
+  assert(lead, "the collapsed head must carry the summary line");
+  assertEquals(lead.textContent, "found 2 hotels in Paris");
+  assert(
+    !body.children.some((c) => c.className?.includes("tool-plain-summary")),
+    "and must NOT also repeat it in the body",
+  );
 
   // Should render detail payload as "result" JSON tree block
   const resultBlock = body.children.find((c) => c.className === "tt-block" && c.querySelector(".tt-block-label")?.textContent === "result");
@@ -178,4 +188,130 @@ Deno.test("tool-result-pretty: plain text result degrades honestly as plain text
 
   const ttBlocks = body.children.filter((c) => c.className === "tt-block");
   assertEquals(ttBlocks.length, 0, "plain text result must not create JSON tree blocks");
+});
+
+// ── CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 ────────────────────────────────
+// The owner's report: "the tool calling bubbles don't help as much, I'd expect
+// some better info, then formatted and ability to see JSON input and response
+// better." Measured before this change: a collapsed card showed only the tool
+// name, a status chip and a duration — and a FAILED call showed no error text
+// at all, which is backwards for the one state most worth reading.
+
+Deno.test("tool card: the COLLAPSED head carries the summary", async () => {
+  const { buildToolCardDom } = await loadComponents();
+  const card = buildToolCardDom({
+    name: "list_tabs", status: "done",
+    args: JSON.stringify({ windowId: 3 }),
+    result: "8 tabs", detail: null, duration: 184,
+    expandedState: new Map(), cardExpanded: false,
+  });
+  const head = card.children.find((c) => c.className === "tool-head");
+  const lead = head.children.find((c) => c.className?.includes("tool-lead"));
+  assert(lead, "a collapsed card must say what happened without being opened");
+  assertEquals(lead.textContent, "8 tabs");
+  assertEquals(card.open, false, "a successful call stays closed — a transcript is a conversation");
+});
+
+Deno.test("tool card: a FAILURE shows its error collapsed, and opens itself", async () => {
+  const { buildToolCardDom } = await loadComponents();
+  const msg = "Tab grouping needs the tab-management permission — allow it to continue";
+  const card = buildToolCardDom({
+    name: "group_tabs", status: "error",
+    args: JSON.stringify({ tabIds: [1, 2] }),
+    result: JSON.stringify({ ok: false, error: msg }),
+    detail: null, duration: 9,
+    expandedState: new Map(), cardExpanded: false,
+  });
+  const head = card.children.find((c) => c.className === "tool-head");
+  const lead = head.children.find((c) => c.className?.includes("tool-lead"));
+  assert(lead, "the error text must be visible WITHOUT expanding the card");
+  assertEquals(lead.textContent, msg);
+  assert(lead.className.includes("error"), "and must read as an error");
+  assertEquals(card.open, true, "a failure opens itself — it is the state worth reading");
+});
+
+Deno.test("tool card: the envelope is not repeated as tree rows", async () => {
+  const { buildToolCardDom } = await loadComponents();
+  const card = buildToolCardDom({
+    name: "group_tabs", status: "error",
+    args: JSON.stringify({ tabIds: [1] }),
+    result: JSON.stringify({ ok: false, error: "denied" }),
+    detail: null, duration: 9,
+    expandedState: new Map(), cardExpanded: true,
+  });
+  const body = card.children.find((c) => c.className === "tool-body");
+  const resultBlock = body.children.find((c) =>
+    c.className === "tt-block" && c.querySelector(".tt-block-label")?.textContent === "result");
+  // `ok` is the status chip and `error` is the headline; a result carrying only
+  // those renders NO block rather than saying the same thing a third time.
+  assert(!resultBlock, "a result of only {ok,error} adds no block");
+});
+
+Deno.test("tool card: every JSON block offers a raw JSON view and a copy button", async () => {
+  const { buildToolCardDom } = await loadComponents();
+  const card = buildToolCardDom({
+    name: "list_tabs", status: "done",
+    args: JSON.stringify({ windowId: 3 }),
+    result: JSON.stringify({ tabs: [{ id: 1, title: "A" }] }),
+    detail: null, duration: 120,
+    expandedState: new Map(), cardExpanded: true,
+  });
+  const body = card.children.find((c) => c.className === "tool-body");
+  const blocks = body.children.filter((c) => c.className === "tt-block");
+  assert(blocks.length >= 1, "at least one JSON block");
+  for (const b of blocks) {
+    assert(b.querySelector(".tt-raw-toggle"), "each block has a raw JSON toggle");
+    assert(b.querySelector(".tt-copy-all"), "each block has a copy button");
+    const raw = b.querySelector(".tt-raw");
+    assert(raw, "each block carries the raw JSON");
+    assertEquals(raw.hidden, true, "raw starts hidden — the tree is the default view");
+    assert(raw.textContent.length > 0, "and the raw text is actually the payload");
+  }
+});
+
+Deno.test("tool card: the synthetic {keys} root row is gone", async () => {
+  const { buildToolCardDom } = await loadComponents();
+  const card = buildToolCardDom({
+    name: "list_tabs", status: "done",
+    args: JSON.stringify({ windowId: 3, active: true }),
+    result: null, detail: null, duration: 120,
+    expandedState: new Map(), cardExpanded: true,
+  });
+  const body = card.children.find((c) => c.className === "tool-body");
+  const block = body.children.find((c) => c.className === "tt-block");
+  const keys = [...(block.querySelectorAll?.(".tt-key") ?? [])].map((e) => e.textContent);
+  assert(!keys.includes("{keys}"), "'{keys}' is not a word and says nothing the block label does not");
+  assert(keys.includes("windowId"), "the tree starts at the data itself");
+});
+
+Deno.test("tool card: the raw-JSON choice is remembered per block", async () => {
+  const { buildToolCardDom } = await loadComponents();
+  const state = new Map();
+  const build = () => buildToolCardDom({
+    name: "list_tabs", status: "done",
+    args: JSON.stringify({ windowId: 3 }),
+    result: JSON.stringify({ tabs: [{ id: 1, title: "A" }] }),
+    detail: null, duration: 120, expandedState: state, cardExpanded: true,
+  });
+  const blockOf = (card, label) => card.children
+    .find((c) => c.className === "tool-body").children
+    .find((c) => c.className === "tt-block" && c.querySelector(".tt-block-label")?.textContent === label);
+
+  const first = build();
+  const inputs = blockOf(first, "inputs");
+  assertEquals(inputs.querySelector(".tt-raw").hidden, true, "the tree is the default view");
+  const toggle = inputs.querySelector(".tt-raw-toggle");
+  for (const fn of toggle.listeners.get("click") ?? []) {
+    fn({ type: "click", target: toggle, preventDefault() {}, stopPropagation() {} });
+  }
+
+  // A re-render (the card rebuilds on every tool-status/duration update) must
+  // not throw the choice away — that was the whole point of persisting it.
+  const second = build();
+  const inputs2 = blockOf(second, "inputs");
+  assertEquals(inputs2.querySelector(".tt-raw").hidden, false, "raw view survives a rebuild");
+  assertEquals(inputs2.querySelector(".tt-tree").hidden, true, "and the tree is the one hidden");
+  // The preference is PER BLOCK — turning raw on for inputs must not turn it on
+  // for the result, which is a different payload the owner did not ask about.
+  assertEquals(blockOf(second, "result").querySelector(".tt-raw").hidden, true);
 });

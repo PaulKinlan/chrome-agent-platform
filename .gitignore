@@ -14,3 +14,4 @@ dist-archives/
 .cache/
 .build/
 .build/
+.claude/worktrees/

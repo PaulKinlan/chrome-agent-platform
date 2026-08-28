@@ -88,6 +88,91 @@ function primitiveText(v) {
   return String(v);
 }
 
+/** How wide an inline container preview may be. A preview sits on one row of a
+ *  transcript beside the key and the type label, so it is deliberately short —
+ *  it exists to make the row identifiable, not to replace expanding it. */
+export const TOOL_TREE_PREVIEW_CHARS = 72;
+
+/** Keys that identify a row to a HUMAN, most identifying first. A tab is its
+ *  title, a search hit its name, a file its path. Without this, an array of ten
+ *  objects renders as ten identical `object · 10` rows and every one of them
+ *  has to be opened to find out which is which — the exact thing the product
+ *  owner reported ("the tools calling bubbles don't help as much"). */
+const PREVIEW_KEYS = [
+  "title", "name", "label", "summary", "description", "message", "text",
+  "url", "path", "file", "query", "kind", "type", "status",
+  // `id` and `key` rank LAST deliberately. A row that reads "7" tells a human
+  // nothing, so a bare identifier is the fallback of last resort rather than
+  // the first choice its position in a payload would suggest.
+  "id", "key",
+];
+
+/**
+ * A short, human-readable preview of a container's CONTENT.
+ *
+ * Objects prefer an identifying field; failing that, the first a couple of
+ * scalar entries as `key: value`. Arrays preview their first few scalars, or
+ * recurse ONE level to preview their first element when they hold objects.
+ *
+ * Returns "" when nothing useful can be said — an empty preview must render
+ * nothing rather than an empty gap, because a preview that is sometimes blank
+ * and sometimes not is worse than no preview at all.
+ */
+export function containerPreview(v, { chars = TOOL_TREE_PREVIEW_CHARS, depth = 0 } = {}) {
+  if (v === null || typeof v !== "object") return "";
+  const clip = (s) => {
+    const one = String(s).replace(/\s+/g, " ").trim();
+    return one.length > chars ? `${one.slice(0, chars - 1)}…` : one;
+  };
+  const scalar = (x) => {
+    if (x === null) return "null";
+    const t = typeof x;
+    if (t === "string") return x;
+    if (t === "number" || t === "boolean") return String(x);
+    return null; // containers are not scalars; the caller decides what to do
+  };
+
+  if (Array.isArray(v)) {
+    if (v.length === 0) return "empty";
+    const scalars = [];
+    for (const item of v.slice(0, 4)) {
+      const sc = scalar(item);
+      if (sc === null) { scalars.length = 0; break; }
+      scalars.push(sc);
+    }
+    if (scalars.length) return clip(scalars.join(", "));
+    // An array of containers: the first element's own preview stands in for the
+    // array, which is what makes a list of tabs read as tabs. Bounded to one
+    // extra level so a deep payload cannot walk itself.
+    if (depth >= 1) return "";
+    const inner = containerPreview(v[0], { chars, depth: depth + 1 });
+    return inner ? clip(`${inner}…`) : "";
+  }
+
+  let keys;
+  try { keys = Object.keys(v); } catch { return ""; }
+  if (keys.length === 0) return "empty";
+  for (const k of PREVIEW_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(v, k)) continue;
+    let raw;
+    try { raw = v[k]; } catch { continue; }
+    const sc = scalar(raw);
+    if (sc !== null && String(sc).trim() !== "") return clip(sc);
+  }
+  // No identifying field — the first scalar entries, named, so the row still
+  // says something specific about ITSELF.
+  const parts = [];
+  for (const k of keys.slice(0, 6)) {
+    let raw;
+    try { raw = v[k]; } catch { continue; }
+    const sc = scalar(raw);
+    if (sc === null) continue;
+    parts.push(`${k}: ${sc}`);
+    if (parts.length === 2) break;
+  }
+  return parts.length ? clip(parts.join(" · ")) : "";
+}
+
 /**
  * Build the BOUNDED tree model for a parsed value. Returns
  * { rows, maxDepth, maxNodes, truncated, parse } where each row is:
@@ -123,12 +208,12 @@ export function buildTree(value, opts = {}) {
       if (Array.isArray(v)) {
         if (depth >= maxDepth) {
           truncated = true;
-          push({ segments, key, kind: "array", depth, leaf: false, count: v.length, capped: true, text: `[${v.length}] (depth capped)`, source: "json" });
+          push({ segments, key, kind: "array", depth, leaf: false, count: v.length, capped: true, text: `[${v.length}] (depth capped)`, preview: containerPreview(v), source: "json" });
           return;
         }
         const arrayCapped = v.length > containerCap;
         if (arrayCapped) truncated = true;
-        push({ segments, key, kind: "array", depth, leaf: false, count: Math.min(v.length, containerCap), capped: arrayCapped, source: "json" });
+        push({ segments, key, kind: "array", depth, leaf: false, count: Math.min(v.length, containerCap), capped: arrayCapped, preview: containerPreview(v), source: "json" });
         const shown = v.length > containerCap ? v.slice(0, containerCap) : v;
         chain.add(v);
         for (let i = 0; i < shown.length; i++) {
@@ -142,12 +227,12 @@ export function buildTree(value, opts = {}) {
       try { keys = Object.keys(v); } catch { keys = []; }
       if (depth >= maxDepth) {
         truncated = true;
-        push({ segments, key, kind: "object", depth, leaf: false, count: Math.min(keys.length, containerCap), capped: true, text: `{${keys.length}} (depth capped)`, source: "json" });
+        push({ segments, key, kind: "object", depth, leaf: false, count: Math.min(keys.length, containerCap), capped: true, text: `{${keys.length}} (depth capped)`, preview: containerPreview(v), source: "json" });
         return;
       }
       const objCapped = keys.length > containerCap;
       if (objCapped) truncated = true;
-      push({ segments, key, kind: "object", depth, leaf: false, count: Math.min(keys.length, containerCap), capped: objCapped, source: "json" });
+      push({ segments, key, kind: "object", depth, leaf: false, count: Math.min(keys.length, containerCap), capped: objCapped, preview: containerPreview(v), source: "json" });
       const entries = keys.length > containerCap ? keys.slice(0, containerCap) : keys;
       chain.add(v);
       for (const k of entries) {

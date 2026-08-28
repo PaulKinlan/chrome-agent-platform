@@ -15,6 +15,8 @@ import {
   TOOL_TREE_MAX_NODES,
   TOOL_TREE_CONTAINER_CAP,
   TOOL_TREE_PARSE_LIMIT,
+  containerPreview,
+  TOOL_TREE_PREVIEW_CHARS,
 } from "../extension/shared/tool-tree.js";
 
 Deno.test("tool-tree: an object parses to a json kind with rows", () => {
@@ -433,4 +435,79 @@ Deno.test("tool-tree: redaction uses the CANONICAL matcher — exhaustive aliase
   for (const v of ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]) {
     assert(!out.includes(":" + JSON.stringify(v)), `the secret value ${v} never reaches the output`);
   }
+});
+
+// ── content previews — CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 §4 ──────────
+// Measured before this change: an 8-tab `list_tabs` result rendered as eight
+// identical `0 object · 10` rows. Every tab title was one more click away, so
+// the tree showed the payload's SHAPE and hid its CONTENT.
+Deno.test("preview: an object is identified by its most human field", () => {
+  assertEquals(containerPreview({ id: 42, title: "Inbox — Gmail", url: "https://mail.google.com" }), "Inbox — Gmail");
+  // `title` outranks `name` outranks `id` — the order is the point, not merely
+  // that some field is chosen.
+  assertEquals(containerPreview({ id: 7, name: "list_tabs" }), "list_tabs");
+  assertEquals(containerPreview({ id: 7, status: "done" }), "done");
+  assertEquals(containerPreview({ id: 7 }), "7");
+});
+
+Deno.test("preview: with no identifying field, name the first scalars", () => {
+  assertEquals(containerPreview({ width: 1440, height: 900 }), "width: 1440 · height: 900");
+});
+
+Deno.test("preview: containers are not scalars and are skipped, not stringified", () => {
+  // The failure this guards: `String({})` is "[object Object]", which is worse
+  // than showing nothing at all.
+  const out = containerPreview({ meta: { a: 1 }, kind: "tab" });
+  assertEquals(out, "tab");
+  assert(!out.includes("[object"), "never stringify a container into a preview");
+});
+
+Deno.test("preview: an array of objects previews its FIRST element", () => {
+  const tabs = [{ title: "Inbox" }, { title: "Calendar" }];
+  assertEquals(containerPreview(tabs), "Inbox…");
+});
+
+Deno.test("preview: an array of scalars previews the values themselves", () => {
+  assertEquals(containerPreview([1, 2, 3]), "1, 2, 3");
+  assertEquals(containerPreview(["a", "b"]), "a, b");
+});
+
+Deno.test("preview: empty containers say so rather than nothing", () => {
+  assertEquals(containerPreview([]), "empty");
+  assertEquals(containerPreview({}), "empty");
+});
+
+Deno.test("preview: recursion is bounded to one level", () => {
+  // Nested arrays must not walk themselves deriving previews; one level in,
+  // the preview stops. Without the depth bound a deeply nested payload pays
+  // the traversal cost twice — once for rows, once for previews.
+  const deep = [[[["x"]]]];
+  const out = containerPreview(deep);
+  assertEquals(typeof out, "string");
+  assertEquals(out, "", "a container-of-containers beyond one level previews nothing");
+});
+
+Deno.test("preview: a preview is clipped to one bounded line", () => {
+  const long = "x".repeat(500);
+  const out = containerPreview({ title: long });
+  assert(out.length <= TOOL_TREE_PREVIEW_CHARS, `preview was ${out.length} chars`);
+  assert(out.endsWith("…"));
+  // Newlines would break the single-row layout.
+  assertEquals(containerPreview({ title: "line one\nline two" }), "line one line two");
+});
+
+Deno.test("preview: a cyclic object still previews without hanging", () => {
+  const a = { title: "self" };
+  a.self = a;
+  assertEquals(containerPreview(a), "self");
+});
+
+Deno.test("buildTree: container rows CARRY the preview; leaves do not", () => {
+  const { rows } = buildTree({ tabs: [{ title: "Inbox", id: 1 }, { title: "Docs", id: 2 }] });
+  const tabsRow = rows.find((r) => r.key === "tabs");
+  assertEquals(tabsRow.preview, "Inbox…");
+  const first = rows.find((r) => r.key === "0");
+  assertEquals(first.preview, "Inbox", "the row a reader scans says WHICH tab it is");
+  const leaf = rows.find((r) => r.key === "title");
+  assertEquals(leaf.preview, undefined, "a leaf already shows its value — a preview would duplicate it");
 });
