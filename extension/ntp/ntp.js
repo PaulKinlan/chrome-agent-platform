@@ -972,6 +972,32 @@ async function refreshFailedRuns() {
   label.className = "fr-label";
   label.textContent = "Failed runs";
   section.append(label);
+  // ORPHANED-ALARM CLEANUP (owner P0): failed records whose agent is an
+  // agent-ref (background:/agent:) may be orphaned — the agent was deleted but
+  // its alarm survived. Offer one honest cleanup action that cancels every
+  // schedule whose agent no longer exists (the SW verifies against the live
+  // registry; it never cancels a live agent's schedule).
+  const hasAgentRefFailures = failed.some((fr) => typeof fr.agentId === "string" && /^(background:|agent:)/.test(fr.agentId));
+  if (hasAgentRefFailures) {
+    const orphanBtn = document.createElement("button");
+    orphanBtn.type = "button";
+    orphanBtn.className = "fr-retry fr-orphan-cleanup";
+    orphanBtn.textContent = "Cancel orphaned alarms";
+    orphanBtn.setAttribute("aria-label", "Cancel alarms whose agent was deleted");
+    orphanBtn.addEventListener("click", async () => {
+      orphanBtn.disabled = true;
+      orphanBtn.textContent = "…";
+      const r = await send("schedule.cancelOrphans").catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+      if (r?.ok) {
+        orphanBtn.textContent = r.count > 0 ? `Cancelled ${r.count} orphaned alarm${r.count === 1 ? "" : "s"}.` : "No orphaned alarms found.";
+        await refreshFailedRuns();
+      } else {
+        orphanBtn.textContent = "Cancel failed";
+        orphanBtn.disabled = false;
+      }
+    });
+    section.append(orphanBtn);
+  }
   for (const fr of failed) {
     const row = document.createElement("div");
     row.className = "fr-row";
@@ -2040,6 +2066,15 @@ async function runThreadTurn(text, attachments = [], mention = null) {
 const composer = document.getElementById("composer");
 composer.addEventListener("send", async (ev) => {
   const { text: task, attachments, agent } = ev.detail;
+  // TASK-LIFECYCLE-CONTRACT §2: a send must land in the conversation the user
+  // is looking at. If a task view is open, this send CONTINUES that thread —
+  // it may never silently fork a visible conversation into a new task (the
+  // owner's P0: "he should have all been in that one task"). A NEW task is
+  // started only when the hub surface is showing (no open task view).
+  if (!threadView.hidden && currentThreadId && !agent?.ref) {
+    await runThreadTurn(task, attachments);
+    return;
+  }
   runSurfaceOwner.claim(); // a NEW task replaces the surface — fence any in-flight run
   currentThreadId = null; // a new task → a new thread
   syncConversationRunControls();
