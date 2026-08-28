@@ -3,7 +3,32 @@
 // second allow-scripts-only iframe, so self/location navigation can replace at
 // most the disposable inner document — never this message/lifecycle boundary.
 const MAX_HTML_BYTES = 300000;
+// Never sit on "Preparing restricted preview…" forever: if no payload arrives
+// (the tool call failed, the embedder was removed, or the delivery raced the
+// frame load), say so honestly and offer a retry. The embedder re-delivers the
+// staged payload on every frame load, so a reload IS the retry.
+const PREVIEW_TIMEOUT_MS = 15000;
 let active = null;
+
+const statusEl = () => document.getElementById("preview-status");
+
+setTimeout(() => {
+  if (active) return;
+  const status = statusEl();
+  if (!status) return;
+  status.textContent = "Preview unavailable — the content never arrived. The tool call may have failed; check the message's raw payload for the error.";
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.id = "preview-retry";
+  retry.textContent = "Try again";
+  retry.addEventListener("click", () => {
+    // The embedder posts the staged payload on the frame's load event, so a
+    // self-reload re-requests it. If nothing is staged any more, this page
+    // lands back here after the timeout — still honest.
+    location.reload();
+  });
+  status.after(retry);
+}, PREVIEW_TIMEOUT_MS);
 
 function validNonce(value) {
   return typeof value === "string" && value.length > 0 && value.length <= 128;

@@ -1,0 +1,143 @@
+// @ts-nocheck — stubs browser globals (as tests/components.test.ts does) so the
+// components module imports under Deno; runtime behavior is what's under test.
+//
+// tests/genui-error-state.test.ts — the owner-reported bug: a GenUI bubble whose
+// tool call FAILED (update_asset → ok:false, "requires owner approval") still
+// rendered the sandbox preview frame, which then sat on "Preparing restricted
+// preview…" forever. These tests pin:
+//   1. toolResultSignalsError detects failure — status attribute, ok:false,
+//      error string, the double-wrapped modelContent envelope, and the
+//      approval-required (authorizes:false + requiresLiveAuthorization) shape —
+//      and NEVER flags a success;
+//   2. the message-bubble tool branch CONSULTS it before mounting the frame
+//      (source pin — the falsification gate: absent on the pre-fix tree);
+//   3. the sandbox preview host has the bounded wait: timeout, honest failure
+//      text, and a retry (source pin — absent on the pre-fix tree).
+
+const registry = new Map();
+class HTMLElementStub {
+  attachShadow() { return { innerHTML: "" }; }
+  getAttribute() { return null; }
+  hasAttribute() { return false; }
+  setAttribute() {}
+  removeAttribute() {}
+  dispatchEvent() { return true; }
+  addEventListener() {}
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+}
+globalThis.HTMLElement = HTMLElementStub;
+globalThis.customElements = {
+  define(name, cls) { registry.set(name, cls); },
+  get(name) { return registry.get(name); },
+};
+globalThis.window = globalThis;
+globalThis.CustomEvent = class { constructor(type, init = {}) { this.type = type; this.detail = init.detail ?? {}; } };
+globalThis.matchMedia = () => ({ matches: false });
+
+import { assert, assertEquals } from "jsr:@std/assert";
+const { toolResultSignalsError, renderHtmlFrame, wireHtmlFrameContent } = await import("../extension/shared/components.js");
+
+// The owner's captured payload, verbatim shape: the outer tool-result envelope
+// wraps a modelContent string whose result is the approval-required denial.
+const OWNER_RESULT = JSON.stringify({
+  modelContent: JSON.stringify({
+    ok: true,
+    selectedTool: "update_asset",
+    result: { error: "This operation requires owner approval in Settings.", ok: false },
+    selectionRef: "sel_48a5b187ad9ab795eecbb289c7f0c5aae400",
+  }),
+  authorizes: false,
+  requiresLiveAuthorization: true,
+});
+
+Deno.test("genui-error: the owner's approval-required envelope signals error", () => {
+  assertEquals(toolResultSignalsError("done", OWNER_RESULT), true);
+});
+
+Deno.test("genui-error: tool-status=error signals error even with a null result", () => {
+  assertEquals(toolResultSignalsError("error", null), true);
+});
+
+Deno.test("genui-error: a bare ok:false result signals error", () => {
+  assertEquals(toolResultSignalsError("done", '{"ok":false,"error":"denied"}'), true);
+  assertEquals(toolResultSignalsError("done", { ok: false }), true);
+});
+
+Deno.test("genui-error: a bare error string field signals error", () => {
+  assertEquals(toolResultSignalsError("done", '{"error":"boom"}'), true);
+});
+
+Deno.test("genui-error: approval-required (authorizes:false + requiresLiveAuthorization) signals error", () => {
+  assertEquals(toolResultSignalsError("done", '{"authorizes":false,"requiresLiveAuthorization":true}'), true);
+});
+
+Deno.test("genui-error: SUCCESS results never signal error", () => {
+  assertEquals(toolResultSignalsError("done", '{"ok":true,"asset":{"name":"x","content":"<html></html>"}}'), false);
+  assertEquals(toolResultSignalsError("done", JSON.stringify({ modelContent: JSON.stringify({ ok: true, result: { ok: true, id: "a_1" } }) })), false);
+  assertEquals(toolResultSignalsError("success", null), false);
+  assertEquals(toolResultSignalsError("done", "plain text result"), false);
+  assertEquals(toolResultSignalsError("done", "<!DOCTYPE html><html><body>hi</body></html>"), false);
+  assertEquals(toolResultSignalsError("running", null), false);
+  // An empty error STRING is not an error (the field is present on some ok rows).
+  assertEquals(toolResultSignalsError("done", '{"ok":true,"error":""}'), false);
+});
+
+Deno.test("genui-error: unwrapping is depth-bounded (pathological nesting is not an error)", () => {
+  // Each level doubles the string (quote escaping), so keep it small but past
+  // the depth bound of 4.
+  let deep = { ok: true };
+  for (let i = 0; i < 8; i++) deep = { modelContent: JSON.stringify(deep) };
+  assertEquals(toolResultSignalsError("done", JSON.stringify(deep)), false);
+});
+
+Deno.test("genui-error: the happy-path wire delivers the staged payload to the frame on load", () => {
+  // The bubble renders markup from a string renderer, so the payload is staged
+  // in frameContents and postMessaged after mount. Pin that contract: staged
+  // guarded HTML, nonce-matched, delivered on the frame's load event.
+  globalThis.chrome = { runtime: { getURL: (p) => `chrome-extension://kat/${p}` } };
+  try {
+    const markup = renderHtmlFrame("<h1>hi</h1>", { nonce: "n1" });
+    assert(markup.includes("sandbox/artifact-preview.html"), "the extension path points at the sandbox host");
+    const posted = [];
+    const listeners = {};
+    const iframe = {
+      matches: (s) => s === "iframe",
+      addEventListener: (t, f) => { listeners[t] = f; },
+      removeEventListener: () => {},
+      contentWindow: { postMessage: (d) => posted.push(d) },
+    };
+    const frame = { matches: (s) => s === ".html-frame", dataset: { frameNonce: "n1" }, querySelector: () => iframe };
+    const container = { matches: () => false, querySelector: () => frame };
+    const cleanup = wireHtmlFrameContent(container);
+    listeners["load"]?.();
+    assert(posted.length >= 1, "the load event posts the payload");
+    assertEquals(posted[0].type, "cap:artifact-preview-open");
+    assertEquals(posted[0].nonce, "n1");
+    assert(String(posted[0].html).includes("hi"), "the staged guarded HTML is delivered");
+    cleanup();
+  } finally {
+    delete globalThis.chrome;
+  }
+});
+
+// ── Source pins: the falsification gate (each FAILS on the pre-fix tree) ─────
+
+const COMPONENTS_SRC = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+const PREVIEW_SRC = await Deno.readTextFile(new URL("../extension/sandbox/artifact-preview.js", import.meta.url));
+
+Deno.test("genui-error: the tool branch consults toolResultSignalsError BEFORE mounting the preview frame", () => {
+  const toolBranch = COMPONENTS_SRC.indexOf('role === "tool"');
+  const gate = COMPONENTS_SRC.indexOf("const resultFailed = toolResultSignalsError(status, result)");
+  const frameRender = COMPONENTS_SRC.indexOf('class="genui"');
+  assert(toolBranch > 0 && gate > toolBranch, "the error gate exists inside the tool branch");
+  assert(frameRender > gate, "the genui frame render happens AFTER the gate");
+  assert(/if \(!resultFailed && genHtml != null/.test(COMPONENTS_SRC), "the genui branch is skipped when the result failed");
+});
+
+Deno.test("genui-error: the preview host has the bounded wait — timeout, honest text, retry", () => {
+  assert(/PREVIEW_TIMEOUT_MS\s*=\s*15000/.test(PREVIEW_SRC), "a 15s bounded wait exists");
+  assert(/Preview unavailable — the content never arrived/.test(PREVIEW_SRC), "the honest failure text replaces the perpetual preparing state");
+  assert(/preview-retry/.test(PREVIEW_SRC) && /location\.reload\(\)/.test(PREVIEW_SRC), "a retry affordance reloads the frame (the embedder re-posts on load)");
+  assert(/if \(active\) return;/.test(PREVIEW_SRC), "a delivered payload suppresses the failure (happy path untouched)");
+});

@@ -209,6 +209,35 @@ export function renderMarkdown(text) {
   return out.join("");
 }
 
+/**
+ * Does a tool RESULT signal failure? The tool card's status attribute is the
+ * primary signal; the result envelope is the backup for rows whose status was
+ * never propagated (older journal rows, replay). The envelope is double-wrapped
+ * ({modelContent:"{\"ok\":true,\"result\":{\"ok\":false,\"error\":…}}"}) — unwrap
+ * modelContent/result layers, bounded, and treat ok:false or a non-empty error
+ * string at ANY layer as failure. Pure; never throws.
+ */
+export function toolResultSignalsError(status, result) {
+  if (status === "error") return true;
+  let cur = result;
+  for (let depth = 0; cur != null && depth < 4; depth++) {
+    let obj = cur;
+    if (typeof cur === "string") {
+      const t = cur.trim();
+      if (!t.startsWith("{")) return false;
+      try { obj = JSON.parse(t); } catch { return false; }
+    }
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
+    if (obj.ok === false) return true;
+    if (typeof obj.error === "string" && obj.error !== "") return true;
+    if (obj.requiresLiveAuthorization === true && obj.authorizes === false) return true;
+    cur = typeof obj.modelContent === "string" ? obj.modelContent
+      : (obj.result && typeof obj.result === "object") ? obj.result
+      : (typeof obj.result === "string" ? obj.result : null);
+  }
+  return false;
+}
+
 /** Does the text look like a standalone HTML document (renderable in an iframe)? */
 export function isHtmlDocument(text) {
   const s = String(text ?? "").trim();
@@ -2959,6 +2988,15 @@ class MessageBubble extends Component {
       const args = this.getAttribute("tool-args");
       const result = this.getAttribute("tool-result");
       const detail = this.getAttribute("tool-detail");
+      // A FAILED tool call must never render the generated-UI preview: the
+      // args alone carry the HTML (e.g. update_asset's content), so a denied
+      // or errored call used to mount the sandbox frame and sit forever on
+      // "Preparing restricted preview…" — a success-looking skeleton over a
+      // result that says the opposite. Detect the failure (status attribute,
+      // or the envelope's ok:false / error string, unwrapping the nested
+      // modelContent/result layers) and fall through to the structured card,
+      // which renders the error headline and opens itself.
+      const resultFailed = toolResultSignalsError(status, result);
       // The generative-UI tools (generate_ui / create_asset with type html)
       // or ANY tool outputting an HTML document render their HTML LIVE in the
       // sandboxed double-iframe, inline.
@@ -2993,7 +3031,7 @@ class MessageBubble extends Component {
         if (genHtml == null && detail != null) checkCandidate(detail);
         if (genHtml == null && args != null) checkCandidate(args);
       }
-      if (genHtml != null && (isHtmlDocument(genHtml) || name === "generate_ui")) {
+      if (!resultFailed && genHtml != null && (isHtmlDocument(genHtml) || name === "generate_ui")) {
         const rawPayload = [
           args ? `Arguments:\n${args}` : "",
           result ? `Result:\n${result}` : "",
