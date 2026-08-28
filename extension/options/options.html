@@ -22,6 +22,9 @@
         <a href="#tool-library" class="nav-item" data-section="tool-library">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
         Tool library</a>
+        <a href="#skills" class="nav-item" data-section="skills">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M12 2l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4L4.2 7.7l5.4-.8z"/></svg>
+        Skills</a>
         <a href="#agents" class="nav-item" data-section="agents">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         Agents</a>
@@ -181,6 +184,22 @@
         <p
           class="muted">Every permission is optional. The hub runs with none of these; enable each capability when you need it. Each Enable button asks Chrome for just that permission.</p>
         <div id="permission-list" class="permission-list"></div>
+      </section>
+
+      <section id="skills" class="panel">
+        <h2>Skills</h2>
+        <p class="skills-sub">
+          Reusable capabilities, each documented below. A skill is included in a
+          task — type <span class="muted">/skill:name</span> anywhere in the
+          composer on the hub, or attach it to an agent. Use one here to start a
+          task with it pre-filled.
+        </p>
+        <div class="skills-import">
+          <input class="import-url" type="url" placeholder="Import a skill — a GitHub repo or a SKILL.md URL" aria-label="Skill URL">
+          <button class="import-btn btn" type="button">Import</button>
+          <span class="import-status" role="status"></span>
+        </div>
+        <div class="skills-list"></div>
       </section>
 
       <section id="hooks" class="panel">

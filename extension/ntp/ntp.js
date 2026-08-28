@@ -2464,11 +2464,17 @@ function embeddedViewRoute(path) {
   const routePath = String(path ?? "").split(/[?#]/, 1)[0];
   if (routePath === "options/options.html") return VIEW_ROUTE.SETTINGS;
   if (routePath === "directory/directory.html") return VIEW_ROUTE.DIRECTORY;
-  if (routePath === "recipes/index.html") return VIEW_ROUTE.SKILLS;
   return VIEW_ROUTE.ARTIFACTS;
 }
 
 function openView(path, title, trigger) {
+  // Skills moved INTO Settings (owner directive): any residual skills deep
+  // link (an old #view=recipes/index.html history entry or a stale caller)
+  // lands on Settings' Skills section — a redirect, never a dead end.
+  if (String(path ?? "").split(/[?#]/, 1)[0] === "recipes/index.html") {
+    path = "options/options.html#skills";
+    title = "Settings";
+  }
   const targetRoute = embeddedViewRoute(path);
   // Boot the embedded document before the route update so the destination
   // CAP-FB-20260826-BACK-STACK-02: a plain `viewFrame.src = url` is a
@@ -2652,10 +2658,6 @@ document.getElementById("open-settings")?.addEventListener(
 document.getElementById("open-directory")?.addEventListener(
   "click",
   (event) => openView("directory/directory.html", "Directory", event.currentTarget),
-);
-document.getElementById("open-recipes")?.addEventListener(
-  "click",
-  (event) => openView("recipes/index.html", "Skills", event.currentTarget),
 );
 const assetQuickDrawer = document.getElementById("asset-quick-drawer");
 document.getElementById("open-assets")?.addEventListener(

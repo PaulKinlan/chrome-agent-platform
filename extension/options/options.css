@@ -1101,3 +1101,73 @@ input:focus, select:focus, textarea:focus {
   white-space: nowrap;
 }
 .shortcut-list .unbound { font-style: italic; }
+
+/* ── Skills section (moved from the standalone recipes page) ─────────────── */
+/* The same layout the standalone page had: intent-grouped capability-rows +
+   a collapsed "how it works" details, now inside the Settings panel column. */
+#skills .skills-sub {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  margin: 0 0 20px;
+  max-width: 60ch;
+}
+#skills .skills-import {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+#skills .skills-import .import-url {
+  flex: 1;
+  min-width: 220px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+#skills .skills-import .import-status {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+#skills .intent-group { margin-bottom: 24px; }
+#skills .intent-head {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  font-weight: 600;
+  margin-bottom: 8px;
+  padding: 0 14px;
+}
+#skills .intent-group .recipe { border-bottom: 1px solid var(--border); }
+#skills .intent-group .recipe:last-child { border-bottom: 0; }
+#skills .recipe capability-row { display: block; }
+#skills .recipe capability-row::part(row) { border-bottom: 0; }
+#skills .recipe .how {
+  padding: 0 14px 12px 54px; /* align with the row's label column (28px icon + 12px gap + 14px) */
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+#skills .recipe .how summary {
+  cursor: pointer;
+  color: var(--text);
+  font-weight: 600;
+  font-size: var(--text-xs);
+  margin-bottom: 6px;
+  user-select: none;
+}
+#skills .recipe .how summary:hover { color: var(--accent); }
+#skills .recipe .how p {
+  margin: 0 0 8px;
+  line-height: 1.5;
+  max-width: 70ch;
+}
+#skills .recipe .how .hint {
+  font-size: var(--text-xs);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--muted);
+}
+#skills .skills-list .empty { color: var(--muted); font-size: var(--text-sm); padding: 14px; }

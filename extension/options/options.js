@@ -37,6 +37,7 @@ import { createNavigationController } from "../lib/navigation-controller.js";
 // everywhere — no hand-rolled duplicates).
 import { confirmActionDialog } from "../shared/components.js";
 import { saveFsGrant, wireLocalFolderPickers, regrantFsGrantAccess } from "../lib/fs-grants.js";
+import { mountSkillsSection } from "../recipes/skills-panel.js";
 
 // ── Provider presets (the user picks one; OpenAI-compatible endpoints) ──
 // NOTE: the "demo" + "prompt-api" providers are deliberately NOT in this
@@ -2588,6 +2589,7 @@ export function handleSettingsHashNavigation(hash, isTraverse = false) {
 
   if (sectionId === "local-folders") renderLocalFolders();
   if (sectionId === "usage") renderUsage();
+  if (sectionId === "skills") mountSkillsSection(document.getElementById("skills"));
 
   section.scrollIntoView({
     behavior: isTraverse ? "auto" : "smooth",

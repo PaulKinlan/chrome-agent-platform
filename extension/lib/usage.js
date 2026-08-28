@@ -7,6 +7,67 @@
 // service-worker restarts WITHOUT the optional `storage` permission.
 import { usageRead, usageWrite, usageClear, usageRemoveRow } from "./usage-store.js";
 import { assertRunOwned } from "./run-fence.js";
+import { kvGet, kvSet } from "./kv.js";
+
+// ── Per-tool call counters (the Usage panel's tool-usage chart) ─────────────
+// Bounded per-day per-tool counts over the same 7-day horizon as the ledger.
+// Stored OUTSIDE the IndexedDB ledger (the ledger rows are validated token
+// rows; mixing schemas in the sole-authority store is how corruption bugs
+// start). Key: cap:usage:tools:v1 → { v: 1, days: { "YYYY-MM-DD": { tool: n } } }.
+export const TOOL_USAGE_KEY = "cap:usage:tools:v1";
+const TOOL_USAGE_DAYS = 7;
+const MAX_TOOL_NAMES_PER_DAY = 64;
+const MAX_TOOL_NAME_LEN = 128;
+let toolUsageMutex = Promise.resolve();
+
+function todayKey(now = new Date()) {
+  return now.toISOString().slice(0, 10);
+}
+
+function trimToolUsageDays(days) {
+  const keys = Object.keys(days).sort();
+  while (keys.length > TOOL_USAGE_DAYS) delete days[keys.shift()];
+  return days;
+}
+
+/** Count ONE tool invocation. Fire-and-forget safe: never throws to the caller
+ * of the tool path — a telemetry write must not fail a tool execution. */
+export async function recordToolCall(toolName, nowMs = Date.now()) {
+  const name = String(toolName ?? "").slice(0, MAX_TOOL_NAME_LEN);
+  if (!name) return;
+  const run = toolUsageMutex.then(async () => {
+    const cur = await kvGet(TOOL_USAGE_KEY);
+    const days = cur && typeof cur === "object" && cur.days && typeof cur.days === "object" ? cur.days : {};
+    const day = todayKey(new Date(nowMs));
+    const today = days[day] && typeof days[day] === "object" ? days[day] : {};
+    if (!(name in today) && Object.keys(today).length >= MAX_TOOL_NAMES_PER_DAY) return; // bounded
+    today[name] = (Number(today[name]) || 0) + 1;
+    days[day] = today;
+    await kvSet(TOOL_USAGE_KEY, { v: 1, days: trimToolUsageDays(days) });
+  });
+  toolUsageMutex = run.then(() => {}, () => {});
+  return run;
+}
+
+/** Roll the per-day counters up to per-tool totals over the retention window. */
+export async function getToolUsage(nowMs = Date.now()) {
+  return await toolUsageMutex.then(() => {}, () => {}).then(async () => {
+    const cur = await kvGet(TOOL_USAGE_KEY);
+    const days = cur && typeof cur === "object" && cur.days && typeof cur.days === "object" ? cur.days : {};
+    const perTool = {};
+    const cutoff = nowMs - TOOL_USAGE_DAYS * 24 * 60 * 60 * 1000;
+    for (const [day, tools] of Object.entries(days)) {
+      const dayMs = Date.parse(`${day}T00:00:00Z`);
+      if (!Number.isFinite(dayMs) || dayMs < cutoff) continue; // expired bucket
+      if (!tools || typeof tools !== "object") continue;
+      for (const [name, n] of Object.entries(tools)) {
+        perTool[name] ??= { tool: name, calls: 0 };
+        perTool[name].calls += Number(n) || 0;
+      }
+    }
+    return Object.values(perTool).sort((a, b) => b.calls - a.calls || a.tool.localeCompare(b.tool));
+  });
+}
 
 // A module mutex serializes the usage ledger read-modify-write. Concurrent
 // onUsage events (parallel tool calls in a single model step resolve via

@@ -8,7 +8,6 @@ export const VIEW_ROUTE = Object.freeze({
   TASK: "task",
   SETTINGS: "settings",
   DIRECTORY: "directory",
-  SKILLS: "skills",
   ARTIFACTS: "artifacts",
 });
 
