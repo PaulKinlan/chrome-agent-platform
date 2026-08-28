@@ -1543,7 +1543,20 @@ export function createDurableRunRegistry({
           },
           threadTerminal: record.threadId
             ? ok
-              ? { role: "assistant", content: result, status: "done" }
+              ? {
+                role: "assistant",
+                content: result,
+                status: "done",
+                // Provider-server grounding (Gemini google_search): citations +
+                // executed queries, bounded, render-only — never a tool result
+                // the agent loop answers.
+                ...(Array.isArray(payload?.citations) && payload.citations.length > 0
+                  ? { citations: payload.citations.slice(0, 32) }
+                  : {}),
+                ...(Array.isArray(payload?.serverToolEvents) && payload.serverToolEvents.length > 0
+                  ? { serverToolEvents: payload.serverToolEvents.slice(0, 16) }
+                  : {}),
+              }
               : {
                 role: "error",
                 content: result || "run failed",

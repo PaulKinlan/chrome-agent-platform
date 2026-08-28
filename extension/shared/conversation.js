@@ -1460,6 +1460,12 @@ export async function runConversationTurn(container, { text, attachments = [], h
     ) {
       appendBubble(c, "agent", res.result);
     }
+    // Provider-server grounding (Gemini google_search): the run response
+    // carries the render-only citation rows (the reopened thread renders the
+    // same rows from the persisted terminal message).
+    if ((res.serverToolEvents || res.citations) && typeof c.appendServerToolRows === "function") {
+      c.appendServerToolRows(res);
+    }
     status({ state: "completed" });
   } else {
     // A provider/config failure must be CLEAR + ACTIONABLE, not a generic

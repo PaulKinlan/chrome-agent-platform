@@ -25,6 +25,10 @@ import {
   isLocalProvider,
   providerOriginPattern,
 } from "../lib/provider-gate.js";
+import {
+  createServerToolLatchRegistry,
+  liveProviderServerToolRecords,
+} from "../lib/provider-server-tools.js";
 import { dispatchDurableProviderRun } from "../lib/durable-provider-dispatch.js";
 import {
   closeAgentWorkerFor,
@@ -113,7 +117,7 @@ import {
   memoryToolset,
   RunAbortedError,
 } from "../lib/agent.js";
-import { clearUsage, getUsage, recordToolCall, recordUsage } from "../lib/usage.js";
+import { clearUsage, getServerToolUsage, getUsage, recordServerToolUsage, recordToolCall, recordUsage } from "../lib/usage.js";
 import { createWebmcpAuthorizationGuard } from "../lib/webmcp-authority.js";
 import {
   diagnosticClear,
@@ -1059,7 +1063,7 @@ async function lazyPermissionDigest() {
   }
 }
 
-async function liveChromeLazyRecords({ browserTools, managementTools, executionId, scoped }) {
+async function liveChromeLazyRecords({ browserTools, managementTools, executionId, scoped, providerServer = null }) {
   const version = String(chrome.runtime.getManifest()?.version ?? "0");
   const extensionDigest = sha256Hex(`cap-extension:${version}`);
   const permissionDigest = await lazyPermissionDigest();
@@ -1127,6 +1131,23 @@ async function liveChromeLazyRecords({ browserTools, managementTools, executionI
       sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
       closureGeneration: "task-execution-core",
     }),
+    // Provider-EXECUTED (server-side) tools — discovery through the same lazy
+    // index; "execution" latches the provider-defined tool onto the run (the
+    // agent-core proxy declares it on the next model call). Availability is
+    // resolved live from the provider lane + the owner's toggles.
+    // SCOPED (hook) runs are driven by UNTRUSTED browser events — a paid
+    // provider-side tool must never be latchable from one, so scoped runs get
+    // no provider-server records at all.
+    ...(providerServer && !scoped
+      ? await liveProviderServerToolRecords({
+        lane: providerServer.lane,
+        modelId: providerServer.modelId,
+        readSwitches: providerServer.readSwitches,
+        latchRegistry: providerServer.latchRegistry,
+        sourceGeneration: `${sourceGeneration}:provider-server`,
+        scope,
+      })
+      : []),
   ];
   return records;
 }
@@ -1275,6 +1296,41 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     // provider.set-style invalidation so a saved change rebuilds the orchestrator.
     const prefs = (await kvGet("cap:multiAgent")) ?? {};
     const multiAgent = prefs["cap:multiAgent"] !== false;
+    // Provider-server tooling for THIS build (slice 1: Gemini google_search).
+    // The latch registry + grounding observations are BUILD-LOCAL (an
+    // invalidated orchestrator starts clean; a stale build's latches can never
+    // leak into a new build's model). The opt-in key derives from the prompt
+    // scope: hub runs read agents.hub, a named agent's run reads agents.<slug>.
+    const serverToolLatchRegistry = createServerToolLatchRegistry();
+    const serverToolGrounding = new Map(); // runId -> { queries:Set, citations:Map }
+    const optInKey = typeof promptScope === "string" && promptScope.startsWith("agent:")
+      ? promptScope.slice("agent:".length)
+      : "hub";
+    const readServerToolSwitches = async () => {
+      const store = (await kvGet(SERVER_TOOLS_KEY).catch(() => null)) ?? {};
+      const cfg = store[SERVER_TOOLS_KEY];
+      return {
+        globalEnabled: cfg?.enabled === true,
+        agentOptIn: cfg?.agents?.[optInKey] === true,
+      };
+    };
+    const serverTooling = {
+      latchRegistry: serverToolLatchRegistry,
+      onGrounding: (runId, normalized) => {
+        let entry = serverToolGrounding.get(runId);
+        if (!entry) {
+          entry = { queries: new Set(), citations: new Map() };
+          serverToolGrounding.set(runId, entry);
+          if (serverToolGrounding.size > 256) {
+            serverToolGrounding.delete(serverToolGrounding.keys().next().value);
+          }
+        }
+        for (const q of normalized.queries) entry.queries.add(q);
+        for (const c of normalized.citations) {
+          if (!entry.citations.has(c.url)) entry.citations.set(c.url, c);
+        }
+      },
+    };
     const modelManagementDispatch = bindModelApprovalDispatcher(approvalExecutionId, dispatchRoute);
     const liveBrowserTools = browserToolset(scoped);
     const liveManagementTools = scoped ? {} : managementToolset({
@@ -1300,7 +1356,14 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
         managementTools: liveManagementTools,
         executionId: approvalExecutionId,
         scoped,
+        providerServer: {
+          lane: model.providerLane ?? "openai-compatible",
+          modelId: model.modelId ?? "",
+          readSwitches: readServerToolSwitches,
+          latchRegistry: serverToolLatchRegistry,
+        },
       }),
+      serverTooling,
       delegateGuard: async (origin) => {
         // The model-facing delegate_task must revalidate LIVE enrollment before
         // running a cached worker (the internal path previously bypassed the
@@ -1327,6 +1390,20 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     // at run start so a run can prove WHICH composition it was built with, and
     // a debug/test path can verify the Settings preview matches it.
     orch.promptInfo = await attestComposition(masterComposed, promptScope ?? "hub");
+    // Expose the build-local provider-server observations so the run's settle
+    // path can attach citations to the terminal message + record the usage
+    // line. Read-only view; the maps themselves stay private to this build.
+    orch.serverTooling = {
+      latchCount: (runId) => serverToolLatchRegistry.latchCount(runId),
+      groundingFor: (runId) => {
+        const entry = serverToolGrounding.get(runId);
+        if (!entry) return null;
+        return Object.freeze({
+          queries: Object.freeze([...entry.queries]),
+          citations: Object.freeze([...entry.citations.values()]),
+        });
+      },
+    };
     return orch;
 }
 
@@ -2334,7 +2411,38 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
           : aborted;
       }
       await fence?.assertOwned?.();
-      const terminal = await durableRuns.settle(executionId, { ok: true, result, logicalId: taskId });
+      // Provider-server tool outcomes for THIS run: grounding harvested from the
+      // provider stream (queries + citations) + the latch count. Attach to the
+      // terminal message for citation rendering and record the usage line as a
+      // labelled ESTIMATE (CAP cannot see the provider's free-tier meter).
+      const serverGrounding = orch?.serverTooling?.groundingFor?.(executionId) ?? null;
+      const serverLatchCount = orch?.serverTooling?.latchCount?.(executionId) ?? 0;
+      if (serverGrounding && serverGrounding.queries.length > 0) {
+        const queryCount = serverGrounding.queries.length;
+        const estUsd = (queryCount * 0.014);
+        try {
+          await recordToolCall("provider-server/gemini/google_search");
+          await recordServerToolUsage({
+            provider: "gemini",
+            tool: "google_search",
+            queries: queryCount,
+            estimatedUsd: estUsd,
+            note: `Web search: ${queryCount} call${queryCount === 1 ? "" : "s"} (Gemini) — est. $${estUsd.toFixed(4)} (ESTIMATE — the 5,000/mo free tier is metered provider-side and invisible to CAP)`,
+          });
+        } catch { /* usage telemetry must never fail a settled run */ }
+      }
+      const terminal = await durableRuns.settle(executionId, {
+        ok: true,
+        result,
+        logicalId: taskId,
+        ...(serverGrounding && (serverGrounding.citations.length > 0 || serverGrounding.queries.length > 0)
+          ? {
+            citations: serverGrounding.citations,
+            serverToolEvents: serverGrounding.queries.map((query) => ({ kind: "google_search", query })),
+            serverToolLatches: serverLatchCount,
+          }
+          : {}),
+      });
       if (terminal?.phase === "cancelled") {
         return { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "cancelled", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId };
       }
@@ -2380,7 +2488,19 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         // Re-check ownership AFTER the notification commit as well.
         await fence?.assertOwned?.();
       }
-      return { ok: true, result, executionId };
+      return {
+        ok: true,
+        result,
+        executionId,
+        // Live-surface citation rendering (reopened threads render the same
+        // rows from the persisted terminal message).
+        ...(serverGrounding && serverGrounding.citations.length > 0
+          ? { citations: serverGrounding.citations }
+          : {}),
+        ...(serverGrounding && serverGrounding.queries.length > 0
+          ? { serverToolEvents: serverGrounding.queries.map((query) => ({ kind: "google_search", query })) }
+          : {}),
+      };
     } catch (error) {
       if (isNativeQuotaExceededError(error)) {
         // Settling allocates a retained payload and terminal outbox before it
@@ -2525,6 +2645,11 @@ const WEBMCP_STATUS_KEY = "cap:webmcpStatus";
 // acceptToolSnapshot/syncSnapshotDocument) — a second same-origin tab or a
 // stale document can never replace the bound tab's current snapshot.
 const SNAPSHOT_GATE_KEY = "cap:webmcpSnapshotGate";
+// Provider server tools (slice 1: Gemini google_search): the owner's GLOBAL
+// toggle + per-agent opt-in map. Both default OFF — a provider-side search
+// spends real money without a Chrome permission, so nothing latches without
+// an explicit owner choice.
+const SERVER_TOOLS_KEY = "cap:providerServerTools";
 
 // Metadata-only shadow catalog (CAP-FB-20260822-TOOL-CATALOG-CONTRACT-01).
 // It observes the REAL current tool maps and WebMCP directory, but owns no
@@ -4588,7 +4713,8 @@ const handlers = mergeRouteMaps(
   },
 
   async "usage.get"() {
-    return await getUsage();
+    const usage = await getUsage();
+    return { ...usage, serverTools: await getServerToolUsage() };
   },
   async "usage.clear"() {
     await clearUsage();

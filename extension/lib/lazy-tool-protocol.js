@@ -481,6 +481,7 @@ export class LazyToolProtocol {
       management: [],
       "bundled-wasm": [],
       webmcp: [],
+      "provider-server": [],
     };
 
     const maxPerCategory = 50;
@@ -495,6 +496,7 @@ export class LazyToolProtocol {
       if (srcKind === "chrome-api") group = "browser";
       else if (srcKind === "management") group = "management";
       else if (srcKind === "bundled-package") group = "bundled-wasm";
+      else if (srcKind === "provider-server") group = "provider-server";
       else if (srcKind.startsWith("webmcp")) group = "webmcp";
 
       if (filterSource && filterSource !== group && filterSource !== srcKind) {
@@ -532,6 +534,7 @@ export class LazyToolProtocol {
       management: bySource.management.length,
       bundledWasm: bySource["bundled-wasm"].length,
       webmcp: bySource.webmcp.length,
+      providerServer: bySource["provider-server"].length,
     };
 
     return Object.freeze({
@@ -539,7 +542,7 @@ export class LazyToolProtocol {
       counts,
       truncated,
       tools: bySource,
-      summary: `Total tools: ${descriptors.length} (builtin: ${counts.builtin}, browser: ${counts.browser}, management: ${counts.management}, bundled-wasm: ${counts.bundledWasm}, webmcp: ${counts.webmcp}). Use search_tools to get an executable selectionRef for a tool.`,
+      summary: `Total tools: ${descriptors.length} (builtin: ${counts.builtin}, browser: ${counts.browser}, management: ${counts.management}, bundled-wasm: ${counts.bundledWasm}, webmcp: ${counts.webmcp}, provider-server: ${counts.providerServer}). Use search_tools to get an executable selectionRef for a tool.`,
     });
   }
 

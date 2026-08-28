@@ -1270,6 +1270,68 @@ async function renderAgents() {
   });
   $("#per-agent-provider").hidden = !on;
 
+  // Provider server tools (Gemini google_search): the GLOBAL toggle gates
+  // every agent; a per-agent opt-in then admits each agent individually. Both
+  // live in ONE kv record ({ enabled, agents: { [id]: bool } }) so the service
+  // worker reads them atomically at every tool-source snapshot.
+  const stCfg = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
+  const stToggle = $("#server-tools-enabled");
+  stToggle.checked = stCfg.enabled === true;
+  const persistServerTools = async (next) => {
+    await storage.set({ "cap:providerServerTools": next });
+    // Availability is read live per snapshot, but the provider LANE is
+    // build-fixed — invalidate so a just-enabled native-lane agent rebuilds.
+    try {
+      await chrome.runtime.sendMessage({ type: "invalidate-agent" });
+    } catch { /* worker may not be running — the setting still persists */ }
+  };
+  stToggle.addEventListener("toggle", async (e) => {
+    const cur = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
+    await persistServerTools({ ...cur, enabled: e.detail.checked === true });
+    renderServerToolAgents(e.detail.checked === true);
+    saveFlash("Provider server tools saved.");
+  });
+  async function renderServerToolAgents(globalOn) {
+    const box = $("#server-tools-agents");
+    if (!box) return;
+    box.hidden = !globalOn;
+    box.replaceChildren();
+    if (!globalOn) return;
+    const cur = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
+    const agents = cur.agents && typeof cur.agents === "object" ? cur.agents : {};
+    let named = [];
+    try {
+      const r = await boundedSend("named-agent.list");
+      named = Array.isArray(r?.agents) ? r.agents : [];
+    } catch { named = []; }
+    const rows = [{ id: "hub", name: "Hub (the main agent)" },
+      ...named.map((a) => ({ id: String(a?.id ?? ""), name: String(a?.name ?? a?.id ?? "agent") }))]
+      .filter((a) => a.id);
+    for (const a of rows) {
+      const field = document.createElement("div");
+      field.className = "toggle-field";
+      const t = document.createElement("switch-toggle");
+      t.setAttribute("label", a.name);
+      t.checked = agents[a.id] === true;
+      t.addEventListener("toggle", async (e) => {
+        const latest = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
+        const latestAgents = latest.agents && typeof latest.agents === "object" ? { ...latest.agents } : {};
+        latestAgents[a.id] = e.detail.checked === true;
+        await persistServerTools({ ...latest, agents: latestAgents });
+        saveFlash(`Provider server tools ${e.detail.checked ? "enabled" : "disabled"} for ${a.name}.`);
+      });
+      const text = document.createElement("div");
+      text.className = "toggle-text";
+      const nm = document.createElement("span");
+      nm.className = "toggle-name";
+      nm.textContent = a.name;
+      text.appendChild(nm);
+      field.append(t, text);
+      box.appendChild(field);
+    }
+  }
+  await renderServerToolAgents(stToggle.checked);
+
   // Per-agent provider overrides: each named agent can use its OWN provider +
   // model (a COMPLETE config). The apiKey is written to storage but NEVER read
   // back here — the field shows a blank placeholder when a key exists.
@@ -2179,6 +2241,19 @@ async function renderUsage(range = currentUsageRange) {
     detailByAgent.slice().sort(sortCost).map((a) => [a.agentId, `${a.provider}/${a.model}`, String(a.calls), fmtTok(a), fmtCost(a)]));
   mk("By day", ["Day", "Calls", "Tokens", "Cost"],
     detailByDay.slice().sort((a, b) => String(a.day).localeCompare(String(b.day))).map((d) => [d.day, String(d.calls), fmtTok(d), fmtCost(d)]));
+
+  // Provider server tools (Gemini google_search): per-run executed-query
+  // counts + the ESTIMATED spend (the provider's free-tier meter is invisible
+  // to CAP — every figure here is labelled an estimate).
+  const serverToolDays = Array.isArray(u?.serverTools) ? u.serverTools : [];
+  const serverToolRows = serverToolDays.flatMap(({ day, rows }) =>
+    (Array.isArray(rows) ? rows : []).map((r) => [
+      day,
+      `${String(r.provider ?? "")}/${String(r.tool ?? "")}`,
+      String(r.queries ?? 0),
+      `est. $${(Number(r.estimatedUsd) || 0).toFixed(4)}`,
+    ]));
+  mk("Provider server tools (estimates)", ["Day", "Tool", "Queries", "Est. cost"], serverToolRows);
 }
 
 // ── Data / memory ──

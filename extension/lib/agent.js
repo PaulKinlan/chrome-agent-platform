@@ -18,6 +18,10 @@ import { capLog } from "./cap-log.js";
 import { perfSpan } from "./cap-perf.js";
 import { isToolResultFailure } from "./tool-summary.js";
 import {
+  groundingFromProviderMetadata,
+  injectLatchedServerTools,
+} from "./provider-server-tools.js";
+import {
   createLazyProviderToolset,
   executableBrowserToolRecords,
   executableBuiltinToolRecords,
@@ -381,6 +385,10 @@ export function createAgent({
   // Dynamic scope/document fence reader. The active run identity is merged
   // after this result, so a source can never replace run/task/agent identity.
   readLazyScope = async () => ({}),
+  // Provider-server tooling (extension/lib/provider-server-tools.js): the
+  // per-build latch registry + a sink for grounding metadata harvested from
+  // the provider stream. Absent → no provider-tool injection, no harvesting.
+  serverTooling = null,
 }) {
   // The worker's immutable run identity, captured at run START. Because master
   // runs are serialized (withRunLock), at most one run is active per agent, so a
@@ -466,6 +474,44 @@ export function createAgent({
   // doStream/doGenerate (attempt 1 fails, attempt 2 succeeds), so a blind FIFO
   // would let a failed attempt's id leak into the next attempt's onUsage (the
   // reviewer's within-run retry finding).
+  // Harvest provider-side grounding (citations + executed search queries) from
+  // a model call result WITHOUT touching the payload the agent loop consumes:
+  // doStream's ReadableStream is tee'd (the agent gets one branch; we observe
+  // the other), doGenerate's providerMetadata is read directly. Observations
+  // flow to serverTooling.onGrounding(runId, normalized) for the thread's
+  // citation rendering + the usage ledger. Observation NEVER breaks a run.
+  const harvestGrounding = (value, runId) => {
+    const onGrounding = serverTooling?.onGrounding;
+    if (typeof onGrounding !== "function" || !runId) return value;
+    try {
+      if (value && typeof value === "object" && value.stream instanceof ReadableStream) {
+        const [consumed, observed] = value.stream.tee();
+        (async () => {
+          const reader = observed.getReader();
+          try {
+            for (;;) {
+              const { done, value: part } = await reader.read();
+              if (done) break;
+              const metadata = ownData(part, "providerMetadata");
+              const grounding = groundingFromProviderMetadata(metadata);
+              if (grounding) {
+                try { onGrounding(runId, grounding); } catch { /* telemetry */ }
+              }
+            }
+          } catch { /* observation failure must not reach the run */ } finally {
+            try { reader.releaseLock(); } catch { /* ignore */ }
+          }
+        })();
+        return { ...value, stream: consumed };
+      }
+      const grounding = groundingFromProviderMetadata(ownData(value, "providerMetadata"));
+      if (grounding) {
+        try { onGrounding(runId, grounding); } catch { /* telemetry */ }
+      }
+    } catch { /* telemetry must never break a model call */ }
+    return value;
+  };
+
   const boundModel = new Proxy(model.model, {
     get(target, prop, receiver) {
       const pushAttempt = () => ({ id: crypto.randomUUID(), occurredAt: new Date().toISOString(), ordinal: ++attemptOrdinal });
@@ -473,6 +519,18 @@ export function createAgent({
         emitAttestation(options);
         const entry = pushAttempt();
         attemptQueue.push(entry);
+        // PROVIDER-SERVER TOOL LATCH: an execute_tool on a provider-server ref
+        // latched the provider-defined tool for THIS run — declare it on this
+        // and subsequent model calls (injection is a no-op when nothing is
+        // latched or no registry is bound). Execution-as-declaration: the
+        // provider runs the tool inside the API call; the client never
+        // dispatches it and never answers a tool_call for it.
+        const runIdForLatch = ownData(activeRun?.identity, "runId");
+        const latchRegistry = serverTooling?.latchRegistry ?? null;
+        const latched = latchRegistry && runIdForLatch
+          ? latchRegistry.latchedToolsFor(runIdForLatch)
+          : [];
+        if (latched.length > 0) options = injectLatchedServerTools(options, latched);
         // Model round-trip observability: method + attempt ordinal + call
         // latency (time to the provider's response OBJECT — stream consumption
         // continues after). NEVER log options/content (prompts, messages).
@@ -500,7 +558,7 @@ export function createAgent({
           (value) => {
             span.end("ok");
             modelLog.debug(`attempt ${entry.ordinal} response`, method);
-            return value;
+            return harvestGrounding(value, runIdForLatch);
           },
           (err) => {
             drop();
@@ -898,6 +956,9 @@ export function createOrchestrator({
                   // read-only browser set, so the master cannot persist state.
   onProgress = null, // async (event) => void — the live progress stream, threaded
                      // into BOTH the master agent and every delegated worker.
+  serverTooling = null, // provider-server latch registry + grounding sink
+                        // (master only — workers are site-origin agents whose
+                        // tools are page-bound, not provider-bound)
 }) {
   const workerAgents = new Map();
   let currentRunIdentity = null;
@@ -1056,6 +1117,7 @@ export function createOrchestrator({
     model,
     system: masterSystem ?? system,
     memory: masterMemory,
+    serverTooling,
     // `extraTools` stay out of this eager map. Their live records come from
     // readMasterLazySources; only delegation's existing closures are added to
     // the private built-in source map.

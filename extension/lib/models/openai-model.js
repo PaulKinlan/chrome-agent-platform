@@ -23,7 +23,7 @@ import { safeProviderError } from "../pure.js";
 // _makeLoggingFetch below.
 const _loggedFetchFailures = new Set();
 
-function _makeLoggingFetch(knownSecrets = []) {
+export function makeLoggingFetch(knownSecrets = []) {
   return async function _loggingFetch(input, init) {
     const res = await fetch(input, init);
     if (!res.ok) {
@@ -90,7 +90,7 @@ export function createOpenAICompatibleModel(config) {
     // Intercept the provider fetch to log the real HTTP status/body ONCE (the
     // SDK's AI_APICallError message is generic). The SDK still throws the
     // AI_APICallError with statusCode/responseBody for describeError to map.
-    fetch: _makeLoggingFetch(apiKey ? [apiKey] : []),
+    fetch: makeLoggingFetch(apiKey ? [apiKey] : []),
   });
   const provider = openai(resolvedModel);
   // Gemini requires the thought_signature back in the next tool-call round-trip;
