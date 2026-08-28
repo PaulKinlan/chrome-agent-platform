@@ -1,41 +1,16 @@
 {
-  "testedSourceCommit": "2aa3068608467c689c83b1ad1c1dfae2136937ea",
-  "evidenceCommitNote": "run against the working tree that became the corrective commit (a tracked manifest cannot contain its own commit hash)",
+  "testedSourceCommit": "b3e68a5b138a3f3dc68efb4b1994b49405b22019",
+  "evidenceCommitNote": "working-tree run; worktreeDirtyFiles lists every difference from testedSourceCommit",
   "worktreeDirtyFiles": [
-    "M CHANGELOG.md",
-    " M PLAN.md",
-    " M docs/KNOWN-ISSUES.md",
-    " M docs/UI-FIXES-TRACKER.md",
-    " M extension/background/service-worker.js",
-    " M extension/content/content-script.js",
-    " M extension/content/main-world.js",
-    " M extension/lib/pure.js",
-    " M extension/lib/tools.js",
-    " M extension/ntp/ntp.js",
-    " M extension/options/options.js",
-    " M fixtures/webmcp-fixture.html",
-    " M fixtures/webmcp-server.ts",
-    " M package.json",
-    "D  scripts/webmcp-integration.ts",
-    "D  scripts/webmcp-repro.ts",
-    " M test-artifacts/ntp-driven.png",
-    " M test-artifacts/options-driven.png",
-    " M tests/webmcp-discovery.test.ts",
-    " M tests/webmcp-status.test.ts",
-    "?? docs/WEBMCP-ACCEPTANCE.md",
-    "?? scripts/webmcp-acceptance.ts",
-    "?? test-artifacts/webmcp-acceptance-after-reload.png",
-    "?? test-artifacts/webmcp-acceptance-manifest.json",
-    "?? test-artifacts/webmcp-acceptance-side-effect.png",
-    "?? tests/webmcp-snapshot.test.ts"
+    "?? test-artifacts/webmcp-acceptance-tab-picker.png"
   ],
-  "runId": "webmcp-acceptance-1787061388611",
-  "ts": "2026-08-18T13:56:28.611Z",
+  "runId": "webmcp-acceptance-1787919394643",
+  "ts": "2026-08-28T12:16:34.643Z",
   "mode": "automated-variant",
   "permissionGrant": "test-manifest-pregranted",
   "overallStatus": "OPEN — the OS-level permission-prompt gesture is unattested in this environment (headless auto-denies optional host permissions; no display/Xvfb). Run with --headed to complete the attestation.",
   "variantNote": "the loaded extension is byte-identical to the shipped one EXCEPT manifest.json pre-holds scripting+tabs+the fixture host permission (the headed flow's real prompt grants exactly these)",
-  "passed": 32,
+  "passed": 35,
   "failed": 0,
   "checks": [
     {
@@ -115,23 +90,35 @@
       "pass": true
     },
     {
-      "name": "invoke: SW→isolated→MAIN returns the page function result",
+      "name": "production tools.invoke: directory → exact approved tab/document → MAIN returns the page function result",
       "pass": true
     },
     {
-      "name": "invoke: VISIBLE side effect on the page (DOM + counter, exactly once)",
+      "name": "invoke: VISIBLE side effect occurs exactly once in the approved tab/document",
       "pass": true
     },
     {
-      "name": "invoke: declared shop.total resolves via modelContext (42.5), never the colliding global (999)",
+      "name": "invoke: the second same-origin tab is NOT invoked",
       "pass": true
     },
     {
-      "name": "invoke: a generationless invoke is rejected",
+      "name": "production tools.invoke: declared shop.total resolves via modelContext (42.5), never the colliding global (999)",
       "pass": true
     },
     {
-      "name": "invoke: a source-less invoke is rejected",
+      "name": "production tools.invoke: an unknown tool is rejected at the directory",
+      "pass": true
+    },
+    {
+      "name": "production tools.invoke: an unenrolled origin is rejected",
+      "pass": true
+    },
+    {
+      "name": "bridge fencing: a generationless invoke is rejected at the relay",
+      "pass": true
+    },
+    {
+      "name": "bridge fencing: a source-less invoke is rejected at the relay",
       "pass": true
     },
     {
@@ -169,43 +156,41 @@
   ],
   "evidence": {
     "scriptParsedUrls": [
-      "chrome-extension://gkhikhejjhncjambjgecnepgdckdmkjp/content/main-world.js",
+      "chrome-extension://aeebmdmeiijaicdllnjdmemhgljmmlbo/content/bridge-auth.js",
+      "chrome-extension://aeebmdmeiijaicdllnjdmemhgljmmlbo/content/main-world.js",
       "http://127.0.0.1:8934/index.html",
-      "chrome-extension://gkhikhejjhncjambjgecnepgdckdmkjp/content/content-script.js",
-      "chrome-extension://gkhikhejjhncjambjgecnepgdckdmkjp/content/main-world.js",
+      "chrome-extension://aeebmdmeiijaicdllnjdmemhgljmmlbo/content/bridge-auth.js",
+      "chrome-extension://aeebmdmeiijaicdllnjdmemhgljmmlbo/content/content-script.js",
+      "chrome-extension://aeebmdmeiijaicdllnjdmemhgljmmlbo/content/bridge-auth.js",
+      "chrome-extension://aeebmdmeiijaicdllnjdmemhgljmmlbo/content/main-world.js",
       "http://127.0.0.1:8934/index.html?nav=2",
-      "chrome-extension://gkhikhejjhncjambjgecnepgdckdmkjp/content/content-script.js"
+      "chrome-extension://aeebmdmeiijaicdllnjdmemhgljmmlbo/content/bridge-auth.js",
+      "chrome-extension://aeebmdmeiijaicdllnjdmemhgljmmlbo/content/content-script.js"
     ],
     "consoleEvents": [
-      "[WebMCP:bridge] start {\"origin\":\"http://127.0.0.1:8934\",\"role\":\"isolated-bridge\",\"diagnostics\":true}",
-      "[WebMCP:bridge] enrollment-sync {\"origin\":\"http://127.0.0.1:8934\",\"gen\":2,\"via\":\"startup\"}",
-      "[WebMCP:bridge] tools-reported {\"origin\":\"http://127.0.0.1:8934\",\"toolCount\":3,\"declaredCount\":2,\"inferredCount\":1,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"greet\"]}",
       "[WebMCP:main] start {\"origin\":\"http://127.0.0.1:8934\",\"role\":\"main-world\"}",
+      "[WebMCP:bridge] enrollment-sync {\"origin\":\"http://127.0.0.1:8934\",\"gen\":2,\"via\":\"startup\"}",
+      "[WebMCP:bridge] start {\"origin\":\"http://127.0.0.1:8934\",\"role\":\"isolated-bridge\",\"diagnostics\":true}",
       "[WebMCP:main] resume {\"origin\":\"http://127.0.0.1:8934\"}",
+      "[WebMCP:main] discover {\"origin\":\"http://127.0.0.1:8934\",\"declaredCount\":2,\"inferredCount\":1,\"toolCount\":3,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"greet\"]}",
       "[WebMCP:bridge] tools-reported {\"origin\":\"http://127.0.0.1:8934\",\"toolCount\":3,\"declaredCount\":2,\"inferredCount\":1,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"greet\"]}",
-      "[WebMCP:bridge] tools-reported {\"origin\":\"http://127.0.0.1:8934\",\"toolCount\":3,\"declaredCount\":2,\"inferredCount\":1,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"greet\"]}",
-      "[WebMCP:bridge] registration {\"origin\":\"http://127.0.0.1:8934\",\"ok\":true,\"accepted\":3}",
-      "[WebMCP:bridge] registration {\"origin\":\"http://127.0.0.1:8934\",\"ok\":true,\"accepted\":3}",
       "[WebMCP:bridge] registration {\"origin\":\"http://127.0.0.1:8934\",\"ok\":true,\"accepted\":3}",
       "[WebMCP:bridge] invoke-tool {\"origin\":\"http://127.0.0.1:8934\",\"name\":\"greet\",\"requestId\":\"1\",\"gen\":2,\"source\":\"inferred\"}",
       "[WebMCP:main] invoke {\"name\":\"greet\",\"requestId\":\"1\"}",
       "[WebMCP:main] result {\"name\":\"greet\",\"requestId\":\"1\",\"ok\":true}",
       "[WebMCP:bridge] tools-reported {\"origin\":\"http://127.0.0.1:8934\",\"toolCount\":3,\"declaredCount\":2,\"inferredCount\":1,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"greet\"]}",
       "[WebMCP:bridge] registration {\"origin\":\"http://127.0.0.1:8934\",\"ok\":true,\"accepted\":3}",
-      "[WebMCP:bridge] start {\"origin\":\"http://127.0.0.1:8934\",\"role\":\"isolated-bridge\",\"diagnostics\":true}",
-      "[WebMCP:bridge] enrollment-sync {\"origin\":\"http://127.0.0.1:8934\",\"gen\":2,\"via\":\"startup\"}",
-      "[WebMCP:bridge] tools-reported {\"origin\":\"http://127.0.0.1:8934\",\"toolCount\":3,\"declaredCount\":2,\"inferredCount\":1,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"greet\"]}",
       "[WebMCP:main] start {\"origin\":\"http://127.0.0.1:8934\",\"role\":\"main-world\"}",
+      "[WebMCP:bridge] enrollment-sync {\"origin\":\"http://127.0.0.1:8934\",\"gen\":2,\"via\":\"startup\"}",
+      "[WebMCP:bridge] start {\"origin\":\"http://127.0.0.1:8934\",\"role\":\"isolated-bridge\",\"diagnostics\":true}",
       "[WebMCP:main] resume {\"origin\":\"http://127.0.0.1:8934\"}",
-      "[WebMCP:bridge] tools-reported {\"origin\":\"http://127.0.0.1:8934\",\"toolCount\":3,\"declaredCount\":2,\"inferredCount\":1,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"greet\"]}",
+      "[WebMCP:main] discover {\"origin\":\"http://127.0.0.1:8934\",\"declaredCount\":2,\"inferredCount\":1,\"toolCount\":3,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"greet\"]}",
       "[WebMCP:bridge] tools-reported {\"origin\":\"http://127.0.0.1:8934\",\"toolCount\":3,\"declaredCount\":2,\"inferredCount\":1,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"greet\"]}",
       "[WebMCP:bridge] registration {\"origin\":\"http://127.0.0.1:8934\",\"ok\":true,\"accepted\":3}",
-      "[WebMCP:bridge] registration {\"origin\":\"http://127.0.0.1:8934\",\"ok\":true,\"accepted\":3}",
-      "[WebMCP:bridge] registration {\"origin\":\"http://127.0.0.1:8934\",\"ok\":true,\"accepted\":3}",
       "[WebMCP:bridge] tools-reported {\"origin\":\"http://127.0.0.1:8934\",\"toolCount\":3,\"declaredCount\":2,\"inferredCount\":1,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"greet\"]}",
+      "[WebMCP:bridge] registration {\"origin\":\"http://127.0.0.1:8934\",\"ok\":true,\"accepted\":3}",
       "[WebMCP:main] discover {\"origin\":\"http://127.0.0.1:8934\",\"declaredCount\":3,\"inferredCount\":1,\"toolCount\":4,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"shop.coupon\",\"greet\"]}",
       "[WebMCP:bridge] tools-reported {\"origin\":\"http://127.0.0.1:8934\",\"toolCount\":4,\"declaredCount\":3,\"inferredCount\":1,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"shop.coupon\",\"greet\"]}",
-      "[WebMCP:bridge] registration {\"origin\":\"http://127.0.0.1:8934\",\"ok\":true,\"accepted\":3}",
       "[WebMCP:bridge] registration {\"origin\":\"http://127.0.0.1:8934\",\"ok\":true,\"accepted\":4}",
       "[WebMCP:main] discover {\"origin\":\"http://127.0.0.1:8934\",\"declaredCount\":3,\"inferredCount\":1,\"toolCount\":4,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"shop.coupon\",\"greet\"]}",
       "[WebMCP:bridge] tools-reported {\"origin\":\"http://127.0.0.1:8934\",\"toolCount\":4,\"declaredCount\":3,\"inferredCount\":1,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"shop.coupon\",\"greet\"]}",
@@ -215,6 +200,11 @@
       "[WebMCP:main] result {\"name\":\"greet\",\"requestId\":\"1\",\"ok\":true}"
     ],
     "screenshots": [
+      {
+        "name": "webmcp-acceptance-tab-picker.png",
+        "sha256": "16505e88e7730303205ffd35b65afea908cc154f67975b4f2413c5fce97d4704",
+        "bytes": 98138
+      },
       {
         "name": "webmcp-acceptance-side-effect.png",
         "sha256": "7c358e8d813ee0d50414ce39dfaefb7f2647928f6bc6734d5653371b48bc3971",

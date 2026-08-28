@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.333] — 2026-08-28
+- Verified the site-tools (WebMCP) machinery actually works end to end — 35 of 35 checks against a real page, covering discovery, invoking the right tab, surviving reloads and navigation. The only thing left unproven is the browser permission prompt, which needs a human click
+
 ## [0.2.332] — 2026-08-28
 - The UX audit fixes are in: the panel no longer leaks memory when you open and close it, dark mode now follows your OS setting, narrow windows no longer overflow sideways (the sidebar becomes a proper overlay drawer), and the first-run call to action is honest about what needs setting up
 

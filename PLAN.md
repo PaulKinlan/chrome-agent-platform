@@ -214,11 +214,18 @@ spreadsheet toolkit, tabular diff, abuse gates, the Gate-2 Worker host. Resumes 
 demo. **P3.** Dead components, recipes→skills rename, hub agent rows onto the shared picker.
 
 ### Known open defect classes
-- **WebMCP discovery attestation** — the implementation is corrected (production
-  `tools.invoke` → `invokeSiteTool`, approved tab + active `documentId`, SW-issued
-  navigation epochs, MAC/replay-fenced transport, redacted diagnostics), but completion
-  needs exact-clean-commit evidence plus the **headed** run for the two OS permission
-  prompts that cannot be automated: `deno run -A scripts/webmcp-acceptance.ts --headed`
+- **WebMCP discovery — the code paths WORK; only the OS prompt is unattested.**
+  Verified 2026-08-28 by running `npm run test:webmcp` against the current tree:
+  **35/35 pass**. That covers the production path end to end — declared
+  (`document.modelContext`) AND inferred (`window.webmcpExpose`) discovery through the
+  real bridge, `tools.invoke` → `invokeSiteTool` hitting the exact approved tab and
+  active `documentId`, a second same-origin tab correctly NOT invoked, a declared tool
+  resolving over a colliding page global, generationless/source-less invokes rejected at
+  the relay, re-enrollment advancing the generation with exactly one side effect (no
+  duplicate listeners), and invocation surviving both a reload and a cross-document
+  navigation without re-enrollment. The single remaining gap is the OS-level host
+  permission prompt, which headless auto-denies and no harness can click:
+  `deno run -A scripts/webmcp-acceptance.ts --headed` plus two manual Allow clicks
   (docs/WEBMCP-ACCEPTANCE.md).
 - **Worktree hygiene** — 71 registered worktrees, and `/tmp` is RAM-backed at 92% inode
   use. Run `node scripts/worktree-audit.mjs` before any cleanup decision; nothing is
