@@ -173,8 +173,9 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P0 | OPEN | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
 | P0 | OPEN | [`CAP-FB-20260827-HUB-FIRST-RUN-01`](#cap-fb-20260827-hub-first-run-01-the-first-screen-is-an-onboarding-wall-not-a-command-center) | The first screen is an onboarding wall, not a command center |
 | P0 | OPEN | [`CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01`](#cap-fb-20260827-tool-call-legibility-01-tool-call-cards-show-shape-not-answers) | Tool-call cards show shape, not answers |
-| P0 | IN_REVIEW | [`CAP-FB-20260828-NOUN-DISCIPLINE-01`](#cap-fb-20260828-noun-discipline-01-one-name-per-concept--assetsartifacts-skillsrecipes-agents-three-deep) | One name per concept — Assets/Artifacts, Skills/recipes, Agents three deep |
+| P0 | DONE | [`CAP-FB-20260828-NOUN-DISCIPLINE-01`](#cap-fb-20260828-noun-discipline-01-one-name-per-concept--assetsartifacts-skillsrecipes-agents-three-deep) | One name per concept — Assets/Artifacts, Skills/recipes, Agents three deep |
 | P1 | **BLOCKED** | [`CAP-FB-20260819-PROACTIVE-TAB-DISCOVERY-01`](#cap-fb-20260819-proactive-tab-discovery-01-proactive-per-tab-site-agent-discovery-before-run) | Proactive per-tab Site Agent discovery before Run |
+| P1 | OPEN | [`CAP-FB-20260829-FIXED-DEBUG-PORTS-01`](#cap-fb-20260829-fixed-debug-ports-01-nine-harnesses-hard-code-a-debug-port-so-a-kat-can-report-green-against-the-wrong-browser) | Nine harnesses hard-code a debug port and can pass against the wrong browser |
 | P1 | OPEN | [`CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01`](#cap-fb-20260819-directory-tool-explorer-01-agent-directory-tool-explorer-and-enrollment-policy) | Agent Directory tool explorer and enrollment policy |
 | P1 | OPEN | [`CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`](#cap-fb-20260819-permission-remediation-ux-01-user-facing-permission-management-and-run-remediation) | User-facing permission management and run remediation |
 | P1 | OPEN | [`CAP-FB-20260819-UI-FLASH-RELAYOUT-01`](#cap-fb-20260819-ui-flash-relayout-01-intermittent-extension-wide-ui-flash-and-relayout-investigation) | Intermittent extension-wide UI flash and relayout investigation |
@@ -1213,14 +1214,14 @@ evidence every other task depends on).
 ## [CAP-FB-20260828-NOUN-DISCIPLINE-01] One name per concept — Assets/Artifacts, Skills/recipes, Agents three deep
 - Feedback: 2026-08-28 — product owner: "the UI is starting to get messy". Root-caused in PRODUCT.md, "Where the product is going": the product speaks three vocabularies for the same nouns
 - Updated: 2026-08-28 23:55 UTC
-- Status: IN_REVIEW
+- Status: DONE
 - Priority: P0
 - Owner: implementer (worktree lane)
 - Workspace: active (local path private)
 - Branch: `worktree-agent-a451ff5ed1d15409d`
 - Base: `d654b0a4`
 - Candidate: `worktree-agent-a451ff5ed1d15409d` (release `0.2.355`, rebased onto `origin/main@d654b0a4`; NOT pushed — a concurrent session is writing to this repo, so the owner merges)
-- Shipping: —
+- Shipping: `origin/main@4e0ed332`
 - Acceptance: exactly one user-facing name per concept, and the code agrees with it. **Artifacts**, never Assets: the sidebar item, the hub card, both `openView` titles and the route family all say the same word. **Skills**, never recipes: `recipes/index.html` and the `recipe.*` routes are renamed to match the nav that already says Skills. **Agents** appears once per view, not as a sidebar section AND a card AND a row inside that card. **Skills is not a top-level view** (owner, 2026-08-28): it is currently a sidebar destination opening `recipes/index.html`, but a skill is something you attach to an agent or include in a task, not a place you go — it belongs where it is used, with management living in Settings alongside the other agent configuration. A `check:vocabulary` script fails the build on a banned term the way `check:gallery` fails on component drift, so this cannot come back
 - Review: PENDING — fresh-session review of the diff on branch `worktree-agent-a451ff5ed1d15409d`. Falsification already recorded below (the gate observed RED on the unfixed tree, GREEN after)
 - Gates: full unit suite; Chrome journeys green (several journeys select views by label); gallery drift; the new vocabulary check
@@ -1301,6 +1302,26 @@ evidence every other task depends on).
 - Recover: `git grep -n "openView\|view-frame" -- extension/ntp/ntp.js`
 - History:
   - 2026-08-28 01:10 UTC — captured from a product audit. Settings, Directory, Skills and Artifacts are separate HTML documents loaded into an iframe of the new-tab page — all same-origin extension pages, so the iframe buys no isolation. It costs: a joint history stack between the top frame and the iframe (two separate back-button fixes, `0.2.296` and `0.2.304`), a full document bootstrap per view switch, and the Settings monolith, because when a view is a document the way to add a feature is to append a `<section>` — which is how Settings reached 12,837px with all twelve panels rendered simultaneously. Five tracked defects trace to this one decision. `CAP-FB-20260827-SETTINGS-MONOLITH-01` can be done independently and first; this entry is the general fix.
+
+## [CAP-FB-20260829-FIXED-DEBUG-PORTS-01] Nine harnesses hard-code a debug port, so a KAT can report green against the wrong browser
+- Feedback: 2026-08-29 — surfaced by the noun-discipline lane: "an early KAT run gave a full page of false failures because a fixed debug port silently attached to another lane's chromium"
+- Updated: 2026-08-29 UTC
+- Status: OPEN
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `4e0ed332`
+- Candidate: —
+- Shipping: —
+- Acceptance: no browser-driving script hard-codes a debug port; every one launches with `--remote-debugging-port=0` and discovers the real port from the `DevTools listening` line (the pattern 28 scripts already use); each converted harness still passes on its own; and two harnesses that previously shared a port pass when run CONCURRENTLY, which is the case that produced false results
+- Review: falsification — a converted harness must be shown to attach to its OWN browser and not to a second chromium started alongside it
+- Gates: each converted KAT green individually; a concurrent run of a previously-colliding pair green; full unit suite; Chrome journeys
+- Blockers: —
+- Next: convert the nine hard-coded scripts to the free-port pattern, reusing the `freePort()` helper from `scripts/kat-noun-discipline.ts`
+- Recover: `git grep -n "PORT = 9" -- scripts/`
+- History:
+  - 2026-08-29 — measured, then corrected after the reporting lane pointed out the failure mode is worse than "a flake". **A fixed-port harness does not merely hang or error — it attaches to another lane's browser and reports confident PASS/FAIL results about an extension it is not testing.** The reporting run produced 7 such results. That means a fixed-port harness can go **green against the wrong tree**, which is worse than a red suite, because the output reads as evidence. Eleven scripts name a port; two of them (`kat-bgagent-delete` on `cbf89c33`, `kat-noun-discipline`) already probe for a free one, leaving **nine hard-coded**. Four ports are each claimed by two of those nine: 9347 (`kat-narrow-toggle`, `kat-dark-scheme`), 9351 (`kat-usage-viz`, `kat-ux-lows`), 9353 (`kat-providers-tabs`, `axe-audit`), 9359 (`kat-agent-templates`, `kat-composer-grow`); `kat-failed-runs` holds 9357, the port `kat-bgagent-delete` starts probing from. 28 other scripts already launch with `--remote-debugging-port=0` and read the real port off the `DevTools listening` line, and `scripts/kat-noun-discipline.ts` carries a reusable `freePort()` (probe `/json/version`, then bind-test) — so both the pattern and a helper are already in-repo.
 
 ## [CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01] Tool-call cards show shape, not answers
 - Feedback: 2026-08-27 — product owner: "the tools calling bubbles don't help as much, I'd expect some better info, then formatted and ability to see JSON input and response better"

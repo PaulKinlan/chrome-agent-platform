@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.356] — 2026-08-28
+- Internal bookkeeping only, no user-visible change: recorded a defect in our own test harnesses (several of them could attach to the wrong browser and report a confident pass against code they were not testing) and closed out the naming clean-up that shipped earlier
+
 ## [0.2.355] — 2026-08-28
 - One name for one thing. The gallery of things your agents make was called "Assets" in the sidebar and "Artifacts" on the card right next to it — and opening it from those two places gave the same screen two different titles. It is **Artifacts** everywhere now: the sidebar, the quick-access drawer, the @-mention list and both ways in. Files you attach to an agent are called "Context files", because they are something you give the agent, not something it made. The Agents card said "Agents" three times, nested; it says it once. In Settings, background agents no longer talk about "recipes" — they wrap skills. A new build check fails if any of these names come back
 
