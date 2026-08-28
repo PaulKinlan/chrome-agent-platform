@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.350] — 2026-08-28
+- feat(agent-cards): export/import agent card data layer with recipe-validated skills and bounded hostile-input schema (AGENT-PRODUCT-GAPS G7)
+
 ## [0.2.349] — 2026-08-28
 - Deleting an agent now truly cleans up after itself: scheduled runs, permissions, workers, and stored data are removed together, safely, and anything half-finished is retried rather than lost
 - Internal bookkeeping: the completed task-loading work is closed out and archived, leaving the tracker showing only live work
