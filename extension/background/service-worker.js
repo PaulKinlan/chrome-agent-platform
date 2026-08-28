@@ -2469,8 +2469,17 @@ async function resolveMemory(origin) {
 // a real writer against an agent namespace; teardown must be able to WAIT
 // for in-flight writes instead of racing them into the directory purge.
 const memoryWritesInflight = new Map(); // origin -> Set<Promise>
-function trackMemoryWrite(origin, promise) {
+/** review r4 P1-3: quiescence keys are CANONICAL — a write tracked under a
+ * legacy/orphan alias must be waitable via the agent's canonical `agent:<ns>`
+ * key, or the fence waits on a name nobody tracked and a legacy write escapes
+ * quiescence. normalizeMemoryKey is applied at BOTH ends (track + await). */
+function normalizeMemoryKey(origin) {
   const key = String(origin ?? "");
+  const m = /^(?:agent-legacy|agent-orphan):(.+)$/.exec(key);
+  return m ? `agent:${m[1]}` : key;
+}
+function trackMemoryWrite(origin, promise) {
+  const key = normalizeMemoryKey(origin);
   let set = memoryWritesInflight.get(key);
   if (!set) { set = new Set(); memoryWritesInflight.set(key, set); }
   set.add(promise);
@@ -2485,7 +2494,9 @@ function trackMemoryWrite(origin, promise) {
 async function awaitMemoryQuiescence(origins, timeoutMs = 5000) {
   const deadline = Date.now() + Math.max(250, timeoutMs);
   for (const origin of origins) {
-    const key = String(origin ?? "");
+    // review r4 P1-3: both fence ends normalize — an alias write is awaited
+    // under the agent's canonical key.
+    const key = normalizeMemoryKey(origin);
     while (Date.now() < deadline) {
       const set = memoryWritesInflight.get(key);
       if (!set || set.size === 0) break;
@@ -4552,6 +4563,13 @@ const handlers = mergeRouteMaps(
     return await (await resolveMemory(origin)).get(key);
   },
   async "memory.set"({ origin, key, value }) {
+    // review r4 P1-3: the legacy/orphan selectors resolve to the LITERAL dir
+    // and are declared READ-ONLY (only agent teardown removes them). A set
+    // here would recreate the dir after the purge — refuse, mirroring
+    // memory.clear.
+    if (typeof origin === "string" && (origin.startsWith("agent-legacy:") || origin.startsWith("agent-orphan:"))) {
+      return { ok: false, error: "legacy store is read-only — delete the agent; teardown removes it" };
+    }
     // review r3 P1-1: non-durable memory writes are tracked so teardown can
     // AWAIT them instead of racing a still-flushing writer into the purge.
     return trackMemoryWrite(origin, (async () =>

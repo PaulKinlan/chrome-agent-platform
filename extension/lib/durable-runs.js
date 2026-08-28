@@ -831,7 +831,14 @@ export function createDurableRunRegistry({
       if (!terminal) throw new Error("terminal registry CAS failed");
       record = terminal;
     }
-    retireWriter(executionId);
+    // review r4 P1-1: a cancellation outbox completing is NOT the writer
+    // settling — the abort callback only STARTED the orchestrator's wind-down,
+    // and its final flush may still be in flight. The cancelling projection
+    // is retained (the fence keeps seeing the writer) until either the
+    // orchestrator's settle() acknowledges completion, or the cancellation
+    // recorded that there was no live writer to wait for. Normal terminal
+    // commits ARE the writer finishing, so they retire here as before.
+    if (!cancelling) retireWriter(executionId);
     await boundary(cancelling ? "after-cancel-cas" : "after-cas", executionId);
 
     await store.setTrusted(`${LOG_PREFIX}${executionId}:terminal`, {
@@ -924,7 +931,13 @@ export function createDurableRunRegistry({
         if (out.some((w) => w.executionId === executionId)) continue;
         const record = await readRecord(executionId);
         if (!record) continue;
-        if (record.phase === "terminal" || record.phase === "cancelled") continue;
+        // review r4 P1-1: a CANCELLING-projection writer stays projected even
+        // once its record reads "cancelled" — the abort fired but the
+        // orchestrator's settle() acknowledgement is still pending, so the
+        // fence must keep seeing it. Only the active set may be skipped on a
+        // terminal record (its retire is synchronous with the transition).
+        if (!cancelling.has(executionId) &&
+            (record.phase === "terminal" || record.phase === "cancelled")) continue;
         const target = String(record.journalTarget ?? "");
         if (!wanted.has(target)) continue;
         out.push({ executionId, journalTarget: target, phase: record.phase ?? null });
@@ -1019,6 +1032,11 @@ export function createDurableRunRegistry({
       await ensureCancellationOutbox(record);
       await boundary("after-cancel-outbox", executionId);
       const run = await processOutbox(executionId);
+      // review r4 P1-1: when the cancellation recorded that there was NO live
+      // writer to abort ("no live execution to abort" / "no live abort
+      // callback registered"), no orchestrator will ever call settle() —
+      // retire the projection here so the fence can observe quiescence.
+      if (abortAttempt?.attempted === false) retireWriter(executionId);
       return { ok: true, cancelled: true, idempotent: false, executionId, run, abortAttempt };
     });
   }
@@ -1188,7 +1206,13 @@ export function createDurableRunRegistry({
       const outboxKey = `${OUTBOX_PREFIX}${executionId}`;
       if (record.phase === "cancel-requested" || record.cancellation) {
         await ensureCancellationOutbox(record);
-        return await processOutbox(executionId);
+        const out = await processOutbox(executionId);
+        // review r4 P1-1: settle() is the ORCHESTRATOR's completion
+        // acknowledgement — this is the only point (besides a recorded
+        // nothing-to-wait-for cancellation) where the cancelling projection
+        // may be retired, because only now is the writer actually done.
+        retireWriter(executionId);
+        return out;
       }
       if (TERMINAL_PHASES.has(record.phase) && !(await store.has(outboxKey))) {
         retireWriter(executionId);
