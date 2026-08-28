@@ -3194,7 +3194,7 @@ class AgentComposer extends Component {
       agent-composer .popup .empty { padding:8px 10px; font-size:12px; color:var(--muted,#635e56); }
       agent-composer .popup .group-label { padding:6px 10px 2px; font-size:11px; font-weight:700;
         color:var(--muted,#635e56); letter-spacing:.01em; }
-      agent-composer .composer textarea { width:100%; background:transparent; border:0; color:var(--text,#1d1b18); font:inherit; resize:vertical; min-height:44px; outline:none; line-height:1.45; }
+      agent-composer .composer textarea { width:100%; background:transparent; border:0; color:var(--text,#1d1b18); font:inherit; resize:none; overflow-y:hidden; min-height:44px; outline:none; line-height:1.45; }
       agent-composer .composer .row { display:flex; gap:8px; align-items:center; margin-top:8px; }
       agent-composer .composer .spacer { flex:1; }
       agent-composer .composer .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
@@ -3272,6 +3272,35 @@ class AgentComposer extends Component {
     this._popupActive = -1;
     this._popupToken = null;
     this._slashAgentToken = null; // { start, end } while /agent: drives the picker
+    // Auto-grow needs a post-layout pass for programmatically prefilled values
+    // (e.g. the first-run prompt) — scrollHeight is 0 before the first style.
+    requestAnimationFrame(() => this._autoGrow());
+  }
+  // The composer GROWS with its text up to ~10 lines, then scrolls internally
+  // (owner bug 2026-08-28: after 1–2 lines the textarea auto-scrolled and the
+  // text being typed left the viewport). The cap derives from the COMPUTED
+  // line-height so font/theme changes keep the line-count contract; resize is
+  // `none` because auto-grow owns the height now.
+  _autoGrow() {
+    const input = this._input;
+    if (!input || !input.isConnected) return;
+    // A HIDDEN composer (the thread composer before its task view opens) has
+    // scrollHeight 0 — skip, or we would pin height:0px until the first input.
+    if (!input.scrollHeight) return;
+    const style = getComputedStyle(input);
+    const lineHeight = parseFloat(style.lineHeight) || 22;
+    const padV = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+    const cap = lineHeight * 10 + padV;
+    // height:auto first so deletions SHRINK the box (scrollHeight then
+    // reflects content, not the previously forced height). Read the natural
+    // height EXACTLY ONCE after that write — a second post-write scrollHeight
+    // read forces ANOTHER synchronous layout per keystroke (review P1:
+    // layout thrash on every input event). The cached value drives the
+    // height, the overflow mode, and nothing else reads layout afterwards.
+    input.style.height = "auto";
+    const natural = input.scrollHeight;
+    input.style.height = `${Math.min(natural, cap)}px`;
+    input.style.overflowY = natural > cap ? "auto" : "hidden";
   }
   _wire() {
     this._run?.addEventListener("click", () => this._send());
@@ -3302,6 +3331,7 @@ class AgentComposer extends Component {
     this._mic?.addEventListener("transcript", (e) => {
       const { text, final: isFinal } = e.detail;
       this._input.value = text;
+      this._autoGrow();
       if (isFinal) this._emit("transcript", { text });
     });
     this._attach?.addEventListener("attach", (e) => {
@@ -3325,6 +3355,7 @@ class AgentComposer extends Component {
       this._closeAgentPicker(token ? "input" : false);
       if (token && this._input && detail.ref) {
         this._input.setRangeText(`/agent:${detail.ref}`, token.start, token.end, "end");
+        this._autoGrow();
       }
       this._setSelectedAgent(detail);
       this._input?.focus();
@@ -3708,7 +3739,7 @@ class AgentComposer extends Component {
   }
   get input() { return this._input; }
   get value() { return this._input?.value ?? ""; }
-  set value(v) { if (this._input) this._input.value = v; }
+  set value(v) { if (this._input) { this._input.value = v; this._autoGrow(); } }
   /** Public: attach something (a reused artifact, an external reference) to the
    * composer — pushes it onto the pending attachments + renders a removable
    * chip, exactly like the + menu does. Returns the stored detail. */
@@ -3743,6 +3774,7 @@ class AgentComposer extends Component {
   async _onComposerInput() {
     const input = this._input;
     if (!input) return;
+    this._autoGrow();
     const text = input.value;
     const caret = input.selectionStart ?? text.length;
 
@@ -3965,7 +3997,7 @@ class AgentComposer extends Component {
       const stillValid = await this.revalidateSelectedAgent();
       if (!stillValid) return;
     }
-    if (this._input) this._input.value = "";
+    if (this._input) { this._input.value = ""; this._autoGrow(); }
     const pending = this.attachments.splice(0);
     this._clearChips();
     const agent = this._selectedAgent ? { ...this._selectedAgent } : null;
