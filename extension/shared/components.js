@@ -1329,7 +1329,7 @@ class SiteAgentCard extends Component {
       :host { display:block; }
       .card { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border,#e3e0d9); border-radius:10px; background:var(--panel,#ffffff); cursor:pointer; }
       .card:hover, .card:focus-visible { border-color:var(--accent,#0e6e63); outline:none; }
-      .badge { width:32px; height:32px; border-radius:8px; background:var(--accent,#0e6e63); color:#fff; display:inline-flex; align-items:center; justify-content:center; font-weight:700; }
+      .badge { width:32px; height:32px; border-radius:8px; background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); display:inline-flex; align-items:center; justify-content:center; font-weight:700; }
       .who { flex:1; min-width:0; }
       .name { font-weight:600; }
       .tools { font-size:12px; color:var(--muted,#635e56); }
@@ -1701,7 +1701,7 @@ class ArtifactInspector extends Component {
       .note,.status { font-size:12px; color:var(--muted,#635e56); margin-block:8px 0; }
       .status { min-block-size:1.4em; }
       .preview[hidden] { display:none; }
-      .preview { margin-block-start:12px; border:1px solid var(--border,#e3e0d9); border-radius:8px; overflow:hidden; background:#fff; }
+      .preview { margin-block-start:12px; border:1px solid var(--border,#e3e0d9); border-radius:8px; overflow:hidden; background:var(--panel,#fff); }
       .preview iframe { display:block; inline-size:100%; block-size:min(56vh,520px); border:0; }
     `, `<div class="bar"><span class="meta"></span><button type="button" class="copy">Copy exact content</button>${type === "html" ? '<button type="button" class="primary play">Preview / Play</button>' : ""}</div><pre tabindex="0"><code></code></pre><p class="note" hidden></p><p class="status" role="status" aria-live="polite"></p><div class="preview" hidden></div>`);
     this._root.querySelector(".meta").textContent = `${type} · ${a.size ?? new TextEncoder().encode(content).byteLength} B · ${a.origin ?? "master"}`;
@@ -2634,7 +2634,7 @@ class MessageBubble extends Component {
       .err-reason { font-weight:600; margin:0 0 4px; }
       .err-action { color:var(--ink,#1d1b18); margin:0 0 8px; }
       .err-fix { font:inherit; font-size:12.5px; font-weight:600; color:var(--accent,#0e6e63); background:transparent; border:1px solid var(--accent,#0e6e63); border-radius:6px; padding:4px 10px; cursor:pointer; }
-      .err-fix:hover { background:var(--accent,#0e6e63); color:#fff; }
+      .err-fix:hover { background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); }
       .err-fix:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
       .msg .attach { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 8px; }
       .msg .attach img { max-width:100%; max-height:260px; border-radius:8px; border:1px solid var(--border,#e3e0d9); display:block; }
@@ -5407,7 +5407,7 @@ class PanelButton extends Component {
       .trigger[data-attention="true"] { color:${attention ? "var(--warning,#9a6700)" : "var(--muted,#635e56)"}; border-color:${attention ? "var(--warning,#9a6700)" : "var(--border,#e3e0d9)"}; }
       .trigger:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .badge { position:absolute; top:-6px; right:-6px; min-width:17px; height:17px; padding:0 4px;
-        border-radius:999px; background:var(--danger,#b3261e); color:#fff; font-size:10px; font-weight:700;
+        border-radius:999px; background:var(--danger,#b3261e); color:var(--btn-fg,#fff); font-size:10px; font-weight:700;
         display:inline-flex; align-items:center; justify-content:center; line-height:1; }
       .panel { position:fixed; z-index:200; width:min(560px, calc(100vw - 24px));
         background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:12px;
@@ -6977,7 +6977,7 @@ class ToolLibrary extends Component {
       .groups summary { display:flex; flex-wrap:wrap; gap:8px; align-items:baseline; cursor:pointer;
         padding:9px 12px; font-size:13px; min-inline-size:0; list-style-position:outside; }
       .groups summary::-webkit-details-marker { display:inline-block; }
-      .groups summary:focus-visible { outline:2px solid var(--accent, #0b57d0); outline-offset:2px; }
+      .groups summary:focus-visible { outline:2px solid var(--accent, #0e6e63); outline-offset:2px; }
       .groups .count { margin-inline-start:auto; font-variant-numeric:tabular-nums; font-weight:700; }
       .groups .source-tools { margin:0; padding:0 12px 10px; list-style:none; display:grid; gap:8px; }
       .source-tool { min-inline-size:0; }
@@ -7038,7 +7038,7 @@ class ToolLibrary extends Component {
         border:1px solid var(--border, #ddd8d2); border-radius:var(--radius-md, 8px);
         font:inherit; font-size:13px; padding:6px 8px; background:var(--panel, #fff); color:var(--text, #24211f);
         font-family:ui-monospace, monospace; resize:vertical; }
-      .preview-doc:focus-visible { outline:2px solid var(--accent, #0b57d0); outline-offset:2px; }
+      .preview-doc:focus-visible { outline:2px solid var(--accent, #0e6e63); outline-offset:2px; }
       .preview-doc-count { margin:2px 0 0; font-size:11px; color:var(--muted, #625d57);
         font-variant-numeric:tabular-nums; }
       .preview input, .preview textarea { display:block; width:100%; box-sizing:border-box; margin-top:4px;
@@ -7047,9 +7047,9 @@ class ToolLibrary extends Component {
       .preview textarea { resize:vertical; font-family:ui-monospace, monospace; }
       .preview [hidden] { display:none; }
       .preview .preview-run { margin-top:10px; padding:6px 14px; border:1px solid var(--border, #ddd8d2);
-        border-radius:999px; background:var(--accent, #0b57d0); color:#fff; font:inherit; font-size:13px;
+        border-radius:999px; background:var(--accent, #0e6e63); color:var(--btn-fg,#fff); font:inherit; font-size:13px;
         cursor:pointer; }
-      .preview .preview-run:focus-visible { outline:2px solid var(--accent, #0b57d0); outline-offset:2px; }
+      .preview .preview-run:focus-visible { outline:2px solid var(--accent, #0e6e63); outline-offset:2px; }
       .preview .preview-run[disabled] { opacity:.55; cursor:default; }
       .preview-output { min-block-size:2rem; max-block-size:240px; overflow:auto; margin:10px 0 0;
         padding:8px 10px; border:1px solid var(--border, #ddd8d2); border-radius:var(--radius-md, 8px);

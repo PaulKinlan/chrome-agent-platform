@@ -2,7 +2,18 @@
   /* ── Color tokens — the single design system (theme switching removed; keep this identity). ──
      The identity is a calm technical instrument: a warm-neutral paper (light)
      with hairline borders and ONE confident petrol-teal accent; a warm charcoal
-     for dark. No AI beige, no default purple/blue, no rainbow glow. */
+     for dark. No AI beige, no default purple/blue, no rainbow glow.
+
+     The OS scheme preference (prefers-color-scheme) is a USER preference, not a
+     theme switcher: each token is declared twice — first the light value as a
+     fallback for engines without light-dark(), then the same token with
+     light-dark(<light>, <dark>) so Chrome ≥123 resolves both schemes from one
+     definition. `color-scheme: light dark` also flips UA widgets (scrollbars,
+     form controls) with the same preference. No toggle UI exists; the media
+     state applies instantly with no flash. ── */
+  color-scheme: light dark;
+  /* Light fallbacks FIRST (engines without light-dark(); dropped where the
+     light-dark() declarations below parse). Keep in sync with the light half. */
   --bg: #f7f6f3;
   --panel: #ffffff;
   --panel-2: #efede8;
@@ -19,6 +30,40 @@
   --on-accent-muted: #d7f0ea;
   --shadow-1: 0 1px 2px rgba(29, 27, 24, 0.05);
   --shadow-2: 0 1px 2px rgba(29, 27, 24, 0.05), 0 12px 32px rgba(29, 27, 24, 0.07);
+
+  /* The same tokens with light-dark(<light>, <dark>) — both schemes from ONE
+     definition; these win wherever light-dark() is supported. */
+  --bg: light-dark(#f7f6f3, #1a1815);
+  --panel: light-dark(#ffffff, #23211d);
+  --panel-2: light-dark(#efede8, #2b2823);
+  --border: light-dark(#e3e0d9, #6b6355);
+  --text: light-dark(#1d1b18, #eae6de);
+  --muted: light-dark(#635e56, #a8a195);
+  --accent: light-dark(#0e6e63, #53b8a9);
+  --accent-hover: light-dark(#0a5c53, #67c7b9);
+  --accent2: light-dark(#b45309, #d98831);
+  --danger: light-dark(#b3261e, #e5675f);
+  --success: light-dark(#1a7f37, #58b877);
+  --warning: light-dark(#9a6700, #d9a03c);
+  --btn-fg: light-dark(#ffffff, #101b18);
+  --on-accent-muted: light-dark(#d7f0ea, #0f2f2a);
+  --shadow-1: 0 1px 2px light-dark(rgba(29, 27, 24, 0.05), rgba(0, 0, 0, 0.45));
+  --shadow-2: 0 1px 2px light-dark(rgba(29, 27, 24, 0.05), rgba(0, 0, 0, 0.45)),
+    0 12px 32px light-dark(rgba(29, 27, 24, 0.07), rgba(0, 0, 0, 0.5));
+
+  /* Aliases: components historically spell "ink on accent" three ways
+     (--accent-contrast, --on-accent, --accent-ink). Route them all through
+     --btn-fg so the dark scheme flips them together. */
+  --accent-contrast: var(--btn-fg);
+  --on-accent: var(--btn-fg);
+  --accent-ink: var(--btn-fg);
+
+  /* Legacy spellings some components predate: route them to their semantic
+     twin so every surface resolves scheme-aware ink/surfaces. */
+  --ink: var(--text);
+  --warn: var(--warning);
+  --bg-subtle: var(--panel-2);
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   /* ── Spacing scale (8px grid) ── */
   --space-1: 4px;
