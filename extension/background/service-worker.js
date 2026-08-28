@@ -3004,7 +3004,7 @@ const handlers = mergeRouteMaps(
       if (hasHost === false) {
         return {
           ok: false,
-          error: `network access to ${u.host} is not granted — enable the host permission (Settings → Permissions) or read the active tab instead`,
+          error: `network access to ${u.host} is not granted — host access is granted at install; if Settings → Permissions shows it missing, reload the extension`,
         };
       }
       const res = await fetch(u.href, { method: m });
@@ -3487,7 +3487,11 @@ const handlers = mergeRouteMaps(
       if (mention && !mentionRoute) {
         result = { ok: false, error: `cannot delegate to ${mention.name}: unknown agent kind ${mention.kind}` };
       } else if (mentionRoute === "agent.delegate") {
-        result = await handlers["agent.delegate"]({ origin: mention.id, task: m.task, threadId });
+        // uiRunId carries the UI attempt's run id so the delegate's progress
+        // events (incl. tool permission denials → approval cards) are accepted
+        // by the conversation's exact-runId fence; execId stays the durable
+        // authority for the run itself.
+        result = await handlers["agent.delegate"]({ origin: mention.id, task: m.task, threadId, uiRunId: m.runId ?? null });
       } else if (mentionRoute) {
         result = await handlers[mentionRoute]({
           id: mention.id,
@@ -5718,7 +5722,7 @@ const handlers = mergeRouteMaps(
   async "agent.pending-cleanup"() {
     return { origins: await listPendingCleanup() };
   },
-  async "agent.delegate"({ origin, task, threadId = null, _executionId = null, _resumeGeneration = null, _resumeToken = null, _allowProviderChange = false }) {
+  async "agent.delegate"({ origin, task, threadId = null, _executionId = null, _resumeGeneration = null, _resumeToken = null, _allowProviderChange = false, uiRunId = null }) {
     // Direct, observable fan-out: run a WORKER agent (not the hub) for an
     // enrolled origin and journal its result to the worker's OWN per-origin
     // memory. Preemptive revocation: the generation is captured up front, the
@@ -5855,7 +5859,10 @@ const handlers = mergeRouteMaps(
           recordRunAttestation(bound);
         });
         a.setProgress?.((ev) => {
-          try { broadcastProgress({ ...ev, runId: execId, agentId: canonical }); } catch { /* best-effort */ }
+          // UI broadcasts ride the UI correlation id when one was supplied
+          // (the conversation fences on the UI attempt's runId); execId stays
+          // the durable authority everywhere else.
+          try { broadcastProgress({ ...ev, runId: uiRunId ?? execId, agentId: canonical }); } catch { /* best-effort */ }
           durableRuns.heartbeat(execId, { progressed: true }).catch(() => {
             try { a.abort?.(); } catch { /* already stopped */ }
           });

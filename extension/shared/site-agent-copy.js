@@ -24,7 +24,7 @@ export function siteAgentSetupMessage(state, origin = "") {
   const site = siteLabel(origin);
   switch (state) {
     case "tabs-denied":
-      return "Tabs permission wasn't granted. Grant it to choose a tab and find site tools.";
+      return "The tabs permission is granted at install — if the tab list is still hidden, reload the extension and try again.";
     case "list-failed":
       return "Open tabs aren't available right now. Try again.";
     case "no-tabs":

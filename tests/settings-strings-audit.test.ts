@@ -68,14 +68,26 @@ const targets = new Set<string>();
 for (const m of optionsHtml.matchAll(/data-section="([^"]+)"/g)) targets.add(normalize(m[1]));
 for (const m of optionsHtml.matchAll(/<h[23][^>]*>([^<]+)/g)) targets.add(normalize(m[1]));
 
-Deno.test("bug 7 sweep: no string points at a Settings Enable control (none exist)", () => {
+Deno.test("bug 7 sweep: no string points at a Settings Enable control or a permission request (none exist)", () => {
   const offenders: string[] = [];
   for (const [path, src] of sources) {
-    for (const m of src.matchAll(/—\s*enable [^"`'\n]* in Settings/gi)) {
+    // Any "enable … Settings" variant (denial suffixes, description
+    // parentheticals, "enable it in Settings", "enable the host permission
+    // (Settings → Permissions)") — the install-granted model has no Enable
+    // controls and no runtime-enable remediation.
+    for (const m of src.matchAll(/enable[^"`'\n]{0,60}\bSettings\b/gi)) {
+      offenders.push(`${path}: ${m[0]}`);
+    }
+    // "Saving asks for the … permission"-style runtime-request copy.
+    for (const m of src.matchAll(/asks? for the [a-z ]*permission/gi)) {
+      offenders.push(`${path}: ${m[0]}`);
+    }
+    // "optional (storage )?permission" prose — nothing is optional anymore.
+    for (const m of src.matchAll(/optional (?:storage )?permission/gi)) {
       offenders.push(`${path}: ${m[0]}`);
     }
   }
-  assert(offenders.length === 0, `stale Enable-control pointers:\n${offenders.join("\n")}`);
+  assert(offenders.length === 0, `stale Enable/request pointers:\n${offenders.join("\n")}`);
 });
 
 Deno.test("bug 7 sweep: every Settings → pointer names REAL UI (a nav section or heading in options.html)", () => {
@@ -90,10 +102,16 @@ Deno.test("bug 7 sweep: every Settings → pointer names REAL UI (a nav section 
   assert(offenders.length === 0, `pointers at UI that does not exist:\n${offenders.join("\n")}`);
 });
 
-Deno.test("bug 7 sweep: no executable chrome.permissions.request remains (install-granted; contains() verifies, fail closed)", () => {
+Deno.test("bug 7 sweep: no permission REQUEST remains in any form (install-granted; contains() verifies, fail closed)", () => {
   const offenders: string[] = [];
   for (const [path, src] of sources) {
-    if (src.includes("chrome.permissions.request(")) offenders.push(path);
+    if (/chrome\.permissions\.request\s*\(/.test(src)) offenders.push(`${path}: chrome.permissions.request(`);
+    // Indirect seams (the first-run onboarding helpers took an injected
+    // permissionsApi and called .request on it).
+    if (/permissionsApi\.request\s*\(/.test(src)) offenders.push(`${path}: permissionsApi.request(`);
+    // Split-line variants: <anyObj>.request({ permissions: … }) — a Chrome
+    // permission request by shape regardless of the receiver's name.
+    if (/\.request\s*\(\s*\{[^}]*permissions\s*:/.test(src)) offenders.push(`${path}: .request({ permissions: … })`);
   }
   assert(offenders.length === 0, `runtime permission requests remain:\n${offenders.join("\n")}`);
 });

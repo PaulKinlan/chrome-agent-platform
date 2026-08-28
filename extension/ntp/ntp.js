@@ -472,10 +472,11 @@ async function renderWebmcpHubStatus() {
 async function discoverActivePage() {
   let listing = await send("agent.discoverable-tabs").catch(() => ({ ok: false }));
   if (listing?.needTabs) {
-    // Tab URLs/titles are hidden without the `tabs` permission — request it
-    // (the click IS the user gesture), then re-list.
+    // `tabs` is granted at install — VERIFY (fail closed). A needTabs response
+    // post-install-grant means a broken/revoked install; verify + report
+    // honestly instead of running an obsolete runtime request.
     const granted = await chrome.permissions
-      .request({ permissions: ["tabs"] })
+      .contains({ permissions: ["tabs"] })
       .catch(() => false);
     if (!granted) {
       setStatus(siteAgentSetupMessage("tabs-denied"), false);

@@ -14,7 +14,7 @@
 // Driven against the REAL extension/lib/browser-tools.js and the REAL
 // extension/shared/conversation.js with stubbed chrome + a minimal fake DOM.
 
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   browserToolset,
   setGlobalBrowserControlGrant,
@@ -435,4 +435,64 @@ Deno.test("P0 conversation: Deny grants nothing and never retries; a forged (unt
   assertEquals(sw.grantCalls.length, 0, "Deny grants nothing");
   assertEquals(sw.runCount, 1, "Deny never retries the turn");
   assertEquals(card.getAttribute("state"), "denied");
+});
+
+// ── (c) review P1-b: a SITE-AGENT mention's denial must render the approval card ──
+// The SW bridge: agent.run passes the UI attempt runId as uiRunId through
+// agent.delegate, and the delegate's progress broadcast rides uiRunId (execId
+// stays the durable authority). Without it, the conversation's exact-runId
+// fence rejected every delegate event — no card could ever render.
+
+Deno.test("P1-b SW bridge: agent.run forwards the UI runId to agent.delegate, and delegate progress rides it", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  assertStringIncludes(
+    sw,
+    'handlers["agent.delegate"]({ origin: mention.id, task: m.task, threadId, uiRunId: m.runId ?? null })',
+    "the mention path forwards the UI attempt runId as uiRunId",
+  );
+  assertStringIncludes(
+    sw,
+    "uiRunId ?? execId",
+    "delegate progress broadcasts ride the UI correlation id (execId remains the durable authority)",
+  );
+  // Falsification note: the pre-fix code called agent.delegate WITHOUT uiRunId
+  // and broadcast with runId: execId — both pins fail on it.
+});
+
+Deno.test("P1-b conversation: a site-mention turn surfaces the denial card and retries on the SAME thread", async () => {
+  const sw = { runCount: 0, lastRunId: null, tasks: [], grantCalls: [], permissionRequests: [], mentions: [], threadIds: [] };
+  installConversationChromeStub(sw);
+  // Capture mention + threadId per attempt.
+  const origSend = globalThis.chrome.runtime.sendMessage;
+  globalThis.chrome.runtime.sendMessage = (msg, cb) => {
+    if (msg.type === "agent.run") { sw.mentions.push(msg.mention ?? null); sw.threadIds.push(msg.threadId ?? null); }
+    return origSend(msg, cb);
+  };
+  globalThis.document = { createElement: (tag) => new FakeElement(tag) };
+  Object.defineProperty(globalThis, "navigator", { value: { userActivation: { isActive: true } }, configurable: true });
+  const { runConversationTurn } = await import("../extension/shared/conversation.js");
+  const appended = [];
+  const turn = runConversationTurn(makeConversationContainer(appended), {
+    text: "check out this site",
+    threadId: "t_site_mention",
+    mention: { kind: "site", id: "https://site.example", name: "site.example" },
+    onStatus: () => {},
+  });
+  await waitForCondition(() => sw.lastRunId !== null && portState.listener !== null, 500, "run dispatch");
+  assertEquals(sw.mentions[0], { kind: "site", id: "https://site.example", name: "site.example" }, "the mention delegates");
+  // The delegate's denial arrives tagged with the UI attempt's runId (the SW
+  // bridge under test); the exact-runId fence ACCEPTS it and the card renders.
+  const denial = {
+    error: "browser control not granted for this tab's origin — the owner can approve it in the approval card here, or in Settings → Browser control",
+    waitingForPermission: true,
+    permissionRequirement: { reason: "read site.example", permissions: [], grantOrigins: ["https://site.example"], grantGlobal: false },
+  };
+  portState.listener({ type: "progress", event: { type: "tool-result", runId: sw.lastRunId, toolName: "read_page", result: denial, ok: true } });
+  await waitForCondition(() => appended.some((el) => el.tagName === "permission-approval-card"), 500, "the approval card renders for a site-mention denial");
+  await turn;
+  const card = appended.find((el) => el.tagName === "permission-approval-card");
+  await card.dispatch("approve", { sourceEvent: { isTrusted: true } });
+  await waitForCondition(() => sw.runCount === 2, 1000, "the turn retries after the grant");
+  assertEquals(sw.threadIds, ["t_site_mention", "t_site_mention"], "the retry stays on the SAME thread — no fork");
+  assertEquals(sw.mentions[1]?.id, "https://site.example", "the retry keeps the mention delegation");
 });

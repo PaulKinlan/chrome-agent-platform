@@ -4607,7 +4607,7 @@ export function browserToolset(readOnly = false) {
     // enterprise policy and is EXCLUDED).
     list_network_rules: tool({
       description:
-        "List the extension's dynamic network rules (declarativeNetRequest). Read-only; requires the declarativeNetRequest permission (enable Network rules in Settings).",
+        "List the extension's dynamic network rules (declarativeNetRequest). Read-only; requires the declarativeNetRequest permission (granted at install).",
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("declarativeNetRequest"))) {
@@ -4768,7 +4768,7 @@ export function browserToolset(readOnly = false) {
     }),
     get_navigation_frames: tool({
       description:
-        "List all frames of a tab (chrome.webNavigation.getAllFrames). Read-only; requires the webNavigation permission (enable Navigation frames in Settings).",
+        "List all frames of a tab (chrome.webNavigation.getAllFrames). Read-only; requires the webNavigation permission (granted at install).",
       inputSchema: z.object({
         tabId: z.number().int().min(1),
       }),
@@ -4825,7 +4825,7 @@ export function browserToolset(readOnly = false) {
     }),
     get_request_activity: tool({
       description:
-        "Read recent observed web request activity (MV3 NON-BLOCKING webRequest observation only — blocking webRequest requires enterprise policy and is excluded). Events arrive only for hosts the owner already granted host access to (never broadened here). Requires the webRequest permission (enable Request observation in Settings).",
+        "Read recent observed web request activity (MV3 NON-BLOCKING webRequest observation only — blocking webRequest requires enterprise policy and is excluded). Events arrive only for hosts the owner already granted host access to (never broadened here). Requires the webRequest permission (granted at install).",
       inputSchema: z.object({
         maxResults: z.number().int().min(1).max(100).optional(),
         tabId: z.number().int().min(0).optional(),

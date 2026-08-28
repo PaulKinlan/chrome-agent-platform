@@ -30,11 +30,18 @@ Deno.test("first run: credential warning is required before an ungranted key can
   );
 });
 
-Deno.test("first run: storage request requires a genuine active owner click", async () => {
+Deno.test("first run: storage VERIFICATION (not request) requires a genuine active owner click, and never calls permissions.request", async () => {
   const calls = [];
+  const requests = [];
   const permissionsApi = {
-    request: (value) => {
+    // The install-granted model: the seam VERIFIES with contains(); a request
+    // call would be the obsolete runtime path — record it so the test fails.
+    contains: (value) => {
       calls.push(value);
+      return Promise.resolve(true);
+    },
+    request: (value) => {
+      requests.push(value);
       return Promise.resolve(true);
     },
   };
@@ -61,8 +68,9 @@ Deno.test("first run: storage request requires a genuine active owner click", as
     userActivation: { isActive: true },
     permissionsApi,
   });
-  assertEquals(accepted, { granted: true, requested: true, reason: "granted" });
-  assertEquals(calls, [{ permissions: ["storage"] }]);
+  assertEquals(accepted, { granted: true, verified: true, reason: "granted" });
+  assertEquals(calls, [{ permissions: ["storage"] }], "verified with contains()");
+  assertEquals(requests, [], "no runtime permission request — storage is install-granted");
 });
 
 Deno.test("first run: zero-permission boot remains clean when every authority is unavailable", async () => {
@@ -267,11 +275,16 @@ Deno.test("first run: options blocks session-only credentials before provider.se
   assert(manifest.permissions.includes("storage"));
 });
 
-Deno.test("first run: browser control request requires a genuine active owner click", async () => {
+Deno.test("first run: browser control VERIFICATION (not request) requires a genuine active owner click, and never calls permissions.request", async () => {
   const calls = [];
+  const requests = [];
   const permissionsApi = {
-    request: (value) => {
+    contains: (value) => {
       calls.push(value);
+      return Promise.resolve(true);
+    },
+    request: (value) => {
+      requests.push(value);
       return Promise.resolve(true);
     },
   };
@@ -299,7 +312,8 @@ Deno.test("first run: browser control request requires a genuine active owner cl
     })).granted,
     true,
   );
-  assertEquals(calls, [{ permissions: ["tabs"] }]);
+  assertEquals(calls, [{ permissions: ["tabs"] }], "verified with contains()");
+  assertEquals(requests, [], "no runtime permission request — tabs is install-granted");
 });
 
 Deno.test("first run: browser control consent state reflects granted, declined, and unselected states", () => {

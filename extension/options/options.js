@@ -225,9 +225,9 @@ function wireCredentialDurability(input, warning, { existing = false } = {}) {
     if (result.granted) {
       storageGranted = true;
       syncAllCredentialWarnings();
-      saveFlash("Storage enabled — API keys saved from now on survive extension restarts.");
+      saveFlash("Storage verified — API keys saved from now on survive extension restarts.");
     } else if (result.reason === "owner-click-required") {
-      saveFlash("Use the Enable storage button directly to grant optional storage.");
+      saveFlash("Use the Verify storage button directly — storage is granted at install.");
       warning.setAttribute("active", "");
       warning.focusAction?.();
     } else {

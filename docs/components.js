@@ -670,7 +670,7 @@ class StorageDurabilityWarning extends Component {
     const followup = state === "denied"
       ? "Storage was not enabled. This key has not been saved."
       : state === "owner-click-required"
-      ? "Use the Enable storage button directly to continue."
+      ? "Use the Verify storage button to continue."
       : state === "request-failed"
       ? "Chrome could not open the storage prompt. Try again."
       : "";
@@ -698,7 +698,7 @@ class StorageDurabilityWarning extends Component {
         <span>Without storage, the ${escapeHtml(provider)} key will be lost when the extension worker restarts.</span>
         ${followup ? `<span class="followup">${escapeHtml(followup)}</span>` : ""}
       </div>
-      <button type="button"${busy ? " disabled aria-busy=\"true\"" : ""}>${busy ? "Enabling…" : "Enable storage"}</button>
+      <button type="button"${busy ? " disabled aria-busy=\"true\"" : ""}>${busy ? "Verifying…" : "Verify storage"}</button>
     </div>`);
   }
   _wire() {
@@ -784,7 +784,7 @@ class FirstRunGuide extends Component {
       <p class="intro">Connect one provider, keep its key across restarts, choose browser control, then create a visible artifact.</p>
       <ol>
         <li class="${providerReady ? "ready" : ""}"><span class="marker">${providerReady ? check : ""}</span><div class="step"><strong>Choose a provider</strong><span>${providerReady ? "Provider and key are ready." : "Pick a model service and enter its key."}</span></div></li>
-        <li class="${storageReady ? "ready" : ""}"><span class="marker">${storageReady ? check : ""}</span><div class="step"><strong>Keep the key</strong><span>${storageReady ? "Storage is enabled." : "Enable optional storage from the key warning."}</span></div></li>
+        <li class="${storageReady ? "ready" : ""}"><span class="marker">${storageReady ? check : ""}</span><div class="step"><strong>Keep the key</strong><span>${storageReady ? "Storage is enabled." : "Verify storage from the key warning (storage is granted at install)."}</span></div></li>
         <li><span class="marker"></span><div class="step"><strong>Create an artifact</strong><span>Use the starter task, review it, then choose Run task.</span></div></li>
       </ol>
       <div class="consent-card" aria-label="Browser control consent">
@@ -6244,7 +6244,7 @@ class SystemPromptEditor extends Component {
       <div class="spe-panel" role="tabpanel" id="spe-panel-custom"
         aria-labelledby="spe-tab-custom" ${this._tab === "custom" ? "" : "hidden"}>
         ${inheritedNote}
-        ${sessionOnly ? `<p class="spe-note" role="status"><strong>Session-only:</strong> the optional storage permission is not granted, so customizations last until the browser restarts. Saving asks for the storage permission so they persist.</p>` : ""}
+        ${sessionOnly ? `<p class="spe-note" role="status"><strong>Session-only:</strong> the storage grant could not be verified (it is granted at install — reload the extension if this persists), so customizations may last only until the browser restarts.</p>` : ""}
         <fieldset class="spe-modes">
           <legend class="spe-label">Composition mode</legend>
           <label class="spe-mode"><input type="radio" name="spe-mode" value="append" aria-label="Append" ${draft.mode === "append" ? "checked" : ""}>
