@@ -6,6 +6,12 @@
 // page-has-heading-one. A violation outside that set is reported but does not
 // fail the gate (new rules are new findings, not this lane's regression).
 //
+// The NTP and sidepanel journeys are SEEDED (a real <task-row> custom element
+// plus a thread-item row mirroring renderTaskRows) before the audit: axe on
+// empty surfaces passes nested-interactive vacuously. The seed also runs an
+// ACTIVATION probe: clicking Retry/Delete must NOT open the row, clicking the
+// open button must, and a keydown on the row wrapper must be inert.
+//
 //   deno run -A scripts/axe-audit.ts <path-to-extension> [<out-dir>]
 //
 // Writes evidence: axe-surfaces.json + a PNG per surface.
@@ -83,11 +89,96 @@ await Deno.mkdir(OUT, { recursive: true });
 const axeSrc = await Deno.readTextFile(AXE_SRC);
 
 const SURFACES = [
-  { name: "ntp-hub", url: `chrome-extension://${extId}/ntp/ntp.html`, wait: 3400 },
+  { name: "ntp-hub", url: `chrome-extension://${extId}/ntp/ntp.html`, wait: 3400, seed: "ntp" },
   { name: "options", url: `chrome-extension://${extId}/options/options.html`, wait: 2600 },
-  { name: "sidepanel", url: `chrome-extension://${extId}/sidepanel/sidepanel.html`, wait: 2600 },
+  { name: "sidepanel", url: `chrome-extension://${extId}/sidepanel/sidepanel.html`, wait: 2600, seed: "taskrow" },
   { name: "artifact", url: `chrome-extension://${extId}/artifact/artifact.html`, wait: 1800 },
 ];
+
+// Seeds mount REAL components (the page's own custom elements) so axe sees a
+// populated, interactive surface. The thread-item markup mirrors ntp.js
+// renderTaskRows (the structure unit test pins the real renderer).
+const SEEDS: Record<string, string> = {
+  ntp: `
+    (() => {
+      const host = document.createElement("div");
+      host.id = "axe-seed-host";
+      document.body.append(host);
+      const tr = document.createElement("task-row");
+      tr.setAttribute("name", "Axe seed task");
+      tr.setAttribute("status", "failed");
+      tr.setAttribute("time", "now");
+      tr.setAttribute("retryable", "");
+      tr.setAttribute("active", "");
+      host.append(tr);
+      const sb = document.getElementById("thread-sidebar");
+      if (sb) {
+        const item = document.createElement("div");
+        item.className = "thread-item";
+        item.title = "Axe seed task";
+        const open = document.createElement("button");
+        open.type = "button";
+        open.className = "t-open";
+        open.setAttribute("aria-label", "Open task Axe seed task");
+        const dot = document.createElement("span"); dot.className = "dot";
+        const name = document.createElement("span"); name.className = "t-name";
+        const title = document.createElement("span"); title.className = "t-title";
+        title.textContent = "Axe seed task";
+        name.append(dot, title);
+        const preview = document.createElement("span"); preview.className = "t-preview";
+        preview.textContent = "seed preview";
+        open.append(name, preview);
+        const meta = document.createElement("span"); meta.className = "t-meta";
+        meta.textContent = "now";
+        const del = document.createElement("button"); del.type = "button"; del.className = "t-delete";
+        del.setAttribute("aria-label", "Delete task Axe seed task");
+        item.append(open, meta, del);
+        sb.append(item);
+      }
+      return true;
+    })()
+  `,
+  taskrow: `
+    (() => {
+      const host = document.createElement("div");
+      host.id = "axe-seed-host";
+      document.body.append(host);
+      const tr = document.createElement("task-row");
+      tr.setAttribute("name", "Axe seed task");
+      tr.setAttribute("status", "failed");
+      tr.setAttribute("time", "now");
+      tr.setAttribute("retryable", "");
+      host.append(tr);
+      return true;
+    })()
+  `,
+};
+
+// The activation probe: child-button clicks are exclusive, the open button
+// opens, and the row wrapper is inert under the keyboard.
+const ACTIVATION_PROBE = `
+  (async () => {
+    const tr = document.querySelector("#axe-seed-host task-row");
+    if (!tr) return { present: false };
+    const root = tr.shadowRoot;
+    const counts = { open: 0, retry: 0, delete: 0 };
+    tr.addEventListener("open", () => counts.open++);
+    tr.addEventListener("retry", () => counts.retry++);
+    tr.addEventListener("delete", () => counts.delete++);
+    root.querySelector(".retry")?.click();
+    root.querySelector(".del")?.click();
+    root.querySelector(".row-open")?.click();
+    const row = root.querySelector(".row");
+    row.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    row.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+    return {
+      present: true,
+      ...counts,
+      rowRole: row.getAttribute("role"),
+      rowTabbable: row.matches("[tabindex]") ? (row.tabIndex >= 0) : false,
+    };
+  })()
+`;
 
 const results: Record<string, unknown> = {};
 for (const s of SURFACES) {
@@ -96,6 +187,10 @@ for (const s of SURFACES) {
   await send("Runtime.enable", {}, sessionId);
   await send("Page.enable", {}, sessionId);
   await sleep(s.wait);
+  if (s.seed) {
+    await send("Runtime.evaluate", { expression: SEEDS[s.seed] }, sessionId);
+    await sleep(150);
+  }
   const shot = async (path: string) => {
     const { result } = await send("Page.captureScreenshot", { format: "png" }, sessionId);
     await Deno.writeFile(path, Uint8Array.from(atob(result.data), (c) => c.charCodeAt(0)));
@@ -120,6 +215,34 @@ for (const s of SURFACES) {
     parsed != null && audited.length === 0,
     audited);
   console.log(`  (${s.name}: ${parsed?.violations?.length ?? "?"} total violation rules, ${parsed?.passes ?? "?"} rule passes)`);
+  if (s.seed === "ntp") {
+    // The seeded thread-item must be a non-interactive wrapper.
+    const row = await send("Runtime.evaluate", { returnByValue: true, expression: `
+      (() => {
+        const item = document.querySelector("#thread-sidebar .thread-item");
+        if (!item) return { present: false };
+        return {
+          present: true,
+          role: item.getAttribute("role"),
+          tabbable: item.matches("[tabindex]") ? (item.tabIndex >= 0) : false,
+          openBtn: !!item.querySelector("button.t-open"),
+        };
+      })()
+    ` }, sessionId);
+    const r = row.result?.result?.value ?? {};
+    check("ntp-hub: thread-item is a non-interactive wrapper with an explicit open button",
+      r.present === true && r.role === null && r.tabbable === false && r.openBtn === true, r);
+  }
+  if (s.seed === "taskrow" || s.seed === "ntp") {
+    const act = await send("Runtime.evaluate", {
+      expression: ACTIVATION_PROBE, returnByValue: true, awaitPromise: true,
+    }, sessionId);
+    const a = act.result?.result?.value ?? {};
+    check("activation: child Retry/Delete clicks do NOT open the row; open button does; keydown on the row is inert",
+      a.present === true && a.retry === 1 && a.delete === 1 && a.open === 1 &&
+      a.rowRole === null && a.rowTabbable === false,
+      a);
+  }
   await send("Target.closeTarget", { targetId });
 }
 

@@ -8,6 +8,10 @@
 <link rel="stylesheet" href="../shared/theme.css">
 <style>
   body { display: flex; flex-direction: column; height: 100vh; margin: 0; }
+  /* The a11y main landmark must forward body's flex layout: #page-view is
+     display:contents, so its children flex against the main element — without
+     this they size against the main's content height and tools collapse. */
+  body > main { display: flex; flex-direction: column; flex: 1; min-height: 0; }
   .tabs { display:flex; gap:4px; padding:8px 10px 0; border-bottom:1px solid var(--border); }
   .tabs [role="tab"] { border:0; background:transparent; color:var(--muted); font:inherit; font-weight:600;
     padding:8px 14px; cursor:pointer; border-bottom:2px solid transparent; min-height:44px; }

@@ -275,7 +275,7 @@ Deno.test("thread projection: real ntp.js projection preserves user attachments 
 
   await waitFor(() => sidebar.children.some((c) => c.className === "thread-item"), "sidebar task item");
   const taskRow = sidebar.children.find((c) => c.className === "thread-item");
-  taskRow.dispatchEvent({ type: "click" });
+  (taskRow.children.find((c: any) => c.className === "t-open") ?? taskRow.children[0]).dispatchEvent({ type: "click" });
   await waitFor(() => getOrCreateElement("thread-view").hidden === false, "thread view open");
 
   assertEquals(threadConv.children.length, 2);
@@ -551,7 +551,7 @@ Deno.test("multi-run leave-and-return in ntp: leaves task view, runs turn 2, ret
   // 1. Initial open of Thread 1 (after Run 1)
   await waitFor(() => sidebar.children.some((c) => c.className === "thread-item"), "sidebar task item");
   const taskRow = sidebar.children.find((c) => c.className === "thread-item");
-  taskRow.dispatchEvent({ type: "click" });
+  (taskRow.children.find((c: any) => c.className === "t-open") ?? taskRow.children[0]).dispatchEvent({ type: "click" });
   await waitFor(() => threadView.hidden === false, "thread view open");
 
   assertEquals(threadConv.children.length, 2, "Turn 1 user + agent bubbles rendered");
@@ -574,7 +574,7 @@ Deno.test("multi-run leave-and-return in ntp: leaves task view, runs turn 2, ret
   };
 
   // 4. User RETURNS to task view (clicks task row in sidebar again)
-  taskRow.dispatchEvent({ type: "click" });
+  (taskRow.children.find((c: any) => c.className === "t-open") ?? taskRow.children[0]).dispatchEvent({ type: "click" });
   await waitFor(() => threadView.hidden === false, "thread view reopened");
 
   assertEquals(threadConv.children.length, 4, "BOTH Turn 1 and Turn 2 are fully rendered on return");

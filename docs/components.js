@@ -4248,8 +4248,9 @@ customElements.define("tool-chips", ToolChips);
 
 /* <task-row name status time> — a live agent-task row (the BeautifulUI "Task
  * Rows" primitive). A status indicator (running spinner / done check / failed
- * cross) + the task name + a time. Emits `open` on activate + `delete` on the
- * affordance. */
+ * cross) + the task name + a time. Emits `open` from the explicit Open button
+ * (the row is a non-interactive wrapper — nested-interactive), `retry` and
+ * `delete` from their affordances. */
 class TaskRow extends Component {
   static get observedAttributes() { return ["name", "status", "time", "active", "retryable"]; }
   _render() {
@@ -4265,8 +4266,13 @@ class TaskRow extends Component {
         : `<span class="ind done" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>`;
     mountTemplate(this, `
       :host { display:block; }
-      .row { display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid transparent; border-radius:10px; cursor:pointer; }
-      .row:hover { background:var(--panel-2,#efede8); }
+      .row { display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid transparent; border-radius:10px; }
+      /* Nested-interactive fix: the row is a non-interactive wrapper; the
+         explicit open button carries activation and is a sibling of
+         Retry/Delete, so child buttons never also open the row. */
+      .row-open { flex:1; min-width:0; display:flex; align-items:center; gap:10px; border:0; background:transparent; padding:0; font:inherit; color:inherit; text-align:left; cursor:pointer; border-radius:10px; }
+      .row-open:hover { background:var(--panel-2,#efede8); }
+      .row-open:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       :host([active]) .row { border-color:var(--accent,#0e6e63); background:var(--panel,#ffffff); }
       .ind { width:18px; height:18px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; }
       .ind.done { color:var(--success,#1a7f37); }
@@ -4280,22 +4286,19 @@ class TaskRow extends Component {
       .del { font-size:15px; }
       .retry:hover, .del:hover { background:var(--panel-2,#efede8); }
       .del:hover { color:var(--danger,#b3261e); }
-      .retry:focus-visible, .del:focus-visible, .row:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .retry:focus-visible, .del:focus-visible, .row-open:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       @keyframes cap-spin { to { transform:rotate(360deg); } }
       @media (prefers-reduced-motion: reduce) { .spin { animation:none; } }
-    `, `<div class="row" role="button" tabindex="0" aria-current="${active ? "true" : "false"}">
-        ${indicator}<span class="name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>${time ? `<span class="time">${escapeHtml(time)}</span>` : ""}${retryable ? `<button type="button" class="retry" aria-label="Retry ${escapeHtml(name)}">Retry</button>` : ""}<button type="button" class="del" aria-label="Delete ${escapeHtml(name)}">×</button></div>`);
+    `, `<div class="row" aria-current="${active ? "true" : "false"}">
+        <button type="button" class="row-open">${indicator}<span class="name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>${time ? `<span class="time">${escapeHtml(time)}</span>` : ""}</button>${retryable ? `<button type="button" class="retry" aria-label="Retry ${escapeHtml(name)}">Retry</button>` : ""}<button type="button" class="del" aria-label="Delete ${escapeHtml(name)}">×</button></div>`);
   }
   _wire() {
-    this._root.querySelector(".row")?.addEventListener("click", () => this._emit("open"));
-    this._root.querySelector(".row")?.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this._emit("open"); }
+    this._root.querySelector(".row-open")?.addEventListener("click", () => this._emit("open"));
+    this._root.querySelector(".retry")?.addEventListener("click", () => {
+      this._emit("retry");
     });
-    this._root.querySelector(".retry")?.addEventListener("click", (e) => {
-      e.stopPropagation(); this._emit("retry");
-    });
-    this._root.querySelector(".del")?.addEventListener("click", (e) => {
-      e.stopPropagation(); this._emit("delete");
+    this._root.querySelector(".del")?.addEventListener("click", () => {
+      this._emit("delete");
     });
   }
 }

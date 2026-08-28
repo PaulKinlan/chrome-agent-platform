@@ -273,11 +273,32 @@
       border: 0;
       background: transparent;
       color: var(--text);
-      cursor: pointer;
       font: inherit;
       min-inline-size: 0;
       position: relative;
     }
+    /* The explicit open button (nested-interactive fix): the row itself is a
+       non-interactive wrapper, so only this button opens the task. */
+    .thread-item .t-open {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 2px;
+      text-align: start;
+      padding: 0;
+      border: 0;
+      background: none;
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+      min-inline-size: 0;
+      flex: 1 1 auto;
+    }
+    .thread-item .t-open:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    .side.collapsed .thread-item .t-open { align-self: stretch; }
     .thread-item:hover { background: var(--panel-2); }
     .thread-item[aria-current="true"] { background: var(--on-accent-muted); }
     .thread-item .t-delete {

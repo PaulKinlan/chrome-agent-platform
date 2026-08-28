@@ -76,3 +76,39 @@ Deno.test("a11y: theme.css ships the visually-hidden utility", async () => {
   const css = await read("./extension/shared/theme.css");
   assert(/\.visually-hidden/.test(css), "no .visually-hidden utility");
 });
+
+// nested-interactive: a focusable role=button row that CONTAINS real buttons
+// makes child activation ambiguous under the keyboard (Enter on Delete also
+// opened the row). The row must be a non-interactive wrapper and the open
+// affordance an explicit button that is a SIBLING of Retry/Delete.
+Deno.test("a11y: ntp task rows are non-interactive wrappers with an explicit open button", async () => {
+  const js = await read("./extension/ntp/ntp.js");
+  const m = js.match(/function renderTaskRows[\s\S]*?\n}/);
+  assert(m, "renderTaskRows not found");
+  const fn = m[0];
+  assert(!/item\.setAttribute\("role", "button"\)/.test(fn), "thread-item is still a role=button");
+  assert(!/item\.tabIndex/.test(fn), "thread-item is still tabbable");
+  assert(!/item\.addEventListener\("keydown"/.test(fn), "thread-item still forwards keydown");
+  assert(!/item\.addEventListener\("click"/.test(fn), "thread-item still has a row-level click handler");
+  assert(/className = "t-open"/.test(fn), "no explicit .t-open open button");
+  assert(/open\.type = "button"/.test(fn), ".t-open is not a real button");
+});
+
+Deno.test("a11y: <task-row> row is not a focusable button; open is an explicit sibling button", async () => {
+  const js = await read("./extension/shared/components.js");
+  // Slice to the TaskRow region — other components share class/template names.
+  const start = js.indexOf("class TaskRow");
+  const end = js.indexOf("customElements.define(\"task-row\"");
+  assert(start > -1 && end > start, "TaskRow region not found");
+  const region = js.slice(start, end);
+  const m = region.match(/`<div class="row"[^>]*>[\s\S]*?<\/div>`\);/);
+  assert(m, "task-row template not found");
+  const tpl = m[0];
+  assert(!/role="button"/.test(tpl), "task-row .row is still role=button");
+  assert(!/tabindex/.test(tpl), "task-row .row is still tabbable");
+  assert(/class="row-open"/.test(tpl), "no explicit .row-open button");
+  const wire = region.match(/_wire\(\) \{[\s\S]*?\n  \}/);
+  assert(wire, "TaskRow._wire not found");
+  assert(!/\.row"\)\?\.addEventListener\("keydown"/.test(wire[0]), "_wire still forwards row keydown");
+  assert(/"\.row-open"\)\?\.addEventListener\("click"/.test(wire[0]), "_wire does not open via .row-open");
+});
