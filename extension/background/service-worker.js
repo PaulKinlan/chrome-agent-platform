@@ -3535,6 +3535,11 @@ const handlers = mergeRouteMaps(
           attachments: bounded,
           runId: m.runId ?? null,
           threadId,
+          // The approved-schedule-mutation bridge must ride @mention dispatches
+          // exactly as it rides the non-mention path — an @mentioned agent
+          // whose schedule mutation was approved by the owner starts its retry
+          // with the SAME binding (no re-approval prompt).
+          approvalBinding: m.approvalBinding ?? null,
         });
       } else {
       result = await runTask({

@@ -531,7 +531,28 @@ Deno.test("schedule routes: the automatic retry turn consumes the resolved appro
 });
 
 // ── Part 11 — P1-B ownership check/commit races ─────────────────────────────
-Deno.test("retry race: a same-name owner swap between snapshot and commit cannot inherit the retry (single-lock re-check)", async () => {
+/** Suspend chrome.alarms.getAll behind a controllable gate: an in-flight
+ * scheduler operation parks at its capacity check while the test swaps the
+ * stored row, proving the commit-phase owner re-check judges the CURRENT row
+ * (not data read before the operation began). Returns the release function. */
+function suspendGetAll(): () => void {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const alarms = globalThis.chrome.alarms;
+  const original = alarms.getAll.bind(alarms);
+  alarms.getAll = async () => {
+    await gate;
+    return original();
+  };
+  return () => {
+    alarms.getAll = original;
+    release();
+  };
+}
+
+Deno.test("retry race: the swap happens while the retry is IN FLIGHT (suspended at getAll) and the commit lock still refuses", async () => {
   installAlarmsChromeMock();
   const s = await freshScheduler();
   const ownerA = { threadId: "t-a", agentRole: "hub", agentSurfaceRef: "named:alpha" };
@@ -541,11 +562,13 @@ Deno.test("retry race: a same-name owner swap between snapshot and commit cannot
   await s.blockScheduledTaskForStorage(name, new Error("quota"));
   assertEquals((await s.listScheduledTasks()).find((t) => t.name === name).storageBlocked, true);
 
-  // THE RACE: between agent A's authorization snapshot and the commit, the
-  // same-name task is replaced by agent B's. The old implementation checked
-  // scope on the snapshot then replaced OUTSIDE the lock — the swap escaped.
-  // THE SWAP, precisely: the same-name record is replaced by agent B's
-  // (blocked) one between A's authorization and its commit.
+  // THE RACE, precisely: start A's retry FIRST — it runs assertRunOwned and
+  // parks at the suspended getAll capacity check — and only THEN replace the
+  // row with B's. A pre-operation scope check (or a snapshot-scope check) would
+  // authorize the commit over B's row; the in-lock re-read must refuse.
+  const releaseGetAll = suspendGetAll();
+  const retryPromise = s.retryScheduledTask(name, { expectedOwner: ownerA });
+  await Promise.resolve(); // let the retry run to its suspension point
   {
     const tasks = kvStore.get("cap:scheduledTasks") ?? {};
     tasks[name] = {
@@ -554,24 +577,31 @@ Deno.test("retry race: a same-name owner swap between snapshot and commit cannot
     };
     kvStore.set("cap:scheduledTasks", tasks);
   }
+  releaseGetAll();
 
-  const r = await s.retryScheduledTask(name, { expectedOwner: ownerA });
-  assertEquals(r.ok, false, "the swapped owner refuses A's retry");
+  const r = await retryPromise;
+  assertEquals(r.ok, false, "the swapped owner refuses A's in-flight retry");
   assertEquals(r.error, "task belongs to another agent");
   const row = (await s.listScheduledTasks()).find((t) => t.name === name);
   assertEquals(row.storageBlocked, true, "B's replacement is untouched — still exactly as B seeded it");
   assertEquals(row.task, "beta's replacement", "B's payload is intact");
 });
 
-Deno.test("resume race: the final commit re-checks owner scope on the CURRENT row", async () => {
+Deno.test("resume race: the snapshot phase PASSES for A, the row is swapped mid-flight, and the final commit re-check refuses", async () => {
   installAlarmsChromeMock();
   const s = await freshScheduler();
   const ownerA = { threadId: "t-a", agentRole: "hub", agentSurfaceRef: "named:alpha" };
   const ownerB = { threadId: "t-b", agentRole: "hub", agentSurfaceRef: "named:beta" };
   const { name } = await s.scheduleTask({ task: "alpha's paused task", delayMs: 60_000, periodInMinutes: 5, owner: ownerA });
   await s.pauseScheduledTask(name, { expectedOwner: ownerA });
-  // THE SWAP: between A's resume snapshot and its commit, the task is replaced
-  // by B's (paused) one. The final lock must re-judge scope on the CURRENT row.
+
+  // THE SWAP, while the resume is parked at its suspended getAll capacity
+  // check — AFTER its snapshot phase already read and scope-checked A's row.
+  // The final commit lock must re-judge scope on the CURRENT row: A's earlier
+  // passing snapshot must not authorize the commit over B's row.
+  const releaseGetAll = suspendGetAll();
+  const resumePromise = s.resumeScheduledTask(name, { expectedOwner: ownerA });
+  await Promise.resolve(); // let the resume run to its suspension point
   {
     const tasks = kvStore.get("cap:scheduledTasks") ?? {};
     tasks[name] = {
@@ -580,10 +610,42 @@ Deno.test("resume race: the final commit re-checks owner scope on the CURRENT ro
     };
     kvStore.set("cap:scheduledTasks", tasks);
   }
+  releaseGetAll();
 
-  const r = await s.resumeScheduledTask(name, { expectedOwner: ownerA });
-  assertEquals(r.ok, false, "the swapped owner refuses A's resume");
+  const r = await resumePromise;
+  assertEquals(r.ok, false, "the swapped owner refuses A's in-flight resume");
   assertEquals(r.error, "task belongs to another agent");
   const row = (await s.listScheduledTasks()).find((t) => t.name === name);
   assertEquals(row.paused, true, "B's paused state is untouched by the refused resume");
+  assertEquals(row.task, "beta's paused replacement", "B's payload is intact");
+});
+
+// ── Part 12 — the approval bridge rides @mention dispatches (REVISE-4 P1-A) ──
+Deno.test("agent.run @mention dispatch forwards the approval binding exactly like the non-mention path", async () => {
+  // The mention branch of the agent.run dispatcher must pass approvalBinding
+  // through to the named/background handlers. Regression: the binding was sent
+  // by the client but DROPPED at the dispatch site, so an @mentioned agent's
+  // approved schedule mutation started its retry unbridged and re-prompted.
+  const sw = await Deno.readTextFile(
+    new URL("../extension/background/service-worker.js", import.meta.url),
+  );
+  // The mentionRoute dispatch block passes the binding with the same
+  // `m.approvalBinding ?? null` shape the non-mention runTask call uses,
+  // and it appears at least TWICE in the dispatcher (mention + non-mention).
+  const forward = /approvalBinding: m\.approvalBinding \?\? null/g;
+  const forwards = sw.match(forward)?.length ?? 0;
+  assert(
+    forwards >= 2,
+    `the agent.run dispatcher must forward approvalBinding on BOTH paths (mention + non-mention); found ${forwards}`,
+  );
+  // And the forwarding sits INSIDE the mentionRoute branch (before the
+  // non-mention runTask call, after the delegate branch).
+  const mentionBranch = sw.slice(
+    sw.indexOf('} else if (mentionRoute) {'),
+    sw.indexOf("} else {\n      result = await runTask({"),
+  );
+  assert(
+    mentionBranch.includes("approvalBinding: m.approvalBinding ?? null"),
+    "the mention dispatch block must carry approvalBinding",
+  );
 });
