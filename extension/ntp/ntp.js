@@ -624,15 +624,33 @@ async function renderNamedAgents() {
           if (!confirmed) return;
           // Background agents schedule deterministically as `recipe:<id>` — the
           // enabled state DERIVES from the scheduled-task store, so the cancel
-          // name must be that scheduled name, not the raw recipe id.
-          const r = await send("task.cancel", { name: `recipe:${a.id}` })
+          // name must be that scheduled name, not the raw recipe id. DELETION
+          // goes through recipe.delete: it removes the custom agent record AND
+          // tears the schedule down NON-BLOCKING (the instant-delete contract —
+          // a RUNNING task's 5s termination dance must never block the UI;
+          // reconciliation reaps the inert payload). A built-in copy has no
+          // custom record — recipe.delete still cancels its schedule, which is
+          // what the row's existence derives from.
+          const rows = [...document.querySelectorAll("#named-agents capability-row")];
+          const removedIdx = rows.indexOf(row);
+          const r = await send("recipe.delete", { id: a.id })
             .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
-          if (r?.ok !== false) {
+          if (r?.ok === true) {
             setStatus(`Deleted ${name}.`, true);
           } else {
             setStatus(`Could not delete ${name}: ${r?.error ?? "failed"}.`, false);
           }
           await renderNamedAgents();
+          // Focus successor (the re-render destroyed the focused Delete
+          // button): the row that TOOK the deleted row's index — else the last
+          // row — else the Agents container itself, so keyboard flow survives.
+          const after = [...document.querySelectorAll("#named-agents capability-row")];
+          const target = after[Math.min(removedIdx, after.length - 1)] ?? null;
+          const focusEl = target?.shadowRoot?.querySelector("button") ?? el;
+          if (focusEl === el && !el.hasAttribute("tabindex")) {
+            el.setAttribute("tabindex", "-1");
+          }
+          focusEl?.focus?.({ preventScroll: true });
         });
         el.append(row);
       }
@@ -2121,10 +2139,14 @@ deleteAgentBtn?.addEventListener("click", async () => {
     // enabled state derives from the task store). The old code passed the RAW
     // recipe id, so task.cancel hit "no such task" and silently deleted
     // NOTHING while the UI claimed success — the dead NTP delete button.
-    out = await send("task.cancel", { name: `recipe:${id}` }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    // DELETION now routes through recipe.delete (removes the custom record +
+    // tears the schedule down NON-BLOCKING — the instant-delete contract; a
+    // RUNNING task's 5s termination dance must never block this dialog), and
+    // success is asserted EXPLICITLY (ok === true), not "anything but false".
+    out = await send("recipe.delete", { id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
   }
 
-  if (out?.ok !== false) {
+  if (out?.ok === true) {
     setStatus(`Deleted ${agentName}.`, true);
     if (typeof window !== "undefined" && window.history?.pushState) {
       window.history.pushState(null, "", "#");

@@ -4841,6 +4841,22 @@ const handlers = mergeRouteMaps(
     if (r?.ok !== false && name.startsWith("recipe:")) broadcastRegistryChanged();
     return r;
   },
+  async "task.cancelBackground"(m) {
+    // NON-BLOCKING owner cancellation for AGENT DELETION (the instant-delete
+    // contract, scheduler.cancelScheduledTaskBackground): durably marks the
+    // payload cancelling (inert), aborts the live run NOW, and finishes the
+    // alarm-clear + payload-delete ASYNC (reconciliation reaps residue if the
+    // worker dies mid-cleanup). Returns immediately — the caller must not
+    // block ~5s on a RUNNING task's termination dance. Honest idempotence:
+    // the cancel of a MISSING task is a documented no-op flavour of ok (the
+    // agent-deletion flow deletes the agent record regardless; the schedule
+    // simply had nothing to cancel — e.g. the agent was never enabled).
+    const name = String(m?.name ?? "");
+    if (!name) return { ok: false, error: "task name is required" };
+    const handle = cancelScheduledTaskBackground(name);
+    if (name.startsWith("recipe:")) broadcastRegistryChanged();
+    return { ok: true, name, stopping: handle.stopping === true };
+  },
 
   async "recipe.list"() {
     // Decorate each recipe with its intent so the hub can group the unified
@@ -4996,12 +5012,16 @@ const handlers = mergeRouteMaps(
     const custom = await getCustomRecipes();
     const next = custom.filter((r) => r.id !== id);
     await masterMemory().set("customRecipes", next);
-    await cancelScheduledTask(`recipe:${id}`).catch(() => ({ ok: false }));
+    // NON-BLOCKING schedule teardown (the instant-delete contract — the same
+    // path background-agent disable uses): the payload is marked cancelling
+    // (inert) synchronously, the live run aborted now, the alarm-clear +
+    // payload-delete finish async (reconciliation reaps residue).
+    cancelScheduledTaskBackground(`recipe:${id}`);
     // The deleted custom recipe LEAVES the live registry — broadcast so the
     // open pickers/conversations revalidate (a selected deleted agent is
     // rejected, never routed to a ghost).
     broadcastRegistryChanged();
-    return { ok: true };
+    return { ok: true, stopping: true };
   },
 
   // ── system prompts (Settings → Advanced) ─────────────────────────────────

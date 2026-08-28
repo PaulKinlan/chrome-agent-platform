@@ -299,12 +299,21 @@ agentDeleteBtn?.addEventListener("click", async () => {
   } else if (kind === "site") {
     out = await send("agent.delete", { origin: id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
   } else if (kind === "background") {
-    out = await send("task.cancel", { name: id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    // Background agents schedule deterministically as `recipe:<id>` — the
+    // picker supplies the BARE recipe id, so the old task.cancel({name:id})
+    // hit "no such task" and silently deleted nothing. DELETION routes
+    // through recipe.delete (removes the custom record + tears the schedule
+    // down NON-BLOCKING — the instant-delete contract), and success is
+    // asserted EXPLICITLY (ok === true); a real failure surfaces in status
+    // instead of silently closing the detail view.
+    out = await send("recipe.delete", { id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
   }
-  if (out?.ok !== false) {
+  if (out?.ok === true) {
     closeAgentDetail();
     picker?.refresh?.();
     await renderTasks();
+  } else if (kind) {
+    setStatus(`Could not delete ${agentName}: ${out?.error ?? "failed"}.`, true);
   }
 });
 picker.addEventListener("agent-select", (e) => {

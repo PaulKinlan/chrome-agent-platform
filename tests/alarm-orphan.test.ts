@@ -126,3 +126,29 @@ Deno.test("cancelScheduledTaskBackground: returns immediately, marks cancelling,
   // The cleanup promise must settle without throwing (no task = no-op path).
   await handle.promise;
 });
+
+Deno.test("cancelScheduledTaskBackground: a RUNNING task's delete is NON-BLOCKING (never the 5s termination dance)", async () => {
+  reset();
+  const mod = await import("../extension/lib/scheduler.js");
+  const name = "recipe:running-bg-agent";
+  // A real scheduled task...
+  const scheduled = await mod.scheduleTask({ task: "long-running agent prompt", delayMs: 3_600_000, name });
+  assertEquals(scheduled.name, name);
+  // ...with a LIVE run registered (tryAcquireInflight registers the run in the
+  // scheduler's activeRuns map exactly as a real run does) that NEVER
+  // acknowledges termination (a hung model round-trip).
+  const acquire = await mod.tryAcquireInflight(name);
+  assertEquals(acquire.acquired, true, "the simulated live run must acquire the in-flight lock");
+  const t0 = Date.now();
+  const handle = mod.cancelScheduledTaskBackground(name);
+  assert(handle.stopping === true, "the handle must return synchronously (stopping)");
+  await handle.promise; // resolves WITHOUT the live run ever terminating
+  const elapsed = Date.now() - t0;
+  assert(
+    elapsed < 2_000,
+    `background cancel must not block on the run's termination (took ${elapsed}ms; the blocking cancel waits ${5_000}ms)`,
+  );
+  assert(acquire.controller.signal.aborted === true, "the live run's controller must be aborted NOW");
+  const tasks = await mod.listScheduledTasks();
+  assert(!tasks.some((t) => t.name === name), "the cancelled task must be reaped from the store despite the run never terminating");
+});

@@ -216,30 +216,33 @@ async function main() {
     })()`);
     check("mic on→off→on", mic.on1 === true && mic.on2 === false && mic.on3 === true, mic);
 
-    // capability-row toggle renders a visible switch (the blank-toggle bug: the
-    // pill styling lived in document-scope theme.css, unreachable from the Shadow
-    // DOM — now in the component's own scoped style).
-    const sw = await evl(s.sessionId, `(()=>{
-      const row = document.querySelector('capability-row[action="toggle"]');
+    // capability-row open-delete (the background-agent row since the owner
+    // removed the toggle primitive): renders a chevron (open the agent's view)
+    // AND a Delete button — and NO enable/disable switch.
+    const od = await evl(s.sessionId, `(()=>{
+      const row = document.querySelector('capability-row[action="open-delete"]');
       if (!row) return { found: false };
+      const open = row.shadowRoot.querySelector('.open');
+      const del = row.shadowRoot.querySelector('button.delete, button[part="delete"]');
       const st = row.shadowRoot.querySelector('switch-toggle');
-      const sw = st ? st.shadowRoot.querySelector('.sw') : null;
+      return { found: true, hasOpen: !!open, hasDelete: !!del, hasToggle: !!st };
+    })()`);
+    check("capability-row open-delete has a chevron + Delete and no switch", od.found && od.hasOpen && od.hasDelete && !od.hasToggle, od);
+
+    // The direct <switch-toggle> specimen still renders a visible 36×20 switch
+    // (the blank-toggle bug: the pill styling lived in document-scope
+    // theme.css, unreachable from the Shadow DOM — now in the component's own
+    // scoped style). The switch lives on permission rows and other non-agent
+    // controls — NOT on background-agent rows (delete is the primitive there).
+    const sw = await evl(s.sessionId, `(()=>{
+      const st = document.querySelector('.stage switch-toggle');
+      if (!st) return { found: false };
+      const sw = st.shadowRoot ? st.shadowRoot.querySelector('.sw') : null;
       if (!sw) return { found: false };
       const cs = getComputedStyle(sw);
       return { found: true, w: cs.width, h: cs.height, pressed: sw.getAttribute('aria-pressed') };
     })()`);
-    check("capability-row toggle is a visible switch (36×20)", sw.found && sw.w === "36px" && sw.h === "20px", sw);
-
-    // capability-row open-toggle (item 61) renders BOTH a chevron (open the
-    // agent's view) AND a switch (enable/disable) — the background-agent row.
-    const ot = await evl(s.sessionId, `(()=>{
-      const row = document.querySelector('capability-row[action="open-toggle"]');
-      if (!row) return { found: false };
-      const open = row.shadowRoot.querySelector('.open');
-      const st = row.shadowRoot.querySelector('switch-toggle');
-      return { found: true, hasOpen: !!open, hasToggle: !!st };
-    })()`);
-    check("capability-row open-toggle has a chevron + a switch", ot.found && ot.hasOpen && ot.hasToggle, ot);
+    check("standalone switch-toggle is a visible switch (36×20)", sw.found && sw.w === "36px" && sw.h === "20px", sw);
 
     // composer / command palette opens (the static namespace registry; the
     // data-driven sub-items need chrome.runtime, which the showcase lacks).
