@@ -115,6 +115,9 @@ const SEEDS: Record<string, string> = {
       if (sb) {
         const item = document.createElement("div");
         item.className = "thread-item";
+        // Unique marker: the assertion below must inspect THIS seeded row, not
+        // whichever production .thread-item happens to be first in the sidebar.
+        item.dataset.axeSeed = "thread-item";
         item.title = "Axe seed task";
         const open = document.createElement("button");
         open.type = "button";
@@ -216,10 +219,11 @@ for (const s of SURFACES) {
     audited);
   console.log(`  (${s.name}: ${parsed?.violations?.length ?? "?"} total violation rules, ${parsed?.passes ?? "?"} rule passes)`);
   if (s.seed === "ntp") {
-    // The seeded thread-item must be a non-interactive wrapper.
+    // The seeded thread-item must be a non-interactive wrapper. Bound to the
+    // uniquely-marked seed row (data-axe-seed), never an arbitrary production row.
     const row = await send("Runtime.evaluate", { returnByValue: true, expression: `
       (() => {
-        const item = document.querySelector("#thread-sidebar .thread-item");
+        const item = document.querySelector('#thread-sidebar [data-axe-seed="thread-item"]');
         if (!item) return { present: false };
         return {
           present: true,

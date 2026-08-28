@@ -285,7 +285,10 @@ try {
     Math.abs(hover.del.rect.cy - hover.task.rect.cy) <= 1,
     hover,
   );
-  await evaluate("document.querySelector('.thread-item').focus()");
+  // The row wrapper (.thread-item) is a non-interactive div (nested-interactive
+  // fix), so keyboard entry starts at its Open button; Tab then reaches the
+  // sibling Delete control (t-meta is a span, not focusable).
+  await evaluate("document.querySelector('.thread-item .t-open').focus()");
   await send("Input.dispatchKeyEvent", {
     type: "rawKeyDown",
     key: "Tab",
