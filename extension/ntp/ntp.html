@@ -695,6 +695,25 @@
        selector beats the UA `[hidden]` rule), so the Edit button leaked into
        views where it should be absent. Re-assert it. */
     .view-head .back[hidden] { display: none; }
+    /* Task/agent view: the durable run registry is a DEBUG affordance (owner
+       directive — the conversation is the status surface; the registry is an
+       on-demand overlay anchored to the top-right, never in the layout flow). */
+    .run-debug {
+      position: absolute;
+      inset-block-start: 60px;
+      inset-inline-end: 16px;
+      z-index: 130;
+      inline-size: min(360px, calc(100% - 32px));
+      max-block-size: 60vh;
+      overflow: auto;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      box-shadow: 0 8px 24px rgb(0 0 0 / .18);
+      padding: 10px 12px;
+    }
+    .run-debug[hidden] { display: none; }
+    .run-debug-note { margin: 0 0 8px; font-size: .75rem; color: var(--muted, #635e56); }
     #thread-title {
       cursor: default;
       padding: 2px 6px;
@@ -891,9 +910,20 @@
         <span class="view-title" id="thread-title" tabindex="-1">Task</span>
         <button class="back subtle" id="edit-agent" type="button" aria-label="Edit agent" hidden>Edit</button>
         <button class="back subtle danger" id="delete-agent" type="button" aria-label="Delete agent" hidden>Delete</button>
+        <button class="back subtle" id="run-debug-toggle" type="button" aria-label="Run debug info" aria-expanded="false" aria-controls="run-debug-panel" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          Runs
+        </button>
       </div>
       <div class="thread-body">
-        <durable-run-registry id="durable-run-registry" hidden></durable-run-registry>
+        <!-- The durable run registry is a DEBUG affordance (owner directive:
+             the conversation IS the status surface; the registry panel must not
+             exist as a visible panel). It lives in this on-demand overlay,
+             toggled by #run-debug-toggle (hover or click), never in flow. -->
+        <div id="run-debug-panel" class="run-debug" role="region" aria-label="Run debug details" hidden>
+          <p class="run-debug-note">Debug — retained run registry for this surface. Cancel, resume and logs live here; the conversation below is the status view.</p>
+          <durable-run-registry id="durable-run-registry" hidden></durable-run-registry>
+        </div>
         <agent-conversation id="thread-conversation" role="log" aria-live="polite" aria-relevant="additions"></agent-conversation>
         <conversation-run-status class="run-status" id="run-status" hidden></conversation-run-status>
         <agent-composer id="thread-composer" placeholder="Reply, or @mention an agent…" send-label="Send"></agent-composer>

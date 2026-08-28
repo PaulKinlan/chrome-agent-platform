@@ -71,11 +71,25 @@ ntpLog.info("new tab page evaluated");
 
 const statusEl = document.getElementById("status");
 const durableRunRegistry = document.getElementById("durable-run-registry");
+// The registry is a DEBUG overlay now (owner directive: the conversation is
+// the status surface — no visible registry panel). The toggle appears (and
+// hover-reveals the panel) only when the open surface has runs.
+const runDebugToggle = document.getElementById("run-debug-toggle");
+const runDebugPanel = document.getElementById("run-debug-panel");
+let runDebugPinned = false;
 let statusTimer;
 let currentThreadId = null;
 let currentAgentId = null;
 let currentAgentKind = null;
 let latestDurableRuns = [];
+
+function setRunDebugOpen(open, { pin = false, focusToggle = false } = {}) {
+  if (!runDebugPanel || !runDebugToggle) return;
+  runDebugPinned = open ? (runDebugPinned || pin) : false;
+  runDebugPanel.hidden = !open;
+  runDebugToggle.setAttribute("aria-expanded", String(open));
+  if (!open && focusToggle) runDebugToggle.focus();
+}
 
 function syncConversationRunControls() {
   if (!durableRunRegistry) return;
@@ -86,6 +100,10 @@ function syncConversationRunControls() {
   });
   durableRunRegistry.runs = runs;
   durableRunRegistry.hidden = runs.length === 0;
+  if (runDebugToggle) {
+    runDebugToggle.hidden = runs.length === 0;
+    if (runs.length === 0) setRunDebugOpen(false);
+  }
 }
 
 // The agent view's LIVE run transcript (CAP-FB-20260823-AGENT-RUN-VISIBILITY-01):
@@ -152,6 +170,31 @@ if (durableRunRegistry) {
     const result = await loadDurableRunLogs(event.detail.executionId).catch((error) => ({ ok: false, error: error?.message ?? String(error) }));
     event.detail.complete(result);
     setStatus(result.ok ? "Retained logs loaded." : `Log load failed: ${result.error}`, result.ok === true);
+  });
+}
+
+// Debug overlay wiring: click pins it open (click again closes), hover reveals
+// it unpinned (fine pointers only), Escape always closes + returns focus, and
+// a click outside a pinned panel closes it.
+if (runDebugToggle && runDebugPanel) {
+  runDebugToggle.addEventListener("click", () => {
+    if (!runDebugPanel.hidden && runDebugPinned) { setRunDebugOpen(false); return; }
+    setRunDebugOpen(true, { pin: true });
+  });
+  if (globalThis.matchMedia?.("(pointer: fine)")?.matches) {
+    runDebugToggle.addEventListener("pointerenter", () => setRunDebugOpen(true));
+    runDebugPanel.addEventListener("pointerenter", () => setRunDebugOpen(true));
+    const hoverOut = () => { if (!runDebugPinned) setRunDebugOpen(false); };
+    runDebugToggle.addEventListener("pointerleave", hoverOut);
+    runDebugPanel.addEventListener("pointerleave", hoverOut);
+  }
+  document.addEventListener?.("keydown", (event) => {
+    if (event.key === "Escape" && !runDebugPanel.hidden) setRunDebugOpen(false, { focusToggle: true });
+  });
+  document.addEventListener?.("pointerdown", (event) => {
+    if (runDebugPanel.hidden || !runDebugPinned) return;
+    if (runDebugPanel.contains(event.target) || runDebugToggle.contains(event.target)) return;
+    setRunDebugOpen(false);
   });
 }
 
@@ -1357,6 +1400,7 @@ function syncViewOpen() {
 }
 function hideThreadViewInner() {
   runSurfaceOwner.claim(); // leaving fences any in-flight run (its outcome still journals)
+  setRunDebugOpen(false); // the debug overlay never outlives its surface
   if (statusOwner !== 0) {
     statusOwner = 0;
     setStatus("ready"); // reset an orphaned "running…" (a parked run never resets itself)
@@ -1474,6 +1518,7 @@ async function openThread(id) {
   currentThreadId = id;
   currentAgentId = null; // a thread is NOT an agent chat
   currentAgentKind = null;
+  setRunDebugOpen(false); // a surface switch always starts with the debug overlay closed
   syncConversationRunControls();
   hideAgentSchedules();
 
@@ -1536,6 +1581,7 @@ async function openBackgroundAgentChat(id, name) {
   currentAgentId = id;
   currentAgentKind = "background";
   currentThreadId = null;
+  setRunDebugOpen(false);
   syncConversationRunControls();
 
   if (typeof window !== "undefined" && window.history?.pushState) {
@@ -1598,6 +1644,7 @@ async function openAgentSurface({ kind, id, name }) {
   currentAgentId = id;
   currentAgentKind = kind;
   currentThreadId = null;
+  setRunDebugOpen(false);
   syncConversationRunControls();
   refreshAgentSchedules(kind, id);
 
