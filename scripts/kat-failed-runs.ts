@@ -10,11 +10,12 @@
 //
 //   deno run -A scripts/kat-failed-runs.ts <path-to-extension> [<out-dir>]
 
+import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-failed-runs`;
 const CHROMIUM = "/usr/bin/chromium";
-const PORT = 9357;
 
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail?: unknown) {
@@ -24,24 +25,17 @@ function check(name: string, cond: boolean, detail?: unknown) {
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 await Deno.mkdir(OUT, { recursive: true });
 
-const proc = new Deno.Command(CHROMIUM, {
+// The debugging port is assigned by the kernel and read back from THIS Chrome's
+// stderr — a fixed port silently attaches the harness to another lane's browser
+// (9357 was also probed by kat-bgagent-delete, and a zombie holding it hung
+// this harness for the whole timeout).
+const { proc, wsUrl } = await launchChrome({
+  binary: CHROMIUM,
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-    `--remote-debugging-port=${PORT}`, "--remote-allow-origins=*",
+    "--remote-allow-origins=*",
     `--user-data-dir=${ROOT}.cache/kat-failed-runs-${Date.now()}`, "about:blank"],
-  stdout: "null", stderr: "piped",
-}).spawn();
-
-let wsUrl = "";
-for (let i = 0; i < 60; i++) {
-  try {
-    const r = await fetch(`http://127.0.0.1:${PORT}/json/version`);
-    const j = await r.json();
-    wsUrl = j.webSocketDebuggerUrl as string;
-    break;
-  } catch { await sleep(300); }
-}
-if (!wsUrl) { console.error("no devtools url"); Deno.exit(1); }
+});
 const ws = new WebSocket(wsUrl);
 await new Promise((r) => { ws.onopen = () => r(null); });
 let id = 0; const pending = new Map<string, (v: any) => void>();
@@ -62,8 +56,9 @@ const shot = async (name: string) => {
   if (r?.result?.data) await Deno.writeFile(`${OUT}/${name}.png`, Uint8Array.from(atob(r.result.data), (c) => c.charCodeAt(0)));
 };
 
-const { result: { targetInfos } } = await send("Target.getTargets");
-const sw = targetInfos.find((t: any) => t.type === "service_worker");
+// MV3 registers the worker a beat after the browser is reachable — wait for
+// it rather than depending on how long the CDP handshake happened to take.
+const sw = await waitForServiceWorker(send);
 if (!sw) { console.log("FAIL: no service worker target"); Deno.exit(1); }
 const extId = new URL(sw.url).host;
 const { result: { sessionId: swSession } } = await send("Target.attachToTarget", { targetId: sw.targetId, flatten: true });

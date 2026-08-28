@@ -9,33 +9,13 @@
 //
 // Screenshots land in <out-dir> (default ./.cache/kat-noun-discipline).
 
+import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
 const OUT = Deno.args[0] ?? `${ROOT}.cache/kat-noun-discipline`;
 const CHROMIUM = "/usr/bin/chromium";
 await Deno.mkdir(OUT, { recursive: true });
-
-// A FIXED debugging port silently attaches to somebody else's browser when two
-// lanes run at once — which produced a full page of false failures against a
-// stale extension before this was hardened. Claim a port that is provably free
-// and refuse to proceed if anything already answers on it.
-async function freePort(): Promise<number> {
-  for (let i = 0; i < 40; i++) {
-    const port = 9400 + Math.floor(Math.random() * 500);
-    try {
-      const probe = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(400) });
-      await probe.body?.cancel();
-      continue; // somebody is already there
-    } catch { /* nothing listening — take it */ }
-    try {
-      const l = Deno.listen({ port, hostname: "127.0.0.1" });
-      l.close();
-      return port;
-    } catch { /* raced; try another */ }
-  }
-  throw new Error("no free debugging port");
-}
-const PORT = await freePort();
 
 let pass = 0, fail = 0;
 const check = (name: string, cond: boolean, detail?: unknown) => {
@@ -44,18 +24,17 @@ const check = (name: string, cond: boolean, detail?: unknown) => {
 };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const proc = new Deno.Command(CHROMIUM, {
+// A FIXED debugging port silently attaches to somebody else's browser when two
+// lanes run at once — which produced a full page of false failures against a
+// stale extension before this was hardened. The port is assigned by the kernel
+// and read back from THIS Chrome's stderr, so there is nothing to collide with.
+const { proc, wsUrl } = await launchChrome({
+  binary: CHROMIUM,
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     "--window-size=1280,900",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-    `--remote-debugging-port=${PORT}`, "--remote-allow-origins=*",
+    "--remote-allow-origins=*",
     `--user-data-dir=${ROOT}.cache/kat-noun-discipline-${Date.now()}`, "about:blank"],
-  stdout: "null", stderr: "piped",
-}).spawn();
-
-const wsUrl = await new Promise<string>((resolve, reject) => {
-  const t = setTimeout(() => reject(new Error("no devtools url")), 20000);
-  (async () => { for (;;) { try { const r = await fetch(`http://127.0.0.1:${PORT}/json/version`); const j = await r.json(); clearTimeout(t); resolve(j.webSocketDebuggerUrl); return; } catch { await sleep(300); } } })();
 });
 const ws = new WebSocket(wsUrl);
 await new Promise((r) => ws.onopen = r);
@@ -69,8 +48,9 @@ ws.onmessage = (m) => {
   if (j.id && pending.has(String(j.id))) { pending.get(String(j.id))!(j); pending.delete(String(j.id)); }
 };
 
-const { result: { targetInfos } } = await send("Target.getTargets");
-const sw = targetInfos.find((t: any) => t.type === "service_worker");
+// MV3 registers the worker a beat after the browser is reachable — wait for
+// it rather than depending on how long the CDP handshake happened to take.
+const sw = await waitForServiceWorker(send);
 if (!sw) { console.log("FAIL: no service worker target"); Deno.exit(1); }
 const extId = new URL(sw.url).host;
 const { result: { targetId } } = await send("Target.createTarget", { url: `chrome-extension://${extId}/ntp/ntp.html` });

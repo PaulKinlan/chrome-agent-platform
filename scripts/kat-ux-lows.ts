@@ -12,6 +12,8 @@
 //
 //   deno run -A scripts/kat-ux-lows.ts <path-to-extension> [<out-dir>]
 
+import { launchChrome } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-ux-lows`;
@@ -19,7 +21,6 @@ const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-ux-lows`;
 // targets at all); Chrome for Testing honors it. The extension also needs a
 // build first (manifest points the SW at dist/background/service-worker.js).
 const CHROMIUM = "/home/paulkinlan/.cache/puppeteer/chrome/linux-140.0.7339.82/chrome-linux64/chrome";
-const PORT = 9351;
 
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail?: unknown) {
@@ -28,18 +29,15 @@ function check(name: string, cond: boolean, detail?: unknown) {
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-let userDataStamp = 0;
-const proc = new Deno.Command(CHROMIUM, {
+const userDataStamp = Date.now();
+// The debugging port is assigned by the kernel and read back from THIS Chrome's
+// stderr — a fixed port silently attaches the harness to another lane's browser.
+const { proc, wsUrl } = await launchChrome({
+  binary: CHROMIUM,
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-    `--remote-debugging-port=${PORT}`, "--remote-allow-origins=*",
-    `--user-data-dir=${ROOT}.cache/kat-ux-lows-${(userDataStamp = Date.now())}`, "about:blank"],
-  stdout: "null", stderr: "piped",
-}).spawn();
-
-const wsUrl = await new Promise<string>((resolve, reject) => {
-  const t = setTimeout(() => reject(new Error("no devtools url")), 15000);
-  (async () => { for (;;) { try { const r = await fetch(`http://127.0.0.1:${PORT}/json/version`); const j = await r.json(); clearTimeout(t); resolve(j.webSocketDebuggerUrl); return; } catch { await sleep(300); } } })();
+    "--remote-allow-origins=*",
+    `--user-data-dir=${ROOT}.cache/kat-ux-lows-${userDataStamp}`, "about:blank"],
 });
 
 const ws = new WebSocket(wsUrl);

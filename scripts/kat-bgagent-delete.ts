@@ -16,6 +16,8 @@
 //      the unit-level running-task proof lives in tests/alarm-orphan.test.ts).
 //
 //   deno run -A scripts/kat-bgagent-delete.ts <path-to-extension> [<out-dir>]
+import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-bgagent-delete`;
@@ -23,17 +25,6 @@ const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-bgagent-delete`;
 // all); Chrome for Testing honors it. The SW must be built first (the manifest
 // points at dist/background/service-worker.js).
 const CHROMIUM = "/home/paulkinlan/.cache/puppeteer/chrome/linux-140.0.7339.82/chrome-linux64/chrome";
-const BASE_PORT = 9357;
-// Pick a free debug port — killed KAT runs leave zombie chromiums holding the
-// fixed port, which then hangs every subsequent run's CDP handshake.
-async function freePort(from: number): Promise<number> {
-  for (let p = from; p < from + 200; p++) {
-    const l = Deno.listen({ port: p });
-    try { l.close(); return p; } catch { /* taken */ }
-  }
-  throw new Error("no free debug port in range");
-}
-const PORT = await freePort(BASE_PORT);
 const STAMP = Date.now();
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail?: unknown) {
@@ -48,24 +39,26 @@ try { await Deno.stat(`${EXT}/dist/background/service-worker.js`); } catch {
   Deno.exit(1);
 }
 
-const proc = new Deno.Command(CHROMIUM, {
-  args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
-    `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-    `--remote-debugging-port=${PORT}`, "--remote-allow-origins=*",
-    `--user-data-dir=${ROOT}.cache/kat-bgagent-delete-${STAMP}`, "about:blank"],
-  stdout: "null", stderr: "piped",
-}).spawn();
+// Killed KAT runs leave zombie chromiums holding a fixed port, and a second
+// lane's browser answers on it just as happily — the harness then drives the
+// WRONG tree. The port is assigned by the kernel and read back from THIS
+// Chrome's stderr instead.
+let proc!: Deno.ChildProcess;
 let ws: WebSocket | null = null;
 try {
-  const wsUrl = await new Promise<string>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("no devtools url")), 15000);
-    (async () => { for (;;) { try { const r = await fetch(`http://127.0.0.1:${PORT}/json/version`); const j = await r.json(); clearTimeout(t); resolve(j.webSocketDebuggerUrl); return; } catch { await sleep(300); } } })();
+  const launched = await launchChrome({
+    binary: CHROMIUM,
+    args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
+      `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
+      "--remote-allow-origins=*",
+      `--user-data-dir=${ROOT}.cache/kat-bgagent-delete-${STAMP}`, "about:blank"],
   });
-  ws = new WebSocket(wsUrl);
+  proc = launched.proc;
+  ws = new WebSocket(launched.wsUrl);
   await new Promise((r) => ws!.onopen = r);
 } catch (e) {
   console.log(`FAIL: could not start Chrome for Testing — ${String(e)}`);
-  proc.kill(); Deno.exit(1);
+  Deno.exit(1);
 }
 let id = 0; const pending = new Map<string, (v: any) => void>();
 ws!.onmessage = (m: MessageEvent) => { const j = JSON.parse(m.data); if (j.id && pending.has(String(j.id))) { pending.get(String(j.id))!(j); pending.delete(String(j.id)); } };
@@ -76,12 +69,10 @@ const send = (method: string, params: any = {}, sessionId?: string) => new Promi
 
 // The extension id: prefer the live SW target; fall back to the profile's
 // Preferences (the unpacked id is deterministic per path).
-let sw: any = null;
-for (let i = 0; i < 20 && !sw; i++) {
-  await sleep(500);
-  const { result: { targetInfos } } = await send("Target.getTargets");
-  sw = targetInfos.find((t: any) => t.type === "service_worker" && String(t.url).includes("dist/background"));
-}
+const sw = await waitForServiceWorker(send, {
+  timeoutMs: 10000,
+  match: (t: any) => t.type === "service_worker" && String(t.url).includes("dist/background"),
+});
 let extId: string;
 if (sw) extId = new URL(sw.url).host;
 else {

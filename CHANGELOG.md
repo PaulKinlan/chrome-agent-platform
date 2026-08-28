@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.359] — 2026-08-29
+- Internal only, no user-visible change: the browser-driven tests each get their own browser now. They used to share a small set of fixed connection numbers, so a leftover browser from an earlier run — or simply two test runs at once — could quietly hand a test the wrong browser, and it would then report confident pass/fail results about a build it was never looking at. A new check fails the build if a fixed number ever comes back
+
 ## [0.2.358] — 2026-08-29
 - Correction to the previous entry: the bug reported there does not exist. If you configure your own API key but have not yet allowed the extension to reach that provider, the task does tell you so, names the exact site, and offers a link to fix it in Settings. My test script had been looking at the wrong part of the page and reported silence where there was none; it has been fixed so it cannot make that mistake again
 

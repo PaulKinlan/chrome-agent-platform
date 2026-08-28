@@ -11,11 +11,12 @@
 //   - the computed body background must flip between the schemes
 //   - sampled visible text must hold WCAG AA (>= 4.5:1; large text >= 3:1)
 
+import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? "/tmp/cap-dark-scheme-kats";
 const CHROMIUM = "/usr/bin/chromium";
-const PORT = 9347;
 
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail?: unknown) {
@@ -25,17 +26,14 @@ function check(name: string, cond: boolean, detail?: unknown) {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 await Deno.mkdir(OUT, { recursive: true });
 
-const proc = new Deno.Command(CHROMIUM, {
+// The debugging port is assigned by the kernel and read back from THIS Chrome's
+// stderr — a fixed port silently attaches the harness to another lane's browser.
+const { proc, wsUrl } = await launchChrome({
+  binary: CHROMIUM,
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-    `--remote-debugging-port=${PORT}`, "--remote-allow-origins=*",
+    "--remote-allow-origins=*",
     `--user-data-dir=${ROOT}.cache/kat-dark-scheme-${Date.now()}`, "about:blank"],
-  stdout: "null", stderr: "piped",
-}).spawn();
-
-const wsUrl = await new Promise<string>((resolve, reject) => {
-  const t = setTimeout(() => reject(new Error("no devtools url")), 15000);
-  (async () => { for (;;) { try { const r = await fetch(`http://127.0.0.1:${PORT}/json/version`); const j = await r.json(); clearTimeout(t); resolve(j.webSocketDebuggerUrl); return; } catch { await sleep(300); } } })();
 });
 const ws = new WebSocket(wsUrl);
 await new Promise(r => ws.onopen = r);
@@ -49,8 +47,9 @@ ws.onmessage = (m) => {
   if (j.id && pending.has(String(j.id))) { pending.get(String(j.id))!(j); pending.delete(String(j.id)); }
 };
 
-const { result: { targetInfos } } = await send("Target.getTargets");
-const sw = targetInfos.find((t: any) => t.type === "service_worker");
+// MV3 registers the worker a beat after the browser is reachable — wait for
+// it rather than depending on how long the CDP handshake happened to take.
+const sw = await waitForServiceWorker(send);
 if (!sw) { console.log("FAIL: no service worker target"); Deno.exit(1); }
 const extId = new URL(sw.url).host;
 

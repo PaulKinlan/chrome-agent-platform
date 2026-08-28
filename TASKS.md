@@ -176,7 +176,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P0 | DONE | [`CAP-FB-20260828-NOUN-DISCIPLINE-01`](#cap-fb-20260828-noun-discipline-01-one-name-per-concept--assetsartifacts-skillsrecipes-agents-three-deep) | One name per concept — Assets/Artifacts, Skills/recipes, Agents three deep |
 | P1 | **BLOCKED** | [`CAP-FB-20260819-PROACTIVE-TAB-DISCOVERY-01`](#cap-fb-20260819-proactive-tab-discovery-01-proactive-per-tab-site-agent-discovery-before-run) | Proactive per-tab Site Agent discovery before Run |
 | P3 | OPEN | [`CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01`](#cap-fb-20260829-provider-set-no-baseurl-01-saving-a-preset-provider-without-a-base-url-yields-a-config-that-can-never-run) | Saving a preset provider without a base URL yields a config that can never run |
-| P1 | OPEN | [`CAP-FB-20260829-FIXED-DEBUG-PORTS-01`](#cap-fb-20260829-fixed-debug-ports-01-nine-harnesses-hard-code-a-debug-port-so-a-kat-can-report-green-against-the-wrong-browser) | Nine harnesses hard-code a debug port and can pass against the wrong browser |
+| P1 | DONE | [`CAP-FB-20260829-FIXED-DEBUG-PORTS-01`](#cap-fb-20260829-fixed-debug-ports-01-nine-harnesses-hard-code-a-debug-port-so-a-kat-can-report-green-against-the-wrong-browser) | Nine harnesses hard-code a debug port and can pass against the wrong browser |
 | P1 | OPEN | [`CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01`](#cap-fb-20260819-directory-tool-explorer-01-agent-directory-tool-explorer-and-enrollment-policy) | Agent Directory tool explorer and enrollment policy |
 | P1 | OPEN | [`CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`](#cap-fb-20260819-permission-remediation-ux-01-user-facing-permission-management-and-run-remediation) | User-facing permission management and run remediation |
 | P1 | OPEN | [`CAP-FB-20260819-UI-FLASH-RELAYOUT-01`](#cap-fb-20260819-ui-flash-relayout-01-intermittent-extension-wide-ui-flash-and-relayout-investigation) | Intermittent extension-wide UI flash and relayout investigation |
@@ -225,7 +225,6 @@ evidence every other task depends on).
 
 
 ## Active
-
 
 ## [CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01] Extended Unix/system tool family admissions
 
@@ -1348,21 +1347,23 @@ evidence every other task depends on).
 ## [CAP-FB-20260829-FIXED-DEBUG-PORTS-01] Nine harnesses hard-code a debug port, so a KAT can report green against the wrong browser
 - Feedback: 2026-08-29 — surfaced by the noun-discipline lane: "an early KAT run gave a full page of false failures because a fixed debug port silently attached to another lane's chromium"
 - Updated: 2026-08-29 UTC
-- Status: OPEN
+- Status: DONE
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `4e0ed332`
-- Candidate: —
-- Shipping: —
+- Owner: implementation session (author review; falsification gates cleared)
+- Workspace: active (local path private)
+- Branch: `cap-fb-20260829-fixed-debug-ports-01`
+- Base: `84991bddd` (`origin/main` at the rebase)
+- Candidate: this tracker commit
+- Shipping: `origin/main@872b7417`
 - Acceptance: no browser-driving script hard-codes a debug port; every one launches with `--remote-debugging-port=0` and discovers the real port from the `DevTools listening` line (the pattern 28 scripts already use); each converted harness still passes on its own; and two harnesses that previously shared a port pass when run CONCURRENTLY, which is the case that produced false results
-- Review: falsification — a converted harness must be shown to attach to its OWN browser and not to a second chromium started alongside it
-- Gates: each converted KAT green individually; a concurrent run of a previously-colliding pair green; full unit suite; Chrome journeys
+- Review: author review 2026-08-29 — falsification cleared in real browsers (a decoy browser holding the old fixed port; the pre-change harness reported the decoy tree's string, the converted harness reported its own). No independent review: no second model is available, per AGENTS.md "Review without a second model"
+- Gates: each converted KAT green individually; a concurrent run of the previously-colliding pair green; `npm run build`, `npm test`, `npm run test:chrome`, `npm run check:gallery`, `node scripts/check-tasks.mjs`
 - Blockers: —
-- Next: convert the nine hard-coded scripts to the free-port pattern, reusing the `freePort()` helper from `scripts/kat-noun-discipline.ts`
-- Recover: `git grep -n "PORT = 9" -- scripts/`
+- Next: owner merges the candidate to `origin/main`
+- Recover: `git log --oneline --all --grep CAP-FB-20260829-FIXED-DEBUG-PORTS-01`
 - History:
+  - 2026-08-29 — verified independently by the coordinator session and merged. Cherry-picked onto current `main` (the tracker row and CHANGELOG conflicted and were resolved keeping both lanes' content). **My own falsification, not the implementer's:** adding `--remote-debugging-port=9351` to `kat-usage-viz.ts` drove the gate RED (4 pass / 1 fail); removing it returned to green — so the gate fails for the right reason. A `grep` for a fixed port anywhere under `scripts/` now returns nothing outside the launcher. Gates at the merge tip: build clean, unit **2004 pass / 0 fail**, Chrome journeys **127/127**, gallery + tracker schema green. **One correction applied on merge:** the second test was named "only the shared launcher writes the debugging-port flag" but asserted merely that the launcher is *among* the writers — roughly thirty other scripts spawn Chrome themselves with the safe `=0` form. Renamed to "the shared launcher owns the debugging-port flag" and documented the scope in the test, because a test that claims more than it checks is the same defect class this entry exists to fix. The safety property (no script may name a port) is enforced by the first test and is unaffected. Migrating the remaining ~30 scripts onto `launchChrome()` is a separate cleanup, not a defect.
+  - 2026-08-29 — **converted, falsified and gated.** Twelve harnesses now launch through one shared `scripts/lib/chrome-launch.ts`; `launchChrome()` passes `--remote-debugging-port=0` and reads the DevTools endpoint out of its OWN child's stderr, so the endpoint provably belongs to this process and there is no probe to race. The port-0 form was used everywhere — no harness needed the weaker probe-then-bind fallback — and the two scripts that already carried private copies of that helper (`kat-noun-discipline`, `kat-bgagent-delete`) were folded onto the shared launcher too, leaving one spawn path instead of nine fixed ports and two copies. FALSIFICATION: a decoy browser was started holding 9351 (the port `kat-usage-viz` hard-coded) running a deliberately altered copy of the extension; the PRE-CHANGE harness, pointed at the real tree, reported `FAIL: cost card is labelled an estimate — "costs are DECOY approximations (this tree is NOT under test)"` — a string that exists only in the decoy — proving it drove a browser it did not launch; the converted harness, with that same decoy still holding the port, passed 13/13 against the real tree. CONCURRENCY: `kat-usage-viz` + `kat-ux-lows` (both 9351) run together — before, one lane hung to a 300 s timeout when the other killed the browser they were sharing; after, both finish with their solo results. Individually every harness matches its pre-change tally: back-stack 6/0, dark-scheme 32/3, narrow-toggle 20/0, usage-viz 13/0, ux-lows 9/1, axe-audit 7/0, providers-tabs 19/0, agent-templates 13/0, composer-grow 11/0, noun-discipline 14/0, bgagent-delete 11/0 (the 3 dark-scheme and 1 ux-lows failures are pre-existing contrast/landmark findings, unchanged by this work); `kat-failed-runs` went from hanging for the full 300 s timeout against a live zombie on 9357 to 7/0 in 10 s. TWO THINGS FOUND THAT THE REPORT DID NOT DESCRIBE: the slow port poll was also masking a startup race — reading the endpoint off stderr is fast enough that MV3 has not registered its service worker yet, so eight harnesses gained an explicit bounded `waitForServiceWorker()` instead of depending on how long a probe happened to take; and `kat-bgagent-delete`'s own helper called `Deno.listen` outside its `try`, so a taken port threw out of the function rather than moving on to the next. A new gate, `tests/harness-debug-port.test.ts`, fails on any fixed debugging port anywhere in `scripts/` and on a launcher that would accept a caller-chosen one; it was observed RED with a port reintroduced into `kat-usage-viz` and GREEN with it removed.
   - 2026-08-29 — measured, then corrected after the reporting lane pointed out the failure mode is worse than "a flake". **A fixed-port harness does not merely hang or error — it attaches to another lane's browser and reports confident PASS/FAIL results about an extension it is not testing.** The reporting run produced 7 such results. That means a fixed-port harness can go **green against the wrong tree**, which is worse than a red suite, because the output reads as evidence. Eleven scripts name a port; two of them (`kat-bgagent-delete` on `cbf89c33`, `kat-noun-discipline`) already probe for a free one, leaving **nine hard-coded**. Four ports are each claimed by two of those nine: 9347 (`kat-narrow-toggle`, `kat-dark-scheme`), 9351 (`kat-usage-viz`, `kat-ux-lows`), 9353 (`kat-providers-tabs`, `axe-audit`), 9359 (`kat-agent-templates`, `kat-composer-grow`); `kat-failed-runs` holds 9357, the port `kat-bgagent-delete` starts probing from. 28 other scripts already launch with `--remote-debugging-port=0` and read the real port off the `DevTools listening` line, and `scripts/kat-noun-discipline.ts` carries a reusable `freePort()` (probe `/json/version`, then bind-test) — so both the pattern and a helper are already in-repo.
 
 ## [CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01] Tool-call cards show shape, not answers

@@ -116,6 +116,16 @@ there. The reviewer agents check against it.
 - deno test tests/ — the pure/unit suite.
 - Load the extension in headless Chrome + verify the surfaces render + the
   journeys work (CDP). See docs/CONSTITUTION.md for the required journeys.
+- **Never name a debugging port.** Every harness in `scripts/` launches its
+  browser through `launchChrome()` in `scripts/lib/chrome-launch.ts`, which asks
+  the kernel for a port (`--remote-debugging-port=0`) and reads the endpoint back
+  from that child process's own stderr. A fixed port silently attaches the
+  harness to a zombie or to another lane's browser, and it then prints confident
+  PASS/FAIL results about a tree it never loaded — green against the wrong tree
+  reads as evidence, which is worse than red. `tests/harness-debug-port.test.ts`
+  fails on any fixed port. MV3 registers its service worker a beat after the
+  browser is reachable, so wait for it with `waitForServiceWorker()` rather than
+  relying on how long a handshake happens to take.
 
 ## The current review (2026-08-21) — read before picking up work
 
