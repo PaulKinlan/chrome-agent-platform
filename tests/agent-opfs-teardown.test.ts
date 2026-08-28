@@ -803,6 +803,11 @@ Deno.test("pending replay r3: schedules, grants, worker close AND durable family
 // ---- r4 P1-2: single admission fence — a refusal destroys NOTHING (row +
 // prompt override + memory + dir all intact; the r3 bug removed prompt+row
 // and then reported a refusal from the second fence). ----
+// FALSIFICATION (verified r5 by running this file against 99bc29f7): PASSES
+// pre-r4 — the first-fence refusal path predates r4, so this KAT is
+// regression coverage, NOT the ordering gate. The ordering gate (nothing
+// destructive before the single fence) is "delete r5: exactly ONE fence
+// admission…", which FAILS on 99bc29f7.
 Deno.test("delete r4: a refused fence leaves the ROW, the PROMPT OVERRIDE, and all state intact", async () => {
   const { describePrompt, setPromptOverride } = await import("../extension/lib/system-prompts.js");
   const created = await createNamedAgent({ name: "NothingRemoved" });
@@ -831,6 +836,8 @@ Deno.test("delete r4: a refused fence leaves the ROW, the PROMPT OVERRIDE, and a
 // ---- r4 P1-1: the fence must NOT resolve while the aborted writer has not
 // settled (the r3 bug retired the writer at cancellation-outbox processing,
 // letting teardown race the orchestrator's final flush). ----
+// FALSIFICATION (verified r5 against 99bc29f7): FAILS pre-r4 — the
+// settle-retired projection is the r4 behavior. Gated.
 Deno.test("fence r4: the fence promise stays pending until the orchestrator settles", async () => {
   const created = await createNamedAgent({ name: "LateSettle" });
   assert(created.ok);
@@ -866,6 +873,10 @@ Deno.test("fence r4: the fence promise stays pending until the orchestrator sett
 });
 
 // ---- r4 P2: the durable refusal→retry flow drives REAL durable runs ----
+// FALSIFICATION (verified r5 against 99bc29f7): PASSES pre-r4 — the fence is
+// injected, so the refusal path predates r4. This KAT's added value is the
+// REAL durable registry (no mocked fence seam in the registry); the
+// destructive-ordering gate is "delete r5: exactly ONE fence admission…".
 Deno.test("retry r4: a real durable run survives a refused delete and is purged by the retry", async () => {
   const created = await createNamedAgent({ name: "RealRuns" });
   assert(created.ok);
@@ -895,6 +906,9 @@ Deno.test("retry r4: a real durable run survives a refused delete and is purged 
 
 // ---- r4 P2: the worker close runs the REAL alive-set machinery (real key
 // `cap:agent-workers:alive`, real kv), for BOTH identity spellings. ----
+// FALSIFICATION (verified r5 against 99bc29f7): PASSES pre-r4 — the real
+// closeAgentWorkerFor seam predates r4. Kept as regression coverage for the
+// identity-truthful close; not a gate for r4 behavior.
 Deno.test("worker close r4: the real closeAgentWorkerFor removes both identities from the real alive-set key", async () => {
   const { closeAgentWorkerFor } = await import("../extension/background/routes/agent-worker.js");
   const created = await createNamedAgent({ name: "AliveSet" });
@@ -914,6 +928,10 @@ Deno.test("worker close r4: the real closeAgentWorkerFor removes both identities
 
 // ---- r4 P2: classification drives BEHAVIOR — the read-only predicate the
 // SW routes gate on, and the literal-dir resolution + clear preservation. ----
+// FALSIFICATION (verified r5 against 99bc29f7): FAILS pre-r4 (the read-only
+// predicate/export did not exist). Gated for the predicate; the ROUTE-level
+// gate the reviewer asked for is "memory.set r5" (real dispatcher) and the
+// alias-quiescence gate is "quiescence r5" below.
 Deno.test("classification r4: the read-only predicate gates writes; legacy dirs resolve literally and survive a clear", async () => {
   const { readOnlyAgentMemorySelector } = await import("../extension/lib/named-agents.js");
   assertEquals(readOnlyAgentMemorySelector("agent-legacy:alpha"), true);
@@ -939,4 +957,163 @@ Deno.test("classification r4: the read-only predicate gates writes; legacy dirs 
   await legacy.clear();
   assertEquals(await legacy.get("k"), null, "keys cleared");
   assert(dirExists(["memory", "agents", encodeURIComponent("legacy-literal")]), "the dir survives clear (only teardown removes it)");
+});
+
+// ================= review r5 =================
+
+// ---- r5 P1-a: a registry-row write failure HALTS the teardown (the r4 bug
+// CONTINUED — schedules/grants/workers/dirs/durable destroyed under a LIVE
+// row — and then returned rowDeleted:true, so the caller reported "the agent
+// row was removed" while it sat in the registry with its state gone).
+// FALSIFICATION: on the pre-r5 code the schedule is cancelled, the memory is
+// purged, and the error message claims the row was removed — the three
+// "survives" assertions + the "NOT deleted" assertion all fail there. ----
+Deno.test("delete r5: a row-write failure halts teardown BEFORE later phases and reports rowDeleted:false truthfully", async () => {
+  const created = await createNamedAgent({ name: "RowWriteFails" });
+  assert(created.ok);
+  const slug = created.agent.id;
+  const inst = created.agent.instanceId;
+  await namedAgentMemory(inst).set("memory:survives", "intact");
+  const schedStore = (await kvGet("cap:scheduledTasks"))?.["cap:scheduledTasks"] ?? {};
+  schedStore["rowfail-owned"] = {
+    name: "rowfail-owned", task: "hourly", at: Date.now() + 3_600_000,
+    owner: { agentSurfaceRef: `named:${slug}` },
+  };
+  await kvSet({ "cap:scheduledTasks": schedStore });
+
+  // Fail ONLY the registry write (writeAgents → kvSet("cap:namedAgents")) by
+  // patching the mocked chrome.storage.local.set for the delete's duration.
+  const originalSet = chrome.storage.local.set;
+  chrome.storage.local.set = async (obj) => {
+    if (Object.prototype.hasOwnProperty.call(obj, "cap:namedAgents")) {
+      throw new Error("injected registry write failure");
+    }
+    return originalSet(obj);
+  };
+  let del;
+  try {
+    del = await deleteNamedAgent(slug);
+  } finally {
+    chrome.storage.local.set = originalSet;
+  }
+  assertEquals(del.ok, false, "the delete fails honestly");
+  assertEquals(del.retryable, true, "retryable");
+  assert(String(del.error).includes("identity row delete"), "the failing phase is named");
+  assert(String(del.error).includes("NOT deleted"), "truthful: the row is NOT deleted (pre-r5 this read 'row was removed')");
+  assert(String(del.error).includes("phases already run"), "the partial state is reported (fence + prompt-override)");
+
+  const rows = await listNamedAgents();
+  assert(rows.some((a) => a.id === slug), "the registry ROW survives the failed write");
+  const schedAfter = (await kvGet("cap:scheduledTasks"))?.["cap:scheduledTasks"] ?? {};
+  assert(schedAfter["rowfail-owned"] && !schedAfter["rowfail-owned"].cancelling,
+    "the owned SCHEDULE survives — teardown halted before the schedule phase (pre-r5 it was cancelled)");
+  assertEquals(await namedAgentMemory(inst).get("memory:survives"), "intact",
+    "the agent MEMORY survives — teardown halted before the dir purge (pre-r5 it was gone)");
+  assert(dirExists(["memory", "agents", encodeURIComponent(inst)]), "the sandbox dir survives");
+
+  // The retry (no failure injected) replays EVERY phase and completes.
+  const retry = await deleteNamedAgent(slug);
+  assertEquals(retry.ok, true, "the retry completes (" + (retry?.error ?? "") + ")");
+  const rowsAfter = await listNamedAgents();
+  assert(!rowsAfter.some((a) => a.id === slug), "the retry removes the row");
+  const schedFinal = (await kvGet("cap:scheduledTasks"))?.["cap:scheduledTasks"] ?? {};
+  assert(!schedFinal["rowfail-owned"] || schedFinal["rowfail-owned"].cancelling || schedFinal["rowfail-owned"].cancelled,
+    "the retry cancels the owned schedule");
+  assertEquals(dirExists(["memory", "agents", encodeURIComponent(inst)]), false, "the retry purges the dir");
+});
+
+// ---- r5 P1-b(1): EXACTLY ONE fence admission per delete, and NOTHING
+// destructive precedes it. The fence injection OBSERVES the live state at
+// admission time: the registry row and the prompt override must still be
+// present (every destructive phase runs behind the fence).
+// FALSIFICATION: on the pre-r4 code the caller removed the prompt override +
+// the row BEFORE teardownAgentState's fence ran, so both at-fence
+// observations fail there. ----
+Deno.test("delete r5: exactly ONE fence admission, with the row + prompt override still intact at fence time", async () => {
+  const { describePrompt, setPromptOverride } = await import("../extension/lib/system-prompts.js");
+  const created = await createNamedAgent({ name: "FenceOrder" });
+  assert(created.ok);
+  const slug = created.agent.id;
+  const d = await describePrompt(`agent:${slug}`);
+  const saved = await setPromptOverride(`agent:${slug}`, { mode: "append", text: "FENCE-ORDER" }, { expectedRevision: d.revision });
+  assert(saved?.ok !== false, "override seeded (" + (saved?.error ?? "") + ")");
+
+  let fenceCalls = 0;
+  const atFence = [];
+  const del = await deleteNamedAgent(slug, {
+    fenceActiveRuns: async () => {
+      fenceCalls += 1;
+      const rows = await listNamedAgents();
+      const prompt = await describePrompt(`agent:${slug}`);
+      atFence.push({
+        rowPresent: rows.some((a) => a.id === slug),
+        overridePresent: Boolean(prompt.override?.text?.includes("FENCE-ORDER")),
+      });
+      return { ok: true };
+    },
+  });
+  assertEquals(del.ok, true, "the delete completes (" + (del?.error ?? "") + ")");
+  assertEquals(fenceCalls, 1, "EXACTLY ONE fence admission across the whole destructive sequence");
+  assertEquals(atFence.length, 1);
+  assert(atFence[0].rowPresent, "the ROW is still present when the fence is admitted (pre-r4 it was already gone)");
+  assert(atFence[0].overridePresent, "the PROMPT OVERRIDE is still present when the fence is admitted (pre-r4 it was already gone)");
+  const rowsAfter = await listNamedAgents();
+  assert(!rowsAfter.some((a) => a.id === slug), "the row is removed behind the fence");
+});
+
+// ---- r5 P1-b(2): memory.set exercised through the REAL route dispatcher
+// (background/routes/memory.js — the same handler map the SW merges), not the
+// read-only predicate in isolation.
+// FALSIFICATION: pre-r4 the memory.set route had NO legacy/orphan refusal, so
+// the first assertion fails there; pre-r5 the dispatcher was not importable
+// at all (the handler was a SW closure). ----
+Deno.test("memory.set r5: the real route dispatcher refuses legacy/orphan selectors and serves a live agent store", async () => {
+  const { createMemoryRoutes } = await import("../extension/background/routes/memory.js");
+  const routes = createMemoryRoutes();
+
+  const refused = await routes["memory.set"]({ origin: "agent-legacy:alpha", key: "k", value: "v" });
+  assertEquals(refused.ok, false, "the REAL route refuses a legacy-selector write");
+  assert(String(refused.error).includes("read-only"), "the refusal is the read-only rule");
+  const refusedOrphan = await routes["memory.set"]({ origin: "agent-orphan:ghost", key: "k", value: "v" });
+  assertEquals(refusedOrphan.ok, false, "the REAL route refuses an orphan-selector write");
+
+  const created = await createNamedAgent({ name: "RealRouteSet" });
+  assert(created.ok);
+  const slug = created.agent.id;
+  const inst = created.agent.instanceId;
+  const wrote = await routes["memory.set"]({ origin: `agent:${slug}`, key: "route:real", value: "through-the-dispatcher" });
+  // The route returns the store's raw set() result (a write count) — success
+  // is behavioral: the value is readable from the agent's real store.
+  assert(wrote?.ok !== false && !wrote?.error, "the REAL route accepts a live agent write (" + JSON.stringify(wrote) + ")");
+  assertEquals(await namedAgentMemory(inst).get("route:real"), "through-the-dispatcher",
+    "the write landed in the agent's REAL instanceId store (slug selector resolved by identity)");
+});
+
+// ---- r5 P1-b(3): a DELAYED write tracked under a legacy/orphan ALIAS is
+// awaited by quiescence under the agent's CANONICAL key — using the real
+// trackMemoryWrite + awaitMemoryQuiescence the memory.set/clear routes and
+// the teardown fence share.
+// FALSIFICATION: pre-r4, tracking keyed the write by the RAW alias
+// ("agent-orphan:x") while the fence awaited "agent:x" — the quiescence call
+// resolved immediately and the alias write escaped. ----
+Deno.test("quiescence r5: a delayed alias write blocks the canonical-key quiescence wait until it settles", async () => {
+  const { trackMemoryWrite, awaitMemoryQuiescence } = await import("../extension/background/routes/memory.js");
+  let settle;
+  const delayed = new Promise((resolve) => { settle = resolve; });
+  const tracked = trackMemoryWrite("agent-orphan:r5-q-ns", delayed);
+
+  // Control: an unrelated namespace is quiescent immediately.
+  const control = await awaitMemoryQuiescence(["agent:r5-q-other"], 500);
+  assertEquals(control.ok, true, "control: an untracked namespace is quiescent");
+
+  let quiesced = false;
+  const wait = awaitMemoryQuiescence(["agent:r5-q-ns"], 5000)
+    .then((r) => { quiesced = true; return r; });
+  await new Promise((r) => setTimeout(r, 400));
+  assertEquals(quiesced, false,
+    "the canonical-key wait BLOCKS while the alias write is in flight (pre-r4 it resolved instantly)");
+  settle("done");
+  await tracked;
+  const result = await wait;
+  assertEquals(result.ok, true, "quiescence resolves once the alias write settles");
 });

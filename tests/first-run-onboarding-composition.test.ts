@@ -107,13 +107,17 @@ Deno.test("first-run composition redacts setup state and only prefills the real 
 });
 
 Deno.test("first-run composition preserves transaction and provider boundaries", async () => {
-  const [worker, memory, options] = await Promise.all([
+  const [worker, memory, options, memoryRoutes] = await Promise.all([
     text("../extension/background/service-worker.js"),
     text("../extension/lib/memory.js"),
     text("../extension/options/options.js"),
+    // The memory.get/set/list/clear routes (incl. the __tombs reserved-key
+    // boundary) live in the extracted module since the teardown r5 review —
+    // the boundary is pinned at its real home, not the SW text.
+    text("../extension/background/routes/memory.js"),
   ]);
   assert(worker.includes("durableRuns"));
-  assert(worker.includes("__tombs"));
+  assert(memoryRoutes.includes("__tombs"));
   assert(worker.includes("attachmentContext(attachments)"));
   assert(memory.includes("run-registry"));
   assert(options.includes("runOwnerApprovedMutation"));

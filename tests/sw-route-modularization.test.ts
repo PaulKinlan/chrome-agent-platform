@@ -6,6 +6,7 @@ import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/asse
 import * as acorn from "npm:acorn";
 import {
   createActivityRoutes,
+  createMemoryRoutes,
   createProviderRoutes,
   kvRoutes,
   mergeRouteMaps,
@@ -216,6 +217,18 @@ Deno.test("sw routes: extracted module route maps are frozen and complete", () =
     "provider.models",
   ]);
   assertEquals(Object.isFrozen(providerRoutes), true);
+
+  // Memory routes (4) — the teardown-review r5 extraction: the dispatcher
+  // lives in routes/memory.js so tests exercise the REAL route handlers and
+  // the writer-quiescence seam is importable by the teardown fence.
+  const memoryRoutes = createMemoryRoutes();
+  assertEquals(Object.keys(memoryRoutes), [
+    "memory.get",
+    "memory.set",
+    "memory.list",
+    "memory.clear",
+  ]);
+  assertEquals(Object.isFrozen(memoryRoutes), true);
 });
 
 Deno.test("sw routes: requireSettingsSender owner gate rejects non-owner-options principals", () => {
@@ -283,6 +296,12 @@ Deno.test("sw routes: AST verification of route registration across service-work
         registeredRouteKeys.push(...Object.keys(providerRoutes));
       } else if (arg.name === "activityRoutes") {
         registeredRouteKeys.push(...Object.keys(activityRoutes));
+      }
+    } else if (arg.type === "CallExpression" && arg.callee.type === "Identifier") {
+      // Factory-composed module maps (memory routes moved to
+      // routes/memory.js in the teardown r5 extraction).
+      if (arg.callee.name === "createMemoryRoutes") {
+        registeredRouteKeys.push(...Object.keys(createMemoryRoutes()));
       }
     }
   }

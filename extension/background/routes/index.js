@@ -6,6 +6,13 @@ export { permLeaseRoutes } from "./perm-lease.js";
 export { createProviderRoutes } from "./provider.js";
 export { createActivityRoutes, filterActivityEntries, ACTIVITY_STORE_CAPS } from "./activity.js";
 export { closeAgentWorkerFor, createAgentWorkerRoutes, reconcileAgentWorkers } from "./agent-worker.js";
+export {
+  createMemoryRoutes,
+  resolveMemory,
+  trackMemoryWrite,
+  awaitMemoryQuiescence,
+  normalizeMemoryKey,
+} from "./memory.js";
 
 /**
  * Merge route maps into a single frozen dictionary.
