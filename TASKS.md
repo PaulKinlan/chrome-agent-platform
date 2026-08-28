@@ -1405,21 +1405,24 @@ evidence every other task depends on).
 ## [CAP-FB-20260828-RUN-LOG-WRITE-BUFFER-01] Buffer and flush the run-log WAL
 - Feedback: 2026-08-28 — product owner: "I think we need to buffer and flush the WAL", and then "if we do the buffer and flush, I'm presuming the read includes the buffer too, right?"
 - Updated: 2026-08-28 17:30 UTC
-- Status: OPEN
+- Status: IN_REVIEW
 - Priority: P1
 - Owner: unassigned
 - Workspace: none
 - Branch: none
 - Base: `f6d0cf23`
-- Candidate: attempted and reverted — see History for exactly how far it got and what it uncovered
+- Candidate: this commit
 - Shipping: —
 - Acceptance: rows appended close together are coalesced into ONE file open, so writing 1,000 rows costs ~1 ms rather than ~14 s; `appendLog` still resolves only when the row is ON DISK, so an awaiting caller keeps today's durability guarantee; a reader can never miss a row that was already accepted; and no run reaches a terminal state with unflushed history behind it. Coalescing is asserted by COUNTING file opens, not inferred from a timing number
 - Review: fresh-session review; falsification — the coalescing test must be shown failing against the unbuffered build
 - Gates: full unit suite; Chrome journeys; `npm run test:opfs`; the security suite; and the `scripts/thread-open-trace.ts` matrix showing the write column drop
 - Blockers: —
-- Next: land `CAP-FB-20260828-RUN-LOG-REGISTRY-ROWS-01` FIRST — the buffer work is what exposed it, and the terminal-ordering guarantee above cannot be tested until registry rows go through the log
+- Next: closed pending review. Streaming the first page (design stage 4) is NOT needed — at 27 ms for 1,000 rows it would add moving parts for no measurable gain
 - Recover: `git grep -n "queueAppend\|flushExecution" -- extension/lib/durable-runs.js`
 - History:
+  - 2026-08-28 21:00 UTC — **DONE. Task open 918 ms → 27 ms (~34x) and writing 1,000 rows 171,375 ms → 1,390 ms (~123x), against the pre-WAL baseline.** Full matrix: open 15/213/918 → 5/14/27 ms at 10/250/1,000 rows; write 140 ms/11.2 s/171 s → 30 ms/323 ms/1.4 s. Extrapolated to the product's own bound (6,250 rows), opening a task goes from ~6 s to ~170 ms. Gates: unit **1926/0**, Chrome journeys **127/127**, `npm run test:opfs` **6/6**, security suite PASS, build clean.
+  - 2026-08-28 21:00 UTC — two changes carried the last order of magnitude. **(1) Coalescing:** the row is queued under the write lock and the flush awaited OUTSIDE it. Both halves matter — an earlier version awaited the flush while holding the lock, which serialised every append and produced **21 file writes for 20 concurrent appends**. The test asserts the write COUNT rather than a timing number, and was falsified: holding the lock across the flush takes it to 20 writes and the test RED. **(2) The preamble:** with file writes coalesced the remaining cost was per-append — a marker read and a directory/file open on every row, plus a SHA-256 computed whether or not it was needed. Marker and handle are stable for an execution's life and are memoised (cleared on purge); the digest is now computed only when a payload actually overflows, which is the only thing it names.
+  - 2026-08-28 21:00 UTC — the owner's question is answered in the code and in a test: **a read FLUSHES, it does not merge the buffer.** One source of truth (the file), and byte cursors stay meaningful because a buffered row has no offset yet. The flush sits INSIDE the shared-lock callback, which has already awaited the write chain — placed before it, a read races an append that had been called but had not yet queued. Also asserted: an awaited append is genuinely on disk (a fresh registry over the same storage sees it), a run never settles with unflushed history behind it, and a failed flush REJECTS every caller whose row it carried rather than dropping rows silently.
   - 2026-08-28 17:30 UTC — **attempted, working, and reverted to keep main green.** The design is settled and was proven in the attempt: queue the row UNDER the write lock, await the flush OUTSIDE it, flush on a macrotask. Both halves matter — an earlier version awaited the flush while still holding the lock, which serialised every append and produced **21 file writes for 20 concurrent appends**, i.e. no coalescing at all. Measured after the fix: 20 concurrent appends → far fewer writes, with every row present.
   - 2026-08-28 17:30 UTC — **the owner's question answered: a read FLUSHES first, it does not merge the buffer.** Flushing keeps one source of truth (the file) and keeps byte cursors meaningful — a buffered row has no offset yet, so a merged view could not be paged back through. The flush must sit INSIDE the shared-lock callback, which has already awaited the write chain: placed before it, a read races an append that has been called but has not yet queued its row. Two tests for this are KEPT on main (`a read sees rows that were appended but not awaited`, `appendLog still resolves only once the row is durable`) because they hold for the current implementation too.
   - 2026-08-28 17:30 UTC — reverted because the change kept widening: buffering forces terminal ordering, which exposed `CAP-FB-20260828-RUN-LOG-REGISTRY-ROWS-01`, which forces the purge/rollback paths to delete the log file and the migration marker, which broke five fault-matrix steps that inject failures around the old `store.setTrusted` terminal write. Each of those is legitimate work; none of it should be rushed into the durable run authority at the tail of a long session. Main stays at the shipped 6.3x/12x.

@@ -402,7 +402,93 @@ export function createDurableRunRegistry({
    *  marker is set is never read again — and in a real run appendLog fires
    *  during the run, so the marker is set before settle(). They are log rows;
    *  they belong in the log. */
+  // ── the run-log write buffer ────────────────────────────────────────────
+  // CAP-FB-20260828-RUN-LOG-WRITE-BUFFER-01. The log is ONE file, but every
+  // appendLog was its own open/write/close cycle, so 1,000 rows cost 1,000
+  // cycles (~14 s) where 1,000 rows in ONE cycle cost ~1 ms. Rows arriving
+  // close together — a tool-call and its result, several parallel tool calls in
+  // one step — are coalesced into a single append.
+  //
+  // DURABILITY IS UNCHANGED. `appendLog` still resolves only once the row is ON
+  // DISK: it returns a promise settled by the flush. A caller that awaits gets
+  // exactly the guarantee it had before; what changed is that N concurrent
+  // appends now share one file-open instead of forcing N.
+  //
+  // The buffer is flushed before anything READS the log and before a run
+  // reaches a terminal state, so no reader misses an accepted row and no run
+  // settles with unflushed history behind it.
+  const pendingAppends = new Map(); // executionId → { rows, waiters, timer, handle }
+  // Per-append storage reads that the write buffer exposed as the next
+  // bottleneck: with file writes coalesced, the remaining cost was the preamble
+  // — a marker read and a directory/file open on every single append. Both are
+  // stable for the life of an execution, so both are memoised here and cleared
+  // when the execution is purged.
+  const migratedExecutions = new Set();
+  const logHandles = new Map();
+  const MAX_BUFFERED_ROWS = 256;    // bounds both memory and the loss window
+
+  function queueAppend(executionId, handle, row) {
+    let pending = pendingAppends.get(executionId);
+    if (!pending) {
+      pending = { rows: [], waiters: [], timer: null, handle };
+      pendingAppends.set(executionId, pending);
+    }
+    pending.handle = handle;
+    pending.rows.push(row);
+    const settled = new Promise((resolve, reject) => pending.waiters.push({ resolve, reject }));
+    if (pending.rows.length >= MAX_BUFFERED_ROWS) {
+      void flushAppends(executionId);
+    } else if (pending.timer == null) {
+      // A macrotask, not a microtask: a microtask would fire before the sibling
+      // appends of the same step were even queued, which is the coalescing this
+      // exists for.
+      pending.timer = setTimeout(() => { void flushAppends(executionId); }, 0);
+    }
+    return settled;
+  }
+
+  async function flushAppends(executionId) {
+    const pending = pendingAppends.get(executionId);
+    if (!pending || pending.rows.length === 0) return;
+    pendingAppends.delete(executionId);
+    if (pending.timer != null) clearTimeout(pending.timer);
+    const { rows, waiters, handle } = pending;
+    try {
+      await walAppend(handle, rows);
+      for (const w of waiters) w.resolve();
+    } catch (error) {
+      // Every queued caller learns the write failed. Silently dropping rows
+      // would be the worst possible outcome for a durability log.
+      for (const w of waiters) w.reject(error);
+    }
+  }
+
+  /** Flush buffered rows. Call this from INSIDE a lock section (read or write);
+   *  taking a lock here would deadlock against the section that already holds
+   *  one. Never throws — a failed flush has already rejected the callers whose
+   *  rows it carried. */
+  async function flushExecution(executionId) {
+    try {
+      await flushAppends(executionId);
+    } catch { /* already reported to the queuing callers */ }
+  }
+
+  async function handleFor(executionId) {
+    let handle = logHandles.get(executionId);
+    if (handle) return handle;
+    handle = await logHandleFor(executionId, { create: true });
+    if (handle) {
+      if (logHandles.size > 64) logHandles.clear(); // bounded, like seenKeys
+      logHandles.set(executionId, handle);
+    }
+    return handle;
+  }
+
   async function appendRegistryRow(executionId, row) {
+    // Flush first: a terminal marker must never land ahead of a tool row that
+    // was already accepted. Written unbuffered because ordering matters more
+    // than coalescing for the two rows the registry writes itself.
+    await flushExecution(executionId);
     await migrateExecutionLog(executionId);
     const handle = await logHandleFor(executionId, { create: true });
     if (!handle) throw new Error("run log unavailable");
@@ -410,14 +496,19 @@ export function createDurableRunRegistry({
   }
 
   async function appendLog(executionId, entry, idempotencyKey = crypto.randomUUID?.() ?? `${now()}-${Math.random()}`) {
-    return locked(async () => {
+    // The row is QUEUED under the write lock — so validation, dedup and the
+    // buffer stay serialised — and the flush is awaited OUTSIDE it. Holding the
+    // lock across the flush defeats the point entirely: concurrent appends then
+    // serialise and each flushes alone (measured: 21 file writes for 20
+    // appends, i.e. no coalescing at all).
+    const queued = await locked(async () => {
       const record = await readRecord(executionId);
       if (!record) throw new Error("cannot log an unknown execution");
       const idText = bounded(String(idempotencyKey), 500);
       const at = Number.isFinite(entry?.at) ? entry.at : now();
 
       await migrateExecutionLog(executionId);
-      const handle = await logHandleFor(executionId, { create: true });
+      const handle = await handleFor(executionId);
       if (!handle) throw new Error("run log unavailable");
 
       const seen = await seenKeysFor(executionId, handle);
@@ -425,18 +516,21 @@ export function createDurableRunRegistry({
         // Already logged. Return the existing row rather than appending a
         // second copy — the same guarantee the content-addressed key gave.
         const existing = (await walReadAll(handle)).find((r) => r?.idempotencyKey === idText);
-        if (existing) return structuredClone(existing);
+        if (existing) return { row: existing, settled: null };
       }
 
       const cloned = structuredClone(entry);
       const serialized = JSON.stringify(cloned);
       // Large entries still spill to their own payload file, so one oversized
       // record cannot make every tail read of this log expensive.
-      const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(idText)))]
-        .map((byte) => byte.toString(16).padStart(2, "0")).join("");
-      const payloadRef = serialized.length > RESUME_CHUNK_CHARS
-        ? await persistJsonPayload(executionId, digest, cloned)
-        : null;
+      // The digest only names an overflow payload file, so it is computed only
+      // when there is one — it was being hashed on every append for nothing.
+      let payloadRef = null;
+      if (serialized.length > RESUME_CHUNK_CHARS) {
+        const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(idText)))]
+          .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+        payloadRef = await persistJsonPayload(executionId, digest, cloned);
+      }
       const row = {
         ...(payloadRef ? { type: cloned?.type ?? "log", payloadRef } : cloned),
         schemaVersion: 1,
@@ -445,10 +539,14 @@ export function createDurableRunRegistry({
         at,
         idempotencyKey: idText,
       };
-      await walAppend(handle, [row]);
+      // `seen` is updated NOW so a duplicate arriving before the flush is still
+      // rejected by the same guarantee the content-addressed key used to give.
       seen.add(idText);
-      return structuredClone(row);
+      return { row, settled: queueAppend(executionId, handle, row) };
     });
+    if (!queued?.settled) return queued?.row ? structuredClone(queued.row) : queued;
+    await queued.settled; // resolves only once the row is on disk
+    return structuredClone(queued.row);
   }
 
   /** Move an execution's legacy key-value rows into its WAL. Runs at most ONCE
@@ -469,9 +567,14 @@ export function createDurableRunRegistry({
   const MIGRATED_PREFIX = "run-log-wal:";
 
   async function migrateExecutionLog(executionId) {
+    // Fastest path: already migrated in this worker's lifetime — no storage
+    // read at all.
+    if (migratedExecutions.has(executionId)) return false;
     const marker = `${MIGRATED_PREFIX}${executionId}`;
-    // Fast path: one `has` instead of enumerating the store on every append.
-    if (await store.has(marker).catch(() => false)) return false;
+    if (await store.has(marker).catch(() => false)) {
+      migratedExecutions.add(executionId);
+      return false;
+    }
 
     const prefix = `${LOG_PREFIX}${executionId}:`;
     let legacyKeys;
@@ -519,6 +622,7 @@ export function createDurableRunRegistry({
       executionId,
       migratedRows: legacyKeys.length,
     }).catch(() => {});
+    migratedExecutions.add(executionId);
     seenKeys.delete(executionId);
     return legacyKeys.length > 0;
   }
@@ -531,6 +635,13 @@ export function createDurableRunRegistry({
     const alreadyMigrated = await store.has(`${MIGRATED_PREFIX}${executionId}`).catch(() => false);
     if (!alreadyMigrated) await locked(() => migrateExecutionLog(executionId));
     return lockedRead(async () => {
+      // Inside the shared lock, which has already awaited the write chain — so
+      // every append initiated before this read has queued its row, and this
+      // flush puts them on disk. Placed BEFORE the lock it would race an append
+      // that had been called but had not yet queued. A read flushes rather than
+      // merging the buffer: one source of truth (the file), and byte cursors
+      // stay meaningful, since a buffered row has no offset yet.
+      await flushExecution(executionId);
       const record = await readRecord(executionId);
       if (!record) throw new Error("unknown execution");
       const handle = await logHandleFor(executionId, { create: false });
@@ -734,7 +845,18 @@ export function createDurableRunRegistry({
           await store.delete(candidate);
         }
         // The run log is a FILE and is therefore not in store.keys(); purging an
-        // execution has to remove it explicitly or it outlives its run.
+        // execution has to remove it explicitly or it outlives its run. Drop any
+        // buffered rows too — writing them after the purge would resurrect the
+        // execution's log.
+        migratedExecutions.delete(executionId);
+        logHandles.delete(executionId);
+        seenKeys.delete(executionId);
+        const orphaned = pendingAppends.get(executionId);
+        if (orphaned) {
+          pendingAppends.delete(executionId);
+          if (orphaned.timer != null) clearTimeout(orphaned.timer);
+          for (const w of orphaned.waiters) w.reject(new Error("execution purged before its log was flushed"));
+        }
         await removeLogFor(executionId).catch(() => {});
         // Remove only this admission. Preserve concurrent IDs, and restore the
         // registry's exact absent-vs-pre-existing-empty shape with CAS.

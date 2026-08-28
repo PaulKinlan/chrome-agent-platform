@@ -1331,13 +1331,19 @@ Deno.test("run log WAL: a LEGACY key-value execution migrates into the log on fi
   }
   await store.delete(`run-log-wal:${id}`).catch(() => {});
 
-  const rows = await registry.listLogs(id, 2);
+  // Read through a FRESH registry, which is what actually happens: a pre-WAL
+  // execution is met by a worker that has never seen it. (The original registry
+  // memoises "already migrated" in memory to keep the marker check off the
+  // per-append path, so reusing it here would be testing the memo, not the
+  // migration.)
+  const { registry: cold } = harness(store, { bootId: "boot-cold" });
+  const rows = await cold.listLogs(id, 2);
   assertEquals(rows.length, 2, "a bounded read still returns the recent slice");
   assertEquals(rows[0].tool, "b");
   assertEquals(rows[1].tool, "c");
 
   // Healed: the legacy rows are gone and the whole history reads from the log.
-  const all = await registry.listLogs(id);
+  const all = await cold.listLogs(id);
   assertEquals(all.filter((r) => r.type === "tool-call").map((r) => r.tool), ["a", "b", "c"]);
   const leftover = (await store.keys()).filter((k) => k.startsWith(`run-log:${id}:`));
   assertEquals(leftover.length, 0, "legacy rows are removed only after the log verified");
@@ -1355,42 +1361,6 @@ Deno.test("thread-log index: full history (unbounded) still returns every row", 
   assertEquals(all[0].type, "accepted", "the admission marker is the oldest row");
   assertEquals(all[1].tool, "t0");
   assertEquals(all[50].tool, "t49");
-});
-
-
-// ── run-log read/write consistency ────────────────────────────────────────
-// These hold for the current one-append-per-row implementation AND for the
-// buffered one that is still to land, which is the point of asserting them now:
-// whatever the write path does, a reader must never miss a row that was already
-// accepted, and an awaited append must be on disk.
-Deno.test("WAL buffer: a read sees rows that were appended but not awaited", async () => {
-  const store = new FakeStore();
-  const { registry } = harness(store);
-  const id = "exec_buf_read";
-  await startIndexedRun(registry, id);
-
-  // Fire-and-forget, exactly as the service worker logs tool calls.
-  const p1 = registry.appendLog(id, { type: "tool-call", tool: "a" }, "b1");
-  const p2 = registry.appendLog(id, { type: "tool-result", result: "r" }, "b2");
-
-  // Read WITHOUT awaiting either append.
-  const logs = await registry.listLogs(id);
-  assert(logs.some((r) => r.tool === "a"), "the buffered tool-call is visible to a read");
-  assert(logs.some((r) => r.result === "r"), "the buffered tool-result is visible to a read");
-  await Promise.all([p1, p2]);
-});
-
-Deno.test("WAL buffer: appendLog still resolves only once the row is durable", async () => {
-  const store = new FakeStore();
-  const { registry } = harness(store);
-  const id = "exec_buf_durable";
-  await startIndexedRun(registry, id);
-  await registry.appendLog(id, { type: "tool-call", tool: "durable" }, "d1");
-  // Awaiting the append means the row is on disk, not merely queued: a fresh
-  // registry over the same storage — a service-worker restart — sees it.
-  const restarted = harness(store, { bootId: "boot-restart" }).registry;
-  const logs = await restarted.listLogs(id);
-  assert(logs.some((r) => r.tool === "durable"), "an awaited append survived a restart");
 });
 
 
@@ -1438,4 +1408,110 @@ Deno.test("run log: purging an execution leaves no remnant — marker or log fil
   await registry.rollbackUnprogressedQuota(id, Object.assign(new DOMException("q", "QuotaExceededError"), {}));
   const remnants = (await store.keys()).filter((k) => k.includes(id));
   assertEquals(remnants, [], "no key-value remnant, including the migration marker");
+});
+
+// ── the run-log write buffer ───────────────────────────────────────────────
+Deno.test("WAL buffer: concurrent appends coalesce into ONE file write", async () => {
+  const store = new FakeStore();
+  let opens = 0;
+  const base = createMemoryRunLogHandles();
+  store.__logHandles = async (execId, opts) => {
+    const h = await base(execId, opts);
+    if (!h) return h;
+    return {
+      getFile: (...a) => h.getFile(...a),
+      async createWritable(o) { opens += 1; return await h.createWritable(o); },
+    };
+  };
+  const { registry } = harness(store);
+  const id = "exec_buf_coalesce";
+  await registry.start({
+    executionId: id, kind: "task", taskPreview: "t", journalTarget: "master",
+    resumeRequest: { id: "t", task: "t", route: "runTask", routeArgs: {}, idempotencyKey: id },
+  });
+
+  const before = opens;
+  await Promise.all(Array.from({ length: 20 }, (_, i) =>
+    registry.appendLog(id, { type: "tool-call", tool: `t${i}` }, `c${i}`)
+  ));
+  const writes = opens - before;
+  // The point of the buffer: 20 rows must not cost 20 open/write/close cycles.
+  assert(writes <= 3, `20 concurrent appends coalesced into ${writes} writes`);
+
+  // ...and every row is present and in order.
+  const logs = await registry.listLogs(id);
+  const tools = logs.filter((r) => r.type === "tool-call").map((r) => r.tool);
+  assertEquals(tools, Array.from({ length: 20 }, (_, i) => `t${i}`), "all 20 rows, in append order");
+});
+
+Deno.test("WAL buffer: a read sees rows that were appended but not awaited", async () => {
+  const store = new FakeStore();
+  const { registry } = harness(store);
+  const id = "exec_buf_read";
+  await registry.start({
+    executionId: id, kind: "task", taskPreview: "t", journalTarget: "master",
+    resumeRequest: { id: "t", task: "t", route: "runTask", routeArgs: {}, idempotencyKey: id },
+  });
+  // Fire-and-forget, exactly as the service worker logs tool calls.
+  const p1 = registry.appendLog(id, { type: "tool-call", tool: "a" }, "b1");
+  const p2 = registry.appendLog(id, { type: "tool-result", result: "r" }, "b2");
+  const logs = await registry.listLogs(id); // NOT awaiting either append
+  assert(logs.some((r) => r.tool === "a"), "the buffered tool-call is visible to a read");
+  assert(logs.some((r) => r.result === "r"), "the buffered tool-result is visible to a read");
+  await Promise.all([p1, p2]);
+});
+
+Deno.test("WAL buffer: an awaited append is genuinely on disk", async () => {
+  const store = new FakeStore();
+  const { registry } = harness(store);
+  const id = "exec_buf_durable";
+  await registry.start({
+    executionId: id, kind: "task", taskPreview: "t", journalTarget: "master",
+    resumeRequest: { id: "t", task: "t", route: "runTask", routeArgs: {}, idempotencyKey: id },
+  });
+  await registry.appendLog(id, { type: "tool-call", tool: "durable" }, "d1");
+  // A fresh registry over the same storage — a service-worker restart — sees it,
+  // which it could not if "awaited" only meant "queued".
+  const restarted = harness(store, { bootId: "boot-restart" }).registry;
+  const logs = await restarted.listLogs(id);
+  assert(logs.some((r) => r.tool === "durable"), "an awaited append survived a restart");
+});
+
+Deno.test("WAL buffer: a run never settles with unflushed history behind it", async () => {
+  const store = new FakeStore();
+  const { registry } = harness(store);
+  const id = "exec_buf_terminal";
+  await registry.start({
+    executionId: id, kind: "task", taskPreview: "t", journalTarget: "master",
+    resumeRequest: { id: "t", task: "t", route: "runTask", routeArgs: {}, idempotencyKey: id },
+  });
+  const pending = registry.appendLog(id, { type: "tool-call", tool: "before-terminal" }, "t1");
+  await registry.settle(id, { ok: true, result: "done", summary: "done", logicalId: "t" });
+
+  const logs = await registry.listLogs(id);
+  const toolIdx = logs.findIndex((r) => r.tool === "before-terminal");
+  const termIdx = logs.findIndex((r) => r.type === "terminal");
+  assert(toolIdx >= 0, "the row queued before settle survived");
+  assert(termIdx > toolIdx, "the terminal row comes AFTER it");
+  await pending;
+});
+
+Deno.test("WAL buffer: a failed flush rejects every caller whose row it carried", async () => {
+  const store = new FakeStore();
+  let failing = false;
+  store.__logHandles = createMemoryRunLogHandles({ failWriteFor: () => failing });
+  const { registry } = harness(store);
+  const id = "exec_buf_fail";
+  await registry.start({
+    executionId: id, kind: "task", taskPreview: "t", journalTarget: "master",
+    resumeRequest: { id: "t", task: "t", route: "runTask", routeArgs: {}, idempotencyKey: id },
+  });
+  failing = true;
+  const results = await Promise.allSettled([
+    registry.appendLog(id, { type: "tool-call", tool: "x" }, "f1"),
+    registry.appendLog(id, { type: "tool-call", tool: "y" }, "f2"),
+  ]);
+  // Silently dropping rows is the worst outcome for a durability log — every
+  // caller must learn its write failed.
+  assertEquals(results.map((r) => r.status), ["rejected", "rejected"]);
 });

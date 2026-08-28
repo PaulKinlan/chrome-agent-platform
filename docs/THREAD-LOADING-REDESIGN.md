@@ -245,6 +245,45 @@ means buffering appends within a tick and flushing once — a change to *when* w
 write, not to how it is stored, and the module already supports it
 (`appendRecords` takes an array). That is the next win and it is cheap.
 
+## 5c. Measured result of the write buffer (2026-08-28) — the work is done
+
+| rows | baseline | after 1+2 | after the WAL | **+ buffer & memo** |
+|---|---|---|---|---|
+| open 10 | 15 ms | 9 ms | 9 ms | **5 ms** |
+| open 250 | 213 ms | 81 ms | 40 ms | **14 ms** |
+| open 1,000 | 918 ms | 348 ms | 146 ms | **27 ms** |
+| write 10 | 140 ms | — | 70 ms | **30 ms** |
+| write 250 | 11,183 ms | — | 1,994 ms | **323 ms** |
+| write 1,000 | 171,375 ms | — | 14,113 ms | **1,390 ms** |
+
+**Open is ~34x faster than baseline. Writing is ~123x faster.** Extrapolated to
+the product's own bound (6,250 rows), opening a task goes from ~6 s to ~170 ms.
+
+Two changes got the last order of magnitude:
+
+1. **Coalescing.** The row is queued under the write lock and the flush is
+   awaited OUTSIDE it. Both halves matter: an earlier version awaited the flush
+   while holding the lock, which serialised every append and produced **21 file
+   writes for 20 concurrent appends** — no coalescing whatsoever. A test asserts
+   the write COUNT, not a timing number, and fails at 20 when the lock is held
+   across the flush.
+2. **The preamble.** With file writes coalesced, the remaining cost was per
+   append: a marker read and a directory/file open, on every row, plus a SHA-256
+   computed whether or not it was needed. The marker and handle are stable for
+   an execution's life and are now memoised (cleared on purge), and the digest
+   is computed only when a payload actually overflows — it exists to name the
+   overflow file.
+
+The remaining write cost is the per-append work still inside the lock — the
+record validity read and JSON serialisation. That is a much smaller target and
+is not currently worth the risk.
+
+**A read flushes; it does not merge the buffer.** One source of truth (the
+file), and byte cursors stay meaningful, since a buffered row has no offset yet.
+The flush sits INSIDE the shared-lock callback, which has already awaited the
+write chain — placed before it, a read races an append that had been called but
+had not yet queued.
+
 ## 6. Staging
 
 Each stage is independently shippable and leaves the product green.
@@ -254,7 +293,8 @@ Each stage is independently shippable and leaves the product green.
 | 1 | Concurrent execution reads + concurrent row reads within a page (§3.2, no storage change) | **DONE** — 918 → 425 ms at 1,000 rows | Low |
 | 2 | Split the global mutex into a read/write lock: readers share, writers exclusive | **DONE** — 425 → 348 ms | Medium |
 | 3 | **WAL: one append-only file per execution** + lazy migration (§3, §4) | **DONE** — open 348 → 146 ms; write 171 s → 14 s | **High** |
-| 4 | Streamed first page (§3.4) | First paint independent of history | Low (trivial once 3 lands) |
+| 4 | Streamed first page (§3.4) | **Not needed.** At 27 ms for 1,000 rows the first paint is already fast enough that streaming would add moving parts for no measurable gain. Revisit only if a real profile exceeds the bound. | — |
+| + | Write buffer & preamble memo (§5c) | **DONE** — open 146 → 27 ms; write 14.1 s → 1.4 s | Medium |
 
 Stage 1 alone should take the 1,000-row case from ~960 ms to roughly 150–250 ms.
 If it does not, the model above is wrong and stages 2–4 should be re-argued

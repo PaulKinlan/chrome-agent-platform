@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.348] — 2026-08-28
+- Tasks are now dramatically faster: opening one is about 34x quicker than it was (nearly a second down to under a thirtieth), and recording what an agent does is ~123x quicker — a thousand steps went from nearly three minutes to under a second and a half. A long-running task no longer slows down the longer it runs
+
 ## [0.2.347] — 2026-08-28
 - Fixed a bug in the faster task-history storage: the row recording how a run finished was written where the new reader never looks, so every completed run quietly lost it from its log. Not visible in the UI (status comes from elsewhere), but wrong — and it blocked the batching work that comes next
 
