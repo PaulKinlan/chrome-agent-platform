@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.335] — 2026-08-28
+- Tool calls in the conversation now show the tool that actually ran and the arguments it actually got, instead of internal plumbing like execute_tool and selectionRef — and artifacts show up inline again. Also fixed a real one: once you had ~70 artifacts, saving a new one silently returned nothing at all, so the agent lost track of what it had just made
+
 ## [0.2.334] — 2026-08-28
 - Internal cleanup: finished removing the old view-transition machinery (it was already disabled) — renamed to what it actually does and stripped the leftover styles. No visible change
 

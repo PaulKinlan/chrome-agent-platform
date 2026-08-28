@@ -1169,6 +1169,26 @@ evidence every other task depends on).
   landed_version: 0.2.287
   summary: "Owner (2026-08-26): the extension has NO observability. Significant logging was requested before but isn't there. Clicking a task takes ~10s with zero trace of what's happening. One error seen: 'VM5974:2 Uncaught TypeError: Cannot read properties of undefined (reading startTime)' in et.reportAllChanges — that script is MINIFIED and is NOT our shipped code (our SW + options bundles are already unminified; grep confirms reportAllChanges absent), so it's a page the agent visited — we need logging to separate ours from theirs. REQUIREMENTS: (1) debug build with unminified code + source maps in npm run build; npm run build:production / --target=store stays the minified Store bundle; (2) a real logging layer — structured console logs with namespaces + levels + timing (grep-able like [cap:sw:grant]), console.groupCollapsed for runs; (3) performance.mark/measure around every slow path (task load, navigation, tool dispatch, model round-trips) + summary timing logs so a 10s task load becomes a readable breakdown; (4) use Chrome's native logging/performance features throughout (SW, NTP, side panel, content scripts); (5) a way to dump/ship the trace. Goal: use observability to improve the product. CRITICAL: debug mode must NOT weaken the production security assertions (seam scan, no-new-Function, oracle scan, bundled-tool verify) — logging verbosity is the only thing debug relaxes."
 
+## [CAP-FB-20260828-TOOL-RESULT-ENVELOPE-01] The lazy protocol envelope leaks into the transcript and erases results
+- Feedback: 2026-08-28 — product owner pasted a live run: `{"selectionRef":"sel_ba138fff…","arguments":{"content":"<!DOCTYPE html>…"}}` and `{"modelContent":"{\"ok\":true,\"selectedTool\":\"create_asset\",\"result\":{\"bounded\":true,\"summary\":\"tool completed; result was not safely serializable\"}…"}` — "it should be showing the asset inline. The result of tool calls is never rendered correctly, and even the inputs aren't formatted well"
+- Updated: 2026-08-28 07:10 UTC
+- Status: IN_REVIEW
+- Priority: P0
+- Owner: claude-opus-5 implementer session
+- Workspace: active (local path private)
+- Branch: working tree on `origin/main`
+- Base: `88ed2df2`
+- Candidate: this commit
+- Shipping: —
+- Acceptance: a transcript names the tool that actually RAN and shows the arguments it actually received, never `execute_tool` with a `selectionRef`; a `create_asset` renders its artifact card inline; and a result that trips a protocol bound keeps its identifying fields instead of being replaced wholesale by a summary string
+- Review: author review with the falsification gates; tested against the exact payload the owner pasted
+- Gates: unit **1815/0** · build clean
+- Blockers: —
+- Next: the tool card's own presentation (collapsed head, JSON view) is `CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01`; this entry only makes the card show the RIGHT tool and the RIGHT data
+- Recover: `git grep -n "effectiveToolCall\|degradeResult" -- extension/shared/conversation.js extension/lib/lazy-tool-protocol.js`
+- History:
+  - 2026-08-28 07:10 UTC — **three defects, one root cause: the lazy protocol envelope was treated as the result.** Since the lazy cutover every run gets only `search_tools`/`execute_tool`, so the tool NAME the UI sees is `execute_tool` and the real tool is named inside the payload. **(1) Results were being ERASED, not bounded.** `asset.create` returned `index: res.index` — the ENTIRE artifact index — to the model on every create. Measured: at ~72 artifacts that alone exceeds the protocol's 512-node result bound; `projectData` THROWS on the bound, and `projectResult` caught every throw and replaced the whole result with `{bounded:true, summary:"…not safely serializable"}`. So past ~72 artifacts the model never learned the id of the thing it had just made, and the UI had nothing to render. **My own artifact-library change made this worse** — one shared index instead of per-origin reaches the bound sooner. Fixed at the source (`asset.create` returns identity: id/name/type/origin/size, never the index and never the content back) and defensively (`degradeResult` keeps top-level scalars and says how many fields were dropped, instead of erasing). **(2) The card named the envelope, not the tool** — `effectiveToolCall` now resolves `execute_tool` to its `selectedTool` and unwraps the arguments from under `arguments`, dropping the meaningless `selectionRef`; the live path corrects the header once the result names the tool, and the replay path resolves it from the pair. **(3) My in-thread artifact work from an hour earlier NEVER FIRED in a real run** — `artifactFromToolResult` keyed on the tool name being `create_asset`, which under the lazy protocol it never is. It now unwraps the envelope first. That bug was invisible to its own tests because they exercised the direct-dispatch shape; the new tests use the exact payload the owner pasted.
+
 ## [CAP-FB-20260828-ARTIFACTS-IN-THREAD-01] Artifacts render in the thread that produced them
 - Feedback: 2026-08-28 — product owner: "assets created by an agent should also be easily visible in the chat/task/agent log so they can be viewed in the context in which they are created. I never see assets there and they should be (as well as globally visible)"
 - Updated: 2026-08-28 05:30 UTC
