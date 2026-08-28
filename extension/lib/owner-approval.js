@@ -438,13 +438,15 @@ export function bridgeApprovedApprovalToRun(store, approvalId, toRunId) {
   if (!entry) return { ok: false, error: "no such approval" };
   if (entry.status !== "approved") return { ok: false, error: "approval is not approved" };
   if (entry.bridgedFrom) return { ok: false, error: "approval was already bridged" };
-  if (entry.runId === toRunId) return { ok: true, bridged: false, action: entry.action };
+  if (entry.runId === toRunId) {
+    return { ok: true, bridged: false, action: entry.action, targetRef: entry.targetRef ?? "" };
+  }
   store.byTuple.delete(entry.key);
   entry.bridgedFrom = entry.runId;
   entry.runId = toRunId;
   entry.key = approvalKey(toRunId, entry.action, entry.target, entry.digest);
   store.byTuple.set(entry.key, approvalId);
-  return { ok: true, bridged: true, action: entry.action };
+  return { ok: true, bridged: true, action: entry.action, targetRef: entry.targetRef ?? "" };
 }
 
 export function listPendingApprovals(store) {

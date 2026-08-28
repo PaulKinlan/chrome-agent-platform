@@ -1977,7 +1977,9 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       for (const aid of ids) {
         try {
           const bridged = bridgeApprovedApprovalToRun(ownerApprovalStore, aid, executionId);
-          if (bridged?.ok) securityApprovalEvent("bridged", bridged.action ?? "", "");
+          // Audit the bridge with the approval's opaque ref ("bridged" is an
+          // allowlisted decision; the owner transparency surface shows it).
+          if (bridged?.ok) securityApprovalEvent("bridged", bridged.action ?? "", bridged.targetRef ?? "");
         } catch { /* degraded — the tool re-requests */ }
       }
     }

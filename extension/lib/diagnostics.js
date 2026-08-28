@@ -122,7 +122,7 @@ export function securityEvent(kind, detail = "") {
  * generic redactor would otherwise treat any long hex as possible key material.
  */
 export function securityApprovalEvent(decision, action, targetRef) {
-  if (!new Set(["requested", "approved", "denied", "consumed", "owner-direct"]).has(decision)) {
+  if (!new Set(["requested", "approved", "denied", "consumed", "owner-direct", "bridged"]).has(decision)) {
     return null;
   }
   if (typeof action !== "string" || !/^[a-z][a-z.-]{0,63}$/.test(action)) return null;

@@ -637,6 +637,11 @@ Deno.test("resume race: the snapshot phase PASSES for A, the row is swapped mid-
 // dispatcher → named-agent.run → runTask chain needs a filesystem to talk to.
 function dirNode() { return { kind: "directory", children: new Map() }; }
 function fileNode(content) { return { kind: "file", content }; }
+function namedNotFound(message: string) {
+  const e = new Error(message);
+  (e as { name: string }).name = "NotFoundError";
+  return e;
+}
 class FakeWritable {
   constructor(node) { this.node = node; this.parts = []; }
   async write(s: unknown) { this.parts.push(String(s)); }
@@ -656,14 +661,17 @@ class FakeDirHandle {
   get kind() { return "directory"; }
   async getDirectoryHandle(name: string, opts: { create?: boolean } = {}) {
     if (!this.node.children.has(name)) {
-      if (opts?.create !== true) throw new Error(`no dir ${name}`);
+      if (opts?.create !== true) throw namedNotFound(`no dir ${name}`);
       this.node.children.set(name, dirNode());
     }
     return new FakeDirHandle(this.node.children.get(name));
   }
   async getFileHandle(name: string, opts: { create?: boolean } = {}) {
     if (!this.node.children.has(name)) {
-      if (opts?.create !== true) throw new Error(`no file ${name}`);
+      // Real OPFS throws a DOMException named NotFoundError for a missing
+      // entry when create:false — callers (e.g. the owner-approval install
+      // key reader) branch on the NAME, so the fake must match.
+      if (opts?.create !== true) throw namedNotFound(`no file ${name}`);
       this.node.children.set(name, fileNode(""));
     }
     return new FakeFileHandle(this.node.children.get(name));
@@ -722,16 +730,53 @@ Deno.test("agent.run @mention dispatch: the REAL dispatcher routes each mention 
     const created = await send({ type: "named-agent.create", id: "named:alpha", name: "Alpha" });
     assertEquals(created.ok, true, `named-agent.create must succeed: ${JSON.stringify(created)}`);
 
-    // THE BINDING RIDES THE MENTION: a real agent + a valid-shaped (unknown)
-    // binding id. The run must be ADMITTED past the mention dispatcher — the
-    // binding reaches the named-agent.run handler and onward into runTask's
-    // one-shot bridge (which degrades harmlessly on an unknown id). The
-    // response must NEVER be the no-agent refusal.
+    // THE BINDING RIDES THE MENTION — and the test OBSERVES the ride. An
+    // unknown binding id degrades harmlessly inside runTask, so an
+    // admitted-run assertion alone cannot distinguish forwarding from a
+    // dropped field. Instead: seed a REAL pending approval through the REAL
+    // gated route (capability.revoke under the owner-options principal),
+    // resolve it through the REAL Settings route, pass ITS id as the binding,
+    // and assert the downstream CONSUMPTION — the one-shot bridge fires the
+    // `owner-bridged` audit event for this approval's action + opaque ref
+    // (the security surface is the store's owner-visible projection).
+    const optionsSender = {
+      id: "test-extension-id",
+      url: "chrome-extension://test-extension-id/options/options.html",
+      documentId: "doc-alarm-mention-1",
+    };
+    const gated = await send(
+      { type: "capability.revoke", id: "storage" },
+      optionsSender,
+    );
+    assertEquals(gated.ok, false, "an unapproved capability.revoke must refuse");
+    const pendingRows = await send(
+      { type: "management.pending-approvals" },
+      optionsSender,
+    );
+    const pendingRow = (pendingRows.approvals as Array<Record<string, unknown>>)?.find(
+      (r) => r.action === "capability.revoke",
+    );
+    assert(pendingRow != null, "the gated mutation must surface a pending approval");
+    const approvalId = String(pendingRow.approvalId);
+    const targetRef = String(pendingRow.targetRef ?? "");
+    assert(/^[0-9a-f]{32}$/.test(targetRef), "the pending approval carries its opaque ref");
+
+    // Resolve through the REAL Settings surface: pending → approved.
+    const resolved = await send(
+      { type: "management.resolve-approval", approvalId, approve: true },
+      optionsSender,
+    );
+    assertEquals(resolved.ok, true, `the owner resolves the approval: ${JSON.stringify(resolved)}`);
+
+    // Isolate the audit buffer: everything from here on is attributable to
+    // THIS test's dispatches.
+    await send({ type: "security.clear" }, optionsSender);
+
     const boundRun = await send({
       type: "agent.run",
       task: "alpha's mention task",
       mention: { kind: "named", id: "named:alpha", name: "Alpha" },
-      approvalBinding: ["a".repeat(64)],
+      approvalBinding: [approvalId],
     });
     // With no provider configured the run fails honestly INSIDE runTask's
     // pipeline (an infrastructure error, e.g. the run store's environment
@@ -754,6 +799,26 @@ Deno.test("agent.run @mention dispatch: the REAL dispatcher routes each mention 
     // thread BEFORE dispatch and the run entered the pipeline (the task stays
     // the hub's — the mention delegates the WORK, not the conversation).
     assertEquals(typeof boundRun.threadId, "string", "the mention run created its hub thread");
+
+    // THE CONSUMPTION OBSERVATION (REVISE-6): the bridge consumed the seeded
+    // approval — re-keyed onto the mention run's execution and audited as an
+    // `owner-bridged` event on the security surface. Deleting the forwarding
+    // at the mention dispatch site makes this assertion FAIL: the binding
+    // never reaches runTask, no bridge fires, no event exists.
+    const afterBridged = await send({ type: "security.state" }, optionsSender);
+    const bridgedEvents = ((afterBridged.violations as Array<Record<string, unknown>>) ?? [])
+      .filter((v) => v.kind === "owner-bridged");
+    assertEquals(bridgedEvents.length, 1, `exactly one bridge audit event expected, got: ${JSON.stringify(bridgedEvents)}`);
+    assertEquals(
+      String(bridgedEvents[0].message).includes("action=capability.revoke"),
+      true,
+      `the bridge event names the seeded approval's action: ${JSON.stringify(bridgedEvents[0])}`,
+    );
+    assertEquals(
+      String(bridgedEvents[0].message).includes(`ref=${targetRef}`),
+      true,
+      `the bridge event correlates to the seeded approval's opaque ref: ${JSON.stringify(bridgedEvents[0])}`,
+    );
 
     // BRANCH DISCRIMINATION through the same real dispatcher:
     const unknownAgent = await send({
@@ -783,6 +848,15 @@ Deno.test("agent.run @mention dispatch: the REAL dispatcher routes each mention 
     });
     assertEquals(unknownKind.ok, false);
     assertEquals(unknownKind.error, "cannot delegate to w: unknown agent kind weird");
+
+    // NEGATIVE CONTROL: the unknown/absent bindings in the branch probes above
+    // degrade harmlessly and audit NOTHING — the bridge count is unchanged.
+    // (A forwarding regression that fired the bridge for a wrong id, or a
+    // noisy bridge that audited degradations, would show up here.)
+    const afterControls = await send({ type: "security.state" }, optionsSender);
+    const lateBridged = ((afterControls.violations as Array<Record<string, unknown>>) ?? [])
+      .filter((v) => v.kind === "owner-bridged");
+    assertEquals(lateBridged.length, 1, "no additional bridge events from unknown/absent bindings");
   } finally {
     if (prevRuntime) globalThis.chrome.runtime = prevRuntime;
   }
