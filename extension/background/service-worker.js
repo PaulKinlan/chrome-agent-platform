@@ -27,11 +27,15 @@ import {
 } from "../lib/provider-gate.js";
 import { dispatchDurableProviderRun } from "../lib/durable-provider-dispatch.js";
 import {
+  closeAgentWorkerFor,
   createActivityRoutes,
   createAgentWorkerRoutes,
   reconcileAgentWorkers,
   createProviderRoutes,
   createSchedulerRoutes,
+  createMemoryRoutes,
+  resolveMemory,
+  awaitMemoryQuiescence,
   kvRoutes,
   mergeRouteMaps,
   permLeaseRoutes,
@@ -76,6 +80,7 @@ import {
   listNamedAgentIds,
   listOrigins,
   listScreenshots,
+  purgeJournals,
   loadScreenshot,
   masterMemory,
   migrateLegacyDurableRunMemory,
@@ -160,6 +165,8 @@ import {
   preserveExistingProviderKey,
   MAX_ROLE_LEN,
   MAX_SKILLS,
+  resolveAgentInstanceId,
+  resolveNamedAgentStore,
   setNamedAgentProvider,
   slugifyAgentId,
   updateNamedAgent,
@@ -227,7 +234,7 @@ import {
 } from "../lib/browser-tools.js";
 import { getRecipe, RECIPES, backgroundRecipes, intentOf } from "../lib/recipes.js";
 import { fetchSkillFromUrl, installImportedSkill } from "../lib/skill-import.js";
-import { durableRuns } from "../lib/durable-runs.js";
+import { durableRuns, sweepOrphanAgentData } from "../lib/durable-runs.js";
 import { replaySafetyForTool } from "../lib/tool-replay-safety.js";
 import { createAlarmPermissionLifecycle } from "../lib/alarm-permission-lifecycle.js";
 import {
@@ -2468,24 +2475,6 @@ async function memoryOverview(store) {
   return { keyCount: keys.length, totalBytes, keys };
 }
 
-/** Resolve an `origin` label (the memory route's selector) to its OPFS store.
- * `master` → the hub's store; `background:<slug>` → a background/scheduled
- * agent's own store; `agent:<slug>` → a named agent's store; anything else → a
- * site-origin store. This is the single place the memory.get/set/list/clear
- * routes map a selector to a store, so every agent tier is addressable + the
- * background/named agents are isolated from the master (Paul: all agents get
- * their own OPFS). */
-function resolveMemory(origin) {
-  if (origin === "master") return masterMemory();
-  if (typeof origin === "string" && origin.startsWith("background:")) {
-    return backgroundAgentMemory(origin.slice("background:".length));
-  }
-  if (typeof origin === "string" && origin.startsWith("agent:")) {
-    return namedAgentMemory(origin.slice("agent:".length));
-  }
-  return siteMemory(origin);
-}
-
 /** Inspect one Site Agent: name, tools, memory keys, enrollment state. The
  * management get_agent / agent.directory routes use this. */
 async function agentInfo(origin) {
@@ -3004,10 +2993,14 @@ function executeWorkerTool(toolName, args, context) {
 const handlers = mergeRouteMaps(
   activityRoutes,
   schedulerRoutes,
+  createMemoryRoutes(),
   createAgentWorkerRoutes({
     ensureOffscreen,
     kvGet,
     kvSet,
+    // Worker identity = the agent's immutable instanceId (review P1-2):
+    // slug-keyed workers would be inherited by a recreated same-name agent.
+    resolveAgentIdentity: (agentId) => resolveAgentInstanceId(agentId),
     // ── PHASE-2 tool bridge authority ───────────────────────────────────────
     // The worker's RPC proxy (agent-worker.tool) resolves here. The SW is the
     // ONLY tool executor: resolve the tool by name from the SAME toolsets the
@@ -3880,16 +3873,47 @@ const handlers = mergeRouteMaps(
           payload,
         );
       },
+      // P1-2 teardown injection: persistent fs-grants scoped to THIS agent
+      // are revoked with it, under BOTH identity spellings (grants saved
+      // pre-instanceId carry the slug; newer carry the instanceId). Global
+      // grants are NEVER touched. P1-5: deletion addresses records by
+      // `grantId` (the record key) — the old `g.id` was always undefined, so
+      // exact-agent grants silently survived deletion.
+      revokeGrants: async (agentId) => {
+        try {
+          const { revokeAgentFsGrants } = await import("../lib/fs-grants.js");
+          return await revokeAgentFsGrants([agentId]);
+        } catch (e) { return { ok: false, error: String(e?.message ?? e) }; }
+      },
+      // P1-3: the fence runs FIRST inside teardownAgentState — every active
+      // durable run owned by this agent (either namespace) is cancelled and
+      // awaited terminal so no writer recreates a purged dir.
+      fenceActiveRuns: async ({ slug: fenceSlug, instanceId }) => {
+        const { fenceAgentActiveRuns } = await import("../lib/named-agents.js");
+        const f = await fenceAgentActiveRuns({
+          registry: durableRuns,
+          slug: fenceSlug,
+          instanceId,
+          // P1-1 (r3): the fence must fire the REAL live abort — without this
+          // the durable record said "no live abort callback registered" and
+          // the execution kept running through the teardown.
+          resolveAborter: (executionId) => durableRunAborters.get(executionId) ?? null,
+        });
+        if (f?.ok === false) return f;
+        // P1-1 (r3): direct (non-durable) memory writers are tracked — hold
+        // the fence until the agent's namespaces have no in-flight write.
+        const namespaces = [...new Set([instanceId, fenceSlug].filter(Boolean))];
+        return await awaitMemoryQuiescence(namespaces.map((ns) => `agent:${ns}`));
+      },
+      // The agent's shared worker must not be resurrectable after deletion.
+      closeAgentWorker: (agentId) => closeAgentWorkerFor(agentId, { kvGet, kvSet }),
     });
     if (r?.ok !== false) {
       // Deletion-time alarm cleanup (owner P1: alarms must not outlive the
-      // agent). If this agent was enabled as a BACKGROUND agent it has a
-      // deterministic `recipe:<slug>` scheduled task; deleting the agent must
-      // disarm it, else its alarm keeps firing forever as an orphan. Best-effort
-      // — "no such task" just means it wasn't scheduled.
-      // Non-blocking disarm (owner: deleting an agent must be instant). The
-      // payload is marked cancelling (inert) + the live run aborted NOW; the
-      // alarm-clear + payload cleanup finishes in the background.
+      // agent). The per-owner teardown inside deleteNamedAgent cancels every
+      // schedule stamped agentSurfaceRef named:<slug>; this background cancel
+      // remains for the deterministic recipe:<slug> task (best-effort, instant
+      // — the payload is marked cancelling and the live run aborted NOW).
       cancelScheduledTaskBackground(`recipe:${slug}`);
       // Failed-runs cascade (owner 2026-08-28): the deleted agent's terminal
       // failed records are purged from the durable registry (record, index,
@@ -3906,8 +3930,9 @@ const handlers = mergeRouteMaps(
   async "named-agent.grep"({ id, query }) {
     // Search a named agent's OWN memory + history (the user-facing path). The
     // agent itself gets the same search through its `memory_grep` tool.
-    if (!(await getNamedAgent(id))) return { ok: false, error: `no agent ${id}` };
-    const mem = namedAgentMemory(slugifyAgentId(id));
+    const agent = await getNamedAgent(id);
+    if (!agent) return { ok: false, error: `no agent ${id}` };
+    const mem = namedAgentMemory(agent.instanceId || slugifyAgentId(id));
     return await grepAgentMemory(mem, query);
   },
   async "named-agent.avatar"({ id, name, role }, context) {
@@ -3970,10 +3995,13 @@ const handlers = mergeRouteMaps(
     // agents had CRUD/grep/avatar but no run path). The agent runs the task
     // with its OWN OPFS sandbox (namedAgentMemory — its memory + history), so
     // its runs read/write its own tier, never the master's or a site's.
+    // The store is namespaced by the agent's IMMUTABLE instanceId (not the
+    // reusable slug): a recreated same-name agent gets a genuinely fresh
+    // namespace, and the deleted agent's journalTarget dies with it.
     const agent = await getNamedAgent(id);
     if (!agent) return { ok: false, error: `no agent ${id}` };
     const slug = slugifyAgentId(id);
-    const mem = namedAgentMemory(slug);
+    const mem = namedAgentMemory(agent.instanceId || slug);
     const runTag = runId ?? `named:${slug}:${Date.now()}`;
     // PER-AGENT provider override: resolve the agent's OWN complete provider
     // config (the full override WITH its key — never surfaced), then thread the
@@ -4033,8 +4061,9 @@ const handlers = mergeRouteMaps(
     // The agent's OWN run history (its journal — task/result/tool-call rows),
     // most-recent-first, so the agent-chat surface can show what the agent did.
     // Reads the per-agent OPFS, never the master journal.
-    if (!(await getNamedAgent(id))) return { ok: false, error: `no agent ${id}` };
-    const mem = namedAgentMemory(slugifyAgentId(id));
+    const agent = await getNamedAgent(id);
+    if (!agent) return { ok: false, error: `no agent ${id}` };
+    const mem = namedAgentMemory(agent.instanceId || slugifyAgentId(id));
     const journal = (await mem.get("journal").catch(() => null)) ?? [];
     const entries = Array.isArray(journal) ? journal.slice(-200).reverse() : [];
     return { entries, count: entries.length };
@@ -4136,6 +4165,37 @@ const handlers = mergeRouteMaps(
     }
     const targets = await enumerateStorageTargets();
     return { ok: true, targets };
+  },
+
+  /** Owner-reported leftover fix: purge agent journals (per-agent or global)
+   * WITHOUT touching memory content, run history, or assets. */
+  async "memory.purgeJournals"({ target = null } = {}, context) {
+    if (context?.principal !== "owner-options") {
+      return { ok: false, error: "journal purge is restricted to the Settings surface" };
+    }
+    try {
+      const r = await purgeJournals(target);
+      return r?.ok === false ? r : { ok: true, ...r };
+    } catch (err) {
+      return { ok: false, error: `purge_journals_failed: ${err?.message || err}` };
+    }
+  },
+
+  /** Orphan sweep: remove OPFS state whose owning agent no longer exists
+   * (pre-fix deletion leftovers). Never touches assets or live agents. */
+  async "memory.sweepOrphans"(_m, context) {
+    if (context?.principal !== "owner-options") {
+      return { ok: false, error: "orphan sweep is restricted to the Settings surface" };
+    }
+    try {
+      const [agentRows, taskRows] = await Promise.all([listNamedAgents(), listScheduledTasks()]);
+      return await sweepOrphanAgentData({
+        listAgents: async () => agentRows,
+        listTasks: async () => taskRows,
+      });
+    } catch (err) {
+      return { ok: false, error: `orphan_sweep_failed: ${err?.message || err}` };
+    }
   },
 
   // `agent.registry` — the ONE redacted, grouped, live agent registry the shared
@@ -4502,32 +4562,10 @@ const handlers = mergeRouteMaps(
     return await allSkills();
   },
 
-  async "memory.get"({ origin, key }) {
-    // The internal namespace is never readable by the MODEL (the reviewer's
-    // finding: __tx/assetRepair/assets/asset:/__epoch were readable/listed).
-    if (/^(?:__gen|__tx|__wal|__epoch|__tombs|assets|assetRepair|asset:)/.test(String(key ?? ""))) {
-      return { ok: false, error: `key "${key}" is reserved on this store` };
-    }
-    return await resolveMemory(origin).get(key);
-  },
-  async "memory.set"({ origin, key, value }) {
-    return await resolveMemory(origin).set(key, value);
-  },
-  async "memory.list"({ origin }) {
-    const all = await resolveMemory(origin).keys();
-    return all.filter((k) => !/^(?:__gen|__tx|__wal|__epoch|__tombs|assets|assetRepair|asset:)/.test(k));
-  },
-  async "memory.clear"({ origin }) {
-    // `clear()` resolves to undefined, so the old shape gave the caller nothing
-    // to check — Settings reported "Cleared…" whether or not anything happened.
-    // Return an explicit result and let a failure surface.
-    try {
-      await resolveMemory(origin).clear();
-      return { ok: true, origin };
-    } catch (e) {
-      return { ok: false, error: `could not clear memory: ${e?.message ?? e}` };
-    }
-  },
+  // memory.get/set/list/clear live in background/routes/memory.js (teardown
+  // review r5 P1-b: the dispatcher must be importable so tests exercise the
+  // real route, and the writer-tracking state is shared with the teardown
+  // fence through that module seam).
   async "memory.origins"() {
     return await listOrigins();
   },
@@ -4746,13 +4784,27 @@ const handlers = mergeRouteMaps(
     ]);
     const named = await listNamedAgents();
     const nameById = new Map(named.map((a) => [slugifyAgentId(a.id), a.name || a.id]));
+    const nameByInstance = new Map(named.map((a) => [String(a.instanceId ?? ""), a.name || a.id]));
+    // review r3 P1-3: store selectors must RESOLVE TRUTHLY. The old listing
+    // exposed a live agent's legacy slug dir under `agent:<slug>` while
+    // get/list/clear canonicalized that selector to the instanceId dir — so
+    // the explorer's "Clear (legacy)" cleared the agent's LIVE memory and
+    // left the displayed legacy dir untouched. classifyAgentMemoryDirs pins
+    // each dir to its true selector: canonical instanceId (read-write),
+    // legacy slug of a live agent (READ-ONLY — it is teardown that removes
+    // it), or orphan (read-write; a real dead dir).
+    const { classifyAgentMemoryDirs } = await import("../lib/named-agents.js");
+    const classified = classifyAgentMemoryDirs({ dirs: namedIds, agents: named });
     const stores = [{ key: "master", label: "Master (the hub)", kind: "master" }];
-    for (const id of namedIds) {
-      const store = namedAgentMemory(id);
+    for (const c of classified) {
+      const label = nameByInstance.get(c.dir) ?? nameById.get(slugifyAgentId(c.dir)) ?? c.dir;
+      const store = namedAgentMemory(c.dir);
       stores.push({
-        key: `agent:${id}`,
-        label: nameById.get(id) ?? id,
+        key: c.selector,
+        label: c.state === "legacy" ? `${label} (legacy — read-only)` : c.state === "orphan" ? `${c.dir} (orphan)` : label,
         kind: "named",
+        state: c.state,
+        readOnly: c.readOnly,
         keyCount: (await store.keys()).length,
       });
     }
@@ -4866,7 +4918,7 @@ const handlers = mergeRouteMaps(
           _executionId: executionId, _permissionResume: true, _resumeToken: resumed.token, _allowProviderChange: run.phase === "paused-provider-change",
         }, context);
       } else {
-        result = await runTask({ ...request, memory: resolveMemory(request.memoryOrigin ?? "master"), executionId, permissionResume: true, resumeToken: resumed.token, allowProviderChange: run.phase === "paused-provider-change" });
+        result = await runTask({ ...request, memory: await resolveMemory(request.memoryOrigin ?? "master"), executionId, permissionResume: true, resumeToken: resumed.token, allowProviderChange: run.phase === "paused-provider-change" });
       }
       if (result?.ok === false && !result?.paused && !result?.cancelled) {
         await durableRuns.failResumeDispatch(executionId, resumed.token, result.error ?? "resume route refused");
@@ -6151,7 +6203,7 @@ async function resumeInterruptedRuns() {
       } else {
         result = await runTask({
           ...request,
-          memory: resolveMemory(request.memoryOrigin ?? "master"),
+          memory: await resolveMemory(request.memoryOrigin ?? "master"),
           executionId: run.executionId,
           permissionResume: true,
           resumeToken: claimed.token,

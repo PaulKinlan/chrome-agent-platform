@@ -25,6 +25,30 @@ import {
 } from "../../lib/browser-command-lease.js";
 
 const ALIVE_KEY = "cap:agent-workers:alive";
+
+/** Alive-set persistence lives at module scope so agent deletion can prune it
+ * without constructing the route table (the SW passes this as the
+ * `closeAgentWorker` teardown injection into deleteNamedAgent). */
+const readAliveSetWith = (kvGet) => async () => {
+  const s = await kvGet(ALIVE_KEY);
+  const list = s?.[ALIVE_KEY];
+  return Array.isArray(list) ? list.filter((x) => typeof x === "string").slice(0, 200) : [];
+};
+const writeAliveSetWith = (kvSet) => (ids) => kvSet({ [ALIVE_KEY]: ids.slice(0, 200) });
+
+/** Agent-deletion teardown: drop the keep-alive port (best-effort — the host
+ * may already be gone) and prune the alive-set so the supervisor cannot
+ * resurrect a deleted agent's worker. Exported for the SW's delete route. */
+export async function closeAgentWorkerFor(agentId, { kvGet, kvSet } = {}) {
+  const id = String(agentId ?? "");
+  if (!id) return { ok: false, error: "invalid agentId" };
+  try {
+    await chrome.runtime.sendMessage({ type: "agent-worker-host:close", agentId: id });
+  } catch { /* host may already be gone */ }
+  const alive = await readAliveSetWith(kvGet)();
+  await writeAliveSetWith(kvSet)(alive.filter((x) => x !== id));
+  return { ok: true, agentId: id, closed: true };
+}
 const WORKER_PATH = "dist/workers/agent-worker.js";
 const MAX_PREVIEW_CHARS = 240;
 
@@ -135,13 +159,19 @@ export function createAgentWorkerRoutes({
   markScheduledDone = null,
   resolveJournalStore = null,
   journalAppend = null,
+  resolveAgentIdentity = null,
 }) {
-  const readAliveSet = async () => {
-    const s = await kvGet(ALIVE_KEY);
-    const list = s?.[ALIVE_KEY];
-    return Array.isArray(list) ? list.filter((x) => typeof x === "string").slice(0, 200) : [];
+  // Review P1-2: worker identity must be the agent's IMMUTABLE instanceId —
+  // a caller-supplied reusable slug would key the host worker + alive-set by
+  // a name a recreated agent reuses, inheriting the previous instance's
+  // worker. When the SW injects a resolver, both ensure and run re-key to
+  // the resolved identity; without it (tests), the literal is used.
+  const workerIdentity = async (agentId) => {
+    if (typeof resolveAgentIdentity !== "function") return agentId;
+    try { return (await resolveAgentIdentity(agentId)) || agentId; } catch { return agentId; }
   };
-  const writeAliveSet = (ids) => kvSet({ [ALIVE_KEY]: ids.slice(0, 200) });
+  const readAliveSet = readAliveSetWith(kvGet);
+  const writeAliveSet = (ids) => writeAliveSetWith(kvSet)(ids);
 
   return {
     /** Validate + ensure an agent's shared worker is alive. Returns the
@@ -152,22 +182,23 @@ export function createAgentWorkerRoutes({
       const agentId = String(m?.agentId ?? "");
       if (!agentId || agentId.length > 200) return { ok: false, error: "invalid agentId" };
 
+      const identity = await workerIdentity(agentId);
       const host = await ensureOffscreen();
       if (!host?.ok) return { ok: false, error: host?.error || "offscreen unavailable" };
 
       let ensured;
       try {
-        ensured = await chrome.runtime.sendMessage({ type: "agent-worker-host:ensure", agentId });
+        ensured = await chrome.runtime.sendMessage({ type: "agent-worker-host:ensure", agentId: identity });
       } catch (e) {
         return { ok: false, error: `worker host unreachable: ${e?.message ?? e}` };
       }
       if (!ensured?.ok) return { ok: false, error: ensured?.error || "worker not ensured" };
 
-      // Record liveness in the durable alive-set.
+      // Record liveness in the durable alive-set (identity-keyed).
       const alive = await readAliveSet();
-      if (!alive.includes(agentId)) await writeAliveSet([...alive, agentId]);
+      if (!alive.includes(identity)) await writeAliveSet([...alive, identity]);
 
-      return { ok: true, agentId, workerUrl: workerUrl(), name: agentId, created: ensured.created };
+      return { ok: true, agentId: identity, workerUrl: workerUrl(), name: identity, created: ensured.created };
     },
 
     /** PHASE-2 run kick (SW → host → worker run descriptor). Validated: only
@@ -180,7 +211,8 @@ export function createAgentWorkerRoutes({
       const runId = String(m?.runId ?? "").slice(0, 200);
       if (!runId) return { ok: false, error: "invalid runId" };
 
-      const ensured = await this["agent-worker.ensure"]({ agentId }, context);
+      const identity = await workerIdentity(agentId);
+      const ensured = await this["agent-worker.ensure"]({ agentId: identity }, context);
       if (!ensured?.ok) return ensured;
 
       const descriptor = {
@@ -195,14 +227,14 @@ export function createAgentWorkerRoutes({
       try {
         posted = await chrome.runtime.sendMessage({
           type: "agent-worker-host:post",
-          agentId,
+          agentId: identity,
           msg: { type: "agent-worker:run", ...descriptor },
         });
       } catch (e) {
         return { ok: false, error: `worker host unreachable: ${e?.message ?? e}` };
       }
       if (!posted?.ok) return { ok: false, error: posted?.error || "worker run not posted" };
-      return { ok: true, runId, agentId };
+      return { ok: true, runId, agentId: identity };
     },
 
     /** P4 dispatch seam: a background/foreground run KICKED through the worker
@@ -222,7 +254,8 @@ export function createAgentWorkerRoutes({
       const surfaceId = String(m?.surfaceId ?? agentId).slice(0, 200);
 
       // Ensure the worker is alive (idempotent).
-      const ensured = await this["agent-worker.ensure"]({ agentId }, context);
+      const identity = await workerIdentity(agentId);
+      const ensured = await this["agent-worker.ensure"]({ agentId: identity }, context);
       if (!ensured?.ok) return ensured;
 
       // Acquire the single-driver lease for this run's lifetime.
@@ -246,7 +279,7 @@ export function createAgentWorkerRoutes({
       try {
         posted = await chrome.runtime.sendMessage({
           type: "agent-worker-host:post",
-          agentId,
+          agentId: identity,
           msg: { type: "agent-worker:run", ...descriptor },
         });
       } catch (e) {
@@ -331,14 +364,18 @@ export function createAgentWorkerRoutes({
       if (!authorized(context)) return { ok: false, error: "unauthorized_principal" };
       const agentId = String(m?.agentId ?? "");
       if (!agentId) return { ok: false, error: "invalid agentId" };
+      // review r3 P1-3: resolve through the SAME identity resolver as
+      // ensure/run — a slug close used to message/remove the SLUG key while
+      // the host worker + alive-set entry live under the instanceId, leaving
+      // the instance worker alive after a "successful" close.
+      const identity = await workerIdentity(agentId);
       try {
-        await chrome.runtime.sendMessage({ type: "agent-worker-host:close", agentId });
+        await chrome.runtime.sendMessage({ type: "agent-worker-host:close", agentId: identity });
       } catch { /* host may already be gone */ }
       const alive = await readAliveSet();
-      await writeAliveSet(alive.filter((id) => id !== agentId));
-      return { ok: true, agentId, closed: true };
+      await writeAliveSet(alive.filter((id) => id !== agentId && id !== identity));
+      return { ok: true, agentId: identity, closed: true };
     },
-
     /** Phase 3: Bounded, redacted progress commit from a worker run.
      * Records progress in durable registry logs + updates execution heartbeat
      * + broadcasts live progress to UI ports. */

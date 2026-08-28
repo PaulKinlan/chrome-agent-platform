@@ -998,3 +998,33 @@ export function wireLocalFolderPickers({
     });
   }
 }
+
+/**
+ * Revoke every grant scoped to ANY of the given agent identities (review
+ * P1-5): records are keyed by `grantId` (NOT `id` — the old inline revocation
+ * passed an undefined field and exact-agent grants silently survived agent
+ * deletion), and both identity spellings are honoured (grants saved
+ * pre-instanceId carry the slug; newer state carries the instanceId). GLOBAL
+ * and other-agent/task-scoped grants are never touched.
+ * @param {string[]} agentIds
+ * @param {{ customIdb?: any }} [opts]
+ * @returns {Promise<{ ok: boolean, revoked: number, failures: string[] }>}
+ */
+export async function revokeAgentFsGrants(agentIds, { customIdb = null } = {}) {
+  const ids = (Array.isArray(agentIds) ? agentIds : [agentIds])
+    .map((v) => String(v ?? "").trim()).filter(Boolean);
+  if (!ids.length) return { ok: true, revoked: 0, failures: [] };
+  const wanted = new Set(ids.map((id) => `agent:${id}`));
+  const failures = [];
+  let revoked = 0;
+  // The unscoped list returns every record; scope filtering here is STRICT —
+  // a record without an exactly-matching agent scopeKey is preserved.
+  const all = await listFsGrants({}, { customIdb });
+  for (const g of Array.isArray(all) ? all : []) {
+    if (!wanted.has(String(g?.scopeKey ?? ""))) continue;
+    const d = await deleteFsGrant(g.grantId ?? g.id, { customIdb }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    if (d?.ok === false) failures.push(`${g.grantId ?? g.id}: ${d.error ?? "refused"}`);
+    else revoked += 1;
+  }
+  return failures.length ? { ok: false, revoked, failures } : { ok: true, revoked, failures };
+}

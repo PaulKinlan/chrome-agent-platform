@@ -255,6 +255,22 @@
         <div id="memory-explorer" class="memory-explorer"></div>
         <div id="origin-list" class="origin-list"></div>
 
+        <div class="maintenance-zone" style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border,#e3e0d9);">
+          <h3 style="margin: 0 0 6px;">Agent data maintenance</h3>
+          <p class="muted" style="margin: 0 0 12px; font-size: 13px;">
+            Purge agent journals (the running activity logs — memory content and artifacts are kept), or clean up leftover files from agents that were removed before deletion cleaned up after itself.
+          </p>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <label class="muted" for="purge-journal-agent" style="font-size:13px;">Agent</label>
+            <select id="purge-journal-agent" class="btn" style="max-width:260px;">
+              <option value="">All agents</option>
+            </select>
+            <button type="button" class="btn" id="purge-journals-btn">Purge journals…</button>
+            <button type="button" class="btn" id="sweep-orphans-btn">Clean up leftover files…</button>
+          </div>
+          <p id="maintenance-status" role="status" aria-live="polite" class="muted" style="margin: 10px 0 0; font-size: 13px;"></p>
+        </div>
+
         <div class="danger-zone" style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border,#e3e0d9);">
           <h3 style="color: var(--danger,#b3261e); margin: 0 0 6px;">Factory reset</h3>
           <p class="muted" style="margin: 0 0 12px; font-size: 13px;">

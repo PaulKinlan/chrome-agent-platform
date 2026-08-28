@@ -2322,7 +2322,10 @@ async function renderMemoryExplorer() {
     for (const key of keyList) {
       body.append(fileNode(store, key));
     }
-    const clearBtn = document.createElement("button");
+    const clearBtn = !store.readOnly
+      ? document.createElement("button")
+      : null;
+    if (clearBtn) {
     clearBtn.type = "button";
     clearBtn.className = "btn small ghost mem-clear";
     clearBtn.textContent = `Clear ${store.label}'s memory`;
@@ -2339,6 +2342,7 @@ async function renderMemoryExplorer() {
       renderData();
     });
     body.append(clearBtn);
+    }
   }
 
   // ── a file node (a key) — click to view its value ──────────────────────
@@ -2485,6 +2489,92 @@ async function renderData() {
 // ── Factory reset / Delete all data (CAP-FB-20260823-FACTORY-RESET-01) ──
 const factoryResetBtn = $("#factory-reset-btn");
 const factoryResetStatus = $("#factory-reset-status");
+
+// ── Agent data maintenance (owner-reported leftover fix: agents deleted before
+// teardown existed left OPFS dirs + journals behind; journals needed a purge
+// affordance that keeps memory + artifacts). ──
+const purgeJournalsBtn = $("#purge-journals-btn");
+const sweepOrphansBtn = $("#sweep-orphans-btn");
+const purgeJournalAgent = $("#purge-journal-agent");
+const maintenanceStatus = $("#maintenance-status");
+
+async function refreshMaintenanceAgentOptions() {
+  if (!purgeJournalAgent) return;
+  try {
+    const res = await boundedSend("named-agent.list");
+    const agents = Array.isArray(res?.agents) ? res.agents : [];
+    const selected = purgeJournalAgent.value;
+    while (purgeJournalAgent.options.length > 1) purgeJournalAgent.remove(1);
+    for (const a of agents) {
+      const opt = document.createElement("option");
+      opt.value = String(a.id ?? a.slug ?? "");
+      opt.textContent = String(a.name ?? a.id ?? "agent");
+      purgeJournalAgent.append(opt);
+    }
+    if (selected) purgeJournalAgent.value = selected;
+  } catch { /* the select stays "All agents" — the global purge still works */ }
+}
+
+refreshMaintenanceAgentOptions();
+
+purgeJournalsBtn?.addEventListener("click", async () => {
+  const slug = purgeJournalAgent?.value || "";
+  const scopeText = slug
+    ? `the journal of agent "${slug}"`
+    : "ALL agent journals (named + background + Site Agents)";
+  const confirmed = await confirmActionDialog({
+    title: "Purge journals?",
+    body: `This permanently deletes ${scopeText}. Memory content, run history, skills, and artifacts are NOT touched.\n\nContinue?`,
+    confirmLabel: "Purge journals",
+    destructive: true,
+  });
+  if (!confirmed) return;
+  if (maintenanceStatus) maintenanceStatus.textContent = "Purging journals…";
+  purgeJournalsBtn.disabled = true;
+  try {
+    const res = await boundedSend("memory.purgeJournals", { target: slug ? { agent: slug } : null });
+    if (res?.ok) {
+      const n = Array.isArray(res.removed) ? res.removed.length : 0;
+      if (maintenanceStatus) maintenanceStatus.textContent = n > 0 ? `Purged ${n} journal${n === 1 ? "" : "s"}.` : "No journals found to purge.";
+    } else if (maintenanceStatus) {
+      maintenanceStatus.textContent = `Purge failed: ${res?.error ?? "unknown error"}`;
+    }
+  } catch (e) {
+    if (maintenanceStatus) maintenanceStatus.textContent = `Purge failed: ${e?.message ?? e}`;
+  } finally {
+    purgeJournalsBtn.disabled = false;
+  }
+});
+
+sweepOrphansBtn?.addEventListener("click", async () => {
+  const confirmed = await confirmActionDialog({
+    title: "Clean up leftover agent files?",
+    body: "This removes stored data (memory folders, journals, run history) belonging to agents that no longer exist. Live agents and artifacts are never touched.\n\nContinue?",
+    confirmLabel: "Clean up",
+    destructive: true,
+  });
+  if (!confirmed) return;
+  if (maintenanceStatus) maintenanceStatus.textContent = "Sweeping leftover files…";
+  sweepOrphansBtn.disabled = true;
+  try {
+    const res = await boundedSend("memory.sweepOrphans", {}, 30000);
+    if (res?.ok) {
+      const s = res.swept ?? {};
+      const total = (s.agentDirs ?? 0) + (s.backgroundDirs ?? 0) + (s.executionDirs ?? 0) + (s.threadDirs ?? 0);
+      if (maintenanceStatus) {
+        maintenanceStatus.textContent = total > 0
+          ? `Cleaned up ${total} leftover item${total === 1 ? "" : "s"} (${s.agentDirs ?? 0} agent folders, ${s.backgroundDirs ?? 0} background folders, ${s.executionDirs ?? 0} run histories, ${s.threadDirs ?? 0} thread indexes).`
+          : "No leftover files found — everything is already clean.";
+      }
+    } else if (maintenanceStatus) {
+      maintenanceStatus.textContent = `Sweep failed: ${res?.error ?? "unknown error"}`;
+    }
+  } catch (e) {
+    if (maintenanceStatus) maintenanceStatus.textContent = `Sweep failed: ${e?.message ?? e}`;
+  } finally {
+    sweepOrphansBtn.disabled = false;
+  }
+});
 
 factoryResetBtn?.addEventListener("click", async () => {
   const confirmed = await confirmActionDialog({

@@ -14,7 +14,7 @@
 // serialized (the same discipline as the enrollment registry).
 
 import { kvGet, kvSet } from "./kv.js";
-import { namedAgentMemory } from "./memory.js";
+import { namedAgentMemory, purgeStoreDir } from "./memory.js";
 import { deleteAgentPromptOverride } from "./system-prompts.js";
 
 const AGENTS_KEY = "cap:namedAgents";
@@ -206,8 +206,10 @@ export async function createNamedAgent(
     map[slug] = agent;
     await writeAgents(map);
     // Provision the agent's OWN sandbox: its operating instructions (agents.md)
-    // live in its store, distinct from every other agent.
-    const mem = namedAgentMemory(slug);
+    // live in its store, distinct from every other agent — namespaced by the
+    // IMMUTABLE instanceId (review P1-2): the slug is reusable, the instanceId
+    // is not, so a recreated same-name agent never inherits the old agents.md.
+    const mem = namedAgentMemory(agent.instanceId || slug);
     await mem.setTrusted("agents.md", agentsMd ?? defaultAgentsMd(agent));
     return { ok: true, agent };
   });
@@ -298,38 +300,420 @@ export async function setNamedAgentProvider(id, config, { gateBeforeMutation = n
  * transaction and its failure PROPAGATES (the deletion reports failure and
  * the agent is preserved, so the owner can retry) — never silently swallowed
  * while the agent row disappears. */
-export async function deleteNamedAgent(id, { gateBeforeDelete = null } = {}) {
+const MAX_PENDING_TEARDOWNS = 50;
+
+/** Bounded memory of namespaces whose teardown did not complete (the agent row
+ * is already gone, so a plain `named-agent.delete` retry would return early
+ * and never finish the job). Each entry records BOTH namespaces that may hold
+ * state for the dead agent: the immutable instanceId dir (post-fix runs +
+ * memory) and the legacy slug dir (pre-fix leftovers). Consumed by the
+ * absent-row branch of deleteNamedAgent; swept entries are removed. */
+async function recordPendingTeardown(slug, instanceId) {
+  try {
+    const store = (await kvGet(PENDING_KEY))?.[PENDING_KEY];
+    const list = Array.isArray(store) ? store : [];
+    list.push({ slug, instanceId: instanceId || null, at: Date.now() });
+    await kvSet({ [PENDING_KEY]: list.slice(-MAX_PENDING_TEARDOWNS) });
+  } catch { /* best-effort: the orphan sweep remains the safety net */ }
+}
+
+const PENDING_KEY = "agents-pending-teardown";
+
+/** ATOMIC PER-AGENT take (review P1-4): remove and return ONLY this slug's
+ * pending-teardown entries, leaving every OTHER agent's record untouched. The
+ * old global take cleared the whole list before filtering — a retry for one
+ * agent silently dropped the other agents' outstanding repairs. Callers hold
+ * the agents lock, so the read-modify-write is atomic w.r.t. other deletes
+ * and records. */
+async function takePendingTeardownsFor(slug) {
+  try {
+    const store = (await kvGet(PENDING_KEY))?.[PENDING_KEY];
+    const list = Array.isArray(store) ? store : [];
+    const mine = list.filter((p) => p?.slug === slug);
+    if (mine.length) {
+      await kvSet({ [PENDING_KEY]: list.filter((p) => p?.slug !== slug) });
+    }
+    return mine;
+  } catch { return []; }
+}
+
+export async function deleteNamedAgent(id, { gateBeforeDelete = null, revokeGrants = null, closeAgentWorker = null, fenceActiveRuns = null } = {}) {
   const slug = slugifyAgentId(id);
   return await withAgentsLock(async () => {
     const map = await agentsMap();
     const existing = map[slug];
-    if (!existing) return { ok: true };
+    if (!existing) {
+      // RETRY-REPAIR: the row may already be gone while namespaces from a
+      // partially-failed teardown remain. Take ONLY this slug's pending
+      // records (other agents' entries are preserved — review P1-4) and
+      // REPLAY THE FULL TEARDOWN (fence → prompt → row → schedules → grants
+      // → worker → dirs → durable family), not just the directory purge.
+      // Absent state is fine (idempotent).
+      const pending = await takePendingTeardownsFor(slug);
+      const fails = [];
+      if (pending.length === 0) {
+        // No record (pre-fix leftover): best-effort legacy slug teardown so a
+        // plain retry can still repair the common case.
+        const repair = await teardownAgentState({ slug, instanceId: "" }, { fenceActiveRuns, revokeGrants, closeAgentWorker });
+        fails.push(...repair.fails);
+      } else {
+        for (const entry of pending) {
+          const repair = await teardownAgentState(
+            { slug, instanceId: String(entry?.instanceId ?? "") },
+            { fenceActiveRuns, revokeGrants, closeAgentWorker },
+          );
+          if (repair.fails.length) {
+            // Re-record so a later retry (or the sweep) finishes the job —
+            // the take removed it optimistically.
+            fails.push(...repair.fails);
+            try { await recordPendingTeardown(slug, entry?.instanceId ?? null); } catch { /* sweep is the net */ }
+          }
+        }
+      }
+      return fails.length ? { ok: false, retryable: true, error: `teardown repair incomplete: ${fails.join("; ")}` } : { ok: true };
+    }
     if (typeof gateBeforeDelete === "function") {
       const gate = await gateBeforeDelete({ slug, existing });
       if (!gate?.ok) return gate ?? { ok: false, error: "owner approval required" };
     }
-    // Prompt cleanup first: a failure aborts the deletion honestly (the
-    // agent row stays, the override stays consistent with it).
-    const cleanup = await deleteAgentPromptOverride(slug)
-      .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
-    if (cleanup?.ok === false) {
+    // review r4 P1-2: ONE admission fence gates the ENTIRE destructive
+    // sequence. The prompt-override delete, the registry-row delete, and
+    // every teardown phase now live INSIDE teardownAgentState, strictly
+    // behind its fence — a refusal can never follow partial destruction
+    // because no destructive phase precedes the single fence, and no fence
+    // is ever re-consulted as a first gate after something was destroyed.
+    const instanceId = String(existing.instanceId || "");
+    const { fails, rowDeleted, phasesCompleted = [] } = await teardownAgentState(
+      { slug, instanceId },
+      {
+        fenceActiveRuns,
+        revokeGrants,
+        closeAgentWorker,
+        // The row deletion is a closure over THIS call's registry snapshot:
+        // dropping the row is the identity-destructive step and must run
+        // behind the same fence as everything else.
+        deleteIdentityRow: async () => {
+          const fresh = await agentsMap();
+          if (!fresh[slug]) return { ok: true, already: true };
+          delete fresh[slug];
+          await writeAgents(fresh);
+          return { ok: true };
+        },
+      },
+    );
+    if (fails.length && !rowDeleted) {
+      // Refused before the registry row went — the agent still EXISTS.
+      // Truthful partial state (review r5 P1-a): phases that already ran
+      // (the prompt override may be gone; the row is intact) replay on the
+      // retry — the owner must not read "NOT deleted" as "untouched".
+      const partial = phasesCompleted.length
+        ? ` (phases already run: ${phasesCompleted.join(", ")} — they replay on retry)`
+        : "";
       return {
         ok: false,
         retryable: true,
-        error: `prompt-override cleanup failed (${cleanup.error ?? "unknown"}) — the agent was NOT deleted; retry`,
+        error: `delete refused (${fails.join("; ")}) — the agent was NOT deleted${partial}; retry`,
       };
     }
-    delete map[slug];
-    await writeAgents(map);
-    const mem = namedAgentMemory(slug);
-    await mem.clear().catch(() => {});
+    if (fails.length) {
+      // Destruction began; the remaining phases are recoverable via the
+      // pending record + retry/sweep. Honest: the row IS gone.
+      try { await recordPendingTeardown(slug, instanceId); } catch { /* sweep is the net */ }
+      return {
+        ok: false,
+        retryable: true,
+        error: `teardown incomplete (${fails.join("; ")}) — the agent row was removed; retry the delete to finish cleanup`,
+      };
+    }
+    // Fully cleaned: clear this agent's pending record.
+    try {
+      const store = (await kvGet(PENDING_KEY))?.[PENDING_KEY];
+      const list = (Array.isArray(store) ? store : []).filter((p) => p?.slug !== slug);
+      await kvSet({ [PENDING_KEY]: list });
+    } catch { /* best-effort */ }
     return { ok: true };
   });
 }
 
-/** The agent's own OPFS store (memory + history + skills + agents.md). */
+/** The agent's own OPFS store (memory + history + skills + agents.md).
+ * LEGACY read path: keys by slug. The LIVE run/deletion path namespaces by
+ * the agent's immutable instanceId (see deleteNamedAgent + the SW run path);
+ * this helper remains for pre-fix rows and tool-facing reads where only the
+ * slug is known. Live consumers should use resolveNamedAgentStore instead —
+ * it routes through the immutable identity. */
 export function agentMemory(id) {
   return namedAgentMemory(slugifyAgentId(id));
+}
+
+/** The namespaces that may hold an agent's state, LIVE identity first: the
+ * immutable instanceId (post-fix memory + durable family) then the legacy
+ * slug (pre-fix leftovers). Every consumer that touches an agent's OPFS dirs,
+ * durable targets, grants, or worker keys must address the agent through
+ * THIS list — the slug alone stopped being the live identity once instanceId
+ * namespacing landed (review P1-2). */
+/** review r4 P1-3: the read-only agent memory selectors. Legacy/orphan dirs
+ * resolve LITERALLY and are declared read-only — the ONLY thing that removes
+ * them is agent teardown (which purges BOTH namespaces). The SW's memory
+ * set/clear routes gate on this predicate so a post-purge write can never
+ * recreate a "read-only" dir. Single source of truth: the routes and the
+ * classification UI (and the tests) all call this. */
+export function readOnlyAgentMemorySelector(origin) {
+  return typeof origin === "string" &&
+    (origin.startsWith("agent-legacy:") || origin.startsWith("agent-orphan:"));
+}
+
+export function agentStateNamespaces(agent) {
+  const slug = slugifyAgentId(agent?.id ?? agent?.slug ?? "");
+  const instanceId = String(agent?.instanceId ?? "").trim();
+  return [...new Set([instanceId, slug].filter(Boolean))];
+}
+
+/** Classify enumerated `memory/agents/*` directory names against the LIVE
+ * registry (review r3 P1-3): a dir is CANONICAL when it is a live row's
+ * instanceId, LEGACY when it is a live row's slug (pre-instanceId leftovers
+ * — its selector must never clear the live store, so it is read-only), or
+ * ORPHAN when no live row claims it (safe to clear from the explorer; the
+ * teardown sweep also removes it). Pure so the KAT pins the contract. */
+export function classifyAgentMemoryDirs({ dirs, agents }) {
+  const rows = Array.isArray(agents) ? agents : [];
+  const byInstance = new Map(rows.map((a) => [String(a?.instanceId ?? ""), a]));
+  const bySlug = new Map(rows.map((a) => [slugifyAgentId(a?.id ?? a?.slug ?? ""), a]));
+  return (Array.isArray(dirs) ? dirs : []).map((dir) => {
+    const name = String(dir ?? "");
+    if (byInstance.has(name)) return { dir: name, selector: `agent:${name}`, state: "canonical", readOnly: false };
+    const slug = slugifyAgentId(name);
+    if (slug && bySlug.has(slug)) return { dir: name, selector: `agent-legacy:${name}`, state: "legacy", readOnly: true };
+    return { dir: name, selector: `agent-orphan:${name}`, state: "orphan", readOnly: false };
+  });
+}
+
+/** Resolve a slug-or-instanceId selector to the agent's LIVE memory store: a
+ * row whose slug OR instanceId matches resolves to its immutable instanceId
+ * namespace; an unknown selector resolves literally so cleanup paths can
+ * still name an orphan/legacy dir. THE single resolver for live OPFS + worker
+ * consumers (review P1-2) — address an agent by anything else and you risk
+ * reading a dead namespace while the live one grows. */
+export async function resolveNamedAgentStore(selector) {
+  const raw = String(selector ?? "");
+  let row = null;
+  try {
+    const map = await agentsMap();
+    row = map[slugifyAgentId(raw)] ?? Object.values(map).find((a) => a?.instanceId === raw) ?? null;
+  } catch { row = null; }
+  if (row?.instanceId) return namedAgentMemory(row.instanceId);
+  return namedAgentMemory(raw);
+}
+
+/** The immutable worker/identity key for a selector (same resolution rule as
+ * resolveNamedAgentStore, returning the identity STRING): live row → its
+ * instanceId; unknown → the literal selector. The agent-worker routes key
+ * host workers + the alive-set through this so a recreated same-name agent
+ * cannot inherit the previous instance's worker. */
+export async function resolveAgentInstanceId(selector) {
+  const raw = String(selector ?? "");
+  try {
+    const map = await agentsMap();
+    const row = map[slugifyAgentId(raw)] ?? Object.values(map).find((a) => a?.instanceId === raw) ?? null;
+    if (row?.instanceId) return row.instanceId;
+  } catch { /* fall through to the literal */ }
+  return raw;
+}
+
+/** FENCE live writers before teardown (review P1-3): cancel every durable run
+ * whose journalTarget belongs to this agent (post-fix `agent:<instanceId>` +
+ * legacy `agent:<slug>`) and AWAIT terminal state, so an in-flight writer
+ * cannot recreate a removed dir mid-teardown. Registry is injectable for
+ * tests; timeout bounds the wait — an honest failure (retryable) beats an
+ * unbounded delete. */
+export async function fenceAgentActiveRuns({ registry, slug, instanceId, timeoutMs = 15000, resolveAborter = null } = {}) {
+  if (!registry || typeof registry.list !== "function" || typeof registry.cancel !== "function") {
+    return { ok: false, error: "fence requires a durable registry with list+cancel" };
+  }
+  const targets = new Set(
+    [instanceId ? `agent:${instanceId}` : null, slug ? `agent:${slug}` : null].filter(Boolean),
+  );
+  const deadline = Date.now() + Math.max(1000, timeoutMs);
+  let live = [];
+  while (Date.now() < deadline) {
+    // Ownership matching uses the registry's dedicated projection (list()
+    // strips journalTarget from public records — review-found blind spot).
+    if (typeof registry.activeByJournalTarget === "function") {
+      try {
+        live = await registry.activeByJournalTarget(targets);
+      } catch (e) {
+        return { ok: false, error: `fence could not list active runs: ${String(e?.message ?? e)}` };
+      }
+    } else {
+      // Fallback for minimal registry doubles: list + isActive, matching on
+      // whatever ownership field the double exposes.
+      let runs;
+      try {
+        runs = await registry.list();
+      } catch (e) {
+        return { ok: false, error: `fence could not list runs: ${String(e?.message ?? e)}` };
+      }
+      live = (runs?.runs ?? []).filter((r) =>
+        targets.has(String(r?.journalTarget ?? "")) && registry.isActive?.(r?.executionId) === true,
+      );
+    }
+    if (!live.length) return { ok: true };
+    for (const r of live) {
+      try {
+        // review P1-1: the fence must invoke the REAL live abort (the SW's
+        // orchestrator aborter) — cancelling without `onAuthorityPersisted`
+        // durably recorded "no live abort callback registered" and left the
+        // execution running while the teardown proceeded.
+        await registry.cancel(r.executionId, {
+          reason: "agent deleted — teardown fence",
+          onAuthorityPersisted: () => {
+            const abort = typeof resolveAborter === "function" ? resolveAborter(r.executionId) : null;
+            if (typeof abort !== "function") return false;
+            abort();
+            return true;
+          },
+        });
+      } catch { /* retried next pass */ }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return {
+    ok: false,
+    error: `active runs did not reach terminal within ${timeoutMs}ms (${live.map((r) => r.executionId).join(", ")})`,
+  };
+}
+
+/** The COMPLETE state teardown for a dead agent identity (review P1-3/P1-4):
+ * fence live writers FIRST, then remove the prompt override + the registry
+ * row (review r4 P1-2 — both are destructive and therefore run strictly
+ * behind the single admitted fence), then cancel owned schedules, revoke
+ * scoped grants, close the shared worker, remove BOTH OPFS namespaces, and
+ * purge the durable run family. External effects are injected where the
+ * caller has the authority (SW); scheduler access is dynamic to keep this
+ * module's import graph clean. Returns { fails, rowDeleted, phasesCompleted }:
+ * `fails` is the failure list (empty = complete), `rowDeleted` says whether
+ * the registry row was removed (false = the agent was NOT deleted; a retry
+ * replays everything), and `phasesCompleted` names the phases that ALREADY
+ * ran when a failure halted the teardown (review r5 P1-a — a halted teardown
+ * must report truthful partial state, never claim the row is gone when the
+ * registry write failed). Used by BOTH the row-present delete and the
+ * absent-row retry so a retry REPLAYS EVERY phase, not just the directory
+ * purge. */
+async function teardownAgentState({ slug, instanceId }, { fenceActiveRuns = null, revokeGrants = null, closeAgentWorker = null, deleteIdentityRow = null } = {}) {
+  const fails = [];
+  const phasesCompleted = [];
+  const markFail = (what, e) => {
+    const msg = `${what}: ${String(e?.message ?? e?.error ?? e ?? "failed")}`;
+    fails.push(msg);
+  };
+  const namespaces = [...new Set([instanceId, slug].filter(Boolean))];
+  // P1-3: the fence is FIRST — abort + await in-flight writers so nothing
+  // recreates a removed namespace after the purge below. A fence FAILURE
+  // gates the removal phases (dirs + durable family): deleting while writers
+  // are live is exactly the data-loss shape the fence exists to prevent. The
+  // pending record + retry finish the removals once writers are gone.
+  let fenced = true;
+  if (typeof fenceActiveRuns === "function") {
+    try {
+      const f = await fenceActiveRuns({ slug, instanceId, namespaces });
+      if (f?.ok === false) { markFail("active-run fence", f); fenced = false; }
+    } catch (e) { markFail("active-run fence", e); fenced = false; }
+  }
+  // review r3 P1-2: a REFUSED fence gates EVERY destructive phase — not just
+  // the dir/durable removals. Cancelling schedules, revoking grants, or
+  // closing the worker while writers are live is teardown work that cannot
+  // be un-done by the retry replay (an already-cancelled schedule replays as
+  // a no-op and the phase is then never re-verified). Everything below is
+  // skipped; the pending record + retry re-fence and re-run all phases.
+  if (!fenced) {
+    return { fails, rowDeleted: false, phasesCompleted };
+  }
+  // review r4 P1-2: the prompt override and the registry row are DESTRUCTIVE
+  // phases and run strictly behind the single admitted fence above — a fence
+  // refusal can never follow partial destruction, because nothing destructive
+  // precedes this point. A prompt-cleanup failure aborts with the row intact
+  // (the owner retries; nothing was destroyed).
+  phasesCompleted.push("fence");
+  const cleanup = await deleteAgentPromptOverride(slug)
+    .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+  if (cleanup?.ok === false) {
+    markFail("prompt-override cleanup", cleanup);
+    return { fails, rowDeleted: false, phasesCompleted };
+  }
+  phasesCompleted.push("prompt-override");
+  // Namespace identity FIRST: the immutable instanceId (NOT the reusable
+  // slug) keys this agent's OPFS dir and its durable run family, so a
+  // later same-name agent can never inherit state.
+  if (typeof deleteIdentityRow === "function") {
+    // review r5 P1-a: a row-delete failure HALTS the teardown. Continuing
+    // (the r4 bug) destroyed schedules/grants/workers/dirs/durable while the
+    // registry row stayed LIVE — a visible agent whose entire backing state
+    // was gone — and then LIED via an unconditional rowDeleted:true. Stop
+    // here, report rowDeleted:false + the phases that already ran (the fence
+    // + the prompt-override removal; both replay safely on the retry), and
+    // leave every later phase untouched.
+    try {
+      const r = await deleteIdentityRow();
+      if (r?.ok === false) {
+        markFail("identity row delete", r);
+        return { fails, rowDeleted: false, phasesCompleted };
+      }
+    } catch (e) {
+      markFail("identity row delete", e);
+      return { fails, rowDeleted: false, phasesCompleted };
+    }
+  }
+  phasesCompleted.push("identity-row");
+  // Every schedule OWNED by this agent (owner.agentSurfaceRef ===
+  // `named:<slug>`) — not only deterministic recipe:<slug> names.
+  try {
+    const { listScheduledTasks, cancelScheduledTask } = await import("./scheduler.js");
+    const tasks = await listScheduledTasks();
+    for (const t of Array.isArray(tasks) ? tasks : []) {
+      if (String(t?.owner?.agentSurfaceRef ?? "") !== `named:${slug}`) continue;
+      try {
+        const c = await cancelScheduledTask(t.name);
+        if (c?.ok === false) markFail(`schedule ${t.name}`, c);
+      } catch (e) { markFail(`schedule ${t.name}`, e); }
+    }
+  } catch (e) { markFail("schedule enumeration", e); }
+  phasesCompleted.push("schedules");
+  // Scoped grants + the shared worker are keyed by EITHER identity string
+  // (grants saved pre-instanceId carry the slug; newer state may carry the
+  // instanceId), so each injection runs per-namespace.
+  for (const ident of namespaces) {
+    if (typeof revokeGrants === "function") {
+      try {
+        const g = await revokeGrants(ident);
+        if (g?.ok === false) markFail(`fs-grant revoke ${ident}`, g);
+      } catch (e) { markFail(`fs-grant revoke ${ident}`, e); }
+    }
+    if (typeof closeAgentWorker === "function") {
+      try {
+        const w = await closeAgentWorker(ident);
+        if (w?.ok === false) markFail(`agent-worker close ${ident}`, w);
+      } catch (e) { markFail(`agent-worker close ${ident}`, e); }
+    }
+  }
+  // OPFS namespaces: the immutable instanceId dir AND any legacy slug dir
+  // must vanish (mem.clear() deliberately preserves dirs for LIVE stores —
+  // recursive removal is the deletion semantics). REMOVALS ARE FENCE-GATED
+  // (and reached only when the fence held — see the early return above).
+  phasesCompleted.push("grants+worker");
+  for (const ns of namespaces) {
+    const r = await purgeStoreDir(["memory", "agents", encodeURIComponent(ns)]);
+    if (!r.ok) markFail(`dir agents/${ns}`, r);
+  }
+  phasesCompleted.push("dirs");
+  // Durable run family, both target spellings (each is a no-op when absent).
+  try {
+    const { durableRuns } = await import("./durable-runs.js");
+    for (const target of namespaces.map((ns) => `agent:${ns}`)) {
+      const purged = await durableRuns.purgeForTarget(target);
+      if (purged?.ok === false) markFail(`durable purge ${target}`, purged);
+    }
+  } catch (e) { markFail("durable purge", e); }
+  phasesCompleted.push("durable");
+  return { fails, rowDeleted: true, phasesCompleted };
 }
 
 /** Default `agents.md` — the agent's operating instructions. */

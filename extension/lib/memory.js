@@ -287,6 +287,118 @@ export async function openDir(segments) {
   return dir;
 }
 
+/** The slug the background-agent memory path uses for a schedule/agent id
+ * (the same slug rules as backgroundAgentMemory). Exported so the background
+ * teardown and the orphan sweep address the SAME directory the store writes —
+ * never a divergent re-slugification. */
+export function backgroundAgentSlug(id) {
+  return String(id || "").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "unnamed-background";
+}
+
+/** Names of the child DIRECTORIES under the given path (absent → []).
+ * Read-only walk for the orphan sweep / maintenance surfaces. */
+export async function listDirsUnder(segments) {
+  const dir = await openDirOptional(segments);
+  if (!dir) return [];
+  const out = [];
+  for await (const entry of dir.values()) {
+    if (entry.kind === "directory") out.push(entry.name);
+  }
+  return out.sort();
+}
+
+/** Remove the ENTIRE store directory at `segments` (authority files included).
+ * For namespaces whose owner is GONE (a deleted agent's execution/thread dirs,
+ * orphan stores): no tombstone semantics apply because nothing may ever
+ * address this path again — deletion IS the guarantee. Absent → ok.
+ * NEVER call this on a LIVE store (clear() is the live-store API: it preserves
+ * the generation authority so stale CAS tokens can't land post-recreate). */
+export async function purgeStoreDir(segments) {
+  if (!Array.isArray(segments) || segments.length === 0) {
+    throw new Error("purgeStoreDir: refusing to remove the storage root");
+  }
+  let dir = await rootDir();
+  for (const seg of segments.slice(0, -1)) {
+    try {
+      dir = await dir.getDirectoryHandle(seg);
+    } catch {
+      return { ok: true, absent: true };
+    }
+  }
+  try {
+    await dir.removeEntry(segments[segments.length - 1], { recursive: true });
+    return { ok: true };
+  } catch (e) {
+    if (e?.name === "NotFoundError") return { ok: true, absent: true };
+    return { ok: false, error: String(e?.message ?? e) };
+  }
+}
+
+/** Delete ONLY the journal entry (the capped journalAppend log) from the store
+ * at `segments` — via the store's own tombstoning delete so the generation
+ * authority stays consistent. Memory content, run history, skills, and assets
+ * are untouched. Absent store or absent journal → ok with removed:false.
+ * The Settings → Data & memory "Purge journals" affordance uses this. */
+export async function purgeStoreJournal(segments) {
+  const store = memoryStoreAt(segments, { isMaster: false, origin: "journal-purge" });
+  try {
+    if (!(await store.has("journal"))) return { ok: true, removed: false };
+    await store.delete("journal");
+    return { ok: true, removed: true };
+  } catch (e) {
+    return { ok: false, error: String(e?.message ?? e) };
+  }
+}
+
+/** Purge journal entries across agent stores. `target` forms:
+ *  - `{ agent: "<slug>" }` → that named agent's journal only.
+ *  - `{ background: "<slug>" }` → that background agent's journal only.
+ *  - `null` → GLOBAL: every named-agent, background-agent, and site-origin
+ *    store's journal (the master journal is NEVER purged — it is the owner's
+ *    own hub journal, not an agent's).
+ * Memory content, run history, skills, and assets are never touched. */
+export async function purgeJournals(target = null) {
+  const removed = [];
+  const failures = [];
+  const segs = {
+    agent: (slug) => [ROOT, "agents", encodeURIComponent(slug)],
+    background: (slug) => ["memory", "background", encodeURIComponent(slug)],
+  };
+  if (target && typeof target === "object") {
+    if (typeof target.agent === "string") {
+      const r = await purgeStoreJournal(segs.agent(target.agent));
+      if (r.ok) removed.push(`agents/${target.agent}`);
+      else failures.push(r.error);
+      return { ok: failures.length === 0, removed, failures };
+    }
+    if (typeof target.background === "string") {
+      const r = await purgeStoreJournal(segs.background(target.background));
+      if (r.ok) removed.push(`background/${target.background}`);
+      else failures.push(r.error);
+      return { ok: failures.length === 0, removed, failures };
+    }
+  }
+  for (const slug of await listNamedAgentIds()) {
+    const r = await purgeStoreJournal(segs.agent(slug));
+    if (r.ok) { if (r.removed) removed.push(`agents/${slug}`); }
+    else failures.push(`agents/${slug}: ${r.error}`);
+  }
+  for (const slug of await listBackgroundAgentIds()) {
+    const r = await purgeStoreJournal(segs.background(slug));
+    if (r.ok) { if (r.removed) removed.push(`background/${slug}`); }
+    else failures.push(`background/${slug}: ${r.error}`);
+  }
+  const originsDir = await openDirOptional([ROOT, "origins"]);
+  if (originsDir) {
+    for await (const [name] of originsDir.entries()) {
+      const r = await purgeStoreJournal([ROOT, "origins", name]);
+      if (r.ok) { if (r.removed) removed.push(`origins/${name}`); }
+      else failures.push(`origins/${name}: ${r.error}`);
+    }
+  }
+  return { ok: failures.length === 0, removed, failures };
+}
+
 async function rootDir() {
   return await navigator.storage.getDirectory();
 }
@@ -808,7 +920,7 @@ export function namedAgentMemory(id) {
  * label is `background:<slug>` so journal/usage tagging never collides with a
  * real origin or a named agent. */
 export function backgroundAgentMemory(id) {
-  const slug = String(id || "").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "unnamed-background";
+  const slug = backgroundAgentSlug(id);
   const path = [ROOT, "background", encodeURIComponent(slug)];
   return memoryStoreAt(path, { isMaster: false, origin: `background:${slug}` });
 }
@@ -831,6 +943,18 @@ function durableThreadId(key) {
   if (!value.startsWith(THREAD_RUNS_PREFIX)) return null;
   const threadId = value.slice(THREAD_RUNS_PREFIX.length);
   return THREAD_ID_RE.test(threadId) ? threadId : null;
+}
+
+/** The OPFS directory segments for one execution's durable store
+ * (`memory/durable-runs/executions/<execId>`). Shared by the run teardown and
+ * the orphan sweep so purge and write address the SAME path. */
+export function durableExecutionDirSegments(executionId) {
+  return [ROOT, DURABLE_ROOT, "executions", encodeURIComponent(String(executionId))];
+}
+
+/** The OPFS directory segments for one thread's reverse-index store. */
+export function durableThreadDirSegments(threadId) {
+  return [ROOT, DURABLE_ROOT, "threads", encodeURIComponent(String(threadId))];
 }
 
 function durableStoreForKey(key) {
@@ -1075,8 +1199,16 @@ async function listStoreIds(dir) {
     return [];
   }
   const out = [];
-  for await (const [name, handle] of agentsDir.entries()) {
-    if (handle.kind === "directory") out.push(decodeURIComponent(name));
+  // FAIL-CLOSED for the orphan sweep: an I/O error while iterating must not
+  // be read as "no sandboxes exist" (the sweep would then judge every dir an
+  // orphan). Absent root/dir is a genuine empty list; iteration errors THROW.
+  try {
+    for await (const [name, handle] of agentsDir.entries()) {
+      if (handle.kind === "directory") out.push(decodeURIComponent(name));
+    }
+  } catch (e) {
+    if (out.length === 0 && e?.name === "NotFoundError") return out;
+    throw e;
   }
   return out.sort();
 }

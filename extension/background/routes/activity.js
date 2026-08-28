@@ -90,9 +90,12 @@ export function createActivityRoutes({
       // lister degrades that class to zero stores, never to a route failure.
       const named = await listNamedAgents().catch(() => []);
       const namedById = new Map(named.map((a) => [slugifyAgentId(a.id), a]));
+      const namedByInstance = new Map(named.map((a) => [String(a.instanceId ?? ""), a]));
       const namedIds = await listNamedAgentIds().catch(() => []);
       for (const id of namedIds.slice(0, ACTIVITY_STORE_CAPS.namedAgents)) {
-        const reg = namedById.get(id);
+        // Dir names are instanceId (post-fix) or legacy slug — resolve the
+        // display row by EITHER identity.
+        const reg = namedByInstance.get(id) ?? namedById.get(id);
         jobs.push(push(
           namedAgentMemory(id),
           `agent:${id}`,

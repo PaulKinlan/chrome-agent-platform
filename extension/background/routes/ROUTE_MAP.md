@@ -26,5 +26,9 @@ This document records the assignment of service-worker message routes to their o
 | `provider.test` | `extension/background/routes/provider.js` | Test provider connection with stored/provided key | `owner-options` |
 | `provider.models` | `extension/background/routes/provider.js` | List available provider model presets | Extension |
 | `activity.list` | `extension/background/routes/activity.js` | Fault-isolated, bounded aggregation of the master + named + background + site journals into the searchable activity timeline | Extension |
+| `memory.get` | `extension/background/routes/memory.js` | Read a key from the resolved memory store; internal namespaces reserved | Extension |
+| `memory.set` | `extension/background/routes/memory.js` | Write a key; legacy/orphan agent selectors are read-only; writes tracked for teardown quiescence | Extension |
+| `memory.list` | `extension/background/routes/memory.js` | List keys on the resolved store; internal namespaces filtered | Extension |
+| `memory.clear` | `extension/background/routes/memory.js` | Clear the resolved store; legacy agent selectors read-only; clears tracked for teardown quiescence | Extension |
 | `tool-catalog.shadow` | `extension/background/service-worker.js` | Settings-only metadata/search/selection diagnostics; never execution or grants | `owner-options` |
-| *All other routes (118)* | `extension/background/service-worker.js` (inline) | To be modularized in subsequent slices | Context-dependent |
+| *All other routes (114)* | `extension/background/service-worker.js` (inline) | To be modularized in subsequent slices | Context-dependent |

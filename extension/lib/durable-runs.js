@@ -25,6 +25,11 @@ import {
   readAll as walReadAll,
   readRecent as walReadRecent,
 } from "./run-log-wal.js";
+import {
+  durableExecutionDirSegments,
+  durableThreadDirSegments,
+  purgeStoreDir,
+} from "./memory.js";
 
 const INDEX_KEY = "run-registry";
 const RUN_PREFIX = "run:";
@@ -161,6 +166,18 @@ export function createDurableRunRegistry({
   injectFailure = null,
 } = {}) {
   const active = new Set();
+  // Writers in the CANCEL flow remain projected as live until the run reaches
+  // terminal: cancel() removes the execution from `active` at authority time
+  // (before abort + outbox completion), but the orchestrator can still be
+  // settling writes. The teardown fence reads this projection (review P1-1:
+  // `activeByJournalTarget` reported no writer during cancellation, so a
+  // purge could race a still-flushing writer).
+  const cancelling = new Set();
+  /** A terminal execution is never a writer: drop it from both projections. */
+  const retireWriter = (executionId) => {
+    active.delete(executionId);
+    cancelling.delete(executionId);
+  };
   const listeners = new Set();
   // READ/WRITE LOCK (CAP-FB-20260827-THREAD-OPEN-SEQUENTIAL-READS-01).
   //
@@ -777,6 +794,10 @@ export function createDurableRunRegistry({
       if (existing) {
         if (existing.executionId !== executionId) throw new Error("execution identity mismatch");
         if (["running", "settling"].includes(existing.phase) && existing.bootId === bootId) active.add(executionId);
+        // A crash between cancel-authority and outbox settle leaves a
+        // cancel-requested record whose writer may still flush — project it
+        // so a post-restart fence waits for it (review P1-1).
+        if (existing.phase === "cancel-requested") cancelling.add(executionId);
         return publicRecord(existing);
       }
       let registryAdmission = null;
@@ -832,7 +853,7 @@ export function createDurableRunRegistry({
         // when OPFS is full, the old write-first compensation is itself
         // impossible and leaves a dangling registry ID. Keep the readable run
         // record until the index no longer names it, then delete it and verify.
-        active.delete(executionId);
+        retireWriter(executionId);
         const recordKey = `${RUN_PREFIX}${executionId}`;
         const owned = (candidate) => candidate === recordKey ||
           candidate === `${OUTBOX_PREFIX}${executionId}` ||
@@ -901,7 +922,7 @@ export function createDurableRunRegistry({
       if (!record) {
         const remnants = (await store.keys()).filter(owned);
         if (remnants.length === 0 && !ids.includes(executionId)) {
-          active.delete(executionId);
+          retireWriter(executionId);
           return { ok: true, rolledBack: true, idempotent: true, executionId, remainingKeys: [] };
         }
         return { ok: false, rolledBack: false, preserved: true, reason: "execution_authority_unreadable", executionId };
@@ -915,7 +936,7 @@ export function createDurableRunRegistry({
         observed.pause?.requiresOwnerDecision === true ||
         observed.cancellation != null;
       if (observed.progressCount !== 0 || uncertain) {
-        active.delete(executionId);
+        retireWriter(executionId);
         return {
           ok: false,
           rolledBack: false,
@@ -926,7 +947,7 @@ export function createDurableRunRegistry({
         };
       }
 
-      active.delete(executionId);
+      retireWriter(executionId);
       // Delete payload/log/resume/outbox bytes first. This both frees quota for
       // the registry rewrite and keeps the readable run authority until every
       // auxiliary delete has succeeded, so an interrupted cleanup is retryable.
@@ -1097,7 +1118,14 @@ export function createDurableRunRegistry({
       if (!terminal) throw new Error("terminal registry CAS failed");
       record = terminal;
     }
-    active.delete(executionId);
+    // review r4 P1-1: a cancellation outbox completing is NOT the writer
+    // settling — the abort callback only STARTED the orchestrator's wind-down,
+    // and its final flush may still be in flight. The cancelling projection
+    // is retained (the fence keeps seeing the writer) until either the
+    // orchestrator's settle() acknowledges completion, or the cancellation
+    // recorded that there was no live writer to wait for. Normal terminal
+    // commits ARE the writer finishing, so they retire here as before.
+    if (!cancelling) retireWriter(executionId);
     await boundary(cancelling ? "after-cancel-cas" : "after-cas", executionId);
 
     await appendRegistryRow(executionId, {
@@ -1173,6 +1201,38 @@ export function createDurableRunRegistry({
     return key;
   }
 
+  /** The ACTIVE (in-process writer) executions whose durable family belongs
+   * to the given journal targets. list() deliberately strips journalTarget
+   * from public records, so ownership matching for the deletion fence needs
+   * this dedicated minimal projection: { executionId, journalTarget, phase }
+   * for runs currently in the live writer set. */
+  async function activeByJournalTarget(targets) {
+    const wanted = new Set([...(targets ?? [])].map((t) => String(t ?? "")));
+    return locked(async () => {
+      const out = [];
+      // Both projections are writers: `active` runs AND runs whose cancel
+      // authority is recorded but whose abort/outbox/terminal settle is still
+      // pending (review P1-1).
+      for (const executionId of [...active, ...cancelling]) {
+        if (!validExecutionId(executionId)) continue;
+        if (out.some((w) => w.executionId === executionId)) continue;
+        const record = await readRecord(executionId);
+        if (!record) continue;
+        // review r4 P1-1: a CANCELLING-projection writer stays projected even
+        // once its record reads "cancelled" — the abort fired but the
+        // orchestrator's settle() acknowledgement is still pending, so the
+        // fence must keep seeing it. Only the active set may be skipped on a
+        // terminal record (its retire is synchronous with the transition).
+        if (!cancelling.has(executionId) &&
+            (record.phase === "terminal" || record.phase === "cancelled")) continue;
+        const target = String(record.journalTarget ?? "");
+        if (!wanted.has(target)) continue;
+        out.push({ executionId, journalTarget: target, phase: record.phase ?? null });
+      }
+      return out;
+    });
+  }
+
   async function cancel(executionId, { reason = "explicit owner cancellation", requestId = null, onAuthorityPersisted = null } = {}) {
     const authority = await locked(async () => {
       let record = await readRecord(executionId);
@@ -1204,7 +1264,10 @@ export function createDurableRunRegistry({
         record = authoritative;
         createdAuthority = true;
       }
+      // The writer STAYS projected (cancelling) until terminal: abort + outbox
+      // completion are still pending, and the fence must keep seeing it.
       active.delete(executionId);
+      cancelling.add(executionId);
       await boundary("after-cancel-authority", executionId);
       return { done: false, record, shouldAbort: createdAuthority };
     });
@@ -1256,6 +1319,11 @@ export function createDurableRunRegistry({
       await ensureCancellationOutbox(record);
       await boundary("after-cancel-outbox", executionId);
       const run = await processOutbox(executionId);
+      // review r4 P1-1: when the cancellation recorded that there was NO live
+      // writer to abort ("no live execution to abort" / "no live abort
+      // callback registered"), no orchestrator will ever call settle() —
+      // retire the projection here so the fence can observe quiescence.
+      if (abortAttempt?.attempted === false) retireWriter(executionId);
       return { ok: true, cancelled: true, idempotent: false, executionId, run, abortAttempt };
     });
   }
@@ -1288,7 +1356,7 @@ export function createDurableRunRegistry({
         },
       }, record.revision);
       if (!paused) throw new Error("permission pause CAS failed");
-      active.delete(executionId);
+      retireWriter(executionId);
       return publicRecord(paused);
     });
   }
@@ -1332,7 +1400,7 @@ export function createDurableRunRegistry({
         phase: "paused-provider-change",
         pause: { schemaVersion: 1, kind: "provider-change", reason: "provider identity changed since this run was accepted", expected: identities?.expected ?? null, actual: identities?.actual ?? null, pausedAt: now(), visible: true, recoverable: true, automaticRetry: false },
       }, record.revision);
-      active.delete(executionId);
+      retireWriter(executionId);
       return { ok: false, paused: true, error: "provider_identity_changed", executionId, run: publicRecord(paused) };
     });
   }
@@ -1412,7 +1480,7 @@ export function createDurableRunRegistry({
         resumeState: { ...record.resumeState, failedAt: now(), error: bounded(error, 2 * 1024), exhausted: false },
       }, record.revision);
       if (!paused) throw new Error("resume failure CAS failed");
-      active.delete(executionId);
+      retireWriter(executionId);
       return { ok: false, error: "resume_dispatch_failed", executionId, run: publicRecord(paused) };
     });
   }
@@ -1425,10 +1493,16 @@ export function createDurableRunRegistry({
       const outboxKey = `${OUTBOX_PREFIX}${executionId}`;
       if (record.phase === "cancel-requested" || record.cancellation) {
         await ensureCancellationOutbox(record);
-        return await processOutbox(executionId);
+        const out = await processOutbox(executionId);
+        // review r4 P1-1: settle() is the ORCHESTRATOR's completion
+        // acknowledgement — this is the only point (besides a recorded
+        // nothing-to-wait-for cancellation) where the cancelling projection
+        // may be retired, because only now is the writer actually done.
+        retireWriter(executionId);
+        return out;
       }
       if (TERMINAL_PHASES.has(record.phase) && !(await store.has(outboxKey))) {
-        active.delete(executionId);
+        retireWriter(executionId);
         return publicRecord(record);
       }
       await boundary("before-outbox", executionId);
@@ -1748,6 +1822,53 @@ export function createDurableRunRegistry({
     return detach;
   }
 
+  /** Agent-teardown purge: remove EVERY durable trace of one journal target
+   * (`agent:<slug>` / `background:<slug>`) — registry rows, the INDEX entries,
+   * the executions' OPFS dirs, and the agent's thread reverse-index entries
+   * (threads whose executions are ALL purged lose their dir + key entirely).
+   * Runs inside the registry mutex; per-dir removals are idempotent so a crash
+   * mid-purge leaves at most an orphan dir that the orphan sweep removes.
+   * NEVER touches the artifacts store (assets live in the master store and
+   * survive agent deletion by design). */
+  async function purgeForTarget(target) {
+    const label = String(target ?? "");
+    if (!/^(?:agent|background):[a-z0-9-]+$/.test(label)) {
+      return { ok: false, error: `refusing to purge unscoped target: ${label || "(empty)"}` };
+    }
+    return await locked(async () => {
+      const purged = [];
+      const threadIds = new Set();
+      for (const executionId of await indexIds()) {
+        const record = await readRecord(executionId, { persistMigration: false });
+        if (!record || record.journalTarget !== label) continue;
+        purged.push(executionId);
+        if (record.threadId) threadIds.add(String(record.threadId));
+      }
+      for (const executionId of purged) {
+        await store.delete(`${RUN_PREFIX}${executionId}`);
+        await removeFromIndexExact(executionId, null);
+        const dir = await purgeStoreDir(durableExecutionDirSegments(executionId));
+        if (dir?.ok === false) throw new Error(`execution dir purge failed: ${executionId}`);
+      }
+      let threadsRemoved = 0;
+      for (const threadId of threadIds) {
+        const key = `${THREAD_RUNS_PREFIX}${threadId}`;
+        const current = await store.get(key);
+        if (!Array.isArray(current)) continue;
+        const remaining = current.filter((id) => !purged.includes(id));
+        if (remaining.length === 0) {
+          await store.delete(key);
+          const dir = await purgeStoreDir(durableThreadDirSegments(threadId));
+          if (dir?.ok === false) throw new Error(`thread dir purge failed: ${threadId}`);
+          threadsRemoved += 1;
+        } else if (remaining.length !== current.length) {
+          await store.setTrusted(key, remaining);
+        }
+      }
+      return { ok: true, runs: purged.length, threads: threadsRemoved, target: label };
+    });
+  }
+
   return {
     bootId,
     start,
@@ -1761,6 +1882,7 @@ export function createDurableRunRegistry({
     dismissedFailedRuns,
     dismissFailedRuns,
     purgeFailedForAgent,
+    purgeForTarget,
     pauseForPermission,
     pauseForProviderChange,
     resumeAfterPermission,
@@ -1772,9 +1894,142 @@ export function createDurableRunRegistry({
     listThreadExecutions,
     recover,
     list,
+    activeByJournalTarget,
     attachPort,
-    isActive: (executionId) => active.has(executionId),
+    // A cancelling (cancel-authority recorded, not yet terminal) execution is
+    // still a live writer for fence purposes (review P1-1).
+    isActive: (executionId) => active.has(executionId) || cancelling.has(executionId),
   };
 }
 
 export const durableRuns = createDurableRunRegistry();
+
+/** Orphan sweep: find OPFS state whose owning agent NO LONGER EXISTS and
+ * remove it. This is what repairs pre-fix leftovers (an agent deleted before
+ * teardown existed leaves memory/agents|background dirs, executions dirs, and
+ * thread dirs behind). Injected `listAgents` (named-agents.listNamedAgents)
+ * and `listTasks` (scheduler.listScheduledTasks) keep this module cycle-free.
+ * Assets are NEVER orphans (they live in the master store, not agent dirs). */
+export async function sweepOrphanAgentData({ listAgents, listTasks, registry = null } = {}) {
+  if (typeof listAgents !== "function" || typeof listTasks !== "function") {
+    throw new Error("sweepOrphanAgentData requires listAgents + listTasks");
+  }
+  const reg = registry ?? durableRuns;
+  const swept = { agentDirs: 0, backgroundDirs: 0, executionDirs: 0, threadDirs: 0 };
+  const failures = [];
+  // FAIL-CLOSED authority resolution: a read failure or a malformed snapshot
+  // must NEVER be read as "nothing is live" — that would turn a transient
+  // I/O error into a recursive delete of LIVE agent data. Uncertainty aborts
+  // the whole sweep (nothing is removed; the next sweep retries).
+  let agentRows;
+  let taskRows;
+  try {
+    [agentRows, taskRows] = await Promise.all([listAgents(), listTasks()]);
+  } catch (e) {
+    return { ok: false, swept, failures: [`live-set read failed: ${String(e?.message ?? e)}`] };
+  }
+  if (!Array.isArray(agentRows) || !Array.isArray(taskRows)) {
+    return { ok: false, swept, failures: ["live-set snapshot malformed (not an array) — sweep refused"] };
+  }
+  // LIVE namespace set (review P1-1): a directory under memory/agents/ is
+  // named EITHER by the agent's immutable instanceId (post-fix) OR its legacy
+  // slug — the live set must contain EVERY identity a live row can be
+  // addressed by, or a live agent's instanceId dir looks orphaned and gets
+  // purged (data loss). Registry rows carry instanceId + id (+ maybe slug).
+  const liveAgentSlugs = new Set(
+    agentRows.flatMap((a) => [a?.instanceId, a?.id, a?.slug]).map((v) => String(v ?? "").trim()).filter(Boolean),
+  );
+  const liveTaskNames = new Set(
+    taskRows.map((t) => String(t?.name ?? "")).filter(Boolean),
+  );
+  const {
+    listNamedAgentIds,
+    listBackgroundAgentIds,
+    listDirsUnder,
+    purgeStoreDir,
+    backgroundAgentSlug,
+    durableRunMemory,
+  } = await import("./memory.js");
+  const durable = durableRunMemory();
+  let namedIds;
+  let backgroundIds;
+  try {
+    namedIds = await listNamedAgentIds();
+    backgroundIds = await listBackgroundAgentIds();
+  } catch (e) {
+    return { ok: false, swept, failures: [`dir enumeration failed: ${String(e?.message ?? e)}`] };
+  }
+  // 1. named-agent sandboxes with no registry row: full teardown (registry
+  // rows + execution dirs + thread index go through purgeForTarget; the dir
+  // itself is then removed — clear-free, the namespace is dead). A purge
+  // refusal skips the dir removal for that slug: an uncertain durable state
+  // must not be half-deleted.
+  for (const slug of namedIds) {
+    let decoded = slug;
+    try { decoded = decodeURIComponent(slug); } catch { /* compare raw */ }
+    if (liveAgentSlugs.has(slug) || liveAgentSlugs.has(decoded)) continue;
+    try {
+      // The durable family target matches the DIR namespace spelling
+      // (post-fix dirs are instanceId-named → agent:<instanceId>; legacy slug
+      // dirs → agent:<slug>). purgeForTarget is a no-op when absent.
+      const purged = await reg.purgeForTarget(`agent:${decoded}`);
+      if (purged?.ok === false) { failures.push(`agents/${slug}: durable purge refused (${purged.error ?? "unknown"})`); continue; }
+    } catch (e) { failures.push(`agents/${slug}: durable purge failed (${String(e?.message ?? e)})`); continue; }
+    const r = await purgeStoreDir(["memory", "agents", encodeURIComponent(decoded)]);
+    if (r.ok) swept.agentDirs += 1;
+    else failures.push(`agents/${slug}: ${r.error}`);
+  }
+  // 2. background sandboxes with no schedule row (same fail-closed shape).
+  for (const slug of backgroundIds) {
+    let decoded = slug;
+    try { decoded = decodeURIComponent(slug); } catch { /* compare raw */ }
+    const owned = [...liveTaskNames].some((name) => backgroundAgentSlug(name) === slug || backgroundAgentSlug(name) === decoded);
+    if (owned) continue;
+    try {
+      const purged = await reg.purgeForTarget(`background:${decoded}`);
+      if (purged?.ok === false) { failures.push(`background/${slug}: durable purge refused (${purged.error ?? "unknown"})`); continue; }
+    } catch (e) { failures.push(`background/${slug}: durable purge failed (${String(e?.message ?? e)})`); continue; }
+    const r = await purgeStoreDir(["memory", "background", encodeURIComponent(decoded)]);
+    if (r.ok) swept.backgroundDirs += 1;
+    else failures.push(`background/${slug}: ${r.error}`);
+  }
+  // 3. execution dirs with no registry row. A registry read failure means NO
+  // execution dir may be judged orphaned (the old code read failures as an
+  // EMPTY live set and deleted everything).
+  let runs;
+  try {
+    runs = await reg.list();
+  } catch (e) {
+    failures.push(`registry list failed: ${String(e?.message ?? e)} — execution dirs skipped`);
+    runs = null;
+  }
+  const liveExecutions = runs ? new Set(runs.runs.map((r) => String(r.executionId))) : null;
+  if (liveExecutions) {
+    for (const dirName of await listDirsUnder(["memory", "durable-runs", "executions"])) {
+      let executionId;
+      try { executionId = decodeURIComponent(dirName); } catch { continue; }
+      if (liveExecutions.has(executionId)) continue;
+      const r = await purgeStoreDir(["memory", "durable-runs", "executions", dirName]);
+      if (r.ok) swept.executionDirs += 1;
+      else failures.push(`executions/${dirName}: ${r.error}`);
+    }
+  }
+  // 4. thread dirs whose reverse-index is DEFINITELY absent/empty. A read
+  // ERROR is not the same as "no record": errors skip (never delete).
+  for (const dirName of await listDirsUnder(["memory", "durable-runs", "threads"])) {
+    let threadId;
+    try { threadId = decodeURIComponent(dirName); } catch { continue; }
+    let record;
+    try {
+      record = await durable.get(`thread-runs:${threadId}`);
+    } catch (e) {
+      failures.push(`threads/${dirName}: reverse-index read failed (${String(e?.message ?? e)}) — skipped`);
+      continue;
+    }
+    if (Array.isArray(record) && record.length > 0) continue;
+    const r = await purgeStoreDir(["memory", "durable-runs", "threads", dirName]);
+    if (r.ok) swept.threadDirs += 1;
+    else failures.push(`threads/${dirName}: ${r.error}`);
+  }
+  return { ok: failures.length === 0, swept, failures };
+}
