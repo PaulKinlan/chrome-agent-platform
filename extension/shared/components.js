@@ -24,6 +24,11 @@ import {
 import { parseMentionToken, parseSlashCommand } from "./command-parser.js";
 import { normalizeConversationRunStatus } from "./run-status.js";
 import { safeParse, buildTree, subtreeJson, safeJsonStringify } from "./tool-tree.js";
+// The CANONICAL secret redactor (lib/pure.js — one semantic, shared with the
+// SW write path): activity journals may predate write-path redaction, so the
+// explorer redacts again at render AND the tree/copy paths only ever see the
+// redacted value.
+import { redactSecrets } from "../lib/pure.js";
 
 const ARIA_HIDDEN = "aria-hidden";
 const TRUE = ""; // boolean-attribute present marker
@@ -5804,7 +5809,20 @@ function activityText(e) {
   switch (e?.type) {
     case "task": return e.task || "";
     case "result": return e.result || "";
-    case "tool-call": return (e.tool || "tool") + (e.args ? ` ${shortText(e.args, 60)}` : "");
+    case "tool-call": {
+      // The args preview in the summary line goes through safeJsonStringify —
+      // which redacts secret-like KEYS before serialization — so a historical
+      // (pre-write-redaction) journal row can never paint a credential into
+      // the collapsed row either.
+      const preview = (() => {
+        if (!e.args) return "";
+        const p = safeParse(e.args);
+        if (p.kind !== "json") return e.args;
+        try { return safeJsonStringify(redactSecrets(p.value), { maxBytes: 256, maxNodes: 24 }); }
+        catch { return ""; }
+      })();
+      return (e.tool || "tool") + (preview ? ` ${shortText(preview, 60)}` : "");
+    }
     case "tool-result": return (e.tool || "tool") + " → " + activityToolSummary(e.tool, e.result);
     case "screenshot": return e.url || "screenshot";
     case "error": return e.error || e.message || "error";
@@ -5960,7 +5978,7 @@ class ActivityExplorer extends Component {
     this._entries = this._entries || [];
     this._search.addEventListener("input", () => this._refresh());
     this._agent.addEventListener("change", () => this._refresh());
-    this._load();
+    this.refresh();
   }
   // Set demo entries directly (the gallery has no extension backend).
   set entries(v) {
@@ -5973,20 +5991,60 @@ class ActivityExplorer extends Component {
   }
   // Re-query the backend NOW (live activity: the NTP calls this,
   // trailing-debounced, when run progress events land — the section used to
-  // freeze at whatever it showed when the page opened).
+  // freeze at whatever it showed when the page opened). At most ONE request
+  // is ever in flight plus ONE pending trailing refresh: bursts coalesce
+  // instead of overlapping, and a stale response can never overwrite newer
+  // data (only the in-flight request applies; the trailing one re-queries).
   refresh() {
     if (this._seeded) return Promise.resolve(); // gallery demos own their data
-    return this._load();
+    if (this._loadInFlight) {
+      this._trailingRefresh = true;
+      return this._loadInFlight;
+    }
+    const p = this._load();
+    this._loadInFlight = p;
+    const settle = () => {
+      if (this._loadInFlight === p) this._loadInFlight = null;
+      if (this._trailingRefresh) {
+        this._trailingRefresh = false;
+        this.refresh();
+      }
+    };
+    p.then(settle, settle);
+    return p;
   }
   // A cheap change signature: skip the re-render entirely when the fetched
   // entries are identical (protects aria-live from spam + keeps open rows
-  // from collapsing on a no-op refresh).
+  // from collapsing on a no-op refresh). The signature must cover EVERY
+  // rendered identity/label/content field + the load error — the old
+  // count+first-row form suppressed renames (agentLabel) and empty-success ↔
+  // empty-error transitions. FNV-1a-style double hash over the fields (cheap,
+  // no large allocation).
   _signature() {
     const es = this._entries || [];
-    const last = es[0];
-    return `${es.length}:${last?.ts ?? 0}:${last?.type ?? ""}:${last?.id ?? ""}:${last?.callId ?? ""}`;
+    let h1 = 0x811c9dc5, h2 = 0x01000193;
+    const mix = (v) => {
+      const str = String(v ?? "");
+      for (let i = 0; i < str.length; i++) {
+        h1 = Math.imul(h1 ^ str.charCodeAt(i), 0x01000193) >>> 0;
+        h2 = (Math.imul(h2, 31) + str.charCodeAt(i)) >>> 0;
+      }
+      h1 = Math.imul(h1 ^ 0xff, 0x01000193) >>> 0;
+      h2 = (Math.imul(h2, 31) + 0xff) >>> 0;
+    };
+    mix(this._loadError ?? "");
+    for (const e of es) {
+      mix(e.ts); mix(e.type); mix(e.id); mix(e.callId); mix(e.source);
+      mix(e.agentLabel); mix(e.tool); mix(e.task); mix(e.args); mix(e.result);
+      mix(e.error); mix(e.message); mix(e.stack); mix(e.detail); mix(e.url);
+      mix(e.ok);
+    }
+    return `${es.length}:${h1.toString(16)}:${h2.toString(16)}`;
   }
   async _load() {
+    // Sequence guard: a response applies ONLY if no newer request was issued
+    // meanwhile (stale responses never overwrite newer data).
+    const seq = (this._loadSeq = (this._loadSeq ?? 0) + 1);
     // If entries were seeded synchronously (the gallery), never clobber them
     // with the empty backend result (the _load await would race the setter).
     if (!this._seeded) {
@@ -5998,6 +6056,7 @@ class ActivityExplorer extends Component {
           agent: this.getAttribute("agent") || undefined,
           limit: Number(this.getAttribute("limit")) || 200,
         });
+        if (seq !== this._loadSeq) return; // superseded mid-flight
         if (!this._seeded) {
           this._entries = Array.isArray(res?.entries) ? res.entries : [];
           this._loadError = Array.isArray(res?.entries)
@@ -6005,6 +6064,7 @@ class ActivityExplorer extends Component {
             : (res?.error || "couldn't load the activity log");
         }
       } catch {
+        if (seq !== this._loadSeq) return; // superseded mid-flight
         if (!this._seeded) {
           this._entries = [];
           this._loadError = "the activity log didn't answer — the agent worker may be busy";
@@ -6057,7 +6117,7 @@ class ActivityExplorer extends Component {
         retry.type = "button";
         retry.className = "aex-retry";
         retry.textContent = "Retry";
-        retry.addEventListener("click", () => this._load());
+        retry.addEventListener("click", () => this.refresh());
         d.append(retry);
       }
       this._list.append(d);
@@ -6119,9 +6179,14 @@ class ActivityExplorer extends Component {
       any = true;
       const parsed = safeParse(raw);
       if (parsed.kind === "json") {
-        const tree = buildTree(parsed.value);
+        // Historical journal rows may predate write-path redaction — redact
+        // AGAIN at render with the canonical redactor so a secret never
+        // paints, and the tree's COPY path (subtreeJson over this same value)
+        // can only ever copy the redacted form.
+        const safeValue = redactSecrets(parsed.value);
+        const tree = buildTree(safeValue);
         if (tree.rows.length >= 1) {
-          wrap.appendChild(buildToolTreeBlock(label, parsed.value, tree.rows, tree.maxNodes, st));
+          wrap.appendChild(buildToolTreeBlock(label, safeValue, tree.rows, tree.maxNodes, st));
           return;
         }
       }

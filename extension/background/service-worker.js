@@ -2098,8 +2098,11 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         const cq = callQueue.get(event.toolName) ?? [];
         cq.push(callId); // the result side shifts the OLDEST pending id (FIFO)
         callQueue.set(event.toolName, cq);
+        // Redact at PERSISTENCE with the canonical redactor: journal rows are
+        // rendered + copied by the activity explorer — a credential-shaped
+        // tool argument must never be readable back from storage.
         let args = "";
-        try { args = event.toolArgs != null ? JSON.stringify(event.toolArgs) : ""; } catch { args = String(event.toolArgs ?? ""); }
+        try { args = event.toolArgs != null ? JSON.stringify(redactSecrets(event.toolArgs)) : ""; } catch { args = String(event.toolArgs ?? ""); }
         if (args && args.length > 2000) args = args.slice(0, 2000) + "…";
         const log = { type: "tool-call", id: taskId, executionId, run: runInstance, callId, tool: event.toolName ?? "tool", args };
         journalAppend(mem, log).catch(() => {});
@@ -2108,7 +2111,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         let result;
         if (event.result == null) result = "";
         else if (typeof event.result === "string") result = event.result;
-        else { try { result = JSON.stringify(event.result); } catch { result = String(event.result); } }
+        else { try { result = JSON.stringify(redactSecrets(event.result)); } catch { result = String(event.result); } }
         if (result && result.length > 2000) result = result.slice(0, 2000) + "…";
         // Match the OLDEST pending callId for this tool name (FIFO — parallel
         // same-name calls pair in order) + persist the ok flag so a replay can

@@ -96,9 +96,12 @@ try {
     document.getElementById("composer")?.dispatchEvent(new CustomEvent("send", { detail: { text: "kat: recent activity live probe", attachments: [] }, bubbles: true }));
     return "sent";
   })()`);
-  // The run settles (provider failure on a fresh profile still journals the
-  // task + error), journal writes land fire-and-forget, the debounced live
-  // refresh follows. Poll up to 20s for the section to update WITHOUT reload.
+  // The hub send opens the THREAD view — the hub is COVERED, so the refresh
+  // is deferred (P1-a contract) and flushed exactly once on return. Let the
+  // run settle, return to the hub, then the run must appear WITHOUT a reload.
+  await sleep(6000);
+  const aCover = await uiEval(`document.getElementById("thread-view")?.hidden === false`);
+  if (aCover) await uiEval(`document.getElementById("thread-back")?.click()`);
   let live = await explorerState();
   const deadline = Date.now() + 20000;
   while (Date.now() < deadline && live.rows === 0) { await sleep(1000); live = await explorerState(); }
@@ -112,6 +115,56 @@ try {
   const reloaded = await explorerState();
   check("persistence: activity survives an NTP reload", reloaded.rows > 0, reloaded);
 
+  // ── G. In-flight coalescing (P1-b): rapid refreshes never overlap _load ─
+  const coalesce = await uiEval(`(async () => {
+    const host = document.querySelector("#run-log activity-explorer");
+    let loads = 0, concurrent = 0, maxConcurrent = 0;
+    const orig = host._load.bind(host);
+    host._load = async () => {
+      loads += 1; concurrent += 1; maxConcurrent = Math.max(maxConcurrent, concurrent);
+      try { return await orig(); } finally { concurrent -= 1; }
+    };
+    await Promise.all([host.refresh(), host.refresh(), host.refresh(), host.refresh(), host.refresh()]);
+    // settle any trailing refresh the guard queued
+    await new Promise((r) => setTimeout(r, 3000));
+    return { loads, maxConcurrent };
+  })()`);
+  check("coalescing: 5 rapid refreshes never overlap (one in flight + trailing)", coalesce.maxConcurrent === 1 && coalesce.loads >= 1 && coalesce.loads <= 2, coalesce);
+
+  // ── F. Hidden-hub deferral (P1-a): covered activity is deferred, not dropped ─
+  await uiEval(`document.getElementById("open-directory")?.click()`);
+  let covered = false;
+  for (let i = 0; i < 20 && !covered; i++) {
+    covered = await uiEval(`document.getElementById("view")?.hidden === false`);
+    if (!covered) await sleep(500);
+  }
+  check("deferral precondition: the directory overlay covers the hub", covered === true, { covered });
+  await uiEval(`(async () => {
+    document.getElementById("composer")?.dispatchEvent(new CustomEvent("send", { detail: { text: "kat: covered deferral probe", attachments: [] }, bubbles: true }));
+    return "sent";
+  })()`);
+  // The hub send opens the THREAD view (replacing the directory overlay — the
+  // hub stays covered, just by a different surface). Let the run settle while
+  // covered; the deferral-probe row must NOT render yet.
+  await sleep(8000);
+  const coverState = await uiEval(`({ view: document.getElementById("view")?.hidden === false, thread: document.getElementById("thread-view")?.hidden === false })`);
+  const whileCovered = await uiEval(`(() => {
+    const root = document.querySelector("#run-log activity-explorer")?.shadowRoot;
+    return { texts: root ? [...root.querySelectorAll(".aex-text")].map((n) => n.textContent) : [] };
+  })()`);
+  check("deferral: covered activity does NOT render while the hub is covered", !whileCovered.texts?.some((t) => t.includes("kat: covered deferral probe")), { ...whileCovered, coverState });
+  // Return to the hub through WHICHEVER surface is covering it.
+  if (coverState.thread) await uiEval(`document.getElementById("thread-back")?.click()`);
+  if (!coverState.thread && coverState.view) await uiEval(`document.getElementById("view-back")?.click()`);
+  let afterReturn = await explorerState();
+  const retDeadline = Date.now() + 15000;
+  while (Date.now() < retDeadline && !afterReturn.texts?.some((t) => t.includes("kat: covered deferral probe"))) {
+    await sleep(1000);
+    afterReturn = await explorerState();
+  }
+  check("deferral: returning to the hub FLUSHES the deferred activity (no reload)", afterReturn.texts?.some((t) => t.includes("kat: covered deferral probe")), { ...afterReturn, coverState });
+  await shot("03-deferred-flush", ui);
+
   // ── C. Structured params/response rendering (seeded entries drive the
   //        REAL component — the gallery path — for the deterministic shapes
   //        a provider-less profile cannot produce) ────────────────────────
@@ -122,6 +175,7 @@ try {
       { ts: Date.now(), source: "master", agentLabel: "hub", type: "tool-call", id: "t1", callId: "c1", tool: "read_page", args: JSON.stringify({ url: "https://example.com", selector: "article", options: { depth: 2, include: ["a", "b"] } }) },
       { ts: Date.now() - 1, source: "master", agentLabel: "hub", type: "tool-result", id: "t1", callId: "c1", tool: "read_page", result: JSON.stringify({ ok: true, title: "Example", links: [{ href: "/a" }, { href: "/b" }] }) },
       { ts: Date.now() - 2, source: "master", agentLabel: "hub", type: "error", id: "e1", error: "boom", stack: big },
+      { ts: Date.now() - 3, source: "master", agentLabel: "hub", type: "tool-call", id: "t9", callId: "c9", tool: "http_request", args: JSON.stringify({ url: "https://api.example.com", apiKey: "sk-live-KATSECRET-dont-paint-918273645" }) },
     ];
     return "seeded";
   })()`);
@@ -158,6 +212,40 @@ try {
   check("show-more reveals the full payload", structured.errRevealed === true, structured);
   check("plain block carries a copy button", structured.errCopyBtn === true, structured);
   await shot("02-structured-detail", ui);
+
+  // ── E. Secret redaction (P1-d): a historical entry with an apiKey-shaped
+  //        value renders + copies REDACTED (falsification: pre-revise code
+  //        paints + copies the raw secret). ────────────────────────────────
+  const redaction = await uiEval(`(async () => {
+    const SECRET = "sk-live-KATSECRET-dont-paint-918273645";
+    const host = document.querySelector("#run-log activity-explorer");
+    const root = host.shadowRoot;
+    const entries = [...root.querySelectorAll("details.aex-entry")];
+    const secretEntry = entries.find((d) => d.dataset.ekey?.startsWith("tool-call:t9"));
+    if (!secretEntry) return { missing: true, keys: entries.map((d) => d.dataset.ekey) };
+    secretEntry.open = true;
+    const summaryText = secretEntry.querySelector(".aex-text")?.textContent ?? "";
+    const treeText = [...secretEntry.querySelectorAll(".tt-val")].map((n) => n.textContent).join(" ");
+    // The COPY path: stub the clipboard, click the root container's copy-json.
+    const captured = [];
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: (t) => { captured.push(t); return Promise.resolve(); } }, configurable: true });
+    const copyJson = [...secretEntry.querySelectorAll(".tt-copy")].find((b) => b.dataset.copy === "json");
+    copyJson?.click();
+    await new Promise((r) => setTimeout(r, 300));
+    const copied = captured.join(" ");
+    return {
+      summaryLeaks: summaryText.includes(SECRET),
+      treeLeaks: treeText.includes(SECRET),
+      treeRedacted: treeText.includes("[REDACTED]"),
+      copied,
+      copyLeaks: copied.includes(SECRET),
+      copyRedacted: copied.includes("[REDACTED]"),
+    };
+  })()`);
+  check("redaction: the summary line never paints the secret", redaction.summaryLeaks === false, redaction);
+  check("redaction: the detail tree renders [REDACTED], never the secret", redaction.treeLeaks === false && redaction.treeRedacted === true, redaction);
+  check("redaction: the tree COPY is redacted too", redaction.copyLeaks === false && redaction.copyRedacted === true, redaction);
+  await shot("04-redaction", ui);
 
   // ── D. Seeded refresh() is a no-op (gallery owns its data) ────────────
   const seededRefresh = await uiEval(`(async () => {

@@ -912,15 +912,29 @@ async function renderRunLog() {
 // writes are fire-and-forget during a run; re-query the explorer on run
 // progress + registry changes, TRAILING-DEBOUNCED (the aggregation walk is
 // bounded but not free — one settle per burst, not one per tool call).
-// Skipped while a task/agent overlay is open (the hub section isn't visible).
+// Skipped while the hub is covered — but DEFERRED, never dropped: a covered
+// burst marks the log dirty and the route return to HUB flushes exactly one
+// refresh (activity created while Settings/Directory or a task thread is open
+// must be there when the owner comes back).
 let runLogExplorer = null;
 let runLogRefreshTimer = 0;
+let runLogDirty = false;
+function runLogCovered() {
+  const view = document.getElementById("view");
+  if (view && view.hidden !== true) return true;
+  return typeof threadView !== "undefined" && threadView && threadView.hidden !== true;
+}
 function scheduleRunLogRefresh() {
   if (!runLogExplorer) return;
-  const view = document.getElementById("view");
-  if (view && view.hidden !== true) return;
+  if (runLogCovered()) { runLogDirty = true; return; }
   clearTimeout(runLogRefreshTimer);
   runLogRefreshTimer = setTimeout(() => { runLogExplorer?.refresh?.().catch(() => {}); }, 1500);
+}
+function flushRunLogDirty() {
+  if (!runLogDirty) return;
+  runLogDirty = false;
+  clearTimeout(runLogRefreshTimer);
+  runLogExplorer?.refresh?.().catch(() => {});
 }
 subscribeProgress((ev) => {
   if (!ev || typeof ev !== "object") return;
@@ -1454,6 +1468,7 @@ function hideThreadView({
   }, {
     focusAfter,
   });
+  flushRunLogDirty(); // activity written while the thread was open appears now
 }
 
 let threadProjectionGeneration = 0;
@@ -2787,6 +2802,7 @@ function closeView({ fromNavigation = false } = {}) {
     // disposition rather than focusing underneath the closing overlay.
     focusAfter: { focus: () => viewFocus.close(() => {}) },
   });
+  flushRunLogDirty(); // activity written while Settings/Directory was open appears now
   // Returning from Settings/Directory is an owner navigation boundary. A
   // fresh authoritative read both restores the row promptly and fences any
   // older delayed sidebar read that began before the view switch.
