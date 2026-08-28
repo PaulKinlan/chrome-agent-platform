@@ -495,7 +495,7 @@ export async function cancelScheduledTask(name, terminationTimeoutMs = CANCEL_TE
 
 /** Phase-2 of cancellation (alarm clear + confirm-absent + payload delete),
  * extracted so the non-blocking delete path shares the SAME fail-closed logic. */
-async function finalizeCancellation(name) {
+export async function finalizeCancellation(name) {
   return withLock(async () => {
     // Clear the alarm (best-effort — a one-shot may already be consumed), then
     // CONFIRM absence via alarms.get so a periodic alarm whose clear FAILED is
@@ -545,16 +545,14 @@ async function finalizeCancellation(name) {
  * interrupted (a service-worker kill mid-cleanup leaves the inert cancelling
  * payload, which handleAlarm skips and reconcileScheduledTasks reaps). */
 export function cancelScheduledTaskBackground(name) {
-  // `marked` resolves once the durable cancelling mark is in the store AND the
-  // live run's abort controller has fired — the route-level contract: by the
-  // time a delete/cancel route responds, the teardown state is DURABLE (the
-  // SW keepalive cannot lose it). Only finalizeCancellation (the
-  // wait-for-termination dance) stays fire-and-forget on `promise`.
-  let markedResolve;
-  const marked = new Promise((resolve) => {
-    markedResolve = resolve;
-  });
-  const done = (async () => {
+  // `marked` IS the marking/abort async operation — the route-level contract:
+  // it RESOLVES once the durable cancelling mark is in the store AND the live
+  // run's abort controller has fired (the SW keepalive can no longer lose the
+  // teardown), and it REJECTS on any marking failure (lock/kv error) so a
+  // route awaiting it can surface an honest {ok:false} instead of hanging on
+  // a promise that would never settle (REVISE-4 P1-A: the old manual-resolve
+  // promise stayed pending forever when the marking threw).
+  const marked = (async () => {
     let live = null;
     await withLock(async () => {
       const store = await kvGet(TASK_KEY);
@@ -568,12 +566,21 @@ export function cancelScheduledTaskBackground(name) {
     if (live) {
       try { live.controller.abort(); } catch { /* already aborted */ }
     }
-    markedResolve({ ok: true, name });
-    await finalizeCancellation(name);
+    return { ok: true, name };
   })();
-  // `promise` stays exposed so tests can await the FULL cleanup without
-  // blocking the delete route; `marked` is what routes await.
-  return { promise: done, marked, name, stopping: true };
+  // `promise` stays exposed so tests can await the FULL cleanup (marking →
+  // finalizeCancellation) without blocking the delete route; only the
+  // wait-for-termination dance is backgrounded behind `marked`.
+  const promise = (async () => {
+    await marked;
+    return await finalizeCancellation(name);
+  })();
+  // Fire-and-forget callers (recipe teardown after delete, the disable path)
+  // never await these — mark both handled so a marking failure is not
+  // reported as an unhandled rejection, while awaiters still receive it.
+  marked.catch(() => {});
+  promise.catch(() => {});
+  return { promise, marked, name, stopping: true };
 }
 
 /** Remove a one-shot task only AFTER its result is committed (durable).
@@ -817,6 +824,7 @@ export async function reconcileScheduledTasks() {
   let activeAlarmCount = existing.size;
   const resumed = [];
   const failed = [];
+  const reaped = [];
   const now = Date.now();
   for (const name of names) {
     const task = tasks[name];
@@ -824,10 +832,31 @@ export async function reconcileScheduledTasks() {
     // NEVER be re-armed by reconciliation — it is non-runnable until the owner
     // explicitly retries (a fresh scheduleTask) or cancels (the round-22
     // unknown-state replay blocker: reconcile recreated + ran a failed schedule).
-    // A CANCELLING task (a cancel that failed closed because the alarm was still
-    // armed) must also never be re-armed — it is cancel-pending, retryable via the
-    // owner's cancel route (the round-24 fail-closed cancel blocker).
-    if (task?.quarantined || task?.cancelling || task?.storageBlocked) continue;
+    // A STORAGE-BLOCKED task likewise stays disarmed until retried.
+    if (task?.quarantined || task?.storageBlocked) continue;
+    if (task?.cancelling) {
+      // Crash recovery (REVISE-4 P1-B): a worker death after the durable
+      // cancelling mark but before finalizeCancellation leaves an inert payload
+      // and possibly a still-armed alarm (Chrome re-delivers periodic alarms).
+      // Run the idempotent finalize INLINE — we already hold the scheduling
+      // lock, so calling finalizeCancellation here would nest withLock and
+      // deadlock. Clear → confirm absence via alarms.get → delete. FAIL
+      // CLOSED: if alarm absence cannot be confirmed (get threw) the payload
+      // is RETAINED (inert; a later reconcile or the owner's cancel route
+      // retries). A cancelling payload is never re-armed either way.
+      try { await alarms.clear(name); } catch { /* alarms.get decides */ }
+      let alarmAbsent = true;
+      try {
+        alarmAbsent = (await alarms.get(name)) == null;
+      } catch {
+        alarmAbsent = false; // fail closed — cannot confirm absence
+      }
+      if (alarmAbsent) {
+        delete tasks[name];
+        reaped.push(name);
+      }
+      continue;
+    }
     if (!existing.has(name)) {
       // Chrome's extension-wide 500-active-alarm cap is distinct from memory
       // capacity. Preserve the task payload but report that it was not re-armed.
@@ -866,6 +895,10 @@ export async function reconcileScheduledTasks() {
       `reconcile: failed to recreate ${failed.length} alarm(s): ${failed.join(", ")}`,
     );
   }
+  // Persist the crash-recovery deletions (reaped cancelling payloads). The
+  // pre-loop snapshot `tasks` is the only written-back state — recreated
+  // alarms live in Chrome's own store, not the payload map.
+  if (reaped.length > 0) await kvSet({ [TASK_KEY]: tasks });
   return resumed;
   });
 }

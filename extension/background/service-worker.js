@@ -378,6 +378,7 @@ import {
   blockScheduledTaskForStorage,
   cancelScheduledTask,
   cancelScheduledTaskBackground,
+  finalizeCancellation,
   disarmScheduledAlarms,
   heartbeatInflight,
   listScheduledTasks,
@@ -682,6 +683,17 @@ async function handleAlarm(alarm) {
           : "Task is pending cancellation",
         actionTaken: "skipped_execution",
       }, "warn");
+      // A CANCELLING payload whose alarm STILL FIRES is definitive evidence
+      // the alarm is armed — run the idempotent finalize (clear → confirm
+      // absence → delete) instead of leaving the skip loop to do it forever
+      // (REVISE-4 P1-B: delivery used to skip without clearing anything).
+      // Fire-and-forget: finalizeCancellation takes the scheduling lock
+      // itself, so it safely queues behind this handler and never blocks the
+      // delivery path. Quarantined tasks are NOT finalized — only an owner
+      // retry/cancel resolves those.
+      if (task.cancelling) {
+        finalizeCancellation(alarm.name).catch(() => {});
+      }
       return;
     }
     // A key-quota failure disarms and marks the task once. If Chrome delivers a
@@ -4857,8 +4869,18 @@ const handlers = mergeRouteMaps(
     // Durable before the response: the store carries the cancelling mark (and
     // the live run's abort has fired) by the time the caller sees ok:true —
     // the SW keepalive can no longer lose the teardown. Only the
-    // wait-for-termination dance continues in the background.
-    await handle.marked;
+    // wait-for-termination dance continues in the background. A MARKING
+    // FAILURE (lock/kv error) rejects `marked` — surface it honestly instead
+    // of letting the route hang or silently claim success (REVISE-4 P1-A).
+    try {
+      await handle.marked;
+    } catch (err) {
+      return {
+        ok: false,
+        name,
+        error: `cancel failed before the teardown was durable: ${err?.message ?? String(err)}`,
+      };
+    }
     if (name.startsWith("recipe:")) broadcastRegistryChanged();
     return { ok: true, name, stopping: handle.stopping === true };
   },
@@ -5021,9 +5043,19 @@ const handlers = mergeRouteMaps(
     // path background-agent disable uses): the payload is marked cancelling
     // (inert) DURABLY before this route responds, the live run aborted now;
     // only the alarm-clear + payload-delete + termination wait finish async
-    // (reconciliation reaps residue).
+    // (reconciliation reaps residue). A MARKING FAILURE rejects `marked` —
+    // surface it honestly; the recipe row is NOT deleted when the teardown
+    // could not be made durable (REVISE-4 P1-A).
     const teardown = cancelScheduledTaskBackground(`recipe:${id}`);
-    await teardown.marked;
+    try {
+      await teardown.marked;
+    } catch (err) {
+      return {
+        ok: false,
+        id,
+        error: `delete failed before the teardown was durable: ${err?.message ?? String(err)}`,
+      };
+    }
     // The deleted custom recipe LEAVES the live registry — broadcast so the
     // open pickers/conversations revalidate (a selected deleted agent is
     // rejected, never routed to a ghost).
