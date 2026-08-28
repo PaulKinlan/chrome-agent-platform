@@ -26,6 +26,7 @@ import {
   purgeStoreDir,
 } from "../extension/lib/memory.js";
 import { durableRuns, sweepOrphanAgentData } from "../extension/lib/durable-runs.js";
+import { scheduleTask, listScheduledTasks, cancelScheduledTask } from "../extension/lib/scheduler.js";
 import { listFsGrants, revokeAgentFsGrants, saveFsGrant } from "../extension/lib/fs-grants.js";
 import { IDBFactory } from "fake-indexeddb";
 import { createAsset, getAsset, listAssets } from "../extension/lib/artifacts.js";
@@ -591,4 +592,208 @@ Deno.test("sweep: a registry list failure refuses execution-dir judgement (fail-
   assertEquals(sweep.ok, false, "sweep reports the registry failure");
   assert((sweep.failures ?? []).join(" ").includes("registry I/O error"));
   assert(dirExists(["memory", "durable-runs", "executions", encodeURIComponent(exec)]), "LIVE execution dir NOT judged/purged on registry failure");
+});
+
+// ---- review r3 P1-1: the fence must fire the REAL abort and await terminal ----
+Deno.test("fence r3: the REAL aborter fires and the writer stays projected until terminal", async () => {
+  const created = await createNamedAgent({ name: "FenceAbort" });
+  assert(created.ok);
+  const slug = created.agent.id;
+  const inst = created.agent.instanceId;
+  const exec = "exec:aaaaaaa1-8888-4777-8666-555555555555";
+  const started = await durableRuns.start({
+    executionId: exec,
+    journalTarget: "agent:" + inst,
+    kind: "agent",
+    agentId: "named:" + slug,
+    taskPreview: "abort-seam KAT",
+  });
+  assert(started, "run started");
+
+  // Simulate the SW: a live aborter that stops the "orchestrator", which then
+  // settles asynchronously (the writer is NOT terminal at abort time).
+  const durableRunAborters = new Map();
+  let abortCalled = 0;
+  let settleRun;
+  const settled = new Promise((r) => { settleRun = r; });
+  durableRunAborters.set(exec, () => {
+    abortCalled += 1;
+    setTimeout(() => {
+      durableRuns.settle(exec, { ok: true, cancelled: true, result: { stopped: true } })
+        .then(settleRun).catch(settleRun);
+    }, 25);
+  });
+
+  // The writer is reported while running…
+  const preLive = await durableRuns.activeByJournalTarget(new Set(["agent:" + inst]));
+  assert(preLive.some((w) => w.executionId === exec), "pre: writer reported by journal-target projection");
+
+  const fence = await fenceAgentActiveRuns({
+    registry: durableRuns,
+    slug,
+    instanceId: inst,
+    resolveAborter: (id) => durableRunAborters.get(id) ?? null,
+  });
+  await settled;
+  assertEquals(fence.ok, true, "fence ok (" + (fence?.error ?? "") + ")");
+  assertEquals(abortCalled, 1, "the REAL abort was invoked via onAuthorityPersisted (exactly once)");
+  assert(durableRuns.isActive(exec) === false, "post-terminal: no longer a writer");
+
+  // reread the cancellation record: the abort must be recorded as ATTEMPTED
+  const rec = (await durableRuns.list()).runs.find((r) => r.executionId === exec);
+  assert(rec, "record retained");
+});
+
+// ---- review r3 P1-2: a refused fence gates EVERY destructive phase ----
+Deno.test("fence r3: refusal gates schedules, grants, worker close, dirs AND durable family", async () => {
+  // chrome.alarms stub (scheduleTask needs the optional alarms API).
+  const armedAlarms = new Map();
+  const g0 = globalThis;
+  const prevChrome0 = g0.chrome;
+  g0.chrome = {
+    alarms: {
+      create: async (name, info) => { armedAlarms.set(name, info); },
+      clear: async (name) => { const had = armedAlarms.has(name); armedAlarms.delete(name); return had; },
+      get: async (name) => armedAlarms.has(name) ? { name, ...armedAlarms.get(name) } : undefined,
+      getAll: async () => [...armedAlarms.entries()].map(([name, info]) => ({ name, ...armedAlarms.get(name) })),
+    },
+  };
+  try {
+  const created = await createNamedAgent({ name: "FenceGateAll" });
+  assert(created.ok);
+  const slug = created.agent.id;
+  const inst = created.agent.instanceId;
+  await namedAgentMemory(inst).set("memory:g", "state");
+  const scheduled = await scheduleTask({
+    task: "owned work",
+    delayMs: 3600_000,
+    name: "fencegate-owned",
+    owner: { agentSurfaceRef: `named:${slug}` },
+  });
+  assert(scheduled?.ok !== false, "schedule created");
+  let schedulesCancelled = 0, grantsRevoked = 0, workerCloses = 0;
+  const refused = await deleteNamedAgent(slug, {
+    fenceActiveRuns: async () => ({ ok: false, error: "writers live" }),
+    revokeGrants: async () => { grantsRevoked += 1; return { ok: true }; },
+    closeAgentWorker: async () => { workerCloses += 1; return { ok: true }; },
+  });
+  assertEquals(refused.ok, false, "refusal fails the delete");
+  assertEquals(refused.retryable, true);
+  assertEquals(grantsRevoked, 0, "grants NOT touched on refusal");
+  assertEquals(workerCloses, 0, "worker NOT closed on refusal");
+  const tasks = await listScheduledTasks();
+  assert(tasks.some((t) => t.name === "fencegate-owned"), "schedule NOT cancelled on refusal");
+  assert(dirExists(["memory", "agents", encodeURIComponent(inst)]), "dir survives");
+  await cancelScheduledTask("fencegate-owned");
+  } finally {
+    if (prevChrome0 === undefined) delete g0.chrome; else g0.chrome = prevChrome0;
+  }
+});
+
+// ---- review r3 P1-3a: worker close resolves a slug through the identity ----
+Deno.test("worker close route resolves a slug to the instanceId (host msg + alive-set)", async () => {
+  const created = await createNamedAgent({ name: "CloseIdent" });
+  assert(created.ok);
+  const slug = created.agent.id;
+  const inst = created.agent.instanceId;
+  const captured = [];
+  const g = globalThis;
+  const prevChrome = g.chrome;
+  g.chrome = { runtime: { sendMessage: async (msg) => { captured.push(msg); return { ok: true }; } } };
+  try {
+    const { createAgentWorkerRoutes } = await import("../extension/background/routes/agent-worker.js");
+    const routeStore = new Map();
+    const routes = createAgentWorkerRoutes({
+      kvGet: async (k) => routeStore.get(k),
+      kvSet: async (k, v) => { routeStore.set(k, v); return true; },
+      resolveAgentIdentity: async (sel) => (sel === slug ? inst : sel),
+    });
+    // Seed the alive-set with BOTH spellings (pre-fix state).
+    await routes["agent-worker.close"]({ agentId: slug }, { principal: "extension" });
+    const aliveNow = routeStore.get("bg-agents:alive") ?? [];
+    assert(!aliveNow.includes(slug) && !aliveNow.includes(inst), "alive-set dropped BOTH spellings");
+    assertEquals(captured[0]?.agentId, inst, "the HOST message targeted the immutable identity, not the slug");
+  } finally {
+    if (prevChrome === undefined) delete g.chrome; else g.chrome = prevChrome;
+  }
+});
+
+// ---- review r3 P1-3b: store-dir classification (truthful selectors) ----
+Deno.test("memory store classification: canonical read-write, legacy read-only, orphan clearable", async () => {
+  const { classifyAgentMemoryDirs } = await import("../extension/lib/named-agents.js");
+  const agents = [{ id: "alpha", slug: "alpha", instanceId: "inst-alpha", name: "Alpha" }];
+  const out = classifyAgentMemoryDirs({ dirs: ["inst-alpha", "alpha", "ghost"], agents });
+  assertEquals(out[0], { dir: "inst-alpha", selector: "agent:inst-alpha", state: "canonical", readOnly: false });
+  assertEquals(out[1], { dir: "alpha", selector: "agent-legacy:alpha", state: "legacy", readOnly: true });
+  assertEquals(out[2], { dir: "ghost", selector: "agent-orphan:ghost", state: "orphan", readOnly: false });
+});
+
+// ---- review r3 P1-2: the fence runs BEFORE the row/override removal ----
+Deno.test("delete r3: a refused fence leaves the ROW intact (nothing destructive ran)", async () => {
+  const created = await createNamedAgent({ name: "RowIntact" });
+  assert(created.ok);
+  const slug = created.agent.id;
+  const refused = await deleteNamedAgent(slug, {
+    fenceActiveRuns: async () => ({ ok: false, error: "writers live" }),
+  });
+  assertEquals(refused.ok, false);
+  const stillThere = await listNamedAgents();
+  assert(stillThere.some((a) => a.id === slug), "the agent ROW survives a refused fence (pre-fix it was removed first)");
+});
+
+// ---- review r3 P2: a mid-teardown failure replays EVERY phase on retry ----
+Deno.test("pending replay r3: schedules, grants, worker close AND durable family all replay", async () => {
+  // The alarms stub is installed BEFORE any state is created: kv routes to a
+  // different backend once `chrome` exists, so flipping it mid-test would
+  // strand the created row in the pre-stub realm (observed in review).
+  const armedAlarms = new Map();
+  const g1 = globalThis;
+  const prevChrome1 = g1.chrome;
+  g1.chrome = {
+    alarms: {
+      create: async (name, info) => { armedAlarms.set(name, info); },
+      clear: async (name) => { const had = armedAlarms.has(name); armedAlarms.delete(name); return had; },
+      get: async (name) => armedAlarms.has(name) ? { name, ...armedAlarms.get(name) } : undefined,
+      getAll: async () => [...armedAlarms.entries()].map(([name, info]) => ({ name, ...armedAlarms.get(name) })),
+    },
+  };
+  try {
+    const created = await createNamedAgent({ name: "ReplayAll" });
+    assert(created.ok);
+    const slug = created.agent.id;
+    const inst = created.agent.instanceId;
+    await namedAgentMemory(inst).set("memory:r", "state");
+    const scheduled = await scheduleTask({
+      task: "replay-owned",
+      delayMs: 3600_000,
+      name: "replayall-owned",
+      owner: { agentSurfaceRef: `named:${slug}` },
+    });
+    assert(scheduled?.ok !== false, "schedule created");
+    let grantRevokes = 0, workerCloses = 0;
+    // FIRST delete: the fence passes but the worker close FAILS — the row is
+    // gone, a pending record carries the dead identity, and the retry must
+    // replay every remaining phase.
+    const first = await deleteNamedAgent(slug, {
+      closeAgentWorker: async () => { workerCloses += 1; return { ok: false, error: "host wedged" }; },
+    });
+    assertEquals(first.ok, false, "first delete fails honestly");
+            assertEquals(first.retryable, true);
+    const retry = await deleteNamedAgent(slug, {
+      revokeGrants: async () => { grantRevokes += 1; return { ok: true }; },
+      closeAgentWorker: async () => { workerCloses += 1; return { ok: true }; },
+    });
+    assertEquals(retry.ok, true, "retry completes (" + (retry?.error ?? "") + ")");
+    // Injections run PER NAMESPACE (instanceId + legacy slug = 2 calls per
+    // delete): the first delete attempted 2 closes (both failed), the retry
+    // replayed 2 more (both ok) and 2 grant revokes.
+    assertEquals(workerCloses, 4, "worker close REPLAYED on the retry (2 per delete, per namespace)");
+    assertEquals(grantRevokes, 2, "grant revoke ran on the retry (per namespace)");
+    const tasks = await listScheduledTasks();
+    assert(!tasks.some((t) => t.name === "replayall-owned"), "owned schedule cancelled by the replay");
+    assert(armedAlarms.has("replayall-owned") === false, "the chrome alarm was disarmed");
+    assertEquals(dirExists(["memory", "agents", encodeURIComponent(inst)]), false, "dir purged by the replay");
+  } finally {
+    if (prevChrome1 === undefined) delete g1.chrome; else g1.chrome = prevChrome1;
+  }
 });

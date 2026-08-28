@@ -126,6 +126,18 @@ export function createDurableRunRegistry({
   injectFailure = null,
 } = {}) {
   const active = new Set();
+  // Writers in the CANCEL flow remain projected as live until the run reaches
+  // terminal: cancel() removes the execution from `active` at authority time
+  // (before abort + outbox completion), but the orchestrator can still be
+  // settling writes. The teardown fence reads this projection (review P1-1:
+  // `activeByJournalTarget` reported no writer during cancellation, so a
+  // purge could race a still-flushing writer).
+  const cancelling = new Set();
+  /** A terminal execution is never a writer: drop it from both projections. */
+  const retireWriter = (executionId) => {
+    active.delete(executionId);
+    cancelling.delete(executionId);
+  };
   const listeners = new Set();
   let mutex = Promise.resolve();
 
@@ -511,6 +523,10 @@ export function createDurableRunRegistry({
       if (existing) {
         if (existing.executionId !== executionId) throw new Error("execution identity mismatch");
         if (["running", "settling"].includes(existing.phase) && existing.bootId === bootId) active.add(executionId);
+        // A crash between cancel-authority and outbox settle leaves a
+        // cancel-requested record whose writer may still flush — project it
+        // so a post-restart fence waits for it (review P1-1).
+        if (existing.phase === "cancel-requested") cancelling.add(executionId);
         return publicRecord(existing);
       }
       let registryAdmission = null;
@@ -566,7 +582,7 @@ export function createDurableRunRegistry({
         // when OPFS is full, the old write-first compensation is itself
         // impossible and leaves a dangling registry ID. Keep the readable run
         // record until the index no longer names it, then delete it and verify.
-        active.delete(executionId);
+        retireWriter(executionId);
         const recordKey = `${RUN_PREFIX}${executionId}`;
         const owned = (candidate) => candidate === recordKey ||
           candidate === `${OUTBOX_PREFIX}${executionId}` ||
@@ -619,7 +635,7 @@ export function createDurableRunRegistry({
       if (!record) {
         const remnants = (await store.keys()).filter(owned);
         if (remnants.length === 0 && !ids.includes(executionId)) {
-          active.delete(executionId);
+          retireWriter(executionId);
           return { ok: true, rolledBack: true, idempotent: true, executionId, remainingKeys: [] };
         }
         return { ok: false, rolledBack: false, preserved: true, reason: "execution_authority_unreadable", executionId };
@@ -633,7 +649,7 @@ export function createDurableRunRegistry({
         observed.pause?.requiresOwnerDecision === true ||
         observed.cancellation != null;
       if (observed.progressCount !== 0 || uncertain) {
-        active.delete(executionId);
+        retireWriter(executionId);
         return {
           ok: false,
           rolledBack: false,
@@ -644,7 +660,7 @@ export function createDurableRunRegistry({
         };
       }
 
-      active.delete(executionId);
+      retireWriter(executionId);
       // Delete payload/log/resume/outbox bytes first. This both frees quota for
       // the registry rewrite and keeps the readable run authority until every
       // auxiliary delete has succeeded, so an interrupted cleanup is retryable.
@@ -815,7 +831,7 @@ export function createDurableRunRegistry({
       if (!terminal) throw new Error("terminal registry CAS failed");
       record = terminal;
     }
-    active.delete(executionId);
+    retireWriter(executionId);
     await boundary(cancelling ? "after-cancel-cas" : "after-cas", executionId);
 
     await store.setTrusted(`${LOG_PREFIX}${executionId}:terminal`, {
@@ -900,10 +916,15 @@ export function createDurableRunRegistry({
     const wanted = new Set([...(targets ?? [])].map((t) => String(t ?? "")));
     return locked(async () => {
       const out = [];
-      for (const executionId of [...active]) {
+      // Both projections are writers: `active` runs AND runs whose cancel
+      // authority is recorded but whose abort/outbox/terminal settle is still
+      // pending (review P1-1).
+      for (const executionId of [...active, ...cancelling]) {
         if (!validExecutionId(executionId)) continue;
+        if (out.some((w) => w.executionId === executionId)) continue;
         const record = await readRecord(executionId);
         if (!record) continue;
+        if (record.phase === "terminal" || record.phase === "cancelled") continue;
         const target = String(record.journalTarget ?? "");
         if (!wanted.has(target)) continue;
         out.push({ executionId, journalTarget: target, phase: record.phase ?? null });
@@ -943,7 +964,10 @@ export function createDurableRunRegistry({
         record = authoritative;
         createdAuthority = true;
       }
+      // The writer STAYS projected (cancelling) until terminal: abort + outbox
+      // completion are still pending, and the fence must keep seeing it.
       active.delete(executionId);
+      cancelling.add(executionId);
       await boundary("after-cancel-authority", executionId);
       return { done: false, record, shouldAbort: createdAuthority };
     });
@@ -1027,7 +1051,7 @@ export function createDurableRunRegistry({
         },
       }, record.revision);
       if (!paused) throw new Error("permission pause CAS failed");
-      active.delete(executionId);
+      retireWriter(executionId);
       return publicRecord(paused);
     });
   }
@@ -1071,7 +1095,7 @@ export function createDurableRunRegistry({
         phase: "paused-provider-change",
         pause: { schemaVersion: 1, kind: "provider-change", reason: "provider identity changed since this run was accepted", expected: identities?.expected ?? null, actual: identities?.actual ?? null, pausedAt: now(), visible: true, recoverable: true, automaticRetry: false },
       }, record.revision);
-      active.delete(executionId);
+      retireWriter(executionId);
       return { ok: false, paused: true, error: "provider_identity_changed", executionId, run: publicRecord(paused) };
     });
   }
@@ -1151,7 +1175,7 @@ export function createDurableRunRegistry({
         resumeState: { ...record.resumeState, failedAt: now(), error: bounded(error, 2 * 1024), exhausted: false },
       }, record.revision);
       if (!paused) throw new Error("resume failure CAS failed");
-      active.delete(executionId);
+      retireWriter(executionId);
       return { ok: false, error: "resume_dispatch_failed", executionId, run: publicRecord(paused) };
     });
   }
@@ -1167,7 +1191,7 @@ export function createDurableRunRegistry({
         return await processOutbox(executionId);
       }
       if (TERMINAL_PHASES.has(record.phase) && !(await store.has(outboxKey))) {
-        active.delete(executionId);
+        retireWriter(executionId);
         return publicRecord(record);
       }
       await boundary("before-outbox", executionId);
@@ -1463,7 +1487,9 @@ export function createDurableRunRegistry({
     list,
     activeByJournalTarget,
     attachPort,
-    isActive: (executionId) => active.has(executionId),
+    // A cancelling (cancel-authority recorded, not yet terminal) execution is
+    // still a live writer for fence purposes (review P1-1).
+    isActive: (executionId) => active.has(executionId) || cancelling.has(executionId),
   };
 }
 

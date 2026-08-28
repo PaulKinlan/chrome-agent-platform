@@ -364,12 +364,17 @@ export function createAgentWorkerRoutes({
       if (!authorized(context)) return { ok: false, error: "unauthorized_principal" };
       const agentId = String(m?.agentId ?? "");
       if (!agentId) return { ok: false, error: "invalid agentId" };
+      // review r3 P1-3: resolve through the SAME identity resolver as
+      // ensure/run — a slug close used to message/remove the SLUG key while
+      // the host worker + alive-set entry live under the instanceId, leaving
+      // the instance worker alive after a "successful" close.
+      const identity = await workerIdentity(agentId);
       try {
-        await chrome.runtime.sendMessage({ type: "agent-worker-host:close", agentId });
+        await chrome.runtime.sendMessage({ type: "agent-worker-host:close", agentId: identity });
       } catch { /* host may already be gone */ }
       const alive = await readAliveSet();
-      await writeAliveSet(alive.filter((id) => id !== agentId));
-      return { ok: true, agentId, closed: true };
+      await writeAliveSet(alive.filter((id) => id !== agentId && id !== identity));
+      return { ok: true, agentId: identity, closed: true };
     },
     /** Phase 3: Bounded, redacted progress commit from a worker run.
      * Records progress in durable registry logs + updates execution heartbeat

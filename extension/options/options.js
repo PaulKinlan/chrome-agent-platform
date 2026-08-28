@@ -2197,7 +2197,10 @@ async function renderMemoryExplorer() {
     for (const key of keyList) {
       body.append(fileNode(store, key));
     }
-    const clearBtn = document.createElement("button");
+    const clearBtn = !store.readOnly
+      ? document.createElement("button")
+      : null;
+    if (clearBtn) {
     clearBtn.type = "button";
     clearBtn.className = "btn small ghost mem-clear";
     clearBtn.textContent = `Clear ${store.label}'s memory`;
@@ -2214,6 +2217,7 @@ async function renderMemoryExplorer() {
       renderData();
     });
     body.append(clearBtn);
+    }
   }
 
   // ── a file node (a key) — click to view its value ──────────────────────

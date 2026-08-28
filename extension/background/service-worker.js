@@ -2455,7 +2455,50 @@ async function resolveMemory(origin) {
     const { resolveNamedAgentStore } = await import("../lib/named-agents.js");
     return resolveNamedAgentStore(origin.slice("agent:".length));
   }
+  // review r3 P1-3: legacy/orphan agent dirs resolve to the LITERAL dir —
+  // never canonicalized (that mismatch is exactly the bug where the
+  // explorer's legacy Clear wiped the live store). Writes stay blocked at
+  // the route level for the read-only legacy selector.
+  if (typeof origin === "string" && (origin.startsWith("agent-legacy:") || origin.startsWith("agent-orphan:"))) {
+    return namedAgentMemory(origin.slice(origin.indexOf(":") + 1));
+  }
   return siteMemory(origin);
+}
+
+// review r3 P1-1: non-durable writer tracking. A direct memory.set/clear is
+// a real writer against an agent namespace; teardown must be able to WAIT
+// for in-flight writes instead of racing them into the directory purge.
+const memoryWritesInflight = new Map(); // origin -> Set<Promise>
+function trackMemoryWrite(origin, promise) {
+  const key = String(origin ?? "");
+  let set = memoryWritesInflight.get(key);
+  if (!set) { set = new Set(); memoryWritesInflight.set(key, set); }
+  set.add(promise);
+  return promise.finally(() => {
+    const cur = memoryWritesInflight.get(key);
+    cur?.delete(promise);
+    if (cur && cur.size === 0) memoryWritesInflight.delete(key);
+  });
+}
+/** Resolve once NO tracked write is in flight for any of `origins` (bounded
+ * wait — a wedged writer fails the fence honestly instead of hanging it). */
+async function awaitMemoryQuiescence(origins, timeoutMs = 5000) {
+  const deadline = Date.now() + Math.max(250, timeoutMs);
+  for (const origin of origins) {
+    const key = String(origin ?? "");
+    while (Date.now() < deadline) {
+      const set = memoryWritesInflight.get(key);
+      if (!set || set.size === 0) break;
+      await Promise.race([
+        Promise.allSettled([...set]),
+        new Promise((r) => setTimeout(r, 100)),
+      ]);
+    }
+    if (memoryWritesInflight.get(key)?.size) {
+      return { ok: false, error: `memory writes still in flight for ${key}` };
+    }
+  }
+  return { ok: true };
 }
 
 /** Inspect one Site Agent: name, tools, memory keys, enrollment state. The
@@ -3836,7 +3879,20 @@ const handlers = mergeRouteMaps(
       // awaited terminal so no writer recreates a purged dir.
       fenceActiveRuns: async ({ slug: fenceSlug, instanceId }) => {
         const { fenceAgentActiveRuns } = await import("../lib/named-agents.js");
-        return fenceAgentActiveRuns({ registry: durableRuns, slug: fenceSlug, instanceId });
+        const f = await fenceAgentActiveRuns({
+          registry: durableRuns,
+          slug: fenceSlug,
+          instanceId,
+          // P1-1 (r3): the fence must fire the REAL live abort — without this
+          // the durable record said "no live abort callback registered" and
+          // the execution kept running through the teardown.
+          resolveAborter: (executionId) => durableRunAborters.get(executionId) ?? null,
+        });
+        if (f?.ok === false) return f;
+        // P1-1 (r3): direct (non-durable) memory writers are tracked — hold
+        // the fence until the agent's namespaces have no in-flight write.
+        const namespaces = [...new Set([instanceId, fenceSlug].filter(Boolean))];
+        return await awaitMemoryQuiescence(namespaces.map((ns) => `agent:${ns}`));
       },
       // The agent's shared worker must not be resurrectable after deletion.
       closeAgentWorker: (agentId) => closeAgentWorkerFor(agentId, { kvGet, kvSet }),
@@ -4496,18 +4552,28 @@ const handlers = mergeRouteMaps(
     return await (await resolveMemory(origin)).get(key);
   },
   async "memory.set"({ origin, key, value }) {
-    return await (await resolveMemory(origin)).set(key, value);
+    // review r3 P1-1: non-durable memory writes are tracked so teardown can
+    // AWAIT them instead of racing a still-flushing writer into the purge.
+    return trackMemoryWrite(origin, (async () =>
+      (await (await resolveMemory(origin)).set(key, value)))());
   },
   async "memory.list"({ origin }) {
     const all = await (await resolveMemory(origin)).keys();
     return all.filter((k) => !/^(?:__gen|__tx|__wal|__epoch|__tombs|assets|assetRepair|asset:)/.test(k));
   },
   async "memory.clear"({ origin }) {
+    // review r3 P1-3: a live agent's legacy slug dir is READ-ONLY — the only
+    // thing that removes it is agent teardown (which purges BOTH
+    // namespaces). Clearing it would either be a no-op lie or (pre-fix) the
+    // canonicalizing resolver wiping the agent's LIVE store.
+    if (typeof origin === "string" && origin.startsWith("agent-legacy:")) {
+      return { ok: false, error: "legacy store is read-only — delete the agent; teardown removes it" };
+    }
     // `clear()` resolves to undefined, so the old shape gave the caller nothing
     // to check — Settings reported "Cleared…" whether or not anything happened.
     // Return an explicit result and let a failure surface.
     try {
-      await (await resolveMemory(origin)).clear();
+      await trackMemoryWrite(origin, (async () => (await (await resolveMemory(origin)).clear()))());
       return { ok: true, origin };
     } catch (e) {
       return { ok: false, error: `could not clear memory: ${e?.message ?? e}` };
@@ -4724,21 +4790,27 @@ const handlers = mergeRouteMaps(
     ]);
     const named = await listNamedAgents();
     const nameById = new Map(named.map((a) => [slugifyAgentId(a.id), a.name || a.id]));
-    // Dir names are EITHER the immutable instanceId (post-fix) OR the legacy
-    // slug (pre-fix leftovers). Label both by the agent's name — a legacy dir
-    // for a LIVE agent is marked so the owner understands why one agent can
-    // list two stores (the legacy dir is what the orphan sweep cleans).
     const nameByInstance = new Map(named.map((a) => [String(a.instanceId ?? ""), a.name || a.id]));
-    const liveSlugs = new Set(named.map((a) => slugifyAgentId(a.id)));
+    // review r3 P1-3: store selectors must RESOLVE TRUTHLY. The old listing
+    // exposed a live agent's legacy slug dir under `agent:<slug>` while
+    // get/list/clear canonicalized that selector to the instanceId dir — so
+    // the explorer's "Clear (legacy)" cleared the agent's LIVE memory and
+    // left the displayed legacy dir untouched. classifyAgentMemoryDirs pins
+    // each dir to its true selector: canonical instanceId (read-write),
+    // legacy slug of a live agent (READ-ONLY — it is teardown that removes
+    // it), or orphan (read-write; a real dead dir).
+    const { classifyAgentMemoryDirs } = await import("../lib/named-agents.js");
+    const classified = classifyAgentMemoryDirs({ dirs: namedIds, agents: named });
     const stores = [{ key: "master", label: "Master (the hub)", kind: "master" }];
-    for (const id of namedIds) {
-      const store = namedAgentMemory(id);
-      const label = nameByInstance.get(id) ?? nameById.get(id) ?? id;
-      const isLegacySlugDir = !nameByInstance.has(id) && liveSlugs.has(slugifyAgentId(id));
+    for (const c of classified) {
+      const label = nameByInstance.get(c.dir) ?? nameById.get(slugifyAgentId(c.dir)) ?? c.dir;
+      const store = namedAgentMemory(c.dir);
       stores.push({
-        key: `agent:${id}`,
-        label: isLegacySlugDir ? `${label} (legacy)` : label,
+        key: c.selector,
+        label: c.state === "legacy" ? `${label} (legacy — read-only)` : c.state === "orphan" ? `${c.dir} (orphan)` : label,
         kind: "named",
+        state: c.state,
+        readOnly: c.readOnly,
         keyCount: (await store.keys()).length,
       });
     }

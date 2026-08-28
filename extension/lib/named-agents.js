@@ -376,6 +376,30 @@ export async function deleteNamedAgent(id, { gateBeforeDelete = null, revokeGran
       const gate = await gateBeforeDelete({ slug, existing });
       if (!gate?.ok) return gate ?? { ok: false, error: "owner approval required" };
     }
+    // review r3 P1-2: the fence gates EVERYTHING — including the registry-row
+    // and prompt-override removals below. With writers still live, deleting
+    // the row first would leave a live execution owned by a deleted identity
+    // (recreating state the sweep then has to chase). A refusal here leaves
+    // the agent FULLY intact for a retry.
+    const instanceId0 = String(existing.instanceId || "");
+    if (typeof fenceActiveRuns === "function") {
+      try {
+        const pre = await fenceActiveRuns({ slug, instanceId: instanceId0 });
+        if (pre?.ok === false) {
+          return {
+            ok: false,
+            retryable: true,
+            error: `active-run fence refused (${pre.error ?? "unknown"}) — the agent was NOT deleted; retry`,
+          };
+        }
+      } catch (e) {
+        return {
+          ok: false,
+          retryable: true,
+          error: `active-run fence failed (${String(e?.message ?? e)}) — the agent was NOT deleted; retry`,
+        };
+      }
+    }
     // Prompt cleanup first: a failure aborts the deletion honestly (the
     // agent row stays, the override stays consistent with it).
     const cleanup = await deleteAgentPromptOverride(slug)
@@ -390,7 +414,7 @@ export async function deleteNamedAgent(id, { gateBeforeDelete = null, revokeGran
     // Namespace identity FIRST: the immutable instanceId (NOT the reusable
     // slug) keys this agent's OPFS dir and its durable run family, so a
     // later same-name agent can never inherit state.
-    const instanceId = String(existing.instanceId || "");
+    const instanceId = instanceId0;
     delete map[slug];
     await writeAgents(map);
     // If anything below fails, remember BOTH namespaces so a retry of the
@@ -442,6 +466,25 @@ export function agentStateNamespaces(agent) {
   return [...new Set([instanceId, slug].filter(Boolean))];
 }
 
+/** Classify enumerated `memory/agents/*` directory names against the LIVE
+ * registry (review r3 P1-3): a dir is CANONICAL when it is a live row's
+ * instanceId, LEGACY when it is a live row's slug (pre-instanceId leftovers
+ * — its selector must never clear the live store, so it is read-only), or
+ * ORPHAN when no live row claims it (safe to clear from the explorer; the
+ * teardown sweep also removes it). Pure so the KAT pins the contract. */
+export function classifyAgentMemoryDirs({ dirs, agents }) {
+  const rows = Array.isArray(agents) ? agents : [];
+  const byInstance = new Map(rows.map((a) => [String(a?.instanceId ?? ""), a]));
+  const bySlug = new Map(rows.map((a) => [slugifyAgentId(a?.id ?? a?.slug ?? ""), a]));
+  return (Array.isArray(dirs) ? dirs : []).map((dir) => {
+    const name = String(dir ?? "");
+    if (byInstance.has(name)) return { dir: name, selector: `agent:${name}`, state: "canonical", readOnly: false };
+    const slug = slugifyAgentId(name);
+    if (slug && bySlug.has(slug)) return { dir: name, selector: `agent-legacy:${name}`, state: "legacy", readOnly: true };
+    return { dir: name, selector: `agent-orphan:${name}`, state: "orphan", readOnly: false };
+  });
+}
+
 /** Resolve a slug-or-instanceId selector to the agent's LIVE memory store: a
  * row whose slug OR instanceId matches resolves to its immutable instanceId
  * namespace; an unknown selector resolves literally so cleanup paths can
@@ -480,7 +523,7 @@ export async function resolveAgentInstanceId(selector) {
  * cannot recreate a removed dir mid-teardown. Registry is injectable for
  * tests; timeout bounds the wait — an honest failure (retryable) beats an
  * unbounded delete. */
-export async function fenceAgentActiveRuns({ registry, slug, instanceId, timeoutMs = 15000 } = {}) {
+export async function fenceAgentActiveRuns({ registry, slug, instanceId, timeoutMs = 15000, resolveAborter = null } = {}) {
   if (!registry || typeof registry.list !== "function" || typeof registry.cancel !== "function") {
     return { ok: false, error: "fence requires a durable registry with list+cancel" };
   }
@@ -513,7 +556,21 @@ export async function fenceAgentActiveRuns({ registry, slug, instanceId, timeout
     }
     if (!live.length) return { ok: true };
     for (const r of live) {
-      try { await registry.cancel(r.executionId, { reason: "agent deleted — teardown fence" }); } catch { /* retried next pass */ }
+      try {
+        // review P1-1: the fence must invoke the REAL live abort (the SW's
+        // orchestrator aborter) — cancelling without `onAuthorityPersisted`
+        // durably recorded "no live abort callback registered" and left the
+        // execution running while the teardown proceeded.
+        await registry.cancel(r.executionId, {
+          reason: "agent deleted — teardown fence",
+          onAuthorityPersisted: () => {
+            const abort = typeof resolveAborter === "function" ? resolveAborter(r.executionId) : null;
+            if (typeof abort !== "function") return false;
+            abort();
+            return true;
+          },
+        });
+      } catch { /* retried next pass */ }
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
@@ -550,6 +607,15 @@ async function teardownAgentState({ slug, instanceId }, { fenceActiveRuns = null
       if (f?.ok === false) { markFail("active-run fence", f); fenced = false; }
     } catch (e) { markFail("active-run fence", e); fenced = false; }
   }
+  // review r3 P1-2: a REFUSED fence gates EVERY destructive phase — not just
+  // the dir/durable removals. Cancelling schedules, revoking grants, or
+  // closing the worker while writers are live is teardown work that cannot
+  // be un-done by the retry replay (an already-cancelled schedule replays as
+  // a no-op and the phase is then never re-verified). Everything below is
+  // skipped; the pending record + retry re-fence and re-run all phases.
+  if (!fenced) {
+    return fails;
+  }
   // Every schedule OWNED by this agent (owner.agentSurfaceRef ===
   // `named:<slug>`) — not only deterministic recipe:<slug> names.
   try {
@@ -582,21 +648,20 @@ async function teardownAgentState({ slug, instanceId }, { fenceActiveRuns = null
   }
   // OPFS namespaces: the immutable instanceId dir AND any legacy slug dir
   // must vanish (mem.clear() deliberately preserves dirs for LIVE stores —
-  // recursive removal is the deletion semantics). REMOVALS ARE FENCE-GATED.
-  if (fenced) {
-    for (const ns of namespaces) {
-      const r = await purgeStoreDir(["memory", "agents", encodeURIComponent(ns)]);
-      if (!r.ok) markFail(`dir agents/${ns}`, r);
-    }
-    // Durable run family, both target spellings (each is a no-op when absent).
-    try {
-      const { durableRuns } = await import("./durable-runs.js");
-      for (const target of namespaces.map((ns) => `agent:${ns}`)) {
-        const purged = await durableRuns.purgeForTarget(target);
-        if (purged?.ok === false) markFail(`durable purge ${target}`, purged);
-      }
-    } catch (e) { markFail("durable purge", e); }
+  // recursive removal is the deletion semantics). REMOVALS ARE FENCE-GATED
+  // (and reached only when the fence held — see the early return above).
+  for (const ns of namespaces) {
+    const r = await purgeStoreDir(["memory", "agents", encodeURIComponent(ns)]);
+    if (!r.ok) markFail(`dir agents/${ns}`, r);
   }
+  // Durable run family, both target spellings (each is a no-op when absent).
+  try {
+    const { durableRuns } = await import("./durable-runs.js");
+    for (const target of namespaces.map((ns) => `agent:${ns}`)) {
+      const purged = await durableRuns.purgeForTarget(target);
+      if (purged?.ok === false) markFail(`durable purge ${target}`, purged);
+    }
+  } catch (e) { markFail("durable purge", e); }
   return fails;
 }
 
