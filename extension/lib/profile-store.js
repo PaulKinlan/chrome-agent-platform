@@ -1,18 +1,20 @@
 // lib/profile-store.js — structured OPFS user profile store (AGENT-PRODUCT-GAPS, form-filler layer 1).
 //
 // A structured, namespaced profile store on the OPFS/memory substrate:
-//   - profile:basic       (contact, identity, social/portfolio links)
+//   - profile:basic        (contact, identity, social/portfolio links)
 //   - profile:work_history (career timeline, company, title, achievements)
-//   - profile:education   (degrees, institutions, dates, GPA)
-//   - profile:disclosures (work auth, sponsorship, demographics, custom Q&A)
+//   - profile:education    (degrees, institutions, dates, GPA)
+//   - profile:disclosures  (work auth, sponsorship, demographics, custom Q&A)
 //
 // Security & access control principles (Constitution §2 + §4):
-//   - Schema-validated and bounded (finite byte size and array lengths).
-//   - Per-agent readable with explicit grants (an agent reads profile sections only if granted).
-//   - Write-audited (every mutation is recorded with timestamp, action, and actor in an audit log).
-//   - Fail closed on malformed documents or unauthorized access attempts.
+//   - Schema-validated and bounded (exact UTF-8 byte bounds and array lengths).
+//   - Per-agent readable with explicit grants from the authoritative agent registry.
+//   - Reserved namespace: profile:* keys are reserved and protected from raw model memory tools.
+//   - Write-audited with actual change diffs (mutations fail closed if auditing fails).
+//   - Atomic bulk updates: pre-validated before mutation with rollback compensation.
 
 import { masterMemory } from "./memory.js";
+import { getNamedAgent } from "./named-agents.js";
 
 export const PROFILE_SECTIONS = [
   "profile:basic",
@@ -21,13 +23,20 @@ export const PROFILE_SECTIONS = [
   "profile:disclosures",
 ];
 
-export const MAX_PROFILE_SECTION_BYTES = 131072; // 128 KiB per section
+export const MAX_PROFILE_SECTION_BYTES = 131072; // 128 KiB UTF-8 bytes per section
 export const MAX_WORK_ENTRIES = 32;
 export const MAX_EDUCATION_ENTRIES = 16;
 export const MAX_LINKS_COUNT = 16;
 export const MAX_CUSTOM_ANSWERS = 32;
 export const MAX_AUDIT_LOG_ENTRIES = 100;
 export const PROFILE_AUDIT_KEY = "profile:audit_log";
+
+let auditMutex = Promise.resolve();
+function withAuditLock(fn) {
+  const run = auditMutex.then(fn, fn);
+  auditMutex = run.then(() => {}, () => {});
+  return run;
+}
 
 /** Normalize a section key to its canonical "profile:<name>" form. */
 export function normalizeSectionKey(key) {
@@ -44,10 +53,42 @@ export function normalizeSectionKey(key) {
   return null;
 }
 
+function isPlainObject(val) {
+  if (!val || typeof val !== "object" || Array.isArray(val)) return false;
+  const proto = Object.getPrototypeOf(val);
+  return proto === Object.prototype || proto === null;
+}
+
 /** Validate and normalize profile:basic document. */
 export function validateBasicProfile(data) {
-  if (!data || typeof data !== "object" || Array.isArray(data)) {
-    return { ok: false, error: "basic profile must be a non-null object" };
+  if (!isPlainObject(data)) {
+    return { ok: false, error: "basic profile must be a plain JSON object" };
+  }
+
+  // Strict type checks before normalization
+  if (data.firstName !== undefined && data.firstName !== null && typeof data.firstName !== "string") {
+    return { ok: false, error: "firstName must be a string" };
+  }
+  if (data.lastName !== undefined && data.lastName !== null && typeof data.lastName !== "string") {
+    return { ok: false, error: "lastName must be a string" };
+  }
+  if (data.fullName !== undefined && data.fullName !== null && typeof data.fullName !== "string") {
+    return { ok: false, error: "fullName must be a string" };
+  }
+  if (data.email !== undefined && data.email !== null && typeof data.email !== "string") {
+    return { ok: false, error: "email must be a string" };
+  }
+  if (data.phone !== undefined && data.phone !== null && typeof data.phone !== "string") {
+    return { ok: false, error: "phone must be a string" };
+  }
+  if (data.headline !== undefined && data.headline !== null && typeof data.headline !== "string") {
+    return { ok: false, error: "headline must be a string" };
+  }
+  if (data.title !== undefined && data.title !== null && typeof data.title !== "string") {
+    return { ok: false, error: "title must be a string" };
+  }
+  if (data.summary !== undefined && data.summary !== null && typeof data.summary !== "string") {
+    return { ok: false, error: "summary must be a string" };
   }
 
   const firstName = String(data.firstName ?? "").trim().slice(0, 64);
@@ -63,39 +104,59 @@ export function validateBasicProfile(data) {
   const summary = String(data.summary ?? "").trim().slice(0, 4000);
 
   let location = "";
-  if (typeof data.location === "string") {
-    location = data.location.trim().slice(0, 120);
-  } else if (data.location && typeof data.location === "object" && !Array.isArray(data.location)) {
-    const parts = [
-      data.location.city,
-      data.location.state,
-      data.location.country,
-      data.location.postalCode,
-    ].filter((x) => typeof x === "string" && x.trim());
-    location = parts.join(", ").slice(0, 120);
+  if (data.location !== undefined && data.location !== null) {
+    if (typeof data.location === "string") {
+      location = data.location.trim().slice(0, 120);
+    } else if (isPlainObject(data.location)) {
+      for (const [k, v] of Object.entries(data.location)) {
+        if (v !== undefined && v !== null && typeof v !== "string") {
+          return { ok: false, error: `location.${k} must be a string` };
+        }
+      }
+      const parts = [
+        data.location.city,
+        data.location.state,
+        data.location.country,
+        data.location.postalCode,
+      ].filter((x) => typeof x === "string" && x.trim());
+      location = parts.join(", ").slice(0, 120);
+    } else {
+      return { ok: false, error: "location must be a string or object" };
+    }
   }
 
-  // Normalize links (object or array)
+  // Normalize links
   const links = {};
-  if (data.links && typeof data.links === "object") {
+  if (data.links !== undefined && data.links !== null) {
     if (Array.isArray(data.links)) {
-      for (const item of data.links) {
-        if (!item || typeof item !== "object") continue;
-        const label = String(item.label ?? item.name ?? "link").trim().slice(0, 64);
-        const url = String(item.url ?? "").trim().slice(0, 512);
+      for (let i = 0; i < data.links.length; i++) {
+        const item = data.links[i];
+        if (!item || typeof item !== "object" || Array.isArray(item)) {
+          return { ok: false, error: `links at index ${i} must be an object` };
+        }
+        if (typeof item.url !== "string") {
+          return { ok: false, error: `link at index ${i} requires a url string` };
+        }
+        const label = String(item.label ?? item.name ?? `link_${i}`).trim().slice(0, 64);
+        const url = item.url.trim().slice(0, 512);
         if (label && url) {
           links[label] = url;
           if (Object.keys(links).length >= MAX_LINKS_COUNT) break;
         }
       }
-    } else {
+    } else if (isPlainObject(data.links)) {
       for (const [key, val] of Object.entries(data.links)) {
-        if (typeof val === "string" && val.trim()) {
+        if (val !== undefined && val !== null) {
+          if (typeof val !== "string") {
+            return { ok: false, error: `link URL for "${key}" must be a string` };
+          }
           const label = key.trim().slice(0, 64);
           links[label] = val.trim().slice(0, 512);
           if (Object.keys(links).length >= MAX_LINKS_COUNT) break;
         }
       }
+    } else {
+      return { ok: false, error: "links must be an object or array" };
     }
   }
 
@@ -124,32 +185,62 @@ export function validateWorkHistory(data) {
   const entries = [];
   for (let i = 0; i < list.length; i++) {
     const item = list[i];
-    if (!item || typeof item !== "object" || Array.isArray(item)) {
-      return { ok: false, error: `work history entry at index ${i} must be an object` };
+    if (!isPlainObject(item)) {
+      return { ok: false, error: `work history entry at index ${i} must be a plain object` };
     }
 
-    const company = String(item.company ?? "").trim().slice(0, 120);
+    if (item.company === undefined || item.company === null || typeof item.company !== "string") {
+      return { ok: false, error: `work history entry at index ${i} requires a company string` };
+    }
+    const company = item.company.trim().slice(0, 120);
     if (!company) {
       return { ok: false, error: `work history entry at index ${i} requires a company name` };
     }
 
-    const title = String(item.title ?? "").trim().slice(0, 120);
+    if (item.title === undefined || item.title === null || typeof item.title !== "string") {
+      return { ok: false, error: `work history entry at index ${i} requires a job title string` };
+    }
+    const title = item.title.trim().slice(0, 120);
     if (!title) {
       return { ok: false, error: `work history entry at index ${i} requires a job title` };
+    }
+
+    if (item.location !== undefined && item.location !== null && typeof item.location !== "string") {
+      return { ok: false, error: `work history entry at index ${i} location must be a string` };
+    }
+    if (item.startDate !== undefined && item.startDate !== null && typeof item.startDate !== "string") {
+      return { ok: false, error: `work history entry at index ${i} startDate must be a string` };
+    }
+    if (item.endDate !== undefined && item.endDate !== null && typeof item.endDate !== "string") {
+      return { ok: false, error: `work history entry at index ${i} endDate must be a string` };
+    }
+    if (item.current !== undefined && item.current !== null && typeof item.current !== "boolean") {
+      return { ok: false, error: `work history entry at index ${i} current must be a boolean` };
+    }
+    if (item.description !== undefined && item.description !== null && typeof item.description !== "string") {
+      return { ok: false, error: `work history entry at index ${i} description must be a string` };
     }
 
     const location = String(item.location ?? "").trim().slice(0, 120);
     const startDate = String(item.startDate ?? "").trim().slice(0, 32);
     const endDate = item.endDate == null ? null : String(item.endDate).trim().slice(0, 32);
-    const current = Boolean(item.current || (!endDate && startDate));
+    const current = typeof item.current === "boolean" ? item.current : Boolean(!endDate && startDate);
     const description = String(item.description ?? "").trim().slice(0, 4000);
 
-    const rawHighlights = Array.isArray(item.highlights) ? item.highlights : [];
     const highlights = [];
-    for (const h of rawHighlights) {
-      if (typeof h === "string" && h.trim()) {
-        highlights.push(h.trim().slice(0, 500));
-        if (highlights.length >= 16) break;
+    if (item.highlights !== undefined && item.highlights !== null) {
+      if (!Array.isArray(item.highlights)) {
+        return { ok: false, error: `work history entry at index ${i} highlights must be an array` };
+      }
+      for (let hIdx = 0; hIdx < item.highlights.length; hIdx++) {
+        const h = item.highlights[hIdx];
+        if (typeof h !== "string") {
+          return { ok: false, error: `work history entry at index ${i} highlight at ${hIdx} must be a string` };
+        }
+        if (h.trim()) {
+          highlights.push(h.trim().slice(0, 500));
+          if (highlights.length >= 16) break;
+        }
       }
     }
 
@@ -180,19 +271,44 @@ export function validateEducation(data) {
   const entries = [];
   for (let i = 0; i < list.length; i++) {
     const item = list[i];
-    if (!item || typeof item !== "object" || Array.isArray(item)) {
-      return { ok: false, error: `education entry at index ${i} must be an object` };
+    if (!isPlainObject(item)) {
+      return { ok: false, error: `education entry at index ${i} must be a plain object` };
     }
 
-    const institution = String(item.institution ?? item.school ?? "").trim().slice(0, 120);
+    const rawInst = item.institution ?? item.school;
+    if (rawInst === undefined || rawInst === null || typeof rawInst !== "string") {
+      return { ok: false, error: `education entry at index ${i} requires an institution name string` };
+    }
+    const institution = rawInst.trim().slice(0, 120);
     if (!institution) {
       return { ok: false, error: `education entry at index ${i} requires an institution name` };
     }
 
+    if (item.degree !== undefined && item.degree !== null && typeof item.degree !== "string") {
+      return { ok: false, error: `education entry at index ${i} degree must be a string` };
+    }
+    const rawMajor = item.fieldOfStudy ?? item.major;
+    if (rawMajor !== undefined && rawMajor !== null && typeof rawMajor !== "string") {
+      return { ok: false, error: `education entry at index ${i} fieldOfStudy must be a string` };
+    }
+    if (item.startDate !== undefined && item.startDate !== null && typeof item.startDate !== "string") {
+      return { ok: false, error: `education entry at index ${i} startDate must be a string` };
+    }
+    const rawEnd = item.endDate ?? item.graduationYear;
+    if (rawEnd !== undefined && rawEnd !== null && typeof rawEnd !== "string" && typeof rawEnd !== "number") {
+      return { ok: false, error: `education entry at index ${i} endDate must be a string or number` };
+    }
+    if (item.gpa !== undefined && item.gpa !== null && typeof item.gpa !== "string" && typeof item.gpa !== "number") {
+      return { ok: false, error: `education entry at index ${i} gpa must be a string or number` };
+    }
+    if (item.activities !== undefined && item.activities !== null && typeof item.activities !== "string") {
+      return { ok: false, error: `education entry at index ${i} activities must be a string` };
+    }
+
     const degree = String(item.degree ?? "").trim().slice(0, 120);
-    const fieldOfStudy = String(item.fieldOfStudy ?? item.major ?? "").trim().slice(0, 120);
+    const fieldOfStudy = String(rawMajor ?? "").trim().slice(0, 120);
     const startDate = String(item.startDate ?? "").trim().slice(0, 32);
-    const endDate = item.endDate == null ? null : String(item.endDate ?? item.graduationYear ?? "").trim().slice(0, 32);
+    const endDate = rawEnd == null ? null : String(rawEnd).trim().slice(0, 32);
     const gpa = item.gpa == null ? null : String(item.gpa).trim().slice(0, 16);
     const activities = String(item.activities ?? "").trim().slice(0, 2000);
 
@@ -214,29 +330,58 @@ export function validateEducation(data) {
 
 /** Validate and normalize profile:disclosures document. */
 export function validateDisclosures(data) {
-  if (!data || typeof data !== "object" || Array.isArray(data)) {
-    return { ok: false, error: "disclosures must be an object" };
+  if (!isPlainObject(data)) {
+    return { ok: false, error: "disclosures must be a plain JSON object" };
+  }
+
+  if (data.workAuthorization !== undefined && data.workAuthorization !== null && typeof data.workAuthorization !== "string") {
+    return { ok: false, error: "workAuthorization must be a string" };
+  }
+  if (data.requiresSponsorship !== undefined && data.requiresSponsorship !== null) {
+    if (typeof data.requiresSponsorship !== "boolean") {
+      const s = String(data.requiresSponsorship).trim().toLowerCase();
+      if (s !== "yes" && s !== "no") {
+        return { ok: false, error: "requiresSponsorship must be a boolean or 'yes'/'no'" };
+      }
+    }
+  }
+  if (data.gender !== undefined && data.gender !== null && typeof data.gender !== "string") {
+    return { ok: false, error: "gender must be a string" };
+  }
+  if (data.veteranStatus !== undefined && data.veteranStatus !== null && typeof data.veteranStatus !== "string") {
+    return { ok: false, error: "veteranStatus must be a string" };
+  }
+  if (data.disabilityStatus !== undefined && data.disabilityStatus !== null && typeof data.disabilityStatus !== "string") {
+    return { ok: false, error: "disabilityStatus must be a string" };
+  }
+  if (data.raceEthnicity !== undefined && data.raceEthnicity !== null && typeof data.raceEthnicity !== "string") {
+    return { ok: false, error: "raceEthnicity must be a string" };
   }
 
   const workAuthorization = String(data.workAuthorization ?? "").trim().slice(0, 64);
   const requiresSponsorship = typeof data.requiresSponsorship === "boolean"
     ? data.requiresSponsorship
-    : (data.requiresSponsorship != null ? String(data.requiresSponsorship).trim().slice(0, 32) : null);
+    : (data.requiresSponsorship != null ? (String(data.requiresSponsorship).trim().toLowerCase() === "yes") : null);
   const gender = String(data.gender ?? "").trim().slice(0, 64);
   const veteranStatus = String(data.veteranStatus ?? "").trim().slice(0, 64);
   const disabilityStatus = String(data.disabilityStatus ?? "").trim().slice(0, 64);
   const raceEthnicity = String(data.raceEthnicity ?? "").trim().slice(0, 64);
 
   const customAnswers = {};
-  if (data.customAnswers && typeof data.customAnswers === "object" && !Array.isArray(data.customAnswers)) {
+  if (data.customAnswers !== undefined && data.customAnswers !== null) {
+    if (!isPlainObject(data.customAnswers)) {
+      return { ok: false, error: "customAnswers must be a plain object" };
+    }
     for (const [k, v] of Object.entries(data.customAnswers)) {
-      if (typeof k === "string" && v != null) {
-        const qKey = k.trim().slice(0, 64);
-        const ansVal = String(v).trim().slice(0, 1000);
-        if (qKey) {
-          customAnswers[qKey] = ansVal;
-          if (Object.keys(customAnswers).length >= MAX_CUSTOM_ANSWERS) break;
-        }
+      if (typeof k !== "string") continue;
+      if (v !== undefined && v !== null && typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") {
+        return { ok: false, error: `customAnswer for "${k}" must be a string or primitive` };
+      }
+      const qKey = k.trim().slice(0, 64);
+      const ansVal = v == null ? "" : String(v).trim().slice(0, 1000);
+      if (qKey) {
+        customAnswers[qKey] = ansVal;
+        if (Object.keys(customAnswers).length >= MAX_CUSTOM_ANSWERS) break;
       }
     }
   }
@@ -275,10 +420,40 @@ export function validateProfileSection(sectionKey, data) {
   }
 }
 
-/** Internal helper to record an audit log entry for profile mutations. */
+/** Compute actual changed field names between old and new states. */
+function computeDiff(previous, current) {
+  if (!previous) {
+    return Array.isArray(current) ? [`entries:${current.length}`] : Object.keys(current ?? {});
+  }
+  if (Array.isArray(previous) && Array.isArray(current)) {
+    if (JSON.stringify(previous) === JSON.stringify(current)) return [];
+    return [`entries:${previous.length}->${current.length}`];
+  }
+  if (isPlainObject(previous) && isPlainObject(current)) {
+    const changes = [];
+    const allKeys = new Set([...Object.keys(previous), ...Object.keys(current)]);
+    for (const k of allKeys) {
+      if (JSON.stringify(previous[k]) !== JSON.stringify(current[k])) {
+        changes.push(k);
+      }
+    }
+    return changes;
+  }
+  return ["modified"];
+}
+
+/** Read a key from memory through the trusted internal subsystem path. */
+async function readTrustedMemory(mem, key) {
+  if (typeof mem.getStrict === "function") {
+    return await mem.getStrict(key);
+  }
+  return await mem.get(key);
+}
+
+/** Internal helper to record an audit log entry. Fails closed if audit write fails. */
 async function recordAudit(mem, { action, section, actor = "owner", fields = [] }) {
-  try {
-    const existing = (await mem.get(PROFILE_AUDIT_KEY)) ?? [];
+  return await withAuditLock(async () => {
+    const existing = await readTrustedMemory(mem, PROFILE_AUDIT_KEY);
     const log = Array.isArray(existing) ? existing : [];
     const entry = {
       id: crypto.randomUUID(),
@@ -292,53 +467,45 @@ async function recordAudit(mem, { action, section, actor = "owner", fields = [] 
     const boundedLog = log.slice(0, MAX_AUDIT_LOG_ENTRIES);
     await mem.setTrusted(PROFILE_AUDIT_KEY, boundedLog);
     return entry;
-  } catch {
-    return null;
-  }
+  });
 }
 
 /** Read the profile mutation audit log. */
 export async function getProfileAuditLog(options = {}) {
   const mem = options.memory ?? masterMemory();
-  const log = (await mem.get(PROFILE_AUDIT_KEY)) ?? [];
+  const log = await readTrustedMemory(mem, PROFILE_AUDIT_KEY);
   return Array.isArray(log) ? log : [];
 }
 
-/** Check if an agent record or grant list possesses explicit permission for a section. */
+/**
+ * Check if an agent record or explicit grant list has permission for a section.
+ * Grants resolve only from an authenticated/trusted agent record or explicit grants array.
+ * Untrusted caller-sentinel strings or mock prototype objects are rejected.
+ */
 export function hasProfileGrant(agentOrGrants, sectionKey) {
   const normSection = normalizeSectionKey(sectionKey);
   if (!normSection) return false;
 
-  // Owner / master caller has full access
-  if (
-    agentOrGrants === null ||
-    agentOrGrants === undefined ||
-    agentOrGrants === "owner" ||
-    agentOrGrants === "master"
-  ) {
-    return true;
-  }
-
   let grants = null;
   if (Array.isArray(agentOrGrants)) {
     grants = agentOrGrants;
-  } else if (typeof agentOrGrants === "object" && agentOrGrants !== null) {
-    grants = agentOrGrants.profileGrants ?? agentOrGrants.profileAccess ?? agentOrGrants.grants ?? null;
+  } else if (isPlainObject(agentOrGrants) && Object.hasOwn(agentOrGrants, "profileGrants") && Array.isArray(agentOrGrants.profileGrants)) {
+    grants = agentOrGrants.profileGrants;
   }
 
   if (!Array.isArray(grants)) return false;
 
   for (const g of grants) {
     if (typeof g !== "string") continue;
-    const cleanGrant = g.trim().toLowerCase();
-    if (cleanGrant === "*" || cleanGrant === "profile:*") return true;
-    if (normalizeSectionKey(cleanGrant) === normSection) return true;
+    const clean = g.trim().toLowerCase();
+    if (clean === "*" || clean === "profile:*") return true;
+    if (normalizeSectionKey(clean) === normSection) return true;
   }
 
   return false;
 }
 
-/** Read a profile section directly (unrestricted / owner access). */
+/** Read a profile section directly (internal/owner access with isTrustedOwner check). */
 export async function getProfileSection(sectionKey, options = {}) {
   const normSection = normalizeSectionKey(sectionKey);
   if (!normSection) {
@@ -346,7 +513,7 @@ export async function getProfileSection(sectionKey, options = {}) {
   }
 
   const mem = options.memory ?? masterMemory();
-  const data = await mem.get(normSection);
+  const data = await readTrustedMemory(mem, normSection);
   return { ok: true, section: normSection, data: data ?? null };
 }
 
@@ -361,29 +528,39 @@ export async function setProfileSection(sectionKey, data, options = {}) {
   if (!validation.ok) return validation;
 
   const serialized = JSON.stringify(validation.data);
-  if (serialized.length > MAX_PROFILE_SECTION_BYTES) {
+  const utf8Bytes = new TextEncoder().encode(serialized).byteLength;
+  if (utf8Bytes > MAX_PROFILE_SECTION_BYTES) {
     return {
       ok: false,
-      error: `section payload exceeds maximum size (${serialized.length} > ${MAX_PROFILE_SECTION_BYTES})`,
+      error: `section payload exceeds maximum size (${utf8Bytes} bytes > ${MAX_PROFILE_SECTION_BYTES} bytes)`,
     };
   }
 
   const mem = options.memory ?? masterMemory();
-  const existing = await mem.get(normSection);
-  const action = existing ? "update" : "create";
+  const previous = await readTrustedMemory(mem, normSection);
+  const action = previous ? "update" : "create";
+  const diffFields = computeDiff(previous, validation.data);
 
+  // Write through trusted subsystem path
   await mem.setTrusted(normSection, validation.data);
 
-  const changedFields = Array.isArray(validation.data)
-    ? [`entries:${validation.data.length}`]
-    : Object.keys(validation.data);
-
-  await recordAudit(mem, {
-    action,
-    section: normSection,
-    actor: options.actor ?? "owner",
-    fields: changedFields,
-  });
+  // Audit logging: fail the mutation closed if audit log cannot be committed
+  try {
+    await recordAudit(mem, {
+      action,
+      section: normSection,
+      actor: options.actor ?? "owner",
+      fields: diffFields,
+    });
+  } catch (e) {
+    // Revert write on audit failure
+    if (previous) {
+      await mem.setTrusted(normSection, previous).catch(() => {});
+    } else {
+      await mem.delete(normSection).catch(() => {});
+    }
+    return { ok: false, error: `audit write failed: ${e?.message ?? String(e)}` };
+  }
 
   return { ok: true, section: normSection, data: validation.data };
 }
@@ -396,59 +573,111 @@ export async function deleteProfileSection(sectionKey, options = {}) {
   }
 
   const mem = options.memory ?? masterMemory();
-  const existing = await mem.get(normSection);
+  const existing = await readTrustedMemory(mem, normSection);
   if (existing !== null && existing !== undefined) {
     await mem.delete(normSection);
     await recordAudit(mem, {
       action: "delete",
       section: normSection,
       actor: options.actor ?? "owner",
+      fields: ["deleted"],
     });
   }
 
   return { ok: true, section: normSection };
 }
 
-/** Read a profile section scoped to an agent's explicit grants. Fails closed if unauthorized. */
-export async function readAgentProfileSection(agentOrRecord, sectionKey, options = {}) {
+/**
+ * Read a profile section scoped to an agent's explicit grants.
+ * Identity is authenticated against the authoritative agent registry (getNamedAgent).
+ * Fails closed if the agent is unknown, lacks grants, or attempts caller-sentinel bypasses.
+ */
+export async function readAgentProfileSection(agentSlugOrRecord, sectionKey, options = {}) {
   const normSection = normalizeSectionKey(sectionKey);
   if (!normSection) {
     return { ok: false, error: `invalid profile section key: ${sectionKey}` };
   }
 
-  if (!hasProfileGrant(agentOrRecord, normSection)) {
-    const agentId = typeof agentOrRecord === "object" && agentOrRecord !== null
-      ? (agentOrRecord.id ?? agentOrRecord.name ?? "unnamed-agent")
-      : String(agentOrRecord ?? "unauthorized-agent");
+  // Trusted owner bypass only if explicit isTrustedOwner flag is passed
+  if (options.isTrustedOwner === true) {
+    return await getProfileSection(normSection, options);
+  }
+
+  // Resolve agent record from trusted registry
+  let agentRecord = null;
+  let slug = null;
+
+  if (typeof agentSlugOrRecord === "string" && agentSlugOrRecord.trim()) {
+    slug = agentSlugOrRecord.trim();
+    agentRecord = typeof options.getAgentRecord === "function"
+      ? await options.getAgentRecord(slug)
+      : await getNamedAgent(slug);
+  } else if (isPlainObject(agentSlugOrRecord) && typeof agentSlugOrRecord.id === "string") {
+    slug = agentSlugOrRecord.id.trim();
+    agentRecord = typeof options.getAgentRecord === "function"
+      ? await options.getAgentRecord(slug)
+      : await getNamedAgent(slug);
+  }
+
+  if (!agentRecord) {
     return {
       ok: false,
-      error: `unauthorized: agent "${agentId}" lacks explicit grant for ${normSection}`,
+      error: `unauthorized: agent "${slug || "unknown"}" not found in trusted registry`,
+    };
+  }
+
+  if (!hasProfileGrant(agentRecord, normSection)) {
+    return {
+      ok: false,
+      error: `unauthorized: agent "${agentRecord.name || slug}" lacks explicit grant for ${normSection}`,
     };
   }
 
   const mem = options.memory ?? masterMemory();
-  const data = await mem.get(normSection);
+  const data = await readTrustedMemory(mem, normSection);
   return { ok: true, section: normSection, data: data ?? null };
 }
 
 /** Read all profile sections granted to an agent in a single call. */
-export async function readAgentProfile(agentOrRecord, options = {}) {
-  const mem = options.memory ?? masterMemory();
-  const readableSections = PROFILE_SECTIONS.filter((sec) => hasProfileGrant(agentOrRecord, sec));
+export async function readAgentProfile(agentSlugOrRecord, options = {}) {
+  let agentRecord = null;
+  let slug = null;
 
-  if (readableSections.length === 0) {
-    const agentId = typeof agentOrRecord === "object" && agentOrRecord !== null
-      ? (agentOrRecord.id ?? agentOrRecord.name ?? "unnamed-agent")
-      : String(agentOrRecord ?? "unauthorized-agent");
+  if (options.isTrustedOwner === true) {
+    return await getWholeProfile(options);
+  }
+
+  if (typeof agentSlugOrRecord === "string" && agentSlugOrRecord.trim()) {
+    slug = agentSlugOrRecord.trim();
+    agentRecord = typeof options.getAgentRecord === "function"
+      ? await options.getAgentRecord(slug)
+      : await getNamedAgent(slug);
+  } else if (isPlainObject(agentSlugOrRecord) && typeof agentSlugOrRecord.id === "string") {
+    slug = agentSlugOrRecord.id.trim();
+    agentRecord = typeof options.getAgentRecord === "function"
+      ? await options.getAgentRecord(slug)
+      : await getNamedAgent(slug);
+  }
+
+  if (!agentRecord) {
     return {
       ok: false,
-      error: `unauthorized: agent "${agentId}" has no profile grants`,
+      error: `unauthorized: agent "${slug || "unknown"}" not found in trusted registry`,
     };
   }
 
+  const readableSections = PROFILE_SECTIONS.filter((sec) => hasProfileGrant(agentRecord, sec));
+  if (readableSections.length === 0) {
+    return {
+      ok: false,
+      error: `unauthorized: agent "${agentRecord.name || slug}" has no profile grants`,
+    };
+  }
+
+  const mem = options.memory ?? masterMemory();
   const profile = {};
   for (const sec of readableSections) {
-    const data = await mem.get(sec);
+    const data = await readTrustedMemory(mem, sec);
     if (data !== null && data !== undefined) {
       profile[sec] = data;
     }
@@ -466,7 +695,7 @@ export async function getWholeProfile(options = {}) {
   const mem = options.memory ?? masterMemory();
   const profile = {};
   for (const sec of PROFILE_SECTIONS) {
-    const data = await mem.get(sec);
+    const data = await readTrustedMemory(mem, sec);
     if (data !== null && data !== undefined) {
       profile[sec] = data;
     }
@@ -474,36 +703,93 @@ export async function getWholeProfile(options = {}) {
   return { ok: true, profile };
 }
 
-/** Set multiple profile sections in bulk and audit each. */
+/**
+ * Set multiple profile sections in bulk.
+ * Pre-validates ALL sections upfront before committing any writes.
+ * If any section fails validation or writing, fails closed without leaving partial dirty writes.
+ */
 export async function setWholeProfile(profileObject, options = {}) {
-  if (!profileObject || typeof profileObject !== "object" || Array.isArray(profileObject)) {
-    return { ok: false, error: "profile must be an object with section keys" };
+  if (!isPlainObject(profileObject)) {
+    return { ok: false, error: "profile must be a plain object with section keys" };
   }
 
-  const written = [];
-  for (const [k, val] of Object.entries(profileObject)) {
+  const entries = Object.entries(profileObject);
+  if (entries.length === 0) {
+    return { ok: false, error: "bulk profile update cannot be empty" };
+  }
+
+  // Pre-validate ALL sections upfront
+  const validatedSections = [];
+  for (const [k, val] of entries) {
     const norm = normalizeSectionKey(k);
-    if (norm) {
-      const res = await setProfileSection(norm, val, options);
-      if (!res.ok) return res;
-      written.push(norm);
+    if (!norm) {
+      return { ok: false, error: `unknown profile section key in bulk payload: "${k}"` };
+    }
+    const valRes = validateProfileSection(norm, val);
+    if (!valRes.ok) {
+      return { ok: false, error: `validation failed for section ${norm}: ${valRes.error}` };
+    }
+    const serialized = JSON.stringify(valRes.data);
+    const bytes = new TextEncoder().encode(serialized).byteLength;
+    if (bytes > MAX_PROFILE_SECTION_BYTES) {
+      return { ok: false, error: `section ${norm} exceeds maximum size (${bytes} > ${MAX_PROFILE_SECTION_BYTES})` };
+    }
+    validatedSections.push({ section: norm, data: valRes.data });
+  }
+
+  const mem = options.memory ?? masterMemory();
+  const snapshots = new Map();
+  const committed = [];
+
+  // Capture snapshots of previous states for rollback safety
+  for (const { section } of validatedSections) {
+    const prev = await readTrustedMemory(mem, section);
+    snapshots.set(section, prev);
+  }
+
+  // Commit writes sequentially
+  for (const { section, data } of validatedSections) {
+    const writeRes = await setProfileSection(section, data, options);
+    if (!writeRes.ok) {
+      // Rollback committed sections
+      for (const rolled of committed) {
+        const prev = snapshots.get(rolled);
+        if (prev !== null && prev !== undefined) {
+          await mem.setTrusted(rolled, prev).catch(() => {});
+        } else {
+          await mem.delete(rolled).catch(() => {});
+        }
+      }
+      return { ok: false, error: `bulk commit failed at ${section}: ${writeRes.error}` };
+    }
+    committed.push(section);
+  }
+
+  return { ok: true, writtenSections: committed };
+}
+
+/** Clear all profile sections and record audit log. */
+export async function clearProfile(options = {}) {
+  const mem = options.memory ?? masterMemory();
+  const errors = [];
+  for (const sec of PROFILE_SECTIONS) {
+    try {
+      await mem.delete(sec);
+    } catch (e) {
+      errors.push(`delete ${sec}: ${e?.message ?? String(e)}`);
     }
   }
 
-  return { ok: true, writtenSections: written };
-}
-
-/** Clear all profile sections and audit. */
-export async function clearProfile(options = {}) {
-  const mem = options.memory ?? masterMemory();
-  for (const sec of PROFILE_SECTIONS) {
-    await mem.delete(sec).catch(() => {});
+  if (errors.length > 0) {
+    return { ok: false, error: `clearProfile failed: ${errors.join(", ")}` };
   }
+
   await recordAudit(mem, {
     action: "clear",
     section: null,
     actor: options.actor ?? "owner",
     fields: [...PROFILE_SECTIONS],
   });
+
   return { ok: true };
 }

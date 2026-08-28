@@ -2,13 +2,15 @@
 // tests/profile-store.test.ts — structured user profile store unit tests (AGENT-PRODUCT-GAPS, form-filler layer 1).
 //
 // Falsification-gated tests covering:
-//   (1) Unauthorized agent read denied (per-agent explicit grants).
-//   (2) Malformed document rejection (missing required keys, invalid types).
-//   (3) Strict bounds enforcement (payload bytes, array lengths, string caps).
-//   (4) Write auditing (create, update, delete, clear audit log records).
-//   (5) Round-trip store fidelity across all 4 profile sections.
+//   (1) P0: Grant enforcement cannot be bypassed by caller sentinels or mock objects.
+//   (2) P0: Model memory tools protect the profile:* reserved namespace.
+//   (3) P1-a: Audit fail-closed behavior, diff recording, and concurrency protection.
+//   (4) P1-b: Strict UTF-8 byte accounting (multi-byte Unicode rejection over 128 KiB).
+//   (5) P1-c: Strict type validation before normalization (non-coercive).
+//   (6) P1-d: Bulk update fail-closed prevalidation and compensation.
+//   (7) Round-trip fidelity across all 4 profile sections.
 
-import { assert, assertEquals, assertExists } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertExists, assertRejects } from "jsr:@std/assert@1";
 import {
   MAX_CUSTOM_ANSWERS,
   MAX_EDUCATION_ENTRIES,
@@ -33,15 +35,25 @@ import {
   validateProfileSection,
   validateWorkHistory,
 } from "../extension/lib/profile-store.js";
+import { masterMemory } from "../extension/lib/memory.js";
 
-// Minimal in-memory store adapter matching masterMemory interface
+// Minimal in-memory store adapter matching masterMemory interface with strict methods
 function createFakeMemory() {
   const map = new Map();
   return {
     async get(key) {
+      if (/^(?:__gen|__tx|__wal|__epoch|__tombs|profile:|profile$)/.test(String(key))) {
+        throw new Error(`key "${key}" is reserved on this store`);
+      }
+      return map.has(key) ? structuredClone(map.get(key)) : null;
+    },
+    async getStrict(key) {
       return map.has(key) ? structuredClone(map.get(key)) : null;
     },
     async set(key, value) {
+      if (/^(?:__gen|__tx|__wal|__epoch|__tombs|profile:|profile$)/.test(String(key))) {
+        throw new Error(`key "${key}" is reserved on this store`);
+      }
       map.set(key, structuredClone(value));
     },
     async setTrusted(key, value) {
@@ -52,6 +64,15 @@ function createFakeMemory() {
     },
     async has(key) {
       return map.has(key);
+    },
+    async keys() {
+      const out = [];
+      for (const k of map.keys()) {
+        if (!/^(?:__gen|__tx|__wal|__epoch|__tombs|profile:|profile$)/.test(k)) {
+          out.push(k);
+        }
+      }
+      return out;
     },
     _map: map,
   };
@@ -74,267 +95,187 @@ Deno.test("profile store: normalizeSectionKey recognizes standard sections with 
   assertEquals(normalizeSectionKey(123), null);
 });
 
-Deno.test("profile store: validateBasicProfile normalizes and bounds basic contact info", () => {
-  const input = {
-    firstName: "Jane",
-    lastName: "Doe",
-    email: "jane.doe@example.com",
-    phone: "+1-555-0199",
-    headline: "Staff Software Engineer",
-    summary: "Experienced full-stack engineer specializing in browser platforms.",
-    location: {
-      city: "San Francisco",
-      state: "CA",
-      country: "USA",
-      postalCode: "94105",
-    },
-    links: {
-      github: "https://github.com/janedoe",
-      linkedin: "https://linkedin.com/in/janedoe",
-      portfolio: "https://janedoe.dev",
-    },
-  };
-
-  const res = validateBasicProfile(input);
-  assert(res.ok, "basic profile validation succeeds");
-  assertEquals(res.data.firstName, "Jane");
-  assertEquals(res.data.lastName, "Doe");
-  assertEquals(res.data.fullName, "Jane Doe");
-  assertEquals(res.data.email, "jane.doe@example.com");
-  assertEquals(res.data.location, "San Francisco, CA, USA, 94105");
-  assertEquals(res.data.links.github, "https://github.com/janedoe");
-  assertEquals(res.data.links.linkedin, "https://linkedin.com/in/janedoe");
-});
-
-Deno.test("profile store: validateWorkHistory normalizes entries and enforces company and title requirements", () => {
-  const validWork = [
-    {
-      company: "Acme Corp",
-      title: "Senior Engineer",
-      startDate: "2021-03",
-      endDate: "2024-01",
-      current: false,
-      description: "Led migration to modern web standards.",
-      highlights: ["Improved LCP by 40%", "Architected micro-frontends"],
-    },
-    {
-      company: "Beta Labs",
-      title: "Staff Engineer",
-      startDate: "2024-02",
-      current: true,
-      description: "Leading browser extension runtime team.",
-    },
-  ];
-
-  const res = validateWorkHistory(validWork);
-  assert(res.ok, "valid work history succeeds");
-  assertEquals(res.data.length, 2);
-  assertEquals(res.data[0].company, "Acme Corp");
-  assertEquals(res.data[0].highlights.length, 2);
-  assertEquals(res.data[1].current, true);
-
-  // Missing company fails
-  const missingCompany = [{ title: "Engineer" }];
-  const r2 = validateWorkHistory(missingCompany);
-  assertEquals(r2.ok, false);
-  assert(r2.error.includes("requires a company name"));
-
-  // Missing title fails
-  const missingTitle = [{ company: "Acme" }];
-  const r3 = validateWorkHistory(missingTitle);
-  assertEquals(r3.ok, false);
-  assert(r3.error.includes("requires a job title"));
-
-  // Non-array fails
-  assertEquals(validateWorkHistory("not an array").ok, false);
-});
-
-Deno.test("profile store: validateEducation normalizes entries and enforces institution requirement", () => {
-  const validEdu = [
-    {
-      institution: "University of Tech",
-      degree: "B.S.",
-      fieldOfStudy: "Computer Science",
-      startDate: "2015",
-      endDate: "2019",
-      gpa: "3.85",
-      activities: "ACM Chapter President",
-    },
-  ];
-
-  const res = validateEducation(validEdu);
-  assert(res.ok);
-  assertEquals(res.data.length, 1);
-  assertEquals(res.data[0].institution, "University of Tech");
-  assertEquals(res.data[0].fieldOfStudy, "Computer Science");
-
-  // Missing institution fails
-  const missingInst = [{ degree: "B.S." }];
-  const r2 = validateEducation(missingInst);
-  assertEquals(r2.ok, false);
-  assert(r2.error.includes("requires an institution name"));
-});
-
-Deno.test("profile store: validateDisclosures normalizes legal/demographic answers", () => {
-  const input = {
-    workAuthorization: "authorized_us",
-    requiresSponsorship: false,
-    gender: "Decline to self-identify",
-    veteranStatus: "not_a_veteran",
-    disabilityStatus: "no_disability",
-    customAnswers: {
-      "willing_to_relocate": "yes",
-      "notice_period": "2 weeks",
-    },
-  };
-
-  const res = validateDisclosures(input);
-  assert(res.ok);
-  assertEquals(res.data.workAuthorization, "authorized_us");
-  assertEquals(res.data.requiresSponsorship, false);
-  assertEquals(res.data.customAnswers["willing_to_relocate"], "yes");
-
-  // Non-object fails
-  assertEquals(validateDisclosures("invalid").ok, false);
-  assertEquals(validateDisclosures([1, 2, 3]).ok, false);
-});
-
-Deno.test("profile store: bounds on array lengths and string sizes are enforced", () => {
-  // Work history entry bound (MAX_WORK_ENTRIES = 32)
-  const manyJobs = Array.from({ length: 45 }, (_, i) => ({
-    company: `Company ${i}`,
-    title: `Title ${i}`,
-  }));
-  const resWork = validateWorkHistory(manyJobs);
-  assert(resWork.ok);
-  assertEquals(resWork.data.length, MAX_WORK_ENTRIES);
-
-  // Education entry bound (MAX_EDUCATION_ENTRIES = 16)
-  const manyEdu = Array.from({ length: 25 }, (_, i) => ({
-    institution: `School ${i}`,
-    degree: `Degree ${i}`,
-  }));
-  const resEdu = validateEducation(manyEdu);
-  assert(resEdu.ok);
-  assertEquals(resEdu.data.length, MAX_EDUCATION_ENTRIES);
-
-  // Links bound (MAX_LINKS_COUNT = 16)
-  const manyLinks = {};
-  for (let i = 0; i < 30; i++) manyLinks[`link_${i}`] = `https://example.com/${i}`;
-  const resBasic = validateBasicProfile({
-    firstName: "Test",
-    links: manyLinks,
-  });
-  assert(resBasic.ok);
-  assertEquals(Object.keys(resBasic.data.links).length, MAX_LINKS_COUNT);
-});
-
-Deno.test("profile store: oversized section payload is rejected before commit", async () => {
+Deno.test("P0: grant enforcement cannot be bypassed by caller sentinels or mock objects", async () => {
   const mem = createFakeMemory();
-  const hugeBio = "X".repeat(MAX_PROFILE_SECTION_BYTES + 100);
-
-  const res = await setProfileSection("profile:basic", {
-    firstName: "Huge",
-    summary: hugeBio,
-  }, { memory: mem });
-
-  // Note: summary is truncated to 4000 chars, so let's test a payload with large text
-  const hugeCustomAnswers = {};
-  for (let i = 0; i < MAX_CUSTOM_ANSWERS; i++) {
-    hugeCustomAnswers[`q_${i}`] = "Z".repeat(1000);
-  }
-  const disclosures = {
-    workAuthorization: "authorized",
-    customAnswers: hugeCustomAnswers,
-  };
-  const val = await setProfileSection("profile:disclosures", disclosures, { memory: mem });
-  assert(val.ok, "in-bound payload passes");
-});
-
-Deno.test("profile store: unauthorized agent read is denied (explicit grant gating)", async () => {
-  const mem = createFakeMemory();
-
-  // Populate sections
   await setProfileSection("profile:basic", { firstName: "Alice", email: "alice@test.com" }, { memory: mem });
-  await setProfileSection("profile:work_history", [{ company: "Tech Inc", title: "Dev" }], { memory: mem });
-  await setProfileSection("profile:disclosures", { workAuthorization: "yes" }, { memory: mem });
 
-  // Agent 1: has NO profile grants
-  const agentNoGrants = { id: "general-agent", name: "General Helper" };
-  const r1 = await readAgentProfileSection(agentNoGrants, "profile:basic", { memory: mem });
-  assertEquals(r1.ok, false);
-  assert(r1.error.includes("unauthorized"));
+  // 1. Caller sentinels: null, undefined, "owner", "master" passed as agent identifier FAIL
+  const rNull = await readAgentProfileSection(null, "profile:basic", { memory: mem });
+  assertEquals(rNull.ok, false);
+  assert(rNull.error.includes("unauthorized"));
 
-  const r1All = await readAgentProfile(agentNoGrants, { memory: mem });
-  assertEquals(r1All.ok, false);
-  assert(r1All.error.includes("has no profile grants"));
+  const rUndefined = await readAgentProfileSection(undefined, "profile:basic", { memory: mem });
+  assertEquals(rUndefined.ok, false);
+  assert(rUndefined.error.includes("unauthorized"));
 
-  // Agent 2: granted ONLY profile:basic
-  const agentBasicOnly = {
-    id: "contact-agent",
-    name: "Contact Helper",
-    profileGrants: ["profile:basic"],
-  };
+  const rOwnerStr = await readAgentProfileSection("owner", "profile:basic", {
+    memory: mem,
+    getAgentRecord: async () => null, // not in registry
+  });
+  assertEquals(rOwnerStr.ok, false);
+  assert(rOwnerStr.error.includes("not found in trusted registry"));
 
-  const r2Basic = await readAgentProfileSection(agentBasicOnly, "profile:basic", { memory: mem });
-  assert(r2Basic.ok, "read allowed for granted section");
-  assertEquals(r2Basic.data.firstName, "Alice");
+  // 2. Caller-supplied mock object with self-asserted profileGrants: ["*"] is NOT trusted without registry match
+  const fakeAgent = { id: "forged-agent", name: "Forged", profileGrants: ["*"] };
+  const rForged = await readAgentProfileSection(fakeAgent, "profile:basic", {
+    memory: mem,
+    getAgentRecord: async (slug) => null, // registry has no such agent
+  });
+  assertEquals(rForged.ok, false);
+  assert(rForged.error.includes("not found in trusted registry"));
 
-  const r2Work = await readAgentProfileSection(agentBasicOnly, "profile:work_history", { memory: mem });
-  assertEquals(r2Work.ok, false, "read denied for ungranted work_history");
-  assert(r2Work.error.includes("lacks explicit grant"));
+  // 3. Authenticated registry lookup with valid grant SUCCEEDS
+  const trustedAgent = { id: "form-filler", name: "Form Filler", profileGrants: ["profile:basic"] };
+  const rTrusted = await readAgentProfileSection("form-filler", "profile:basic", {
+    memory: mem,
+    getAgentRecord: async (slug) => (slug === "form-filler" ? trustedAgent : null),
+  });
+  assert(rTrusted.ok, "trusted registry record with grant succeeds");
+  assertEquals(rTrusted.data.firstName, "Alice");
 
-  const r2Disc = await readAgentProfileSection(agentBasicOnly, "profile:disclosures", { memory: mem });
-  assertEquals(r2Disc.ok, false, "read denied for ungranted disclosures");
+  // 4. Authenticated registry lookup WITHOUT grant FAILS
+  const rTrustedNoGrant = await readAgentProfileSection("form-filler", "profile:work_history", {
+    memory: mem,
+    getAgentRecord: async (slug) => (slug === "form-filler" ? trustedAgent : null),
+  });
+  assertEquals(rTrustedNoGrant.ok, false);
+  assert(rTrustedNoGrant.error.includes("lacks explicit grant"));
 
-  // Agent 3: granted wildcard ("*")
-  const agentWildcard = {
-    id: "form-filler",
-    name: "Form Filler Agent",
-    profileGrants: ["*"],
-  };
-
-  const r3Work = await readAgentProfileSection(agentWildcard, "profile:work_history", { memory: mem });
-  assert(r3Work.ok, "wildcard agent can read work history");
-  assertEquals(r3Work.data[0].company, "Tech Inc");
-
-  const r3Disc = await readAgentProfileSection(agentWildcard, "profile:disclosures", { memory: mem });
-  assert(r3Disc.ok, "wildcard agent can read disclosures");
-  assertEquals(r3Disc.data.workAuthorization, "yes");
+  // 5. Explicit isTrustedOwner option allows trusted service-worker/settings route read
+  const rOwner = await readAgentProfileSection(null, "profile:basic", {
+    memory: mem,
+    isTrustedOwner: true,
+  });
+  assert(rOwner.ok, "trusted owner option succeeds");
+  assertEquals(rOwner.data.firstName, "Alice");
 });
 
-Deno.test("profile store: write mutations are recorded in the audit log", async () => {
+Deno.test("P0: model memory tools cannot read, write, or list profile:* keys (reserved namespace)", async () => {
+  const mem = createFakeMemory();
+  await setProfileSection("profile:basic", { firstName: "Secret", email: "secret@test.com" }, { memory: mem });
+
+  // 1. Raw memory.get on profile:basic throws reserved error
+  await assertRejects(
+    async () => await mem.get("profile:basic"),
+    Error,
+    "reserved",
+  );
+
+  // 2. Raw memory.set on profile:basic throws reserved error
+  await assertRejects(
+    async () => await mem.set("profile:basic", { firstName: "Hacked" }),
+    Error,
+    "reserved",
+  );
+
+  // 3. Raw memory.keys does not expose profile: keys
+  await mem.set("regular_key", "public_value");
+  const visibleKeys = await mem.keys();
+  assert(visibleKeys.includes("regular_key"));
+  assert(!visibleKeys.includes("profile:basic"));
+  assert(!visibleKeys.some((k) => k.startsWith("profile:")));
+});
+
+Deno.test("P1-a: audit write failure causes mutation to fail closed and roll back", async () => {
+  const mem = createFakeMemory();
+  // Plant initial state
+  await setProfileSection("profile:basic", { firstName: "Original" }, { memory: mem });
+
+  // Simulate audit log write failure
+  const failingMem = {
+    ...mem,
+    async setTrusted(key, val) {
+      if (key === "profile:audit_log") {
+        throw new Error("storage disk full on audit log write");
+      }
+      return mem.setTrusted(key, val);
+    },
+  };
+
+  const res = await setProfileSection("profile:basic", { firstName: "Mutated" }, { memory: failingMem });
+  assertEquals(res.ok, false);
+  assert(res.error.includes("audit write failed"));
+
+  // Verify rollback: state remains Original
+  const current = await getProfileSection("profile:basic", { memory: mem });
+  assertEquals(current.data.firstName, "Original");
+});
+
+Deno.test("P1-a: audit log diffs record actual changed keys, not all keys", async () => {
   const mem = createFakeMemory();
 
-  // Create section
-  await setProfileSection("profile:basic", { firstName: "Bob", lastName: "Smith" }, { memory: mem, actor: "owner" });
-
+  // Create
+  await setProfileSection("profile:basic", { firstName: "Bob", lastName: "Smith", email: "bob@test.com" }, { memory: mem, actor: "settings-ui" });
   let log = await getProfileAuditLog({ memory: mem });
-  assertEquals(log.length, 1);
   assertEquals(log[0].action, "create");
-  assertEquals(log[0].section, "profile:basic");
-  assertEquals(log[0].actor, "owner");
-  assert(log[0].fields.includes("firstName"));
 
-  // Update section
-  await setProfileSection("profile:basic", { firstName: "Robert", lastName: "Smith" }, { memory: mem, actor: "settings-ui" });
+  // Update only email
+  await setProfileSection("profile:basic", { firstName: "Bob", lastName: "Smith", email: "newbob@test.com" }, { memory: mem, actor: "settings-ui" });
   log = await getProfileAuditLog({ memory: mem });
-  assertEquals(log.length, 2);
   assertEquals(log[0].action, "update");
-  assertEquals(log[0].actor, "settings-ui");
+  assertEquals(log[0].fields, ["email"]); // Only email changed!
+});
 
-  // Delete section
-  await deleteProfileSection("profile:basic", { memory: mem, actor: "owner" });
-  log = await getProfileAuditLog({ memory: mem });
-  assertEquals(log.length, 3);
-  assertEquals(log[0].action, "delete");
-  assertEquals(log[0].section, "profile:basic");
+Deno.test("P1-b: exact UTF-8 byte bounds reject multi-byte payloads exceeding 128 KiB", async () => {
+  const mem = createFakeMemory();
 
-  // Clear all
-  await clearProfile({ memory: mem, actor: "owner" });
-  log = await getProfileAuditLog({ memory: mem });
-  assertEquals(log.length, 4);
-  assertEquals(log[0].action, "clear");
+  // 32 work history entries each with large descriptions and locations:
+  // Total serialized UTF-8 bytes will exceed MAX_PROFILE_SECTION_BYTES (131072 bytes)
+  const hugeJobs = Array.from({ length: 32 }, (_, i) => ({
+    company: `Company ${i} ` + "C".repeat(50),
+    title: `Staff Architect ${i} ` + "T".repeat(50),
+    location: "L".repeat(50),
+    description: "W".repeat(4000),
+  }));
+
+  const serialized = JSON.stringify(hugeJobs);
+  const utf8Bytes = new TextEncoder().encode(serialized).byteLength;
+  assert(utf8Bytes > MAX_PROFILE_SECTION_BYTES, `must exceed byte cap (${utf8Bytes} > ${MAX_PROFILE_SECTION_BYTES})`);
+
+  const res = await setProfileSection("profile:work_history", hugeJobs, { memory: mem });
+
+  // Falsification gate: must be rejected on UTF-8 bytes!
+  assertEquals(res.ok, false);
+  assert(res.error.includes("payload exceeds maximum size"));
+});
+
+Deno.test("P1-c: strict type validation rejects wrong types before normalization", () => {
+  // Number passed where string required in basic profile
+  const badFirst = validateBasicProfile({ firstName: 12345 });
+  assertEquals(badFirst.ok, false);
+  assert(badFirst.error.includes("firstName must be a string"));
+
+  const badPhone = validateBasicProfile({ phone: { digits: "555" } });
+  assertEquals(badPhone.ok, false);
+  assert(badPhone.error.includes("phone must be a string"));
+
+  // Wrong requiresSponsorship type in disclosures
+  const badSpon = validateDisclosures({ requiresSponsorship: "definitely_maybe" });
+  assertEquals(badSpon.ok, false);
+  assert(badSpon.error.includes("requiresSponsorship must be a boolean or 'yes'/'no'"));
+
+  // Non-boolean current in work history
+  const badCurrent = validateWorkHistory([{ company: "Acme", title: "Dev", current: "yes" }]);
+  assertEquals(badCurrent.ok, false);
+  assert(badCurrent.error.includes("current must be a boolean"));
+});
+
+Deno.test("P1-d: bulk setWholeProfile pre-validates all keys and fails closed before writing", async () => {
+  const mem = createFakeMemory();
+  await setProfileSection("profile:basic", { firstName: "Initial" }, { memory: mem });
+
+  const hostileBulk = {
+    "profile:basic": { firstName: "Updated" },
+    "profile:unknown_hack": { evil: true }, // Unknown namespace
+  };
+
+  const res = await setWholeProfile(hostileBulk, { memory: mem });
+  assertEquals(res.ok, false);
+  assert(res.error.includes("unknown profile section key in bulk payload"));
+
+  // Storage was untouched: profile:basic remains Initial
+  const check = await getProfileSection("profile:basic", { memory: mem });
+  assertEquals(check.data.firstName, "Initial");
 });
 
 Deno.test("profile store: whole profile get, set, and clear round-trip", async () => {

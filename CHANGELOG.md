@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.350] — 2026-08-28
+- feat(profile-store): structured OPFS profile store with schema validation, per-agent grants, and write auditing (AGENT-PRODUCT-GAPS G7/form-filler layer 1)
+
 ## [0.2.349] — 2026-08-28
 - Deleting an agent now truly cleans up after itself: scheduled runs, permissions, workers, and stored data are removed together, safely, and anything half-finished is retried rather than lost
 - Internal bookkeeping: the completed task-loading work is closed out and archived, leaving the tracker showing only live work

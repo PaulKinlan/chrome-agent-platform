@@ -190,12 +190,12 @@ const MASTER_RESERVED_KEYS = new Set([
   "wasmPkg",
   "wasmPkgRepair",
 ]);
-// The INTERNAL namespace + the artifact/repair/package prefixes are reserved on EVERY
+// The INTERNAL namespace + the artifact/repair/package/profile prefixes are reserved on EVERY
 // store — the model's memory_set can never write the generation authority,
 // the WAL, a tombstone, or an artifact body/repair record.
-const INTERNAL_PREFIX_RE = /^(?:__gen|__tx|__wal|__epoch|__tombs|__wasmTx)/;
+const INTERNAL_PREFIX_RE = /^(?:__gen|__tx|__wal|__epoch|__tombs|__wasmTx|profile:)/;
 // The full hidden namespace (keys()/get/list exclusion + set reservation).
-const INTERNAL_KEY_RE = /^(?:__gen|__tx|__wal|__epoch|__tombs|__wasmTx|assets|assetRepair|asset:|wasmPkg|wasmPkgRepair)/;
+const INTERNAL_KEY_RE = /^(?:__gen|__tx|__wal|__epoch|__tombs|__wasmTx|assets|assetRepair|asset:|wasmPkg|wasmPkgRepair|profile:|profile$)/;
 // Authority/registry keys that the MODEL's `memory_set` must never write on a
 // SITE store: a worker that could write `approvals` or `toolDirectory` would
 // bypass the owner's first-run approval or forge its own tool directory, and
@@ -735,10 +735,10 @@ function memoryStoreAt(path, { isMaster, origin }) {
     isMaster,
     origin,
     async get(key) {
-      // The AUTHORITY files are never readable (the model-facing memory.get
-      // route + the agent memory_get tool apply the same refusal); the artifact
-      // internals are read via getStrict by the transaction code.
-      if (/^(?:__gen|__tx|__wal|__epoch|__tombs)$/.test(String(key))) {
+      // The AUTHORITY files and reserved profile dossiers are never readable
+      // via the model-facing memory.get route + agent memory_get tool; trusted
+      // internal subsystems use getStrict.
+      if (/^(?:__gen|__tx|__wal|__epoch|__tombs|profile:|profile$)/.test(String(key))) {
         throw new Error(`key "${key}" is reserved on this store`);
       }
       const dir = await openDirOptional(path);
