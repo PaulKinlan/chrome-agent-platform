@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.351] — 2026-08-28
+- docs(agent-cards): add agent card format specification and sharing contract (AGENT-PRODUCT-GAPS G7)
+
 ## [0.2.350] — 2026-08-28
 - feat(agent-cards): export/import agent card data layer with recipe-validated skills and bounded hostile-input schema (AGENT-PRODUCT-GAPS G7)
 

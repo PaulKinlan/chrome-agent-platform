@@ -79,6 +79,9 @@ When exporting an agent via `exportAgentCard(agent)`:
 4. **Internal OPFS Sandbox State (`agents.md` internal storage paths, memory logs, journal history):**
    - **Why:** Memory and conversation journals contain personal browsing history and local state. A shared agent card shares the *agent definition*, not personal user data.
 
+### Residual Risk Notice (Content vs. Structure)
+Exporting an agent card strips **structured runtime credentials** (API keys, provider URLs, instance IDs, storage revision counters). However, **free-text prompt fields** (`role`, `summary`, or attached `coreAssets`) are preserved verbatim. Card export is **not** a content-level DLP (Data Loss Prevention) scanner for user-authored text. Owners sharing cards publicly should ensure their role prompts and attached documents do not contain hardcoded private secrets or API keys.
+
 ---
 
 ## 4. Import & Validation Contract
@@ -89,34 +92,34 @@ Importing an agent card via `importAgentCard(cardInput, options)` performs stric
 [Raw JSON String / Object]
           │
           ▼
- [1. Byte Bound Check] ─── (Fail if string > 1 MiB)
+ [1. UTF-8 Byte Bound Check] ── (Fail if payload > 2 MiB)
           │
           ▼
-    [2. JSON.parse] ────── (Fail if syntax error)
+    [2. JSON.parse] ─────────── (Fail if syntax error or malformed)
           │
           ▼
-[3. Root Object Check] ─── (Fail if null, array, primitive)
+[3. Plain Object Check] ─────── (Fail if null, array, primitive, or prototype inheritance)
           │
           ▼
-[4. Schema Version Check] ─ (Fail if version > 1 or non-integer)
+[4. Strict Integer Version] ─── (Fail if non-integer, boolean, array, or version > 1)
           │
           ▼
- [5. Name Validation] ──── (Fail if missing, non-string, or whitespace-only)
+ [5. Own Name Property] ─────── (Fail if missing, non-string, or whitespace-only)
           │
           ▼
- [6. Persona & Role] ───── (Extract role/persona, bound to 32,000 chars)
+ [6. Persona & Role] ────────── (Extract role/persona, bound to 32,000 chars)
           │
           ▼
-[7. Skill ID Filtering] ── (Match against RECIPES: valid kept, unknown -> droppedSkills)
+[7. Skill ID Filtering] ─────── (Validate against RECIPES; bounded droppedSkills report)
           │
           ▼
-[8. Core Assets Normalization] (Cap at 8 assets, truncate content > 128 KiB)
+[8. Core Assets Normalization] ─ (Cap at 8 assets, truncate content > 128 KiB)
           │
           ▼
-[9. Schedule Validation] ─ (Validate periodInMinutes > 0, task text, at timestamp)
+[9. Schedule Validation] ────── (Validate periodInMinutes > 0, task text, bounded at timestamp)
           │
           ▼
-[10. Result Construction] ─► { ok: true, agent, droppedSkills, version, exportedAt }
+[10. Result Construction] ─────► { ok: true, agent, droppedSkills, version, exportedAt }
 ```
 
 ### Dropped Skills Reporting

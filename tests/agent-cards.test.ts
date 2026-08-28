@@ -8,6 +8,10 @@
 //   (4) Strict bounding of oversized fields (name, role, skills, assets, avatar, JSON).
 //   (5) Missing or invalid name rejection.
 //   (6) Credential and private state isolation.
+//   (7) Real named-agent object skills normalization (P1-a).
+//   (8) Import bounds and 8×128KiB full asset export-import alignment (P1-b).
+//   (9) Bounded droppedSkills and omitted counts (P1-c).
+//   (10) Plain data object requirements, getter-throw fail-closed, and strict versions (P1-d).
 
 import { assert, assertEquals, assertExists, assertThrows } from "jsr:@std/assert@1";
 import {
@@ -20,6 +24,8 @@ import {
   MAX_CARD_ROLE_LEN,
   MAX_CARD_SKILLS,
   MAX_CREATED_FROM_LEN,
+  MAX_DROPPED_SKILLS_REPORT,
+  MAX_RAW_SKILLS_INPUT,
   exportAgentCard,
   exportAgentCardJson,
   importAgentCard,
@@ -40,6 +46,7 @@ Deno.test("agent cards: exportAgentCard produces a well-formed card object with 
     schedule: {
       periodInMinutes: 60,
       task: "Check open PR tabs and summarize status.",
+      at: "2026-08-29T10:00:00.000Z",
     },
     avatar: "data:image/svg+xml,<svg></svg>",
   };
@@ -58,7 +65,31 @@ Deno.test("agent cards: exportAgentCard produces a well-formed card object with 
   assertEquals(card.createdFrom, "code-reviewer");
   assertEquals(card.schedule?.periodInMinutes, 60);
   assertEquals(card.schedule?.task, "Check open PR tabs and summarize status.");
+  assertEquals(card.schedule?.at, "2026-08-29T10:00:00.000Z");
   assertEquals(card.avatar, "data:image/svg+xml,<svg></svg>");
+});
+
+Deno.test("P1-a: exportAgentCard normalizes REAL named-agent object-form skills {id,name} without dropping them", () => {
+  // Real UI/named-agents records persist skills as { id, name, description } objects or mixed
+  const realAgentRecord = {
+    id: "sorting-hat",
+    name: "Sorting Hat",
+    role: "Groups tabs by intent.",
+    skills: [
+      { id: "tab-hygiene", name: "Tab hygiene", description: "Closes dupes" },
+      { id: "page-summary", name: "Summarise this page", description: "Summarises" },
+      "reading-list", // mixed string ID
+    ],
+    coreAssets: [],
+  };
+
+  const card = exportAgentCard(realAgentRecord);
+  assertEquals(card.skills, ["tab-hygiene", "page-summary", "reading-list"]);
+
+  const json = exportAgentCardJson(realAgentRecord);
+  const imported = importAgentCard(json);
+  assert(imported.ok, "real agent record re-imports cleanly");
+  assertEquals(imported.agent.skills, ["tab-hygiene", "page-summary", "reading-list"]);
 });
 
 Deno.test("agent cards: round-trip fidelity export → JSON string → import", () => {
@@ -96,6 +127,208 @@ Deno.test("agent cards: round-trip fidelity export → JSON string → import", 
   assertEquals(agent.schedule?.task, sourceAgent.schedule.task);
   assertEquals(agent.schedule?.at, sourceAgent.schedule.at);
   assertEquals(agent.avatar, sourceAgent.avatar);
+});
+
+Deno.test("P1-b: maximum legal export (8×128KiB assets + role + metadata) round-trips without hitting import size limit", () => {
+  const maxAssets = Array.from({ length: MAX_CARD_CORE_ASSETS }, (_, i) => ({
+    name: `asset-${i}.txt`,
+    type: "text/plain",
+    content: "M".repeat(MAX_CARD_CORE_ASSET_BYTES),
+  }));
+
+  const maxAgent = {
+    name: "Maximum Agent",
+    role: "R".repeat(MAX_CARD_ROLE_LEN),
+    skills: ["tab-hygiene", "page-summary"],
+    coreAssets: maxAssets,
+    schedule: {
+      periodInMinutes: 60,
+      task: "T".repeat(2000),
+      at: "2026-08-30T00:00:00.000Z",
+    },
+    avatar: "A".repeat(10000),
+  };
+
+  const json = exportAgentCardJson(maxAgent);
+  const utf8Bytes = new TextEncoder().encode(json).byteLength;
+  assert(utf8Bytes > 1024 * 1024, "max legal card exceeds 1MB due to 8 assets");
+  assert(utf8Bytes <= MAX_CARD_JSON_BYTES, `max card must be under MAX_CARD_JSON_BYTES (${utf8Bytes} <= ${MAX_CARD_JSON_BYTES})`);
+
+  const imported = importAgentCard(json);
+  assert(imported.ok, `max legal card must import successfully: ${!imported.ok && imported.error}`);
+  assertEquals(imported.agent.coreAssets.length, MAX_CARD_CORE_ASSETS);
+  assertEquals(imported.agent.coreAssets[0].content.length, MAX_CARD_CORE_ASSET_BYTES);
+});
+
+Deno.test("P1-b: UTF-8 byte length is measured for JSON strings (multi-byte Unicode check)", () => {
+  // A string with 4-byte emojis where char count < byte count
+  const emojis = "🔥".repeat(100);
+  const emojiBytes = new TextEncoder().encode(emojis).byteLength;
+  assertEquals(emojiBytes, 400);
+
+  const cardJson = JSON.stringify({
+    version: 1,
+    name: "Emoji Agent",
+    role: emojis,
+  });
+
+  const cardBytes = new TextEncoder().encode(cardJson).byteLength;
+  const res = importAgentCard(cardJson, { maxBytes: cardBytes - 1 });
+  assertEquals(res.ok, false);
+  assert(res.error.includes("exceeds maximum allowed size"));
+});
+
+Deno.test("P1-b: object import enforces maximum size bound and cyclic structure rejection", () => {
+  const hugeObj = {
+    version: 1,
+    name: "Huge Object",
+    role: "H".repeat(MAX_CARD_JSON_BYTES + 500),
+  };
+
+  const resHuge = importAgentCard(hugeObj);
+  assertEquals(resHuge.ok, false);
+  assert(resHuge.error.includes("exceeds maximum allowed size"));
+
+  // Cyclic object
+  const cyclic = { version: 1, name: "Cyclic" };
+  cyclic.self = cyclic;
+  const resCyclic = importAgentCard(cyclic);
+  assertEquals(resCyclic.ok, false);
+  assert(resCyclic.error.includes("cannot be serialized") || resCyclic.error.includes("circular") || resCyclic.error.includes("cyclic"));
+});
+
+Deno.test("P1-b: schedule.at is strictly bounded and validated against oversized strings or NaN", () => {
+  // Oversized at string (> 64 chars) fails closed
+  const badAtString = {
+    version: 1,
+    name: "Bad At Agent",
+    schedule: {
+      periodInMinutes: 60,
+      at: "X".repeat(65),
+    },
+  };
+  const r1 = importAgentCard(badAtString);
+  assertEquals(r1.ok, false);
+  assert(r1.error.includes("schedule at exceeds maximum length"));
+
+  // NaN at fails closed
+  const badAtNaN = {
+    version: 1,
+    name: "Bad NaN At",
+    schedule: {
+      periodInMinutes: 60,
+      at: NaN,
+    },
+  };
+  const r2 = importAgentCard(badAtNaN);
+  assertEquals(r2.ok, false);
+  assert(r2.error.includes("finite timestamp"));
+
+  // Valid bounded timestamp passes
+  const goodAt = {
+    version: 1,
+    name: "Good At",
+    schedule: {
+      periodInMinutes: 60,
+      at: "2026-08-29T12:00:00Z",
+    },
+  };
+  const r3 = importAgentCard(goodAt);
+  assert(r3.ok);
+  assertEquals(r3.agent.schedule.at, "2026-08-29T12:00:00Z");
+});
+
+Deno.test("P1-b: exportedAt is typed and validated", () => {
+  const badExportedAt = {
+    version: 1,
+    name: "Bad ExportedAt",
+    exportedAt: { bad: "type" },
+  };
+  const r1 = importAgentCard(badExportedAt);
+  assertEquals(r1.ok, false);
+  assert(r1.error.includes("exportedAt must be a date string or timestamp"));
+
+  const goodExportedAt = {
+    version: 1,
+    name: "Good ExportedAt",
+    exportedAt: 1724000000000,
+  };
+  const r2 = importAgentCard(goodExportedAt);
+  assert(r2.ok);
+  assertEquals(r2.exportedAt, new Date(1724000000000).toISOString());
+});
+
+Deno.test("P1-c: droppedSkills is bounded and over-cap skill inputs are rejected or reported", () => {
+  // Input over MAX_RAW_SKILLS_INPUT (256) fails closed honestly
+  const hugeSkills = Array.from({ length: MAX_RAW_SKILLS_INPUT + 10 }, (_, i) => `unknown-skill-${i}`);
+  const cardHugeSkills = {
+    version: 1,
+    name: "Spam Skills Agent",
+    skills: hugeSkills,
+  };
+  const r1 = importAgentCard(cardHugeSkills);
+  assertEquals(r1.ok, false);
+  assert(r1.error.includes("skills list exceeds maximum allowed count"));
+
+  // 150 unknown skills (within 256 limit): droppedSkills caps at 128 and reports omittedDroppedSkillsCount
+  const unknown150 = Array.from({ length: 150 }, (_, i) => `bogus-skill-${i}`);
+  const card150 = {
+    version: 1,
+    name: "Unknown 150",
+    skills: unknown150,
+  };
+  const r2 = importAgentCard(card150);
+  assert(r2.ok);
+  assertEquals(r2.droppedSkills.length, MAX_DROPPED_SKILLS_REPORT);
+  assertEquals(r2.omittedDroppedSkillsCount, 150 - MAX_DROPPED_SKILLS_REPORT);
+});
+
+Deno.test("P1-d: prototype inheritance is rejected and only own properties are read", () => {
+  // Object.create with inherited name
+  const inheritedProto = { name: "Inherited Name", role: "Inherited Role" };
+  const inheritedObj = Object.create(inheritedProto);
+  inheritedObj.version = 1;
+
+  const res1 = importAgentCard(inheritedObj);
+  assertEquals(res1.ok, false);
+  assert(res1.error.includes("prototype inheritance is rejected"));
+
+  // Plain null-prototype object with own properties passes
+  const nullProtoObj = Object.create(null);
+  nullProtoObj.version = 1;
+  nullProtoObj.name = "Null Proto Agent";
+  nullProtoObj.role = "Valid role";
+  const res2 = importAgentCard(nullProtoObj);
+  assert(res2.ok);
+  assertEquals(res2.agent.name, "Null Proto Agent");
+});
+
+Deno.test("P1-d: throwing property getters fail closed without escaping as uncaught exceptions", () => {
+  const evilCard = {
+    get version() {
+      throw new Error("malicious getter explosion in version");
+    },
+    name: "Evil Agent",
+  };
+
+  const resImport = importAgentCard(evilCard);
+  assertEquals(resImport.ok, false);
+  assert(resImport.error.includes("malicious getter") || resImport.error.includes("cannot be serialized"));
+
+  const resValidate = validateAgentCard(evilCard);
+  assertEquals(resValidate.ok, false);
+  assert(resValidate.error.includes("malicious getter") || resValidate.error.includes("card validation error"));
+});
+
+Deno.test("P1-d: strict integer version check rejects boolean, array, and non-integer coercions", () => {
+  assertEquals(importAgentCard({ version: true, name: "Test" }).ok, false);
+  assertEquals(importAgentCard({ version: false, name: "Test" }).ok, false);
+  assertEquals(importAgentCard({ version: [1], name: "Test" }).ok, false);
+  assertEquals(importAgentCard({ version: "1.5", name: "Test" }).ok, false);
+  assertEquals(importAgentCard({ version: "invalid", name: "Test" }).ok, false);
+  assertEquals(importAgentCard({ version: 99, name: "Test" }).ok, false);
+  assertEquals(importAgentCard({ version: 1, name: "Test" }).ok, true);
+  assertEquals(importAgentCard({ version: "1", name: "Test" }).ok, true);
 });
 
 Deno.test("agent cards: import supports persona field as alias for role", () => {
@@ -229,7 +462,7 @@ Deno.test("agent cards: oversized fields are bounded to their respective maximum
 });
 
 Deno.test("agent cards: core asset count and skill count caps are enforced", () => {
-  // 10 assets (cap is 8)
+  // 12 assets (cap is 8)
   const assets = Array.from({ length: 12 }, (_, i) => ({
     name: `doc-${i}.txt`,
     type: "text/plain",
