@@ -107,7 +107,7 @@ import {
   memoryToolset,
   RunAbortedError,
 } from "../lib/agent.js";
-import { clearUsage, getUsage, recordUsage } from "../lib/usage.js";
+import { clearUsage, getUsage, recordToolCall, recordUsage } from "../lib/usage.js";
 import { createWebmcpAuthorizationGuard } from "../lib/webmcp-authority.js";
 import {
   diagnosticClear,
@@ -378,6 +378,7 @@ import {
   blockScheduledTaskForStorage,
   cancelScheduledTask,
   cancelScheduledTaskBackground,
+  finalizeCancellation,
   disarmScheduledAlarms,
   heartbeatInflight,
   listScheduledTasks,
@@ -682,6 +683,17 @@ async function handleAlarm(alarm) {
           : "Task is pending cancellation",
         actionTaken: "skipped_execution",
       }, "warn");
+      // A CANCELLING payload whose alarm STILL FIRES is definitive evidence
+      // the alarm is armed — run the idempotent finalize (clear → confirm
+      // absence → delete) instead of leaving the skip loop to do it forever
+      // (REVISE-4 P1-B: delivery used to skip without clearing anything).
+      // Fire-and-forget: finalizeCancellation takes the scheduling lock
+      // itself, so it safely queues behind this handler and never blocks the
+      // delivery path. Quarantined tasks are NOT finalized — only an owner
+      // retry/cancel resolves those.
+      if (task.cancelling) {
+        finalizeCancellation(alarm.name).catch(() => {});
+      }
       return;
     }
     // A key-quota failure disarms and marks the task once. If Chrome delivers a
@@ -2933,6 +2945,9 @@ function executeWorkerTool(toolName, args, context) {
   });
   const tool = workerBrowserTools()[name] ?? management[name];
   if (!tool) return Promise.resolve({ ok: false, error: `unknown tool: ${name}` });
+  // Bounded per-tool call counter for the Usage panel (fire-and-forget — a
+  // telemetry write must never fail or slow a tool execution).
+  recordToolCall(name).catch(() => {});
   return Promise.resolve(tool.execute(a))
     .then((result) => redactSecrets(result ?? null))
     .catch((e) => ({ ok: false, error: String(e?.message ?? e).slice(0, 200) }));
@@ -4863,6 +4878,37 @@ const handlers = mergeRouteMaps(
     if (r?.ok !== false && name.startsWith("recipe:")) broadcastRegistryChanged();
     return r;
   },
+  async "task.cancelBackground"(m) {
+    // NON-BLOCKING owner cancellation for AGENT DELETION (the instant-delete
+    // contract, scheduler.cancelScheduledTaskBackground): durably marks the
+    // payload cancelling (inert), aborts the live run NOW, and finishes the
+    // alarm-clear + payload-delete ASYNC (reconciliation reaps residue if the
+    // worker dies mid-cleanup). Returns immediately — the caller must not
+    // block ~5s on a RUNNING task's termination dance. Honest idempotence:
+    // the cancel of a MISSING task is a documented no-op flavour of ok (the
+    // agent-deletion flow deletes the agent record regardless; the schedule
+    // simply had nothing to cancel — e.g. the agent was never enabled).
+    const name = String(m?.name ?? "");
+    if (!name) return { ok: false, error: "task name is required" };
+    const handle = cancelScheduledTaskBackground(name);
+    // Durable before the response: the store carries the cancelling mark (and
+    // the live run's abort has fired) by the time the caller sees ok:true —
+    // the SW keepalive can no longer lose the teardown. Only the
+    // wait-for-termination dance continues in the background. A MARKING
+    // FAILURE (lock/kv error) rejects `marked` — surface it honestly instead
+    // of letting the route hang or silently claim success (REVISE-4 P1-A).
+    try {
+      await handle.marked;
+    } catch (err) {
+      return {
+        ok: false,
+        name,
+        error: `cancel failed before the teardown was durable: ${err?.message ?? String(err)}`,
+      };
+    }
+    if (name.startsWith("recipe:")) broadcastRegistryChanged();
+    return { ok: true, name, stopping: handle.stopping === true };
+  },
 
   async "recipe.list"() {
     // Decorate each recipe with its intent so the hub can group the unified
@@ -5015,15 +5061,35 @@ const handlers = mergeRouteMaps(
     return { ok: true, recipe: custom[idx] };
   },
   async "recipe.delete"({ id }) {
+    // NON-BLOCKING schedule teardown FIRST (the instant-delete contract — the
+    // same path background-agent disable uses): the payload is marked
+    // cancelling (inert) DURABLY before this route responds, the live run
+    // aborted now; only the alarm-clear + payload-delete + termination wait
+    // finish async (reconciliation reaps residue). A MARKING FAILURE rejects
+    // `marked` — surface it honestly and REMOVE NOTHING: the recipe row
+    // survives so the owner can retry the delete (REVISE-5 P1: the removal
+    // used to persist BEFORE the mark, so an honest {ok:false} still lost the
+    // recipe).
+    const teardown = cancelScheduledTaskBackground(`recipe:${id}`);
+    try {
+      await teardown.marked;
+    } catch (err) {
+      return {
+        ok: false,
+        id,
+        error: `delete failed before the teardown was durable: ${err?.message ?? String(err)}`,
+      };
+    }
+    // Read AFTER the durable mark so the removal cannot clobber a concurrent
+    // edit that landed while the mark was in flight.
     const custom = await getCustomRecipes();
     const next = custom.filter((r) => r.id !== id);
     await masterMemory().set("customRecipes", next);
-    await cancelScheduledTask(`recipe:${id}`).catch(() => ({ ok: false }));
     // The deleted custom recipe LEAVES the live registry — broadcast so the
     // open pickers/conversations revalidate (a selected deleted agent is
     // rejected, never routed to a ghost).
     broadcastRegistryChanged();
-    return { ok: true };
+    return { ok: true, stopping: true };
   },
 
   // ── system prompts (Settings → Advanced) ─────────────────────────────────

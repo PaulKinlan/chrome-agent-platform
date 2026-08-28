@@ -14,6 +14,19 @@ import {
   requestCapability,
 } from "../lib/capabilities.js";
 import { requestProviderHostAccess } from "../lib/provider-gate.js";
+import {
+  USAGE_RANGES,
+  dayBuckets,
+  filterRowsByRange,
+  formatCost,
+  formatTokens,
+  shareBars,
+  svgDailyBars,
+  svgShareBars,
+  topTools,
+} from "../lib/usage-viz.js";
+
+let currentUsageRange = "7d"; // hoisted above renderUsage — no TDZ on section open
 import { bindProviderSetDefault } from "../lib/provider-options-save.js";
 import { modelsForVendor } from "../lib/model-prices.js";
 import {
@@ -37,6 +50,7 @@ import { createNavigationController } from "../lib/navigation-controller.js";
 // everywhere — no hand-rolled duplicates).
 import { confirmActionDialog } from "../shared/components.js";
 import { saveFsGrant, wireLocalFolderPickers, regrantFsGrantAccess } from "../lib/fs-grants.js";
+import { mountSkillsSection } from "../recipes/skills-panel.js";
 
 // ── Provider presets (the user picks one; OpenAI-compatible endpoints) ──
 // NOTE: the "demo" + "prompt-api" providers are deliberately NOT in this
@@ -1537,9 +1551,15 @@ function backgroundAgentRow(a) {
     del.textContent = "Delete";
     del.setAttribute("aria-label", `Delete ${a.name}`);
     del.addEventListener("click", async () => {
-      await chrome.runtime.sendMessage({ type: "recipe.delete", id: a.id }).catch(() => ({ ok: false }));
-      saveFlash(`Deleted ${a.name}.`);
-      renderBackgroundAgents();
+      const out = await chrome.runtime
+        .sendMessage({ type: "recipe.delete", id: a.id })
+        .catch(() => ({ ok: false }));
+      if (out?.ok === true) {
+        saveFlash(`Deleted ${a.name}.`);
+        renderBackgroundAgents();
+      } else {
+        saveFlash(`Could not delete ${a.name}: ${out?.error ?? "failed"}.`);
+      }
     });
     actions.append(del);
   }
@@ -1954,7 +1974,8 @@ async function renderHooks() {
 }
 
 // ── Usage ──
-async function renderUsage() {
+async function renderUsage(range = currentUsageRange) {
+  currentUsageRange = USAGE_RANGES[range] ? range : "7d";
   // Usage is shared state — read it through the SW (single authority), not the
   // page-local usage.js kv* (the round-16 split-authority finding).
   // BOUNDED read — a killed worker must not leave the Usage section blank.
@@ -1962,12 +1983,11 @@ async function renderUsage() {
   try {
     u = await boundedSend("usage.get");
   } catch (e) {
-    const sum = $("#usage-summary");
-    if (sum) sum.innerHTML = `<div class="muted">Couldn't load usage — the agent worker didn't answer (${escapeHtml(String(e?.message ?? e))}).</div><button class="btn small" type="button" id="retry-usage">Retry</button>`;
-    sum?.querySelector("#retry-usage")?.addEventListener("click", () => renderUsage());
+    const cards = $("#usage-cards");
+    if (cards) cards.innerHTML = `<div class="muted">Couldn't load usage — the agent worker didn't answer (${escapeHtml(String(e?.message ?? e))}).</div><button class="btn small" type="button" id="retry-usage">Retry</button>`;
+    cards?.querySelector("#retry-usage")?.addEventListener("click", () => renderUsage());
     return;
   }
-  const sum = $("#usage-summary");
   // Defensive: usage.get may return an error envelope or a shape missing
   // totals (e.g. storage permission not yet granted, SW cold-start race) —
   // render the empty state instead of crashing the Settings page.
@@ -1979,23 +1999,54 @@ async function renderUsage() {
     estimatedCost: Number(totals?.estimatedCost ?? 0),
   };
   const tok = safe.inputTokens + safe.outputTokens;
-  sum.replaceChildren();
-  for (const [n, l] of [
-    [String(safe.calls), "calls"],
-    [tok.toLocaleString(), "tokens"],
-    ["$" + safe.estimatedCost.toFixed(4), "est. cost"],
-  ]) {
-    const s = document.createElement("div");
-    s.className = "usage-stat";
-    const nEl = document.createElement("div");
-    nEl.className = "n";
-    nEl.textContent = n;
-    const lEl = document.createElement("div");
-    lEl.className = "l";
-    lEl.textContent = l;
-    s.append(nEl, lEl);
-    sum.appendChild(s);
+  const cards = $("#usage-cards");
+  if (cards) {
+    cards.replaceChildren();
+    for (const [n, l] of [
+      [formatTokens(tok), "total tokens"],
+      [formatTokens(safe.inputTokens), "input"],
+      [formatTokens(safe.outputTokens), "output"],
+      [formatCost(safe.estimatedCost), "est. cost"],
+      [String(safe.calls), "calls"],
+    ]) {
+      const s = document.createElement("div");
+      s.className = "usage-stat";
+      const nEl = document.createElement("div");
+      nEl.className = "n";
+      nEl.textContent = n;
+      const lEl = document.createElement("div");
+      lEl.className = "l";
+      lEl.textContent = l;
+      s.append(nEl, lEl);
+      cards.appendChild(s);
+    }
   }
+
+  // ── Charts (FolioLM-style, SVG, aggregated at read time) ──
+  // The ledger aggregates arrive pre-aggregated from the SW; the range filter
+  // slices byDay entries + raw rows without re-scanning anything unbounded.
+  const byDay = Array.isArray(u?.byDay) ? u.byDay : [];
+  const byModel = Array.isArray(u?.byModel) ? u.byModel : [];
+  const byAgent = Array.isArray(u?.byAgent) ? u.byAgent : [];
+  const rows = Array.isArray(u?.rows) ? u.rows : [];
+  const tools = Array.isArray(u?.tools) ? u.tools : [];
+  // byDay entries carry `day`; for the 24h view the day buckets would collapse
+  // to one bar, so slice the RAW rows for the daily chart when range is 24h.
+  const dailySource = currentUsageRange === "24h"
+    ? filterRowsByRange(rows, "24h")
+    : byDay;
+  const dayMount = $("#usage-chart-days");
+  if (dayMount) dayMount.innerHTML = svgDailyBars(dayBuckets(dailySource, currentUsageRange));
+  const modelMount = $("#usage-chart-models");
+  if (modelMount) modelMount.innerHTML = svgShareBars(shareBars(byModel, "totalTokens", 6), { kind: "models", valueLabel: "tokens by model" });
+  const agentMount = $("#usage-chart-agents");
+  if (agentMount) agentMount.innerHTML = svgShareBars(shareBars(byAgent, "estimatedCost", 6), { kind: "agents", valueLabel: "estimated cost by agent" });
+  const toolMount = $("#usage-chart-tools");
+  if (toolMount) toolMount.innerHTML = svgShareBars(topTools(tools, 6), { kind: "tools", valueLabel: "tool calls" });
+  // Range tabs reflect the active range.
+  document.querySelectorAll(".usage-range").forEach((b) => {
+    b.setAttribute("aria-selected", String(b.dataset.range === currentUsageRange));
+  });
 
   // The full breakdown: by provider, by model, by agent, by day. Each is a
   // textContent-built table (never interpolate into innerHTML — untrusted).
@@ -2041,19 +2092,19 @@ async function renderUsage() {
   const fmtCost = (m) => "$" + Number(m.estimatedCost ?? 0).toFixed(4);
   const sortCost = (a, b) => (b.estimatedCost ?? 0) - (a.estimatedCost ?? 0);
 
-  const byProvider = Array.isArray(u?.byProvider) ? u.byProvider : [];
-  const byModel = Array.isArray(u?.byModel) ? u.byModel : [];
-  const byAgent = Array.isArray(u?.byAgent) ? u.byAgent : [];
-  const byDay = Array.isArray(u?.byDay) ? u.byDay : [];
+  const detailByProvider = Array.isArray(u?.byProvider) ? u.byProvider : [];
+  const detailByModel = Array.isArray(u?.byModel) ? u.byModel : [];
+  const detailByAgent = Array.isArray(u?.byAgent) ? u.byAgent : [];
+  const detailByDay = Array.isArray(u?.byDay) ? u.byDay : [];
 
   mk("By provider", ["Provider", "Calls", "Tokens", "Cost"],
-    byProvider.slice().sort(sortCost).map((p) => [p.provider, String(p.calls), fmtTok(p), fmtCost(p)]));
+    detailByProvider.slice().sort(sortCost).map((p) => [p.provider, String(p.calls), fmtTok(p), fmtCost(p)]));
   mk("By model", ["Provider", "Model", "Calls", "Tokens", "Cost"],
-    byModel.slice().sort(sortCost).map((m) => [m.provider, m.model, String(m.calls), fmtTok(m), fmtCost(m)]));
+    detailByModel.slice().sort(sortCost).map((m) => [m.provider, m.model, String(m.calls), fmtTok(m), fmtCost(m)]));
   mk("By agent", ["Agent", "Model", "Calls", "Tokens", "Cost"],
-    byAgent.slice().sort(sortCost).map((a) => [a.agentId, `${a.provider}/${a.model}`, String(a.calls), fmtTok(a), fmtCost(a)]));
+    detailByAgent.slice().sort(sortCost).map((a) => [a.agentId, `${a.provider}/${a.model}`, String(a.calls), fmtTok(a), fmtCost(a)]));
   mk("By day", ["Day", "Calls", "Tokens", "Cost"],
-    byDay.slice().sort((a, b) => String(a.day).localeCompare(String(b.day))).map((d) => [d.day, String(d.calls), fmtTok(d), fmtCost(d)]));
+    detailByDay.slice().sort((a, b) => String(a.day).localeCompare(String(b.day))).map((d) => [d.day, String(d.calls), fmtTok(d), fmtCost(d)]));
 }
 
 // ── Data / memory ──
@@ -2588,6 +2639,7 @@ export function handleSettingsHashNavigation(hash, isTraverse = false) {
 
   if (sectionId === "local-folders") renderLocalFolders();
   if (sectionId === "usage") renderUsage();
+  if (sectionId === "skills") mountSkillsSection(document.getElementById("skills"));
 
   section.scrollIntoView({
     behavior: isTraverse ? "auto" : "smooth",
@@ -2744,6 +2796,12 @@ $("#usage-detail-toggle").addEventListener("click", () => {
   const d = $("#usage-detail");
   d.hidden = !d.hidden;
   $("#usage-detail-toggle").textContent = d.hidden ? "Show detail" : "Hide detail";
+});
+// Usage range tabs (24h / 7d) — re-render the panel on switch.
+document.querySelectorAll(".usage-range").forEach((b) => {
+  b.addEventListener("click", () => {
+    if (b.dataset.range && b.dataset.range !== currentUsageRange) renderUsage(b.dataset.range);
+  });
 });
 await renderData();
 await renderMemoryExplorer();

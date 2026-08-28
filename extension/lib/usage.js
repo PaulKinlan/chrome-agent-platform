@@ -7,6 +7,69 @@
 // service-worker restarts WITHOUT the optional `storage` permission.
 import { usageRead, usageWrite, usageClear, usageRemoveRow } from "./usage-store.js";
 import { assertRunOwned } from "./run-fence.js";
+import { kvGet, kvSet } from "./kv.js";
+
+// ── Per-tool call counters (the Usage panel's tool-usage chart) ─────────────
+// Bounded per-day per-tool counts over the same 7-day horizon as the ledger.
+// Stored OUTSIDE the IndexedDB ledger (the ledger rows are validated token
+// rows; mixing schemas in the sole-authority store is how corruption bugs
+// start). Key: cap:usage:tools:v1 → { v: 1, days: { "YYYY-MM-DD": { tool: n } } }.
+export const TOOL_USAGE_KEY = "cap:usage:tools:v1";
+const TOOL_USAGE_DAYS = 7;
+const MAX_TOOL_NAMES_PER_DAY = 64;
+const MAX_TOOL_NAME_LEN = 128;
+let toolUsageMutex = Promise.resolve();
+
+function todayKey(now = new Date()) {
+  return now.toISOString().slice(0, 10);
+}
+
+function trimToolUsageDays(days) {
+  const keys = Object.keys(days).sort();
+  while (keys.length > TOOL_USAGE_DAYS) delete days[keys.shift()];
+  return days;
+}
+
+/** Count ONE tool invocation. Fire-and-forget safe: never throws to the caller
+ * of the tool path — a telemetry write must not fail a tool execution. */
+export async function recordToolCall(toolName, nowMs = Date.now()) {
+  const name = String(toolName ?? "").slice(0, MAX_TOOL_NAME_LEN);
+  if (!name) return;
+  const run = toolUsageMutex.then(async () => {
+    const store = await kvGet([TOOL_USAGE_KEY]);
+    const cur = store?.[TOOL_USAGE_KEY];
+    const days = cur && typeof cur === "object" && cur.days && typeof cur.days === "object" ? cur.days : {};
+    const day = todayKey(new Date(nowMs));
+    const today = days[day] && typeof days[day] === "object" ? days[day] : {};
+    if (!(name in today) && Object.keys(today).length >= MAX_TOOL_NAMES_PER_DAY) return; // bounded
+    today[name] = (Number(today[name]) || 0) + 1;
+    days[day] = today;
+    await kvSet({ [TOOL_USAGE_KEY]: { v: 1, days: trimToolUsageDays(days) } });
+  });
+  toolUsageMutex = run.then(() => {}, () => {});
+  return run;
+}
+
+/** Roll the per-day counters up to per-tool totals over the retention window. */
+export async function getToolUsage(nowMs = Date.now()) {
+  return await toolUsageMutex.then(() => {}, () => {}).then(async () => {
+    const store = await kvGet([TOOL_USAGE_KEY]);
+    const cur = store?.[TOOL_USAGE_KEY];
+    const days = cur && typeof cur === "object" && cur.days && typeof cur.days === "object" ? cur.days : {};
+    const perTool = {};
+    const cutoff = nowMs - TOOL_USAGE_DAYS * 24 * 60 * 60 * 1000;
+    for (const [day, tools] of Object.entries(days)) {
+      const dayMs = Date.parse(`${day}T00:00:00Z`);
+      if (!Number.isFinite(dayMs) || dayMs < cutoff) continue; // expired bucket
+      if (!tools || typeof tools !== "object") continue;
+      for (const [name, n] of Object.entries(tools)) {
+        perTool[name] ??= { tool: name, calls: 0 };
+        perTool[name].calls += Number(n) || 0;
+      }
+    }
+    return Object.values(perTool).sort((a, b) => b.calls - a.calls || a.tool.localeCompare(b.tool));
+  });
+}
 
 // A module mutex serializes the usage ledger read-modify-write. Concurrent
 // onUsage events (parallel tool calls in a single model step resolve via
@@ -150,6 +213,7 @@ export async function getUsage() {
     const mk = `${r.provider}/${r.model}`;
     byModel[mk] ??= {
       provider: r.provider,
+      totalTokens: 0,
       model: r.model,
       calls: 0,
       inputTokens: 0,
@@ -159,11 +223,13 @@ export async function getUsage() {
     byModel[mk].calls++;
     byModel[mk].inputTokens += r.inputTokens;
     byModel[mk].outputTokens += r.outputTokens;
+    byModel[mk].totalTokens += r.totalTokens;
     byModel[mk].estimatedCost += r.estimatedCost;
 
     // By provider (the provider-level breakdown).
     byProvider[r.provider] ??= {
       provider: r.provider,
+      totalTokens: 0,
       calls: 0,
       inputTokens: 0,
       outputTokens: 0,
@@ -172,11 +238,13 @@ export async function getUsage() {
     byProvider[r.provider].calls++;
     byProvider[r.provider].inputTokens += r.inputTokens;
     byProvider[r.provider].outputTokens += r.outputTokens;
+    byProvider[r.provider].totalTokens += r.totalTokens;
     byProvider[r.provider].estimatedCost += r.estimatedCost;
 
     // By agent (each agent's attributable usage + cost).
     byAgent[r.agentId] ??= {
       agentId: r.agentId,
+      totalTokens: 0,
       provider: r.provider,
       model: r.model,
       calls: 0,
@@ -187,6 +255,7 @@ export async function getUsage() {
     byAgent[r.agentId].calls++;
     byAgent[r.agentId].inputTokens += r.inputTokens;
     byAgent[r.agentId].outputTokens += r.outputTokens;
+    byAgent[r.agentId].totalTokens += r.totalTokens;
     byAgent[r.agentId].estimatedCost += r.estimatedCost;
 
     // By task (each task's attributable usage + cost, with its agent).
@@ -194,6 +263,7 @@ export async function getUsage() {
     byTask[tk] ??= {
       taskId: tk,
       agentId: r.agentId ?? "hub",
+      totalTokens: 0,
       provider: r.provider,
       model: r.model,
       calls: 0,
@@ -204,6 +274,7 @@ export async function getUsage() {
     byTask[tk].calls++;
     byTask[tk].inputTokens += r.inputTokens;
     byTask[tk].outputTokens += r.outputTokens;
+    byTask[tk].totalTokens += r.totalTokens;
     byTask[tk].estimatedCost += r.estimatedCost;
 
     // By day (the times/dates — a per-day breakdown).
@@ -234,11 +305,13 @@ export async function getUsage() {
     byDay: Object.values(byDay),
     rows,
     durability,
+    tools: await getToolUsage(),
   };
 }
 
 export async function clearUsage() {
   return await withUsageLock(async () => {
     await usageClear();
+    await kvSet({ [TOOL_USAGE_KEY]: { v: 1, days: {} } });
   });
 }

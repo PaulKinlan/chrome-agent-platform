@@ -83,20 +83,13 @@ Deno.test("attachAssetToComposer: the Reuse path emits the canonical artifact at
   assert(/dataURL:/ .test(body) && /content:/ .test(body) && /name:/ .test(body), "name/type/size/data/content retained");
 });
 
-Deno.test("ntp: open-recipes listener has EXACTLY two arguments (no stray dead callback)", async () => {
+Deno.test("ntp: the standalone Skills button is GONE (skills live in Settings now)", async () => {
   const src = await Deno.readTextFile("extension/ntp/ntp.js");
-  const match = src.match(/getElementById\("open-recipes"\)\?\.[\s\S]*?\.addEventListener\([\s\S]*?\);/);
-  assert(match, "open-recipes listener block missing");
-  const block = match[0];
-  // The third argument (an options object) must be absent — a function as the
-  // third argument is a dead callback that never fires.
-  const args = block.match(/addEventListener\(([\s\S]*?)\);/);
-  const openParens = (args?.[1] ?? "").split("").filter((c) => c === "(").length;
-  const closeParens = (args?.[1] ?? "").split("").filter((c) => c === ")").length;
-  const depth = openParens - closeParens;
-  // After the 2-arg listener, the closing parens must balance: depth 0 means
-  // exactly "click", handler → no third argument.
-  assert(depth === 0, `open-recipes listener arity unexpected: depth=${depth}`);
+  const html = await Deno.readTextFile("extension/ntp/ntp.html");
+  // No button, no listener, no standalone view route — a reintroduction fails here.
+  assert(!html.includes("open-recipes"), "open-recipes button must not exist in ntp.html");
+  assert(!src.includes("open-recipes"), "open-recipes listener must not exist in ntp.js");
+  assert(!src.includes("VIEW_ROUTE.SKILLS"), "the standalone SKILLS route must stay removed");
 });
 
 Deno.test("ntp: the cap:attach-artifact handler is ONE canonical attachment — no dead inline get/add/close/status", async () => {

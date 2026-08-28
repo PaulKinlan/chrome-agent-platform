@@ -115,3 +115,47 @@ Deno.test("master-skill: operating manual truthfully includes list_tools and the
   assert(MASTER_SKILL.includes("26 on-device bundled Wasm tools"), "MASTER_SKILL must mention 26 bundled Wasm tools");
   assert(!MASTER_SKILL.includes("there are no native WebAssembly tools"), "must NOT claim no Wasm tools");
 });
+
+Deno.test("master-skill: the manual's bundled-Wasm count is PINNED to the shipped inventory", async () => {
+  // The prompt's count literal must equal the REAL bundled inventory — when a
+  // bundled tool is added or removed, this test forces the prompt to follow.
+  const { BUNDLED_INVENTORY } = await import("../extension/lib/bundled-inventory-data.js");
+  const live = (Array.isArray(BUNDLED_INVENTORY.manifests)
+    ? BUNDLED_INVENTORY.manifests
+    : Object.values(BUNDLED_INVENTORY.manifests)).length;
+  assert(
+    MASTER_SKILL.includes(`${live} on-device bundled Wasm tools`),
+    `MASTER_SKILL must state the live bundled count (${live}) — update the manual when the inventory changes`,
+  );
+});
+
+Deno.test("master-skill: every cited tool name resolves to a real registry entry", async () => {
+  // Accuracy pin: the manual must never describe a tool that does not exist.
+  const { browserToolset } = await import("../extension/lib/browser-tools.js");
+  const browser = new Set(Object.keys(browserToolset(false)));
+  const bundled = new Set(
+    (await import("../extension/lib/bundled-inventory-data.js"))
+      .BUNDLED_INVENTORY.manifests.flatMap((x) => {
+        const raw = x.pkg.replace("cap.bundled.", "");
+        return [raw, raw.replace(/\./g, "_")];
+      }),
+  );
+  const management = new Set([
+    "create_agent", "update_agent", "delete_agent", "get_agent", "list_agents",
+    "disenroll_origin", "create_asset", "update_asset", "delete_asset",
+    "list_assets", "get_asset", "create_script", "update_script",
+    "delete_script", "list_scripts", "get_script", "run_script",
+    "schedule_task", "delegate_task", "memory_get", "memory_set",
+    "memory_list", "get_usage", "get_memory_overview", "search_tools",
+    "list_tools", "execute_tool", "read_page", "capture_screenshot",
+  ]);
+  const cited = [...MASTER_SKILL.matchAll(/\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b/g)]
+    .map((m) => m[1]);
+  const missing = [...new Set(cited)].filter(
+    (n) => !browser.has(n) && !bundled.has(n) && !management.has(n),
+  );
+  assert(
+    missing.length === 0,
+    `manual cites non-existent tools: ${missing.join(", ")}`,
+  );
+});

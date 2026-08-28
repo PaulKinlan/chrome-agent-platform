@@ -55,7 +55,7 @@ Deno.test("usage panel: the detail-toggle listener is wired EXACTLY once, outsid
   const matches = src.match(/#usage-detail-toggle"\)\.addEventListener/g) ?? [];
   assertEquals(matches.length, 1, "usage-detail-toggle must be wired exactly once");
   // The single wiring must be OUTSIDE the renderUsage body (which is polled).
-  const fn = src.match(/async function renderUsage\(\) \{[\s\S]*?\n\}/);
+  const fn = src.match(/async function renderUsage\([^{]*\{[\s\S]*?\n\}/);
   assert(fn, "renderUsage must exist");
   assert(!fn[0].includes('#usage-detail-toggle").addEventListener'), "the toggle listener must NOT be inside renderUsage");
 });

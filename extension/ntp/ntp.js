@@ -572,7 +572,7 @@ async function renderNamedAgents() {
   const el = document.getElementById("named-agents");
   // Unified agents list (CAP-FB-20260826-BACKGROUND-AGENTS-UNIFY-01): the hub's
   // Agents box shows named AND background agents together — a background agent
-  // is marked "Runs in the background" and keeps its enable/disable switch.
+  // is marked "Runs in the background" and keeps its Delete control.
   const [namedRes, bgRes] = await Promise.all([
     send("named-agent.list").catch(() => ({ agents: [] })),
     send("background-agent.list").catch(() => ({ agents: [] })),
@@ -603,31 +603,54 @@ async function renderNamedAgents() {
         row.setAttribute("name", a.name || a.id);
         row.setAttribute("description", `Runs in the background${a.description ? " · " + a.description : ""}`);
         row.setAttribute("icon", "");
-        // item 61: a background agent is an INDEPENDENT agent — a chevron opens
-        // its view (history + chat) AND a switch enables/disables it.
-        row.setAttribute("action", "open-toggle");
-        row.setAttribute("enabled", "");
+        // A background agent is an INDEPENDENT agent — a chevron opens its view
+        // (history + chat) and a destructive DELETE removes it (an enable/
+        // disable toggle was the wrong primitive: an enabled background agent
+        // exists and runs; the owner's control is delete, and per-agent
+        // schedule pausing lands separately as an alarm control).
+        row.setAttribute("action", "open-delete");
         if (a.schedule?.periodInMinutes) {
           row.setAttribute("last-run", `every ${a.schedule.periodInMinutes} min`);
         }
         row.addEventListener("open", () => openBackgroundAgentChat(a.id, a.name));
-        row.addEventListener("toggle", async (ev) => {
-          const enabled = ev.detail?.enabled;
-          // ENABLE time (a real user gesture): request the OPTIONAL notifications
-          // permission so scheduled completions can surface as notifications.
-          if (enabled) {
-            try {
-              await chrome.permissions?.request?.({ permissions: ["notifications"] });
-            } catch { /* not grantable here — the run-time path skips the notification */ }
-          }
-          const r = await send("background-agent.set", { id: a.id, enabled })
-            .catch(() => ({ ok: false, error: "request failed" }));
-          if (r?.ok) {
-            setStatus(`${a.name} ${enabled ? "enabled" : "disabled"}`);
+        row.addEventListener("delete", async () => {
+          const name = a.name || a.id;
+          const confirmed = await confirmActionDialog({
+            title: `Delete “${name}”?`,
+            body: `Are you sure you want to delete ${name}?\n\nThis will cancel its scheduled task and remove the recurring alarm.`,
+            confirmLabel: "Delete agent",
+            destructive: true,
+          });
+          if (!confirmed) return;
+          // Background agents schedule deterministically as `recipe:<id>` — the
+          // enabled state DERIVES from the scheduled-task store, so the cancel
+          // name must be that scheduled name, not the raw recipe id. DELETION
+          // goes through recipe.delete: it removes the custom agent record AND
+          // tears the schedule down NON-BLOCKING (the instant-delete contract —
+          // a RUNNING task's 5s termination dance must never block the UI;
+          // reconciliation reaps the inert payload). A built-in copy has no
+          // custom record — recipe.delete still cancels its schedule, which is
+          // what the row's existence derives from.
+          const rows = [...document.querySelectorAll("#named-agents capability-row")];
+          const removedIdx = rows.indexOf(row);
+          const r = await send("recipe.delete", { id: a.id })
+            .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+          if (r?.ok === true) {
+            setStatus(`Deleted ${name}.`, true);
           } else {
-            setStatus(`couldn't ${enabled ? "enable" : "disable"} ${a.name}: ${r?.error ?? "unknown"}`, false);
+            setStatus(`Could not delete ${name}: ${r?.error ?? "failed"}.`, false);
           }
           await renderNamedAgents();
+          // Focus successor (the re-render destroyed the focused Delete
+          // button): the row that TOOK the deleted row's index — else the last
+          // row — else the Agents container itself, so keyboard flow survives.
+          const after = [...document.querySelectorAll("#named-agents capability-row")];
+          const target = after[Math.min(removedIdx, after.length - 1)] ?? null;
+          const focusEl = target?.shadowRoot?.querySelector("button") ?? el;
+          if (focusEl === el && !el.hasAttribute("tabindex")) {
+            el.setAttribute("tabindex", "-1");
+          }
+          focusEl?.focus?.({ preventScroll: true });
         });
         el.append(row);
       }
@@ -2161,10 +2184,18 @@ deleteAgentBtn?.addEventListener("click", async () => {
   } else if (kind === "site" || kind === "origin") {
     out = await send("agent.delete", { origin: id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
   } else if (kind === "background") {
-    out = await send("task.cancel", { name: id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    // Background agents schedule deterministically as `recipe:<id>` (the
+    // enabled state derives from the task store). The old code passed the RAW
+    // recipe id, so task.cancel hit "no such task" and silently deleted
+    // NOTHING while the UI claimed success — the dead NTP delete button.
+    // DELETION now routes through recipe.delete (removes the custom record +
+    // tears the schedule down NON-BLOCKING — the instant-delete contract; a
+    // RUNNING task's 5s termination dance must never block this dialog), and
+    // success is asserted EXPLICITLY (ok === true), not "anything but false".
+    out = await send("recipe.delete", { id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
   }
 
-  if (out?.ok !== false) {
+  if (out?.ok === true) {
     setStatus(`Deleted ${agentName}.`, true);
     if (typeof window !== "undefined" && window.history?.pushState) {
       window.history.pushState(null, "", "#");
@@ -2513,11 +2544,17 @@ function embeddedViewRoute(path) {
   const routePath = String(path ?? "").split(/[?#]/, 1)[0];
   if (routePath === "options/options.html") return VIEW_ROUTE.SETTINGS;
   if (routePath === "directory/directory.html") return VIEW_ROUTE.DIRECTORY;
-  if (routePath === "recipes/index.html") return VIEW_ROUTE.SKILLS;
   return VIEW_ROUTE.ARTIFACTS;
 }
 
 function openView(path, title, trigger) {
+  // Skills moved INTO Settings (owner directive): any residual skills deep
+  // link (an old #view=recipes/index.html history entry or a stale caller)
+  // lands on Settings' Skills section — a redirect, never a dead end.
+  if (String(path ?? "").split(/[?#]/, 1)[0] === "recipes/index.html") {
+    path = "options/options.html#skills";
+    title = "Settings";
+  }
   const targetRoute = embeddedViewRoute(path);
   // Boot the embedded document before the route update so the destination
   // CAP-FB-20260826-BACK-STACK-02: a plain `viewFrame.src = url` is a
@@ -2701,10 +2738,6 @@ document.getElementById("open-settings")?.addEventListener(
 document.getElementById("open-directory")?.addEventListener(
   "click",
   (event) => openView("directory/directory.html", "Directory", event.currentTarget),
-);
-document.getElementById("open-recipes")?.addEventListener(
-  "click",
-  (event) => openView("recipes/index.html", "Skills", event.currentTarget),
 );
 const assetQuickDrawer = document.getElementById("asset-quick-drawer");
 document.getElementById("open-assets")?.addEventListener(

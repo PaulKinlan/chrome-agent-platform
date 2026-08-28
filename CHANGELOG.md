@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.340] — 2026-08-28
+- Fixed: deleting an agent (including background agents) now actually deletes it — every surface checks the result honestly, a running task is torn down in the background without freezing the UI, focus lands somewhere sane afterwards, and settings no longer claims success when nothing happened
+
+## [0.2.339] — 2026-08-28
+- New in Settings: the Providers panel is now a side-tabbed interface with the default provider badged on its tab; Skills live as a full section inside Settings (the old sidebar button is gone — old links redirect); the Usage panel has real graphs (daily token bars, model share, top tools, estimated cost); and the hub agent's instructions now describe its full browser-control surface properly
+
+## [0.2.338] — 2026-08-28
+- test(evidence): skills-in-settings browser evidence — seed via the shared OPFS masterMemory (localhost fetch refused by design), 9 browser checks + 4 screenshots
+
+## [0.2.337] — 2026-08-28
+- Traced why opening a task is slow and wrote up the fix. Measured: opening a task costs about a millisecond per logged step, so a well-used task takes seconds. Worse, WRITING those steps gets slower the longer a task runs — a thousand steps takes three minutes — because every step rewrites the whole index. The redesign is written down and waiting for review; nothing has changed yet
+
 ## [0.2.336] — 2026-08-28
 - More audit fixes: accessibility violations are cleared on every surface (proper landmarks, headings, keyboard-safe task rows), a failed task run is now kept as a retryable row instead of vanishing, the artifact viewer's copy button only appears when there's something to copy, panels use the space better at wide sizes, and the side panel gets real first-run guidance
 

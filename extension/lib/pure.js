@@ -775,6 +775,7 @@ export const SETTINGS_SECTIONS = Object.freeze([
   "providers",
   "local-folders",
   "tool-library",
+  "skills",
   "agents",
   "background",
   "appearance",
@@ -797,7 +798,7 @@ export function normalizeSettingsSectionId(hash) {
 }
 
 export const OPTIONS_PRODUCT_HASHES = new Set([
-  "#providers", "#local-folders", "#tool-library", "#agents", "#background",
+  "#providers", "#local-folders", "#tool-library", "#skills", "#agents", "#background",
   "#background-agents",
   "#appearance", "#browser", "#permissions", "#approvals", "#hooks",
   "#prompts", "#usage", "#data", "#about",
