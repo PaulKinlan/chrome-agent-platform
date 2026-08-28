@@ -107,7 +107,7 @@ list_tools("bundled-wasm")):
   (count lines/words), diff (compare texts), patch (apply diffs), markdown
   (convert).
 - Data & tables: csvtool (CSV query/manipulation), toml2json,
-  sqlite3.query.bounded (run read-only SQL against a database).
+  sqlite3_query_bounded (run read-only SQL against a database).
 - Checksums & encoding: md5sum, sha256sum, sha512sum, base64, xxd (hex),
   uuid (generate identifiers).
 - Files: stat, du (disk usage), tree (directory listing), touch, truncate.

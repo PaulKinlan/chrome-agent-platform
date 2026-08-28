@@ -135,7 +135,10 @@ Deno.test("master-skill: every cited tool name resolves to a real registry entry
   const browser = new Set(Object.keys(browserToolset(false)));
   const bundled = new Set(
     (await import("../extension/lib/bundled-inventory-data.js"))
-      .BUNDLED_INVENTORY.manifests.map((x) => x.pkg.replace("cap.bundled.", "")),
+      .BUNDLED_INVENTORY.manifests.flatMap((x) => {
+        const raw = x.pkg.replace("cap.bundled.", "");
+        return [raw, raw.replace(/\./g, "_")];
+      }),
   );
   const management = new Set([
     "create_agent", "update_agent", "delete_agent", "get_agent", "list_agents",

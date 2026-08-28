@@ -173,7 +173,7 @@ Deno.test("hub prompt: capability breadth — the chrome.* areas, the wasm suite
   assert(MASTER_SKILL.includes("declarativeNetRequest"),
     "the manual must name the declarativeNetRequest capability");
   // (c) bundled wasm tools are named + their discovery is strengthened.
-  for (const t of ["grep", "csvtool", "sqlite3.query.bounded", "toml2json", "xxd", "uuid", "gzip"]) {
+  for (const t of ["grep", "csvtool", "sqlite3_query_bounded", "toml2json", "xxd", "uuid", "gzip"]) {
     assert(MASTER_SKILL.includes(t), `the manual must name the bundled wasm tool "${t}"`);
   }
   assertStringIncludes(MASTER_SKILL, 'list_tools("bundled-wasm")');
