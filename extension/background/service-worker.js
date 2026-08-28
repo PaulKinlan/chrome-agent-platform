@@ -4021,11 +4021,18 @@ const handlers = mergeRouteMaps(
         continue;
       }
       if (!origin || !/^https?:/.test(origin)) continue;
+      // Item-44 parity (owner directive): a page with ZERO registered WebMCP
+      // tools must not appear as an addable Site Agent. The per-origin tool
+      // count comes from the SAME registry the directory lists (listTools) —
+      // a page only appears when it actually exposes tools.
+      const registeredTools = await listTools(origin).catch(() => []);
+      if (!Array.isArray(registeredTools) || registeredTools.length === 0) continue;
       out.push({
         id: t.id,
         title: String(t.title ?? "").slice(0, 200),
         url: String(t.url).slice(0, 500),
         origin,
+        toolCount: registeredTools.length,
         active: t.active === true,
         lastAccessed: typeof t.lastAccessed === "number" ? t.lastAccessed : 0,
       });
@@ -4830,6 +4837,29 @@ const handlers = mergeRouteMaps(
     }
     const executionId = String(m?.executionId ?? "");
     return { ok: true, executionId, logs: await durableRuns.listLogs(executionId) };
+  },
+  async "schedule.cancelOrphans"() {
+    // ORPHANED-ALARM CLEANUP (owner P0 2026-08-28): a deleted agent's schedule
+    // (recipe:<slug>) can survive as a live alarm that keeps firing failed runs
+    // and wasting tokens. An orphan is a recipe:<slug> scheduled task whose
+    // slug is neither a built-in/background recipe nor a custom recipe — the
+    // agent is gone, the alarm must go too. Cancels every orphan and reports
+    // exactly what was cancelled.
+    const tasks = await listScheduledTasks().catch(() => []);
+    const custom = await getCustomRecipes().catch(() => []);
+    const known = new Set([
+      ...backgroundRecipes().map((r) => `recipe:${r.id}`),
+      ...(Array.isArray(custom) ? custom : []).map((r) => `recipe:${r.id}`),
+    ]);
+    const cancelled = [];
+    for (const t of Array.isArray(tasks) ? tasks : []) {
+      if (!t?.name || !t.name.startsWith("recipe:")) continue;
+      if (known.has(t.name)) continue;
+      const r = await cancelScheduledTask(t.name).catch(() => null);
+      if (r?.ok !== false) cancelled.push(t.name);
+    }
+    if (cancelled.length) broadcastRegistryChanged();
+    return { ok: true, cancelled, count: cancelled.length };
   },
   async "task.list"() {
     // Owner-visible scheduled-task list (active + quarantined) so a quarantined
