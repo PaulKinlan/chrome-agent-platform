@@ -33,6 +33,39 @@ export const MAX_ROLE_LEN = 32000;
 export const MAX_SKILLS = 128;
 const MAX_CORE_ASSETS = 8;
 const MAX_CORE_ASSET_BYTES = 131072; // 128 KiB per core asset
+const MAX_PROFILE_GRANTS = 8;
+
+const VALID_PROFILE_GRANTS = new Set([
+  "profile:basic",
+  "profile:work_history",
+  "profile:education",
+  "profile:disclosures",
+  "profile:*",
+  "*",
+  "basic",
+  "work_history",
+  "education",
+  "disclosures",
+]);
+
+/** Normalize and bound an agent's explicit profile grants. */
+export function normalizeProfileGrants(grants) {
+  if (!Array.isArray(grants)) return [];
+  const out = [];
+  for (const g of grants) {
+    if (typeof g !== "string") continue;
+    const clean = g.trim().toLowerCase();
+    if (!VALID_PROFILE_GRANTS.has(clean)) continue;
+    const canonical = clean.startsWith("profile:") || clean === "*"
+      ? clean
+      : `profile:${clean}`;
+    if (!out.includes(canonical)) {
+      out.push(canonical);
+      if (out.length >= MAX_PROFILE_GRANTS) break;
+    }
+  }
+  return out;
+}
 
 /** Normalize the core assets (files the owner attaches as the agent's core
  * context — a text file's content, or an image's data URL). Bounded so a
@@ -161,7 +194,7 @@ export async function getNamedAgentProvider(id) {
  * sandbox (its `agents.md` operating instructions).
  */
 export async function createNamedAgent(
-  { id, name, role = "", avatar = null, skills = [], coreAssets = [], agentsMd = null, provider = null },
+  { id, name, role = "", avatar = null, skills = [], coreAssets = [], profileGrants = [], agentsMd = null, provider = null },
   { gateOnReplace = null } = {},
 ) {
   const cleanName = String(name ?? "").trim();
@@ -187,6 +220,7 @@ export async function createNamedAgent(
       avatar: avatar ? String(avatar) : (existing?.avatar ?? null),
       skills: skillList,
       coreAssets: assetList,
+      profileGrants: normalizeProfileGrants(profileGrants ?? existing?.profileGrants),
       provider: normalizeAgentProvider(provider) ?? (existing?.provider ?? null),
       // Non-reusable row identity + monotonic per-row revision let an owner
       // approval bind the exact current agent without hashing large avatars or
@@ -239,6 +273,7 @@ export async function updateNamedAgent(id, patch = {}, { gateBeforeMutation = nu
     if (patch.avatar !== undefined) next.avatar = patch.avatar ? String(patch.avatar) : null;
     if (patch.skills !== undefined) next.skills = Array.isArray(patch.skills) ? patch.skills.slice(0, MAX_SKILLS) : [];
     if (patch.coreAssets !== undefined) next.coreAssets = normalizeCoreAssets(patch.coreAssets);
+    if (patch.profileGrants !== undefined) next.profileGrants = normalizeProfileGrants(patch.profileGrants);
     if (patch.provider !== undefined) {
       // `null` clears the override (inherit the global); a complete config sets it.
       next.provider = normalizeAgentProvider(patch.provider);

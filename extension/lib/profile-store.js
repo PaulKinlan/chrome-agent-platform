@@ -8,9 +8,9 @@
 //
 // Security & access control principles (Constitution §2 + §4):
 //   - Schema-validated and bounded (exact UTF-8 byte bounds and array lengths).
-//   - Per-agent readable with explicit grants from the authoritative agent registry.
+//   - Per-agent readable with explicit grants from the authoritative agent registry (getNamedAgent).
 //   - Reserved namespace: profile:* keys are reserved and protected from raw model memory tools.
-//   - Write-audited with actual change diffs (mutations fail closed if auditing fails).
+//   - Write-audited with actual change diffs (mutations fail closed and roll back if auditing fails).
 //   - Atomic bulk updates: pre-validated before mutation with rollback compensation.
 
 import { masterMemory } from "./memory.js";
@@ -131,10 +131,16 @@ export function validateBasicProfile(data) {
     if (Array.isArray(data.links)) {
       for (let i = 0; i < data.links.length; i++) {
         const item = data.links[i];
-        if (!item || typeof item !== "object" || Array.isArray(item)) {
-          return { ok: false, error: `links at index ${i} must be an object` };
+        if (!isPlainObject(item)) {
+          return { ok: false, error: `links at index ${i} must be a plain object` };
         }
-        if (typeof item.url !== "string") {
+        if (item.label !== undefined && item.label !== null && typeof item.label !== "string") {
+          return { ok: false, error: `link label at index ${i} must be a string` };
+        }
+        if (item.name !== undefined && item.name !== null && typeof item.name !== "string") {
+          return { ok: false, error: `link name at index ${i} must be a string` };
+        }
+        if (item.url === undefined || item.url === null || typeof item.url !== "string") {
           return { ok: false, error: `link at index ${i} requires a url string` };
         }
         const label = String(item.label ?? item.name ?? `link_${i}`).trim().slice(0, 64);
@@ -452,22 +458,20 @@ async function readTrustedMemory(mem, key) {
 
 /** Internal helper to record an audit log entry. Fails closed if audit write fails. */
 async function recordAudit(mem, { action, section, actor = "owner", fields = [] }) {
-  return await withAuditLock(async () => {
-    const existing = await readTrustedMemory(mem, PROFILE_AUDIT_KEY);
-    const log = Array.isArray(existing) ? existing : [];
-    const entry = {
-      id: crypto.randomUUID(),
-      at: Date.now(),
-      action, // "create" | "update" | "delete" | "clear"
-      section: section ?? null,
-      actor: String(actor || "owner").slice(0, 64),
-      fields: Array.isArray(fields) ? fields.slice(0, 32) : [],
-    };
-    log.unshift(entry);
-    const boundedLog = log.slice(0, MAX_AUDIT_LOG_ENTRIES);
-    await mem.setTrusted(PROFILE_AUDIT_KEY, boundedLog);
-    return entry;
-  });
+  const existing = await readTrustedMemory(mem, PROFILE_AUDIT_KEY);
+  const log = Array.isArray(existing) ? existing : [];
+  const entry = {
+    id: crypto.randomUUID(),
+    at: Date.now(),
+    action, // "create" | "update" | "delete" | "clear"
+    section: section ?? null,
+    actor: String(actor || "owner").slice(0, 64),
+    fields: Array.isArray(fields) ? fields.slice(0, 32) : [],
+  };
+  log.unshift(entry);
+  const boundedLog = log.slice(0, MAX_AUDIT_LOG_ENTRIES);
+  await mem.setTrusted(PROFILE_AUDIT_KEY, boundedLog);
+  return entry;
 }
 
 /** Read the profile mutation audit log. */
@@ -478,22 +482,11 @@ export async function getProfileAuditLog(options = {}) {
 }
 
 /**
- * Check if an agent record or explicit grant list has permission for a section.
- * Grants resolve only from an authenticated/trusted agent record or explicit grants array.
- * Untrusted caller-sentinel strings or mock prototype objects are rejected.
+ * Check if a grant list contains explicit permission for a section.
  */
-export function hasProfileGrant(agentOrGrants, sectionKey) {
+export function hasProfileGrant(grants, sectionKey) {
   const normSection = normalizeSectionKey(sectionKey);
-  if (!normSection) return false;
-
-  let grants = null;
-  if (Array.isArray(agentOrGrants)) {
-    grants = agentOrGrants;
-  } else if (isPlainObject(agentOrGrants) && Object.hasOwn(agentOrGrants, "profileGrants") && Array.isArray(agentOrGrants.profileGrants)) {
-    grants = agentOrGrants.profileGrants;
-  }
-
-  if (!Array.isArray(grants)) return false;
+  if (!normSection || !Array.isArray(grants)) return false;
 
   for (const g of grants) {
     if (typeof g !== "string") continue;
@@ -505,7 +498,7 @@ export function hasProfileGrant(agentOrGrants, sectionKey) {
   return false;
 }
 
-/** Read a profile section directly (internal/owner access with isTrustedOwner check). */
+/** Read a profile section directly (unrestricted / owner access). */
 export async function getProfileSection(sectionKey, options = {}) {
   const normSection = normalizeSectionKey(sectionKey);
   if (!normSection) {
@@ -517,7 +510,7 @@ export async function getProfileSection(sectionKey, options = {}) {
   return { ok: true, section: normSection, data: data ?? null };
 }
 
-/** Write and audit a profile section. */
+/** Write and audit a profile section. Serialized under audit lock with rollback on audit failure. */
 export async function setProfileSection(sectionKey, data, options = {}) {
   const normSection = normalizeSectionKey(sectionKey);
   if (!normSection) {
@@ -537,35 +530,45 @@ export async function setProfileSection(sectionKey, data, options = {}) {
   }
 
   const mem = options.memory ?? masterMemory();
-  const previous = await readTrustedMemory(mem, normSection);
-  const action = previous ? "update" : "create";
-  const diffFields = computeDiff(previous, validation.data);
 
-  // Write through trusted subsystem path
-  await mem.setTrusted(normSection, validation.data);
+  return await withAuditLock(async () => {
+    const previous = await readTrustedMemory(mem, normSection);
+    const action = previous ? "update" : "create";
+    const diffFields = computeDiff(previous, validation.data);
 
-  // Audit logging: fail the mutation closed if audit log cannot be committed
-  try {
-    await recordAudit(mem, {
-      action,
-      section: normSection,
-      actor: options.actor ?? "owner",
-      fields: diffFields,
-    });
-  } catch (e) {
-    // Revert write on audit failure
-    if (previous) {
-      await mem.setTrusted(normSection, previous).catch(() => {});
-    } else {
-      await mem.delete(normSection).catch(() => {});
+    // Commit section write
+    await mem.setTrusted(normSection, validation.data);
+
+    // Audit logging: fail the mutation closed if audit log cannot be committed
+    try {
+      await recordAudit(mem, {
+        action,
+        section: normSection,
+        actor: options.actor ?? "owner",
+        fields: diffFields,
+      });
+    } catch (auditErr) {
+      // Revert write on audit failure
+      try {
+        if (previous !== null && previous !== undefined) {
+          await mem.setTrusted(normSection, previous);
+        } else {
+          await mem.delete(normSection);
+        }
+      } catch (rollbackErr) {
+        return {
+          ok: false,
+          error: `audit write failed: ${auditErr?.message ?? String(auditErr)}; rollback failed: ${rollbackErr?.message ?? String(rollbackErr)}`,
+        };
+      }
+      return { ok: false, error: `audit write failed: ${auditErr?.message ?? String(auditErr)}` };
     }
-    return { ok: false, error: `audit write failed: ${e?.message ?? String(e)}` };
-  }
 
-  return { ok: true, section: normSection, data: validation.data };
+    return { ok: true, section: normSection, data: validation.data };
+  });
 }
 
-/** Delete and audit a profile section. */
+/** Delete and audit a profile section. Serialized under audit lock with rollback on audit failure. */
 export async function deleteProfileSection(sectionKey, options = {}) {
   const normSection = normalizeSectionKey(sectionKey);
   if (!normSection) {
@@ -573,63 +576,64 @@ export async function deleteProfileSection(sectionKey, options = {}) {
   }
 
   const mem = options.memory ?? masterMemory();
-  const existing = await readTrustedMemory(mem, normSection);
-  if (existing !== null && existing !== undefined) {
-    await mem.delete(normSection);
-    await recordAudit(mem, {
-      action: "delete",
-      section: normSection,
-      actor: options.actor ?? "owner",
-      fields: ["deleted"],
-    });
-  }
 
-  return { ok: true, section: normSection };
+  return await withAuditLock(async () => {
+    const existing = await readTrustedMemory(mem, normSection);
+    if (existing !== null && existing !== undefined) {
+      await mem.delete(normSection);
+      try {
+        await recordAudit(mem, {
+          action: "delete",
+          section: normSection,
+          actor: options.actor ?? "owner",
+          fields: ["deleted"],
+        });
+      } catch (auditErr) {
+        // Restore on audit failure
+        try {
+          await mem.setTrusted(normSection, existing);
+        } catch (rollbackErr) {
+          return {
+            ok: false,
+            error: `audit write failed: ${auditErr?.message ?? String(auditErr)}; rollback failed: ${rollbackErr?.message ?? String(rollbackErr)}`,
+          };
+        }
+        return { ok: false, error: `audit write failed: ${auditErr?.message ?? String(auditErr)}` };
+      }
+    }
+
+    return { ok: true, section: normSection };
+  });
 }
 
 /**
  * Read a profile section scoped to an agent's explicit grants.
  * Identity is authenticated against the authoritative agent registry (getNamedAgent).
- * Fails closed if the agent is unknown, lacks grants, or attempts caller-sentinel bypasses.
+ * Fails closed if the agent slug is missing, unknown, or lacks explicit grants.
  */
-export async function readAgentProfileSection(agentSlugOrRecord, sectionKey, options = {}) {
+export async function readAgentProfileSection(agentSlug, sectionKey, options = {}) {
   const normSection = normalizeSectionKey(sectionKey);
   if (!normSection) {
     return { ok: false, error: `invalid profile section key: ${sectionKey}` };
   }
 
-  // Trusted owner bypass only if explicit isTrustedOwner flag is passed
-  if (options.isTrustedOwner === true) {
-    return await getProfileSection(normSection, options);
+  if (typeof agentSlug !== "string" || !agentSlug.trim()) {
+    return { ok: false, error: "readAgentProfileSection requires an agent slug string" };
   }
 
-  // Resolve agent record from trusted registry
-  let agentRecord = null;
-  let slug = null;
-
-  if (typeof agentSlugOrRecord === "string" && agentSlugOrRecord.trim()) {
-    slug = agentSlugOrRecord.trim();
-    agentRecord = typeof options.getAgentRecord === "function"
-      ? await options.getAgentRecord(slug)
-      : await getNamedAgent(slug);
-  } else if (isPlainObject(agentSlugOrRecord) && typeof agentSlugOrRecord.id === "string") {
-    slug = agentSlugOrRecord.id.trim();
-    agentRecord = typeof options.getAgentRecord === "function"
-      ? await options.getAgentRecord(slug)
-      : await getNamedAgent(slug);
-  }
-
-  if (!agentRecord) {
+  const slug = agentSlug.trim();
+  const agent = await getNamedAgent(slug);
+  if (!agent) {
     return {
       ok: false,
-      error: `unauthorized: agent "${slug || "unknown"}" not found in trusted registry`,
+      error: `unauthorized: agent "${slug}" not found in trusted registry`,
     };
   }
 
-  if (!hasProfileGrant(agentRecord, normSection)) {
+  if (!hasProfileGrant(agent.profileGrants, normSection)) {
     return {
       ok: false,
-      error: `unauthorized: agent "${agentRecord.name || slug}" lacks explicit grant for ${normSection}`,
+      error: `unauthorized: agent "${agent.name || slug}" lacks explicit grant for ${normSection}`,
     };
   }
 
@@ -639,38 +643,25 @@ export async function readAgentProfileSection(agentSlugOrRecord, sectionKey, opt
 }
 
 /** Read all profile sections granted to an agent in a single call. */
-export async function readAgentProfile(agentSlugOrRecord, options = {}) {
-  let agentRecord = null;
-  let slug = null;
-
-  if (options.isTrustedOwner === true) {
-    return await getWholeProfile(options);
+export async function readAgentProfile(agentSlug, options = {}) {
+  if (typeof agentSlug !== "string" || !agentSlug.trim()) {
+    return { ok: false, error: "readAgentProfile requires an agent slug string" };
   }
 
-  if (typeof agentSlugOrRecord === "string" && agentSlugOrRecord.trim()) {
-    slug = agentSlugOrRecord.trim();
-    agentRecord = typeof options.getAgentRecord === "function"
-      ? await options.getAgentRecord(slug)
-      : await getNamedAgent(slug);
-  } else if (isPlainObject(agentSlugOrRecord) && typeof agentSlugOrRecord.id === "string") {
-    slug = agentSlugOrRecord.id.trim();
-    agentRecord = typeof options.getAgentRecord === "function"
-      ? await options.getAgentRecord(slug)
-      : await getNamedAgent(slug);
-  }
-
-  if (!agentRecord) {
+  const slug = agentSlug.trim();
+  const agent = await getNamedAgent(slug);
+  if (!agent) {
     return {
       ok: false,
-      error: `unauthorized: agent "${slug || "unknown"}" not found in trusted registry`,
+      error: `unauthorized: agent "${slug}" not found in trusted registry`,
     };
   }
 
-  const readableSections = PROFILE_SECTIONS.filter((sec) => hasProfileGrant(agentRecord, sec));
+  const readableSections = PROFILE_SECTIONS.filter((sec) => hasProfileGrant(agent.profileGrants, sec));
   if (readableSections.length === 0) {
     return {
       ok: false,
-      error: `unauthorized: agent "${agentRecord.name || slug}" has no profile grants`,
+      error: `unauthorized: agent "${agent.name || slug}" has no profile grants`,
     };
   }
 
@@ -706,7 +697,7 @@ export async function getWholeProfile(options = {}) {
 /**
  * Set multiple profile sections in bulk.
  * Pre-validates ALL sections upfront before committing any writes.
- * If any section fails validation or writing, fails closed without leaving partial dirty writes.
+ * If any section fails validation or writing, fails closed and rolls back previously committed writes.
  */
 export async function setWholeProfile(profileObject, options = {}) {
   if (!isPlainObject(profileObject)) {
@@ -747,49 +738,84 @@ export async function setWholeProfile(profileObject, options = {}) {
     snapshots.set(section, prev);
   }
 
-  // Commit writes sequentially
-  for (const { section, data } of validatedSections) {
-    const writeRes = await setProfileSection(section, data, options);
-    if (!writeRes.ok) {
-      // Rollback committed sections
-      for (const rolled of committed) {
-        const prev = snapshots.get(rolled);
-        if (prev !== null && prev !== undefined) {
-          await mem.setTrusted(rolled, prev).catch(() => {});
-        } else {
-          await mem.delete(rolled).catch(() => {});
-        }
+  // Commit writes sequentially with catch and rollback
+  try {
+    for (const { section, data } of validatedSections) {
+      const writeRes = await setProfileSection(section, data, options);
+      if (!writeRes?.ok) {
+        throw new Error(writeRes?.error ?? `write failed at ${section}`);
       }
-      return { ok: false, error: `bulk commit failed at ${section}: ${writeRes.error}` };
+      committed.push(section);
     }
-    committed.push(section);
+  } catch (err) {
+    // Rollback committed sections
+    const rollbackErrors = [];
+    for (const rolled of committed) {
+      const prev = snapshots.get(rolled);
+      try {
+        if (prev !== null && prev !== undefined) {
+          await mem.setTrusted(rolled, prev);
+        } else {
+          await mem.delete(rolled);
+        }
+      } catch (rbErr) {
+        rollbackErrors.push(`rollback ${rolled}: ${rbErr?.message ?? String(rbErr)}`);
+      }
+    }
+
+    const baseMsg = `bulk commit failed: ${err?.message ?? String(err)}`;
+    if (rollbackErrors.length > 0) {
+      return { ok: false, error: `${baseMsg}; compensation errors: ${rollbackErrors.join("; ")}` };
+    }
+    return { ok: false, error: baseMsg };
   }
 
   return { ok: true, writtenSections: committed };
 }
 
-/** Clear all profile sections and record audit log. */
+/** Clear all profile sections and record audit log with rollback compensation. */
 export async function clearProfile(options = {}) {
   const mem = options.memory ?? masterMemory();
-  const errors = [];
-  for (const sec of PROFILE_SECTIONS) {
-    try {
-      await mem.delete(sec);
-    } catch (e) {
-      errors.push(`delete ${sec}: ${e?.message ?? String(e)}`);
+
+  return await withAuditLock(async () => {
+    // Snapshot all sections before deleting
+    const snapshots = new Map();
+    for (const sec of PROFILE_SECTIONS) {
+      snapshots.set(sec, await readTrustedMemory(mem, sec));
     }
-  }
 
-  if (errors.length > 0) {
-    return { ok: false, error: `clearProfile failed: ${errors.join(", ")}` };
-  }
+    const deleted = [];
+    try {
+      for (const sec of PROFILE_SECTIONS) {
+        await mem.delete(sec);
+        deleted.push(sec);
+      }
 
-  await recordAudit(mem, {
-    action: "clear",
-    section: null,
-    actor: options.actor ?? "owner",
-    fields: [...PROFILE_SECTIONS],
+      await recordAudit(mem, {
+        action: "clear",
+        section: null,
+        actor: options.actor ?? "owner",
+        fields: [...PROFILE_SECTIONS],
+      });
+    } catch (err) {
+      // Roll back deleted sections on any deletion or audit failure
+      const restoreErrors = [];
+      for (const [sec, prev] of snapshots.entries()) {
+        if (prev !== null && prev !== undefined) {
+          try {
+            await mem.setTrusted(sec, prev);
+          } catch (rErr) {
+            restoreErrors.push(`restore ${sec}: ${rErr?.message ?? String(rErr)}`);
+          }
+        }
+      }
+      const baseErr = `clearProfile failed: ${err?.message ?? String(err)}`;
+      if (restoreErrors.length > 0) {
+        return { ok: false, error: `${baseErr}; restoration failed: ${restoreErrors.join("; ")}` };
+      }
+      return { ok: false, error: baseErr };
+    }
+
+    return { ok: true };
   });
-
-  return { ok: true };
 }
