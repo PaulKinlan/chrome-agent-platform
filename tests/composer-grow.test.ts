@@ -33,3 +33,26 @@ Deno.test("composer-grow: programmatic value changes also grow (set value + mic 
 Deno.test("composer-grow: a HIDDEN composer is never pinned to 0px (thread composer before its view opens)", () => {
   if (!/if \(!input\.scrollHeight\) return/.test(src)) throw new Error("the hidden-composer guard must exist");
 });
+
+Deno.test("composer-grow: ONE layout read per input event — the natural height is cached, never re-read (review P1: layout thrash)", () => {
+  // Extract the _autoGrow method body and count layout-forcing reads.
+  const m = src.match(/_autoGrow\(\) \{([\s\S]*?)\n  \}/);
+  if (!m) throw new Error("_autoGrow body not found");
+  const body = m[1];
+  const reads = body.match(/input\.scrollHeight/g) ?? [];
+  // Exactly TWO: the pre-write hidden guard (no forced layout — styles are
+  // clean at handler entry) + the single cached post-write read. The
+  // pre-fix body read scrollHeight THREE times (guard + height + overflow),
+  // alternating write→read→write→read = two forced synchronous layouts per
+  // keystroke. Falsification: on the pre-fix body this count is 3 → RED.
+  if (reads.length !== 2) {
+    throw new Error(`_autoGrow must read input.scrollHeight exactly twice (guard + one cached read); found ${reads.length}`);
+  }
+  // The cached value must drive the overflow mode — no third layout read.
+  if (!/overflowY = natural > cap/.test(body)) {
+    throw new Error("overflow must derive from the CACHED natural height, not a fresh scrollHeight read");
+  }
+  if (!/const natural = input\.scrollHeight;/.test(body)) {
+    throw new Error("the natural height must be cached exactly once after the height:auto write");
+  }
+});

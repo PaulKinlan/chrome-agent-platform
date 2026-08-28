@@ -3292,11 +3292,15 @@ class AgentComposer extends Component {
     const padV = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
     const cap = lineHeight * 10 + padV;
     // height:auto first so deletions SHRINK the box (scrollHeight then
-    // reflects content, not the previously forced height).
+    // reflects content, not the previously forced height). Read the natural
+    // height EXACTLY ONCE after that write — a second post-write scrollHeight
+    // read forces ANOTHER synchronous layout per keystroke (review P1:
+    // layout thrash on every input event). The cached value drives the
+    // height, the overflow mode, and nothing else reads layout afterwards.
     input.style.height = "auto";
-    const next = Math.min(input.scrollHeight, cap);
-    input.style.height = `${next}px`;
-    input.style.overflowY = input.scrollHeight > cap ? "auto" : "hidden";
+    const natural = input.scrollHeight;
+    input.style.height = `${Math.min(natural, cap)}px`;
+    input.style.overflowY = natural > cap ? "auto" : "hidden";
   }
   _wire() {
     this._run?.addEventListener("click", () => this._send());
