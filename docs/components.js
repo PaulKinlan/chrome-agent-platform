@@ -4253,14 +4253,18 @@ customElements.define("tool-chips", ToolChips);
  * (the row is a non-interactive wrapper — nested-interactive), `retry` and
  * `delete` from their affordances. */
 class TaskRow extends Component {
-  static get observedAttributes() { return ["name", "status", "time", "active", "retryable"]; }
+  static get observedAttributes() { return ["name", "status", "time", "active", "retryable", "paused", "pausable"]; }
   _render() {
     const name = this.getAttribute("name") || "Task";
     const status = this.getAttribute("status") || "completed";
     const time = this.getAttribute("time") || "";
     const active = this.hasAttribute("active");
     const retryable = this.hasAttribute("retryable");
-    const indicator = status === "running"
+    const paused = this.hasAttribute("paused");
+    const pausable = this.hasAttribute("pausable");
+    const indicator = paused
+      ? `<span class="ind pausedd" aria-hidden="true"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg></span>`
+      : status === "running"
       ? `<span class="ind running" aria-hidden="true"><span class="spin"></span></span>`
       : status === "failed"
         ? `<span class="ind failed" aria-hidden="true">${ICONS.close}</span>`
@@ -4277,24 +4281,28 @@ class TaskRow extends Component {
       :host([active]) .row { border-color:var(--accent,#0e6e63); background:var(--panel,#ffffff); }
       .ind { width:18px; height:18px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; }
       .ind.done { color:var(--success,#1a7f37); }
+      .ind.pausedd { color:var(--muted,#635e56); }
       .ind.failed { color:var(--danger,#b3261e); }
       .ind.running { color:var(--muted,#635e56); }
       .spin { width:12px; height:12px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation:cap-spin 1s linear infinite; display:inline-block; }
       .name { flex:1; min-width:0; font-size:14px; color:var(--ink,#1d1b18); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .time { flex:0 0 auto; font-size:12px; color:var(--muted,#635e56); font-variant-numeric:tabular-nums; }
-      .retry, .del { flex:0 0 auto; border:0; background:transparent; color:var(--muted,#635e56); cursor:pointer; padding:2px 4px; font:inherit; line-height:1; border-radius:6px; }
-      .retry { color:var(--accent,#0e6e63); font-size:12px; font-weight:650; }
+      .retry, .psep, .del { flex:0 0 auto; border:0; background:transparent; color:var(--muted,#635e56); cursor:pointer; padding:2px 4px; font:inherit; line-height:1; border-radius:6px; }
+      .retry, .psep { color:var(--accent,#0e6e63); font-size:12px; font-weight:650; }
       .del { font-size:15px; }
-      .retry:hover, .del:hover { background:var(--panel-2,#efede8); }
+      .retry:hover, .psep:hover, .del:hover { background:var(--panel-2,#efede8); }
       .del:hover { color:var(--danger,#b3261e); }
-      .retry:focus-visible, .del:focus-visible, .row-open:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .retry:focus-visible, .psep:focus-visible, .del:focus-visible, .row-open:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       @keyframes cap-spin { to { transform:rotate(360deg); } }
       @media (prefers-reduced-motion: reduce) { .spin { animation:none; } }
     `, `<div class="row" aria-current="${active ? "true" : "false"}">
-        <button type="button" class="row-open">${indicator}<span class="name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>${time ? `<span class="time">${escapeHtml(time)}</span>` : ""}</button>${retryable ? `<button type="button" class="retry" aria-label="Retry ${escapeHtml(name)}">Retry</button>` : ""}<button type="button" class="del" aria-label="Delete ${escapeHtml(name)}">×</button></div>`);
+        <button type="button" class="row-open">${indicator}<span class="name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>${time ? `<span class="time">${escapeHtml(time)}</span>` : ""}</button>${pausable ? `<button type="button" class="psep" aria-label="${paused ? "Resume" : "Pause"} ${escapeHtml(name)}">${paused ? "Resume" : "Pause"}</button>` : ""}${retryable ? `<button type="button" class="retry" aria-label="Retry ${escapeHtml(name)}">Retry</button>` : ""}<button type="button" class="del" aria-label="Delete ${escapeHtml(name)}">×</button></div>`);
   }
   _wire() {
     this._root.querySelector(".row-open")?.addEventListener("click", () => this._emit("open"));
+    this._root.querySelector(".psep")?.addEventListener("click", () => {
+      this._emit("toggle-pause");
+    });
     this._root.querySelector(".retry")?.addEventListener("click", () => {
       this._emit("retry");
     });

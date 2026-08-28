@@ -411,7 +411,21 @@ export function normalizePermissionRequirement(result) {
   const grantOrigins = [...new Set(cleanStrings(req.grantOrigins, 50))]
     .filter((origin) => /^https?:\/\//.test(origin));
   const grantGlobal = req.grantGlobal === true;
-  if (!permissions.length && !grantOrigins.length && !grantGlobal) return null;
+  // Owner-approval card requirements (schedule mutations et al.): a bounded
+  // list of pending-approval ids the owner's Allow resolves — a DESCRIPTION
+  // only; the real decision is the owner's card click (P1-3). A malformed
+  // entry fails the whole requirement closed (never a card for a forged
+  // shape).
+  const approvals = Array.isArray(req.approvals)
+    ? req.approvals
+      .filter((a) => a && typeof a === "object" && !Array.isArray(a)
+        && typeof a.approvalId === "string" && a.approvalId.length > 0 && a.approvalId.length <= 160
+        && typeof a.action === "string" && a.action.length > 0 && a.action.length <= 80)
+      .slice(0, 4)
+      .map((a) => ({ approvalId: a.approvalId, action: a.action }))
+    : [];
+  if (Array.isArray(req.approvals) && req.approvals.length > 0 && approvals.length === 0) return null;
+  if (!permissions.length && !grantOrigins.length && !grantGlobal && !approvals.length) return null;
   const reason = typeof req.reason === "string" && req.reason.trim()
     ? req.reason.trim().slice(0, 240)
     : "perform this action";
@@ -420,7 +434,10 @@ export function normalizePermissionRequirement(result) {
     permissions,
     grantOrigins,
     grantGlobal,
-    key: [...permissions].sort().join(",") + "|" + (grantGlobal ? "<global>" : [...grantOrigins].sort().join(",")),
+    approvals,
+    key: approvals.length
+      ? "approvals|" + approvals.map((a) => a.approvalId).sort().join(",")
+      : [...permissions].sort().join(",") + "|" + (grantGlobal ? "<global>" : [...grantOrigins].sort().join(",")),
   };
 }
 
@@ -440,6 +457,21 @@ export async function approvePermissionRequirement(requirement, {
   requestPermissions = (permissions) => chrome.permissions.request({ permissions }),
 } = {}) {
   const out = { ok: true, permissionsGranted: true, grantSet: false, storagePersisted: null, errors: [] };
+  // Owner-approval card requirements (P1-3): resolve each pending approval by
+  // id through the service worker's authority. The resolver surface enforces
+  // run-bound-only for extension principals — this call carries the owner's
+  // card-click authority, nothing else.
+  if (requirement?.approvals?.length) {
+    for (const a of requirement.approvals) {
+      const res = await sendFn("management.resolve-approval", { approvalId: a.approvalId, approve: true })
+        .catch((e) => ({ error: String(e?.message ?? e) }));
+      if (res?.ok !== true) {
+        out.ok = false;
+        out.errors.push(res?.error ?? `approval ${a.approvalId} could not be resolved`);
+      }
+    }
+    return out;
+  }
   if (requirement?.permissions?.length) {
     try {
       out.permissionsGranted = (await requestPermissions([...requirement.permissions])) === true;
@@ -1110,6 +1142,12 @@ export async function runConversationTurn(container, { text, attachments = [], h
   // dismisses; nothing is granted. One card per distinct requirement.
   const pendingApprovals = new Map(); // key -> { requirement, status, card }
   let approvalRetryRequested = false;
+  // P1-A approval-retry binding: the approval ids the owner just resolved with
+  // the Allow click. The retry turn's run start carries them so the service
+  // worker's one-shot bridge re-keys the approved tuples onto the fresh
+  // execution — otherwise the retried call could never consume its approval
+  // (every attempt runs under a NEW executionId) and would re-request forever.
+  let approvalBindingForRetry = null;
   let attemptSettled = false;
   const handleApprovalDecision = async (requirement, card, sourceEvent, approve) => {
     const entry = pendingApprovals.get(requirement.key);
@@ -1132,6 +1170,9 @@ export async function runConversationTurn(container, { text, attachments = [], h
       entry.status = "granted";
       card?.setAttribute("state", "granted");
       approvalRetryRequested = true;
+      approvalBindingForRetry = (requirement.approvals ?? [])
+        .map((a) => a.approvalId)
+        .filter((id) => typeof id === "string" && id.length > 0);
       if (attemptSettled && !stale()) {
         // The common case: the run already finished narrating the denial, then
         // the owner clicked Allow — retry detached (the turn's result was
@@ -1189,6 +1230,10 @@ export async function runConversationTurn(container, { text, attachments = [], h
   // A grant-retry re-enters here after its own permission awaits — re-check.
   if (stale()) return { ok: false, superseded: true, error: "the surface was replaced before the run started" };
   const runId = newRunId();
+  // Consume the P1-A binding once: only the attempt started BECAUSE of the
+  // owner's Allow carries the resolved approval ids (null on every other turn).
+  const approvalBinding = approvalBindingForRetry;
+  approvalBindingForRetry = null;
   attempt += 1;
   status({ state: attempt > 1 ? "retrying" : "running", activity: attempt > 1 ? "Retrying…" : "Thinking…" });
   // Per-call tool cards: a FIFO queue per tool NAME so parallel same-name calls
@@ -1333,6 +1378,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
         c.appendSystem("Attachments aren't delivered to Site Agents yet — the text was sent.");
       }
       res = await send("agent.run", {
+        approvalBinding: approvalBinding ?? null,
         task: text,
         id: String(Date.now()),
         runId,
@@ -1355,6 +1401,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
       });
     } else if (agentKind === "background") {
       res = await send("background-agent.run", {
+        approvalBinding: approvalBinding ?? null,
         id: agentId,
         task: text,
         runId,
@@ -1362,6 +1409,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
       });
     } else if (agentId) {
       res = await send("named-agent.run", {
+        approvalBinding: approvalBinding ?? null,
         id: agentId,
         task: text,
         runId,
@@ -1369,6 +1417,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
       });
     } else {
       res = await send("agent.run", {
+        approvalBinding: approvalBinding ?? null,
         task: text,
         id: String(Date.now()),
         runId,

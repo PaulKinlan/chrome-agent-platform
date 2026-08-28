@@ -45,6 +45,10 @@ export const MANAGEMENT_TOOL_NAMES = [
   "list_scripts",
   "get_script",
   "run_script",
+  "schedules_list",
+  "schedules_pause",
+  "schedules_resume",
+  "schedules_update",
 ];
 
 export function managementToolset({ callRoute }) {
@@ -303,6 +307,43 @@ export function managementToolset({ callRoute }) {
         "Run a script NOW (sandboxed, no model re-invocation) and return its result.",
       inputSchema: z.object({ id: z.string(), origin: z.string().default("master") }),
       execute: ({ id, origin }) => call("script.run", { origin, id }),
+    }),
+
+    // ---- schedules (per-agent alarm visibility + control) ----
+    // The agent manages ITS OWN scheduled tasks by default. Pause/resume/update
+    // are MUTATIONS: the route gates them behind owner approval (an in-context
+    // approval card resolves a model-initiated call; the owner's own UI click is
+    // its own approval).
+    schedules_list: tool({
+      description:
+        "List YOUR scheduled tasks (alarms you created with schedule_task): prompt preview, next fire time, period, and state (active/paused/quarantined). Always scoped to your own tasks — you can never see another agent's tasks.",
+      inputSchema: z.object({}),
+      execute: () => call("schedules.list", {}),
+    }),
+    schedules_pause: tool({
+      description:
+        "Pause one of your scheduled tasks by name: it keeps its schedule metadata but stops firing (its alarm is released). Resume it with schedules_resume. Requires owner approval.",
+      inputSchema: z.object({ name: z.string().min(1) }),
+      execute: ({ name }) => call("task.pause", { name }),
+    }),
+    schedules_resume: tool({
+      description:
+        "Resume a paused scheduled task by name: a periodic task restarts its period from now; a one-shot fires at its original time (or soon if that passed). Requires owner approval.",
+      inputSchema: z.object({ name: z.string().min(1) }),
+      execute: ({ name }) => call("task.resume", { name }),
+    }),
+    schedules_update: tool({
+      description:
+        "Update one of your scheduled tasks by name: new prompt text and/or timing. Pass at OR delayMs to change the schedule; omit both to change only the text. Requires owner approval.",
+      inputSchema: z.object({
+        name: z.string().min(1),
+        task: z.string().min(1).max(4000).optional(),
+        at: z.number().optional().describe("absolute epoch ms in the future — pass this OR delayMs"),
+        delayMs: z.number().optional().describe("positive delay in ms from now — pass this OR at"),
+        periodInMinutes: z.number().optional(),
+      }),
+      execute: ({ name, task, at, delayMs, periodInMinutes }) =>
+        call("task.update", { name, task, at, delayMs, periodInMinutes }),
     }),
   };
 }

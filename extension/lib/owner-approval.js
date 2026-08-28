@@ -34,6 +34,13 @@ export const DESTRUCTIVE_ACTIONS = new Set([
   "named-agent.update",
   "script.delete",
   "script.update",
+  // Per-agent schedule controls are approvable mutations: a MODEL-initiated
+  // pause/resume/update creates a pending approval (the in-context card flow,
+  // per-agent alarms P1-3). Without membership here createPendingApproval
+  // refuses and no approval could ever be requested.
+  "task.pause",
+  "task.resume",
+  "task.update",
 ]);
 
 export class CanonicalPayloadError extends Error {
@@ -57,6 +64,13 @@ export const OWNER_DIRECT_ACTIONS = new Set([
   "agent.delete",
   "named-agent.delete",
   "recipe.delete",
+  // Per-agent schedule controls (pause/resume/update): the owner's own click in
+  // an extension UI document IS the approval — the same owner-direct principle
+  // as asset.delete. A MODEL calling the same actions keeps the full
+  // pending-approval flow (the in-context approval card + exact-retry).
+  "task.pause",
+  "task.resume",
+  "task.update",
 ]);
 
 export function isOwnerDirectApproval(context, action) {
@@ -239,6 +253,15 @@ export function canonicalOperationTarget(kind, parts = Object.create(null)) {
     case "provider":
       values = [normalizedSlug(parts.id)];
       break;
+    case "scheduled": {
+      // A scheduled-task name is already a system-generated id (task_<ts>_<rand>,
+      // recipe:<id>, or an explicit owner name) — taken verbatim, length-bounded;
+      // slug-normalizing it would be lossy (two names could collapse to one
+      // target and share an approval row).
+      const id = typeof parts.id === "string" ? parts.id.trim() : "";
+      values = [id.slice(0, 200)];
+      break;
+    }
     case "capability":
       values = [typeof parts.id === "string" && /^[a-z][a-zA-Z0-9-]{0,63}$/.test(parts.id) ? parts.id : ""];
       break;
@@ -391,6 +414,41 @@ export function consumeApproved(store, runId, action, target, digest) {
   return { ok: false };
 }
 
+/** ONE-SHOT approval bridge (per-agent alarms P1-A): the owner approved a
+ * pending tuple for execution A, but the automatic retry starts a FRESH
+ * execution B whose executionId can never consume A's tuple by exact key —
+ * the agent would re-request approval forever. The TRUSTED surface (the same
+ * extension page whose owner click resolved the approval) passes the resolved
+ * approvalId with the retry's run start; the service worker re-keys the
+ * approved-but-unconsumed tuple onto the new execution EXACTLY ONCE.
+ * Guards: the entry must exist, be `approved` (never pending/denied/consumed),
+ * be un-bridged (bridgedFrom absent — no chains), and the target run must be
+ * a bounded distinct id. TTL still applies (sweep). A failed bridge degrades
+ * to a fresh approval request — it never fails the run. */
+export function bridgeApprovedApprovalToRun(store, approvalId, toRunId) {
+  if (!store?.approvals) return { ok: false, error: "invalid approval store" };
+  sweep(store);
+  if (typeof approvalId !== "string" || !approvalId || approvalId.length > 160) {
+    return { ok: false, error: "invalid approval id" };
+  }
+  if (typeof toRunId !== "string" || !toRunId || toRunId.length > 160) {
+    return { ok: false, error: "invalid target run" };
+  }
+  const entry = store.approvals.get(approvalId);
+  if (!entry) return { ok: false, error: "no such approval" };
+  if (entry.status !== "approved") return { ok: false, error: "approval is not approved" };
+  if (entry.bridgedFrom) return { ok: false, error: "approval was already bridged" };
+  if (entry.runId === toRunId) {
+    return { ok: true, bridged: false, action: entry.action, targetRef: entry.targetRef ?? "" };
+  }
+  store.byTuple.delete(entry.key);
+  entry.bridgedFrom = entry.runId;
+  entry.runId = toRunId;
+  entry.key = approvalKey(toRunId, entry.action, entry.target, entry.digest);
+  store.byTuple.set(entry.key, approvalId);
+  return { ok: true, bridged: true, action: entry.action, targetRef: entry.targetRef ?? "" };
+}
+
 export function listPendingApprovals(store) {
   if (!store?.approvals) return [];
   sweep(store);
@@ -402,4 +460,36 @@ export function listPendingApprovals(store) {
 
 export function approvalPendingCount(store) {
   return listPendingApprovals(store).length;
+}
+
+/** The STRUCTURED in-context denial for a just-created pending approval
+ * (per-agent alarms P1-3): the conversation renders `permissionRequirement`
+ * as an approval card; the owner's Allow resolves `approvalId` through the
+ * resolve-approval authority and the EXACT retry consumes it by digest match.
+ * The requirement is a bounded DESCRIPTION (action + opaque target ref) — it
+ * grants nothing by itself. Returns null for an unusable tuple (fail closed). */
+export function approvalCardDenial({ approvalId, action, targetRef }) {
+  if (typeof approvalId !== "string" || !approvalId || approvalId.length > 160) return null;
+  if (typeof action !== "string" || !DESTRUCTIVE_ACTIONS.has(action)) return null;
+  return {
+    ok: false,
+    waitingForPermission: true,
+    permissionRequirement: {
+      reason: `${action}: ${String(targetRef ?? "").slice(0, 200)}`,
+      approvals: [{ approvalId, action }],
+    },
+  };
+}
+
+/** Which surface may resolve WHICH approval (per-agent alarms P1-3): Settings
+ * (owner-options) resolves anything; an extension surface (the conversation's
+ * approval card) may resolve ONLY run-bound approvals — a model-initiated
+ * action awaiting its owner — never a `ui:`-bound one, which stays an exact
+ * Settings-document decision. Every other principal resolves nothing. */
+export function mayResolveApproval(row, principal) {
+  if (principal === "owner-options") return Boolean(row);
+  if (principal === "extension") {
+    return Boolean(row) && typeof row.runId === "string" && !row.runId.startsWith("ui:");
+  }
+  return false;
 }

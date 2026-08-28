@@ -4,6 +4,7 @@ export { requireSettingsSender } from "./auth.js";
 export { kvRoutes } from "./kv.js";
 export { permLeaseRoutes } from "./perm-lease.js";
 export { createProviderRoutes } from "./provider.js";
+export { createSchedulerRoutes } from "./scheduler.js";
 export { createActivityRoutes, filterActivityEntries, ACTIVITY_STORE_CAPS } from "./activity.js";
 export { createAgentWorkerRoutes, reconcileAgentWorkers } from "./agent-worker.js";
 

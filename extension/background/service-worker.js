@@ -31,6 +31,7 @@ import {
   createAgentWorkerRoutes,
   reconcileAgentWorkers,
   createProviderRoutes,
+  createSchedulerRoutes,
   kvRoutes,
   mergeRouteMaps,
   permLeaseRoutes,
@@ -387,10 +388,13 @@ import {
   recoverOnBoot,
   markScheduledDone,
   ownsInflight,
+  pauseScheduledTask,
   releaseInflight,
+  resumeScheduledTask,
   retryScheduledTask,
   scheduleTask,
   tryAcquireInflight,
+  updateScheduledTask,
 } from "../lib/scheduler.js";
 
 import {
@@ -405,7 +409,7 @@ import {
 import { tool, generateText } from "ai";
 import { z } from "zod";
 import { setRunFence, clearRunFence, runAborted } from "../lib/run-fence.js";
-import { setRunContext, clearRunContext } from "../lib/run-context.js";
+import { setRunContext, clearRunContext, currentRunContext } from "../lib/run-context.js";
 import {
   currentBrowserCommandSurface,
   exitBrowserCommandContext,
@@ -443,6 +447,8 @@ import {
   canonicalScalar,
   bindModelApprovalDispatcher,
   consumeApproved,
+  approvalCardDenial,
+  mayResolveApproval,
   createApprovalStore,
   createPendingApproval,
   isOwnerDirectApproval,
@@ -451,6 +457,7 @@ import {
   payloadDigest,
   resolvePendingApproval,
 } from "../lib/owner-approval.js";
+import { bridgeAndAuditApprovalBindings } from "../lib/approval-bridge-audit.js";
 import { capLog, dumpLogBuffer, clearLogBuffer, getLogVerbosity, setLogVerbosity } from "../lib/cap-log.js";
 import { perfSpan, perfSummary, perfClear } from "../lib/cap-perf.js";
 
@@ -672,14 +679,18 @@ async function handleAlarm(alarm) {
     // A CANCELLING task (a cancel that failed closed because the alarm was still
     // armed) must likewise NEVER run — it is cancel-pending and only the owner's
     // cancel route resolves it (the round-24 fail-closed cancel blocker).
-    if (task.quarantined || task.cancelling) {
+    // A PAUSED task never runs even if a racing alarm was delivered before the
+    // pause's alarm-clear landed (the owner's pause must hold unconditionally).
+    if (task.quarantined || task.cancelling || task.paused) {
       logSchedulerDiagnostic({
         event: "task_quarantined_or_cancelling",
         alarmName: alarm.name,
         path: "service-worker:handleAlarm",
-        storeState: task.quarantined ? "quarantined" : "cancelling",
+        storeState: task.quarantined ? "quarantined" : (task.paused ? "paused" : "cancelling"),
         reason: task.quarantined
           ? "Task is quarantined due to prior alarm creation ambiguity"
+          : task.paused
+          ? "Task is paused by its owner"
           : "Task is pending cancellation",
         actionTaken: "skipped_execution",
       }, "warn");
@@ -1951,7 +1962,7 @@ function providerResumeIdentity(config) {
   };
 }
 
-async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSurfaceRef = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false }) {
+async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSurfaceRef = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null }) {
   // Serialize master execution: the cached orchestrator is shared, so a second
   // run must queue behind the first rather than clobber its abort controller.
   return await withRunLock(async () => {
@@ -1965,6 +1976,17 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       ? providerResumeIdentity(providerConfig)
       : (providerBinding ?? providerResumeIdentity(providerConfig));
     const executionId = resumedExecutionId || newExecutionId();
+    // ONE-SHOT approval bridge (per-agent alarms P1-A): the trusted surface
+    // passes the approvalId(s) its owner just resolved with this retry's run
+    // start; the approved-but-unconsumed tuples re-key onto THIS execution so
+    // the retried tool call consumes them by exact key instead of re-requesting
+    // approval forever. Any bridge failure degrades to a fresh approval
+    // request — it must never fail the run.
+    if (approvalBinding != null) {
+      // The EXACT production seam, extracted verbatim into
+      // lib/approval-bridge-audit.js so tests drive the real code path.
+      bridgeAndAuditApprovalBindings({ ownerApprovalStore, approvalBinding, executionId });
+    }
     await durableRecoveryReady;
     const resumeRequest = {
       id: taskId,
@@ -2753,7 +2775,7 @@ function approvalExecutionId(context) {
   return "";
 }
 
-async function requireOwnerApproval(context, action, target, payload) {
+async function requireOwnerApproval(context, action, target, payload, { card = false } = {}) {
   const executionId = approvalExecutionId(context);
   if (!executionId || !target) return { ok: false, error: "This operation requires owner approval in Settings." };
   // Owner-DIRECT actions: the owner's own click in an extension UI document IS
@@ -2786,6 +2808,15 @@ async function requireOwnerApproval(context, action, target, payload) {
     const row = ownerApprovalStore.approvals.get(pending.approvalId);
     if (row) row.targetRef = targetRef;
     if (!pending.deduped) securityApprovalEvent("requested", action, targetRef);
+  }
+  // Card mode (P1-3): surface the pending approval as a STRUCTURED in-context
+  // denial the conversation renders as an approval card — instead of a
+  // dead-end Settings pointer. Bounded: the requirement is a DESCRIPTION
+  // (action + opaque target ref); the real owner click resolves the exact
+  // pending approval id and the EXACT retry consumes it by digest match.
+  if (card && pending.ok) {
+    return approvalCardDenial({ approvalId: pending.approvalId, action, targetRef }) ??
+      { ok: false, error: "This operation requires owner approval in Settings." };
   }
   return { ok: false, error: "This operation requires owner approval in Settings." };
 }
@@ -2911,6 +2942,23 @@ function dispatchRoute(type, body, context) {
 
 const providerRoutes = createProviderRoutes({ invalidateAgent });
 
+// Per-agent schedule routes (schedules.list / task.pause / task.resume / task
+// .update) — extracted for unit-drivability. The card flag turns a model-
+// initiated approval denial into the STRUCTURED in-context card requirement.
+const schedulerRoutes = createSchedulerRoutes({
+  pauseScheduledTask,
+  resumeScheduledTask,
+  updateScheduledTask,
+  retryScheduledTask,
+  listScheduledTasks,
+  requireOwnerApproval,
+  currentRunContext,
+  broadcastProgress,
+  canonicalOperationTarget,
+  canonicalScalar,
+  payloadFields,
+});
+
 // The activity-log explorer aggregation (extracted from the inline handler so
 // it is fault-isolated + bounded on real profiles — a slow/failing store can
 // never hang the route past the MV3 worker's lifetime).
@@ -2955,6 +3003,7 @@ function executeWorkerTool(toolName, args, context) {
 
 const handlers = mergeRouteMaps(
   activityRoutes,
+  schedulerRoutes,
   createAgentWorkerRoutes({
     ensureOffscreen,
     kvGet,
@@ -3495,6 +3544,11 @@ const handlers = mergeRouteMaps(
           attachments: bounded,
           runId: m.runId ?? null,
           threadId,
+          // The approved-schedule-mutation bridge must ride @mention dispatches
+          // exactly as it rides the non-mention path — an @mentioned agent
+          // whose schedule mutation was approved by the owner starts its retry
+          // with the SAME binding (no re-approval prompt).
+          approvalBinding: m.approvalBinding ?? null,
         });
       } else {
       result = await runTask({
@@ -3502,6 +3556,7 @@ const handlers = mergeRouteMaps(
         task: m.task,
         attachments: bounded,
         clientCorrelationId: m.runId ?? null,
+        approvalBinding: m.approvalBinding ?? null,
         threadId,
         agentRole: "hub",
         onProgress: (event) => {
@@ -3903,7 +3958,7 @@ const handlers = mergeRouteMaps(
     }
     return { ok: true, refined };
   },
-  async "named-agent.run"({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false }) {
+  async "named-agent.run"({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false, approvalBinding = null }) {
     // RUN/DELEGATE a task to a named agent (the wider-goal review found named
     // agents had CRUD/grep/avatar but no run path). The agent runs the task
     // with its OWN OPFS sandbox (namedAgentMemory — its memory + history), so
@@ -3936,6 +3991,7 @@ const handlers = mergeRouteMaps(
         providerBinding: overrideConfig ? providerResumeIdentity(overrideConfig) : null,
         providerGateConfig: overrideConfig,
         clientCorrelationId: runId ?? null,
+        approvalBinding: approvalBinding ?? null,
         runKind: "agent",
         executionId: _executionId,
         permissionResume: _permissionResume,
@@ -4500,8 +4556,15 @@ const handlers = mergeRouteMaps(
     return { ok: true, approvals: await ownerApprovalRows() };
   },
   async "management.resolve-approval"({ approvalId, approve }, context) {
-    if (context?.principal !== "owner-options") return { ok: false, error: "approvals are available only in Settings" };
+    // Two resolver surfaces, strictly partitioned by WHICH approvals each may
+    // resolve: Settings (owner-options) resolves anything; an extension
+    // surface (the NTP conversation's approval card) may resolve ONLY run-
+    // bound approvals (a model-initiated action awaiting its owner) — never
+    // a ui:-bound one, which stays an exact-Settings-document decision.
     const before = ownerApprovalStore.approvals.get(String(approvalId ?? ""));
+    if (!mayResolveApproval(before, context?.principal)) {
+      return { ok: false, error: "approvals are available only in Settings" };
+    }
     const result = resolvePendingApproval(ownerApprovalStore, String(approvalId ?? ""), approve === true);
     if (result.ok && before) {
       securityApprovalEvent(result.decision, before.action, before.targetRef ?? "");
@@ -4837,11 +4900,6 @@ const handlers = mergeRouteMaps(
     // delivery blocker: a quarantined task must not run, but it must be VISIBLE
     // and CANCELLABLE).
     return { tasks: await listScheduledTasks() };
-  },
-  async "task.retry"(m) {
-    const name = String(m?.name ?? "");
-    if (!name) return { ok: false, error: "task name is required" };
-    return await retryScheduledTask(name);
   },
   async "task.cancel"(m) {
     // Authoritative owner cancellation of a scheduled (or quarantined) task:
@@ -5208,7 +5266,7 @@ const handlers = mergeRouteMaps(
     const entries = Array.isArray(journal) ? journal.slice(-200).reverse() : [];
     return { entries, count: entries.length };
   },
-  async "background-agent.run"({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false }) {
+  async "background-agent.run"({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false, approvalBinding = null }) {
     const recipe = await resolveRecipe(id);
     if (!recipe) return { ok: false, error: `no background agent ${id}` };
     const mem = backgroundAgentMemory(`recipe:${recipe.id}`);
@@ -5220,6 +5278,7 @@ const handlers = mergeRouteMaps(
         attachments: attachments ?? [],
         memory: mem,
         clientCorrelationId: runId ?? null,
+        approvalBinding: approvalBinding ?? null,
         runKind: "agent",
         agentRole: `background:${recipe.id}`,
         agentSurfaceRef: `background:${recipe.id}`,
