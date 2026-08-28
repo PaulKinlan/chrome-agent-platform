@@ -59,9 +59,9 @@
   .ad-delete:focus-visible { outline:2px solid var(--danger,#b3261e); outline-offset:2px; }
   #agent-history { flex:1; overflow-y:auto; padding:12px 14px; }
   .ad-composer { padding:10px 14px; border-top:1px solid var(--border); }
-  /* one <main> landmark wraps the views (axe landmark-one-main + region);
+  /* the <main> landmark wraps the views (axe landmark-one-main + region);
      display:contents keeps the flex column layout on the body intact */
-  main.views { display: contents; }
+  .views { display: contents; }
   /* first-run guidance (UX-AUDIT-2026-08-28 UX-011): what Site Agents are +
      the one action to take first, shown until a site is opened */
   .first-run { margin: 12px 14px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); background: var(--panel-2, #efede8); }
@@ -80,7 +80,7 @@
     <button type="button" role="tab" id="tab-agents" aria-selected="false" aria-controls="agents-view">Agents</button>
   </nav>
 
-  <main class="views">
+  <div class="views">
   <section id="page-view" role="tabpanel" aria-labelledby="tab-page">
     <div class="head">
       <h1 class="head-title">Side panel</h1>
@@ -128,7 +128,7 @@
       </div>
     </div>
   </section>
-  </main>
+  </div>
 <script type="module" src="sidepanel.js"></script>
 </body>
 </html>
