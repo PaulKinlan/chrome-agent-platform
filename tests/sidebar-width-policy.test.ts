@@ -51,6 +51,33 @@ Deno.test("ntp wiring: the width policy drives the rail without persisting auto 
   assertStringIncludes(ntp, "persistedSidebarCollapsed = s?.[SIDEBAR_KEY] === true;");
 });
 
+Deno.test("ntp wiring: the narrow TOGGLE routes through the policy — the manual expansion is the off-canvas overlay, never the inline rail", () => {
+  const ntp = readFileSync(new URL("../extension/ntp/ntp.js", import.meta.url), "utf8");
+  // The click handler branches on the breakpoint BEFORE touching state.
+  assertStringIncludes(ntp, "if (narrowSidebarMq?.matches === true) {");
+  assertStringIncludes(ntp, "withViewTransition(() => setSidebarOverlay(!sidebarOverlayOpen))");
+  // The overlay is narrow-only, transient, and closable (scrim + Escape +
+  // leaving the breakpoint all close it).
+  assertStringIncludes(ntp, "function setSidebarOverlay(open)");
+  assertStringIncludes(ntp, "sidebarOverlayOpen = open === true && (narrowSidebarMq?.matches === true);");
+  assertStringIncludes(ntp, 'sideScrim.addEventListener("click"');
+  assertStringIncludes(ntp, 'event.key === "Escape" && sidebarOverlayOpen');
+  assertStringIncludes(ntp, "if (!narrow && sidebarOverlayOpen) setSidebarOverlay(false);");
+  // The scrim is a real element in the light DOM after the rail.
+  assertStringIncludes(ntp, 'sideScrim.className = "side-scrim";');
+  assertStringIncludes(ntp, "side.after(sideScrim);");
+});
+
+Deno.test("ntp surface: the overlay layout is policy-sanctioned at narrow width (off-canvas, zero overflow)", () => {
+  const html = readFileSync(new URL("../extension/ntp/ntp.html", import.meta.url), "utf8");
+  // The overlay rules live INSIDE the same breakpoint as the policy.
+  const overlayBlock = html.slice(html.indexOf("@media (max-width: 599.98px)"));
+  assert(overlayBlock.includes(".side.overlay"));
+  assert(overlayBlock.includes("position: fixed;"));
+  assert(overlayBlock.includes("inline-size: min(240px, 78vw);"));
+  assert(overlayBlock.includes(".side-scrim"));
+});
+
 Deno.test("first-run CTA: the gate is visible, described, and never a dead end", () => {
   const components = readFileSync(
     new URL("../extension/shared/components.js", import.meta.url),

@@ -2233,32 +2233,82 @@ function persistSidebar(collapsed) {
 // `auto` marks a form-factor-driven change (the narrow-width policy): it moves
 // the rail without overwriting the user's persisted preference.
 let persistedSidebarCollapsed = false;
+// UX-004 REVISE: the narrow manual expansion is an OFF-CANVAS overlay, never
+// the inline 240px rail (which overflows a 360px viewport). The overlay is
+// transient (never persisted) and closes on scrim tap, Escape, or leaving the
+// narrow width.
+let sidebarOverlayOpen = false;
+let sideScrim = null;
+function setSideToggleExpanded(expanded) {
+  sideToggle.setAttribute("aria-expanded", String(expanded));
+}
+function ensureSideScrim() {
+  if (sideScrim) return sideScrim;
+  sideScrim = document.createElement("button");
+  sideScrim.className = "side-scrim";
+  sideScrim.type = "button";
+  sideScrim.setAttribute("aria-label", "Close sidebar");
+  sideScrim.hidden = true;
+  sideScrim.addEventListener("click", () => withViewTransition(() => setSidebarOverlay(false)));
+  side.after(sideScrim);
+  return sideScrim;
+}
+function setSidebarOverlay(open) {
+  sidebarOverlayOpen = open === true && (narrowSidebarMq?.matches === true);
+  side.classList.toggle("overlay", sidebarOverlayOpen);
+  const scrim = ensureSideScrim();
+  scrim.hidden = !sidebarOverlayOpen;
+  // At narrow width the rail class stays on (the icon rail remains in flow);
+  // expanded-ness is the overlay, so aria-expanded tracks IT, not the rail.
+  setSideToggleExpanded(
+    (narrowSidebarMq?.matches === true) ? sidebarOverlayOpen : !sidebarCollapsed,
+  );
+}
 function setSidebarCollapsed(collapsed, { auto = false } = {}) {
   sidebarCollapsed = collapsed;
   side.classList.toggle("collapsed", collapsed);
   sideToggle.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
   sideToggle.setAttribute("title", collapsed ? "Expand sidebar" : "Collapse sidebar");
-  sideToggle.setAttribute("aria-expanded", String(!collapsed));
+  setSideToggleExpanded(
+    (narrowSidebarMq?.matches === true) ? sidebarOverlayOpen : !collapsed,
+  );
   renderDurability();
   if (auto) return; // form-factor state — the user's saved choice stands
   persistedSidebarCollapsed = collapsed;
   persistSidebar(collapsed); // serialized + ordered
 }
 sideToggle?.addEventListener("click", () => {
+  // UX-004 REVISE: the toggle goes THROUGH the narrow policy — below the
+  // breakpoint expansion is the off-canvas overlay, never the inline rail.
+  if (narrowSidebarMq?.matches === true) {
+    withViewTransition(() => setSidebarOverlay(!sidebarOverlayOpen));
+    return;
+  }
   withViewTransition(() => setSidebarCollapsed(!sidebarCollapsed));
+});
+// Escape closes the overlay. Optional-chained: the unit-thread harnesses
+// evaluate this module against a partial DOM shim without addEventListener.
+document.addEventListener?.("keydown", (event) => {
+  if (event.key === "Escape" && sidebarOverlayOpen) {
+    withViewTransition(() => setSidebarOverlay(false));
+  }
 });
 // Narrow-width auto-collapse (UX-004): the expanded 240px rail overflows a
 // 360px viewport, so below the breakpoint the rail collapses to the icon rail
 // without persisting; crossing back restores the user's own last choice.
 const narrowSidebarMq = window.matchMedia?.(SIDEBAR_NARROW_QUERY) ?? null;
 function applySidebarForWidth() {
+  const narrow = narrowSidebarMq?.matches === true;
+  // The overlay exists only at narrow width — leaving the breakpoint closes it.
+  if (!narrow && sidebarOverlayOpen) setSidebarOverlay(false);
   const policy = sidebarWidthPolicy({
-    narrow: narrowSidebarMq?.matches === true,
+    narrow,
     persistedCollapsed: persistedSidebarCollapsed,
   });
   if (policy.collapsed !== sidebarCollapsed) {
     setSidebarCollapsed(policy.collapsed, { auto: !policy.persist });
   }
+  setSideToggleExpanded(narrow ? sidebarOverlayOpen : !policy.collapsed);
 }
 narrowSidebarMq?.addEventListener?.("change", applySidebarForWidth);
 // Restore the persisted rail state on load (session or durable), then let the
