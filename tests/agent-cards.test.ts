@@ -2,18 +2,15 @@
 // tests/agent-cards.test.ts — agent cards data layer unit tests (AGENT-PRODUCT-GAPS §5, G7).
 //
 // Falsification-gated tests covering:
-//   (1) Round-trip fidelity (export → JSON → import).
-//   (2) Schema validation and hostile-input fail-closed behavior.
-//   (3) Skill ID validation against RECIPES with explicit droppedSkills reporting.
-//   (4) Strict bounding of oversized fields (name, role, skills, assets, avatar, JSON).
-//   (5) Missing or invalid name rejection.
-//   (6) Credential and private state isolation.
-//   (7) Real named-agent object skills normalization (P1-a round 1).
-//   (8) Import bounds and UTF-8 byte accounting (P1-b round 1).
-//   (9) Strict integer version requirement (P1-c round 2).
-//   (10) Unicode 8×128KiB multi-byte emoji asset round-trip (P1-a round 2).
-//   (11) Deep descriptor validation rejecting toJSON, getters, non-enumerable props (P1-b round 2).
-//   (12) Deduplicated distinct counting for omittedValidSkillsCount (P2 round 2).
+//   (1) Round-trip fidelity (export → JSON → import) with 100% content equality.
+//   (2) P1-a r4: Array index accessor inspection (getter counter 0) and array custom props/toJSON rejection.
+//   (3) P1-b r4: Serialized JSON budget enforcement on escaped characters (\\, \0, quotes).
+//   (4) P2 r4: truncateToUtf8Bytes handling of tiny budgets (0, 1, 2 bytes return "").
+//   (5) P1-c r2: Strict integer version requirement (numeric safe integer === 1).
+//   (6) P2 r2: Distinct counting for omittedValidSkillsCount.
+//   (7) Real named-agent object skills normalization.
+//   (8) Unicode 8×128KiB multi-byte emoji asset round-trip.
+//   (9) Deep descriptor validation rejecting toJSON, getters, and non-enumerable props.
 
 import { assert, assertEquals, assertExists, assertThrows } from "jsr:@std/assert@1";
 import {
@@ -38,79 +35,102 @@ import {
 } from "../extension/lib/agent-cards.js";
 import { RECIPES } from "../extension/lib/recipes.js";
 
-Deno.test("agent cards: exportAgentCard produces a well-formed card object with expected fields", () => {
-  const agent = {
-    name: "PR Reviewer",
-    role: "Reviews pull requests critically and provides actionable feedback.",
-    skills: ["tab-hygiene", "page-summary"],
-    coreAssets: [
-      { name: "style-guide.md", type: "text/markdown", content: "# Style Guide\nBe clear." },
-    ],
-    createdFrom: "code-reviewer",
-    schedule: {
-      periodInMinutes: 60,
-      task: "Check open PR tabs and summarize status.",
-      at: "2026-08-29T10:00:00.000Z",
+Deno.test("P2 r4: truncateToUtf8Bytes handles tiny budgets (0, 1, 2 bytes return '')", () => {
+  assertEquals(truncateToUtf8Bytes("hello", 0), "");
+  assertEquals(truncateToUtf8Bytes("hello", 1), "");
+  assertEquals(truncateToUtf8Bytes("hello", 2), "");
+  // 3 bytes can fit the 3-byte ellipsis "…"
+  const r3 = truncateToUtf8Bytes("hello", 3);
+  assertEquals(r3, "…");
+  assertEquals(new TextEncoder().encode(r3).byteLength, 3);
+
+  // Exact fit
+  assertEquals(truncateToUtf8Bytes("abc", 3), "abc");
+  assertEquals(truncateToUtf8Bytes("abcd", 4), "abcd");
+});
+
+Deno.test("P1-a r4: array index accessor is caught by descriptor check without executing the getter", () => {
+  let getterRan = 0;
+  const skillsWithIndexGetter = [];
+  Object.defineProperty(skillsWithIndexGetter, "0", {
+    get() {
+      getterRan++;
+      return "tab-hygiene";
     },
-    avatar: "data:image/svg+xml,<svg></svg>",
+    enumerable: true,
+    configurable: true,
+  });
+
+  const cardWithArrayGetter = {
+    version: 1,
+    name: "Array Getter Agent",
+    skills: skillsWithIndexGetter,
   };
 
-  const card = exportAgentCard(agent);
+  const res = importAgentCard(cardWithArrayGetter);
+  assertEquals(res.ok, false);
+  assert(res.error.includes("accessor property (getter/setter) rejected"));
+  assertEquals(getterRan, 0, "getter at array index must never execute during descriptor check");
 
-  assertEquals(card.version, AGENT_CARD_VERSION);
-  assertEquals(typeof card.exportedAt, "string");
-  assertEquals(card.name, "PR Reviewer");
-  assertEquals(card.role, agent.role);
-  assertEquals(card.persona, agent.role);
-  assertEquals(card.skills, ["tab-hygiene", "page-summary"]);
-  assertEquals(card.coreAssets.length, 1);
-  assertEquals(card.coreAssets[0].name, "style-guide.md");
-  assertEquals(card.coreAssets[0].content, "# Style Guide\nBe clear.");
-  assertEquals(card.createdFrom, "code-reviewer");
-  assertEquals(card.schedule?.periodInMinutes, 60);
-  assertEquals(card.schedule?.task, "Check open PR tabs and summarize status.");
-  assertEquals(card.schedule?.at, "2026-08-29T10:00:00.000Z");
-  assertEquals(card.avatar, "data:image/svg+xml,<svg></svg>");
+  // Custom non-index property on array is rejected
+  const skillsWithCustomProp = ["tab-hygiene"];
+  skillsWithCustomProp.customMetadata = "malicious";
+  const resCustom = importAgentCard({
+    version: 1,
+    name: "Custom Array Prop",
+    skills: skillsWithCustomProp,
+  });
+  assertEquals(resCustom.ok, false);
+  assert(resCustom.error.includes("custom non-index property rejected"));
+
+  // toJSON on array is rejected
+  const skillsWithToJSON = ["tab-hygiene"];
+  skillsWithToJSON.toJSON = () => ["escaped"];
+  const resToJSON = importAgentCard({
+    version: 1,
+    name: "Array toJSON",
+    skills: skillsWithToJSON,
+  });
+  assertEquals(resToJSON.ok, false);
+  assert(resToJSON.error.includes("toJSON property rejected on array"));
 });
 
-Deno.test("P1-a r1: exportAgentCard normalizes REAL named-agent object-form skills {id,name} without dropping them", () => {
-  const realAgentRecord = {
-    id: "sorting-hat",
-    name: "Sorting Hat",
-    role: "Groups tabs by intent.",
-    skills: [
-      { id: "tab-hygiene", name: "Tab hygiene", description: "Closes dupes" },
-      { id: "page-summary", name: "Summarise this page", description: "Summarises" },
-      "reading-list",
-    ],
-    coreAssets: [],
+Deno.test("P1-b r4: export ceiling enforced on heavy JSON-escaping payloads (backslashes and NULs)", () => {
+  // 8 assets with 131,072 backslashes each (which expand to 262,144 bytes per asset in JSON)
+  const backslashAssets = Array.from({ length: MAX_CARD_CORE_ASSETS }, (_, i) => ({
+    name: `backslash-${i}.txt`,
+    type: "text/plain",
+    content: "\\".repeat(MAX_CARD_CORE_ASSET_BYTES),
+  }));
+
+  const agentWithBackslashes = {
+    name: "Backslash Agent",
+    role: "Testing JSON escaping expansion.",
+    skills: ["tab-hygiene"],
+    coreAssets: backslashAssets,
   };
 
-  const card = exportAgentCard(realAgentRecord);
-  assertEquals(card.skills, ["tab-hygiene", "page-summary", "reading-list"]);
+  const json = exportAgentCardJson(agentWithBackslashes);
+  const totalBytes = new TextEncoder().encode(json).byteLength;
+  assert(totalBytes <= MAX_CARD_JSON_BYTES, `exported JSON must fit within MAX_CARD_JSON_BYTES (${totalBytes} <= ${MAX_CARD_JSON_BYTES})`);
 
-  const json = exportAgentCardJson(realAgentRecord);
-  const imported = importAgentCard(json);
-  assert(imported.ok, "real agent record re-imports cleanly");
-  assertEquals(imported.agent.skills, ["tab-hygiene", "page-summary", "reading-list"]);
+  const reimported = importAgentCard(json);
+  assert(reimported.ok, `escaped export must re-import cleanly: ${!reimported.ok && reimported.error}`);
+  assertEquals(reimported.agent.coreAssets.length, MAX_CARD_CORE_ASSETS);
+  // Assert 100% content equality on re-imported assets
+  for (let i = 0; i < MAX_CARD_CORE_ASSETS; i++) {
+    const exportedAsset = JSON.parse(json).coreAssets[i];
+    assertEquals(reimported.agent.coreAssets[i].name, exportedAsset.name);
+    assertEquals(reimported.agent.coreAssets[i].content, exportedAsset.content);
+  }
 });
 
-Deno.test("P1-a r2: Unicode round-trip — 8 legal multi-byte emoji assets export and re-import under 2 MiB ceiling", () => {
-  // 8 assets with 4-byte emojis: 40,000 emojis = 160,000 UTF-8 bytes each (over 128 KiB)
-  // normalizeCardCoreAssets must truncate each asset strictly to <= 131,072 UTF-8 bytes.
+Deno.test("P1-a r2: Unicode round-trip — 8 legal multi-byte emoji assets export and re-import with 100% content equality", () => {
   const emojiAssets = Array.from({ length: MAX_CARD_CORE_ASSETS }, (_, i) => ({
     name: `emoji-asset-${i}.txt`,
     type: "text/plain",
     content: "🔥".repeat(40000),
   }));
-
-  const normalized = normalizeCardCoreAssets(emojiAssets);
-  assertEquals(normalized.length, MAX_CARD_CORE_ASSETS);
-  for (let i = 0; i < MAX_CARD_CORE_ASSETS; i++) {
-    const bytes = new TextEncoder().encode(normalized[i].content).byteLength;
-    assert(bytes <= MAX_CARD_CORE_ASSET_BYTES, `asset ${i} must not exceed 128 KiB (${bytes} <= ${MAX_CARD_CORE_ASSET_BYTES})`);
-    assert(normalized[i].content.endsWith("…"));
-  }
 
   const agentWithEmojiAssets = {
     name: "Emoji Specialist",
@@ -126,6 +146,12 @@ Deno.test("P1-a r2: Unicode round-trip — 8 legal multi-byte emoji assets expor
   const reimported = importAgentCard(cardJson);
   assert(reimported.ok, `maximal Unicode export must re-import cleanly: ${!reimported.ok && reimported.error}`);
   assertEquals(reimported.agent.coreAssets.length, MAX_CARD_CORE_ASSETS);
+
+  // 100% content equality check
+  const parsedExport = JSON.parse(cardJson);
+  for (let i = 0; i < MAX_CARD_CORE_ASSETS; i++) {
+    assertEquals(reimported.agent.coreAssets[i].content, parsedExport.coreAssets[i].content);
+  }
 });
 
 Deno.test("P1-b r2: deep descriptor validation rejects accessors, toJSON, and non-enumerable properties", () => {
@@ -184,21 +210,17 @@ Deno.test("P1-b r2: deep descriptor validation rejects accessors, toJSON, and no
 });
 
 Deno.test("P1-c r2: strict integer version requirement (own property, numeric safe integer)", () => {
-  // Missing version rejected
   assertEquals(importAgentCard({ name: "No Version" }).ok, false);
 
-  // String version "1" rejected (strictly integer number required)
   const strVerRes = importAgentCard({ version: "1", name: "Str Version" });
   assertEquals(strVerRes.ok, false);
   assert(strVerRes.error.includes("version must be an integer"));
 
-  // Boolean/array/float version rejected
   assertEquals(importAgentCard({ version: true, name: "Bool Version" }).ok, false);
   assertEquals(importAgentCard({ version: [1], name: "Array Version" }).ok, false);
   assertEquals(importAgentCard({ version: 1.5, name: "Float Version" }).ok, false);
   assertEquals(importAgentCard({ version: 99, name: "Future Version" }).ok, false);
 
-  // Safe integer 1 accepted
   const validRes = importAgentCard({ version: 1, name: "Valid Version" });
   assertEquals(validRes.ok, true);
   assertEquals(validRes.version, 1);
@@ -208,7 +230,6 @@ Deno.test("P2 r2: omittedValidSkillsCount counts distinct omitted skills, not re
   const distinctSkills = Array.from({ length: 130 }, (_, i) => `skill-id-${i}`);
   const knownSet = new Set(distinctSkills);
 
-  // 130 distinct skills + 50 repeats of the 130th skill
   const skillListWithRepeats = [
     ...distinctSkills,
     ...Array(50).fill("skill-id-129"),
@@ -223,8 +244,64 @@ Deno.test("P2 r2: omittedValidSkillsCount counts distinct omitted skills, not re
   const res = importAgentCard(card, { knownSkillIds: knownSet });
   assert(res.ok);
   assertEquals(res.agent.skills.length, MAX_CARD_SKILLS); // 128
-  // Exactly 2 distinct valid skills exceeded the 128 cap (skill-id-128 and skill-id-129), not 52!
   assertEquals(res.omittedValidSkillsCount, 2);
+});
+
+Deno.test("agent cards: exportAgentCard produces a well-formed card object with expected fields", () => {
+  const agent = {
+    name: "PR Reviewer",
+    role: "Reviews pull requests critically and provides actionable feedback.",
+    skills: ["tab-hygiene", "page-summary"],
+    coreAssets: [
+      { name: "style-guide.md", type: "text/markdown", content: "# Style Guide\nBe clear." },
+    ],
+    createdFrom: "code-reviewer",
+    schedule: {
+      periodInMinutes: 60,
+      task: "Check open PR tabs and summarize status.",
+      at: "2026-08-29T10:00:00.000Z",
+    },
+    avatar: "data:image/svg+xml,<svg></svg>",
+  };
+
+  const card = exportAgentCard(agent);
+
+  assertEquals(card.version, AGENT_CARD_VERSION);
+  assertEquals(typeof card.exportedAt, "string");
+  assertEquals(card.name, "PR Reviewer");
+  assertEquals(card.role, agent.role);
+  assertEquals(card.persona, agent.role);
+  assertEquals(card.skills, ["tab-hygiene", "page-summary"]);
+  assertEquals(card.coreAssets.length, 1);
+  assertEquals(card.coreAssets[0].name, "style-guide.md");
+  assertEquals(card.coreAssets[0].content, "# Style Guide\nBe clear.");
+  assertEquals(card.createdFrom, "code-reviewer");
+  assertEquals(card.schedule?.periodInMinutes, 60);
+  assertEquals(card.schedule?.task, "Check open PR tabs and summarize status.");
+  assertEquals(card.schedule?.at, "2026-08-29T10:00:00.000Z");
+  assertEquals(card.avatar, "data:image/svg+xml,<svg></svg>");
+});
+
+Deno.test("P1-a r1: exportAgentCard normalizes REAL named-agent object-form skills {id,name} without dropping them", () => {
+  const realAgentRecord = {
+    id: "sorting-hat",
+    name: "Sorting Hat",
+    role: "Groups tabs by intent.",
+    skills: [
+      { id: "tab-hygiene", name: "Tab hygiene", description: "Closes dupes" },
+      { id: "page-summary", name: "Summarise this page", description: "Summarises" },
+      "reading-list",
+    ],
+    coreAssets: [],
+  };
+
+  const card = exportAgentCard(realAgentRecord);
+  assertEquals(card.skills, ["tab-hygiene", "page-summary", "reading-list"]);
+
+  const json = exportAgentCardJson(realAgentRecord);
+  const imported = importAgentCard(json);
+  assert(imported.ok, "real agent record re-imports cleanly");
+  assertEquals(imported.agent.skills, ["tab-hygiene", "page-summary", "reading-list"]);
 });
 
 Deno.test("agent cards: round-trip fidelity export → JSON string → import", () => {
@@ -307,31 +384,26 @@ Deno.test("agent cards: skill ID validation drops unknown skills and reports the
 });
 
 Deno.test("agent cards: missing or empty name is rejected honestly (fails closed)", () => {
-  // Missing name property
   const noName = { version: 1, role: "No name" };
   const res1 = importAgentCard(noName);
   assertEquals(res1.ok, false);
   assert(res1.error.includes("requires a name"));
 
-  // null name
   const nullName = { version: 1, name: null, role: "Null name" };
   const res2 = importAgentCard(nullName);
   assertEquals(res2.ok, false);
   assert(res2.error.includes("requires a name"));
 
-  // Empty string name
   const emptyName = { version: 1, name: "", role: "Empty name" };
   const res3 = importAgentCard(emptyName);
   assertEquals(res3.ok, false);
   assert(res3.error.includes("requires a non-empty name"));
 
-  // Whitespace-only name
   const wsName = { version: 1, name: "   \t\n  ", role: "WS name" };
   const res4 = importAgentCard(wsName);
   assertEquals(res4.ok, false);
   assert(res4.error.includes("requires a non-empty name"));
 
-  // Non-string name
   const numName = { version: 1, name: 12345, role: "Num name" };
   const res5 = importAgentCard(numName);
   assertEquals(res5.ok, false);
@@ -373,37 +445,31 @@ Deno.test("agent cards: oversized fields are bounded to their respective maximum
 });
 
 Deno.test("agent cards: hostile input fails closed on invalid field types", () => {
-  // Non-string role
   const badRole = { version: 1, name: "Agent", role: { nested: "object" } };
   const r1 = importAgentCard(badRole);
   assertEquals(r1.ok, false);
   assert(r1.error.includes("role/persona must be a string"));
 
-  // Non-array skills
   const badSkills = { version: 1, name: "Agent", skills: "tab-hygiene" };
   const r2 = importAgentCard(badSkills);
   assertEquals(r2.ok, false);
   assert(r2.error.includes("skills must be an array"));
 
-  // Non-string skill item
   const badSkillItem = { version: 1, name: "Agent", skills: ["tab-hygiene", 12345] };
   const r3 = importAgentCard(badSkillItem);
   assertEquals(r3.ok, false);
   assert(r3.error.includes("skill ids must be strings"));
 
-  // Non-array coreAssets
   const badAssets = { version: 1, name: "Agent", coreAssets: { name: "doc.txt" } };
   const r4 = importAgentCard(badAssets);
   assertEquals(r4.ok, false);
   assert(r4.error.includes("coreAssets must be an array"));
 
-  // Non-object schedule
   const badSched1 = { version: 1, name: "Agent", schedule: "every 5 min" };
   const r5 = importAgentCard(badSched1);
   assertEquals(r5.ok, false);
   assert(r5.error.includes("schedule must be an object"));
 
-  // Negative / invalid schedule period
   const badSched2 = { version: 1, name: "Agent", schedule: { periodInMinutes: -10 } };
   const r6 = importAgentCard(badSched2);
   assertEquals(r6.ok, false);

@@ -12,8 +12,8 @@
 // Security & integrity principles (Constitution §2 + §4):
 //   - Agent cards are pure DATA (never executable code or eval'd strings).
 //   - Hostile input FAILS CLOSED (malformed JSON, invalid types, accessors, toJSON methods, cyclic objects).
-//   - Plain data objects only: deep descriptor validation rejects prototype inheritance and accessor traps.
-//   - UTF-8 byte bounded: asset content and payload size bounded strictly by UTF-8 bytes.
+//   - Plain data objects only: deep descriptor validation rejects prototype inheritance and accessor traps (including array-index getters).
+//   - UTF-8 byte bounded: asset content and serialized JSON payloads bounded strictly by UTF-8 bytes.
 //   - Deduplicated counting: omitted skills/dropped counters increment per distinct ID.
 //   - Structured credentials (API keys, session tokens, instance IDs) are NEVER exported in cards.
 
@@ -27,7 +27,7 @@ export const MAX_RAW_SKILLS_INPUT = 256;
 export const MAX_DROPPED_SKILLS_REPORT = 128;
 export const MAX_CARD_CORE_ASSETS = 8;
 export const MAX_CARD_CORE_ASSET_BYTES = 131072; // 128 KiB UTF-8 bytes per core asset
-export const MAX_CARD_JSON_BYTES = 2097152; // 2 MiB (guarantees 8 × 128 KiB UTF-8 assets + role + metadata re-import)
+export const MAX_CARD_JSON_BYTES = 2097152; // 2 MiB ceiling for total card JSON
 export const MAX_CREATED_FROM_LEN = 64;
 export const MAX_AVATAR_LEN = 32768; // 32 KiB for avatar data URL / emoji / SVG
 export const MAX_SCHEDULE_TASK_LEN = 4000;
@@ -36,16 +36,19 @@ export const MAX_SCHEDULE_AT_LEN = 64;
 /**
  * Truncate a UTF-8 string to at most maxBytes, appending an ellipsis "…" (3 UTF-8 bytes)
  * if truncation occurred, without splitting multi-byte code points.
+ * Returns empty string if maxBytes is less than 3 bytes (cannot fit ellipsis).
  */
 export function truncateToUtf8Bytes(text, maxBytes) {
-  if (typeof text !== "string") return "";
+  if (typeof text !== "string" || !text || maxBytes <= 0) return "";
   const encoder = new TextEncoder();
   const bytes = encoder.encode(text);
   if (bytes.byteLength <= maxBytes) return text;
 
+  if (maxBytes < 3) return "";
+
   const ellipsis = "…";
   const ellipsisBytes = encoder.encode(ellipsis); // 3 bytes
-  const targetBytes = Math.max(0, maxBytes - ellipsisBytes.byteLength);
+  const targetBytes = maxBytes - ellipsisBytes.byteLength;
 
   const decoder = new TextDecoder("utf-8", { fatal: false });
   let sliced = decoder.decode(bytes.subarray(0, targetBytes));
@@ -84,7 +87,7 @@ function getKnownSkillSet(customKnown) {
  * Recursively validate that a JavaScript value is a pure, plain data graph.
  * Fails closed on:
  *   - Prototype inheritance (must have Object.prototype/null or Array.prototype)
- *   - Accessor properties (getters / setters)
+ *   - Accessor properties (getters / setters on objects AND array indices)
  *   - Non-enumerable properties
  *   - Functions, methods, and toJSON hooks
  *   - Symbols
@@ -111,10 +114,46 @@ export function assertPlainDataGraph(root) {
       if (proto !== Array.prototype) {
         return { ok: false, error: `array prototype inheritance detected at ${path || "root"}` };
       }
-      for (let i = 0; i < node.length; i++) {
-        const itemRes = walk(node[i], `${path}[${i}]`);
+
+      const symbols = Object.getOwnPropertySymbols(node);
+      if (symbols.length > 0) {
+        return { ok: false, error: `symbol properties rejected on array at ${path || "root"}` };
+      }
+
+      const descs = Object.getOwnPropertyDescriptors(node);
+      for (const [prop, desc] of Object.entries(descs)) {
+        if (prop === "length") {
+          if (desc.get !== undefined || desc.set !== undefined || typeof desc.value !== "number") {
+            return { ok: false, error: `invalid array length descriptor at ${path || "root"}` };
+          }
+          continue;
+        }
+
+        if (prop === "toJSON") {
+          return { ok: false, error: `toJSON property rejected on array at ${path || "root"}` };
+        }
+
+        if (desc.get !== undefined || desc.set !== undefined) {
+          return { ok: false, error: `accessor property (getter/setter) rejected: ${prop}` };
+        }
+
+        if (!desc.enumerable) {
+          return { ok: false, error: `non-enumerable property rejected on array: ${prop}` };
+        }
+
+        if (typeof desc.value === "function") {
+          return { ok: false, error: `method/function rejected on array: ${prop}` };
+        }
+
+        if (!/^\d+$/.test(prop)) {
+          return { ok: false, error: `custom non-index property rejected on array: ${prop}` };
+        }
+
+        // Recurse through desc.value without ever reading node[prop] directly
+        const itemRes = walk(desc.value, `${path}[${prop}]`);
         if (!itemRes.ok) return itemRes;
       }
+
       return { ok: true };
     }
 
@@ -128,18 +167,16 @@ export function assertPlainDataGraph(root) {
       return { ok: false, error: `symbol properties rejected at ${path || "root"}` };
     }
 
-    const propNames = Object.getOwnPropertyNames(node);
-    for (const prop of propNames) {
-      const desc = Object.getOwnPropertyDescriptor(node, prop);
-      if (!desc) continue;
+    const descs = Object.getOwnPropertyDescriptors(node);
+    for (const [prop, desc] of Object.entries(descs)) {
+      if (prop === "toJSON") {
+        return { ok: false, error: `toJSON property rejected at ${path || "root"}` };
+      }
       if (desc.get !== undefined || desc.set !== undefined) {
         return { ok: false, error: `accessor property (getter/setter) rejected: ${prop}` };
       }
       if (!desc.enumerable) {
         return { ok: false, error: `non-enumerable property rejected: ${prop}` };
-      }
-      if (prop === "toJSON") {
-        return { ok: false, error: `toJSON property rejected at ${path || "root"}` };
       }
       if (typeof desc.value === "function") {
         return { ok: false, error: `method/function rejected: ${prop}` };
@@ -152,6 +189,55 @@ export function assertPlainDataGraph(root) {
   }
 
   return walk(root);
+}
+
+/**
+ * Ensure an exported card's serialized JSON string is within MAX_CARD_JSON_BYTES,
+ * reducing asset content progressively if JSON escaping expands the payload over budget.
+ */
+function enforceCardJsonBudget(card, maxBytes = MAX_CARD_JSON_BYTES) {
+  const encoder = new TextEncoder();
+  let jsonBytes = encoder.encode(JSON.stringify(card)).byteLength;
+  if (jsonBytes <= maxBytes) return card;
+
+  if (Array.isArray(card.coreAssets) && card.coreAssets.length > 0) {
+    while (jsonBytes > maxBytes) {
+      const excess = jsonBytes - maxBytes;
+      let reducedAny = false;
+
+      let largestIdx = -1;
+      let maxLen = 0;
+      for (let i = 0; i < card.coreAssets.length; i++) {
+        const contentBytes = encoder.encode(card.coreAssets[i].content).byteLength;
+        if (contentBytes > maxLen) {
+          maxLen = contentBytes;
+          largestIdx = i;
+        }
+      }
+
+      if (largestIdx === -1 || maxLen <= 3) {
+        if (card.coreAssets.length > 0) {
+          card.coreAssets.pop();
+          reducedAny = true;
+        } else {
+          break;
+        }
+      } else {
+        const reductionTarget = Math.max(1024, Math.min(maxLen - 3, Math.ceil(excess / 2) + 32));
+        const newMaxBytes = Math.max(0, maxLen - reductionTarget);
+        card.coreAssets[largestIdx].content = truncateToUtf8Bytes(
+          card.coreAssets[largestIdx].content,
+          newMaxBytes,
+        );
+        reducedAny = true;
+      }
+
+      jsonBytes = encoder.encode(JSON.stringify(card)).byteLength;
+      if (!reducedAny) break;
+    }
+  }
+
+  return card;
 }
 
 /**
@@ -234,7 +320,7 @@ export function exportAgentCard(agent, { schedule = null, exportedAt = null } = 
     card.avatar = agent.avatar.trim().slice(0, MAX_AVATAR_LEN);
   }
 
-  return card;
+  return enforceCardJsonBudget(card);
 }
 
 /**
@@ -256,7 +342,7 @@ export function validateAgentCard(card, options = {}) {
       return { ok: false, error: "agent card must be a non-null JSON object" };
     }
 
-    // Require plain data object — reject prototype inheritance and non-plain graphs
+    // Require plain data object — reject prototype inheritance, accessors, toJSON
     const plainCheck = assertPlainDataGraph(card);
     if (!plainCheck.ok) {
       return plainCheck;
