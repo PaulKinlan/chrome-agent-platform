@@ -25,6 +25,30 @@ import {
 } from "../../lib/browser-command-lease.js";
 
 const ALIVE_KEY = "cap:agent-workers:alive";
+
+/** Alive-set persistence lives at module scope so agent deletion can prune it
+ * without constructing the route table (the SW passes this as the
+ * `closeAgentWorker` teardown injection into deleteNamedAgent). */
+const readAliveSetWith = (kvGet) => async () => {
+  const s = await kvGet(ALIVE_KEY);
+  const list = s?.[ALIVE_KEY];
+  return Array.isArray(list) ? list.filter((x) => typeof x === "string").slice(0, 200) : [];
+};
+const writeAliveSetWith = (kvSet) => (ids) => kvSet({ [ALIVE_KEY]: ids.slice(0, 200) });
+
+/** Agent-deletion teardown: drop the keep-alive port (best-effort — the host
+ * may already be gone) and prune the alive-set so the supervisor cannot
+ * resurrect a deleted agent's worker. Exported for the SW's delete route. */
+export async function closeAgentWorkerFor(agentId, { kvGet, kvSet } = {}) {
+  const id = String(agentId ?? "");
+  if (!id) return { ok: false, error: "invalid agentId" };
+  try {
+    await chrome.runtime.sendMessage({ type: "agent-worker-host:close", agentId: id });
+  } catch { /* host may already be gone */ }
+  const alive = await readAliveSetWith(kvGet)();
+  await writeAliveSetWith(kvSet)(alive.filter((x) => x !== id));
+  return { ok: true, agentId: id, closed: true };
+}
 const WORKER_PATH = "dist/workers/agent-worker.js";
 const MAX_PREVIEW_CHARS = 240;
 
@@ -136,12 +160,8 @@ export function createAgentWorkerRoutes({
   resolveJournalStore = null,
   journalAppend = null,
 }) {
-  const readAliveSet = async () => {
-    const s = await kvGet(ALIVE_KEY);
-    const list = s?.[ALIVE_KEY];
-    return Array.isArray(list) ? list.filter((x) => typeof x === "string").slice(0, 200) : [];
-  };
-  const writeAliveSet = (ids) => kvSet({ [ALIVE_KEY]: ids.slice(0, 200) });
+  const readAliveSet = readAliveSetWith(kvGet);
+  const writeAliveSet = (ids) => writeAliveSetWith(kvSet)(ids);
 
   return {
     /** Validate + ensure an agent's shared worker is alive. Returns the
@@ -338,7 +358,6 @@ export function createAgentWorkerRoutes({
       await writeAliveSet(alive.filter((id) => id !== agentId));
       return { ok: true, agentId, closed: true };
     },
-
     /** Phase 3: Bounded, redacted progress commit from a worker run.
      * Records progress in durable registry logs + updates execution heartbeat
      * + broadcasts live progress to UI ports. */

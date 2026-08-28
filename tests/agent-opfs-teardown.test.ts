@@ -25,6 +25,8 @@ import {
   purgeStoreDir,
 } from "../extension/lib/memory.js";
 import { durableRuns, sweepOrphanAgentData } from "../extension/lib/durable-runs.js";
+import { createAsset, getAsset, listAssets } from "../extension/lib/artifacts.js";
+import { kvSet, kvGet } from "../extension/lib/kv.js";
 
 // ---- in-memory chrome + OPFS mock (pattern from tests/named-agents.test.ts,
 // extended with values() + truly-recursive removeEntry) ----
@@ -171,8 +173,13 @@ Deno.test("teardown: deleting an agent removes its sandbox, journal, durable run
   const runsBefore = await durableRuns.list();
   assert(runsBefore.runs.some((r) => r.executionId === EXEC), "registry row exists pre-delete");
 
-  // ASSETS: an artifact written before deletion (master store by design).
-  await masterMemory().setTrusted("assets", { index: { a_1: { id: "a_1", title: "Report" } } });
+  // ASSETS: a REAL artifact created through the artifacts authority (the
+  // reviewer P2: a raw `assets` key write would be rejected by listAssets —
+  // it must be the actual createAsset path).
+  const asset = await createAsset("master", { type: "text", name: "Report", content: "scout report body" });
+  assert(asset?.ok, `createAsset ok (${asset?.error ?? ""})`);
+  const listedBefore = await listAssets("master");
+  assert(listedBefore?.ok === true && listedBefore.assets.some((a) => a.id === asset.asset.id), "asset listed pre-delete");
 
   const del = await deleteNamedAgent(slug);
   assertEquals(del?.ok, true, `delete ok (warning: ${del?.cleanupWarning ?? "none"})`);
@@ -186,13 +193,21 @@ Deno.test("teardown: deleting an agent removes its sandbox, journal, durable run
   const threadRecord = await (await import("../extension/lib/memory.js")).durableRunMemory()
     .get("thread-runs:thread-scout-1").catch(() => null);
   assertEquals(threadRecord, null, "thread index purged");
-  // 4. memory sandbox emptied (fresh-namespace semantics) — the old memory
-  //    note is unrecoverable through the store APIs.
+  // 4. BOTH namespaces emptied (post-fix instance dir + legacy slug dir) —
+  //    fresh-namespace semantics; the old memory note is unrecoverable.
+  const inst = created.agent?.instanceId ?? created.agent?.id;
+  assertEquals(await namedAgentMemory(inst).get("memory:note"), null, "instance-namespace memory purged");
   const memAfter = namedAgentMemory(slug);
   assertEquals(await memAfter.get("memory:note"), null, "memory content purged");
-  // 5. ASSETS SURVIVE.
-  const assets = await masterMemory().get("assets");
-  assertEquals(assets?.index?.a_1?.title, "Report", "assets survive agent deletion");
+  // 4b. and the DIRECTORIES are GONE — clear() preserves them by design for
+  //     live stores; deletion must actually remove them (P1-1).
+  assertEquals(dirExists(["memory", "agents", encodeURIComponent(inst)]), false, "instance dir removed");
+  assertEquals(dirExists(["memory", "agents", encodeURIComponent(slug)]), false, "legacy slug dir removed");
+  // 5. ASSETS SURVIVE — via the REAL listing API.
+  const listedAfter = await listAssets("master");
+  assert(listedAfter?.ok === true && listedAfter.assets.some((a) => a.id === asset.asset.id), "asset survives agent deletion (listAssets)");
+  const body = await getAsset("master", asset.asset.id);
+  assert(body != null, "asset body survives (not just the index row)");
 });
 
 Deno.test("teardown: recreated same-name agent gets a fresh namespace (no journal/memory leaks in)", async () => {
@@ -269,4 +284,156 @@ Deno.test("purgeForTarget refuses unscoped targets (fail-closed)", async () => {
   assertEquals(r.ok, false, "master is never purgeable via the agent teardown");
   const r2 = await durableRuns.purgeForTarget("");
   assertEquals(r2.ok, false);
+});
+
+// ---------------------------------------------------------------------------
+// Review-round fixes (P1-1 id non-reuse + real dir removal, P1-2 ownership
+// map completeness, P1-3 fail-closed sweep, injected via the DI contract).
+
+Deno.test("teardown: recreate-same-name gets a DIFFERENT namespace (instanceId), old state unreachable", async () => {
+  const first = await createNamedAgent({ name: "Recycler" });
+  assert(first.ok, "first create ok");
+  const i1 = first.agent.instanceId;
+  await namedAgentMemory(i1).set("memory:secret", "first-life");
+  const del = await deleteNamedAgent(first.agent.id);
+  assertEquals(del.ok, true, `delete ok (${del?.error ?? ""})`);
+  assertEquals(dirExists(["memory", "agents", encodeURIComponent(i1)]), false, "first-life dir removed");
+
+  const second = await createNamedAgent({ name: "Recycler" });
+  assert(second.ok, "recreate ok");
+  const i2 = second.agent.instanceId;
+  assert(i2 !== i1, "recreated agent has a DIFFERENT immutable instanceId (no id reuse)");
+  assertEquals(await namedAgentMemory(i2).get("memory:secret"), null, "old instance memory not visible in the new namespace");
+  assertEquals(dirExists(["memory", "agents", encodeURIComponent(i1)]), false, "old namespace stays dead after recreate");
+});
+
+Deno.test("teardown: post-fix runs (journalTarget agent:<instanceId>) are purged with the agent", async () => {
+  const created = await createNamedAgent({ name: "Modern" });
+  assert(created.ok);
+  const slug = created.agent.id;
+  const inst = created.agent.instanceId;
+  const instExec = "exec:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  await namedAgentMemory(inst).set("memory:state", "live");
+  await durableRuns.start({
+    executionId: instExec,
+    journalTarget: `agent:${inst}`,
+    threadId: "thread-modern-1",
+    kind: "agent",
+    agentId: `named:${slug}`,
+    taskPreview: "modern task",
+  });
+  assert(dirExists(["memory", "durable-runs", "executions", encodeURIComponent(instExec)]), "pre: instance exec dir exists");
+
+  const del = await deleteNamedAgent(slug);
+  assertEquals(del.ok, true, `delete ok (${del?.error ?? ""})`);
+  const runs = await durableRuns.list();
+  assertEquals(runs.runs.some((r) => r.executionId === instExec), false, "instance-namespaced run family purged");
+  assertEquals(dirExists(["memory", "durable-runs", "executions", encodeURIComponent(instExec)]), false, "instance exec dir purged");
+  assertEquals(dirExists(["memory", "agents", encodeURIComponent(inst)]), false, "instance sandbox dir purged");
+});
+
+Deno.test("teardown: retry repairs a partial teardown (pending record carries the dead instanceId)", async () => {
+  const created = await createNamedAgent({ name: "Partial" });
+  assert(created.ok);
+  const slug = created.agent.id;
+  const inst = created.agent.instanceId;
+  // Simulate a partial teardown: the row vanishes but the instance dir +
+  // the pending-teardown record remain (a crashed earlier delete).
+  await namedAgentMemory(inst).set("memory:stale", "leftover");
+  assert(dirExists(["memory", "agents", encodeURIComponent(inst)]), "pre: leftover instance dir exists");
+  const pending = (await kvGet("agents-pending-teardown"))?.["agents-pending-teardown"] ?? [];
+  await kvSet({ "agents-pending-teardown": [...pending, { slug, instanceId: inst, at: Date.now() }] });
+
+  // The registry row is GONE (simulate by direct map surgery through delete
+  // semantics: the absent-row branch is exercised by deleting twice).
+  const first = await deleteNamedAgent(slug);
+  assertEquals(first.ok, true);
+  const second = await deleteNamedAgent(slug); // absent row → repair path
+  assertEquals(second.ok, true, `repair delete ok (${second?.error ?? ""})`);
+  assertEquals(dirExists(["memory", "agents", encodeURIComponent(inst)]), false, "retry repaired the leftover instance dir");
+  const remaining = (await kvGet("agents-pending-teardown"))?.["agents-pending-teardown"] ?? [];
+  assertEquals(remaining.some((p) => p?.slug === slug), false, "pending record consumed");
+});
+
+Deno.test("teardown: deletion cancels EVERY schedule owned by the agent (non-recipe names too)", async () => {
+  const created = await createNamedAgent({ name: "Scheduler" });
+  assert(created.ok);
+  const slug = created.agent.id;
+  // Seed the scheduler store directly: one recipe:<slug> task, one runtime
+  // task with a GENERATED name, both owned via agentSurfaceRef — plus one
+  // owned by a DIFFERENT agent that must survive.
+  const store = (await kvGet("cap:scheduledTasks"))?.["cap:scheduledTasks"] ?? {};
+  store["recipe:scheduler-test"] = {
+    name: "recipe:scheduler-test", task: "hourly", at: Date.now() + 3_600_000,
+    owner: { agentSurfaceRef: `named:${slug}`, agentRole: "test" },
+  };
+  store["generated-name-xyz"] = {
+    name: "generated-name-xyz", task: "sweep logs", at: Date.now() + 3_600_000,
+    owner: { agentSurfaceRef: `named:${slug}` },
+  };
+  store["other-agents-task"] = {
+    name: "other-agents-task", task: "other", at: Date.now() + 3_600_000,
+    owner: { agentSurfaceRef: "named:someone-else" },
+  };
+  await kvSet({ "cap:scheduledTasks": store });
+
+  const del = await deleteNamedAgent(slug);
+  assertEquals(del.ok, true, `delete ok (${del?.error ?? ""})`);
+  const after = (await kvGet("cap:scheduledTasks"))?.["cap:scheduledTasks"] ?? {};
+  const mine = Object.values(after).filter((t) => t?.owner?.agentSurfaceRef === `named:${slug}`);
+  const activeMine = mine.filter((t) => !t?.cancelling && !t?.cancelled);
+  assertEquals(activeMine.length, 0, `every owned schedule is cancelling/gone (${mine.map((t) => `${t.name}:${t.cancelling ? "cancelling" : "active"}`).join(", ")})`);
+  assert(after["other-agents-task"] && !after["other-agents-task"].cancelling, "OTHER agent's schedule untouched");
+});
+
+Deno.test("teardown: fs-grant revocation + worker-close injections fire; failures fail the teardown", async () => {
+  const created = await createNamedAgent({ name: "Granted" });
+  assert(created.ok);
+  const slug = created.agent.id;
+  const calls = { revoke: [], close: [] };
+  const del = await deleteNamedAgent(slug, {
+    revokeGrants: async (agentId) => { calls.revoke.push(agentId); return { ok: true, revoked: 2 }; },
+    closeAgentWorker: async (agentId) => { calls.close.push(agentId); return { ok: true }; },
+  });
+  assertEquals(del.ok, true);
+  assertEquals(calls.revoke, [slug], "revokeGrants got the agent slug");
+  assertEquals(calls.close, [slug], "closeAgentWorker got the agent slug");
+
+  // A failing injection must FAIL the teardown honestly (retryable), not
+  // silently drop the remaining cleanup.
+  const created2 = await createNamedAgent({ name: "Granted2" });
+  assert(created2.ok);
+  const del2 = await deleteNamedAgent(created2.agent.id, {
+    revokeGrants: async () => ({ ok: false, error: "idb unavailable" }),
+  });
+  assertEquals(del2.ok, false, "grant-revoke failure fails the teardown");
+  assertEquals(del2.retryable, true, "and is retryable");
+});
+
+Deno.test("orphan sweep FAILS CLOSED: a live-set read error deletes nothing", async () => {
+  // An orphan dir that WOULD be swept if the sweep were fail-open.
+  await namedAgentMemory("fail-closed-ghost").set("memory:x", "live-data");
+  assert((await listNamedAgentIds()).includes("fail-closed-ghost"), "pre: ghost dir exists");
+
+  const thrown = await sweepOrphanAgentData({
+    listAgents: async () => { throw new Error("registry I/O error"); },
+    listTasks: async () => [],
+  });
+  assertEquals(thrown.ok, false, "sweep refuses on listAgents failure");
+  assert((thrown.failures ?? []).join(" ").includes("registry I/O error"), "failure names the cause");
+  assert((await listNamedAgentIds()).includes("fail-closed-ghost"), "ghost dir STILL EXISTS (no deletion on uncertainty)");
+
+  const malformed = await sweepOrphanAgentData({
+    listAgents: async () => ({ notAnArray: true }),
+    listTasks: async () => [],
+  });
+  assertEquals(malformed.ok, false, "sweep refuses a malformed snapshot");
+  assert((await listNamedAgentIds()).includes("fail-closed-ghost"), "ghost dir STILL EXISTS after malformed snapshot");
+
+  const tasksThrew = await sweepOrphanAgentData({
+    listAgents: async () => await listNamedAgents(),
+    listTasks: async () => { throw new Error("task store I/O error"); },
+  });
+  assertEquals(tasksThrew.ok, false, "sweep refuses on listTasks failure");
+  assert((await listNamedAgentIds()).includes("fail-closed-ghost"), "ghost dir STILL EXISTS after task-read failure");
 });

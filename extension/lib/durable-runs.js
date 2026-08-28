@@ -1457,12 +1457,27 @@ export async function sweepOrphanAgentData({ listAgents, listTasks } = {}) {
   if (typeof listAgents !== "function" || typeof listTasks !== "function") {
     throw new Error("sweepOrphanAgentData requires listAgents + listTasks");
   }
-  const [agentRows, taskRows] = await Promise.all([listAgents(), listTasks()]);
+  const swept = { agentDirs: 0, backgroundDirs: 0, executionDirs: 0, threadDirs: 0 };
+  const failures = [];
+  // FAIL-CLOSED authority resolution: a read failure or a malformed snapshot
+  // must NEVER be read as "nothing is live" — that would turn a transient
+  // I/O error into a recursive delete of LIVE agent data. Uncertainty aborts
+  // the whole sweep (nothing is removed; the next sweep retries).
+  let agentRows;
+  let taskRows;
+  try {
+    [agentRows, taskRows] = await Promise.all([listAgents(), listTasks()]);
+  } catch (e) {
+    return { ok: false, swept, failures: [`live-set read failed: ${String(e?.message ?? e)}`] };
+  }
+  if (!Array.isArray(agentRows) || !Array.isArray(taskRows)) {
+    return { ok: false, swept, failures: ["live-set snapshot malformed (not an array) — sweep refused"] };
+  }
   const liveAgentSlugs = new Set(
-    (Array.isArray(agentRows) ? agentRows : []).map((a) => String(a?.id ?? a?.slug ?? "")).filter(Boolean),
+    agentRows.map((a) => String(a?.id ?? a?.slug ?? "")).filter(Boolean),
   );
   const liveTaskNames = new Set(
-    (Array.isArray(taskRows) ? taskRows : []).map((t) => String(t?.name ?? "")).filter(Boolean),
+    taskRows.map((t) => String(t?.name ?? "")).filter(Boolean),
   );
   const {
     listNamedAgentIds,
@@ -1473,43 +1488,74 @@ export async function sweepOrphanAgentData({ listAgents, listTasks } = {}) {
     durableRunMemory,
   } = await import("./memory.js");
   const durable = durableRunMemory();
-  const swept = { agentDirs: 0, backgroundDirs: 0, executionDirs: 0, threadDirs: 0 };
-  const failures = [];
+  let namedIds;
+  let backgroundIds;
+  try {
+    namedIds = await listNamedAgentIds();
+    backgroundIds = await listBackgroundAgentIds();
+  } catch (e) {
+    return { ok: false, swept, failures: [`dir enumeration failed: ${String(e?.message ?? e)}`] };
+  }
   // 1. named-agent sandboxes with no registry row: full teardown (registry
   // rows + execution dirs + thread index go through purgeForTarget; the dir
-  // itself is then removed — clear-free, the namespace is dead).
-  for (const slug of await listNamedAgentIds()) {
+  // itself is then removed — clear-free, the namespace is dead). A purge
+  // refusal skips the dir removal for that slug: an uncertain durable state
+  // must not be half-deleted.
+  for (const slug of namedIds) {
     if (liveAgentSlugs.has(slug)) continue;
-    await durableRuns.purgeForTarget(`agent:${slug}`).catch(() => {});
+    try {
+      const purged = await durableRuns.purgeForTarget(`agent:${slug}`);
+      if (purged?.ok === false) { failures.push(`agents/${slug}: durable purge refused (${purged.error ?? "unknown"})`); continue; }
+    } catch (e) { failures.push(`agents/${slug}: durable purge failed (${String(e?.message ?? e)})`); continue; }
     const r = await purgeStoreDir(["memory", "agents", encodeURIComponent(slug)]);
     if (r.ok) swept.agentDirs += 1;
     else failures.push(`agents/${slug}: ${r.error}`);
   }
-  // 2. background sandboxes with no schedule row.
-  for (const slug of await listBackgroundAgentIds()) {
+  // 2. background sandboxes with no schedule row (same fail-closed shape).
+  for (const slug of backgroundIds) {
     const owned = [...liveTaskNames].some((name) => backgroundAgentSlug(name) === slug);
     if (owned) continue;
-    await durableRuns.purgeForTarget(`background:${slug}`).catch(() => {});
+    try {
+      const purged = await durableRuns.purgeForTarget(`background:${slug}`);
+      if (purged?.ok === false) { failures.push(`background/${slug}: durable purge refused (${purged.error ?? "unknown"})`); continue; }
+    } catch (e) { failures.push(`background/${slug}: durable purge failed (${String(e?.message ?? e)})`); continue; }
     const r = await purgeStoreDir(["memory", "background", encodeURIComponent(slug)]);
     if (r.ok) swept.backgroundDirs += 1;
     else failures.push(`background/${slug}: ${r.error}`);
   }
-  // 3. execution dirs with no registry row + thread dirs with no/empty key.
-  const liveExecutions = new Set(
-    (await durableRuns.list().catch(() => ({ runs: [] }))).runs.map((r) => String(r.executionId)),
-  );
-  for (const dirName of await listDirsUnder(["memory", "durable-runs", "executions"])) {
-    let executionId;
-    try { executionId = decodeURIComponent(dirName); } catch { continue; }
-    if (liveExecutions.has(executionId)) continue;
-    const r = await purgeStoreDir(["memory", "durable-runs", "executions", dirName]);
-    if (r.ok) swept.executionDirs += 1;
-    else failures.push(`executions/${dirName}: ${r.error}`);
+  // 3. execution dirs with no registry row. A registry read failure means NO
+  // execution dir may be judged orphaned (the old code read failures as an
+  // EMPTY live set and deleted everything).
+  let runs;
+  try {
+    runs = await durableRuns.list();
+  } catch (e) {
+    failures.push(`registry list failed: ${String(e?.message ?? e)} — execution dirs skipped`);
+    runs = null;
   }
+  const liveExecutions = runs ? new Set(runs.runs.map((r) => String(r.executionId))) : null;
+  if (liveExecutions) {
+    for (const dirName of await listDirsUnder(["memory", "durable-runs", "executions"])) {
+      let executionId;
+      try { executionId = decodeURIComponent(dirName); } catch { continue; }
+      if (liveExecutions.has(executionId)) continue;
+      const r = await purgeStoreDir(["memory", "durable-runs", "executions", dirName]);
+      if (r.ok) swept.executionDirs += 1;
+      else failures.push(`executions/${dirName}: ${r.error}`);
+    }
+  }
+  // 4. thread dirs whose reverse-index is DEFINITELY absent/empty. A read
+  // ERROR is not the same as "no record": errors skip (never delete).
   for (const dirName of await listDirsUnder(["memory", "durable-runs", "threads"])) {
     let threadId;
     try { threadId = decodeURIComponent(dirName); } catch { continue; }
-    const record = await durable.get(`thread-runs:${threadId}`).catch(() => null);
+    let record;
+    try {
+      record = await durable.get(`thread-runs:${threadId}`);
+    } catch (e) {
+      failures.push(`threads/${dirName}: reverse-index read failed (${String(e?.message ?? e)}) — skipped`);
+      continue;
+    }
     if (Array.isArray(record) && record.length > 0) continue;
     const r = await purgeStoreDir(["memory", "durable-runs", "threads", dirName]);
     if (r.ok) swept.threadDirs += 1;

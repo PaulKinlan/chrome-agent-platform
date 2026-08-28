@@ -27,6 +27,7 @@ import {
 } from "../lib/provider-gate.js";
 import { dispatchDurableProviderRun } from "../lib/durable-provider-dispatch.js";
 import {
+  closeAgentWorkerFor,
   createActivityRoutes,
   createAgentWorkerRoutes,
   reconcileAgentWorkers,
@@ -3811,16 +3812,31 @@ const handlers = mergeRouteMaps(
           payload,
         );
       },
+      // P1-2 teardown injection: persistent fs-grants scoped to THIS agent
+      // are revoked with it (global grants are NEVER touched — listFsGrants
+      // with a scope filter also returns global records, so filter strictly).
+      revokeGrants: async (agentId) => {
+        try {
+          const { listFsGrants, deleteFsGrant } = await import("../lib/fs-grants.js");
+          const scoped = (await listFsGrants({ scope: { agentId } }))
+            .filter((g) => g?.scopeKey === `agent:${agentId}`);
+          const failures = [];
+          for (const g of scoped) {
+            const d = await deleteFsGrant(g.id).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+            if (d?.ok === false) failures.push(`${g.id}: ${d.error ?? "refused"}`);
+          }
+          return failures.length ? { ok: false, error: failures.join("; ") } : { ok: true, revoked: scoped.length };
+        } catch (e) { return { ok: false, error: String(e?.message ?? e) }; }
+      },
+      // The agent's shared worker must not be resurrectable after deletion.
+      closeAgentWorker: (agentId) => closeAgentWorkerFor(agentId, { kvGet, kvSet }),
     });
     if (r?.ok !== false) {
       // Deletion-time alarm cleanup (owner P1: alarms must not outlive the
-      // agent). If this agent was enabled as a BACKGROUND agent it has a
-      // deterministic `recipe:<slug>` scheduled task; deleting the agent must
-      // disarm it, else its alarm keeps firing forever as an orphan. Best-effort
-      // — "no such task" just means it wasn't scheduled.
-      // Non-blocking disarm (owner: deleting an agent must be instant). The
-      // payload is marked cancelling (inert) + the live run aborted NOW; the
-      // alarm-clear + payload cleanup finishes in the background.
+      // agent). The per-owner teardown inside deleteNamedAgent cancels every
+      // schedule stamped agentSurfaceRef named:<slug>; this background cancel
+      // remains for the deterministic recipe:<slug> task (best-effort, instant
+      // — the payload is marked cancelling and the live run aborted NOW).
       cancelScheduledTaskBackground(`recipe:${slug}`);
       broadcastProgress({ type: "named-agent-changed" });
     }
@@ -3830,8 +3846,9 @@ const handlers = mergeRouteMaps(
   async "named-agent.grep"({ id, query }) {
     // Search a named agent's OWN memory + history (the user-facing path). The
     // agent itself gets the same search through its `memory_grep` tool.
-    if (!(await getNamedAgent(id))) return { ok: false, error: `no agent ${id}` };
-    const mem = namedAgentMemory(slugifyAgentId(id));
+    const agent = await getNamedAgent(id);
+    if (!agent) return { ok: false, error: `no agent ${id}` };
+    const mem = namedAgentMemory(agent.instanceId || slugifyAgentId(id));
     return await grepAgentMemory(mem, query);
   },
   async "named-agent.avatar"({ id, name, role }, context) {
@@ -3894,10 +3911,13 @@ const handlers = mergeRouteMaps(
     // agents had CRUD/grep/avatar but no run path). The agent runs the task
     // with its OWN OPFS sandbox (namedAgentMemory — its memory + history), so
     // its runs read/write its own tier, never the master's or a site's.
+    // The store is namespaced by the agent's IMMUTABLE instanceId (not the
+    // reusable slug): a recreated same-name agent gets a genuinely fresh
+    // namespace, and the deleted agent's journalTarget dies with it.
     const agent = await getNamedAgent(id);
     if (!agent) return { ok: false, error: `no agent ${id}` };
     const slug = slugifyAgentId(id);
-    const mem = namedAgentMemory(slug);
+    const mem = namedAgentMemory(agent.instanceId || slug);
     const runTag = runId ?? `named:${slug}:${Date.now()}`;
     // PER-AGENT provider override: resolve the agent's OWN complete provider
     // config (the full override WITH its key — never surfaced), then thread the
@@ -3956,8 +3976,9 @@ const handlers = mergeRouteMaps(
     // The agent's OWN run history (its journal — task/result/tool-call rows),
     // most-recent-first, so the agent-chat surface can show what the agent did.
     // Reads the per-agent OPFS, never the master journal.
-    if (!(await getNamedAgent(id))) return { ok: false, error: `no agent ${id}` };
-    const mem = namedAgentMemory(slugifyAgentId(id));
+    const agent = await getNamedAgent(id);
+    if (!agent) return { ok: false, error: `no agent ${id}` };
+    const mem = namedAgentMemory(agent.instanceId || slugifyAgentId(id));
     const journal = (await mem.get("journal").catch(() => null)) ?? [];
     const entries = Array.isArray(journal) ? journal.slice(-200).reverse() : [];
     return { entries, count: entries.length };

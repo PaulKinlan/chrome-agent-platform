@@ -1149,8 +1149,16 @@ async function listStoreIds(dir) {
     return [];
   }
   const out = [];
-  for await (const [name, handle] of agentsDir.entries()) {
-    if (handle.kind === "directory") out.push(decodeURIComponent(name));
+  // FAIL-CLOSED for the orphan sweep: an I/O error while iterating must not
+  // be read as "no sandboxes exist" (the sweep would then judge every dir an
+  // orphan). Absent root/dir is a genuine empty list; iteration errors THROW.
+  try {
+    for await (const [name, handle] of agentsDir.entries()) {
+      if (handle.kind === "directory") out.push(decodeURIComponent(name));
+    }
+  } catch (e) {
+    if (out.length === 0 && e?.name === "NotFoundError") return out;
+    throw e;
   }
   return out.sort();
 }
