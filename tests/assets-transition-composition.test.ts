@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
-import { focusExplicitRouteTarget } from "../extension/ntp/view-transition.js";
+import { focusExplicitRouteTarget } from "../extension/ntp/route-focus.js";
 
 const root = new URL("../", import.meta.url);
 const read = (path: string) => Deno.readTextFile(new URL(path, root));
@@ -19,7 +19,7 @@ Deno.test("Assets dialog lifecycle composes with no-argument follow-up focus neu
 
   assertStringIncludes(
     ntp,
-    "import {\n  createViewTransitionRunner,\n  focusExplicitRouteTarget,",
+    "import {\n  createRouteUpdateRunner,\n  focusExplicitRouteTarget,",
   );
   assertStringIncludes(
     ntp,

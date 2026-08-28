@@ -36,15 +36,14 @@ Deno.test("first-run composition preserves current run, transition, Directory an
       'id="durable-run-registry"',
       'id="side-toggle"',
       'id="thread-composer"',
-      "::view-transition-old(overlay-view)",
     ]
   ) assert(html.includes(marker), `missing composed NTP marker: ${marker}`);
 
   for (
     const marker of [
       'from "../lib/first-run-onboarding.js"',
-      'from "./view-transition.js"',
-      "createViewTransitionRunner",
+      'from "./route-focus.js"',
+      "createRouteUpdateRunner",
       "focusExplicitRouteTarget",
       "loadFirstRunGuideState",
       'const assetQuickDrawer = document.getElementById("asset-quick-drawer")',

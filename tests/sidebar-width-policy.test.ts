@@ -55,7 +55,7 @@ Deno.test("ntp wiring: the narrow TOGGLE routes through the policy — the manua
   const ntp = readFileSync(new URL("../extension/ntp/ntp.js", import.meta.url), "utf8");
   // The click handler branches on the breakpoint BEFORE touching state.
   assertStringIncludes(ntp, "if (narrowSidebarMq?.matches === true) {");
-  assertStringIncludes(ntp, "withViewTransition(() => setSidebarOverlay(!sidebarOverlayOpen))");
+  assertStringIncludes(ntp, "runRouteUpdate(() => setSidebarOverlay(!sidebarOverlayOpen))");
   // The overlay is narrow-only, transient, and closable (scrim + Escape +
   // leaving the breakpoint all close it).
   assertStringIncludes(ntp, "function setSidebarOverlay(open)");
