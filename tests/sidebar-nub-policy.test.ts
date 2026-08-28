@@ -207,7 +207,7 @@ Deno.test("sidebar nub policy: openView synchronises covered state inside the fo
     start,
     source.indexOf("function closeView(", start),
   );
-  const transitionOpen = body.indexOf("withViewTransition(() =>");
+  const transitionOpen = body.indexOf("runRouteUpdate(() =>");
   const focusUpdate = body.indexOf("viewFocus.open(trigger, () => {");
   const reveal = body.indexOf("viewOverlay.hidden = false;");
   const sync = body.indexOf("syncViewOpen();");

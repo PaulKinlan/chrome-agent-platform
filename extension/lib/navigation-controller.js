@@ -5,7 +5,7 @@
 //   - Uses modern window.navigation (navigate, navigatesuccess, navigateerror) where available.
 //   - Graceful fallback to popstate + hashchange when Navigation API is absent.
 //   - Exactly ONE active listener registration per window/document (no duplicate listeners).
-//   - History is the single source of truth: every view transition produces a real history entry.
+//   - History is the single source of truth: every route update produces a real history entry.
 //   - Back/forward traversal restores full UI state (aria-current, data renders, scroll, focus, overlay state).
 //   - Deep links and reloads restore the exact target view/section.
 //   - Stale/invalid hashes fail closed safely without crashing.

@@ -36,10 +36,10 @@ import {
   requestBrowserControlFromOwnerClick,
 } from "../lib/first-run-onboarding.js";
 import {
-  createViewTransitionRunner,
+  createRouteUpdateRunner,
   focusExplicitRouteTarget,
   VIEW_ROUTE,
-} from "./view-transition.js";
+} from "./route-focus.js";
 import { applySidebarNubPolicy, SIDEBAR_NARROW_QUERY, sidebarWidthPolicy } from "./view-policy.js";
 import { parseNtpHash, resolveEntryMeta, shouldDispatchForNavigationType } from "../lib/navigation-controller.js";
 import { actionableRunsForSurface, latestRunForSurface } from "../lib/run-scope.js";
@@ -307,18 +307,7 @@ firstRunGuide?.addEventListener("decline-browser-control", async () => {
   await renderFirstRunGuide();
 });
 
-function prefersReducedMotion() {
-  try {
-    return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
-  } catch {
-    return false;
-  }
-}
-
-const withViewTransition = createViewTransitionRunner({
-  document,
-  prefersReducedMotion,
-});
+const runRouteUpdate = createRouteUpdateRunner();
 
 // ── Site Agents (enrolled origins + proactive discovery) ───────────────────
 async function renderSiteAgents() {
@@ -1047,9 +1036,9 @@ function syncComposerScope() {
   }
 }
 
-// The inner (no-transition) cleanups, so openView/showThreadView can hide the
-// OTHER overlay without nesting a second document.startViewTransition (a nested
-// transition throws "transition was aborted because of invalid state snapshot").
+// The inner cleanups, so openView/showThreadView can hide the OTHER overlay
+// before the next route update (stale overlay state must never survive into
+// the new view).
 // When any in-context view (thread / settings / directory / skills / etc.) is
 // open, the hub is hidden + its scroll is frozen so the BACKGROUND page cannot
 // scroll behind the overlay (the scrollbar belongs to the ACTIVE view only).
@@ -1121,19 +1110,16 @@ function showThreadView(options = {}) {
     focusExplicitRouteTarget(options);
     return;
   }
-  const sourceRoute = activeViewRoute;
-  withViewTransition(() => {
+  runRouteUpdate(() => {
     // Only ONE overlay at a time (item 48): the thread view replaces the
     // settings/directory/recipes view.
     if (!viewOverlay.hidden) hideViewInner();
     threadView.hidden = false;
     activeViewRoute = VIEW_ROUTE.TASK;
-    // The new-root snapshot must already exclude the hub. Keeping this state
-    // change inside the update callback makes snapshot capture deterministic.
+    // Covered-view state is synchronized inside the route update so the
+    // destination view never renders over stale overlay state.
     syncViewOpen();
   }, {
-    sourceRoute,
-    targetRoute: VIEW_ROUTE.TASK,
     focusAfter,
   });
 }
@@ -1146,13 +1132,10 @@ function hideThreadView({
     window.history.back();
     return;
   }
-  const sourceRoute = activeViewRoute;
-  withViewTransition(() => {
+  runRouteUpdate(() => {
     hideThreadViewInner();
     activeViewRoute = VIEW_ROUTE.HUB;
   }, {
-    sourceRoute,
-    targetRoute: VIEW_ROUTE.HUB,
     focusAfter,
   });
 }
@@ -2263,7 +2246,7 @@ function ensureSideScrim() {
   sideScrim.type = "button";
   sideScrim.setAttribute("aria-label", "Close sidebar");
   sideScrim.hidden = true;
-  sideScrim.addEventListener("click", () => withViewTransition(() => setSidebarOverlay(false)));
+  sideScrim.addEventListener("click", () => runRouteUpdate(() => setSidebarOverlay(false)));
   side.after(sideScrim);
   return sideScrim;
 }
@@ -2307,16 +2290,16 @@ sideToggle?.addEventListener("click", () => {
   // UX-004 REVISE: the toggle goes THROUGH the narrow policy — below the
   // breakpoint expansion is the off-canvas overlay, never the inline rail.
   if (narrowSidebarMq?.matches === true) {
-    withViewTransition(() => setSidebarOverlay(!sidebarOverlayOpen));
+    runRouteUpdate(() => setSidebarOverlay(!sidebarOverlayOpen));
     return;
   }
-  withViewTransition(() => setSidebarCollapsed(!sidebarCollapsed));
+  runRouteUpdate(() => setSidebarCollapsed(!sidebarCollapsed));
 });
 // Escape closes the overlay. Optional-chained: the unit-thread harnesses
 // evaluate this module against a partial DOM shim without addEventListener.
 document.addEventListener?.("keydown", (event) => {
   if (event.key === "Escape" && sidebarOverlayOpen) {
-    withViewTransition(() => setSidebarOverlay(false));
+    runRouteUpdate(() => setSidebarOverlay(false));
   }
 });
 // Narrow-width auto-collapse (UX-004): the expanded 240px rail overflows a
@@ -2367,15 +2350,6 @@ document.getElementById("new-agent")?.addEventListener("click", () => {
   openQuickCreateAgent();
 });
 
-// ── View Transitions (item 8): smooth in-page state changes, reduced-motion aware.
-// Named elements let the thread body + composer morph between the hub and the
-// full-screen thread. No-op when the API is absent or reduced-motion is on.
-//
-// The runner guards against overlapping snapshots, cleans route-scoped policy
-// after both success and abort, and moves focus only after the active transition
-// finishes. Rapid switches still apply their state immediately rather than
-// aborting the transition already in flight.
-
 // ── in-context navigation (no new tabs) ─────────────────────────────────
 const viewOverlay = document.getElementById("view");
 // CAP-FB-20260828-PANEL-DOC-RETENTION-01: one PERSISTENT frame per panel
@@ -2423,10 +2397,8 @@ function embeddedViewRoute(path) {
 }
 
 function openView(path, title, trigger) {
-  const sourceRoute = activeViewRoute;
   const targetRoute = embeddedViewRoute(path);
-  // Start the embedded document load before snapshot capture so the named
-  // destination overlay is populated at the transition midpoint.
+  // Boot the embedded document before the route update so the destination
   // CAP-FB-20260826-BACK-STACK-02: a plain `viewFrame.src = url` is a
   // cross-document navigation that APPENDS a joint session-history entry —
   // combined with the pushState below that produced TWO entries per open (the
@@ -2456,18 +2428,16 @@ function openView(path, title, trigger) {
     }
   }
 
-  withViewTransition(() =>
+  runRouteUpdate(() =>
     viewFocus.open(trigger, () => {
       // Only ONE overlay at a time (item 48): the settings/directory/recipes
-      // view replaces the task thread. Synchronise covered-view state inside the
-      // transition callback: startViewTransition applies this callback later.
+      // view replaces the task thread. Synchronize covered-view state inside
+      // the route update.
       if (!threadView.hidden) hideThreadViewInner();
       viewOverlay.hidden = false;
       activeViewRoute = targetRoute;
       syncViewOpen();
     }, null), {
-    sourceRoute,
-    targetRoute,
     focusAfter: activePanelFrame,
   });
 }
@@ -2477,15 +2447,12 @@ function closeView({ fromNavigation = false } = {}) {
     return;
   }
 
-  const sourceRoute = activeViewRoute;
-  withViewTransition(() => {
+  runRouteUpdate(() => {
     hideViewInner();
     activeViewRoute = VIEW_ROUTE.HUB;
   }, {
-    sourceRoute,
-    targetRoute: VIEW_ROUTE.HUB,
-    // Keep Directory's initiating-trigger restoration, but defer it until the
-    // View Transition top layer has settled instead of focusing underneath it.
+    // Keep Directory's initiating-trigger restoration via the viewFocus.close
+    // disposition rather than focusing underneath the closing overlay.
     focusAfter: { focus: () => viewFocus.close(() => {}) },
   });
   // Returning from Settings/Directory is an owner navigation boundary. A

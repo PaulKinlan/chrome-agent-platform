@@ -1,121 +1,53 @@
-// @ts-nocheck — minimal harness for synchronous view transition and focus routing.
+// @ts-nocheck — minimal harness for the synchronous route-update runner and focus routing.
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
-  createViewTransitionRunner,
+  createRouteUpdateRunner,
   focusExplicitRouteTarget,
-  shouldSuppressRootCrossfade,
-  TASK_VIEW_TRANSITION_CLASS,
   VIEW_ROUTE,
-} from "../extension/ntp/view-transition.js";
+} from "../extension/ntp/route-focus.js";
 
 function harness() {
-  let starts = 0;
-  const classes = new Set();
-  const document = {
-    documentElement: {
-      classList: {
-        add: (name) => classes.add(name),
-        remove: (name) => classes.delete(name),
-      },
-    },
-    startViewTransition(update) {
-      starts += 1;
-      update();
-      return { finished: Promise.resolve() };
-    },
-  };
-  const run = createViewTransitionRunner({
-    document,
-    prefersReducedMotion: () => false,
-  });
+  let focused = 0;
+  const run = createRouteUpdateRunner();
   return {
-    classes,
-    document,
     run,
-    starts: () => starts,
+    focused: () => focused,
+    makeTarget: () => ({ isConnected: true, focus: () => (focused += 1) }),
   };
 }
 
-Deno.test("route direction suppresses snapshots only across either side of a task boundary", () => {
-  const fullViewRoutes = [
-    VIEW_ROUTE.HUB,
-    VIEW_ROUTE.SETTINGS,
-    VIEW_ROUTE.DIRECTORY,
-    VIEW_ROUTE.SKILLS,
-    VIEW_ROUTE.ARTIFACTS,
-  ];
-  for (const fullViewRoute of fullViewRoutes) {
-    for (
-      const [source, target] of [
-        [fullViewRoute, VIEW_ROUTE.TASK],
-        [VIEW_ROUTE.TASK, fullViewRoute],
-      ]
-    ) {
-      assertEquals(
-        shouldSuppressRootCrossfade(source, target),
-        true,
-        `${source} → ${target} suppresses obsolete root and overlay pixels`,
-      );
-    }
-  }
-
-  for (const source of fullViewRoutes) {
-    for (const target of fullViewRoutes) {
-      if (source === target) continue;
-      assertEquals(
-        shouldSuppressRootCrossfade(source, target),
-        false,
-        `${source} → ${target} retains its normal named cross-fade`,
-      );
-    }
-  }
-  assertEquals(
-    shouldSuppressRootCrossfade(VIEW_ROUTE.TASK, VIEW_ROUTE.TASK),
-    false,
-  );
-  assertEquals(shouldSuppressRootCrossfade(null, VIEW_ROUTE.TASK), false);
-});
-
-Deno.test("view transition runner: applies navigation update immediately without starting view transitions", () => {
+Deno.test("route update runner: applies navigation update immediately and synchronously", () => {
   const h = harness();
   let updated = 0;
   let focused = 0;
   const focusTarget = { isConnected: true, focus: () => focused++ };
 
   const res = h.run(() => updated++, {
-    sourceRoute: VIEW_ROUTE.HUB,
-    targetRoute: VIEW_ROUTE.TASK,
     focusAfter: focusTarget,
   });
 
   assertEquals(res, null, "runner returns null for immediate synchronous execution");
   assertEquals(updated, 1, "update runs immediately and synchronously");
-  assertEquals(h.starts(), 0, "document.startViewTransition is NOT invoked (no janky transition)");
   assertEquals(focused, 1, "focus is routed synchronously to the destination surface");
 });
 
-Deno.test("view transition runner: rapid route switches apply updates synchronously and focus latest target", () => {
+Deno.test("route update runner: rapid route switches apply updates synchronously and focus latest target", () => {
   const h = harness();
   let updates = 0;
   let staleFocus = 0;
   let currentFocus = 0;
 
   h.run(() => updates++, {
-    sourceRoute: VIEW_ROUTE.HUB,
-    targetRoute: VIEW_ROUTE.TASK,
     focusAfter: { isConnected: true, focus: () => staleFocus++ },
   });
 
   h.run(() => updates++, {
-    sourceRoute: VIEW_ROUTE.TASK,
-    targetRoute: VIEW_ROUTE.SETTINGS,
     focusAfter: { isConnected: true, focus: () => currentFocus++ },
   });
 
   assertEquals(updates, 2, "both route updates run synchronously in order");
   assertEquals(staleFocus, 1, "first route focused on execution");
   assertEquals(currentFocus, 1, "second route focused on execution");
-  assertEquals(h.starts(), 0, "no view transitions started");
 });
 
 Deno.test("explicit route focus distinguishes no-owner, connected, disconnected, and throwing targets", () => {
@@ -178,15 +110,34 @@ Deno.test("explicit route focus distinguishes no-owner, connected, disconnected,
   );
 });
 
+Deno.test("view transitions are fully removed: no transition API or naming remains in the runner or the NTP", async () => {
+  const runnerSource = await Deno.readTextFile(
+    new URL("../extension/ntp/route-focus.js", import.meta.url),
+  );
+  const ntpSource = await Deno.readTextFile(
+    new URL("../extension/ntp/ntp.js", import.meta.url),
+  );
+  const ntpHtml = await Deno.readTextFile(
+    new URL("../extension/ntp/ntp.html", import.meta.url),
+  );
+
+  for (const [name, source] of [["route-focus.js", runnerSource], ["ntp.js", ntpSource], ["ntp.html", ntpHtml]]) {
+    assert(
+      !/view.?transition/i.test(source),
+      `${name} must not mention view transitions at all`,
+    );
+  }
+});
+
 Deno.test("NTP showThreadView keeps follow-ups focus-neutral and explicit agent switches composer-focused", async () => {
   const js = await Deno.readTextFile(
     new URL("../extension/ntp/ntp.js", import.meta.url),
   );
 
   assert(
-    /function showThreadView\(options = \{\}\)\s*\{[\s\S]*?const focusAfter = Object\.hasOwn\(options, "focusAfter"\)[\s\S]*?: threadTitle;[\s\S]*?if \(!threadView\.hidden\) \{\s*focusExplicitRouteTarget\(options\);\s*return;\s*\}[\s\S]*?withViewTransition\(/
+    /function showThreadView\(options = \{\}\)\s*\{[\s\S]*?const focusAfter = Object\.hasOwn\(options, "focusAfter"\)[\s\S]*?: threadTitle;[\s\S]*?if \(!threadView\.hidden\) \{\s*focusExplicitRouteTarget\(options\);\s*return;\s*\}[\s\S]*?runRouteUpdate\(/
       .test(js),
-    "already-open routes return before transitions and focus only an explicit target",
+    "already-open routes return before the route update and focus only an explicit target",
   );
   assert(
     /async function runThreadTurn\(text, attachments = \[\], mention = null\)\s*\{[\s\S]*?showThreadView\(\);/
