@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.344] — 2026-08-28
+- Groundwork for much faster tasks: task history will be stored as one append-only log per run instead of one file per step. This lands the storage piece with its tests; the switch-over is next
+
 ## [0.2.343] — 2026-08-28
 - Reworked the plan for how task history is stored, after a much better suggestion: one append-only log file per run instead of one file per step. Measured on the real thing, writing a thousand steps goes from about three minutes to one millisecond, and reading them from a third of a second to under one
 

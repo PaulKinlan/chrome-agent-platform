@@ -171,9 +171,17 @@ boot-time sweep; a thread nobody opens costs nothing.
   in a page is corrupt or missing. Must be covered by a test that slices
   deliberately mid-record.
 - **Concurrent writers.** `createWritable` does not lock the file. Today the
-  registry mutex makes the SW the single writer, and that must remain true — if
-  logging ever moves into the agent workers, this design needs revisiting.
-  Worth stating explicitly in the module.
+  registry mutex makes the SW the single writer, and that must remain true.
+  **The owner's observation (2026-08-28) is the durable answer:** with the
+  per-agent actor/worker model already shipped, an agent's writes can be
+  serialised through its own single worker instance, which makes single-writer
+  *structural* rather than conventional. It also unlocks
+  `createSyncAccessHandle`, which shared workers have and the service worker
+  does not — so the same move that removes the correctness caveat also removes
+  the one API limitation this design had to work around. Deliberately NOT done
+  in the same change: it moves where logging runs, which is a bigger blast
+  radius than changing how it is stored. The module is written so that move
+  changes only where `appendRecords` is called from, not its contract.
 - **Retention and growth.** Today's row cap is implicit in the index; a log
   grows without bound. Needs an explicit size bound with either segmentation or
   offline rewrite. This is the one place the design adds a concern rather than
