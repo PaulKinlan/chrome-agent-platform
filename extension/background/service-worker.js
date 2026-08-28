@@ -5036,16 +5036,15 @@ const handlers = mergeRouteMaps(
     return { ok: true, recipe: custom[idx] };
   },
   async "recipe.delete"({ id }) {
-    const custom = await getCustomRecipes();
-    const next = custom.filter((r) => r.id !== id);
-    await masterMemory().set("customRecipes", next);
-    // NON-BLOCKING schedule teardown (the instant-delete contract — the same
-    // path background-agent disable uses): the payload is marked cancelling
-    // (inert) DURABLY before this route responds, the live run aborted now;
-    // only the alarm-clear + payload-delete + termination wait finish async
-    // (reconciliation reaps residue). A MARKING FAILURE rejects `marked` —
-    // surface it honestly; the recipe row is NOT deleted when the teardown
-    // could not be made durable (REVISE-4 P1-A).
+    // NON-BLOCKING schedule teardown FIRST (the instant-delete contract — the
+    // same path background-agent disable uses): the payload is marked
+    // cancelling (inert) DURABLY before this route responds, the live run
+    // aborted now; only the alarm-clear + payload-delete + termination wait
+    // finish async (reconciliation reaps residue). A MARKING FAILURE rejects
+    // `marked` — surface it honestly and REMOVE NOTHING: the recipe row
+    // survives so the owner can retry the delete (REVISE-5 P1: the removal
+    // used to persist BEFORE the mark, so an honest {ok:false} still lost the
+    // recipe).
     const teardown = cancelScheduledTaskBackground(`recipe:${id}`);
     try {
       await teardown.marked;
@@ -5056,6 +5055,11 @@ const handlers = mergeRouteMaps(
         error: `delete failed before the teardown was durable: ${err?.message ?? String(err)}`,
       };
     }
+    // Read AFTER the durable mark so the removal cannot clobber a concurrent
+    // edit that landed while the mark was in flight.
+    const custom = await getCustomRecipes();
+    const next = custom.filter((r) => r.id !== id);
+    await masterMemory().set("customRecipes", next);
     // The deleted custom recipe LEAVES the live registry — broadcast so the
     // open pickers/conversations revalidate (a selected deleted agent is
     // rejected, never routed to a ghost).
