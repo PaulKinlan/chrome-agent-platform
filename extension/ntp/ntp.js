@@ -903,7 +903,30 @@ async function renderRunLog() {
   const explorer = document.createElement("activity-explorer");
   explorer.setAttribute("limit", "100");
   el.replaceChildren(explorer);
+  runLogExplorer = explorer;
 }
+
+// LIVE Recent activity (owner bug: the section froze at page-load state — the
+// explorer loaded ONCE at mount and nothing ever re-queried, so a run that
+// happened while the NTP was open never appeared until a reload). Journal
+// writes are fire-and-forget during a run; re-query the explorer on run
+// progress + registry changes, TRAILING-DEBOUNCED (the aggregation walk is
+// bounded but not free — one settle per burst, not one per tool call).
+// Skipped while a task/agent overlay is open (the hub section isn't visible).
+let runLogExplorer = null;
+let runLogRefreshTimer = 0;
+function scheduleRunLogRefresh() {
+  if (!runLogExplorer) return;
+  const view = document.getElementById("view");
+  if (view && view.hidden !== true) return;
+  clearTimeout(runLogRefreshTimer);
+  runLogRefreshTimer = setTimeout(() => { runLogExplorer?.refresh?.().catch(() => {}); }, 1500);
+}
+subscribeProgress((ev) => {
+  if (!ev || typeof ev !== "object") return;
+  if (["tool-call", "tool-result", "done", "error", "text"].includes(ev.type)) scheduleRunLogRefresh();
+});
+subscribeRunRegistry(() => scheduleRunLogRefresh(), { emitCurrent: false });
 
 // A small usage summary on the hub (the recent calls/tokens/cost) — reads the
 // SW's single-authority usage aggregate, so you see at a glance how much the

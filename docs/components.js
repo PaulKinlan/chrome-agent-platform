@@ -5812,20 +5812,54 @@ function activityText(e) {
   }
 }
 
-// The FULL detail for a journal entry (shown in the expanded row).
-function activityDetail(e) {
-  switch (e?.type) {
-    case "tool-result": {
-      const raw = e.result;
-      const s = typeof raw === "string" ? raw : (raw == null ? "" : JSON.stringify(raw, null, 2));
-      return s || "(no result)";
-    }
-    case "tool-call": return typeof e.args === "string" ? e.args : (e.args == null ? "" : JSON.stringify(e.args, null, 2));
-    case "error": return [e.error, e.message, e.stack].filter(Boolean).join("\n") || "error";
-    case "task": return e.task || "";
-    case "result": return e.result || "";
-    default: return e?.detail || e?.url || "";
+// Plain-text details are bounded inline; longer payloads truncate with a
+// "show more" reveal (the SW already caps journaled args/results at 2 KiB —
+// this bound is the defensive ceiling for every other source, e.g. error
+// stacks). The copy button copies the FULL text, never the truncated view.
+const AEX_PLAIN_DETAIL_INLINE = 2048;
+function plainDetailBlock(label, text) {
+  const wrap = document.createElement("div");
+  wrap.className = "aex-plain";
+  const head = document.createElement("div");
+  head.className = "aex-plain-head";
+  const l = document.createElement("span");
+  l.className = "aex-plain-label";
+  l.textContent = label;
+  head.appendChild(l);
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "aex-plain-copy";
+  copy.textContent = "copy";
+  copy.setAttribute("aria-label", `Copy ${label}`);
+  copy.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    const restore = () => setTimeout(() => { copy.textContent = "copy"; }, 1400);
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(() => { copy.textContent = "copied"; restore(); })
+        .catch(() => { copy.textContent = "copy failed"; restore(); });
+    } else { copy.textContent = "copy failed"; restore(); }
+  });
+  head.appendChild(copy);
+  wrap.appendChild(head);
+  const pre = document.createElement("pre");
+  pre.className = "aex-detail";
+  if (text.length > AEX_PLAIN_DETAIL_INLINE) {
+    pre.textContent = text.slice(0, AEX_PLAIN_DETAIL_INLINE) + "\n…";
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "aex-plain-more";
+    more.textContent = `show more (${(text.length - AEX_PLAIN_DETAIL_INLINE).toLocaleString()} more chars)`;
+    more.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      pre.textContent = text;
+      more.remove();
+    });
+    head.appendChild(more);
+    // keep copy last in the head for a stable layout
+    head.appendChild(copy);
   }
+  wrap.appendChild(pre);
+  return wrap;
 }
 
 class ActivityExplorer extends Component {
@@ -5872,6 +5906,44 @@ class ActivityExplorer extends Component {
           color:var(--accent,#0e6e63); background:var(--bg,#f7f6f3); border:1px solid var(--border,#e3e0d9);
           border-radius:var(--radius-sm,8px); }
         .aex-count { font-size:11px; color:var(--muted,#635e56); }
+        /* Structured detail blocks (the same bounded tool-tree renderer the
+           conversation cards use — styles duplicated per shadow-root
+           isolation, scoped under .aex-blocks). */
+        .aex-blocks { padding:0 12px 10px 12px; display:flex; flex-direction:column; gap:6px; }
+        .aex-blocks .tt-block { border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,8px); }
+        .aex-blocks .tt-block summary { list-style:none; cursor:pointer; display:flex; align-items:baseline; gap:8px; padding:6px 10px; color:var(--muted,#635e56); font-size:12px; user-select:none; }
+        .aex-blocks .tt-block summary::-webkit-details-marker { display:none; }
+        .aex-blocks .tt-block summary:hover { color:var(--text,#1d1b18); }
+        .aex-blocks .tt-block summary:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:-2px; }
+        .aex-blocks .tt-block-label { font-weight:600; color:var(--ink,#1d1b18); }
+        .aex-blocks .tt-block-meta { color:var(--muted,#635e56); }
+        .aex-blocks .tt-tree { padding:2px 6px 8px; max-height:260px; overflow:auto; }
+        .aex-blocks .tt-row { display:flex; align-items:center; gap:6px; padding:2px 4px; border-radius:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; line-height:1.5; min-height:22px; }
+        .aex-blocks .tt-row:hover { background:var(--panel-2,#efede8); }
+        .aex-blocks .tt-row[hidden] { display:none; }
+        .aex-blocks .tt-toggle { display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; padding:0; border:0; background:transparent; color:var(--muted,#635e56); cursor:pointer; border-radius:4px; flex:0 0 auto; }
+        .aex-blocks .tt-toggle:hover { color:var(--ink,#1d1b18); background:var(--panel-2,#efede8); }
+        .aex-blocks .tt-toggle:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:0; }
+        .aex-blocks .tt-toggle .tt-caret { transition:transform .15s ease; }
+        .aex-blocks .tt-toggle[aria-expanded="true"] .tt-caret { transform:rotate(90deg); }
+        .aex-blocks .tt-ic { width:18px; height:18px; flex:0 0 auto; }
+        .aex-blocks .tt-key { color:var(--accent,#0e6e63); font-weight:600; white-space:nowrap; }
+        .aex-blocks .tt-val { color:var(--ink,#1d1b18); overflow-wrap:anywhere; min-width:0; }
+        .aex-blocks .tt-val-number, .aex-blocks .tt-val-boolean { color:var(--accent,#0e6e63); }
+        .aex-blocks .tt-val-null { color:var(--muted,#635e56); font-style:italic; }
+        .aex-blocks .tt-kind { color:var(--muted,#635e56); font-size:11px; margin-left:2px; }
+        .aex-blocks .tt-copy { margin-left:auto; flex:0 0 auto; font:inherit; font-size:11px; color:var(--muted,#635e56); background:transparent; border:1px solid var(--border,#e3e0d9); border-radius:5px; padding:1px 7px; cursor:pointer; opacity:0; transition:opacity .12s ease; }
+        .aex-blocks .tt-row:hover .tt-copy, .aex-blocks .tt-copy:focus-visible { opacity:1; }
+        .aex-blocks .tt-copy:hover { color:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); }
+        .aex-plain { border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,8px); }
+        .aex-plain-head { display:flex; align-items:baseline; gap:8px; padding:6px 10px 0; }
+        .aex-plain-label { font-size:12px; font-weight:600; color:var(--ink,#1d1b18); }
+        .aex-plain-copy, .aex-plain-more { margin-left:auto; font:inherit; font-size:11px; color:var(--muted,#635e56);
+          background:transparent; border:1px solid var(--border,#e3e0d9); border-radius:5px; padding:1px 7px; cursor:pointer; }
+        .aex-plain-copy:hover, .aex-plain-more:hover { color:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); }
+        .aex-plain-copy:focus-visible, .aex-plain-more:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:0; }
+        .aex-plain .aex-detail { padding:4px 10px 8px; }
+        @media (prefers-reduced-motion: reduce) { .aex-blocks .tt-toggle .tt-caret { transition:none; } .aex-blocks .tt-copy { transition:none; } }
       </style>
       <div class="aex">
         <div class="aex-toolbar">
@@ -5899,6 +5971,21 @@ class ActivityExplorer extends Component {
   get entries() {
     return this._entries;
   }
+  // Re-query the backend NOW (live activity: the NTP calls this,
+  // trailing-debounced, when run progress events land — the section used to
+  // freeze at whatever it showed when the page opened).
+  refresh() {
+    if (this._seeded) return Promise.resolve(); // gallery demos own their data
+    return this._load();
+  }
+  // A cheap change signature: skip the re-render entirely when the fetched
+  // entries are identical (protects aria-live from spam + keeps open rows
+  // from collapsing on a no-op refresh).
+  _signature() {
+    const es = this._entries || [];
+    const last = es[0];
+    return `${es.length}:${last?.ts ?? 0}:${last?.type ?? ""}:${last?.id ?? ""}:${last?.callId ?? ""}`;
+  }
   async _load() {
     // If entries were seeded synchronously (the gallery), never clobber them
     // with the empty backend result (the _load await would race the setter).
@@ -5923,6 +6010,9 @@ class ActivityExplorer extends Component {
           this._loadError = "the activity log didn't answer — the agent worker may be busy";
         }
       }
+      const sig = this._signature();
+      if (sig === this._lastSignature && this._rendered) return; // nothing new — leave the DOM (and open rows) alone
+      this._lastSignature = sig;
     }
     const seen = new Map();
     for (const e of this._entries) {
@@ -5949,6 +6039,12 @@ class ActivityExplorer extends Component {
       }
       return true;
     });
+    // Rows that are open BEFORE the rebuild stay open after it (a live
+    // refresh must not collapse what the owner is reading).
+    const openBefore = new Set();
+    for (const d of this._list.querySelectorAll("details.aex-entry[open]")) {
+      if (d.dataset.ekey) openBefore.add(d.dataset.ekey);
+    }
     this._list.replaceChildren();
     if (!filtered.length) {
       const d = document.createElement("div");
@@ -5988,16 +6084,58 @@ class ActivityExplorer extends Component {
       ts.textContent = timeAgo(e.ts);
       summary.append(who, main, ts);
       entry.append(summary);
-      // The expanded detail (only for entries that have more than the one-liner).
-      const detail = activityDetail(e);
-      if (detail) {
-        const body = document.createElement("pre");
-        body.className = "aex-detail";
-        body.textContent = detail;
-        entry.append(body);
-      }
+      // The expanded detail — STRUCTURED for tool calls/results (the same
+      // bounded tree renderer the conversation tool cards use), plain text
+      // with truncation + copy for everything else. Never raw JSON blobs.
+      const body = this._detailBody(e);
+      if (body) entry.append(body);
+      const ekey = this._detailKey(e);
+      entry.dataset.ekey = ekey;
+      if (openBefore.has(ekey)) entry.open = true;
       this._list.append(entry);
     }
+  }
+  _detailKey(e) {
+    return `${e.type}:${e.id ?? ""}:${e.callId ?? ""}:${e.ts ?? ""}`;
+  }
+  // Build the expanded detail body for an entry: tool-call inputs and
+  // tool-result output become collapsible, syntax-aware tree blocks
+  // (buildToolTreeBlock over safeParse/buildTree — the conversation card's
+  // renderer, reused per the no-parallel-renderers rule). Each entry gets a
+  // persistent expansion-state map so the owner's collapse/expand choices
+  // survive re-renders.
+  _detailBody(e) {
+    const key = this._detailKey(e);
+    if (!this._blockStates) this._blockStates = new Map();
+    let st = this._blockStates.get(key);
+    if (!st) { st = new Map(); this._blockStates.set(key, st); }
+    // Bound the state maps with the entry volume (they die with the entries).
+    if (this._blockStates.size > 400) this._blockStates.clear();
+    const wrap = document.createElement("div");
+    wrap.className = "aex-blocks";
+    let any = false;
+    const addBlock = (label, raw) => {
+      if (raw == null || raw === "") return;
+      any = true;
+      const parsed = safeParse(raw);
+      if (parsed.kind === "json") {
+        const tree = buildTree(parsed.value);
+        if (tree.rows.length >= 1) {
+          wrap.appendChild(buildToolTreeBlock(label, parsed.value, tree.rows, tree.maxNodes, st));
+          return;
+        }
+      }
+      wrap.appendChild(plainDetailBlock(label, String(parsed.value ?? raw ?? "")));
+    };
+    switch (e?.type) {
+      case "tool-call": addBlock("inputs", e.args); break;
+      case "tool-result": addBlock("result", e.result); break;
+      case "error": addBlock("error", [e.error, e.message, e.stack].filter(Boolean).join("\n") || "error"); break;
+      case "task": addBlock("task", e.task); break;
+      case "result": addBlock("result", e.result); break;
+      default: addBlock("detail", e?.detail || e?.url || "");
+    }
+    return any ? wrap : null;
   }
 }
 customElements.define("activity-explorer", ActivityExplorer);
