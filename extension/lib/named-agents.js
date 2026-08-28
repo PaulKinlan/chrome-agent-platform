@@ -323,7 +323,20 @@ export async function deleteNamedAgent(id, { gateBeforeDelete = null } = {}) {
     await writeAgents(map);
     const mem = namedAgentMemory(slug);
     await mem.clear().catch(() => {});
-    return { ok: true };
+    // Full teardown: the agent's durable run family (registry rows, execution
+    // dirs, thread reverse-index) goes with it. Dynamic import keeps the
+    // module graph acyclic (durable-runs must never import named-agents).
+    // Failure does NOT resurrect the agent — the deletion stands and the
+    // orphan sweep can finish the job; the owner gets an honest warning.
+    let cleanupWarning = null;
+    try {
+      const { durableRuns } = await import("./durable-runs.js");
+      const purged = await durableRuns.purgeForTarget(`agent:${slug}`);
+      if (purged?.ok === false) cleanupWarning = purged.error ?? "durable purge refused";
+    } catch (e) {
+      cleanupWarning = String(e?.message ?? e);
+    }
+    return cleanupWarning ? { ok: true, cleanupWarning } : { ok: true };
   });
 }
 

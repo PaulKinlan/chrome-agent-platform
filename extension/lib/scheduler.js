@@ -495,6 +495,20 @@ export async function cancelScheduledTask(name, terminationTimeoutMs = CANCEL_TE
 
 /** Phase-2 of cancellation (alarm clear + confirm-absent + payload delete),
  * extracted so the non-blocking delete path shares the SAME fail-closed logic. */
+/** Best-effort OPFS cleanup after a background/scheduled task is REMOVED:
+ * the background agent's memory sandbox (`memory/background/<slug>/`, incl.
+ * its journal) and its durable run family. A no-op for plain one-shot tasks
+ * (no dir exists). Dynamic import keeps the module graph acyclic. */
+async function purgeBackgroundResidue(name) {
+  const { backgroundAgentSlug, backgroundAgentMemory, openDirOptional } = await import("./memory.js");
+  const slug = backgroundAgentSlug(name);
+  const dir = await openDirOptional(["memory", "background", encodeURIComponent(slug)]);
+  if (!dir) return; // not a background agent — nothing to purge
+  await backgroundAgentMemory(slug).clear().catch(() => {});
+  const { durableRuns } = await import("./durable-runs.js");
+  await durableRuns.purgeForTarget(`background:${slug}`).catch(() => {});
+}
+
 async function finalizeCancellation(name) {
   return withLock(async () => {
     // Clear the alarm (best-effort — a one-shot may already be consumed), then
@@ -532,6 +546,10 @@ async function finalizeCancellation(name) {
     const tasks = { ...(store[TASK_KEY] ?? {}) };
     delete tasks[name];
     await kvSet({ [TASK_KEY]: tasks });
+    // Owner-reported leftover fix: a REMOVED background agent must not keep its
+    // OPFS sandbox + journal + durable run family. Best-effort after the row
+    // is gone: non-agent tasks have no background dir → absent → no-op.
+    await purgeBackgroundResidue(name).catch(() => {});
     return { ok: true, name, cancelled: true, alarmAbsent: true };
   });
 }

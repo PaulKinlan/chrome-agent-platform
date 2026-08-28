@@ -75,6 +75,7 @@ import {
   listNamedAgentIds,
   listOrigins,
   listScreenshots,
+  purgeJournals,
   loadScreenshot,
   masterMemory,
   migrateLegacyDurableRunMemory,
@@ -226,7 +227,7 @@ import {
 } from "../lib/browser-tools.js";
 import { getRecipe, RECIPES, backgroundRecipes, intentOf } from "../lib/recipes.js";
 import { fetchSkillFromUrl, installImportedSkill } from "../lib/skill-import.js";
-import { durableRuns } from "../lib/durable-runs.js";
+import { durableRuns, sweepOrphanAgentData } from "../lib/durable-runs.js";
 import { replaySafetyForTool } from "../lib/tool-replay-safety.js";
 import { createAlarmPermissionLifecycle } from "../lib/alarm-permission-lifecycle.js";
 import {
@@ -4058,6 +4059,37 @@ const handlers = mergeRouteMaps(
     }
     const targets = await enumerateStorageTargets();
     return { ok: true, targets };
+  },
+
+  /** Owner-reported leftover fix: purge agent journals (per-agent or global)
+   * WITHOUT touching memory content, run history, or assets. */
+  async "memory.purgeJournals"({ target = null } = {}, context) {
+    if (context?.principal !== "owner-options") {
+      return { ok: false, error: "journal purge is restricted to the Settings surface" };
+    }
+    try {
+      const r = await purgeJournals(target);
+      return r?.ok === false ? r : { ok: true, ...r };
+    } catch (err) {
+      return { ok: false, error: `purge_journals_failed: ${err?.message || err}` };
+    }
+  },
+
+  /** Orphan sweep: remove OPFS state whose owning agent no longer exists
+   * (pre-fix deletion leftovers). Never touches assets or live agents. */
+  async "memory.sweepOrphans"(_m, context) {
+    if (context?.principal !== "owner-options") {
+      return { ok: false, error: "orphan sweep is restricted to the Settings surface" };
+    }
+    try {
+      const [agentRows, taskRows] = await Promise.all([listNamedAgents(), listScheduledTasks()]);
+      return await sweepOrphanAgentData({
+        listAgents: async () => agentRows,
+        listTasks: async () => taskRows,
+      });
+    } catch (err) {
+      return { ok: false, error: `orphan_sweep_failed: ${err?.message || err}` };
+    }
   },
 
   // `agent.registry` — the ONE redacted, grouped, live agent registry the shared

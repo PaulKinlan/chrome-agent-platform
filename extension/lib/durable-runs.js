@@ -18,6 +18,11 @@ import {
 import { REPLAY_MUTATING, perCallIdempotencyKey, worstSafety } from "./tool-replay-safety.js";
 import { commitThreadCancellation, commitThreadTerminal } from "./threads.js";
 import { isNativeQuotaExceededError } from "./storage-errors.js";
+import {
+  durableExecutionDirSegments,
+  durableThreadDirSegments,
+  purgeStoreDir,
+} from "./memory.js";
 
 const INDEX_KEY = "run-registry";
 const RUN_PREFIX = "run:";
@@ -1366,6 +1371,53 @@ export function createDurableRunRegistry({
     return detach;
   }
 
+  /** Agent-teardown purge: remove EVERY durable trace of one journal target
+   * (`agent:<slug>` / `background:<slug>`) — registry rows, the INDEX entries,
+   * the executions' OPFS dirs, and the agent's thread reverse-index entries
+   * (threads whose executions are ALL purged lose their dir + key entirely).
+   * Runs inside the registry mutex; per-dir removals are idempotent so a crash
+   * mid-purge leaves at most an orphan dir that the orphan sweep removes.
+   * NEVER touches the artifacts store (assets live in the master store and
+   * survive agent deletion by design). */
+  async function purgeForTarget(target) {
+    const label = String(target ?? "");
+    if (!/^(?:agent|background):[a-z0-9-]+$/.test(label)) {
+      return { ok: false, error: `refusing to purge unscoped target: ${label || "(empty)"}` };
+    }
+    return await locked(async () => {
+      const purged = [];
+      const threadIds = new Set();
+      for (const executionId of await indexIds()) {
+        const record = await readRecord(executionId, { persistMigration: false });
+        if (!record || record.journalTarget !== label) continue;
+        purged.push(executionId);
+        if (record.threadId) threadIds.add(String(record.threadId));
+      }
+      for (const executionId of purged) {
+        await store.delete(`${RUN_PREFIX}${executionId}`);
+        await removeFromIndexExact(executionId, null);
+        const dir = await purgeStoreDir(durableExecutionDirSegments(executionId));
+        if (dir?.ok === false) throw new Error(`execution dir purge failed: ${executionId}`);
+      }
+      let threadsRemoved = 0;
+      for (const threadId of threadIds) {
+        const key = `${THREAD_RUNS_PREFIX}${threadId}`;
+        const current = await store.get(key);
+        if (!Array.isArray(current)) continue;
+        const remaining = current.filter((id) => !purged.includes(id));
+        if (remaining.length === 0) {
+          await store.delete(key);
+          const dir = await purgeStoreDir(durableThreadDirSegments(threadId));
+          if (dir?.ok === false) throw new Error(`thread dir purge failed: ${threadId}`);
+          threadsRemoved += 1;
+        } else if (remaining.length !== current.length) {
+          await store.setTrusted(key, remaining);
+        }
+      }
+      return { ok: true, runs: purged.length, threads: threadsRemoved, target: label };
+    });
+  }
+
   return {
     bootId,
     start,
@@ -1376,6 +1428,7 @@ export function createDurableRunRegistry({
     settle,
     cancel,
     getRetryRequest,
+    purgeForTarget,
     pauseForPermission,
     pauseForProviderChange,
     resumeAfterPermission,
@@ -1393,3 +1446,74 @@ export function createDurableRunRegistry({
 }
 
 export const durableRuns = createDurableRunRegistry();
+
+/** Orphan sweep: find OPFS state whose owning agent NO LONGER EXISTS and
+ * remove it. This is what repairs pre-fix leftovers (an agent deleted before
+ * teardown existed leaves memory/agents|background dirs, executions dirs, and
+ * thread dirs behind). Injected `listAgents` (named-agents.listNamedAgents)
+ * and `listTasks` (scheduler.listScheduledTasks) keep this module cycle-free.
+ * Assets are NEVER orphans (they live in the master store, not agent dirs). */
+export async function sweepOrphanAgentData({ listAgents, listTasks } = {}) {
+  if (typeof listAgents !== "function" || typeof listTasks !== "function") {
+    throw new Error("sweepOrphanAgentData requires listAgents + listTasks");
+  }
+  const [agentRows, taskRows] = await Promise.all([listAgents(), listTasks()]);
+  const liveAgentSlugs = new Set(
+    (Array.isArray(agentRows) ? agentRows : []).map((a) => String(a?.id ?? a?.slug ?? "")).filter(Boolean),
+  );
+  const liveTaskNames = new Set(
+    (Array.isArray(taskRows) ? taskRows : []).map((t) => String(t?.name ?? "")).filter(Boolean),
+  );
+  const {
+    listNamedAgentIds,
+    listBackgroundAgentIds,
+    listDirsUnder,
+    purgeStoreDir,
+    backgroundAgentSlug,
+    durableRunMemory,
+  } = await import("./memory.js");
+  const durable = durableRunMemory();
+  const swept = { agentDirs: 0, backgroundDirs: 0, executionDirs: 0, threadDirs: 0 };
+  const failures = [];
+  // 1. named-agent sandboxes with no registry row: full teardown (registry
+  // rows + execution dirs + thread index go through purgeForTarget; the dir
+  // itself is then removed — clear-free, the namespace is dead).
+  for (const slug of await listNamedAgentIds()) {
+    if (liveAgentSlugs.has(slug)) continue;
+    await durableRuns.purgeForTarget(`agent:${slug}`).catch(() => {});
+    const r = await purgeStoreDir(["memory", "agents", encodeURIComponent(slug)]);
+    if (r.ok) swept.agentDirs += 1;
+    else failures.push(`agents/${slug}: ${r.error}`);
+  }
+  // 2. background sandboxes with no schedule row.
+  for (const slug of await listBackgroundAgentIds()) {
+    const owned = [...liveTaskNames].some((name) => backgroundAgentSlug(name) === slug);
+    if (owned) continue;
+    await durableRuns.purgeForTarget(`background:${slug}`).catch(() => {});
+    const r = await purgeStoreDir(["memory", "background", encodeURIComponent(slug)]);
+    if (r.ok) swept.backgroundDirs += 1;
+    else failures.push(`background/${slug}: ${r.error}`);
+  }
+  // 3. execution dirs with no registry row + thread dirs with no/empty key.
+  const liveExecutions = new Set(
+    (await durableRuns.list().catch(() => ({ runs: [] }))).runs.map((r) => String(r.executionId)),
+  );
+  for (const dirName of await listDirsUnder(["memory", "durable-runs", "executions"])) {
+    let executionId;
+    try { executionId = decodeURIComponent(dirName); } catch { continue; }
+    if (liveExecutions.has(executionId)) continue;
+    const r = await purgeStoreDir(["memory", "durable-runs", "executions", dirName]);
+    if (r.ok) swept.executionDirs += 1;
+    else failures.push(`executions/${dirName}: ${r.error}`);
+  }
+  for (const dirName of await listDirsUnder(["memory", "durable-runs", "threads"])) {
+    let threadId;
+    try { threadId = decodeURIComponent(dirName); } catch { continue; }
+    const record = await durable.get(`thread-runs:${threadId}`).catch(() => null);
+    if (Array.isArray(record) && record.length > 0) continue;
+    const r = await purgeStoreDir(["memory", "durable-runs", "threads", dirName]);
+    if (r.ok) swept.threadDirs += 1;
+    else failures.push(`threads/${dirName}: ${r.error}`);
+  }
+  return { ok: failures.length === 0, swept, failures };
+}

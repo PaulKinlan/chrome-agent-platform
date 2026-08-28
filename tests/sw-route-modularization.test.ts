@@ -74,6 +74,8 @@ const BASELINE_ROUTES = [
   "agent.directory",
   "system.factoryReset",
   "system.factoryResetEnumerate",
+  "memory.purgeJournals",
+  "memory.sweepOrphans",
   "agent.registry",
   "agent.get",
   "agent.update",
