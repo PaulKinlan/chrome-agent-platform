@@ -614,6 +614,48 @@ export function pairToolJournal(entries) {
  * { type:"tool-call"|"tool-result", callId, tool, args|result, ok, at }).
  * Output: rows in the thread-body tool shape (role:"tool", toolName, …) so
  * the EXISTING projectThreadMessages pairing renders them unchanged. Pure. */
+/** ARTIFACT-PRODUCING TOOLS (CAP-FB-20260828-ARTIFACTS-IN-THREAD-01).
+ *
+ * An artifact is the OUTPUT of the work, so it belongs in the thread that
+ * produced it as well as in the library. Before this, a run that made something
+ * rendered as `create_asset · done · 12ms` and the thing itself was invisible in
+ * the conversation — for a non-HTML artifact there was no trace of it at all.
+ *
+ * PURE, and deliberately the single source for both paths: the live event
+ * stream and the durable-log replay both derive the card from the same tool
+ * RESULT, so an artifact cannot appear while a run is streaming and then vanish
+ * when the thread is reopened.
+ *
+ * Returns null for anything that is not an artifact-producing result, so it is
+ * safe to call on every tool result. */
+const ARTIFACT_TOOLS = new Set(["create_asset", "update_asset", "generate_ui"]);
+
+export function artifactFromToolResult(toolName, result) {
+  if (!ARTIFACT_TOOLS.has(String(toolName ?? ""))) return null;
+  let parsed = result;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return null;
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  if (parsed.ok === false) return null; // a failed create made nothing
+  const asset = parsed.asset && typeof parsed.asset === "object" ? parsed.asset : null;
+  const id = typeof asset?.id === "string" && asset.id
+    ? asset.id
+    : (typeof parsed.id === "string" && parsed.id ? parsed.id : null);
+  if (!id) return null;
+  return {
+    id,
+    name: typeof asset?.name === "string" && asset.name ? asset.name : "Untitled",
+    type: typeof asset?.type === "string" && asset.type ? asset.type : "data",
+    origin: typeof asset?.origin === "string" && asset.origin ? asset.origin : "master",
+    size: Number.isFinite(asset?.size) ? asset.size : 0,
+  };
+}
+
 export function toolRowsFromRunLog(executionId, logs) {
   const rows = (Array.isArray(logs) ? logs : [])
     .filter((r) => r && (r.type === "tool-call" || r.type === "tool-result"))
@@ -629,19 +671,33 @@ export function toolRowsFromRunLog(executionId, logs) {
       ok: r.ok ?? null,
       ts: typeof r.at === "number" ? r.at : null,
     }));
-  return pairToolJournal(rows).map((p) => ({
-    role: "tool",
-    toolName: p.tool,
-    toolStatus: p.status === "success" ? "done" : p.status === "error" ? "error" : "done",
-    toolArgs: p.args ?? null,
-    toolResult: p.result ?? null,
-    toolOk: p.ok ?? null,
-    toolDuration: p.durationMs ?? null,
-    toolCallId: p.callId ?? null,
-    executionId,
-    ts: p.ts ?? null,
-    derived: true, // a VIEW row — not persisted in the thread body
-  }));
+  return pairToolJournal(rows).flatMap((p) => {
+    const toolRow = {
+      role: "tool",
+      toolName: p.tool,
+      toolStatus: p.status === "success" ? "done" : p.status === "error" ? "error" : "done",
+      toolArgs: p.args ?? null,
+      toolResult: p.result ?? null,
+      toolOk: p.ok ?? null,
+      toolDuration: p.durationMs ?? null,
+      toolCallId: p.callId ?? null,
+      executionId,
+      ts: p.ts ?? null,
+      derived: true, // a VIEW row — not persisted in the thread body
+    };
+    // The artifact this call produced renders straight after it, so reopening
+    // a thread shows the deliverable in the context that created it.
+    const artifact = p.status === "error" ? null : artifactFromToolResult(p.tool, p.result);
+    if (!artifact) return [toolRow];
+    return [toolRow, {
+      role: "artifact",
+      artifact,
+      toolCallId: p.callId ?? null,
+      executionId,
+      ts: p.ts ?? null,
+      derived: true,
+    }];
+  });
 }
 
 /** Merge a thread's persisted turn markers (user/terminal rows — the small
@@ -1134,6 +1190,13 @@ export async function runConversationTurn(container, { text, attachments = [], h
           c.appendTool({ name: ev.toolName, status, result: summary, detail: raw !== summary ? raw : null, durationMs: ev.durationMs });
         } else {
           appendBubble(c, "tool", `✓ ${ev.toolName}${summary ? ` — ${summary}` : ""}`);
+        }
+        // The artifact this call produced, rendered in the thread that made it
+        // (the same derivation the durable-log replay uses, so the live view
+        // and the reopened view cannot disagree).
+        if (!err && typeof c.appendArtifact === "function") {
+          const artifact = artifactFromToolResult(ev.toolName, ev.result);
+          if (artifact) c.appendArtifact({ artifact });
         }
         // A structured permission/grant denial surfaces an IN-CONTEXT approval
         // card (one per distinct requirement) instead of only an error card.

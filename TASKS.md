@@ -160,7 +160,7 @@ On resume after a coordinator or worker loss:
 
 ## Open work queue
 
-**This file holds only what is in progress or still to do — 40 entries.** Completed work is archived in [TASKS-DONE.md](TASKS-DONE.md) at triage; **merged is done** (Paul, 2026-08-28), so nothing sits in a terminal state here. Most urgent first (regenerated 2026-08-28). The entry itself is always the authority; where it disagrees with this table, the entry wins.
+**This file holds only what is in progress or still to do — 42 entries.** Completed work is archived in [TASKS-DONE.md](TASKS-DONE.md) at triage; **merged is done** (Paul, 2026-08-28), so nothing sits in a terminal state here. Most urgent first (regenerated 2026-08-28). The entry itself is always the authority; where it disagrees with this table, the entry wins.
 
 Regenerate after any status change (this exact command reproduces the table below):
 
@@ -170,13 +170,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 | Priority | Status | Task | What it is |
 |---|---|---|---|
+| P0 | IN_REVIEW | [`CAP-FB-20260828-ARTIFACT-DURABILITY-01`](#cap-fb-20260828-artifact-durability-01-deleting-a-site-agent-destroys-the-artifacts-made-under-it) | Deleting a Site Agent destroys the artifacts made under it |
+| P0 | IN_REVIEW | [`CAP-FB-20260828-ARTIFACTS-IN-THREAD-01`](#cap-fb-20260828-artifacts-in-thread-01-artifacts-render-in-the-thread-that-produced-them) | Artifacts render in the thread that produced them |
 | P0 | OPEN | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
 | P0 | OPEN | [`CAP-FB-20260827-HUB-FIRST-RUN-01`](#cap-fb-20260827-hub-first-run-01-the-first-screen-is-an-onboarding-wall-not-a-command-center) | The first screen is an onboarding wall, not a command center |
 | P0 | OPEN | [`CAP-FB-20260827-THREAD-OPEN-SEQUENTIAL-READS-01`](#cap-fb-20260827-thread-open-sequential-reads-01-thread-open-serializes-25-opfs-reads-before-first-paint) | Thread open serializes 25 OPFS reads before first paint |
 | P0 | OPEN | [`CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01`](#cap-fb-20260827-tool-call-legibility-01-tool-call-cards-show-shape-not-answers) | Tool-call cards show shape, not answers |
-| P0 | OPEN | [`CAP-FB-20260828-ARTIFACT-DURABILITY-01`](#cap-fb-20260828-artifact-durability-01-deleting-a-site-agent-destroys-the-artifacts-made-under-it) | Deleting a Site Agent destroys the artifacts made under it |
 | P0 | OPEN | [`CAP-FB-20260828-NOUN-DISCIPLINE-01`](#cap-fb-20260828-noun-discipline-01-one-name-per-concept--assetsartifacts-skillsrecipes-agents-three-deep) | One name per concept — Assets/Artifacts, Skills/recipes, Agents three deep |
 | P1 | **BLOCKED** | [`CAP-FB-20260819-PROACTIVE-TAB-DISCOVERY-01`](#cap-fb-20260819-proactive-tab-discovery-01-proactive-per-tab-site-agent-discovery-before-run) | Proactive per-tab Site Agent discovery before Run |
+| P1 | IN_REVIEW | [`CAP-FB-20260828-AMBIENT-SITE-TOOLS-01`](#cap-fb-20260828-ambient-site-tools-01-site-tools-should-be-available-on-the-tab-not-pre-registered-in-settings) | Site tools should be available on the tab, not pre-registered in Settings |
 | P1 | OPEN | [`CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01`](#cap-fb-20260819-directory-tool-explorer-01-agent-directory-tool-explorer-and-enrollment-policy) | Agent Directory tool explorer and enrollment policy |
 | P1 | OPEN | [`CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`](#cap-fb-20260819-permission-remediation-ux-01-user-facing-permission-management-and-run-remediation) | User-facing permission management and run remediation |
 | P1 | OPEN | [`CAP-FB-20260819-UI-FLASH-RELAYOUT-01`](#cap-fb-20260819-ui-flash-relayout-01-intermittent-extension-wide-ui-flash-and-relayout-investigation) | Intermittent extension-wide UI flash and relayout investigation |
@@ -191,7 +193,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | OPEN | [`CAP-FB-20260825-WEBSTORE-RELEASE-01`](#cap-fb-20260825-webstore-release-01-the-path-to-a-published-extension) | The path to a published extension |
 | P1 | OPEN | [`CAP-FB-20260827-DIALOG-CONSOLIDATION-01`](#cap-fb-20260827-dialog-consolidation-01-five-dialog-implementations-three-hand-rolled) | Five dialog implementations, three hand-rolled |
 | P1 | OPEN | [`CAP-FB-20260827-SETTINGS-MONOLITH-01`](#cap-fb-20260827-settings-monolith-01-settings-is-one-88-screen-scroll-with-a-nav-that-only-scrolls) | Settings is one 8.8-screen scroll with a nav that only scrolls |
-| P1 | OPEN | [`CAP-FB-20260828-AMBIENT-SITE-TOOLS-01`](#cap-fb-20260828-ambient-site-tools-01-site-tools-should-be-available-on-the-tab-not-pre-registered-in-settings) | Site tools should be available on the tab, not pre-registered in Settings |
+| P1 | OPEN | [`CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01`](#cap-fb-20260828-artifact-library-capacity-01-the-library-still-evicts-the-owners-oldest-artifact-silently) | The library still evicts the owner's oldest artifact silently |
 | P1 | OPEN | [`CAP-FB-20260828-HUB-AS-TIMELINE-01`](#cap-fb-20260828-hub-as-timeline-01-the-hub-is-a-dashboard-it-should-be-a-composer-and-a-timeline) | The hub is a dashboard; it should be a composer and a timeline |
 | P2 | **BLOCKED** | [`CAP-FB-20260822-MV3-WASM-RUNTIME-PROBE-01`](#cap-fb-20260822-mv3-wasm-runtime-probe-01-loaded-mv3-wasm-runtime-and-termination-probe) | Loaded-MV3 Wasm runtime and termination probe |
 | P2 | **BLOCKED** | [`CAP-FB-20260822-OWNER-WASM-INSTALL-01`](#cap-fb-20260822-owner-wasm-install-01-owner-selected-wasm-package-lifecycle) | Owner-selected Wasm package lifecycle |
@@ -1166,6 +1168,28 @@ evidence every other task depends on).
   status: done
   landed_version: 0.2.287
   summary: "Owner (2026-08-26): the extension has NO observability. Significant logging was requested before but isn't there. Clicking a task takes ~10s with zero trace of what's happening. One error seen: 'VM5974:2 Uncaught TypeError: Cannot read properties of undefined (reading startTime)' in et.reportAllChanges — that script is MINIFIED and is NOT our shipped code (our SW + options bundles are already unminified; grep confirms reportAllChanges absent), so it's a page the agent visited — we need logging to separate ours from theirs. REQUIREMENTS: (1) debug build with unminified code + source maps in npm run build; npm run build:production / --target=store stays the minified Store bundle; (2) a real logging layer — structured console logs with namespaces + levels + timing (grep-able like [cap:sw:grant]), console.groupCollapsed for runs; (3) performance.mark/measure around every slow path (task load, navigation, tool dispatch, model round-trips) + summary timing logs so a 10s task load becomes a readable breakdown; (4) use Chrome's native logging/performance features throughout (SW, NTP, side panel, content scripts); (5) a way to dump/ship the trace. Goal: use observability to improve the product. CRITICAL: debug mode must NOT weaken the production security assertions (seam scan, no-new-Function, oracle scan, bundled-tool verify) — logging verbosity is the only thing debug relaxes."
+
+## [CAP-FB-20260828-ARTIFACTS-IN-THREAD-01] Artifacts render in the thread that produced them
+- Feedback: 2026-08-28 — product owner: "assets created by an agent should also be easily visible in the chat/task/agent log so they can be viewed in the context in which they are created. I never see assets there and they should be (as well as globally visible)"
+- Updated: 2026-08-28 05:30 UTC
+- Status: IN_REVIEW
+- Priority: P0
+- Owner: claude-opus-5 implementer session
+- Workspace: active (local path private)
+- Branch: working tree on `origin/main`
+- Base: `2fc8bc1b`
+- Candidate: this commit
+- Shipping: —
+- Acceptance: a run that produces an artifact shows it in the conversation as a real, openable card — name, type, size, provenance — not as an opaque `create_asset · done` row; the card is there LIVE as the run streams and still there when the thread is reopened; and it renders through the same `<artifact-card>` the library uses rather than a thread-only duplicate
+- Review: author review with the falsification gates (AGENTS.md, "Review without a second model"); rendered and screenshotted in a real loaded extension
+- Gates: unit **1811/0** (10 new) · Chrome journeys **127/127** · component gallery smoke **35/35** · gallery drift clean · build clean · visual verification in headless Chrome at 1440×1600
+- Blockers: —
+- Next: the preview panel shows a type placeholder rather than the artifact's content, because the thread does not set `card.preview`. The library loads previews for its newest N; doing the same in-thread is a small follow-up, not a blocker
+- Recover: `git grep -n "artifactFromToolResult" -- extension/shared/conversation.js`
+- History:
+  - 2026-08-28 05:30 UTC — **implemented.** Before this, a run that made something rendered as `create_asset · done · 31ms` and the artifact itself was invisible; for a non-HTML artifact there was no trace of it in the conversation at all. (An HTML artifact did get a live sandboxed preview, but with no name, no identity and no way to open it.) The fix is one PURE derivation, `artifactFromToolResult(toolName, result)`, used by BOTH paths: the live event stream calls it on each tool result, and `toolRowsFromRunLog` emits an `artifact` row straight after the tool row that produced it. Sharing one derivation is the point — an artifact cannot appear while a run streams and then vanish when the thread is reopened, because there is no second implementation to disagree. It accepts the object form (live) and the JSON-string form (replayed logs) and returns identical output for both, which is asserted. A failed create renders nothing: telling the owner they have something they do not is worse than silence.
+  - 2026-08-28 05:30 UTC — reuses the SAME `<artifact-card>` as the library rather than a thread-only rendering, per the project's anti-hand-roll rule — a second artifact card is exactly the duplication that produced the toggle and menu bugs. Events bubble, so the hub wires open / open-tab once by delegation and every card, live or replayed, behaves identically.
+  - 2026-08-28 05:30 UTC — **caught in visual verification, not in the tests:** the first render showed a **Delete** button that nothing in the thread wired, so it did nothing. A control that does nothing is the same defect class as one that claims a success it never checked. Added an optional `actions` allowlist to `<artifact-card>` (omitted keeps every action, so the library is untouched); the thread declares `actions="open-tab reuse"`. An artifact is also not something you delete from the transcript that records making it — deletion belongs in the library.
 
 ## [CAP-FB-20260828-ARTIFACT-DURABILITY-01] Deleting a Site Agent destroys the artifacts made under it
 - Feedback: 2026-08-28 — product owner, defining what artifacts are for: "we do need access to all the artifacts because the agents might go away when we kill them, and tasks might go away. We need this central store of things that we can reference in the future because we can build upon them... the whole point of the artifacts is that they're the central source of all the information that has been created by the worker, by the person." The shipped behaviour contradicts that

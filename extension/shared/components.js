@@ -1558,7 +1558,7 @@ customElements.define("capability-row", CapabilityRow);
  * set. Emits open / reuse / delete. */
 class ArtifactCard extends Component {
   static get observedAttributes() {
-    return ["id", "name", "type", "size", "origin", "time"];
+    return ["id", "name", "type", "size", "origin", "time", "actions"];
   }
   set preview(v) {
     this._preview = v ?? "";
@@ -1592,6 +1592,15 @@ class ArtifactCard extends Component {
       previewHtml = `<div class="placeholder"><span class="picon">${ICONS.image}</span><span>${escapeHtml(type)}</span></div>`;
     }
     const t = time ? new Date(Number(time) || time).toLocaleString() : "";
+    // `actions` is an optional space-separated allowlist. Omitted keeps every
+    // action, so the library is unchanged. A surface that cannot HANDLE an
+    // action must not render its button: a control that does nothing is the
+    // same defect as one that claims success it never checked. The thread, for
+    // instance, offers New tab and Reuse but not Delete — an artifact is not
+    // deleted from the transcript that records making it.
+    const allow = (this.getAttribute("actions") ?? "").trim();
+    const allowed = allow ? new Set(allow.split(/\s+/)) : null;
+    const act = (nameOfAct, html) => (allowed && !allowed.has(nameOfAct) ? "" : html);
     mountTemplate(this, `
       :host { display:block; }
       .card { display:flex; flex-direction:column; background:var(--panel,#ffffff);
@@ -1631,9 +1640,9 @@ class ArtifactCard extends Component {
         <span class="meta">${escapeHtml(type)} · ${escapeHtml(size)} B · ${escapeHtml(origin)}${t ? " · " + escapeHtml(t) : ""}</span>
       </div>
       <div class="actions">
-        <button type="button" data-act="open-tab" title="Open in new tab">${ICONS.external}<span>New tab</span></button>
-        <button type="button" data-act="reuse">${ICONS.attach}<span>Reuse</span></button>
-        <button type="button" data-act="delete" class="danger">${ICONS.close}<span>Delete</span></button>
+        ${act("open-tab", `<button type="button" data-act="open-tab" title="Open in new tab">${ICONS.external}<span>New tab</span></button>`)}
+        ${act("reuse", `<button type="button" data-act="reuse">${ICONS.attach}<span>Reuse</span></button>`)}
+        ${act("delete", `<button type="button" data-act="delete" class="danger">${ICONS.close}<span>Delete</span></button>`)}
       </div>
     </div>`);
   }
@@ -2916,6 +2925,9 @@ class AgentConversation extends Component {
       agent-conversation { display:flex; flex-direction:column; min-height:0; }
       agent-conversation .empty { color:var(--muted,#635e56); font-size:var(--text-sm,13px); padding:2px 0; }
       agent-conversation .ts-gap { align-self:center; margin:10px 0 4px; font-size:var(--text-xs,12px); color:var(--muted,#635e56); letter-spacing:.02em; user-select:none; }
+      /* An artifact is a deliverable, not a chat line: it gets its own block on
+         the 8px grid rather than being squeezed into the bubble column. */
+      agent-conversation .msg-artifact { margin:var(--space-2,8px) 0; max-width:min(560px, 100%); }
     `);
     const msgs = this.getAttribute("messages");
     if (msgs != null) this.setMessages(parseJSONAttr(msgs, []));
@@ -2964,6 +2976,33 @@ class AgentConversation extends Component {
   appendThinking(text, { step, totalSteps } = {}) {
     return this._bubble("thinking", text, { step, "total-steps": totalSteps });
   }
+  /** An artifact produced by this run, rendered in the thread that made it
+   *  (CAP-FB-20260828-ARTIFACTS-IN-THREAD-01). Reuses the SAME <artifact-card>
+   *  the library uses — a second, thread-only rendering of an artifact is
+   *  exactly the hand-rolled duplication that produced the toggle and menu
+   *  bugs. Events bubble, so the host page wires open / open-tab / reuse once
+   *  and both surfaces behave identically. */
+  appendArtifact(m = {}) {
+    const a = m.artifact ?? m;
+    if (!a || typeof a !== "object" || !a.id) return null;
+    if (typeof m.ts === "number") this._maybeTsGap(m.ts);
+    const wrap = document.createElement("div");
+    wrap.className = "msg-artifact";
+    const card = document.createElement("artifact-card");
+    card.setAttribute("id", String(a.id));
+    card.setAttribute("name", String(a.name ?? "Untitled"));
+    card.setAttribute("type", String(a.type ?? "data"));
+    card.setAttribute("size", String(a.size ?? 0));
+    card.setAttribute("origin", String(a.origin ?? "master"));
+    if (a.at != null) card.setAttribute("time", String(a.at));
+    // Only what the thread actually handles.
+    card.setAttribute("actions", "open-tab reuse");
+    wrap.appendChild(card);
+    this.appendChild(wrap);
+    this.scrollTop = this.scrollHeight;
+    return card;
+  }
+
   appendTool(m = {}) {
     // Accept both the imperative {name,args,status,result,detail} and the
     // message object {tool-name,tool-status,tool-args,tool-result,tool-detail}
@@ -3007,6 +3046,7 @@ class AgentConversation extends Component {
         case "system": this.appendSystem(m.content, ts); break;
         case "thinking": this.appendThinking(m.content, m); break;
         case "tool": this.appendTool(m); break;
+        case "artifact": this.appendArtifact(m); break;
         case "error": this.appendError(m.content, { reason: m.reason ?? null, action: m.action ?? null, category: m.category ?? null }); break;
         default: this.appendAgent(m.content, ts); break;
       }

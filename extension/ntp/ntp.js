@@ -1002,6 +1002,28 @@ const threadView = document.getElementById("thread-view");
 const threadTitle = document.getElementById("thread-title");
 const threadConversation = document.getElementById("thread-conversation");
 const threadComposer = document.getElementById("thread-composer");
+
+// Artifacts rendered INSIDE a thread (CAP-FB-20260828-ARTIFACTS-IN-THREAD-01).
+// artifact-card events bubble, so one delegated listener serves every card the
+// conversation ever appends — live or replayed — instead of wiring each card as
+// it arrives. Same handlers the hub's Recent artifacts rows already use, so an
+// artifact behaves identically wherever the owner meets it.
+if (threadConversation) {
+  threadConversation.addEventListener("open", (e) => {
+    const { id, origin, name } = e.detail ?? {};
+    if (!id || !e.target?.matches?.("artifact-card")) return;
+    openArtifactDialog(id, origin ?? "master", name);
+  });
+  threadConversation.addEventListener("open-tab", (e) => {
+    const { id, origin } = e.detail ?? {};
+    if (!id) return;
+    const url = chrome.runtime.getURL(
+      `artifact/artifact.html?id=${encodeURIComponent(id)}&origin=${encodeURIComponent(origin ?? "master")}`,
+    );
+    if (chrome.tabs?.create) chrome.tabs.create({ url });
+    else window.open(url, "_blank", "noopener");
+  });
+}
 const editAgentBtn = document.getElementById("edit-agent");
 const deleteAgentBtn = document.getElementById("delete-agent");
 // Current conversation identity is declared before the run-registry subscription

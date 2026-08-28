@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.330] — 2026-08-28
+- Things an agent makes for you now show up in the conversation that made them — a real card with the name, type and size, and buttons to open it in a tab or reuse it in another task. Before, creating a report showed you a bare create_asset line and the report itself was nowhere to be seen. They stay there when you reopen the task, and they are still in your artifacts library too
+
 ## [0.2.329] — 2026-08-28
 - Fixed real data loss: deleting a Site Agent used to destroy every artifact created under that site — and those artifacts were never shown in your artifacts library in the first place. Artifacts are now one library that survives the agent and the task that made them, existing ones are migrated automatically, and the library shows everything you have made
 
