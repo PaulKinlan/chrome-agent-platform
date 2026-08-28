@@ -124,6 +124,8 @@ const BASELINE_ROUTES = [
   "run.list",
   "run.cancel",
   "run.resume",
+  "run.dismissFailed",
+  "run.dismissedFailed",
   "run.retry",
   "run.logs",
   "task.list",

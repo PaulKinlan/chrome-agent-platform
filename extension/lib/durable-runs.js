@@ -27,6 +27,8 @@ const LOG_IDX_PREFIX = "run-log-idx:";
 const RESUME_PREFIX = "run-resume:";
 const PAYLOAD_PREFIX = "run-payload:";
 const RESUME_CHUNK_CHARS = 64 * 1024;
+// Bounded fan-out for independent log-row reads (see mapBounded).
+const LOG_READ_CONCURRENCY = 32;
 const MAX_PREVIEW_CHARS = 240;
 const MAX_RESUME_ATTEMPTS = 3;
 
@@ -108,6 +110,32 @@ function newBootId() {
  * Create a registry. Dependencies are injectable so the crash-boundary matrix
  * can deterministically terminate and recreate a worker around the same store.
  */
+/** Read independent keys with BOUNDED concurrency, preserving input order
+ *  (CAP-FB-20260827-THREAD-OPEN-SEQUENTIAL-READS-01).
+ *
+ *  Measured: 97% of task-open time was `thread-view:logs`, which read a page of
+ *  up to 250 log rows with `for (const key of keys) await store.get(key)` — 250
+ *  sequential file opens for data that has no ordering dependency at all. The
+ *  rows are independent; only the RESULT order matters, and that is restored by
+ *  index rather than by completion order.
+ *
+ *  Bounded rather than a bare Promise.all: a 250-wide fan-out opens 250 OPFS
+ *  handles at once, and a thread view issues that per execution. 32 is enough
+ *  to hide per-file latency without that. */
+async function mapBounded(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const workers = new Array(Math.min(limit, items.length)).fill(0).map(async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
 export function createDurableRunRegistry({
   store = durableRunMemory(),
   now = () => Date.now(),
@@ -122,11 +150,43 @@ export function createDurableRunRegistry({
 } = {}) {
   const active = new Set();
   const listeners = new Set();
-  let mutex = Promise.resolve();
+  // READ/WRITE LOCK (CAP-FB-20260827-THREAD-OPEN-SEQUENTIAL-READS-01).
+  //
+  // This was ONE exclusive mutex over the whole registry, so no two operations
+  // ever overlapped — including two reads of two unrelated executions. Opening a
+  // thread reads up to 25 executions, and they queued behind each other for no
+  // reason: a read mutates nothing, so reads can share.
+  //
+  // Writers stay fully exclusive against both writers and readers, so every
+  // existing invariant (index/row atomicity, idempotency, recovery) is unchanged
+  // — a reader simply never runs WHILE a write is in flight. Readers also wait
+  // on the pending write chain before starting, which both prevents writer
+  // starvation and means a read never sees a store mid-write.
+  let writeChain = Promise.resolve();
+  const activeReads = new Set();
 
+  /** Exclusive: waits for pending writes, then for in-flight readers to drain. */
   function locked(fn) {
-    const run = mutex.then(fn, fn);
-    mutex = run.then(() => {}, () => {});
+    const run = (async () => {
+      await writeChain.catch(() => {});
+      if (activeReads.size) await Promise.allSettled([...activeReads]);
+      return await fn();
+    })();
+    writeChain = run.then(() => {}, () => {});
+    return run;
+  }
+
+  /** Shared: concurrent with other readers, never with a writer. Use ONLY for
+   *  operations that cannot write — a read path that may repair or rebuild must
+   *  take `locked` for that part. */
+  function lockedRead(fn) {
+    const run = (async () => {
+      await writeChain.catch(() => {});
+      return await fn();
+    })();
+    const tracked = run.then(() => {}, () => {});
+    activeReads.add(tracked);
+    tracked.finally(() => activeReads.delete(tracked)).catch(() => {});
     return run;
   }
 
@@ -328,8 +388,22 @@ export function createDurableRunRegistry({
     });
   }
 
+  // Sentinel: the shared-lock fast path could not serve this read (no index, a
+  // stale index, or an unbounded read) and it must be retried exclusively,
+  // because serving it involves REBUILDING and persisting the index.
+  const LOGS_NEEDS_WRITE = Symbol("logs-needs-write");
+
   async function listLogs(executionId, opts = Infinity) {
-    return locked(async () => {
+    // Try the pure-read fast path with readers sharing the lock. Only if that
+    // cannot serve the page do we take the exclusive lock, because the fallback
+    // writes.
+    const fast = await lockedRead(() => readLogs(executionId, opts, false));
+    if (fast !== LOGS_NEEDS_WRITE) return fast;
+    return locked(() => readLogs(executionId, opts, true));
+  }
+
+  async function readLogs(executionId, opts, allowRebuild) {
+    return await (async () => {
       const record = await readRecord(executionId);
       if (!record) throw new Error("unknown execution");
       const prefix = `${LOG_PREFIX}${executionId}:`;
@@ -357,31 +431,38 @@ export function createDurableRunRegistry({
             slice = pos > 0 ? ordered.slice(0, pos) : [];
           }
           const keys = slice.slice(-limit).map((e) => e.key);
-          const rows = [];
-          let complete = true;
-          for (const key of keys) {
-            const row = await store.get(key);
-            if (row == null) { complete = false; break; } // stale index → rebuild below
-            if (row.retentionPolicyVersion !== RUN_RETENTION_POLICY.policyVersion) {
-              throw new Error(`unknown durable run log retention policy: ${row.retentionPolicyVersion}`);
+          // The page's rows are independent reads; fetch them concurrently and
+          // restore order by index. A null anywhere still means a stale index,
+          // and the retention check still runs on every row — the only thing
+          // that changed is that they no longer wait for each other.
+          const fetched = await mapBounded(keys, LOG_READ_CONCURRENCY, (key) => store.get(key));
+          const complete = fetched.every((row) => row != null);
+          if (complete && fetched.length > 0) {
+            for (const row of fetched) {
+              if (row.retentionPolicyVersion !== RUN_RETENTION_POLICY.policyVersion) {
+                throw new Error(`unknown durable run log retention policy: ${row.retentionPolicyVersion}`);
+              }
             }
-            rows.push(row);
-          }
-          if (complete && rows.length > 0) {
-            return await hydrate(sortByAt(rows));
+            return await hydrate(sortByAt(fetched));
           }
         }
       }
 
       // FALLBACK (legacy unindexed execution, an unbounded read, or a bounded read
       // whose index missed): full scan ONCE, persist the index, then serve.
+      // This WRITES, so it may only run under the exclusive lock; a shared
+      // reader that gets here asks to be retried exclusively rather than
+      // rebuilding the index underneath a concurrent writer.
+      if (!allowRebuild) return LOGS_NEEDS_WRITE;
+      const scanKeys = (await store.keys()).filter((value) => value.startsWith(prefix)).sort();
+      const scanned = await mapBounded(scanKeys, LOG_READ_CONCURRENCY, (key) => store.get(key));
       const combined = [];
-      for (const key of (await store.keys()).filter((value) => value.startsWith(prefix)).sort()) {
-        const row = await store.get(key);
+      for (let i = 0; i < scanKeys.length; i++) {
+        const row = scanned[i];
         if (row?.retentionPolicyVersion !== RUN_RETENTION_POLICY.policyVersion) {
           throw new Error(`unknown durable run log retention policy: ${row?.retentionPolicyVersion}`);
         }
-        combined.push({ key, at: row?.at ?? 0, row });
+        combined.push({ key: scanKeys[i], at: row?.at ?? 0, row });
       }
       combined.sort((a, b) => (a.at ?? 0) - (b.at ?? 0) || String(a.row.idempotencyKey ?? a.row.type).localeCompare(String(b.row.idempotencyKey ?? b.row.type)));
       // Persist the FULL ordered index so subsequent reads (and pagination) are fast.
@@ -398,7 +479,7 @@ export function createDurableRunRegistry({
       }
       const limited = useBounded ? slice.slice(-limit).map((c) => c.row) : combined.map((c) => c.row);
       return await hydrate(limited);
-    });
+    })();
   }
 
   // ── thread → executions reverse index (log-redesign) ────────────────────
@@ -1293,6 +1374,100 @@ export function createDurableRunRegistry({
    * TERMINAL FAILED (non-aborted) run, for owner-visible Retry. Read-only —
    * retry itself re-dispatches as a NEW execution (the failed record stays as
    * honest history; retention is retain-all/explicit-clear-only). */
+  const DISMISSED_KEY = "run-dismissed-failed";
+  const DISMISSED_CAP = 512;
+
+  /** The dismissed-failed-runs tombstone: execution ids the owner explicitly
+   * dismissed from the Tasks sidebar. Deliberately ONLY ids — no prompt text,
+   * no summaries — so the tombstone can never leak run content. Bounded LRU:
+   * the oldest ids fall off the cap (and die with their records anyway). */
+  async function readDismissedIds() {
+    const rec = await store.get(DISMISSED_KEY);
+    const ids = Array.isArray(rec?.ids) ? rec.ids.filter(validExecutionId) : [];
+    return new Set(ids);
+  }
+
+  async function dismissedFailedRuns() {
+    return locked(async () => [...(await readDismissedIds())]);
+  }
+
+  async function dismissFailedRuns(ids) {
+    return locked(async () => {
+      const incoming = (Array.isArray(ids) ? ids : [ids])
+        .map((id) => String(id ?? ""))
+        .filter(validExecutionId);
+      if (!incoming.length) return { ok: false, error: "no valid executionIds" };
+      const current = await readDismissedIds();
+      for (const id of incoming) current.add(id);
+      // LRU by insertion: newest last, cap trims the oldest.
+      const next = [...current].slice(-DISMISSED_CAP);
+      await store.setTrusted(DISMISSED_KEY, {
+        schemaVersion: 1,
+        retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
+        ids: next,
+      });
+      return { ok: true, dismissed: incoming.length, tracked: next.length };
+    });
+  }
+
+  /** Agent-deletion cascade (owner: a deleted agent's failures must not linger
+   * in the Tasks panel or the durable registry): purge the TERMINAL records of
+   * the given agent surface refs ("named:<slug>", "background:<id>") — record,
+   * index admission, resume-request payload (the stored prompt), logs, and
+   * payload chunks. Running/paused runs are NEVER touched here; the live-run
+   * abort in the delete path owns those. Aborted terminal records go too — the
+   * agent itself is gone, and its history must not resurrect under a reused
+   * id. Idempotent and per-record CAS-guarded: a concurrent writer only skips
+   * that one record. */
+  async function purgeFailedForAgent(agentIds) {
+    return locked(async () => {
+      const refs = (Array.isArray(agentIds) ? agentIds : [agentIds])
+        .map((id) => String(id ?? ""))
+        .filter(Boolean);
+      if (!refs.length) return { ok: false, error: "no agentIds" };
+      const refSet = new Set(refs);
+      const index = await store.get(INDEX_KEY);
+      const ids = Array.isArray(index) ? index.filter(validExecutionId) : [];
+      let purged = 0;
+      for (const executionId of ids) {
+        const record = await readRecord(executionId);
+        if (!record) continue;
+        if (!refSet.has(record.agentId)) continue;
+        if (!TERMINAL_PHASES.has(record.phase)) continue;
+        const terminal = record.terminal ?? null;
+        if (!terminal || terminal.ok !== false) continue;
+        const recordKey = `${RUN_PREFIX}${executionId}`;
+        const owned = (candidate) => candidate === recordKey ||
+          candidate === `${OUTBOX_PREFIX}${executionId}` ||
+          candidate === `${LOG_IDX_PREFIX}${executionId}` ||
+          candidate.startsWith(`${RESUME_PREFIX}${executionId}:`) ||
+          candidate.startsWith(`${LOG_PREFIX}${executionId}:`) ||
+          candidate.startsWith(`${PAYLOAD_PREFIX}${executionId}:`);
+        for (const key of (await store.keys()).filter(owned).sort()) await store.delete(key);
+        const removed = await removeFromIndexExact(executionId, record.registryAdmission);
+        if (!removed.ok) continue; // CAS raced — the record stays, honestly
+        const version = await store.getVersion(recordKey);
+        if (recordKey && (await store.has(recordKey))) await store.compareAndDelete(recordKey, version);
+        purged += 1;
+      }
+      // Tombstones for purged ids are dead weight — prune them with the records.
+      const dismissed = await readDismissedIds();
+      if (dismissed.size) {
+        const alive = await store.get(INDEX_KEY);
+        const aliveIds = new Set(Array.isArray(alive) ? alive.filter(validExecutionId) : []);
+        const next = [...dismissed].filter((id) => aliveIds.has(id));
+        if (next.length !== dismissed.size) {
+          await store.setTrusted(DISMISSED_KEY, {
+            schemaVersion: 1,
+            retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
+            ids: next,
+          });
+        }
+      }
+      return { ok: true, purged };
+    });
+  }
+
   async function getRetryRequest(executionId) {
     return locked(async () => {
       const id = String(executionId ?? "");
@@ -1376,6 +1551,9 @@ export function createDurableRunRegistry({
     settle,
     cancel,
     getRetryRequest,
+    dismissedFailedRuns,
+    dismissFailedRuns,
+    purgeFailedForAgent,
     pauseForPermission,
     pauseForProviderChange,
     resumeAfterPermission,

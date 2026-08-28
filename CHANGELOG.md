@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.345] — 2026-08-28
+- Internal groundwork only, no user-visible change: kept the pieces of the faster task-history storage that stand on their own, and backed out the switch-over after it produced a result I could not explain. Not worth guessing with your task history
+
+## [0.2.344] — 2026-08-28
+- Groundwork for much faster tasks: task history will be stored as one append-only log per run instead of one file per step. This lands the storage piece with its tests; the switch-over is next
+
+## [0.2.343] — 2026-08-28
+- Reworked the plan for how task history is stored, after a much better suggestion: one append-only log file per run instead of one file per step. Measured on the real thing, writing a thousand steps goes from about three minutes to one millisecond, and reading them from a third of a second to under one
+
+## [0.2.342] — 2026-08-28
+- Opening a task is about 2.6x faster (nearly a second down to a third of one on a well-used task). The stored steps were being read one file at a time even though they do not depend on each other, and a single lock meant nothing could overlap. More to come — the remaining cost is that every logged step is still its own file
+
+## [0.2.341] — 2026-08-28
+- Failed task runs are now manageable: dismissing one hides it for good (there's a Clear all for the whole section), and deleting an agent clears its failed runs too
+
 ## [0.2.340] — 2026-08-28
 - Fixed: deleting an agent (including background agents) now actually deletes it — every surface checks the result honestly, a running task is torn down in the background without freezing the UI, focus lands somewhere sane afterwards, and settings no longer claims success when nothing happened
 

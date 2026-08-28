@@ -205,7 +205,8 @@ Deno.test("ux008: the SW route + sidebar wiring exist (source pins)", async () =
 
   const ntp = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
   assert(ntp.includes('send("run.retry", { executionId: fr.executionId })'), "the sidebar Retry action calls run.retry");
-  assert(ntp.includes("selectFailedRuns(runs ?? [])"), "the sidebar projects failed runs through the pure helper");
+  assert(/selectFailedRuns\(runs \?\? \[\], \{[\s\S]{0,200}dismissedIds/.test(ntp), "the sidebar projects failed runs through the pure helper (with lifecycle opts)");
+  assert(ntp.includes('send("run.dismissFailed"'), "the sidebar persists dismissals through the durable tombstone route");
   assert(ntp.includes("refreshFailedRuns();"), "every task render refreshes the failed-runs section");
   const html = await Deno.readTextFile(new URL("../extension/ntp/ntp.html", import.meta.url));
   assert(html.includes('id="failed-runs"'), "the sidebar hosts the failed-runs section");

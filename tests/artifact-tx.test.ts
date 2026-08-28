@@ -19,7 +19,7 @@ function dirNode() { return { kind: "directory", children: new Map() }; }
 function fileNode(c) { return { kind: "file", content: c }; }
 class FakeWritable {
   constructor(node) { this.node = node; this.parts = []; }
-  async write(s) { this.parts.push(String(s)); }
+  async write(s) { this.parts.push(typeof s === "string" ? s : new TextDecoder().decode(s)); }
   async close() {
     this.node.content = this.parts.join("");
     if (globalThis.__failClose?.has(this.node.name)) throw new Error("injected failure: close");

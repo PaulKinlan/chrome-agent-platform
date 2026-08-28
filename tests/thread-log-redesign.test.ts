@@ -13,7 +13,7 @@ class FakeWritable {
   constructor(n) { this.node = n; this.parts = []; }
   async write(s) {
     if (globalThis.__failNextWrite) { globalThis.__failNextWrite = false; throw new Error("OPFS write failed (injected)"); }
-    this.parts.push(String(s));
+    this.parts.push(typeof s === "string" ? s : new TextDecoder().decode(s));
   }
   async close() { this.node.content = this.parts.join(""); }
 }

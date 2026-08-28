@@ -183,6 +183,10 @@ const MASTER_RESERVED_KEYS = new Set([
   "threads",
   "scripts",
   "run-registry",
+  // Failed-runs dismiss tombstones (owner 2026-08-28): a single bounded
+  // registry-level record, same reservation class as the run registry index —
+  // authority state the model's memory_set must never write.
+  "run-dismissed-failed",
   "wasmPkg",
   "wasmPkgRepair",
 ]);
@@ -220,6 +224,8 @@ const MAX_BYTES_GLOBAL = 64 * 1024 * 1024; // 64 MiB across all origins
 // arbitrary file-count ceiling blocked routine work. Isolate each execution in
 // its own byte-bounded store; the registry uses a separate store.
 const DURABLE_ROOT = "durable-runs";
+// The per-execution write-ahead log, beside that execution's KV records.
+const RUN_LOG_FILE = "run.log";
 const DURABLE_INDEX_KEY = "run-registry";
 const DURABLE_PREFIXES = ["run:", "run-outbox:", "run-log:", "run-log-idx:", "run-resume:", "run-payload:"];
 const EXECUTION_ID_SOURCE = "(?:exec:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|exec_[A-Za-z0-9][A-Za-z0-9_-]{7,194})";
@@ -831,6 +837,11 @@ function durableStoreForKey(key) {
   if (String(key) === DURABLE_INDEX_KEY) {
     return memoryStoreAt([ROOT, DURABLE_ROOT, "registry"], { isMaster: false, origin: "durable:registry" });
   }
+  // The failed-runs dismiss tombstone lives WITH the registry (a single
+  // bounded record pruned against the index), not under an execution.
+  if (String(key) === "run-dismissed-failed") {
+    return memoryStoreAt([ROOT, DURABLE_ROOT, "registry"], { isMaster: false, origin: "durable:registry" });
+  }
   if (String(key).startsWith(THREAD_RUNS_PREFIX)) {
     const threadId = durableThreadId(key);
     if (!threadId) throw new Error(`invalid durable thread-runs key: ${String(key)}`);
@@ -845,6 +856,45 @@ function durableStoreForKey(key) {
     [ROOT, DURABLE_ROOT, "executions", encodeURIComponent(executionId)],
     { isMaster: false, origin: `durable:${executionId}` },
   );
+}
+
+/** The OPFS file handle for an execution's run log (the WAL —
+ *  CAP-FB-20260827-THREAD-OPEN-SEQUENTIAL-READS-01).
+ *
+ *  Deliberately inside the execution's OWN directory, alongside its key-value
+ *  records, so that everything which already removes an execution — retention,
+ *  registry pruning, a store clear — takes the log with it. A log filed
+ *  somewhere else would outlive its run and leak.
+ *
+ *  Returns null rather than throwing when `create` is false and nothing is
+ *  there: "this execution has no WAL yet" is the normal pre-migration state,
+ *  not an error. */
+export async function durableRunLogHandle(executionId, { create = false } = {}) {
+  const id = String(executionId ?? "");
+  if (!id) return null;
+  const segments = [ROOT, DURABLE_ROOT, "executions", encodeURIComponent(id)];
+  try {
+    const dir = create ? await openDir(segments) : await openDirOptional(segments);
+    if (!dir) return null;
+    return await dir.getFileHandle(RUN_LOG_FILE, { create });
+  } catch {
+    return null; // absent, or an unreadable directory — the caller falls back
+  }
+}
+
+/** Remove an execution's run log. Used by the migration's verify-then-delete
+ *  and by retention; never on a read path. */
+export async function removeDurableRunLog(executionId) {
+  const id = String(executionId ?? "");
+  if (!id) return false;
+  const dir = await openDirOptional([ROOT, DURABLE_ROOT, "executions", encodeURIComponent(id)]);
+  if (!dir) return false;
+  try {
+    await dir.removeEntry(RUN_LOG_FILE);
+    return true;
+  } catch {
+    return false; // already gone
+  }
 }
 
 /** Remove a thread's durable reverse-index directory. Called when a thread is

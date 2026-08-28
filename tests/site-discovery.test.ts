@@ -3,7 +3,7 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 
 function dirNode() { return { kind: "directory", children: new Map() }; }
 function fileNode(content) { return { kind: "file", content }; }
-class FakeWritable { constructor(n) { this.node = n; this.parts = []; } async write(s) { this.parts.push(String(s)); } async close() { this.node.content = this.parts.join(""); } }
+class FakeWritable { constructor(n) { this.node = n; this.parts = []; } async write(s) { this.parts.push(typeof s === "string" ? s : new TextDecoder().decode(s)); } async close() { this.node.content = this.parts.join(""); } }
 class FakeFileHandle { constructor(n) { this.node = n; } get kind() { return "file"; } async getFile() { const n = this.node; return { size: (n.content ?? "").length, async text() { return n.content ?? ""; } }; } async createWritable() { return new FakeWritable(this.node); } }
 class FakeDirHandle {
   constructor(n) { this.node = n; } get kind() { return "directory"; }

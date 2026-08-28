@@ -1105,20 +1105,54 @@ async function refreshFailedRuns() {
   const section = document.getElementById("failed-runs");
   if (!section) return;
   let runs = null;
+  let dismissedIds = [];
+  let agentRefs = null; // null = could not know → the projection does not cascade-filter
   try {
-    const res = await send("run.list");
-    if (res?.ok !== false && Array.isArray(res?.runs)) runs = res.runs;
+    const [runsRes, dismissedRes, agentsRes] = await Promise.all([
+      send("run.list"),
+      send("run.dismissedFailed").catch(() => null),
+      send("named-agent.list").catch(() => null),
+    ]);
+    if (runsRes?.ok !== false && Array.isArray(runsRes?.runs)) runs = runsRes.runs;
+    if (dismissedRes?.ok && Array.isArray(dismissedRes?.ids)) dismissedIds = dismissedRes.ids;
+    // The agent cascade needs the surviving agents' surface refs. A failed
+    // fetch stays null — the projection only filters on known agents when the
+    // list actually resolved, so a transient failure can never mass-hide
+    // failures. Zero agents IS known (an explicit empty list).
+    if (agentsRes && Array.isArray(agentsRes.agents)) {
+      agentRefs = [];
+      for (const a of agentsRes.agents) {
+        if (typeof a?.id === "string" && a.id) agentRefs.push(`named:${a.id}`, `background:${a.id}`);
+      }
+    }
   } catch {
     runs = null; // worker restarting — the next authoritative render re-fetches
   }
   if (owner !== failedRunsOwner) return; // a newer render superseded this one
-  const failed = selectFailedRuns(runs ?? []);
+  const failed = selectFailedRuns(runs ?? [], {
+    dismissedIds: new Set(dismissedIds),
+    knownAgentIds: agentRefs === null ? undefined : new Set(agentRefs),
+  });
   section.replaceChildren();
   section.hidden = failed.length === 0;
   if (!failed.length) return;
   const label = document.createElement("div");
   label.className = "fr-label";
-  label.textContent = "Failed runs";
+  label.textContent = `Failed runs (${failed.length})`;
+  // Clear-all (owner: "sometimes I just don't want to see them"): one click,
+  // no confirm — dismissing is durable but carries no data loss beyond the
+  // retry affordance, and the rows carry only previews already shown.
+  const clearAll = document.createElement("button");
+  clearAll.type = "button";
+  clearAll.className = "fr-clear";
+  clearAll.textContent = "Clear all";
+  clearAll.setAttribute("aria-label", `Dismiss all ${failed.length} failed runs`);
+  clearAll.addEventListener("click", async () => {
+    clearAll.disabled = true;
+    await send("run.dismissFailed", { executionIds: failed.map((f) => f.executionId) }).catch(() => null);
+    if (owner === failedRunsOwner) await refreshFailedRuns();
+  });
+  label.append(clearAll);
   section.append(label);
   for (const fr of failed) {
     const row = document.createElement("div");
@@ -1133,6 +1167,18 @@ async function refreshFailedRuns() {
     retry.className = "fr-retry";
     retry.textContent = "Retry";
     retry.setAttribute("aria-label", `Retry failed run: ${preview}`);
+    // Dismiss (owner: an X beside Retry — the failure stops being shown even
+    // after restarts). Durable id-only tombstone via run.dismissFailed.
+    const dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.className = "fr-dismiss";
+    dismiss.textContent = "×";
+    dismiss.setAttribute("aria-label", `Dismiss failed run: ${preview}`);
+    dismiss.addEventListener("click", async () => {
+      dismiss.disabled = true;
+      await send("run.dismissFailed", { executionIds: [fr.executionId] }).catch(() => null);
+      if (owner === failedRunsOwner) await refreshFailedRuns();
+    });
     const statusLine = document.createElement("div");
     statusLine.className = "fr-status";
     statusLine.setAttribute("role", "status");
@@ -1144,6 +1190,9 @@ async function refreshFailedRuns() {
       if (r?.ok) {
         statusLine.textContent = "Run restarted.";
         retry.remove();
+        // A retried failure leaves the panel: the owner acted on it. The same
+        // durable tombstone as the × button — it never re-appears.
+        await send("run.dismissFailed", { executionIds: [fr.executionId] }).catch(() => null);
         await renderTasks(); // the new run may create/update threads
       } else {
         statusLine.textContent = `Retry failed: ${r?.error ?? "unknown error"}`;
@@ -1151,7 +1200,7 @@ async function refreshFailedRuns() {
         retry.textContent = "Retry";
       }
     });
-    row.append(text, retry);
+    row.append(text, retry, dismiss);
     section.append(row, statusLine);
   }
 }

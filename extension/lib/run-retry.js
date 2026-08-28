@@ -69,11 +69,25 @@ export function buildRetryDispatch(request, opts = {}) {
  * most-recent first, capped. Aborted runs are the owner's own choice — never
  * offered back as failures.
  *
+ * Lifecycle opts (failed-runs lifecycle, owner 2026-08-28):
+ *   - dismissedIds: execution ids the owner explicitly dismissed (persisted
+ *     tombstones) — never rendered again.
+ *   - knownAgentIds: the agent surface refs that still exist ("named:<slug>",
+ *     "background:<id>"). A failed run whose owning agent no longer exists is
+ *     defensively filtered even if the delete-path purge missed it (SW restart
+ *     between delete and purge, etc.). Hub runs carry no agentId and stay.
+ *
  * @param {Array<{executionId: string, phase?: string, resumeAvailable?: boolean, terminal?: {ok?: boolean, aborted?: boolean, at?: number, summary?: string|null}, taskPreview?: string|null, kind?: string|null, agentId?: string|null}>} runs
- * @param {{limit?: number}} [opts]
+ * @param {{limit?: number, dismissedIds?: Iterable<string>, knownAgentIds?: Iterable<string>}} [opts]
  */
 export function selectFailedRuns(runs, opts = {}) {
   const limit = Number.isFinite(opts.limit) && opts.limit > 0 ? opts.limit : 5;
+  const dismissed = opts.dismissedIds instanceof Set ? opts.dismissedIds : new Set(opts.dismissedIds ?? []);
+  // A set that was never passed means the caller could not know which agents
+  // exist (transient fetch failure) — no cascade filtering. An EXPLICIT set
+  // (even empty: zero agents exist) is authoritative and filters.
+  const knowsAgents = opts.knownAgentIds !== undefined && opts.knownAgentIds !== null;
+  const knownAgents = opts.knownAgentIds instanceof Set ? opts.knownAgentIds : new Set(opts.knownAgentIds ?? []);
   return (Array.isArray(runs) ? runs : [])
     .filter((r) =>
       r?.phase === "terminal"
@@ -81,6 +95,9 @@ export function selectFailedRuns(runs, opts = {}) {
       && r.terminal.aborted !== true
       && r.resumeAvailable === true
       && typeof r.executionId === "string" && r.executionId
+      && !dismissed.has(r.executionId)
+      // Cascade filter: an agent-owned surface must have an existing owner.
+      && (!knowsAgents || typeof r.agentId !== "string" || !r.agentId || knownAgents.has(r.agentId))
     )
     .sort((a, b) => (b.terminal.at ?? 0) - (a.terminal.at ?? 0))
     .slice(0, limit)

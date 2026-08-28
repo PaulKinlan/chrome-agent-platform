@@ -3891,6 +3891,13 @@ const handlers = mergeRouteMaps(
       // payload is marked cancelling (inert) + the live run aborted NOW; the
       // alarm-clear + payload cleanup finishes in the background.
       cancelScheduledTaskBackground(`recipe:${slug}`);
+      // Failed-runs cascade (owner 2026-08-28): the deleted agent's terminal
+      // failed records are purged from the durable registry (record, index,
+      // stored prompt payload, logs) so the Tasks sidebar neither shows them
+      // nor keeps their bytes. Both surface refs cover named + background
+      // ownership. Best-effort: the sidebar's read-time filter is the second
+      // line of defense. Best-effort + awaited (bounded, ids only).
+      await durableRuns.purgeFailedForAgent([`named:${slug}`, `background:${slug}`]).catch(() => null);
       broadcastProgress({ type: "named-agent-changed" });
     }
     broadcastRegistryChanged();
@@ -4781,6 +4788,21 @@ const handlers = mergeRouteMaps(
   async "run.list"() {
     await durableRecoveryReady;
     return await durableRuns.list();
+  },
+  // Failed-runs lifecycle (owner 2026-08-28): dismiss is a DURABLE tombstone by
+  // execution id — the row leaves the Tasks sidebar and never re-appears after
+  // a service-worker restart. Tombstones carry ids only (no prompt text).
+  async "run.dismissFailed"(m, context) {
+    if (!["extension", "owner-options"].includes(context?.principal)) {
+      return { ok: false, error: "owner_extension_required" };
+    }
+    await durableRecoveryReady;
+    const ids = Array.isArray(m?.executionIds) ? m.executionIds : (m?.executionId ? [m.executionId] : []);
+    return await durableRuns.dismissFailedRuns(ids);
+  },
+  async "run.dismissedFailed"() {
+    await durableRecoveryReady;
+    return { ok: true, ids: await durableRuns.dismissedFailedRuns() };
   },
   async "run.cancel"(m, context) {
     if (!["extension", "owner-options"].includes(context?.principal)) {
