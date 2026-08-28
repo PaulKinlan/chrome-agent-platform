@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.341] — 2026-08-28
+- Failed task runs are now manageable: dismissing one hides it for good (there's a Clear all for the whole section), and deleting an agent clears its failed runs too
+
 ## [0.2.340] — 2026-08-28
 - Fixed: deleting an agent (including background agents) now actually deletes it — every surface checks the result honestly, a running task is torn down in the background without freezing the UI, focus lands somewhere sane afterwards, and settings no longer claims success when nothing happened
 
