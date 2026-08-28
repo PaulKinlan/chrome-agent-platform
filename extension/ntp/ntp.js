@@ -6,6 +6,7 @@
 //   and the hub lists every prior thread (auto-named).
 
 import { send } from "../lib/messages.js";
+import { AGENT_TEMPLATES, agentTemplateById, templatePrefill } from "../lib/agent-templates.js";
 import { schedulePreviewText } from "../lib/schedule-preview.js";
 import { selectFailedRuns } from "../lib/run-retry.js";
 import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript } from "../shared/conversation.js";
@@ -1806,14 +1807,23 @@ function openQuickCreateAgent() {
     initialSkills: [],
     initialCoreAssets: [],
     canRegenerateAvatar: false,
+    showTemplates: true,
     savedLabel: "Create agent",
     onSave: async (v) => {
       const r = await send("named-agent.create", {
         name: v.name, role: v.role, avatar: v.avatar, skills: v.skills, coreAssets: v.coreAssets,
       }).catch(() => ({ ok: false }));
-      return r?.ok ? { ok: true, id: r.agent?.id ?? v.name } : { ok: false, error: r?.error ?? "unknown" };
+      return r?.ok ? { ok: true, id: r.agent?.id ?? v.name, firstTask: v.firstTask } : { ok: false, error: r?.error ?? "unknown" };
     },
-    onSaved: async (result) => { renderNamedAgents(); await openAgentChat(result?.id); },
+    onSaved: async (result) => {
+      renderNamedAgents();
+      await openAgentChat(result?.id);
+      // A template's first task is a SUGGESTION: pre-fill the composer so the
+      // owner reviews/edits before sending (it is never auto-sent).
+      if (result?.firstTask && composer) {
+        composer.value = result.firstTask;
+      }
+    },
   });
 }
 
@@ -1899,6 +1909,64 @@ async function buildAgentConfigDialog(opts) {
   scrollBody.append(avatarRow);
 
   const nameField = configField("Name", "input", opts.name ?? "");
+
+  // ── Template picker (G2, docs/AGENT-PRODUCT-GAPS.md §3): a STARTING POINT
+  // with full specialization. Picking a template pre-fills name/role/skills
+  // (+ the first-task suggestion carried to the composer after create), and
+  // the owner can then edit ALL of it — rewrite the persona, add/remove
+  // skills — before creating. "Custom agent" (blank) stays the default.
+  let selectedTemplate = null;
+  if (opts.showTemplates) {
+    const tplWrap = document.createElement("div");
+    tplWrap.style.display = "flex";
+    tplWrap.style.flexDirection = "column";
+    tplWrap.style.gap = "6px";
+    const tplLabel = document.createElement("label");
+    tplLabel.textContent = "Start from a template";
+    tplLabel.setAttribute("for", "agent-template-picker");
+    tplLabel.style.fontWeight = "600";
+    tplLabel.style.fontSize = "13px";
+    const tplSelect = document.createElement("select");
+    tplSelect.id = "agent-template-picker";
+    tplSelect.style.cssText =
+      "width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border,#e3e0d9);background:var(--panel,#ffffff);color:var(--text,#1f1d1a);font:inherit;";
+    const blank = document.createElement("option");
+    blank.value = "";
+    blank.textContent = "Custom agent (blank)";
+    tplSelect.append(blank);
+    for (const t of AGENT_TEMPLATES) {
+      const o = document.createElement("option");
+      o.value = t.id;
+      o.textContent = t.name;
+      tplSelect.append(o);
+    }
+    const tplDesc = document.createElement("div");
+    tplDesc.id = "agent-template-description";
+    tplDesc.style.cssText =
+      "font-size:12px;color:var(--muted,#635e56);min-height:15px;";
+    tplSelect.addEventListener("change", () => {
+      const t = agentTemplateById(tplSelect.value);
+      tplDesc.textContent = t ? t.description : "";
+      if (!t) { selectedTemplate = null; return; }
+      const pre = templatePrefill(t);
+      selectedTemplate = t;
+      nameField.el.value = pre.name;
+      roleField.el.value = pre.role;
+      // Suggested skills: CHECK the template's suggestions on top of whatever
+      // the owner already picked — removal is theirs (full specialization).
+      for (const [id, cb] of skillChecks) {
+        if (pre.skills.includes(id)) cb.checked = true;
+      }
+      const countEl = skillsSummary?.querySelector(".skill-count");
+      if (countEl) {
+        const count = [...skillChecks.values()].filter((c) => c.checked).length;
+        countEl.textContent = count > 0 ? `${count} selected` : "0 selected";
+      }
+    });
+    tplWrap.append(tplLabel, tplSelect, tplDesc);
+    scrollBody.append(tplWrap);
+  }
+
 
   // Role (the system prompt / what the agent does) + mic (dictate) + refine.
   const roleField = configField("Role / what it does", "textarea", opts.role ?? "", 4);
@@ -2112,7 +2180,10 @@ async function buildAgentConfigDialog(opts) {
       }
     }
     saveBtn.disabled = true;
-    const r = await opts.onSave({ name, role, avatar: avatarValue, skills, coreAssets });
+    const r = await opts.onSave({
+      name, role, avatar: avatarValue, skills, coreAssets,
+      firstTask: selectedTemplate?.firstTask ?? "",
+    });
     saveBtn.disabled = false;
     if (r?.ok) {
       dialog.close();
