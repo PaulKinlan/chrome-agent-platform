@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.331] — 2026-08-28
+- docs(ux-audit): full UX/navigation/performance/memory audit (web-uplift methodology) — 11 findings: panel iframe+listener leaks, no dark scheme, 360px overflow, gated first-run CTA, plus verified-good perf/security/backstack; evidence in reports/cap-ux/
+
 ## [0.2.330] — 2026-08-28
 - Things an agent makes for you now show up in the conversation that made them — a real card with the name, type and size, and buttons to open it in a tab or reuse it in another task. Before, creating a report showed you a bare create_asset line and the report itself was nowhere to be seen. They stay there when you reopen the task, and they are still in your artifacts library too
 
