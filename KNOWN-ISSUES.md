@@ -74,3 +74,31 @@ gate nobody reads.
 product's own capability table — which made the check tautological and unable to fail. It
 was caught only because the review rule changed the same day to require proving a changed
 assertion can go red. See `AGENTS.md`, "Review without a second model".
+
+### [P0 — OPEN] Two sessions write to `main` from separate worktrees, and work has already been lost once
+
+`main` is checked out in a second worktree while this repository also pushes to
+it. On 2026-08-28 that session force-pushed and **dropped three commits** of
+landed, green work (the run-log performance line). It was recovered only because
+the commits were still reachable locally.
+
+At the time of writing the second worktree's `main` was **six commits behind**
+`origin/main` with its own committed work on top, so its next push would have
+dropped both the performance line and the Providers side-tabs work. That was
+resolved by merging its committed tip forward (`dc04e4c7`) so its next push is a
+fast-forward, and by binding both lines to tags:
+`rescue/origin-main-20260828`, `rescue/agent-templates-20260828`,
+`rescue/wal-work-20260828`.
+
+**This will recur.** The mechanism is unchanged: two writers, one branch, no
+coordination, and `--force` available. Options, cheapest first:
+
+1. **Never force-push `main`.** A rejected push is a signal to merge, not an
+   obstacle to overpower. This alone would have prevented the incident.
+2. **One worktree owns `main`;** every other session works on a branch and
+   merges. The repository already has 71 worktrees — the convention exists, it
+   just is not applied to `main`.
+3. Protect the branch server-side so the choice is not available.
+
+Recorded here rather than as a `CAP-FB-*` task because it is a working-practice
+decision for the owner, not an engineering change.

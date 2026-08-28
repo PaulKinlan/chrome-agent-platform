@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.349] — 2026-08-28
+- Internal bookkeeping: the completed task-loading work is closed out and archived, leaving the tracker showing only live work
+
 ## [0.2.348] — 2026-08-28
 - Tasks are now dramatically faster: opening one is about 34x quicker than it was (nearly a second down to under a thirtieth), and recording what an agent does is ~123x quicker — a thousand steps went from nearly three minutes to under a second and a half. A long-running task no longer slows down the longer it runs
 
