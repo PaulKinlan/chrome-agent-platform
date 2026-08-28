@@ -25,6 +25,8 @@ document.getElementById("back").addEventListener("click", () => {
   else location.href = "../ntp/ntp.html";
 });
 
+// The copy action is dead until an artifact resolves (no id / not found =
+// nothing to copy) — it stays disabled on the failure path (UX-AUDIT UX-009).
 let currentAssetContent = "";
 copyBtn?.addEventListener("click", async () => {
   if (!currentAssetContent) return;
@@ -57,6 +59,7 @@ async function main() {
   nameEl.textContent = asset.name ?? "Artifact";
   metaEl.textContent = `${asset.type ?? "unknown"} · ${asset.size ?? 0} B · ${origin}`;
   currentAssetContent = asset.content ?? "";
+  if (copyBtn && currentAssetContent) copyBtn.disabled = false;
 
   if (asset.type === "html" || (asset.type === "text" && /^\s*<!doctype html|<html|</i.test(asset.content ?? ""))) {
     const frame = document.createElement("div");

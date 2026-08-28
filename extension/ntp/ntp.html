@@ -405,10 +405,28 @@
       flex-direction: column;
     }
     .main-wrap {
-      max-width: 680px;
+      max-width: 960px;
       width: 100%;
       margin: 0 auto;
       padding: 32px 24px 48px;
+    }
+    /* Wide form factor: the hub uses the available width instead of leaving
+       ~700px of dead margins at 1440×900 (UX-AUDIT-2026-08-28 UX-010). The
+       composer/first-run stay full-width; the Agents / Recent artifacts /
+       Recent activity sections flow into two columns. Prose stays inside the
+       panels' own measures, so nothing stretches unreadably. */
+    @media (min-width: 1100px) {
+      .main-wrap {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        column-gap: 24px;
+        align-items: start;
+      }
+      .main-wrap > header,
+      .main-wrap > first-run-guide,
+      .main-wrap > agent-composer {
+        grid-column: 1 / -1;
+      }
     }
     /* narrow: reclaim the fixed 24px gutters so the composer controls fit
        beside the 240px rail without a horizontal scroll
