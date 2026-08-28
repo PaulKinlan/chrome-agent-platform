@@ -13,7 +13,7 @@
 // `artifactFromToolResult`, so these tests pin that one function plus the
 // replay projection that uses it.
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { artifactFromToolResult, toolRowsFromRunLog } from "../extension/shared/conversation.js";
+import { artifactFromToolResult, effectiveToolCall, toolRowsFromRunLog } from "../extension/shared/conversation.js";
 
 const assetResult = (over = {}) => ({
   ok: true,
@@ -131,4 +131,63 @@ Deno.test("in-thread: the derivation is pure — no storage, DOM or messaging", 
   for (const sink of ["chrome.", "document.", "fetch(", "await ", "innerHTML"]) {
     assert(!body.includes(sink), `artifactFromToolResult must not contain ${sink}`);
   }
+});
+
+// ── the REAL lazy-protocol envelope (owner-reported, 2026-08-28) ───────────
+// Every provider run gets only search_tools/execute_tool, so in a real run the
+// card header is `execute_tool` and the invoked tool is named in the payload.
+// These use the exact shape the owner pasted from a live run.
+Deno.test("envelope: the owner's real execute_tool payload yields the artifact", () => {
+  const inner = JSON.stringify({
+    ok: true,
+    selectedTool: "create_asset",
+    result: { ok: true, id: "a_real_1", asset: { id: "a_real_1", name: "OpenClaw Report", type: "html", origin: "master", size: 12000 } },
+    selectionRef: "sel_ba138fffcac9813515d075901fb166802eb9",
+    authorizes: false,
+    requiresLiveAuthorization: true,
+  });
+  const a = artifactFromToolResult("execute_tool", { modelContent: inner });
+  assert(a, "an execute_tool create must produce a card");
+  assertEquals(a.id, "a_real_1");
+  assertEquals(a.name, "OpenClaw Report");
+  assertEquals(a.type, "html");
+});
+
+Deno.test("envelope: the header shows the tool that RAN and its real arguments", () => {
+  const args = {
+    selectionRef: "sel_ba138fffcac9813515d075901fb166802eb9",
+    arguments: { content: "<!DOCTYPE html><html>…</html>", name: "Report", type: "html" },
+  };
+  const result = { modelContent: JSON.stringify({ ok: true, selectedTool: "create_asset", result: { ok: true, id: "a_1" } }) };
+  const eff = effectiveToolCall("execute_tool", args, result);
+  assertEquals(eff.name, "create_asset", "the card must name the tool that ran");
+  assertEquals(eff.lazy, true);
+  // The selectionRef is protocol plumbing and means nothing to a reader.
+  assertEquals(eff.args.name, "Report");
+  assertEquals(eff.args.content, "<!DOCTYPE html><html>…</html>");
+  assertEquals(eff.args.selectionRef, undefined);
+});
+
+Deno.test("envelope: a direct (non-lazy) call passes straight through", () => {
+  const eff = effectiveToolCall("list_tabs", { windowId: 3 }, { ok: true, tabs: [] });
+  assertEquals(eff.name, "list_tabs");
+  assertEquals(eff.lazy, false);
+  assertEquals(eff.args.windowId, 3);
+});
+
+Deno.test("envelope: a bounded/degraded result still yields the artifact when the id survived", () => {
+  // The whole point of degrading rather than erasing: identity survives.
+  const inner = JSON.stringify({
+    ok: true,
+    selectedTool: "create_asset",
+    result: { ok: true, id: "a_kept", bounded: true, droppedFields: 1, summary: "tool completed; result exceeded the lazy protocol output bound — identifying fields kept, bulk omitted" },
+  });
+  const a = artifactFromToolResult("execute_tool", { modelContent: inner });
+  assert(a, "a degraded result that kept the id must still render a card");
+  assertEquals(a.id, "a_kept");
+});
+
+Deno.test("envelope: a failed execute_tool renders no artifact", () => {
+  const inner = JSON.stringify({ ok: false, selectedTool: "create_asset", error: "denied" });
+  assertEquals(artifactFromToolResult("execute_tool", { modelContent: inner }), null);
 });

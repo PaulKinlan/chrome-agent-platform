@@ -231,8 +231,13 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
     switch (ev.type) {
       case "tool-call": {
         onStatus?.({ state: "running", activity: friendlyActivityLabel(ev.toolName, ev.toolArgs) });
+        // The invoked tool is not known until the result arrives, but the
+        // arguments already carry it nested under `arguments` alongside a
+        // selectionRef that means nothing to a reader — unwrap now so the card
+        // never shows protocol plumbing, even briefly.
+        const callEff = effectiveToolCall(ev.toolName, ev.toolArgs, null);
         const card = typeof c.appendTool === "function"
-          ? c.appendTool({ name: ev.toolName, args: ev.toolArgs, status: "running" })
+          ? c.appendTool({ name: callEff.name, args: callEff.args, status: "running" })
           : appendBubble(c, "tool", `→ ${ev.toolName}`);
         toolCards.push(ev.toolName, card);
         break;
@@ -243,6 +248,15 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
         const summary = ev.result != null ? summarizeToolResult(ev.toolName, ev.result) : "";
         const status = isToolErrorEvent(ev) ? "error" : "success";
         if (card) {
+          // The result names the tool that actually ran; correct the header
+          // from `execute_tool` to that name now it is known.
+          const resEff = effectiveToolCall(ev.toolName, ev.toolArgs, ev.result);
+          if (resEff.lazy && resEff.name && resEff.name !== ev.toolName) {
+            card.setAttribute?.("tool-name", resEff.name);
+          }
+          if (resEff.args != null) {
+            try { card.setAttribute?.("tool-args", JSON.stringify(resEff.args)); } catch { /* keep what is there */ }
+          }
           card.setAttribute?.("tool-status", status);
           if (ev.durationMs != null) card.setAttribute?.("tool-duration", String(ev.durationMs));
           if (summary) card.setAttribute?.("tool-result", summary);
@@ -630,9 +644,72 @@ export function pairToolJournal(entries) {
  * safe to call on every tool result. */
 const ARTIFACT_TOOLS = new Set(["create_asset", "update_asset", "generate_ui"]);
 
+/** THE LAZY PROTOCOL ENVELOPE (CAP-FB-20260828-TOOL-RESULT-ENVELOPE-01).
+ *
+ * Every provider run now receives exactly two definitions, `search_tools` and
+ * `execute_tool`, so in a real run the tool NAME the UI sees is `execute_tool`
+ * and the tool actually invoked is named inside the payload. The transcript was
+ * showing the envelope rather than the work: a card headed `execute_tool` whose
+ * arguments were `{selectionRef, arguments:{…}}` and whose result was
+ * `{modelContent:"{\"selectedTool\":\"create_asset\",…}"}`.
+ *
+ * These two unwrap it so every consumer — the card header, the summary, the
+ * artifact derivation — works on the tool that actually ran. Pure, and
+ * tolerant: anything that is not an envelope passes straight through, so the
+ * direct (non-lazy) dispatch path is unaffected. */
+export function unwrapLazyEnvelope(value) {
+  let v = value;
+  for (let hop = 0; hop < 4; hop++) { // bounded: envelopes nest at most 2 deep
+    if (typeof v === "string") {
+      const t = v.trim();
+      if (!t.startsWith("{") && !t.startsWith("[")) return v;
+      try { v = JSON.parse(t); } catch { return v; }
+      continue;
+    }
+    if (!v || typeof v !== "object" || Array.isArray(v)) return v;
+    // agent-do's {modelContent,userSummary} wrapper.
+    if (v.userSummary != null) { v = v.userSummary; continue; }
+    if (v.modelContent != null) { v = v.modelContent; continue; }
+    return v;
+  }
+  return v;
+}
+
+/** The tool that actually ran, and the arguments it actually received. */
+export function effectiveToolCall(toolName, args, result) {
+  const name = String(toolName ?? "");
+  if (name !== "execute_tool" && name !== "search_tools") {
+    return { name, args, lazy: false };
+  }
+  const outer = unwrapLazyEnvelope(result);
+  const selected = outer && typeof outer === "object" && typeof outer.selectedTool === "string"
+    ? outer.selectedTool
+    : null;
+  const rawArgs = unwrapLazyEnvelope(args);
+  // `execute_tool`'s own arguments carry the invoked tool's arguments nested
+  // under `arguments`, alongside a selectionRef that means nothing to a reader.
+  const inner = rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs) &&
+      rawArgs.arguments !== undefined
+    ? rawArgs.arguments
+    : rawArgs;
+  return { name: selected ?? name, args: inner, lazy: true };
+}
+
 export function artifactFromToolResult(toolName, result) {
-  if (!ARTIFACT_TOOLS.has(String(toolName ?? ""))) return null;
-  let parsed = result;
+  const outer = unwrapLazyEnvelope(result);
+  // Under the lazy protocol the invoked tool is named in the payload, not in
+  // the card header — keying on the header alone meant this never fired in a
+  // real run, only in the direct-dispatch tests.
+  const selected = outer && typeof outer === "object" && typeof outer.selectedTool === "string"
+    ? outer.selectedTool
+    : null;
+  const effective = selected ?? String(toolName ?? "");
+  if (!ARTIFACT_TOOLS.has(effective)) return null;
+  if (outer && typeof outer === "object" && outer.ok === false) return null;
+  // The invoked tool's own result sits under `result` in the envelope.
+  let parsed = outer && typeof outer === "object" && outer.result !== undefined
+    ? unwrapLazyEnvelope(outer.result)
+    : outer;
   if (typeof parsed === "string") {
     try {
       parsed = JSON.parse(parsed);
@@ -672,11 +749,13 @@ export function toolRowsFromRunLog(executionId, logs) {
       ts: typeof r.at === "number" ? r.at : null,
     }));
   return pairToolJournal(rows).flatMap((p) => {
+    // Show the tool that RAN, not the lazy protocol's envelope.
+    const eff = effectiveToolCall(p.tool, p.args, p.result);
     const toolRow = {
       role: "tool",
-      toolName: p.tool,
+      toolName: eff.name,
       toolStatus: p.status === "success" ? "done" : p.status === "error" ? "error" : "done",
-      toolArgs: p.args ?? null,
+      toolArgs: eff.args ?? null,
       toolResult: p.result ?? null,
       toolOk: p.ok ?? null,
       toolDuration: p.durationMs ?? null,

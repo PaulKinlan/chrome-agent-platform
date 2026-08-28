@@ -233,18 +233,55 @@ function projectResult(value) {
       utf8ByteLength(JSON.stringify(redacted)) >
         LAZY_TOOL_PROTOCOL_BOUNDS.maxResultBytes
     ) {
-      return Object.freeze({
-        bounded: true,
-        summary:
-          "tool completed; result exceeded the lazy protocol output bound",
-      });
+      return degradeResult(value, "result exceeded the lazy protocol output bound");
     }
     return redacted;
   } catch {
-    return Object.freeze({
-      bounded: true,
-      summary: "tool completed; result was not safely serializable",
-    });
+    return degradeResult(value, "result was not safely serializable in full");
+  }
+}
+
+/** BOUNDING MUST DEGRADE, NOT ERASE (CAP-FB-20260828-TOOL-RESULT-ENVELOPE-01).
+ *
+ * This previously replaced an over-bound result with a bare summary string, so
+ * a `create_asset` whose payload tripped a bound came back as
+ * `{bounded:true, summary:"tool completed; result was not safely serializable"}`
+ * — the model never learned the id of the artifact it had just made, and the UI
+ * had nothing to render. The bound is there to stop unbounded data reaching the
+ * provider; it was never meant to destroy the answer.
+ *
+ * So keep what is small and identifying — the top-level scalars, which is where
+ * `ok`, `id`, `error` and counts live — drop the bulk, and say plainly that the
+ * rest was dropped. Everything kept still goes through the same redaction and
+ * truncation, and the whole thing is re-checked against the byte bound; if even
+ * this does not fit, THEN fall back to the summary. */
+function degradeResult(value, why) {
+  const summary = `tool completed; ${why} — identifying fields kept, bulk omitted`;
+  try {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      return Object.freeze({ bounded: true, summary });
+    }
+    const kept = {};
+    let dropped = 0;
+    for (const [key, child] of Object.entries(value)) {
+      const scalar = child === null || typeof child === "string" ||
+        typeof child === "number" || typeof child === "boolean";
+      if (!scalar) { dropped += 1; continue; }
+      if (typeof child === "number" && !Number.isFinite(child)) { dropped += 1; continue; }
+      if (utf8ByteLength(String(key)) > LAZY_TOOL_PROTOCOL_BOUNDS.maxKeyBytes) { dropped += 1; continue; }
+      if (Object.keys(kept).length >= LAZY_TOOL_PROTOCOL_BOUNDS.maxObjectKeys) { dropped += 1; continue; }
+      kept[key] = typeof child === "string"
+        ? redactSecretText(truncateUtf8(child.normalize("NFKC"), LAZY_TOOL_PROTOCOL_BOUNDS.maxStringBytes))
+        : child;
+      if (SECRET_KEY_RE.test(key)) kept[key] = "[REDACTED]";
+    }
+    const out = { ...kept, bounded: true, droppedFields: dropped, summary };
+    if (utf8ByteLength(JSON.stringify(out)) > LAZY_TOOL_PROTOCOL_BOUNDS.maxResultBytes) {
+      return Object.freeze({ bounded: true, summary });
+    }
+    return Object.freeze(out);
+  } catch {
+    return Object.freeze({ bounded: true, summary });
   }
 }
 

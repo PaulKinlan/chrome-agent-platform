@@ -2849,6 +2849,23 @@ function namedBoundMutationPayload(request, existing) {
   );
 }
 
+/** An artifact's identity: enough to reference, open or render it, with none of
+ *  the bulk. Deliberately omits `content` — the caller supplied it, the UI
+ *  fetches it on demand, and echoing it back is what pushed create results past
+ *  the lazy protocol's result bound and erased them entirely. */
+function assetIdentity(asset) {
+  if (!asset || typeof asset !== "object") return null;
+  return {
+    id: asset.id,
+    name: asset.name,
+    type: asset.type,
+    origin: asset.origin,
+    size: asset.size,
+    createdAt: asset.createdAt,
+    updatedAt: asset.updatedAt,
+  };
+}
+
 async function ownerApprovalRows() {
   const rows = listPendingApprovals(ownerApprovalStore);
   return rows.map((row) => ({
@@ -4492,12 +4509,19 @@ const handlers = mergeRouteMaps(
         key: namespacedKey, type: assetType, name, content,
       });
       return res?.ok
-        ? { ok: true, asset: res.asset, id: res.id, keyed: true, created: res.created === true, updated: res.updated === true }
+        ? { ok: true, id: res.id, asset: assetIdentity(res.asset), keyed: true, created: res.created === true, updated: res.updated === true }
         : res;
     }
     const res = await createAsset(origin ?? "master", { type: assetType, name, content });
+    // Return the artifact's IDENTITY, never the whole index and never the
+    // content back (CAP-FB-20260828-TOOL-RESULT-ENVELOPE-01). Returning
+    // `index` shipped the entire artifact index to the model on every create;
+    // past ~70 artifacts that alone blew the lazy protocol's 512-node result
+    // bound, which THREW, which erased the whole result — so the model never
+    // learned the id of the thing it had just made, and the UI had nothing to
+    // render. Echoing `content` is pure waste: the model just sent it.
     return res.ok
-      ? { ok: true, asset: res.asset, index: res.index }
+      ? { ok: true, id: res.asset?.id ?? res.id ?? null, asset: assetIdentity(res.asset) }
       : res;
   },
   async "asset.update"({ origin, id, assetType, name, content }, context) {

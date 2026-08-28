@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.334] — 2026-08-28
+- Internal cleanup: finished removing the old view-transition machinery (it was already disabled) — renamed to what it actually does and stripped the leftover styles. No visible change
+
 ## [0.2.333] — 2026-08-28
 - Verified the site-tools (WebMCP) machinery actually works end to end — 35 of 35 checks against a real page, covering discovery, invoking the right tab, surviving reloads and navigation. The only thing left unproven is the browser permission prompt, which needs a human click
 
