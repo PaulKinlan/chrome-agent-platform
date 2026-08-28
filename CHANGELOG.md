@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.326] — 2026-08-28
+- Product thesis written down properly: this is a coworking environment for knowledge workers in the browser — tools for running the browser, tools for doing the work, and WebMCP so any website can become a tool. Two gaps between that and the current UI are now tracked: site tools should be available on the tab you are on rather than pre-registered in Settings, and the tool library should be grouped by what things are for
+
 ## [0.2.325] — 2026-08-27
 - Product direction: audited the whole UI and wrote down why it reads as messy — the same thing is called Assets in one place and Artifacts in another, every view is a separate page loaded in an iframe (which is where the back-button and layout bugs came from), and the hub is an onboarding flow, a launcher and a dashboard stacked in one scroll
 

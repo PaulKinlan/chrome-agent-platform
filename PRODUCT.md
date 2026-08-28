@@ -109,11 +109,58 @@ a name and a status chip, or 462px of object inspector. Neither tells the story.
 transcript is the product's main surface and should read as a narrative with detail
 available on demand — not a debugger that happens to be embedded in a chat.
 
-## The one thing to decide
+## What this is (Paul, 2026-08-28)
 
-The product currently presents 126 browser tools, 26 bundled Wasm tools, WebMCP site
-agents, hooks, generated scripts, artifacts, skills and background agents as
-co-equals. That is an enormous capability surface and a very thin story. Before the
-exec demo, pick the **one** thing this is for and let the hub argue for it; the rest
-stays available but stops competing for the first screen. Capability is not the
-problem — the absence of a spine is.
+A **coworking environment for knowledge workers, in the browser**. The tools exist to
+let you finish a large range of work without leaving it. They come in two families:
+
+- **Running the browser** — orchestrating tabs, windows, groups, downloads, history,
+  and reacting to what the environment does.
+- **Doing the work** — the knowledge-worker tools: data, text, files, documents,
+  artifacts, skills.
+
+And **WebMCP is the long game**: any website can expose itself as a tool, so the set of
+things this can do grows with the web rather than with our release notes.
+
+An earlier draft of this section claimed the product had "a thin story" and needed to
+pick one thing it was for. That was wrong, and vaguely put. The purpose is clear. What
+follows is what that purpose implies for the UI — which is a sharper critique than the
+one it replaces, because it can be checked against the thesis.
+
+## What the thesis implies, and where the UI does not match it yet
+
+**Coworking is organised around work; the hub is organised around object types.**
+Agents, Recent artifacts and Recent activity are three catalogs — they answer "what
+objects exist?" A colleague-shaped environment answers "what is in flight, what is
+waiting on me, what came back while I was gone?" Same information, different spine.
+This is the real argument for `CAP-FB-20260828-HUB-AS-TIMELINE-01`, and a better one
+than the composition argument it was filed with.
+
+**If the work produces deliverables, the deliverables belong to the work.** Artifacts
+are the output of knowledge work, and they are currently filed in a separate gallery
+reachable from the sidebar, with a "Recent artifacts" card as a second, partial view of
+the same set. In a coworking model an artifact belongs to the thread that produced it
+and should be found there first; the gallery is the archive, not the primary home.
+
+**If every website is a tool, enrollment should not feel like configuration.** Today a
+site becomes an agent by being enrolled — Settings → Site agents, a "Discovered open
+pages — click to add" box, a curated list. That is a configuration model, and it puts a
+setup step between the user and the most distinctive thing the product does. The WebMCP
+thesis points the other way: the browser already knows the current tab offers tools, so
+that capability should simply be present for a task on that tab, with the owner
+approving its use rather than pre-registering the site. This is the biggest gap between
+what the product IS and how it presents itself, and it is not currently tracked as
+anything.
+
+**The two tool families are invisible.** The tool library is one flat list of 126.
+If "run the browser" and "do the work" are genuinely different halves, saying so helps a
+person predict what they can ask for — which is the actual problem a 126-item list
+creates. Right now the only grouping is by Chrome API.
+
+## Design implications, restated as rules
+
+1. The hub's spine is **work in progress**, not object catalogs.
+2. An artifact's home is **the thread that produced it**; the gallery is the archive.
+3. A site's tools should be **available on the tab**, approved in the moment — not
+   pre-registered in Settings.
+4. Group tools by **what they are for**, not by which Chrome API implements them.

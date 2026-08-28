@@ -160,7 +160,7 @@ On resume after a coordinator or worker loss:
 
 ## Open work queue
 
-**This file holds only what is in progress or still to do — 37 entries.** Completed work is archived in [TASKS-DONE.md](TASKS-DONE.md) at triage; **merged is done** (Paul, 2026-08-28), so nothing sits in a terminal state here. Most urgent first (regenerated 2026-08-28). The entry itself is always the authority; where it disagrees with this table, the entry wins.
+**This file holds only what is in progress or still to do — 39 entries.** Completed work is archived in [TASKS-DONE.md](TASKS-DONE.md) at triage; **merged is done** (Paul, 2026-08-28), so nothing sits in a terminal state here. Most urgent first (regenerated 2026-08-28). The entry itself is always the authority; where it disagrees with this table, the entry wins.
 
 Regenerate after any status change (this exact command reproduces the table below):
 
@@ -190,6 +190,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | OPEN | [`CAP-FB-20260825-WEBSTORE-RELEASE-01`](#cap-fb-20260825-webstore-release-01-the-path-to-a-published-extension) | The path to a published extension |
 | P1 | OPEN | [`CAP-FB-20260827-DIALOG-CONSOLIDATION-01`](#cap-fb-20260827-dialog-consolidation-01-five-dialog-implementations-three-hand-rolled) | Five dialog implementations, three hand-rolled |
 | P1 | OPEN | [`CAP-FB-20260827-SETTINGS-MONOLITH-01`](#cap-fb-20260827-settings-monolith-01-settings-is-one-88-screen-scroll-with-a-nav-that-only-scrolls) | Settings is one 8.8-screen scroll with a nav that only scrolls |
+| P1 | OPEN | [`CAP-FB-20260828-AMBIENT-SITE-TOOLS-01`](#cap-fb-20260828-ambient-site-tools-01-site-tools-should-be-available-on-the-tab-not-pre-registered-in-settings) | Site tools should be available on the tab, not pre-registered in Settings |
 | P1 | OPEN | [`CAP-FB-20260828-HUB-AS-TIMELINE-01`](#cap-fb-20260828-hub-as-timeline-01-the-hub-is-a-dashboard-it-should-be-a-composer-and-a-timeline) | The hub is a dashboard; it should be a composer and a timeline |
 | P2 | **BLOCKED** | [`CAP-FB-20260822-MV3-WASM-RUNTIME-PROBE-01`](#cap-fb-20260822-mv3-wasm-runtime-probe-01-loaded-mv3-wasm-runtime-and-termination-probe) | Loaded-MV3 Wasm runtime and termination probe |
 | P2 | **BLOCKED** | [`CAP-FB-20260822-OWNER-WASM-INSTALL-01`](#cap-fb-20260822-owner-wasm-install-01-owner-selected-wasm-package-lifecycle) | Owner-selected Wasm package lifecycle |
@@ -202,6 +203,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P2 | OPEN | [`CAP-FB-20260825-DELEGATE-ATTACHMENTS-PROGRESS-01`](#cap-fb-20260825-delegate-attachments-progress-01-site-agent-delegation-is-text-only) | Site-agent delegation is text-only |
 | P2 | OPEN | [`CAP-FB-20260825-I18N-FOUNDATION-01`](#cap-fb-20260825-i18n-foundation-01-no-internationalisation-foundation) | No internationalisation foundation |
 | P2 | OPEN | [`CAP-FB-20260828-DEAD-SURFACES-01`](#cap-fb-20260828-dead-surfaces-01-two-html-surfaces-ship-to-users-and-nothing-links-to-them) | Two HTML surfaces ship to users and nothing links to them |
+| P2 | OPEN | [`CAP-FB-20260828-TOOL-LIBRARY-GROUPING-01`](#cap-fb-20260828-tool-library-grouping-01-group-tools-by-what-they-are-for-not-by-chrome-api) | Group tools by what they are for, not by Chrome API |
 | P2 | OPEN | [`CAP-FB-20260828-VIEW-FRAME-COLLAPSE-01`](#cap-fb-20260828-view-frame-collapse-01-collapse-the-iframe-view-model-into-one-hub-document) | Collapse the iframe view model into one hub document |
 | P3 | **BLOCKED** | [`CAP-FB-20260818-WIDER-REVIEW-01`](#cap-fb-20260818-wider-review-01-wider-goal-review-remediation-umbrella) | Wider-goal review remediation umbrella |
 | P3 | OPEN | [`CAP-FB-20260821-RECIPES-SKILLS-RENAME-01`](#cap-fb-20260821-recipes-skills-rename-01-finish-the-recipes-to-skills-rename) | Finish the recipes to skills rename |
@@ -1164,6 +1166,46 @@ evidence every other task depends on).
   landed_version: 0.2.287
   summary: "Owner (2026-08-26): the extension has NO observability. Significant logging was requested before but isn't there. Clicking a task takes ~10s with zero trace of what's happening. One error seen: 'VM5974:2 Uncaught TypeError: Cannot read properties of undefined (reading startTime)' in et.reportAllChanges — that script is MINIFIED and is NOT our shipped code (our SW + options bundles are already unminified; grep confirms reportAllChanges absent), so it's a page the agent visited — we need logging to separate ours from theirs. REQUIREMENTS: (1) debug build with unminified code + source maps in npm run build; npm run build:production / --target=store stays the minified Store bundle; (2) a real logging layer — structured console logs with namespaces + levels + timing (grep-able like [cap:sw:grant]), console.groupCollapsed for runs; (3) performance.mark/measure around every slow path (task load, navigation, tool dispatch, model round-trips) + summary timing logs so a 10s task load becomes a readable breakdown; (4) use Chrome's native logging/performance features throughout (SW, NTP, side panel, content scripts); (5) a way to dump/ship the trace. Goal: use observability to improve the product. CRITICAL: debug mode must NOT weaken the production security assertions (seam scan, no-new-Function, oracle scan, bundled-tool verify) — logging verbosity is the only thing debug relaxes."
 
+## [CAP-FB-20260828-AMBIENT-SITE-TOOLS-01] Site tools should be available on the tab, not pre-registered in Settings
+- Feedback: 2026-08-28 — product owner, restating the product thesis: "WebMCP is that every single website can be a tool that can be used in the future because that's what the web is". Today the product makes you enroll a site first, which is a configuration step in front of the most distinctive thing it does
+- Updated: 2026-08-28 02:00 UTC
+- Status: OPEN
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `d551074b`
+- Candidate: —
+- Shipping: —
+- Acceptance: starting a task on a tab whose page exposes WebMCP tools makes those tools available to that task WITHOUT a prior enrollment step — the owner approves the tool's USE in the moment (the in-context approval path that already exists since `0.2.303`), rather than pre-registering the origin in Settings. Enrollment remains available as an explicit, persistent choice for sites the owner wants standing access to, and the existing per-tool first-run approval, origin-keyed memory and grant scoping are unchanged: this changes WHEN the owner is asked, not WHETHER, and grants no new authority. The Settings → Site agents list becomes a management view of standing enrollments rather than the way you get any site tools at all
+- Review: fresh-session review; this touches the enrollment/authorization boundary, so a security-focused pass over the grant scoping is required, plus real-browser verification on a genuine WebMCP page
+- Gates: full unit suite; Chrome journeys green; `npm run test:webmcp` acceptance; the security suite; a11y pass on the in-context approval
+- Blockers: —
+- Next: confirm the intended authorization shape with the owner before building — "available on the tab, approved on use" must not become "available without asking"
+- Recover: `git grep -n "enroll" -- extension/lib/site-agents.js extension/options/options.js | head`
+- History:
+  - 2026-08-28 02:00 UTC — captured from the owner's restatement of the product thesis, and from a gap between that thesis and the shipped UI. The product's most distinctive claim is that the web itself becomes the toolset. The shipped flow is a configuration model: Settings → Site agents, a "Discovered open pages — click to add site" box, a curated enrolled list, and a hub card that reads "No Site Agents yet. Find tools from an open tab to add one." Every one of those puts a setup step between the user and the capability. This is the largest gap between what the product IS and how it presents itself, and before now it was not tracked as anything — the existing site-agent entries (`SITE-DISCOVERABILITY-01`, `PROACTIVE-TAB-DISCOVERY-01`, `SITE-AGENT-SHOWCASE-01`) all improve the enrollment flow rather than question whether enrollment should be the front door.
+
+## [CAP-FB-20260828-TOOL-LIBRARY-GROUPING-01] Group tools by what they are for, not by Chrome API
+- Feedback: 2026-08-28 — follows from the product thesis: the toolset has two families (running the browser, doing the work) and the UI shows neither
+- Updated: 2026-08-28 02:00 UTC
+- Status: OPEN
+- Priority: P2
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `d551074b`
+- Candidate: —
+- Shipping: —
+- Acceptance: the tool library presents tools grouped by purpose — the two families the product is actually built around, "running the browser" and "doing the work", subdivided into task-shaped groups a person would recognise (tabs & windows, reading & capture, files & data, text & documents, …) — rather than one flat list ordered by which Chrome API implements them. Each group says in one plain line what it lets you ask for. The 126-row honesty from `0.2.312` is preserved: the count and the rows still agree
+- Review: fresh-session review; the impeccable design pass on the grouping and its copy
+- Gates: unit suite; Chrome journeys green; the tool-count assertion still passes
+- Blockers: —
+- Next: the grouping is a product judgement, not a data problem — draft the two families and their subgroups against the real 126 names before touching the UI
+- Recover: `git grep -n "routeFamily\|tool-library" -- extension/lib/chrome-tool-capabilities.js extension/options/options.js | head`
+- History:
+  - 2026-08-28 02:00 UTC — the registry already carries a `routeFamily` per tool (`browser.tabs`, `browser.debugger`, …), but that axis is the implementing Chrome API, which is an engineering fact rather than a user one. A flat 126-item list ordered that way does not help a person predict what they can ask the agent to do, which is the actual job the tool library has.
+
 ## [CAP-FB-20260828-NOUN-DISCIPLINE-01] One name per concept — Assets/Artifacts, Skills/recipes, Agents three deep
 - Feedback: 2026-08-28 — product owner: "the UI is starting to get messy". Root-caused in PRODUCT.md, "Where the product is going": the product speaks three vocabularies for the same nouns
 - Updated: 2026-08-28 01:10 UTC
@@ -1195,13 +1237,14 @@ evidence every other task depends on).
 - Base: `30cd7f59`
 - Candidate: —
 - Shipping: —
-- Acceptance: the composer is the primary element of the hub in the steady state, not only on a fresh profile. The three separate status cards (Agents, Recent artifacts, Recent activity) become ONE activity stream with filters, so a returning owner sees what happened while they were away as a single chronological thing rather than three partial views of it. Drilling into an agent, an artifact or a run still works from that stream. Verified with before/after screenshots on a profile that has real history, not an empty one
+- Acceptance: the composer is the primary element of the hub in the steady state, not only on a fresh profile. The three separate status cards (Agents, Recent artifacts, Recent activity) become ONE activity stream with filters, so a returning owner sees what happened while they were away as a single chronological thing rather than three partial views of it. Drilling into an agent, an artifact or a run still works from that stream. An artifact's primary home becomes the thread that produced it — it is the output of the work, so it belongs with the work; the Artifacts gallery remains as the archive rather than the first place you look. Verified with before/after screenshots on a profile that has real history, not an empty one
 - Review: fresh-session review; the impeccable design skill is mandatory
 - Gates: Chrome journeys green; a11y pass; the impeccable design pass; hub render stays under the existing budget
 - Blockers: —
 - Next: build the profile-with-history fixture first — every hub screenshot to date has been of an empty profile, which is why the composition problem was invisible
 - Recover: `git grep -n "Recent artifacts\|Recent activity" -- extension/ntp/ntp.html`
 - History:
+  - 2026-08-28 02:00 UTC — **better rationale, from the owner's own framing of the product.** This was filed as a composition problem (three cards, weak composer). The stronger statement: the product is a coworking environment for knowledge workers, and coworking is organised around WORK, while the hub is organised around OBJECT TYPES. Agents / Recent artifacts / Recent activity are three catalogs answering "what objects exist?" A colleague-shaped environment answers "what is in flight, what is waiting on me, what came back while I was away?" — the same information with a different spine. Judge the redesign against that question, not against card count.
   - 2026-08-28 01:10 UTC — captured from a product audit. PRODUCT.md states the job as "start a task, see what's happening, and drill in". Today the hub answers the second half with three mostly-empty cards and answers the first half with a composer placed below them. A returning power user mid-task needs somewhere to say the next thing and a record of what happened while they were gone; three partial views of the second thing is not that.
 
 ## [CAP-FB-20260828-DEAD-SURFACES-01] Two HTML surfaces ship to users and nothing links to them
