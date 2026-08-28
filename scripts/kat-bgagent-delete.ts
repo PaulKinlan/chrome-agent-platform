@@ -23,7 +23,17 @@ const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-bgagent-delete`;
 // all); Chrome for Testing honors it. The SW must be built first (the manifest
 // points at dist/background/service-worker.js).
 const CHROMIUM = "/home/paulkinlan/.cache/puppeteer/chrome/linux-140.0.7339.82/chrome-linux64/chrome";
-const PORT = 9357;
+const BASE_PORT = 9357;
+// Pick a free debug port — killed KAT runs leave zombie chromiums holding the
+// fixed port, which then hangs every subsequent run's CDP handshake.
+async function freePort(from: number): Promise<number> {
+  for (let p = from; p < from + 200; p++) {
+    const l = Deno.listen({ port: p });
+    try { l.close(); return p; } catch { /* taken */ }
+  }
+  throw new Error("no free debug port in range");
+}
+const PORT = await freePort(BASE_PORT);
 const STAMP = Date.now();
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail?: unknown) {
@@ -76,7 +86,14 @@ let extId: string;
 if (sw) extId = new URL(sw.url).host;
 else {
   const prof = `${ROOT}.cache/kat-bgagent-delete-${STAMP}/Default/Preferences`;
-  const prefs = JSON.parse(await Deno.readTextFile(prof));
+  // Under fleet load Chrome can take >10s to materialize the profile — poll.
+  let prefsRaw: string | null = null;
+  for (let i = 0; i < 30 && prefsRaw === null; i++) {
+    prefsRaw = await Deno.readTextFile(prof).catch(() => null);
+    if (prefsRaw === null) await sleep(1000);
+  }
+  if (prefsRaw === null) { console.log("FAIL: Chrome profile never materialized (Preferences absent after 30s)"); Deno.exit(1); }
+  const prefs = JSON.parse(prefsRaw);
   const entry = Object.entries<any>(prefs.extensions?.settings ?? {}).find(([, v]) => String(v?.path ?? "").endsWith("extension") && v?.location === 8);
   if (!entry) { console.log("FAIL: extension never registered"); Deno.exit(1); }
   extId = entry[0];
