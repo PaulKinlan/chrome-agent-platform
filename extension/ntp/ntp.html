@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
     <title>Agent Hub — new tab</title>
     <link rel="icon" href="../icons/icon16.png">
     <link rel="stylesheet" href="../shared/theme.css">
@@ -219,7 +220,7 @@
     .run-status { display: block; margin-block-start: 8px; }
     /* the provider-status warning chip (the user must know BEFORE a run) */
     .provider-status { font: inherit; font-size: 12px; font-weight: 600; color: var(--danger, #b3261e); background: transparent; border: 1px solid var(--danger, #b3261e); border-radius: 999px; padding: 2px 10px; cursor: pointer; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .provider-status:hover { background: var(--danger, #b3261e); color: #fff; }
+    .provider-status:hover { background: var(--danger, #b3261e); color: var(--btn-fg, #fff); }
     /* Author styles beat the UA hidden rule; keep the hidden surface absent. */
     .run-status[hidden] { display: none; }
     /* Author styles beat the UA hidden rule; a covered nub stays absent. */
@@ -744,7 +745,8 @@
         </button>
         <span class="view-title" id="view-title">Settings</span>
       </div>
-      <iframe id="view-frame" title="view"></iframe>
+      <!-- CAP-FB-20260828-PANEL-DOC-RETENTION-01: panel frames are created
+           lazily per panel path by ntp.js (panelFrameFor) — see the pool note. -->
     </div>
     <div id="thread-view" class="view-overlay" hidden>
       <div class="view-head">

@@ -1692,7 +1692,9 @@ async function main() {
       let point = null;
       for (let i = 0; i < 30 && !point; i++) {
         point = await evalIn(cdp, ntpSession, `(() => {
-          const frame = document.querySelector('#view-frame');
+          // CAP-FB-20260828-PANEL-DOC-RETENTION-01: panel frames are pooled per
+          // path (ntp.js panelFrameFor) — address the Settings frame by path.
+          const frame = document.querySelector('iframe[data-panel-path="options/options.html"]');
           const el = frame?.contentDocument?.querySelector(${JSON.stringify(selector)});
           if (!frame || !el) return null;
           const fr = frame.getBoundingClientRect();
@@ -1719,7 +1721,8 @@ async function main() {
     // document were NOT treated as an owner surface, this would fail closed.
     // Address the embedded Settings frame's OWN main-world execution context.
     const settingsFrameId = await evalIn(cdp, ntpSession, `(() => {
-      const frame = document.querySelector('#view-frame');
+      // CAP-FB-20260828-PANEL-DOC-RETENTION-01: pooled panel frame selector.
+      const frame = document.querySelector('iframe[data-panel-path="options/options.html"]');
       return frame && frame.contentDocument ? "present" : null;
     })()`);
     const frameTree = await cdp.send("Page.getFrameTree", {}, ntpSession);

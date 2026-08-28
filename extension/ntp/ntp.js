@@ -820,7 +820,7 @@ async function openArtifactDialog(id, origin, fallbackName) {
     frame.style.border = "1px solid var(--border)";
     frame.style.borderRadius = "10px";
     frame.style.overflow = "hidden";
-    frame.style.background = "#fff";
+    frame.style.background = "var(--panel, #fff)";
     frame.style.flex = "1 1 auto";
     frame.style.display = "flex";
     frame.style.flexDirection = "column";
@@ -1096,12 +1096,16 @@ function hideThreadViewInner() {
 }
 function hideViewInner() {
   viewOverlay.hidden = true;
-  // CAP-FB-20260826-BACK-STACK-02: do NOT set viewFrame.src="about:blank" here.
-  // A cross-document navigation (X → about:blank) appends a JOINT session-history
-  // entry, so every close polluted the top frame's history and the next open
-  // needed an extra Back press (the "blank screen, press back twice" bug).
-  // Leaving the embedded document loaded (just hidden) keeps the joint history
-  // clean; the next openView() navigates it with a replace (see openView).
+  // CAP-FB-20260826-BACK-STACK-02: do NOT navigate the frame with a plain
+  // viewFrame.src= assignment here. A cross-document navigation (X →
+  // about:blank) via src= APPENDS a JOINT session-history entry, so every close
+  // polluted the top frame's history and the next open needed an extra Back
+  // press (the "blank screen, press back twice" bug).
+  //
+  // CAP-FB-20260828-PANEL-DOC-RETENTION-01: the panel documents persist in the
+  // per-panel frame pool (bounded by the panel count — see panelFrameFor), so
+  // close is a plain hide: no document churn, no GC-cadence memory sawtooth,
+  // and the CAP-FB-20260826-BACK-STACK-02 history semantics above still hold.
   syncViewOpen();
 }
 function showThreadView(options = {}) {
@@ -1450,7 +1454,7 @@ function configButton(text, variant) {
   b.style.border = "1px solid var(--border,#e3e0d9)";
   if (variant === "primary") {
     b.style.background = "var(--accent,#0e6e63)";
-    b.style.color = "#fff";
+    b.style.color = "var(--btn-fg, #fff)";
     b.style.borderColor = "var(--accent,#0e6e63)";
   } else {
     b.style.background = "transparent";
@@ -2280,7 +2284,39 @@ document.getElementById("new-agent")?.addEventListener("click", () => {
 
 // ── in-context navigation (no new tabs) ─────────────────────────────────
 const viewOverlay = document.getElementById("view");
-const viewFrame = document.getElementById("view-frame");
+// CAP-FB-20260828-PANEL-DOC-RETENTION-01: one PERSISTENT frame per panel
+// (lazy, created on first open, reused for every later open). A single shared
+// frame forces a cross-document replace on every panel SWITCH, and the
+// renderer retains each destroyed document until a MAJOR GC — measured 12
+// open/close cycles across settings/directory/assets growing Documents 4→39,
+// Frames 3→20, listeners 113→776 and JS heap 1.8→8.4MB before any GC
+// (scripts/panel-leak-probe.ts). With a per-panel pool the document count is
+// bounded by the panel count, nothing is destroyed on close, and re-opening a
+// panel is instant (no reload). Freshness semantics are unchanged: a panel
+// document already booted once per hub session for same-panel reopens; this
+// makes panel switches behave the same way.
+const panelFrames = new Map();
+let activePanelFrame = null;
+const PANEL_FRAME_CONTAINER = document.getElementById("view");
+function panelFrameFor(path) {
+  let frame = panelFrames.get(path);
+  if (!frame) {
+    frame = document.createElement("iframe");
+    frame.dataset.panelPath = path;
+    frame.title = "view";
+    frame.hidden = true;
+    PANEL_FRAME_CONTAINER.appendChild(frame);
+    panelFrames.set(path, frame);
+  }
+  return frame;
+}
+function isPanelFrameSource(win) {
+  if (!win) return false;
+  for (const frame of panelFrames.values()) {
+    if (frame.contentWindow === win) return true;
+  }
+  return false;
+}
 const viewTitle = document.getElementById("view-title");
 const viewFocus = createViewFocusController();
 
@@ -2304,18 +2340,15 @@ function openView(path, title, trigger) {
   // (location.replace) so the pushState below is the SINGLE history entry; the
   // very first load (empty iframe) still uses src= (which replaces the initial
   // about:blank and adds nothing).
+  const frame = panelFrameFor(path);
   const frameUrl = chrome.runtime.getURL(path);
-  if (viewFrame.contentWindow && viewFrame.src && viewFrame.src !== "about:blank" && viewFrame.src !== frameUrl) {
-    try {
-      viewFrame.contentWindow.location.replace(frameUrl);
-    } catch {
-      // Cross-origin fallback (should not happen — the frame is same-extension):
-      viewFrame.src = frameUrl;
-    }
-  } else {
-    viewFrame.src = frameUrl;
+  // Boot the panel document exactly once; later opens reuse the live document.
+  if (!frame.src || frame.src === "about:blank" || frame.src === location.href) {
+    frame.src = frameUrl;
   }
-  viewFrame.title = title;
+  for (const other of panelFrames.values()) other.hidden = other !== frame;
+  activePanelFrame = frame;
+  frame.title = title;
   viewTitle.textContent = title;
 
   if (typeof window !== "undefined" && window.history?.pushState) {
@@ -2341,7 +2374,7 @@ function openView(path, title, trigger) {
     }, null), {
     sourceRoute,
     targetRoute,
-    focusAfter: viewFrame,
+    focusAfter: activePanelFrame,
   });
 }
 function closeView({ fromNavigation = false } = {}) {
@@ -2415,9 +2448,11 @@ async function applyCurrentHashRoute(isTraverse = false) {
         }
       }
     } else if (parsed.route === "view") {
-      const expectedSrc = chrome.runtime?.getURL ? chrome.runtime.getURL(parsed.path) : parsed.path;
       const title = meta.title ?? "View";
-      if (viewOverlay?.hidden || viewFrame.src !== expectedSrc) {
+      // CAP-FB-20260828-PANEL-DOC-RETENTION-01: the route is open when its
+      // pooled panel frame is the active one (an unbooted path has no frame
+      // yet, so a traverse to a not-yet-opened view falls through to openView).
+      if (viewOverlay?.hidden || activePanelFrame !== panelFrames.get(parsed.path)) {
         openView(parsed.path, title, null, { pushHistory: false });
       } else if (viewTitle && meta.title && meta.title !== "View") {
         // Already open with the correct src — restore the stored title (a
@@ -2579,7 +2614,7 @@ window.addEventListener("message", async (e) => {
   if (d?.type === "cap:go-home") {
     // CAP-FB-20260826-HEADER-HOME-01: the settings panel's brand asked to go
     // Home — close the overlay (only our own embedded view may drive this).
-    if (e.source !== viewFrame.contentWindow) return;
+    if (!isPanelFrameSource(e.source)) return;
     if (!viewOverlay?.hidden) closeView();
     return;
   }
@@ -2587,7 +2622,7 @@ window.addEventListener("message", async (e) => {
     // A skill was chosen on the Skills page → close the overlay + pre-fill the
     // composer with the /skill:<id> reference (the skill is INCLUDED in the
     // task, not run in isolation).
-    if (e.source !== viewFrame.contentWindow) return;
+    if (!isPanelFrameSource(e.source)) return;
     const id = String(d.id ?? "").trim();
     closeView();
     composer.value = composer.value ? `${composer.value} /skill:${id}` : `/skill:${id}`;
@@ -2595,7 +2630,7 @@ window.addEventListener("message", async (e) => {
     return;
   }
   if (!d || d.type !== "cap:attach-artifact") return;
-  if (e.source !== viewFrame.contentWindow) return; // only our own gallery
+  if (!isPanelFrameSource(e.source)) return; // only our own gallery
   const { id, name, type, origin } = d.artifact ?? {};
   if (!id) return;
   // The single Reuse path: attachAssetToComposer performs exactly one
