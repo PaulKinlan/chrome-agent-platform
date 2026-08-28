@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.352] — 2026-08-28
+- fix(agent-cards): address review findings (P1-a object skills, P1-b import bounds & size alignment, P1-c bounded droppedSkills, P1-d prototype & accessor fail-closed)
+
 ## [0.2.351] — 2026-08-28
 - docs(agent-cards): add agent card format specification and sharing contract (AGENT-PRODUCT-GAPS G7)
 

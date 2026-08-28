@@ -11,11 +11,11 @@
 //
 // Security & integrity principles (Constitution §2 + §4):
 //   - Agent cards are pure DATA (never executable code or eval'd strings).
-//   - Hostile input FAILS CLOSED (malformed JSON, invalid types, non-plain objects, throwing accessors).
-//   - Unknown skill IDs are dropped with an explicit, bounded droppedSkills report.
-//   - Oversized fields are strictly bounded (role, assets, names, counts).
+//   - Hostile input FAILS CLOSED (malformed JSON, invalid types, accessors, toJSON methods, cyclic objects).
+//   - Plain data objects only: deep descriptor validation rejects prototype inheritance and accessor traps.
+//   - UTF-8 byte bounded: asset content and payload size bounded strictly by UTF-8 bytes.
+//   - Deduplicated counting: omitted skills/dropped counters increment per distinct ID.
 //   - Structured credentials (API keys, session tokens, instance IDs) are NEVER exported in cards.
-//   - Plain data objects only: prototype inheritance and accessor traps fail closed.
 
 import { RECIPES } from "./recipes.js";
 
@@ -26,16 +26,37 @@ export const MAX_CARD_SKILLS = 128;
 export const MAX_RAW_SKILLS_INPUT = 256;
 export const MAX_DROPPED_SKILLS_REPORT = 128;
 export const MAX_CARD_CORE_ASSETS = 8;
-export const MAX_CARD_CORE_ASSET_BYTES = 131072; // 128 KiB per core asset
-export const MAX_CARD_JSON_BYTES = 2097152; // 2 MiB (accommodates 8 × 128 KiB assets + role + metadata)
+export const MAX_CARD_CORE_ASSET_BYTES = 131072; // 128 KiB UTF-8 bytes per core asset
+export const MAX_CARD_JSON_BYTES = 2097152; // 2 MiB (guarantees 8 × 128 KiB UTF-8 assets + role + metadata re-import)
 export const MAX_CREATED_FROM_LEN = 64;
 export const MAX_AVATAR_LEN = 32768; // 32 KiB for avatar data URL / emoji / SVG
 export const MAX_SCHEDULE_TASK_LEN = 4000;
 export const MAX_SCHEDULE_AT_LEN = 64;
 
 /**
+ * Truncate a UTF-8 string to at most maxBytes, appending an ellipsis "…" (3 UTF-8 bytes)
+ * if truncation occurred, without splitting multi-byte code points.
+ */
+export function truncateToUtf8Bytes(text, maxBytes) {
+  if (typeof text !== "string") return "";
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(text);
+  if (bytes.byteLength <= maxBytes) return text;
+
+  const ellipsis = "…";
+  const ellipsisBytes = encoder.encode(ellipsis); // 3 bytes
+  const targetBytes = Math.max(0, maxBytes - ellipsisBytes.byteLength);
+
+  const decoder = new TextDecoder("utf-8", { fatal: false });
+  let sliced = decoder.decode(bytes.subarray(0, targetBytes));
+  sliced = sliced.replace(/\uFFFD+$/, "");
+
+  return sliced + ellipsis;
+}
+
+/**
  * Normalize and bound core assets attached to an agent card.
- * Truncates oversized content with an ellipsis and caps asset count.
+ * Truncates oversized content strictly by UTF-8 bytes and caps asset count.
  */
 export function normalizeCardCoreAssets(assets) {
   if (!Array.isArray(assets)) return [];
@@ -45,9 +66,7 @@ export function normalizeCardCoreAssets(assets) {
     const name = String(a.name ?? "").trim().slice(0, 96);
     const type = String(a.type ?? "text/plain").trim().slice(0, 64);
     let content = a.content == null ? "" : String(a.content);
-    if (content.length > MAX_CARD_CORE_ASSET_BYTES) {
-      content = content.slice(0, MAX_CARD_CORE_ASSET_BYTES) + "…";
-    }
+    content = truncateToUtf8Bytes(content, MAX_CARD_CORE_ASSET_BYTES);
     if (!name && !content) continue;
     out.push({ name, type, content });
     if (out.length >= MAX_CARD_CORE_ASSETS) break;
@@ -59,6 +78,80 @@ function getKnownSkillSet(customKnown) {
   if (customKnown instanceof Set) return customKnown;
   if (Array.isArray(customKnown)) return new Set(customKnown);
   return new Set(RECIPES.map((r) => r.id));
+}
+
+/**
+ * Recursively validate that a JavaScript value is a pure, plain data graph.
+ * Fails closed on:
+ *   - Prototype inheritance (must have Object.prototype/null or Array.prototype)
+ *   - Accessor properties (getters / setters)
+ *   - Non-enumerable properties
+ *   - Functions, methods, and toJSON hooks
+ *   - Symbols
+ *   - Cyclic / circular references
+ */
+export function assertPlainDataGraph(root) {
+  const visited = new Set();
+
+  function walk(node, path = "") {
+    if (node === null || typeof node !== "object") {
+      if (typeof node === "function" || typeof node === "symbol") {
+        return { ok: false, error: `disallowed non-data value at ${path || "root"}` };
+      }
+      return { ok: true };
+    }
+
+    if (visited.has(node)) {
+      return { ok: false, error: `cyclic structure detected at ${path || "root"}` };
+    }
+    visited.add(node);
+
+    if (Array.isArray(node)) {
+      const proto = Object.getPrototypeOf(node);
+      if (proto !== Array.prototype) {
+        return { ok: false, error: `array prototype inheritance detected at ${path || "root"}` };
+      }
+      for (let i = 0; i < node.length; i++) {
+        const itemRes = walk(node[i], `${path}[${i}]`);
+        if (!itemRes.ok) return itemRes;
+      }
+      return { ok: true };
+    }
+
+    const proto = Object.getPrototypeOf(node);
+    if (proto !== Object.prototype && proto !== null) {
+      return { ok: false, error: `prototype inheritance detected at ${path || "root"}` };
+    }
+
+    const symbols = Object.getOwnPropertySymbols(node);
+    if (symbols.length > 0) {
+      return { ok: false, error: `symbol properties rejected at ${path || "root"}` };
+    }
+
+    const propNames = Object.getOwnPropertyNames(node);
+    for (const prop of propNames) {
+      const desc = Object.getOwnPropertyDescriptor(node, prop);
+      if (!desc) continue;
+      if (desc.get !== undefined || desc.set !== undefined) {
+        return { ok: false, error: `accessor property (getter/setter) rejected: ${prop}` };
+      }
+      if (!desc.enumerable) {
+        return { ok: false, error: `non-enumerable property rejected: ${prop}` };
+      }
+      if (prop === "toJSON") {
+        return { ok: false, error: `toJSON property rejected at ${path || "root"}` };
+      }
+      if (typeof desc.value === "function") {
+        return { ok: false, error: `method/function rejected: ${prop}` };
+      }
+      const childRes = walk(desc.value, path ? `${path}.${prop}` : prop);
+      if (!childRes.ok) return childRes;
+    }
+
+    return { ok: true };
+  }
+
+  return walk(root);
 }
 
 /**
@@ -163,31 +256,23 @@ export function validateAgentCard(card, options = {}) {
       return { ok: false, error: "agent card must be a non-null JSON object" };
     }
 
-    // Require plain data object — reject prototype pollution and inherited properties
-    const proto = Object.getPrototypeOf(card);
-    if (proto !== Object.prototype && proto !== null) {
-      return {
-        ok: false,
-        error: "agent card must be a plain JSON object (prototype inheritance is rejected)",
-      };
+    // Require plain data object — reject prototype inheritance and non-plain graphs
+    const plainCheck = assertPlainDataGraph(card);
+    if (!plainCheck.ok) {
+      return plainCheck;
     }
 
-    // Version validation: strict integer checking (no boolean or array coercion)
-    let version = AGENT_CARD_VERSION;
-    if (Object.hasOwn(card, "version") && card.version !== undefined && card.version !== null) {
-      if (typeof card.version !== "number" && typeof card.version !== "string") {
-        return { ok: false, error: "card version must be an integer" };
-      }
-      const rawVer = typeof card.version === "string" ? card.version.trim() : card.version;
-      if (typeof rawVer === "string" && !/^\d+$/.test(rawVer)) {
-        return { ok: false, error: `unsupported agent card version (${card.version})` };
-      }
-      const numVer = Number(rawVer);
-      if (!Number.isSafeInteger(numVer) || numVer < 1 || numVer > AGENT_CARD_VERSION) {
-        return { ok: false, error: `unsupported agent card version (${card.version})` };
-      }
-      version = numVer;
+    // Strict version validation: required OWN property, numeric safe integer == AGENT_CARD_VERSION
+    if (!Object.hasOwn(card, "version") || card.version === undefined || card.version === null) {
+      return { ok: false, error: "agent card requires an own version property" };
     }
+    if (typeof card.version !== "number" || !Number.isSafeInteger(card.version)) {
+      return { ok: false, error: "card version must be an integer" };
+    }
+    if (card.version !== AGENT_CARD_VERSION) {
+      return { ok: false, error: `unsupported agent card version (${card.version})` };
+    }
+    const version = card.version;
 
     // Name validation: must be an own property, required, string, non-empty, bounded
     if (!Object.hasOwn(card, "name") || card.name === undefined || card.name === null) {
@@ -231,6 +316,8 @@ export function validateAgentCard(card, options = {}) {
     const knownSkillSet = getKnownSkillSet(options?.knownSkillIds ?? options?.knownSkills);
     const validSkills = [];
     const droppedSkills = [];
+    const seenValid = new Set();
+    const seenDropped = new Set();
     let omittedValidSkillsCount = 0;
     let omittedDroppedSkillsCount = 0;
 
@@ -248,7 +335,8 @@ export function validateAgentCard(card, options = {}) {
         if (!skillId) continue;
 
         if (knownSkillSet.has(skillId)) {
-          if (!validSkills.includes(skillId)) {
+          if (!seenValid.has(skillId)) {
+            seenValid.add(skillId);
             if (validSkills.length < MAX_CARD_SKILLS) {
               validSkills.push(skillId);
             } else {
@@ -256,7 +344,8 @@ export function validateAgentCard(card, options = {}) {
             }
           }
         } else {
-          if (!droppedSkills.includes(skillId)) {
+          if (!seenDropped.has(skillId)) {
+            seenDropped.add(skillId);
             if (droppedSkills.length < MAX_DROPPED_SKILLS_REPORT) {
               droppedSkills.push(skillId);
             } else {
@@ -382,7 +471,7 @@ export function validateAgentCard(card, options = {}) {
 
 /**
  * Import a card JSON string or object and return a validated agent record.
- * Fails closed on hostile input, malformed JSON, prototype inheritance, or oversized payloads.
+ * Fails closed on hostile input, malformed JSON, prototype inheritance, accessors, or oversized payloads.
  */
 export function importAgentCard(cardInput, options = {}) {
   try {
@@ -406,6 +495,11 @@ export function importAgentCard(cardInput, options = {}) {
         };
       }
     } else if (cardInput && typeof cardInput === "object") {
+      // Deep descriptor validation on the complete object graph BEFORE serialization
+      const plainCheck = assertPlainDataGraph(cardInput);
+      if (!plainCheck.ok) {
+        return plainCheck;
+      }
       try {
         const serialized = JSON.stringify(cardInput);
         if (serialized !== undefined) {
@@ -420,7 +514,7 @@ export function importAgentCard(cardInput, options = {}) {
       } catch (e) {
         return {
           ok: false,
-          error: `card object cannot be serialized (cyclic/circular structure): ${e?.message ?? String(e)}`,
+          error: `card object cannot be serialized: ${e?.message ?? String(e)}`,
         };
       }
     }
