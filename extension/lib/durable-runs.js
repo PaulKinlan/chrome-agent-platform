@@ -891,6 +891,27 @@ export function createDurableRunRegistry({
     return key;
   }
 
+  /** The ACTIVE (in-process writer) executions whose durable family belongs
+   * to the given journal targets. list() deliberately strips journalTarget
+   * from public records, so ownership matching for the deletion fence needs
+   * this dedicated minimal projection: { executionId, journalTarget, phase }
+   * for runs currently in the live writer set. */
+  async function activeByJournalTarget(targets) {
+    const wanted = new Set([...(targets ?? [])].map((t) => String(t ?? "")));
+    return locked(async () => {
+      const out = [];
+      for (const executionId of [...active]) {
+        if (!validExecutionId(executionId)) continue;
+        const record = await readRecord(executionId);
+        if (!record) continue;
+        const target = String(record.journalTarget ?? "");
+        if (!wanted.has(target)) continue;
+        out.push({ executionId, journalTarget: target, phase: record.phase ?? null });
+      }
+      return out;
+    });
+  }
+
   async function cancel(executionId, { reason = "explicit owner cancellation", requestId = null, onAuthorityPersisted = null } = {}) {
     const authority = await locked(async () => {
       let record = await readRecord(executionId);
@@ -1440,6 +1461,7 @@ export function createDurableRunRegistry({
     listThreadExecutions,
     recover,
     list,
+    activeByJournalTarget,
     attachPort,
     isActive: (executionId) => active.has(executionId),
   };
@@ -1453,10 +1475,11 @@ export const durableRuns = createDurableRunRegistry();
  * thread dirs behind). Injected `listAgents` (named-agents.listNamedAgents)
  * and `listTasks` (scheduler.listScheduledTasks) keep this module cycle-free.
  * Assets are NEVER orphans (they live in the master store, not agent dirs). */
-export async function sweepOrphanAgentData({ listAgents, listTasks } = {}) {
+export async function sweepOrphanAgentData({ listAgents, listTasks, registry = null } = {}) {
   if (typeof listAgents !== "function" || typeof listTasks !== "function") {
     throw new Error("sweepOrphanAgentData requires listAgents + listTasks");
   }
+  const reg = registry ?? durableRuns;
   const swept = { agentDirs: 0, backgroundDirs: 0, executionDirs: 0, threadDirs: 0 };
   const failures = [];
   // FAIL-CLOSED authority resolution: a read failure or a malformed snapshot
@@ -1473,8 +1496,13 @@ export async function sweepOrphanAgentData({ listAgents, listTasks } = {}) {
   if (!Array.isArray(agentRows) || !Array.isArray(taskRows)) {
     return { ok: false, swept, failures: ["live-set snapshot malformed (not an array) — sweep refused"] };
   }
+  // LIVE namespace set (review P1-1): a directory under memory/agents/ is
+  // named EITHER by the agent's immutable instanceId (post-fix) OR its legacy
+  // slug — the live set must contain EVERY identity a live row can be
+  // addressed by, or a live agent's instanceId dir looks orphaned and gets
+  // purged (data loss). Registry rows carry instanceId + id (+ maybe slug).
   const liveAgentSlugs = new Set(
-    agentRows.map((a) => String(a?.id ?? a?.slug ?? "")).filter(Boolean),
+    agentRows.flatMap((a) => [a?.instanceId, a?.id, a?.slug]).map((v) => String(v ?? "").trim()).filter(Boolean),
   );
   const liveTaskNames = new Set(
     taskRows.map((t) => String(t?.name ?? "")).filter(Boolean),
@@ -1502,24 +1530,31 @@ export async function sweepOrphanAgentData({ listAgents, listTasks } = {}) {
   // refusal skips the dir removal for that slug: an uncertain durable state
   // must not be half-deleted.
   for (const slug of namedIds) {
-    if (liveAgentSlugs.has(slug)) continue;
+    let decoded = slug;
+    try { decoded = decodeURIComponent(slug); } catch { /* compare raw */ }
+    if (liveAgentSlugs.has(slug) || liveAgentSlugs.has(decoded)) continue;
     try {
-      const purged = await durableRuns.purgeForTarget(`agent:${slug}`);
+      // The durable family target matches the DIR namespace spelling
+      // (post-fix dirs are instanceId-named → agent:<instanceId>; legacy slug
+      // dirs → agent:<slug>). purgeForTarget is a no-op when absent.
+      const purged = await reg.purgeForTarget(`agent:${decoded}`);
       if (purged?.ok === false) { failures.push(`agents/${slug}: durable purge refused (${purged.error ?? "unknown"})`); continue; }
     } catch (e) { failures.push(`agents/${slug}: durable purge failed (${String(e?.message ?? e)})`); continue; }
-    const r = await purgeStoreDir(["memory", "agents", encodeURIComponent(slug)]);
+    const r = await purgeStoreDir(["memory", "agents", encodeURIComponent(decoded)]);
     if (r.ok) swept.agentDirs += 1;
     else failures.push(`agents/${slug}: ${r.error}`);
   }
   // 2. background sandboxes with no schedule row (same fail-closed shape).
   for (const slug of backgroundIds) {
-    const owned = [...liveTaskNames].some((name) => backgroundAgentSlug(name) === slug);
+    let decoded = slug;
+    try { decoded = decodeURIComponent(slug); } catch { /* compare raw */ }
+    const owned = [...liveTaskNames].some((name) => backgroundAgentSlug(name) === slug || backgroundAgentSlug(name) === decoded);
     if (owned) continue;
     try {
-      const purged = await durableRuns.purgeForTarget(`background:${slug}`);
+      const purged = await reg.purgeForTarget(`background:${decoded}`);
       if (purged?.ok === false) { failures.push(`background/${slug}: durable purge refused (${purged.error ?? "unknown"})`); continue; }
     } catch (e) { failures.push(`background/${slug}: durable purge failed (${String(e?.message ?? e)})`); continue; }
-    const r = await purgeStoreDir(["memory", "background", encodeURIComponent(slug)]);
+    const r = await purgeStoreDir(["memory", "background", encodeURIComponent(decoded)]);
     if (r.ok) swept.backgroundDirs += 1;
     else failures.push(`background/${slug}: ${r.error}`);
   }
@@ -1528,7 +1563,7 @@ export async function sweepOrphanAgentData({ listAgents, listTasks } = {}) {
   // EMPTY live set and deleted everything).
   let runs;
   try {
-    runs = await durableRuns.list();
+    runs = await reg.list();
   } catch (e) {
     failures.push(`registry list failed: ${String(e?.message ?? e)} — execution dirs skipped`);
     runs = null;

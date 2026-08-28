@@ -159,7 +159,17 @@ export function createAgentWorkerRoutes({
   markScheduledDone = null,
   resolveJournalStore = null,
   journalAppend = null,
+  resolveAgentIdentity = null,
 }) {
+  // Review P1-2: worker identity must be the agent's IMMUTABLE instanceId —
+  // a caller-supplied reusable slug would key the host worker + alive-set by
+  // a name a recreated agent reuses, inheriting the previous instance's
+  // worker. When the SW injects a resolver, both ensure and run re-key to
+  // the resolved identity; without it (tests), the literal is used.
+  const workerIdentity = async (agentId) => {
+    if (typeof resolveAgentIdentity !== "function") return agentId;
+    try { return (await resolveAgentIdentity(agentId)) || agentId; } catch { return agentId; }
+  };
   const readAliveSet = readAliveSetWith(kvGet);
   const writeAliveSet = (ids) => writeAliveSetWith(kvSet)(ids);
 
@@ -172,22 +182,23 @@ export function createAgentWorkerRoutes({
       const agentId = String(m?.agentId ?? "");
       if (!agentId || agentId.length > 200) return { ok: false, error: "invalid agentId" };
 
+      const identity = await workerIdentity(agentId);
       const host = await ensureOffscreen();
       if (!host?.ok) return { ok: false, error: host?.error || "offscreen unavailable" };
 
       let ensured;
       try {
-        ensured = await chrome.runtime.sendMessage({ type: "agent-worker-host:ensure", agentId });
+        ensured = await chrome.runtime.sendMessage({ type: "agent-worker-host:ensure", agentId: identity });
       } catch (e) {
         return { ok: false, error: `worker host unreachable: ${e?.message ?? e}` };
       }
       if (!ensured?.ok) return { ok: false, error: ensured?.error || "worker not ensured" };
 
-      // Record liveness in the durable alive-set.
+      // Record liveness in the durable alive-set (identity-keyed).
       const alive = await readAliveSet();
-      if (!alive.includes(agentId)) await writeAliveSet([...alive, agentId]);
+      if (!alive.includes(identity)) await writeAliveSet([...alive, identity]);
 
-      return { ok: true, agentId, workerUrl: workerUrl(), name: agentId, created: ensured.created };
+      return { ok: true, agentId: identity, workerUrl: workerUrl(), name: identity, created: ensured.created };
     },
 
     /** PHASE-2 run kick (SW → host → worker run descriptor). Validated: only
@@ -200,7 +211,8 @@ export function createAgentWorkerRoutes({
       const runId = String(m?.runId ?? "").slice(0, 200);
       if (!runId) return { ok: false, error: "invalid runId" };
 
-      const ensured = await this["agent-worker.ensure"]({ agentId }, context);
+      const identity = await workerIdentity(agentId);
+      const ensured = await this["agent-worker.ensure"]({ agentId: identity }, context);
       if (!ensured?.ok) return ensured;
 
       const descriptor = {
@@ -215,14 +227,14 @@ export function createAgentWorkerRoutes({
       try {
         posted = await chrome.runtime.sendMessage({
           type: "agent-worker-host:post",
-          agentId,
+          agentId: identity,
           msg: { type: "agent-worker:run", ...descriptor },
         });
       } catch (e) {
         return { ok: false, error: `worker host unreachable: ${e?.message ?? e}` };
       }
       if (!posted?.ok) return { ok: false, error: posted?.error || "worker run not posted" };
-      return { ok: true, runId, agentId };
+      return { ok: true, runId, agentId: identity };
     },
 
     /** P4 dispatch seam: a background/foreground run KICKED through the worker
@@ -242,7 +254,8 @@ export function createAgentWorkerRoutes({
       const surfaceId = String(m?.surfaceId ?? agentId).slice(0, 200);
 
       // Ensure the worker is alive (idempotent).
-      const ensured = await this["agent-worker.ensure"]({ agentId }, context);
+      const identity = await workerIdentity(agentId);
+      const ensured = await this["agent-worker.ensure"]({ agentId: identity }, context);
       if (!ensured?.ok) return ensured;
 
       // Acquire the single-driver lease for this run's lifetime.
@@ -266,7 +279,7 @@ export function createAgentWorkerRoutes({
       try {
         posted = await chrome.runtime.sendMessage({
           type: "agent-worker-host:post",
-          agentId,
+          agentId: identity,
           msg: { type: "agent-worker:run", ...descriptor },
         });
       } catch (e) {

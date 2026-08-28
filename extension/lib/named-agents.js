@@ -206,8 +206,10 @@ export async function createNamedAgent(
     map[slug] = agent;
     await writeAgents(map);
     // Provision the agent's OWN sandbox: its operating instructions (agents.md)
-    // live in its store, distinct from every other agent.
-    const mem = namedAgentMemory(slug);
+    // live in its store, distinct from every other agent — namespaced by the
+    // IMMUTABLE instanceId (review P1-2): the slug is reusable, the instanceId
+    // is not, so a recreated same-name agent never inherits the old agents.md.
+    const mem = namedAgentMemory(agent.instanceId || slug);
     await mem.setTrusted("agents.md", agentsMd ?? defaultAgentsMd(agent));
     return { ok: true, agent };
   });
@@ -315,41 +317,58 @@ async function recordPendingTeardown(slug, instanceId) {
   } catch { /* best-effort: the orphan sweep remains the safety net */ }
 }
 
-async function takePendingTeardowns() {
+const PENDING_KEY = "agents-pending-teardown";
+
+/** ATOMIC PER-AGENT take (review P1-4): remove and return ONLY this slug's
+ * pending-teardown entries, leaving every OTHER agent's record untouched. The
+ * old global take cleared the whole list before filtering — a retry for one
+ * agent silently dropped the other agents' outstanding repairs. Callers hold
+ * the agents lock, so the read-modify-write is atomic w.r.t. other deletes
+ * and records. */
+async function takePendingTeardownsFor(slug) {
   try {
     const store = (await kvGet(PENDING_KEY))?.[PENDING_KEY];
     const list = Array.isArray(store) ? store : [];
-    if (list.length) await kvSet({ [PENDING_KEY]: [] });
-    return list;
+    const mine = list.filter((p) => p?.slug === slug);
+    if (mine.length) {
+      await kvSet({ [PENDING_KEY]: list.filter((p) => p?.slug !== slug) });
+    }
+    return mine;
   } catch { return []; }
 }
-const PENDING_KEY = "agents-pending-teardown";
 
-export async function deleteNamedAgent(id, { gateBeforeDelete = null, revokeGrants = null, closeAgentWorker = null } = {}) {
+export async function deleteNamedAgent(id, { gateBeforeDelete = null, revokeGrants = null, closeAgentWorker = null, fenceActiveRuns = null } = {}) {
   const slug = slugifyAgentId(id);
   return await withAgentsLock(async () => {
     const map = await agentsMap();
     const existing = map[slug];
     if (!existing) {
       // RETRY-REPAIR: the row may already be gone while namespaces from a
-      // partially-failed teardown remain. Consume the pending-teardown
-      // record (which carries the instanceId the row no longer can) and
-      // purge those dirs + their durable families now. Absent state is
-      // fine (idempotent). Returns ok either way — the deletion stands.
-      const pending = await takePendingTeardowns();
-      const mine = pending.filter((p) => p?.slug === slug);
+      // partially-failed teardown remain. Take ONLY this slug's pending
+      // records (other agents' entries are preserved — review P1-4) and
+      // REPLAY THE FULL TEARDOWN (fence → schedules → grants → worker → dirs
+      // → durable family), not just the directory purge. Absent state is
+      // fine (idempotent).
+      const pending = await takePendingTeardownsFor(slug);
       const fails = [];
-      for (const entry of mine) {
-        for (const ns of [entry.instanceId, entry.slug].filter(Boolean)) {
-          const r = await purgeStoreDir(["memory", "agents", encodeURIComponent(ns)]);
-          if (!r.ok) fails.push(`${ns}: ${r.error}`);
-        }
-      }
-      if (mine.length === 0) {
-        // No record (pre-fix leftover): best-effort legacy slug purge so a
+      if (pending.length === 0) {
+        // No record (pre-fix leftover): best-effort legacy slug teardown so a
         // plain retry can still repair the common case.
-        const r = await purgeStoreDir(["memory", "agents", encodeURIComponent(slug)]);
-        if (!r.ok) fails.push(`${slug}: ${r.error}`);
+        const repairFails = await teardownAgentState({ slug, instanceId: "" }, { fenceActiveRuns, revokeGrants, closeAgentWorker });
+        fails.push(...repairFails);
+      } else {
+        for (const entry of pending) {
+          const repairFails = await teardownAgentState(
+            { slug, instanceId: String(entry?.instanceId ?? "") },
+            { fenceActiveRuns, revokeGrants, closeAgentWorker },
+          );
+          if (repairFails.length) {
+            // Re-record so a later retry (or the sweep) finishes the job —
+            // the take removed it optimistically.
+            fails.push(...repairFails);
+            try { await recordPendingTeardown(slug, entry?.instanceId ?? null); } catch { /* sweep is the net */ }
+          }
+        }
       }
       return fails.length ? { ok: false, retryable: true, error: `teardown repair incomplete: ${fails.join("; ")}` } : { ok: true };
     }
@@ -375,69 +394,20 @@ export async function deleteNamedAgent(id, { gateBeforeDelete = null, revokeGran
     delete map[slug];
     await writeAgents(map);
     // If anything below fails, remember BOTH namespaces so a retry of the
-    // delete (absent row) can finish the teardown.
-    let fail = null;
-    const markFail = (what, e) => {
-      const msg = `${what}: ${String(e?.message ?? e?.error ?? e ?? "failed")}`;
-      fail = fail ? `${fail}; ${msg}` : msg;
-    };
-    try { await recordPendingTeardown(slug, instanceId); } catch { /* sweep is the net */ }
-    // P1-2a: cancel EVERY schedule owned by this agent (owner.agentSurfaceRef
-    // === `named:<slug>`), not only the deterministic recipe:<slug> one —
-    // schedules the agent created at runtime with generated names survive
-    // otherwise and keep firing as orphans.
-    try {
-      const { listScheduledTasks, cancelScheduledTask } = await import("./scheduler.js");
-      const tasks = await listScheduledTasks();
-      for (const t of Array.isArray(tasks) ? tasks : []) {
-        if (String(t?.owner?.agentSurfaceRef ?? "") !== `named:${slug}`) continue;
-        try {
-          const c = await cancelScheduledTask(t.name);
-          if (c?.ok === false) markFail(`schedule ${t.name}`, c);
-        } catch (e) { markFail(`schedule ${t.name}`, e); }
-      }
-    } catch (e) { markFail("schedule enumeration", e); }
-    // P1-2b: revoke persistent file-system grants scoped to this agent
-    // (injected: fs-grants revocation stays out of this module's graph).
-    if (typeof revokeGrants === "function") {
-      try {
-        const g = await revokeGrants(slug);
-        if (g?.ok === false) markFail("fs-grant revoke", g);
-      } catch (e) { markFail("fs-grant revoke", e); }
-    }
-    // P1-2c: detach the agent's shared worker (host port drop + alive-set
-    // prune) so a deleted agent's worker cannot be resurrected.
-    if (typeof closeAgentWorker === "function") {
-      try {
-        const w = await closeAgentWorker(slug);
-        if (w?.ok === false) markFail("agent-worker close", w);
-      } catch (e) { markFail("agent-worker close", e); }
-    }
-    // P1-1: RECURSIVELY REMOVE the OPFS dirs. mem.clear() deliberately
-    // PRESERVES the directory + generation authority for ABA safety — that is
-    // the right semantics for a LIVE store, but a DELETED agent's namespace is
-    // dead: both the instanceId dir and any legacy slug dir must vanish.
-    for (const ns of [...(instanceId ? [instanceId] : []), slug]) {
-      const r = await purgeStoreDir(["memory", "agents", encodeURIComponent(ns)]);
-      if (!r.ok) markFail(`dir agents/${ns}`, r);
-    }
-    // Durable run family: post-fix runs live under agent:<instanceId>;
-    // pre-fix runs under agent:<slug>. Purge BOTH (each is a no-op when
-    // absent). A refusal here leaves registry rows behind — fail the
-    // teardown so retry + sweep finish it; the row is already gone so the
-    // agent cannot run again either way.
-    try {
-      const { durableRuns } = await import("./durable-runs.js");
-      for (const target of [...(instanceId ? [`agent:${instanceId}`] : []), `agent:${slug}`]) {
-        const purged = await durableRuns.purgeForTarget(target);
-        if (purged?.ok === false) markFail(`durable purge ${target}`, purged);
-      }
-    } catch (e) { markFail("durable purge", e); }
-    if (fail) {
+    // delete (absent row) can finish the teardown. The teardown body is the
+    // SHARED fence→schedules→grants→worker→dirs→durable sequence (review
+    // P1-3/P1-4): the fence aborts + awaits in-flight writers BEFORE any
+    // removal, and a failure leaves a pending record for the retry/sweep.
+    const fails = await teardownAgentState(
+      { slug, instanceId },
+      { fenceActiveRuns, revokeGrants, closeAgentWorker },
+    );
+    if (fails.length) {
+      try { await recordPendingTeardown(slug, instanceId); } catch { /* sweep is the net */ }
       return {
         ok: false,
         retryable: true,
-        error: `teardown incomplete (${fail}) — the agent row was removed; retry the delete to finish cleanup`,
+        error: `teardown incomplete (${fails.join("; ")}) — the agent row was removed; retry the delete to finish cleanup`,
       };
     }
     // Fully cleaned: clear this agent's pending record.
@@ -454,9 +424,180 @@ export async function deleteNamedAgent(id, { gateBeforeDelete = null, revokeGran
  * LEGACY read path: keys by slug. The LIVE run/deletion path namespaces by
  * the agent's immutable instanceId (see deleteNamedAgent + the SW run path);
  * this helper remains for pre-fix rows and tool-facing reads where only the
- * slug is known. */
+ * slug is known. Live consumers should use resolveNamedAgentStore instead —
+ * it routes through the immutable identity. */
 export function agentMemory(id) {
   return namedAgentMemory(slugifyAgentId(id));
+}
+
+/** The namespaces that may hold an agent's state, LIVE identity first: the
+ * immutable instanceId (post-fix memory + durable family) then the legacy
+ * slug (pre-fix leftovers). Every consumer that touches an agent's OPFS dirs,
+ * durable targets, grants, or worker keys must address the agent through
+ * THIS list — the slug alone stopped being the live identity once instanceId
+ * namespacing landed (review P1-2). */
+export function agentStateNamespaces(agent) {
+  const slug = slugifyAgentId(agent?.id ?? agent?.slug ?? "");
+  const instanceId = String(agent?.instanceId ?? "").trim();
+  return [...new Set([instanceId, slug].filter(Boolean))];
+}
+
+/** Resolve a slug-or-instanceId selector to the agent's LIVE memory store: a
+ * row whose slug OR instanceId matches resolves to its immutable instanceId
+ * namespace; an unknown selector resolves literally so cleanup paths can
+ * still name an orphan/legacy dir. THE single resolver for live OPFS + worker
+ * consumers (review P1-2) — address an agent by anything else and you risk
+ * reading a dead namespace while the live one grows. */
+export async function resolveNamedAgentStore(selector) {
+  const raw = String(selector ?? "");
+  let row = null;
+  try {
+    const map = await agentsMap();
+    row = map[slugifyAgentId(raw)] ?? Object.values(map).find((a) => a?.instanceId === raw) ?? null;
+  } catch { row = null; }
+  if (row?.instanceId) return namedAgentMemory(row.instanceId);
+  return namedAgentMemory(raw);
+}
+
+/** The immutable worker/identity key for a selector (same resolution rule as
+ * resolveNamedAgentStore, returning the identity STRING): live row → its
+ * instanceId; unknown → the literal selector. The agent-worker routes key
+ * host workers + the alive-set through this so a recreated same-name agent
+ * cannot inherit the previous instance's worker. */
+export async function resolveAgentInstanceId(selector) {
+  const raw = String(selector ?? "");
+  try {
+    const map = await agentsMap();
+    const row = map[slugifyAgentId(raw)] ?? Object.values(map).find((a) => a?.instanceId === raw) ?? null;
+    if (row?.instanceId) return row.instanceId;
+  } catch { /* fall through to the literal */ }
+  return raw;
+}
+
+/** FENCE live writers before teardown (review P1-3): cancel every durable run
+ * whose journalTarget belongs to this agent (post-fix `agent:<instanceId>` +
+ * legacy `agent:<slug>`) and AWAIT terminal state, so an in-flight writer
+ * cannot recreate a removed dir mid-teardown. Registry is injectable for
+ * tests; timeout bounds the wait — an honest failure (retryable) beats an
+ * unbounded delete. */
+export async function fenceAgentActiveRuns({ registry, slug, instanceId, timeoutMs = 15000 } = {}) {
+  if (!registry || typeof registry.list !== "function" || typeof registry.cancel !== "function") {
+    return { ok: false, error: "fence requires a durable registry with list+cancel" };
+  }
+  const targets = new Set(
+    [instanceId ? `agent:${instanceId}` : null, slug ? `agent:${slug}` : null].filter(Boolean),
+  );
+  const deadline = Date.now() + Math.max(1000, timeoutMs);
+  let live = [];
+  while (Date.now() < deadline) {
+    // Ownership matching uses the registry's dedicated projection (list()
+    // strips journalTarget from public records — review-found blind spot).
+    if (typeof registry.activeByJournalTarget === "function") {
+      try {
+        live = await registry.activeByJournalTarget(targets);
+      } catch (e) {
+        return { ok: false, error: `fence could not list active runs: ${String(e?.message ?? e)}` };
+      }
+    } else {
+      // Fallback for minimal registry doubles: list + isActive, matching on
+      // whatever ownership field the double exposes.
+      let runs;
+      try {
+        runs = await registry.list();
+      } catch (e) {
+        return { ok: false, error: `fence could not list runs: ${String(e?.message ?? e)}` };
+      }
+      live = (runs?.runs ?? []).filter((r) =>
+        targets.has(String(r?.journalTarget ?? "")) && registry.isActive?.(r?.executionId) === true,
+      );
+    }
+    if (!live.length) return { ok: true };
+    for (const r of live) {
+      try { await registry.cancel(r.executionId, { reason: "agent deleted — teardown fence" }); } catch { /* retried next pass */ }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return {
+    ok: false,
+    error: `active runs did not reach terminal within ${timeoutMs}ms (${live.map((r) => r.executionId).join(", ")})`,
+  };
+}
+
+/** The COMPLETE state teardown for a dead agent identity (review P1-3/P1-4):
+ * fence live writers FIRST, then cancel owned schedules, revoke scoped
+ * grants, close the shared worker, remove BOTH OPFS namespaces, and purge the
+ * durable run family. External effects are injected where the caller has the
+ * authority (SW); scheduler access is dynamic to keep this module's import
+ * graph clean. Returns the failure list (empty = complete). Used by BOTH the
+ * row-present delete and the absent-row retry so a retry REPLAYS EVERY
+ * phase, not just the directory purge. */
+async function teardownAgentState({ slug, instanceId }, { fenceActiveRuns = null, revokeGrants = null, closeAgentWorker = null } = {}) {
+  const fails = [];
+  const markFail = (what, e) => {
+    const msg = `${what}: ${String(e?.message ?? e?.error ?? e ?? "failed")}`;
+    fails.push(msg);
+  };
+  const namespaces = [...new Set([instanceId, slug].filter(Boolean))];
+  // P1-3: the fence is FIRST — abort + await in-flight writers so nothing
+  // recreates a removed namespace after the purge below. A fence FAILURE
+  // gates the removal phases (dirs + durable family): deleting while writers
+  // are live is exactly the data-loss shape the fence exists to prevent. The
+  // pending record + retry finish the removals once writers are gone.
+  let fenced = true;
+  if (typeof fenceActiveRuns === "function") {
+    try {
+      const f = await fenceActiveRuns({ slug, instanceId, namespaces });
+      if (f?.ok === false) { markFail("active-run fence", f); fenced = false; }
+    } catch (e) { markFail("active-run fence", e); fenced = false; }
+  }
+  // Every schedule OWNED by this agent (owner.agentSurfaceRef ===
+  // `named:<slug>`) — not only deterministic recipe:<slug> names.
+  try {
+    const { listScheduledTasks, cancelScheduledTask } = await import("./scheduler.js");
+    const tasks = await listScheduledTasks();
+    for (const t of Array.isArray(tasks) ? tasks : []) {
+      if (String(t?.owner?.agentSurfaceRef ?? "") !== `named:${slug}`) continue;
+      try {
+        const c = await cancelScheduledTask(t.name);
+        if (c?.ok === false) markFail(`schedule ${t.name}`, c);
+      } catch (e) { markFail(`schedule ${t.name}`, e); }
+    }
+  } catch (e) { markFail("schedule enumeration", e); }
+  // Scoped grants + the shared worker are keyed by EITHER identity string
+  // (grants saved pre-instanceId carry the slug; newer state may carry the
+  // instanceId), so each injection runs per-namespace.
+  for (const ident of namespaces) {
+    if (typeof revokeGrants === "function") {
+      try {
+        const g = await revokeGrants(ident);
+        if (g?.ok === false) markFail(`fs-grant revoke ${ident}`, g);
+      } catch (e) { markFail(`fs-grant revoke ${ident}`, e); }
+    }
+    if (typeof closeAgentWorker === "function") {
+      try {
+        const w = await closeAgentWorker(ident);
+        if (w?.ok === false) markFail(`agent-worker close ${ident}`, w);
+      } catch (e) { markFail(`agent-worker close ${ident}`, e); }
+    }
+  }
+  // OPFS namespaces: the immutable instanceId dir AND any legacy slug dir
+  // must vanish (mem.clear() deliberately preserves dirs for LIVE stores —
+  // recursive removal is the deletion semantics). REMOVALS ARE FENCE-GATED.
+  if (fenced) {
+    for (const ns of namespaces) {
+      const r = await purgeStoreDir(["memory", "agents", encodeURIComponent(ns)]);
+      if (!r.ok) markFail(`dir agents/${ns}`, r);
+    }
+    // Durable run family, both target spellings (each is a no-op when absent).
+    try {
+      const { durableRuns } = await import("./durable-runs.js");
+      for (const target of namespaces.map((ns) => `agent:${ns}`)) {
+        const purged = await durableRuns.purgeForTarget(target);
+        if (purged?.ok === false) markFail(`durable purge ${target}`, purged);
+      }
+    } catch (e) { markFail("durable purge", e); }
+  }
+  return fails;
 }
 
 /** Default `agents.md` — the agent's operating instructions. */

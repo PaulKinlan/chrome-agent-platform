@@ -10,6 +10,7 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   createNamedAgent,
   deleteNamedAgent,
+  fenceAgentActiveRuns,
   listNamedAgents,
   grepAgentMemory,
 } from "../extension/lib/named-agents.js";
@@ -25,6 +26,8 @@ import {
   purgeStoreDir,
 } from "../extension/lib/memory.js";
 import { durableRuns, sweepOrphanAgentData } from "../extension/lib/durable-runs.js";
+import { listFsGrants, revokeAgentFsGrants, saveFsGrant } from "../extension/lib/fs-grants.js";
+import { IDBFactory } from "fake-indexeddb";
 import { createAsset, getAsset, listAssets } from "../extension/lib/artifacts.js";
 import { kvSet, kvGet } from "../extension/lib/kv.js";
 
@@ -396,8 +399,11 @@ Deno.test("teardown: fs-grant revocation + worker-close injections fire; failure
     closeAgentWorker: async (agentId) => { calls.close.push(agentId); return { ok: true }; },
   });
   assertEquals(del.ok, true);
-  assertEquals(calls.revoke, [slug], "revokeGrants got the agent slug");
-  assertEquals(calls.close, [slug], "closeAgentWorker got the agent slug");
+  // Per-identity teardown (review P1-2): injections fire for BOTH identity
+  // spellings — immutable instanceId first, then the legacy slug — so state
+  // saved under either is revoked/closed.
+  assertEquals(calls.revoke, [created.agent.instanceId, slug], "revokeGrants got instanceId then slug");
+  assertEquals(calls.close, [created.agent.instanceId, slug], "closeAgentWorker got instanceId then slug");
 
   // A failing injection must FAIL the teardown honestly (retryable), not
   // silently drop the remaining cleanup.
@@ -436,4 +442,153 @@ Deno.test("orphan sweep FAILS CLOSED: a live-set read error deletes nothing", as
   });
   assertEquals(tasksThrew.ok, false, "sweep refuses on listTasks failure");
   assert((await listNamedAgentIds()).includes("fail-closed-ghost"), "ghost dir STILL EXISTS after task-read failure");
+});
+
+// ---- review round 2 fidelity KATs (P1-1/P1-3/P1-4/P1-5 + sweep DI) ----
+
+Deno.test("sweep: a LIVE agent's instanceId AND legacy slug dirs survive; dead namespaces are swept", async () => {
+  const live = await createNamedAgent({ name: "Survivor" });
+  assert(live.ok);
+  const liveInst = live.agent.instanceId;
+  const liveSlug = live.agent.id;
+  // Live state in BOTH namespace spellings (a pre-fix leftover slug dir for a
+  // live agent must ALSO survive — it is re-associated, not orphaned).
+  await namedAgentMemory(liveInst).set("memory:live", "current");
+  await namedAgentMemory(liveSlug).set("memory:legacy", "pre-fix");
+  // Dead namespaces: an instanceId dir with NO registry row + a legacy slug
+  // dir with no row (the owner's pre-fix leftover shape).
+  const deadInst = crypto.randomUUID();
+  await namedAgentMemory(deadInst).set("memory:dead", "orphan");
+  await namedAgentMemory("dead-ghost-slug").set("memory:dead", "orphan-legacy");
+  assert(dirExists(["memory", "agents", encodeURIComponent(deadInst)]), "pre: dead instance dir exists");
+
+  const sweep = await sweepOrphanAgentData({ listAgents: () => listNamedAgents(), listTasks: async () => [] });
+  assert(sweep.ok, "sweep ok (" + (sweep.failures ?? []).join("; ") + ")");
+  assert(dirExists(["memory", "agents", encodeURIComponent(liveInst)]), "LIVE instanceId dir SURVIVES the sweep");
+  assertEquals(await namedAgentMemory(liveInst).get("memory:live"), "current");
+  assert(dirExists(["memory", "agents", encodeURIComponent(liveSlug)]), "LIVE legacy slug dir SURVIVES the sweep");
+  assertEquals(await namedAgentMemory(liveSlug).get("memory:legacy"), "pre-fix");
+  assertEquals(dirExists(["memory", "agents", encodeURIComponent(deadInst)]), false, "dead instance dir swept");
+  assertEquals(dirExists(["memory", "agents", encodeURIComponent("dead-ghost-slug")]), false, "dead legacy slug dir swept");
+});
+
+Deno.test("fence: an in-flight run is cancelled + awaited before deletion; refusal gates the removals", async () => {
+  const created = await createNamedAgent({ name: "Fenced" });
+  assert(created.ok);
+  const slug = created.agent.id;
+  const inst = created.agent.instanceId;
+  const exec = "exec:99999999-8888-4777-8666-555555555555";
+  const started = await durableRuns.start({
+    executionId: exec,
+    journalTarget: "agent:" + inst,
+    kind: "agent",
+    agentId: "named:" + slug,
+    taskPreview: "in-flight when the owner deletes",
+  });
+  assert(started, "run started");
+  assert(durableRuns.isActive(exec), "pre: the run is a live writer");
+  await namedAgentMemory(inst).set("memory:x", "state");
+
+  const realFence = ({ slug: s, instanceId: i }) => fenceAgentActiveRuns({ registry: durableRuns, slug: s, instanceId: i });
+  const del = await deleteNamedAgent(slug, { fenceActiveRuns: realFence });
+  assertEquals(del.ok, true, "delete with fence ok (" + (del?.error ?? "") + ")");
+  assertEquals(durableRuns.isActive(exec), false, "the in-flight writer was cancelled (no longer active)");
+  // The fenced teardown cancels the writer THEN purges the durable family —
+  // the run record is GONE entirely (stronger than merely cancelled).
+  const runPhase = (await durableRuns.list()).runs.find((r) => r.executionId === exec)?.phase;
+  assert(runPhase === undefined || ["cancel-requested", "terminal", "cancelled"].includes(runPhase), "run still live after fenced delete (phase=" + runPhase + ")");
+  assertEquals(dirExists(["memory", "agents", encodeURIComponent(inst)]), false, "sandbox stays deleted after the fenced removal");
+
+  // A REFUSING fence must gate the removals (no delete while writers live).
+  const created2 = await createNamedAgent({ name: "Fenced2" });
+  assert(created2.ok);
+  const refused = await deleteNamedAgent(created2.agent.id, {
+    fenceActiveRuns: async () => ({ ok: false, error: "writers did not stop" }),
+  });
+  assertEquals(refused.ok, false, "fence refusal fails the teardown");
+  assertEquals(refused.retryable, true);
+  assert(dirExists(["memory", "agents", encodeURIComponent(created2.agent.instanceId)]), "removals GATED: sandbox dir survives a refused fence");
+});
+
+Deno.test("pending: per-agent take preserves OTHER agents' records; failure re-records; retry replays", async () => {
+  const a = await createNamedAgent({ name: "PendingA" });
+  const b = await createNamedAgent({ name: "PendingB" });
+  assert(a.ok && b.ok);
+  // Simulate two crashed partial teardowns.
+  await namedAgentMemory(a.agent.instanceId).set("k", "a");
+  await namedAgentMemory(b.agent.instanceId).set("k", "b");
+  const pending = (await kvGet("agents-pending-teardown"))?.["agents-pending-teardown"] ?? [];
+  await kvSet({
+    "agents-pending-teardown": [
+      ...pending,
+      { slug: a.agent.id, instanceId: a.agent.instanceId, at: Date.now() },
+      { slug: b.agent.id, instanceId: b.agent.instanceId, at: Date.now() },
+    ],
+  });
+
+  // Repair A with a REFUSING fence: A's repair fails, is RE-RECORDED, and —
+  // critically — B's record is untouched (the old global take dropped it).
+  const failed = await deleteNamedAgent(a.agent.id, {
+    fenceActiveRuns: async () => ({ ok: false, error: "still writing" }),
+  });
+  assertEquals(failed.ok, false, "refused fence fails the repair honestly");
+  let records = (await kvGet("agents-pending-teardown"))?.["agents-pending-teardown"] ?? [];
+  assertEquals(records.some((p) => p?.slug === b.agent.id), true, "OTHER agent's pending record PRESERVED");
+  assertEquals(records.some((p) => p?.slug === a.agent.id), true, "failed repair RE-RECORDED for retry");
+
+  // Repair A again with a passing fence: A's dirs go, B's record survives.
+  const repaired = await deleteNamedAgent(a.agent.id, {
+    fenceActiveRuns: async () => ({ ok: true }),
+  });
+  assertEquals(repaired.ok, true, "second repair ok (" + (repaired?.error ?? "") + ")");
+  assertEquals(dirExists(["memory", "agents", encodeURIComponent(a.agent.instanceId)]), false, "A's dir repaired");
+  records = (await kvGet("agents-pending-teardown"))?.["agents-pending-teardown"] ?? [];
+  assertEquals(records.some((p) => p?.slug === a.agent.id), false, "A's record consumed on success");
+  assertEquals(records.some((p) => p?.slug === b.agent.id), true, "B's record STILL preserved after A's success");
+});
+
+Deno.test("fs-grants: revokeAgentFsGrants removes exactly the target agent's scopes by grantId", async () => {
+  const idb = new IDBFactory();
+  const handle = { name: "folder", kind: "directory" };
+  await saveFsGrant({ grantId: "fsg_global", handle, name: "global", scope: null }, { customIdb: idb });
+  await saveFsGrant({ grantId: "fsg_target", handle, name: "target", scope: { agentId: "target-agent" } }, { customIdb: idb });
+  await saveFsGrant({ grantId: "fsg_other", handle, name: "other", scope: { agentId: "other-agent" } }, { customIdb: idb });
+
+  const res = await revokeAgentFsGrants(["target-agent"], { customIdb: idb });
+  assert(res.ok, "revoke ok (" + (res.failures || []).join("; ") + ")");
+  assertEquals(res.revoked, 1, "exactly the target's grant revoked");
+  const after = await listFsGrants({}, { customIdb: idb });
+  const ids = new Set(after.map((g) => g.grantId));
+  assertEquals(ids.has("fsg_target"), false, "target grant gone");
+  assertEquals(ids.has("fsg_global"), true, "GLOBAL grant preserved");
+  assertEquals(ids.has("fsg_other"), true, "OTHER agent's grant preserved");
+
+  // Both identity spellings: a grant saved under the instanceId spelling is
+  // revoked when the revocation list carries it.
+  await saveFsGrant({ grantId: "fsg_inst", handle, name: "inst", scope: { agentId: "inst-uuid-1" } }, { customIdb: idb });
+  const res2 = await revokeAgentFsGrants(["inst-uuid-1", "target-agent"], { customIdb: idb });
+  assert(res2.ok);
+  const ids2 = new Set((await listFsGrants({}, { customIdb: idb })).map((g) => g.grantId));
+  assertEquals(ids2.has("fsg_inst"), false, "instanceId-scoped grant revoked");
+});
+
+Deno.test("sweep: a registry list failure refuses execution-dir judgement (fail-closed, DI)", async () => {
+  const created = await createNamedAgent({ name: "SweepDI" });
+  assert(created.ok);
+  const exec = "exec:77777777-6666-4777-8555-444444444444";
+  await durableRuns.start({ executionId: exec, journalTarget: "agent:" + created.agent.instanceId, kind: "agent", taskPreview: "live" });
+
+  const throwing = {
+    list: async () => { throw new Error("registry I/O error"); },
+    purgeForTarget: async () => ({ ok: true }),
+    isActive: () => false,
+  };
+  const sweep = await sweepOrphanAgentData({
+    listAgents: () => listNamedAgents(),
+    listTasks: async () => [],
+    registry: throwing,
+  });
+  assertEquals(sweep.ok, false, "sweep reports the registry failure");
+  assert((sweep.failures ?? []).join(" ").includes("registry I/O error"));
+  assert(dirExists(["memory", "durable-runs", "executions", encodeURIComponent(exec)]), "LIVE execution dir NOT judged/purged on registry failure");
 });

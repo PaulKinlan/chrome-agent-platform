@@ -161,6 +161,8 @@ import {
   preserveExistingProviderKey,
   MAX_ROLE_LEN,
   MAX_SKILLS,
+  resolveAgentInstanceId,
+  resolveNamedAgentStore,
   setNamedAgentProvider,
   slugifyAgentId,
   updateNamedAgent,
@@ -2438,18 +2440,20 @@ async function memoryOverview(store) {
 
 /** Resolve an `origin` label (the memory route's selector) to its OPFS store.
  * `master` → the hub's store; `background:<slug>` → a background/scheduled
- * agent's own store; `agent:<slug>` → a named agent's store; anything else → a
- * site-origin store. This is the single place the memory.get/set/list/clear
- * routes map a selector to a store, so every agent tier is addressable + the
- * background/named agents are isolated from the master (Paul: all agents get
- * their own OPFS). */
-function resolveMemory(origin) {
+ * agent's own store; `agent:<x>` → a named agent's store resolved through the
+ * IMMUTABLE identity (review P1-2: a slug selector resolves to the row's
+ * current instanceId namespace — never the reusable slug dir); anything else
+ * → a site-origin store. This is the single place the memory
+ * get/set/list/clear routes map a selector to a store. ASYNC: resolution
+ * reads the registry. */
+async function resolveMemory(origin) {
   if (origin === "master") return masterMemory();
   if (typeof origin === "string" && origin.startsWith("background:")) {
     return backgroundAgentMemory(origin.slice("background:".length));
   }
   if (typeof origin === "string" && origin.startsWith("agent:")) {
-    return namedAgentMemory(origin.slice("agent:".length));
+    const { resolveNamedAgentStore } = await import("../lib/named-agents.js");
+    return resolveNamedAgentStore(origin.slice("agent:".length));
   }
   return siteMemory(origin);
 }
@@ -2946,6 +2950,9 @@ const handlers = mergeRouteMaps(
     ensureOffscreen,
     kvGet,
     kvSet,
+    // Worker identity = the agent's immutable instanceId (review P1-2):
+    // slug-keyed workers would be inherited by a recreated same-name agent.
+    resolveAgentIdentity: (agentId) => resolveAgentInstanceId(agentId),
     // ── PHASE-2 tool bridge authority ───────────────────────────────────────
     // The worker's RPC proxy (agent-worker.tool) resolves here. The SW is the
     // ONLY tool executor: resolve the tool by name from the SAME toolsets the
@@ -3813,20 +3820,23 @@ const handlers = mergeRouteMaps(
         );
       },
       // P1-2 teardown injection: persistent fs-grants scoped to THIS agent
-      // are revoked with it (global grants are NEVER touched — listFsGrants
-      // with a scope filter also returns global records, so filter strictly).
+      // are revoked with it, under BOTH identity spellings (grants saved
+      // pre-instanceId carry the slug; newer carry the instanceId). Global
+      // grants are NEVER touched. P1-5: deletion addresses records by
+      // `grantId` (the record key) — the old `g.id` was always undefined, so
+      // exact-agent grants silently survived deletion.
       revokeGrants: async (agentId) => {
         try {
-          const { listFsGrants, deleteFsGrant } = await import("../lib/fs-grants.js");
-          const scoped = (await listFsGrants({ scope: { agentId } }))
-            .filter((g) => g?.scopeKey === `agent:${agentId}`);
-          const failures = [];
-          for (const g of scoped) {
-            const d = await deleteFsGrant(g.id).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
-            if (d?.ok === false) failures.push(`${g.id}: ${d.error ?? "refused"}`);
-          }
-          return failures.length ? { ok: false, error: failures.join("; ") } : { ok: true, revoked: scoped.length };
+          const { revokeAgentFsGrants } = await import("../lib/fs-grants.js");
+          return await revokeAgentFsGrants([agentId]);
         } catch (e) { return { ok: false, error: String(e?.message ?? e) }; }
+      },
+      // P1-3: the fence runs FIRST inside teardownAgentState — every active
+      // durable run owned by this agent (either namespace) is cancelled and
+      // awaited terminal so no writer recreates a purged dir.
+      fenceActiveRuns: async ({ slug: fenceSlug, instanceId }) => {
+        const { fenceAgentActiveRuns } = await import("../lib/named-agents.js");
+        return fenceAgentActiveRuns({ registry: durableRuns, slug: fenceSlug, instanceId });
       },
       // The agent's shared worker must not be resurrectable after deletion.
       closeAgentWorker: (agentId) => closeAgentWorkerFor(agentId, { kvGet, kvSet }),
@@ -4483,13 +4493,13 @@ const handlers = mergeRouteMaps(
     if (/^(?:__gen|__tx|__wal|__epoch|__tombs|assets|assetRepair|asset:)/.test(String(key ?? ""))) {
       return { ok: false, error: `key "${key}" is reserved on this store` };
     }
-    return await resolveMemory(origin).get(key);
+    return await (await resolveMemory(origin)).get(key);
   },
   async "memory.set"({ origin, key, value }) {
-    return await resolveMemory(origin).set(key, value);
+    return await (await resolveMemory(origin)).set(key, value);
   },
   async "memory.list"({ origin }) {
-    const all = await resolveMemory(origin).keys();
+    const all = await (await resolveMemory(origin)).keys();
     return all.filter((k) => !/^(?:__gen|__tx|__wal|__epoch|__tombs|assets|assetRepair|asset:)/.test(k));
   },
   async "memory.clear"({ origin }) {
@@ -4497,7 +4507,7 @@ const handlers = mergeRouteMaps(
     // to check — Settings reported "Cleared…" whether or not anything happened.
     // Return an explicit result and let a failure surface.
     try {
-      await resolveMemory(origin).clear();
+      await (await resolveMemory(origin)).clear();
       return { ok: true, origin };
     } catch (e) {
       return { ok: false, error: `could not clear memory: ${e?.message ?? e}` };
@@ -4714,12 +4724,20 @@ const handlers = mergeRouteMaps(
     ]);
     const named = await listNamedAgents();
     const nameById = new Map(named.map((a) => [slugifyAgentId(a.id), a.name || a.id]));
+    // Dir names are EITHER the immutable instanceId (post-fix) OR the legacy
+    // slug (pre-fix leftovers). Label both by the agent's name — a legacy dir
+    // for a LIVE agent is marked so the owner understands why one agent can
+    // list two stores (the legacy dir is what the orphan sweep cleans).
+    const nameByInstance = new Map(named.map((a) => [String(a.instanceId ?? ""), a.name || a.id]));
+    const liveSlugs = new Set(named.map((a) => slugifyAgentId(a.id)));
     const stores = [{ key: "master", label: "Master (the hub)", kind: "master" }];
     for (const id of namedIds) {
       const store = namedAgentMemory(id);
+      const label = nameByInstance.get(id) ?? nameById.get(id) ?? id;
+      const isLegacySlugDir = !nameByInstance.has(id) && liveSlugs.has(slugifyAgentId(id));
       stores.push({
         key: `agent:${id}`,
-        label: nameById.get(id) ?? id,
+        label: isLegacySlugDir ? `${label} (legacy)` : label,
         kind: "named",
         keyCount: (await store.keys()).length,
       });
@@ -4819,7 +4837,7 @@ const handlers = mergeRouteMaps(
           _executionId: executionId, _permissionResume: true, _resumeToken: resumed.token, _allowProviderChange: run.phase === "paused-provider-change",
         }, context);
       } else {
-        result = await runTask({ ...request, memory: resolveMemory(request.memoryOrigin ?? "master"), executionId, permissionResume: true, resumeToken: resumed.token, allowProviderChange: run.phase === "paused-provider-change" });
+        result = await runTask({ ...request, memory: await resolveMemory(request.memoryOrigin ?? "master"), executionId, permissionResume: true, resumeToken: resumed.token, allowProviderChange: run.phase === "paused-provider-change" });
       }
       if (result?.ok === false && !result?.paused && !result?.cancelled) {
         await durableRuns.failResumeDispatch(executionId, resumed.token, result.error ?? "resume route refused");
@@ -6057,7 +6075,7 @@ async function resumeInterruptedRuns() {
       } else {
         result = await runTask({
           ...request,
-          memory: resolveMemory(request.memoryOrigin ?? "master"),
+          memory: await resolveMemory(request.memoryOrigin ?? "master"),
           executionId: run.executionId,
           permissionResume: true,
           resumeToken: claimed.token,
