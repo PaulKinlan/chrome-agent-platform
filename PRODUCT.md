@@ -136,11 +136,23 @@ waiting on me, what came back while I was gone?" Same information, different spi
 This is the real argument for `CAP-FB-20260828-HUB-AS-TIMELINE-01`, and a better one
 than the composition argument it was filed with.
 
-**If the work produces deliverables, the deliverables belong to the work.** Artifacts
-are the output of knowledge work, and they are currently filed in a separate gallery
-reachable from the sidebar, with a "Recent artifacts" card as a second, partial view of
-the same set. In a coworking model an artifact belongs to the thread that produced it
-and should be found there first; the gallery is the archive, not the primary home.
+**Artifacts are the central store of everything the person has made — and they must
+outlive the agent and the task that made them.** (Paul, 2026-08-28.) The point of an
+artifact is that it can be built on: a summary report written in one task is an input to
+a follow-up task, or to a different agent entirely. Agents get killed. Tasks get
+deleted. The artifact library is the thing that survives both, and it is where the
+person's accumulated work lives.
+
+So this is both/and, not either/or. An artifact appears in the thread that produced it,
+because that is where you are when it is made and where its context is. AND it is a
+first-class entry in a central library that is independent of that thread's lifetime,
+addressable from any later task. An earlier draft of this file called the gallery "the
+archive, not the primary home", which got the emphasis backwards — the library IS a
+primary home, it just should not be the ONLY place an artifact is visible.
+
+This is currently broken in a way that loses data: artifacts created under a site
+origin live in that site's store, and deleting the Site Agent clears it. See
+`CAP-FB-20260828-ARTIFACT-DURABILITY-01`.
 
 **If every website is a tool, enrollment should not feel like configuration.** Today a
 site becomes an agent by being enrolled — Settings → Site agents, a "Discovered open
@@ -160,7 +172,8 @@ creates. Right now the only grouping is by Chrome API.
 ## Design implications, restated as rules
 
 1. The hub's spine is **work in progress**, not object catalogs.
-2. An artifact's home is **the thread that produced it**; the gallery is the archive.
+2. An artifact appears in **the thread that produced it** AND in a **central library
+   that outlives that thread, its agent and its task** — deliverables are built upon.
 3. A site's tools should be **available on the tab**, approved in the moment — not
    pre-registered in Settings.
 4. Group tools by **what they are for**, not by which Chrome API implements them.
