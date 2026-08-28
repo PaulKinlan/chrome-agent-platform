@@ -2198,39 +2198,35 @@ async function buildAgentConfigDialog(opts) {
   nameField.el.focus();
 }
 
-// ── the ONE shared conversation run-status surface ───────────────────────
-const runStatusEl = document.getElementById("run-status");
+// ── the ONE live-status surface: the conversation's inline pinned bottom row ──
+// The status row lives INSIDE the agent-conversation (sticky at the bottom of
+// the chat viewport) — it replaced the separate banner element that duplicated
+// the running conversation entry below it (owner 2026-08-28).
 function renderRunStatus(s) {
-  if (!runStatusEl) return;
+  if (!threadConversation) return;
   const state = typeof s?.state === "string" ? s.state : "";
   if (!state || state === "idle") {
-    runStatusEl.hidden = true;
-    for (const name of ["state", "activity", "message", "error-reason", "action-label"]) {
-      runStatusEl.removeAttribute(name);
-    }
+    threadConversation.clearLiveStatus?.();
     return;
-  }
-  runStatusEl.hidden = false;
-  runStatusEl.setAttribute("state", state);
-  const attrs = {
-    activity: s?.activity,
-    message: s?.message,
-    "error-reason": s?.errorReason,
-  };
-  for (const [name, value] of Object.entries(attrs)) {
-    if (typeof value === "string" && value.trim()) runStatusEl.setAttribute(name, value);
-    else runStatusEl.removeAttribute(name);
   }
   // A provider/config failure OR a permission wait gets the inline actionable
   // recovery path ("Fix in Settings"), not just the message.
   const recoverable = /host-permission|provider-auth|model-config|network/i.test(s?.errorCategory ?? "");
-  if ((state === "failed" || state === "error" || state === "waiting-for-permission") && recoverable) {
-    runStatusEl.setAttribute("action-label", "Fix in Settings");
-  } else {
-    runStatusEl.removeAttribute("action-label");
-  }
+  const actionLabel = (state === "failed" || state === "error" || state === "waiting-for-permission") && recoverable
+    ? "Fix in Settings"
+    : null;
+  threadConversation.setLiveStatus?.({
+    state,
+    activity: s?.activity,
+    message: s?.message,
+    errorReason: s?.errorReason,
+    actionLabel,
+  });
 }
-runStatusEl?.addEventListener("action", () => {
+// The recovery action bubbles from the inline status row (light DOM). Filter
+// to the status row itself — message bubbles can also emit "action".
+threadConversation?.addEventListener("action", (ev) => {
+  if (!ev.target?.classList?.contains?.("live-status")) return;
   // The run-status action is an NTP surface: route IN-CONTEXT like every other
   // Settings entry. chrome.runtime.openOptionsPage() creates no new target from
   // the NTP (it IS the new-tab page) and would strand the user outside the

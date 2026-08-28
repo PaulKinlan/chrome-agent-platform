@@ -23,7 +23,7 @@ function makeHarness({ thread, threads, runs }) {
     const el = {
       id,
       tagName: tagName.toUpperCase(),
-      hidden: id === "thread-view" || id === "view" || id === "run-status" || id === "durable-run-registry",
+      hidden: id === "thread-view" || id === "view" || id === "durable-run-registry",
       textContent: "",
       innerHTML: "",
       style: {},
@@ -80,6 +80,16 @@ function makeHarness({ thread, threads, runs }) {
       focus: () => {},
       clear: () => { children.length = 0; },
       setMessages: (msgs: any[]) => { children.splice(0, children.length, ...msgs); },
+      // Mirror agent-conversation's inline live-status contract: live states
+      // pin the row; idle/completed/empty resolve it to nothing.
+      liveStatus: null as any,
+      liveStatusLog: [] as any[],
+      setLiveStatus: (s: any) => {
+        el.liveStatusLog.push(s);
+        const st = typeof s?.state === "string" ? s.state : "";
+        el.liveStatus = st && st !== "idle" && st !== "completed" ? s : null;
+      },
+      clearLiveStatus: () => { el.liveStatus = null; },
       get children() { return children; },
     };
     elements.set(id, el);
@@ -171,15 +181,14 @@ Deno.test("restore RUNNING task: transcript + status + controls restored on leav
   });
   const row = await boot(harness);
   const conv = harness.getOrCreateElement("thread-conversation");
-  const status = harness.getOrCreateElement("run-status");
   const registry = harness.getOrCreateElement("durable-run-registry");
 
   openTask(row);
   await waitFor(() => harness.getOrCreateElement("thread-view").hidden === false, "thread view open");
   // persisted journal replayed EXACTLY ONCE
   assertEquals(toolRows(conv.children).length, 1, "one replayed tool card for c1");
-  // status banner + controls restored for the executing run
-  assertEquals(status.getAttribute("state"), "running", "banner shows the live run");
+  // the inline live-status row + controls restored for the executing run
+  assertEquals(conv.liveStatus?.state, "running", "the inline status row shows the live run");
   assertEquals(registry.hidden, false, "run controls restored");
 
   // live projection attached: a NEW progress event renders
@@ -195,7 +204,7 @@ Deno.test("restore RUNNING task: transcript + status + controls restored on leav
   // RETURN: re-attached; journal still exactly once; live continuation resumes
   openTask(row);
   await waitFor(() => harness.getOrCreateElement("thread-view").hidden === false, "thread view reopened");
-  assertEquals(status.getAttribute("state"), "running", "banner restored on return");
+  assertEquals(conv.liveStatus?.state, "running", "the inline status row restored on return");
   assertEquals(toolRows(conv.children).filter((c) => c.name === "zip" || c.getAttribute?.("content")?.includes("zip")).length, 1, "journal replayed exactly once on return");
   portState.listener?.({ type: "progress", event: { runId: "exec_run_1", type: "tool-call", toolName: "xz", toolArgs: {} } });
   await waitFor(() => toolRows(conv.children).some((c) => c.getAttribute?.("content")?.includes("xz")), "live continuation after return");
@@ -221,7 +230,7 @@ Deno.test("restore COMPLETED task: terminal state shown, no live controls, no ph
   openTask(row);
   await waitFor(() => harness.getOrCreateElement("thread-view").hidden === false, "thread view open");
   assert(conv.children.some((c) => c.content === "the summary" || c.getAttribute?.("content") === "the summary"), "terminal answer restored");
-  assertEquals(harness.getOrCreateElement("run-status").hidden, true, "no phantom running banner for a terminal run");
+  assertEquals(conv.liveStatus, null, "no phantom live-status row for a terminal run");
   assertEquals(harness.getOrCreateElement("durable-run-registry").hidden, true, "no live controls for a terminal run");
 });
 
@@ -241,7 +250,7 @@ Deno.test("restore FAILED task: terminal error shown; re-open does not duplicate
   openTask(row);
   await waitFor(() => harness.getOrCreateElement("thread-view").hidden === false, "thread view open");
   assert(conv.children.some((c) => c.content === "provider exploded" || c.getAttribute?.("content") === "provider exploded"), "terminal error restored");
-  assertEquals(harness.getOrCreateElement("run-status").hidden, true, "no phantom banner for a failed run");
+  assertEquals(conv.liveStatus, null, "no phantom live-status row for a failed run");
   const before = conv.children.length;
   openTask(row); // re-open the same task
   await waitFor(() => harness.getOrCreateElement("thread-view").hidden === false, "thread view reopened");

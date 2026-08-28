@@ -41,7 +41,7 @@ Deno.test("conversation run status: legacy lifecycle names normalize to the one 
   assertEquals(normalizeConversationRunStatus({ state: "unknown" }), null);
 });
 
-Deno.test("conversation run status: the legacy top-of-thread banner path is absent and the one surface sits below the transcript", async () => {
+Deno.test("conversation run status: the live status is the conversation's own inline pinned bottom row (no separate banner element)", async () => {
   const html = await Deno.readTextFile(new URL("../extension/ntp/ntp.html", import.meta.url));
   assertEquals(html.includes('<div class="run-status"'), false, "the legacy div banner container is gone");
   assertEquals(html.includes("run-status .spin"), false, "the legacy duplicate spinner styles are gone");
@@ -49,25 +49,40 @@ Deno.test("conversation run status: the legacy top-of-thread banner path is abse
   const threadBody = html.indexOf('class="thread-body"');
   assertEquals(threadBody > -1, true, "the thread body exists");
   const thread = html.slice(threadBody);
-  const surface = thread.indexOf('<conversation-run-status');
-  const transcript = thread.indexOf('<agent-conversation');
-  const composer = thread.indexOf('<agent-composer');
-  assertEquals(surface > -1, true, "the single conversation-owned surface exists in the thread body");
-  assertEquals(transcript > -1 && transcript < surface && surface < composer, true,
-    "the status surface renders at the bottom of the transcript, above the composer");
+  assertEquals(thread.includes("conversation-run-status"), false,
+    "no standalone status element sits outside the conversation — the status row is the conversation's own inline child");
+  assertEquals(html.includes('id="run-status"'), false, "the separate #run-status banner element is gone");
+  const transcript = thread.indexOf("<agent-conversation");
+  const composer = thread.indexOf("<agent-composer");
+  assertEquals(transcript > -1 && transcript < composer, true,
+    "the conversation (which owns the inline status row) sits above the composer");
+  const components = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  assert(components.includes("setLiveStatus(status)"), "agent-conversation exposes the inline live-status API");
+  assert(components.includes("agent-conversation .live-status { position: sticky; bottom: 0;"),
+    "the inline status row is pinned (sticky) at the bottom of the conversation viewport");
+  assert(/state === "idle" \|\| state === "completed"/.test(components),
+    "idle/completed resolve the row — the final conversation entry is the resolution, no orphan chrome");
   const js = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
   assertEquals(js.includes("createElement(\"loading-state\")"), false, "the generic loader render path is gone");
-  assertEquals((js.match(/getElementById\("run-status"\)/g) ?? []).length, 1, "exactly one status owner binds the surface");
+  assertEquals(js.includes('getElementById("run-status")'), false, "no separate status element owner remains");
+  assert(js.includes("threadConversation.setLiveStatus?.("), "the NTP routes run status INTO the conversation");
+  const spHtml = await Deno.readTextFile(new URL("../extension/sidepanel/sidepanel.html", import.meta.url));
+  assertEquals(spHtml.includes("agent-detail-status"), false, "the sidepanel's separate status line is gone");
+  const spJs = await Deno.readTextFile(new URL("../extension/sidepanel/sidepanel.js", import.meta.url));
+  assert(spJs.includes("historyEl.setLiveStatus?.(") || spJs.includes("historyEl.clearLiveStatus?.("),
+    "the sidepanel routes run status INTO its conversation");
 });
 
-Deno.test("conversation run status: the action routes in-context to the Settings view, never openOptionsPage", async () => {
+Deno.test("conversation run status: the action routes in-context to the Settings view, never openOptionsPage, and only from the status row", async () => {
   const js = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
-  const start = js.indexOf('runStatusEl?.addEventListener("action"');
-  assert(start > -1, "the run-status action handler exists");
+  const start = js.indexOf('threadConversation?.addEventListener("action"');
+  assert(start > -1, "the status-row action handler exists on the conversation");
   const handler = js.slice(start, js.indexOf("});", start) + 3)
     .replace(/\/\/[^\n]*/g, ""); // comments may explain WHY openOptionsPage is wrong
   assert(handler.includes('openView("options/options.html", "Settings")'),
     "the action routes in-context through the standard NTP Settings view");
+  assert(handler.includes('contains?.("live-status")'),
+    "the handler fires ONLY for the live-status row (message bubbles also emit 'action')");
   assertEquals(handler.includes("openOptionsPage"), false,
     "openOptionsPage creates no target from the NTP and strands the user outside the thread view");
 });

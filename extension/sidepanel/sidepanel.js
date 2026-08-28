@@ -160,7 +160,6 @@ const detailPane = document.getElementById("agent-detail-pane");
 const picker = document.getElementById("agents-picker");
 const detailName = document.getElementById("agent-detail-name");
 const detailKind = document.getElementById("agent-detail-kind");
-const detailStatus = document.getElementById("agent-detail-status");
 const historyEl = document.getElementById("agent-history");
 const agentComposer = document.getElementById("agent-composer");
 
@@ -190,10 +189,17 @@ for (const tab of [tabPage, tabAgents]) {
   });
 }
 
+// The ONE live-status surface for the agent detail conversation: the
+// conversation's own inline pinned bottom row (owner 2026-08-28 — no separate
+// status line duplicating the running conversation entry).
 function setDetailStatus(text, isError = false) {
-  detailStatus.hidden = !text;
-  detailStatus.textContent = text || "";
-  detailStatus.classList.toggle("error", isError);
+  if (!text) {
+    historyEl.clearLiveStatus?.();
+    return;
+  }
+  historyEl.setLiveStatus?.(isError
+    ? { state: "failed", errorReason: text }
+    : { state: "running", activity: text });
 }
 
 function persistSelection() {
@@ -444,13 +450,18 @@ agentComposer.addEventListener("send", async (ev) => {
     agentKind: target.kind,
     onStatus: (s) => {
       // The conversation turn emits the canonical lifecycle vocabulary
-      // (extension/shared/run-status.js); map it onto the detail status line.
-      if (s?.state === "queued") setDetailStatus("Queued");
-      else if (s?.state === "running" || s?.state === "retrying") setDetailStatus(s.activity || "Working…");
-      else if (s?.state === "waiting-for-permission") setDetailStatus(s.errorReason || s.message || "waiting for permission", true);
-      else if (s?.state === "completed") setDetailStatus("");
-      else if (s?.state === "cancelled") setDetailStatus(s.errorReason || "cancelled", true);
-      else if (s?.state === "failed") setDetailStatus(s.errorReason || s.message || "error", true);
+      // (extension/shared/run-status.js); the conversation's own inline
+      // live-status row renders it (idle/completed resolve to nothing).
+      if (!s?.state || s.state === "idle" || s.state === "completed") {
+        setDetailStatus("");
+        return;
+      }
+      historyEl.setLiveStatus?.({
+        state: s.state,
+        activity: s.activity,
+        message: s.message,
+        errorReason: s.errorReason,
+      });
     },
   });
   if (res?.ok === false) setDetailStatus(res.error ?? "run failed", true);

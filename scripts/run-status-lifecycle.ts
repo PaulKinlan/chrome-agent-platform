@@ -1,6 +1,12 @@
 // run-status-lifecycle.ts — the REAL-Chrome journeys for the visible task/run
-// lifecycle (the top-of-thread run-status banner) on current main, written
+// lifecycle status surface on current main, written
 // FAILING-FIRST from the rejected 0134bff review's blockers:
+//
+// SURFACE (2026-08-28): the status surface is the conversation's INLINE
+// live-status row — `#thread-conversation conversation-run-status.live-status`
+// (sticky at the bottom of the chat; absent when idle/completed — completion
+// resolves the row into the final conversation entry). Host attributes carry
+// state/activity; the shadow .surface carries data-state/data-active.
 //
 //   - overlapping runs (same-surface double-send): the LATEST turn owns the
 //     banner/terminal state; no late turn-1 status/result; next-reply routing,
@@ -344,19 +350,22 @@ async function main() {
     }
     return false;
   };
-  // The banner's recorded state sequence (attributes + text), captured via a
-  // MutationObserver installed BEFORE the run — the genuine transition record.
+  // The inline status row's recorded state sequence (host attributes + text),
+  // captured via a MutationObserver on the CONVERSATION installed BEFORE the
+  // run — the genuine transition record (the row itself is created/removed).
   const OBSERVER_INSTALL = `(() => {
     window.__statusSeq = [];
-    const el = document.getElementById('run-status');
+    const conv = document.getElementById('thread-conversation');
+    if (!conv) return false;
     const read = () => {
-      const txt = (el.textContent ?? '').trim().slice(0, 40);
-      const state = el.hidden ? 'hidden' : (el.className.includes('done') ? 'done' : el.className.includes('error') ? 'error' : 'working');
+      const el = conv.querySelector('conversation-run-status.live-status');
+      const txt = (el?.textContent ?? '').trim().slice(0, 40);
+      const st = !el ? 'hidden' : (el.getAttribute('state') === 'failed' ? 'error' : el.getAttribute('state') === 'completed' ? 'done' : 'working');
       const last = window.__statusSeq[window.__statusSeq.length - 1];
-      if (!last || last.state !== state || last.txt !== txt) window.__statusSeq.push({ state, txt, t: Math.round(performance.now()) });
+      if (!last || last.state !== st || last.txt !== txt) window.__statusSeq.push({ state: st, txt, t: Math.round(performance.now()) });
     };
     window.__statusObs = new MutationObserver(read);
-    window.__statusObs.observe(el, { attributes: true, attributeFilter: ['hidden', 'class'], childList: true, subtree: true, characterData: true });
+    window.__statusObs.observe(conv, { attributes: true, childList: true, subtree: true, characterData: true });
     return true;
   })()`;
 
@@ -394,12 +403,13 @@ async function main() {
     let tSent = 0;
     for (let i = 0; i < 40 && !working; i++) {
       const w = await evl(ntp, `(() => {
-        const el = document.getElementById('run-status');
-        if (!el || el.hidden) return null;
-        const loader = el.querySelector('loading-state');
-        const grid = loader?.shadowRoot?.querySelector('.grid');
-        return { visible: !el.hidden, loaderActive: loader?.hasAttribute('active') === true,
-          gridRole: grid?.getAttribute('role') ?? null };
+        const el = document.querySelector('#thread-conversation conversation-run-status.live-status');
+        if (!el) return null;
+        const state = el.getAttribute('state');
+        const surface = el.shadowRoot?.querySelector('.surface');
+        return { visible: true, state,
+          loaderActive: surface?.getAttribute('data-active') === 'true',
+          gridRole: surface?.getAttribute('role') ?? null };
       })()`);
       if (w?.visible && w.loaderActive) { working = w; tDetect = Date.now(); }
       else await sleep(50);
@@ -465,11 +475,13 @@ async function main() {
       genuineOverlap = sentA && sentB && !(await journalHas(ntp, a1));
       dsTiming.push({ attempt, sentA, sentB, a1InFlightAtB: genuineOverlap });
       if (!genuineOverlap) continue;
-      // While turn 2 is in flight, the banner must never show a terminal
-      // state (turn 1's late terminal is fenced).
+      // While turn 2 is in flight, the inline status row must never show a
+      // terminal state (turn 1's late terminal is fenced).
       for (let i = 0; i < 100; i++) {
-        const st = await evl(ntp, `(() => { const el = document.getElementById('run-status');
-          return el?.hidden ? 'hidden' : (el.className.includes('done') ? 'done' : el.className.includes('error') ? 'error' : 'working'); })()`).catch(() => "hidden");
+        const st = await evl(ntp, `(() => { const el = document.querySelector('#thread-conversation conversation-run-status.live-status');
+          if (!el) return 'hidden';
+          const s = el.getAttribute('state');
+          return s === 'failed' ? 'error' : (s === 'running' || s === 'retrying' || s === 'queued') ? 'working' : (s ?? 'hidden'); })()`).catch(() => "hidden");
         let d2Done = await journalHas(ntp, a2);
         if ((st === "done" || st === "error") && !d2Done) {
           // The banner can flip one poll-tick before my journal read catches
@@ -542,7 +554,7 @@ async function main() {
     let settleState = null;
     for (let i = 0; i < 30; i++) {
       settleState = await evl(ntp, `({
-        banner: document.getElementById('run-status').hidden ? 'hidden' : document.getElementById('run-status').className,
+        banner: (document.querySelector('#thread-conversation conversation-run-status.live-status')?.getAttribute('state')) ?? 'hidden',
         status: document.getElementById('status')?.textContent ?? '',
         thinking: document.querySelectorAll('#thread-conversation message-bubble[role="thinking"]').length,
       })`);
@@ -592,7 +604,7 @@ async function main() {
     const otherState = await evl(ntp, `({
       roles: [...document.querySelectorAll('#thread-conversation message-bubble')].map(b => b.getAttribute('role')),
       title: document.getElementById('thread-title').textContent,
-      banner: document.getElementById('run-status').hidden,
+      banner: !document.querySelector('#thread-conversation conversation-run-status.live-status'),
     })`);
     check("switch: opened another thread mid-flight — ONLY its own messages, no status flip, no retitle",
       openedOther && swDone &&
