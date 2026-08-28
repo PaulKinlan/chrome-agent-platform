@@ -12,6 +12,7 @@
 // @ts-nocheck — deterministic in-memory durable-store harness (same pattern as
 // tests/durable-runs.test.ts).
 import { assertEquals, assert } from "jsr:@std/assert";
+import { createMemoryRunLogHandles } from "../extension/lib/run-log-wal-memory.js";
 import { createDurableRunRegistry } from "../extension/lib/durable-runs.js";
 import { buildRetryDispatch, retryRunId, selectFailedRuns } from "../extension/lib/run-retry.js";
 
@@ -51,6 +52,7 @@ function harness() {
   const store = new FakeStore();
   const registry = createDurableRunRegistry({
     store,
+    logHandleFor: (store.__logHandles ??= createMemoryRunLogHandles()),
     bootId: "boot-ux008",
     now: (() => { let n = 1_000; return () => ++n; })(),
     resolveJournalStore: async () => ({ journal: [] }),

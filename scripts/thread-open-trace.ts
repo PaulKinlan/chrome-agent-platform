@@ -40,12 +40,11 @@ const MATRIX = Deno.args.some((a) => a.startsWith("--runs="))
     { runs: 10, logs: 100 },
   ];
 // The product's own bound is 25 executions x 250 rows = 6,250 log rows. The
-// matrix stops at 1,000 because SEEDING to that bound does not finish in a
-// reasonable time — which is the finding, not a harness limitation: appendLog
-// rewrites the ENTIRE per-execution row index on every append, so writing n
-// rows costs O(n^2) index writes, all under one global mutex. Measured write
-// cost per row: 14 ms at 10 rows, 45 ms at 250, 173 ms at 1,000.
-// Pass --runs=25 --logs=250 to attempt the full bound.
+// matrix stops at 1,000 for comparability with the pre-WAL baseline, where
+// seeding to the full bound never finished: appendLog then rewrote the ENTIRE
+// per-execution row index on every append (O(n^2)) and cost 173 ms/row at
+// 1,000 rows. On the WAL that is 14 ms/row, so the full bound is now reachable.
+// Pass --runs=25 --logs=250 to run it.
 
 const profile = await Deno.makeTempDir({ prefix: "thread-trace-" });
 const proc = new Deno.Command(CHROMIUM, {
@@ -179,10 +178,13 @@ for (const r of rows) {
     `${String(r.runs).padStart(3)} x ${String(r.logs).padEnd(4)} ${String(r.runs * r.logs).padStart(6)}   ${String(r.seedMs).padStart(7)} ms   ${String(median).padStart(8)} ms   ${String(r.messages).padStart(6)}`,
   );
 }
-console.log("\nStages 1-2 landed: page rows are read with bounded concurrency, executions");
-console.log("are read with bounded concurrency, and readers now share the registry lock");
-console.log("(writers stay exclusive). What remains is granularity — each log row is");
-console.log("still its own OPFS file, so N rows is still N file opens. That is stage 3.");
+console.log("\nStages 1-3 landed. Rows are lines in ONE append-only log per execution");
+console.log("(the WAL), read with bounded concurrency, with readers sharing the registry");
+console.log("lock. Baseline was 918 ms open / 171 s write at 1,000 rows.");
+console.log("\nWrites are still one file-open PER ROW: appendLog is called a row at a");
+console.log("time, so the batched 1 ms the probe measures is not yet realised. Buffering");
+console.log("appends within a tick is the remaining win, and it is a change to WHEN we");
+console.log("write, not to how it is stored.");
 console.log("─".repeat(72));
 
 try { proc.kill("SIGKILL"); } catch { /* already gone */ }

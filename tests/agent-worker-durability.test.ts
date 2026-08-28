@@ -11,6 +11,7 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { createAgentWorkerRoutes } from "../extension/background/routes/agent-worker.js";
 import { createDurableRunRegistry } from "../extension/lib/durable-runs.js";
+import { createMemoryRunLogHandles } from "../extension/lib/run-log-wal-memory.js";
 
 // In-memory kv store mock
 function createMockKv() {
@@ -65,6 +66,7 @@ function createTestHarness() {
   const thread = [];
   const registry = createDurableRunRegistry({
     store,
+    logHandleFor: (store.__logHandles ??= createMemoryRunLogHandles()),
     bootId: "boot-test",
     now: (() => { let n = 1000; return () => ++n; })(),
     resolveJournalStore: async () => ({ journal }),

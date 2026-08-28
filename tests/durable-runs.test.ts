@@ -6,6 +6,7 @@ import {
   DURABLE_RUN_POLICY,
   RUN_RETENTION_POLICY,
 } from "../extension/lib/durable-runs.js";
+import { createMemoryRunLogHandles } from "../extension/lib/run-log-wal-memory.js";
 import { dispatchDurableProviderRun } from "../extension/lib/durable-provider-dispatch.js";
 import { admitDurableRun, durableQuotaResponse } from "../extension/lib/durable-quota.js";
 
@@ -27,6 +28,16 @@ class FakeStore {
     this.values.set(key, structuredClone(value));
     this.versions.set(key, version);
     return version;
+  }
+  // The real durable store has both of these; this double did not, so any code
+  // that enumerated or deleted keys silently did nothing here — which is how a
+  // migration that never ran looked like a migration that ran four times.
+  async keys() { return [...this.values.keys()]; }
+  async compareAndDelete(key, expectedVersion) {
+    if ((this.versions.get(key) ?? 0) !== expectedVersion) return false;
+    this.values.delete(key);
+    this.versions.delete(key);
+    return true;
   }
   async compareAndRestore(key, expected, value) {
     if (this.failNextCompareAndRestore) {
@@ -60,6 +71,7 @@ function harness(store, { bootId = "boot-a", failAt = null } = {}) {
   let failed = false;
   const registry = createDurableRunRegistry({
     store,
+    logHandleFor: (store.__logHandles ??= createMemoryRunLogHandles()),
     bootId,
     now: (() => { let n = 1_000; return () => ++n; })(),
     resolveJournalStore: async () => ({ journal }),
@@ -115,6 +127,51 @@ async function begin(registry) {
     journalTarget: "master",
     resumeRequest: { id: "task-1", task: "do durable work", memoryOrigin: "master", providerBinding: { schemaVersion: 1, provider: "demo", model: "demo", requestedScope: null, local: true }, idempotencyKey: executionId },
   });
+}
+
+// In-memory run-log handles for the WAL. The registry takes `logHandleFor` for
+// the same reason it takes `store`: a suite that injects its own storage must
+// inject all of it, or the code under test reaches past the fake to real OPFS.
+function makeLogHandles() {
+  const files = new Map();
+  return (executionId, { create = false } = {}) => {
+    let node = files.get(executionId);
+    if (!node) {
+      if (!create) return Promise.resolve(null);
+      node = { content: "" };
+      files.set(executionId, node);
+    }
+    return Promise.resolve({
+      async getFile() {
+        const bytes = new TextEncoder().encode(node.content);
+        return {
+          size: bytes.length,
+          async arrayBuffer() { return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length); },
+          slice(a, b) { const sub = bytes.subarray(a, b); return { async arrayBuffer() { return sub.buffer.slice(sub.byteOffset, sub.byteOffset + sub.length); } }; },
+          async text() { return node.content; },
+        };
+      },
+      // Models FileSystemWritableFileStream properly, including `seek`. An
+      // earlier version of this double had no `seek` and appended the writer's
+      // buffer to the existing content on close — so the WAL's seek-less
+      // fallback (which writes the FULL merged content) doubled the file on
+      // every append. That looked exactly like a migration bug in the product
+      // and was entirely a defect in this fake.
+      async createWritable({ keepExistingData = false } = {}) {
+        let buf = keepExistingData ? node.content : "";
+        let pos = 0;
+        return {
+          async seek(p) { pos = p; },
+          async write(chunk) {
+            const text = typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+            buf = buf.slice(0, pos) + text + buf.slice(pos + text.length);
+            pos += text.length;
+          },
+          async close() { node.content = buf; },
+        };
+      },
+    });
+  };
 }
 
 Deno.test("durable runs: addToIndex-first native quota is compensated and settles the message response", async () => {
@@ -228,6 +285,7 @@ Deno.test("durable runs: journal compensation failure preserves authority and re
   let attempts = 0;
   const registry = createDurableRunRegistry({
     store,
+    logHandleFor: (store.__logHandles ??= createMemoryRunLogHandles()),
     bootId: "boot-journal-fail",
     compensateJournal: async () => {
       attempts += 1;
@@ -300,7 +358,12 @@ Deno.test("durable runs: partial quota delete preserves authority and retry comp
   const store = new FakeStore();
   const run = harness(store);
   await begin(run.registry);
-  store.failDeleteKey = `run-log:${executionId}:accepted`;
+  // Was `run-log:<exec>:accepted` — a key-value log row that no longer exists,
+  // because registry rows now live in the run log itself. The property under
+  // test is unchanged (a partial auxiliary delete must preserve authority and
+  // retry safely), so this targets a key the purge still deletes: the migration
+  // marker.
+  store.failDeleteKey = `run-log-wal:${executionId}`;
 
   await assertRejects(
     () => run.registry.rollbackUnprogressedQuota(executionId, quotaError()),
@@ -334,6 +397,7 @@ Deno.test("durable runs: terminal fault matrix recovers exactly one journal and 
 
       const restarted = createDurableRunRegistry({
         store,
+        logHandleFor: (store.__logHandles ??= createMemoryRunLogHandles()),
         bootId: "boot-b",
         now: () => 2_000,
         resolveJournalStore: async () => ({ journal: first.journal }),
@@ -377,6 +441,7 @@ Deno.test("durable runs: pre-outbox crash cannot create result+orphan double sta
   // upgrades the interrupted record to one terminal triple, never a double state.
   const replay = createDurableRunRegistry({
     store,
+    logHandleFor: (store.__logHandles ??= createMemoryRunLogHandles()),
     bootId: "boot-b",
     resolveJournalStore: async () => ({ journal: first.journal }),
     appendJournal: async (target, entry, _guard, id) => {
@@ -637,6 +702,7 @@ Deno.test("durable runs: abort hook fires once immediately after tombstone and f
   let abortObservedBeforeOutbox = false;
   const registry = createDurableRunRegistry({
     store,
+    logHandleFor: (store.__logHandles ??= createMemoryRunLogHandles()),
     bootId: "boot-abort-hook",
     now: (() => { let n = 10; return () => ++n; })(),
     resolveJournalStore: async () => ({ journal: [] }),
@@ -961,12 +1027,20 @@ Deno.test("durable runs: quota rejection preserves all old logs and leaves no st
     }
   }
   const store = new QuotaStore();
+  // The failing write moved with the data: the `accepted` row is a LOG row now,
+  // so the quota fault is injected where that write happens rather than on a
+  // key-value key that no longer exists. The property is unchanged — a quota
+  // failure while admitting a run must leave every old log intact and strand
+  // nothing.
+  let failExec = null;
+  store.__logHandles = createMemoryRunLogHandles({ failWriteFor: (id) => id === failExec });
   const registry = harness(store).registry;
   await begin(registry);
   await registry.appendLog(executionId, { type: "tool-result", result: "old retained" }, "old-log");
   const oldKeys = (await store.keys()).filter((key) => key.includes(executionId)).sort();
-  store.failKey = "run-log:exec_quota_new1:accepted";
+  failExec = "exec_quota_new1";
   await assertRejects(() => registry.start({ executionId: "exec_quota_new1", taskPreview: "new", journalTarget: "master", resumeRequest: { task: "new" } }), Error, "quota exceeded");
+  failExec = null;
   const ids = await store.get("run-registry");
   assertEquals(ids.includes("exec_quota_new1"), false);
   assertEquals((await store.keys()).filter((key) => key.includes("exec_quota_new1")), [], "failed start leaves zero run/resume/log/payload/outbox keys");
@@ -1192,7 +1266,11 @@ Deno.test("thread-log index: a bounded listLogs reads O(page), not O(total) (fas
   assertEquals(rows[249].tool, `t${TOTAL - 1}`, "newest of the page");
 });
 
-Deno.test("thread-log index: cursor pagination reaches the OLDEST rows (full history)", async () => {
+Deno.test("run log WAL: cursor pagination reaches the OLDEST rows (full history)", async () => {
+  // The property is unchanged from the index era — the FULL history stays
+  // reachable one bounded page at a time — but the cursor is now a byte offset
+  // into the log rather than a row key, so the test drives the real cursor the
+  // caller is given (`nextBefore`) instead of reconstructing one from an index.
   const store = new FakeStore();
   const { registry } = harness(store);
   const id = "exec_idx_page";
@@ -1202,49 +1280,68 @@ Deno.test("thread-log index: cursor pagination reaches the OLDEST rows (full his
     await registry.appendLog(id, { type: "tool-call", tool: `t${i}` }, `key-${i}`);
   }
   const PAGE = 100;
-  // Read the index (append order == at order here — the harness `now` increments).
-  const idx = await store.get(`run-log-idx:${id}`);
-  const ordered = idx.entries.slice().sort((a, b) => a.at - b.at);
 
-  // First page = the most-recent PAGE rows (no cursor).
   const page1 = await registry.listLogs(id, { limit: PAGE });
   assertEquals(page1.length, PAGE);
   assertEquals(page1[0].tool, `t${TOTAL - PAGE}`, "first page oldest");
   assertEquals(page1[PAGE - 1].tool, `t${TOTAL - 1}`, "first page newest");
 
-  // Page back one page at a time using each page's oldest row key as the cursor,
-  // until the OLDEST row (t0) is reached — proving the FULL history is reachable.
-  let cursor = ordered[ordered.length - PAGE].key; // oldest key of the first page
+  let cursor = page1.nextBefore;
   let found = false;
+  const seen = new Set(page1.map((r) => r.tool));
   for (let guard = 0; guard < 20 && !found; guard += 1) {
     const page = await registry.listLogs(id, { limit: PAGE, before: cursor });
     if (page.length === 0) break;
+    for (const r of page) seen.add(r.tool);
     if (page.some((r) => r.tool === "t0")) { found = true; break; }
-    const oldestAt = page[0].at ?? 0;
-    const oldestEntry = ordered.find((e) => e.at === oldestAt);
-    if (!oldestEntry) break;
-    cursor = oldestEntry.key;
+    if (page.exhausted) break;
+    cursor = page.nextBefore;
   }
   assert(found, "paging back reaches the OLDEST row (t0)");
+  // Stronger than the original: every row is seen exactly once across the
+  // pages, so paging cannot silently skip or repeat history.
+  for (let i = 0; i < TOTAL; i += 1) assert(seen.has(`t${i}`), `t${i} was reachable`);
 });
 
-Deno.test("thread-log index: a pre-index execution rebuilds the index on first bounded read", async () => {
+Deno.test("run log WAL: a LEGACY key-value execution migrates into the log on first read", async () => {
+  // Replaces the old "rebuilds the index" test. The property that matters is
+  // the same — an execution written the OLD way is still fully readable, and
+  // heals on first touch — but the healing is now a migration into the WAL
+  // rather than an index rebuild. Write, verify, then delete: the legacy rows
+  // are only removed once the log reads back complete.
   const store = new FakeStore();
   const { registry } = harness(store);
   const id = "exec_idx_legacy";
   await startIndexedRun(registry, id);
-  // Append rows, then DELETE the index to simulate a pre-index (legacy) execution.
-  await registry.appendLog(id, { type: "tool-call", tool: "a" }, "k1");
-  await registry.appendLog(id, { type: "tool-call", tool: "b" }, "k2");
-  await registry.appendLog(id, { type: "tool-call", tool: "c" }, "k3");
-  await store.delete(`run-log-idx:${id}`);
-  assertEquals(await store.get(`run-log-idx:${id}`), null, "index removed to simulate legacy");
+
+  // Simulate a pre-WAL execution: rows in the key-value store, no log file.
+  const legacy = [
+    { type: "tool-call", tool: "a", idempotencyKey: "k1" },
+    { type: "tool-call", tool: "b", idempotencyKey: "k2" },
+    { type: "tool-call", tool: "c", idempotencyKey: "k3" },
+  ];
+  for (const [i, row] of legacy.entries()) {
+    await store.setTrusted(`run-log:${id}:legacy${i}`, {
+      schemaVersion: 1,
+      retentionPolicyVersion: "run-retention-v1",
+      executionId: id,
+      at: 5_000 + i,
+      ...row,
+    });
+  }
+  await store.delete(`run-log-wal:${id}`).catch(() => {});
+
   const rows = await registry.listLogs(id, 2);
-  assertEquals(rows.length, 2, "bounded read still returns the recent slice");
+  assertEquals(rows.length, 2, "a bounded read still returns the recent slice");
   assertEquals(rows[0].tool, "b");
   assertEquals(rows[1].tool, "c");
-  const idx = await store.get(`run-log-idx:${id}`);
-  assert(Array.isArray(idx?.entries) && idx.entries.length === 4, "the fallback rebuilt the index from existing rows (accepted + 3 appends)");
+
+  // Healed: the legacy rows are gone and the whole history reads from the log.
+  const all = await registry.listLogs(id);
+  assertEquals(all.filter((r) => r.type === "tool-call").map((r) => r.tool), ["a", "b", "c"]);
+  const leftover = (await store.keys()).filter((k) => k.startsWith(`run-log:${id}:`));
+  assertEquals(leftover.length, 0, "legacy rows are removed only after the log verified");
+  assert(await store.has(`run-log-wal:${id}`), "migration is marked so it runs exactly once");
 });
 
 Deno.test("thread-log index: full history (unbounded) still returns every row", async () => {
@@ -1260,3 +1357,85 @@ Deno.test("thread-log index: full history (unbounded) still returns every row", 
   assertEquals(all[50].tool, "t49");
 });
 
+
+// ── run-log read/write consistency ────────────────────────────────────────
+// These hold for the current one-append-per-row implementation AND for the
+// buffered one that is still to land, which is the point of asserting them now:
+// whatever the write path does, a reader must never miss a row that was already
+// accepted, and an awaited append must be on disk.
+Deno.test("WAL buffer: a read sees rows that were appended but not awaited", async () => {
+  const store = new FakeStore();
+  const { registry } = harness(store);
+  const id = "exec_buf_read";
+  await startIndexedRun(registry, id);
+
+  // Fire-and-forget, exactly as the service worker logs tool calls.
+  const p1 = registry.appendLog(id, { type: "tool-call", tool: "a" }, "b1");
+  const p2 = registry.appendLog(id, { type: "tool-result", result: "r" }, "b2");
+
+  // Read WITHOUT awaiting either append.
+  const logs = await registry.listLogs(id);
+  assert(logs.some((r) => r.tool === "a"), "the buffered tool-call is visible to a read");
+  assert(logs.some((r) => r.result === "r"), "the buffered tool-result is visible to a read");
+  await Promise.all([p1, p2]);
+});
+
+Deno.test("WAL buffer: appendLog still resolves only once the row is durable", async () => {
+  const store = new FakeStore();
+  const { registry } = harness(store);
+  const id = "exec_buf_durable";
+  await startIndexedRun(registry, id);
+  await registry.appendLog(id, { type: "tool-call", tool: "durable" }, "d1");
+  // Awaiting the append means the row is on disk, not merely queued: a fresh
+  // registry over the same storage — a service-worker restart — sees it.
+  const restarted = harness(store, { bootId: "boot-restart" }).registry;
+  const logs = await restarted.listLogs(id);
+  assert(logs.some((r) => r.tool === "durable"), "an awaited append survived a restart");
+});
+
+
+Deno.test("run log: a run that settles AFTER migration still has its terminal row", async () => {
+  // The regression this fixes. `start()` and the terminal path used to write
+  // `run-log:<exec>:accepted` / `:terminal` straight to the key-value store,
+  // bypassing the log. Once reads came from the log — and because the KV→log
+  // migration is one-time and marker-guarded — any row written to KV AFTER the
+  // marker was set became unreadable. In a real run appendLog fires during the
+  // run, so the marker is always set before settle(): the terminal row was
+  // orphaned every time.
+  const store = new FakeStore();
+  const { registry } = harness(store);
+  const id = "exec_terminal_after_migration";
+  await registry.start({
+    executionId: id, kind: "task", taskPreview: "t", journalTarget: "master",
+    resumeRequest: { id: "t", task: "t", route: "runTask", routeArgs: {}, idempotencyKey: id },
+  });
+
+  // A tool row during the run — this is what sets the migration marker.
+  await registry.appendLog(id, { type: "tool-call", tool: "during-run" }, "tc-1");
+  assert(await store.has(`run-log-wal:${id}`), "the migration marker is set before the run settles");
+
+  await registry.settle(id, { ok: true, result: "done", summary: "done", logicalId: "t" });
+
+  const logs = await registry.listLogs(id);
+  assert(logs.some((r) => r.type === "accepted"), "the accepted row is readable");
+  assert(logs.some((r) => r.tool === "during-run"), "the tool row is readable");
+  assert(logs.some((r) => r.type === "terminal"), "the TERMINAL row is readable after migration");
+  // And it is last, because it was appended last.
+  assertEquals(logs.at(-1).type, "terminal", "the terminal row is the newest");
+});
+
+Deno.test("run log: purging an execution leaves no remnant — marker or log file", async () => {
+  const store = new FakeStore();
+  const { registry } = harness(store);
+  const id = "exec_purge_remnants";
+  await registry.start({
+    executionId: id, kind: "task", taskPreview: "t", journalTarget: "master",
+    resumeRequest: { id: "t", task: "t", route: "runTask", routeArgs: {}, idempotencyKey: id },
+  });
+  await registry.appendLog(id, { type: "tool-call", tool: "x" }, "k1");
+  assert(await store.has(`run-log-wal:${id}`), "marker exists before the purge");
+
+  await registry.rollbackUnprogressedQuota(id, Object.assign(new DOMException("q", "QuotaExceededError"), {}));
+  const remnants = (await store.keys()).filter((k) => k.includes(id));
+  assertEquals(remnants, [], "no key-value remnant, including the migration marker");
+});

@@ -6,6 +6,7 @@
 // @ts-nocheck — the OPFS fake is intentionally dynamic (no FileSystem types in Deno).
 
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
+import { createMemoryRunLogHandles } from "../extension/lib/run-log-wal-memory.js";
 import { masterMemory, saveScreenshot, listScreenshots, journalAppend, journalAppendWithReceipt, journalCompensateExecution, journalAppendOnce, journalCommitCancellation, backgroundAgentMemory, namedAgentMemory, listNamedAgentIds, listBackgroundAgentIds, durableRunMemory, migrateLegacyDurableRunMemory, forgetDurableThread } from "../extension/lib/memory.js";
 import { createDurableRunRegistry } from "../extension/lib/durable-runs.js";
 import { createThread, deleteThread } from "../extension/lib/threads.js";
@@ -459,6 +460,7 @@ Deno.test("durable authority migrates out of master store without eviction and n
 
   const registry = createDurableRunRegistry({
     store: durable,
+    logHandleFor: (durable.__logHandles ??= createMemoryRunLogHandles()),
     bootId: "boot-isolated",
     now: (() => { let n = 10_000; return () => ++n; })(),
     resolveJournalStore: async () => ({}),

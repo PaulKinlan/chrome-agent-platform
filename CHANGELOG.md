@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.347] — 2026-08-28
+- fix(durable-runs): CAP-FB-20260828-RUN-LOG-REGISTRY-ROWS-01 — the registry's own log rows go in the log, not straight to KV
+
 ## [0.2.346] — 2026-08-28
 - Settings Providers panel is now a side-tabbed interface: one tab per provider down the side with the default marked by a star, editor on the right, and it behaves at narrow widths
 

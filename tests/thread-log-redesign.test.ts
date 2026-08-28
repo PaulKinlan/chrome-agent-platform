@@ -5,6 +5,7 @@
 // (buildThreadRunView / listThreadExecutions / finalizeUnadmittedThreadRun do
 // not exist; the replay drops rows) and PASS on the redesign.
 import { assert, assertEquals, assertNotEquals } from "jsr:@std/assert@1";
+import { createMemoryRunLogHandles } from "../extension/lib/run-log-wal-memory.js";
 
 // ── OPFS fake (threads.js / memory.js live store) ──────────────────────────
 function dirNode() { return { kind: "directory", children: new Map() }; }
@@ -66,6 +67,7 @@ class FakeStore {
 function makeRegistry(store, bootId = "boot-a") {
   return createDurableRunRegistry({
     store,
+    logHandleFor: (store.__logHandles ??= createMemoryRunLogHandles()),
     bootId,
     now: (() => { let n = 1000; return () => ++n; })(),
     resolveJournalStore: async () => ({ journal: [] }),

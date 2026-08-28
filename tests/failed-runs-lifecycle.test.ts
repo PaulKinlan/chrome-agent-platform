@@ -14,6 +14,7 @@
 // @ts-nocheck — deterministic in-memory durable-store harness (same pattern as
 // tests/ux008-failed-dispatch.test.ts).
 import { assertEquals, assert } from "jsr:@std/assert";
+import { createMemoryRunLogHandles } from "../extension/lib/run-log-wal-memory.js";
 import { createDurableRunRegistry } from "../extension/lib/durable-runs.js";
 import { selectFailedRuns } from "../extension/lib/run-retry.js";
 
@@ -53,6 +54,7 @@ function harness() {
   const store = new FakeStore();
   const registry = createDurableRunRegistry({
     store,
+    logHandleFor: (store.__logHandles ??= createMemoryRunLogHandles()),
     bootId: "boot-failed-runs-lifecycle",
     now: (() => { let n = 1_000; return () => ++n; })(),
     resolveJournalStore: async () => ({ journal: [] }),
@@ -169,6 +171,7 @@ Deno.test("lifecycle: dismiss tombstones are durable, id-only, and LRU-bounded",
   // Durable across a fresh registry on the same store (a SW restart).
   const reopened = createDurableRunRegistry({
     store,
+    logHandleFor: (store.__logHandles ??= createMemoryRunLogHandles()),
     bootId: "boot-after-restart",
     now: () => 9_999,
     resolveJournalStore: async () => ({ journal: [] }),

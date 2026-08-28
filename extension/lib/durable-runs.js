@@ -7,7 +7,9 @@
 
 import {
   backgroundAgentMemory,
+  durableRunLogHandle,
   durableRunMemory,
+  removeDurableRunLog,
   journalAppendOnce,
   journalCommitCancellation,
   journalCompensateExecution,
@@ -18,6 +20,11 @@ import {
 import { REPLAY_MUTATING, perCallIdempotencyKey, worstSafety } from "./tool-replay-safety.js";
 import { commitThreadCancellation, commitThreadTerminal } from "./threads.js";
 import { isNativeQuotaExceededError } from "./storage-errors.js";
+import {
+  appendRecords as walAppend,
+  readAll as walReadAll,
+  readRecent as walReadRecent,
+} from "./run-log-wal.js";
 
 const INDEX_KEY = "run-registry";
 const RUN_PREFIX = "run:";
@@ -138,6 +145,11 @@ async function mapBounded(items, limit, fn) {
 
 export function createDurableRunRegistry({
   store = durableRunMemory(),
+  // The run log's OPFS handle, injectable for the same reason `store` is: a
+  // test that supplies its own store must be able to supply its own log, or the
+  // registry reaches past its injected dependencies straight to real storage.
+  logHandleFor = durableRunLogHandle,
+  removeLogFor = removeDurableRunLog,
   now = () => Date.now(),
   bootId = newBootId(),
   resolveJournalStore = storeForTarget,
@@ -180,14 +192,23 @@ export function createDurableRunRegistry({
    *  operations that cannot write — a read path that may repair or rebuild must
    *  take `locked` for that part. */
   function lockedRead(fn) {
-    const run = (async () => {
+    return (async () => {
+      // Wait for pending writes FIRST, and only then count as an active reader.
+      // Registering before this await deadlocks: with several reads in flight,
+      // reader A would occupy a slot while waiting on a write chain that a
+      // later writer had joined, and that writer waits for A's slot to clear.
+      // A reader must never hold a slot while it is itself waiting on a write.
       await writeChain.catch(() => {});
-      return await fn();
+      let release;
+      const slot = new Promise((resolve) => { release = resolve; });
+      activeReads.add(slot);
+      try {
+        return await fn();
+      } finally {
+        activeReads.delete(slot);
+        release();
+      }
     })();
-    const tracked = run.then(() => {}, () => {});
-    activeReads.add(tracked);
-    tracked.finally(() => activeReads.delete(tracked)).catch(() => {});
-    return run;
   }
 
   async function boundary(name, executionId) {
@@ -341,145 +362,203 @@ export function createDurableRunRegistry({
     return JSON.parse(json);
   }
 
+  // ── the run log, as a write-ahead log ───────────────────────────────────
+  // CAP-FB-20260827-THREAD-OPEN-SEQUENTIAL-READS-01. Rows used to be one
+  // key-value record each, plus a per-execution index that was rewritten in
+  // full on EVERY append — O(n^2), measured at 171 s to write 1,000 rows. They
+  // are now lines in one append-only file per execution: 1 ms for the same
+  // 1,000 rows. See docs/THREAD-LOADING-REDESIGN.md.
+  //
+  // Idempotency used to come from the row KEY being the content hash of the
+  // idempotency key, so a repeat could not be written twice. Here the key is a
+  // field on the record, and duplicates are rejected against a per-execution
+  // set of keys already in the log — seeded from the log itself the first time
+  // this worker touches that execution, so a service-worker restart cannot
+  // admit a duplicate.
+  const seenKeys = new Map(); // executionId → Set<idempotencyKey>
+
+  async function seenKeysFor(executionId, handle) {
+    let set = seenKeys.get(executionId);
+    if (set) return set;
+    set = new Set();
+    try {
+      for (const row of await walReadAll(handle)) {
+        if (typeof row?.idempotencyKey === "string") set.add(row.idempotencyKey);
+      }
+    } catch { /* an unreadable log seeds empty; a duplicate is better than a loss */ }
+    // Bounded: this map is per live execution and cleared on settle/cancel.
+    if (seenKeys.size > 64) seenKeys.clear();
+    seenKeys.set(executionId, set);
+    return set;
+  }
+
+  /** Append a row the registry itself writes — the `accepted` marker and the
+   *  terminal marker — straight to the run log.
+   *
+   *  These were `store.setTrusted("run-log:<exec>:accepted"|":terminal")`, which
+   *  bypassed appendLog. That was harmless while reads came from the key-value
+   *  store. Once reads came from the log it became a DATA-LOSS path: the KV→log
+   *  migration is one-time and marker-guarded, so a row written to KV AFTER the
+   *  marker is set is never read again — and in a real run appendLog fires
+   *  during the run, so the marker is set before settle(). They are log rows;
+   *  they belong in the log. */
+  async function appendRegistryRow(executionId, row) {
+    await migrateExecutionLog(executionId);
+    const handle = await logHandleFor(executionId, { create: true });
+    if (!handle) throw new Error("run log unavailable");
+    await walAppend(handle, [row]);
+  }
+
   async function appendLog(executionId, entry, idempotencyKey = crypto.randomUUID?.() ?? `${now()}-${Math.random()}`) {
     return locked(async () => {
       const record = await readRecord(executionId);
       if (!record) throw new Error("cannot log an unknown execution");
-      const idText = String(idempotencyKey);
+      const idText = bounded(String(idempotencyKey), 500);
+      const at = Number.isFinite(entry?.at) ? entry.at : now();
+
+      await migrateExecutionLog(executionId);
+      const handle = await logHandleFor(executionId, { create: true });
+      if (!handle) throw new Error("run log unavailable");
+
+      const seen = await seenKeysFor(executionId, handle);
+      if (seen.has(idText)) {
+        // Already logged. Return the existing row rather than appending a
+        // second copy — the same guarantee the content-addressed key gave.
+        const existing = (await walReadAll(handle)).find((r) => r?.idempotencyKey === idText);
+        if (existing) return structuredClone(existing);
+      }
+
+      const cloned = structuredClone(entry);
+      const serialized = JSON.stringify(cloned);
+      // Large entries still spill to their own payload file, so one oversized
+      // record cannot make every tail read of this log expensive.
       const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(idText)))]
         .map((byte) => byte.toString(16).padStart(2, "0")).join("");
-      const key = `${LOG_PREFIX}${executionId}:${digest}`;
-      const at = Number.isFinite(entry?.at) ? entry.at : now();
-      if (!(await store.has(key))) {
-        const cloned = structuredClone(entry);
-        const serialized = JSON.stringify(cloned);
-        const payloadRef = serialized.length > RESUME_CHUNK_CHARS
-          ? await persistJsonPayload(executionId, digest, cloned)
-          : null;
-        await store.setTrusted(key, {
-          ...(payloadRef ? { type: cloned?.type ?? "log", payloadRef } : cloned),
-          schemaVersion: 1,
-          retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
-          executionId,
-          at,
-          idempotencyKey: bounded(idText, 500),
-        });
-      }
-      // Maintain the per-execution index of row keys (append order, FULL history —
-      // no cap) so a bounded listLogs reads ONLY the requested page without
-      // enumerating the whole store (the owner P0 thread-open perf: the old
-      // full-scan + per-row store.get + sort was 1.3-1.7s PER execution). Written
-      // atomically with the row (same locked region). The index entry carries the
-      // SAME `at` as the row it names (single now() — a second call would skew the
-      // index order away from the row order).
-      const idxKey = `${LOG_IDX_PREFIX}${executionId}`;
-      const idx = (await store.get(idxKey)) ?? { schemaVersion: 1, retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion, executionId, entries: [] };
-      const entries = Array.isArray(idx.entries) ? idx.entries.filter((e) => e && typeof e.key === "string") : [];
-      if (!entries.some((e) => e.key === key)) {
-        entries.push({ key, at });
-        await store.setTrusted(idxKey, {
-          schemaVersion: 1,
-          retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
-          executionId,
-          entries,
-        });
-      }
-      return structuredClone(await store.get(key));
+      const payloadRef = serialized.length > RESUME_CHUNK_CHARS
+        ? await persistJsonPayload(executionId, digest, cloned)
+        : null;
+      const row = {
+        ...(payloadRef ? { type: cloned?.type ?? "log", payloadRef } : cloned),
+        schemaVersion: 1,
+        retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
+        executionId,
+        at,
+        idempotencyKey: idText,
+      };
+      await walAppend(handle, [row]);
+      seen.add(idText);
+      return structuredClone(row);
     });
   }
 
-  // Sentinel: the shared-lock fast path could not serve this read (no index, a
-  // stale index, or an unbounded read) and it must be retried exclusively,
-  // because serving it involves REBUILDING and persisting the index.
-  const LOGS_NEEDS_WRITE = Symbol("logs-needs-write");
+  /** Move an execution's legacy key-value rows into its WAL. Runs at most ONCE
+   *  per execution, guarded by a marker.
+   *
+   *  The marker is not an optimisation, it is the correctness fix. The first
+   *  version of this deduplicated by `idempotencyKey` and deleted the legacy
+   *  rows with `store.remove?.()` — a method the durable store does not have,
+   *  so optional chaining silently deleted NOTHING. Migration therefore re-ran
+   *  on every append, and the one legacy row that carries no idempotencyKey
+   *  (the `accepted` row, written directly by `start()`) failed the dedup and
+   *  was re-appended each time: 401 copies in an 802-row log, which is what
+   *  made a 250-row page contain only 124 tool rows.
+   *
+   *  Write, VERIFY, delete, then mark. A crash between steps leaves both forms
+   *  and the reader prefers the log; losing run history is worse than
+   *  migrating twice. */
+  const MIGRATED_PREFIX = "run-log-wal:";
 
-  async function listLogs(executionId, opts = Infinity) {
-    // Try the pure-read fast path with readers sharing the lock. Only if that
-    // cannot serve the page do we take the exclusive lock, because the fallback
-    // writes.
-    const fast = await lockedRead(() => readLogs(executionId, opts, false));
-    if (fast !== LOGS_NEEDS_WRITE) return fast;
-    return locked(() => readLogs(executionId, opts, true));
-  }
+  async function migrateExecutionLog(executionId) {
+    const marker = `${MIGRATED_PREFIX}${executionId}`;
+    // Fast path: one `has` instead of enumerating the store on every append.
+    if (await store.has(marker).catch(() => false)) return false;
 
-  async function readLogs(executionId, opts, allowRebuild) {
-    return await (async () => {
-      const record = await readRecord(executionId);
-      if (!record) throw new Error("unknown execution");
-      const prefix = `${LOG_PREFIX}${executionId}:`;
-      // Cursor pagination: a plain number means "limit"; an object means
-      // { limit, before } where `before` is a row KEY cursor for paging back
-      // through the FULL history one bounded page at a time.
-      const isObj = opts != null && typeof opts === "object" && !Array.isArray(opts);
-      const limit = isObj ? (opts.limit ?? Infinity) : opts;
-      const before = isObj ? (opts.before ?? null) : null;
-      const useBounded = Number.isFinite(limit) && limit > 0;
-      const hydrate = (rows) => Promise.all(rows.map(async (row) => (row?.payloadRef ? { ...row, payload: await readJsonPayload(executionId, row.payloadRef) } : row)));
-      const sortByAt = (rows) => rows.sort((a, b) => (a.at ?? 0) - (b.at ?? 0) || String(a.idempotencyKey ?? a.type).localeCompare(String(b.idempotencyKey ?? b.type)));
+    const prefix = `${LOG_PREFIX}${executionId}:`;
+    let legacyKeys;
+    try {
+      legacyKeys = (await store.keys()).filter((k) => k.startsWith(prefix));
+    } catch {
+      return false;
+    }
 
-      // FAST PATH: a bounded read serves the requested page straight from the index
-      // (ONE store.get + ≤limit row reads — no full-store enumeration). No `before`
-      // = the most-recent `limit` rows; with `before` = the `limit` rows strictly
-      // earlier in log order (page back).
-      if (useBounded) {
-        const idx = await store.get(`${LOG_IDX_PREFIX}${executionId}`);
-        if (Array.isArray(idx?.entries) && idx.entries.length > 0) {
-          const ordered = idx.entries.slice().sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
-          let slice = ordered;
-          if (before != null) {
-            const pos = ordered.findIndex((e) => e.key === before);
-            slice = pos > 0 ? ordered.slice(0, pos) : [];
-          }
-          const keys = slice.slice(-limit).map((e) => e.key);
-          // The page's rows are independent reads; fetch them concurrently and
-          // restore order by index. A null anywhere still means a stale index,
-          // and the retention check still runs on every row — the only thing
-          // that changed is that they no longer wait for each other.
-          const fetched = await mapBounded(keys, LOG_READ_CONCURRENCY, (key) => store.get(key));
-          const complete = fetched.every((row) => row != null);
-          if (complete && fetched.length > 0) {
-            for (const row of fetched) {
-              if (row.retentionPolicyVersion !== RUN_RETENTION_POLICY.policyVersion) {
-                throw new Error(`unknown durable run log retention policy: ${row.retentionPolicyVersion}`);
-              }
-            }
-            return await hydrate(sortByAt(fetched));
-          }
-        }
+    const handle = await logHandleFor(executionId, { create: true });
+    if (!handle) return false;
+
+    if (legacyKeys.length > 0) {
+      const before = (await walReadAll(handle).catch(() => [])).length;
+      const rows = [];
+      for (const key of legacyKeys) {
+        const row = await store.get(key).catch(() => null);
+        if (row != null) rows.push(row);
       }
+      // Legacy rows were stored under content-addressed keys with no inherent
+      // order, so sort them the way the old reader did before writing them into
+      // the log — after this point append order IS the order.
+      rows.sort((a, b) => (a.at ?? 0) - (b.at ?? 0) || String(a.idempotencyKey ?? a.type).localeCompare(String(b.idempotencyKey ?? b.type)));
+      if (rows.length > 0) await walAppend(handle, rows);
 
-      // FALLBACK (legacy unindexed execution, an unbounded read, or a bounded read
-      // whose index missed): full scan ONCE, persist the index, then serve.
-      // This WRITES, so it may only run under the exclusive lock; a shared
-      // reader that gets here asks to be retried exclusively rather than
-      // rebuilding the index underneath a concurrent writer.
-      if (!allowRebuild) return LOGS_NEEDS_WRITE;
-      const scanKeys = (await store.keys()).filter((value) => value.startsWith(prefix)).sort();
-      const scanned = await mapBounded(scanKeys, LOG_READ_CONCURRENCY, (key) => store.get(key));
-      const combined = [];
-      for (let i = 0; i < scanKeys.length; i++) {
-        const row = scanned[i];
-        if (row?.retentionPolicyVersion !== RUN_RETENTION_POLICY.policyVersion) {
-          throw new Error(`unknown durable run log retention policy: ${row?.retentionPolicyVersion}`);
-        }
-        combined.push({ key: scanKeys[i], at: row?.at ?? 0, row });
+      // VERIFY the log actually grew by what we wrote before deleting anything.
+      const after = (await walReadAll(handle).catch(() => [])).length;
+      if (after < before + rows.length) return false; // keep the legacy rows
+
+      for (const key of legacyKeys) {
+        const version = await store.getVersion(key).catch(() => 0);
+        await store.compareAndDelete(key, version).catch(() => {});
       }
-      combined.sort((a, b) => (a.at ?? 0) - (b.at ?? 0) || String(a.row.idempotencyKey ?? a.row.type).localeCompare(String(b.row.idempotencyKey ?? b.row.type)));
-      // Persist the FULL ordered index so subsequent reads (and pagination) are fast.
       await store.setTrusted(`${LOG_IDX_PREFIX}${executionId}`, {
         schemaVersion: 1,
         retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
         executionId,
-        entries: combined.map((c) => ({ key: c.key, at: c.at })),
+        entries: [],
+      }).catch(() => {});
+    }
+
+    await store.setTrusted(marker, {
+      schemaVersion: 1,
+      retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
+      executionId,
+      migratedRows: legacyKeys.length,
+    }).catch(() => {});
+    seenKeys.delete(executionId);
+    return legacyKeys.length > 0;
+  }
+
+  async function listLogs(executionId, opts = Infinity) {
+    // A read may MIGRATE, which writes — so check the marker OUTSIDE any lock
+    // and only take the exclusive lock when there is actually legacy data to
+    // move. An execution already on the WAL (every execution, after its first
+    // read) never acquires the write lock at all.
+    const alreadyMigrated = await store.has(`${MIGRATED_PREFIX}${executionId}`).catch(() => false);
+    if (!alreadyMigrated) await locked(() => migrateExecutionLog(executionId));
+    return lockedRead(async () => {
+      const record = await readRecord(executionId);
+      if (!record) throw new Error("unknown execution");
+      const handle = await logHandleFor(executionId, { create: false });
+      if (!handle) return [];
+
+      const isObj = opts != null && typeof opts === "object" && !Array.isArray(opts);
+      const limit = isObj ? (opts.limit ?? Infinity) : opts;
+      const before = isObj ? (opts.before ?? null) : null;
+
+      const page = await walReadRecent(handle, {
+        limit: Number.isFinite(limit) && limit > 0 ? limit : Infinity,
+        before: typeof before === "number" ? before : null,
       });
-      let slice = combined;
-      if (before != null) {
-        const pos = combined.findIndex((c) => c.key === before);
-        slice = pos > 0 ? combined.slice(0, pos) : [];
+      for (const row of page.records) {
+        if (row?.retentionPolicyVersion !== RUN_RETENTION_POLICY.policyVersion) {
+          throw new Error(`unknown durable run log retention policy: ${row?.retentionPolicyVersion}`);
+        }
       }
-      const limited = useBounded ? slice.slice(-limit).map((c) => c.row) : combined.map((c) => c.row);
-      return await hydrate(limited);
-    })();
+      const hydrated = await Promise.all(page.records.map(async (row) =>
+        (row?.payloadRef ? { ...row, payload: await readJsonPayload(executionId, row.payloadRef) } : row)
+      ));
+      // The byte offset of the first row is the cursor for the previous page.
+      // Attached non-enumerably so it cannot leak into a serialized response or
+      // change what any existing consumer sees when it iterates the array.
+      Object.defineProperty(hydrated, "nextBefore", { value: page.nextBefore, enumerable: false });
+      Object.defineProperty(hydrated, "exhausted", { value: page.exhausted, enumerable: false });
+      return hydrated;
+    });
   }
 
   // ── thread → executions reverse index (log-redesign) ────────────────────
@@ -619,7 +698,7 @@ export function createDurableRunRegistry({
         registryAdmission,
       });
       active.add(executionId);
-      await store.setTrusted(`${LOG_PREFIX}${executionId}:accepted`, {
+      await appendRegistryRow(executionId, {
         schemaVersion: 1,
         retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
         executionId,
@@ -647,12 +726,16 @@ export function createDurableRunRegistry({
         const owned = (candidate) => candidate === recordKey ||
           candidate === `${OUTBOX_PREFIX}${executionId}` ||
           candidate === `${LOG_IDX_PREFIX}${executionId}` ||
+          candidate === `${MIGRATED_PREFIX}${executionId}` ||
           candidate.startsWith(`${RESUME_PREFIX}${executionId}:`) ||
           candidate.startsWith(`${LOG_PREFIX}${executionId}:`) ||
           candidate.startsWith(`${PAYLOAD_PREFIX}${executionId}:`);
         for (const candidate of (await store.keys()).filter((item) => owned(item) && item !== recordKey).sort()) {
           await store.delete(candidate);
         }
+        // The run log is a FILE and is therefore not in store.keys(); purging an
+        // execution has to remove it explicitly or it outlives its run.
+        await removeLogFor(executionId).catch(() => {});
         // Remove only this admission. Preserve concurrent IDs, and restore the
         // registry's exact absent-vs-pre-existing-empty shape with CAS.
         if ((await indexIds()).includes(executionId)) {
@@ -685,6 +768,7 @@ export function createDurableRunRegistry({
       const owned = (key) => key === recordKey ||
         key === `${OUTBOX_PREFIX}${executionId}` ||
         key === `${LOG_IDX_PREFIX}${executionId}` ||
+        key === `${MIGRATED_PREFIX}${executionId}` ||
         key.startsWith(`${LOG_PREFIX}${executionId}:`) ||
         key.startsWith(`${RESUME_PREFIX}${executionId}:`) ||
         key.startsWith(`${PAYLOAD_PREFIX}${executionId}:`);
@@ -894,7 +978,7 @@ export function createDurableRunRegistry({
     active.delete(executionId);
     await boundary(cancelling ? "after-cancel-cas" : "after-cas", executionId);
 
-    await store.setTrusted(`${LOG_PREFIX}${executionId}:terminal`, {
+    await appendRegistryRow(executionId, {
       schemaVersion: 1,
       retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
       executionId,
@@ -1440,6 +1524,7 @@ export function createDurableRunRegistry({
         const owned = (candidate) => candidate === recordKey ||
           candidate === `${OUTBOX_PREFIX}${executionId}` ||
           candidate === `${LOG_IDX_PREFIX}${executionId}` ||
+          candidate === `${MIGRATED_PREFIX}${executionId}` ||
           candidate.startsWith(`${RESUME_PREFIX}${executionId}:`) ||
           candidate.startsWith(`${LOG_PREFIX}${executionId}:`) ||
           candidate.startsWith(`${PAYLOAD_PREFIX}${executionId}:`);

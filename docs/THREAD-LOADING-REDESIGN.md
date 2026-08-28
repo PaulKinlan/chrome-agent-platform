@@ -222,6 +222,29 @@ Attribution after stages 1–2 is unchanged in shape: `thread-view:logs` still
 dominates, `thread-view:project` is 5 ms and `thread.get:read` 6 ms — the
 projection and the thread-record read are noise, as §8 said.
 
+## 5b. Measured result of stage 3 — the WAL (2026-08-28)
+
+Landed and wired. Same harness, median of three:
+
+| rows | baseline | after 1+2 | **after the WAL** |
+|---|---|---|---|
+| open 10 | 15 ms | 9 ms | **9 ms** |
+| open 250 | 213 ms | 81 ms | **40 ms** |
+| open 1,000 | 918 ms | 348 ms | **146 ms** |
+| write 10 | 140 ms | — | **70 ms** |
+| write 250 | 11,183 ms | — | **1,994 ms** |
+| write 1,000 | 171,375 ms | — | **14,113 ms** |
+
+**Open: 6.3x faster than baseline** (918 → 146 ms), 2.4x of that from the WAL
+itself. **Write: 12x faster** (171 s → 14 s for 1,000 rows).
+
+**The write number is well short of the probe's 1 ms, and the reason is
+important:** `appendLog` is called one row at a time, so each row still costs a
+file open. The probe's 1 ms was 1,000 rows written in ONE open. Realising that
+means buffering appends within a tick and flushing once — a change to *when* we
+write, not to how it is stored, and the module already supports it
+(`appendRecords` takes an array). That is the next win and it is cheap.
+
 ## 6. Staging
 
 Each stage is independently shippable and leaves the product green.
@@ -230,7 +253,7 @@ Each stage is independently shippable and leaves the product green.
 |---|---|---|---|
 | 1 | Concurrent execution reads + concurrent row reads within a page (§3.2, no storage change) | **DONE** — 918 → 425 ms at 1,000 rows | Low |
 | 2 | Split the global mutex into a read/write lock: readers share, writers exclusive | **DONE** — 425 → 348 ms | Medium |
-| 3 | **WAL: one append-only file per execution** + lazy migration (§3, §4) | Measured: write 1,000 rows 171 s → 1 ms; read 348 ms → 0.4 ms | **High** |
+| 3 | **WAL: one append-only file per execution** + lazy migration (§3, §4) | **DONE** — open 348 → 146 ms; write 171 s → 14 s | **High** |
 | 4 | Streamed first page (§3.4) | First paint independent of history | Low (trivial once 3 lands) |
 
 Stage 1 alone should take the 1,000-row case from ~960 ms to roughly 150–250 ms.
