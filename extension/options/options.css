@@ -292,12 +292,90 @@ input:focus, select:focus, textarea:focus {
   color: var(--text);
 }
 /* Usage */
-.usage-summary {
+.usage-head {
   display: flex;
-  gap: 20px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   flex-wrap: wrap;
   margin-bottom: 8px;
 }
+.usage-ranges { display: inline-flex; gap: 4px; }
+.usage-range {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.usage-range[aria-selected="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg, #fff);
+  font-weight: 600;
+}
+.usage-cost-note { font-size: 11px; }
+.usage-cards {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+#usage h3 {
+  font-size: 13px;
+  margin: 14px 0 6px;
+  color: var(--text);
+}
+.usage-chart-mount { min-height: 40px; }
+.usage-chart { max-width: 100%; height: auto; display: block; }
+.usage-chart-empty { fill: var(--muted); font-size: 13px; }
+.usage-grid { stroke: var(--border); stroke-width: 1; }
+.usage-axis { fill: var(--muted); font-size: 10px; }
+.usage-bar-in { fill: var(--usage-in, var(--accent)); }
+.usage-bar-out { fill: var(--usage-out, color-mix(in oklab, var(--accent) 45%, var(--panel)));
+}
+.usage-legend {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 4px;
+}
+.usage-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 2px; }
+span.usage-swatch.usage-bar-in { background: var(--usage-in, var(--accent)); }
+span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in oklab, var(--accent) 45%, var(--panel))); }
+.usage-share { display: flex; flex-direction: column; gap: 6px; }
+.usage-share-row {
+  display: grid;
+  grid-template-columns: minmax(80px, 180px) 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+.usage-share-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.usage-share-track {
+  height: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  display: flex;
+  overflow: hidden;
+}
+.usage-share-fill { height: 100%; border-radius: 999px; }
+.usage-share-fill-models { background: var(--usage-in, var(--accent)); }
+.usage-share-fill-agents { background: var(--usage-out, color-mix(in oklab, var(--accent) 45%, var(--panel))); }
+.usage-share-fill-tools { background: var(--accent-2, var(--accent)); }
+.usage-share-value { color: var(--text); font-variant-numeric: tabular-nums; min-width: 48px; text-align: right; }
+.usage-share-calls { color: var(--muted); font-size: 11px; min-width: 64px; text-align: right; }
 .usage-stat {
   background: var(--bg);
   border: 1px solid var(--border);

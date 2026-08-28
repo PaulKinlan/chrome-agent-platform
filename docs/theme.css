@@ -23,6 +23,8 @@
   --accent: #0e6e63;
   --accent-hover: #0a5c53;
   --accent2: #b45309;
+  --usage-in: #0e6e63;
+  --usage-out: #b45309;
   --danger: #b3261e;
   --success: #1a7f37;
   --warning: #9a6700;
@@ -42,6 +44,8 @@
   --accent: light-dark(#0e6e63, #53b8a9);
   --accent-hover: light-dark(#0a5c53, #67c7b9);
   --accent2: light-dark(#b45309, #d98831);
+  --usage-in: light-dark(#0e6e63, #53b8a9);
+  --usage-out: light-dark(#b45309, #d98831);
   --danger: light-dark(#b3261e, #e5675f);
   --success: light-dark(#1a7f37, #58b877);
   --warning: light-dark(#9a6700, #d9a03c);

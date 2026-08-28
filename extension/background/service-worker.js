@@ -107,7 +107,7 @@ import {
   memoryToolset,
   RunAbortedError,
 } from "../lib/agent.js";
-import { clearUsage, getUsage, recordUsage } from "../lib/usage.js";
+import { clearUsage, getUsage, recordToolCall, recordUsage } from "../lib/usage.js";
 import { createWebmcpAuthorizationGuard } from "../lib/webmcp-authority.js";
 import {
   diagnosticClear,
@@ -2933,6 +2933,9 @@ function executeWorkerTool(toolName, args, context) {
   });
   const tool = workerBrowserTools()[name] ?? management[name];
   if (!tool) return Promise.resolve({ ok: false, error: `unknown tool: ${name}` });
+  // Bounded per-tool call counter for the Usage panel (fire-and-forget — a
+  // telemetry write must never fail or slow a tool execution).
+  recordToolCall(name).catch(() => {});
   return Promise.resolve(tool.execute(a))
     .then((result) => redactSecrets(result ?? null))
     .catch((e) => ({ ok: false, error: String(e?.message ?? e).slice(0, 200) }));

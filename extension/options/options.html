@@ -222,7 +222,23 @@
 
       <section id="usage" class="panel">
         <h2>Usage</h2>
-        <div id="usage-summary" class="usage-summary"></div>
+        <div class="usage-head">
+          <div class="usage-ranges" role="tablist" aria-label="Usage time range">
+            <button class="usage-range" type="button" role="tab" data-range="24h" aria-selected="false">24h</button>
+            <button class="usage-range" type="button" role="tab" data-range="7d" aria-selected="true">7 days</button>
+          </div>
+          <span class="muted usage-cost-note">costs are estimates (bundled per-1M-token pricing)</span>
+        </div>
+        <div id="usage-cards" class="usage-cards"></div>
+        <h3>Tokens per day</h3>
+        <div id="usage-chart-days" class="usage-chart-mount"></div>
+        <div class="usage-legend" aria-hidden="true"><span class="usage-swatch usage-bar-in"></span> input <span class="usage-swatch usage-bar-out"></span> output</div>
+        <h3>By model</h3>
+        <div id="usage-chart-models" class="usage-chart-mount"></div>
+        <h3>By agent</h3>
+        <div id="usage-chart-agents" class="usage-chart-mount"></div>
+        <h3>Tool calls</h3>
+        <div id="usage-chart-tools" class="usage-chart-mount"></div>
         <button class="btn ghost" id="usage-detail-toggle"
           type="button">Show detail</button>
         <div id="usage-detail" class="usage-detail" hidden></div>

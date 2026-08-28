@@ -36,14 +36,15 @@ export async function recordToolCall(toolName, nowMs = Date.now()) {
   const name = String(toolName ?? "").slice(0, MAX_TOOL_NAME_LEN);
   if (!name) return;
   const run = toolUsageMutex.then(async () => {
-    const cur = await kvGet(TOOL_USAGE_KEY);
+    const store = await kvGet([TOOL_USAGE_KEY]);
+    const cur = store?.[TOOL_USAGE_KEY];
     const days = cur && typeof cur === "object" && cur.days && typeof cur.days === "object" ? cur.days : {};
     const day = todayKey(new Date(nowMs));
     const today = days[day] && typeof days[day] === "object" ? days[day] : {};
     if (!(name in today) && Object.keys(today).length >= MAX_TOOL_NAMES_PER_DAY) return; // bounded
     today[name] = (Number(today[name]) || 0) + 1;
     days[day] = today;
-    await kvSet(TOOL_USAGE_KEY, { v: 1, days: trimToolUsageDays(days) });
+    await kvSet({ [TOOL_USAGE_KEY]: { v: 1, days: trimToolUsageDays(days) } });
   });
   toolUsageMutex = run.then(() => {}, () => {});
   return run;
@@ -52,7 +53,8 @@ export async function recordToolCall(toolName, nowMs = Date.now()) {
 /** Roll the per-day counters up to per-tool totals over the retention window. */
 export async function getToolUsage(nowMs = Date.now()) {
   return await toolUsageMutex.then(() => {}, () => {}).then(async () => {
-    const cur = await kvGet(TOOL_USAGE_KEY);
+    const store = await kvGet([TOOL_USAGE_KEY]);
+    const cur = store?.[TOOL_USAGE_KEY];
     const days = cur && typeof cur === "object" && cur.days && typeof cur.days === "object" ? cur.days : {};
     const perTool = {};
     const cutoff = nowMs - TOOL_USAGE_DAYS * 24 * 60 * 60 * 1000;
@@ -211,6 +213,7 @@ export async function getUsage() {
     const mk = `${r.provider}/${r.model}`;
     byModel[mk] ??= {
       provider: r.provider,
+      totalTokens: 0,
       model: r.model,
       calls: 0,
       inputTokens: 0,
@@ -220,11 +223,13 @@ export async function getUsage() {
     byModel[mk].calls++;
     byModel[mk].inputTokens += r.inputTokens;
     byModel[mk].outputTokens += r.outputTokens;
+    byModel[mk].totalTokens += r.totalTokens;
     byModel[mk].estimatedCost += r.estimatedCost;
 
     // By provider (the provider-level breakdown).
     byProvider[r.provider] ??= {
       provider: r.provider,
+      totalTokens: 0,
       calls: 0,
       inputTokens: 0,
       outputTokens: 0,
@@ -233,11 +238,13 @@ export async function getUsage() {
     byProvider[r.provider].calls++;
     byProvider[r.provider].inputTokens += r.inputTokens;
     byProvider[r.provider].outputTokens += r.outputTokens;
+    byProvider[r.provider].totalTokens += r.totalTokens;
     byProvider[r.provider].estimatedCost += r.estimatedCost;
 
     // By agent (each agent's attributable usage + cost).
     byAgent[r.agentId] ??= {
       agentId: r.agentId,
+      totalTokens: 0,
       provider: r.provider,
       model: r.model,
       calls: 0,
@@ -248,6 +255,7 @@ export async function getUsage() {
     byAgent[r.agentId].calls++;
     byAgent[r.agentId].inputTokens += r.inputTokens;
     byAgent[r.agentId].outputTokens += r.outputTokens;
+    byAgent[r.agentId].totalTokens += r.totalTokens;
     byAgent[r.agentId].estimatedCost += r.estimatedCost;
 
     // By task (each task's attributable usage + cost, with its agent).
@@ -255,6 +263,7 @@ export async function getUsage() {
     byTask[tk] ??= {
       taskId: tk,
       agentId: r.agentId ?? "hub",
+      totalTokens: 0,
       provider: r.provider,
       model: r.model,
       calls: 0,
@@ -265,6 +274,7 @@ export async function getUsage() {
     byTask[tk].calls++;
     byTask[tk].inputTokens += r.inputTokens;
     byTask[tk].outputTokens += r.outputTokens;
+    byTask[tk].totalTokens += r.totalTokens;
     byTask[tk].estimatedCost += r.estimatedCost;
 
     // By day (the times/dates — a per-day breakdown).
@@ -295,11 +305,13 @@ export async function getUsage() {
     byDay: Object.values(byDay),
     rows,
     durability,
+    tools: await getToolUsage(),
   };
 }
 
 export async function clearUsage() {
   return await withUsageLock(async () => {
     await usageClear();
+    await kvSet({ [TOOL_USAGE_KEY]: { v: 1, days: {} } });
   });
 }
