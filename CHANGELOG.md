@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.336] — 2026-08-28
+- More audit fixes: accessibility violations are cleared on every surface (proper landmarks, headings, keyboard-safe task rows), a failed task run is now kept as a retryable row instead of vanishing, the artifact viewer's copy button only appears when there's something to copy, panels use the space better at wide sizes, and the side panel gets real first-run guidance
+
 ## [0.2.335] — 2026-08-28
 - Tool calls in the conversation now show the tool that actually ran and the arguments it actually got, instead of internal plumbing like execute_tool and selectionRef — and artifacts show up inline again. Also fixed a real one: once you had ~70 artifacts, saving a new one silently returned nothing at all, so the agent lost track of what it had just made
 
