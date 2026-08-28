@@ -183,6 +183,16 @@ import {
 } from "../lib/thread-run-view.js";
 import { managementToolset, MANAGEMENT_TOOL_NAMES } from "../lib/management-tools.js";
 import {
+  MAX_DELEGATION_DEPTH,
+  MAX_DELEGATION_DESCENDANTS,
+  appendDelegationAudit,
+  createDelegationRegistry,
+  delegationAuditRecord,
+  evaluateDelegation,
+  normalizeCanDelegateTo,
+  resolveTargetAgent,
+} from "../lib/agent-delegation.js";
+import {
   ATTESTATION_KEY_STORE,
   attestComposition,
   attestationKeyState,
@@ -494,6 +504,14 @@ function withRunLock(fn) {
   runMutex = run.then(() => {}, () => {});
   return run;
 }
+
+// ---- agent→agent delegation (G5) ----
+// Live state for every delegation-capable run (named-agent runs): identity,
+// path, depth, and the LIVE iteration budget (step is tracked from the run's
+// own progress stream). The agent.delegate route authorizes against THIS map —
+// a stale tool closure whose executionId is no longer live fails closed.
+const activeDelegationRuns = new Map(); // executionId -> { agentId, rootRunId, depth, path, maxIterations, step }
+const delegationRegistry = createDelegationRegistry();
 
 // ---- live progress streaming (the unified conversational surface) ----
 // UI pages connect a long-lived runtime port named "agent-progress"; the SW
@@ -981,7 +999,7 @@ function abortWorker(origin) {
   }
 }
 
-async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverride = null, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null) {
+async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverride = null, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined) {
   // A BACKGROUND/SCHEDULED agent has its OWN memory (Paul: all agents get their
   // own OPFS). Build a FRESH orchestrator bound to that store — never the cached
   // shared master, whose memory tools would otherwise write to the master's
@@ -1000,6 +1018,7 @@ async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverr
       promptScope,
       agentRole,
       approvalExecutionId,
+      runMaxIterations,
     );
   }
   while (true) {
@@ -1219,7 +1238,7 @@ async function readSiteLazySources(origin, runGenCell) {
 // ensureOrchestrator's cache path AND the fresh per-background-agent path.
 // `promptScope`/`agentRole` select the system-prompt composition (the hub by
 // default; a named agent's own scope + role when it runs).
-async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null) {
+async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined) {
     // A per-agent model override (the named-agent provider config) REPLACES the
     // global model for THIS build — the resolved { model, modelId, providerName }
     // is self-contained, so a per-agent model never mixes one provider's
@@ -1273,6 +1292,8 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     const liveManagementTools = scoped ? {} : managementToolset({
       // Immutable build-local capture. A stale tool closure keeps its original
       // execution id, which activeExecutions rejects after the run finalizes.
+      // (The delegate_to_agent caller identity rides the dispatcher's bound
+      // execution id — the route context — never a model-controlled arg.)
       callRoute: modelManagementDispatch,
     });
     const orch = await createOrchestrator({
@@ -1280,6 +1301,9 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       masterMemory: mem,
       workers,
       multiAgent,
+      // The delegation child run's iteration budget (bounded by the parent's
+      // REMAINING iterations upstream in the agent.delegate route).
+      maxIterations: runMaxIterations,
       // The composed effective prompt for this run's scope (see above).
       masterSystem: masterComposed.text,
       // SCOPED (hook) runs: the read-only browser set (no open/navigate/close/schedule)
@@ -1962,10 +1986,15 @@ function providerResumeIdentity(config) {
   };
 }
 
-async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSurfaceRef = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null }) {
-  // Serialize master execution: the cached orchestrator is shared, so a second
-  // run must queue behind the first rather than clobber its abort controller.
-  return await withRunLock(async () => {
+async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSurfaceRef = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null }) {
+  // skipRunLock is ONLY for the delegation child path (agent.delegate): the
+  // child builds a FRESH orchestrator (its own memory + abort controller via
+  // the memoryOverride/promptScope/executionId path below), so the shared-
+  // orchestrator hazard the mutex guards does not apply — and taking the
+  // mutex would DEADLOCK (the parent holds it while awaiting this tool
+  // result). Depth (≤2) + descendant (≤4) caps bound the concurrency this
+  // opens: at most one top-level run plus its bounded descendant tree.
+  const runBody = async () => {
     const taskId = id ?? String(Date.now());
     // A BACKGROUND/SCHEDULED agent passes its OWN memory (Paul: all agents get
     // their own OPFS). The journal + the orchestrator's memory tools then write
@@ -1988,6 +2017,20 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       bridgeAndAuditApprovalBindings({ ownerApprovalStore, approvalBinding, executionId });
     }
     await durableRecoveryReady;
+    // Delegation run-state (G5): a run that may CALL agent.delegate registers
+    // its live identity/path/depth/budget so the route authorizes against the
+    // LIVE run (a stale tool closure whose executionId is gone fails closed).
+    // The root run's rootRunId is its own executionId; children inherit it.
+    const delegationState = delegation && typeof delegation === "object" && typeof delegation.agentId === "string" && delegation.agentId
+      ? {
+        agentId: delegation.agentId,
+        rootRunId: delegation.rootRunId ? String(delegation.rootRunId) : executionId,
+        depth: Number.isFinite(delegation.depth) ? delegation.depth : 0,
+        path: Array.isArray(delegation.path) && delegation.path.length ? delegation.path.map(String).slice(0, MAX_DELEGATION_DEPTH + 1) : [delegation.agentId],
+        maxIterations: Number.isFinite(maxIterations) ? maxIterations : 12,
+        step: 0,
+      }
+      : null;
     const resumeRequest = {
       id: taskId,
       task: String(task ?? ""),
@@ -2073,6 +2116,12 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     const callQueue = new Map(); // per-run: toolName -> pending callId FIFO (tool-result side)
     const orphanSeq = new Map(); // per-run: toolName -> orphan-result counter (unique ids)
     const journalingProgress = async (event) => {
+      // Live budget tracking for the delegation guard: each model step emits a
+      // thinking event carrying the loop's step counter; the caller's REMAINING
+      // iterations bound any child run it spawns (agent.delegate reads this).
+      if (delegationState && event?.type === "thinking" && Number.isFinite(event.step)) {
+        delegationState.step = Math.max(delegationState.step, event.step);
+      }
       try { onProgress?.(event); } catch { /* broadcast must not break telemetry */ }
       const type = event?.type;
       if (type === "tool-call") {
@@ -2155,6 +2204,9 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     let taskJournalReceipt = null;
     let taskJournalGuard = null;
     let taskJournalAttempted = false;
+    // Declared at run scope so the finally can restore the parent's stamped
+    // context after a delegation child settles (see the setRunContext site).
+    let savedRunContext = null;
     const durableHeartbeat = setInterval(() => {
       durableRuns.heartbeat(executionId).catch(() => {
         heartbeatFailed = true;
@@ -2168,7 +2220,14 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // projects back into this agent/thread's conversation surface. Set for
       // EVERY run — interactive included — not only fenced scheduled runs;
       // cleared in the finally below (same lifecycle as the run fence).
+      // A delegation CHILD run (skipRunLock) runs while its parent is parked
+      // awaiting the tool result — strictly NESTED execution. The shared
+      // run-context singleton (built for serialized runs) is saved here and
+      // restored in the finally so the child's surface attribution never
+      // leaks into the parent's remaining steps (and vice versa).
+      savedRunContext = skipRunLock ? currentRunContext() : null;
       setRunContext({ threadId, agentRole, agentSurfaceRef });
+      if (delegationState) activeDelegationRuns.set(executionId, delegationState);
       orch = await ensureOrchestrator(
         journalingProgress,
         scoped,
@@ -2177,6 +2236,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         promptScope,
         agentRole,
         executionId,
+        delegationState ? delegationState.maxIterations : undefined,
       );
       durableRunAborters.set(executionId, () => {
         try { orch?.abort?.(); } catch { /* already stopped */ }
@@ -2409,6 +2469,11 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     } finally {
       clearInterval(durableHeartbeat);
       durableRunAborters.delete(executionId);
+      // The delegation run-state dies with the run: a tool closure from a
+      // settled run can never authorize a new delegation (fail-closed).
+      if (delegationState) activeDelegationRuns.delete(executionId);
+      // The ROOT run releases the descendant counter on settle.
+      if (delegationState && delegationState.depth === 0) delegationRegistry.release(delegationState.rootRunId);
       // Seal THIS execution: unbind the attestation callback from the (cached)
       // orchestrator and finalize the execution slot, so no late/duplicate
       // emission can be recorded against this — or a later — run (the ring
@@ -2418,7 +2483,15 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       } catch { /* best-effort */ }
       finalizeExecution(executionId);
       clearRunFence();
-      clearRunContext();
+      if (skipRunLock) {
+        // Restore the parent's context when it is still live (the normal case:
+        // the parent awaits this child); clear when the parent settled first
+        // (an abort racing the child) so a stale stamp can never leak forward.
+        if (parentRunId && activeDelegationRuns.has(parentRunId) && savedRunContext) setRunContext(savedRunContext);
+        else clearRunContext();
+      } else {
+        clearRunContext();
+      }
       // Unbind the per-run PROGRESS callback (the live UI + the journaling
       // forwarder) so no stale callback survives into the next run — the next
       // run's ensureOrchestrator rebinds inside ITS lock.
@@ -2439,7 +2512,8 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         abortNow = null;
       }
     }
-  }).finally(async () => {
+  };
+  return await (skipRunLock ? runBody() : withRunLock(runBody)).finally(async () => {
     // P4 single-driver (CAP-FB-20260826-BROWSER-SINGLE-DRIVER-01): release the
     // browser-command lease THIS run's surface lazily acquired (destructive
     // tools acquire it on first use via withGrantLock) + clear the context.
@@ -2846,10 +2920,13 @@ function namedCandidatePayload(candidate) {
     canonicalField("avatar", canonicalScalar(candidate.avatar)),
     canonicalField("skills", payloadStringArray(candidate.skills)),
     canonicalField("coreAssets", canonicalArray(...assetNodes)),
+    // Delegation edges are authorization grants — the owner approval must bind
+    // them exactly, never let them ride unapproved inside another change.
+    canonicalField("canDelegateTo", payloadStringArray(candidate.canDelegateTo)),
   );
 }
 
-function normalizedNamedPatch({ name, role, avatar, skills, coreAssets }) {
+function normalizedNamedPatch({ name, role, avatar, skills, coreAssets, canDelegateTo }) {
   const patch = Object.create(null);
   patch.name = name === undefined ? undefined : String(name).trim();
   // CAP-FB-20260824-AGENT-ROLE-TRUNCATION-01 r2 (Gemini review): NO slice here —
@@ -2862,6 +2939,7 @@ function normalizedNamedPatch({ name, role, avatar, skills, coreAssets }) {
   patch.avatar = avatar === undefined ? undefined : (avatar ? String(avatar) : null);
   patch.skills = skills === undefined ? undefined : (Array.isArray(skills) ? skills.slice(0, MAX_SKILLS) : []);
   patch.coreAssets = coreAssets === undefined ? undefined : normalizeCoreAssets(coreAssets);
+  patch.canDelegateTo = canDelegateTo === undefined ? undefined : normalizeCanDelegateTo(canDelegateTo);
   return patch;
 }
 
@@ -2869,6 +2947,7 @@ function namedPatchPayload(id, patch) {
   const fields = [canonicalField("id", canonicalScalar(slugifyAgentId(id)))];
   for (const key of ["name", "role", "avatar"]) fields.push(canonicalField(key, canonicalScalar(patch[key])));
   fields.push(canonicalField("skills", patch.skills === undefined ? canonicalScalar(undefined) : payloadStringArray(patch.skills)));
+  fields.push(canonicalField("canDelegateTo", patch.canDelegateTo === undefined ? canonicalScalar(undefined) : payloadStringArray(patch.canDelegateTo)));
   if (patch.coreAssets === undefined) fields.push(canonicalField("coreAssets", canonicalScalar(undefined)));
   else fields.push(canonicalField("coreAssets", canonicalArray(...patch.coreAssets.map((asset) => canonicalRecord(
     canonicalField("name", canonicalScalar(asset.name)),
@@ -2999,6 +3078,83 @@ function executeWorkerTool(toolName, args, context) {
   return Promise.resolve(tool.execute(a))
     .then((result) => redactSecrets(result ?? null))
     .catch((e) => ({ ok: false, error: String(e?.message ?? e).slice(0, 200) }));
+}
+
+// The named-agent run pipeline, factored so BOTH the trusted named-agent.run
+// route and the agent→agent delegation route (named-agent.delegate) execute the
+// child through the SAME path (own OPFS sandbox, own provider override, own
+// prompt scope) — delegation adds only the delegation context, the budget cap,
+// skipRunLock, and never forwards approvalBinding.
+async function runNamedAgentTask({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null }) {
+  // The agent runs the task with its OWN OPFS sandbox (namedAgentMemory — its
+  // memory + history), so its runs read/write its own tier, never the
+  // master's or a site's.
+  const agent = await getNamedAgent(id);
+  if (!agent) return { ok: false, error: `no agent ${id}` };
+  const slug = slugifyAgentId(id);
+  const mem = namedAgentMemory(slug);
+  const runTag = runId ?? `named:${slug}:${Date.now()}`;
+  // PER-AGENT provider override: resolve the agent's OWN complete provider
+  // config (the full override WITH its key — never surfaced), then thread the
+  // resolved model into THIS run so the agent uses its provider, not the
+  // global. Absent override → the global model (getModelForAgent falls back).
+  let modelOverride = null;
+  let overrideConfig = null;
+  try {
+    overrideConfig = await getNamedAgentProvider(id);
+    if (overrideConfig) modelOverride = await getModelForAgent(overrideConfig);
+  } catch { modelOverride = null; overrideConfig = null; }
+  // The agent-chat surface needs LIVE progress (the tool calls streaming) —
+  // broadcast each event tagged with the runId + the agentId so the page's
+  // listener renders ONLY this agent run's tool cards.
+  try {
+    const result = await runTask({
+      id: runTag,
+      task,
+      attachments: attachments ?? [],
+      memory: mem,
+      modelOverride,
+      providerBinding: overrideConfig ? providerResumeIdentity(overrideConfig) : null,
+      providerGateConfig: overrideConfig,
+      clientCorrelationId: runId ?? null,
+      approvalBinding: approvalBinding ?? null,
+      runKind: "agent",
+      executionId: _executionId,
+      permissionResume: _permissionResume,
+      resumeToken: _resumeToken,
+      allowProviderChange: _allowProviderChange,
+      resumeRoute: "named-agent.run",
+      resumeRouteArgs: { id, runId: runTag, threadId: threadId ?? null },
+      // An @mention task's terminal commits into the HUB thread (idempotent
+      // by executionId via the durable outbox) — the result returns to the
+      // task, never stranded in the agent's own journal only.
+      threadId: threadId ?? null,
+      // The agent's OWN system-prompt scope (agent:<slug>) — a per-agent
+      // override composes over the hub base (inheriting the hub override when
+      // the agent has none), and its role rides as the agent-role layer.
+      promptScope: `agent:${slug}`,
+      agentRole: agent.role ?? "",
+      agentSurfaceRef: `named:${slug}`,
+      // Agent→agent delegation (G5): a top-level named-agent run is a
+      // delegation ROOT (depth 0); a child run carries its extended path.
+      // The delegate_to_agent tool is present either way — the per-call
+      // guard (the agent's canDelegateTo list) is the authority.
+      delegation: delegation ?? { agentId: agent.id, depth: 0, path: [agent.id], rootRunId: null },
+      maxIterations,
+      skipRunLock,
+      parentRunId,
+      onProgress: (event) => {
+        broadcastProgress({ ...event, runId: runTag, agentId: agent.id ?? null, ...(parentRunId ? { parentRunId } : {}) });
+      },
+    });
+    return result;
+  } catch (e) {
+    // UNWRAP the AI SDK wrapper + say what to do (not a raw "No output").
+    let cfg = null;
+    try { cfg = await getProviderConfig(); } catch { cfg = null; }
+    const desc = describeError(e, { provider: cfg?.id ?? cfg?.name ?? "", model: cfg?.model ?? "" });
+    return { ok: false, error: desc.message, errorCategory: desc.category, errorReason: desc.reason, errorAction: desc.action, errorDetail: desc.detail };
+  }
 }
 
 const handlers = mergeRouteMaps(
@@ -3766,9 +3922,9 @@ const handlers = mergeRouteMaps(
     const agent = await getNamedAgent(id);
     return agent ? { ok: true, agent } : { ok: false, error: `no agent ${id}` };
   },
-  async "named-agent.create"({ id, name, role, avatar, skills, coreAssets }, context) {
+  async "named-agent.create"({ id, name, role, avatar, skills, coreAssets, canDelegateTo }, context) {
     const r = await createNamedAgent(
-      { id, name, role, avatar, skills, coreAssets },
+      { id, name, role, avatar, skills, coreAssets, canDelegateTo },
       {
         gateOnReplace: async ({ slug, existing, candidate }) => {
           let payload;
@@ -3809,8 +3965,8 @@ const handlers = mergeRouteMaps(
     }
     return r;
   },
-  async "named-agent.update"({ id, name, role, avatar, skills, coreAssets }, context) {
-    const patch = normalizedNamedPatch({ name, role, avatar, skills, coreAssets });
+  async "named-agent.update"({ id, name, role, avatar, skills, coreAssets, canDelegateTo }, context) {
+    const patch = normalizedNamedPatch({ name, role, avatar, skills, coreAssets, canDelegateTo });
     const r = await updateNamedAgent(id, patch, {
       gateBeforeMutation: async ({ slug, existing }) => {
         let payload;
@@ -3966,69 +4122,96 @@ const handlers = mergeRouteMaps(
     return { ok: true, refined };
   },
   async "named-agent.run"({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false, approvalBinding = null }) {
-    // RUN/DELEGATE a task to a named agent (the wider-goal review found named
-    // agents had CRUD/grep/avatar but no run path). The agent runs the task
-    // with its OWN OPFS sandbox (namedAgentMemory — its memory + history), so
-    // its runs read/write its own tier, never the master's or a site's.
-    const agent = await getNamedAgent(id);
-    if (!agent) return { ok: false, error: `no agent ${id}` };
-    const slug = slugifyAgentId(id);
-    const mem = namedAgentMemory(slug);
-    const runTag = runId ?? `named:${slug}:${Date.now()}`;
-    // PER-AGENT provider override: resolve the agent's OWN complete provider
-    // config (the full override WITH its key — never surfaced), then thread the
-    // resolved model into THIS run so the agent uses its provider, not the
-    // global. Absent override → the global model (getModelForAgent falls back).
-    let modelOverride = null;
-    let overrideConfig = null;
+    return await runNamedAgentTask({ id, task, attachments, runId, threadId, _executionId, _permissionResume, _resumeToken, _allowProviderChange, approvalBinding });
+  },
+
+  // Agent→agent delegation (G5, owner directive 2026-08-28: "agents invocable
+  // as skills"). The CALLER identity comes from the route CONTEXT — the
+  // model-facing dispatcher (bindModelApprovalDispatcher) binds the run's
+  // execution id per build, and dispatchRoute strips __-prefixed body keys, so
+  // the caller can never be forged by model-controlled args. The live run
+  // registry makes a stale closure fail closed. All guards are the pure logic
+  // in lib/agent-delegation.js. The child inherits NO approvals and gets a
+  // FRESH execution (skipRunLock — see runTask for why that is safe).
+  async "named-agent.delegate"({ agent: targetRef, task, context: briefContext = "" }, routeContext) {
+    const callerExecutionId = typeof routeContext?.executionId === "string" ? routeContext.executionId : "";
+    const state = callerExecutionId ? activeDelegationRuns.get(callerExecutionId) : null;
+    if (!state) {
+      return { ok: false, code: "delegation-context", error: "delegation is only available inside a running named agent" };
+    }
+    const taskText = typeof task === "string" ? task.trim() : "";
+    if (!taskText) return { ok: false, code: "delegation-input", error: "a non-empty task is required" };
+    if (taskText.length > 4000) return { ok: false, code: "delegation-input", error: "task too long (4000 chars max)" };
+    const callerAgent = await getNamedAgent(state.agentId);
+    const agents = await listNamedAgents();
+    const targetAgent = resolveTargetAgent(targetRef, agents);
+    if (!targetAgent) {
+      // Report the unresolved reference honestly (the ref is the model's own
+      // input, not privileged data) so a mistyped name is debuggable.
+      return { ok: false, code: "delegation-target", error: `no agent "${String(targetRef ?? "").slice(0, 80)}" — use list_named_agents to see who exists (have: ${agents.map((a) => a.id).join(", ")})` };
+    }
+    const verdict = evaluateDelegation({
+      callerAgent,
+      targetAgent,
+      state,
+      descendantCount: delegationRegistry.count(state.rootRunId),
+    });
+    if (!verdict.ok) return verdict;
+    if (!delegationRegistry.acquire(state.rootRunId)) {
+      return { ok: false, code: "delegation-cap", error: `this run already has ${MAX_DELEGATION_DESCENDANTS} delegated child runs — the per-run delegation cap` };
+    }
+    const childRunId = `delegate:${targetAgent.id}:${Date.now()}`;
+    const brief = typeof briefContext === "string" && briefContext.trim()
+      ? `${taskText}\n\nContext from ${callerAgent.name ?? callerAgent.id}:\n${briefContext.trim().slice(0, 2000)}`
+      : taskText;
+    const auditBase = {
+      rootRunId: state.rootRunId,
+      parentRunId: callerExecutionId,
+      childRunId,
+      fromAgent: callerAgent.name ?? callerAgent.id,
+      toAgent: targetAgent.name ?? targetAgent.id,
+      task: taskText,
+    };
     try {
-      overrideConfig = await getNamedAgentProvider(id);
-      if (overrideConfig) modelOverride = await getModelForAgent(overrideConfig);
-    } catch { modelOverride = null; overrideConfig = null; }
-    // The agent-chat surface needs LIVE progress (the tool calls streaming) —
-    // broadcast each event tagged with the runId + the agentId so the page's
-    // listener renders ONLY this agent run's tool cards.
-    try {
-      const result = await runTask({
-        id: runTag,
-        task,
-        attachments: attachments ?? [],
-        memory: mem,
-        modelOverride,
-        providerBinding: overrideConfig ? providerResumeIdentity(overrideConfig) : null,
-        providerGateConfig: overrideConfig,
-        clientCorrelationId: runId ?? null,
-        approvalBinding: approvalBinding ?? null,
-        runKind: "agent",
-        executionId: _executionId,
-        permissionResume: _permissionResume,
-        resumeToken: _resumeToken,
-        allowProviderChange: _allowProviderChange,
-        resumeRoute: "named-agent.run",
-        resumeRouteArgs: { id, runId: runTag, threadId: threadId ?? null },
-        // An @mention task's terminal commits into the HUB thread (idempotent
-        // by executionId via the durable outbox) — the result returns to the
-        // task, never stranded in the agent's own journal only.
-        threadId: threadId ?? null,
-        // The agent's OWN system-prompt scope (agent:<slug>) — a per-agent
-        // override composes over the hub base (inheriting the hub override when
-        // the agent has none), and its role rides as the agent-role layer.
-        promptScope: `agent:${slug}`,
-        agentRole: agent.role ?? "",
-        agentSurfaceRef: `named:${slug}`,
-        onProgress: (event) => {
-          broadcastProgress({ ...event, runId: runTag, agentId: agent.id ?? null });
-        },
+      const result = await runNamedAgentTask({
+        id: targetAgent.id,
+        task: brief,
+        runId: childRunId,
+        threadId: null,
+        approvalBinding: null, // the child inherits NO parent approvals — its tool approvals go through its own flow
+        delegation: { agentId: targetAgent.id, depth: verdict.child.depth, path: verdict.child.path, rootRunId: state.rootRunId },
+        maxIterations: verdict.child.maxIterations,
+        skipRunLock: true,
+        parentRunId: callerExecutionId,
       });
-      return result;
-    } catch (e) {
-      // UNWRAP the AI SDK wrapper + say what to do (not a raw "No output").
-      let cfg = null;
-      try { cfg = await getProviderConfig(); } catch { cfg = null; }
-      const desc = describeError(e, { provider: cfg?.id ?? cfg?.name ?? "", model: cfg?.model ?? "" });
-      return { ok: false, error: desc.message, errorCategory: desc.category, errorReason: desc.reason, errorAction: desc.action, errorDetail: desc.detail };
+      if (result?.ok) {
+        await appendDelegationAudit(masterMemory(), delegationAuditRecord({ ...auditBase, outcome: "ok" })).catch(() => {});
+        return {
+          ok: true,
+          agent: targetAgent.name ?? targetAgent.id,
+          childRunId,
+          result: String(result.result ?? "").slice(0, 8000),
+        };
+      }
+      const detail = String(result?.error ?? "unknown error").slice(0, 200);
+      await appendDelegationAudit(masterMemory(), delegationAuditRecord({ ...auditBase, outcome: "error", detail })).catch(() => {});
+      return { ok: false, code: "delegation-run", error: `${targetAgent.name ?? targetAgent.id} failed: ${detail}`, childRunId };
+    } catch (error) {
+      const detail = String(error?.message ?? error).slice(0, 200);
+      await appendDelegationAudit(masterMemory(), delegationAuditRecord({ ...auditBase, outcome: "error", detail })).catch(() => {});
+      return { ok: false, code: "delegation-run", error: `${targetAgent.name ?? targetAgent.id} threw: ${detail}`, childRunId };
     }
   },
+
+  // The durable delegation audit (G5): every agent→agent delegation, bounded
+  // (DELEGATION_AUDIT_MAX), most-recent-first. Read-only; the entries are
+  // already bounded (ids, short names, 140-char task summaries, no bodies).
+  async "named-agent.delegations"() {
+    const log = (await masterMemory().get("cap:delegation-log").catch(() => null)) ?? [];
+    const entries = Array.isArray(log) ? [...log].reverse() : [];
+    return { ok: true, entries, count: entries.length };
+  },
+
   async "named-agent.history"({ id }) {
     // The agent's OWN run history (its journal — task/result/tool-call rows),
     // most-recent-first, so the agent-chat surface can show what the agent did.

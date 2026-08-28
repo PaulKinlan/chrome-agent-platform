@@ -69,6 +69,9 @@ const BASELINE_ROUTES = [
   "named-agent.refine",
   "named-agent.run",
   "named-agent.history",
+  // Agent→agent delegation (G5): the delegate_to_agent tool's authority.
+  "named-agent.delegate",
+  "named-agent.delegations",
   "run-log.list",
   "activity.list",
   "agent.discoverable-tabs",

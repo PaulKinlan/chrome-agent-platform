@@ -888,6 +888,7 @@ export function createOrchestrator({
   workers = [], // [{ origin, memory, skills, tools }]
   multiAgent = true,
   taskId = "adhoc",
+  maxIterations = undefined, // delegation child budget (createAgent default when absent)
   extraTools = {}, // retained as private source closures; never provider-eager
   readMasterLazySources = async () => [],
   readMasterLazyScope = async () => ({}),
@@ -1056,6 +1057,7 @@ export function createOrchestrator({
     model,
     system: masterSystem ?? system,
     memory: masterMemory,
+    ...(maxIterations !== undefined ? { maxIterations } : {}),
     // `extraTools` stay out of this eager map. Their live records come from
     // readMasterLazySources; only delegation's existing closures are added to
     // the private built-in source map.

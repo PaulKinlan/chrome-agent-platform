@@ -18,6 +18,12 @@ const TOOLS_MARKER = "@demo-tools";
 // call (the production model-facing delegate) — the delegated worker runs
 // "@demo-tools" and the final text reflects the delegation result.
 const DELEGATE_MARKER = "@demo-delegate";
+// @demo-delegate-agent <agentIdOrName>: the demo model issues a REAL
+// delegate_to_agent management call (agent→agent delegation, G5) targeting a
+// NAMED agent; the child runs "@demo-tools" in its OWN sandbox and the final
+// text reflects the delegation result. Checked BEFORE the site-delegation
+// marker (the strings share a prefix).
+const AGENT_DELEGATE_MARKER = "@demo-delegate-agent";
 // @demo-slow: the FIRST model step is delayed (a deterministic mid-run window
 // for abort tests).
 const SLOW_MARKER = "@demo-slow";
@@ -44,6 +50,18 @@ function abortableDelay(ms, signal) {
 
 function wantsDelegate(prompt) {
   return !!latestRunSlice(prompt)?.marker?.delegate;
+}
+
+function wantsAgentDelegate(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.delegateAgent;
+}
+
+function delegateAgentRef(prompt) {
+  // Scope to the SAME run slice the marker check uses — the last user message
+  // of the WHOLE prompt can be an agent-do continuation without the marker.
+  const sliceText = extractText(latestRunSlice(prompt)?.slice ?? (Array.isArray(prompt) ? prompt : []));
+  const m = sliceText.match(new RegExp(AGENT_DELEGATE_MARKER + "\\s+([\\w.-]+)"));
+  return m ? m[1] : "demo-agent";
 }
 
 function delegateAgentId(prompt) {
@@ -121,7 +139,8 @@ function latestRunSlice(prompt) {
     slice: msgs.slice(lastIdx),
     marker: {
       tools: lastUser.includes(TOOLS_MARKER),
-      delegate: lastUser.includes(DELEGATE_MARKER),
+      delegate: lastUser.includes(DELEGATE_MARKER) && !lastUser.includes(AGENT_DELEGATE_MARKER),
+      delegateAgent: lastUser.includes(AGENT_DELEGATE_MARKER),
     },
   };
 }
@@ -150,8 +169,20 @@ function latestSelectionRef(prompt) {
   }
 }
 
-function lazyDemoCall(prompt, { delegate = false } = {}) {
+function lazyDemoCall(prompt, { delegate = false, delegateAgent = false } = {}) {
   const step = toolResultCount(prompt);
+  if (delegateAgent) {
+    if (step === 0) {
+      return { id: "search_delegate_agent", name: "search_tools", input: { query: "delegate_to_agent", limit: 1 } };
+    }
+    if (step === 1) {
+      const selectionRef = latestSelectionRef(prompt);
+      return selectionRef
+        ? { id: "execute_delegate_agent", name: "execute_tool", input: { selectionRef, arguments: { agent: delegateAgentRef(prompt), task: "@demo-tools" } } }
+        : null;
+    }
+    return null;
+  }
   if (delegate) {
     if (step === 0) {
       return { id: "search_delegate", name: "search_tools", input: { query: "delegate_task", limit: 1 } };
@@ -197,6 +228,13 @@ function delegateAlreadyFinal(prompt) {
     m.content.some((p) => p?.type === "text" && /\[demo model\] Delegation/.test(p.text ?? "")));
 }
 
+function agentDelegateAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" &&
+    Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && /\[demo model\] Agent delegation/.test(p.text ?? "")));
+}
+
 // A deterministic, RICH tool-call payload (nested arrays/objects/unicode — the
 // structured renderer's showcase + the journal's real persisted rows).
 const DEMO_ARGS = {
@@ -221,7 +259,9 @@ export function createDemoModel() {
 
     doGenerate(options) {
       const text = extractText(options.prompt);
-      const lazyCall = wantsDelegate(options.prompt)
+      const lazyCall = wantsAgentDelegate(options.prompt)
+        ? lazyDemoCall(options.prompt, { delegateAgent: true })
+        : wantsDelegate(options.prompt)
         ? lazyDemoCall(options.prompt, { delegate: true })
         : wantsDemoTools(options.prompt) && !demoAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt)
@@ -260,13 +300,16 @@ export function createDemoModel() {
       const text = extractText(options.prompt);
       const wantsTools = wantsDemoTools(options.prompt);
       const wantsDel = wantsDelegate(options.prompt);
+      const wantsADel = wantsAgentDelegate(options.prompt);
       const id = `demo-${crypto.randomUUID?.() ?? Math.random()}`;
       const usage = { inputTokens: 8, outputTokens: 32, totalTokens: 40 };
       const stream = new ReadableStream({
         start(controller) {
           controller.enqueue({ type: "stream-start", warnings: [] });
           let response = "";
-          const lazyCall = wantsDel
+          const lazyCall = wantsADel && !agentDelegateAlreadyFinal(options.prompt)
+            ? lazyDemoCall(options.prompt, { delegateAgent: true })
+            : wantsDel
             ? lazyDemoCall(options.prompt, { delegate: true })
             : wantsTools && !demoAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt)
@@ -335,6 +378,64 @@ export function createDemoModel() {
             response = failed
               ? "[demo model] Delegation FAILED — the delegated worker was aborted mid-run."
               : `[demo model] Delegation succeeded. Worker response: ${typeof outValue === "string" ? outValue.slice(0, 160) : JSON.stringify(outValue ?? "").slice(0, 160)}`;
+            controller.enqueue({ type: "text-start", id });
+            const chunks = response.match(/.{1,24}/g) ?? [response];
+            for (const chunk of chunks) controller.enqueue({ type: "text-delta", id, delta: chunk });
+            controller.enqueue({ type: "text-end", id });
+            controller.enqueue({ type: "finish", usage, finishReason: "stop" });
+            controller.close();
+            return;
+          }
+          if (wantsADel && agentDelegateAlreadyFinal(options.prompt)) {
+            // Continuation AFTER the final text (agent-do compacts the tool
+            // exchange away, then asks to continue): re-emit the EXACT prior
+            // final — never restart the search/execute sequence.
+            const prior = runSlice(options.prompt)
+              .filter((m) => m?.role === "assistant" && Array.isArray(m?.content))
+              .flatMap((m) => m.content)
+              .find((p2) => p2?.type === "text" && /\[demo model\] Agent delegation/.test(p2.text ?? ""));
+            response = prior?.text ?? "[demo model] Agent delegation finished.";
+            controller.enqueue({ type: "text-start", id });
+            const chunks = response.match(/.{1,24}/g) ?? [response];
+            for (const chunk of chunks) controller.enqueue({ type: "text-delta", id, delta: chunk });
+            controller.enqueue({ type: "text-end", id });
+            controller.enqueue({ type: "finish", usage, finishReason: "stop" });
+            controller.close();
+            return;
+          }
+          if (wantsADel) {
+            // STEP 2 (delegate-to-agent): reflect the child run's outcome with
+            // the SAME structural tool-part parsing as the site-delegation path.
+            // The lazy execute_tool wrapper reports { ok:true, result: <route
+            // result> } for a COMPLETED call — a structured DENIAL rides inside
+            // as result.ok === false, so look one level in before deciding.
+            const lastTool = [...runSlice(options.prompt)].reverse().find((m) => m?.role === "tool");
+            const parts = Array.isArray(lastTool?.content) ? lastTool.content : [];
+            let succeeded = false;
+            for (const part of parts) {
+              if (part?.type === "tool-result" && part?.output) {
+                if (part.output.type === "error-text") { succeeded = false; break; }
+                succeeded = true;
+              } else if (part?.type === "tool-error") { succeeded = false; break; }
+            }
+            const outValue = parts.find((pt) => pt?.type === "tool-result" && pt?.output && pt.output.type !== "error-text")?.output?.value ?? "";
+            const errValue = parts.find((pt) => pt?.output?.type === "error-text")?.output?.value ?? parts.find((pt) => pt?.type === "tool-error")?.error ?? "";
+            let outText = typeof outValue === "string" ? outValue : JSON.stringify(outValue ?? "");
+            // Unwrap the lazy protocol envelope (string OR object form).
+            let inner = outValue;
+            if (typeof outValue === "string") {
+              try { inner = JSON.parse(outValue); } catch { inner = outValue; }
+            }
+            const routeResult = inner && typeof inner === "object" && "result" in inner ? inner.result : inner;
+            if (succeeded && routeResult && typeof routeResult === "object" && routeResult.ok === false) {
+              succeeded = false;
+              outText = String(routeResult.error ?? "delegation denied");
+            } else if (succeeded && routeResult && typeof routeResult === "object" && typeof routeResult.result === "string") {
+              outText = routeResult.result;
+            }
+            response = succeeded
+              ? `[demo model] Agent delegation succeeded. Child result: ${String(outText).slice(0, 200)}`
+              : `[demo model] Agent delegation DENIED/FAILED: ${String(succeeded ? "" : (routeResult?.error ?? outText ?? errValue)).slice(0, 200)}`;
             controller.enqueue({ type: "text-start", id });
             const chunks = response.match(/.{1,24}/g) ?? [response];
             for (const chunk of chunks) controller.enqueue({ type: "text-delta", id, delta: chunk });

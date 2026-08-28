@@ -1784,12 +1784,14 @@ async function openAgentConfig() {
     avatar: agent.avatar ?? null,
     initialSkills: agent.skills ?? [],
     initialCoreAssets: agent.coreAssets ?? [],
+    selfId: agent.id ?? currentAgentId,
+    initialCanDelegateTo: agent.canDelegateTo ?? [],
     canRegenerateAvatar: true,
     canDelete: true,
     savedLabel: "Save",
     onSave: async (v) => {
       const r = await send("named-agent.update", {
-        id: currentAgentId, name: v.name, role: v.role, avatar: v.avatar, skills: v.skills, coreAssets: v.coreAssets,
+        id: currentAgentId, name: v.name, role: v.role, avatar: v.avatar, skills: v.skills, coreAssets: v.coreAssets, canDelegateTo: v.canDelegateTo,
       }).catch(() => ({ ok: false }));
       return r?.ok !== false ? { ok: true } : { ok: false, error: r?.error ?? "unknown" };
     },
@@ -1809,7 +1811,7 @@ function openQuickCreateAgent() {
     savedLabel: "Create agent",
     onSave: async (v) => {
       const r = await send("named-agent.create", {
-        name: v.name, role: v.role, avatar: v.avatar, skills: v.skills, coreAssets: v.coreAssets,
+        name: v.name, role: v.role, avatar: v.avatar, skills: v.skills, coreAssets: v.coreAssets, canDelegateTo: v.canDelegateTo,
       }).catch(() => ({ ok: false }));
       return r?.ok ? { ok: true, id: r.agent?.id ?? v.name } : { ok: false, error: r?.error ?? "unknown" };
     },
@@ -1987,6 +1989,42 @@ async function buildAgentConfigDialog(opts) {
   skillsDetails.append(skillsList);
   scrollBody.append(skillsDetails);
 
+  // Can delegate to (G5): the owner-configured allow-list of OTHER agents this
+  // agent may hand subtasks to mid-run (delegate_to_agent). Empty = cannot
+  // delegate. The checkbox list is every OTHER named agent (self excluded).
+  const delegRes = await send("named-agent.list").catch(() => ({ agents: [] }));
+  const otherAgents = (Array.isArray(delegRes.agents) ? delegRes.agents : [])
+    .filter((a) => a?.id && a.id !== opts.selfId);
+  const initialDeleg = new Set(Array.isArray(opts.initialCanDelegateTo) ? opts.initialCanDelegateTo : []);
+  const delegChecks = new Map();
+  if (otherAgents.length) {
+    const delegDetails = document.createElement("details");
+    delegDetails.style.fontSize = "13px";
+    const delegSummary = document.createElement("summary");
+    delegSummary.textContent = "Can delegate to (other agents this agent may hand subtasks to)";
+    delegDetails.append(delegSummary);
+    const delegList = document.createElement("div");
+    delegList.style.padding = "6px 0 0 4px";
+    for (const a of otherAgents) {
+      const row = document.createElement("label");
+      row.style.display = "flex";
+      row.style.alignItems = "baseline";
+      row.style.gap = "8px";
+      row.style.fontSize = "13px";
+      row.style.padding = "2px 0";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = initialDeleg.has(a.id);
+      const text = document.createElement("span");
+      text.textContent = a.name ?? a.id;
+      row.append(cb, text);
+      delegChecks.set(a.id, cb);
+      delegList.append(row);
+    }
+    delegDetails.append(delegList);
+    scrollBody.append(delegDetails);
+  }
+
   // Core assets: files whose content becomes part of the agent's context.
   const coreAssets = [];
   const assetsBox = document.createElement("fieldset");
@@ -2112,7 +2150,8 @@ async function buildAgentConfigDialog(opts) {
       }
     }
     saveBtn.disabled = true;
-    const r = await opts.onSave({ name, role, avatar: avatarValue, skills, coreAssets });
+    const canDelegateTo = [...delegChecks.entries()].filter(([, cb]) => cb.checked).map(([id]) => id);
+    const r = await opts.onSave({ name, role, avatar: avatarValue, skills, coreAssets, canDelegateTo });
     saveBtn.disabled = false;
     if (r?.ok) {
       dialog.close();
