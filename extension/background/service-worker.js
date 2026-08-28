@@ -445,7 +445,6 @@ import {
   canonicalRecord,
   canonicalScalar,
   bindModelApprovalDispatcher,
-  bridgeApprovedApprovalToRun,
   consumeApproved,
   approvalCardDenial,
   mayResolveApproval,
@@ -457,6 +456,7 @@ import {
   payloadDigest,
   resolvePendingApproval,
 } from "../lib/owner-approval.js";
+import { bridgeAndAuditApprovalBindings } from "../lib/approval-bridge-audit.js";
 import { capLog, dumpLogBuffer, clearLogBuffer, getLogVerbosity, setLogVerbosity } from "../lib/cap-log.js";
 import { perfSpan, perfSummary, perfClear } from "../lib/cap-perf.js";
 
@@ -1971,20 +1971,9 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     // approval forever. Any bridge failure degrades to a fresh approval
     // request — it must never fail the run.
     if (approvalBinding != null) {
-      const ids = (Array.isArray(approvalBinding) ? approvalBinding : [approvalBinding])
-        .filter((aid) => typeof aid === "string" && aid.length > 0 && aid.length <= 160)
-        .slice(0, 4);
-      for (const aid of ids) {
-        try {
-          const bridged = bridgeApprovedApprovalToRun(ownerApprovalStore, aid, executionId);
-          // Audit the bridge with the approval's opaque ref ("bridged" is an
-          // allowlisted decision; the owner transparency surface shows it).
-          // ONLY a real re-key audits: {ok:true, bridged:false} means the
-          // approval was already keyed to THIS run — auditing every truthy ok
-          // would emit a repeatable false bridge record on re-audit.
-          if (bridged?.ok && bridged.bridged) securityApprovalEvent("bridged", bridged.action ?? "", bridged.targetRef ?? "");
-        } catch { /* degraded — the tool re-requests */ }
-      }
+      // The EXACT production seam, extracted verbatim into
+      // lib/approval-bridge-audit.js so tests drive the real code path.
+      bridgeAndAuditApprovalBindings({ ownerApprovalStore, approvalBinding, executionId });
     }
     await durableRecoveryReady;
     const resumeRequest = {

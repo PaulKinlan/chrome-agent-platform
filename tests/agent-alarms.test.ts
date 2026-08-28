@@ -462,6 +462,73 @@ Deno.test("approval bridge: pending under exec A → resolve → retry under exe
   assertEquals(selfRepeat.bridged, false, "an already-keyed repeat reports bridged:false — no re-audit");
 });
 
+Deno.test("approval bridge audit gate: a SAME-RUN repeat ({ok:true,bridged:false}) through the REAL production seam emits NO second owner-bridged event (the ungated audit would)", async () => {
+  // REVISE-8: the r7 repeat probe dispatched a NEW execution, so its bridge
+  // returned {ok:false} ("already bridged") — a path where the OLD ungated
+  // `if (bridged?.ok)` audit ALSO emitted nothing, proving nothing about the
+  // gate. THIS test drives the divergent path: the approval already keyed to
+  // the target run returns {ok:true, bridged:false}, where old and new code
+  // DISAGREE — old audits a repeatable false bridge record, new emits none.
+  // The seam is the REAL extracted production block (lib/approval-bridge-audit.js),
+  // the exact code runTask executes, with only the audit sink injected.
+  const stamp = Date.now();
+  const oa = await import(`../extension/lib/owner-approval.js?oa8=${stamp}`);
+  const seam = await import(`../extension/lib/approval-bridge-audit.js?seam8=${stamp}`);
+  const { createApprovalStore } = oa;
+  const store = createApprovalStore();
+
+  const action = "capability.revoke";
+  const target = "storage";
+  const digest = "d".repeat(64);
+
+  // An approval requested + resolved under run "exec-a", then bridged onto
+  // "exec-b" — the seam emits for THIS real re-key (gate passes bridged:true).
+  const pending = oa.createPendingApproval(store, "exec-a", action, target, digest);
+  assertEquals(pending.ok, true);
+  assertEquals(oa.resolvePendingApproval(store, pending.approvalId, true).decision, "approved");
+
+  // A SECOND approval born under "exec-b" itself (never re-keyed) — bridging
+  // it to its OWN run is the {ok:true, bridged:false} no-op branch.
+  const ownRun = oa.createPendingApproval(store, "exec-b", action, target, digest);
+  assertEquals(ownRun.ok, true);
+  assertEquals(oa.resolvePendingApproval(store, ownRun.approvalId, true).decision, "approved");
+
+  const events: Array<{ decision: string; action: string; targetRef: string }> = [];
+  const spyAudit = (decision: string, act: string, ref: string) => {
+    events.push({ decision, action: act, targetRef: ref });
+  };
+
+  const seamArgs = { ownerApprovalStore: store, auditEvent: spyAudit };
+
+  // 1) A real re-key audits exactly once (gate open on bridged:true).
+  seam.bridgeAndAuditApprovalBindings({ ...seamArgs, approvalBinding: [pending.approvalId], executionId: "exec-b" });
+  assertEquals(events.length, 1, "a real re-key must audit");
+  assertEquals(events[0].decision, "bridged");
+  assertEquals(events[0].action, action);
+
+  // 2) THE DIVERGENT PATH — same-run: an approval BORN under "exec-b" is
+  // already keyed to the seam's target execution. Its bridge is a SUCCESS
+  // no-op: {ok:true, bridged:false}. (A bridged-elsewhere approval would
+  // return {ok:false} — the path the r7 probe actually drove, where old and
+  // new code agree.) Pin the branch values on the real primitive first:
+  const repeat = oa.bridgeApprovedApprovalToRun(store, ownRun.approvalId, "exec-b");
+  assertEquals(repeat.ok, true, "the same-run bridge is a SUCCESS result — the branch the r7 probe never reached");
+  assertEquals(repeat.bridged, false, "and it is explicitly NOT a re-key");
+  // The old ungated condition `bridged?.ok` is TRUE on exactly this return —
+  // the old code audits here, REPEATABLY (every same-run re-entry). Drive the
+  // REAL seam twice with this approval and prove the gate holds.
+  seam.bridgeAndAuditApprovalBindings({ ...seamArgs, approvalBinding: [ownRun.approvalId], executionId: "exec-b" });
+  assertEquals(events.length, 1, `a same-run bridge ({ok:true,bridged:false}) must NOT audit — the ungated audit would have emitted a false bridge record here, got: ${JSON.stringify(events)}`);
+  seam.bridgeAndAuditApprovalBindings({ ...seamArgs, approvalBinding: [ownRun.approvalId], executionId: "exec-b" });
+  assertEquals(events.length, 1, "a repeated same-run entry must still not audit (the old code would emit on EVERY re-entry)");
+  assertEquals(events[0].action, action, "the single event remains the real re-key's");
+
+  // 3) The failure path stays silent through the same seam (degradation).
+  seam.bridgeAndAuditApprovalBindings({ ...seamArgs, approvalBinding: ["f".repeat(64)], executionId: "exec-b" });
+  assertEquals(events.length, 1, "an unknown approval id audits nothing");
+});
+
+
 Deno.test("schedule routes: the automatic retry turn consumes the resolved approval — exactly ONE mutation, no second approval request", async () => {
   // The REAL route layer over the REAL scheduler primitives + the REAL
   // owner-approval gate ops (the SW's requireOwnerApproval is a thin shell
