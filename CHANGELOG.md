@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.346] — 2026-08-28
+- Settings Providers panel is now a side-tabbed interface: one tab per provider down the side with the default marked by a star, editor on the right, and it behaves at narrow widths
+
 ## [0.2.345] — 2026-08-28
 - Internal groundwork only, no user-visible change: kept the pieces of the faster task-history storage that stand on their own, and backed out the switch-over after it produced a result I could not explain. Not worth guessing with your task history
 
