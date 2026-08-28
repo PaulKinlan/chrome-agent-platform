@@ -878,11 +878,11 @@ evidence every other task depends on).
 
 ## [CAP-FB-20260821-WORKTREE-HYGIENE-01] Durable worktrees and evidence off the RAM-backed temp filesystem
 - Feedback: 2026-08-21 — independent architectural review found the build host's temporary filesystem at 100% inode use, which failed the unit suite, and found reviewed work and retained gate evidence stored only on tmpfs
-- Updated: 2026-08-22 07:30 UTC
-- Status: OPEN
+- Updated: 2026-08-28 UTC
+- Status: OPEN — the loss risk is CLOSED (every at-risk head is bound under a rescue tag); what remains is a cleanup decision that is the owner's to make
 - Resume: OPEN
 - Priority: P0
-- Owner: unassigned
+- Owner: coordinator session (audit + rescue binding); owner decision pending on removal
 - Workspace: none
 - Branch: none
 - Base: `cdc1a657e3907e018ba8fb33de066aec95bd9596`
@@ -892,9 +892,10 @@ evidence every other task depends on).
 - Review: independent verification that no commit reachable only from a removed worktree was lost, by comparing the pre-removal HEAD set against branch and tag reachability
 - Gates: pre-removal inventory of every worktree HEAD with reachability classification; `df -i` before and after; `git worktree list` and `git worktree prune` output; `git fsck --unreachable` diff showing no newly unreachable commit; full unit suite green on the reclaimed host
 - Blockers: the dirty worktrees (tracked + untracked changes) must be preserved or consciously reconciled first; the durable/tmpfs relocation of the remaining worktrees is deferred until then
-- Next: Residual: no candidate commit exists; the 18 dirty worktrees (tracked + untracked) must be preserved or consciously reconciled before any destructive cleanup, and the durable/tmpfs relocation is deferred until then. Next action: run `node scripts/worktree-audit.mjs` (read-only), agree the dirty-preservation plan with the owner, then (a) remove the clean worktrees holding nothing beyond origin/main + `git worktree prune`, (b) bind the unreachable detached heads under `rescue/*` tags, (c) move the durable evidence off the RAM-backed tmpfs.
+- Next: OWNER DECISION. Nothing further can be removed safely without it. The 11 worktrees carrying work not on `origin/main` are now all bound under `rescue/*` tags, so the cleanup is reversible — but the call on which to keep as live workspaces and which to retire is a working-practice decision, not an engineering one. Ask on the three named lines below.
 - Recover: `git worktree list --porcelain && git tag -l 'rescue/*' && git fsck --unreachable`
 - History:
+  - 2026-08-28 — **re-measured; the recorded facts were badly stale and the real risk was different from the one described.** Actual state: **28 worktrees, 26 of them already on durable storage and only 2 on tmpfs** (both merely carrying one untracked file, with heads that are on `origin/main`) — not the "71 registered worktrees" on a RAM-backed filesystem the entry claimed. `/tmp` is at 90% inode use (936,204 of 1,048,576) and 43% of 46 GB, with both suites running green, so the `ENOSPC` acceptance condition is already met. The tmpfs relocation this task was largely about is therefore **already done**. The REAL exposure was elsewhere and is now closed: **11 worktree HEADs carried commits not reachable from `origin/main`, and none was rescue-tagged.** Three mattered — `073c59f3` (a cairn→cap rename, 1 commit) and `1e55c7cb` (6 commits of P0 permissions work) were held by **no ref whatsoever**, one `git worktree remove` from garbage collection; and `0816727f` is the second-writer `main` from the KNOWN-ISSUES force-push incident, 2 commits ahead and not on `origin/main`. Branch-held heads were not safe either: a prior cleanup on this repo deleted 126 local branches. **All 11 are now bound under `rescue/*` tags** (25 total, up from 13); the audit re-run reports `unreachable+untagged: 0`. Purely additive — no worktree removed, no ref deleted, no history rewritten.
   - 2026-08-28 — corrected to OPEN at triage. It was recorded IN_REVIEW while its own `Candidate:` field reads `—`; the lifecycle requires a candidate commit to be in review, so the state was not truthful. Nothing about the work changed.
   - 2026-08-22 — the public-safe AGENTS.md convention + the read-only worktree-audit script shipped; the audit inventories every registered worktree (HEAD/branch/dirty tracked+untracked/reachability/rescue/location class) and refuses destructive operations; private paths stay out of the repo.
   - Git reconcile at 2026-08-22 07:50 UTC: VERIFIED current facts — after the prior cleanup 19 worktrees remained (18 dirty, preserved, + the clean main worktree); two clean worktrees were later added for the tracker and the product work, so the current 21 = 18 dirty + 3 clean; 151 tracked changes + 26 untracked paths sit in the dirty worktrees; the cleanup removed 133 clean worktrees and 126 obsolete local branches, left 10 rescue tags, and touched no remote refs. No further destructive action until the dirty-preservation decisions.

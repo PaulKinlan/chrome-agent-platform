@@ -29,16 +29,30 @@ with it. Fixed under `CAP-FB-20260827-MAIN-GATES-RED-02`.
 
 Three, all with live entries in `TASKS.md`. Everything else previously listed here is done.
 
-### Infrastructure — evidence lives on a RAM-backed filesystem
-`CAP-FB-20260821-WORKTREE-HYGIENE-01` · P0 · OPEN
+### Infrastructure — worktree heads carried work that no ref was holding
+`CAP-FB-20260821-WORKTREE-HYGIENE-01` · P0 · OPEN (loss risk closed; cleanup awaits an owner decision)
 
-`/tmp` is a 46 GB tmpfs at **92% inode use** (955,417 of 1,048,576) holding **71 registered
-git worktrees**. A reboot destroys every one of them and every retained evidence bundle a
-`Gates:` field in the tracker points at. Evidence whose only copy is on tmpfs is not
-evidence. Eighteen of those worktrees are dirty and must be preserved or consciously
-reconciled before any cleanup; seven detached heads are bound under `rescue/*` tags.
-Run `node scripts/worktree-audit.mjs` (read-only, refuses destructive operations) before
-any worktree decision.
+Re-measured 2026-08-28. The previous text here — 71 worktrees on a RAM-backed
+filesystem at 92% inode use — was stale in both directions. Actual: **28
+worktrees, 26 already on durable storage, 2 on tmpfs** (each holding one
+untracked file, both heads on `origin/main`). `/tmp` sits at 90% inode use and
+43% of 46 GB with both suites green, so the `ENOSPC` condition the task was
+opened for no longer reproduces.
+
+The real exposure was different: **11 worktree HEADs held commits not reachable
+from `origin/main`, none of them rescue-tagged.** Two were held by no ref at all
+— `073c59f3` (cairn→cap rename) and `1e55c7cb` (six commits of P0 permissions
+work) — and were one `git worktree remove` from garbage collection. A third,
+`0816727f`, is the second-writer `main` described below, two commits ahead of
+`origin/main`. Branch-held heads were not safe either: a prior cleanup on this
+repository deleted 126 local branches.
+
+All 11 are now bound under `rescue/*` tags (25 total, up from 13). The audit
+re-run reports `unreachable+untagged: 0`. Purely additive — nothing removed.
+
+What remains is an owner decision, not engineering: which of those lines are
+live workspaces to keep and which are finished or abandoned and can be retired.
+Run `node scripts/worktree-audit.mjs` (read-only) before any cleanup.
 
 ### Platform — the Wasm tool operating layer is unfinished, and partly not ours to finish
 `CAP-FB-20260822-WASM-TOOL-PLATFORM-01` · P2 · OPEN

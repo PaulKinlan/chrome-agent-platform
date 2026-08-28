@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.354] — 2026-08-28
+- CAP-FB-20260821-WORKTREE-HYGIENE-01: bind every at-risk worktree head, correct the stale facts
+
 ## [0.2.353] — 2026-08-28
 - CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01: record the shipping commit
 
