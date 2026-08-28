@@ -273,11 +273,32 @@
       border: 0;
       background: transparent;
       color: var(--text);
-      cursor: pointer;
       font: inherit;
       min-inline-size: 0;
       position: relative;
     }
+    /* The explicit open button (nested-interactive fix): the row itself is a
+       non-interactive wrapper, so only this button opens the task. */
+    .thread-item .t-open {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 2px;
+      text-align: start;
+      padding: 0;
+      border: 0;
+      background: none;
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+      min-inline-size: 0;
+      flex: 1 1 auto;
+    }
+    .thread-item .t-open:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    .side.collapsed .thread-item .t-open { align-self: stretch; }
     .thread-item:hover { background: var(--panel-2); }
     .thread-item[aria-current="true"] { background: var(--on-accent-muted); }
     .thread-item .t-delete {
@@ -710,7 +731,7 @@
     </style>
   </head>
   <body>
-    <aside class="side" id="side" aria-label="Tasks">
+    <aside class="side" id="side" aria-label="Sidebar">
       <div class="brand-row">
         <div class="brand">Chrome <span>Agent</span> Platform</div>
       </div>
@@ -720,14 +741,14 @@
           <button class="new-task" id="new-task" type="button" aria-label="New task" title="New task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
         </div>
         <section id="failed-runs" class="failed-runs" hidden aria-label="Failed runs"></section>
-        <nav class="side-list thread-list" id="thread-sidebar" aria-label="Task threads"></nav>
+        <nav class="side-list thread-list" id="thread-sidebar" aria-label="Task threads" tabindex="0"></nav>
       </section>
-      <section class="side-section side-agents" aria-labelledby="agents-label">
+      <section class="side-section side-agents" aria-label="Agent list">
         <div class="side-label-row">
           <span class="side-label" id="agents-label">Agents</span>
           <button class="new-task" id="new-agent" type="button" aria-label="Create agent" title="Create agent"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
         </div>
-        <div class="side-list agent-list" id="side-agents" aria-label="Named agents"></div>
+        <div class="side-list agent-list" id="side-agents" aria-label="Named agents" tabindex="0"></div>
       </section>
       <div class="side-foot">
         <span id="sidebar-durability-hint" role="status" aria-live="polite" hidden></span>
@@ -761,6 +782,9 @@
 
     <main class="content">
       <div class="main-wrap">
+        <!-- UX-007: the design has no visible page title; the h1 stays for the
+             a11y tree (visually-hidden utility in theme.css). -->
+        <h1 class="visually-hidden">Agent Hub</h1>
         <header class="top">
           <div class="top-actions">
             <span class="status" id="status" role="status" aria-live="polite" hidden></span>

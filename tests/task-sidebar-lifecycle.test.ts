@@ -86,7 +86,7 @@ Deno.test("task sidebar: returning from another view re-renders the same native-
   assertEquals(opened, "thread-owner-1");
 
   const source = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
-  assertStringIncludes(source, 'item.addEventListener("click", () => openThread(t.id))');
+  assertStringIncludes(source, 'open.addEventListener("click", () => openThread(t.id))');
   assertStringIncludes(source, "taskSidebarLifecycle.onRunSnapshot(snapshot, currentThreadId)");
   assertStringIncludes(source, "renderTasks(currentThreadId);");
 });

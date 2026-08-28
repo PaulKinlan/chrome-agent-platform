@@ -281,9 +281,12 @@ Deno.test("components: empty mention results remove stale popup options and a la
   if (!popup.hidden || popup.querySelectorAll(".item").length !== 0 || popup.querySelectorAll('[role="option"]').length !== 0) {
     throw new Error("hidden empty popup retained stale option DOM");
   }
-  if (attrs.get("aria-expanded") !== "false" || attrs.has("aria-activedescendant")) {
-    throw new Error("empty popup did not reset combobox accessibility state");
+  if (attrs.has("aria-expanded") || attrs.has("aria-activedescendant")) {
+    throw new Error("empty popup left combobox accessibility state on the input");
   }
+  // A11Y (UX-006): the plain textarea may never carry combobox state — the
+  // reset must leave NO aria-expanded/activedescendant on the input at all
+  // (the ghost-DOM guard above still pins the popup itself).
 
   composer._showPopup([{ label: "Fresh candidate", kind: "agent" }], { type: "mention", start: 0, end: 6 });
   if (popup.hidden || popup.querySelectorAll(".item").length !== 1) {

@@ -1001,10 +1001,12 @@ function renderTaskRows(threads, activeId = null) {
     return;
   }
   for (const t of threads.slice(0, 40)) {
+    // The row is a NON-interactive wrapper (nested-interactive): a focusable
+    // role=button row containing real buttons made child activation ambiguous
+    // under the keyboard (Enter on Delete also opened the row). The explicit
+    // Open button below is the only open affordance and a sibling of Delete.
     const item = document.createElement("div");
     item.className = "thread-item";
-    item.setAttribute("role", "button");
-    item.tabIndex = 0;
     // A hover tooltip for the collapsed icon-rail (and the full name on hover).
     item.title = (t.name || "Task") + (t.preview ? " — " + t.preview : "");
     if (activeId && t.id === activeId) item.setAttribute("aria-current", "true");
@@ -1014,6 +1016,10 @@ function renderTaskRows(threads, activeId = null) {
     // (the .t-name dot is hidden with the label).
     const railDot = document.createElement("span");
     railDot.className = "t-dot" + (dotState ? " " + dotState : "");
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "t-open";
+    open.setAttribute("aria-label", `Open task ${t.name || "Task"}`);
     const name = document.createElement("span");
     name.className = "t-name";
     const dot = document.createElement("span");
@@ -1025,6 +1031,9 @@ function renderTaskRows(threads, activeId = null) {
     const preview = document.createElement("span");
     preview.className = "t-preview";
     preview.textContent = t.preview || "";
+    // The railDot lives inside the open button so the collapsed icon-rail
+    // keeps a real click target (the dot is its visible content there).
+    open.append(railDot, name, preview);
     const meta = document.createElement("span");
     meta.className = "t-meta";
     meta.textContent = timeAgo(t.updatedAt);
@@ -1033,13 +1042,9 @@ function renderTaskRows(threads, activeId = null) {
     del.className = "t-delete";
     del.setAttribute("aria-label", `Delete task ${t.name || "Task"}`);
     del.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
-    item.append(railDot, name, preview, meta, del);
-    item.addEventListener("click", () => openThread(t.id));
-    item.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openThread(t.id); }
-    });
-    del.addEventListener("click", async (e) => {
-      e.stopPropagation();
+    item.append(open, meta, del);
+    open.addEventListener("click", () => openThread(t.id));
+    del.addEventListener("click", async () => {
       const r = await send("thread.delete", { id: t.id })
         .catch(() => ({ ok: false }));
       if (!r?.ok) {

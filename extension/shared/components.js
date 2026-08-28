@@ -1266,12 +1266,12 @@ class SwitchToggle extends Component {
         padding:0; flex:0 0 auto; transition:background 150ms ease, border-color 150ms ease; }
       .sw::after { content:""; position:absolute; top:2px; left:2px; width:14px; height:14px;
         border-radius:50%; background:var(--muted,#635e56); transition:transform 150ms ease, background 150ms ease; }
-      .sw[aria-pressed="true"] { background:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); }
-      .sw[aria-pressed="true"]::after { transform:translateX(16px); background:var(--btn-fg,#ffffff); }
+      .sw[aria-checked="true"] { background:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); }
+      .sw[aria-checked="true"]::after { transform:translateX(16px); background:var(--btn-fg,#ffffff); }
       .sw:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       @media (prefers-reduced-motion: reduce) { .sw, .sw::after { transition:none; } }
     `, `<button part="switch" class="sw" type="button" role="switch"
-        aria-checked="${checked}" aria-pressed="${checked}" aria-label="${escapeHtml(label)}"></button>`);
+        aria-checked="${checked}" aria-label="${escapeHtml(label)}"></button>`);
     this._btn = this._root.querySelector(".sw");
   }
   _wire() {
@@ -3151,8 +3151,7 @@ class AgentComposer extends Component {
       <div class="composer" part="composer">
         <span class="sr-only" id="composer-description-${this._uid}">${escapeHtml(description)}</span>
         <textarea id="task-input" placeholder="${escapeHtml(placeholder)}" aria-label="${escapeHtml(label)}"
-          aria-describedby="composer-description-${this._uid}" rows="2"
-          aria-expanded="false" aria-controls="popup-${this._uid}" aria-autocomplete="list"></textarea>
+          aria-describedby="composer-description-${this._uid}" rows="2"></textarea>
         <div class="popup" id="popup-${this._uid}" role="listbox" aria-label="Agent and resource mentions" hidden></div>
         <div class="chips" id="chips"></div>
         <div class="row">
@@ -3444,8 +3443,7 @@ class AgentComposer extends Component {
     const reopen = !this._slashAgentToken;
     this._slashAgentToken = { start: token.start, end: token.end };
     if (reopen) this._presentAgentPopover();
-    this._input?.setAttribute("aria-expanded", "true");
-    // The typed arg filters the picker; the composer input KEEPS focus so the
+        // The typed arg filters the picker; the composer input KEEPS focus so the
     // user can keep typing the reference (or a space to end the token).
     this._agentPick?.setQuery?.(token.arg || "");
   }
@@ -3486,8 +3484,7 @@ class AgentComposer extends Component {
     this._agentPop.hidden = true;
     // The slash picker's aria-expanded is owned here (the items popup manages
     // its own via _showPopup/_hidePopup).
-    if (this._popup?.hidden) this._input?.setAttribute("aria-expanded", "false");
-    if (returnFocus === "input") {
+        if (returnFocus === "input") {
       this._input?.focus();
     } else if (returnFocus) {
       // Focus returns to the + button (the trigger), falling back to the input.
@@ -3819,8 +3816,7 @@ class AgentComposer extends Component {
     this._renderPopupItems();
     if (this._popup) {
       this._popup.hidden = false;
-      this._input?.setAttribute("aria-expanded", "true");
-      // Always position via the JS fallback (flips above/below + clamps). The
+            // Always position via the JS fallback (flips above/below + clamps). The
       // native CSS anchor positioning (position-area) proved unreliable for the
       // bottom-anchored composer (the popup fell off-screen), so the JS path
       // wins: it sets position:fixed + the correct top/left, overriding the CSS.
@@ -3850,8 +3846,10 @@ class AgentComposer extends Component {
         this._select(Number(el.dataset.index));
       });
     });
+    // A11Y (UX-006): no combobox state on the plain-textarea input — the
+    // focused option is exposed by the popup's own listbox semantics.
     const active = this._popup.querySelector(`[data-index="${this._popupActive}"]`);
-    if (active) this._input?.setAttribute("aria-activedescendant", active.id);
+    active?.scrollIntoView({ block: "nearest" });
   }
 
   _setSelectionIndex(i) {
@@ -3927,8 +3925,6 @@ class AgentComposer extends Component {
       // or Accessibility tree after a prior result set.
       this._popup.replaceChildren();
     }
-    this._input?.setAttribute("aria-expanded", "false");
-    this._input?.removeAttribute("aria-activedescendant");
     this._popupItems = [];
     this._popupActive = -1;
     this._popupToken = null;
@@ -4252,8 +4248,9 @@ customElements.define("tool-chips", ToolChips);
 
 /* <task-row name status time> — a live agent-task row (the BeautifulUI "Task
  * Rows" primitive). A status indicator (running spinner / done check / failed
- * cross) + the task name + a time. Emits `open` on activate + `delete` on the
- * affordance. */
+ * cross) + the task name + a time. Emits `open` from the explicit Open button
+ * (the row is a non-interactive wrapper — nested-interactive), `retry` and
+ * `delete` from their affordances. */
 class TaskRow extends Component {
   static get observedAttributes() { return ["name", "status", "time", "active", "retryable"]; }
   _render() {
@@ -4269,8 +4266,13 @@ class TaskRow extends Component {
         : `<span class="ind done" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>`;
     mountTemplate(this, `
       :host { display:block; }
-      .row { display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid transparent; border-radius:10px; cursor:pointer; }
-      .row:hover { background:var(--panel-2,#efede8); }
+      .row { display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid transparent; border-radius:10px; }
+      /* Nested-interactive fix: the row is a non-interactive wrapper; the
+         explicit open button carries activation and is a sibling of
+         Retry/Delete, so child buttons never also open the row. */
+      .row-open { flex:1; min-width:0; display:flex; align-items:center; gap:10px; border:0; background:transparent; padding:0; font:inherit; color:inherit; text-align:left; cursor:pointer; border-radius:10px; }
+      .row-open:hover { background:var(--panel-2,#efede8); }
+      .row-open:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       :host([active]) .row { border-color:var(--accent,#0e6e63); background:var(--panel,#ffffff); }
       .ind { width:18px; height:18px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; }
       .ind.done { color:var(--success,#1a7f37); }
@@ -4284,22 +4286,19 @@ class TaskRow extends Component {
       .del { font-size:15px; }
       .retry:hover, .del:hover { background:var(--panel-2,#efede8); }
       .del:hover { color:var(--danger,#b3261e); }
-      .retry:focus-visible, .del:focus-visible, .row:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .retry:focus-visible, .del:focus-visible, .row-open:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       @keyframes cap-spin { to { transform:rotate(360deg); } }
       @media (prefers-reduced-motion: reduce) { .spin { animation:none; } }
-    `, `<div class="row" role="button" tabindex="0" aria-current="${active ? "true" : "false"}">
-        ${indicator}<span class="name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>${time ? `<span class="time">${escapeHtml(time)}</span>` : ""}${retryable ? `<button type="button" class="retry" aria-label="Retry ${escapeHtml(name)}">Retry</button>` : ""}<button type="button" class="del" aria-label="Delete ${escapeHtml(name)}">×</button></div>`);
+    `, `<div class="row" aria-current="${active ? "true" : "false"}">
+        <button type="button" class="row-open">${indicator}<span class="name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>${time ? `<span class="time">${escapeHtml(time)}</span>` : ""}</button>${retryable ? `<button type="button" class="retry" aria-label="Retry ${escapeHtml(name)}">Retry</button>` : ""}<button type="button" class="del" aria-label="Delete ${escapeHtml(name)}">×</button></div>`);
   }
   _wire() {
-    this._root.querySelector(".row")?.addEventListener("click", () => this._emit("open"));
-    this._root.querySelector(".row")?.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this._emit("open"); }
+    this._root.querySelector(".row-open")?.addEventListener("click", () => this._emit("open"));
+    this._root.querySelector(".retry")?.addEventListener("click", () => {
+      this._emit("retry");
     });
-    this._root.querySelector(".retry")?.addEventListener("click", (e) => {
-      e.stopPropagation(); this._emit("retry");
-    });
-    this._root.querySelector(".del")?.addEventListener("click", (e) => {
-      e.stopPropagation(); this._emit("delete");
+    this._root.querySelector(".del")?.addEventListener("click", () => {
+      this._emit("delete");
     });
   }
 }

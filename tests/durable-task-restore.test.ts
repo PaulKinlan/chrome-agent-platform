@@ -141,6 +141,13 @@ async function boot(harness) {
   return sidebar.children.find((c) => c.className === "thread-item");
 }
 
+// The production click target is the row's explicit .t-open button (the row
+// is a non-interactive wrapper — nested-interactive fix).
+function openTask(row: any) {
+  const btn = row.children.find((c: any) => c.className === "t-open") ?? row.children[0];
+  btn.dispatchEvent({ type: "click" });
+}
+
 async function waitFor(fn: () => boolean, label: string) {
   const end = Date.now() + 2000;
   while (Date.now() < end) { if (fn()) return; await new Promise((r) => setTimeout(r, 10)); }
@@ -167,7 +174,7 @@ Deno.test("restore RUNNING task: transcript + status + controls restored on leav
   const status = harness.getOrCreateElement("run-status");
   const registry = harness.getOrCreateElement("durable-run-registry");
 
-  row.dispatchEvent({ type: "click" });
+  openTask(row);
   await waitFor(() => harness.getOrCreateElement("thread-view").hidden === false, "thread view open");
   // persisted journal replayed EXACTLY ONCE
   assertEquals(toolRows(conv.children).length, 1, "one replayed tool card for c1");
@@ -186,7 +193,7 @@ Deno.test("restore RUNNING task: transcript + status + controls restored on leav
   portState.listener?.({ type: "progress", event: { runId: "exec_run_1", type: "tool-call", toolName: "gzip", toolArgs: {} } });
 
   // RETURN: re-attached; journal still exactly once; live continuation resumes
-  row.dispatchEvent({ type: "click" });
+  openTask(row);
   await waitFor(() => harness.getOrCreateElement("thread-view").hidden === false, "thread view reopened");
   assertEquals(status.getAttribute("state"), "running", "banner restored on return");
   assertEquals(toolRows(conv.children).filter((c) => c.name === "zip" || c.getAttribute?.("content")?.includes("zip")).length, 1, "journal replayed exactly once on return");
@@ -211,7 +218,7 @@ Deno.test("restore COMPLETED task: terminal state shown, no live controls, no ph
   });
   const row = await boot(harness);
   const conv = harness.getOrCreateElement("thread-conversation");
-  row.dispatchEvent({ type: "click" });
+  openTask(row);
   await waitFor(() => harness.getOrCreateElement("thread-view").hidden === false, "thread view open");
   assert(conv.children.some((c) => c.content === "the summary" || c.getAttribute?.("content") === "the summary"), "terminal answer restored");
   assertEquals(harness.getOrCreateElement("run-status").hidden, true, "no phantom running banner for a terminal run");
@@ -231,12 +238,12 @@ Deno.test("restore FAILED task: terminal error shown; re-open does not duplicate
   });
   const row = await boot(harness);
   const conv = harness.getOrCreateElement("thread-conversation");
-  row.dispatchEvent({ type: "click" });
+  openTask(row);
   await waitFor(() => harness.getOrCreateElement("thread-view").hidden === false, "thread view open");
   assert(conv.children.some((c) => c.content === "provider exploded" || c.getAttribute?.("content") === "provider exploded"), "terminal error restored");
   assertEquals(harness.getOrCreateElement("run-status").hidden, true, "no phantom banner for a failed run");
   const before = conv.children.length;
-  row.dispatchEvent({ type: "click" }); // re-open the same task
+  openTask(row); // re-open the same task
   await waitFor(() => harness.getOrCreateElement("thread-view").hidden === false, "thread view reopened");
   assertEquals(conv.children.length, before, "re-open reproduces the same terminal projection, no growth");
 });
