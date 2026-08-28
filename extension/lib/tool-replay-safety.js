@@ -111,6 +111,7 @@ const MEMORY_READ_TOOLS = new Set(["memory_get", "memory_grep", "memory_list"]);
 const REGISTRY_READ_TOOLS = new Set([
   "get_agent", "list_agents", "get_asset", "list_assets", "get_usage", "get_memory_overview",
   "get_named_agent", "list_named_agents", "list_hooks", "list_scripts", "get_script", "list_skills", "list_tools",
+  "schedules_list",
 ]);
 // Key-bound writes (replaying writes the same value under the same key — the
 // last-write-wins effect is identical) or idempotent-by-identity creations.
@@ -229,6 +230,9 @@ const BUILT_IN_TOOLS = new Set([
   "list_named_agents", "set_agent_provider", "list_hooks", "subscribe_hook",
   "unsubscribe_hook", "generate_ui", "create_script", "update_script",
   "delete_script", "list_scripts", "get_script", "run_script",
+  // Per-agent schedule controls: mutating built-ins (route-gated by owner
+  // approval; a replay re-runs the gated route, so the gate re-arms).
+  "schedules_pause", "schedules_resume", "schedules_update",
 ]);
 
 /** The WORST (least replayable) of two classifications. Invalid inputs are

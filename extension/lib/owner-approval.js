@@ -57,6 +57,13 @@ export const OWNER_DIRECT_ACTIONS = new Set([
   "agent.delete",
   "named-agent.delete",
   "recipe.delete",
+  // Per-agent schedule controls (pause/resume/update): the owner's own click in
+  // an extension UI document IS the approval — the same owner-direct principle
+  // as asset.delete. A MODEL calling the same actions keeps the full
+  // pending-approval flow (the in-context approval card + exact-retry).
+  "task.pause",
+  "task.resume",
+  "task.update",
 ]);
 
 export function isOwnerDirectApproval(context, action) {
@@ -239,6 +246,15 @@ export function canonicalOperationTarget(kind, parts = Object.create(null)) {
     case "provider":
       values = [normalizedSlug(parts.id)];
       break;
+    case "scheduled": {
+      // A scheduled-task name is already a system-generated id (task_<ts>_<rand>,
+      // recipe:<id>, or an explicit owner name) — taken verbatim, length-bounded;
+      // slug-normalizing it would be lossy (two names could collapse to one
+      // target and share an approval row).
+      const id = typeof parts.id === "string" ? parts.id.trim() : "";
+      values = [id.slice(0, 200)];
+      break;
+    }
     case "capability":
       values = [typeof parts.id === "string" && /^[a-z][a-zA-Z0-9-]{0,63}$/.test(parts.id) ? parts.id : ""];
       break;

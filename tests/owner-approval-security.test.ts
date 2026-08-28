@@ -60,7 +60,12 @@ Deno.test("owner-direct approval: a browser-attested owner UI document's asset.d
 });
 
 Deno.test("owner-direct scope is exactly the audited action set (no silent widening)", () => {
-  assertEquals([...OWNER_DIRECT_ACTIONS].sort(), ["agent.delete", "asset.delete", "named-agent.delete", "recipe.delete"].sort());
+  // PER-AGENT SCHEDULES WIDENING (owner request: pause/resume/update schedules
+  // from the agent + UI): task.pause/resume/update join the audited owner-direct
+  // set — the owner's own UI click IS the approval (asset.delete precedent);
+  // model-initiated calls keep the full pending-approval flow. FLAGGED for the
+  // independent permission-model review.
+  assertEquals([...OWNER_DIRECT_ACTIONS].sort(), ["agent.delete", "asset.delete", "named-agent.delete", "recipe.delete", "task.pause", "task.resume", "task.update"].sort());
   // Every owner-direct action passes the audit grammar; widening this set
   // requires a new permission-model review.
   for (const direct of OWNER_DIRECT_ACTIONS) {

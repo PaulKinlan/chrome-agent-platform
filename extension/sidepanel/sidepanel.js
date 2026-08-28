@@ -335,17 +335,32 @@ async function renderTasks() {
   for (const t of tasks) {
     const row = document.createElement("task-row");
     row.setAttribute("name", t.name || "task");
-    row.setAttribute("status", (t.quarantined || t.storageBlocked) ? "failed" : "running");
-    const when = t.storageBlocked
+    row.setAttribute("status", (t.quarantined || t.storageBlocked) ? "failed" : (t.paused ? "paused" : "running"));
+    const when = t.paused
+      ? "paused"
+      : t.storageBlocked
       ? "Storage full — retry or cancel"
-      : (t.periodInMinutes
-        ? `every ${t.periodInMinutes} min`
-        : (typeof t.at === "number" ? new Date(t.at).toLocaleString() : ""));
+      : (typeof t.nextFireAt === "number"
+        ? new Date(t.nextFireAt).toLocaleString()
+        : (t.periodInMinutes
+          ? `every ${t.periodInMinutes} min`
+          : (typeof t.at === "number" ? new Date(t.at).toLocaleString() : "")));
     if (when) row.setAttribute("time", when);
+    if (!t.quarantined && !t.storageBlocked) row.setAttribute("pausable", "");
+    if (t.paused) row.setAttribute("paused", "");
     if (t.storageBlocked) {
       row.setAttribute("retryable", "");
       row.title = t.remediation || "Execution storage was full. Retry or cancel this task.";
     }
+    row.addEventListener("toggle-pause", async () => {
+      row.setAttribute("time", t.paused ? "Resuming…" : "Pausing…");
+      const r = await send(t.paused ? "task.resume" : "task.pause", { name: t.name }).catch(() => null);
+      if (!r?.ok) {
+        row.setAttribute("time", r?.error || "failed");
+        return;
+      }
+      await renderTasks();
+    });
     row.addEventListener("open", () => {
       // A recipe task belongs to its background agent — open its conversation.
       const m = /^recipe:(.+)$/.exec(String(t.name ?? ""));

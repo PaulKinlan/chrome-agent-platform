@@ -6,8 +6,8 @@
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
   browserTools: 126,
-  managementTools: 29,
-  totalTools: 155,
+  managementTools: 33,
+  totalTools: 159,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -174,6 +174,10 @@ export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
   "list_scripts",
   "get_script",
   "run_script",
+  "schedules_list",
+  "schedules_pause",
+  "schedules_resume",
+  "schedules_update",
 ]);
 
 export const FLAGGED_FOR_LATER_PROVIDER_CUTOVER = Object.freeze([
@@ -430,6 +434,12 @@ const rows = [
   record("list_scripts", "management", ["management.script.list"], [], "none", "read-only", false, "read", "management.scripts"),
   record("get_script", "management", ["management.script.get"], [], "none", "read-only", false, "read", "management.scripts"),
   record("run_script", "management", ["management.script.run"], [], "none", "mutating", false, "mutating", "management.scripts"),
+  // Per-agent schedule visibility + control (pause/resume/update are gated
+  // owner-approved mutations; list is a read, scoped to the calling agent).
+  record("schedules_list", "management", ["management.schedules.list"], [], "none", "read-only", false, "read", "management.schedules"),
+  record("schedules_pause", "management", ["management.task.pause"], [], "none", "mutating", false, "mutating", "management.schedules"),
+  record("schedules_resume", "management", ["management.task.resume"], [], "none", "mutating", false, "mutating", "management.schedules"),
+  record("schedules_update", "management", ["management.task.update"], [], "none", "mutating", false, "mutating", "management.schedules"),
   // Tranche-12 Chrome API coverage:
   // browser-wide global grant), user scripts + dynamic content scripts
   // (single-origin matches; destination-origin grant coverage; host

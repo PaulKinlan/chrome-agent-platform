@@ -928,6 +928,150 @@ function renderTasks(activeId = currentThreadId) {
 // the sidebar renders terminal failures that kept their stored prompt, and the
 // Retry action re-dispatches the ORIGINAL prompt through the SW's run.retry
 // route (a NEW execution; the failed record remains as history).
+// UX (per-agent alarm visibility): the SCHEDULES section in an agent's
+// conversation — ONLY this agent's scheduled tasks (matched by the persisted
+// owner attribution: named → `named:<id>`, background → `background:<id>`),
+// each with Pause/Resume/Update/Delete. The hub has no schedules section.
+let agentSchedulesOwner = 0;
+let agentSchedulesRef = null;
+function hideAgentSchedules() {
+  agentSchedulesOwner += 1;
+  agentSchedulesRef = null;
+  const section = document.getElementById("agent-schedules");
+  if (section) {
+    section.replaceChildren();
+    section.hidden = true;
+  }
+}
+async function refreshAgentSchedules(kind, id) {
+  const owner = ++agentSchedulesOwner;
+  const surfaceRef = kind === "named" ? `named:${id}` : kind === "background" ? `background:${id}` : null;
+  agentSchedulesRef = surfaceRef;
+  const section = document.getElementById("agent-schedules");
+  if (!section || !surfaceRef) { hideAgentSchedules(); return; }
+  let tasks = null;
+  try {
+    const res = await send("task.list");
+    if (res?.ok !== false && Array.isArray(res?.tasks)) tasks = res.tasks;
+  } catch {
+    tasks = null; // worker restarting — the next authoritative render re-fetches
+  }
+  if (owner !== agentSchedulesOwner || agentSchedulesRef !== surfaceRef) return;
+  const mine = (tasks ?? []).filter((t) => t.owner?.agentSurfaceRef === surfaceRef);
+  section.replaceChildren();
+  section.hidden = mine.length === 0;
+  if (!mine.length) return;
+  const label = document.createElement("div");
+  label.className = "fr-label";
+  label.textContent = "Schedules";
+  section.append(label);
+  for (const t of mine) section.append(agentScheduleRow(t));
+}
+function agentScheduleRow(t) {
+  const row = document.createElement("div");
+  row.className = "fr-row";
+  const text = document.createElement("span");
+  text.className = "fr-text";
+  const preview = String(t.task || "(no prompt)").slice(0, 80);
+  text.textContent = preview;
+  const when = t.paused
+    ? "paused"
+    : t.quarantined
+    ? "quarantined"
+    : (typeof t.nextFireAt === "number"
+      ? `next ${new Date(t.nextFireAt).toLocaleTimeString()}`
+      : (t.periodInMinutes ? `every ${t.periodInMinutes} min` : ""));
+  text.title = `${preview}${when ? ` · ${when}` : ""}`;
+  row.append(text);
+  const whenEl = document.createElement("span");
+  whenEl.className = "fr-status";
+  whenEl.textContent = when;
+  row.append(whenEl);
+  // Pause/Resume (an owner-approved mutation route — the owner's own click IS
+  // the approval for owner-direct actions).
+  if (!t.quarantined && !t.storageBlocked) {
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "fr-retry";
+    toggle.textContent = t.paused ? "Resume" : "Pause";
+    toggle.addEventListener("click", async () => {
+      toggle.disabled = true;
+      const r = await send(t.paused ? "task.resume" : "task.pause", { name: t.name }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+      if (!r?.ok) {
+        toggle.disabled = false;
+        toggle.title = r?.error || "failed";
+        return;
+      }
+      refreshAgentSchedules(currentAgentKind, currentAgentId);
+    });
+    row.append(toggle);
+  }
+  // Update: an inline editor (prompt + timing) → task.update.
+  const upd = document.createElement("button");
+  upd.type = "button";
+  upd.className = "fr-retry";
+  upd.textContent = "Update";
+  upd.addEventListener("click", () => {
+    row.replaceChildren(...agentScheduleEditor(t, () => refreshAgentSchedules(currentAgentKind, currentAgentId)));
+  });
+  row.append(upd);
+  // Delete: the authoritative (non-blocking) cancel path.
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "fr-retry";
+  del.setAttribute("aria-label", `Delete ${t.name}`);
+  del.textContent = "×";
+  del.addEventListener("click", async () => {
+    del.disabled = true;
+    await send("task.cancel", { name: t.name }).catch(() => null);
+    refreshAgentSchedules(currentAgentKind, currentAgentId);
+  });
+  row.append(del);
+  return row;
+}
+function agentScheduleEditor(t, done) {
+  const text = document.createElement("input");
+  text.type = "text";
+  text.value = String(t.task || "");
+  text.maxLength = 4000;
+  text.setAttribute("aria-label", "Scheduled prompt");
+  text.className = "fr-text";
+  text.style.flex = "1";
+  const timing = document.createElement("input");
+  timing.type = "text";
+  timing.placeholder = t.periodInMinutes ? "period in minutes" : "delay in minutes";
+  timing.setAttribute("aria-label", "New timing in minutes (blank = keep)");
+  timing.className = "fr-status";
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "fr-retry";
+  save.textContent = "Save";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "fr-retry";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", done);
+  save.addEventListener("click", async () => {
+    const body = { name: t.name };
+    const nt = text.value.trim();
+    if (nt && nt !== t.task) body.task = nt;
+    const mins = Number(timing.value.trim());
+    if (timing.value.trim() && Number.isFinite(mins) && mins > 0) {
+      if (t.periodInMinutes) body.periodInMinutes = mins;
+      else body.delayMs = mins * 60 * 1000;
+    }
+    save.disabled = true;
+    const r = await send("task.update", body).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    if (!r?.ok) {
+      save.disabled = false;
+      save.title = r?.error || "update failed";
+      return;
+    }
+    done();
+  });
+  return [text, timing, save, cancel];
+}
+
 let failedRunsOwner = 0;
 async function refreshFailedRuns() {
   const owner = ++failedRunsOwner;
@@ -1148,6 +1292,7 @@ function hideThreadViewInner() {
   currentThreadId = null;
   currentAgentId = null;
   currentAgentKind = null;
+  hideAgentSchedules();
   syncComposerScope();
   syncConversationRunControls();
   stopRunTranscript();
@@ -1253,6 +1398,7 @@ async function openThread(id) {
   currentAgentId = null; // a thread is NOT an agent chat
   currentAgentKind = null;
   syncConversationRunControls();
+  hideAgentSchedules();
 
   if (typeof window !== "undefined" && window.history?.pushState) {
     const hash = `#thread=${encodeURIComponent(id)}`;
@@ -1376,6 +1522,7 @@ async function openAgentSurface({ kind, id, name }) {
   currentAgentKind = kind;
   currentThreadId = null;
   syncConversationRunControls();
+  refreshAgentSchedules(kind, id);
 
   if (typeof window !== "undefined" && window.history?.pushState) {
     const hash = `#agent=${encodeURIComponent(kind)}:${encodeURIComponent(id)}`;

@@ -386,10 +386,13 @@ import {
   recoverOnBoot,
   markScheduledDone,
   ownsInflight,
+  pauseScheduledTask,
   releaseInflight,
+  resumeScheduledTask,
   retryScheduledTask,
   scheduleTask,
   tryAcquireInflight,
+  updateScheduledTask,
 } from "../lib/scheduler.js";
 
 import {
@@ -404,7 +407,7 @@ import {
 import { tool, generateText } from "ai";
 import { z } from "zod";
 import { setRunFence, clearRunFence, runAborted } from "../lib/run-fence.js";
-import { setRunContext, clearRunContext } from "../lib/run-context.js";
+import { setRunContext, clearRunContext, currentRunContext } from "../lib/run-context.js";
 import {
   currentBrowserCommandSurface,
   exitBrowserCommandContext,
@@ -671,14 +674,18 @@ async function handleAlarm(alarm) {
     // A CANCELLING task (a cancel that failed closed because the alarm was still
     // armed) must likewise NEVER run — it is cancel-pending and only the owner's
     // cancel route resolves it (the round-24 fail-closed cancel blocker).
-    if (task.quarantined || task.cancelling) {
+    // A PAUSED task never runs even if a racing alarm was delivered before the
+    // pause's alarm-clear landed (the owner's pause must hold unconditionally).
+    if (task.quarantined || task.cancelling || task.paused) {
       logSchedulerDiagnostic({
         event: "task_quarantined_or_cancelling",
         alarmName: alarm.name,
         path: "service-worker:handleAlarm",
-        storeState: task.quarantined ? "quarantined" : "cancelling",
+        storeState: task.quarantined ? "quarantined" : (task.paused ? "paused" : "cancelling"),
         reason: task.quarantined
           ? "Task is quarantined due to prior alarm creation ambiguity"
+          : task.paused
+          ? "Task is paused by its owner"
           : "Task is pending cancellation",
         actionTaken: "skipped_execution",
       }, "warn");
@@ -4823,10 +4830,85 @@ const handlers = mergeRouteMaps(
     // and CANCELLABLE).
     return { tasks: await listScheduledTasks() };
   },
+  async "schedules.list"(m) {
+    // The schedules_list agent tool: the CALLING agent's own scheduled tasks by
+    // default (owner attribution matches this run's agentRole + agentSurfaceRef
+    // exactly — never another agent's without the explicit all:true scope). A
+    // read-only route; no approval gate (the global list is owner-visible too).
+    const tasks = await listScheduledTasks();
+    if (m?.all === true) return { tasks };
+    const ctx = currentRunContext();
+    if (!ctx) return { tasks: [], scoped: true };
+    const own = tasks.filter((t) => {
+      const o = t.owner;
+      if (!o) return false;
+      return o.agentRole === ctx.agentRole && (o.agentSurfaceRef ?? null) === (ctx.agentSurfaceRef ?? null);
+    });
+    return { tasks: own, scoped: true };
+  },
   async "task.retry"(m) {
     const name = String(m?.name ?? "");
     if (!name) return { ok: false, error: "task name is required" };
     return await retryScheduledTask(name);
+  },
+  async "task.pause"(m, context) {
+    // Pause a scheduled task: retained payload + schedule, cleared alarm, never
+    // fires. Owner-direct UI clicks approve themselves; a model-initiated call
+    // creates a pending approval resolved in-context (the 0.2.303 card flow).
+    const name = String(m?.name ?? "");
+    if (!name) return { ok: false, error: "task name is required" };
+    const approval = await requireOwnerApproval(
+      context,
+      "task.pause",
+      canonicalOperationTarget("scheduled", { id: name }),
+      payloadFields([["name", canonicalScalar(name)]]),
+    );
+    if (approval?.ok !== true) return approval?.ok === false ? approval : { ok: false, error: approval?.error ?? "This operation requires owner approval in Settings." };
+    const r = await pauseScheduledTask(name);
+    if (r?.ok) broadcastProgress({ type: "scheduled-tasks-changed" });
+    return r;
+  },
+  async "task.resume"(m, context) {
+    const name = String(m?.name ?? "");
+    if (!name) return { ok: false, error: "task name is required" };
+    const approval = await requireOwnerApproval(
+      context,
+      "task.resume",
+      canonicalOperationTarget("scheduled", { id: name }),
+      payloadFields([["name", canonicalScalar(name)]]),
+    );
+    if (approval?.ok !== true) return approval?.ok === false ? approval : { ok: false, error: approval?.error ?? "This operation requires owner approval in Settings." };
+    const r = await resumeScheduledTask(name);
+    if (r?.ok) broadcastProgress({ type: "scheduled-tasks-changed" });
+    return r;
+  },
+  async "task.update"(m, context) {
+    const name = String(m?.name ?? "");
+    if (!name) return { ok: false, error: "task name is required" };
+    const fields = [];
+    if (m?.task !== undefined) fields.push(["task", canonicalScalar(String(m.task).slice(0, 4000))]);
+    if (m?.at !== undefined) fields.push(["at", canonicalScalar(Number(m.at))]);
+    if (m?.delayMs !== undefined) fields.push(["delayMs", canonicalScalar(Number(m.delayMs))]);
+    if (m?.periodInMinutes !== undefined) fields.push(["periodInMinutes", canonicalScalar(Number(m.periodInMinutes))]);
+    const approval = await requireOwnerApproval(
+      context,
+      "task.update",
+      canonicalOperationTarget("scheduled", { id: name }),
+      payloadFields(fields),
+    );
+    if (approval?.ok !== true) return approval?.ok === false ? approval : { ok: false, error: approval?.error ?? "This operation requires owner approval in Settings." };
+    try {
+      const r = await updateScheduledTask(name, {
+        task: m?.task !== undefined ? String(m.task) : undefined,
+        at: m?.at !== undefined ? Number(m.at) : undefined,
+        delayMs: m?.delayMs !== undefined ? Number(m.delayMs) : undefined,
+        periodInMinutes: m?.periodInMinutes !== undefined ? Number(m.periodInMinutes) : undefined,
+      });
+      if (r?.ok) broadcastProgress({ type: "scheduled-tasks-changed" });
+      return r;
+    } catch (e) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
   },
   async "task.cancel"(m) {
     // Authoritative owner cancellation of a scheduled (or quarantined) task:

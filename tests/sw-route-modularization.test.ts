@@ -128,6 +128,13 @@ const BASELINE_ROUTES = [
   "task.list",
   "task.retry",
   "task.cancel",
+  // Per-agent schedule visibility + control (owner request): the routes are
+  // mutation-gated (requireOwnerApproval) — task.pause/resume/update; the
+  // schedules.list route is the agent-scoped read for the schedules_list tool.
+  "task.pause",
+  "task.resume",
+  "task.update",
+  "schedules.list",
   "recipe.list",
   "skill.list",
   "skill.import",
