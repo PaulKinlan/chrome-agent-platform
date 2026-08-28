@@ -95,6 +95,8 @@ async function go() {
     return;
   }
   setStatus(`Opened ${parsed.origin} in a tab. Available Site Agent tools are shown below.`);
+  // The first-run guidance has done its job once a site is opened.
+  document.getElementById("first-run")?.setAttribute("hidden", "");
 
   // Record the origin so the hub can enroll it.
   send("tools.allOrigins").catch(() => {});
@@ -118,6 +120,9 @@ urlInput.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
       try { parsed = new URL(res.url); } catch { /* invalid legacy target */ }
       if (parsed && (parsed.protocol === "http:" || parsed.protocol === "https:")) {
         setStatus(`Site ready: ${parsed.origin}. Choose Open site to show its available Site Agent tools.`);
+        // Agent-opened panel: the user is already on a site — the first-run
+        // guidance block has done its job.
+        document.getElementById("first-run")?.setAttribute("hidden", "");
         await renderTools(parsed.origin);
       } else {
         setStatus("The stored target is invalid.", true);
