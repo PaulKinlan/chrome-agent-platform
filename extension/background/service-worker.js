@@ -4854,6 +4854,11 @@ const handlers = mergeRouteMaps(
     const name = String(m?.name ?? "");
     if (!name) return { ok: false, error: "task name is required" };
     const handle = cancelScheduledTaskBackground(name);
+    // Durable before the response: the store carries the cancelling mark (and
+    // the live run's abort has fired) by the time the caller sees ok:true —
+    // the SW keepalive can no longer lose the teardown. Only the
+    // wait-for-termination dance continues in the background.
+    await handle.marked;
     if (name.startsWith("recipe:")) broadcastRegistryChanged();
     return { ok: true, name, stopping: handle.stopping === true };
   },
@@ -5014,9 +5019,11 @@ const handlers = mergeRouteMaps(
     await masterMemory().set("customRecipes", next);
     // NON-BLOCKING schedule teardown (the instant-delete contract — the same
     // path background-agent disable uses): the payload is marked cancelling
-    // (inert) synchronously, the live run aborted now, the alarm-clear +
-    // payload-delete finish async (reconciliation reaps residue).
-    cancelScheduledTaskBackground(`recipe:${id}`);
+    // (inert) DURABLY before this route responds, the live run aborted now;
+    // only the alarm-clear + payload-delete + termination wait finish async
+    // (reconciliation reaps residue).
+    const teardown = cancelScheduledTaskBackground(`recipe:${id}`);
+    await teardown.marked;
     // The deleted custom recipe LEAVES the live registry — broadcast so the
     // open pickers/conversations revalidate (a selected deleted agent is
     // rejected, never routed to a ghost).

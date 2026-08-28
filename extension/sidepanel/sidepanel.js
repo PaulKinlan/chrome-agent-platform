@@ -376,7 +376,22 @@ async function renderTasks() {
     });
     row.addEventListener("delete", async () => {
       row.setAttribute("status", "completed");
-      await send("task.cancel", { name: t.name }).catch(() => null);
+      // cancelBackground: non-blocking teardown (durable mark + abort, the
+      // terminating wait happens in the SW) — never the 5s-terminating path.
+      const out = await send("task.cancelBackground", { name: t.name }).catch(
+        () => null,
+      );
+      if (out?.ok !== true) {
+        row.setAttribute(
+          "status",
+          "failed",
+        );
+        row.setAttribute(
+          "time",
+          `Delete failed: ${out?.error ?? "no response"}`,
+        );
+        return;
+      }
       // The registry broadcast refreshes both the picker + this list; refresh
       // eagerly too so a cancelled row disappears even without the broadcast.
       renderTasks();

@@ -110,7 +110,15 @@ const newView = async (url: string) => {
     await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: b.x, y: b.y, button: "left", buttons: 0, clickCount: 1 }, sessionId);
     return true;
   };
-  return { targetId, sessionId, ev, shot, clickSel };
+  // Trusted click at an ARBITRARY evaluated point — for elements inside
+  // shadow roots that document.querySelector cannot reach.
+  const clickXY = async (xy: { x: number; y: number } | null | undefined) => {
+    if (!xy || typeof xy.x !== "number" || typeof xy.y !== "number") return false;
+    await send("Input.dispatchMouseEvent", { type: "mousePressed", x: xy.x, y: xy.y, button: "left", buttons: 1, clickCount: 1 }, sessionId);
+    await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: xy.x, y: xy.y, button: "left", buttons: 0, clickCount: 1 }, sessionId);
+    return true;
+  };
+  return { targetId, sessionId, ev, shot, clickSel, clickXY };
 };
 
 // ── 1. Seed a REAL custom background agent via the REAL message bus ────────
@@ -164,14 +172,21 @@ const rowFound = await ntp.ev(`(() => {
 })()`);
 check("journey: the seeded agent's row renders with a real Delete button", rowFound?.found === true && rowFound.hasDelete === true, rowFound);
 
-// Click the real Delete (a genuine event through the component's listener).
-await ntp.ev(`(() => {
+// Click the real Delete with a TRUSTED CDP pointer gesture — the button lives
+// in capability-row's shadow root, so resolve its box through the shadow path
+// and dispatch real Input events (element.click() from evaluate is NOT
+// trusted; the delete must prove it works for a real user).
+const delRect = await ntp.ev(`(() => {
   const rows = [...document.querySelectorAll("#named-agents capability-row")];
   const row = rows.find((r) => (r.getAttribute("name") || "") === ${JSON.stringify(agentName)});
   const del = row?.shadowRoot?.querySelector('button.delete, button[part="delete"]');
-  del?.click();
-  return { clicked: !!del };
+  if (!del) return null;
+  del.scrollIntoView({ block: "center" });
+  const r = del.getBoundingClientRect();
+  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
 })()`);
+const delClicked = await ntp.clickXY(delRect);
+check("journey: the Delete button received a trusted pointer click", delClicked === true, { delRect });
 await sleep(600); // the confirm dialog renders
 const dialogUp = await ntp.ev(`(() => {
   const d = document.querySelector(".cap-confirm-dialog");
@@ -182,8 +197,11 @@ check("journey: the real confirm dialog appears (destructive delete)", dialogUp?
 await ntp.shot(`${OUT}/02-confirm-dialog.png`);
 
 // ── 3. Accept → deletion must be REAL, COMPLETE, and NON-BLOCKING ─────────
+// The confirm-accept click is ALSO trusted (the accept handler is a real
+// user-gesture path).
 const t0 = Date.now();
-await ntp.ev(`(() => { document.querySelector(".cap-confirm-dialog .cap-confirm-accept")?.click(); return true; })()`);
+const acceptClicked = await ntp.clickSel(".cap-confirm-dialog .cap-confirm-accept");
+check("journey: the confirm accept received a trusted pointer click", acceptClicked === true, null);
 // Poll the DOM: the row must disappear promptly (non-blocking UI).
 let rowGoneMs = -1;
 for (let i = 0; i < 60 && rowGoneMs < 0; i++) {

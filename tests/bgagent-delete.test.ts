@@ -165,6 +165,19 @@ Deno.test("bgagent delete: the service-worker exposes the non-blocking routes", 
     /async "recipe\.delete"\([\s\S]{0,1200}?cancelScheduledTaskBackground\(`recipe:\$\{id\}`\)/,
     "recipe.delete must use the non-blocking cancel",
   );
+  // The durable-before-response contract: BOTH routes await the teardown's
+  // `marked` stage (store mark + live-run abort) BEFORE responding — the SW
+  // keepalive can then never lose the teardown after ok:true was reported.
+  assertMatch(
+    src,
+    /async "task\.cancelBackground"\([\s\S]{0,1400}?await handle\.marked;[\s\S]{0,400}?return \{ ok: true, name/,
+    "task.cancelBackground must await the durable mark before responding",
+  );
+  assertMatch(
+    src,
+    /cancelScheduledTaskBackground\(`recipe:\$\{id\}`\);[\s\S]{0,200}?await teardown\.marked;/,
+    "recipe.delete must await the durable mark before responding",
+  );
   assertMatch(
     src,
     /async "recipe\.delete"\([\s\S]{0,1400}?return \{ ok: true, stopping: true \}/,

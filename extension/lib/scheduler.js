@@ -545,6 +545,15 @@ async function finalizeCancellation(name) {
  * interrupted (a service-worker kill mid-cleanup leaves the inert cancelling
  * payload, which handleAlarm skips and reconcileScheduledTasks reaps). */
 export function cancelScheduledTaskBackground(name) {
+  // `marked` resolves once the durable cancelling mark is in the store AND the
+  // live run's abort controller has fired — the route-level contract: by the
+  // time a delete/cancel route responds, the teardown state is DURABLE (the
+  // SW keepalive cannot lose it). Only finalizeCancellation (the
+  // wait-for-termination dance) stays fire-and-forget on `promise`.
+  let markedResolve;
+  const marked = new Promise((resolve) => {
+    markedResolve = resolve;
+  });
   const done = (async () => {
     let live = null;
     await withLock(async () => {
@@ -559,11 +568,12 @@ export function cancelScheduledTaskBackground(name) {
     if (live) {
       try { live.controller.abort(); } catch { /* already aborted */ }
     }
+    markedResolve({ ok: true, name });
     await finalizeCancellation(name);
   })();
-  // The returned promise is fire-and-forget by the callers; expose it so tests
-  // can await the cleanup without blocking the delete route.
-  return { promise: done, name, stopping: true };
+  // `promise` stays exposed so tests can await the FULL cleanup without
+  // blocking the delete route; `marked` is what routes await.
+  return { promise: done, marked, name, stopping: true };
 }
 
 /** Remove a one-shot task only AFTER its result is committed (durable).
