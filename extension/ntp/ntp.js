@@ -6,6 +6,7 @@
 //   and the hub lists every prior thread (auto-named).
 
 import { send } from "../lib/messages.js";
+import { selectFailedRuns } from "../lib/run-retry.js";
 import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript } from "../shared/conversation.js";
 import { createRunSurfaceOwner } from "../shared/run-surface-owner.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
@@ -922,10 +923,76 @@ function renderTasks(activeId = currentThreadId) {
   return taskSidebarLifecycle.render(activeId);
 }
 
+// UX-008 (CAP-FB-20260828-SILENT-DISPATCH-LOSS-01): the failed-runs section.
+// A run that fails before producing anything must stay VISIBLE and RETRYABLE —
+// the sidebar renders terminal failures that kept their stored prompt, and the
+// Retry action re-dispatches the ORIGINAL prompt through the SW's run.retry
+// route (a NEW execution; the failed record remains as history).
+let failedRunsOwner = 0;
+async function refreshFailedRuns() {
+  const owner = ++failedRunsOwner;
+  const section = document.getElementById("failed-runs");
+  if (!section) return;
+  let runs = null;
+  try {
+    const res = await send("run.list");
+    if (res?.ok !== false && Array.isArray(res?.runs)) runs = res.runs;
+  } catch {
+    runs = null; // worker restarting — the next authoritative render re-fetches
+  }
+  if (owner !== failedRunsOwner) return; // a newer render superseded this one
+  const failed = selectFailedRuns(runs ?? []);
+  section.replaceChildren();
+  section.hidden = failed.length === 0;
+  if (!failed.length) return;
+  const label = document.createElement("div");
+  label.className = "fr-label";
+  label.textContent = "Failed runs";
+  section.append(label);
+  for (const fr of failed) {
+    const row = document.createElement("div");
+    row.className = "fr-row";
+    const text = document.createElement("span");
+    text.className = "fr-text";
+    const preview = (fr.taskPreview || fr.summary || "(no prompt text)").trim();
+    text.textContent = preview;
+    text.title = `${preview}${fr.summary ? ` — ${fr.summary}` : ""} · ${timeAgo(fr.at)}`;
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "fr-retry";
+    retry.textContent = "Retry";
+    retry.setAttribute("aria-label", `Retry failed run: ${preview}`);
+    const statusLine = document.createElement("div");
+    statusLine.className = "fr-status";
+    statusLine.setAttribute("role", "status");
+    retry.addEventListener("click", async () => {
+      retry.disabled = true;
+      retry.textContent = "…";
+      statusLine.textContent = "Retrying…";
+      const r = await send("run.retry", { executionId: fr.executionId }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+      if (r?.ok) {
+        statusLine.textContent = "Run restarted.";
+        retry.remove();
+        await renderTasks(); // the new run may create/update threads
+      } else {
+        statusLine.textContent = `Retry failed: ${r?.error ?? "unknown error"}`;
+        retry.disabled = false;
+        retry.textContent = "Retry";
+      }
+    });
+    row.append(text, retry);
+    section.append(row, statusLine);
+  }
+}
+
 function renderTaskRows(threads, activeId = null) {
   const el = document.getElementById("thread-sidebar");
   if (!el) return;
   el.replaceChildren();
+  // UX-008: failed dispatches render as a bounded, retryable section ABOVE the
+  // thread rows — a submitted prompt must never vanish into a silent failure.
+  // Fire-and-forget: the section refreshes itself; the thread render stays sync.
+  refreshFailedRuns();
   if (!threads.length) {
     const empty = document.createElement("div");
     empty.className = "thread-empty";

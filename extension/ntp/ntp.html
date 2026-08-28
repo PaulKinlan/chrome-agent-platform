@@ -352,6 +352,53 @@
       color: var(--muted);
       font-size: 13px;
     }
+    /* UX-008: failed dispatches stay visible + retryable in the Tasks rail. */
+    .failed-runs {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 6px 8px;
+      margin: 0 0 6px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+    .failed-runs[hidden] { display: none; }
+    .failed-runs .fr-label {
+      font-size: var(--text-xs);
+      color: var(--muted);
+      padding: 0 4px;
+    }
+    .failed-runs .fr-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+    .failed-runs .fr-text {
+      flex: 1;
+      min-width: 0;
+      font-size: 13px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .failed-runs .fr-retry {
+      flex: none;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: transparent;
+      color: var(--fg);
+      font-size: var(--text-xs);
+      padding: 3px 8px;
+      cursor: pointer;
+    }
+    .failed-runs .fr-retry:hover { border-color: var(--fg); }
+    .failed-runs .fr-retry[disabled] { opacity: 0.55; cursor: default; }
+    .failed-runs .fr-status {
+      font-size: var(--text-xs);
+      color: var(--muted);
+      padding: 0 4px;
+    }
     .side-foot {
       border-top: 1px solid var(--border);
       padding-top: 12px;
@@ -654,6 +701,7 @@
           <span class="side-label" id="tasks-label">Tasks</span>
           <button class="new-task" id="new-task" type="button" aria-label="New task" title="New task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
         </div>
+        <section id="failed-runs" class="failed-runs" hidden aria-label="Failed runs"></section>
         <nav class="side-list thread-list" id="thread-sidebar" aria-label="Task threads"></nav>
       </section>
       <section class="side-section side-agents" aria-labelledby="agents-label">

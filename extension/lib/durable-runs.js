@@ -1289,6 +1289,49 @@ export function createDurableRunRegistry({
     });
   }
 
+  /** UX-008 retry authority: the stored prompt + original dispatch route of a
+   * TERMINAL FAILED (non-aborted) run, for owner-visible Retry. Read-only —
+   * retry itself re-dispatches as a NEW execution (the failed record stays as
+   * honest history; retention is retain-all/explicit-clear-only). */
+  async function getRetryRequest(executionId) {
+    return locked(async () => {
+      const id = String(executionId ?? "");
+      if (!validExecutionId(id)) return { ok: false, error: "invalid executionId" };
+      const record = await readRecord(id);
+      if (!record) return { ok: false, error: "unknown execution" };
+      if (!TERMINAL_PHASES.has(record.phase)) return { ok: false, error: "run is still active" };
+      const terminal = record.terminal ?? null;
+      if (!terminal || terminal.ok !== false) return { ok: false, error: "run did not fail" };
+      if (terminal.aborted === true) return { ok: false, error: "an aborted run is not retryable" };
+      let request = null;
+      try {
+        request = record.resumeRequestRef || record.resumeRequest
+          ? await readResumeRequest(record)
+          : null;
+      } catch {
+        request = null; // a corrupt/unreadable stored prompt is honestly "no stored prompt"
+      }
+      const task = String(request?.task ?? "");
+      if (!task.trim()) return { ok: false, error: "no stored prompt" };
+      return {
+        ok: true,
+        executionId: id,
+        phase: record.phase,
+        summary: bounded(terminal.summary ?? "", 300),
+        request: {
+          route: String(request.route ?? ""),
+          task,
+          attachments: structuredClone(Array.isArray(request.attachments) ? request.attachments : []),
+          history: structuredClone(Array.isArray(request.history) ? request.history : []),
+          scheduled: !!request.scheduled,
+          scoped: !!request.scoped,
+          threadId: request.threadId ?? null,
+          routeArgs: structuredClone(request.routeArgs ?? {}),
+        },
+      };
+    });
+  }
+
   /** Register first, buffer mutations during snapshot, then drain only newer revisions. */
   function attachPort(port) {
     let buffering = true;
@@ -1332,6 +1375,7 @@ export function createDurableRunRegistry({
     rollbackUnprogressedQuota,
     settle,
     cancel,
+    getRetryRequest,
     pauseForPermission,
     pauseForProviderChange,
     resumeAfterPermission,

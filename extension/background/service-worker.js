@@ -37,6 +37,7 @@ import {
   requireSettingsSender,
 } from "./routes/index.js";
 import { describeError, formatError, errorDetail } from "../lib/error-report.js";
+import { buildRetryDispatch, retryRunId } from "../lib/run-retry.js";
 import { isMemoryKeyQuotaError, isNativeQuotaExceededError } from "../lib/storage-errors.js";
 import {
   PREVIEW_LIMITS,
@@ -4775,6 +4776,38 @@ const handlers = mergeRouteMaps(
       await durableRuns.failResumeDispatch(executionId, resumed.token, error?.message ?? error);
       throw error;
     }
+  },
+  async "run.retry"(m, context) {
+    // UX-008 (CAP-FB-20260828-SILENT-DISPATCH-LOSS-01): a failed dispatch must
+    // be RETRYABLE from its stored prompt, never retyped. The failed run's
+    // durable resume-request is the retry authority; retry re-dispatches it as
+    // a NEW execution through the original route (the failed record stays as
+    // honest history — retention is retain-all). Same owner gate as resume.
+    if (!["extension", "owner-options"].includes(context?.principal)) {
+      return { ok: false, error: "owner_extension_required" };
+    }
+    const executionId = String(m?.executionId ?? "");
+    if (!executionId) return { ok: false, error: "executionId is required" };
+    const retryable = await durableRuns.getRetryRequest(executionId);
+    if (!retryable?.ok) return { ...retryable, executionId };
+    const dispatch = buildRetryDispatch(retryable.request, { runId: retryRunId() });
+    if (!dispatch) {
+      return { ok: false, error: `route ${retryable.request.route || "(none)"} is not retryable`, executionId };
+    }
+    const fn = handlers[dispatch.route];
+    if (typeof fn !== "function") {
+      return { ok: false, error: `route ${dispatch.route} is unavailable`, executionId };
+    }
+    let result;
+    try {
+      result = await fn(dispatch.args);
+    } catch (error) {
+      result = { ok: false, error: String(error?.message ?? error) };
+    }
+    // The retry's own outcome flows through verbatim (a retry that fails is a
+    // NEW failed run — honest, and itself retryable); the caller learns which
+    // failed run this was spawned from.
+    return { ...(result ?? { ok: false, error: "no result" }), retriedFrom: executionId, retryRoute: dispatch.route };
   },
   async "run.logs"(m, context) {
     if (!["extension", "owner-options"].includes(context?.principal)) {
