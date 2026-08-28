@@ -90,7 +90,7 @@ function warnOnce() {
     // error-console fault. Keep the diagnostic visible to developers at info
     // level while the owner-facing guide provides the path forward.
     console.info(
-      "storage permission not granted — changes are session-only until enabled in Settings",
+      "storage permission not granted — changes are session-only; storage is granted at install, so reload the extension if this persists",
     );
   }
 }

@@ -14,11 +14,22 @@ const manifest = JSON.parse(
   await Deno.readTextFile(new URL("../extension/manifest.json", import.meta.url)),
 );
 
-Deno.test("contract §2: the hub composer continues an open task view (no silent fork)", () => {
+Deno.test("contract §2: the hub composer continues an open task view (no silent fork — mentions included)", () => {
   assertStringIncludes(
     ntp,
-    "if (!threadView.hidden && currentThreadId && !agent?.ref) {",
-    "the hub-composer continuation guard is present",
+    "if (!threadView.hidden && currentThreadId) {",
+    "the hub-composer continuation guard is present and has NO mention exclusion",
+  );
+  // Falsification for the review P1-b fix: the old guard excluded agent?.ref,
+  // so an @mention while a task view was open silently forked a new task.
+  assert(
+    !ntp.includes("currentThreadId && !agent?.ref"),
+    "the mention exclusion must be gone — a mention continues the open thread",
+  );
+  assertStringIncludes(
+    ntp,
+    "agent?.ref ? { kind: agent.kind, id: agent.id, name: agent.name } : null",
+    "the mention rides the continuation as a delegation (same shape as the new-task path)",
   );
 });
 

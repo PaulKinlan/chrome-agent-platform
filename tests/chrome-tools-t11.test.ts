@@ -146,12 +146,12 @@ Deno.test("T11 management permission: reads fail closed without the management p
   reset();
   const t = tools();
   const noPerm = await t.list_extensions.execute({});
-  assertEquals(noPerm.error, "management permission not granted — enable Extension management in Settings");
+  assertEquals(noPerm.error, "management permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
   assertEquals(chromeCalls.filter((c) => c[0] === "management.getAll").length, 0, "no management call without permission");
   const getNoPerm = await t.get_extension.execute({ id: "other-extension-id" });
-  assertEquals(getNoPerm.error, "management permission not granted — enable Extension management in Settings");
+  assertEquals(getNoPerm.error, "management permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
   const warnNoPerm = await t.get_extension_permission_warnings.execute({ id: "other-extension-id" });
-  assertEquals(warnNoPerm.error, "management permission not granted — enable Extension management in Settings");
+  assertEquals(warnNoPerm.error, "management permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
 });
 
 Deno.test("T11 management reads: bounded output + honest totals once permission granted", async () => {
@@ -231,12 +231,12 @@ Deno.test("T11 GLOBAL-grant-only: management mutations refuse an origin grant an
   const t = tools();
   // No grant at all: denied before any mutation.
   const noGrant = await t.set_extension_enabled.execute({ id: "other-extension-id", enabled: false });
-  assertEquals(noGrant.error, "browser control not granted for extension management — ask the user to approve it in Settings");
+  assertEquals(noGrant.error, "browser control not granted for extension management — the owner can approve it in the approval card here, or in Settings → Browser control");
   assertEquals(chromeCalls.filter((c) => c[0] === "management.setEnabled").length, 0);
   // An ORIGIN grant must NEVER authorize a browser-wide management mutation.
   await setOriginBrowserControlGrant(["https://example.com"]);
   const originGrant = await t.set_extension_enabled.execute({ id: "other-extension-id", enabled: false });
-  assertEquals(originGrant.error, "browser control not granted for extension management — ask the user to approve it in Settings");
+  assertEquals(originGrant.error, "browser control not granted for extension management — the owner can approve it in the approval card here, or in Settings → Browser control");
   assertEquals(chromeCalls.filter((c) => c[0] === "management.setEnabled").length, 0, "an origin grant never authorizes management");
   // The GLOBAL grant authorizes it.
   await setGlobalBrowserControlGrant();

@@ -188,6 +188,16 @@ try {
     return String((store[KEY] ?? {})["recipe:orphan-kat"] === undefined);
   })()`);
   check("contract §6: the orphaned schedule is gone from the store", gone === "true", gone);
+
+  // ── bug 7 (owner, live on 0.2.346): search_history denied with "enable
+  // History in Settings" — a control that did not exist. Under the
+  // install-granted model the gate can never fire. Prove it in the LIVE
+  // service worker: the permission is granted, and the underlying chrome.*
+  // call the tool wraps actually executes. (Reuses the sw2 attach above.)
+  const histGrant = await swEval2(`chrome.permissions.contains({ permissions: ["history"] }).then(v => String(v), e => "err:" + e)`);
+  check("bug 7: the history permission is install-granted in the live SW (the search_history gate can never fire)", histGrant === "true", histGrant);
+  const histExec = await swEval2(`chrome.history.search({ text: "", maxResults: 1 }).then(() => "ok", e => "err:" + e)`);
+  check("bug 7: chrome.history.search EXECUTES (search_history's underlying call)", histExec === "ok", histExec);
 } catch (e) {
   console.error("HARNESS ERROR:", String(e).slice(0, 400));
   fail++;

@@ -16,7 +16,7 @@ export const FIRST_RUN_EXAMPLE_AGENTS = Object.freeze([
   Object.freeze({
     id: "weekly-browsing-review",
     name: "Weekly browsing review",
-    role: "A weekly reviewer of the owner's activity in this hub: read the recent browser events, usage, and artifacts, then produce a concise plain-language summary of what happened and what is worth following up. To run it automatically on a schedule, the owner can add it in Settings → Background agents (the alarms permission is requested only there).",
+    role: "A weekly reviewer of the owner's activity in this hub: read the recent browser events, usage, and artifacts, then produce a concise plain-language summary of what happened and what is worth following up. To run it automatically on a schedule, the owner can add it in Settings → Background agents (alarms are granted at install).",
   }),
 ]);
 

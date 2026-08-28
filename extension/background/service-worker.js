@@ -2755,7 +2755,7 @@ function approvalExecutionId(context) {
 
 async function requireOwnerApproval(context, action, target, payload) {
   const executionId = approvalExecutionId(context);
-  if (!executionId || !target) return { ok: false, error: "This operation requires owner approval in Settings." };
+  if (!executionId || !target) return { ok: false, error: "This operation requires owner approval." };
   // Owner-DIRECT actions: the owner's own click in an extension UI document IS
   // the approval — deleting an artifact from the artifact view must never wait
   // on a hidden Settings decision (CAP-FB-20260823-ARTIFACT-DELETE-PERMISSION-01).
@@ -2774,7 +2774,7 @@ async function requireOwnerApproval(context, action, target, payload) {
     // install key, fail closed rather than publishing an ephemeral reference.
     targetRef = await opaqueTargetRef(target);
   } catch {
-    return { ok: false, error: "This operation requires owner approval in Settings." };
+    return { ok: false, error: "This operation requires owner approval." };
   }
   const consumed = consumeApproved(ownerApprovalStore, executionId, action, target, digest);
   if (consumed.ok) {
@@ -2787,7 +2787,7 @@ async function requireOwnerApproval(context, action, target, payload) {
     if (row) row.targetRef = targetRef;
     if (!pending.deduped) securityApprovalEvent("requested", action, targetRef);
   }
-  return { ok: false, error: "This operation requires owner approval in Settings." };
+  return { ok: false, error: "This operation requires owner approval." };
 }
 
 function payloadFields(entries) {
@@ -4643,11 +4643,11 @@ const handlers = mergeRouteMaps(
     return { ok: run?.ok ?? false, result, error: run?.error, logs: run?.logs ?? [] };
   },
 
-  // ---- capability request (the agent can REQUEST; the owner approves) ----
+  // ---- capability request (install-granted: the SW VERIFIES, never asks) ----
   async "capability.request"({ id }) {
-    // requestCapability MUST be called from a user gesture; from the SW (an
-    // agent tool) there is no gesture, so it fails closed. Return an honest
-    // "needs owner gesture" — the agent tells the owner to click Enable.
+    // Every capability permission is granted at install — requestCapability
+    // VERIFIES the install grant (fail closed: an unreadable state is an
+    // honest error, never reported as granted).
     const res = await requestCapability(id);
     if (res.ok && res.granted) return { ok: true, granted: true, capability: id };
     return {
@@ -4655,7 +4655,7 @@ const handlers = mergeRouteMaps(
       granted: false,
       capability: id,
       error: res.ok
-        ? `capability ${id} needs a user gesture — ask the owner to click Enable in Settings`
+        ? `capability ${id} is not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension`
         : (res.error ?? `capability ${id} not granted`),
     };
   },
@@ -4845,21 +4845,31 @@ const handlers = mergeRouteMaps(
     // slug is neither a built-in/background recipe nor a custom recipe — the
     // agent is gone, the alarm must go too. Cancels every orphan and reports
     // exactly what was cancelled.
-    const tasks = await listScheduledTasks().catch(() => []);
-    const custom = await getCustomRecipes().catch(() => []);
+    const tasks = await listScheduledTasks().catch(() => null);
+    const custom = await getCustomRecipes().catch(() => null);
+    // FAIL CLOSED (review P1-a): an unreadable registry means a live custom
+    // recipe is INDISTINGUISHABLE from an orphan — refuse to cancel anything
+    // rather than risk cancelling a live agent's schedule.
+    if (!Array.isArray(tasks) || !Array.isArray(custom)) {
+      return { ok: false, error: "the recipe/schedule registry could not be read — refusing to cancel anything", cancelled: [], count: 0 };
+    }
     const known = new Set([
       ...backgroundRecipes().map((r) => `recipe:${r.id}`),
-      ...(Array.isArray(custom) ? custom : []).map((r) => `recipe:${r.id}`),
+      ...custom.map((r) => `recipe:${r.id}`),
     ]);
     const cancelled = [];
-    for (const t of Array.isArray(tasks) ? tasks : []) {
+    const failed = [];
+    for (const t of tasks) {
       if (!t?.name || !t.name.startsWith("recipe:")) continue;
       if (known.has(t.name)) continue;
       const r = await cancelScheduledTask(t.name).catch(() => null);
-      if (r?.ok !== false) cancelled.push(t.name);
+      // Only a CONFIRMED cancellation is reported — a thrown cancel or an
+      // {ok:false}/{cancelled:false} result is a failure, never a success.
+      if (r?.ok === true && r.cancelled === true) cancelled.push(t.name);
+      else failed.push(t.name);
     }
     if (cancelled.length) broadcastRegistryChanged();
-    return { ok: true, cancelled, count: cancelled.length };
+    return { ok: true, cancelled, failed, count: cancelled.length };
   },
   async "task.list"() {
     // Owner-visible scheduled-task list (active + quarantined) so a quarantined
@@ -6627,7 +6637,7 @@ async function openSidePanelForCommand() {
   if (!granted) {
     pushDiagnostic(
       "warn",
-      "Side panel shortcut: the sidePanel permission is not granted — enable it in Settings → Permissions, then try again.",
+      "Side panel shortcut: the sidePanel permission is not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension.",
       "commands",
       "permission",
     );

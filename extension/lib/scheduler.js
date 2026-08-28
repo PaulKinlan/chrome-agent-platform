@@ -186,7 +186,7 @@ export async function scheduleTask(
     const alarms = alarmsApi();
     if (!alarms) {
       throw new Error(
-        "alarms permission not granted — enable Scheduled tasks in Settings",
+        "alarms permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension",
       );
     }
     // Fail before persistence when Chrome's extension-wide alarm capacity is

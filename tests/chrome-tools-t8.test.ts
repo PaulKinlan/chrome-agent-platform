@@ -152,15 +152,15 @@ Deno.test("T8 inventory: the 9 tranche-8 tools ship in the browser toolset; read
 Deno.test("T8 permission fail-closed: every tool returns an honest Settings error without its optional permission", async () => {
   reset();
   const t = tools();
-  assertEquals((await t.list_cookies.execute({ domain: "example.com" })).error, "cookies permission not granted — enable Cookies in Settings");
-  assertEquals((await t.list_cookie_stores.execute({})).error, "cookies permission not granted — enable Cookies in Settings");
-  assertEquals((await t.get_cookie.execute({ url: "https://example.com/", name: "s" })).error, "cookies permission not granted — enable Cookies in Settings");
-  assertEquals((await t.set_cookie.execute({ url: "https://example.com/", name: "s", value: "v" })).error, "cookies permission not granted — enable Cookies in Settings");
-  assertEquals((await t.remove_cookie.execute({ url: "https://example.com/", name: "s" })).error, "cookies permission not granted — enable Cookies in Settings");
-  assertEquals((await t.wipe_browsing_data.execute({ dataTypes: ["cache"] })).error, "browsingData permission not granted — enable Browsing data in Settings");
-  assertEquals((await t.get_content_setting.execute({ resource: "javascript", primaryPattern: "https://example.com/*" })).error, "contentSettings permission not granted — enable Content settings in Settings");
-  assertEquals((await t.set_content_setting.execute({ resource: "javascript", primaryPattern: "https://example.com/*", setting: "block" })).error, "contentSettings permission not granted — enable Content settings in Settings");
-  assertEquals((await t.clear_content_settings.execute({ resource: "javascript", primaryPattern: "https://example.com/*" })).error, "contentSettings permission not granted — enable Content settings in Settings");
+  assertEquals((await t.list_cookies.execute({ domain: "example.com" })).error, "cookies permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.list_cookie_stores.execute({})).error, "cookies permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.get_cookie.execute({ url: "https://example.com/", name: "s" })).error, "cookies permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.set_cookie.execute({ url: "https://example.com/", name: "s", value: "v" })).error, "cookies permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.remove_cookie.execute({ url: "https://example.com/", name: "s" })).error, "cookies permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.wipe_browsing_data.execute({ dataTypes: ["cache"] })).error, "browsingData permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.get_content_setting.execute({ resource: "javascript", primaryPattern: "https://example.com/*" })).error, "contentSettings permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.set_content_setting.execute({ resource: "javascript", primaryPattern: "https://example.com/*", setting: "block" })).error, "contentSettings permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.clear_content_settings.execute({ resource: "javascript", primaryPattern: "https://example.com/*" })).error, "contentSettings permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
   assertEquals(chromeCalls.filter((c) => !String(c[0]).startsWith("cookies")).length, 0, "no chrome mutation reached without the permission");
 });
 
@@ -220,12 +220,12 @@ Deno.test("T8 grant discipline: site-scoped cookie writes need the origin grant;
   const t = tools();
   // No grant at all: denied before any cookie mutation.
   const noGrant = await t.set_cookie.execute({ url: "https://example.com/", name: "s", value: "v" });
-  assertEquals(noGrant.error, "browser control not granted for this origin — ask the user to approve it in Settings");
+  assertEquals(noGrant.error, "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control");
   assertEquals(chromeCalls.filter((c) => c[0] === "cookies.set").length, 0);
   // An origin grant for a DIFFERENT origin does not cover example.com.
   await setOriginBrowserControlGrant(["https://other.example"]);
   const wrongOrigin = await t.set_cookie.execute({ url: "https://example.com/", name: "s", value: "v" });
-  assertEquals(wrongOrigin.error, "browser control not granted for this origin — ask the user to approve it in Settings");
+  assertEquals(wrongOrigin.error, "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control");
   // The matching origin grant authorizes the write.
   await setOriginBrowserControlGrant(["https://example.com"]);
   const ok = await t.set_cookie.execute({ url: "https://example.com/", name: "s", value: "v" });
@@ -285,7 +285,7 @@ Deno.test("T8 contentSettings mutation: grant-gated single-origin set/clear + pe
   assertEquals(badSetting.error, "invalid setting for images — allowed: allow, block");
   // No grant: denied.
   const noGrant = await t.set_content_setting.execute({ resource: "javascript", primaryPattern: "https://example.com/*", setting: "block" });
-  assertEquals(noGrant.error, "browser control not granted for this origin — ask the user to approve it in Settings");
+  assertEquals(noGrant.error, "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control");
   // Origin grant for the pattern's origin authorizes set + clear.
   await setOriginBrowserControlGrant(["https://example.com"]);
   const setRes = await t.set_content_setting.execute({ resource: "javascript", primaryPattern: "https://example.com/*", setting: "block" });

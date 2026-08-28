@@ -235,22 +235,22 @@ Deno.test("Tranche 2 tools: permission-gated execution fails closed when permiss
 
   // Without chrome.permissions granted:
   const alarmRes = await browser.create_alarm.execute({ name: "test_alarm", delayInMinutes: 5 });
-  assertEquals(alarmRes.error, "alarms permission not granted — enable Alarms in Settings");
+  assertEquals(alarmRes.error, "alarms permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
 
   const listAlarmsRes = await browser.list_alarms.execute({});
-  assertEquals(listAlarmsRes.error, "alarms permission not granted — enable Alarms in Settings");
+  assertEquals(listAlarmsRes.error, "alarms permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
 
   const bmRes = await browser.create_bookmark.execute({ title: "Test" });
-  assertEquals(bmRes.error, "bookmarks permission not granted — enable Bookmarks in Settings");
+  assertEquals(bmRes.error, "bookmarks permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
 
   const notifyRes = await browser.notify.execute({ title: "Test", message: "Hello" });
-  assertEquals(notifyRes.error, "notifications permission not granted — enable Notifications in Settings");
+  assertEquals(notifyRes.error, "notifications permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
 
   const idleRes = await browser.query_idle_state.execute({ detectionIntervalInSeconds: 60 });
-  assertEquals(idleRes.error, "idle permission not granted — enable Idle in Settings");
+  assertEquals(idleRes.error, "idle permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
 
   const menuRes = await browser.create_context_menu.execute({ id: "menu1", title: "Menu" });
-  assertEquals(menuRes.error, "contextMenus permission not granted — enable Context menus in Settings");
+  assertEquals(menuRes.error, "contextMenus permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
 });
 Deno.test("shadow metadata wiring contains no permission request, grant, runtime-send, provider or execute path", async () => {
   const files = [

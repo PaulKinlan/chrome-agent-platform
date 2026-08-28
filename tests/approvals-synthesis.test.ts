@@ -18,14 +18,17 @@ Deno.test("approvals synthesis: the settings section + nav + wiring are fully re
   assert(!js.includes("pendingCapabilityDisable"), "the pending-disable detour is gone");
 });
 
-Deno.test("approvals synthesis: revoke confirmation routes through the in-context owner-approved mutation", () => {
+Deno.test("approvals synthesis: the Permissions section is a read-only install-grant display (no Enable/Disable detours)", () => {
   const js = read("../extension/options/options.js");
-  // The Disable handler now drives capability.revoke through
-  // runOwnerApprovedMutation with a native confirm (confirmActionDialog) — the
-  // in-context path — never a settings page.
-  assert(js.includes('action: "capability.revoke"'), "the revoke action is the approval action");
-  assert(/runOwnerApprovedMutation\(\{/.test(js), "Disable uses the owner-approved mutation helper");
-  assert(js.includes("confirmActionDialog"), "the confirmation is a native in-context dialog");
+  // Install-granted model: chrome.permissions.remove only works on OPTIONAL
+  // permissions and nothing is optional anymore — there is no revoke control.
+  assert(!js.includes('action: "capability.revoke"'), "no capability.revoke control in Settings");
+  assert(!js.includes("grant-perm"), "no Enable button");
+  assert(!js.includes("revoke-perm"), "no Disable button");
+  // The in-context owner-approved mutation helper remains the path for real
+  // runtime-grantable mutations (e.g. per-agent provider overrides).
+  assert(/runOwnerApprovedMutation\(\{/.test(js), "the owner-approved mutation helper remains");
+  assert(js.includes("confirmActionDialog"), "the in-context confirmation dialog remains");
 });
 
 Deno.test("approvals synthesis: the SW approval contract is consumed exactly once by the retry", async () => {
@@ -45,7 +48,7 @@ Deno.test("approvals synthesis: the SW approval contract is consumed exactly onc
       return { ok: true, approvals };
     }
     if (msg?.type === "capability.revoke") {
-      if (!revoked) return { ok: false, error: "This operation requires owner approval in Settings." };
+      if (!revoked) return { ok: false, error: "This operation requires owner approval." };
       revoked = true;
       return { ok: true, revoked: true };
     }
@@ -64,7 +67,7 @@ Deno.test("approvals synthesis: the SW approval contract is consumed exactly onc
       if (revokeCount === 1) {
         // create the pending approval (the SW's requireOwnerApproval does this)
         approvals.push({ approvalId: "approval-1", action: "capability.revoke", targetRef: "storage" });
-        return { ok: false, error: "This operation requires owner approval in Settings." };
+        return { ok: false, error: "This operation requires owner approval." };
       }
       // the retry, after approval, succeeds
       return { ok: true, revoked: true };

@@ -191,7 +191,9 @@ export async function requestCapability(id) {
     // separate policy layer and is unaffected.
     const granted = await chrome.permissions.contains({
       permissions: cap.permissions,
-    }).catch(() => true);
+    });
+    // NOTE: no .catch(() => true) — a contains() failure must surface as an
+    // honest error (the outer catch), NEVER as granted (fail closed).
     if (!granted) {
       // Install-granted permissions can never be absent; this is a lie-guard,
       // not a request path.
@@ -232,8 +234,12 @@ export async function requestOriginHost(origin) {
   // HOST-PERMISSION SIMPLIFICATION: <all_urls> is granted at install
   // (manifest host_permissions), so every http(s) origin is already covered —
   // confirm and report honestly. A runtime escalation request no longer
-  // exists for host access.
+  // exists for host access. FAIL CLOSED: a contains() error means the grant
+  // state is unreadable — that is NOT granted, never silently true.
   const matches = [exactOriginPattern(origin)];
-  const granted = await chrome.permissions.contains({ origins: matches }).catch(() => true);
-  return granted;
+  try {
+    return (await chrome.permissions.contains({ origins: matches })) === true;
+  } catch {
+    return false;
+  }
 }

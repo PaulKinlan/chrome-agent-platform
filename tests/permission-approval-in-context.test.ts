@@ -179,7 +179,7 @@ Deno.test("P0 approval: an origins requirement sets ONLY the origin-scoped grant
     { reason: "group tabs", permissions: [], grantOrigins: ["https://a.example", "https://b.example"], grantGlobal: false },
     {
       sendFn: async (type, body) => { sent.push([type, body]); return { grant: { id: "g1", scope: "origins", origins: body.origins ?? [] } }; },
-      requestPermissions: async (perms) => { requestedPerms.push([...perms]); return true; },
+      verifyPermissions: async (perms) => { requestedPerms.push([...perms]); return true; },
     },
   );
   assertEquals(outcome.ok, true);
@@ -188,7 +188,7 @@ Deno.test("P0 approval: an origins requirement sets ONLY the origin-scoped grant
   assertEquals(grantCalls.length, 1, "exactly one grant write");
   assertEquals(grantCalls[0][1], { granted: true, origins: ["https://a.example", "https://b.example"] },
     "the grant is EXACTLY the requirement's origins — never widened, never the global form");
-  assertEquals(requestedPerms, [["storage"]], "storage is requested so the grant persists (the Settings toggle's behaviour)");
+  assertEquals(requestedPerms, [["storage"]], "storage is verified so the grant persists (the Settings toggle's behaviour)");
 });
 
 Deno.test("P0 approval: a global requirement sends the global form ONLY because the tool required it", async () => {
@@ -197,7 +197,7 @@ Deno.test("P0 approval: a global requirement sends the global form ONLY because 
     { reason: "group tabs (origin-less)", permissions: [], grantOrigins: [], grantGlobal: true },
     {
       sendFn: async (type, body) => { sent.push([type, body]); return { grant: { id: "g2", scope: "global" } }; },
-      requestPermissions: async () => true,
+      verifyPermissions: async () => true,
     },
   );
   assertEquals(outcome.ok, true);
@@ -206,18 +206,18 @@ Deno.test("P0 approval: a global requirement sends the global form ONLY because 
     "the global form is sent ONLY for a genuinely-global requirement");
 });
 
-Deno.test("P0 approval: Chrome permissions are requested exactly, first (they need the live gesture)", async () => {
+Deno.test("P0 approval: install-granted Chrome permissions are verified exactly (fail closed, no runtime request)", async () => {
   const sent = [];
   const requestedPerms = [];
   const outcome = await approvePermissionRequirement(
     { reason: "group tabs", permissions: ["tabGroups", "tabs"], grantOrigins: [], grantGlobal: false },
     {
       sendFn: async (type, body) => { sent.push([type, body]); return { grant: { id: "g3" } }; },
-      requestPermissions: async (perms) => { requestedPerms.push([...perms]); return true; },
+      verifyPermissions: async (perms) => { requestedPerms.push([...perms]); return true; },
     },
   );
   assertEquals(outcome.ok, true);
-  assertEquals(requestedPerms, [["tabGroups", "tabs"]], "the exact permissions are requested, nothing added");
+  assertEquals(requestedPerms, [["tabGroups", "tabs"]], "the exact permissions are verified, nothing added");
   assertEquals(sent, [], "a permissions-only requirement never touches the grant");
 });
 
@@ -227,7 +227,7 @@ Deno.test("P0 approval: a declined permission grants NOTHING (honest failure, no
     { reason: "group tabs", permissions: ["tabGroups"], grantOrigins: ["https://a.example"], grantGlobal: false },
     {
       sendFn: async (type, body) => { sent.push([type, body]); return { grant: { id: "g4" } }; },
-      requestPermissions: async () => false, // the owner dismissed Chrome's prompt
+      verifyPermissions: async () => false, // the install-grant verification failed
     },
   );
   assertEquals(outcome.ok, false);
@@ -241,7 +241,7 @@ Deno.test("P0 approval: a failed grant write is honest (ok:false, never claims s
     { reason: "group tabs", permissions: [], grantOrigins: ["https://a.example"], grantGlobal: false },
     {
       sendFn: async () => ({ error: "backend exploded" }),
-      requestPermissions: async () => true,
+      verifyPermissions: async () => true,
     },
   );
   assertEquals(outcome.ok, false);
@@ -341,7 +341,7 @@ function installConversationChromeStub(sw) {
       },
     },
     permissions: {
-      contains: () => Promise.resolve(true),
+      contains: (req) => { (sw.permissionVerifies ??= []).push([...(req.permissions ?? [])]); return Promise.resolve(true); },
       request: (req) => { sw.permissionRequests.push([...(req.permissions ?? [])]); return Promise.resolve(true); },
     },
   };
@@ -395,7 +395,8 @@ Deno.test("P0 conversation: a structured tool denial renders an in-context appro
   await card.dispatch("approve", { sourceEvent: { isTrusted: true } });
   await waitForCondition(() => sw.grantCalls.length === 1, 500, "the scoped grant is written");
   assertEquals(sw.grantCalls[0].origins, ["https://a.example"], "Allow granted EXACTLY the card's scope — never widened");
-  assert(sw.permissionRequests.some((p) => p.join() === "storage"), "storage requested so the grant persists");
+  assertEquals(sw.permissionRequests.length, 0, "no runtime permission request — the install grant is VERIFIED, not requested");
+  assert(sw.permissionVerifies?.some((p) => p.join() === "storage"), "storage verified so the grant persists");
   await waitForCondition(() => sw.runCount === 2, 1000, "the turn retries after the grant");
   assertEquals(sw.tasks[1], "group my tabs by domain", "the retry re-runs the owner's same task");
   await waitForCondition(() => card.getAttribute("state") === "granted", 500, "the card reports the grant");
@@ -426,6 +427,7 @@ Deno.test("P0 conversation: Deny grants nothing and never retries; a forged (unt
   await new Promise((r) => setTimeout(r, 50));
   assertEquals(sw.grantCalls.length, 0, "an untrusted event can never grant");
   assertEquals(sw.permissionRequests.length, 0, "an untrusted event can never request permissions");
+  assertEquals((sw.permissionVerifies ?? []).length, 0, "an untrusted event never even verifies the grant");
   // The owner declines for real.
   await card.dispatch("deny", { sourceEvent: { isTrusted: true } });
   await turn;

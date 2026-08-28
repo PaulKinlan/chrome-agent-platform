@@ -3499,16 +3499,17 @@ class AgentComposer extends Component {
   // gesture (the menu click) then acts. A missing/denied permission surfaces a
   // clear status (never a silent no-op).
 
-  /** Request optional permissions. MUST be the first await in the action so it
-   *  runs inside the menu-click user gesture (a preceding await breaks the
-   *  gesture and Chrome auto-denies). Supports both API permissions (perms) and
-   *  scoped host origins (origins). */
-  async _requestPermission(perms, origins) {
-    if (!chrome?.permissions?.request) return true; // no API → treat as available
+  /** Verify install-granted permissions. Every API permission + host access is
+   *  granted at install (manifest permissions + host_permissions <all_urls>),
+   *  so there is no runtime request left — this VERIFIES with contains() and
+   *  fails CLOSED: a contains() error is treated as NOT granted. Supports both
+   *  API permissions (perms) and scoped host origins (origins). */
+  async _verifyPermission(perms, origins) {
+    if (!chrome?.permissions?.contains) return true; // no API → treat as available
     const req = {};
     if (perms?.length) req.permissions = perms;
     if (origins?.length) req.origins = origins;
-    try { return (await chrome.permissions.request(req)) === true; }
+    try { return (await chrome.permissions.contains(req)) === true; }
     catch { return false; }
   }
 
@@ -3585,11 +3586,10 @@ class AgentComposer extends Component {
         // grab-screenshot activates + captures the chosen tab. Listing the tabs
         // needs `tabs`; capturing a SPECIFIC tab needs host access to THAT
         // origin (activeTab is transient + tied to the tab active at grant
-        // time, so it does not authorize a later-activated pick). The dynamic-
-        // permission-on-need principle: request the scoped host origin on the
-        // gesture, never fail with a bare "permission required".
-        const tabsGranted = await this._requestPermission(["tabs"]);
-        if (!tabsGranted) { this.setStatus("tab listing not granted — enable the Tabs permission in Settings.", false); return; }
+        // time, so it does not authorize a later-activated pick). Both are
+        // install-granted — verified here (fail closed), never a runtime ask.
+        const tabsGranted = await this._verifyPermission(["tabs"]);
+        if (!tabsGranted) { this.setStatus("tab listing unavailable — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension.", false); return; }
         const tabs = await chrome.tabs.query({}).catch(() => []);
         if (!tabs.length) { this.setStatus("no open tabs to pick from."); return; }
         const tab = await this._pickTab(tabs);
@@ -3599,11 +3599,11 @@ class AgentComposer extends Component {
           this.setStatus(`attached tab: ${tab.title || tab.url}`);
           return;
         }
-        // Capture the picked tab: request the scoped host origin on the gesture.
+        // Capture the picked tab: verify host access to that origin (install-granted).
         let origin = "";
         try { origin = new URL(tab.url || "").origin; } catch { /* keep empty */ }
         if (origin && origin !== "null") {
-          const granted = await this._requestPermission(null, [`${origin}/*`]);
+          const granted = await this._verifyPermission(null, [`${origin}/*`]);
           if (!granted) { this.setStatus(`screenshot blocked — grant access to ${origin} in the permission prompt.`, false); return; }
         }
         await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
@@ -3650,7 +3650,7 @@ class AgentComposer extends Component {
   async _captureMedia(kind) {
     try {
       const perm = kind === "record-audio" ? "audioCapture" : "videoCapture";
-      const ok = await this._requestPermission([perm]);
+      const ok = await this._verifyPermission([perm]);
       if (!ok) { this.setStatus(`${perm} permission denied — enable it to capture.`, false); return; }
       if (kind === "record-audio") {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });

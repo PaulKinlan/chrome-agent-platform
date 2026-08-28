@@ -523,16 +523,16 @@ function openDiscoverPicker(tabs) {
 }
 
 async function discoverTab(tab) {
-  // Request the exact origin's host permission + `scripting` together (one
-  // prompt) — the same owner-gesture the Settings Enroll button uses. The
-  // picked tab's id rides along so the SW can verify tab↔origin identity and
-  // report whether THAT tab was fully injected.
+  // The scripting permission + host access are GRANTED AT INSTALL (manifest
+  // permissions + host_permissions <all_urls>) — VERIFY the install grant
+  // rather than running an obsolete runtime request. A verification failure
+  // or absence is surfaced honestly (fail closed).
   let granted = false;
   try {
-    granted = await chrome.permissions.request({
+    granted = (await chrome.permissions.contains({
       permissions: ["scripting"],
       origins: [`${tab.origin}/*`],
-    });
+    })) === true;
   } catch (e) {
     setStatus(siteAgentSetupMessage("permission-error", tab.origin), false);
     return;
@@ -2071,8 +2071,12 @@ composer.addEventListener("send", async (ev) => {
   // it may never silently fork a visible conversation into a new task (the
   // owner's P0: "he should have all been in that one task"). A NEW task is
   // started only when the hub surface is showing (no open task view).
-  if (!threadView.hidden && currentThreadId && !agent?.ref) {
-    await runThreadTurn(task, attachments);
+  if (!threadView.hidden && currentThreadId) {
+    // A send with an @mention while a task view is open CONTINUES the thread
+    // too — the mention rides along as a delegation to the referenced agent
+    // (same shape as the new-task mention path below); it must never fork the
+    // visible conversation into a new task (contract §2).
+    await runThreadTurn(task, attachments, agent?.ref ? { kind: agent.kind, id: agent.id, name: agent.name } : null);
     return;
   }
   runSurfaceOwner.claim(); // a NEW task replaces the surface — fence any in-flight run

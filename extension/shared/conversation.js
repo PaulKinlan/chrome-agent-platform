@@ -424,41 +424,46 @@ export function normalizePermissionRequirement(result) {
   };
 }
 
-/** Execute an approved permission requirement FROM THE OWNER'S CLICK. Order
- * matters: the Chrome permission request happens FIRST (it needs the live
- * user gesture; awaiting anything else first can lose transient activation),
- * then the browser-control grant is routed through the service worker (the
- * single grant authority). Scope is exactly what the tool computed:
- * grantOrigins set an origin-scoped grant; grantGlobal (only when the tool's
- * own semantics already required the global grant) sets the global grant;
- * nothing is silently broadened. When a grant is set, "storage" is requested
- * too so the grant PERSISTS (without it the grant is session-only and
- * evaporates with the MV3 worker — the Settings toggle does the same).
- * Returns an honest outcome; every failure is surfaced, never swallowed. */
+/** Execute an approved permission requirement FROM THE OWNER'S CLICK. Every
+ * Chrome API permission + host access is GRANTED AT INSTALL (manifest
+ * permissions + host_permissions <all_urls>) — so the Chrome side is VERIFIED
+ * (chrome.permissions.contains, fail closed: a contains() error is treated as
+ * NOT granted and surfaced) rather than requested at runtime. The
+ * browser-control grant — the in-context MUTATION approval, a separate policy
+ * layer — is then routed through the service worker (the single grant
+ * authority). Scope is exactly what the tool computed: grantOrigins set an
+ * origin-scoped grant; grantGlobal (only when the tool's own semantics already
+ * required the global grant) sets the global grant; nothing is silently
+ * broadened. "storage" is verified too so the grant PERSISTS (without it the
+ * grant is session-only and evaporates with the MV3 worker). Returns an
+ * honest outcome; every failure is surfaced, never swallowed. */
 export async function approvePermissionRequirement(requirement, {
   sendFn = send,
-  requestPermissions = (permissions) => chrome.permissions.request({ permissions }),
+  verifyPermissions = async (permissions) => {
+    try { return (await chrome.permissions.contains({ permissions })) === true; }
+    catch { return false; }
+  },
 } = {}) {
   const out = { ok: true, permissionsGranted: true, grantSet: false, storagePersisted: null, errors: [] };
   if (requirement?.permissions?.length) {
     try {
-      out.permissionsGranted = (await requestPermissions([...requirement.permissions])) === true;
+      out.permissionsGranted = (await verifyPermissions([...requirement.permissions])) === true;
     } catch (e) {
       out.permissionsGranted = false;
       out.errors.push(String(e?.message ?? e));
     }
     if (!out.permissionsGranted) {
       out.ok = false;
-      if (!out.errors.length) out.errors.push("the permission request was declined");
+      if (!out.errors.length) out.errors.push("the install grant could not be verified");
       return out;
     }
   }
   if (requirement?.grantGlobal === true || requirement?.grantOrigins?.length) {
-    // Persist the grant first (silent permission, same gesture) — without it
-    // the grant would be session-only and the retry would deny again after a
-    // worker restart. A declined storage request is reported, not hidden.
+    // Verify the storage install-grant first — without it the grant would be
+    // session-only and the retry would deny again after a worker restart. A
+    // failed verify is reported, not hidden.
     try {
-      out.storagePersisted = (await requestPermissions(["storage"])) === true;
+      out.storagePersisted = (await verifyPermissions(["storage"])) === true;
     } catch {
       out.storagePersisted = false;
     }
