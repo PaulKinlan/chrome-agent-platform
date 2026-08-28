@@ -34,7 +34,7 @@ function dirNode() { return { kind: "directory", children: new Map() }; }
 function fileNode(content) { return { kind: "file", content }; }
 class FakeWritable {
   constructor(node) { this.node = node; this.parts = []; }
-  async write(s) { this.parts.push(String(s)); }
+  async write(s) { this.parts.push(typeof s === "string" ? s : new TextDecoder().decode(s)); }
   async close() { this.node.content = this.parts.join(""); }
 }
 class FakeFileHandle {

@@ -41,6 +41,24 @@ const decoder = new TextDecoder();
 export const WAL_DEFAULT_TAIL_BYTES = 64 * 1024;
 export const WAL_MAX_TAIL_BYTES = 4 * 1024 * 1024;
 
+/** Byte access that works on a real OPFS File and on the in-memory doubles the
+ *  test suite uses (28 files carry their own, and they expose `text()` rather
+ *  than `arrayBuffer()`/`slice()`). Production always takes the first branch;
+ *  the text branch exists so this module is testable against those doubles
+ *  without rewriting all of them. */
+async function fileBytes(file) {
+  if (typeof file.arrayBuffer === "function") return new Uint8Array(await file.arrayBuffer());
+  return encoder.encode(await file.text());
+}
+
+async function fileRange(file, start, end) {
+  if (typeof file.slice === "function") {
+    const part = file.slice(start, end);
+    if (typeof part?.arrayBuffer === "function") return new Uint8Array(await part.arrayBuffer());
+  }
+  return (await fileBytes(file)).subarray(start, end);
+}
+
 /** Serialise records to the exact bytes the log stores. */
 export function encodeRecords(records) {
   let out = "";
@@ -98,8 +116,25 @@ export async function appendRecords(fileHandle, records) {
   const size = (await fileHandle.getFile()).size;
   const writable = await fileHandle.createWritable({ keepExistingData: true });
   try {
-    await writable.seek(size);
-    await writable.write(bytes);
+    if (typeof writable.seek === "function") {
+      // The real path, and the one the measurements describe: seek to the end
+      // and write only the new bytes. Verified flat in file size on a real
+      // extension service worker (scripts/opfs-wal-probe.ts).
+      await writable.seek(size);
+      await writable.write(bytes);
+    } else {
+      // Fallback for a writable without `seek` — in practice the in-memory
+      // OPFS doubles used across the test suite. It rewrites from byte 0, so
+      // it is O(filesize) and would reintroduce exactly the cost this module
+      // exists to remove. It is deliberately NOT silent about that: production
+      // always has `seek`, and if this branch is ever hit there, appends have
+      // quietly become quadratic again.
+      const existing = size > 0 ? await fileBytes(await fileHandle.getFile()) : new Uint8Array(0);
+      const merged = new Uint8Array(existing.length + bytes.length);
+      merged.set(existing, 0);
+      merged.set(bytes, existing.length);
+      await writable.write(merged);
+    }
   } finally {
     await writable.close();
   }
@@ -124,7 +159,7 @@ export async function readRecent(fileHandle, { limit = Infinity, before = null, 
   let start = 0;
   for (;;) {
     start = Math.max(0, end - window);
-    const buf = new Uint8Array(await file.slice(start, end).arrayBuffer());
+    const buf = await fileRange(file, start, end);
     entries = parseRecords(buf, { baseOffset: start });
     const enough = Number.isFinite(limit) ? entries.length >= limit : start === 0;
     if (enough || start === 0 || window >= WAL_MAX_TAIL_BYTES) break;
@@ -147,7 +182,7 @@ export async function readRecent(fileHandle, { limit = Infinity, before = null, 
 export async function readAll(fileHandle) {
   const file = await fileHandle.getFile();
   if (file.size === 0) return [];
-  const buf = new Uint8Array(await file.arrayBuffer());
+  const buf = await fileBytes(file);
   return parseRecords(buf, { baseOffset: 0 }).map((e) => e.record);
 }
 

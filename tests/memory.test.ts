@@ -25,7 +25,7 @@ class FakeWritable {
     this.parts = [];
   }
   async write(s) {
-    this.parts.push(String(s));
+    this.parts.push(typeof s === "string" ? s : new TextDecoder().decode(s));
   }
   async close() {
     this.node.content = this.parts.join("");
