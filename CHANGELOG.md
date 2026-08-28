@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.328] — 2026-08-28
+- Groundwork for making any website usable by an agent: you will be able to write a small description of what a site can do (search this, read that, click this) and the agent gets those as tools — without the site owner having to do anything. It is deliberately a fixed list of simple actions rather than code, so a proposal from an agent can never be more than something you can read and refuse
+
 ## [0.2.327] — 2026-08-28
 - Found a data-loss bug while writing down what artifacts are for: deleting a Site Agent currently destroys every artifact created under that site. Artifacts are meant to be the central store of everything you have made and to outlive the agent and task that made them, so this is now the top-priority fix
 
