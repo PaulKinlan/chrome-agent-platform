@@ -1293,6 +1293,100 @@ export function createDurableRunRegistry({
    * TERMINAL FAILED (non-aborted) run, for owner-visible Retry. Read-only —
    * retry itself re-dispatches as a NEW execution (the failed record stays as
    * honest history; retention is retain-all/explicit-clear-only). */
+  const DISMISSED_KEY = "run-dismissed-failed";
+  const DISMISSED_CAP = 512;
+
+  /** The dismissed-failed-runs tombstone: execution ids the owner explicitly
+   * dismissed from the Tasks sidebar. Deliberately ONLY ids — no prompt text,
+   * no summaries — so the tombstone can never leak run content. Bounded LRU:
+   * the oldest ids fall off the cap (and die with their records anyway). */
+  async function readDismissedIds() {
+    const rec = await store.get(DISMISSED_KEY);
+    const ids = Array.isArray(rec?.ids) ? rec.ids.filter(validExecutionId) : [];
+    return new Set(ids);
+  }
+
+  async function dismissedFailedRuns() {
+    return locked(async () => [...(await readDismissedIds())]);
+  }
+
+  async function dismissFailedRuns(ids) {
+    return locked(async () => {
+      const incoming = (Array.isArray(ids) ? ids : [ids])
+        .map((id) => String(id ?? ""))
+        .filter(validExecutionId);
+      if (!incoming.length) return { ok: false, error: "no valid executionIds" };
+      const current = await readDismissedIds();
+      for (const id of incoming) current.add(id);
+      // LRU by insertion: newest last, cap trims the oldest.
+      const next = [...current].slice(-DISMISSED_CAP);
+      await store.setTrusted(DISMISSED_KEY, {
+        schemaVersion: 1,
+        retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
+        ids: next,
+      });
+      return { ok: true, dismissed: incoming.length, tracked: next.length };
+    });
+  }
+
+  /** Agent-deletion cascade (owner: a deleted agent's failures must not linger
+   * in the Tasks panel or the durable registry): purge the TERMINAL records of
+   * the given agent surface refs ("named:<slug>", "background:<id>") — record,
+   * index admission, resume-request payload (the stored prompt), logs, and
+   * payload chunks. Running/paused runs are NEVER touched here; the live-run
+   * abort in the delete path owns those. Aborted terminal records go too — the
+   * agent itself is gone, and its history must not resurrect under a reused
+   * id. Idempotent and per-record CAS-guarded: a concurrent writer only skips
+   * that one record. */
+  async function purgeFailedForAgent(agentIds) {
+    return locked(async () => {
+      const refs = (Array.isArray(agentIds) ? agentIds : [agentIds])
+        .map((id) => String(id ?? ""))
+        .filter(Boolean);
+      if (!refs.length) return { ok: false, error: "no agentIds" };
+      const refSet = new Set(refs);
+      const index = await store.get(INDEX_KEY);
+      const ids = Array.isArray(index) ? index.filter(validExecutionId) : [];
+      let purged = 0;
+      for (const executionId of ids) {
+        const record = await readRecord(executionId);
+        if (!record) continue;
+        if (!refSet.has(record.agentId)) continue;
+        if (!TERMINAL_PHASES.has(record.phase)) continue;
+        const terminal = record.terminal ?? null;
+        if (!terminal || terminal.ok !== false) continue;
+        const recordKey = `${RUN_PREFIX}${executionId}`;
+        const owned = (candidate) => candidate === recordKey ||
+          candidate === `${OUTBOX_PREFIX}${executionId}` ||
+          candidate === `${LOG_IDX_PREFIX}${executionId}` ||
+          candidate.startsWith(`${RESUME_PREFIX}${executionId}:`) ||
+          candidate.startsWith(`${LOG_PREFIX}${executionId}:`) ||
+          candidate.startsWith(`${PAYLOAD_PREFIX}${executionId}:`);
+        for (const key of (await store.keys()).filter(owned).sort()) await store.delete(key);
+        const removed = await removeFromIndexExact(executionId, record.registryAdmission);
+        if (!removed.ok) continue; // CAS raced — the record stays, honestly
+        const version = await store.getVersion(recordKey);
+        if (recordKey && (await store.has(recordKey))) await store.compareAndDelete(recordKey, version);
+        purged += 1;
+      }
+      // Tombstones for purged ids are dead weight — prune them with the records.
+      const dismissed = await readDismissedIds();
+      if (dismissed.size) {
+        const alive = await store.get(INDEX_KEY);
+        const aliveIds = new Set(Array.isArray(alive) ? alive.filter(validExecutionId) : []);
+        const next = [...dismissed].filter((id) => aliveIds.has(id));
+        if (next.length !== dismissed.size) {
+          await store.setTrusted(DISMISSED_KEY, {
+            schemaVersion: 1,
+            retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
+            ids: next,
+          });
+        }
+      }
+      return { ok: true, purged };
+    });
+  }
+
   async function getRetryRequest(executionId) {
     return locked(async () => {
       const id = String(executionId ?? "");
@@ -1376,6 +1470,9 @@ export function createDurableRunRegistry({
     settle,
     cancel,
     getRetryRequest,
+    dismissedFailedRuns,
+    dismissFailedRuns,
+    purgeFailedForAgent,
     pauseForPermission,
     pauseForProviderChange,
     resumeAfterPermission,
