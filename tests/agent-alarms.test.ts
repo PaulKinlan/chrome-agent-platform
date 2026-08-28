@@ -446,6 +446,20 @@ Deno.test("approval bridge: pending under exec A → resolve → retry under exe
   const bridgedAgain = oa.bridgeApprovedApprovalToRun(store, again.approvalId, "exec-d");
   assertEquals(bridgedAgain.ok, true, "a distinct approved approval bridges once");
   assertEquals(oa.bridgeApprovedApprovalToRun(store, again.approvalId, "exec-e").ok, false, "and never twice");
+
+  // REVISE-7 P1-2 unit pin: bridging an approval to its OWN run is a no-op
+  // success ({ok:true, bridged:false}) — reachable on a same-run re-audit.
+  // The SW audit gate keys on bridged===true so this never emits a second
+  // owner-bridged record. (A CROSS-run repeat hits the already-bridged
+  // refusal instead — asserted above.)
+  const selfRun = oa.createPendingApproval(store, "exec-self", action, target, digest);
+  oa.resolvePendingApproval(store, selfRun.approvalId, true);
+  const selfOnce = oa.bridgeApprovedApprovalToRun(store, selfRun.approvalId, "exec-self");
+  assertEquals(selfOnce.ok, true);
+  assertEquals(selfOnce.bridged, false, "own-run bridge is a no-op success");
+  const selfRepeat = oa.bridgeApprovedApprovalToRun(store, selfRun.approvalId, "exec-self");
+  assertEquals(selfRepeat.ok, true);
+  assertEquals(selfRepeat.bridged, false, "an already-keyed repeat reports bridged:false — no re-audit");
 });
 
 Deno.test("schedule routes: the automatic retry turn consumes the resolved approval — exactly ONE mutation, no second approval request", async () => {
@@ -857,6 +871,51 @@ Deno.test("agent.run @mention dispatch: the REAL dispatcher routes each mention 
     const lateBridged = ((afterControls.violations as Array<Record<string, unknown>>) ?? [])
       .filter((v) => v.kind === "owner-bridged");
     assertEquals(lateBridged.length, 1, "no additional bridge events from unknown/absent bindings");
+
+    // REVISE-7 P1-1 — the negative control must REACH the bridge. The branch
+    // probes above use NONEXISTENT agents, so named-agent.run returns early
+    // and never forwards the binding — they prove only that early refusals
+    // audit nothing. Dispatch a mention to the REAL named:alpha carrying a
+    // random unknown approval id: the handler forwards it, runTask's bridge
+    // resolves "no such approval", and NOTHING is audited.
+    const unknownBindingRun = await send({
+      type: "agent.run",
+      task: "alpha with an unknown binding",
+      mention: { kind: "named", id: "named:alpha", name: "Alpha" },
+      approvalBinding: ["c".repeat(64)],
+    });
+    assertEquals(
+      !dispatchRefusals.includes(String(unknownBindingRun.error)),
+      true,
+      `the unknown-binding probe must reach runTask for the REAL agent, got: ${JSON.stringify(unknownBindingRun)}`,
+    );
+    const afterUnknownBinding = await send({ type: "security.state" }, optionsSender);
+    assertEquals(
+      ((afterUnknownBinding.violations as Array<Record<string, unknown>>) ?? []).filter((v) => v.kind === "owner-bridged").length,
+      1,
+      "an unknown approval id on a REAL agent's run must not bridge or audit",
+    );
+
+    // REVISE-7 P1-2 — the already-keyed repeat. Re-dispatching the SAME bound
+    // mention creates a NEW execution; the approval was already bridged onto
+    // the first run, so the second bridge refuses ("already bridged") and —
+    // with the audit gate keyed on bridged===true — audits NOTHING. A repeat
+    // that emitted a second event (the old every-truthy-ok audit) fails here.
+    const repeatRun = await send({
+      type: "agent.run",
+      task: "alpha's mention task",
+      mention: { kind: "named", id: "named:alpha", name: "Alpha" },
+      approvalBinding: [approvalId],
+    });
+    assertEquals(
+      !dispatchRefusals.includes(String(repeatRun.error)),
+      true,
+      `the repeat dispatch must also reach runTask, got: ${JSON.stringify(repeatRun)}`,
+    );
+    const afterRepeat = await send({ type: "security.state" }, optionsSender);
+    const repeatBridged = ((afterRepeat.violations as Array<Record<string, unknown>>) ?? [])
+      .filter((v) => v.kind === "owner-bridged");
+    assertEquals(repeatBridged.length, 1, `the already-bridged repeat must not emit a second bridge event, got: ${JSON.stringify(repeatBridged)}`);
   } finally {
     if (prevRuntime) globalThis.chrome.runtime = prevRuntime;
   }

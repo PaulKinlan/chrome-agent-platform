@@ -1979,7 +1979,10 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
           const bridged = bridgeApprovedApprovalToRun(ownerApprovalStore, aid, executionId);
           // Audit the bridge with the approval's opaque ref ("bridged" is an
           // allowlisted decision; the owner transparency surface shows it).
-          if (bridged?.ok) securityApprovalEvent("bridged", bridged.action ?? "", bridged.targetRef ?? "");
+          // ONLY a real re-key audits: {ok:true, bridged:false} means the
+          // approval was already keyed to THIS run — auditing every truthy ok
+          // would emit a repeatable false bridge record on re-audit.
+          if (bridged?.ok && bridged.bridged) securityApprovalEvent("bridged", bridged.action ?? "", bridged.targetRef ?? "");
         } catch { /* degraded — the tool re-requests */ }
       }
     }
