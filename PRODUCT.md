@@ -47,7 +47,7 @@ ways. There are three structural causes, and they are measurable.
 ## Why it feels messy
 
 **1. The product speaks three vocabularies for the same nouns.**
-*(Fixed for everything a person reads, `0.2.350` — CAP-FB-20260828-NOUN-DISCIPLINE-01.)*
+*(Fixed for everything a person reads, `0.2.355` — CAP-FB-20260828-NOUN-DISCIPLINE-01.)*
 One view was `Assets` in the sidebar, `Recent artifacts` on the card next to it,
 `artifacts/index.html` on disk, and `asset.*` in the routes — and `ntp.js` opened it
 with the title "Assets" in one place and "Artifacts" in another. `Skills` in the nav
@@ -82,7 +82,7 @@ above it.
 
 ## The direction
 
-**Nouns before pixels.** *(Done for the UI, `0.2.350`; the routes remain.)* One name
+**Nouns before pixels.** *(Done for the UI, `0.2.355`; the routes remain.)* One name
 per concept, enforced by a check the way `check:gallery` enforces component drift:
 **Artifacts** (never Assets), **Skills** (never recipes), **Agents** used once per
 view. The files followed the UI where it was safe (`extension/recipes/` is gone); the

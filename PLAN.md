@@ -195,7 +195,7 @@ shippable:
 3. `CAP-FB-20260827-HUB-FIRST-RUN-01` — the first-run card offers six competing actions
    above the composer and a fresh profile stacks seven empty states, one of which shows
    filtered-empty copy to someone who has never had data.
-4. `CAP-FB-20260828-NOUN-DISCIPLINE-01` — **UI half done, in review (`0.2.350`).** The
+4. `CAP-FB-20260828-NOUN-DISCIPLINE-01` — **UI half done, in review (`0.2.355`).** The
    product spoke three vocabularies for the same nouns (Assets / Recent artifacts /
    `asset.*`; Skills served by `recipes/`). Everything a person reads now says
    **Artifacts**, the Agents card names itself once instead of three times nested, and

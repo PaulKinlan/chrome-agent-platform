@@ -13,7 +13,7 @@ one line each here:
 
 - **Back button → blank screen** — fixed at the top frame (`0.2.296`, `0.2.304`).
   Settings/Artifacts/Directory return to the hub in ONE press (the view was called
-  "Assets" then and Skills was still a destination; both changed in `0.2.350` —
+  "Assets" then and Skills was still a destination; both changed in `0.2.355` —
   `CAP-FB-20260828-NOUN-DISCIPLINE-01`). Settings
   sub-navigation uses `replaceState`, and the Settings brand click goes Home.
 - **Permission dead-ends** — approval now surfaces **in the conversation** that needs it
@@ -84,7 +84,7 @@ one line each here:
 
 ### Hub / sidebar / task list
 - The task sidebar (expand/collapse to an icon rail, tooltips, the + new-task button).
-- **One name per concept (2026-08-28, `0.2.350`, CAP-FB-20260828-NOUN-DISCIPLINE-01)** —
+- **One name per concept (2026-08-28, `0.2.355`, CAP-FB-20260828-NOUN-DISCIPLINE-01)** —
   the sidebar item, the quick drawer, the composer mention group and BOTH `openView` call
   sites for `artifacts/index.html` now say **Artifacts**; the same view no longer has two
   titles. The agent editor's "Core assets" became **Context files** (owner-supplied input

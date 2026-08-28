@@ -69,7 +69,7 @@ invisible in a demo.
 ### Consistency — the recipes→skills rename never finished
 `CAP-FB-20260821-RECIPES-SKILLS-RENAME-01` · P3 · OPEN (narrowed 2026-08-28)
 
-The USER-FACING half is closed by `CAP-FB-20260828-NOUN-DISCIPLINE-01` (`0.2.350`): no
+The USER-FACING half is closed by `CAP-FB-20260828-NOUN-DISCIPLINE-01` (`0.2.355`): no
 string a person reads still says "recipe", `extension/recipes/` is gone, and
 `npm run check:vocabulary` fails the build if one comes back. What survives is internal —
 `extension/lib/recipes.js` with its `RECIPES` export, the `recipe.*` message routes

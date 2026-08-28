@@ -1,10 +1,13 @@
 # Changelog
 
+## [0.2.355] — 2026-08-28
+- One name for one thing. The gallery of things your agents make was called "Assets" in the sidebar and "Artifacts" on the card right next to it — and opening it from those two places gave the same screen two different titles. It is **Artifacts** everywhere now: the sidebar, the quick-access drawer, the @-mention list and both ways in. Files you attach to an agent are called "Context files", because they are something you give the agent, not something it made. The Agents card said "Agents" three times, nested; it says it once. In Settings, background agents no longer talk about "recipes" — they wrap skills. A new build check fails if any of these names come back
+
 ## [0.2.354] — 2026-08-28
-- CAP-FB-20260821-WORKTREE-HYGIENE-01: bind every at-risk worktree head, correct the stale facts
+- Internal only, no user-visible change: every in-progress branch was made recoverable and the notes about them corrected
 
 ## [0.2.353] — 2026-08-28
-- CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01: record the shipping commit
+- Internal bookkeeping for the tool-call readability work released just before it
 
 ## [0.2.352] — 2026-08-28
 - Tool calls in a task are much easier to read. A collapsed one now tells you what happened — "list_tabs · 8 tabs · done" — and a failed one shows the actual error on the line, in red, and opens itself instead of hiding the reason behind a click. Opened up, rows show what they contain rather than their shape: a list of tabs reads as the tab titles, not ten identical "object" rows. Every block of input and output has a JSON view and a Copy button, and it remembers which view you last used. A typical call now takes about a third less room on screen while showing more

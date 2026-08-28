@@ -879,8 +879,9 @@ evidence every other task depends on).
 ## [CAP-FB-20260821-WORKTREE-HYGIENE-01] Durable worktrees and evidence off the RAM-backed temp filesystem
 - Feedback: 2026-08-21 — independent architectural review found the build host's temporary filesystem at 100% inode use, which failed the unit suite, and found reviewed work and retained gate evidence stored only on tmpfs
 - Updated: 2026-08-28 UTC
-- Status: OPEN — the loss risk is CLOSED (every at-risk head is bound under a rescue tag); what remains is a cleanup decision that is the owner's to make
+- Status: OPEN
 - Resume: OPEN
+- Note: the loss risk is CLOSED (every at-risk head is bound under a rescue tag); what remains is a cleanup decision that is the owner's to make
 - Priority: P0
 - Owner: coordinator session (audit + rescue binding); owner decision pending on removal
 - Workspace: none
@@ -1217,8 +1218,8 @@ evidence every other task depends on).
 - Owner: implementer (worktree lane)
 - Workspace: active (local path private)
 - Branch: `worktree-agent-a451ff5ed1d15409d`
-- Base: `2607d954`
-- Candidate: `worktree-agent-a451ff5ed1d15409d` (see History for the exact commit)
+- Base: `d654b0a4`
+- Candidate: `worktree-agent-a451ff5ed1d15409d` (release `0.2.355`, rebased onto `origin/main@d654b0a4`; NOT pushed — a concurrent session is writing to this repo, so the owner merges)
 - Shipping: —
 - Acceptance: exactly one user-facing name per concept, and the code agrees with it. **Artifacts**, never Assets: the sidebar item, the hub card, both `openView` titles and the route family all say the same word. **Skills**, never recipes: `recipes/index.html` and the `recipe.*` routes are renamed to match the nav that already says Skills. **Agents** appears once per view, not as a sidebar section AND a card AND a row inside that card. **Skills is not a top-level view** (owner, 2026-08-28): it is currently a sidebar destination opening `recipes/index.html`, but a skill is something you attach to an agent or include in a task, not a place you go — it belongs where it is used, with management living in Settings alongside the other agent configuration. A `check:vocabulary` script fails the build on a banned term the way `check:gallery` fails on component drift, so this cannot come back
 - Review: PENDING — fresh-session review of the diff on branch `worktree-agent-a451ff5ed1d15409d`. Falsification already recorded below (the gate observed RED on the unfixed tree, GREEN after)
@@ -1227,7 +1228,9 @@ evidence every other task depends on).
 - Next: fresh-session review of the branch, then merge. The deliberate remainder is the `asset.*` / `recipe.*` WIRE ROUTES, the `*_asset` model-facing tool names, the `management.asset.*` capability ids and the `asset:` OPFS keys — those are a persisted security/data boundary (approval digests, `DESTRUCTIVE_ACTIONS`/`OWNER_DIRECT_ACTIONS`, per-agent tool allowlists, stored artifact bodies), not vocabulary, and renaming them is its own reviewed change. `check:vocabulary` deliberately does not scan them, so the gate can never be satisfied by weakening it
 - Recover: `git grep -n "NOUN-DISCIPLINE" -- TASKS.md scripts/check-vocabulary.mjs`
 - History:
-  - 2026-08-28 23:55 UTC — implemented on `worktree-agent-a451ff5ed1d15409d` (base `2607d954`), NOT pushed to main (a concurrent session is writing to this repo).
+  - 2026-08-29 00:40 UTC — **two gates were inherited RED from `origin/main@d654b0a4` and repaired here, without changing anyone's meaning** (flagged for the owning lanes): (a) `tests/changelog.test.ts` failed because the auto-bump hook had written raw commit subjects containing `CAP-FB-` ids into the `0.2.353` and `0.2.354` changelog entries — both rewritten as plain user-facing English; (b) `scripts/check-tasks.mjs` reported 2 new schema violations because `CAP-FB-20260821-WORKTREE-HYGIENE-01` and `CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01` had appended a qualifier to the enum `Status:` field — the exact wording was MOVED verbatim to a `Note:` line and `Status:` left as `OPEN`. No content deleted, no assertion weakened.
+  - 2026-08-29 00:40 UTC — rebased onto `origin/main@d654b0a4` (release `0.2.355`). The concurrently-landed `TOOL-CALL-LEGIBILITY` and composer-auto-grow edits to `extension/shared/components.js` auto-merged; the only conflicts were the hook-generated version files, all resolved to upstream. Full gates re-run at the rebased tip. One PRE-EXISTING red was inherited from `origin/main@d654b0a4` and fixed here rather than carried: `tests/changelog.test.ts` failed because the auto-bump hook had written raw commit subjects containing `CAP-FB-` ids into the `0.2.353` and `0.2.354` changelog entries; both are now plain user-facing English. Still NOT pushed.
+  - 2026-08-28 23:55 UTC — implemented on `worktree-agent-a451ff5ed1d15409d` (base `2607d954`), NOT pushed to main (a concurrent session is writing to this repo; a force-push destroyed landed work earlier today).
     **Artifacts is the single user-facing name.** The sidebar button (`open-assets`/"Assets" → `open-artifacts`/"Artifacts"), the quick drawer (`<asset-quick-drawer>` → `<artifact-quick-drawer>`, its heading/search/empty/browse copy, its `browse-assets`/`asset-open`/`asset-reuse` events → `artifact-*`, its exports `ASSET_QUICK_LIMITS`/`selectQuickAssets`/`quickAssetOwner`/`formatQuickAsset*` → `ARTIFACT_*`/`*Artifact*`), the composer mention group ("Assets" → "Artifacts"), and BOTH `openView("artifacts/index.html", …)` call sites (one said "Assets", one said "Artifacts" — the exact defect in the feedback) now say one word. `attachAssetToComposer` → `attachArtifactToComposer`. The agent editor's "Core assets" became **Context files** — owner-supplied INPUT is a different concept from agent OUTPUT and may not borrow the artifact noun either; the persisted `coreAssets` field is untouched.
     **Agents once per view.** The hub card was `<section aria-label="Agents">` → `<h2>Agents</h2>` → `<span>Agents</span>`; the aria-label became `aria-labelledby` on the h2 and the inner row became "Yours". The same duplicate-accessible-name defect was found and fixed on the Recent artifacts and Recent activity sections by the new checker.
     **Skills.** The sidebar destination was already gone (skills-in-settings landed earlier); this change removes the last user-facing "recipe" copy (Settings → Background agents said "each wraps a recipe"), moves `extension/recipes/skills-panel.js` → `extension/skills/skills-panel.js`, and renames `shared/recipe-icons.js`/`RECIPE_ICON` → `shared/skill-icons.js`/`SKILL_ICON`. `/skill:<id>`, the `use-skill` bridge and agent skill attachment are untouched. Absorbs the UI half of `CAP-FB-20260821-RECIPES-SKILLS-RENAME-01`; that entry keeps the `recipe.*` route/`lib/recipes.js` half.
@@ -1302,7 +1305,8 @@ evidence every other task depends on).
 ## [CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01] Tool-call cards show shape, not answers
 - Feedback: 2026-08-27 — product owner: "the tools calling bubbles don't help as much, I'd expect some better info, then formatted and ability to see JSON input and response better"
 - Updated: 2026-08-28 UTC
-- Status: OPEN — 7 of 8 acceptance items delivered and gated; ONE remains (the in-context grant card for a permission denial, §2b)
+- Status: OPEN
+- Note: 7 of 8 acceptance items delivered and gated; ONE remains (the in-context grant card for a permission denial, §2b)
 - Priority: P0
 - Owner: coordinator session
 - Workspace: main
