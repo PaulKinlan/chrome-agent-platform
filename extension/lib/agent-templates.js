@@ -14,7 +14,7 @@
 // hub delegation) — per-agent MCP config and agent-to-agent delegation are
 // future gaps (G4/G5) and are never implied here.
 
-/** @type {Array<{id:string,name:string,description:string,role:string,skills:string[],firstTask:string,mode:"on-demand"|"background"}>} */
+/** @type {Array<{id:string,name:string,description:string,role:string,skills:string[],firstTask:string,mode:"on-demand"|"background",schedule?:{periodInMinutes:number,prompt:string}}>} */
 export const AGENT_TEMPLATES = [
   {
     id: "chief-of-staff",
@@ -123,6 +123,11 @@ Findings grouped BLOCKING / MAJOR / MINOR, each with evidence, ending with a ver
     ],
     firstTask: "Do a full pass: dedupe, close stale tabs, group by domain — then tell me what you did.",
     mode: "background",
+    schedule: {
+      periodInMinutes: 120,
+      prompt:
+        "Do your scheduled hygiene pass: dedupe tabs, close stale ones, group by domain — then report what you did.",
+    },
     role: `# Tab Janitor Persona
 
 ## Identity
@@ -153,6 +158,11 @@ A short action report: what was closed/grouped/pinned with counts, plus anything
     ],
     firstTask: "Tidy my bookmarks: categorise, dedupe, and check for dead links.",
     mode: "background",
+    schedule: {
+      periodInMinutes: 10080,
+      prompt:
+        "Do your scheduled library pass: categorise new bookmarks, dedupe, check for dead links — report counts.",
+    },
     role: `# Bookmark Librarian Persona
 
 ## Identity
@@ -179,6 +189,11 @@ A run report: what was categorised, merged, and link-checked (counts), plus anyt
     skills: ["price-watcher", "page-change-watcher", "link-checker"],
     firstTask: "Ask me which page to watch and at what threshold, then set it up.",
     mode: "background",
+    schedule: {
+      periodInMinutes: 60,
+      prompt:
+        "Do your scheduled watch pass: check every page you are tracking against its threshold — alert only on a real change.",
+    },
     role: `# Price & Change Watcher Persona
 
 ## Identity
@@ -232,7 +247,7 @@ A scored report: a table of findings (area, severity, evidence, fix), the overal
     id: "data-wrangler",
     name: "Data Wrangler",
     description:
-      "Extracts and shapes: tables from pages, CSV clean-up, structured summaries — jq, csv, and sed are its instruments.",
+      "Extracts and shapes: tables from pages, CSV clean-up, structured summaries — csvtool and the bundled text tools are its instruments.",
     skills: ["data-extractor", "form-filler"],
     firstTask: "Extract every table from the page in my active tab into clean CSV.",
     mode: "on-demand",
@@ -247,7 +262,7 @@ A scored report: a table of findings (area, severity, evidence, fix), the overal
 
 - Extract faithfully: the data is the data — never invent values to fill gaps; mark gaps as empty
 - Shape deliberately: consistent column names, stable types, one row per thing
-- Use the bundled capability tools (jq, csv, sed, htmlq) for shaping; show the transformation when it is not obvious
+- Use the bundled capability tools (csvtool, grep, sort, uniq, sqlite3_query_bounded) for shaping; show the transformation when it is not obvious
 - Preserve the source: always say which page and which region data came from
 
 ## Output Format
@@ -338,6 +353,33 @@ A submission report: what was filed, where, the field-by-field summary, the conf
 ## Output Format
 
 A verdict table: claim | verdict (corroborated / contradicted / unverified) | sources as linked quotes | confidence. Unverifiable means UNVERIFIED, not false.`,
+  },
+  {
+    id: "critic",
+    name: "Critic",
+    description:
+      "Argues against the plan: the strongest honest objection, every time — risks, counter-evidence, gaps. Never softens.",
+    skills: ["red-team", "page-summary", "claim-crosscheck"],
+    firstTask:
+      "Red-team the plan in my active tab; give me the three strongest objections.",
+    mode: "on-demand",
+    role: `# Critic Persona
+
+## Identity
+
+- **Role**: the owner's critic
+- **Purpose**: argue AGAINST the plan — your job is the strongest honest objection, not agreement
+
+## Instructions
+
+- Steel-man first: restate the plan in its strongest form before attacking it
+- Produce the three strongest objections, each with evidence or a concrete failure scenario — no vague unease
+- Never soften a finding to be agreeable; a critic who flatters is useless
+- Distinguish blocking objections from acceptable risks, and say which is which
+
+## Output Format
+
+An objection memo: the steel-manned plan in one paragraph, then the objections ranked by severity (blocking / major / minor), each with its evidence, ending with the mitigations that would change your verdict.`,
   },
   {
     id: "webapp-test-pilot",
@@ -535,6 +577,11 @@ An itinerary brief: the recommendation (cost breakdown, why), the alternatives, 
     firstTask:
       "Pull the last 3 months of statements, list every recurring charge, flag anything that grew more than 10%.",
     mode: "background",
+    schedule: {
+      periodInMinutes: 1440,
+      prompt:
+        "Do your scheduled audit pass: organise any new statements into CSV, flag anomalies and price creep with the numbers.",
+    },
     role: `# Subscription & Bill Auditor Persona
 
 ## Identity
@@ -590,6 +637,21 @@ Explanations in the three levels, then practice questions with the answers held 
 /** Count of shipped templates (test-pinned so accidental drops trip the suite). */
 export const AGENT_TEMPLATE_COUNT = AGENT_TEMPLATES.length;
 
+/**
+ * The CURATED starter set (owner directive): the six agents offered one-click
+ * from the agents area and the first-run empty state. The other templates stay
+ * in the picker. Ids only — the template records are the single source of
+ * truth, so the set can never drift from the catalogue.
+ */
+export const STARTER_TEMPLATE_IDS = Object.freeze([
+  "chief-of-staff",
+  "research-analyst",
+  "site-auditor",
+  "critic",
+  "webapp-test-pilot",
+  "skill-smith",
+]);
+
 /** Look up a template by id, or null. */
 export function agentTemplateById(id) {
   return AGENT_TEMPLATES.find((t) => t.id === id) ?? null;
@@ -607,5 +669,7 @@ export function templatePrefill(template) {
     role: template.role,
     skills: [...template.skills],
     firstTask: template.firstTask,
+    mode: template.mode,
+    schedule: template.schedule ? { ...template.schedule } : null,
   };
 }

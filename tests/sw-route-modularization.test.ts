@@ -61,6 +61,7 @@ const BASELINE_ROUTES = [
   "named-agent.list",
   "named-agent.get",
   "named-agent.create",
+  "named-agent.set-schedule",
   "named-agent.update",
   "named-agent.set-provider",
   "named-agent.delete",

@@ -225,7 +225,7 @@ import {
   setGlobalBrowserControlGrant,
   setOriginBrowserControlGrant,
 } from "../lib/browser-tools.js";
-import { getRecipe, RECIPES, backgroundRecipes, intentOf } from "../lib/recipes.js";
+import { getRecipe, RECIPES, backgroundRecipes, intentOf, agentSkillIds, mergeRunSkills } from "../lib/recipes.js";
 import { fetchSkillFromUrl, installImportedSkill } from "../lib/skill-import.js";
 import { durableRuns } from "../lib/durable-runs.js";
 import { replaySafetyForTool } from "../lib/tool-replay-safety.js";
@@ -364,6 +364,60 @@ async function resolveSkillRefs(task) {
     if (skill) out.push(skill);
   }
   return out;
+}
+
+// An agent's SAVED skills (picked at create/edit, e.g. from a template) ride
+// every run the same way a /skill:<id> reference does — resolved to recipes
+// and composed into the system prompt (the templates review P1: saved skills
+// were persisted but decorative at execution). Unknown ids resolve to nothing
+// (a deleted skill drops out of the composition honestly).
+async function resolveAgentSkills(agent) {
+  const out = [];
+  for (const id of agentSkillIds(agent)) {
+    const skill = await resolveRecipe(id);
+    if (skill) out.push(skill);
+  }
+  return out;
+}
+
+// ── agent schedules (ONE agent concept: persona + skills + memory + OPTIONAL
+// schedule — owner directive 2026-08-28) ────────────────────────────────────
+// The single schedule code path for named agents: create-with-schedule and
+// edit-schedule both land here. A scheduled agent fires as a REAL named-agent
+// run (its own OPFS memory, its role layer, its saved skills — the fire
+// path's `agent:` branch); removing the schedule cancels the alarm and the
+// agent itself is untouched.
+async function applyAgentSchedule(id, periodInMinutes, task = null) {
+  const agent = await getNamedAgent(id);
+  if (!agent) return { ok: false, error: `no agent ${id}` };
+  const slug = slugifyAgentId(id);
+  const name = `agent:${slug}`;
+  if (periodInMinutes == null || periodInMinutes === 0) {
+    const handle = cancelScheduledTaskBackground(name);
+    try {
+      await handle.marked;
+    } catch (err) {
+      return { ok: false, error: `schedule removal failed before it was durable: ${err?.message ?? String(err)}` };
+    }
+    broadcastRegistryChanged();
+    return { ok: true, scheduled: false, name, stopping: handle.stopping };
+  }
+  const minutes = Number(periodInMinutes);
+  if (!Number.isFinite(minutes) || minutes < 1) {
+    return { ok: false, error: "periodInMinutes must be a number ≥ 1" };
+  }
+  const prompt = typeof task === "string" && task.trim()
+    ? task.trim()
+    : `Perform your scheduled run as ${agent.name ?? slug}, per your role.`;
+  await scheduleTask({
+    task: prompt,
+    delayMs: minutes * 60 * 1000,
+    periodInMinutes: minutes,
+    name,
+    owner: { agentRole: `named:${slug}`, agentSurfaceRef: `named:${slug}` },
+  });
+  broadcastRegistryChanged();
+  return { ok: true, scheduled: true, name, periodInMinutes: minutes };
 }
 import {
   checkHookAllowed,
@@ -742,6 +796,36 @@ async function handleAlarm(alarm) {
           type: "tool-result", id: alarm.name, run: runInstance, callId: `${alarm.name}:${runInstance}:script:1`,
           tool: "script", result: `script ${task.scriptId} not found`, ok: false,
         }).catch(() => {});
+      }
+    } else if (alarm.name.startsWith("agent:")) {
+      // A NAMED agent's schedule (the unified agent model — owner directive
+      // 2026-08-28): the fired run is a REAL named-agent run — the agent's OWN
+      // OPFS memory (its history lands where its interactive runs do), its
+      // role layer, and its saved skills composed in. Live record reads mean
+      // owner edits to the persona/skills take effect on the next fire.
+      const slug = alarm.name.slice("agent:".length);
+      const agent = await getNamedAgent(slug);
+      if (!agent) {
+        // Orphaned agent schedule (deleted out from under it): never run for
+        // a ghost. A one-shot orphan still falls through to markScheduledDone;
+        // a recurring one is left for the owner to cancel (task.cancel).
+        console.warn(`orphaned agent schedule ${alarm.name} — the agent is gone; cancel it from Tasks`);
+      } else {
+        await fence.assertOwned();
+        await runTask({
+          id: alarm.name,
+          task: task.task ?? alarm.name,
+          scheduled: true,
+          scheduleName: alarm.name,
+          runKind: "agent",
+          attachments: task.attachments ?? [],
+          fence,
+          promptScope: `agent:${slug}`,
+          agentRole: agent.role ?? "",
+          agentSkills: await resolveAgentSkills(agent),
+          agentSurfaceRef: `named:${slug}`,
+          memory: namedAgentMemory(slug),
+        });
       }
     } else {
       // Surface attribution for the fired run: the owner captured at schedule
@@ -1962,7 +2046,7 @@ function providerResumeIdentity(config) {
   };
 }
 
-async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSurfaceRef = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null }) {
+async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSkills = [], agentSurfaceRef = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null }) {
   // Serialize master execution: the cached orchestrator is shared, so a second
   // run must queue behind the first rather than clobber its abort controller.
   return await withRunLock(async () => {
@@ -2271,8 +2355,10 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // so an included skill can never override the platform invariants).
       // The /skill:<id> tokens stay in the user's task text (for the thread
       // display); the skill instructions ride in the system composition, not
-      // as trailing context after the protected layer.
-      const runSkills = await resolveSkillRefs(task);
+      // as trailing context after the protected layer. The agent's SAVED
+      // skills (from its record — template picks, owner edits) compose first,
+      // deduped against any /skill:<id> references in the task text.
+      const runSkills = mergeRunSkills(agentSkills, await resolveSkillRefs(task));
       // agent-do's run(task, context, history) -> result text; context is a STRING.
       // `history` carries the prior conversation turns (the unified surface: a
       // follow-up / nudge is a new turn in the SAME persistent thread, so the
@@ -3760,13 +3846,45 @@ const handlers = mergeRouteMaps(
   // create/manage agents through these routes (the management tool suite calls
   // them, so a natural-language "create an agent" works too).
   async "named-agent.list"() {
-    return { agents: await listNamedAgents() };
+    // ONE agent concept (owner directive 2026-08-28): an agent is persona +
+    // skills + memory + an OPTIONAL schedule. The list enriches each agent
+    // with its live schedule (derived from the scheduled-task store, never a
+    // stale flag) so the UI shows one agents list with a schedule chip.
+    const tasks = await listScheduledTasks().catch(() => []);
+    const byName = new Map((Array.isArray(tasks) ? tasks : []).map((t) => [t.name, t]));
+    const agents = await listNamedAgents();
+    return {
+      agents: agents.map((a) => {
+        const t = byName.get(`agent:${a.id}`);
+        return t && !t.cancelling
+          ? { ...a, schedule: { periodInMinutes: t.periodInMinutes ?? null, task: t.task ?? "" } }
+          : a;
+      }),
+    };
+  },
+  async "named-agent.set-schedule"({ id, periodInMinutes, task }, context) {
+    // Add/edit/remove an agent's schedule (the ONE creation flow's schedule
+    // backing). Set: the agent runs on a recurring alarm as a REAL named-agent
+    // run (its own memory, role layer, saved skills — the fire path's `agent:`
+    // branch). Remove (null): the alarm goes, the agent stays. The owner's
+    // in-dialog click approves directly; a model-initiated call pends.
+    const gate = await requireOwnerApproval(
+      context,
+      "named-agent.set-schedule",
+      canonicalOperationTarget("named", { id: slugifyAgentId(id) }),
+      payloadFields([
+        ["id", String(id ?? "")],
+        ["periodInMinutes", periodInMinutes == null ? "none" : String(periodInMinutes)],
+      ]),
+    );
+    if (!gate?.ok) return gate;
+    return await applyAgentSchedule(id, periodInMinutes, task);
   },
   async "named-agent.get"({ id }) {
     const agent = await getNamedAgent(id);
     return agent ? { ok: true, agent } : { ok: false, error: `no agent ${id}` };
   },
-  async "named-agent.create"({ id, name, role, avatar, skills, coreAssets }, context) {
+  async "named-agent.create"({ id, name, role, avatar, skills, coreAssets, schedule }, context) {
     const r = await createNamedAgent(
       { id, name, role, avatar, skills, coreAssets },
       {
@@ -3805,6 +3923,16 @@ const handlers = mergeRouteMaps(
             broadcastRegistryChanged();
           }
         }).catch(() => { /* the placeholder remains */ });
+      }
+      // ONE creation flow (owner directive): an optional schedule rides the
+      // create — the SAME agent record, plus a real recurring alarm backing it.
+      // A schedule failure is honest: the agent exists, the error says the
+      // schedule did not take.
+      if (schedule && r?.ok !== false && r?.agent?.id) {
+        const s = await applyAgentSchedule(r.agent.id, schedule.periodInMinutes, schedule.task);
+        if (s?.ok !== true) {
+          return { ...r, scheduleError: s?.error ?? "schedule failed" };
+        }
       }
     }
     return r;
@@ -3891,6 +4019,10 @@ const handlers = mergeRouteMaps(
       // payload is marked cancelling (inert) + the live run aborted NOW; the
       // alarm-clear + payload cleanup finishes in the background.
       cancelScheduledTaskBackground(`recipe:${slug}`);
+      // An agent created/edited with a schedule (the unified agent model:
+      // persona + skills + memory + OPTIONAL schedule) has an `agent:<slug>`
+      // schedule — tearing the agent down tears its schedule down too.
+      cancelScheduledTaskBackground(`agent:${slug}`);
       // Failed-runs cascade (owner 2026-08-28): the deleted agent's terminal
       // failed records are purged from the durable registry (record, index,
       // stored prompt payload, logs) so the Tasks sidebar neither shows them
@@ -4015,6 +4147,9 @@ const handlers = mergeRouteMaps(
         // the agent has none), and its role rides as the agent-role layer.
         promptScope: `agent:${slug}`,
         agentRole: agent.role ?? "",
+        // The agent's SAVED skills compose into every run (the same path a
+        // /skill:<id> reference takes) — saved skills are real, not decorative.
+        agentSkills: await resolveAgentSkills(agent),
         agentSurfaceRef: `named:${slug}`,
         onProgress: (event) => {
           broadcastProgress({ ...event, runId: runTag, agentId: agent.id ?? null });

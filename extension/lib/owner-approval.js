@@ -31,6 +31,7 @@ export const DESTRUCTIVE_ACTIONS = new Set([
   "named-agent.create",
   "named-agent.delete",
   "named-agent.set-provider",
+  "named-agent.set-schedule",
   "named-agent.update",
   "script.delete",
   "script.update",
@@ -63,6 +64,9 @@ export const OWNER_DIRECT_ACTIONS = new Set([
   "asset.delete",
   "agent.delete",
   "named-agent.delete",
+  // The owner's own schedule edit in the agent dialog IS the approval (same
+  // owner-direct principle as task.pause/resume/update below).
+  "named-agent.set-schedule",
   "recipe.delete",
   // Per-agent schedule controls (pause/resume/update): the owner's own click in
   // an extension UI document IS the approval — the same owner-direct principle

@@ -6,7 +6,7 @@
 //   and the hub lists every prior thread (auto-named).
 
 import { send } from "../lib/messages.js";
-import { AGENT_TEMPLATES, agentTemplateById, templatePrefill } from "../lib/agent-templates.js";
+import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, templatePrefill } from "../lib/agent-templates.js";
 import { schedulePreviewText } from "../lib/schedule-preview.js";
 import { selectFailedRuns } from "../lib/run-retry.js";
 import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript } from "../shared/conversation.js";
@@ -584,9 +584,21 @@ async function renderNamedAgents() {
   if (el) {
     el.replaceChildren();
     if (!agents.length && !background.length) {
-      el.innerHTML = `<div class="empty">No named agents yet. Create one in a task ("create an agent…") or with /agent:create.</div>`;
+      // First-run / empty state: ONE click seeds the curated starter set
+      // (never automatic — the owner chooses).
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "No agents yet. Create one with the + above, or:";
+      const starterBtn = document.createElement("button");
+      starterBtn.id = "add-starter-agents";
+      starterBtn.type = "button";
+      starterBtn.textContent = "Add starter agents";
+      starterBtn.style.cssText = "margin-top:8px;padding:8px 14px;border-radius:8px;border:1px solid var(--border,#e3e0d9);background:var(--panel,#ffffff);color:var(--text,#1f1d1a);font:inherit;cursor:pointer;";
+      starterBtn.addEventListener("click", () => addStarterAgents(starterBtn));
+      empty.append(document.createElement("br"), starterBtn);
+      el.append(empty);
     } else {
-      for (const a of agents.slice(0, 6)) {
+      for (const a of agents) {
         const row = document.createElement("capability-row");
         row.setAttribute("name", a.name || a.id);
         row.setAttribute("description", a.role || "a named agent");
@@ -597,13 +609,18 @@ async function renderNamedAgents() {
         // Item 55: the WHOLE row opens the agent's view (history + run log) +
         // lets you talk to it — a chevron affordance, not a misleading "Run".
         row.setAttribute("action", "open");
+        // ONE agents list (owner directive): a scheduled agent carries a small
+        // schedule chip — no other distinction from an on-demand agent.
+        if (a.schedule?.periodInMinutes) {
+          row.setAttribute("last-run", `every ${a.schedule.periodInMinutes} min`);
+        }
         row.addEventListener("open", () => openAgentChat(a.id || a.name));
         el.append(row);
       }
       for (const a of background) {
         const row = document.createElement("capability-row");
         row.setAttribute("name", a.name || a.id);
-        row.setAttribute("description", `Runs in the background${a.description ? " · " + a.description : ""}`);
+        row.setAttribute("description", a.description || "a scheduled agent");
         row.setAttribute("icon", "");
         // A background agent is an INDEPENDENT agent — a chevron opens its view
         // (history + chat) and a destructive DELETE removes it (an enable/
@@ -1788,14 +1805,64 @@ async function openAgentConfig() {
     canRegenerateAvatar: true,
     canDelete: true,
     savedLabel: "Save",
+    schedule: agent.schedule?.periodInMinutes ?? null,
     onSave: async (v) => {
+      // Schedule FIRST: the owner's schedule change applies through the
+      // owner-direct schedule path even when the persona edit pends an
+      // approval (named-agent.update is not owner-direct — pre-existing).
+      const prev = agent.schedule?.periodInMinutes ?? null;
+      const next = v.schedule?.periodInMinutes ?? null;
+      let scheduleNote = "";
+      if (next !== prev) {
+        const s = await send("named-agent.set-schedule", {
+          id: currentAgentId,
+          periodInMinutes: next,
+          task: v.schedule?.task ?? agent.schedule?.task ?? null,
+        }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+        if (s?.ok !== true) return { ok: false, error: `the schedule failed: ${s?.error ?? "unknown"}` };
+        scheduleNote = next == null ? "schedule removed" : `scheduled every ${next} min`;
+      }
       const r = await send("named-agent.update", {
         id: currentAgentId, name: v.name, role: v.role, avatar: v.avatar, skills: v.skills, coreAssets: v.coreAssets,
       }).catch(() => ({ ok: false }));
-      return r?.ok !== false ? { ok: true } : { ok: false, error: r?.error ?? "unknown" };
+      if (r?.ok === false) {
+        return scheduleNote
+          ? { ok: true, note: `${scheduleNote}; the persona edit needs approval in Settings` }
+          : { ok: false, error: r?.error ?? "unknown" };
+      }
+      return { ok: true };
     },
     onSaved: async () => { renderNamedAgents(); await openAgentChat(currentAgentId); },
   });
+}
+
+// One-click seeding of the CURATED starter set (owner directive 2026-08-28):
+// the six starters become REAL agents — persona, skills, memory, and (for any
+// background-mode starter) a live schedule. Each is fully editable afterwards.
+async function addStarterAgents(btn = null) {
+  if (btn) btn.disabled = true;
+  const created = [];
+  const failed = [];
+  for (const id of STARTER_TEMPLATE_IDS) {
+    const t = agentTemplateById(id);
+    if (!t) { failed.push(`${id} (missing template)`); continue; }
+    const pre = templatePrefill(t);
+    const r = await send("named-agent.create", {
+      name: pre.name,
+      role: pre.role,
+      skills: pre.skills,
+      schedule: pre.schedule ? { periodInMinutes: pre.schedule.periodInMinutes, task: pre.schedule.prompt } : null,
+    }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    if (r?.ok) created.push(pre.name);
+    else failed.push(`${pre.name} (${r?.error ?? "unknown"})`);
+  }
+  await renderNamedAgents();
+  if (failed.length === 0) {
+    setStatus(`Added ${created.length} starter agents: ${created.join(", ")}.`, true);
+  } else {
+    setStatus(`Added ${created.length} starter agents; failed: ${failed.join(", ")}.`, false);
+  }
+  if (btn) btn.disabled = false;
 }
 
 function openQuickCreateAgent() {
@@ -1812,16 +1879,18 @@ function openQuickCreateAgent() {
     onSave: async (v) => {
       const r = await send("named-agent.create", {
         name: v.name, role: v.role, avatar: v.avatar, skills: v.skills, coreAssets: v.coreAssets,
+        schedule: v.schedule,
       }).catch(() => ({ ok: false }));
       return r?.ok ? { ok: true, id: r.agent?.id ?? v.name, firstTask: v.firstTask } : { ok: false, error: r?.error ?? "unknown" };
     },
     onSaved: async (result) => {
       renderNamedAgents();
       await openAgentChat(result?.id);
-      // A template's first task is a SUGGESTION: pre-fill the composer so the
-      // owner reviews/edits before sending (it is never auto-sent).
-      if (result?.firstTask && composer) {
-        composer.value = result.firstTask;
+      // A template's first task is a SUGGESTION: pre-fill the VISIBLE composer
+      // (the opened agent view's thread composer — never the hidden hub
+      // composer) so the owner reviews/edits before sending (never auto-sent).
+      if (result?.firstTask && threadComposer) {
+        threadComposer.value = result.firstTask;
       }
     },
   });
@@ -1947,11 +2016,14 @@ async function buildAgentConfigDialog(opts) {
     tplSelect.addEventListener("change", () => {
       const t = agentTemplateById(tplSelect.value);
       tplDesc.textContent = t ? t.description : "";
-      if (!t) { selectedTemplate = null; return; }
+      if (!t) { selectedTemplate = null; scheduleField.el.value = ""; return; }
       const pre = templatePrefill(t);
       selectedTemplate = t;
       nameField.el.value = pre.name;
       roleField.el.value = pre.role;
+      // A background template is just an agent WITH a schedule (the unified
+      // model): prefill the schedule field; an on-demand template clears it.
+      scheduleField.el.value = pre.schedule ? String(pre.schedule.periodInMinutes) : "";
       // Suggested skills: CHECK the template's suggestions on top of whatever
       // the owner already picked — removal is theirs (full specialization).
       for (const [id, cb] of skillChecks) {
@@ -2054,6 +2126,23 @@ async function buildAgentConfigDialog(opts) {
   }
   skillsDetails.append(skillsList);
   scrollBody.append(skillsDetails);
+
+  // ── Optional schedule (ONE agent concept, owner directive 2026-08-28): an
+  // agent is persona + skills + memory + an OPTIONAL schedule. Empty = an
+  // on-demand agent; a number of minutes = the agent runs on a recurring
+  // alarm. Background templates prefill this; it stays fully editable.
+  const scheduleField = configField("Run on a schedule (every N minutes — empty = on demand)", "input", opts.schedule != null ? String(opts.schedule) : "", 1);
+  scheduleField.el.type = "number";
+  scheduleField.el.min = "1";
+  scheduleField.el.step = "1";
+  scheduleField.el.id = "agent-schedule-minutes";
+  scheduleField.el.placeholder = "on demand";
+  const scheduleHint = document.createElement("p");
+  scheduleHint.id = "agent-schedule-hint";
+  scheduleHint.textContent = "With a schedule the agent runs itself recurringly — same persona, skills, and memory as its on-demand runs.";
+  scheduleHint.style.cssText = "font-size:12px;color:var(--muted,#635e56);margin:4px 0 0;";
+  scheduleField.wrap.append(scheduleHint);
+  scrollBody.append(scheduleField.wrap);
 
   // Core assets: files whose content becomes part of the agent's context.
   const coreAssets = [];
@@ -2180,9 +2269,19 @@ async function buildAgentConfigDialog(opts) {
       }
     }
     saveBtn.disabled = true;
+    const schedMinutes = Number(scheduleField.el.value);
+    const schedule = Number.isFinite(schedMinutes) && schedMinutes >= 1
+      ? {
+          periodInMinutes: Math.floor(schedMinutes),
+          // A background template carries its own recurring prompt; a manual
+          // schedule falls back to the SW's role-derived default.
+          task: selectedTemplate?.schedule?.prompt ?? null,
+        }
+      : null;
     const r = await opts.onSave({
       name, role, avatar: avatarValue, skills, coreAssets,
       firstTask: selectedTemplate?.firstTask ?? "",
+      schedule,
     });
     saveBtn.disabled = false;
     if (r?.ok) {

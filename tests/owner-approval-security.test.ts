@@ -65,7 +65,12 @@ Deno.test("owner-direct scope is exactly the audited action set (no silent widen
   // set — the owner's own UI click IS the approval (asset.delete precedent);
   // model-initiated calls keep the full pending-approval flow. FLAGGED for the
   // independent permission-model review.
-  assertEquals([...OWNER_DIRECT_ACTIONS].sort(), ["agent.delete", "asset.delete", "named-agent.delete", "recipe.delete", "task.pause", "task.resume", "task.update"].sort());
+  // UNIFIED AGENT MODEL WIDENING (owner directive 2026-08-28): an agent is
+  // persona + skills + memory + an OPTIONAL schedule — the owner's schedule
+  // edit in the agent dialog IS the approval, so named-agent.set-schedule
+  // joins the audited owner-direct set; model-initiated calls keep the full
+  // pending-approval flow.
+  assertEquals([...OWNER_DIRECT_ACTIONS].sort(), ["agent.delete", "asset.delete", "named-agent.delete", "named-agent.set-schedule", "recipe.delete", "task.pause", "task.resume", "task.update"].sort());
   // Every owner-direct action passes the audit grammar; widening this set
   // requires a new permission-model review.
   for (const direct of OWNER_DIRECT_ACTIONS) {
