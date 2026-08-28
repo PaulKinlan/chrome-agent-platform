@@ -34,9 +34,13 @@ live logging path, so **a long task gets progressively slower as it runs**, and
 because writes hold a global lock they also block reads.
 
 The per-stage spans (`thread.get:read`, `thread.get:view`, `thread-view:logs:*`,
-`thread-view:project`) all reported 0 ms in the production build, so the
-attribution below comes from reading the code, not from the span data. Fixing
-that instrumentation is part of the work (§7).
+`thread-view:project`) are recorded by `cap-perf.js` and work correctly. An
+earlier draft of this document said they "reported 0 ms in the production
+build" and treated that as a finding — it was a bug in the measuring harness,
+which read a field named `total` where `perfSummary` reports `totalMs`. The
+product instrumentation needed no fixing; the tool did. Corrected, and recorded
+here because a design that argues from measurements has to be honest about the
+measurements it got wrong.
 
 ## 2. Why — four causes, all confirmed in source
 
@@ -105,12 +109,16 @@ it already is; only its internal format changes.
 
 ### 3.2 Split the lock, and read concurrently
 
-- **Reads stop taking the global mutex.** Sealed chunks are immutable and the
-  head record is written atomically, so a reader either sees a chunk or does not
-  — it can never see a half-written one. A reader takes the head record first,
-  then reads only the chunks that head names.
-- **Writes take a per-execution lock**, not a global one. Two executions logging
-  concurrently no longer serialise against each other, and neither blocks a read.
+- **Readers share the lock; writers stay exclusive.** (Shipped this way rather
+  than fully lock-free: `listLogs`'s fallback path REBUILDS and persists the row
+  index, so it is not a pure read. The shared path serves the indexed fast case,
+  and a read that would have to rebuild asks to be retried under the exclusive
+  lock instead of writing underneath a concurrent writer.) Once chunks land,
+  sealed chunks are immutable and the head record is written atomically, so the
+  fast path can widen further.
+- **Writes could later take a per-execution lock** rather than a registry-wide
+  one. Not needed yet: with readers sharing, writers no longer block opens for
+  the common case.
 - **`buildThreadRunView` reads executions concurrently** with a bounded pool
   (8 at a time — enough to hide latency, bounded so a 25-execution thread does
   not open 25 file handles at once).
@@ -183,14 +191,43 @@ Recorded because these are the parts a review should attack hardest.
   With streaming, that reconciliation must happen once for the whole thread, not
   once per page.
 
+## 5a. Measured result of stages 1 and 2 (2026-08-28)
+
+Both landed. Task open, median of three, same harness:
+
+| rows | before | after 1+2 | speedup |
+|---|---|---|---|
+| 10 | 15 ms | **8 ms** | 1.9x |
+| 250 | 213 ms | **72 ms** | 3.0x |
+| 1,000 | 918 ms | **348 ms** | 2.6x |
+
+Extrapolated to the product's bound (6,250 rows): ~6 s → **~2.2 s**.
+
+**My stage-1 prediction was wrong and should be recorded as such.** §6 said stage 1
+alone would reach 150–250 ms at 1,000 rows; it reached 425 ms. The reason is
+identifiable rather than mysterious: stage 1 made rows *within* a page concurrent,
+but every `listLogs` call still queued on the one global mutex, so the bounded
+fan-out across executions could not actually overlap. That is cause (b), which
+stage 2 addresses — so the model was right about the causes and wrong about how
+much of the win stage 1 could deliver on its own. Stage 2 then took 425 → 348 ms.
+
+**The remaining cost is granularity, exactly as §2 predicted.** 1,000 rows is
+still 1,000 OPFS file opens; making them concurrent bounds the latency but not
+the syscall count. Stage 3 (chunking) is where the rest of the win is, and the
+measurements now support that rather than merely asserting it.
+
+Attribution after stages 1–2 is unchanged in shape: `thread-view:logs` still
+dominates, `thread-view:project` is 5 ms and `thread.get:read` 6 ms — the
+projection and the thread-record read are noise, as §8 said.
+
 ## 6. Staging
 
 Each stage is independently shippable and leaves the product green.
 
 | # | Change | Expected effect | Risk |
 |---|---|---|---|
-| 1 | Concurrent execution reads + concurrent row reads within a page (§3.2, no storage change) | ~6,300 sequential reads → ~100 concurrent | Low |
-| 2 | Split the global mutex: reads lock-free, writes per-execution | Live logging stops blocking opens | Medium |
+| 1 | Concurrent execution reads + concurrent row reads within a page (§3.2, no storage change) | **DONE** — 918 → 425 ms at 1,000 rows | Low |
+| 2 | Split the global mutex into a read/write lock: readers share, writers exclusive | **DONE** — 425 → 348 ms | Medium |
 | 3 | Chunked log pages + lazy migration (§3.1, §4) | Append O(1) amortised; page read 4 files not 251 | **High** |
 | 4 | Streamed first page (§3.3) | First paint independent of history | Medium |
 
@@ -202,10 +239,10 @@ before proceeding.
 
 - `scripts/thread-open-trace.ts` is the harness and already runs. Every stage
   reports its matrix before and after, in the same table as §1.
-- **Fix the span instrumentation first.** `thread.get:read`, `thread.get:view`,
-  `thread-view:logs:*` and `thread-view:project` all report 0 ms in the
-  production build, so the stage attribution is currently unverifiable. A
-  redesign justified by measurements needs its measurements to work.
+- **Stage attribution comes from the product's own spans** (`thread.get:read`,
+  `thread.get:view`, `thread-view:logs:*`, `thread-view:project`) via
+  `observability.dumpTrace`. These work; the harness was reading the wrong field
+  name and has been fixed.
 - The existing suites are the correctness gate: `tests/thread-log-redesign.test.ts`
   (the projection, the reconciliation and the degraded-read paths),
   `tests/durable-runs.test.ts`, `tests/durable-task-restore.test.ts`,
@@ -218,9 +255,9 @@ before proceeding.
 
 The projection itself (`projectThreadWithRunLogs`, `toolRowsFromRunLog`) is pure
 and is very unlikely to be the bottleneck — it is in-memory array work over rows
-that have already been read, against ~0.95 ms per row of measured I/O. That is
-an inference, not a measurement, precisely because the spans read 0 ms; stage 1
-should confirm it before stages 3–4 are justified on it. The tool-card
+that have already been read, against ~0.95 ms per row of measured I/O. The
+`thread-view:project` span now reports, so stage 1 confirms this rather than
+assuming it. The tool-card
 rendering work (`CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01`) is orthogonal and can
 proceed in parallel. The durable-run authority, its recovery semantics and the
 outbox are untouched: this changes how rows are stored and read, not what a run

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.342] — 2026-08-28
+- Opening a task is about 2.6x faster (nearly a second down to a third of one on a well-used task). The stored steps were being read one file at a time even though they do not depend on each other, and a single lock meant nothing could overlap. More to come — the remaining cost is that every logged step is still its own file
+
 ## [0.2.341] — 2026-08-28
 - Failed task runs are now manageable: dismissing one hides it for good (there's a Clear all for the whole section), and deleting an agent clears its failed runs too
 

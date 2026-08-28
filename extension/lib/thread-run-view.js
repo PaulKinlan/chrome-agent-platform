@@ -18,7 +18,26 @@ import { perfSpan } from "./cap-perf.js";
 // task open take ~10s (it scales with history). Render only the most-recent
 // executions + their most-recent log rows; totals are reported honestly so the
 // surface can say "showing N of M". Full history stays available on demand.
+/** Bounded-concurrency map that preserves input order. A per-execution read
+ *  failure is already captured as `logFailed` on that execution's own row, so a
+ *  worker never rejects and one bad execution cannot take the view with it. */
+async function mapBounded(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const workers = new Array(Math.min(limit, items.length)).fill(0).map(async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
 const MAX_VIEW_EXECUTIONS = 25;
+// Bounded fan-out across executions (each page read is itself bounded).
+const VIEW_READ_CONCURRENCY = 8;
 const MAX_VIEW_LOG_ROWS = 250;
 
 /** Build the render-ready thread view.
@@ -52,8 +71,16 @@ export async function buildThreadRunView(thread, deps) {
   const totalExecutions = executions.length;
   const viewedExecutions = executions.slice(-MAX_VIEW_EXECUTIONS);
   const truncatedExecutions = totalExecutions - viewedExecutions.length;
-  const withLogs = [];
-  for (const e of viewedExecutions) {
+  // Executions are read CONCURRENTLY with a bounded pool
+  // (CAP-FB-20260827-THREAD-OPEN-SEQUENTIAL-READS-01). Measured: 97% of
+  // task-open time was these reads, and they were serialised only because the
+  // loop awaited each one — nothing about an execution's log depends on
+  // another's. Bounded rather than unbounded so a 25-execution thread does not
+  // fan out 25 simultaneous page reads (each of which is itself a bounded
+  // fan-out). Order is restored by index: `withLogs` must stay in execution
+  // order, because the projection places each execution's cards relative to its
+  // own terminal marker.
+  const withLogs = await mapBounded(viewedExecutions, VIEW_READ_CONCURRENCY, async (e) => {
     let logs = [];
     let logFailed = false;
     let truncatedLogs = false;
@@ -68,7 +95,7 @@ export async function buildThreadRunView(thread, deps) {
       recordFailure("thread-view-logs", `could not read run log for ${e.executionId}: ${String(err?.message ?? err).slice(0, 200)}`);
     }
     logSpan.end(logFailed ? "error" : "ok");
-    withLogs.push({
+    return {
       executionId: e.executionId,
       logs,
       logFailed,
@@ -76,8 +103,8 @@ export async function buildThreadRunView(thread, deps) {
       phase: e.record?.phase ?? null,
       pause: e.record?.pause ?? null,
       terminal: e.record?.terminal ?? null,
-    });
-  }
+    };
+  });
   const projectSpan = perfSpan("thread-view:project");
   const { messages, missingTerminals } = projectThreadWithRunLogs(thread, withLogs);
   projectSpan.end("ok");

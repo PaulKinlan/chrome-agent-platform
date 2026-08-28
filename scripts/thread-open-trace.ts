@@ -152,7 +152,10 @@ for (const { runs, logs } of MATRIX) {
       const bucket = key.startsWith("thread-view:logs:") ? "thread-view:logs:* (per execution)" : key;
       const st = stages[bucket] ?? (stages[bucket] = { count: 0, total: 0 });
       st.count += m.count ?? 1;
-      st.total += m.total ?? m.duration ?? 0;
+      // cap-perf reports totalMs (see perfSummary). An earlier draft read
+      // 'total', got undefined, and reported every stage as 0 ms — which looked
+      // like broken product instrumentation and was a bug in the tool.
+      st.total += m.totalMs ?? 0;
     }
     return { out, stages };
   })()`);
@@ -176,8 +179,10 @@ for (const r of rows) {
     `${String(r.runs).padStart(3)} x ${String(r.logs).padEnd(4)} ${String(r.runs * r.logs).padStart(6)}   ${String(r.seedMs).padStart(7)} ms   ${String(median).padStart(8)} ms   ${String(r.messages).padStart(6)}`,
   );
 }
-console.log("\nEach log row is its own OPFS file, and listLogs holds a mutex, so the");
-console.log("per-execution reads cannot overlap even though they are independent.");
+console.log("\nStages 1-2 landed: page rows are read with bounded concurrency, executions");
+console.log("are read with bounded concurrency, and readers now share the registry lock");
+console.log("(writers stay exclusive). What remains is granularity — each log row is");
+console.log("still its own OPFS file, so N rows is still N file opens. That is stage 3.");
 console.log("─".repeat(72));
 
 try { proc.kill("SIGKILL"); } catch { /* already gone */ }
