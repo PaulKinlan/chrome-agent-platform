@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.332] — 2026-08-28
+- The UX audit fixes are in: the panel no longer leaks memory when you open and close it, dark mode now follows your OS setting, narrow windows no longer overflow sideways (the sidebar becomes a proper overlay drawer), and the first-run call to action is honest about what needs setting up
+
 ## [0.2.331] — 2026-08-28
 - docs(ux-audit): full UX/navigation/performance/memory audit (web-uplift methodology) — 11 findings: panel iframe+listener leaks, no dark scheme, 360px overflow, gated first-run CTA, plus verified-good perf/security/backstack; evidence in reports/cap-ux/
 
