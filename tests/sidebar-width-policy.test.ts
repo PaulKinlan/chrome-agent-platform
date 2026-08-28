@@ -59,7 +59,14 @@ Deno.test("ntp wiring: the narrow TOGGLE routes through the policy — the manua
   // The overlay is narrow-only, transient, and closable (scrim + Escape +
   // leaving the breakpoint all close it).
   assertStringIncludes(ntp, "function setSidebarOverlay(open)");
-  assertStringIncludes(ntp, "sidebarOverlayOpen = open === true && (narrowSidebarMq?.matches === true);");
+  assertStringIncludes(ntp, "const next = open === true && (narrowSidebarMq?.matches === true);");
+  assertStringIncludes(ntp, "sidebarOverlayOpen = next;");
+  // REVISE 2: the drawer shows the FULL nav — the collapsed class comes OFF
+  // while the overlay is open and the captured rail state is restored on
+  // close (transient: the collapsed setter must NOT fight the open drawer).
+  assertStringIncludes(ntp, "next ? false : ((narrowSidebarMq?.matches === true) ? sidebarOverlayWasCollapsed : sidebarCollapsed)");
+  assertStringIncludes(ntp, "sidebarOverlayWasCollapsed = sidebarCollapsed;");
+  assertStringIncludes(ntp, "if (!sidebarOverlayOpen) side.classList.toggle(\"collapsed\", collapsed);");
   assertStringIncludes(ntp, 'sideScrim.addEventListener("click"');
   assertStringIncludes(ntp, 'event.key === "Escape" && sidebarOverlayOpen');
   assertStringIncludes(ntp, "if (!narrow && sidebarOverlayOpen) setSidebarOverlay(false);");

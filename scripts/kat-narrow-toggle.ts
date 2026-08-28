@@ -94,6 +94,9 @@ const expanded = await ev(`(() => {
   };
 })()`);
 check("360px manual expand: the overlay state is on", expanded?.overlayClass === true, expanded);
+// UX-004 REVISE 2 P1: the drawer shows the FULL nav — the collapsed class
+// must come OFF while the overlay is open (previously a blank 240px shell).
+check("360px manual expand: the collapsed class is OFF (full nav in the drawer)", expanded?.collapsedStillOn === false, expanded);
 check("360px manual expand: layout is off-canvas (position fixed)", expanded?.position === "fixed", expanded);
 check("360px manual expand: panel within the viewport width (<= 78vw = 280.8px)", typeof expanded?.inlineSize === "number" && expanded.inlineSize <= 281, expanded);
 check("360px manual expand: ZERO horizontal overflow (the reviewer's P1)", (await noOverflow()) === true, await noOverflow());
@@ -101,6 +104,17 @@ const scrimVisible = await ev(`(() => { const s = document.querySelector('.side-
 check("360px manual expand: the scrim is present and visible", scrimVisible === true, { scrimVisible });
 const aria = await ev(`document.getElementById('side-toggle')?.getAttribute('aria-expanded')`);
 check("360px manual expand: aria-expanded=true", aria === "true", { aria });
+// Labels are VISIBLE in the expanded drawer (brand + section label rendered
+// non-zero — the collapsed selectors hide them, so this catches a regression
+// where the drawer renders as an icon-only shell).
+const labelsVisible = await ev(`(() => {
+  const vis = (el) => { if (!el) return false; const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return r.width > 0 && r.height > 0 && cs.visibility === 'visible' && cs.display !== 'none'; };
+  const brand = vis(document.querySelector('.side .brand'));
+  const labels = [...document.querySelectorAll('.side .side-label')];
+  return { brand, sectionLabelCount: labels.length, sectionLabelVisible: labels.some(vis) };
+})()`);
+check("360px manual expand: brand is visible in the drawer", labelsVisible?.brand === true, labelsVisible);
+check("360px manual expand: at least one section label is rendered non-zero", labelsVisible?.sectionLabelVisible === true, labelsVisible);
 
 await shot(`${OUT}/narrow-manually-expanded-v2.png`);
 
@@ -109,9 +123,13 @@ await ev(`document.querySelector('.side-scrim')?.click()`);
 await sleep(700);
 const afterScrim = await ev(`(() => {
   const side = document.getElementById('side');
-  return { overlay: side.classList.contains('overlay'), scrimHidden: document.querySelector('.side-scrim')?.hidden };
+  return { overlay: side.classList.contains('overlay'), scrimHidden: document.querySelector('.side-scrim')?.hidden, collapsedRestored: side.classList.contains('collapsed'), toggleLabel: document.getElementById('side-toggle')?.getAttribute('aria-label') };
 })()`);
 check("360px scrim tap: the overlay closes", afterScrim?.overlay === false && afterScrim?.scrimHidden === true, afterScrim);
+// The transient drawer state is undone: the icon rail (collapsed) returns and
+// the toggle label flips back — without persisting anything.
+check("360px after close: the icon-rail collapsed state is restored", afterScrim?.collapsedRestored === true, afterScrim);
+check("360px after close: toggle label back to expand", afterScrim?.toggleLabel === "Expand sidebar", afterScrim);
 check("360px after close: zero horizontal overflow", (await noOverflow()) === true);
 
 // ---- Wide viewport (1280x800): the inline-rail behaviour is unchanged -----

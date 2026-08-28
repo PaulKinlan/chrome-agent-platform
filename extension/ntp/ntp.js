@@ -2238,9 +2238,19 @@ let persistedSidebarCollapsed = false;
 // transient (never persisted) and closes on scrim tap, Escape, or leaving the
 // narrow width.
 let sidebarOverlayOpen = false;
+// Transient capture of the rail's collapsed state while the overlay drawer is
+// open — restored on close, never persisted (the saved preference is untouched).
+let sidebarOverlayWasCollapsed = false;
 let sideScrim = null;
 function setSideToggleExpanded(expanded) {
   sideToggle.setAttribute("aria-expanded", String(expanded));
+}
+// The toggle's label must track the EFFECTIVE expanded state (at narrow width
+// that is the overlay, not the rail class).
+function updateSideToggleLabels(expanded) {
+  const label = expanded ? "Collapse sidebar" : "Expand sidebar";
+  sideToggle.setAttribute("aria-label", label);
+  sideToggle.setAttribute("title", label);
 }
 function ensureSideScrim() {
   if (sideScrim) return sideScrim;
@@ -2254,24 +2264,36 @@ function ensureSideScrim() {
   return sideScrim;
 }
 function setSidebarOverlay(open) {
-  sidebarOverlayOpen = open === true && (narrowSidebarMq?.matches === true);
-  side.classList.toggle("overlay", sidebarOverlayOpen);
-  const scrim = ensureSideScrim();
-  scrim.hidden = !sidebarOverlayOpen;
-  // At narrow width the rail class stays on (the icon rail remains in flow);
-  // expanded-ness is the overlay, so aria-expanded tracks IT, not the rail.
-  setSideToggleExpanded(
-    (narrowSidebarMq?.matches === true) ? sidebarOverlayOpen : !sidebarCollapsed,
+  const next = open === true && (narrowSidebarMq?.matches === true);
+  if (next && !sidebarOverlayOpen) {
+    sidebarOverlayWasCollapsed = sidebarCollapsed;
+  }
+  sidebarOverlayOpen = next;
+  side.classList.toggle("overlay", next);
+  // UX-004 REVISE 2: while the overlay drawer is open the FULL nav must be
+  // visible (brand, section labels, item text) — the collapsed class comes
+  // OFF for the drawer's lifetime. On close the captured rail state goes back
+  // on (at narrow that is the icon rail again; at wide the width policy owns
+  // the class, so fall back to the live state until it applies).
+  side.classList.toggle(
+    "collapsed",
+    next ? false : ((narrowSidebarMq?.matches === true) ? sidebarOverlayWasCollapsed : sidebarCollapsed),
   );
+  const scrim = ensureSideScrim();
+  scrim.hidden = !next;
+  // expanded-ness is the overlay at narrow width, so aria-expanded + the
+  // toggle label track IT.
+  setSideToggleExpanded(next);
+  updateSideToggleLabels(next);
 }
 function setSidebarCollapsed(collapsed, { auto = false } = {}) {
   sidebarCollapsed = collapsed;
-  side.classList.toggle("collapsed", collapsed);
-  sideToggle.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
-  sideToggle.setAttribute("title", collapsed ? "Expand sidebar" : "Collapse sidebar");
-  setSideToggleExpanded(
-    (narrowSidebarMq?.matches === true) ? sidebarOverlayOpen : !collapsed,
-  );
+  // While the overlay drawer is open it owns the collapsed class (the drawer
+  // shows the full nav); the variable still updates so close() restores it.
+  if (!sidebarOverlayOpen) side.classList.toggle("collapsed", collapsed);
+  const expandedNow = (narrowSidebarMq?.matches === true) ? sidebarOverlayOpen : !collapsed;
+  updateSideToggleLabels(expandedNow);
+  setSideToggleExpanded(expandedNow);
   renderDurability();
   if (auto) return; // form-factor state — the user's saved choice stands
   persistedSidebarCollapsed = collapsed;
