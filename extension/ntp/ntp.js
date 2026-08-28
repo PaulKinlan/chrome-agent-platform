@@ -1341,7 +1341,7 @@ function syncViewOpen() {
   document.body.classList.toggle("view-open", anyOpen);
   document.body.classList.toggle("full-view-open", fullViewOpen);
 
-  // The full Directory/Settings/Skills/Assets view covers the whole hub. Keep
+  // The full Directory/Settings/Artifacts view covers the whole hub. Keep
   // the sidebar itself inert and AX-absent while the pure nub policy separately
   // owns every toggle state. This avoids two authorities mutating sideToggle,
   // while preserving the sidebar's exact expanded/collapsed state on restore.
@@ -1742,7 +1742,7 @@ function configButton(text, variant) {
   return b;
 }
 // ── the RICH agent-config dialog (item: avatar + name + role + skills + mic +
-//    core assets + refine) — shared by the Edit (named) + Create flows. Reuses
+//    context files + refine) — shared by the Edit (named) + Create flows. Reuses
 //    the design-system components (<mic-button>, <attach-button>, <agent-dialog>)
 //    + the field helpers so it matches the rest of the UI.
 function agentAssetRow(name, type) {
@@ -2055,7 +2055,11 @@ async function buildAgentConfigDialog(opts) {
   skillsDetails.append(skillsList);
   scrollBody.append(skillsDetails);
 
-  // Core assets: files whose content becomes part of the agent's context.
+  // Context files: files whose content becomes part of the agent's context.
+  // CAP-FB-20260828-NOUN-DISCIPLINE-01: "Assets" is not a user-facing word.
+  // These are NOT artifacts (agent output) — they are owner-supplied input, so
+  // they get their own honest name rather than borrowing the artifact noun.
+  // The persisted field stays `coreAssets` (stored agent registry shape).
   const coreAssets = [];
   const assetsBox = document.createElement("fieldset");
   assetsBox.style.border = "1px solid var(--border,#e3e0d9)";
@@ -2063,12 +2067,12 @@ async function buildAgentConfigDialog(opts) {
   assetsBox.style.padding = "10px";
   assetsBox.style.margin = "0";
   const assetsLegend = document.createElement("legend");
-  assetsLegend.textContent = "Core assets";
+  assetsLegend.textContent = "Context files";
   assetsLegend.style.fontWeight = "600";
   assetsLegend.style.fontSize = "13px";
   assetsBox.append(assetsLegend);
   const assetsHint = document.createElement("p");
-  assetsHint.textContent = "Attach a text file or image as a core asset — its content becomes part of the agent's instructions.";
+  assetsHint.textContent = "Attach a text file or image as a context file — its content becomes part of the agent's instructions.";
   assetsHint.style.fontSize = "12px";
   assetsHint.style.color = "var(--muted,#635e56)";
   assetsHint.style.margin = "0 0 6px";
@@ -2078,7 +2082,7 @@ async function buildAgentConfigDialog(opts) {
   assetsList.style.flexDirection = "column";
   assetsList.style.gap = "6px";
   const attach = document.createElement("attach-button");
-  attach.setAttribute("label", "Add a core asset");
+  attach.setAttribute("label", "Add a context file");
   attach.addEventListener("attach", async (e) => {
     const d = e?.detail ?? {};
     const file = d.file;
@@ -2090,7 +2094,7 @@ async function buildAgentConfigDialog(opts) {
     } else {
       content = d.dataURL ?? content;
     }
-    coreAssets.push({ name: d.name ?? file?.name ?? "asset", type: d.type ?? file?.type ?? "text/plain", content });
+    coreAssets.push({ name: d.name ?? file?.name ?? "file", type: d.type ?? file?.type ?? "text/plain", content });
     renderAssets();
   });
   function renderAssets() {
@@ -2380,7 +2384,7 @@ deleteAgentBtn?.addEventListener("click", async () => {
     const assetsCount = agent?.coreAssets?.length ?? 0;
     previewDetails = `This will permanently remove the agent registry entry, its memory store, system prompt override, and custom provider configuration.\n\n` +
       `• Skills configured: ${skillsCount}\n` +
-      `• Core assets: ${assetsCount}\n\n` +
+      `• Context files: ${assetsCount}\n\n` +
       `Note: Any artifacts created by this agent will be retained.`;
   } else if (kind === "site" || kind === "origin") {
     const res = await send("list-tools", { origin: id }).catch(() => ({ tools: [] }));
@@ -2961,28 +2965,31 @@ document.getElementById("open-directory")?.addEventListener(
   "click",
   (event) => openView("directory/directory.html", "Directory", event.currentTarget),
 );
-const assetQuickDrawer = document.getElementById("asset-quick-drawer");
-document.getElementById("open-assets")?.addEventListener(
+// CAP-FB-20260828-NOUN-DISCIPLINE-01: the view has ONE user-facing name —
+// Artifacts. Every call site that opens artifacts/index.html passes the same
+// title; there is no second name for the same destination.
+const artifactQuickDrawer = document.getElementById("artifact-quick-drawer");
+document.getElementById("open-artifacts")?.addEventListener(
   "click",
   () => {
-    assetQuickDrawer?.close?.({ returnFocus: false });
-    openView("artifacts/index.html", "Assets");
+    artifactQuickDrawer?.close?.({ returnFocus: false });
+    openView("artifacts/index.html", "Artifacts");
   },
 );
-assetQuickDrawer?.addEventListener("browse-assets", () => {
-  openView("artifacts/index.html", "Assets");
+artifactQuickDrawer?.addEventListener("browse-artifacts", () => {
+  openView("artifacts/index.html", "Artifacts");
 });
-assetQuickDrawer?.addEventListener("asset-open", async (event) => {
-  const asset = event.detail?.asset;
-  if (!asset?.id) return;
-  const opened = await openArtifactDialog(asset.id, asset.origin ?? "master", asset.name);
-  if (!opened) assetQuickDrawer.focusTrigger?.();
+artifactQuickDrawer?.addEventListener("artifact-open", async (event) => {
+  const artifact = event.detail?.artifact;
+  if (!artifact?.id) return;
+  const opened = await openArtifactDialog(artifact.id, artifact.origin ?? "master", artifact.name);
+  if (!opened) artifactQuickDrawer.focusTrigger?.();
 });
-assetQuickDrawer?.addEventListener("asset-reuse", async (event) => {
-  const asset = event.detail?.asset;
-  if (!asset?.id) return;
-  const reused = await attachAssetToComposer(asset, { closeOverlay: false });
-  if (!reused) assetQuickDrawer.focusTrigger?.();
+artifactQuickDrawer?.addEventListener("artifact-reuse", async (event) => {
+  const artifact = event.detail?.artifact;
+  if (!artifact?.id) return;
+  const reused = await attachArtifactToComposer(artifact, { closeOverlay: false });
+  if (!reused) artifactQuickDrawer.focusTrigger?.();
 });
 
 document.getElementById("bg-configure")?.addEventListener(
@@ -3009,7 +3016,7 @@ function utf8ToBase64(s) {
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
   return btoa(bin);
 }
-function assetDataURL(type, content) {
+function artifactDataURL(type, content) {
   if (type === "image") return content ?? ""; // stored as a data URL
   const mime = type === "html" ? "text/html"
     : type === "json" ? "application/json"
@@ -3020,29 +3027,29 @@ function assetDataURL(type, content) {
 // One authoritative Reuse path serves both the full browser iframe and the
 // quick drawer. It fetches the body only after the owner's action; the drawer
 // itself remains metadata-only and bounded.
-async function attachAssetToComposer({ id, name, type, origin }, { closeOverlay = false } = {}) {
+async function attachArtifactToComposer({ id, name, type, origin }, { closeOverlay = false } = {}) {
   const full = await send("asset.get", { origin: origin ?? "master", id }).catch(() => ({ ok: false }));
-  const asset = full?.ok ? full.asset : null;
-  if (!asset) { setStatus("Artifact not found", false); return false; }
-  const assetType = asset.type ?? type ?? "data";
-  const mime = assetType === "html" ? "text/html"
-    : assetType === "json" ? "application/json"
-    : assetType === "image" ? "image/png"
+  const artifact = full?.ok ? full.asset : null;
+  if (!artifact) { setStatus("Artifact not found", false); return false; }
+  const artifactType = artifact.type ?? type ?? "data";
+  const mime = artifactType === "html" ? "text/html"
+    : artifactType === "json" ? "application/json"
+    : artifactType === "image" ? "image/png"
     : "text/plain";
   composer.addAttachment({
-    name: asset.name ?? name ?? "artifact",
+    name: artifact.name ?? name ?? "artifact",
     type: mime,
-    size: asset.size ?? 0,
+    size: artifact.size ?? 0,
     kind: "artifact",
-    dataURL: assetDataURL(assetType, asset.content),
-    content: asset.content,
-    artifactId: asset.id ?? id,
-    artifactOrigin: asset.origin ?? origin ?? "master",
-    artifactType: asset.type ?? type,
+    dataURL: artifactDataURL(artifactType, artifact.content),
+    content: artifact.content,
+    artifactId: artifact.id ?? id,
+    artifactOrigin: artifact.origin ?? origin ?? "master",
+    artifactType: artifact.type ?? type,
   });
   if (closeOverlay) closeView();
   composer.focus();
-  setStatus(`Attached "${asset.name ?? name}" to a new task`);
+  setStatus(`Attached "${artifact.name ?? name}" to a new task`);
   return true;
 }
 
@@ -3070,10 +3077,10 @@ window.addEventListener("message", async (e) => {
   if (!isPanelFrameSource(e.source)) return; // only our own gallery
   const { id, name, type, origin } = d.artifact ?? {};
   if (!id) return;
-  // The single Reuse path: attachAssetToComposer performs exactly one
+  // The single Reuse path: attachArtifactToComposer performs exactly one
   // asset.get + the canonical kind:"artifact" attachment + the closeView. No
   // duplicate inline get/add/close/status locals.
-  await attachAssetToComposer({ id, name, type, origin }, { closeOverlay: true });
+  await attachArtifactToComposer({ id, name, type, origin }, { closeOverlay: true });
 });
 
 setStatus("ready");

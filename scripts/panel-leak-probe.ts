@@ -112,7 +112,7 @@ try {
 
   await push("baseline");
 
-  const PANELS = [["open-settings","Settings"],["open-directory","Directory"],["open-assets","Assets"]];
+  const PANELS = [["open-settings","Settings"],["open-directory","Directory"],["open-artifacts","Artifacts"]];
   for (let i = 1; i <= CYCLES; i++) {
     const [btn] = PANELS[i % PANELS.length];
     await evl(flat, `document.getElementById('${btn}')?.click()`);

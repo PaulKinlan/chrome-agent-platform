@@ -47,19 +47,26 @@ ways. There are three structural causes, and they are measurable.
 ## Why it feels messy
 
 **1. The product speaks three vocabularies for the same nouns.**
-One view is `Assets` in the sidebar, `Recent artifacts` on the card next to it,
-`artifacts/index.html` on disk, and `asset.*` in the routes — and `ntp.js` opens it
+*(Fixed for everything a person reads, `0.2.350` — CAP-FB-20260828-NOUN-DISCIPLINE-01.)*
+One view was `Assets` in the sidebar, `Recent artifacts` on the card next to it,
+`artifacts/index.html` on disk, and `asset.*` in the routes — and `ntp.js` opened it
 with the title "Assets" in one place and "Artifacts" in another. `Skills` in the nav
-is `recipes/index.html` served by `recipe.*` routes. `Agents` labels a sidebar
-section, a card, and a row inside that card. A person builds a mental model out of
-nouns; three names for one noun means there is no model to build. This is the
-cheapest thing on this page to fix and the fastest to feel.
+was `recipes/index.html`. `Agents` labelled a sidebar section, a card, and a row
+inside that card. A person builds a mental model out of nouns; three names for one
+noun means there is no model to build. This was the cheapest thing on this page to fix
+and the fastest to feel.
+Every user-facing surface now says **Artifacts**, the Agents card names itself once,
+and `npm run check:vocabulary` fails the build on a banned term the way
+`check:gallery` fails on component drift. What is deliberately unchanged is the wire:
+the `asset.*` / `recipe.*` routes, the `*_asset` tool names and the `asset:` storage
+keys are a persisted approval/data boundary and get their own reviewed migration. The
+checker does not scan them, so it cannot be satisfied by weakening it.
 
 **2. Every capability got its own HTML document, and the hub embeds them in an
 iframe.** Twelve HTML surfaces ship; two of them — `chat/chat.html` and
 `memory/explorer.html` — are referenced by nothing at all and still ship to users.
-Settings, Directory, Skills and Assets are separate documents loaded into
-`#view-frame`. Five tracked defects trace to that one decision: two back-stack fixes
+Settings, Directory and Artifacts are separate documents loaded into
+`#view-frame` (Skills stopped being one of them — its manager is a Settings panel). Five tracked defects trace to that one decision: two back-stack fixes
 (`0.2.296`, `0.2.304`), the task-view transition ghost, the covered-nub overflow, the
 intermittent UI flash, and the Settings monolith — because when a view is a document,
 adding a feature means appending a `<section>`, which is how Settings reached
@@ -75,11 +82,12 @@ above it.
 
 ## The direction
 
-**Nouns before pixels.** One name per concept, enforced by a check the way
-`check:gallery` enforces component drift: **Artifacts** (never Assets), **Skills**
-(never recipes), **Agents** used once per view. Rename the routes and the files to
-match what the UI says, not the other way round. Nothing else on this list changes
-the felt quality of the product as cheaply.
+**Nouns before pixels.** *(Done for the UI, `0.2.350`; the routes remain.)* One name
+per concept, enforced by a check the way `check:gallery` enforces component drift:
+**Artifacts** (never Assets), **Skills** (never recipes), **Agents** used once per
+view. The files followed the UI where it was safe (`extension/recipes/` is gone); the
+routes did not, and that is a separate, security-boundary change rather than a
+rename. Nothing else on this list changed the felt quality of the product as cheaply.
 
 **The hub is a composer and a timeline, not a dashboard.** A returning power user
 mid-task needs two things: somewhere to say the next thing, and what happened while

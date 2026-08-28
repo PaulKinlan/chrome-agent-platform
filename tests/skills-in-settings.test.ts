@@ -52,7 +52,7 @@ Deno.test("skills-in-settings: the standalone recipes page is GONE (replaced by 
     indexGone = true;
   }
   assert(indexGone, "recipes/index.html must be deleted (no orphan standalone page)");
-  const panel = await Deno.readTextFile("extension/recipes/skills-panel.js");
+  const panel = await Deno.readTextFile("extension/skills/skills-panel.js");
   assert(panel.includes("export async function renderSkillList"), "the reusable list renderer exists");
   assert(panel.includes("export function mountSkillsSection"), "the section mount exists");
   assert(panel.includes("use-skill"), "the hub-composer handoff (use in a task) is preserved");
@@ -64,7 +64,7 @@ Deno.test("skills-in-settings: renderSkillList groups by intent and hands use to
   // a seeded DOM-less pass: renderSkillList needs `send`, so pin its wiring
   // against the real module and verify the grouping logic through the source
   // contract (the integration is covered by the browser KAT).
-  const panel = await Deno.readTextFile("extension/recipes/skills-panel.js");
+  const panel = await Deno.readTextFile("extension/skills/skills-panel.js");
   assert(panel.includes('send("recipe.list")'), "the list renders from the live recipe.list record");
   assert(panel.includes('mode === "on-demand"'), "only on-demand skills are offered (the store contract)");
   assert(panel.includes("byIntent"), "skills group by intent");

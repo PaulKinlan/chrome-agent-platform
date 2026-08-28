@@ -7,7 +7,7 @@ import {
   SETTINGS_SECTIONS,
   normalizeSettingsSectionId,
 } from "../lib/pure.js";
-import { RECIPE_ICON } from "../shared/recipe-icons.js";
+import { SKILL_ICON } from "../shared/skill-icons.js";
 import {
   CAPABILITIES,
   capabilityStatus,
@@ -50,7 +50,7 @@ import { createNavigationController } from "../lib/navigation-controller.js";
 // everywhere — no hand-rolled duplicates).
 import { confirmActionDialog } from "../shared/components.js";
 import { saveFsGrant, wireLocalFolderPickers, regrantFsGrantAccess } from "../lib/fs-grants.js";
-import { mountSkillsSection } from "../recipes/skills-panel.js";
+import { mountSkillsSection } from "../skills/skills-panel.js";
 
 // ── Provider presets (the user picks one; OpenAI-compatible endpoints) ──
 // NOTE: the "demo" + "prompt-api" providers are deliberately NOT in this
@@ -1717,7 +1717,7 @@ function addBackgroundAgentSelect(disabled, onChange) {
     const opt = document.createElement("option");
     opt.value = a.id;
     opt.setAttribute("aria-label", a.name);
-    const svg = RECIPE_ICON[a.icon] ?? "";
+    const svg = SKILL_ICON[a.icon] ?? "";
     const name = document.createElement("span");
     name.className = "opt-title";
     name.textContent = a.name;

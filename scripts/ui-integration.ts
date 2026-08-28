@@ -170,7 +170,7 @@ try {
     const nub = document.querySelector('#side-toggle .nub');
     const nubBox = nub ? nub.getBoundingClientRect() : null;
     return { sideW, vw: innerWidth, vh: innerHeight,
-      items: { newTask: box('#new-task'), newAgent: box('#new-agent'), skills: box('#open-recipes'), directory: box('#open-directory'), settings: box('#open-settings') },
+      items: { newTask: box('#new-task'), newAgent: box('#new-agent'), artifacts: box('#open-artifacts'), directory: box('#open-directory'), settings: box('#open-settings') },
       togg: box('#side-toggle'),
       nub: nubBox ? { w: Math.round(nubBox.width), h: Math.round(nubBox.height), left: Math.round(nubBox.left), right: Math.round(nubBox.right) } : null };
   })()`);

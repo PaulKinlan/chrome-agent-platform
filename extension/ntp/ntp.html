@@ -479,25 +479,25 @@
       width: 100%;
     }
     .foot-btn svg { flex: 0 0 auto; display: block; }
-    /* Assets is a split row: the main, familiar action opens the full browser;
+    /* Artifacts is a split row: the main, familiar action opens the full browser;
        the adjacent disclosure opens the metadata-only quick drawer. Both stay
        visible and independently operable in the collapsed rail. */
-    .assets-nav-row {
+    .artifacts-nav-row {
       display: grid;
       grid-template-columns: minmax(0, 1fr) 36px;
       gap: 4px;
       min-inline-size: 0;
     }
-    .assets-nav-row .foot-btn { min-inline-size: 0; }
-    .assets-nav-row asset-quick-drawer { min-inline-size: 0; }
-    .side.collapsed .assets-nav-row {
+    .artifacts-nav-row .foot-btn { min-inline-size: 0; }
+    .artifacts-nav-row artifact-quick-drawer { min-inline-size: 0; }
+    .side.collapsed .artifacts-nav-row {
       display: flex;
       flex-direction: column;
       align-items: center;
       gap: 4px;
     }
-    .side.collapsed .assets-nav-row .foot-btn { inline-size: 34px; block-size: 34px; }
-    .side.collapsed .assets-nav-row asset-quick-drawer::part(trigger) {
+    .side.collapsed .artifacts-nav-row .foot-btn { inline-size: 34px; block-size: 34px; }
+    .side.collapsed .artifacts-nav-row artifact-quick-drawer::part(trigger) {
       inline-size: 34px;
       block-size: 34px;
     }
@@ -793,12 +793,12 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
           <span class="btn-label">Directory</span>
         </button>
-        <div class="assets-nav-row">
-          <button class="btn ghost foot-btn" id="open-assets" type="button" title="Assets" aria-label="Assets">
+        <div class="artifacts-nav-row">
+          <button class="btn ghost foot-btn" id="open-artifacts" type="button" title="Artifacts" aria-label="Artifacts">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m8 14 2.5-2.5L14 15l2-2 3 3"/><circle cx="9" cy="8" r="1"/></svg>
-            <span class="btn-label">Assets</span>
+            <span class="btn-label">Artifacts</span>
           </button>
-          <asset-quick-drawer id="asset-quick-drawer" auto origin="master" label="Quick access assets"></asset-quick-drawer>
+          <artifact-quick-drawer id="artifact-quick-drawer" auto origin="master" label="Quick access artifacts"></artifact-quick-drawer>
         </div>
         <button class="btn foot-btn" id="open-settings" type="button" title="Settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -830,14 +830,19 @@
         <first-run-guide id="first-run-guide" hidden></first-run-guide>
         <agent-composer id="composer" placeholder="Ask anything, or @mention an agent…" send-label="Run task"></agent-composer>
 
-        <!-- Agents: the two groupings — background agents (scheduled) + Site Agents (enrolled origins). -->
-        <section aria-label="Agents">
+        <!-- Agents: one heading, two groupings — your own agents and Site Agents
+             (enrolled origins). CAP-FB-20260828-NOUN-DISCIPLINE-01: the noun
+             "Agents" names this section ONCE. The section takes its accessible
+             name from the same h2 (aria-labelledby, never a duplicated
+             aria-label), and the inner group row says "Yours" rather than
+             repeating "Agents" one level below the heading that already said it. -->
+        <section aria-labelledby="agents-panel-title">
           <div class="panel">
             <div class="panel-head">
-              <h2 class="t">Agents</h2>
+              <h2 class="t" id="agents-panel-title">Agents</h2>
               <span class="hint" id="agent-count"></span>
             </div>
-            <div class="panel-subhead"><span>Agents</span><span class="hint">your agents</span><a href="#" class="hint-link" id="bg-configure">Configure</a></div>
+            <div class="panel-subhead"><span>Yours</span><a href="#" class="hint-link" id="bg-configure">Configure</a></div>
             <div class="panel-body" id="named-agents"></div>
             <div class="panel-subhead"><span>Site Agents</span><a href="#" class="hint-link" id="discover-page">Find site tools</a></div>
             <div class="panel-body" id="site-agents"></div>
@@ -846,10 +851,10 @@
         </section>
 
         <!-- Recent artifacts: what the agents have made. -->
-        <section aria-label="Recent artifacts">
+        <section aria-labelledby="recent-artifacts-title">
           <div class="panel">
             <div class="panel-head">
-              <h2 class="t">Recent artifacts</h2>
+              <h2 class="t" id="recent-artifacts-title">Recent artifacts</h2>
               <a href="#" class="hint-link" id="browse-artifacts">Browse all</a>
             </div>
             <div class="panel-body" id="artifacts"></div>
@@ -859,10 +864,10 @@
         <!-- Recent activity: the agent run log (what the agents DID — their
              tasks, tool calls, and results, so a background agent's work is
              visible even without a live UI). -->
-        <section aria-label="Recent activity">
+        <section aria-labelledby="recent-activity-title">
           <div class="panel">
             <div class="panel-head">
-              <h2 class="t">Recent activity</h2>
+              <h2 class="t" id="recent-activity-title">Recent activity</h2>
               <span class="hint" id="hub-usage">what the agents did</span>
             </div>
             <div class="panel-body runlog" id="run-log"></div>

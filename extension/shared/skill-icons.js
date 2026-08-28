@@ -1,8 +1,10 @@
-// shared/recipe-icons.js — the line-art SVG icon map for recipes/capabilities.
-// Single source of truth (the hub + the recipes page share these). currentColor
-// stroke icons — no emoji.
+// shared/skill-icons.js — the line-art SVG icon map for skills/capabilities.
+// Single source of truth (the hub + the Settings Skills panel share these).
+// currentColor stroke icons — no emoji.
+// CAP-FB-20260828-NOUN-DISCIPLINE-01 (absorbing -RECIPES-SKILLS-RENAME-01):
+// renamed from shared/recipe-icons.js / RECIPE_ICON.
 
-export const RECIPE_ICON = {
+export const SKILL_ICON = {
   broom:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M21 3l-9 9-3-3 9-9z"/><path d="M9 12l-6 6a2.5 2.5 0 0 0 3 3l6-6"/><path d="M12 9l3 3"/></svg>',
   doc:

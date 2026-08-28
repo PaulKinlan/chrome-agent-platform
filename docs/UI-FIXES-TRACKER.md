@@ -12,7 +12,9 @@ per-item evidence is under `CAP-FB-20260826-OWNER-BATCH-01` in [TASKS.md](../TAS
 one line each here:
 
 - **Back button → blank screen** — fixed at the top frame (`0.2.296`, `0.2.304`).
-  Settings/Assets/Directory/Skills return to the hub in ONE press. Settings
+  Settings/Artifacts/Directory return to the hub in ONE press (the view was called
+  "Assets" then and Skills was still a destination; both changed in `0.2.350` —
+  `CAP-FB-20260828-NOUN-DISCIPLINE-01`). Settings
   sub-navigation uses `replaceState`, and the Settings brand click goes Home.
 - **Permission dead-ends** — approval now surfaces **in the conversation** that needs it
   (`0.2.303`); the orphaned Settings → Approvals section is deleted and revoke confirms
@@ -82,6 +84,19 @@ one line each here:
 
 ### Hub / sidebar / task list
 - The task sidebar (expand/collapse to an icon rail, tooltips, the + new-task button).
+- **One name per concept (2026-08-28, `0.2.350`, CAP-FB-20260828-NOUN-DISCIPLINE-01)** —
+  the sidebar item, the quick drawer, the composer mention group and BOTH `openView` call
+  sites for `artifacts/index.html` now say **Artifacts**; the same view no longer has two
+  titles. The agent editor's "Core assets" became **Context files** (owner-supplied input
+  is not agent output). The hub's Agents card named itself three times nested
+  (`aria-label` → `h2` → row); it now names itself once, and the same duplicated
+  accessible name was fixed on Recent artifacts and Recent activity. `extension/recipes/`
+  is gone (`skills-panel.js` → `extension/skills/`, `recipe-icons.js`/`RECIPE_ICON` →
+  `skill-icons.js`/`SKILL_ICON`). Enforced by `npm run check:vocabulary`
+  (`scripts/check-vocabulary.mjs`), which scans only user-visible strings and fails the
+  build on a banned term — modelled on the `check:gallery` drift guard. Evidence:
+  `scripts/kat-noun-discipline.ts` 14/14 in a real loaded extension; the gate observed at
+  23 violations on the unfixed tree and 0 after.
 - **Per-view nub policy (2026-08-21, CAP-FB-20260819-COVERED-NUB-VISIBILITY-01 provisional 0.2.119 composite)** — the sidebar edge nub is available only where it is actionable: on the hub and in a task/agent conversation it stays visible, enabled, focusable, and in the AX tree; whenever Settings, Directory, Skills, or Assets covers the sidebar, the nub is hidden, inert, disabled, non-hit-testable, non-focusable, and `aria-hidden`. The pure `extension/ntp/view-policy.js` authority never touches collapse state; the broader view policy retains the sidebar's covered inert/AX state. Independently accepted nub/responsive content is recomposed onto transition-focus tip `46a3e6df`, preserving explicit agent composer focus, focus-neutral follow-ups/same-thread opens, Directory trigger restoration, and route-aware snapshots. V4 evidence found real 500px Settings overflow after eight passing cells; the composite reflows every fixed form grid below 680px with 500px/360px semantic contracts and no clipping. Exact composition review and the complete 48-cell plus rapid-sequence browser matrix remain pending.
 - **Collapsed-rail geometry (2026-08-18)** — the `new-task`/`create-agent`/Skills/Directory/Settings rail icons now share ONE size + icon convention (inline SVG plus + SVG × delete, 34×34 centred when collapsed — previously `new-task` was 28×28 left-aligned at x=16 while `create-agent` was centred at x=13). The collapse control is now an edge **nub** (rounded tab on the sidebar boundary, 44×44 hit target, chevron flips on collapse, RTL mirror + inner border + reduced-motion handled) instead of the undersized 28×28 chevron. Collapsed state persists via the SW `kv.set`/`kv.get` routes, which now report **durable vs permissionless-session fallback** (backend failure is flagged, not silently claimed) — the durability is exposed as a VISIBLE + accessible hint (`role=status aria-live` session-only/error text) plus `data-durability`, and the write queue is serialized before reload (awaited via the public attribute, no `window.*` oracle). The backend-failure/error path is unit-tested (`kvSet` rejects on a backend write failure); there is NO production fault route or test global — build.mjs asserts `kv.fault`/`__setKvFaultForTest`/`__sidebarPersistence`/`__lastViewTransition`/`window.__*` are absent from every shipped JS + the SW bundle. Verified in the real extension: collapsed rail centre spread ≤2px, exactly five 34×34 actions, nub 44×44 + in-bounds + hit-testable above a REAL production thread (typed into `#task-input` + clicked `#run-task`, demo provider ran), Enter/Space toggle + aria/title track, reload persistence after the write settles, RTL inner-boundary centring + border swap, deterministic rapid-toggle + View Transition `finished` awaited (test-injected patch), narrow/dark/reduced-motion matrix. (branch fix/collapsed-sidebar-nub, scripts/ui-integration.ts 40 checks.)
 - The collapsed-rail task X (visible on hover + deletes) + the 24px hit target.

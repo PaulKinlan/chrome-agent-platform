@@ -1,12 +1,14 @@
-// recipes/skills-panel.js — the Skills manager as a REUSABLE panel module.
+// skills/skills-panel.js — the Skills manager as a REUSABLE panel module.
 // Formerly the standalone recipes/index.html page (the sidebar Skills button
 // was folded into Settings — the owner wants skills managed as a Settings
-// panel). The options page mounts this natively in its #skills section; the
+// panel), and formerly under extension/recipes/ — moved by
+// CAP-FB-20260828-NOUN-DISCIPLINE-01 so the directory says what the UI says.
+// The options page mounts this natively in its #skills section; the
 // rendering (intent-grouped capability-rows + collapsed "how it works") is the
 // SAME component set the standalone page used — no fork, no iframe.
 
 import { send } from "../lib/messages.js";
-import { RECIPE_ICON } from "../shared/recipe-icons.js";
+import { SKILL_ICON } from "../shared/skill-icons.js";
 
 /** A skill = the shared capability-row (consistent layout) + a collapsed
  * "how it works" details for the documentation. The action is "Use in a task"
@@ -23,7 +25,7 @@ function recipeCard(r, onUse) {
   const row = document.createElement("capability-row");
   row.setAttribute("name", r.name);
   row.setAttribute("description", baseDesc);
-  row.setAttribute("icon", RECIPE_ICON[r.icon] ?? "");
+  row.setAttribute("icon", SKILL_ICON[r.icon] ?? "");
   row.setAttribute("action", "use");
   row.addEventListener("use", () => onUse?.(r));
 

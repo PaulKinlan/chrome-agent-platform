@@ -222,7 +222,7 @@ Deno.test("thread projection: real ntp.js projection preserves user attachments 
     "run-status", "composer", "thread-back", "provider-status", "side",
     "side-toggle", "sidebar-durability-hint", "new-task", "new-agent",
     "view", "view-frame", "view-title", "view-back", "open-settings",
-    "open-directory", "open-recipes", "bg-configure", "browse-artifacts",
+    "open-directory", "open-artifacts", "artifact-quick-drawer", "bg-configure", "browse-artifacts",
     "discover-page",
   ];
   for (const id of knownIds) getOrCreateElement(id);
@@ -495,7 +495,7 @@ Deno.test("multi-run leave-and-return in ntp: leaves task view, runs turn 2, ret
     "run-status", "composer", "thread-back", "provider-status", "side",
     "side-toggle", "sidebar-durability-hint", "new-task", "new-agent",
     "view", "view-frame", "view-title", "view-back", "open-settings",
-    "open-directory", "open-recipes", "bg-configure", "browse-artifacts",
+    "open-directory", "open-artifacts", "artifact-quick-drawer", "bg-configure", "browse-artifacts",
     "discover-page",
   ];
   for (const id of knownIds) getOrCreateElement(id);
@@ -656,7 +656,7 @@ Deno.test("reload parity at #thread: boot route restore renders all conversation
     "run-status", "composer", "thread-back", "provider-status", "side",
     "side-toggle", "sidebar-durability-hint", "new-task", "new-agent",
     "view", "view-frame", "view-title", "view-back", "open-settings",
-    "open-directory", "open-recipes", "bg-configure", "browse-artifacts",
+    "open-directory", "open-artifacts", "artifact-quick-drawer", "bg-configure", "browse-artifacts",
     "discover-page",
   ];
   for (const id of knownIds) getOrCreateElement(id);

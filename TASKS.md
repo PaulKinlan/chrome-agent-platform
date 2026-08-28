@@ -173,7 +173,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P0 | OPEN | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
 | P0 | OPEN | [`CAP-FB-20260827-HUB-FIRST-RUN-01`](#cap-fb-20260827-hub-first-run-01-the-first-screen-is-an-onboarding-wall-not-a-command-center) | The first screen is an onboarding wall, not a command center |
 | P0 | OPEN | [`CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01`](#cap-fb-20260827-tool-call-legibility-01-tool-call-cards-show-shape-not-answers) | Tool-call cards show shape, not answers |
-| P0 | OPEN | [`CAP-FB-20260828-NOUN-DISCIPLINE-01`](#cap-fb-20260828-noun-discipline-01-one-name-per-concept--assetsartifacts-skillsrecipes-agents-three-deep) | One name per concept — Assets/Artifacts, Skills/recipes, Agents three deep |
+| P0 | IN_REVIEW | [`CAP-FB-20260828-NOUN-DISCIPLINE-01`](#cap-fb-20260828-noun-discipline-01-one-name-per-concept--assetsartifacts-skillsrecipes-agents-three-deep) | One name per concept — Assets/Artifacts, Skills/recipes, Agents three deep |
 | P1 | **BLOCKED** | [`CAP-FB-20260819-PROACTIVE-TAB-DISCOVERY-01`](#cap-fb-20260819-proactive-tab-discovery-01-proactive-per-tab-site-agent-discovery-before-run) | Proactive per-tab Site Agent discovery before Run |
 | P1 | OPEN | [`CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01`](#cap-fb-20260819-directory-tool-explorer-01-agent-directory-tool-explorer-and-enrollment-policy) | Agent Directory tool explorer and enrollment policy |
 | P1 | OPEN | [`CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`](#cap-fb-20260819-permission-remediation-ux-01-user-facing-permission-management-and-run-remediation) | User-facing permission management and run remediation |
@@ -920,9 +920,10 @@ evidence every other task depends on).
 - Review: independent cross-subsystem review covering the composer, command registry, autocomplete, settings, hub and gallery
 - Gates: full unit suite, `scripts/chrome-journeys.ts`, `npm run check:gallery` and `npm run test:components` green; a repository-wide grep for the retired term with each remaining hit justified; a loaded-MV3 pass over every surface that names the concept; a fixture proving pre-rename stored data still loads
 - Blockers: the couplings named in `AGENTS.md` — composer, command registry, autocomplete, skills/agents registry — must all be updated together; a partial rename is what produced this entry
-- Next: produce the full occurrence inventory across code, storage keys, routes, tests and docs before renaming anything
+- Next: the UI half is done (see the 2026-08-28 entry). What remains is the INTERNAL half: `extension/lib/recipes.js` and its `RECIPES` export, the `recipe.*` message routes (`recipe.delete` is in `OWNER_DIRECT_ACTIONS`, so this touches the approval boundary), and the tests named after them (`tests/recipes.test.ts`, `tests/recipe-delete-order.test.ts`). Treat it as a routes/security rename with its own review, not as copy editing
 - Recover: `git grep -in "recipe" -- extension lib tests scripts docs`
 - History:
+  - 2026-08-28 23:55 UTC — the USER-FACING half was absorbed by `CAP-FB-20260828-NOUN-DISCIPLINE-01`: the last user-facing "recipe" copy is gone (Settings → Background agents), `extension/recipes/skills-panel.js` moved to `extension/skills/skills-panel.js`, and `shared/recipe-icons.js`/`RECIPE_ICON` became `shared/skill-icons.js`/`SKILL_ICON`. `extension/recipes/` no longer exists. A `check:vocabulary` rule now fails the build on user-facing "recipe", so the UI half cannot regress while the internal half waits. Remaining scope narrowed to the module, the routes and their tests.
   - Git reconcile at 2026-08-22 07:30 UTC: legacy state `OPEN` mapped to `OPEN` (unchanged semantics).
   - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §3 D8).
 
@@ -1210,22 +1211,30 @@ evidence every other task depends on).
 
 ## [CAP-FB-20260828-NOUN-DISCIPLINE-01] One name per concept — Assets/Artifacts, Skills/recipes, Agents three deep
 - Feedback: 2026-08-28 — product owner: "the UI is starting to get messy". Root-caused in PRODUCT.md, "Where the product is going": the product speaks three vocabularies for the same nouns
-- Updated: 2026-08-28 01:10 UTC
-- Status: OPEN
+- Updated: 2026-08-28 23:55 UTC
+- Status: IN_REVIEW
 - Priority: P0
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `30cd7f59`
-- Candidate: —
+- Owner: implementer (worktree lane)
+- Workspace: active (local path private)
+- Branch: `worktree-agent-a451ff5ed1d15409d`
+- Base: `2607d954`
+- Candidate: `worktree-agent-a451ff5ed1d15409d` (see History for the exact commit)
 - Shipping: —
 - Acceptance: exactly one user-facing name per concept, and the code agrees with it. **Artifacts**, never Assets: the sidebar item, the hub card, both `openView` titles and the route family all say the same word. **Skills**, never recipes: `recipes/index.html` and the `recipe.*` routes are renamed to match the nav that already says Skills. **Agents** appears once per view, not as a sidebar section AND a card AND a row inside that card. **Skills is not a top-level view** (owner, 2026-08-28): it is currently a sidebar destination opening `recipes/index.html`, but a skill is something you attach to an agent or include in a task, not a place you go — it belongs where it is used, with management living in Settings alongside the other agent configuration. A `check:vocabulary` script fails the build on a banned term the way `check:gallery` fails on component drift, so this cannot come back
-- Review: fresh-session review of the diff; falsification — the vocabulary check must be shown failing when a banned term is reintroduced
+- Review: PENDING — fresh-session review of the diff on branch `worktree-agent-a451ff5ed1d15409d`. Falsification already recorded below (the gate observed RED on the unfixed tree, GREEN after)
 - Gates: full unit suite; Chrome journeys green (several journeys select views by label); gallery drift; the new vocabulary check
 - Blockers: —
-- Next: two owner decisions are settled — **Artifacts** is the name (not Assets), and **Skills stops being a tab**. Rename outward from the routes, and move Skills management into Settings while keeping `/skill:<id>` and agent attachment exactly as they are
-- Recover: `git grep -n "Assets\|asset\." -- extension/ntp extension/artifacts | head`
+- Next: fresh-session review of the branch, then merge. The deliberate remainder is the `asset.*` / `recipe.*` WIRE ROUTES, the `*_asset` model-facing tool names, the `management.asset.*` capability ids and the `asset:` OPFS keys — those are a persisted security/data boundary (approval digests, `DESTRUCTIVE_ACTIONS`/`OWNER_DIRECT_ACTIONS`, per-agent tool allowlists, stored artifact bodies), not vocabulary, and renaming them is its own reviewed change. `check:vocabulary` deliberately does not scan them, so the gate can never be satisfied by weakening it
+- Recover: `git grep -n "NOUN-DISCIPLINE" -- TASKS.md scripts/check-vocabulary.mjs`
 - History:
+  - 2026-08-28 23:55 UTC — implemented on `worktree-agent-a451ff5ed1d15409d` (base `2607d954`), NOT pushed to main (a concurrent session is writing to this repo).
+    **Artifacts is the single user-facing name.** The sidebar button (`open-assets`/"Assets" → `open-artifacts`/"Artifacts"), the quick drawer (`<asset-quick-drawer>` → `<artifact-quick-drawer>`, its heading/search/empty/browse copy, its `browse-assets`/`asset-open`/`asset-reuse` events → `artifact-*`, its exports `ASSET_QUICK_LIMITS`/`selectQuickAssets`/`quickAssetOwner`/`formatQuickAsset*` → `ARTIFACT_*`/`*Artifact*`), the composer mention group ("Assets" → "Artifacts"), and BOTH `openView("artifacts/index.html", …)` call sites (one said "Assets", one said "Artifacts" — the exact defect in the feedback) now say one word. `attachAssetToComposer` → `attachArtifactToComposer`. The agent editor's "Core assets" became **Context files** — owner-supplied INPUT is a different concept from agent OUTPUT and may not borrow the artifact noun either; the persisted `coreAssets` field is untouched.
+    **Agents once per view.** The hub card was `<section aria-label="Agents">` → `<h2>Agents</h2>` → `<span>Agents</span>`; the aria-label became `aria-labelledby` on the h2 and the inner row became "Yours". The same duplicate-accessible-name defect was found and fixed on the Recent artifacts and Recent activity sections by the new checker.
+    **Skills.** The sidebar destination was already gone (skills-in-settings landed earlier); this change removes the last user-facing "recipe" copy (Settings → Background agents said "each wraps a recipe"), moves `extension/recipes/skills-panel.js` → `extension/skills/skills-panel.js`, and renames `shared/recipe-icons.js`/`RECIPE_ICON` → `shared/skill-icons.js`/`SKILL_ICON`. `/skill:<id>`, the `use-skill` bridge and agent skill attachment are untouched. Absorbs the UI half of `CAP-FB-20260821-RECIPES-SKILLS-RENAME-01`; that entry keeps the `recipe.*` route/`lib/recipes.js` half.
+    **The gate.** `scripts/check-vocabulary.mjs` + `npm run check:vocabulary` (also wired into `test:all`), modelled on `sync-gallery.mjs --check`. It extracts only USER-VISIBLE strings (HTML text nodes, visible attributes, a declared list of JS sinks, and HTML template literals — collapsing `${…}` holes while keeping string literals written inside them) and applies four rules: banned terms (`asset`, `recipe`), Skills-is-not-a-destination, one governed noun per `<section>`, and no aria-label duplicating a heading. 14 surfaces scanned.
+    **Falsification (recorded, not asserted):** with the four source files stashed to their pre-fix state the gate reported **23 violations** across `ntp.html` (4 + the nested-Agents + 3 duplicate-accessible-name), `ntp.js` (5), `components.js` (9) and `options.html` (1) and exited 1; restored, it reports 0 and exits 0. `tests/vocabulary.test.ts` (12 tests) went **8 passed / 4 failed** against the unfixed tree and 12/12 after; each falsification test also feeds the FIXED markup and asserts zero findings, so no rule passes by returning true.
+    **Gates at this commit:** `npm run build` clean (80 generated files byte-identical, 26 packages / 65 shipped files); `npm test` **1946 passed / 0 failed** (1934 before, +12 new); `npm run test:chrome` **127/127**; `npm run check:gallery` clean; `node scripts/check-tasks.mjs` no new violations; `npm run check:vocabulary` clean.
+    **Real-browser evidence:** `scripts/kat-noun-discipline.ts` loads the real MV3 extension and asserts the rendered nouns — **14/14 passed**, no page errors, with screenshots (hub, quick drawer, and the Artifacts view reached from both call sites). Both entry points produce the view title "Artifacts".
   - 2026-08-28 02:40 UTC — owner: "Skills shouldn't be a tab... but artifacts and [Assets] we should clear that up." So: Artifacts is the single name, and the Skills sidebar destination goes. That removes one of the four iframe views outright, which also shrinks `CAP-FB-20260828-VIEW-FRAME-COLLAPSE-01`.
   - 2026-08-28 01:10 UTC — captured from a product audit of the shipped extension. The same view is `Assets` in the hub sidebar, `Recent artifacts` on the card beside it, `artifacts/index.html` on disk and `asset.*` in the routes — and `extension/ntp/ntp.js` opens it with the title "Assets" at one call site and "Artifacts" at another, so the SAME view has two titles in one file. `Skills` in the nav is `recipes/index.html` served by `recipe.*` routes; `CAP-FB-20260821-RECIPES-SKILLS-RENAME-01` is the unfinished half of that and should be absorbed here or sequenced with it. `Agents` labels a sidebar section, a hub card, and a row inside that card. This is the cheapest item in the whole UI backlog and the fastest one a person feels — a user builds a mental model out of nouns, and three names for one noun means there is no model to build.
 

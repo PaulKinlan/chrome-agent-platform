@@ -195,9 +195,14 @@ shippable:
 3. `CAP-FB-20260827-HUB-FIRST-RUN-01` — the first-run card offers six competing actions
    above the composer and a fresh profile stacks seven empty states, one of which shows
    filtered-empty copy to someone who has never had data.
-4. `CAP-FB-20260828-NOUN-DISCIPLINE-01` — the product speaks three vocabularies for the
-   same nouns (Assets / Recent artifacts / `asset.*`; Skills served by `recipes/`). The
-   cheapest item in the UI backlog and the fastest one a person feels.
+4. `CAP-FB-20260828-NOUN-DISCIPLINE-01` — **UI half done, in review (`0.2.350`).** The
+   product spoke three vocabularies for the same nouns (Assets / Recent artifacts /
+   `asset.*`; Skills served by `recipes/`). Everything a person reads now says
+   **Artifacts**, the Agents card names itself once instead of three times nested, and
+   `npm run check:vocabulary` fails the build if a banned name returns. Deliberately NOT
+   renamed: the `asset.*` / `recipe.*` wire routes, the `*_asset` model-facing tool names
+   and the `asset:` OPFS keys — a persisted approval/data boundary that is its own
+   reviewed change.
 
 **The product direction behind these** — why the UI reads as messy, and what to do about
 it structurally — is in [PRODUCT.md](PRODUCT.md), "Where the product is going".

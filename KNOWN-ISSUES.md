@@ -67,11 +67,26 @@ Apache-2.0-root vs MIT-metadata licence reconciliation (Q14), both in
 invisible in a demo.
 
 ### Consistency — the recipes→skills rename never finished
-`CAP-FB-20260821-RECIPES-SKILLS-RENAME-01` · P3 · OPEN
+`CAP-FB-20260821-RECIPES-SKILLS-RENAME-01` · P3 · OPEN (narrowed 2026-08-28)
 
-`recipe.*` identifiers, routes and UI strings survive alongside the `skill` vocabulary the
-product presents. A user-facing concept with two names in the code is how the `/` command
-and the autocomplete fell out of sync the first time.
+The USER-FACING half is closed by `CAP-FB-20260828-NOUN-DISCIPLINE-01` (`0.2.350`): no
+string a person reads still says "recipe", `extension/recipes/` is gone, and
+`npm run check:vocabulary` fails the build if one comes back. What survives is internal —
+`extension/lib/recipes.js` with its `RECIPES` export, the `recipe.*` message routes
+(`recipe.delete` sits in `OWNER_DIRECT_ACTIONS`, so this is an approval-boundary change,
+not copy editing), and the tests named after them. A user-facing concept with two names in
+the code is how the `/` command and the autocomplete fell out of sync the first time.
+
+### Consistency — the wire still says `asset`
+`CAP-FB-20260828-NOUN-DISCIPLINE-01` · P0 · IN_REVIEW
+
+Every user-facing surface now says **Artifacts**, but the `asset.*` message routes, the
+`*_asset` model-facing tool names, the `management.asset.*` capability ids and the `asset:`
+OPFS keys still say asset. That was a deliberate stop: those strings are load-bearing in
+the approval digest (`DESTRUCTIVE_ACTIONS`, `OWNER_DIRECT_ACTIONS`), in per-agent tool
+allowlists, and in stored artifact bodies — renaming them is a security/data migration with
+its own review, and doing it halfway is worse than not doing it. `check:vocabulary`
+deliberately does not scan them, so the gate cannot be satisfied by weakening it.
 
 ## Process findings
 

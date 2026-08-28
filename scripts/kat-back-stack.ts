@@ -2,7 +2,7 @@
 // The first back-stack fix (0.2.296) changed the OPTIONS iframe's internal
 // navigationController, but the real bug lives in the TOP frame's joint session
 // history: `viewFrame.src = "about:blank"` on close + `viewFrame.src = url` on
-// open both append joint-history entries, so Back from Assets/Directory/Skills
+// open both append joint-history entries, so Back from Artifacts/Directory
 // needed TWO presses (a blank intermediate). This harness loads the REAL
 // extension, opens each view, presses Back once, and asserts the overlay is
 // hidden (returned to the hub) in a single step.
@@ -61,9 +61,8 @@ await sleep(3000);
 // Open each view, press Back once, assert the overlay is hidden.
 const flows: Array<[string, string]> = [
   ["Settings", `document.getElementById('open-settings')?.click()`],
-  ["Assets", `document.getElementById('open-assets')?.click()`],
+  ["Artifacts", `document.getElementById('open-artifacts')?.click()`],
   ["Directory", `document.getElementById('open-directory')?.click()`],
-  ["Skills", `document.getElementById('open-recipes')?.click()`],
 ];
 for (const [name, open] of flows) {
   await ev(open);

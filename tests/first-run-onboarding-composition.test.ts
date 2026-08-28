@@ -31,7 +31,7 @@ Deno.test("first-run composition preserves current run, transition, Directory an
   for (
     const marker of [
       'id="first-run-guide"',
-      'id="asset-quick-drawer"',
+      'id="artifact-quick-drawer"',
       'id="open-directory"',
       'id="durable-run-registry"',
       'id="side-toggle"',
@@ -46,10 +46,10 @@ Deno.test("first-run composition preserves current run, transition, Directory an
       "createRouteUpdateRunner",
       "focusExplicitRouteTarget",
       "loadFirstRunGuideState",
-      'const assetQuickDrawer = document.getElementById("asset-quick-drawer")',
-      "attachAssetToComposer",
-      "artifactId: asset.id ?? id",
-      'artifactOrigin: asset.origin ?? origin ?? "master"',
+      'const artifactQuickDrawer = document.getElementById("artifact-quick-drawer")',
+      "attachArtifactToComposer",
+      "artifactId: artifact.id ?? id",
+      'artifactOrigin: artifact.origin ?? origin ?? "master"',
       "recordAuthoritativeThreadProjection",
       "clearAuthoritativeThreadProjection",
       "side.inert = fullViewOpen",
@@ -140,12 +140,12 @@ Deno.test("first-run composition preserves transaction and provider boundaries",
   );
   assert(
     components.includes(
-      'customElements.define("asset-quick-drawer", AssetQuickDrawer)',
+      'customElements.define("artifact-quick-drawer", ArtifactQuickDrawer)',
     ),
   );
   assert(
     components.includes(
-      'for (const [action, visible] of [["asset-open", "Open"], ["asset-reuse", "Reuse"]])',
+      'for (const [action, visible] of [["artifact-open", "Open"], ["artifact-reuse", "Reuse"]])',
     ),
   );
   assert(manifest.sandbox?.pages?.includes("sandbox/artifact-preview.html"));

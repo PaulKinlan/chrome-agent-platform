@@ -438,7 +438,7 @@ Deno.test("conversation run sequence: real ntp.js event routing — thread follo
     "run-status", "composer", "thread-back", "provider-status", "side",
     "side-toggle", "sidebar-durability-hint", "new-task", "new-agent",
     "view", "view-frame", "view-title", "view-back", "open-settings",
-    "open-directory", "bg-configure", "browse-artifacts",
+    "open-directory", "open-artifacts", "artifact-quick-drawer", "bg-configure", "browse-artifacts",
     "discover-page",
   ];
   for (const id of knownIds) getOrCreateElement(id);

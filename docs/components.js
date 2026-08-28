@@ -571,7 +571,7 @@ async function mentionCandidates(q = "", currentAgentId = null, currentAgentKind
     }
     for (const a of assets.assets || []) {
       if (!hit(a.name) && !hit(a.id)) continue;
-      items.push({ id: `asset:${a.id ?? a.name}`, label: a.name, description: a.type || "artifact", kind: "artifact", group: "Assets" });
+      items.push({ id: `artifact:${a.id ?? a.name}`, label: a.name, description: a.type || "artifact", kind: "artifact", group: "Artifacts" });
     }
   }
   return items;
@@ -1760,26 +1760,29 @@ class ArtifactInspector extends Component {
 customElements.define("artifact-inspector", ArtifactInspector);
 
 /* ──────────────────────────────────────────────────────────────────────────
- * <asset-quick-drawer> — bounded recent/search/filter access to asset metadata.
- * The component never reads asset bodies: hosts own Open/Reuse authority and
- * receive metadata-only events. Dynamic asset values are written with DOM
- * textContent, never interpolated into HTML.
+ * <artifact-quick-drawer> — bounded recent/search/filter access to artifact
+ * metadata. The component never reads artifact bodies: hosts own Open/Reuse
+ * authority and receive metadata-only events. Dynamic artifact values are
+ * written with DOM textContent, never interpolated into HTML.
+ * CAP-FB-20260828-NOUN-DISCIPLINE-01: the element, its labels and its events
+ * all say "artifact". The `asset.list` runtime ROUTE keeps its wire name — the
+ * route family is a persisted security boundary, renamed separately.
  * ────────────────────────────────────────────────────────────────────────── */
-export const ASSET_QUICK_LIMITS = Object.freeze({
+export const ARTIFACT_QUICK_LIMITS = Object.freeze({
   maxSource: 200,
   recent: 8,
   results: 40,
   maxQuery: 200,
 });
 
-const QUICK_ASSET_TYPES = new Set(["html", "text", "json", "image", "data"]);
+const QUICK_ARTIFACT_TYPES = new Set(["html", "text", "json", "image", "data"]);
 
-function boundedAssetField(value, max, fallback = "") {
+function boundedArtifactField(value, max, fallback = "") {
   const text = String(value ?? fallback).trim();
   return text.length > max ? text.slice(0, max) : text;
 }
 
-function quickAssetTimestamp(value) {
+function quickArtifactTimestamp(value) {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
   const numeric = typeof value === "string" && /^\d+$/.test(value) ? Number(value) : NaN;
   if (Number.isFinite(numeric) && numeric > 0) return numeric;
@@ -1787,32 +1790,32 @@ function quickAssetTimestamp(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
-function normalizeQuickAsset(value) {
+function normalizeQuickArtifact(value) {
   if (!value || typeof value !== "object") return null;
-  const id = boundedAssetField(value.id, 256);
+  const id = boundedArtifactField(value.id, 256);
   if (!id) return null;
-  const rawType = boundedAssetField(value.type, 40, "data").toLowerCase();
-  const type = QUICK_ASSET_TYPES.has(rawType) ? rawType : "unknown";
+  const rawType = boundedArtifactField(value.type, 40, "data").toLowerCase();
+  const type = QUICK_ARTIFACT_TYPES.has(rawType) ? rawType : "unknown";
   const sizeValue = Number(value.size);
   return {
     id,
-    name: boundedAssetField(value.name, 200, "Untitled") || "Untitled",
+    name: boundedArtifactField(value.name, 200, "Untitled") || "Untitled",
     type,
-    origin: boundedAssetField(value.origin, 256, "master") || "master",
+    origin: boundedArtifactField(value.origin, 256, "master") || "master",
     size: Number.isFinite(sizeValue) && sizeValue >= 0 ? Math.floor(sizeValue) : 0,
-    at: quickAssetTimestamp(value.at ?? value.updatedAt ?? value.createdAt),
+    at: quickArtifactTimestamp(value.at ?? value.updatedAt ?? value.createdAt),
   };
 }
 
 /** A truthful owner label: hub-owned master entries, otherwise the canonical
  * origin when parseable (and the bounded stored owner string when not). */
-export function quickAssetOwner(origin) {
-  const stored = boundedAssetField(origin, 256, "master") || "master";
+export function quickArtifactOwner(origin) {
+  const stored = boundedArtifactField(origin, 256, "master") || "master";
   if (stored === "master") return "Hub";
   try { return new URL(stored).origin; } catch { return stored; }
 }
 
-export function formatQuickAssetSize(value) {
+export function formatQuickArtifactSize(value) {
   const bytes = Number.isFinite(Number(value)) && Number(value) >= 0
     ? Math.floor(Number(value))
     : 0;
@@ -1825,8 +1828,8 @@ export function formatQuickAssetSize(value) {
   return `${compact} ${units[unit]} (${bytes.toLocaleString()} bytes)`;
 }
 
-export function formatQuickAssetTime(value) {
-  const timestamp = quickAssetTimestamp(value);
+export function formatQuickArtifactTime(value) {
+  const timestamp = quickArtifactTimestamp(value);
   if (!timestamp) return { label: "Time unavailable", datetime: "" };
   const date = new Date(timestamp);
   try {
@@ -1843,43 +1846,43 @@ export function formatQuickAssetTime(value) {
 }
 
 /** Select the visible metadata rows without unbounded work or DOM growth.
- * Storage contract: one origin owns at most 200 assets. A malformed oversized
+ * Storage contract: one origin owns at most 200 artifacts. A malformed oversized
  * response is read from its newest end and explicitly reported as truncated. */
-export function selectQuickAssets(raw, { query = "", type = "all" } = {}) {
+export function selectQuickArtifacts(raw, { query = "", type = "all" } = {}) {
   const source = Array.isArray(raw) ? raw : [];
-  const start = Math.max(0, source.length - ASSET_QUICK_LIMITS.maxSource);
+  const start = Math.max(0, source.length - ARTIFACT_QUICK_LIMITS.maxSource);
   const normalized = [];
   for (let i = start; i < source.length; i++) {
-    const asset = normalizeQuickAsset(source[i]);
-    if (asset) normalized.push(asset);
+    const artifact = normalizeQuickArtifact(source[i]);
+    if (artifact) normalized.push(artifact);
   }
   normalized.sort((a, b) => b.at - a.at || a.name.localeCompare(b.name));
-  const q = String(query ?? "").trim().slice(0, ASSET_QUICK_LIMITS.maxQuery).toLocaleLowerCase();
-  const selectedType = QUICK_ASSET_TYPES.has(type) ? type : "all";
+  const q = String(query ?? "").trim().slice(0, ARTIFACT_QUICK_LIMITS.maxQuery).toLocaleLowerCase();
+  const selectedType = QUICK_ARTIFACT_TYPES.has(type) ? type : "all";
   const matches = [];
-  for (const asset of normalized) {
-    if (selectedType !== "all" && asset.type !== selectedType) continue;
+  for (const artifact of normalized) {
+    if (selectedType !== "all" && artifact.type !== selectedType) continue;
     if (q) {
-      const haystack = `${asset.name}\n${asset.type}\n${asset.origin}\n${quickAssetOwner(asset.origin)}`.toLocaleLowerCase();
+      const haystack = `${artifact.name}\n${artifact.type}\n${artifact.origin}\n${quickArtifactOwner(artifact.origin)}`.toLocaleLowerCase();
       if (!haystack.includes(q)) continue;
     }
-    matches.push(asset);
+    matches.push(artifact);
   }
   const activeFilter = !!q || selectedType !== "all";
-  const limit = activeFilter ? ASSET_QUICK_LIMITS.results : ASSET_QUICK_LIMITS.recent;
+  const limit = activeFilter ? ARTIFACT_QUICK_LIMITS.results : ARTIFACT_QUICK_LIMITS.recent;
   return {
     items: matches.slice(0, limit),
     total: matches.length,
     sourceTotal: source.length,
-    sourceTruncated: source.length > ASSET_QUICK_LIMITS.maxSource,
+    sourceTruncated: source.length > ARTIFACT_QUICK_LIMITS.maxSource,
     limited: matches.length > limit,
   };
 }
 
-class AssetQuickDrawer extends Component {
+class ArtifactQuickDrawer extends Component {
   constructor() {
     super();
-    this._assets = [];
+    this._artifacts = [];
     this._state = "idle";
     this._error = "";
     this._query = "";
@@ -1891,17 +1894,17 @@ class AssetQuickDrawer extends Component {
     this._returnFocus = true;
   }
 
-  set assets(value) {
-    this._assets = Array.isArray(value) ? value : [];
+  set artifacts(value) {
+    this._artifacts = Array.isArray(value) ? value : [];
     this._state = "ready";
     this._error = "";
     if (this._rendered) this._renderList();
   }
-  get assets() { return this._assets; }
+  get artifacts() { return this._artifacts; }
 
   connectedCallback() {
-    if (!this._assets.length && this.hasAttribute("assets")) {
-      this._assets = parseJSONAttr(this.getAttribute("assets"), []);
+    if (!this._artifacts.length && this.hasAttribute("artifacts")) {
+      this._artifacts = parseJSONAttr(this.getAttribute("artifacts"), []);
       this._state = "ready";
     }
     super.connectedCallback();
@@ -1915,7 +1918,7 @@ class AssetQuickDrawer extends Component {
   }
 
   _render() {
-    const label = this.getAttribute("label") || "Quick access assets";
+    const label = this.getAttribute("label") || "Quick access artifacts";
     mountTemplate(this, `
       :host { display:inline-flex; min-inline-size:0; }
       .trigger { inline-size:36px; block-size:36px; display:inline-flex; align-items:center; justify-content:center;
@@ -1977,28 +1980,28 @@ class AssetQuickDrawer extends Component {
       @media (prefers-reduced-motion:reduce) { * { scroll-behavior:auto !important; } }
       @media (forced-colors:active) { .type { border:1px solid CanvasText; } }
     `, `<button part="trigger" class="trigger" type="button" aria-label="${escapeHtml(label)}"
-        title="${escapeHtml(label)}" aria-expanded="false" aria-controls="asset-quick-panel">
+        title="${escapeHtml(label)}" aria-expanded="false" aria-controls="artifact-quick-panel">
         ${ICONS.chevron}</button>
-      <section class="drawer" id="asset-quick-panel" popover="auto" hidden aria-labelledby="asset-quick-title">
+      <section class="drawer" id="artifact-quick-panel" popover="auto" hidden aria-labelledby="artifact-quick-title">
         <div class="shell">
-          <header class="head"><h2 id="asset-quick-title">Recent assets</h2>
-            <button class="close" type="button" aria-label="Close quick access assets">${ICONS.close}</button></header>
+          <header class="head"><h2 id="artifact-quick-title">Recent artifacts</h2>
+            <button class="close" type="button" aria-label="Close quick access artifacts">${ICONS.close}</button></header>
           <div class="controls">
-            <label for="asset-quick-search">Search assets
-              <input id="asset-quick-search" type="search" autocomplete="off" placeholder="Name or owner">
+            <label for="artifact-quick-search">Search artifacts
+              <input id="artifact-quick-search" type="search" autocomplete="off" placeholder="Name or owner">
             </label>
-            <label for="asset-quick-type">Filter by type
-              <select id="asset-quick-type">
+            <label for="artifact-quick-type">Filter by type
+              <select id="artifact-quick-type">
                 <option value="all">All types</option><option value="html">HTML</option>
                 <option value="text">Text</option><option value="json">JSON</option>
                 <option value="image">Image</option><option value="data">Data</option>
               </select>
             </label>
           </div>
-          <p class="summary" id="asset-quick-summary"></p>
-          <ul class="list" id="asset-quick-list" aria-label="Assets"></ul>
-          <div class="foot"><button type="button" class="browse">Browse all assets</button></div>
-          <span class="sr-only" id="asset-quick-live" role="status" aria-live="polite"></span>
+          <p class="summary" id="artifact-quick-summary"></p>
+          <ul class="list" id="artifact-quick-list" aria-label="Artifacts"></ul>
+          <div class="foot"><button type="button" class="browse">Browse all artifacts</button></div>
+          <span class="sr-only" id="artifact-quick-live" role="status" aria-live="polite"></span>
         </div>
       </section>`);
     this._trigger = this._root.querySelector(".trigger");
@@ -2007,7 +2010,7 @@ class AssetQuickDrawer extends Component {
     this._select = this._root.querySelector("select");
     this._list = this._root.querySelector(".list");
     this._summary = this._root.querySelector(".summary");
-    this._live = this._root.querySelector("#asset-quick-live");
+    this._live = this._root.querySelector("#artifact-quick-live");
     this._renderList();
   }
 
@@ -2016,10 +2019,10 @@ class AssetQuickDrawer extends Component {
     this._root.querySelector(".close")?.addEventListener("click", () => this.close());
     this._root.querySelector(".browse")?.addEventListener("click", () => {
       this.close({ returnFocus: false });
-      this._emit("browse-assets");
+      this._emit("browse-artifacts");
     });
     this._search?.addEventListener("input", () => {
-      this._query = this._search.value.slice(0, ASSET_QUICK_LIMITS.maxQuery);
+      this._query = this._search.value.slice(0, ARTIFACT_QUICK_LIMITS.maxQuery);
       if (this._search.value !== this._query) this._search.value = this._query;
       this._renderList();
     });
@@ -2123,7 +2126,7 @@ class AssetQuickDrawer extends Component {
       if (!res || res.ok === false || !Array.isArray(res.assets)) {
         throw new Error(res?.error || "asset list unavailable");
       }
-      this._assets = res.assets;
+      this._artifacts = res.assets;
       this._state = "ready";
       this._error = "";
     } catch (error) {
@@ -2151,8 +2154,8 @@ class AssetQuickDrawer extends Component {
       setTimeout(() => { if (this._open) this._position(); }, 0);
     }
     if (this._state === "loading") {
-      this._summary.textContent = "Loading assets…";
-      this._announce("Loading assets");
+      this._summary.textContent = "Loading artifacts…";
+      this._announce("Loading artifacts");
       return;
     }
     if (this._state === "error") {
@@ -2160,7 +2163,7 @@ class AssetQuickDrawer extends Component {
       const row = document.createElement("li");
       row.className = "state error";
       const message = document.createElement("span");
-      message.textContent = `Couldn't load assets — ${this._error || "unknown error"}.`;
+      message.textContent = `Couldn't load artifacts — ${this._error || "unknown error"}.`;
       const retry = document.createElement("button");
       retry.type = "button";
       retry.className = "retry";
@@ -2168,47 +2171,47 @@ class AssetQuickDrawer extends Component {
       retry.addEventListener("click", () => this.refresh());
       row.append(message, retry);
       this._list.append(row);
-      this._announce("Couldn't load assets");
+      this._announce("Couldn't load artifacts");
       return;
     }
 
-    const selected = selectQuickAssets(this._assets, { query: this._query, type: this._type });
+    const selected = selectQuickArtifacts(this._artifacts, { query: this._query, type: this._type });
     const suffix = selected.limited ? ` Showing the first ${selected.items.length}.` : "";
     const truncation = selected.sourceTruncated
-      ? ` The asset index exceeded ${ASSET_QUICK_LIMITS.maxSource}; only its newest ${ASSET_QUICK_LIMITS.maxSource} entries were searched.`
+      ? ` The artifact index exceeded ${ARTIFACT_QUICK_LIMITS.maxSource}; only its newest ${ARTIFACT_QUICK_LIMITS.maxSource} entries were searched.`
       : "";
-    this._summary.textContent = `${selected.total} ${selected.total === 1 ? "asset" : "assets"}.${suffix}${truncation}`;
-    this._announce(`${selected.total} ${selected.total === 1 ? "asset" : "assets"}`);
+    this._summary.textContent = `${selected.total} ${selected.total === 1 ? "artifact" : "artifacts"}.${suffix}${truncation}`;
+    this._announce(`${selected.total} ${selected.total === 1 ? "artifact" : "artifacts"}`);
 
     if (!selected.items.length) {
       const row = document.createElement("li");
       row.className = "state";
       row.textContent = this._query || this._type !== "all"
-        ? "No assets match this search and filter."
-        : "No assets yet. Ask an agent to make something.";
+        ? "No artifacts match this search and filter."
+        : "No artifacts yet. Ask an agent to make something.";
       this._list.append(row);
       return;
     }
 
-    for (const asset of selected.items) {
+    for (const artifact of selected.items) {
       const row = document.createElement("li");
       row.className = "item";
       const head = document.createElement("div");
       head.className = "item-head";
       const name = document.createElement("span");
       name.className = "name";
-      name.textContent = asset.name;
+      name.textContent = artifact.name;
       const type = document.createElement("span");
       type.className = "type";
-      type.textContent = asset.type;
+      type.textContent = artifact.type;
       head.append(name, type);
 
       const meta = document.createElement("dl");
-      const time = formatQuickAssetTime(asset.at);
+      const time = formatQuickArtifactTime(artifact.at);
       const facts = [
-        ["Owner", quickAssetOwner(asset.origin), null],
-        ["Type", asset.type, null],
-        ["Size", formatQuickAssetSize(asset.size), null],
+        ["Owner", quickArtifactOwner(artifact.origin), null],
+        ["Type", artifact.type, null],
+        ["Size", formatQuickArtifactSize(artifact.size), null],
         ["Created", time.label, time.datetime],
       ];
       for (const [term, value, datetime] of facts) {
@@ -2228,7 +2231,7 @@ class AssetQuickDrawer extends Component {
 
       const actions = document.createElement("div");
       actions.className = "actions";
-      for (const [action, visible] of [["asset-open", "Open"], ["asset-reuse", "Reuse"]]) {
+      for (const [action, visible] of [["artifact-open", "Open"], ["artifact-reuse", "Reuse"]]) {
         const button = document.createElement("button");
         button.type = "button";
         button.className = "action";
@@ -2236,11 +2239,11 @@ class AssetQuickDrawer extends Component {
         label.textContent = visible;
         const context = document.createElement("span");
         context.className = "sr-only";
-        context.textContent = ` ${asset.name}`;
+        context.textContent = ` ${artifact.name}`;
         button.append(label, context);
         button.addEventListener("click", () => {
           this.close({ returnFocus: false });
-          this._emit(action, { asset: { ...asset } });
+          this._emit(action, { artifact: { ...artifact } });
         });
         actions.append(button);
       }
@@ -2249,7 +2252,7 @@ class AssetQuickDrawer extends Component {
     }
   }
 }
-customElements.define("asset-quick-drawer", AssetQuickDrawer);
+customElements.define("artifact-quick-drawer", ArtifactQuickDrawer);
 /* <code-block lang="python">code text</code-block>
  * A fenced code block: monospace, a subtle panel surface, a language label,
  * horizontal scroll + a copy button. Content is its light-DOM text (already
