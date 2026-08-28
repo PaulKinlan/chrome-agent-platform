@@ -151,6 +151,41 @@ Deno.test("policy: the protected constraints are GENERATED from the single runti
   }
 });
 
+Deno.test("hub prompt: capability breadth — the chrome.* areas, the wasm suite, and search-FIRST discovery", () => {
+  // (a) search-first: the manual must put discovery before every tool use and
+  // teach the lexical matcher's query style (concrete tool-name nouns).
+  assertStringIncludes(MASTER_SKILL, "Tool discovery — SEARCH FIRST");
+  assertStringIncludes(MASTER_SKILL, "CALL search_tools BEFORE GUESSING");
+  assertStringIncludes(MASTER_SKILL, "executable\n  selectionRef");
+  assert(MASTER_SKILL.includes('search_tools("network rule")'),
+    "the manual must model concrete-noun queries (network rule)");
+  assert(MASTER_SKILL.includes('search_tools("MHTML")'),
+    "the manual must model concrete-noun queries (MHTML)");
+  // (b) browser control = the whole chrome.* surface, grouped by area.
+  for (const area of [
+    "Tabs & windows", "Tab groups", "Downloads", "Cookies & site data",
+    "Network", "Content & user scripts", "System & power", "Extensions",
+    "History & sessions", "Bookmarks & reading list", "Read & capture",
+  ]) {
+    assert(MASTER_SKILL.includes(area), `the manual must name the browser area "${area}"`);
+  }
+  assertStringIncludes(MASTER_SKILL, "whole chrome.*\nextensions API namespace");
+  assert(MASTER_SKILL.includes("declarativeNetRequest"),
+    "the manual must name the declarativeNetRequest capability");
+  // (c) bundled wasm tools are named + their discovery is strengthened.
+  for (const t of ["grep", "csvtool", "sqlite3.query.bounded", "toml2json", "xxd", "uuid", "gzip"]) {
+    assert(MASTER_SKILL.includes(t), `the manual must name the bundled wasm tool "${t}"`);
+  }
+  assertStringIncludes(MASTER_SKILL, 'list_tools("bundled-wasm")');
+  assertStringIncludes(MASTER_SKILL, "NOT in your default\ntool list");
+  // (d) memory + delegation honesty: per-agent memory, own context.
+  assertStringIncludes(MASTER_SKILL, "Memory is PER-AGENT");
+  assertStringIncludes(MASTER_SKILL, "ITS OWN context: its own\n  memory, its own discovered tools, its own skills");
+  // (e) no stale hardcoded registry count — live counts come from list_tools.
+  assert(!MASTER_SKILL.includes("126 browser tools"),
+    "the manual must not hardcode a browser-tool count (drifts; list_tools is authoritative)");
+});
+
 Deno.test("policy drift: the EDITABLE base carries NONE of the runtime-security constraints", () => {
   // No rule text may live in the replaceable product base — a "replace"
   // override must not be able to suppress any runtime-security instruction.
