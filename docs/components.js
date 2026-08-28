@@ -868,7 +868,15 @@ class RunTaskButton extends Component {
 }
 customElements.define("run-task-button", RunTaskButton);
 
-/* <mic-button listening> — self-contained Web Speech toggle + waveform */
+/* <mic-button listening> — self-contained Web Speech toggle + live waveform.
+ * Recording state is signalled THREE ways: the `listening` attribute on the
+ * host (state authority), `data-listening` on the inner button (visual state —
+ * the original bug: the CSS keyed on data-listening but the attribute was
+ * never rendered, so recording looked identical to idle), and aria-pressed.
+ * While recording the wave bars are driven by the REAL mic level
+ * (getUserMedia + AnalyserNode); if the stream/AudioContext is unavailable the
+ * bars fall back to the CSS animation (honest "recording" indicator, not a
+ * fake level meter). Hover-while-recording swaps the wave for a STOP icon. */
 class MicButton extends Component {
   static get observedAttributes() { return ["listening", "label"]; }
   constructor() {
@@ -877,16 +885,24 @@ class MicButton extends Component {
     this._listening = false;
     this._mediaStream = null;
     this._noSpeech = 0;
+    this._audioCtx = null;
+    this._analyser = null;
+    this._raf = 0;
+    this._restartTimes = [];
+    // KAT/owner-visible honesty: "live" (real level meter) | "fallback" (CSS
+    // animation, no mic stream) | null (not recording).
+    this.waveformMode = null;
   }
   _render() {
     const listening = this.hasAttribute("listening");
-    const label = this.getAttribute("label") || "Start listening";
+    const idleLabel = this.getAttribute("label") || "Start listening";
+    const label = listening ? "Stop listening" : idleLabel;
     mountTemplate(this, `
       :host { display:inline-flex; }
       .mic { display:inline-flex; align-items:center; justify-content:center; width:var(--control,36px);
         height:var(--control,36px); background:transparent;
         border:1px solid var(--border, #333); color:var(--text, #eee); border-radius:var(--radius-sm,6px);
-        padding:0; cursor:pointer; font:inherit; line-height:1; }
+        padding:0; cursor:pointer; font:inherit; line-height:1; position:relative; }
       .mic .icon { display:inline-flex; align-items:center; justify-content:center; }
       .mic svg { display:block; }
       .mic[data-listening] { color:var(--accent, #0e6e63); border-color:var(--accent, #0e6e63); }
@@ -894,14 +910,22 @@ class MicButton extends Component {
       .wave { display:none; align-items:center; gap:2px; height:16px; }
       .mic[data-listening] .icon { display:none; }
       .mic[data-listening] .wave { display:inline-flex; }
-      .wave span { width:3px; background:currentColor; border-radius:2px; animation:sc-wave 1s ease-in-out infinite; }
+      .wave span { width:3px; background:currentColor; border-radius:2px; animation:sc-wave 1s ease-in-out infinite;
+        transform-origin:center; }
       .wave span:nth-child(1){height:6px;animation-delay:0s}.wave span:nth-child(2){height:12px;animation-delay:.15s}
       .wave span:nth-child(3){height:16px;animation-delay:.3s}.wave span:nth-child(4){height:10px;animation-delay:.45s}
       .wave span:nth-child(5){height:7px;animation-delay:.6s}
+      /* live level meter: bars are driven inline by the AnalyserNode — no CSS
+         animation (it would fight the per-frame transform). */
+      .wave.live span { animation:none; }
       @keyframes sc-wave { 0%,100%{transform:scaleY(.5)} 50%{transform:scaleY(1)} }
+      /* hover-while-recording → the wave becomes a STOP affordance */
+      .stop-ic { display:none; align-items:center; justify-content:center; }
+      .mic[data-listening]:hover .wave { display:none; }
+      .mic[data-listening]:hover .stop-ic { display:inline-flex; }
       @media (prefers-reduced-motion: reduce) { .wave span { animation:none; } }
     `, `<button part="button" class="mic" type="button" aria-label="${escapeHtml(label)}"
-      aria-pressed="${listening}"><span class="icon">${ICONS.mic}</span><span class="wave" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span></button>`);
+      aria-pressed="${listening}"${listening ? " data-listening" : ""}><span class="icon">${ICONS.mic}</span><span class="wave" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span><span class="stop-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></span></button>`);
     this._button = this._root.querySelector(".mic");
   }
   _wire() {
@@ -910,6 +934,32 @@ class MicButton extends Component {
   get listening() { return this._listening; }
   toggle() {
     this._listening ? this.stop() : this.start();
+  }
+  _stopIfHidden() {
+    if (!this._listening) return;
+    if (this._button && this._button.offsetParent === null) {
+      this._emit("mic-error", { message: "recording stopped — the composer was hidden" });
+      this.stop();
+    }
+  }
+  connectedCallback() {
+    super.connectedCallback?.();
+    // Hidden ≠ disconnected: the NTP switches views by display:none-ing the hub
+    // (body.view-open main.content), leaving the composer CONNECTED and a
+    // recording mic live in the background (the owner's "it's just a mess"
+    // bug). IntersectionObserver covers most visibility transitions BUT does
+    // not reliably deliver when an ancestor goes display:none — so a
+    // MutationObserver on body attributes (the view-switch mechanism) runs the
+    // same check. offsetParent===null distinguishes display:none (stop) from
+    // merely scrolled-off (keep dictating).
+    this._visObserver = new IntersectionObserver(() => this._stopIfHidden());
+    this._visObserver.observe(this);
+    this._mutObserver = new MutationObserver(() => this._stopIfHidden());
+    this._mutObserver.observe(document.body, {
+      attributes: true, attributeFilter: ["class", "hidden", "style"], subtree: true,
+    });
+    this._onPageHide = () => { if (this._listening) this.stop(); };
+    window.addEventListener("pagehide", this._onPageHide);
   }
   /** Ensure the microphone permission BEFORE starting recognition. The Web
    *  Speech API can start "successfully" with no audio when the mic permission
@@ -921,16 +971,71 @@ class MicButton extends Component {
     const md = navigator.mediaDevices;
     if (!md?.getUserMedia) return true; // no API — let SpeechRecognition try
     try {
-      const stream = await md.getUserMedia({ audio: true });
-      this._mediaStream = stream;
-      // SpeechRecognition captures its OWN audio; the stream above is just to
-      // grant/verify the permission. Release the tracks so we don't hold the
-      // mic open, but keep the stream handle for the stop teardown.
-      stream.getTracks().forEach((t) => t.stop());
+      // Keep the stream OPEN for the recording's lifetime: it doubles as the
+      // AnalyserNode source for the live waveform. Tracks are stopped in
+      // _stopMeter (called from stop()/disconnectedCallback) — the mic is
+      // never left open after the state reverts.
+      this._mediaStream = await md.getUserMedia({ audio: true });
       return true;
     } catch {
       this._emit("mic-error", { message: "microphone permission denied — grant mic access to dictate" });
       return false;
+    }
+  }
+  /** Drive the wave bars from the real mic level. Falls back to the CSS
+   *  animation (honest "recording", not a fake meter) when AudioContext or
+   *  the stream is unavailable, and under prefers-reduced-motion (static bars,
+   *  no per-frame visual churn). */
+  _startMeter() {
+    const wave = this._root.querySelector(".wave");
+    const bars = wave ? [...wave.querySelectorAll("span")] : [];
+    if (!this._mediaStream || !bars.length || prefersReducedMotion()) {
+      this.waveformMode = "fallback";
+      return;
+    }
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) { this.waveformMode = "fallback"; return; }
+      const ctx = new AC();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      ctx.createMediaStreamSource(this._mediaStream).connect(analyser);
+      this._audioCtx = ctx;
+      this._analyser = analyser;
+      this.waveformMode = "live";
+      wave.classList.add("live");
+      const data = new Uint8Array(analyser.fftSize);
+      const heights = [6, 12, 16, 10, 7]; // the idle bar geometry
+      const tick = () => {
+        if (this.waveformMode !== "live") return;
+        analyser.getByteTimeDomainData(data);
+        let peak = 0;
+        for (let i = 0; i < data.length; i++) {
+          const v = Math.abs(data[i] - 128) / 128;
+          if (v > peak) peak = v;
+        }
+        const level = Math.min(1, peak * 2.5); // speech peaks sit well under 1
+        bars.forEach((b, i) => {
+          b.style.transform = `scaleY(${0.3 + level * (heights[i] / 6)})`;
+        });
+        this._raf = requestAnimationFrame(tick);
+      };
+      this._raf = requestAnimationFrame(tick);
+    } catch {
+      this.waveformMode = "fallback"; // CSS animation carries the state
+    }
+  }
+  _stopMeter() {
+    this.waveformMode = null;
+    if (this._raf) { cancelAnimationFrame(this._raf); this._raf = 0; }
+    if (this._audioCtx) {
+      try { this._audioCtx.close(); } catch { /* ignore */ }
+      this._audioCtx = null;
+      this._analyser = null;
+    }
+    if (this._mediaStream) {
+      try { this._mediaStream.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
+      this._mediaStream = null;
     }
   }
   async start() {
@@ -990,15 +1095,33 @@ class MicButton extends Component {
       };
       this._recognition.onend = () => {
         if (this._listening) {
-          try { this._recognition.start(); } catch { /* ignore */ }
+          // Legit continuous dictation ends on silence and must restart — but a
+          // start() that throws instantly every time is a STUCK recording state
+          // (the wave keeps pulsing, no text ever arrives). Cap the restart
+          // STORM: >3 restarts inside 2s means recognition is dead — revert to
+          // idle honestly instead of looping forever.
+          const now = Date.now();
+          this._restartTimes = this._restartTimes.filter((t) => now - t < 2000);
+          if (this._restartTimes.length >= 3) {
+            this._emit("mic-error", { message: "speech recognition keeps stopping — try again" });
+            this.stop();
+            return;
+          }
+          this._restartTimes.push(now);
+          try { this._recognition.start(); } catch {
+            this._emit("mic-error", { message: "speech recognition stopped unexpectedly" });
+            this.stop();
+          }
           return;
         }
       };
     }
     this._listening = true;
     this._noSpeech = 0;
+    this._restartTimes = [];
     this.setAttribute("listening", TRUE);
     this._emit("mic-toggle", { listening: true });
+    this._startMeter();
     try {
       this._recognition.start();
     } catch (err) {
@@ -1007,6 +1130,7 @@ class MicButton extends Component {
     }
   }
   stop() {
+    this._stopMeter();
     this._listening = false;
     this._noSpeech = 0;
     this.removeAttribute("listening");
@@ -1014,16 +1138,15 @@ class MicButton extends Component {
     if (this._recognition) {
       try { this._recognition.stop(); } catch { /* ignore */ }
     }
-    if (this._mediaStream) {
-      try { this._mediaStream.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
-      this._mediaStream = null;
-    }
   }
   disconnectedCallback() {
     // The wider-goal review's finding: the base disconnect handler removed only
     // document listeners, while `onend` restarted recognition whenever
     // `_listening` was true — so removing/re-rendering a listening mic kept the
     // microphone active. Tear down recognition + state on disconnect.
+    if (this._visObserver) { this._visObserver.disconnect(); this._visObserver = null; }
+    if (this._mutObserver) { this._mutObserver.disconnect(); this._mutObserver = null; }
+    if (this._onPageHide) { window.removeEventListener("pagehide", this._onPageHide); this._onPageHide = null; }
     this._listening = false;
     if (this._recognition) {
       try {
@@ -1034,10 +1157,7 @@ class MicButton extends Component {
       } catch { /* ignore */ }
       this._recognition = null;
     }
-    if (this._mediaStream) {
-      try { this._mediaStream.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
-      this._mediaStream = null;
-    }
+    if (this._mediaStream || this._audioCtx) this._stopMeter();
     super.disconnectedCallback?.();
   }
 }
@@ -3965,6 +4085,11 @@ class AgentComposer extends Component {
       const stillValid = await this.revalidateSelectedAgent();
       if (!stillValid) return;
     }
+    // Accepted send ⇒ the mic must STOP (owner bug: sent a task while
+    // dictating, recognition kept listening in the background). Composer-level
+    // rejections (empty text, stale agent above) keep BOTH the draft and the
+    // recording; only the accepted path tears the mic down.
+    this._root.querySelector("#mic")?.stop?.();
     if (this._input) this._input.value = "";
     const pending = this.attachments.splice(0);
     this._clearChips();
