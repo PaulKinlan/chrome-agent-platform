@@ -23,7 +23,10 @@ document.getElementById("back")?.addEventListener("click", () => {
 });
 
 async function render() {
-  const res = await send("asset.list", { origin: "master" }).catch(() => ({ assets: [] }));
+  // The LIBRARY — every artifact the owner has, not just the ones the hub agent
+  // made. Passing origin:"master" here is what hid every site-origin artifact
+  // (CAP-FB-20260828-ARTIFACT-DURABILITY-01).
+  const res = await send("asset.list", { origin: "all" }).catch(() => ({ assets: [] }));
   const assets = (Array.isArray(res.assets) ? res.assets : []).slice().reverse();
   grid.replaceChildren();
 

@@ -392,7 +392,18 @@ export const ASSET_BOUNDS = {
   maxContentBytes: 256 * 1024,
   maxNameLength: 200,
   maxAssetsPerOrigin: 200,
-  maxIndexBytes: 128 * 1024,
+  // The index byte bound used to be PER ORIGIN. The library is now one shared
+  // index (CAP-FB-20260828-ARTIFACT-DURABILITY-01), so leaving it at 128 KiB
+  // would have been a capacity REGRESSION: every origin's rows now compete for
+  // one budget that previously each had to themselves. 128 KiB is ~940 rows;
+  // 2 MiB is ~15,000, which is a realistic ceiling for one person's accumulated
+  // work rather than a number that starts silently evicting inside a year.
+  //
+  // Silent eviction of the owner's OLDEST artifact is still the wrong terminal
+  // behaviour for a library whose whole point is durability — raising the bound
+  // defers that, it does not fix it. The evict-versus-refuse policy is
+  // CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01.
+  maxIndexBytes: 2 * 1024 * 1024,
 };
 
 export const ASSET_TYPES = new Set(["html", "text", "json", "image", "data"]);
@@ -402,7 +413,11 @@ export const ASSET_TYPES = new Set(["html", "text", "json", "image", "data"]);
 const assetLocks = new Map();
 const MAX_ASSET_LOCKS = 256;
 function withAssetLock(origin, fn) {
-  const key = canonical(origin) ?? "master";
+  // ONE store means ONE index, so every write serialises on a single chain.
+  // Keeping a per-origin key here would let two origins interleave writes to
+  // the same index; the CAS would catch it, but as a failure rather than as
+  // the mutual exclusion the rest of this file is written to assume.
+  const key = "library";
   const prev = (assetLocks.get(key)?.chain) ?? Promise.resolve();
   const next = prev.then(fn, fn);
   // The chain + a SETTLED flag (set when the chain finally lands) so the bound
@@ -425,8 +440,26 @@ function withAssetLock(origin, fn) {
   return next;
 }
 
-function assetStore(origin) {
-  return origin === "master" ? masterMemory() : siteMemory(origin);
+// THE ARTIFACT LIBRARY IS ONE STORE (CAP-FB-20260828-ARTIFACT-DURABILITY-01).
+//
+// Artifacts used to be filed in the store of the origin that produced them, so
+// `origin` selected the store. That had two consequences the owner named as
+// exactly what the library exists to prevent: `agent.delete` clears a Site
+// Agent's store, so deleting a Site Agent DESTROYED its artifacts; and the
+// gallery only ever listed `origin:"master"`, so those artifacts were never
+// visible in the library at all.
+//
+// Artifacts are the owner's accumulated work — a report written in one task is
+// an input to a later task or a different agent — so their lifetime must not be
+// coupled to any agent's or task's. `origin` is now PROVENANCE carried on the
+// row (which it already was) and nothing more.
+//
+// This does not widen a read boundary: `asset.*` routes are only reachable from
+// owner surfaces and the unscoped orchestrator — scoped (site/hook) runs get NO
+// management tools (`scoped ? {} : managementToolset(...)`) — so no site agent
+// could read another origin's artifacts before this change or after it.
+function assetStore() {
+  return masterMemory();
 }
 
 function canonical(origin) {
@@ -476,7 +509,10 @@ async function createAssetLocked(store, origin, o, { type, name, content, meta, 
   await recoverTx(store); // crash recovery (the durable WAL)
   await repairPendingLocked(store, origin);
   const index = await readIndexStrict(store); // S0
-  if (index.length >= ASSET_BOUNDS.maxAssetsPerOrigin) {
+  // The cap stays PER ORIGIN even though the index is now shared: it exists to
+  // stop one noisy producer filling the library, and counting the whole library
+  // against a single origin would let any one origin be starved by the others.
+  if (index.filter((r) => r.origin === o).length >= ASSET_BOUNDS.maxAssetsPerOrigin) {
     return { ok: false, error: `asset limit reached (${ASSET_BOUNDS.maxAssetsPerOrigin})` };
   }
   const idxGen = await store.getVersion(INDEX_KEY);
@@ -621,7 +657,7 @@ async function createAssetLocked(store, origin, o, { type, name, content, meta, 
 
 /** S0→S7 — create (the UNKEYED path; never used for workspace promotion). */
 export async function createAsset(origin, { type, name, content, meta }) {
-  const store = assetStore(origin);
+  const store = assetStore();
   const o = canonical(origin);
   const bounded = boundAssetMeta({ type, name, content });
   if (bounded.error) return { ok: false, error: bounded.error };
@@ -642,7 +678,7 @@ export async function createAssetKeyed(origin, { key, type, name, content, meta 
   if (typeof key !== "string" || !key || key.length > ASSET_BOUNDS.maxNameLength) {
     return { ok: false, error: "promotion key must be a non-empty string" };
   }
-  const store = assetStore(origin);
+  const store = assetStore();
   const o = canonical(origin);
   const bounded = boundAssetMeta({ type, name, content });
   if (bounded.error) return { ok: false, error: bounded.error };
@@ -671,7 +707,7 @@ export async function createAssetKeyed(origin, { key, type, name, content, meta 
 /** S0→S3 — update (the exact-write compensation: the restored body is guarded
  * by the NEW body's version token, so a repair can actually complete). */
 export async function updateAsset(origin, id, patch) {
-  const store = assetStore(origin);
+  const store = assetStore();
   if (!id || typeof id !== "string") return { ok: false, error: "update_asset needs an id" };
   return withAssetLock(origin, async () => updateAssetLocked(store, origin, id, patch));
 }
@@ -792,7 +828,7 @@ export async function createOrUpdateAssetKeyed(origin, { key, type, name, conten
   if (typeof key !== "string" || !key || key.length > ASSET_BOUNDS.maxNameLength) {
     return { ok: false, error: "asset key must be a non-empty bounded string" };
   }
-  const store = assetStore(origin);
+  const store = assetStore();
   const o = canonical(origin);
   const bounded = boundAssetMeta({ type, name, content });
   if (bounded.error) return { ok: false, error: bounded.error };
@@ -829,7 +865,7 @@ export function normalizeModelAssetKey(key) {
 /** S0→S3 — delete (the body is removed by the EXACT-write CAS token; a failure
  * CAS-restores the row; a double failure is recorded durably). */
 export async function deleteAsset(origin, id) {
-  const store = assetStore(origin);
+  const store = assetStore();
   if (!id || typeof id !== "string") return { ok: false, error: "delete_asset needs an id" };
   return withAssetLock(origin, async () => {
     await recoverTx(store); // crash recovery (the durable WAL)
@@ -901,7 +937,7 @@ export async function deleteAsset(origin, id) {
 export async function getAsset(origin, id) {
   if (!id || typeof id !== "string") return { ok: false, error: "get_asset needs an id" };
   return withAssetLock(origin, async () => {
-    const store = assetStore(origin);
+    const store = assetStore();
     const asset = await store.get(`asset:${id}`);
     if (!asset) return { ok: false, error: "asset not found" };
     return { ok: true, asset };
@@ -910,14 +946,94 @@ export async function getAsset(origin, id) {
 
 /** List an origin's assets. Reads run under the per-origin mutex; a strict
  * read failure surfaces (never a silently-empty successful list). */
+/** Rows produced by ONE origin. The store is shared, so this filters on the
+ *  row's provenance rather than reading a per-origin store. */
 export async function listAssets(origin) {
+  const o = canonical(origin);
   return withAssetLock(origin, async () => {
-    const store = assetStore(origin);
+    const store = assetStore();
     try {
       const index = await readIndexStrict(store);
-      return { ok: true, assets: index };
+      return { ok: true, assets: index.filter((r) => r.origin === o) };
     } catch (e) {
       return { ok: false, error: String(e?.message ?? e) };
     }
   });
+}
+
+/** THE LIBRARY: every artifact the owner has, whatever made it and whether or
+ *  not that agent or task still exists. This is what the artifacts gallery
+ *  shows — the owner asked for one central place their work accumulates. */
+export async function listAllAssets() {
+  return withAssetLock("master", async () => {
+    const store = assetStore();
+    try {
+      return { ok: true, assets: await readIndexStrict(store) };
+    } catch (e) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
+  });
+}
+
+/**
+ * Move any artifacts still filed in a SITE store into the library
+ * (CAP-FB-20260828-ARTIFACT-DURABILITY-01).
+ *
+ * Profiles created before the library became one store have artifacts sitting
+ * in per-origin stores, where `agent.delete` would destroy them. This copies
+ * them across and only then removes the originals, so a crash at any point
+ * leaves the artifact readable from at least one place — never neither.
+ *
+ * Idempotent: an id already present in the library is skipped, so running this
+ * on boot AND again immediately before a delete is safe. Returns what it did
+ * rather than throwing; a migration failure must not block the operation that
+ * triggered it, because refusing to delete an agent because a migration failed
+ * would be a worse outcome than a retry on the next boot.
+ */
+export async function migrateSiteAssetsToLibrary(origin) {
+  const o = canonical(origin);
+  if (!o || o === "master") return { ok: true, moved: 0 };
+  const site = siteMemory(o);
+  let siteIndex;
+  try {
+    siteIndex = await site.get(INDEX_KEY);
+  } catch {
+    return { ok: false, moved: 0, error: "could not read the site asset index" };
+  }
+  if (!Array.isArray(siteIndex) || siteIndex.length === 0) return { ok: true, moved: 0 };
+
+  let moved = 0;
+  const failed = [];
+  for (const row of siteIndex) {
+    const id = row?.id;
+    if (typeof id !== "string" || !id) continue;
+    try {
+      const body = await site.get(`asset:${id}`);
+      if (body == null) continue; // an index row with no body migrates nothing
+      const copied = await withAssetLock("master", async () => {
+        const store = assetStore();
+        const index = await readIndexStrict(store);
+        if (index.some((r) => r.id === id)) return true; // already migrated
+        // Body BEFORE index: a crash between them leaves an unreferenced body,
+        // which the existing repair path collects. The reverse would leave an
+        // index row pointing at nothing.
+        await store.setTrusted(`asset:${id}`, { ...body, origin: o });
+        await store.setTrusted(INDEX_KEY, [...index, { ...row, origin: o }]);
+        return true;
+      });
+      if (copied) {
+        // Verify the copy is readable before removing the original. Losing the
+        // artifact is the exact failure this whole task exists to prevent.
+        const check = await assetStore().get(`asset:${id}`).catch(() => null);
+        if (check == null) { failed.push(id); continue; }
+        await site.remove(`asset:${id}`).catch(() => {});
+        moved += 1;
+      }
+    } catch {
+      failed.push(id);
+    }
+  }
+  // Clear the site index only when every row made it across.
+  if (failed.length === 0) await site.setTrusted(INDEX_KEY, []).catch(() => {});
+  return { ok: failed.length === 0, moved, failed: failed.length };
 }

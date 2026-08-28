@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.329] — 2026-08-28
+- Fixed real data loss: deleting a Site Agent used to destroy every artifact created under that site — and those artifacts were never shown in your artifacts library in the first place. Artifacts are now one library that survives the agent and the task that made them, existing ones are migrated automatically, and the library shows everything you have made
+
 ## [0.2.328] — 2026-08-28
 - Groundwork for making any website usable by an agent: you will be able to write a small description of what a site can do (search this, read that, click this) and the agent gets those as tools — without the site owner having to do anything. It is deliberately a fixed list of simple actions rather than code, so a proposal from an agent can never be more than something you can read and refuse
 

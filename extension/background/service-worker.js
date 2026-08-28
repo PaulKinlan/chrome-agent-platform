@@ -199,6 +199,8 @@ import {
   deleteAsset,
   getAsset,
   listAssets,
+  listAllAssets,
+  migrateSiteAssetsToLibrary,
   normalizeModelAssetKey,
   updateAsset,
 } from "../lib/artifacts.js";
@@ -4527,7 +4529,11 @@ const handlers = mergeRouteMaps(
     return await deleteAsset(scope, id);
   },
   async "asset.list"({ origin }) {
-    return await listAssets(origin ?? "master");
+    // No origin (or the explicit "all") means THE LIBRARY: every artifact the
+    // owner has, whatever agent or task made it and whether or not that still
+    // exists. An explicit origin still filters by provenance.
+    if (origin === undefined || origin === null || origin === "all") return await listAllAssets();
+    return await listAssets(origin);
   },
   async "asset.get"({ origin, id }) {
     return await getAsset(origin ?? "master", id);
@@ -5325,6 +5331,11 @@ const handlers = mergeRouteMaps(
         // any incomplete step as RETRYABLE pending-cleanup — never a sequential
         // rollback that silently skips later cleanup on an earlier failure (the
         // round-18 finding: failed enrollment rollback was sequential/non-pending).
+        // Artifacts are the owner's, not the agent's, and must outlive it
+        // (CAP-FB-20260828-ARTIFACT-DURABILITY-01). Move any still filed in
+        // this site's store into the library BEFORE clearing it. Idempotent,
+        // and a failure here is logged rather than blocking the disenrollment.
+        await migrateSiteAssetsToLibrary(canonical).catch(() => {});
         const [unregRes, clearRes] = await Promise.allSettled([
           unregisterOriginScripts(canonical),
           siteMemory(canonical).clear(),
@@ -5443,6 +5454,9 @@ const handlers = mergeRouteMaps(
       // never short-circuit on the first failure (the round-17 non-retryable
       // finding: a sequential rollback skipped later host cleanup on an earlier
       // failure).
+      // See above: the owner's artifacts leave the site store before it is
+      // cleared, so deleting a Site Agent never destroys them.
+      await migrateSiteAssetsToLibrary(canonical).catch(() => {});
       const [unregRes, clearRes] = await Promise.allSettled([
         unregisterOriginScripts(canonical),
         siteMemory(canonical).clear(),

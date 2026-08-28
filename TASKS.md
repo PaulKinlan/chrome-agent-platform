@@ -1170,13 +1170,13 @@ evidence every other task depends on).
 ## [CAP-FB-20260828-ARTIFACT-DURABILITY-01] Deleting a Site Agent destroys the artifacts made under it
 - Feedback: 2026-08-28 — product owner, defining what artifacts are for: "we do need access to all the artifacts because the agents might go away when we kill them, and tasks might go away. We need this central store of things that we can reference in the future because we can build upon them... the whole point of the artifacts is that they're the central source of all the information that has been created by the worker, by the person." The shipped behaviour contradicts that
 - Updated: 2026-08-28 02:40 UTC
-- Status: OPEN
+- Status: IN_REVIEW
 - Priority: P0
 - Owner: unassigned
 - Workspace: none
 - Branch: none
 - Base: `e2442e90`
-- Candidate: —
+- Candidate: working tree — one shared library, provenance filtering, migration, gallery wired
 - Shipping: —
 - Acceptance: an artifact survives the deletion of the agent that made it and of the task it was made in. Deleting a Site Agent still clears that site's MEMORY and enrollment, and still removes its scripts and host permission, but it does not destroy the owner's artifacts. Existing artifacts already sitting in site stores are migrated, not orphaned or dropped. The artifact keeps its provenance — which agent, which thread, which run made it — so the thread view can still show it and so a deleted agent's artifacts are still attributable. `asset.delete` remains the ONLY way an artifact goes away, and stays an owner-direct action. A regression test deletes a Site Agent that has artifacts and asserts they are still listed and readable afterwards
 - Review: fresh-session review; falsification — the regression test must be shown FAILING against current `main`, where the artifacts genuinely disappear
@@ -1185,8 +1185,29 @@ evidence every other task depends on).
 - Next: decide the target layout first — the safest shape is that ALL artifacts live in the master store with an origin/agent/thread provenance field, since `assetStore("master")` is already the master memory and the per-origin split is what creates the coupling
 - Recover: `git grep -n "function assetStore" -- extension/lib/artifacts.js && git grep -n "siteMemory(canonical).clear()" -- extension/background/service-worker.js`
 - History:
+  - 2026-08-28 04:30 UTC — **fixed; red-then-green proven.** `tests/artifact-durability.test.ts` was written FIRST and shown failing against unmodified main with "the artifact must still be readable after the site store is cleared" — the data loss is real, not inferred. **The bug was bigger than filed:** the gallery only ever listed `origin:"master"`, so a site-origin artifact was never visible in the library in the first place, and then `agent.delete` destroyed it. **Fix:** `assetStore()` always returns the master store, so the library is ONE store and `origin` is purely the provenance it already carried on every row. `listAssets(origin)` filters by provenance; a new `listAllAssets()` is the library view and `asset.list` with no origin (or `"all"`) returns it; the gallery now asks for that. `migrateSiteAssetsToLibrary(origin)` moves pre-existing site-store artifacts across — body before index, verify the copy is readable before removing the original, idempotent — and both site-store clear paths call it BEFORE clearing, so no profile loses anything. **Not a boundary change:** scoped (site/hook) runs get no management tools at all (`scoped ? {} : managementToolset(...)`), so no site agent could read another origin's artifacts before or after. **Two things the tests caught in my own change:** the per-origin count cap was being counted against the whole shared index, which starved every origin after the first (restored to counting that origin's rows); and the index byte bound had been per-origin, so leaving it at 128 KiB after sharing the index was a capacity regression — raised to 2 MiB (~940 rows to ~15,000). The remaining silent-eviction behaviour is `CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01`, filed rather than folded in. Gates: unit 1801/0, Chrome journeys 127/127, security PASS, `npm run test:opfs` 6/6.
   - 2026-08-28 02:40 UTC — found by tracing the owner's requirement through the code rather than assuming. `assetStore(origin)` in `extension/lib/artifacts.js` returns `masterMemory()` for `"master"` and **`siteMemory(origin)` for anything else**. The `create_asset` tool takes an `origin` argument and its own description invites the model to use one ("Use origin 'master' for a hub-level artifact, or an origin for a site-specific one"), so artifacts genuinely land in site stores. `agent.delete` calls **`siteMemory(canonical).clear()`** as part of its cleanup. So deleting a Site Agent permanently destroys every artifact created under that origin — exactly the case the owner says the artifact library exists to protect against. This is data loss, not a UI issue, which is why it is P0 ahead of the presentation work.
   - 2026-08-28 02:40 UTC — checked and NOT affected: `deleteNamedAgent` clears `namedAgentMemory(slug)`, which is a different store from `assetStore`, so deleting a NAMED agent does not take master artifacts with it. The exposure is the site-origin path only. Thread/task deletion also does not currently touch assets.
+
+## [CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01] The library still evicts the owner's oldest artifact silently
+- Feedback: 2026-08-28 — found while fixing `CAP-FB-20260828-ARTIFACT-DURABILITY-01`; same bug class, deliberately not folded into that fix
+- Updated: 2026-08-28 04:30 UTC
+- Status: OPEN
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `4ed8cf8a`
+- Candidate: —
+- Shipping: —
+- Acceptance: the artifact library never silently discards the owner's work. When the index reaches its bound the owner is told and given a choice — the create fails honestly, or old artifacts are offered for review — rather than the oldest row being dropped inside a write it did not ask for. Whatever the policy, a test proves an artifact cannot leave the library without either an explicit `asset.delete` or an owner-visible decision
+- Review: fresh-session review; falsification — the test must be shown failing against a build that still evicts silently
+- Gates: unit suite; Chrome journeys green; `npm run test:opfs`
+- Blockers: needs an owner decision — refusing a create fails a task mid-run, while evicting loses work silently. Both are bad in different ways and it is a product call, not an engineering one
+- Next: put the two options to the owner with the real numbers (the bound is now ~15,000 rows) before building either
+- Recover: `git grep -n "maxIndexBytes" -- extension/lib/artifacts.js`
+- History:
+  - 2026-08-28 04:30 UTC — the index carries a byte bound and, when a create would exceed it, drops the OLDEST rows (`idx = idx.slice(1)`) and records eviction obligations to clean their bodies. For a library whose stated purpose is being "the central source of all the information that has been created by the worker", silently discarding the oldest thing the person made is the wrong terminal behaviour — it is the same class as the bug just fixed, reached by a different route. The durability fix raised the bound from 128 KiB to 2 MiB (~940 rows to ~15,000) because the bound had been PER ORIGIN and became shared, which would otherwise have been a capacity regression. That defers the problem by roughly an order of magnitude; it does not fix it, and it is recorded here rather than left implied.
 
 ## [CAP-FB-20260828-AMBIENT-SITE-TOOLS-01] Site tools should be available on the tab, not pre-registered in Settings
 - Feedback: 2026-08-28 — product owner, restating the product thesis: "WebMCP is that every single website can be a tool that can be used in the future because that's what the web is". Today the product makes you enroll a site first, which is a configuration step in front of the most distinctive thing it does
