@@ -1266,12 +1266,12 @@ class SwitchToggle extends Component {
         padding:0; flex:0 0 auto; transition:background 150ms ease, border-color 150ms ease; }
       .sw::after { content:""; position:absolute; top:2px; left:2px; width:14px; height:14px;
         border-radius:50%; background:var(--muted,#635e56); transition:transform 150ms ease, background 150ms ease; }
-      .sw[aria-pressed="true"] { background:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); }
-      .sw[aria-pressed="true"]::after { transform:translateX(16px); background:var(--btn-fg,#ffffff); }
+      .sw[aria-checked="true"] { background:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); }
+      .sw[aria-checked="true"]::after { transform:translateX(16px); background:var(--btn-fg,#ffffff); }
       .sw:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       @media (prefers-reduced-motion: reduce) { .sw, .sw::after { transition:none; } }
     `, `<button part="switch" class="sw" type="button" role="switch"
-        aria-checked="${checked}" aria-pressed="${checked}" aria-label="${escapeHtml(label)}"></button>`);
+        aria-checked="${checked}" aria-label="${escapeHtml(label)}"></button>`);
     this._btn = this._root.querySelector(".sw");
   }
   _wire() {
@@ -3151,8 +3151,7 @@ class AgentComposer extends Component {
       <div class="composer" part="composer">
         <span class="sr-only" id="composer-description-${this._uid}">${escapeHtml(description)}</span>
         <textarea id="task-input" placeholder="${escapeHtml(placeholder)}" aria-label="${escapeHtml(label)}"
-          aria-describedby="composer-description-${this._uid}" rows="2"
-          aria-expanded="false" aria-controls="popup-${this._uid}" aria-autocomplete="list"></textarea>
+          aria-describedby="composer-description-${this._uid}" rows="2"></textarea>
         <div class="popup" id="popup-${this._uid}" role="listbox" aria-label="Agent and resource mentions" hidden></div>
         <div class="chips" id="chips"></div>
         <div class="row">
@@ -3444,8 +3443,7 @@ class AgentComposer extends Component {
     const reopen = !this._slashAgentToken;
     this._slashAgentToken = { start: token.start, end: token.end };
     if (reopen) this._presentAgentPopover();
-    this._input?.setAttribute("aria-expanded", "true");
-    // The typed arg filters the picker; the composer input KEEPS focus so the
+        // The typed arg filters the picker; the composer input KEEPS focus so the
     // user can keep typing the reference (or a space to end the token).
     this._agentPick?.setQuery?.(token.arg || "");
   }
@@ -3486,8 +3484,7 @@ class AgentComposer extends Component {
     this._agentPop.hidden = true;
     // The slash picker's aria-expanded is owned here (the items popup manages
     // its own via _showPopup/_hidePopup).
-    if (this._popup?.hidden) this._input?.setAttribute("aria-expanded", "false");
-    if (returnFocus === "input") {
+        if (returnFocus === "input") {
       this._input?.focus();
     } else if (returnFocus) {
       // Focus returns to the + button (the trigger), falling back to the input.
@@ -3819,8 +3816,7 @@ class AgentComposer extends Component {
     this._renderPopupItems();
     if (this._popup) {
       this._popup.hidden = false;
-      this._input?.setAttribute("aria-expanded", "true");
-      // Always position via the JS fallback (flips above/below + clamps). The
+            // Always position via the JS fallback (flips above/below + clamps). The
       // native CSS anchor positioning (position-area) proved unreliable for the
       // bottom-anchored composer (the popup fell off-screen), so the JS path
       // wins: it sets position:fixed + the correct top/left, overriding the CSS.
@@ -3850,8 +3846,10 @@ class AgentComposer extends Component {
         this._select(Number(el.dataset.index));
       });
     });
+    // A11Y (UX-006): no combobox state on the plain-textarea input — the
+    // focused option is exposed by the popup's own listbox semantics.
     const active = this._popup.querySelector(`[data-index="${this._popupActive}"]`);
-    if (active) this._input?.setAttribute("aria-activedescendant", active.id);
+    active?.scrollIntoView({ block: "nearest" });
   }
 
   _setSelectionIndex(i) {
@@ -3927,8 +3925,6 @@ class AgentComposer extends Component {
       // or Accessibility tree after a prior result set.
       this._popup.replaceChildren();
     }
-    this._input?.setAttribute("aria-expanded", "false");
-    this._input?.removeAttribute("aria-activedescendant");
     this._popupItems = [];
     this._popupActive = -1;
     this._popupToken = null;

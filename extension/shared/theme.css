@@ -266,3 +266,18 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 /* ── Theme variants ──
    The default (above) is "paper": a warm-neutral light with a petrol-teal
    accent. Each theme restyles the same custom properties. */
+
+/* ── Accessibility utility ──
+   Visually-hidden but screen-reader-available (UX-AUDIT-2026-08-28 UX-007:
+   surfaces whose design has no visible page title still need an h1). */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
