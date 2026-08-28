@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.340] — 2026-08-28
+- Fixed: deleting an agent (including background agents) now actually deletes it — every surface checks the result honestly, a running task is torn down in the background without freezing the UI, focus lands somewhere sane afterwards, and settings no longer claims success when nothing happened
+
 ## [0.2.339] — 2026-08-28
 - New in Settings: the Providers panel is now a side-tabbed interface with the default provider badged on its tab; Skills live as a full section inside Settings (the old sidebar button is gone — old links redirect); the Usage panel has real graphs (daily token bars, model share, top tools, estimated cost); and the hub agent's instructions now describe its full browser-control surface properly
 
