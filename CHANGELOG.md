@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.338] — 2026-08-28
+- test(evidence): skills-in-settings browser evidence — seed via the shared OPFS masterMemory (localhost fetch refused by design), 9 browser checks + 4 screenshots
+
 ## [0.2.337] — 2026-08-28
 - Traced why opening a task is slow and wrote up the fix. Measured: opening a task costs about a millisecond per logged step, so a well-used task takes seconds. Worse, WRITING those steps gets slower the longer a task runs — a thousand steps takes three minutes — because every step rewrites the whole index. The redesign is written down and waiting for review; nothing has changed yet
 

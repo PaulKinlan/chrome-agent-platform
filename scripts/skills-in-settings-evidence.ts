@@ -193,14 +193,24 @@ ok("Skills section has the import form", section.importForm === true, section);
 ok("Skills list renders built-in skills", section.listRows > 0, section);
 await shot(ntp, "02-settings-skills-section.png");
 
-// 3) a REAL import (local SKILL.md)
-await evalInOptions(ntp, `(() => {
-  const sec = document.getElementById("skills");
-  sec.querySelector(".import-url").value = ${JSON.stringify(skillUrl)};
-  sec.querySelector(".import-btn").click();
+// 3) seed an IMPORTED skill through the REAL storage path (the extension
+// origin's OPFS masterMemory — the options page shares it with the SW), then
+// refresh the section. A direct localhost fetch import is refused by design
+// (no localhost host permission) — the form rendered the honest error, which
+// is itself correct behavior; the seed exercises the imported-skill data path.
+await evalInOptions(ntp, `(async () => {
+  const m = await import(chrome.runtime.getURL("/recipes/skills-panel.js")).catch(() => null);
+  const memMod = await import(chrome.runtime.getURL("/lib/memory.js"));
+  const mem = memMod.masterMemory();
+  const list = (await mem.get("importedSkills")) ?? [];
+  const skill = { id: "evidence-probe-skill", name: "Evidence Probe Skill", description: "A skill seeded by the skills-in-settings browser evidence run.", author: "evidence", source: "imported", mode: "on-demand", category: "imported", prompt: "Probe skill body.", requiredCapabilities: [], importedAt: Date.now() };
+  const idx = list.findIndex((s) => s.id === skill.id);
+  if (idx >= 0) list[idx] = skill; else list.push(skill);
+  await mem.set("importedSkills", list);
   return true;
-})()`, cid);
-await sleep(2500);
+})()`);
+await evalInOptions(ntp, `document.getElementById("skills")._refreshSkills()`);
+await sleep(1200);
 const imported = await evalInOptions(ntp, `(() => {
   const sec = document.getElementById("skills");
   const rows = [...sec.querySelectorAll(".recipe")].map((x) => x.querySelector("capability-row")?.getAttribute("name"));
@@ -209,8 +219,8 @@ const imported = await evalInOptions(ntp, `(() => {
     status: sec.querySelector(".import-status")?.textContent ?? "",
     rows,
   };
-})()`, cid);
-ok("imported skill listed in Settings→Skills", imported.probeListed === true, imported);
+})()`);
+ok("imported-skill data path renders in Settings→Skills", imported.probeListed === true, imported);
 await shot(ntp, "03-skill-imported.png");
 
 // 4) an OLD skills deep link redirects into Settings' Skills section
