@@ -302,13 +302,22 @@ Deno.test("update: a prompt-only change keeps the live alarm's advanced anchor (
 });
 
 // ── Part 8 — P1-4 credential redaction in the schedule preview path ────────
-Deno.test("schedule preview: credential-shaped prompt text is redacted before the bounded slice", async () => {
-  const { redactSecretText } = await import("../extension/lib/pure.js");
+Deno.test("schedule preview: the REAL projector (schedulePreviewText) redacts before the bounded slice", async () => {
+  // P2-B: the test pins the ACTUAL projector (lib/schedule-preview.js — the
+  // function the NTP row renders through), never a re-computed redaction.
+  const { schedulePreviewText, SCHEDULE_PREVIEW_CHARS } = await import(
+    `../extension/lib/schedule-preview.js?sp=${Date.now()}`
+  );
   const raw = 'check the garden API — api_key=sk-ant-abcdef123456 and Bearer tok_9f8e7d6c5b4a run hourly';
-  const preview = redactSecretText(raw).slice(0, 80);
+  const preview = schedulePreviewText(raw);
   assert(!preview.includes("sk-ant-abcdef123456"), "the api key value never reaches the preview");
   assert(!preview.includes("tok_9f8e7d6c5b4a"), "the bearer token never reaches the preview");
   assert(preview.includes("[REDACTED]"), "the redaction marker is present");
+  assert(preview.length <= SCHEDULE_PREVIEW_CHARS, "the preview is bounded");
+  assertEquals(schedulePreviewText(""), "(no prompt)", "empty prompt falls back honestly");
+  assertEquals(schedulePreviewText(undefined), "(no prompt)");
+  // A benign prompt survives verbatim (under the cap).
+  assertEquals(schedulePreviewText("check the garden site"), "check the garden site");
 });
 
 // ── Part 9 — P1-3 route/card flow (extracted routes + helpers) ──────────────
@@ -349,10 +358,15 @@ Deno.test("schedule routes: owner-scoped plumbing + structured approval-card den
   assertEquals(calls.at(-1), ["pause", "a", { expectedOwner: ownerA }]);
   await routes["task.update"]({ name: "a", task: "x" }, modelCtx);
   assertEquals(calls.at(-1), ["update", "a", { expectedOwner: ownerA }]);
-  // schedules.list is scoped to the run context, and there is NO all flag.
+  // schedules.list is scoped to the run context, and there is NO all flag —
+  // even an explicit {all:true} MUST NOT widen the model's view (P2-B: the
+  // assertion fails an all-honoring implementation).
   const own = await routes["schedules.list"]({}, modelCtx);
   assertEquals(own.tasks.map((t) => t.name), ["a"]);
   assertEquals(own.scoped, true);
+  const forcedAll = await routes["schedules.list"]({ all: true }, modelCtx);
+  assertEquals(forcedAll.tasks.map((t) => t.name), ["a"], "{all:true} never widens a model-scoped list");
+  assertEquals(forcedAll.scoped, true);
 
   // Extension (owner-direct) → no scope check (undefined expectedOwner).
   await routes["task.resume"]({ name: "b" }, { principal: "extension", documentId: "doc-1" });
@@ -388,4 +402,188 @@ Deno.test("schedule routes: owner-scoped plumbing + structured approval-card den
   assertEquals(oa.mayResolveApproval({ runId: "ui:doc-1" }, "owner-options"), true);
   assertEquals(oa.mayResolveApproval(undefined, "extension"), false);
   assertEquals(oa.mayResolveApproval({ runId: "exec-1" }, "model"), false);
+});
+
+// ── Part 10 — P1-A approval-retry bridge (fresh executions consume) ─────────
+Deno.test("approval bridge: pending under exec A → resolve → retry under exec B consumes EXACTLY once, no second request", async () => {
+  const oa = await import(`../extension/lib/owner-approval.js?bridge=${Date.now()}`);
+  const store = oa.createApprovalStore();
+  const digest = "a".repeat(64);
+  const target = "scheduled:10:task_1_abc";
+  const action = "task.pause";
+
+  // Execution A requests the mutation → a pending approval + structured card.
+  const pending = oa.createPendingApproval(store, "exec-a", action, target, digest);
+  assertEquals(pending.ok, true);
+  assert(pending.approvalId, "the denial carries an approval id");
+
+  // The owner resolves it (Allow) — status flips to approved, still bound to A.
+  const resolved = oa.resolvePendingApproval(store, pending.approvalId, true);
+  assertEquals(resolved.decision, "approved");
+
+  // BEFORE the bridge, execution B cannot consume (the P1-A bug): exact key miss.
+  assertEquals(oa.consumeApproved(store, "exec-b", action, target, digest).ok, false);
+
+  // The trusted one-shot bridge re-keys the approved tuple onto execution B.
+  const bridged = oa.bridgeApprovedApprovalToRun(store, pending.approvalId, "exec-b");
+  assertEquals(bridged.ok, true);
+  assertEquals(bridged.bridged, true);
+
+  // The retried call under exec B consumes by exact key — ONE mutation, and NO
+  // second approval request is created for exec-b (the tuple is consumed, not
+  // re-pended: the store holds no pending row afterwards).
+  assertEquals(oa.consumeApproved(store, "exec-b", action, target, digest).ok, true);
+  assertEquals(oa.consumeApproved(store, "exec-b", action, target, digest).ok, false, "one-shot: a repeat call re-requests");
+  assertEquals(oa.approvalPendingCount(store), 0, "no second approval was requested");
+
+  // ONE-SHOT: the same approval cannot bridge a second time (no chaining).
+  const again = oa.createPendingApproval(store, "exec-c", action, target, digest);
+  // Non-approved entries refuse to bridge (asserted BEFORE resolving).
+  assertEquals(oa.bridgeApprovedApprovalToRun(store, again.approvalId, "exec-d").ok, false, "a PENDING approval never bridges");
+  oa.resolvePendingApproval(store, again.approvalId, true);
+  const orphaned = oa.bridgeApprovedApprovalToRun(store, pending.approvalId, "exec-c");
+  assertEquals(orphaned.ok, false, "a bridged approval never bridges again");
+  const bridgedAgain = oa.bridgeApprovedApprovalToRun(store, again.approvalId, "exec-d");
+  assertEquals(bridgedAgain.ok, true, "a distinct approved approval bridges once");
+  assertEquals(oa.bridgeApprovedApprovalToRun(store, again.approvalId, "exec-e").ok, false, "and never twice");
+});
+
+Deno.test("schedule routes: the automatic retry turn consumes the resolved approval — exactly ONE mutation, no second approval request", async () => {
+  // The REAL route layer over the REAL scheduler primitives + the REAL
+  // owner-approval gate ops (the SW's requireOwnerApproval is a thin shell
+  // over exactly these), with the retry-start bridge the surface triggers.
+  const oa = await import(`../extension/lib/owner-approval.js?rbridge=${Date.now()}`);
+  const { setRunContext, clearRunContext, currentRunContext } = await import(`../extension/lib/run-context.js?rc2=${Date.now()}`);
+  const { createSchedulerRoutes } = await import(`../extension/background/routes/scheduler.js?sr2=${Date.now()}`);
+  const { createApprovalStore } = oa;
+  const store = createApprovalStore();
+  const activeExecutions = new Set();
+
+  installAlarmsChromeMock();
+  const s = await freshScheduler();
+  const owner = { threadId: "t-a", agentRole: "hub", agentSurfaceRef: "named:alpha" };
+  const { name } = await s.scheduleTask({ task: "alpha's periodic", delayMs: 60_000, periodInMinutes: 10, owner });
+
+  // The REAL gate shape (mirrors requireOwnerApproval's consume→pending→card
+  // sequence over the REAL store ops; model context must be a live execution).
+  const gate = async (context, action, target, payload, { card = false } = {}) => {
+    const executionId = context.executionId;
+    if (!executionId || !activeExecutions.has(executionId)) return { ok: false, error: "requires approval" };
+    const digest = await sha256hex(payload);
+    const consumed = oa.consumeApproved(store, executionId, action, target, digest);
+    if (consumed.ok) return { ok: true };
+    const pending = oa.createPendingApproval(store, executionId, action, target, digest);
+    if (card && pending.ok) {
+      const denial = oa.approvalCardDenial({ approvalId: pending.approvalId, action, targetRef: target });
+      if (denial) return denial;
+    }
+    return { ok: false, error: "requires approval" };
+  };
+  const sha256hex = async (value) => {
+    const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value)));
+    return [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  };
+  const primitives = {
+    pauseScheduledTask: (...a) => s.pauseScheduledTask(...a),
+    resumeScheduledTask: (...a) => s.resumeScheduledTask(...a),
+    updateScheduledTask: (...a) => s.updateScheduledTask(...a),
+    listScheduledTasks: () => s.listScheduledTasks(),
+    requireOwnerApproval: gate,
+    currentRunContext,
+    broadcastProgress: () => {},
+    canonicalOperationTarget: (kind, parts) => `${kind}:${parts.id ?? ""}`,
+    canonicalScalar: (v) => v,
+    payloadFields: (entries) => Object.fromEntries(entries),
+  };
+  const routes = createSchedulerRoutes(primitives);
+
+  // Execution A (live) calls pause → the structured card denial, NO mutation.
+  activeExecutions.add("exec-a");
+  setRunContext({ threadId: "t-a", agentRole: "hub", agentSurfaceRef: "named:alpha" });
+  const denied = await routes["task.pause"]({ name }, { principal: "model", executionId: "exec-a" });
+  assertEquals(denied.ok, false);
+  assertEquals(denied.waitingForPermission, true);
+  const approvalId = denied.permissionRequirement?.approvals?.[0]?.approvalId;
+  assert(approvalId, "the card carries the approval id");
+  assertEquals((await s.listScheduledTasks()).find((t) => t.name === name).paused, false, "the denied call mutated nothing");
+  const pendingAfterDenial = oa.approvalPendingCount(store);
+  assertEquals(pendingAfterDenial, 1);
+
+  // The owner Allow-resolves via the resolve authority.
+  assertEquals(oa.resolvePendingApproval(store, approvalId, true).decision, "approved");
+
+  // The AUTOMATIC RETRY starts a FRESH execution; the surface passes the
+  // resolved approvalId with the run start (the bridge). Execution B's pause
+  // consumes it: EXACTLY ONE mutation, NO second approval request.
+  activeExecutions.add("exec-b");
+  // (the run-start bridge — runTask's approvalBinding — does exactly this:)
+  assertEquals(oa.bridgeApprovedApprovalToRun(store, approvalId, "exec-b").ok, true);
+  const retried = await routes["task.pause"]({ name }, { principal: "model", executionId: "exec-b" });
+  assertEquals(retried.ok, true, `the retried mutation succeeds: ${JSON.stringify(retried)}`);
+  assertEquals((await s.listScheduledTasks()).find((t) => t.name === name).paused, true, "the pause landed exactly once");
+  assertEquals(oa.approvalPendingCount(store), 0, "NO second approval request was created for the retry");
+
+  // A THIRD execution (no bridge) re-requests honestly — scoping intact.
+  activeExecutions.add("exec-c");
+  clearRunContext();
+  const third = await routes["task.pause"]({ name }, { principal: "model", executionId: "exec-c" });
+  assertEquals(third.ok, false, "an unbridged execution still cannot act (already paused → refused before approval)");
+});
+
+// ── Part 11 — P1-B ownership check/commit races ─────────────────────────────
+Deno.test("retry race: a same-name owner swap between snapshot and commit cannot inherit the retry (single-lock re-check)", async () => {
+  installAlarmsChromeMock();
+  const s = await freshScheduler();
+  const ownerA = { threadId: "t-a", agentRole: "hub", agentSurfaceRef: "named:alpha" };
+  const ownerB = { threadId: "t-b", agentRole: "hub", agentSurfaceRef: "named:beta" };
+  const { name } = await s.scheduleTask({ task: "alpha's blocked task", delayMs: 60_000, owner: ownerA });
+  // Block it (the retry precondition).
+  await s.blockScheduledTaskForStorage(name, new Error("quota"));
+  assertEquals((await s.listScheduledTasks()).find((t) => t.name === name).storageBlocked, true);
+
+  // THE RACE: between agent A's authorization snapshot and the commit, the
+  // same-name task is replaced by agent B's. The old implementation checked
+  // scope on the snapshot then replaced OUTSIDE the lock — the swap escaped.
+  // THE SWAP, precisely: the same-name record is replaced by agent B's
+  // (blocked) one between A's authorization and its commit.
+  {
+    const tasks = kvStore.get("cap:scheduledTasks") ?? {};
+    tasks[name] = {
+      name, task: "beta's replacement", at: Date.now() + 60_000, owner: ownerB,
+      storageBlocked: true, storageBlockedAt: Date.now(), storageError: { message: "quota" },
+    };
+    kvStore.set("cap:scheduledTasks", tasks);
+  }
+
+  const r = await s.retryScheduledTask(name, { expectedOwner: ownerA });
+  assertEquals(r.ok, false, "the swapped owner refuses A's retry");
+  assertEquals(r.error, "task belongs to another agent");
+  const row = (await s.listScheduledTasks()).find((t) => t.name === name);
+  assertEquals(row.storageBlocked, true, "B's replacement is untouched — still exactly as B seeded it");
+  assertEquals(row.task, "beta's replacement", "B's payload is intact");
+});
+
+Deno.test("resume race: the final commit re-checks owner scope on the CURRENT row", async () => {
+  installAlarmsChromeMock();
+  const s = await freshScheduler();
+  const ownerA = { threadId: "t-a", agentRole: "hub", agentSurfaceRef: "named:alpha" };
+  const ownerB = { threadId: "t-b", agentRole: "hub", agentSurfaceRef: "named:beta" };
+  const { name } = await s.scheduleTask({ task: "alpha's paused task", delayMs: 60_000, periodInMinutes: 5, owner: ownerA });
+  await s.pauseScheduledTask(name, { expectedOwner: ownerA });
+  // THE SWAP: between A's resume snapshot and its commit, the task is replaced
+  // by B's (paused) one. The final lock must re-judge scope on the CURRENT row.
+  {
+    const tasks = kvStore.get("cap:scheduledTasks") ?? {};
+    tasks[name] = {
+      name, task: "beta's paused replacement", at: Date.now() + 60_000,
+      periodInMinutes: 5, owner: ownerB, paused: true, pausedAt: Date.now(),
+    };
+    kvStore.set("cap:scheduledTasks", tasks);
+  }
+
+  const r = await s.resumeScheduledTask(name, { expectedOwner: ownerA });
+  assertEquals(r.ok, false, "the swapped owner refuses A's resume");
+  assertEquals(r.error, "task belongs to another agent");
+  const row = (await s.listScheduledTasks()).find((t) => t.name === name);
+  assertEquals(row.paused, true, "B's paused state is untouched by the refused resume");
 });

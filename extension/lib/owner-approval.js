@@ -414,6 +414,39 @@ export function consumeApproved(store, runId, action, target, digest) {
   return { ok: false };
 }
 
+/** ONE-SHOT approval bridge (per-agent alarms P1-A): the owner approved a
+ * pending tuple for execution A, but the automatic retry starts a FRESH
+ * execution B whose executionId can never consume A's tuple by exact key —
+ * the agent would re-request approval forever. The TRUSTED surface (the same
+ * extension page whose owner click resolved the approval) passes the resolved
+ * approvalId with the retry's run start; the service worker re-keys the
+ * approved-but-unconsumed tuple onto the new execution EXACTLY ONCE.
+ * Guards: the entry must exist, be `approved` (never pending/denied/consumed),
+ * be un-bridged (bridgedFrom absent — no chains), and the target run must be
+ * a bounded distinct id. TTL still applies (sweep). A failed bridge degrades
+ * to a fresh approval request — it never fails the run. */
+export function bridgeApprovedApprovalToRun(store, approvalId, toRunId) {
+  if (!store?.approvals) return { ok: false, error: "invalid approval store" };
+  sweep(store);
+  if (typeof approvalId !== "string" || !approvalId || approvalId.length > 160) {
+    return { ok: false, error: "invalid approval id" };
+  }
+  if (typeof toRunId !== "string" || !toRunId || toRunId.length > 160) {
+    return { ok: false, error: "invalid target run" };
+  }
+  const entry = store.approvals.get(approvalId);
+  if (!entry) return { ok: false, error: "no such approval" };
+  if (entry.status !== "approved") return { ok: false, error: "approval is not approved" };
+  if (entry.bridgedFrom) return { ok: false, error: "approval was already bridged" };
+  if (entry.runId === toRunId) return { ok: true, bridged: false, action: entry.action };
+  store.byTuple.delete(entry.key);
+  entry.bridgedFrom = entry.runId;
+  entry.runId = toRunId;
+  entry.key = approvalKey(toRunId, entry.action, entry.target, entry.digest);
+  store.byTuple.set(entry.key, approvalId);
+  return { ok: true, bridged: true, action: entry.action };
+}
+
 export function listPendingApprovals(store) {
   if (!store?.approvals) return [];
   sweep(store);

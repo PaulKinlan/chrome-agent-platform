@@ -4286,7 +4286,7 @@ class TaskRow extends Component {
       .spin { width:12px; height:12px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation:cap-spin 1s linear infinite; display:inline-block; }
       .name { flex:1; min-width:0; font-size:14px; color:var(--ink,#1d1b18); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .time { flex:0 0 auto; font-size:12px; color:var(--muted,#635e56); font-variant-numeric:tabular-nums; }
-      .retry, .del { flex:0 0 auto; border:0; background:transparent; color:var(--muted,#635e56); cursor:pointer; padding:2px 4px; font:inherit; line-height:1; border-radius:6px; }
+      .retry, .psep, .del { flex:0 0 auto; border:0; background:transparent; color:var(--muted,#635e56); cursor:pointer; padding:2px 4px; font:inherit; line-height:1; border-radius:6px; }
       .retry, .psep { color:var(--accent,#0e6e63); font-size:12px; font-weight:650; }
       .del { font-size:15px; }
       .retry:hover, .psep:hover, .del:hover { background:var(--panel-2,#efede8); }

@@ -445,6 +445,7 @@ import {
   canonicalRecord,
   canonicalScalar,
   bindModelApprovalDispatcher,
+  bridgeApprovedApprovalToRun,
   consumeApproved,
   approvalCardDenial,
   mayResolveApproval,
@@ -1949,7 +1950,7 @@ function providerResumeIdentity(config) {
   };
 }
 
-async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSurfaceRef = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false }) {
+async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSurfaceRef = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null }) {
   // Serialize master execution: the cached orchestrator is shared, so a second
   // run must queue behind the first rather than clobber its abort controller.
   return await withRunLock(async () => {
@@ -1963,6 +1964,23 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       ? providerResumeIdentity(providerConfig)
       : (providerBinding ?? providerResumeIdentity(providerConfig));
     const executionId = resumedExecutionId || newExecutionId();
+    // ONE-SHOT approval bridge (per-agent alarms P1-A): the trusted surface
+    // passes the approvalId(s) its owner just resolved with this retry's run
+    // start; the approved-but-unconsumed tuples re-key onto THIS execution so
+    // the retried tool call consumes them by exact key instead of re-requesting
+    // approval forever. Any bridge failure degrades to a fresh approval
+    // request — it must never fail the run.
+    if (approvalBinding != null) {
+      const ids = (Array.isArray(approvalBinding) ? approvalBinding : [approvalBinding])
+        .filter((aid) => typeof aid === "string" && aid.length > 0 && aid.length <= 160)
+        .slice(0, 4);
+      for (const aid of ids) {
+        try {
+          const bridged = bridgeApprovedApprovalToRun(ownerApprovalStore, aid, executionId);
+          if (bridged?.ok) securityApprovalEvent("bridged", bridged.action ?? "", "");
+        } catch { /* degraded — the tool re-requests */ }
+      }
+    }
     await durableRecoveryReady;
     const resumeRequest = {
       id: taskId,
@@ -3524,6 +3542,7 @@ const handlers = mergeRouteMaps(
         task: m.task,
         attachments: bounded,
         clientCorrelationId: m.runId ?? null,
+        approvalBinding: m.approvalBinding ?? null,
         threadId,
         agentRole: "hub",
         onProgress: (event) => {
@@ -3925,7 +3944,7 @@ const handlers = mergeRouteMaps(
     }
     return { ok: true, refined };
   },
-  async "named-agent.run"({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false }) {
+  async "named-agent.run"({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false, approvalBinding = null }) {
     // RUN/DELEGATE a task to a named agent (the wider-goal review found named
     // agents had CRUD/grep/avatar but no run path). The agent runs the task
     // with its OWN OPFS sandbox (namedAgentMemory — its memory + history), so
@@ -3958,6 +3977,7 @@ const handlers = mergeRouteMaps(
         providerBinding: overrideConfig ? providerResumeIdentity(overrideConfig) : null,
         providerGateConfig: overrideConfig,
         clientCorrelationId: runId ?? null,
+        approvalBinding: approvalBinding ?? null,
         runKind: "agent",
         executionId: _executionId,
         permissionResume: _permissionResume,
@@ -5181,7 +5201,7 @@ const handlers = mergeRouteMaps(
     const entries = Array.isArray(journal) ? journal.slice(-200).reverse() : [];
     return { entries, count: entries.length };
   },
-  async "background-agent.run"({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false }) {
+  async "background-agent.run"({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false, approvalBinding = null }) {
     const recipe = await resolveRecipe(id);
     if (!recipe) return { ok: false, error: `no background agent ${id}` };
     const mem = backgroundAgentMemory(`recipe:${recipe.id}`);
@@ -5193,6 +5213,7 @@ const handlers = mergeRouteMaps(
         attachments: attachments ?? [],
         memory: mem,
         clientCorrelationId: runId ?? null,
+        approvalBinding: approvalBinding ?? null,
         runKind: "agent",
         agentRole: `background:${recipe.id}`,
         agentSurfaceRef: `background:${recipe.id}`,

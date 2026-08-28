@@ -418,34 +418,66 @@ export async function blockScheduledTaskForStorage(name, error) {
 }
 
 /** Explicit owner retry for a storage-blocked schedule. Reuses the same logical
- * name/configuration but creates a fresh alarm after clearing blocked state. */
+ * name/configuration but creates a fresh alarm after clearing blocked state.
+ * The owner-scope check + the unblock commit happen under ONE lock (P1-B): a
+ * same-name owner replacement between a stale snapshot and the commit must
+ * never inherit the retry authorization. */
 export async function retryScheduledTask(name, { expectedOwner } = {}) {
-  const task = await withLock(async () => {
-    const store = await kvGet(TASK_KEY);
-    const found = structuredClone(store[TASK_KEY]?.[name] ?? null);
-    if (found) {
-      const scopeError = assertOwnerScope(found, expectedOwner);
-      if (scopeError) return { scopeError };
-    }
-    return found;
-  });
-  if (!task) return { ok: false, name, error: "no such task" };
-  if (task.scopeError) return { ok: false, name, error: task.scopeError };
-  if (!task.storageBlocked && !task.quarantined) {
-    return { ok: false, name, error: "task is not blocked" };
+  const alarms = alarmsApi();
+  if (!alarms) {
+    return { ok: false, name, error: "alarms permission not granted — enable Scheduled tasks in Settings" };
   }
-  const scheduled = await scheduleTask({
-    name,
-    task: task.task,
-    delayMs: 1000,
-    periodInMinutes: task.periodInMinutes,
-    attachments: task.attachments ?? [],
-    scriptId: task.scriptId,
+  try {
+    await assertRunOwned();
+  } catch {
+    return { ok: false, name, error: "run aborted — task not retried" };
+  }
+  // Capacity: bounded best-effort OUTSIDE the lock (resume's pattern) — the
+  // authoritative owner/scope/state re-check happens inside the commit lock.
+  try {
+    const active = await alarms.getAll();
+    if (!active.some((a) => a?.name === name) && active.length >= MAX_ACTIVE_ALARMS) {
+      return { ok: false, name, error: `Chrome allows at most ${MAX_ACTIVE_ALARMS} active alarms per extension` };
+    }
+  } catch (e) {
+    return { ok: false, name, error: String(e?.message ?? e) };
+  }
+  return withLock(async () => {
+    // Authoritative re-read INSIDE the commit lock (P1-B): scope + blocked
+    // state are judged on the CURRENT row, never the caller's snapshot.
+    const store = await kvGet(TASK_KEY);
+    const tasks = { ...(store[TASK_KEY] ?? {}) };
+    const cur = tasks[name];
+    if (!cur) return { ok: false, name, error: "no such task" };
+    const scopeError = assertOwnerScope(cur, expectedOwner);
+    if (scopeError) return { ok: false, name, error: scopeError };
+    if (!cur.storageBlocked && !cur.quarantined) {
+      return { ok: false, name, error: "task is not blocked" };
+    }
     // A retry re-arms the SAME logical task — its surface attribution must
     // survive, or the retried run loses its agent/thread projection.
-    owner: task.owner ?? null,
+    const when = Date.now() + 1000;
+    const next = { ...cur, at: when };
+    delete next.storageBlocked;
+    delete next.storageBlockedAt;
+    delete next.storageError;
+    delete next.quarantined;
+    delete next.quarantinedAt;
+    tasks[name] = next;
+    await kvSet({ [TASK_KEY]: tasks });
+    // Re-create the alarm LAST (scheduleTask's ordering): on failure roll the
+    // persisted unblock back so the row still shows its blocked state.
+    try {
+      const info = { when };
+      if (cur.periodInMinutes) info.periodInMinutes = cur.periodInMinutes;
+      await alarms.create(name, info);
+    } catch (e) {
+      tasks[name] = cur;
+      await kvSet({ [TASK_KEY]: tasks });
+      return { ok: false, name, error: String(e?.message ?? e) };
+    }
+    return { ok: true, name, retried: true, when };
   });
-  return { ok: true, name, retried: true, when: scheduled.when };
 }
 
 /** Pause a scheduled task (owner action): the payload + full schedule metadata
@@ -581,11 +613,15 @@ export async function resumeScheduledTask(name, { expectedOwner } = {}) {
   }
   return withLock(async () => {
     // Re-read under the lock: the task may have changed (or vanished) while we
-    // awaited the capacity check outside the lock.
+    // awaited the capacity check outside the lock. The OWNER SCOPE is re-judged
+    // on the CURRENT row too (P1-B): a same-name owner replacement between the
+    // snapshot and this commit must not inherit the resume authorization.
     const store = await kvGet(TASK_KEY);
     const tasks = { ...(store[TASK_KEY] ?? {}) };
     const cur = tasks[name];
     if (!cur) return { ok: false, name, error: "no such task" };
+    const scopeError = assertOwnerScope(cur, expectedOwner);
+    if (scopeError) return { ok: false, name, error: scopeError };
     if (!cur.paused) return { ok: true, name, resumed: false, when: cur.at };
     const nextWhen = cur.periodInMinutes
       ? Date.now() + cur.periodInMinutes * 60 * 1000

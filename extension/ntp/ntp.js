@@ -6,6 +6,7 @@
 //   and the hub lists every prior thread (auto-named).
 
 import { send } from "../lib/messages.js";
+import { schedulePreviewText } from "../lib/schedule-preview.js";
 import { selectFailedRuns } from "../lib/run-retry.js";
 import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript } from "../shared/conversation.js";
 import { createRunSurfaceOwner } from "../shared/run-surface-owner.js";
@@ -42,7 +43,6 @@ import {
   VIEW_ROUTE,
 } from "./route-focus.js";
 import { applySidebarNubPolicy, SIDEBAR_NARROW_QUERY, sidebarWidthPolicy } from "./view-policy.js";
-import { redactSecretText } from "../lib/pure.js";
 import { parseNtpHash, resolveEntryMeta, shouldDispatchForNavigationType } from "../lib/navigation-controller.js";
 import { actionableRunsForSurface, latestRunForSurface } from "../lib/run-scope.js";
 import {
@@ -973,9 +973,10 @@ function agentScheduleRow(t) {
   row.className = "fr-row";
   const text = document.createElement("span");
   text.className = "fr-text";
-  // Credential-shaped content is redacted BEFORE the bounded preview
-  // (P1-4: the per-agent schedule preview rendered raw prompt text).
-  const preview = redactSecretText(String(t.task || "(no prompt)")).slice(0, 80);
+  // Credential-shaped content is redacted BEFORE the bounded preview — the
+  // ONE projector (P1-4/P2-B): the row renders through schedulePreviewText and
+  // the test pins that function's output, never a re-implementation.
+  const preview = schedulePreviewText(t.task);
   text.textContent = preview;
   const when = t.paused
     ? "paused"
