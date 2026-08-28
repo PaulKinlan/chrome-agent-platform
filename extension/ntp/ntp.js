@@ -40,7 +40,7 @@ import {
   focusExplicitRouteTarget,
   VIEW_ROUTE,
 } from "./view-transition.js";
-import { applySidebarNubPolicy } from "./view-policy.js";
+import { applySidebarNubPolicy, SIDEBAR_NARROW_QUERY, sidebarWidthPolicy } from "./view-policy.js";
 import { parseNtpHash, resolveEntryMeta, shouldDispatchForNavigationType } from "../lib/navigation-controller.js";
 import { actionableRunsForSurface, latestRunForSurface } from "../lib/run-scope.js";
 import {
@@ -2230,26 +2230,48 @@ function persistSidebar(collapsed) {
   }).catch(() => {});
   return sidebarWriteQueue;
 }
-function setSidebarCollapsed(collapsed) {
+// `auto` marks a form-factor-driven change (the narrow-width policy): it moves
+// the rail without overwriting the user's persisted preference.
+let persistedSidebarCollapsed = false;
+function setSidebarCollapsed(collapsed, { auto = false } = {}) {
   sidebarCollapsed = collapsed;
   side.classList.toggle("collapsed", collapsed);
   sideToggle.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
   sideToggle.setAttribute("title", collapsed ? "Expand sidebar" : "Collapse sidebar");
   sideToggle.setAttribute("aria-expanded", String(!collapsed));
   renderDurability();
+  if (auto) return; // form-factor state — the user's saved choice stands
+  persistedSidebarCollapsed = collapsed;
   persistSidebar(collapsed); // serialized + ordered
 }
 sideToggle?.addEventListener("click", () => {
   withViewTransition(() => setSidebarCollapsed(!sidebarCollapsed));
 });
-// Restore the persisted rail state on load (session or durable).
+// Narrow-width auto-collapse (UX-004): the expanded 240px rail overflows a
+// 360px viewport, so below the breakpoint the rail collapses to the icon rail
+// without persisting; crossing back restores the user's own last choice.
+const narrowSidebarMq = window.matchMedia?.(SIDEBAR_NARROW_QUERY) ?? null;
+function applySidebarForWidth() {
+  const policy = sidebarWidthPolicy({
+    narrow: narrowSidebarMq?.matches === true,
+    persistedCollapsed: persistedSidebarCollapsed,
+  });
+  if (policy.collapsed !== sidebarCollapsed) {
+    setSidebarCollapsed(policy.collapsed, { auto: !policy.persist });
+  }
+}
+narrowSidebarMq?.addEventListener?.("change", applySidebarForWidth);
+// Restore the persisted rail state on load (session or durable), then let the
+// width policy decide the effective state (a narrow viewport collapses even
+// when the saved choice was expanded).
 async function restoreSidebar() {
   try {
     const s = await send("kv.get", { keys: SIDEBAR_KEY });
-    if (s?.[SIDEBAR_KEY] === true) setSidebarCollapsed(true);
+    persistedSidebarCollapsed = s?.[SIDEBAR_KEY] === true;
   } catch {
-    // worker unreachable — default expanded.
+    persistedSidebarCollapsed = false; // worker unreachable — default expanded.
   }
+  applySidebarForWidth();
 }
 restoreSidebar();
 
