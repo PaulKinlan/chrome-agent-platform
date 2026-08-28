@@ -712,6 +712,10 @@ function providerCatalogue(p) {
   return Array.isArray(p.models) ? p.models : [];
 }
 
+// Providers side-tabs: the SELECTED tab is view state (which editor is open);
+// the DEFAULT is the persisted cfg.provider. Selection survives re-renders.
+let selectedProviderId = null;
+
 function modelFieldHtml(p, cfg) {
   const current = cfg.provider === p.id ? (cfg.model || "") : "";
   const models = providerCatalogue(p);
@@ -746,11 +750,11 @@ async function renderProviders(restoreFocus = false) {
   try {
     cfg = await boundedSend("provider.get");
   } catch (e) {
-    const list = $("#provider-list");
-    if (list) {
-      list.innerHTML = `<div class="muted">Couldn't load providers — the agent worker didn't answer (${escapeHtml(String(e?.message ?? e))}).</div>` +
+    const panelsRoot = $("#provider-panels");
+    if (panelsRoot) {
+      panelsRoot.innerHTML = `<div class="muted">Couldn't load providers — the agent worker didn't answer (${escapeHtml(String(e?.message ?? e))}).</div>` +
         `<button class="btn small" type="button" id="retry-providers">Retry</button>`;
-      list.querySelector("#retry-providers")?.addEventListener("click", () => renderProviders(restoreFocus));
+      panelsRoot.querySelector("#retry-providers")?.addEventListener("click", () => renderProviders(restoreFocus));
     }
     return;
   }
@@ -760,12 +764,78 @@ async function renderProviders(restoreFocus = false) {
     $("#provider-selection-status"),
     providerSelectionPresentation(cfg, PROVIDERS),
   );
-  const list = $("#provider-list");
-  list.innerHTML = "";
+  const panelsRoot = $("#provider-panels");
+  const tabsRail = $("#provider-tabs");
+  panelsRoot.innerHTML = "";
+  tabsRail.innerHTML = "";
+  // Resolve the selected tab: the caller's persisted choice, else the DEFAULT
+  // provider, else the first catalogue entry.
+  if (!selectedProviderId || !PROVIDERS.some((p) => p.id === selectedProviderId)) {
+    selectedProviderId = PROVIDERS.some((p) => p.id === cfg.provider)
+      ? cfg.provider
+      : PROVIDERS[0]?.id ?? null;
+  }
+  // Roving-tabindex tab switch: exactly one aria-selected tab, its panel shown.
+  const selectProviderTab = (id, { focus = false } = {}) => {
+    if (!id) return;
+    selectedProviderId = id;
+    for (const tab of tabsRail.querySelectorAll("[role='tab']")) {
+      const selected = tab.dataset.provider === id;
+      tab.setAttribute("aria-selected", String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+      const panel = panelsRoot.querySelector(`#${CSS.escape(tab.getAttribute("aria-controls") ?? "")}`);
+      if (panel) panel.hidden = !selected;
+      if (selected && focus) tab.focus();
+    }
+  };
+  tabsRail.addEventListener("keydown", (e) => {
+    const ids = PROVIDERS.map((p) => p.id);
+    const current = Math.max(0, ids.indexOf(selectedProviderId));
+    let next = null;
+    if (e.key === "ArrowDown" || e.key === "ArrowRight") next = ids[(current + 1) % ids.length];
+    else if (e.key === "ArrowUp" || e.key === "ArrowLeft") next = ids[(current - 1 + ids.length) % ids.length];
+    else if (e.key === "Home") next = ids[0];
+    else if (e.key === "End") next = ids[ids.length - 1];
+    else return;
+    e.preventDefault();
+    selectProviderTab(next, { focus: true });
+  });
   for (const p of PROVIDERS) {
+    // RAIL TAB: name + hint, with the pinned DEFAULT badge on the provider
+    // that owns cfg.provider (visible without opening anything).
+    const isDefault = cfg.provider === p.id;
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.id = `provider-tab-${p.id}`;
+    tab.dataset.provider = p.id;
+    tab.className = "provider-tab" + (isDefault ? " is-default" : "");
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", String(p.id === selectedProviderId));
+    tab.setAttribute("aria-controls", `provider-panel-${p.id}`);
+    tab.tabIndex = p.id === selectedProviderId ? 0 : -1;
+    tab.innerHTML = `
+      <span class="pt-copy">
+        <span class="provider-name">${p.name}${
+      isDefault ? `<span class="pt-default-badge" title="Default provider" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none" width="12" height="12" aria-hidden="true"><path d="M12 2l2.9 6.26 6.6.56-5 4.36 1.5 6.45L12 16.9 5.99 19.63l1.5-6.45-5-4.36 6.6-.56z"/></svg></span><span class="visually-hidden"> (default)</span>` : ""
+    }</span>
+        <span class="muted pt-hint">${p.hint}</span>
+      </span>`;
+    tab.addEventListener("click", () => selectProviderTab(p.id));
+    tabsRail.appendChild(tab);
+
+    // EDITOR PANEL: the existing per-provider card markup, unchanged.
+    const panel = document.createElement("div");
+    panel.className = "provider-panel";
+    panel.id = `provider-panel-${p.id}`;
+    panel.setAttribute("role", "tabpanel");
+    panel.setAttribute("aria-labelledby", `provider-tab-${p.id}`);
+    panel.tabIndex = 0;
+    panel.hidden = p.id !== selectedProviderId;
+    panelsRoot.appendChild(panel);
     const card = document.createElement("div");
-    card.className = "provider-card" + (cfg.provider === p.id ? " active" : "");
+    card.className = "provider-card" + (isDefault ? " active" : "");
     card.dataset.provider = p.id;
+    panel.appendChild(card);
     card.innerHTML = `
       <div class="provider-head">
         <div class="provider-id">
@@ -870,10 +940,10 @@ async function renderProviders(restoreFocus = false) {
         ? `Connected — ${res.detail ?? "ok"} (${res.latencyMs}ms)`
         : `Failed — ${res?.error ?? "unknown error"}`;
     });
-    list.appendChild(card);
+    // (the card lives in its hidden-by-default tabpanel — appended above)
   }
   // populate the active card's current key/model + an explicit clear-key control
-  const active = list.querySelector(
+  const active = panelsRoot.querySelector(
     `.provider-card[data-provider="${cfg.provider}"]`,
   );
   if (active) {
@@ -901,9 +971,13 @@ async function renderProviders(restoreFocus = false) {
     }
   }
   if (restoreFocus) {
-    // Rerender replaces the focused subtree — re-focus the active provider's
-    // Set/Update button so a keyboard/AT user is not stranded.
-    active?.querySelector(".set-default")?.focus();
+    // Rerender replaces the focused subtree — re-focus a STABLE anchor so a
+    // keyboard/AT user is not stranded: the selected provider's tab (its
+    // editor may be hidden if selection and default diverge).
+    const selectedTab = tabsRail.querySelector(
+      `[role='tab'][data-provider="${selectedProviderId}"]`,
+    );
+    selectedTab?.focus();
   }
 }
 

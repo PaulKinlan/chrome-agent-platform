@@ -137,6 +137,83 @@ code {
   font-size: 12px;
 }
 #provider-selection-status { margin-block: var(--space-3, 12px) 0; }
+/* Providers side-tabs: a vertical tab rail (one tab per provider, the DEFAULT
+   carries a pinned badge) + the selected provider's editor pane. Selection is
+   view state; the default is the persisted cfg.provider. */
+.providers-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+.provider-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.provider-tab {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  text-align: start;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  padding: 8px 10px;
+  cursor: pointer;
+  min-width: 0;
+}
+.provider-tab:hover {
+  background: var(--panel-2);
+}
+.provider-tab[aria-selected="true"] {
+  border-color: var(--border);
+  background: var(--bg);
+}
+.provider-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.pt-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.pt-copy .provider-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.pt-copy .pt-hint {
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The DEFAULT badge: pinned on the default provider's tab, visible without
+   opening anything. Pure presentation — the tab's accessible name carries the
+   state via the visually-hidden " (default)" text. */
+.pt-default-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent2);
+  flex-shrink: 0;
+}
+.provider-panels {
+  min-width: 0;
+}
+.provider-panel:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 /* Providers */
 .provider-list {
   display: flex;
@@ -1106,6 +1183,28 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     align-items: stretch;
+  }
+
+  /* Providers side-tabs collapse to a horizontal scroll ROW at narrow
+     widths: the rail itself scrolls (overflow-x on the rail, never the
+     document), hints hide, and the DEFAULT badge stays visible. */
+  .providers-layout {
+    display: block;
+  }
+  .provider-tabs {
+    flex-direction: row;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    padding-bottom: 4px;
+    margin-bottom: var(--space-3);
+    scrollbar-width: thin;
+  }
+  .provider-tab {
+    width: auto;
+    flex: 0 0 auto;
+  }
+  .provider-tab .pt-hint {
+    display: none;
   }
 
   .enroll-row .field,

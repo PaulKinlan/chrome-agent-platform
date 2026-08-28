@@ -958,6 +958,11 @@ async function main() {
 
     let openaiCard = null;
     for (let i = 0; i < 20 && !openaiCard; i++) {
+      // Side-tabs: select OpenAI's tab first — its editor panel is hidden
+      // until selected, and boxOf needs a VISIBLE box.
+      await evalIn(cdp, optsSession,
+        `document.querySelector('#provider-tab-openai')?.click(); true`).catch(() => {});
+      await sleep(100);
       openaiCard = await boxOf(
         cdp, optsSession, `.provider-card[data-provider="openai"] .set-default`,
       );
