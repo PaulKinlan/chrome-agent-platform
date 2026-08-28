@@ -572,7 +572,7 @@ async function renderNamedAgents() {
   const el = document.getElementById("named-agents");
   // Unified agents list (CAP-FB-20260826-BACKGROUND-AGENTS-UNIFY-01): the hub's
   // Agents box shows named AND background agents together — a background agent
-  // is marked "Runs in the background" and keeps its enable/disable switch.
+  // is marked "Runs in the background" and keeps its Delete control.
   const [namedRes, bgRes] = await Promise.all([
     send("named-agent.list").catch(() => ({ agents: [] })),
     send("background-agent.list").catch(() => ({ agents: [] })),
@@ -603,29 +603,34 @@ async function renderNamedAgents() {
         row.setAttribute("name", a.name || a.id);
         row.setAttribute("description", `Runs in the background${a.description ? " · " + a.description : ""}`);
         row.setAttribute("icon", "");
-        // item 61: a background agent is an INDEPENDENT agent — a chevron opens
-        // its view (history + chat) AND a switch enables/disables it.
-        row.setAttribute("action", "open-toggle");
-        row.setAttribute("enabled", "");
+        // A background agent is an INDEPENDENT agent — a chevron opens its view
+        // (history + chat) and a destructive DELETE removes it (an enable/
+        // disable toggle was the wrong primitive: an enabled background agent
+        // exists and runs; the owner's control is delete, and per-agent
+        // schedule pausing lands separately as an alarm control).
+        row.setAttribute("action", "open-delete");
         if (a.schedule?.periodInMinutes) {
           row.setAttribute("last-run", `every ${a.schedule.periodInMinutes} min`);
         }
         row.addEventListener("open", () => openBackgroundAgentChat(a.id, a.name));
-        row.addEventListener("toggle", async (ev) => {
-          const enabled = ev.detail?.enabled;
-          // ENABLE time (a real user gesture): request the OPTIONAL notifications
-          // permission so scheduled completions can surface as notifications.
-          if (enabled) {
-            try {
-              await chrome.permissions?.request?.({ permissions: ["notifications"] });
-            } catch { /* not grantable here — the run-time path skips the notification */ }
-          }
-          const r = await send("background-agent.set", { id: a.id, enabled })
-            .catch(() => ({ ok: false, error: "request failed" }));
-          if (r?.ok) {
-            setStatus(`${a.name} ${enabled ? "enabled" : "disabled"}`);
+        row.addEventListener("delete", async () => {
+          const name = a.name || a.id;
+          const confirmed = await confirmActionDialog({
+            title: `Delete “${name}”?`,
+            body: `Are you sure you want to delete ${name}?\n\nThis will cancel its scheduled task and remove the recurring alarm.`,
+            confirmLabel: "Delete agent",
+            destructive: true,
+          });
+          if (!confirmed) return;
+          // Background agents schedule deterministically as `recipe:<id>` — the
+          // enabled state DERIVES from the scheduled-task store, so the cancel
+          // name must be that scheduled name, not the raw recipe id.
+          const r = await send("task.cancel", { name: `recipe:${a.id}` })
+            .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+          if (r?.ok !== false) {
+            setStatus(`Deleted ${name}.`, true);
           } else {
-            setStatus(`couldn't ${enabled ? "enable" : "disable"} ${a.name}: ${r?.error ?? "unknown"}`, false);
+            setStatus(`Could not delete ${name}: ${r?.error ?? "failed"}.`, false);
           }
           await renderNamedAgents();
         });
@@ -2112,7 +2117,11 @@ deleteAgentBtn?.addEventListener("click", async () => {
   } else if (kind === "site" || kind === "origin") {
     out = await send("agent.delete", { origin: id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
   } else if (kind === "background") {
-    out = await send("task.cancel", { name: id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    // Background agents schedule deterministically as `recipe:<id>` (the
+    // enabled state derives from the task store). The old code passed the RAW
+    // recipe id, so task.cancel hit "no such task" and silently deleted
+    // NOTHING while the UI claimed success — the dead NTP delete button.
+    out = await send("task.cancel", { name: `recipe:${id}` }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
   }
 
   if (out?.ok !== false) {
