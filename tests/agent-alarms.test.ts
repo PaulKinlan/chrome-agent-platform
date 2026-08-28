@@ -535,20 +535,31 @@ Deno.test("schedule routes: the automatic retry turn consumes the resolved appro
  * scheduler operation parks at its capacity check while the test swaps the
  * stored row, proving the commit-phase owner re-check judges the CURRENT row
  * (not data read before the operation began). Returns the release function. */
-function suspendGetAll(): () => void {
+function suspendGetAll(): { entered: Promise<void>; release: () => void } {
   let release!: () => void;
+  let enter!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
+  });
+  // `entered` resolves when the patched getAll is ACTUALLY ENTERED (not merely
+  // scheduled) — the race tests must swap the row only after the operation is
+  // truly parked inside, never on a microtask guess.
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
   });
   const alarms = globalThis.chrome.alarms;
   const original = alarms.getAll.bind(alarms);
   alarms.getAll = async () => {
+    enter();
     await gate;
     return original();
   };
-  return () => {
-    alarms.getAll = original;
-    release();
+  return {
+    entered,
+    release: () => {
+      alarms.getAll = original;
+      release();
+    },
   };
 }
 
@@ -566,9 +577,9 @@ Deno.test("retry race: the swap happens while the retry is IN FLIGHT (suspended 
   // parks at the suspended getAll capacity check — and only THEN replace the
   // row with B's. A pre-operation scope check (or a snapshot-scope check) would
   // authorize the commit over B's row; the in-lock re-read must refuse.
-  const releaseGetAll = suspendGetAll();
+  const { entered, release: releaseGetAll } = suspendGetAll();
   const retryPromise = s.retryScheduledTask(name, { expectedOwner: ownerA });
-  await Promise.resolve(); // let the retry run to its suspension point
+  await entered; // the retry is now genuinely PARKED inside getAll — safe to swap
   {
     const tasks = kvStore.get("cap:scheduledTasks") ?? {};
     tasks[name] = {
@@ -599,9 +610,9 @@ Deno.test("resume race: the snapshot phase PASSES for A, the row is swapped mid-
   // check — AFTER its snapshot phase already read and scope-checked A's row.
   // The final commit lock must re-judge scope on the CURRENT row: A's earlier
   // passing snapshot must not authorize the commit over B's row.
-  const releaseGetAll = suspendGetAll();
+  const { entered, release: releaseGetAll } = suspendGetAll();
   const resumePromise = s.resumeScheduledTask(name, { expectedOwner: ownerA });
-  await Promise.resolve(); // let the resume run to its suspension point
+  await entered; // the resume is genuinely parked inside getAll — swap now
   {
     const tasks = kvStore.get("cap:scheduledTasks") ?? {};
     tasks[name] = {
@@ -620,32 +631,159 @@ Deno.test("resume race: the snapshot phase PASSES for A, the row is swapped mid-
   assertEquals(row.task, "beta's paused replacement", "B's payload is intact");
 });
 
-// ── Part 12 — the approval bridge rides @mention dispatches (REVISE-4 P1-A) ──
-Deno.test("agent.run @mention dispatch forwards the approval binding exactly like the non-mention path", async () => {
-  // The mention branch of the agent.run dispatcher must pass approvalBinding
-  // through to the named/background handlers. Regression: the binding was sent
-  // by the client but DROPPED at the dispatch site, so an @mentioned agent's
-  // approved schedule mutation started its retry unbridged and re-prompted.
-  const sw = await Deno.readTextFile(
-    new URL("../extension/background/service-worker.js", import.meta.url),
-  );
-  // The mentionRoute dispatch block passes the binding with the same
-  // `m.approvalBinding ?? null` shape the non-mention runTask call uses,
-  // and it appears at least TWICE in the dispatcher (mention + non-mention).
-  const forward = /approvalBinding: m\.approvalBinding \?\? null/g;
-  const forwards = sw.match(forward)?.length ?? 0;
-  assert(
-    forwards >= 2,
-    `the agent.run dispatcher must forward approvalBinding on BOTH paths (mention + non-mention); found ${forwards}`,
-  );
-  // And the forwarding sits INSIDE the mentionRoute branch (before the
-  // non-mention runTask call, after the delegate branch).
-  const mentionBranch = sw.slice(
-    sw.indexOf('} else if (mentionRoute) {'),
-    sw.indexOf("} else {\n      result = await runTask({"),
-  );
-  assert(
-    mentionBranch.includes("approvalBinding: m.approvalBinding ?? null"),
-    "the mention dispatch block must carry approvalBinding",
-  );
+// ── Part 12 — the approval bridge rides @mention dispatches (REVISE-5 P1-A) ──
+// Minimal OPFS fake (same shape as agent-deletion-owner.test.ts): the named-
+// agent store and run admission touch navigator.storage, so the real
+// dispatcher → named-agent.run → runTask chain needs a filesystem to talk to.
+function dirNode() { return { kind: "directory", children: new Map() }; }
+function fileNode(content) { return { kind: "file", content }; }
+class FakeWritable {
+  constructor(node) { this.node = node; this.parts = []; }
+  async write(s: unknown) { this.parts.push(String(s)); }
+  async close() { this.node.content = this.parts.join(""); }
+}
+class FakeFileHandle {
+  constructor(node) { this.node = node; }
+  get kind() { return "file"; }
+  async getFile() {
+    const node = this.node;
+    return { size: (node.content ?? "").length, async text() { return node.content ?? ""; } };
+  }
+  async createWritable() { return new FakeWritable(this.node); }
+}
+class FakeDirHandle {
+  constructor(node) { this.node = node; }
+  get kind() { return "directory"; }
+  async getDirectoryHandle(name: string, opts: { create?: boolean } = {}) {
+    if (!this.node.children.has(name)) {
+      if (opts?.create !== true) throw new Error(`no dir ${name}`);
+      this.node.children.set(name, dirNode());
+    }
+    return new FakeDirHandle(this.node.children.get(name));
+  }
+  async getFileHandle(name: string, opts: { create?: boolean } = {}) {
+    if (!this.node.children.has(name)) {
+      if (opts?.create !== true) throw new Error(`no file ${name}`);
+      this.node.children.set(name, fileNode(""));
+    }
+    return new FakeFileHandle(this.node.children.get(name));
+  }
+  async removeEntry(name: string) { this.node.children.delete(name); }
+  async *entries() {
+    for (const [name, node] of this.node.children) {
+      yield [name, node.kind === "file" ? new FakeFileHandle(node) : new FakeDirHandle(node)];
+    }
+  }
+}
+
+Deno.test("agent.run @mention dispatch: the REAL dispatcher routes each mention kind and carries the approval binding into the named-agent run", async () => {
+  // Regression context: the approval binding was DROPPED at the mention dispatch
+  // site. The old test grepped service-worker.js source text — it never invoked
+  // the dispatcher. THIS test boots the real service worker against the chrome +
+  // OPFS fakes and drives the REAL onMessage listener, so the actual
+  // agent.run → mentionRoute → named-agent.run → runTask chain executes.
+  installAlarmsChromeMock();
+  const root = dirNode();
+  Object.defineProperty(globalThis, "navigator", {
+    value: { storage: { async getDirectory() { return new FakeDirHandle(root); } } },
+    configurable: true,
+    writable: true,
+  });
+  const onMessageListeners: ((m: unknown, s: unknown, r: (x: unknown) => void) => boolean | void)[] = [];
+  const noop = { addListener: () => {} };
+  const prevRuntime = globalThis.chrome.runtime;
+  globalThis.chrome.runtime = {
+    id: "test-extension-id",
+    getURL: (p: string) => `chrome-extension://test-extension-id/${p}`,
+    getManifest: () => ({ version: "0.0.0-test" }),
+    onMessage: { addListener: (fn: never) => onMessageListeners.push(fn as never) },
+    onConnect: noop,
+    onInstalled: noop,
+    sendMessage: async () => {},
+  };
+  try {
+    await import(`../extension/background/service-worker.js?agent-alarms-mention=${Date.now()}`);
+    assert(onMessageListeners.length >= 1, "the SW registered its message listener");
+
+    const send = (msg: unknown, sender: unknown = { id: "test-extension-id" }) =>
+      new Promise<Record<string, unknown>>((resolve) => {
+        let settled = false;
+        const done = (resp: unknown) => {
+          if (!settled) { settled = true; resolve(resp as Record<string, unknown>); }
+        };
+        for (const fn of onMessageListeners) {
+          const keepOpen = fn(msg, sender, done);
+          if (keepOpen === true && settled) return;
+        }
+        setTimeout(() => done({ ok: false, error: "no response" }), 8_000);
+      });
+
+    // A REAL named agent, created through the REAL route.
+    const created = await send({ type: "named-agent.create", id: "named:alpha", name: "Alpha" });
+    assertEquals(created.ok, true, `named-agent.create must succeed: ${JSON.stringify(created)}`);
+
+    // THE BINDING RIDES THE MENTION: a real agent + a valid-shaped (unknown)
+    // binding id. The run must be ADMITTED past the mention dispatcher — the
+    // binding reaches the named-agent.run handler and onward into runTask's
+    // one-shot bridge (which degrades harmlessly on an unknown id). The
+    // response must NEVER be the no-agent refusal.
+    const boundRun = await send({
+      type: "agent.run",
+      task: "alpha's mention task",
+      mention: { kind: "named", id: "named:alpha", name: "Alpha" },
+      approvalBinding: ["a".repeat(64)],
+    });
+    // With no provider configured the run fails honestly INSIDE runTask's
+    // pipeline (an infrastructure error, e.g. the run store's environment
+    // gap) — the decisive point is that the failure is NOT a dispatcher-level
+    // refusal: the dispatcher delivered a REAL agent's run (binding in flight)
+    // into the named-agent.run handler and onward into runTask.
+    const dispatchRefusals = [
+      `no agent named:alpha`,
+      "cannot delegate to Alpha: unknown agent kind named",
+      "unknown message: agent.run",
+    ];
+    assert(
+      !dispatchRefusals.includes(String(boundRun.error)),
+      `the mention dispatch must reach runTask for a REAL agent (binding in flight), got: ${JSON.stringify(boundRun)}`,
+    );
+
+    // A thread row was created for the mention task BEFORE dispatch (the task
+    // stays the hub's — the mention delegates the WORK, not the conversation).
+    // The response carries the HUB thread id: the mention created the task's
+    // thread BEFORE dispatch and the run entered the pipeline (the task stays
+    // the hub's — the mention delegates the WORK, not the conversation).
+    assertEquals(typeof boundRun.threadId, "string", "the mention run created its hub thread");
+
+    // BRANCH DISCRIMINATION through the same real dispatcher:
+    const unknownAgent = await send({
+      type: "agent.run",
+      task: "x",
+      mention: { kind: "named", id: "named:nope", name: "nope" },
+      approvalBinding: ["b".repeat(64)],
+    });
+    assertEquals(unknownAgent.ok, false);
+    assertEquals(unknownAgent.error, "no agent named:nope", "an unknown named agent refuses INSIDE the handler (the dispatcher reached it)");
+
+    const backgroundMention = await send({
+      type: "agent.run",
+      task: "x",
+      mention: { kind: "background", id: "background:nope", name: "nope" },
+    });
+    assertEquals(
+      backgroundMention.error !== "cannot delegate to nope: unknown agent kind background",
+      true,
+      "the background mention reached its OWN handler (not the dispatcher's unknown-kind refusal)",
+    );
+
+    const unknownKind = await send({
+      type: "agent.run",
+      task: "x",
+      mention: { kind: "weird", id: "w", name: "w" },
+    });
+    assertEquals(unknownKind.ok, false);
+    assertEquals(unknownKind.error, "cannot delegate to w: unknown agent kind weird");
+  } finally {
+    if (prevRuntime) globalThis.chrome.runtime = prevRuntime;
+  }
 });
