@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.353] — 2026-08-28
+- CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01: record the shipping commit
+
 ## [0.2.352] — 2026-08-28
 - Tool calls in a task are much easier to read. A collapsed one now tells you what happened — "list_tabs · 8 tabs · done" — and a failed one shows the actual error on the line, in red, and opens itself instead of hiding the reason behind a click. Opened up, rows show what they contain rather than their shape: a list of tabs reads as the tab titles, not ten identical "object" rows. Every block of input and output has a JSON view and a Copy button, and it remembers which view you last used. A typical call now takes about a third less room on screen while showing more
 
