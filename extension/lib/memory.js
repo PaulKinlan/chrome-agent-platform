@@ -183,6 +183,10 @@ const MASTER_RESERVED_KEYS = new Set([
   "threads",
   "scripts",
   "run-registry",
+  // Failed-runs dismiss tombstones (owner 2026-08-28): a single bounded
+  // registry-level record, same reservation class as the run registry index —
+  // authority state the model's memory_set must never write.
+  "run-dismissed-failed",
   "wasmPkg",
   "wasmPkgRepair",
 ]);
@@ -829,6 +833,11 @@ function durableThreadId(key) {
 
 function durableStoreForKey(key) {
   if (String(key) === DURABLE_INDEX_KEY) {
+    return memoryStoreAt([ROOT, DURABLE_ROOT, "registry"], { isMaster: false, origin: "durable:registry" });
+  }
+  // The failed-runs dismiss tombstone lives WITH the registry (a single
+  // bounded record pruned against the index), not under an execution.
+  if (String(key) === "run-dismissed-failed") {
     return memoryStoreAt([ROOT, DURABLE_ROOT, "registry"], { isMaster: false, origin: "durable:registry" });
   }
   if (String(key).startsWith(THREAD_RUNS_PREFIX)) {

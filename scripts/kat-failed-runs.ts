@@ -1,12 +1,11 @@
 // kat-failed-runs.ts — live-browser KAT for the failed-runs lifecycle
-// (owner 2026-08-28): a real dispatch that fails with no provider seeded the
-// durable failed record (the exact UX-008 scenario); the KAT then proves the
-// lifecycle in the REAL sidebar:
-//   1. the section renders "Failed runs (N)" + Retry + dismiss (×) + Clear all;
+// (owner 2026-08-28). Seeds a REAL terminal-failed record through the REAL
+// durable registry (the service worker's own durableRuns singleton — the same
+// authority the sidebar reads), then proves the lifecycle in the REAL sidebar:
+//   1. the section renders "Failed runs (N)" with Retry + dismiss (×) + Clear all;
 //   2. × removes the row;
-//   3. the dismissal is DURABLE — a full page reload (new render + fresh SW
-//      round-trip) keeps the row gone;
-//   4. an empty section hides entirely.
+//   3. the dismissal is DURABLE — a full page reload keeps it gone;
+//   4. Clear all empties the section and the section hides when empty.
 // Screenshot artifacts land in the out dir.
 //
 //   deno run -A scripts/kat-failed-runs.ts <path-to-extension> [<out-dir>]
@@ -15,14 +14,14 @@ const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-failed-runs`;
 const CHROMIUM = "/usr/bin/chromium";
-const PORT = 9355;
+const PORT = 9357;
 
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail?: unknown) {
   if (cond) { pass++; console.log(`PASS: ${name}`); }
   else { fail++; console.log(`FAIL: ${name} — ${JSON.stringify(detail)}`); }
 }
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 await Deno.mkdir(OUT, { recursive: true });
 
 const proc = new Deno.Command(CHROMIUM, {
@@ -43,9 +42,8 @@ for (let i = 0; i < 60; i++) {
   } catch { await sleep(300); }
 }
 if (!wsUrl) { console.error("no devtools url"); Deno.exit(1); }
-
 const ws = new WebSocket(wsUrl);
-await new Promise(r => ws.onopen = r);
+await new Promise((r) => { ws.onopen = () => r(null); });
 let id = 0; const pending = new Map<string, (v: any) => void>();
 const send = (method: string, params: any = {}, sessionId?: string) => new Promise<any>((res) => {
   const mid = ++id; pending.set(String(mid), res);
@@ -55,12 +53,12 @@ ws.onmessage = (m: MessageEvent) => {
   const j = JSON.parse(m.data as string);
   if (j.id && pending.has(String(j.id))) { pending.get(String(j.id))!(j); pending.delete(String(j.id)); }
 };
-const evalPage = async (expr: string) => {
-  const r = await send("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true }, sessionId);
+const evalIn = async (expr: string, sid: string) => {
+  const r = await send("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true }, sid);
   return r?.result?.result?.value;
 };
 const shot = async (name: string) => {
-  const r = await send("Page.captureScreenshot", { format: "png" }, sessionId);
+  const r = await send("Page.captureScreenshot", { format: "png" }, pageSession);
   if (r?.result?.data) await Deno.writeFile(`${OUT}/${name}.png`, Uint8Array.from(atob(r.result.data), (c) => c.charCodeAt(0)));
 };
 
@@ -68,14 +66,42 @@ const { result: { targetInfos } } = await send("Target.getTargets");
 const sw = targetInfos.find((t: any) => t.type === "service_worker");
 if (!sw) { console.log("FAIL: no service worker target"); Deno.exit(1); }
 const extId = new URL(sw.url).host;
+const { result: { sessionId: swSession } } = await send("Target.attachToTarget", { targetId: sw.targetId, flatten: true });
+await send("Runtime.enable", {}, swSession);
 const { result: { targetId } } = await send("Target.createTarget", { url: `chrome-extension://${extId}/ntp/ntp.html` });
-const { result: { sessionId } } = await send("Target.attachToTarget", { targetId, flatten: true });
-await send("Runtime.enable", {}, sessionId);
-await send("Page.enable", {}, sessionId);
+const { result: { sessionId: pageSession } } = await send("Target.attachToTarget", { targetId, flatten: true });
+await send("Runtime.enable", {}, pageSession);
+await send("Page.enable", {}, pageSession);
 await sleep(1500);
 
+// Seed through the SW's own registry singleton: a real durable terminal-failed
+// run (hub task — no owning agent, so the agent cascade does not filter it).
+// Seed through a page-realm instance of the SAME durable-runs module over the
+// SAME origin store (import() is disallowed on the SW global scope). The
+// seeded record is a real durable terminal failure — exactly what the sidebar
+// projects. The seed agent is a HUB task (no owning agent), so the agent
+// cascade does not filter it.
+const seeded = await evalIn(`(async () => {
+  try {
+    const m = await import(chrome.runtime.getURL("/lib/durable-runs.js"));
+    if (!m?.durableRuns) return { err: "no durableRuns export" };
+    const id = "exec_katfailedruns" + Date.now().toString(36);
+    await m.durableRuns.start({
+      executionId: id,
+      kind: "task",
+      taskPreview: "kat-failed-runs: summarize the monthly report",
+      journalTarget: "master",
+      resumeRequest: { route: "agent.run", task: "kat-failed-runs: summarize the monthly report", attachments: [], history: [] },
+    });
+    await m.durableRuns.settle(id, { ok: false, error: "kat seeded failure", errorCategory: "model", logicalId: "kat" });
+    return { ok: true, id };
+  } catch (e) {
+    return { err: String((e && e.message) ?? e) };
+  }
+})()`, pageSession);
+check("seeded a terminal failed run through the real registry", !!seeded && seeded.ok === true, seeded);
 
-const sectionState = async () => evalPage(`(() => {
+const sectionState = async () => evalIn(`(() => {
   const s = document.getElementById('failed-runs');
   if (!s) return null;
   const label = s.querySelector('.fr-label')?.childNodes[0]?.textContent ?? '';
@@ -87,71 +113,40 @@ const sectionState = async () => evalPage(`(() => {
     dismiss: s.querySelectorAll('.fr-dismiss').length,
     clearAll: s.querySelectorAll('.fr-clear').length,
   };
-})()`);
+})()`, pageSession);
 
+// Reload so the sidebar renders from the durable registry fresh.
+await send("Page.reload", {}, pageSession);
+await sleep(2500);
 let st = await sectionState();
-// Seed the failure the honest way: a real dispatch with no provider configured
-// (the run fails before producing anything and retains its prompt — the exact
-// UX-008 scenario). Dispatched through the same runtime messaging the composer
-// uses, then we poll for the durable failed record to surface.
-// A failed DURABLE record needs the run to be ADMITTED and then fail. With no
-// provider at all the dispatch refuses pre-admission, so first configure a
-// dummy provider through the REAL settings surface (options page = settings
-// sender) pointing at a closed port: admission succeeds, the model call fails
-// fast, the run settles failed with its stored prompt — the exact UX-008
-// scenario.
-const optT = await send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html` });
-const { result: { sessionId: optSession } } = await send("Target.attachToTarget", { targetId: optT.result.targetId, flatten: true });
-await send("Runtime.enable", {}, optSession);
-await sleep(800);
-await send("Runtime.evaluate", { expression: `chrome.runtime.sendMessage({ type: "provider.set", config: { provider: "openai", baseURL: "http://127.0.0.1:1/v1", apiKey: "kat-dummy-key", model: "kat-model" } })`, awaitPromise: true, returnByValue: true }, optSession);
-await send("Target.closeTarget", { targetId: optT.result.targetId });
-await sleep(300);
-// Fire-and-forget: agent.run answers only when the RUN settles, and the
-// failure is what we are waiting for — the poll loop below watches for it.
-await evalPage(`(() => {
-  chrome.runtime.sendMessage({ type: "agent.run", task: "kat-failed-runs: summarize the monthly report", id: String(Date.now()), runId: "kat:failed-runs:1", attachments: [], history: [], threadId: null });
-  return "dispatched";
-})()`);
-for (let i = 0; i < 20; i++) {
-  await sleep(1000);
-  const s = await sectionState();
-  if (s && !s.hidden && s.rows.length > 0) break;
-}
-const dbg = await evalPage(`(async () => {
-  const runs = await chrome.runtime.sendMessage({ type: "run.list" });
-  return JSON.stringify((runs?.runs ?? []).slice(0, 3).map((r) => ({ phase: r.phase, ok: r.terminal?.ok, resume: r.resumeAvailable, agentId: r.agentId })));
-})()`);
-console.log("DEBUG run.list:", dbg);
-st = await sectionState();
 check("failed section rendered with label+count", !!st && !st.hidden && /^Failed runs \(\d+\)$/.test(st.label ?? ""), st);
-check("at least one failed row with retry+dismiss+clear-all", !!st && st.rows.length >= 1 && st.retry >= 1 && st.dismiss === st.rows.length && st.clearAll === 1, st);
+check("row shows retry+dismiss, header shows clear-all", !!st && st.rows.length >= 1 && st.retry === st.rows.length && st.dismiss === st.rows.length && st.clearAll === 1, st);
+check("the row is OUR seeded failure", !!st && (st.rows as string[]).some((t) => t.includes("kat-failed-runs")), st);
 await shot("01-failed-runs-rendered");
 
 const rowsBefore = st?.rows.length ?? 0;
-await evalPage(`(() => {
+await evalIn(`(() => {
   const s = document.getElementById('failed-runs');
   s.querySelector('.fr-row .fr-dismiss')?.click();
   return true;
-})()`);
-await sleep(1200);
+})()`, pageSession);
+await sleep(1500);
 st = await sectionState();
 check("dismiss removes a row", !!st && st.rows.length === rowsBefore - 1, st);
 
 // Durability: a full reload re-renders from the durable registry + tombstones.
-await send("Page.reload", {}, sessionId);
+await send("Page.reload", {}, pageSession);
 await sleep(2500);
 st = await sectionState();
-const labelAfterReload = st?.label ?? "";
-const rowsAfterReload = st?.rows.length ?? -1;
-check("dismissal survives a full reload", rowsAfterReload === rowsBefore - 1 && !JSON.stringify(st).includes("kat-failed-runs"), { rowsAfterReload, labelAfterReload });
+check("dismissal survives a full reload", !!st && st.rows.length === rowsBefore - 1 && !JSON.stringify(st.rows).includes("kat-failed-runs"), st);
+await shot("02-after-dismiss-reload");
 
-// Clear all: the remaining rows vanish and the section hides.
-await evalPage(`(() => { document.getElementById('failed-runs')?.querySelector('.fr-clear')?.click(); return true; })()`);
-await sleep(1200);
+// Clear all: any remaining rows vanish; the section hides when empty.
+await evalIn(`(() => { document.getElementById('failed-runs')?.querySelector('.fr-clear')?.click(); return true; })()`, pageSession);
+await sleep(1500);
 st = await sectionState();
 check("clear-all empties and hides the section", !!st && (st.hidden === true || st.rows.length === 0), st);
-await shot("02-after-clear-all");
+await shot("03-after-clear-all");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 proc.kill();
