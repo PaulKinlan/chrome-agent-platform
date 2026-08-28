@@ -1,7 +1,7 @@
 # Changelog
 
 ## [0.2.347] — 2026-08-28
-- fix(durable-runs): CAP-FB-20260828-RUN-LOG-REGISTRY-ROWS-01 — the registry's own log rows go in the log, not straight to KV
+- Fixed a bug in the faster task-history storage: the row recording how a run finished was written where the new reader never looks, so every completed run quietly lost it from its log. Not visible in the UI (status comes from elsewhere), but wrong — and it blocked the batching work that comes next
 
 ## [0.2.346] — 2026-08-28
 - Settings Providers panel is now a side-tabbed interface: one tab per provider down the side with the default marked by a star, editor on the right, and it behaves at narrow widths
