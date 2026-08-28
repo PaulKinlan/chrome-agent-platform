@@ -1046,6 +1046,8 @@ await shot(opts, "after-agents-panel");
 const providersUses = await evalIn(opts, `(() => {
   location.hash = "#providers";
   document.querySelector('[data-section="providers"]')?.click();
+  // Side-tabs: select the provider's tab BEFORE reading its editor panel.
+  document.querySelector('#provider-tab-gemini')?.click();
   const card = document.querySelector('.provider-card[data-provider="gemini"]');
   return { picker: !!card?.querySelector("model-picker"), select: !!card?.querySelector("select.model-select") };
 })()`);
@@ -1055,6 +1057,7 @@ await shot(opts, "after-providers-panel");
 
 // 9. catalogue freshness: the openai-compatible preset no longer ships a stale list
 const stale = await evalIn(opts, `(() => {
+  document.querySelector('#provider-tab-openai-compatible')?.click();
   const card = document.querySelector('.provider-card[data-provider="openai-compatible"]');
   const mp = card?.querySelector("model-picker");
   return { models: mp?.models ?? null };
@@ -1063,6 +1066,7 @@ check("stale: openai-compatible is free-custom (no hard-coded list)", Array.isAr
 
 // 9b. the MAIN provider cards' control heights are measured too (every cell 36px).
 const providerCardHeights = await evalIn(opts, `(() => {
+  document.querySelector('#provider-tab-openai')?.click();
   const card = document.querySelector('.provider-card[data-provider="openai"]');
   const h = (sel) => {
     const el = card?.querySelector(sel);
@@ -1188,6 +1192,8 @@ await evalIn(opts, `(async () => {
   location.hash = "#providers";
   document.querySelector('[data-section="providers"]')?.click();
   await new Promise(r => setTimeout(r, 300));
+  document.querySelector('#provider-tab-openai-compatible')?.click();
+  await new Promise(r => setTimeout(r, 100));
   const card = document.querySelector('.provider-card[data-provider="openai-compatible"]');
   card.querySelector(".base-url").value = ${JSON.stringify(`http://127.0.0.1:${BYO_PORT}/v1`)};
   const mp = card.querySelector("model-picker");

@@ -66,7 +66,11 @@
         <h2>Providers</h2>
         <p
           class="muted">Choose the model the hub agent uses. Your API key is stored locally in <code>chrome.storage</code> — never in the bundle, logs, or receipts.</p>
-        <div id="provider-list" class="provider-list"></div>
+        <div class="providers-layout">
+          <div id="provider-tabs" class="provider-tabs" role="tablist"
+            aria-orientation="vertical" aria-label="Configured providers"></div>
+          <div id="provider-panels" class="provider-panels"></div>
+        </div>
         <p id="provider-selection-status" class="hint" role="status" aria-live="polite" aria-atomic="true" hidden></p>
       </section>
 
