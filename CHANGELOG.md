@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.343] — 2026-08-28
+- Reworked the plan for how task history is stored, after a much better suggestion: one append-only log file per run instead of one file per step. Measured on the real thing, writing a thousand steps goes from about three minutes to one millisecond, and reading them from a third of a second to under one
+
 ## [0.2.342] — 2026-08-28
 - Opening a task is about 2.6x faster (nearly a second down to a third of one on a well-used task). The stored steps were being read one file at a time even though they do not depend on each other, and a single lock meant nothing could overlap. More to come — the remaining cost is that every logged step is still its own file
 
