@@ -171,6 +171,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | Priority | Status | Task | What it is |
 |---|---|---|---|
 | P0 | OPEN | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
+| P0 | OPEN | [`CAP-FB-20260829-SILENT-PROVIDER-RUN-01`](#cap-fb-20260829-silent-provider-run-01-a-task-with-a-keyed-provider-but-no-host-grant-runs-nothing-and-says-nothing) | A keyed provider with no host grant runs nothing and says nothing |
 | P0 | OPEN | [`CAP-FB-20260827-HUB-FIRST-RUN-01`](#cap-fb-20260827-hub-first-run-01-the-first-screen-is-an-onboarding-wall-not-a-command-center) | The first screen is an onboarding wall, not a command center |
 | P0 | OPEN | [`CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01`](#cap-fb-20260827-tool-call-legibility-01-tool-call-cards-show-shape-not-answers) | Tool-call cards show shape, not answers |
 | P0 | DONE | [`CAP-FB-20260828-NOUN-DISCIPLINE-01`](#cap-fb-20260828-noun-discipline-01-one-name-per-concept--assetsartifacts-skillsrecipes-agents-three-deep) | One name per concept — Assets/Artifacts, Skills/recipes, Agents three deep |
@@ -1302,6 +1303,26 @@ evidence every other task depends on).
 - Recover: `git grep -n "openView\|view-frame" -- extension/ntp/ntp.js`
 - History:
   - 2026-08-28 01:10 UTC — captured from a product audit. Settings, Directory, Skills and Artifacts are separate HTML documents loaded into an iframe of the new-tab page — all same-origin extension pages, so the iframe buys no isolation. It costs: a joint history stack between the top frame and the iframe (two separate back-button fixes, `0.2.296` and `0.2.304`), a full document bootstrap per view switch, and the Settings monolith, because when a view is a document the way to add a feature is to append a `<section>` — which is how Settings reached 12,837px with all twelve panels rendered simultaneously. Five tracked defects trace to this one decision. `CAP-FB-20260827-SETTINGS-MONOLITH-01` can be done independently and first; this entry is the general fix.
+
+## [CAP-FB-20260829-SILENT-PROVIDER-RUN-01] A task with a keyed provider but no host grant runs nothing and says nothing
+- Feedback: 2026-08-29 — found by driving a real task end-to-end in a loaded extension while verifying the tool-card work
+- Updated: 2026-08-29 UTC
+- Status: OPEN
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `8f3b03d0`
+- Candidate: —
+- Shipping: —
+- Acceptance: on a fresh profile with a keyed provider configured and its host permission NOT granted, starting a task produces a visible, plain-English explanation in the transcript and an in-context control to grant the access on the owner's gesture — never an empty thread. The first failure is reported even though the circuit-breaker may quieten later ones. Verified by driving a real task, not by reading the code
+- Review: falsification — the assertion must go red against the current build, which renders nothing
+- Gates: `deno run -A scripts/live-run-evidence.ts` with a keyed provider; Chrome journeys; unit suite
+- Blockers: a headless profile cannot answer Chrome's permission prompt, so the GRANT half needs the headed acceptance lane (`CAP-FB-20260825-HEADED-ACCEPTANCE-LANE-01`). The MESSAGE half is verifiable headless today and is the P0 part
+- Next: surface the first provider-gate failure in the transcript. The gate already knows why it failed — `extension/lib/provider-gate.js` derives the exact origin pattern — so the message can name the site and offer the grant
+- Recover: `git grep -n "providerRunGate\|requestProviderHostAccess" -- extension/`
+- History:
+  - 2026-08-29 — measured in a loaded MV3 extension on a fresh profile. Configured the Anthropic provider with a real key via `provider.set` (`hasApiKey: true` confirmed by `provider.get`), typed a task into the hub composer with real CDP input events and clicked Run. **The thread view opened with the title "New task" and then nothing happened for the full two-minute observation: no assistant message, no error, no status text, no approval card, and no run route reaching the service worker** — only the routine `diagnostics.list` / `security.state` polling. An exec who configures their own API key sees the product do nothing at all. The mechanism is understood: a keyed provider fetch needs the extension's OPTIONAL host permission for the provider origin, which a fresh profile has not granted (`optional_host_permissions` is `http://*/*`, `https://*/*` with no `host_permissions`). `extension/lib/provider-gate.js` documents this and its circuit-breaker deliberately makes runs "fail quietly, no run, no per-event log" — but that is meant for runs AFTER repeated failures; the FIRST one still owes the owner an explanation. This is the exact failure mode AGENTS.md already prohibits ("Ask for permissions on need, never fail silently... a feature that just fails with 'permission required' is a bug") — and silence is worse than that message. **Control:** the identical harness against the local `demo` provider (no network, no host permission) dispatches correctly and renders the assistant reply, so the composer, the dispatch and the run path are all sound — the gate is the difference. Landed `scripts/live-run-evidence.ts` so this is reproducible.
 
 ## [CAP-FB-20260829-FIXED-DEBUG-PORTS-01] Nine harnesses hard-code a debug port, so a KAT can report green against the wrong browser
 - Feedback: 2026-08-29 — surfaced by the noun-discipline lane: "an early KAT run gave a full page of false failures because a fixed debug port silently attached to another lane's chromium"

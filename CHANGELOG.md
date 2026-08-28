@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.357] — 2026-08-28
+- Recorded a serious bug found by driving the real product: if you configure your own API key but have not yet allowed the extension to reach that provider, starting a task does nothing at all — no reply, no error, no prompt to allow it. The fix comes next; this lands the evidence and a new script that drives a genuine task end to end so problems like it are caught in the seams the unit tests cannot reach
+
 ## [0.2.356] — 2026-08-28
 - Internal bookkeeping only, no user-visible change: recorded a defect in our own test harnesses (several of them could attach to the wrong browser and report a confident pass against code they were not testing) and closed out the naming clean-up that shipped earlier
 
