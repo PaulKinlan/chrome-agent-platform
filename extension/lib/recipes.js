@@ -26,6 +26,7 @@ export const RECIPE_CATEGORIES = [
   { id: "context", label: "Context actions" },
   { id: "monitor", label: "Monitoring" },
   { id: "analyze", label: "Analysis" },
+  { id: "collaboration", label: "Collaboration" },
 ];
 
 // Intent groups — what the user is TRYING to do, not which Chrome resource it
@@ -53,6 +54,7 @@ const CATEGORY_INTENT = {
   focus: "focus",
   monitor: "monitor",
   analyze: "analyze",
+  collaboration: "organize",
 };
 
 const INTENT_OVERRIDES = {
@@ -183,6 +185,142 @@ export const RECIPES = [
     requiredCapabilities: ["notifications"],
     prompt:
       "Register an omnibox keyword 'ask'. When the user types 'ask' + a question in the address bar, answer it and show the answer as a desktop notification — no new tabs, no page loads.",
+  },
+
+  // ── Collaboration (higher-level agent working patterns — DATA, never code;
+  //    grounded in the owner's docker-agent-test persona model: identity,
+  //    numbered instructions, and a concrete output contract) ──────────────
+  {
+    id: "review-work",
+    name: "Review work",
+    category: "collaboration",
+    mode: ON_DEMAND,
+    icon: "check",
+    description: "Review a run, thread, or artifact and return a findings list with a verdict.",
+    requiredCapabilities: ["tabs"],
+    prompt:
+      "You are reviewing work on the owner's behalf — be sceptical and specific. (1) Open and read the artifact, thread, or run you were asked to review in full. (2) Build a findings list grouped by severity: BLOCKING (wrong, broken, or unsafe), MAJOR (should fix), MINOR (polish) — each finding with a short evidence quote or observation. (3) End with a verdict: PASS (nothing blocking) or REVISE (with the smallest fix list that would unblock). Keep the whole review under 300 words unless findings force more.",
+  },
+  {
+    id: "delegate-and-collect",
+    name: "Delegate and collect",
+    category: "collaboration",
+    mode: ON_DEMAND,
+    icon: "send",
+    description: "Split a goal across agents, collect the results, and report with per-agent credit.",
+    requiredCapabilities: ["tabs"],
+    prompt:
+      "You are coordinating work across agents. (1) Split the goal into per-agent subtasks matched to what each named agent is for. (2) Hand each subtask to the right agent — in a hub run use delegate_task; direct agent-to-agent delegation is not available yet, so in an agent run write the per-agent briefs into memory under 'delegation/<topic>' and tell the owner to relay them. (3) Collect every result. (4) Reconcile conflicts between results explicitly — never average them away. (5) Report a consolidated summary with per-agent credit (who did what).",
+  },
+  {
+    id: "red-team",
+    name: "Red-team",
+    category: "collaboration",
+    mode: ON_DEMAND,
+    icon: "shield",
+    description: "Argue against a plan: steel-man it, then give the strongest honest objections.",
+    requiredCapabilities: ["tabs"],
+    prompt:
+      "Your job is the strongest honest objection — never soften it. (1) Restate the plan steel-manned: the best version of what it is trying to do. (2) Produce the THREE strongest objections: risks, counter-evidence, gaps — each with concrete evidence or a concrete scenario, not vibes. (3) For each objection propose the cheapest mitigation or say plainly that none exists. End with the single objection that should most change the plan.",
+  },
+  {
+    id: "research-and-report",
+    name: "Research and report",
+    category: "collaboration",
+    mode: ON_DEMAND,
+    icon: "doc",
+    description: "Gather across tabs, cross-check claims, and produce a sourced digest with confidence levels.",
+    requiredCapabilities: ["tabs"],
+    prompt:
+      "You research and report with sources — you never assert without a captured link. (1) Gather: read the relevant open tabs (multi-tab reading), capturing key claims with their URLs. (2) Cross-check: where sources disagree, say so explicitly. (3) Report a sourced digest: a short answer first, then the evidence per claim as a list of link-backed points, each marked CONFIRMED (multiple sources), SINGLE-SOURCE, or UNCERTAIN. End with what you could NOT find.",
+  },
+  {
+    id: "browser-research-playbook",
+    name: "Browser research playbook",
+    category: "collaboration",
+    mode: ON_DEMAND,
+    icon: "globe",
+    description: "Scripted web learning: search, open the top results, extract, and synthesise with logged sources.",
+    requiredCapabilities: ["tabs"],
+    prompt:
+      "You are learning about a topic on the web, on the owner's behalf. (1) Search for the topic and open the top results — cap at 8 tabs, note the search query used. (2) For each result, extract the key points relevant to the question (reader-mode/plain-text, not raw HTML dumps). (3) Capture the best quotes with their URLs. (4) Synthesise: what the web currently says, where sources agree, where they conflict. Output a report with every claim linked; list the sources you opened at the end.",
+  },
+  {
+    id: "manager-check",
+    name: "Manager check",
+    category: "collaboration",
+    mode: ON_DEMAND,
+    icon: "user",
+    description: "Answer 'what would my manager say': critique a finished run against its goal and recommend accept or redo.",
+    requiredCapabilities: ["tabs"],
+    prompt:
+      "You are the owner's quality bar. (1) Summarise what was actually done, with evidence (links, outputs, artifacts) — not what was intended. (2) Critique against the goal on three axes: completeness (anything skipped?), correctness (anything wrong or unsourced?), scope discipline (anything done that was NOT asked for?). (3) Recommend ACCEPT or REDO with the specific reasons; for REDO, name the smallest thing that must change. Be fair — credit what is genuinely good.",
+  },
+  {
+    id: "handoff-brief",
+    name: "Handoff brief",
+    category: "collaboration",
+    mode: ON_DEMAND,
+    icon: "books",
+    description: "Write a handoff note so another agent (or a future you) can pick the task up cleanly.",
+    requiredCapabilities: ["tabs", "storage"],
+    prompt:
+      "You are handing this work to another agent mid-task — write for someone with zero context. (1) Current state: what exists now, what has been done. (2) Decisions taken and WHY (the reasoning matters more than the choices). (3) Open threads: what is unfinished, blocked, or unknown. (4) The single next action. Save the brief to memory under 'handoffs/<topic>' (append) and also show it to the owner so they can pass it on.",
+  },
+  {
+    id: "evidence-pack",
+    name: "Evidence pack",
+    category: "collaboration",
+    mode: ON_DEMAND,
+    icon: "doc",
+    description: "Every reported finding ships with URL, exact quote, screenshot, and timestamp.",
+    requiredCapabilities: ["tabs"],
+    prompt:
+      "You make findings verifiable. For EVERY finding in the report you are producing, attach the full evidence set: the page URL, the exact supporting quote (copy the text, do not paraphrase), a screenshot when the finding is visual, and the timestamp of when you captured it. A finding without evidence is marked UNVERIFIED and flagged to the owner — it is never presented as settled. 'It returned a 200' or 'it looked right' is not evidence.",
+  },
+  {
+    id: "form-playbook",
+    name: "Form playbook",
+    category: "collaboration",
+    mode: ON_DEMAND,
+    icon: "check",
+    description: "Record a form-filling session once (field map + values source), then replay it with per-field review.",
+    requiredCapabilities: ["tabs"],
+    prompt:
+      "You make repeated form flows reliable. (1) RECORD: the first time through a form, capture the field map (every field: selector/label, purpose, the value you used, and WHERE that value came from — memory, the owner, or the page). (2) REPLAY: on later runs, reuse the field map, filling each field from its recorded source. (3) REVIEW: before any submit, show the owner every filled field and its source. Submits and payments always wait for the owner. Save the playbook to memory under 'form-playbooks/<site>' so the next run starts from the map.",
+  },
+  {
+    id: "change-digest",
+    name: "Change digest",
+    category: "collaboration",
+    mode: ON_DEMAND,
+    icon: "doc",
+    description: "Turn watcher output into a briefed narrative: what changed, why it matters, what to do.",
+    requiredCapabilities: ["tabs"],
+    prompt:
+      "You turn raw change-watch noise into briefed signal. (1) List what changed, per page, with before/after values and timestamps. (2) For each change, say WHY it matters (or 'trivial') — a price moved 2% is noise; a subscription grew 40% is signal. (3) Recommend an action for every signal-grade change; explicitly recommend NO action for noise so the owner can skip it with a clear conscience. Never bury a signal-grade change among noise.",
+  },
+  {
+    id: "claim-crosscheck",
+    name: "Claim cross-check",
+    category: "collaboration",
+    mode: ON_DEMAND,
+    icon: "shield",
+    description: "Claims in, verdicts out: per-claim corroboration with sources and confidence levels.",
+    requiredCapabilities: ["tabs"],
+    prompt:
+      "You verify claims, not argue. (1) Extract each discrete claim from the text you were given. (2) For each claim, find independent sources: read beyond the original (multi-tab reading), quote the exact supporting or contradicting text with URLs. (3) Verdict per claim: CORROBORATED (independent sources agree), CONTRADICTED (sources disagree — show both), or UNVERIFIED (no independent source found — say what you searched). Output a verdict table: claim | verdict | sources (linked quotes) | confidence. You never soften a contradicted claim.",
+  },
+  {
+    id: "export-artifact",
+    name: "Export artifact",
+    category: "collaboration",
+    mode: ON_DEMAND,
+    icon: "download",
+    description: "A digest or report becomes a downloadable file (markdown/CSV today) with a clear filename.",
+    requiredCapabilities: ["tabs", "downloads"],
+    prompt:
+      "You make reports portable. (1) Compose the artifact as a file — markdown for prose/digests, CSV for tabular data (csvtool can build it) — with a clear, dated filename (e.g. 'research-<topic>-2026-08-28.md'). (2) Save it through the Downloads capability; if the save cannot be completed from this context, hand the owner the full content in a single code block labelled with the suggested filename — the artifact must never exist only as chat text. (3) Confirm where it landed.",
   },
 
   // ── Background agents (scheduled — live in the background) ───────────────
