@@ -936,3 +936,138 @@ Deno.test("cancelScheduledTask completes once the acquired run terminates (round
     await chrome.storage.local.set({ "cap:scheduledTasks": {} });
   }
 });
+
+// ---- REVISE-4 P1-B: crash recovery for marked cancellations ----
+// A worker death AFTER the durable cancelling mark but BEFORE
+// finalizeCancellation leaves an inert `cancelling:true` payload behind (the
+// recipe row is already gone, so an explicit cancel cannot help). Boot
+// reconciliation must run the idempotent finalize: alarm absent → delete;
+// alarm absence NOT confirmable → retain (fail closed). Never re-armed.
+
+Deno.test("reconcileScheduledTasks FINALIZES a cancelling payload whose alarm is gone (REVISE-4 crash recovery)", async () => {
+  const origGetAll = chrome.alarms.getAll;
+  const origCreate = chrome.alarms.create;
+  const created = [];
+  chrome.alarms.getAll = async () => []; // the alarm is gone (fired/consumed/cleared)
+  chrome.alarms.create = async (name) => {
+    created.push(name);
+    return true;
+  };
+  await chrome.storage.local.set({
+    "cap:scheduledTasks": {
+      "task_crash_cancel": {
+        name: "task_crash_cancel",
+        task: "run of a deleted background agent",
+        at: Date.now() + 60_000,
+        periodInMinutes: 5,
+        cancelling: true,
+        cancellingAt: Date.now() - 5000,
+      },
+    },
+  });
+  try {
+    const resumed = await reconcileScheduledTasks();
+    assert(
+      !created.includes("task_crash_cancel"),
+      "a cancelling payload must never be re-armed",
+    );
+    assert(!resumed.includes("task_crash_cancel"), "recovery is not a resume");
+    const after = (await chrome.storage.local.get("cap:scheduledTasks"))[
+      "cap:scheduledTasks"
+    ];
+    assert(
+      after?.task_crash_cancel === undefined,
+      "boot recovery must DELETE the inert cancelling payload once alarm absence is confirmed",
+    );
+  } finally {
+    chrome.alarms.getAll = origGetAll;
+    chrome.alarms.create = origCreate;
+    await chrome.storage.local.set({ "cap:scheduledTasks": {} });
+  }
+});
+
+Deno.test("reconcileScheduledTasks RETAINS a cancelling payload when alarm absence cannot be confirmed (REVISE-4 fail-closed)", async () => {
+  const origGetAll = chrome.alarms.getAll;
+  const origClear = chrome.alarms.clear;
+  const origGet = chrome.alarms.get;
+  chrome.alarms.getAll = async () => [];
+  chrome.alarms.clear = async () => {
+    throw new Error("clear failed");
+  };
+  chrome.alarms.get = async () => {
+    throw new Error("alarms state unreadable");
+  };
+  await chrome.storage.local.set({
+    "cap:scheduledTasks": {
+      "task_unclearable": {
+        name: "task_unclearable",
+        task: "x",
+        at: Date.now() + 60_000,
+        cancelling: true,
+        cancellingAt: Date.now() - 5000,
+      },
+    },
+  });
+  try {
+    await reconcileScheduledTasks();
+    const after = (await chrome.storage.local.get("cap:scheduledTasks"))[
+      "cap:scheduledTasks"
+    ];
+    assert(
+      after?.task_unclearable?.cancelling === true,
+      "when alarm absence cannot be confirmed the inert payload is RETAINED (fail closed), never deleted blind",
+    );
+  } finally {
+    chrome.alarms.getAll = origGetAll;
+    chrome.alarms.clear = origClear;
+    chrome.alarms.get = origGet;
+    await chrome.storage.local.set({ "cap:scheduledTasks": {} });
+  }
+});
+
+// ---- REVISE-4 P1-A: `marked` must SETTLE (reject) on marking failure ----
+// The old manual-resolve promise stayed pending forever when the marking
+// (lock/kv) threw, hanging every route that awaited it. The marking async
+// operation itself is now the `marked` promise: rejection is deliverable.
+
+Deno.test("cancelScheduledTaskBackground marked REJECTS when the marking fails (REVISE-4 P1-A)", async () => {
+  const origGet = chrome.storage.local.get;
+  const { cancelScheduledTaskBackground } = await import(
+    "../extension/lib/scheduler.js"
+  );
+  // Seed a real task so the marking path enters the store write.
+  await chrome.storage.local.set({
+    "cap:scheduledTasks": {
+      "task_markfail": { name: "task_markfail", task: "x", at: Date.now() + 60_000 },
+    },
+  });
+  chrome.storage.local.get = async () => {
+    throw new Error("kv read failed");
+  };
+  try {
+    const handle = cancelScheduledTaskBackground("task_markfail");
+    let settled = false;
+    let rejected = false;
+    const race = Promise.race([
+      handle.marked.then(
+        () => true,
+        () => false,
+      ),
+      new Promise((r) => setTimeout(() => r(null), 1000)),
+    ]).then((v) => {
+      settled = v !== null;
+      return v;
+    });
+    const ok = await race;
+    // `ok === false` proves the promise REJECTED (not left pending — the old
+    // bug). A null (timeout) would mean `marked` never settled: the hang.
+    assert(settled, "marked must settle (resolve or reject) on marking failure — never hang");
+    assert(ok === false, "marked must REJECT (surface an honest failure) on marking failure");
+    rejected = ok === false;
+    assert(rejected, "marked rejection is the route's honest {ok:false} signal");
+    await handle.promise.catch(() => {}); // full cleanup handle settles too
+  } finally {
+    chrome.storage.local.get = origGet;
+    await chrome.storage.local.set({ "cap:scheduledTasks": {} });
+  }
+});

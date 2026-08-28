@@ -1551,9 +1551,15 @@ function backgroundAgentRow(a) {
     del.textContent = "Delete";
     del.setAttribute("aria-label", `Delete ${a.name}`);
     del.addEventListener("click", async () => {
-      await chrome.runtime.sendMessage({ type: "recipe.delete", id: a.id }).catch(() => ({ ok: false }));
-      saveFlash(`Deleted ${a.name}.`);
-      renderBackgroundAgents();
+      const out = await chrome.runtime
+        .sendMessage({ type: "recipe.delete", id: a.id })
+        .catch(() => ({ ok: false }));
+      if (out?.ok === true) {
+        saveFlash(`Deleted ${a.name}.`);
+        renderBackgroundAgents();
+      } else {
+        saveFlash(`Could not delete ${a.name}: ${out?.error ?? "failed"}.`);
+      }
     });
     actions.append(del);
   }

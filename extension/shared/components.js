@@ -1461,13 +1461,13 @@ class ToolDirectoryCard extends Component {
 }
 customElements.define("tool-directory-card", ToolDirectoryCard);
 
-/* <capability-row name description icon action="run|toggle" enabled last-run>
+/* <capability-row name description icon action="run|open|open-delete|use" last-run>
  * The reusable capability/recipe row. A strict grid — icon (fixed) | label
  * column (name + description STACKED, never run together) | action
  * (right-aligned) — so every capability list is aligned by construction. */
 class CapabilityRow extends Component {
   static get observedAttributes() {
-    return ["name", "description", "icon", "action", "action-label", "enabled", "last-run"];
+    return ["name", "description", "icon", "action", "action-label", "last-run"];
   }
   _render() {
     const name = this.getAttribute("name") || "";
@@ -1475,23 +1475,18 @@ class CapabilityRow extends Component {
     const icon = this.getAttribute("icon") || "";
     const action = this.getAttribute("action") || "run";
     const actionLabel = this.getAttribute("action-label") || "Run";
-    const enabled = this.hasAttribute("enabled");
     const lastRun = this.getAttribute("last-run") || "";
     // "open" = the WHOLE row is clickable (an agent → open its chat/view) with a
-    // chevron affordance instead of a "Run" button; "toggle" = an enable/disable
-    // switch; "open-toggle" = BOTH (a chevron to open the agent's view AND a
-    // switch to enable/disable) — for background agents (item 61: they are
-    // independent, clickable AND enableable); "run" = a small Run button.
-    const actionHtml = action === "toggle"
-      ? `<switch-toggle part="toggle"${enabled ? " checked" : ""}
-          label="${enabled ? "Disable" : "Enable"} ${escapeHtml(name)} in the background"></switch-toggle>`
+    // chevron affordance instead of a "Run" button; "open-delete" = a chevron to
+    // open the agent's view AND a destructive Delete button — for background
+    // agents (an enabled background agent exists and runs; the owner removes it
+    // with Delete, not an enable/disable switch); "run" = a small Run button.
+    const actionHtml = action === "open-delete"
+      ? `<button part="open" class="open" type="button" aria-label="Open ${escapeHtml(name)}">${ICONS.chevron}</button>
+         <button part="delete" class="delete" type="button" aria-label="Delete ${escapeHtml(name)}">Delete</button>`
       : action === "open"
         ? `<button part="open" class="open" type="button" aria-label="Open ${escapeHtml(name)}">${ICONS.chevron}</button>`
-        : action === "open-toggle"
-          ? `<button part="open" class="open" type="button" aria-label="Open ${escapeHtml(name)}">${ICONS.chevron}</button>
-             <switch-toggle part="toggle"${enabled ? " checked" : ""}
-              label="${enabled ? "Disable" : "Enable"} ${escapeHtml(name)}"></switch-toggle>`
-          : action === "use"
+        : action === "use"
             ? `<button part="use" class="run" type="button">Use</button>`
             : `<button part="run" class="run" type="button" aria-label="${escapeHtml(actionLabel)} ${escapeHtml(name)}">${escapeHtml(actionLabel)}</button>`;
     const rowAttrs = action === "open"
@@ -1530,6 +1525,11 @@ class CapabilityRow extends Component {
         cursor:pointer; border-radius:6px; }
       .open:hover, .open:focus-visible { color:var(--accent,#0e6e63); outline:none; }
       .open svg { width:16px; height:16px; display:block; }
+      .delete { justify-self:end; font-size:var(--text-xs,12px); color:var(--danger,#b3261e);
+        border:1px solid var(--border,#30363d); border-radius:var(--radius-sm,6px);
+        padding:4px 12px; background:transparent; cursor:pointer; font:inherit;
+        white-space:nowrap; }
+      .delete:hover, .delete:focus-visible { border-color:var(--danger,#b3261e); outline:none; }
       .meta { display:flex; align-items:center; gap:6px; }
     `, `<div${rowAttrs}>
       <span class="icon" aria-hidden="true">${icon}</span>
@@ -1556,8 +1556,9 @@ class CapabilityRow extends Component {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this._emit("open"); }
       });
     }
-    this._root.querySelector("switch-toggle")?.addEventListener("toggle", (e) => {
-      this._emit("toggle", { enabled: e.detail.checked });
+    this._root.querySelector("[part=delete]")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this._emit("delete");
     });
   }
 }
