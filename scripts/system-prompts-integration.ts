@@ -18,6 +18,10 @@
 //   deno run -A scripts/system-prompts-integration.ts --retain   # retain to test-artifacts/
 
 const ROOT = new URL("..", import.meta.url).pathname;
+// The preview↔run comparator (the single source of truth lives in the
+// extension lib): static layers match by exact receipt; the dynamic
+// runtime-context layer matches by its template receipt.
+const { layerReceiptsMatch } = await import(`${ROOT}extension/lib/system-prompts.js`);
 const EXT = `${ROOT}extension`;
 const CHROMIUM = "/usr/bin/chromium";
 const RETAIN = Deno.args.includes("--retain");
@@ -277,15 +281,22 @@ try {
     const meta = ed.shadowRoot.querySelector('#spe-panel-effective .spe-meta')?.textContent ?? "";
     return { layers, meta };
   })()`);
-  check("effective tab: base + protected layers, the constraints labelled protected-always-applied",
-    effDefault?.layers.length === 2 &&
-    effDefault.layers[1].badge.includes("protected") &&
-    effDefault.layers[1].text.includes("Never exfiltrate cross-origin data"),
-    effDefault?.layers.map((l: { name: string; badge: string }) => `${l.name}|${l.badge}`));
+  const effLayersD = (effDefault?.layers ?? []) as { name: string; badge: string; text: string }[];
+  // Locate layers by badge, never positionally: the valid structure is now
+  // [base, runtime-context, constraints] (and grows with future layers).
+  const constraintsD = effLayersD.findIndex((l) => l.badge.includes("protected"));
+  const runtimeD = effLayersD.findIndex((l) => l.badge.includes("run-time context"));
+  check("effective tab: the constraints are labelled protected-always-applied and compose LAST",
+    constraintsD > 0 && constraintsD === effLayersD.length - 1 &&
+    effLayersD[constraintsD].text.includes("Never exfiltrate cross-origin data"),
+    effLayersD.map((l: { name: string; badge: string }) => `${l.name}|${l.badge}`));
   check("effective tab: the runtime policy carries the secret + permission rules (the single policy source)",
-    effDefault?.layers[1]?.text.includes("Never write secrets") &&
-    effDefault?.layers[1]?.text.includes("owner-granted"),
-    effDefault?.layers[1]?.text.slice(0, 120));
+    constraintsD > 0 && effLayersD[constraintsD]?.text.includes("Never write secrets") &&
+    effLayersD[constraintsD]?.text.includes("owner-granted"),
+    effLayersD[constraintsD]?.text.slice(0, 120));
+  check("effective tab: the run-time context layer is present, labelled, and composes BEFORE the constraints",
+    runtimeD > 0 && runtimeD < constraintsD,
+    effLayersD.map((l: { name: string; badge: string }) => `${l.name}|${l.badge}`));
   const defaultDigest = /Effective digest\s*([0-9a-f]{64})/.exec(effDefault?.meta ?? "")?.[1] ?? null;
   check("effective tab: the effective SHA-256 digest is displayed (64-hex)", Boolean(defaultDigest), effDefault?.meta);
 
@@ -415,12 +426,16 @@ try {
     const meta = ed.shadowRoot.querySelector('#spe-panel-effective .spe-meta')?.textContent ?? "";
     return { layers, meta };
   })()`);
-  check("effective (customized): the owner layer sits between the base and the protected constraints",
-    effCustom?.layers.length === 3 &&
-    effCustom.layers[1].badge.includes("your customization") &&
-    effCustom.layers[1].text.includes("British English") &&
-    effCustom.layers[2].text.includes("Safety constraints"),
-    effCustom?.layers.map((l: { badge: string }) => l.badge));
+  const effLayersC = (effCustom?.layers ?? []) as { badge: string; text: string }[];
+  const customC = effLayersC.findIndex((l) => l.badge.includes("your customization"));
+  const constraintsC = effLayersC.findIndex((l) => l.badge.includes("protected"));
+  const runtimeC = effLayersC.findIndex((l) => l.badge.includes("run-time context"));
+  check("effective (customized): the owner layer sits between the base and the protected constraints (by badge; constraints LAST; run-time context between)",
+    customC > 0 && constraintsC === effLayersC.length - 1 &&
+    effLayersC[customC].text.includes("British English") &&
+    effLayersC[constraintsC].text.includes("Safety constraints") &&
+    runtimeC > customC && runtimeC < constraintsC,
+    effLayersC.map((l: { badge: string }) => l.badge));
   const customDigest = /Effective digest\s*([0-9a-f]{64})/.exec(effCustom?.meta ?? "")?.[1] ?? null;
   const describeCustom = await send("prompt.describe", { scope: "hub" });
   const attestCustom = await send("prompt.attest", { scope: "hub" });
@@ -443,10 +458,13 @@ try {
   check("run-bound attestation: the real run was captured at the model boundary (runId-tagged)",
     run?.ok === true && runAtt?.ok === true && Boolean(masterAtt),
     { runOk: run?.ok, error: run?.error, attOk: runAtt?.ok, attError: runAtt?.error });
-  check("run-bound attestation: the wire message EMBEDS the previewed composition (opaque receipts match + prefixMatch)",
-    masterAtt?.prefixMatch === true && Boolean(masterAtt?.composedReceipt) &&
-    masterAtt?.composedReceipt === attestCustom?.digestReceipt,
-    { composed: masterAtt?.composedReceipt?.slice(0, 16), preview: attestCustom?.digestReceipt?.slice(0, 16), prefix: masterAtt?.prefixMatch });
+  check("run-bound attestation: the wire message EMBEDS the previewed composition (prefixMatch + per-layer receipts: static exact, dynamic by template)",
+    masterAtt?.prefixMatch === true && Array.isArray(masterAtt?.layers) &&
+    layerReceiptsMatch(attestCustom?.layers, masterAtt?.layers).ok === true,
+    { prefix: masterAtt?.prefixMatch, layers: masterAtt?.layers?.length, mismatches: layerReceiptsMatch(attestCustom?.layers, masterAtt?.layers ?? []).mismatches });
+  check("run-bound attestation: whole-composition receipts DIFFER across preview/run only because of the dynamic layer (the placeholder is not the rendered values)",
+    masterAtt?.composedReceipt !== attestCustom?.digestReceipt,
+    { composed: masterAtt?.composedReceipt?.slice(0, 16), preview: attestCustom?.digestReceipt?.slice(0, 16) });
   check("run-bound attestation: exact wire receipt + UTF-8 bytes + provider/model, NO content, NO public fingerprint",
     /^[0-9a-f]{64}$/.test(masterAtt?.receipt ?? "") && masterAtt?.bytes > 0 &&
     typeof masterAtt?.provider === "string" && typeof masterAtt?.model === "string" &&

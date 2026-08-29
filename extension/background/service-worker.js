@@ -230,10 +230,12 @@ import {
   normalizeScope,
   PROMPT_OWNED_KEYS,
   resolveSystemPrompt,
+  boundaryLayersFor,
   restampPromptOverride,
   rotateAttestationKey,
   setPromptOverride,
 } from "../lib/system-prompts.js";
+import { gatherRuntimeContext } from "../lib/runtime-context.js";
 import {
   createAsset,
   createOrUpdateAssetKeyed,
@@ -1397,7 +1399,20 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     // The SAME composition backs the Settings → Advanced preview, so the
     // preview IS the platform composition the run is built with (the exact
     // wire message is proven per run by the run-bound attestation).
-    const masterComposed = await resolveSystemPrompt(promptScope ?? "hub", { role: agentRole });
+    // The volatile layer (lib/runtime-context.js): date/time, extension +
+    // platform identity, the hub-scope agent roster, and the run's own memory
+    // index — gathered per BUILD (named/background/approval runs build fresh
+    // per run; the cached hub carries assembly-time values, honestly labelled).
+    // Gathering never breaks a build (every read is failure-isolated).
+    const runtimeContext = await gatherRuntimeContext({
+      scope: promptScope ?? "hub",
+      agentLabel: promptScope ? `named agent "${promptScope.replace(/^agent:/, "")}"` : "hub",
+      memory: mem ?? masterMemory(),
+      listAgents: promptScope ? null : listNamedAgents,
+      chromeApi: globalThis.chrome ?? null,
+      now: new Date(),
+    });
+    const masterComposed = await resolveSystemPrompt(promptScope ?? "hub", { role: agentRole, runtimeContext });
     // Workers = enrolled site origins, each with its own memory + skills.
     const origins = await listOrigins();
     // BUILD-LOCAL run-generation cells (the round-27 blocker 4): the cells are
@@ -1408,10 +1423,21 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     // A then failed site tools spuriously). A build-local map means each build
     // binds EXACTLY the cells it created, and the map is GC'd with the build.
     const buildCells = new Map(); // canonical origin -> { get: () => number|null }
+    const workerComposed = new Map(); // canonical origin -> composed prompt (for layered attestation)
     const workers = await Promise.all(origins.map(async (origin) => {
       const cell = { get: () => null };
       buildCells.set(origin, cell);
       const skills = await getSkills(origin);
+      const workerRuntimeContext = await gatherRuntimeContext({
+        scope: "worker",
+        agentLabel: `site worker (${origin})`,
+        memory: siteMemory(origin),
+        listAgents: null, // the roster is hub-scope knowledge
+        chromeApi: globalThis.chrome ?? null,
+        now: new Date(),
+      });
+      const workerText = await resolveSystemPrompt("worker", { skills, runtimeContext: workerRuntimeContext });
+      workerComposed.set(origin, workerText);
       return {
         origin,
         memory: siteMemory(origin),
@@ -1420,7 +1446,7 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
         // skills ride inside the composition (skills: [] below) so the
         // attestation hash covers exactly what the model receives — no
         // double-append in the agent core.
-        system: (await resolveSystemPrompt("worker", { skills })).text,
+        system: workerText.text,
         skills: [],
         // WebMCP directories/navigation/approval are read for every lazy
         // search/execute fence; no build-time snapshot reaches the provider.
@@ -1534,8 +1560,16 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     }
     // The effective-prompt attestation (keyed receipts, no content) — journaled
     // at run start so a run can prove WHICH composition it was built with, and
-    // a debug/test path can verify the Settings preview matches it.
+    // a debug/test path can verify the Settings preview matches it. Workers are
+    // attested too: EVERY agent's boundary event can then carry its own layered
+    // receipts (content-free), so preview↔run parity works per layer — static
+    // layers exact, the dynamic runtime-context layer by its template receipt.
     orch.promptInfo = await attestComposition(masterComposed, promptScope ?? "hub");
+    const workerLayers = {};
+    for (const [origin, composed] of workerComposed) {
+      workerLayers[origin] = (await attestComposition(composed, "worker")).layers;
+    }
+    if (Object.keys(workerLayers).length) orch.promptInfo.workerLayers = workerLayers;
     // Expose the build-local provider-server observations so the run's settle
     // path can attach citations to the terminal message + record the usage
     // line. Read-only view; the maps themselves stay private to this build.
@@ -2497,6 +2531,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       await durableRuns.heartbeat(executionId);
       const attestKeyState = await attestationKeyState();
       orch.setAttestation?.((att) => {
+        const boundLayers = boundaryLayersFor(orch?.promptInfo, att.agentId);
         const bound = {
           runId: executionId, // the immutable per-attempt execution id
           taskId, // the LOGICAL id (task/schedule/thread) — kept separate
@@ -2514,6 +2549,12 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
           // digestReceipt to prove a run sent the previewed composition).
           receipt: hmacSha256Hex(attestKeyState.bytes, String(att.digest ?? "")),
           composedReceipt: hmacSha256Hex(attestKeyState.bytes, String(att.composedDigest ?? "")),
+          // Content-free layered receipts of the composition THIS agent was
+          // built with (master: promptInfo.layers; worker origin:
+          // promptInfo.workerLayers[origin]) — the preview↔run comparator
+          // (layerReceiptsMatch) consumes these: static layers exact, the
+          // dynamic runtime-context layer by template receipt.
+          ...(boundLayers ? { layers: boundLayers } : {}),
         };
         recordRunAttestation(bound);
         journalAppend(mem, { type: "prompt-attestation", ...bound }).catch(() => {});
@@ -6031,7 +6072,7 @@ const handlers = mergeRouteMaps(
       const agent = await getNamedAgent(s.slice("agent:".length));
       role = agent?.role ?? "";
     }
-    const composed = await resolveSystemPrompt(s, { role });
+    const composed = await resolveSystemPrompt(s, { role, runtimeContext: { placeholder: true } });
     // Keyed receipts ONLY (the review's oracle blocker): the unkeyed
     // composition hash is NOT returned — a stable unkeyed digest of
     // owner-customized text is a public fingerprint/dictionary oracle. Parity
@@ -6641,8 +6682,12 @@ const handlers = mergeRouteMaps(
       dispatch: async () => {
         // Do not even initialize or look up the worker until the production
         // provider gate has admitted this exact durable provider binding.
-        await ensureOrchestrator();
-        const a = orchestrator?.workers?.get(canonical);
+        // Retain the LOCAL build: the worker AND its layered receipts both
+        // come from it — no callback may read the racing global (an
+        // invalidate between capture and attestation would otherwise drop or
+        // swap the receipts under this worker).
+        const build = await ensureOrchestrator();
+        const a = build?.workers?.get(canonical);
         // The worker run is a SIDE-EFFECTING boundary: it must be fenced (an aborted
         // run must not start a delegated worker) AND serialized with the master via
         // withRunLock (the cached orchestrator's shared abort controller must never be
@@ -6682,6 +6727,7 @@ const handlers = mergeRouteMaps(
       try {
         const attestKeyState = await attestationKeyState();
         a.setAttestation?.((att) => {
+          const delegateLayers = boundaryLayersFor(build?.promptInfo, att.agentId);
           const bound = {
             runId: execId,
             taskId: logicalId,
@@ -6696,6 +6742,10 @@ const handlers = mergeRouteMaps(
             ephemeral: !attestKeyState.durable,
             receipt: hmacSha256Hex(attestKeyState.bytes, String(att.digest ?? "")),
             composedReceipt: hmacSha256Hex(attestKeyState.bytes, String(att.composedDigest ?? "")),
+            // Content-free layered receipts — same parity attach as the
+            // runTask boundary, read from the LOCAL build that produced this
+            // worker (never the racing global).
+            ...(delegateLayers ? { layers: delegateLayers } : {}),
           };
           recordRunAttestation(bound);
         });

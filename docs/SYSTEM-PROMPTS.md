@@ -180,8 +180,15 @@ key history. Every receipt names its `keyVersion`; when optional `storage` is
 absent the service-worker-session key is honestly labelled `ephemeral: true`
 instead of being described as per-install durable. No prompt content, key
 bytes, or unkeyed stable fingerprint of owner text is ever routed/journaled. A
-run proves it sent the previewed composition when its `composedReceipt` equals
-`prompt.attest`'s `digestReceipt` for the same key version.
+run proves it sent the previewed composition when its layered boundary
+receipts match the preview's per layer: static layers compare by exact
+receipt, and the dynamic `runtime-context` layer (date/time, roster, memory
+index — legitimately per-assembly) compares by its TEMPLATE receipt (the
+preview renders that layer as its clearly-marked placeholder, so the
+preview's rendered receipt IS its template receipt). The comparator is
+`layerReceiptsMatch` in `extension/lib/system-prompts.js`; whole-composition
+receipts (`composedReceipt` vs `digestReceipt`) intentionally differ whenever
+the dynamic layer renders real values.
 
 ## Secrets + hidden reasoning
 
@@ -191,6 +198,17 @@ anywhere except as part of the system prompt to the configured provider; the
 UI warns against pasting credentials. Only product-authored prompt content is
 ever shown in the UI — there is no hidden chain-of-thought in the
 composition.
+
+The dynamic `runtime-context` layer follows the same trust class: the memory
+index it carries is the agent's OWN store content, already fully reachable by
+the model via `memory_grep`/`memory_list` in the same prompts, and the roster
+is hub-only and already reachable via `list_agents`. The layer changes WHEN
+this content appears (every composition), never WHO sees it or WHERE it goes —
+all prompt content flows to the configured provider by platform design (page
+content, journals, grep results already do), so PII in prompts is accepted.
+The contract is CREDENTIAL-redaction: every agent-written field in the layer
+passes through `redactSecretText` before any truncation or encoding, so a
+credential-shape string in a store reaches the prompt only as `[REDACTED]`.
 
 ## Tests
 

@@ -96,6 +96,7 @@ import {
 } from "./pure.js";
 import { kvGet, kvSet, storageAvailable } from "./kv.js";
 import { buildSkillsPrompt } from "./skills.js";
+import { RUNTIME_CONTEXT_PLACEHOLDER } from "./runtime-context.js";
 import { renderRuntimePolicy } from "./runtime-policy.js";
 
 /* ── The protected constraints (immutable, non-editable, FINAL layer) ──────
@@ -616,6 +617,10 @@ export async function deleteAgentPromptOverride(slug) {
  *   override — a stored override record (or null)
  *   role     — a named agent's role text (agent scopes; "" otherwise)
  *   skills   — installed skills for the run
+ *   runtimeContext — the volatile per-assembly layer (lib/runtime-context.js):
+ *     { text, template } renders the gathered values; { placeholder: true }
+ *     renders the clearly-marked template (the Settings preview). ABSENT → no
+ *     layer at all (static baselines stay byte-identical).
  *   registry — the built-in registry (injectable for upgrade-simulation tests)
  *
  * Returns { text, hash, base, builtinChanged, layers }. `layers` carries every
@@ -629,6 +634,7 @@ export function composeSystemPrompt({
   override = null,
   role = "",
   skills = [],
+  runtimeContext = null,
   registry = PROMPT_REGISTRY,
 }) {
   const base = registryEntry(baseId, registry);
@@ -708,6 +714,27 @@ export function composeSystemPrompt({
       editable: false,
       protected: false,
       text: skillsText,
+    });
+  }
+
+  // 5.5 runtime-context — the volatile per-assembly layer (date/time, system
+  // state, roster, memory index). Between skills and the protected constraints
+  // so injected (agent-written, untrusted) content can never read as policy.
+  // `dynamic` + `templateText` let attestation record BOTH the rendered values
+  // and the stable template, keeping the preview↔run parity proof intact.
+  if (runtimeContext) {
+    const isPlaceholder = runtimeContext.placeholder === true;
+    layers.push({
+      id: "runtime-context",
+      label: "Run-time context",
+      source: "runtime",
+      editable: false,
+      protected: false,
+      dynamic: true,
+      templateText: RUNTIME_CONTEXT_PLACEHOLDER,
+      text: isPlaceholder
+        ? RUNTIME_CONTEXT_PLACEHOLDER
+        : String(runtimeContext.text ?? RUNTIME_CONTEXT_PLACEHOLDER),
     });
   }
 
@@ -801,7 +828,7 @@ export function appendSkillsLayer(systemText, skills, registry = PROMPT_REGISTRY
  * Fail-closed: an unknown scope composes the protected constraints ONLY —
  * never an unprotected empty prompt.
  */
-export async function resolveSystemPrompt(scope, { role = "", skills = [], registry } = {}) {
+export async function resolveSystemPrompt(scope, { role = "", skills = [], runtimeContext = null, registry } = {}) {
   const s = normalizeScope(scope);
   if (!s) {
     return composeSystemPrompt({ baseId: null, registry });
@@ -812,6 +839,7 @@ export async function resolveSystemPrompt(scope, { role = "", skills = [], regis
     override,
     role,
     skills,
+    runtimeContext,
     registry,
   });
 }
@@ -843,6 +871,11 @@ export async function describePrompt(scope, { role = "", skills = [], registry }
     override,
     role,
     skills,
+    // The preview renders the volatile layer as its clearly-marked template —
+    // the preview claims to BE the composition, and the honest claim is the
+    // structure + the run-time note; the per-run values are proven by the
+    // run-bound attestation (template receipt ↔ rendered receipt).
+    runtimeContext: { placeholder: true },
     registry,
   });
   const changed = composed.builtinChanged;
@@ -1075,8 +1108,57 @@ export async function attestComposition(composed, scope = "hub", { key, keyVersi
       bytes: utf8ByteLength(l.text ?? ""),
       protected: Boolean(l.protected),
       omitted: Boolean(l.omitted),
+      // Dynamic (per-assembly) layers: the rendered receipt above covers the
+      // values THIS composition carried; the template receipt covers the
+      // stable placeholder — the preview↔run comparison anchor for content
+      // that legitimately varies per run.
+      ...(l.dynamic
+        ? { dynamic: true, templateReceipt: hmacSha256Hex(k, l.templateText ?? "") }
+        : {}),
     })),
   };
+}
+
+/**
+ * The preview↔run parity comparator. Static layers must match by their
+ * rendered receipt (byte-exact composition); DYNAMIC layers (runtime-context)
+ * legitimately carry per-assembly values, so they match on the TEMPLATE
+ * receipt — the preview's rendered receipt IS its template receipt (it
+ * renders the placeholder), and the run's templateReceipt anchors the same
+ * structure. Returns { ok, mismatches: [layerId, …] }.
+ */
+export function layerReceiptsMatch(previewLayers, runLayers) {
+  const a = Array.isArray(previewLayers) ? previewLayers : [];
+  const b = Array.isArray(runLayers) ? runLayers : [];
+  const mismatches = [];
+  if (a.length !== b.length || a.some((l, i) => l?.id !== b[i]?.id)) {
+    return { ok: false, mismatches: ["<layer-set>"] };
+  }
+  for (let i = 0; i < a.length; i++) {
+    const p = a[i], r = b[i];
+    if (p?.dynamic || r?.dynamic) {
+      if (!(p?.templateReceipt && r?.templateReceipt && p.templateReceipt === r.templateReceipt)) {
+        mismatches.push(p?.id ?? r?.id ?? "<unknown>");
+      }
+    } else if (p?.receipt !== r?.receipt) {
+      mismatches.push(p?.id ?? "<unknown>");
+    }
+  }
+  return { ok: mismatches.length === 0, mismatches };
+}
+
+/**
+ * Pick the layered receipts matching a boundary attestation event's agentId
+ * ("hub" → the master composition; a worker origin → that worker's
+ * composition). Content-free (receipts/ids/bytes only). Returns null when the
+ * build recorded no layers for the agent (older builds, unknown ids).
+ */
+export function boundaryLayersFor(promptInfo, agentId) {
+  if (!promptInfo || !agentId) return null;
+  if (agentId === "hub") return promptInfo.layers ?? null;
+  const workers = promptInfo.workerLayers;
+  if (workers && typeof workers === "object" && workers[agentId]) return workers[agentId];
+  return null;
 }
 
 /* ── Line diff (old-vs-new base, for the release-update UI) ─────────────── */

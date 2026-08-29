@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.399] — 2026-08-29
+- Agents now see the world as it is right now: every prompt carries the current date and time, the extension version, and the agent's own notebook index — and the hub also sees who else is on the team. Site agents never see the roster, anything that looks like a password or key is scrubbed first, and the whole block is size-capped so it can never crowd out the safety rules, which still come last
+
 ## [0.2.398] — 2026-08-29
 - Claude models can search the web while answering (you opt in globally and per agent): answers show what was searched and link their sources, and every paid search is billed from Anthropic's own counter — with an honest counted-from-the-stream fallback whenever the counter is missing
 
