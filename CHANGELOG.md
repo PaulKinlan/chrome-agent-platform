@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.407] — 2026-08-29
+- Agents that share an interactive persona and scheduled automation now appear as one Settings row with both sets of controls
+
 ## [0.2.406] — 2026-08-29
 - Edit persona & schedule now opens the maintained agent editor from standalone Settings as well as the in-app panel
 

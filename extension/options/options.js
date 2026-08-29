@@ -7,6 +7,7 @@ import {
   SETTINGS_SECTIONS,
   normalizeSettingsSectionId,
 } from "../lib/pure.js";
+import { projectUnifiedAgents } from "../lib/named-agents.js";
 import {
   agentScheduleMarker,
   backgroundAgentsForDisplay,
@@ -1364,8 +1365,10 @@ function openNamedAgentEditor(agent) {
   window.location.href = chrome.runtime.getURL(`ntp/ntp.html#agent=named:${encodeURIComponent(agent.id)}&edit=1`);
 }
 
-async function renderAgentProviders(list, agents, globalCfg) {
-  for (const a of agents) {
+async function renderAgentProviders(list, projectedAgents, globalCfg) {
+  for (const projected of projectedAgents) {
+    const a = projected.namedAgent;
+    if (!a) continue;
     const row = document.createElement("div");
     row.className = "agent-settings-row agent-provider-row";
     // The stored override is REDACTED (no key) — the provider + model are shown,
@@ -1495,18 +1498,19 @@ async function renderAgentProviders(list, agents, globalCfg) {
         saveFlash(`Provider not saved: ${r.error ?? "unknown error"}`);
       }
     });
+    if (projected.backgroundAgent) backgroundAgentRow(projected.backgroundAgent, row);
     list.appendChild(row);
   }
 }
 
 // ── Background agents (scheduled recipes) ──
-function backgroundAgentRow(a) {
-  const row = document.createElement("div");
-  row.className = "agent-settings-row background-agent-row";
+function backgroundAgentRow(a, hostRow = null) {
+  const row = hostRow ?? document.createElement("div");
+  row.classList.add("agent-settings-row", "background-agent-row");
 
   const name = document.createElement("span");
   name.className = "perm-name";
-  name.textContent = a.name;
+  name.textContent = hostRow ? "Scheduled automation" : a.name;
 
   const state = document.createElement("span");
   state.className = "agent-mode-badge";
@@ -1590,7 +1594,14 @@ function backgroundAgentRow(a) {
     actions.append(del);
   }
 
-  row.append(name, state, hint, toggle, actions);
+  if (hostRow) {
+    const controls = document.createElement("div");
+    controls.className = "background-agent-controls";
+    controls.append(name, state, hint, toggle, actions);
+    row.append(controls);
+  } else {
+    row.append(name, state, hint, toggle, actions);
+  }
   return row;
 }
 
@@ -1655,17 +1666,20 @@ async function renderUnifiedAgentSettings() {
   // Settings is a display/management surface, not a callability filter: stopped
   // scheduled agents remain visible so the owner can enable or edit them.
   const background = backgroundAgentsForDisplay(backgroundRes?.agents);
+  const unified = projectUnifiedAgents(named, background);
 
   list.replaceChildren();
-  if (!named.length && !background.length) {
+  if (!unified.length) {
     const empty = document.createElement("p");
     empty.className = "muted";
     empty.textContent = "No agents yet.";
     list.appendChild(empty);
     return;
   }
-  await renderAgentProviders(list, named, globalCfg);
-  for (const agent of background) list.appendChild(backgroundAgentRow(agent));
+  await renderAgentProviders(list, unified.filter((agent) => agent.namedAgent), globalCfg);
+  for (const projected of unified) {
+    if (!projected.namedAgent) list.appendChild(backgroundAgentRow(projected.backgroundAgent));
+  }
 }
 
 async function renderBackgroundAgents() {

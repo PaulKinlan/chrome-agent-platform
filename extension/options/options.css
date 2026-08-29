@@ -788,10 +788,26 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   gap: 4px 12px;
   align-items: center;
 }
-.background-agent-row .agent-actions { grid-area: actions; justify-self: end; }
-.background-agent-row .perm-name { grid-area: name; font-weight: 600; }
-.background-agent-row .muted { grid-area: hint; font-size: var(--text-xs); }
-.background-agent-row switch-toggle { grid-area: toggle; }
+.background-agent-controls {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-areas:
+    "name state toggle actions"
+    "hint hint hint actions";
+  gap: 4px 12px;
+  align-items: center;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+.background-agent-row > .agent-actions,
+.background-agent-controls > .agent-actions { grid-area: actions; justify-self: end; }
+.background-agent-row > .perm-name,
+.background-agent-controls > .perm-name { grid-area: name; font-weight: 600; }
+.background-agent-row > .muted,
+.background-agent-controls > .muted { grid-area: hint; font-size: var(--text-xs); }
+.background-agent-row > switch-toggle,
+.background-agent-controls > switch-toggle { grid-area: toggle; }
 
 /* Optional-permission capability panel. */
 .permission-list,
@@ -1106,7 +1122,19 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
     align-items: start;
   }
 
-  .background-agent-row .agent-actions {
+  .background-agent-controls {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "name"
+      "state"
+      "toggle"
+      "hint"
+      "actions";
+    align-items: start;
+  }
+
+  .background-agent-row > .agent-actions,
+  .background-agent-controls > .agent-actions {
     justify-self: start;
     flex-wrap: wrap;
   }
