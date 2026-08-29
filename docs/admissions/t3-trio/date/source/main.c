@@ -24,51 +24,56 @@
 
 #define MAX_OUT_LEN 4096
 
-static time_t parse_date_spec(const char *spec) {
-    if (!spec || !*spec) return time(NULL);
+static bool parse_epoch(const char *text, time_t *out) {
+    if (!text || !*text) return false;
+    char *end = NULL;
+    long long value = strtoll(text, &end, 10);
+    if (end == text || *end != '\0') return false;
+    *out = (time_t)value;
+    return true;
+}
 
+static bool parse_date_spec(const char *spec, time_t *out) {
+    if (!spec || !out) return false;
     while (isspace((unsigned char)*spec)) spec++;
+    if (!*spec) return false;
 
-    // Epoch timestamp @1724000000
-    if (*spec == '@') {
-        return (time_t)atoll(spec + 1);
-    }
+    // Epoch timestamp @1724000000 or a plain numeric epoch.
+    if (*spec == '@') return parse_epoch(spec + 1, out);
+    bool numeric = *spec == '-' || *spec == '+' || isdigit((unsigned char)*spec);
+    if (numeric && parse_epoch(spec, out)) return true;
 
-    // Pure numeric epoch
-    bool all_digits = true;
-    for (const char *p = spec; *p; p++) {
-        if (!isdigit((unsigned char)*p)) {
-            all_digits = false;
-            break;
-        }
-    }
-    if (all_digits && strlen(spec) >= 9) {
-        return (time_t)atoll(spec);
-    }
-
-    // ISO format YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS
+    // Exact ISO date or timestamp: YYYY-MM-DD[ T]HH:MM:SS. timegm normalizes
+    // invalid fields, so compare its round-trip fields before accepting.
     int year = 0, month = 0, day = 0, hour = 0, min = 0, sec = 0;
-    if (sscanf(spec, "%d-%d-%d", &year, &month, &day) >= 3) {
-        struct tm tm_val;
-        memset(&tm_val, 0, sizeof(struct tm));
-        tm_val.tm_year = year - 1900;
-        tm_val.tm_mon = month - 1;
-        tm_val.tm_mday = day;
-
-        const char *t = strchr(spec, 'T');
-        if (!t) t = strchr(spec, ' ');
-        if (t) {
-            sscanf(t + 1, "%d:%d:%d", &hour, &min, &sec);
-        }
-        tm_val.tm_hour = hour;
-        tm_val.tm_min = min;
-        tm_val.tm_sec = sec;
-
-        time_t t_res = timegm(&tm_val);
-        if (t_res != (time_t)-1) return t_res;
+    int consumed = 0;
+    int fields = sscanf(spec, "%d-%d-%d%n", &year, &month, &day, &consumed);
+    if (fields != 3 || consumed != 10 || year < 1970 || month < 1 || month > 12 || day < 1 || day > 31) return false;
+    const char *rest = spec + consumed;
+    if (*rest != '\0') {
+        if (*rest != 'T' && *rest != ' ') return false;
+        int time_consumed = 0;
+        if (sscanf(rest + 1, "%d:%d:%d%n", &hour, &min, &sec, &time_consumed) != 3 || rest[1 + time_consumed] != '\0') return false;
+        if (hour < 0 || hour > 23 || min < 0 || min > 59 || sec < 0 || sec > 60) return false;
     }
 
-    return time(NULL);
+    struct tm tm_val;
+    memset(&tm_val, 0, sizeof(tm_val));
+    tm_val.tm_year = year - 1900;
+    tm_val.tm_mon = month - 1;
+    tm_val.tm_mday = day;
+    tm_val.tm_hour = hour;
+    tm_val.tm_min = min;
+    tm_val.tm_sec = sec;
+    time_t parsed = timegm(&tm_val);
+    if (parsed == (time_t)-1) return false;
+    struct tm roundtrip;
+    if (!gmtime_r(&parsed, &roundtrip)) return false;
+    if (roundtrip.tm_year != tm_val.tm_year || roundtrip.tm_mon != tm_val.tm_mon ||
+        roundtrip.tm_mday != tm_val.tm_mday || roundtrip.tm_hour != tm_val.tm_hour ||
+        roundtrip.tm_min != tm_val.tm_min || roundtrip.tm_sec != tm_val.tm_sec) return false;
+    *out = parsed;
+    return true;
 }
 
 int main(int argc, char **argv) {
@@ -84,9 +89,11 @@ int main(int argc, char **argv) {
         } else if (strcmp(arg, "-u") == 0 || strcmp(arg, "--utc") == 0 || strcmp(arg, "--universal") == 0) {
             utc = true;
         } else if (strcmp(arg, "-d") == 0 || strcmp(arg, "--date") == 0) {
-            if (++i < argc) {
-                date_str = argv[i];
+            if (++i >= argc) {
+                fprintf(stderr, "date: option '%s' requires an argument\n", arg);
+                return 1;
             }
+            date_str = argv[i];
         } else if (strncmp(arg, "--date=", 7) == 0) {
             date_str = arg + 7;
         } else if (strncmp(arg, "-I", 2) == 0) {
@@ -103,7 +110,11 @@ int main(int argc, char **argv) {
         }
     }
 
-    time_t raw_time = date_str ? parse_date_spec(date_str) : time(NULL);
+    time_t raw_time = time(NULL);
+    if (date_str && !parse_date_spec(date_str, &raw_time)) {
+        fprintf(stderr, "date: invalid date '%.*s'\n", 96, date_str);
+        return 1;
+    }
 
     struct tm tm_info;
     if (utc) {

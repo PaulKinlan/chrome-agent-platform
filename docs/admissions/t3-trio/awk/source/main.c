@@ -239,13 +239,30 @@ static bool eval_condition(const char *cond, const char *raw_line) {
     while (isspace((unsigned char)*cond)) cond++;
     if (!*cond) return true;
 
-    // Pattern /regex/ or /substring/
+    // Bounded literal pattern /text/ with optional ^ and $ anchors. This is
+    // deliberately NOT a general regular-expression engine: metacharacters
+    // other than edge anchors are matched literally.
     if (*cond == '/' && cond[strlen(cond) - 1] == '/') {
         char pat[256];
         size_t len = strlen(cond) - 2;
-        if (len >= sizeof(pat)) len = sizeof(pat) - 1;
-        strncpy(pat, cond + 1, len);
+        if (len >= sizeof(pat)) return false;
+        memcpy(pat, cond + 1, len);
         pat[len] = '\0';
+
+        bool anchor_start = pat[0] == '^';
+        if (anchor_start) {
+            memmove(pat, pat + 1, len);
+            len--;
+        }
+        bool anchor_end = len > 0 && pat[len - 1] == '$';
+        if (anchor_end) pat[--len] = '\0';
+
+        if (anchor_start && anchor_end) return strcmp(raw_line, pat) == 0;
+        if (anchor_start) return strncmp(raw_line, pat, len) == 0;
+        if (anchor_end) {
+            size_t raw_len = strlen(raw_line);
+            return raw_len >= len && strcmp(raw_line + raw_len - len, pat) == 0;
+        }
         return strstr(raw_line, pat) != NULL;
     }
 

@@ -1,0 +1,7 @@
+tool=awk
+toolchain=clang version 18.1.2-wasi-sdk (https://github.com/llvm/llvm-project 26a1d6601d727a96f4301d0d8647b5a42760ae0c)
+flags=-O2 -DNDEBUG -Wall -Wextra -Werror -ffile-prefix-map=<source-root>=/src -Wl,--strip-all -Wl,--initial-memory=524288 -Wl,--max-memory=33554432
+source_sha256=4460946b6bd9b684148974630ce62471cc16294134f9888259fe11c7ee7ec043
+binary_sha256=e415ab94548da2d14bef43457cb9a990e66c3d8a151ba16e067f61d685d32312
+binary_bytes=58623
+reproducible=byte-identical
