@@ -104,7 +104,7 @@ Deno.test("tool descriptions: natural query vocabulary appears organically in fu
   assert(sql.includes("filter"), "sqlite3 description must include 'filter'");
 });
 
-Deno.test("manifest descriptions: all 25 manifests contain matching agent-useful descriptions", async () => {
+Deno.test("manifest descriptions: all 28 manifests contain matching agent-useful descriptions", async () => {
   for (const row of BUNDLED_TOOL_PACKAGE_ROWS) {
     const manifestPath = new URL(`../${row.manifestRef}`, import.meta.url);
     const manifestText = await Deno.readTextFile(manifestPath);

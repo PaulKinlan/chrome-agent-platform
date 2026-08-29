@@ -103,15 +103,16 @@ then capture a screenshot, then save an artifact report).
 (no network, no cloud). Grouped by purpose (authoritative list:
 list_tools("bundled-wasm")):
 
-- Text processing: grep (pattern search), cut, sort, uniq, tr, head, tail, wc
-  (count lines/words), diff (compare texts), patch (apply diffs), markdown
-  (convert).
+- Text processing: awk_filter_bounded (field extraction and literal filtering),
+  grep (pattern search), cut, sort, uniq, tr, head, tail, wc (count lines/words),
+  diff (compare texts), patch (apply diffs), markdown (convert).
 - Data & tables: csvtool (CSV query/manipulation), toml2json,
   sqlite3_query_bounded (run read-only SQL against a database).
 - Checksums & encoding: md5sum, sha256sum, sha512sum, base64, xxd (hex),
   uuid (generate identifiers).
 - Files: stat, du (disk usage), tree (directory listing), touch, truncate.
 - Compression: gzip (compress/decompress).
+- Time: date_formatter_bounded (UTC, epoch, and exact ISO formatting).
 
 These are ideal for anything the model is bad at: exact byte work, hashing,
 structured data wrangling, format conversion. They are NOT in your default

@@ -46,7 +46,7 @@ Deno.test("list_tools: enumerates all categories including the 28 admitted bundl
   // Call list_tools
   const result = await toolset.tools.list_tools.execute({});
   assertEquals(result.ok, true);
-  assertEquals(result.counts.bundledWasm, 28, "must report exactly 26 bundled Wasm tools");
+  assertEquals(result.counts.bundledWasm, 28, "must report exactly 28 bundled Wasm tools");
   assertEquals(result.tools["bundled-wasm"].length, 28, "must list all 28 bundled Wasm tools");
 
   const names = result.tools["bundled-wasm"].map((t) => t.name);

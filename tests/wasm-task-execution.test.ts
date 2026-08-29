@@ -142,7 +142,7 @@ Deno.test("assertBundledExecutionAuthority: admits installed tools and fails clo
     assertEquals(auth1.authorized, true);
     assertEquals(auth1.policy, "owner-build-admission");
 
-    // A non-admitted descriptor fails closed (all 26 bundled tools are now
+    // A non-admitted descriptor fails closed (all 28 bundled tools are now
     // admitted after the R12 sqlite admission, so a fictional disabled row
     // stands in for the fail-closed check).
     let disabledThrew = false;

@@ -55,13 +55,13 @@ isolated OPFS memory, run history, skills, and avatar.
   installs or executes. Execute accepts only a returned reference and revalidates
   catalog, source, capability, permission, grant, enrollment, document, run, expiry and
   replay fences before validation, before dispatch, and after dispatch.
-- **26 bundled Wasm tools** — base64, csvtool, cut, diff, du, grep, gzip, head, markdown,
-  md5sum, patch, sha256sum, sha512sum, sort, sqlite3 (bounded query), stat, tail,
-  toml2json, touch, tr, tree, truncate, uniq, uuid, wc, xxd. Each ships with an exact
-  manifest, CAS digest, SBOM and licence record, verified at build time by a bounded raw
-  import/memory scan. A Rust/C→`wasm32-wasip1` lane (htmlq, numbat, bttf, sed, jq, xan,
-  tokei, awk, date) builds and runs with reproducible builds and lock-faithful licence censuses —
-  those nine are **proven, not yet admitted** to the shipped set.
+- **28 bundled Wasm tools** — awk (bounded filter), base64, csvtool, cut, date
+  (bounded formatter), diff, du, grep, gzip, head, markdown, md5sum, patch, sha256sum,
+  sha512sum, sort, sqlite3 (bounded query), stat, tail, toml2json, touch, tr, tree,
+  truncate, uniq, uuid, wc, xxd. Each ships with an exact manifest, CAS digest, SBOM
+  and licence record, verified at build time by a bounded raw import/memory scan.
+  Separate Rust/C candidate lanes (htmlq, numbat, bttf, sed, jq, xan, tokei) are not
+  part of this shipped set; their own admission records remain authoritative.
 - **Usage + cost accounting** — per-call token/cost records against the bundled
   llm-prices table, aggregated per run and per agent. Providers that don't report usage
   are recorded as unknown, never faked.

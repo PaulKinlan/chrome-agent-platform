@@ -79,7 +79,7 @@ reused across jobs, keyed by the artifact SHA. Zero network at execution time.
 - **Dispatcher separation**: Python is NOT a WASI binary — it runs under a SEPARATE
   Emscripten/JS-glue dispatcher profile. The WASI host (`wasi-preview1-runtime.js`) and
   its import allowlist are NOT widened. One python dispatcher profile, distinct from the
-  26-tool WASI lane.
+  28-tool WASI lane.
 
 ## 5. What is NOT changed
 
