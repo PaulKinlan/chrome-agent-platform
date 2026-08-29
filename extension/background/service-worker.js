@@ -185,7 +185,9 @@ import { managementToolset, MANAGEMENT_TOOL_NAMES } from "../lib/management-tool
 import {
   MAX_DELEGATION_DEPTH,
   MAX_DELEGATION_DESCENDANTS,
+  admitQueuedDelegationChild,
   appendDelegationAudit,
+  assertDelegationSpendWithinCap,
   canPauseDelegatedRun,
   canStartDelegationIteration,
   chargeChildSpend,
@@ -193,11 +195,11 @@ import {
   createDelegationRegistry,
   delegationAuditRecord,
   delegationCancellationFailure,
-  durableDelegationParentIsRunning,
   evaluateDelegation,
   normalizeCanDelegateTo,
   remainingIterations,
   resolveTargetAgent,
+  terminalizeDelegatedPermission,
 } from "../lib/agent-delegation.js";
 import {
   ATTESTATION_KEY_STORE,
@@ -2113,18 +2115,12 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         // A delegated child cannot resume through named-agent.run without
         // losing its parent/depth/cap authority. Fail terminally instead.
         if (!canPauseDelegatedRun(delegationState)) {
-          const terminal = await durableRuns.settle(executionId, {
-            ok: false,
-            error: early.reason,
-            errorCategory: "permission",
-            errorReason: "delegated runs cannot pause and resume outside their hierarchy",
-            errorAction: "Resolve the provider permission, then start a new parent run.",
+          return await terminalizeDelegatedPermission({
+            durableRuns,
+            executionId,
             logicalId: taskId,
+            reason: early.reason,
           });
-          if (terminal?.phase === "cancelled") {
-            return { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "cancelled", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId };
-          }
-          return { ok: false, code: "delegation-permission-required", error: early.reason, errorCategory: "permission", executionId };
         }
         const paused = await durableRuns.pauseForPermission(executionId, {
           code: early.code,
@@ -2444,19 +2440,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // The terminal record is authoritative and idempotent: enforce the
       // parent+subtree cap BEFORE committing success, because a later catch
       // cannot replace an already-settled successful record.
-      const delegationSpend = delegationState
-        ? {
-          own: delegationState.step ?? 0,
-          descendants: delegationState.childSpend ?? 0,
-          total: (delegationState.step ?? 0) + (delegationState.childSpend ?? 0),
-          cap: delegationState.maxIterations,
-        }
-        : null;
-      if (delegationSpend && delegationSpend.total > delegationSpend.cap) {
-        const error = new Error("delegation subtree iteration budget exceeded");
-        error.code = "delegation-budget";
-        throw error;
-      }
+      const delegationSpend = assertDelegationSpendWithinCap(delegationState);
       const terminal = await durableRuns.settle(executionId, { ok: true, result, logicalId: taskId });
       if (terminal?.phase === "cancelled") {
         return { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "cancelled", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId };
@@ -3293,11 +3277,14 @@ async function runDelegatedChild(callerExecutionId, state, targetRef, task, brie
   // the durable running phase can admit a queued sibling. There is deliberately
   // NO await from this check's completion through children.add().
   const parentSnapshot = await durableRuns.list();
-  if (!durableDelegationParentIsRunning(parentSnapshot, callerExecutionId)) {
-    return auditDenied("delegation-context", "the parent run is no longer durably running");
-  }
-  if (!delegationRegistry.acquire(state.rootRunId)) {
-    return auditDenied("delegation-cap", `this run already has ${MAX_DELEGATION_DESCENDANTS} delegated child runs — the per-run delegation cap`, targetAgent.name ?? targetAgent.id, targetAgent.id);
+  const admission = admitQueuedDelegationChild({
+    snapshot: parentSnapshot,
+    parentExecutionId: callerExecutionId,
+    registry: delegationRegistry,
+    rootRunId: state.rootRunId,
+  });
+  if (!admission.ok) {
+    return auditDenied(admission.code, admission.error, targetAgent.name ?? targetAgent.id, targetAgent.id);
   }
   const childRunId = `delegate:${targetAgent.id}:${Date.now()}`;
   const brief = typeof briefContext === "string" && briefContext.trim()

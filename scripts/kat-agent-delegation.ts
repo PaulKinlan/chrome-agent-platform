@@ -195,11 +195,75 @@ try {
   const permissionChildRun = (permissionRuns?.runs ?? []).find((r) => r.agentId === "named:permission-child" && r.phase === "terminal" && r.terminal?.ok === false && String(r.clientCorrelationId ?? "").startsWith("delegate:permission-child:"));
   check("permission-denied child is terminal failed, never paused", permissionChildRun?.phase === "terminal" && permissionChildRun?.terminal?.ok === false, permissionChildRun ?? permissionRuns);
 
-  // ── 5. UI linkage: the parent's agent-chat renders the delegation ────────
-  const chat = await newView(`chrome-extension://${extId}/ntp/ntp.html#agent=named:delegator-prime`);
-  await sleep(2500);
-  const chatText = await chat.ev(`document.body.innerText.slice(0, 4000)`);
-  check("the agent-chat surface renders the delegation", typeof chatText === "string" && /delegate_to_agent|Helper Bee/i.test(chatText), String(chatText ?? "").slice(0, 200));
+  // ── 5. UI linkage: target the VISIBLE delegation result card itself ─────
+  // Open a fresh hub, wait for its real agent list to hydrate, then drive the
+  // same capability-row `open` event as an owner click. Direct hash navigation
+  // can beat registry hydration and render an empty fallback.
+  const chat = await newView(`chrome-extension://${extId}/ntp/ntp.html`);
+  let agentRowReady = false;
+  for (let i = 0; i < 60 && !agentRowReady; i++) {
+    await sleep(250);
+    agentRowReady = await chat.ev(`(() => [...document.querySelectorAll("#named-agents capability-row")].some((row) => row.getAttribute("name") === "Delegator Prime"))()`);
+  }
+  check("delegation UI probe: Delegator Prime row is visible", agentRowReady === true, agentRowReady);
+  const openedAgentChat = await chat.ev(`(() => {
+    const row = [...document.querySelectorAll("#named-agents capability-row")].find((item) => item.getAttribute("name") === "Delegator Prime");
+    if (!row) return false;
+    row.dispatchEvent(new CustomEvent("open"));
+    return true;
+  })()`);
+  check("delegation UI probe: owner open action dispatched", openedAgentChat === true, openedAgentChat);
+  const scrollDelegationResultIntoView = `(() => {
+    const roots = [document];
+    for (let i = 0; i < roots.length; i++) {
+      for (const el of roots[i].querySelectorAll("*")) if (el.shadowRoot) roots.push(el.shadowRoot);
+    }
+    const bubbles = roots.flatMap((root) => [...root.querySelectorAll("message-bubble")]);
+    const toolBubble = bubbles.filter((el) => el.getAttribute("tool-name") === "delegate_to_agent").at(-1);
+    const agentBubble = bubbles.filter((el) => {
+      if (el.getAttribute("role") !== "agent") return false;
+      const text = el.shadowRoot?.querySelector(".msg.agent .body")?.textContent ?? el.getAttribute("content") ?? "";
+      return /Agent delegation succeeded|Helper Bee/i.test(text);
+    }).at(-1);
+    const bubble = toolBubble ?? agentBubble;
+    const result = toolBubble
+      ? toolBubble.shadowRoot?.querySelector(".tool-result, .tool-plain, .tt-tree")
+      : agentBubble?.shadowRoot?.querySelector(".msg.agent .body");
+    if (!bubble || !result) return {
+      found: false,
+      title: document.getElementById("thread-title")?.textContent ?? "",
+      messages: bubbles.map((el) => ({
+        role: el.getAttribute("role"),
+        tool: el.getAttribute("tool-name"),
+        content: (el.getAttribute("content") ?? "").slice(0, 100),
+      })).slice(-12),
+    };
+    bubble.scrollIntoView({ block: "center", inline: "nearest" });
+    const rect = result.getBoundingClientRect();
+    return {
+      found: true,
+      kind: toolBubble ? "tool-result" : "agent-result",
+      resultText: result.textContent?.trim() ?? "",
+      top: rect.top,
+      bottom: rect.bottom,
+      viewportHeight: innerHeight,
+      visible: rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.bottom <= innerHeight,
+    };
+  })()`;
+  let delegationResult = null;
+  for (let i = 0; i < 60 && !delegationResult?.found; i++) {
+    await sleep(250);
+    delegationResult = await chat.ev(scrollDelegationResultIntoView);
+  }
+  await sleep(300);
+  delegationResult = await chat.ev(scrollDelegationResultIntoView);
+  check(
+    "the agent-chat surface renders the visible delegation result card",
+    delegationResult?.found === true && delegationResult?.visible === true && /Helper Bee|Agent delegation succeeded/i.test(delegationResult?.resultText ?? ""),
+    delegationResult,
+  );
+  // The viewport is centred on the asserted result element — the screenshot is
+  // evidence of the rendered delegation, not merely the initiating prompt.
   await chat.shot(`${OUT}/delegation-parent-chat.png`);
 
   // Fire-and-poll route caller (the cancellation probe must cancel WHILE the

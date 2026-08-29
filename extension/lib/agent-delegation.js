@@ -164,6 +164,68 @@ export function durableDelegationParentIsRunning(snapshot, executionId) {
   return snapshot.runs.some((run) => run?.executionId === executionId && run?.phase === "running");
 }
 
+/** Atomically revalidate a queued child's durable owner and reserve its root
+ * registry slot. Both decisions are synchronous after the durable snapshot is
+ * read, so cancellation cannot enter between authority and allocation. */
+export function admitQueuedDelegationChild({ snapshot, parentExecutionId, registry, rootRunId }) {
+  if (!durableDelegationParentIsRunning(snapshot, parentExecutionId)) {
+    return { ok: false, code: "delegation-context", error: "the parent run is no longer durably running" };
+  }
+  if (!registry?.acquire?.(rootRunId)) {
+    return {
+      ok: false,
+      code: "delegation-cap",
+      error: `this run already has ${MAX_DELEGATION_DESCENDANTS} delegated child runs — the per-run delegation cap`,
+    };
+  }
+  return { ok: true };
+}
+
+/** Compute the terminal subtree spend and reject before durable success can be
+ * committed. The caller's catch path owns the durable failure settlement. */
+export function assertDelegationSpendWithinCap(state) {
+  if (!state) return null;
+  const spend = {
+    own: state.step ?? 0,
+    descendants: state.childSpend ?? 0,
+    total: (state.step ?? 0) + (state.childSpend ?? 0),
+    cap: state.maxIterations,
+  };
+  if (spend.total > spend.cap) {
+    const error = new Error("delegation subtree iteration budget exceeded");
+    error.code = "delegation-budget";
+    throw error;
+  }
+  return spend;
+}
+
+/** Terminalize a delegated provider-permission denial without overwriting a
+ * concurrent owner cancellation. The durable store's returned phase remains
+ * authoritative when cancellation wins the terminal-settlement race. */
+export async function terminalizeDelegatedPermission({ durableRuns, executionId, logicalId, reason }) {
+  const terminal = await durableRuns.settle(executionId, {
+    ok: false,
+    error: reason,
+    errorCategory: "permission",
+    errorReason: "delegated runs cannot pause and resume outside their hierarchy",
+    errorAction: "Resolve the provider permission, then start a new parent run.",
+    logicalId,
+  });
+  if (terminal?.phase === "cancelled") {
+    return {
+      ok: false,
+      cancelled: true,
+      aborted: true,
+      error: "run cancelled by owner",
+      errorCategory: "cancelled",
+      errorReason: "explicit owner cancellation",
+      errorAction: "Start a new run to execute this request again.",
+      executionId,
+    };
+  }
+  return { ok: false, code: "delegation-permission-required", error: reason, errorCategory: "permission", executionId };
+}
+
 /** Explain a failed live-cancellation result; null means the cancellation was
  * accepted and its live abort did not report a failure. */
 export function delegationCancellationFailure(result) {
