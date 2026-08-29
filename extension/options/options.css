@@ -332,6 +332,9 @@ input:focus, select:focus, textarea:focus {
 .toggle-name {
   font-weight: 600;
 }
+.server-tools-agents { margin-top: var(--space-4); }
+.server-tools-agents h3 { margin: 0 0 4px; font-size: var(--text-sm); }
+.server-tools-agents > .muted { display: block; margin: 0 0 var(--space-2); }
 /* Theme grid */
 .theme-grid {
   display: grid;

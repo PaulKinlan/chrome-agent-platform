@@ -1544,6 +1544,26 @@ evidence every other task depends on).
 - History:
   - 2026-08-29 20:47 UTC — falsification RED: the new parser pin showed Skills before Agents in nav but after Permissions in the document; moved the existing Skills nav item after Permissions, producing exact order parity without moving any panel.
 
+## [CAP-FB-20260829-PROVIDER-TOOLS-COPY-01] Explain provider-run tool toggles per agent
+- Feedback: 2026-08-29 — owner could not tell what the per-agent provider-tool toggles enabled, and the global explainer still described Gemini only after Anthropic web search shipped
+- Updated: 2026-08-29 UTC
+- Status: IN_REVIEW
+- Priority: P2
+- Owner: implementation lane
+- Workspace: durable worktree
+- Branch: `cap-agents-merge`
+- Base: `e52b22a6`
+- Candidate: this commit
+- Shipping: —
+- Acceptance: the Providers panel names both Gemini grounding and Anthropic web search; the per-agent block has a visible heading, billing hint, and a consequence line saying enabled agents may search the web during runs; no controls move out of Providers
+- Review: required with the parent Agents merge candidate
+- Gates: focused copy contract; full suite and build
+- Blockers: —
+- Next: independent acceptance review, then coordinator merge
+- Recover: `git log --oneline --all --grep=CAP-FB-20260829-PROVIDER-TOOLS-COPY-01`
+- History:
+  - 2026-08-29 20:52 UTC — falsification RED: the copy pin failed on the Gemini-only global explainer before the subheading, billing hint, stable per-agent list, and per-row consequence line were added.
+
 ## [CAP-FB-20260829-MAIN-GATES-RED-03] Journey suite red on main after the install-granted permission change
 - Feedback: 2026-08-29 — found by running the suite on `origin/main`
 - Updated: 2026-08-29 UTC

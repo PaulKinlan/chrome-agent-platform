@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.403] — 2026-08-29
+- CAP-FB-20260829-PROVIDER-TOOLS-COPY-01 clarify per-agent search toggles
+
 ## [0.2.402] — 2026-08-29
 - CAP-FB-20260829-SETTINGS-NAV-ORDER-01 align settings navigation
 

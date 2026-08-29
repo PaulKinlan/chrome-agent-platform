@@ -1228,9 +1228,10 @@ async function renderAgents() {
   });
   async function renderServerToolAgents(globalOn) {
     const box = $("#server-tools-agents");
-    if (!box) return;
+    const list = $("#server-tools-agent-list");
+    if (!box || !list) return;
     box.hidden = !globalOn;
-    box.replaceChildren();
+    list.replaceChildren();
     if (!globalOn) return;
     const cur = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
     const agents = cur.agents && typeof cur.agents === "object" ? cur.agents : {};
@@ -1262,9 +1263,12 @@ async function renderAgents() {
       const nm = document.createElement("span");
       nm.className = "toggle-name";
       nm.textContent = a.name;
-      text.appendChild(nm);
+      const hint = document.createElement("span");
+      hint.className = "muted";
+      hint.textContent = "Can search the web during its runs.";
+      text.append(nm, hint);
       field.append(t, text);
-      box.appendChild(field);
+      list.appendChild(field);
     }
   }
   await renderServerToolAgents(stToggle.checked);
