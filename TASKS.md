@@ -1644,7 +1644,7 @@ evidence every other task depends on).
 
 ## [CAP-FB-20260829-BACKGROUND-RUN-TRANSCRIPT-01] Scheduled named-agent runs disappear from the agent conversation
 - Feedback: 2026-08-29 — product owner reports an hourly agent completes work in the background but opening that agent shows no conversation
-- Updated: 2026-08-29 21:22 UTC
+- Updated: 2026-08-29 21:43 UTC
 - Status: IN_REVIEW
 - Resume: —
 - Priority: P0
@@ -1655,13 +1655,14 @@ evidence every other task depends on).
 - Candidate: this tracker commit
 - Shipping: —
 - Acceptance: create a scheduled named agent, let its real alarm fire, open that agent through the real hub UI, and see the scheduled task/result in the same conversation as interactive runs
-- Review: required by reviewer — pending
-- Gates: focused scheduled-attribution 7/7; real-browser scheduled-run transcript RED 4/5 then GREEN 5/5 with screenshots; full unit 2370 pass / 0 fail; developer build clean (95 generated files, 28 packages, CSP/oracle/Wasm assertions green)
+- Review: REVISE — P1 KAT asserted only the scheduled user bubble; fix applied, re-review pending
+- Gates: focused scheduled-attribution 7/7; real-browser scheduled-run transcript RED 4/5 then GREEN 6/6 with both user/result bubbles visibly captured; full unit 2370 pass / 0 fail; developer build clean (95 generated files, 28 packages, CSP/oracle/Wasm assertions green)
 - Blockers: —
 - Next: reviewer checks the candidate diff and behavioral evidence, then the coordinator lands it without a manual version bump
 - Recover: `git show cap-bgrun-transcript -- extension/background/service-worker.js tests/sched-attr.test.ts scripts/kat-background-run-transcript.ts`
 - History:
   - 2026-08-29 21:22 UTC — real-browser RED: a real named agent and recurring schedule were created, the accelerated real alarm reached durable terminal state, and the real agent row opened, but its conversation had no transcript (4 pass / 1 fail). Root cause is an identity split introduced by immutable agent namespaces: interactive runs and `named-agent.history` use `agent.instanceId`, while the `agent:<slug>` alarm branch still wrote to `namedAgentMemory(slug)`. The candidate uses that already-loaded agent row's immutable instance ID, exactly matching the interactive and history paths, so both address the same OPFS journal.
-  - 2026-08-29 21:28 UTC — falsification and green gates complete. The focused identity assertion fails on the unfixed line and passes after restoration; focused suite 7/7. The same real-browser journey is GREEN 5/5 and captures the opened conversation with its scheduled user turn plus demo-agent result. Full unit suite 2370/0; final developer build and changelog sync clean. Author diff review found no security, accessibility, design, memory, or performance regression: this reuses the existing immutable instance identity already used by interactive runs and changes no authority or UI surface.
+  - 2026-08-29 21:28 UTC — falsification and green gates complete. The focused identity assertion fails on the unfixed line and passes after restoration; focused suite 7/7. The same real-browser journey is GREEN 5/5. Full unit suite 2370/0; final developer build and changelog sync clean. Author diff review found no security, accessibility, design, memory, or performance regression: this reuses the existing immutable instance identity already used by interactive runs and changes no authority or UI surface.
+  - 2026-08-29 21:43 UTC — independent review REVISE (P1): `scripts/kat-background-run-transcript.ts` asserted only the scheduled user bubble, so the prior screenshot/claim did not prove a result transcript. Fixed with the explicit deterministic `@demo-tools` result, separate exact user and agent bubble assertions, bounded render polling, and a taller screenshot viewport. Re-run GREEN 6/6; the recaptured screenshot visibly contains the scheduled prompt, completed tool rows, and non-empty demo-model result. Re-review pending.
 
 

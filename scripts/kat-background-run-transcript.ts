@@ -38,6 +38,7 @@ const { proc, wsUrl } = await launchChrome({
     `--disable-extensions-except=${EXT}`,
     `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
+    "--window-size=1400,2000",
     `--user-data-dir=${ROOT}.cache/kat-background-run-transcript-${STAMP}`,
     "about:blank",
   ],
@@ -150,7 +151,9 @@ try {
 
   const ntp = await openPage(`chrome-extension://${extensionId}/ntp/ntp.html`);
   await sleep(2500);
-  const prompt = `scheduled transcript probe ${STAMP}`;
+  const prompt = `@demo-tools scheduled transcript probe ${STAMP}`;
+  const expectedResult =
+    "[demo model] Tool calls executed in sequence: memory_set wrote the shopping list, then memory_get read it back twice.";
   const seeded = await ntp.evaluate(`(async () => {
     const send = (message) => chrome.runtime.sendMessage(message);
     const created = await send({ type: 'named-agent.create', name: 'Scheduled Transcript Probe', role: 'Report scheduled work concisely.' });
@@ -223,18 +226,35 @@ try {
     rowPoint,
   );
   await ntp.clickPoint(rowPoint);
-  await sleep(1500);
-  const conversation = await ntp.evaluate(`(() => {
-    const host = document.getElementById('thread-conversation');
-    const bubbles = [...(host?.querySelectorAll('message-bubble') ?? [])]
-      .map(bubble => ({ role: bubble.getAttribute('role'), content: bubble.getAttribute('content') ?? '', rendered: bubble.shadowRoot?.textContent ?? '' }));
-    return { title: document.getElementById('thread-title')?.textContent ?? '', bubbles };
-  })()`);
+  let conversation: any = null;
+  for (let i = 0; i < 30; i++) {
+    conversation = await ntp.evaluate(`(() => {
+      const host = document.getElementById('thread-conversation');
+      const bubbles = [...(host?.querySelectorAll('message-bubble') ?? [])]
+        .map(bubble => ({ role: bubble.getAttribute('role'), content: bubble.getAttribute('content') ?? '', rendered: bubble.shadowRoot?.textContent ?? '' }));
+      return { title: document.getElementById('thread-title')?.textContent ?? '', bubbles };
+    })()`);
+    const hasUser = conversation?.bubbles?.some((bubble: any) =>
+      bubble.role === "user" && bubble.content === prompt
+    );
+    const hasResult = conversation?.bubbles?.some((bubble: any) =>
+      bubble.role === "agent" && bubble.content === expectedResult
+    );
+    if (hasUser && hasResult) break;
+    await sleep(200);
+  }
   await ntp.screenshot("scheduled-agent-conversation.png");
   check(
-    "opening the agent shows the background run transcript",
+    "opening the agent shows the scheduled user turn",
     conversation?.bubbles?.some((bubble: any) =>
       bubble.role === "user" && bubble.content === prompt
+    ) === true,
+    conversation,
+  );
+  check(
+    "opening the agent shows the deterministic non-empty model result",
+    conversation?.bubbles?.some((bubble: any) =>
+      bubble.role === "agent" && bubble.content === expectedResult
     ) === true,
     conversation,
   );

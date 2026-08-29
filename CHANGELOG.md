@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.404] — 2026-08-29
+- Prove scheduled agent result transcripts
+
 ## [0.2.403] — 2026-08-29
 - Show scheduled work in agent conversations
 
