@@ -1403,7 +1403,7 @@ evidence every other task depends on).
 
 ## [CAP-FB-20260829-URGENT-UI-REPAIR-01] Restore Agents and create-dialog visual quality
 - Feedback: 2026-08-29 — owner reported visual regressions from the landed Agents merge and create-dialog declutter lanes: the background picker was replaced by 22 phantom rows, provider/template selects showed double arrows, agent edit actions drifted out of their action group, the template and microphone disappeared behind Advanced, and disclosures changed the dialog width
-- Updated: 2026-08-29 23:40 BST
+- Updated: 2026-08-29 23:52 BST
 - Status: OPEN
 - Priority: P0
 - Owner: implementation lane
@@ -1419,6 +1419,7 @@ evidence every other task depends on).
 - Next: complete provider/select and create-dialog repairs, then run all gates
 - Recover: `git log --oneline --all --grep CAP-FB-20260829-URGENT-UI-REPAIR-01`
 - History:
+  - 2026-08-29 23:52 BST — restored the create-dialog hierarchy requested after visual review: Name and What it does remain first; microphone/Refine are visibly attached to the purpose field; the rich template select and English schedule follow before Advanced. The real-browser order and visible-voice assertions turned green while the separate width-jitter assertion remains intentionally RED for the next atomic fix.
   - 2026-08-29 23:40 BST — removed the hand-drawn chevron from the shared `<provider-select>` and styled the one native `::picker-icon`; rich options now carry safe inline SVG icons, the closed state is one-line/ellipsis/min-width contained, and Save/Edit/Delete share one wrapping `.ag-actions` row. Browser assertions for provider containment, one provider arrow, one template arrow and action grouping are green.
   - 2026-08-29 23:20 BST — RED browser run captured 1/10 pass: Settings rendered all 22 disabled background templates as rows; provider/template each had the native picker icon plus a custom SVG; voice/template/schedule were behind Advanced; opening Skills widened the dialog from 582px to 878px. First repair restores the compact rich background picker with an explicit Add action and projects only created/enabled agents into management rows; its two focused KAT assertions are now green.
 

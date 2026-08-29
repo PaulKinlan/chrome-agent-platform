@@ -48,10 +48,10 @@ one line each here:
 - Restore create-dialog hierarchy to Name → what it does + voice → template → schedule → Advanced, with a stable width across disclosure states.
 - Real-browser before evidence reproduced all defects; the dedicated visual KAT pins the corrected structure, arrow count, containment, order and stable width.
 
-### Create-agent dialog clutter and inconsistent controls (2026-08-29 — implementation)
-- Keep only Name and What it does on the primary path; avatar, templates, persona tools,
-  skills, schedule, delegation and context files remain reachable under one collapsed
-  Advanced disclosure.
+### Create-agent dialog clutter and inconsistent controls (2026-08-29 — corrected after owner review)
+- The owner's visual review superseded the over-collapsed hierarchy: the primary path is
+  Name → What it does with visible voice input → template → English schedule → Advanced.
+  Avatar, skills, delegation and context files remain under the disclosure.
 - Schedule entry now deterministically accepts interval English (including “every couple
   of minutes” and “every hour”), confirms the parsed recurrence inline, and blocks
   ambiguous/unsupported text; exact weekday times are honestly unsupported by the

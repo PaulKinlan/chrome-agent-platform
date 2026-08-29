@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.409] — 2026-08-29
+- fix(CAP-FB-20260829-URGENT-UI-REPAIR-01): restore create dialog hierarchy
+
 ## [0.2.408] — 2026-08-29
 - fix(CAP-FB-20260829-URGENT-UI-REPAIR-01): contain base selects and actions
 
@@ -7,7 +10,7 @@
 - fix(CAP-FB-20260829-URGENT-UI-REPAIR-01): restore background agent picker
 
 ## [0.2.406] — 2026-08-29
-- Settings → Agents again keeps the built-in background-agent catalogue in one compact picker; only agents you created or enabled appear as management rows. Provider and template selects now have one arrow, rich option icons and a contained single-line closed state, and agent edit actions stay in their button row
+- Settings → Agents again keeps the built-in background-agent catalogue in one compact picker; only agents you created or enabled appear as management rows. Provider and template selects now have one arrow, rich option icons and a contained single-line closed state, and agent edit actions stay in their button row. Create Agent visibly follows Name → what it does with microphone → template → English schedule → Advanced
 - Scheduled agents now keep their conversation: when a background agent runs on its timer, the work it did shows up in that agent's chat — previously it vanished
 
 ## [0.2.405] — 2026-08-29

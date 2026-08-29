@@ -2268,10 +2268,11 @@ async function buildAgentConfigDialog(opts) {
   }
 
 
-  // The primary path is only name + what it does. Persona tooling and every
-  // optional capability stay reachable in one collapsed disclosure below.
+  // The primary path follows the owner's task order: identity, purpose,
+  // starting template, then schedule. Less common persona data stays in Advanced.
   const roleField = configField("What it does", "textarea", opts.role ?? "", 3);
   const roleTools = document.createElement("div");
+  roleTools.className = "agent-role-tools";
   roleTools.style.display = "flex";
   roleTools.style.gap = "8px";
   roleTools.style.alignItems = "center";
@@ -2285,7 +2286,9 @@ async function buildAgentConfigDialog(opts) {
   mic.addEventListener("mic-error", (e) => setStatus(e?.detail?.message ?? "mic error", false));
   const refineBtn = configButton("Refine", "secondary");
   roleTools.append(mic, refineBtn);
+  roleField.wrap.append(roleTools);
   scrollBody.append(nameField.wrap, roleField.wrap);
+  if (templateSection) scrollBody.append(templateSection);
 
   const advancedDetails = document.createElement("details");
   advancedDetails.className = "agent-config-advanced";
@@ -2300,10 +2303,8 @@ async function buildAgentConfigDialog(opts) {
   advancedBody.className = "agent-config-advanced-body";
   advancedBody.style.cssText = "display:flex;flex-direction:column;gap:12px;padding:4px 12px 12px;border-top:1px solid var(--border,#e3e0d9);";
   advancedBody.append(avatarRow);
-  if (templateSection) advancedBody.append(templateSection);
   advancedDetails.append(advancedSummary, advancedBody);
   scrollBody.append(advancedDetails);
-  advancedBody.append(roleTools);
 
   // Collapsible skills section
   const skillsDetails = document.createElement("details");
@@ -2402,7 +2403,7 @@ async function buildAgentConfigDialog(opts) {
   };
   scheduleField.el.addEventListener("input", updateScheduleFeedback);
   scheduleField.wrap.append(scheduleFeedback);
-  advancedBody.append(scheduleField.wrap);
+  scrollBody.insertBefore(scheduleField.wrap, advancedDetails);
   updateScheduleFeedback();
 
   // Context files: files whose content becomes part of the agent's context.
