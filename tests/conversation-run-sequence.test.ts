@@ -8,7 +8,7 @@
 import { assert, assertEquals } from "jsr:@std/assert";
 import { recordAuthoritativeThreadProjection } from "../extension/shared/thread-projection-authority.js";
 
-type Status = { state: string; activity?: string };
+type Status = { state: string; activity?: string; message?: string; errorReason?: string; errorCategory?: string };
 type Bubble = { role: string; content: string };
 
 function makeContainer(bubbles: Bubble[]) {
@@ -103,6 +103,20 @@ Deno.test("conversation run sequence: streamed final text + identical res.result
     `the streamed text and the identical res.result must not both project (got ${JSON.stringify(agentBubbles)})`);
   assertEquals(agentBubbles[0].content, "[demo] final answer");
   assertEquals(statuses.at(-1)?.state, "completed");
+});
+
+Deno.test("conversation run sequence: onRunRegistered exposes the exact run id sent to the durable route", async () => {
+  const sw: FakeSw = { runHoldMs: 20, resultText: "registered", lastRunId: null };
+  installChromeStub(sw);
+  const { runConversationTurn } = await import("../extension/shared/conversation.js");
+  const registered: string[] = [];
+  await runConversationTurn(makeContainer([]) as never, {
+    text: "capture run identity",
+    onRunRegistered: (runId: string) => registered.push(runId),
+  } as never);
+  assertEquals(registered.length, 1);
+  assertEquals(registered[0], sw.lastRunId,
+    "the caller tracks the same client run id persisted as clientCorrelationId");
 });
 
 Deno.test("conversation run sequence: a differing authoritative result still appends after streamed text", async () => {
@@ -310,10 +324,19 @@ Deno.test("conversation run sequence: ungranted provider preflight transitions q
   const bubbles: Bubble[] = [];
   const container = makeContainer(bubbles);
   const statuses: Status[] = [];
+  const liveStatus: { current: Record<string, unknown> | null } = { current: null };
+  const liveSurface = {
+    setLiveStatus(status: Record<string, unknown>) { liveStatus.current = status; },
+    clearLiveStatus() { liveStatus.current = null; },
+  };
+  const { projectConversationRunStatus } = await import("../extension/shared/run-status.js");
 
   const res = await runConversationTurn(container as never, {
     text: "query with ungranted provider",
-    onStatus: (s: Status) => statuses.push(s),
+    onStatus: (s: Status) => {
+      statuses.push(s);
+      projectConversationRunStatus(liveSurface, s);
+    },
   } as never);
 
   assertEquals(res.ok, false);
@@ -321,6 +344,8 @@ Deno.test("conversation run sequence: ungranted provider preflight transitions q
   assertEquals(res.errorCategory, "host-permission");
   assertEquals(statuses[0]?.state, "queued", "accepted turn emits queued first");
   assertEquals(statuses.at(-1)?.state, "waiting-for-permission", "transitions to waiting-for-permission");
+  assertEquals(liveStatus.current?.actionLabel, "Fix in Settings",
+    "the final post-resolution row retains the recovery action emitted by the real turn");
   const errBubbles = bubbles.filter((b) => b.role === "error");
   assertEquals(errBubbles.length, 1, "exactly one error bubble appended");
   assert(errBubbles[0].content.includes("127.0.0.1:9"), "error bubble names the ungranted origin");

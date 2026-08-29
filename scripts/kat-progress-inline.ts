@@ -146,6 +146,15 @@ let notLastViolations = 0;
 let notLastDetail: unknown = null;
 let axeDuringRun: unknown = "not-run";
 let axeSrcCache = "";
+const injectAxe = async () => {
+  if (!axeSrcCache) {
+    const response = await fetch("https://cdn.jsdelivr.net/npm/axe-core@4.10.2/axe.min.js");
+    if (!response.ok) throw new Error(`axe fetch returned ${response.status}`);
+    axeSrcCache = await response.text();
+  }
+  const injected = await send("Runtime.evaluate", { expression: axeSrcCache }, page);
+  if (injected?.error || injected?.result?.exceptionDetails) throw new Error("axe injection failed");
+};
 let composerGrow: unknown = null;
 let dupDetail: unknown = null;
 let dupOk = false;
@@ -167,9 +176,9 @@ while (Date.now() < deadline && !done) {
       // resolved, so the live surface was never audited).
       if (axeDuringRun === "not-run") {
         try {
-          if (!axeSrcCache) axeSrcCache = await (await fetch("https://cdn.jsdelivr.net/npm/axe-core@4.10.2/axe.min.js")).text();
-          await send("Runtime.evaluate", { expression: axeSrcCache }, page);
+          await injectAxe();
           axeDuringRun = await ev(`axe.run(document, { resultTypes: ['violations'] }).then(r => r.violations.map(v => ({ id: v.id, nodes: v.nodes.map(n => (n.target || []).join(' ')) })))`, page);
+          if (!Array.isArray(axeDuringRun)) throw new Error("axe returned no violation array");
         } catch (e) { axeDuringRun = `unavailable: ${String(e).slice(0, 60)}`; }
       }
       // Composer auto-grow coexistence (review residual): grow the thread
@@ -232,7 +241,7 @@ check("no duplicate step/status text anywhere else in the conversation", dupOk, 
     const relevant = a.filter((v: any) => (v.nodes ?? []).some((n: string) => n.includes("live-status") || n.includes("thread-conversation")));
     check("axe DURING the run: no violations on the live row / conversation", relevant.length === 0, relevant);
   } else {
-    console.log(`NOTE: axe-during-run ${typeof a === "string" ? a : "unavailable"} — the settled axe scan below stands.`);
+    check("axe DURING the run: axe loaded", false, a);
   }
 }
 
@@ -242,14 +251,13 @@ check("completion: the inline row RESOLVES (removed, nothing renders when idle)"
 
 // axe on the settled thread surface.
 try {
-  const axeRes = await fetch("https://cdn.jsdelivr.net/npm/axe-core@4.10.2/axe.min.js");
-  const axeSrc = await axeRes.text();
-  await send("Runtime.evaluate", { expression: axeSrc }, page);
+  await injectAxe();
   const axeOut = await ev(`axe.run(document, { resultTypes: ['violations'] }).then(r => r.violations.map(v => ({ id: v.id, nodes: v.nodes.map(n => (n.target || []).join(' ')) })))`, page);
-  const relevant = (axeOut ?? []).filter((v: any) => (v.nodes ?? []).some((n: string) => n.includes("live-status") || n.includes("thread-conversation")));
+  if (!Array.isArray(axeOut)) throw new Error("axe returned no violation array");
+  const relevant = axeOut.filter((v: any) => (v.nodes ?? []).some((n: string) => n.includes("live-status") || n.includes("thread-conversation")));
   check("axe: no violations on the conversation/status surface", relevant.length === 0, relevant);
 } catch (e) {
-  console.log(`NOTE: axe injection unavailable (${String(e).slice(0, 80)}) — structural checks stand.`);
+  check("axe: axe loaded", false, String(e).slice(0, 120));
 }
 
 console.log(`\nkat-progress-inline: ${pass} passed, ${fail} failed`);

@@ -18,7 +18,7 @@ import {
   subscribeProgress,
   appendBubble,
 } from "../shared/conversation.js";
-import { runStatusActionLabel } from "../shared/run-status.js";
+import { projectConversationRunStatus } from "../shared/run-status.js";
 import { findAgentByRef } from "../shared/agent-registry.js";
 import { siteAgentToolsMessage } from "../shared/site-agent-copy.js";
 import { confirmActionDialog } from "../shared/components.js"; // registers <agent-picker>, <agent-composer>, <agent-conversation>, <task-row>
@@ -453,32 +453,16 @@ agentComposer.addEventListener("send", async (ev) => {
     await openAgentDetail(agent);
   }
   setDetailStatus("Working…");
-  const res = await runConversationTurn(historyEl, {
+  await runConversationTurn(historyEl, {
     text,
     attachments,
     agentId: target.id,
     agentKind: target.kind,
-    onStatus: (s) => {
-      // The conversation turn emits the canonical lifecycle vocabulary
-      // (extension/shared/run-status.js); the conversation's own inline
-      // live-status row renders it (idle/completed resolve to nothing).
-      // errorCategory feeds the shared recovery-action authority so provider
-      // permission/config failures get the same "Fix in Settings" path the
-      // NTP has (review P1-b: the sidepanel used to drop it).
-      if (!s?.state || s.state === "idle" || s.state === "completed") {
-        setDetailStatus("");
-        return;
-      }
-      historyEl.setLiveStatus?.({
-        state: s.state,
-        activity: s.activity,
-        message: s.message,
-        errorReason: s.errorReason,
-        actionLabel: runStatusActionLabel(s),
-      });
-    },
+    // The conversation emits the authoritative terminal status before its
+    // promise resolves. Do not overwrite that complete status afterwards with
+    // a bare error string — doing so stripped "Fix in Settings" from the row.
+    onStatus: (s) => projectConversationRunStatus(historyEl, s),
   });
-  if (res?.ok === false) setDetailStatus(res.error ?? "run failed", true);
 });
 
 // Live registry updates: the picker re-fetches; an open conversation on a

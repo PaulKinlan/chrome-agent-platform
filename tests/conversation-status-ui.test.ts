@@ -65,7 +65,7 @@ Deno.test("conversation run status: the live status is the conversation's own in
   const js = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
   assertEquals(js.includes("createElement(\"loading-state\")"), false, "the generic loader render path is gone");
   assertEquals(js.includes('getElementById("run-status")'), false, "no separate status element owner remains");
-  assert(js.includes("threadConversation.setLiveStatus?.("), "the NTP routes run status INTO the conversation");
+  assert(js.includes("projectConversationRunStatus(threadConversation, s)"), "the NTP routes run status INTO the conversation");
   const spHtml = await Deno.readTextFile(new URL("../extension/sidepanel/sidepanel.html", import.meta.url));
   assertEquals(spHtml.includes("agent-detail-status"), false, "the sidepanel's separate status line is gone");
   const spJs = await Deno.readTextFile(new URL("../extension/sidepanel/sidepanel.js", import.meta.url));
@@ -116,10 +116,12 @@ Deno.test("runStatusActionLabel: one shared authority for the Settings recovery 
 
 Deno.test("sidepanel parity: the live row keeps the recovery action and routes it to Settings (review P1-b)", async () => {
   const sp = await Deno.readTextFile(new URL("../extension/sidepanel/sidepanel.js", import.meta.url));
-  assert(sp.includes("runStatusActionLabel"), "the sidepanel uses the shared recovery-action authority");
+  assert(sp.includes("projectConversationRunStatus"), "the sidepanel uses the shared live-status projector");
   const statusCall = sp.slice(sp.indexOf("onStatus: (s)"));
-  assert(/errorCategory/.test(statusCall.slice(0, 700)) || sp.includes("runStatusActionLabel(s)"),
-    "the status object's errorCategory feeds the recovery action (it used to be dropped)");
+  assert(statusCall.includes("projectConversationRunStatus(historyEl, s)"),
+    "the complete terminal status, including errorCategory, reaches the shared projector");
+  assertEquals(statusCall.includes("setDetailStatus(res.error"), false,
+    "the resolved promise must not overwrite the complete terminal row with a bare error string");
   const listener = sp.indexOf('historyEl.addEventListener("action"');
   assert(listener > -1, "the sidepanel wires the status-row action listener");
   const handler = sp.slice(listener, sp.indexOf("});", listener) + 3);
@@ -127,7 +129,26 @@ Deno.test("sidepanel parity: the live row keeps the recovery action and routes i
   assert(handler.includes("chrome.runtime.openOptionsPage()"),
     "the sidepanel routes the action to the real Settings page (openOptionsPage is correct off the NTP)");
   const ntp = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
-  assert(ntp.includes("runStatusActionLabel(s)"), "the NTP uses the SAME shared authority (no divergent copies)");
+  assert(ntp.includes("projectConversationRunStatus(threadConversation, s)"),
+    "the NTP uses the SAME shared projector (no divergent copies)");
+});
+
+Deno.test("NTP terminal reconciliation captures the exact per-attempt run id", async () => {
+  const ntp = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
+  assert(ntp.includes("onRunRegistered: (runId)"), "runThreadTurn receives the exact id created by runConversationTurn");
+  assert(ntp.includes("liveClientRunId = runId"), "the live surface tracks that exact id");
+  assertEquals(ntp.includes("surfaceRunLiveAt"), false, "timestamp identity heuristic is gone");
+});
+
+Deno.test("progress-inline KAT fails closed when axe cannot run", async () => {
+  const src = await Deno.readTextFile(new URL("../scripts/kat-progress-inline.ts", import.meta.url));
+  assertEquals(src.includes("NOTE: axe-during-run"), false, "missing during-run axe is not a passing note");
+  assertEquals(src.includes("NOTE: axe injection unavailable"), false, "missing settled axe is not a passing note");
+  assert(src.includes('check("axe DURING the run: axe loaded"'), "during-run axe availability is a required check");
+  assert(src.includes('check("axe: axe loaded"'), "settled axe availability is a required check");
+  assert(src.includes("if (!response.ok) throw"), "an HTTP error cannot inject garbage and pass");
+  assertEquals((src.match(/if \(!Array\.isArray\(/g) ?? []).length >= 2, true,
+    "both during-run and settled scans require a real axe result array");
 });
 
 Deno.test("run-status-lifecycle: no stale #run-status / loading-state selectors remain (review P2)", async () => {
@@ -137,4 +158,6 @@ Deno.test("run-status-lifecycle: no stale #run-status / loading-state selectors 
   assertEquals(src.includes("#run-status"), false, "no #run-status selector survives anywhere in the journey");
   assertEquals(src.includes("loading-state"), false, "the deleted loader element is no longer queried");
   assert(src.includes("conversation-run-status.live-status"), "the journey drives the inline live-status row");
+  assert(src.includes("fuContinuous"), "the follow-up assertion forbids working→hidden→working flaps");
+  assertEquals(src.includes("fuBlocksResolve"), false, "the old every-block-eventually-resolves loophole is gone");
 });

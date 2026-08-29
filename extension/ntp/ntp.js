@@ -12,7 +12,7 @@ import { selectFailedRuns } from "../lib/run-retry.js";
 import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript } from "../shared/conversation.js";
 import { createRunSurfaceOwner } from "../shared/run-surface-owner.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
-import { runStatusActionLabel } from "../shared/run-status.js";
+import { projectConversationRunStatus } from "../shared/run-status.js";
 import { safeJsonStringify } from "../shared/tool-tree.js";
 import {
   renderHtmlFrame,
@@ -46,7 +46,7 @@ import {
 } from "./route-focus.js";
 import { applySidebarNubPolicy, SIDEBAR_NARROW_QUERY, sidebarWidthPolicy } from "./view-policy.js";
 import { parseNtpHash, resolveEntryMeta, shouldDispatchForNavigationType } from "../lib/navigation-controller.js";
-import { actionableRunsForSurface, latestRunForSurface } from "../lib/run-scope.js";
+import { actionableRunsForSurface, isSettledLiveRunRecord, latestRunForSurface } from "../lib/run-scope.js";
 import {
   SITE_AGENT_COPY,
   enrollOutcomeState,
@@ -151,9 +151,12 @@ if (durableRunRegistry) {
     if (
       settled &&
       settled.executionId !== lastReconciledTerminalId &&
-      // Never resolve from a snapshot that predates the live run's
-      // registration (skew allowance for the page/SW clock + write lag).
-      (settled.updatedAt ?? 0) >= surfaceRunLiveAt - 2000 &&
+      // Reconcile ONLY from the settled record that IS the live run (review
+      // P1-1): a fresh terminal record for the PREVIOUS run must never clear a
+      // new live run's row — identity by the client's per-attempt run id, no
+      // timestamp heuristic (a stale snapshot's record fails this check even
+      // when its updatedAt lands inside any skew window).
+      isSettledLiveRunRecord(settled, liveClientRunId) &&
       !actionableRunsForSurface(latestDurableRuns, surface).length
     ) {
       const phase = String(settled.phase ?? "");
@@ -2234,22 +2237,7 @@ async function buildAgentConfigDialog(opts) {
 // the chat viewport) — it replaced the separate banner element that duplicated
 // the running conversation entry below it (owner 2026-08-28).
 function renderRunStatus(s) {
-  if (!threadConversation) return;
-  const state = typeof s?.state === "string" ? s.state : "";
-  if (!state || state === "idle") {
-    threadConversation.clearLiveStatus?.();
-    return;
-  }
-  // A provider/config failure OR a permission wait gets the inline actionable
-  // recovery path ("Fix in Settings"), not just the message — one shared
-  // authority (runStatusActionLabel) so every surface agrees.
-  threadConversation.setLiveStatus?.({
-    state,
-    activity: s?.activity,
-    message: s?.message,
-    errorReason: s?.errorReason,
-    actionLabel: runStatusActionLabel(s),
-  });
+  projectConversationRunStatus(threadConversation, s);
 }
 // The recovery action bubbles from the inline status row (light DOM). Filter
 // to the status row itself — message bubbles can also emit "action".
@@ -2265,11 +2253,13 @@ threadConversation?.addEventListener("action", (ev) => {
 /** Which run owner last wrote the global #status (so a superseded run's
  * orphaned "running…" is reset exactly once, never clobbering a newer run). */
 let statusOwner = 0;
-/** When the open surface's live run started (page clock) — the registry
- * terminal-reconciliation must never resolve the row from a STALE snapshot
- * that predates the live run's registration (the follow-up-under-queue-saturation
- * gap found by run-status-lifecycle, 2026-08-28). */
-let surfaceRunLiveAt = 0;
+/** The live run's immutable per-attempt client run id (each attempt of the
+ * open surface's turn registers its own — conversation.js onRunRegistered).
+ * The registry terminal-reconciliation resolves the live row ONLY from the
+ * settled record whose clientCorrelationId IS this id (review P1-1: the
+ * updatedAt-skew heuristic let a previous run's fresh terminal record clear a
+ * just-started follow-up's row under queue saturation). */
+let liveClientRunId = null;
 /** The last run executionId the terminal reconciliation resolved the row for
  * (a settled run keeps matching every later snapshot — resolve it ONCE). */
 let lastReconciledTerminalId = null;
@@ -2280,7 +2270,7 @@ let lastReconciledTerminalId = null;
  * back in this thread (CAP-FB-20260824-TASK-AGENT-BOUNDARY-01). */
 async function runThreadTurn(text, attachments = [], mention = null) {
   const owner = runSurfaceOwner.claim();
-  surfaceRunLiveAt = Date.now();
+  liveClientRunId = null;
   lastReconciledTerminalId = null;
   showThreadView();
   setStatus("running…", false);
@@ -2298,6 +2288,10 @@ async function runThreadTurn(text, attachments = [], mention = null) {
     // Fence at the actual shared-DOM commit boundary as well as through
     // isStale below. No old callback can reveal a banner on a newer surface.
     onStatus: (state) => runSurfaceOwner.commit(owner, () => renderRunStatus(state)),
+    // Capture the exact per-attempt id BEFORE dispatch. Registry snapshots may
+    // still contain run A while follow-up B is waiting for durable admission;
+    // only B's own clientCorrelationId may resolve B's row.
+    onRunRegistered: (runId) => runSurfaceOwner.commit(owner, () => { liveClientRunId = runId; }),
     agentId: agentAtStart, // null for a thread; set when chatting with a named/background agent
     agentKind: kindAtStart,
     mention: mention ?? null,

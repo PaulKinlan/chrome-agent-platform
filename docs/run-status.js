@@ -62,3 +62,21 @@ export function runStatusActionLabel(input) {
   const category = typeof input?.errorCategory === "string" ? input.errorCategory : "";
   return RECOVERABLE_CATEGORY.test(category) ? "Fix in Settings" : null;
 }
+
+/** Project one canonical run status into an <agent-conversation>.
+ * Shared by the NTP and sidepanel so terminal recovery actions cannot diverge. */
+export function projectConversationRunStatus(conversation, input) {
+  if (!conversation) return;
+  const state = typeof input?.state === "string" ? input.state : "";
+  if (!state || state === "idle") {
+    conversation.clearLiveStatus?.();
+    return;
+  }
+  conversation.setLiveStatus?.({
+    state,
+    activity: input?.activity,
+    message: input?.message,
+    errorReason: input?.errorReason,
+    actionLabel: runStatusActionLabel(input),
+  });
+}

@@ -48,3 +48,18 @@ export function latestRunForSurface(runs, surface = {}) {
   matching.sort((a, b) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0));
   return matching[0] ?? null;
 }
+
+/** Terminal-reconciliation gate for a surface's LIVE status row (review P1-1,
+ * 2026-08-29): reconcile ONLY from the settled record that IS the live run —
+ * matched by the client's immutable per-attempt run id, projected onto the
+ * durable record as clientCorrelationId. The previous timestamp heuristic
+ * (settled.updatedAt >= liveStart − skew) let a FRESH terminal record for the
+ * PREVIOUS run clear a NEW live run's row under queue saturation (the old run
+ * settles inside the skew window while the follow-up is not yet registered).
+ * Fail-closed: no known live run id, or a record with no clientCorrelationId
+ * (e.g. delegate dispatches), never reconciles. */
+export function isSettledLiveRunRecord(settled, liveClientRunId) {
+  if (!settled || typeof settled !== "object") return false;
+  if (typeof liveClientRunId !== "string" || !liveClientRunId) return false;
+  return settled.clientCorrelationId === liveClientRunId;
+}

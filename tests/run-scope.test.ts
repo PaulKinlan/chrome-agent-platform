@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { actionableRunsForSurface, runSurfaceIdentity } from "../extension/lib/run-scope.js";
+import { actionableRunsForSurface, isSettledLiveRunRecord, runSurfaceIdentity } from "../extension/lib/run-scope.js";
 
 const runs = [
   { executionId: "a", phase: "running", threadId: "thread-a", agentId: null },
@@ -25,4 +25,15 @@ Deno.test("run controls are scoped to the exact named, background, or site agent
 Deno.test("hub and unrelated surfaces expose no conversation run controls", () => {
   assertEquals(runSurfaceIdentity({}), null);
   assertEquals(actionableRunsForSurface(runs, {}), []);
+});
+
+Deno.test("terminal reconciliation matches the exact live client run id, never a fresh previous terminal", () => {
+  const previous = { executionId: "exec-a", phase: "terminal", clientCorrelationId: "run-a", updatedAt: 10_001 };
+  const current = { executionId: "exec-b", phase: "terminal", clientCorrelationId: "run-b", updatedAt: 10_002 };
+  assertEquals(isSettledLiveRunRecord(previous, "run-b"), false,
+    "run A must not clear follow-up B even when A's terminal timestamp is fresh");
+  assertEquals(isSettledLiveRunRecord(current, "run-b"), true);
+  assertEquals(isSettledLiveRunRecord(current, null), false, "unknown live identity fails closed");
+  assertEquals(isSettledLiveRunRecord({ executionId: "exec-b", phase: "terminal" }, "run-b"), false,
+    "legacy records without clientCorrelationId fail closed");
 });

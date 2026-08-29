@@ -86,7 +86,7 @@ const EXPECTED = [
   "AX: exactly ONE run-status live region (no duplicate status surfaces)",
   "follow-up: sending in an already-open thread does NOT restart the view transition (no banner flash)",
   "follow-up: screenshot of the LIVE working state (no transition by construction)",
-  "follow-up: the status row reaches working + resolves for the follow-up (no error, every live block resolves)",
+  "follow-up: the status row stays continuously working until its own terminal resolves it (no stale-terminal flap)",
   "no console errors on the NTP",
   "assertion set exact (no missing/extra checks)",
   "assertion order matches EXPECTED",
@@ -823,21 +823,18 @@ async function main() {
     }
     const seqFu = [...seqFuRaw];
     while (seqFu.length && seqFu[0].state === "hidden") seqFu.shift();
-    // The durable truth under queue saturation: a run CAN be resumed after an
-    // SW idle-kill mid-settle, which legitimately yields a second working
-    // block (observed live: SW restart ~30s in, resume, terminal). The
-    // contract is: every working block resolves, NO error state ever renders,
-    // and the row ends resolved with the result journaled in the thread.
-    const fuResolved = seqFu.length > 1 && seqFu[seqFu.length - 1].state === "hidden";
-    const fuNoError = seqFu.every((s) => s.state !== "error");
-    const fuBlocksResolve = seqFu.every((s, i) =>
-      s.state !== "working" || seqFu.slice(i + 1).some((l) => l.state === "hidden"));
+    // Identity is exact now: a previous terminal registry record cannot clear
+    // the follow-up while it waits for admission. From the first working row
+    // until the final hidden resolution there must be NO hidden/error flap.
+    const firstWorking = seqFu.findIndex((s) => s.state === "working");
+    const fuResolved = firstWorking >= 0 && seqFu.length > firstWorking + 1 && seqFu[seqFu.length - 1].state === "hidden";
+    const fuContinuous = fuResolved && seqFu.slice(firstWorking, -1).every((s) => s.state === "working");
     const fuDiag = await evl(ntp, `({
       rowGone: !document.querySelector('#thread-conversation conversation-run-status.live-status'),
       agentBubbles: document.querySelectorAll('#thread-conversation message-bubble[role="agent"]').length,
     })`).catch(() => null);
-    check("follow-up: the status row reaches working + resolves for the follow-up (no error, every live block resolves)",
-      fuDone && fuResolved && fuNoError && fuBlocksResolve && seqFu.some((s) => s.state === "working"),
+    check("follow-up: the status row stays continuously working until its own terminal resolves it (no stale-terminal flap)",
+      fuDone && fuContinuous,
       { seq: seqFuRaw, diag: fuDiag });
     await evl(ntp, `(() => { window.__statusObs?.disconnect(); })()`);
 

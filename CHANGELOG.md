@@ -1,6 +1,7 @@
 # Changelog
 
 ## [0.2.353] — 2026-08-29
+- fix(conversation): terminal reconciliation now keys on the exact per-attempt run id, so a fresh terminal snapshot from the previous run cannot clear a newly-live follow-up; sidepanel failures retain their Settings recovery action after the turn resolves; the progress KAT fails closed if axe cannot run
 - fix(conversation): terminal reconciliation for the live row from the durable run registry — a run whose terminal event is lost (fenced turn, queue saturation, SW idle-kill mid-settle) used to leave the row stuck at 'working' forever; the registry authority now resolves it (guarded against stale snapshots + deduped). The lifecycle journey's follow-up probe is thread-authoritative (bounded journal evicts under warmup floods) and asserts the durable contract: no error, every live block resolves
 
 ## [0.2.352] — 2026-08-29
