@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.403] — 2026-08-29
+- test(board): r4 RED battery — blockedBy-pinned tombstone compaction, claim-churn compaction, live-settle drain kick
+
+## [0.2.402] — 2026-08-29
+- test(board): r4 RED battery — blockedBy-pinned tombstone compaction, claim-churn compaction, live-settle drain kick
+
+## [0.2.401] — 2026-08-29
+- test(board): r4 RED battery — blockedBy-pinned tombstone compaction, claim-churn compaction, live-settle drain kick
+
 ## [0.2.400] — 2026-08-29
 - chore(board): changelog entries for the board rounds in plain user language
 

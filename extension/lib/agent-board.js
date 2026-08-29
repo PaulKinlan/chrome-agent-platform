@@ -285,6 +285,22 @@ function eventsBytes(events) {
  *  admitted after the prior lease expired, so dropping the superseded
  *  heartbeat cannot make an expired-at-admission claim look live (review
  *  P1-4). */
+function compactSupersededClaims(events) {
+  // Claim churn (review r4 P1-2): every re-claim REPLACES the prior claim
+  // generation wholesale (a re-claim is only admitted after the prior lease
+  // expired), so all but a job's LATEST claimed event are dead weight. The
+  // latest generation is always retained — settled jobs need it for the
+  // settle's claimant identity.
+  const lastClaim = new Map(); // jobId -> index of its latest claimed event
+  (Array.isArray(events) ? events : []).forEach((ev, i) => {
+    if (ev?.type === "claimed") lastClaim.set(ev.jobId, i);
+  });
+  return (Array.isArray(events) ? events : []).filter((ev, i) => {
+    if (ev?.type !== "claimed") return true;
+    return lastClaim.get(ev.jobId) === i;
+  });
+}
+
 function compactHeartbeatEvents(events) {
   const lastHeartbeat = new Map(); // jobId -> index of its latest heartbeat
   const settled = new Set();
@@ -334,7 +350,7 @@ function tombstoneOf(job, now) {
  *      delivery is pending.
  *  OPEN jobs' events are NEVER dropped (the posting route refuses instead). */
 export function pruneJobEvents(events, now = Date.now()) {
-  const compacted = compactHeartbeatEvents(events);
+  const compacted = compactSupersededClaims(compactHeartbeatEvents(events));
   const jobs = foldJobEvents(compacted, now);
   const byId = new Map(jobs.map((j) => [j.id, j]));
   const openIds = new Set(jobs.filter((j) => j.status === "pending" || j.status === "claimed").map((j) => j.id));
@@ -349,18 +365,22 @@ export function pruneJobEvents(events, now = Date.now()) {
   const tombs = settled.filter((j) => j.tombstone);
   const evictFull = new Set(); // full chain → tombstone
   const dropTomb = new Set();  // tombstone → gone (final horizon)
+  const pinnedTomb = new Set(); // tombstones pinned by an open dependent: never dropped (review r4 P1-1)
   let surplusFull = full.length - BOARD_MAX_SETTLED_JOBS;
   for (const job of full) {
     if (surplusFull <= 0) break;
-    if (pinnedIds.has(job.id)) continue; // a live dependent still needs the record
     if (job.delivery && !job.delivery.delivered) continue; // an unacknowledged delivery keeps its chain
+    // A live dependent needs only the completed OUTCOME fact, which the
+    // tombstone preserves (r4 P1-1): pinned settled dependencies compact
+    // into tombstones that are themselves never dropped.
+    if (pinnedIds.has(job.id)) pinnedTomb.add(job.id);
     evictFull.add(job.id);
     surplusFull -= 1;
   }
   let surplusTomb = tombs.length - BOARD_MAX_TOMBSTONES;
   for (const job of tombs) {
     if (surplusTomb <= 0) break;
-    if (pinnedIds.has(job.id)) continue;
+    if (pinnedIds.has(job.id) || pinnedTomb.has(job.id)) continue; // dependency-pinned tombstones: never dropped
     if (job.delivery && !job.delivery.delivered) continue;
     dropTomb.add(job.id);
     surplusTomb -= 1;
@@ -374,11 +394,12 @@ export function pruneJobEvents(events, now = Date.now()) {
   // Byte authority: the count cap alone can exceed the memory per-value cap
   // (settled jobs carry up to BOARD_MAX_RESULT of result text each).
   while (eventsBytes(out) > BOARD_MAX_LOG_BYTES) {
-    const nextFull = full.find((j) => !evictFull.has(j.id) && !pinnedIds.has(j.id) && !(j.delivery && !j.delivery.delivered));
+    const nextFull = full.find((j) => !evictFull.has(j.id) && !(j.delivery && !j.delivery.delivered));
     if (nextFull) {
+      if (pinnedIds.has(nextFull.id)) pinnedTomb.add(nextFull.id); // compacted pinned deps stay pinned as tombstones
       evictFull.add(nextFull.id);
     } else {
-      const nextTomb = tombs.find((j) => !dropTomb.has(j.id) && !pinnedIds.has(j.id) && !(j.delivery && !j.delivery.delivered));
+      const nextTomb = tombs.find((j) => !dropTomb.has(j.id) && !pinnedIds.has(j.id) && !pinnedTomb.has(j.id) && !(j.delivery && !j.delivery.delivered));
       if (!nextTomb) break; // everything left is open, pinned, or undelivered — the post gate owns this
       dropTomb.add(nextTomb.id);
     }
@@ -697,7 +718,7 @@ export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => 
  * authority seam: it maps the route CONTEXT (never model args) to the caller
  * identity (a named agent's id from the live run registry, else the hub).
  */
-export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCaller, resolvePosterThreadId, commitThread, broadcast, now }) {
+export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCaller, resolvePosterThreadId, commitThread, broadcast, now, onPendingDelivery = null }) {
   // The store owns delivery (review r2 P1-3): commitThread rides into the
   // board so settlement + pending-delivery persist together and the ACK
   // waits on the idempotent thread commit.
@@ -772,6 +793,11 @@ export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCa
       if (caller.denial) return caller.denial;
       const r = await board.settleJob({ callerId: caller.callerId, jobId, result, outcome: "completed" });
       if (r.settled) fire({ type: "board-job-completed", jobId, posterId: r.job.posterId, claimantId: caller.callerId });
+      // A live settlement that creates a pending delivery kicks the drain
+      // scheduler NOW (review r4 P2) — previously only SW startup or the
+      // drain's own alarm ran it, so a mid-session failure stalled delivery
+      // until the next restart.
+      if (r.code === "board-delivery") onPendingDelivery?.();
       return r;
     }),
     "board.fail": guarded(async ({ jobId, result }, context) => {
@@ -779,6 +805,7 @@ export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCa
       if (caller.denial) return caller.denial;
       const r = await board.settleJob({ callerId: caller.callerId, jobId, result, outcome: "failed" });
       if (r.settled) fire({ type: "board-job-failed", jobId, posterId: r.job.posterId, claimantId: caller.callerId });
+      if (r.code === "board-delivery") onPendingDelivery?.();
       return r;
     }),
     "board.heartbeat": guarded(async ({ jobId }, context) => {

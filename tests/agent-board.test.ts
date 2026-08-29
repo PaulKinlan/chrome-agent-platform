@@ -894,3 +894,108 @@ Deno.test("board store: drainDeliveries reports delivered + remaining for the re
   assertEquals(second.delivered, 1);
   assertEquals(second.remaining, 0);
 });
+
+// ── review round-4 battery (P1-1 blockedBy-pinned tombstone compaction,
+//    P1-2 claim-churn compaction, P2 live-settle drain kick) ─────────────────
+
+// (P1-1) A settled job an OPEN child still references in blockedBy keeps its
+// full record today (prune pins it) — sustained blocked-by pressure therefore
+// wedges the log past the byte budget with nothing prune can drop. The fix:
+// pinned settled dependencies COMPACT INTO TOMBSTONES (the child only needs
+// the completed outcome fact), and those tombstones are themselves never
+// dropped while a dependent is open.
+Deno.test("board prune: blockedBy-pinned settled dependencies compact to tombstones that are never dropped", async () => {
+  const memory = mockMemory();
+  const board = createAgentBoard({ memory });
+  // 40 threadless parents settled with max-size results: pinned-full alone
+  // (~40 × 6.6KB) exceeds the log budget once every parent is settled.
+  const parents = [];
+  for (let i = 0; i < 40; i += 1) {
+    // Posts stay SMALL (the post gate refuses near the budget); the pressure
+    // comes from the SETTLE events' max-size results, which pile onto the
+    // pinned full records that prune refuses to compact (on the unfixed base).
+    const posted = await board.postJob({ callerId: BOARD_HUB_ID, agents: AGENTS, description: "p".repeat(200) });
+    assertEquals(posted.ok, true);
+    await board.claimJob({ callerId: "critic", agents: AGENTS, jobId: posted.job.id });
+    await board.settleJob({ callerId: "critic", agents: AGENTS, jobId: posted.job.id, result: "r".repeat(BOARD_MAX_RESULT) });
+    parents.push(posted.job.id);
+  }
+  // 40 open children, each blockedBy exactly one parent: ALL 40 parents are
+  // pinned from this point on — BEFORE the settling pressure piles on.
+  for (const parent of parents) {
+    const posted = await board.postJob({ callerId: BOARD_HUB_ID, agents: AGENTS, description: "c".repeat(BOARD_MAX_DESCRIPTION), blockedBy: [parent] });
+    assertEquals(posted.ok, true);
+  }
+  // NOW the settle wave: every settle appends a max-size result onto a
+  // PINNED full record that prune must not drop on the unfixed base.
+  for (const id of parents) {
+    const job = await board.getJob(id);
+    await board.claimJob({ callerId: "critic", agents: AGENTS, jobId: id });
+    await board.settleJob({ callerId: "critic", agents: AGENTS, jobId: id, result: "r".repeat(BOARD_MAX_RESULT) });
+  }
+  // Churn saves (each post/settle re-pruned) then read back through the store.
+  const bytes = new TextEncoder().encode(JSON.stringify(memory._map.get(BOARD_JOBS_KEY))).length;
+  assert(bytes <= BOARD_MAX_LOG_BYTES, `prune left ${bytes}B over the ${BOARD_MAX_LOG_BYTES}B budget — pinned settled dependencies must compact to tombstones`);
+  // The completed outcome fact survives for every pinned dependency, and the
+  // compacted tombstones are never dropped under repeated pruning.
+  for (const parent of parents) {
+    const job = await board.getJob(parent);
+    assert(job, `pinned parent ${parent} was dropped entirely`);
+    assertEquals(job.status, "completed");
+  }
+  const tombs = (memory._map.get(BOARD_JOBS_KEY) ?? []).filter((ev: any) => ev?.type === "settled-tombstone").length;
+  assert(tombs >= parents.length, `expected pinned tombstones for every parent (got ${tombs})`);
+});
+
+// (P1-2) Claim churn is bounded: superseded/expired claim generations are
+// compacted — only the latest authoritative claimed generation survives (the
+// fold replaces claimant + lease wholesale, exactly the heartbeat argument).
+Deno.test("board prune: claim churn on one open job compacts superseded claim generations", async () => {
+  const memory = mockMemory();
+  let fakeNow = 1_700_000_000_000;
+  const board = createAgentBoard({ memory, now: () => fakeNow });
+  const posted = await board.postJob({ callerId: BOARD_HUB_ID, agents: AGENTS, description: "churn me" });
+  const jobId = posted.job.id;
+  // 3,000 claim -> lease-expiry cycles on ONE open job (the coordinator probe:
+  // 3,000 claimed events, 389,513B — 2x the budget).
+  for (let i = 0; i < 3000; i += 1) {
+    fakeNow += BOARD_CLAIM_LEASE_MS + 1000; // expire the current lease
+    const claimed = await board.claimJob({ callerId: "critic", agents: AGENTS, jobId });
+    assertEquals(claimed.ok, true, `cycle ${i}`);
+  }
+  const events = memory._map.get(BOARD_JOBS_KEY) ?? [];
+  const bytes = new TextEncoder().encode(JSON.stringify(events)).length;
+  assert(bytes <= BOARD_MAX_LOG_BYTES, `claim churn left ${bytes}B over the ${BOARD_MAX_LOG_BYTES}B budget`);
+  const claimedCount = events.filter((ev: any) => ev?.type === "claimed").length;
+  assertEquals(claimedCount, 1, "only the latest authoritative claim generation survives");
+  // The job still folds to CLAIMED with the CURRENT claimant + lease.
+  const job = await board.getJob(jobId);
+  assertEquals(job?.status, "claimed");
+  assertEquals(job?.claimantId, "critic");
+  assert(Number.isFinite(job?.leaseExpiry));
+});
+
+// (P2) A live settlement that creates a pending delivery must kick the drain
+// scheduler (previously only SW startup / the drain's own alarm ran it).
+Deno.test("board routes: a settlement creating a pending delivery notifies the drain scheduler", async () => {
+  let kicks = 0;
+  const memory = mockMemory();
+  const { routes } = createAgentBoardRoutes({
+    memory,
+    withLock: (fn) => fn(),
+    listAgents: async () => AGENTS,
+    resolveCaller: () => BOARD_HUB_ID,
+    resolvePosterThreadId: async () => "thread-live",
+    commitThread: async () => { throw new Error("thread store down"); },
+    onPendingDelivery: () => { kicks += 1; },
+  });
+  const posted = await routes["board.post"]({ description: "live settle" }, {});
+  assertEquals(posted.ok, true);
+  await board_listHelper(memory);
+  const claimer = createAgentBoard({ memory, commitThread: async () => { throw new Error("down"); } });
+  const job = (await claimer.listJobs())[0];
+  await claimer.claimJob({ callerId: "critic", agents: AGENTS, jobId: job.id });
+  const settled = await routes["board.complete"]({ jobId: job.id, result: "r" }, {});
+  assertEquals(settled.code, "board-delivery");
+  assert(kicks >= 1, `the drain scheduler was not kicked by the live pending delivery (kicks=${kicks})`);
+});
