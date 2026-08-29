@@ -260,17 +260,76 @@ Deno.test("P1-b: audit fail-closed & rollback compensation on delete/clear/set f
   assert(delIoRes.error.includes("injected deletion IO error"));
 });
 
-Deno.test("P1-c: reserved sentinel slugs ('owner', 'master') are rejected before registry lookup", async () => {
-  // Even if an agent with id 'owner' existed, sentinel slug lookup is rejected
+Deno.test("P1-a: validateProfileGrants strictly validates array bounds, non-arrays, and null", () => {
+  // Array over MAX_PROFILE_GRANTS_INPUT (32) is rejected
+  const hugeGrants = Array.from({ length: 35 }, () => "profile:basic");
+  const rHuge = validateProfileGrants(hugeGrants);
+  assertEquals(rHuge.ok, false);
+  assert(rHuge.error.includes("exceeds maximum allowed length"));
+
+  // null and primitives rejected
+  assertEquals(validateProfileGrants(null).ok, false);
+  assertEquals(validateProfileGrants("profile:basic").ok, false);
+  assertEquals(validateProfileGrants(12345).ok, false);
+});
+
+Deno.test("P1-c: reserved sentinel slugs ('owner', 'master') are rejected before registry lookup across all punctuation variants", async () => {
+  // Even if an agent with id 'owner' existed, all sentinel slug variants are rejected
   await createNamedAgent({ id: "owner", name: "Owner Imposter", profileGrants: ["*"] });
+  await createNamedAgent({ id: "master", name: "Master Imposter", profileGrants: ["*"] });
 
-  const rOwner = await readAgentProfileSection("owner", "profile:basic");
-  assertEquals(rOwner.ok, false);
-  assert(rOwner.error.includes("reserved sentinel slug"));
+  const variants = [
+    "owner",
+    "Owner",
+    "OWNER",
+    "Owner!",
+    " owner ",
+    "---owner---",
+    "Master!",
+    " master ",
+    "admin",
+    "System.",
+  ];
 
-  const rMaster = await readAgentProfileSection("master", "profile:basic");
-  assertEquals(rMaster.ok, false);
-  assert(rMaster.error.includes("reserved sentinel slug"));
+  for (const v of variants) {
+    const res = await readAgentProfileSection(v, "profile:basic");
+    assertEquals(res.ok, false, `variant "${v}" must be rejected as a reserved sentinel`);
+    assert(res.error.includes("reserved sentinel slug"));
+
+    const resAll = await readAgentProfile(v);
+    assertEquals(resAll.ok, false, `variant "${v}" must be rejected as a reserved sentinel in readAgentProfile`);
+    assert(resAll.error.includes("reserved sentinel slug"));
+  }
+});
+
+Deno.test("P1-c: failed bulk setWholeProfile restores audit log snapshot leaving zero ghost audit entries", async () => {
+  await clearProfile();
+  let initialAudit = await getProfileAuditLog();
+  const initialAuditLen = initialAudit.length;
+
+  const realMem = masterMemory();
+  const failingBulkMem = {
+    ...realMem,
+    async setTrusted(key, val) {
+      if (key === "profile:education") {
+        throw new Error("injected write failure on education bulk commit");
+      }
+      return realMem.setTrusted(key, val);
+    },
+  };
+
+  const bulkPayload = {
+    "profile:basic": { firstName: "GhostBasic" },
+    "profile:education": [{ institution: "GhostCollege" }],
+  };
+
+  const res = await setWholeProfile(bulkPayload, { memory: failingBulkMem });
+  assertEquals(res.ok, false);
+  assert(res.error.includes("injected write failure"));
+
+  // Verify that the audit log was restored to its exact pre-bulk state
+  const auditAfter = await getProfileAuditLog({ memory: failingBulkMem });
+  assertEquals(auditAfter, initialAudit, "audit log must be restored to its exact pre-bulk state on failure");
 });
 
 Deno.test("P1-d: setWholeProfile rollback catches thrown errors and compensates committed writes", async () => {

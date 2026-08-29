@@ -34,6 +34,7 @@ export const MAX_SKILLS = 128;
 const MAX_CORE_ASSETS = 8;
 const MAX_CORE_ASSET_BYTES = 131072; // 128 KiB per core asset
 const MAX_PROFILE_GRANTS = 8;
+export const MAX_PROFILE_GRANTS_INPUT = 32;
 
 export const VALID_PROFILE_GRANTS = new Set([
   "profile:basic",
@@ -52,6 +53,12 @@ export const VALID_PROFILE_GRANTS = new Set([
 export function validateProfileGrants(grants) {
   if (!Array.isArray(grants)) {
     return { ok: false, error: "profileGrants must be an array of grant strings" };
+  }
+  if (grants.length > MAX_PROFILE_GRANTS_INPUT) {
+    return {
+      ok: false,
+      error: `profileGrants exceeds maximum allowed length (${grants.length} > ${MAX_PROFILE_GRANTS_INPUT})`,
+    };
   }
   const out = [];
   for (let i = 0; i < grants.length; i++) {
@@ -221,7 +228,10 @@ export async function createNamedAgent(
   const assetList = normalizeCoreAssets(coreAssets);
 
   let cleanProfileGrants = [];
-  if (profileGrants !== undefined && profileGrants !== null) {
+  if (profileGrants !== undefined) {
+    if (profileGrants === null) {
+      return { ok: false, error: "profileGrants must be an array of grant strings" };
+    }
     const validatedGrants = validateProfileGrants(profileGrants);
     if (!validatedGrants.ok) return validatedGrants;
     cleanProfileGrants = validatedGrants.grants;
@@ -298,12 +308,11 @@ export async function updateNamedAgent(id, patch = {}, { gateBeforeMutation = nu
     if (patch.coreAssets !== undefined) next.coreAssets = normalizeCoreAssets(patch.coreAssets);
     if (patch.profileGrants !== undefined) {
       if (patch.profileGrants === null) {
-        next.profileGrants = [];
-      } else {
-        const validatedGrants = validateProfileGrants(patch.profileGrants);
-        if (!validatedGrants.ok) return validatedGrants;
-        next.profileGrants = validatedGrants.grants;
+        return { ok: false, error: "profileGrants must be an array of grant strings" };
       }
+      const validatedGrants = validateProfileGrants(patch.profileGrants);
+      if (!validatedGrants.ok) return validatedGrants;
+      next.profileGrants = validatedGrants.grants;
     }
     if (patch.provider !== undefined) {
       // `null` clears the override (inherit the global); a complete config sets it.

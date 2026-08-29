@@ -14,7 +14,7 @@
 //   - Atomic bulk updates: pre-validated before mutation with rollback compensation under a single transaction lock.
 
 import { masterMemory } from "./memory.js";
-import { getNamedAgent } from "./named-agents.js";
+import { getNamedAgent, slugifyAgentId } from "./named-agents.js";
 
 export const PROFILE_SECTIONS = [
   "profile:basic",
@@ -469,7 +469,7 @@ async function readTrustedMemory(mem, key) {
 /** Internal helper to record an audit log entry. Fails closed if audit write fails. */
 async function recordAudit(mem, { action, section, actor = "owner", fields = [] }) {
   const existing = await readTrustedMemory(mem, PROFILE_AUDIT_KEY);
-  const log = Array.isArray(existing) ? existing : [];
+  const log = Array.isArray(existing) ? [...existing] : [];
   const entry = {
     id: crypto.randomUUID(),
     at: Date.now(),
@@ -636,9 +636,12 @@ export async function readAgentProfileSection(agentSlug, sectionKey, options = {
     return { ok: false, error: "readAgentProfileSection requires an agent slug string" };
   }
 
-  const slug = agentSlug.trim().toLowerCase();
-  if (RESERVED_AGENT_SLUGS.has(slug)) {
-    return { ok: false, error: `unauthorized: reserved sentinel slug "${slug}" cannot be used as an agent grant subject` };
+  const slug = slugifyAgentId(agentSlug);
+  if (!slug || RESERVED_AGENT_SLUGS.has(slug)) {
+    return {
+      ok: false,
+      error: `unauthorized: reserved sentinel slug "${slug || agentSlug}" cannot be used as an agent grant subject`,
+    };
   }
 
   const agent = await getNamedAgent(slug);
@@ -667,9 +670,12 @@ export async function readAgentProfile(agentSlug, options = {}) {
     return { ok: false, error: "readAgentProfile requires an agent slug string" };
   }
 
-  const slug = agentSlug.trim().toLowerCase();
-  if (RESERVED_AGENT_SLUGS.has(slug)) {
-    return { ok: false, error: `unauthorized: reserved sentinel slug "${slug}" cannot be used as an agent grant subject` };
+  const slug = slugifyAgentId(agentSlug);
+  if (!slug || RESERVED_AGENT_SLUGS.has(slug)) {
+    return {
+      ok: false,
+      error: `unauthorized: reserved sentinel slug "${slug || agentSlug}" cannot be used as an agent grant subject`,
+    };
   }
 
   const agent = await getNamedAgent(slug);
@@ -757,11 +763,13 @@ export async function setWholeProfile(profileObject, options = {}) {
     const snapshots = new Map();
     const committed = [];
 
-    // Capture snapshots inside the transaction lock
+    // Capture snapshots of sections AND audit log inside the single transaction lock
     for (const { section } of validatedSections) {
       const prev = await readTrustedMemory(mem, section);
-      snapshots.set(section, prev);
+      snapshots.set(section, prev != null ? structuredClone(prev) : prev);
     }
+    const rawAudit = await readTrustedMemory(mem, PROFILE_AUDIT_KEY);
+    const auditSnapshot = rawAudit != null ? structuredClone(rawAudit) : rawAudit;
 
     // Commit writes sequentially inside the transaction lock
     try {
@@ -773,7 +781,7 @@ export async function setWholeProfile(profileObject, options = {}) {
         committed.push(section);
       }
     } catch (err) {
-      // Rollback committed sections
+      // Rollback committed sections AND restore the audit log
       const rollbackErrors = [];
       for (const rolled of committed) {
         const prev = snapshots.get(rolled);
@@ -786,6 +794,17 @@ export async function setWholeProfile(profileObject, options = {}) {
         } catch (rbErr) {
           rollbackErrors.push(`rollback ${rolled}: ${rbErr?.message ?? String(rbErr)}`);
         }
+      }
+
+      // Restore audit log snapshot
+      try {
+        if (auditSnapshot !== null && auditSnapshot !== undefined) {
+          await mem.setTrusted(PROFILE_AUDIT_KEY, auditSnapshot);
+        } else {
+          await mem.delete(PROFILE_AUDIT_KEY);
+        }
+      } catch (auditRbErr) {
+        rollbackErrors.push(`audit rollback: ${auditRbErr?.message ?? String(auditRbErr)}`);
       }
 
       const baseMsg = `bulk commit failed: ${err?.message ?? String(err)}`;
@@ -807,7 +826,8 @@ export async function clearProfile(options = {}) {
     // Snapshot all sections before deleting
     const snapshots = new Map();
     for (const sec of PROFILE_SECTIONS) {
-      snapshots.set(sec, await readTrustedMemory(mem, sec));
+      const prev = await readTrustedMemory(mem, sec);
+      snapshots.set(sec, prev != null ? structuredClone(prev) : prev);
     }
 
     try {
