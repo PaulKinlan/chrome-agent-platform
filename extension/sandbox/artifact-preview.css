@@ -15,6 +15,22 @@ body {
   font: 0.875rem/1.4 system-ui, sans-serif;
 }
 
+#preview-retry {
+  display: block;
+  margin: 0 1rem 1rem;
+  font: 0.8125rem/1 system-ui, sans-serif;
+  padding: 6px 14px;
+  border: 1px solid #c9c4ba;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+
+#preview-retry:hover {
+  border-color: #0e6e63;
+  color: #0e6e63;
+}
+
 #artifact-preview-content {
   display: block;
   width: 100%;

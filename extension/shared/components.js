@@ -209,6 +209,38 @@ export function renderMarkdown(text) {
   return out.join("");
 }
 
+/**
+ * Does a tool RESULT signal failure? The tool card's status attribute is the
+ * primary signal; the result envelope is the backup for rows whose status was
+ * never propagated (older journal rows, replay). The envelope is double-wrapped
+ * ({modelContent:"{\"ok\":true,\"result\":{\"ok\":false,\"error\":…}}"}) — unwrap
+ * modelContent/result layers, bounded, and treat ok:false or a non-empty error
+ * string at ANY layer as failure. Pure; never throws.
+ */
+export function toolResultSignalsError(status, result) {
+  if (status === "error") return true;
+  let cur = result;
+  for (let depth = 0; cur != null && depth < 4; depth++) {
+    let obj = cur;
+    if (typeof cur === "string") {
+      const t = cur.trim();
+      if (!t.startsWith("{")) return false;
+      try { obj = JSON.parse(t); } catch { return false; }
+    }
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
+    if (obj.ok === false) return true;
+    if (typeof obj.error === "string" && obj.error !== "") return true;
+    // authorizes:false + requiresLiveAuthorization:true is NORMAL metadata on a
+    // SUCCESSFUL lazy-tool envelope (lazy-tool-protocol stamps it on every ok:true
+    // projection) — it only signals failure when this layer is not ok:true.
+    if (obj.requiresLiveAuthorization === true && obj.authorizes === false && obj.ok !== true) return true;
+    cur = typeof obj.modelContent === "string" ? obj.modelContent
+      : (obj.result && typeof obj.result === "object") ? obj.result
+      : (typeof obj.result === "string" ? obj.result : null);
+  }
+  return false;
+}
+
 /** Does the text look like a standalone HTML document (renderable in an iframe)? */
 export function isHtmlDocument(text) {
   const s = String(text ?? "").trim();
@@ -2513,9 +2545,9 @@ function stripToolEnvelope(value, status) {
 /** The one line a collapsed tool card shows: for a failure the actual error, for
  *  a success the short summary the caller already computed. Bounded, because
  *  this sits on one line in a transcript. */
-function toolHeadline(status, result, detail) {
-  const pick = (v) => {
-    if (v == null || v === "") return "";
+export function toolHeadline(status, result, detail) {
+  const pick = (v, depth = 0) => {
+    if (v == null || v === "" || depth > 4) return "";
     if (typeof v === "string") {
       const t = v.trim();
       if (!t.startsWith("{") && !t.startsWith("[")) return t;
@@ -2524,6 +2556,9 @@ function toolHeadline(status, result, detail) {
         if (o && typeof o === "object" && !Array.isArray(o)) {
           if (typeof o.error === "string" && o.error) return o.error;
           if (typeof o.summary === "string" && o.summary) return o.summary;
+          // Envelopes double-wrap the payload ({modelContent:"{\"result\":…}"}),
+          // so the denial text lives a layer down — descend, bounded.
+          return pick(o.modelContent, depth + 1) || pick(o.result, depth + 1);
         }
       } catch { /* not JSON — fall through */ }
       return "";
@@ -2531,10 +2566,16 @@ function toolHeadline(status, result, detail) {
     if (typeof v === "object" && !Array.isArray(v)) {
       if (typeof v.error === "string" && v.error) return v.error;
       if (typeof v.summary === "string" && v.summary) return v.summary;
+      return pick(v.modelContent, depth + 1) || pick(v.result, depth + 1);
     }
     return "";
   };
-  const text = pick(result) || pick(detail);
+  // A FAILED call headlines the ERROR, never a bare summary: the live path
+  // stores summarizeToolResult(...) in `result` (the owner's denied envelope
+  // summarizes to "done") and the raw envelope in `detail`, so on error the
+  // detail's extracted error wins; the result stays the fallback when there is
+  // no detail (replay rows store the envelope in `result` itself).
+  const text = status === "error" ? pick(detail) || pick(result) : pick(result) || pick(detail);
   if (!text) return "";
   const oneLine = text.replace(/\s+/g, " ").trim();
   return oneLine.length > 140 ? `${oneLine.slice(0, 139)}…` : oneLine;
@@ -3142,6 +3183,15 @@ class MessageBubble extends Component {
       const args = this.getAttribute("tool-args");
       const result = this.getAttribute("tool-result");
       const detail = this.getAttribute("tool-detail");
+      // A FAILED tool call must never render the generated-UI preview: the
+      // args alone carry the HTML (e.g. update_asset's content), so a denied
+      // or errored call used to mount the sandbox frame and sit forever on
+      // "Preparing restricted preview…" — a success-looking skeleton over a
+      // result that says the opposite. Detect the failure (status attribute,
+      // or the envelope's ok:false / error string, unwrapping the nested
+      // modelContent/result layers) and fall through to the structured card,
+      // which renders the error headline and opens itself.
+      const resultFailed = toolResultSignalsError(status, result);
       // The generative-UI tools (generate_ui / create_asset with type html)
       // or ANY tool outputting an HTML document render their HTML LIVE in the
       // sandboxed double-iframe, inline.
@@ -3176,7 +3226,7 @@ class MessageBubble extends Component {
         if (genHtml == null && detail != null) checkCandidate(detail);
         if (genHtml == null && args != null) checkCandidate(args);
       }
-      if (genHtml != null && (isHtmlDocument(genHtml) || name === "generate_ui")) {
+      if (!resultFailed && genHtml != null && (isHtmlDocument(genHtml) || name === "generate_ui")) {
         const rawPayload = [
           args ? `Arguments:\n${args}` : "",
           result ? `Result:\n${result}` : "",
@@ -3196,7 +3246,9 @@ class MessageBubble extends Component {
         if (!this._ttExpanded) this._ttExpanded = new Map();
         this._cardDom = buildToolCardDom({
           name,
-          status,
+          // A done/success status with a FAILED result envelope must render as
+          // the error card (open, error chip) — not a collapsed green "done".
+          status: resultFailed ? "error" : status,
           args,
           result,
           detail,
