@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.412] — 2026-08-29
+- Agents now know they run inside a Chrome extension: they're taught the real rules (fetch responses are read-once, tabs are opened with the tab tool, search once then use the tool), which stops whole classes of failed tool calls. Find-site-tools now lists only pages that genuinely have tools — never a plain page again — with tamper-proof detection. And every running task has a Stop button that stops exactly that run, instantly
+
 ## [0.2.411] — 2026-08-29
 - Fixed a regression where deleting or changing agents from Settings could stall: the confirmation flow now settles correctly, required permissions are checked before anything is torn down, and removal no longer fails on permissions the extension must always keep
 
