@@ -95,33 +95,63 @@ Deno.test("P1-a r4: array index accessor is caught by descriptor check without e
   assert(resToJSON.error.includes("toJSON property rejected on array"));
 });
 
-Deno.test("P1-b r4: export ceiling enforced on heavy JSON-escaping payloads (backslashes and NULs)", () => {
-  // 8 assets with 131,072 backslashes each (which expand to 262,144 bytes per asset in JSON)
-  const backslashAssets = Array.from({ length: MAX_CARD_CORE_ASSETS }, (_, i) => ({
-    name: `backslash-${i}.txt`,
-    type: "text/plain",
-    content: "\\".repeat(MAX_CARD_CORE_ASSET_BYTES),
-  }));
+Deno.test("P1-b r5: pseudo-index properties (e.g. arr['01']='hidden') are rejected as non-canonical array properties", () => {
+  const skillsWithPseudoIndex = ["tab-hygiene"];
+  skillsWithPseudoIndex["01"] = "hidden";
 
-  const agentWithBackslashes = {
-    name: "Backslash Agent",
-    role: "Testing JSON escaping expansion.",
-    skills: ["tab-hygiene"],
-    coreAssets: backslashAssets,
-  };
+  const res = importAgentCard({
+    version: 1,
+    name: "Pseudo Index Agent",
+    skills: skillsWithPseudoIndex,
+  });
 
-  const json = exportAgentCardJson(agentWithBackslashes);
-  const totalBytes = new TextEncoder().encode(json).byteLength;
-  assert(totalBytes <= MAX_CARD_JSON_BYTES, `exported JSON must fit within MAX_CARD_JSON_BYTES (${totalBytes} <= ${MAX_CARD_JSON_BYTES})`);
+  assertEquals(res.ok, false);
+  assert(res.error.includes("custom non-index property rejected"));
 
-  const reimported = importAgentCard(json);
-  assert(reimported.ok, `escaped export must re-import cleanly: ${!reimported.ok && reimported.error}`);
-  assertEquals(reimported.agent.coreAssets.length, MAX_CARD_CORE_ASSETS);
-  // Assert 100% content equality on re-imported assets
-  for (let i = 0; i < MAX_CARD_CORE_ASSETS; i++) {
-    const exportedAsset = JSON.parse(json).coreAssets[i];
-    assertEquals(reimported.agent.coreAssets[i].name, exportedAsset.name);
-    assertEquals(reimported.agent.coreAssets[i].content, exportedAsset.content);
+  // Non-integer and negative indices also rejected
+  const arrNegative = ["tab-hygiene"];
+  arrNegative["-1"] = "negative";
+  assertEquals(importAgentCard({ version: 1, name: "Neg", skills: arrNegative }).ok, false);
+
+  const arrFloat = ["tab-hygiene"];
+  arrFloat["1.5"] = "float";
+  assertEquals(importAgentCard({ version: 1, name: "Float", skills: arrFloat }).ok, false);
+});
+
+Deno.test("P1-a r5: pretty-printed JSON export budget enforcement on exact boundary sizes (n=131041, n=131023)", () => {
+  // Test both exact boundary sizes from reviewer probes
+  for (const n of [131041, 131023, 131072]) {
+    const assets = Array.from({ length: MAX_CARD_CORE_ASSETS }, (_, i) => ({
+      name: `asset-${i}.txt`,
+      type: "text/plain",
+      content: "\\".repeat(n),
+    }));
+
+    const agent = {
+      name: `Boundary Agent ${n}`,
+      role: "Boundary testing.",
+      skills: ["tab-hygiene"],
+      coreAssets: assets,
+    };
+
+    // Both pretty-printed export and compact export must fit within MAX_CARD_JSON_BYTES
+    const prettyJson = exportAgentCardJson(agent);
+    const prettyBytes = new TextEncoder().encode(prettyJson).byteLength;
+    assert(prettyBytes <= MAX_CARD_JSON_BYTES, `pretty JSON at n=${n} must be <= 2 MiB (${prettyBytes} <= ${MAX_CARD_JSON_BYTES})`);
+
+    const compactJson = JSON.stringify(exportAgentCard(agent));
+    const compactBytes = new TextEncoder().encode(compactJson).byteLength;
+    assert(compactBytes <= MAX_CARD_JSON_BYTES, `compact JSON at n=${n} must be <= 2 MiB (${compactBytes} <= ${MAX_CARD_JSON_BYTES})`);
+
+    // Re-importing pretty JSON must succeed and maintain 100% content equality
+    const reimported = importAgentCard(prettyJson);
+    assert(reimported.ok, `pretty export at n=${n} must re-import: ${!reimported.ok && reimported.error}`);
+    assertEquals(reimported.agent.coreAssets.length, MAX_CARD_CORE_ASSETS);
+
+    const parsed = JSON.parse(prettyJson);
+    for (let i = 0; i < MAX_CARD_CORE_ASSETS; i++) {
+      assertEquals(reimported.agent.coreAssets[i].content, parsed.coreAssets[i].content);
+    }
   }
 });
 

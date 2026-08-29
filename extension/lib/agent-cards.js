@@ -145,7 +145,12 @@ export function assertPlainDataGraph(root) {
           return { ok: false, error: `method/function rejected on array: ${prop}` };
         }
 
-        if (!/^\d+$/.test(prop)) {
+        const isCanonicalIndex = String(Number(prop)) === prop &&
+          Number.isSafeInteger(Number(prop)) &&
+          Number(prop) >= 0 &&
+          Number(prop) <= 4294967294;
+
+        if (!isCanonicalIndex) {
           return { ok: false, error: `custom non-index property rejected on array: ${prop}` };
         }
 
@@ -192,12 +197,12 @@ export function assertPlainDataGraph(root) {
 }
 
 /**
- * Ensure an exported card's serialized JSON string is within MAX_CARD_JSON_BYTES,
+ * Ensure an exported card's serialized JSON string (formatted with 2 spaces) is within MAX_CARD_JSON_BYTES,
  * reducing asset content progressively if JSON escaping expands the payload over budget.
  */
 function enforceCardJsonBudget(card, maxBytes = MAX_CARD_JSON_BYTES) {
   const encoder = new TextEncoder();
-  let jsonBytes = encoder.encode(JSON.stringify(card)).byteLength;
+  let jsonBytes = encoder.encode(JSON.stringify(card, null, 2)).byteLength;
   if (jsonBytes <= maxBytes) return card;
 
   if (Array.isArray(card.coreAssets) && card.coreAssets.length > 0) {
@@ -232,7 +237,7 @@ function enforceCardJsonBudget(card, maxBytes = MAX_CARD_JSON_BYTES) {
         reducedAny = true;
       }
 
-      jsonBytes = encoder.encode(JSON.stringify(card)).byteLength;
+      jsonBytes = encoder.encode(JSON.stringify(card, null, 2)).byteLength;
       if (!reducedAny) break;
     }
   }
