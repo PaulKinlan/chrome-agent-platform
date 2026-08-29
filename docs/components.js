@@ -23,7 +23,7 @@ import {
 } from "./agent-registry.js";
 import { parseMentionToken, parseSlashCommand } from "./command-parser.js";
 import { normalizeConversationRunStatus } from "./run-status.js";
-import { safeParse, buildTree, subtreeJson, safeJsonStringify } from "./tool-tree.js";
+import { safeParseOnce, buildTree, subtreeJson, safeJsonStringify } from "./tool-tree.js";
 // The CANONICAL secret redactor (lib/pure.js — one semantic, shared with the
 // SW write path): activity journals may predate write-path redaction, so the
 // explorer redacts again at render AND the tree/copy paths only ever see the
@@ -2542,12 +2542,43 @@ customElements.define("code-block", CodeBlock);
  * fails; depth/size bounds prevent a huge or deep payload from hanging the UI.
  * The tree is a flat row list inside one <details> per block — keyboard
  * accessible (<button> toggles + copy buttons), no emoji (SVG caret). */
+/** Consume a lazy result's bounded selected-tool output contract. Schema
+ * metadata is not user output; a matching declared container may decode one
+ * JSON-string layer. Legacy/direct results use the generic tree path below. */
+function schemaAllowsContainer(schema, value, depth = 0) {
+  if (!schema || typeof schema !== "object" || depth > 4) return false;
+  const kind = Array.isArray(value) ? "array" : "object";
+  if (schema.type === kind || (Array.isArray(schema.type) && schema.type.includes(kind))) return true;
+  if (schema["x-cap-output-shape"] === "generic-json-value") return true;
+  for (const branch of [schema.oneOf, schema.anyOf, schema.allOf]) {
+    if (Array.isArray(branch) && branch.some((entry) => schemaAllowsContainer(entry, value, depth + 1))) return true;
+  }
+  return false;
+}
+
+function schemaAwareToolPayload(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      typeof value.schemaSummary !== "string") return value;
+  const schema = safeParseOnce(value.schemaSummary);
+  if (schema.kind !== "json" || !schema.value || typeof schema.value !== "object") return value;
+  const shown = {};
+  for (const [key, field] of Object.entries(value)) {
+    if (key !== "schemaSummary") shown[key] = field;
+  }
+  if (typeof shown.result === "string") {
+    const decoded = safeParseOnce(shown.result);
+    if (decoded.kind === "json" && schemaAllowsContainer(schema.value, decoded.value)) shown.result = decoded.value;
+  }
+  return shown;
+}
+
 /** Remove the parts of a tool payload the card already communicates, so the tree
  *  shows the ANSWER rather than the envelope around it. `ok` is the status chip;
  *  `summary`/`error` are the collapsed headline. Returns undefined when nothing
  *  substantive is left, so the block is skipped entirely rather than rendering
  *  an empty tree. */
 function stripToolEnvelope(value, status) {
+  value = schemaAwareToolPayload(value);
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const drop = new Set(["ok", "summary", "error"]);
   const kept = {};
@@ -2558,13 +2589,17 @@ function stripToolEnvelope(value, status) {
     keptCount += 1;
   }
   if (keptCount === 0) return undefined;
-  // A single remaining wrapper key adds a level of nesting for nothing: a
-  // result of {tabs:[...]} reads better as the tabs themselves, labelled by the
-  // block. Only unwrap when the value is itself a container.
+  // A single remaining wrapper key adds a level of nesting for nothing. Decode
+  // at most one bounded JSON-string layer too, covering modelContent wrappers
+  // without turning prose, malformed JSON, or oversized strings into a tree.
   const keys = Object.keys(kept);
   if (keys.length === 1) {
     const only = kept[keys[0]];
     if (only && typeof only === "object") return only;
+    if (typeof only === "string") {
+      const decoded = safeParseOnce(only);
+      if (decoded.kind === "json") return decoded.value;
+    }
   }
   return kept;
 }
@@ -2956,7 +2991,7 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
   // argument interpolation, never a broken card.
   let what = "";
   try {
-    const parsedArgs = args != null && args !== "" ? safeParse(args) : null;
+    const parsedArgs = args != null && args !== "" ? safeParseOnce(args) : null;
     what = describeToolCall(name, parsedArgs && parsedArgs.kind === "json" ? parsedArgs.value : args);
   } catch { what = ""; }
   if (what) {
@@ -2988,7 +3023,7 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
 
   const addBlock = (label, raw) => {
     if (raw == null || raw === "") return;
-    const parsed = safeParse(raw);
+    const parsed = safeParseOnce(raw);
     if (parsed.kind === "json") {
       // Strip the protocol envelope before rendering
       // (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01). `ok:true` is already said by
@@ -3011,8 +3046,8 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
 
   addBlock("inputs", args);
 
-  const resultParsed = result != null && result !== "" ? safeParse(result) : null;
-  const detailParsed = detail != null && detail !== "" ? safeParse(detail) : null;
+  const resultParsed = result != null && result !== "" ? safeParseOnce(result) : null;
+  const detailParsed = detail != null && detail !== "" ? safeParseOnce(detail) : null;
 
   if (resultParsed && resultParsed.kind === "json") {
     // result itself is structured JSON -> render as "result" tree block.
@@ -3036,13 +3071,13 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
       addBlock("detail", detail);
     }
   } else if (detailParsed && detailParsed.kind === "json") {
-    // detail is structured JSON and result is a readable summary text
-    // The summary already IS the collapsed headline — repeating it here was
-    // the same sentence twice on every card.
-    const tree = buildTree(detailParsed.value);
+    // The live event path stores the raw lazy envelope in detail, so consume
+    // its selected output schema exactly as the direct/replay branch does.
+    const shownDetail = stripToolEnvelope(detailParsed.value, status);
+    const tree = shownDetail === undefined ? { rows: [], maxNodes: 0 } : buildTree(shownDetail);
     if (tree.rows.length >= 1) {
-      body.appendChild(buildToolTreeBlock("result", detailParsed.value, tree.rows, tree.maxNodes, expandedState));
-    } else {
+      body.appendChild(buildToolTreeBlock("result", shownDetail, tree.rows, tree.maxNodes, expandedState));
+    } else if (shownDetail !== undefined) {
       const div = document.createElement("div");
       div.className = "tool-plain tool-plain-result";
       div.textContent = String(detailParsed.value ?? detail ?? "");
@@ -3448,6 +3483,13 @@ function applyInlineCitations(bubble, citations) {
 // meaningful boundary (the task started, then a gap, then it finished); the
 // rapid thinking/tool messages in between stay unmarked.
 export const TS_GAP_MS = 5 * 60 * 1000;
+
+/** Preserve prose while carrying structured tool payloads through DOM attributes. */
+export function toolPayloadAttribute(value) {
+  if (value == null) return null;
+  return typeof value === "string" ? value : safeJsonStringify(value);
+}
+
 export function formatTsLabel(ts) {
   if (!Number.isFinite(ts)) return "";
   const d = new Date(ts);
@@ -3555,7 +3597,9 @@ class AgentConversation extends Component {
         name: `provider:${ev?.kind ?? "server-tool"}`,
         status: "done",
         args: { query },
-        result: "Executed by the provider (server-side) — sources below.",
+        // Provider-executed Gemini google_search and Anthropic web_search rows
+        // use the same JSON tree as client tools; source links remain below.
+        result: ev,
       });
     }
     if (citations.length > 0) {
@@ -3618,8 +3662,8 @@ class AgentConversation extends Component {
   appendTool(m = {}) {
     // Accept both the imperative {name,args,status,result,detail} and the
     // message object {tool-name,tool-status,tool-args,tool-result,tool-detail}
-    // conventions. The CALLER is responsible for passing a readable `result`
-    // summary (see lib/tool-summary.js) + the raw `detail` (shown on expand).
+    // conventions. Strings stay strings so prose remains prose; structured
+    // values become valid JSON attributes for the shared tree renderer.
     // `ts` (optional) participates in the subtle timestamp-gap divider.
     const name = m.name ?? m["tool-name"];
     const status = m.status ?? m["tool-status"];
@@ -3631,9 +3675,9 @@ class AgentConversation extends Component {
     return this._bubble("tool", null, {
       "tool-name": name,
       "tool-status": status || "running",
-      "tool-args": args != null ? (typeof args === "string" ? args : safeJsonStringify(args)) : null,
-      "tool-result": result != null ? String(result) : null,
-      "tool-detail": detail != null ? String(detail) : null,
+      "tool-args": toolPayloadAttribute(args),
+      "tool-result": toolPayloadAttribute(result),
+      "tool-detail": toolPayloadAttribute(detail),
       "tool-duration": durationMs != null ? String(durationMs) : null,
     });
   }
@@ -6531,7 +6575,7 @@ function activityText(e) {
       // the collapsed row either.
       const preview = (() => {
         if (!e.args) return "";
-        const p = safeParse(e.args);
+        const p = safeParseOnce(e.args);
         if (p.kind !== "json") return e.args;
         try { return safeJsonStringify(redactSecrets(p.value), { maxBytes: 256, maxNodes: 24 }); }
         catch { return ""; }
@@ -6892,7 +6936,7 @@ class ActivityExplorer extends Component {
     const addBlock = (label, raw) => {
       if (raw == null || raw === "") return;
       any = true;
-      const parsed = safeParse(raw);
+      const parsed = safeParseOnce(raw);
       if (parsed.kind === "json") {
         // Historical journal rows may predate write-path redaction — redact
         // AGAIN at render with the canonical redactor so a secret never

@@ -15,6 +15,7 @@ function fakeElement(tag) {
     children: [],
     attributes: new Map(),
     listeners: new Map(),
+    dataset: {},
     parentNode: null,
     appendChild(child) { this.children.push(child); child.parentNode = this; return child; },
     addEventListener(type, fn) {
@@ -54,12 +55,17 @@ globalThis.document = {
   execCommand: () => false,
 };
 
-let cachedBuildToolCardDom = null;
+let cachedComponents = null;
+async function loadComponents() {
+  if (!cachedComponents) cachedComponents = await import("../extension/shared/components.js");
+  return cachedComponents;
+}
 async function loadBuildToolCardDom() {
-  if (cachedBuildToolCardDom) return cachedBuildToolCardDom;
-  const mod = await import("../extension/shared/components.js");
-  cachedBuildToolCardDom = mod.buildToolCardDom;
-  return cachedBuildToolCardDom;
+  return (await loadComponents()).buildToolCardDom;
+}
+
+function descendants(el) {
+  return [el, ...(el.children ?? []).flatMap(descendants)];
 }
 
 Deno.test("toolcalls-collapsed: the tool card renders COLLAPSED by default — name + status summary only", async () => {
@@ -88,6 +94,115 @@ Deno.test("toolcalls-collapsed: the args/result live in the body, NOT the summar
   const body = card.children[1];
   assertEquals(body.className, "tool-body");
   assert(body.children.length >= 1, "the result block is in the body");
+});
+
+Deno.test("toolcalls-collapsed: a JSON-string result uses the structured tree", async () => {
+  const buildToolCardDom = await loadBuildToolCardDom();
+  const card = buildToolCardDom({ name: "list_tabs", status: "done", args: null, result: '{"tabs":[{"title":"Docs"}]}', detail: null, duration: null, expandedState: new Map() });
+  const body = card.children[1];
+  assert(body.children.some((c) => c.className === "tt-block"), "JSON-looking string renders through the tree viewer");
+  assert(descendants(body).some((c) => c.className === "tt-key" && c.textContent === "title"), "decoded JSON keys are rows, not escaped text");
+});
+
+Deno.test("toolcalls-collapsed: prose and invalid JSON stay readable plain text", async () => {
+  const buildToolCardDom = await loadBuildToolCardDom();
+  for (const result of ["completed normally", '{"broken":']) {
+    const card = buildToolCardDom({ name: "note", status: "done", args: null, result, detail: null, duration: null, expandedState: new Map() });
+    const plain = card.children[1].children.find((c) => c.className === "tool-plain tool-plain-result");
+    assertEquals(plain?.textContent, result);
+  }
+});
+
+Deno.test("toolcalls-collapsed: an object result survives the attribute boundary and uses the tree", async () => {
+  const { buildToolCardDom, toolPayloadAttribute } = await loadComponents();
+  const result = toolPayloadAttribute({ tabs: [{ title: "Docs" }] });
+  assertEquals(result, '{"tabs":[{"title":"Docs"}]}', "object is serialized once, never String(object)");
+  const card = buildToolCardDom({ name: "list_tabs", status: "done", args: null, result, detail: null, duration: null, expandedState: new Map() });
+  assert(card.children[1].children.some((c) => c.className === "tt-block"), "serialized object renders through the tree viewer");
+});
+
+Deno.test("toolcalls-collapsed: an oversized JSON probe safely falls back to text", async () => {
+  const buildToolCardDom = await loadBuildToolCardDom();
+  const result = JSON.stringify(["x".repeat(64 * 1024)]);
+  const card = buildToolCardDom({ name: "large", status: "done", args: null, result, detail: null, duration: null, expandedState: new Map() });
+  const plain = card.children[1].children.find((c) => c.className === "tool-plain tool-plain-result");
+  assertEquals(plain?.textContent, result, "oversized JSON is not parsed but remains readable");
+});
+
+Deno.test("toolcalls-collapsed: one modelContent JSON-string layer unwraps into tree rows", async () => {
+  const buildToolCardDom = await loadBuildToolCardDom();
+  const result = JSON.stringify({ modelContent: JSON.stringify({ ok: true, tabs: [{ title: "Docs" }] }) });
+  const card = buildToolCardDom({ name: "list_tabs", status: "done", args: null, result, detail: null, duration: null, expandedState: new Map() });
+  const body = card.children[1];
+  assert(body.children.some((c) => c.className === "tt-block"));
+  assert(descendants(body).some((c) => c.className === "tt-key" && c.textContent === "title"));
+  assert(!descendants(body).some((c) => c.className === "tt-key" && c.textContent === "modelContent"));
+});
+
+Deno.test("toolcalls-collapsed: a normal double-wrapped result stays text", async () => {
+  const buildToolCardDom = await loadBuildToolCardDom();
+  const result = JSON.stringify(JSON.stringify({ a: 1 }));
+  const card = buildToolCardDom({ name: "wrapped", status: "done", args: null, result, detail: null, duration: null, expandedState: new Map() });
+  const body = card.children[1];
+  assert(!body.children.some((c) => c.className === "tt-block"));
+  const plain = body.children.find((c) => c.className === "tool-plain tool-plain-result");
+  assertEquals(plain?.textContent, JSON.stringify({ a: 1 }), "only the outer encoding layer is decoded");
+});
+
+Deno.test("toolcalls-collapsed: a second modelContent encoding layer stays text", async () => {
+  const buildToolCardDom = await loadBuildToolCardDom();
+  const result = JSON.stringify({ modelContent: JSON.stringify(JSON.stringify({ a: 1 })) });
+  const card = buildToolCardDom({ name: "wrapped", status: "done", args: null, result, detail: null, duration: null, expandedState: new Map() });
+  const body = card.children[1];
+  assert(descendants(body).some((c) => c.className === "tt-key" && c.textContent === "modelContent"));
+  assert(descendants(body).some((c) => c.className === "tt-val tt-val-string"), "the second encoded layer remains a string leaf");
+  assert(!descendants(body).some((c) => c.className === "tt-key" && c.textContent === "a"));
+});
+
+Deno.test("toolcalls-collapsed: a second schema-wrapped result encoding layer stays text", async () => {
+  const buildToolCardDom = await loadBuildToolCardDom();
+  const detail = JSON.stringify({
+    ok: true,
+    selectedTool: "list_assets",
+    result: JSON.stringify(JSON.stringify({ a: 1 })),
+    schemaSummary: JSON.stringify({ type: "object" }),
+  });
+  const card = buildToolCardDom({ name: "execute_tool", status: "done", args: null, result: "done", detail, duration: null, expandedState: new Map() });
+  const body = card.children[1];
+  assert(descendants(body).some((c) => c.className === "tt-key" && c.textContent === "result"));
+  assert(descendants(body).some((c) => c.className === "tt-val tt-val-string"));
+  assert(!descendants(body).some((c) => c.className === "tt-key" && c.textContent === "a"));
+});
+
+Deno.test("toolcalls-collapsed: live execute detail consumes its output schema and decodes the selected result", async () => {
+  const buildToolCardDom = await loadBuildToolCardDom();
+  const detail = JSON.stringify({
+    ok: true,
+    selectedTool: "list_assets",
+    result: JSON.stringify({ assets: [{ id: "asset-1", name: "Notes" }] }),
+    schemaSummary: JSON.stringify({ type: "object" }),
+  });
+  const card = buildToolCardDom({ name: "execute_tool", status: "done", args: null, result: "Found 1 artifact", detail, duration: null, expandedState: new Map() });
+  const body = card.children[1];
+  assert(descendants(body).some((c) => c.className === "tt-key" && c.textContent === "assets"));
+  assert(!descendants(body).some((c) => c.className === "tt-key" && c.textContent === "schemaSummary"));
+});
+
+Deno.test("toolcalls-collapsed: Gemini and Anthropic server-search events remain JSON tool results", async () => {
+  await loadComponents();
+  const Conversation = customElements.get("agent-conversation");
+  const calls = [];
+  const conversation = Object.create(Conversation.prototype);
+  conversation.appendTool = (value) => calls.push(value);
+  conversation.appendServerToolRows({ serverToolEvents: [
+    { kind: "google_search", query: "current Chrome release" },
+    { kind: "web_search", query: "Anthropic release notes" },
+  ] });
+  assertEquals(calls.map((call) => call.name), ["provider:google_search", "provider:web_search"]);
+  assertEquals(calls.map((call) => call.result), [
+    { kind: "google_search", query: "current Chrome release" },
+    { kind: "web_search", query: "Anthropic release notes" },
+  ]);
 });
 
 Deno.test("toolcalls-collapsed: cardExpanded:true renders open; the toggle reports the per-card open state", async () => {

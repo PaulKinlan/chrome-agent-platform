@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.407] — 2026-08-29
+- Tool results now show structured data in the JSON tree everywhere, including wrapped results and provider web searches, while prose and oversized or malformed payloads keep a safe text fallback
+
 ## [0.2.406] — 2026-08-29
 - Scheduled agents now keep their conversation: when a background agent runs on its timer, the work it did shows up in that agent's chat — previously it vanished
 

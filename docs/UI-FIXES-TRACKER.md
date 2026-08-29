@@ -42,6 +42,22 @@ one line each here:
 
 ## Open
 
+### JSON tool results rendered as plain text (2026-08-29 — in review)
+- The shared tool-card boundary now preserves prose strings but serializes object/array
+  results and details once, so live, replayed and assembled turns all reach the existing
+  structured tree rather than rendering `[object Object]`.
+- Strings that begin with `{` or `[` parse into the same tree within a 64 KiB probe
+  budget; invalid, prose and oversized strings retain the readable text fallback.
+- Every catalog descriptor now exposes a bounded output schema summary. Exact tool-id
+  registry entries cover the lazy protocol, artifact family, Gemini `google_search` and
+  Anthropic `web_search`; legacy tools use a generic JSON-value schema until the
+  follow-up return-shape audit extends the registry.
+- The lazy result envelope transports the selected schema for the renderer to consume;
+  one bounded string-encoded JSON layer is unwrapped, including `modelContent` wrappers.
+  Provider-server search events now use the same JSON tree.
+- Focused object/string/prose/invalid/oversized/schema/provider coverage added under
+  `CAP-FB-20260829-TOOL-RESULT-JSON-01`; independent review remains required.
+
 ### Create-agent dialog clutter and inconsistent controls (2026-08-29 — implementation)
 - Keep only Name and What it does on the primary path; avatar, templates, persona tools,
   skills, schedule, delegation and context files remain reachable under one collapsed

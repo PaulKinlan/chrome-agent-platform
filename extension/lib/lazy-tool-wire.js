@@ -7,7 +7,7 @@
 import { TOOL_SEARCH_BOUNDS } from "./tool-search.js";
 import { selectedCapabilitySummary } from "./chrome-tool-capabilities.js";
 import { TOOL_CATALOG_BOUNDS } from "./tool-catalog.js";
-import { toolArgumentContract } from "./tool-argument-contract.js";
+import { toolArgumentContract, toolOutputSchema } from "./tool-argument-contract.js";
 
 function ownData(value, key) {
   try {
@@ -37,6 +37,7 @@ export const LAZY_PROTOCOL_TOOL_WIRE = Object.freeze([
         }),
       }),
     }),
+    outputSchema: toolOutputSchema("search_tools"),
   }),
   Object.freeze({
     name: "list_tools",
@@ -52,6 +53,7 @@ export const LAZY_PROTOCOL_TOOL_WIRE = Object.freeze([
         }),
       }),
     }),
+    outputSchema: toolOutputSchema("list_tools"),
   }),
   Object.freeze({
     name: "execute_tool",
@@ -73,6 +75,7 @@ export const LAZY_PROTOCOL_TOOL_WIRE = Object.freeze([
         }),
       }),
     }),
+    outputSchema: toolOutputSchema("execute_tool"),
   }),
 ]);
 
@@ -107,6 +110,7 @@ export function buildLazyProviderCapture(searchResult, options = {}) {
       name: ownData(result, "name"),
       summary: ownData(result, "summary"),
       schemaSummary: ownData(result, "schemaSummary"),
+      outputSchemaSummary: ownData(result, "outputSchemaSummary"),
       sourceKind: ownData(result, "sourceKind"),
       packageId: ownData(result, "packageId"),
       version: ownData(result, "version"),

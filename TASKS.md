@@ -160,7 +160,7 @@ On resume after a coordinator or worker loss:
 
 ## Open work queue
 
-**This file holds only what is in progress or still to do — 39 entries.** Completed work is archived in [TASKS-DONE.md](TASKS-DONE.md) at triage; **merged is done** (Paul, 2026-08-28), so nothing sits in a terminal state here. Most urgent first (regenerated 2026-08-28). The entry itself is always the authority; where it disagrees with this table, the entry wins.
+**This file holds only what is in progress or still to do — 40 entries.** Completed work is archived in [TASKS-DONE.md](TASKS-DONE.md) at triage; **merged is done** (Paul, 2026-08-28), so nothing sits in a terminal state here. Most urgent first (regenerated 2026-08-28). The entry itself is always the authority; where it disagrees with this table, the entry wins.
 
 Regenerate after any status change (this exact command reproduces the table below):
 
@@ -173,6 +173,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P0 | IN_REVIEW | [`CAP-FB-20260829-MIC-DEAD-MACOS-01`](#cap-fb-20260829-mic-dead-macos-01-mic-button-is-completely-dead-on-macos-after-the-waveform-change) | Mic button is completely dead on macOS after the waveform change |
 | P0 | DONE | [`CAP-FB-20260829-MAIN-GATES-RED-03`](#cap-fb-20260829-main-gates-red-03-the-journey-suite-is-red-on-main-49-checks-still-assert-the-pre-p0-all-optional-permission-model) | Journey suite red on main — 49 checks assert the pre-P0 permission model |
 | P0 | IN_REVIEW | [`CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01`](#cap-fb-20260829-tool-argument-robustness-01-tool-call-argument-robustness-and-schema-accuracy) | Tool-call argument robustness and schema accuracy |
+| P1 | IN_REVIEW | [`CAP-FB-20260829-TOOL-RESULT-JSON-01`](#cap-fb-20260829-tool-result-json-01-json-tool-results-use-the-structured-viewer-everywhere) | JSON tool results use the structured viewer everywhere |
 | P1 | DONE | [`CAP-FB-20260829-AGENT-BOARD-01`](#cap-fb-20260829-agent-board-01-the-shared-jobs-board-agents-post-and-claim-work) | The shared jobs board — agents post and claim work |
 | P1 | IN_REVIEW | [`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`](#cap-fb-20260829-create-dialog-declutter-01-create-agent-dialog-is-cluttered-and-its-scheduletheme-controls-are-inconsistent) | Create-agent dialog is cluttered and its schedule/theme controls are inconsistent |
 | P0 | OPEN | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
@@ -230,6 +231,30 @@ evidence every other task depends on).
 
 
 ## Active
+
+## [CAP-FB-20260829-TOOL-RESULT-JSON-01] JSON tool results use the structured viewer everywhere
+
+- Feedback: 2026-08-29 — owner reported clearly-JSON tool outputs rendering as plain text and asked for the existing structured/pretty JSON treatment everywhere
+- Updated: 2026-08-29 23:06 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P1
+- Owner: implementation lane
+- Workspace: active (local path private)
+- Branch: `cap-json-render`
+- Base: `origin/main@cebb4601`
+- Candidate: branch tip (one atomic commit; not pushed)
+- Shipping: —
+- Acceptance: every tool result that is an object or a bounded string beginning with `{` or `[` and parsing cleanly renders through the shared structured tree; prose, invalid JSON and oversized parse probes remain readable plain text; structured payloads are serialized once rather than becoming `[object Object]` or escaped JSON strings; every catalog descriptor exposes a bounded output schema summary, with exact registry contracts for lazy protocol, artifact and provider-search tools; the renderer consumes the selected schema and unwraps one bounded string-encoded JSON layer; Gemini `google_search` and Anthropic `web_search` events render as JSON
+- Review: independent acceptance review required
+- Gates: focused result-rendering tests; changed assertions RED on the unfixed product and GREEN after; full `nice -n 10 deno test --allow-all tests/`; `npm run build`
+- Blockers: independent review and coordinator integration
+- Next: review the candidate diff, then merge and run the same gates at the integration tip
+- Recover: `git log --oneline origin/main..cap-json-render`
+- History:
+  - 2026-08-29 23:06 UTC — independent review found the one-layer claim was not enforced and the 64 KiB cap counted UTF-16 code units. Added a strict one-parse renderer path, UTF-8 byte accounting, and second-layer-stays-text regressions; final gates pending. No push.
+  - 2026-08-29 22:22 UTC — added bounded output schemas to every catalog descriptor, an exact tool-id registry for lazy/artifact/provider-search families, schema transport through `execute_tool`, one-layer string-encoded JSON normalization, and JSON provider-server search rows. Exact schemas for remaining legacy tools are a documented follow-up audit. No push.
+  - 2026-08-29 21:59 UTC — normalized structured values at the shared `appendTool` attribute boundary, retained prose unchanged, bounded JSON-string probes at 64 KiB, and added focused object/string/prose/invalid/oversized rendering coverage. No push.
 
 ## [CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01] Tool-call argument robustness and schema accuracy
 

@@ -7,7 +7,7 @@
 // dispatch and after dispatch; the existing source closure remains the only
 // permission/grant/cancellation/replay authority.
 
-import { tool } from "ai";
+import { jsonSchema, tool } from "ai";
 import { z } from "zod";
 import {
   adaptBrowserTools,
@@ -634,6 +634,7 @@ export class LazyToolProtocol {
         availability: desc.availability ?? "ready",
         sourceKind: desc.sourceKind ?? "extension-builtin",
         schemaSummary: truncateUtf8(String(desc.schemaSummary ?? ""), 4096),
+        outputSchemaSummary: truncateUtf8(String(desc.outputSchemaSummary ?? ""), 4096),
       };
 
       const entryBytes = utf8ByteLength(JSON.stringify(entry));
@@ -817,6 +818,9 @@ export class LazyToolProtocol {
       ok: true,
       selectedTool: afterResolved.descriptor.name,
       result: projectResult(rawResult),
+      // Renderer-only metadata: the UI consumes this bounded selected-tool
+      // contract and does not display it as part of the result tree.
+      schemaSummary: afterResolved.descriptor.outputSchemaSummary,
       selectionRef,
       authorizes: false,
       requiresLiveAuthorization: true,
@@ -1090,6 +1094,7 @@ export function createLazyProviderToolset({
         query: z.string().max(512),
         limit: z.number().int().min(1).max(12).optional(),
       }).strict(),
+      outputSchema: jsonSchema(LAZY_PROTOCOL_TOOL_WIRE[0].outputSchema),
       execute: async (request) => {
         const context = await readContext();
         return context
@@ -1102,6 +1107,7 @@ export function createLazyProviderToolset({
       inputSchema: z.object({
         source: z.string().optional(),
       }).strict(),
+      outputSchema: jsonSchema(LAZY_PROTOCOL_TOOL_WIRE[1].outputSchema),
       execute: async (request) => {
         const context = await readContext();
         return context
@@ -1115,6 +1121,7 @@ export function createLazyProviderToolset({
         selectionRef: z.string().regex(/^sel_[a-f0-9]{36}$/u),
         arguments: z.record(z.unknown()),
       }).strict(),
+      outputSchema: jsonSchema(LAZY_PROTOCOL_TOOL_WIRE[2].outputSchema),
       execute: async (request) => {
         const context = await readContext();
         return context
