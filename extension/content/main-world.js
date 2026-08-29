@@ -63,6 +63,18 @@
     if (!diagnostics) return;
     try { console.log(TAG, ...args); } catch { /* never throw from a logger */ }
   }
+  function warnToolFailure(name, args, error) {
+    if (!diagnostics) return;
+    let argsShape = typeof args;
+    try {
+      if (Array.isArray(args)) argsShape = `array(${args.length})`;
+      else if (args && typeof args === "object") argsShape = `{ ${Object.keys(args).slice(0, 50).join(", ").slice(0, 1000)} }`;
+    } catch { argsShape = "<unavailable>"; }
+    try {
+      // Page-local only: the original error never enters post(), the SW, or model logs.
+      console.warn(TAG, "tool call failed", { tool: name, argsShape }, error);
+    } catch { /* never throw from a logger */ }
+  }
 
   // ── Cancellation: an IMMUTABLE epoch, not expiring tombstones ────────────
   // The round-30 blocker: the old per-id tombstones expired after 60s (or were
@@ -569,9 +581,10 @@
           })
           .catch((e) => {
             inFlight.delete(requestId);
-            // Redact the page-thrown body EVERYWHERE — the bridged error AND
-            // the diagnostics log carry only our own internal messages or an
-            // allowlisted error NAME (the round-30 redaction finding).
+            // The page owner can inspect the original error in their own
+            // DevTools. Only the redacted value may cross the bridge or enter
+            // the extension/model diagnostics path.
+            warnToolFailure(msg.name, msg.args, e);
             const safe = isStale() ? "invocation cancelled" : resultError(e);
             log("result", JSON.stringify({ name: msg.name, requestId, ok: false, error: safe }));
             post({ type: "result", requestId, ok: false, error: safe });

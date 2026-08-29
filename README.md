@@ -25,6 +25,8 @@ isolated OPFS memory, run history, skills, and avatar.
   discovers + invokes them (first-run approval per tool). Discovery is observable:
   enable **Settings → Site agents → Diagnostics** for gated `[WebMCP]` logs (page
   DevTools console) + a status readout (last discovery, origin, script state, tool count).
+  Failed calls keep their full page-thrown error and argument shape in that page-local
+  console; only the redacted error name crosses into the extension and model path.
 - **Tasks as threads** — a task is a distinct thread (auto-named, full-screen, with
   live progress + per-task error detail + a nudge/continue composer).
 - **Skills** — reusable capabilities (the recipes reworked into skills): include a

@@ -1642,4 +1642,24 @@ evidence every other task depends on).
 - History:
   - 2026-08-29 20:30 UTC — diagnosis: commit `ce6247ef` changed `start()` to await `_requestMicStream()` before constructing and starting SpeechRecognition. The composer already displays `mic-error` through `setStatus`, and the real NTP KAT proves `offsetParent` is non-null in the visible layout. Falsification on the unfixed source produced 39 pass / 4 fail: a rejected meter left the button idle with the old permission error, a never-settling meter left it idle indefinitely, and recognition did not start in either case. The candidate starts recognition first, renders the CSS fallback immediately, then adopts the meter stream asynchronously under the existing generation guard. Rejection leaves recognition active and reports only that the live waveform is unavailable; late streams are stopped after cancellation. Green evidence: focused 9/9, mic KAT 43/43, full unit 2359/0, final build clean.
 
-
+## [CAP-FB-20260829-WEBMCP-ERROR-DIAGNOSTICS-01] Page owners cannot see why their WebMCP tool failed
+- Feedback: 2026-08-29 — product owner reports repeated `tool failed (DOMException: UnknownError)` responses hide the page-thrown detail needed to debug his own tools
+- Updated: 2026-08-29 21:46 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P1
+- Owner: implementation worker
+- Workspace: active (local path private)
+- Branch: `cap-webmcp-errdiag`
+- Base: `55646faecb26115868fa2b42dec47b804875e64a`
+- Candidate: this tracker commit
+- Shipping: —
+- Acceptance: with Site agent diagnostics enabled, a failed call warns in the page's DevTools console with the tool name, bounded argument shape and original error object; the posted result, extension logs and model path retain the existing name-only redaction, including a sensitive-message `UnknownError`; logging can never throw into invocation handling
+- Review: required by reviewer — pending
+- Gates: focused WebMCP test RED (19 pass / 1 fail) on the unfixed source and GREEN (20/20) on the candidate; `nice -n 10 deno test --allow-all tests/` 2370 pass / 0 fail after build; `npm run build` clean (95 generated files identical, 28 packages, CSP/oracle/Wasm assertions green)
+- Blockers: —
+- Next: commit the atomic candidate, then send it to review without pushing
+- Recover: `git show cap-webmcp-errdiag -- extension/content/main-world.js tests/webmcp-discovery.test.ts README.md PLAN.md CHANGELOG.md TASKS.md`
+- History:
+  - 2026-08-29 21:41 UTC — captured the owner report and implemented a page-local `console.warn` diagnostic gated by the existing Site agents diagnostics setting. Falsification: the new `UnknownError` regression passed the name-only bridge assertion but failed because the page console received zero warnings; after the product change it passes and receives the original DOMException object plus `{ tool: "lookup", argsShape: "{ accountId, options }" }`.
+  - 2026-08-29 21:46 UTC — gates green: focused 20/20, full unit 2370/0, and developer build clean. The first full-suite attempt correctly refused its one browser-backed test because this fresh worktree had not built `dist`; building and rerunning the exact requested command produced the recorded green result.

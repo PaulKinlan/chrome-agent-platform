@@ -91,7 +91,8 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
 - [x] The named-agent layer — every agent (named/site/background) gets its own OPFS
       sandbox: memory + run history + skills + `memory_grep`.
 - [x] Sites-as-sub-agents (WebMCP discovery + per-tool first-run approval) with
-      Settings → Site agents → Diagnostics.
+      Settings → Site agents → Diagnostics, including page-local full failure detail
+      while bridged/model errors remain redacted.
 - [x] Tasks-as-threads, skills (`/skill:<id>`), generative-UI artifacts, agent-generated
       scripts, the system-hooks layer, the omnibox keyword.
 - [x] All-optional permissions (`manifest.permissions: []`), origin-keyed OPFS,
