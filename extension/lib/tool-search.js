@@ -14,7 +14,7 @@ export const TOOL_SEARCH_BOUNDS = Object.freeze({
   defaultTopK: 6,
   maxResultBytes: 32 * 1024,
   maxSummaryBytes: 512,
-  maxSchemaSummaryBytes: 1024,
+  maxSchemaSummaryBytes: 4096,
 });
 
 const FORBIDDEN =

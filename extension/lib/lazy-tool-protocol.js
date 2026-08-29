@@ -20,6 +20,10 @@ import {
   TOOL_CATALOG_BOUNDS,
 } from "./tool-catalog.js";
 import { buildToolSearchIndex, searchToolIndex } from "./tool-search.js";
+import {
+  TOOL_ARGUMENT_LIMITS,
+  toolArgumentContract,
+} from "./tool-argument-contract.js";
 import { ToolSelectionAuthority } from "./tool-selection.js";
 import { assertRunOwned } from "./run-fence.js";
 import {
@@ -44,18 +48,17 @@ import {
 
 export const LAZY_TOOL_PROTOCOL_BOUNDS = Object.freeze({
   maxSources: TOOL_CATALOG_BOUNDS.maxDescriptors * 2,
-  maxArgumentBytes: 32 * 1024,
-  maxArgumentDepth: 8,
-  maxArgumentNodes: 256,
-  maxObjectKeys: 64,
-  maxArrayItems: 64,
-  maxKeyBytes: 128,
-  maxStringBytes: 16 * 1024,
-  // Deliberate large-content channel: only these product-owned artifact fields
-  // may use the artifact store's real 256 KiB body bound. Ordinary arguments
-  // retain the 16/32 KiB limits below; documents are never truncated.
-  maxLargeContentBytes: 256 * 1024,
-  maxLargeArgumentBytes: 288 * 1024,
+  maxArgumentBytes: TOOL_ARGUMENT_LIMITS.maxJsonUtf8Bytes,
+  maxArgumentDepth: TOOL_ARGUMENT_LIMITS.maxDepth,
+  maxArgumentNodes: TOOL_ARGUMENT_LIMITS.maxNodes,
+  maxObjectKeys: TOOL_ARGUMENT_LIMITS.maxObjectKeys,
+  maxArrayItems: TOOL_ARGUMENT_LIMITS.maxArrayItems,
+  maxKeyBytes: TOOL_ARGUMENT_LIMITS.maxKeyUtf8Bytes,
+  maxStringBytes: TOOL_ARGUMENT_LIMITS.maxStringUtf8Bytes,
+  // Deliberate large-content channel: only product-owned fields named by the
+  // shared argument contract may use their backing store's real body bound.
+  maxLargeContentBytes: TOOL_ARGUMENT_LIMITS.maxAssetContentUtf8Bytes,
+  maxLargeArgumentBytes: TOOL_ARGUMENT_LIMITS.maxLargeJsonUtf8Bytes,
   maxResultBytes: 64 * 1024,
   maxResultDepth: 8,
   maxResultNodes: 512,
@@ -204,18 +207,13 @@ function projectData(value, limits, state, depth = 0, path = []) {
   throw new Error("data-type-invalid");
 }
 
-function largeContentField(descriptor) {
-  if (descriptor?.sourceKind !== "management") return null;
-  if (["create_asset", "update_asset"].includes(descriptor.toolId)) return "content";
-  if (descriptor.toolId === "generate_ui") return "html";
-  return null;
-}
-
 export function sanitizeLazyToolArguments(value, descriptor) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("arguments-must-be-object");
   }
-  const contentField = largeContentField(descriptor);
+  const contract = toolArgumentContract(descriptor?.sourceKind, descriptor?.toolId);
+  const contentField = contract.largeContent?.field ?? null;
+  const contentLimit = contract.largeContent?.maxUtf8Bytes ?? LAZY_TOOL_PROTOCOL_BOUNDS.maxStringBytes;
   const projected = projectData(value, {
     maxNodes: LAZY_TOOL_PROTOCOL_BOUNDS.maxArgumentNodes,
     maxDepth: LAZY_TOOL_PROTOCOL_BOUNDS.maxArgumentDepth,
@@ -223,14 +221,12 @@ export function sanitizeLazyToolArguments(value, descriptor) {
     maxArrayItems: LAZY_TOOL_PROTOCOL_BOUNDS.maxArrayItems,
     maxStringBytes: LAZY_TOOL_PROTOCOL_BOUNDS.maxStringBytes,
     stringLimit: (path) => path.length === 1 && path[0] === contentField
-      ? LAZY_TOOL_PROTOCOL_BOUNDS.maxLargeContentBytes
+      ? contentLimit
       : LAZY_TOOL_PROTOCOL_BOUNDS.maxStringBytes,
     preserveString: (path) => path.length === 1 && path[0] === contentField,
     truncateStrings: false,
   }, { nodes: 0 });
-  const maxArgumentBytes = contentField
-    ? LAZY_TOOL_PROTOCOL_BOUNDS.maxLargeArgumentBytes
-    : LAZY_TOOL_PROTOCOL_BOUNDS.maxArgumentBytes;
+  const maxArgumentBytes = contract.maxJsonUtf8Bytes;
   if (
     utf8ByteLength(JSON.stringify(projected)) > maxArgumentBytes
   ) {
@@ -536,6 +532,10 @@ export class LazyToolProtocol {
         capabilities: Array.isArray(desc.capabilities) ? desc.capabilities.slice(0, 8) : [],
         availability: desc.availability ?? "ready",
         sourceKind: desc.sourceKind ?? "extension-builtin",
+        schemaSummary: truncateUtf8(
+          redactSecretText(String(desc.schemaSummary ?? "")),
+          4096,
+        ),
       };
 
       const entryBytes = utf8ByteLength(JSON.stringify(entry));

@@ -5,6 +5,10 @@
 // remain authoritative. Descriptions and schemas may be page-controlled, so
 // they are treated only as bounded searchable data.
 
+import { zodSchema } from "ai";
+import {
+  schemaWithArgumentContract,
+} from "./tool-argument-contract.js";
 import {
   hasLoneSurrogates,
   sha256Hex,
@@ -176,10 +180,26 @@ function projectSchema(value, depth = 0, budget = { nodes: 0 }) {
   }
 }
 
-export function summarizeToolSchema(value) {
+function providerJsonSchema(value) {
+  try {
+    if (ownData(ownData(value, "~standard"), "vendor") === "zod") {
+      const { $schema: _dialect, ...json } = zodSchema(value).jsonSchema;
+      return json;
+    }
+  } catch {
+    throw new ToolCatalogValidationError("schema-hostile");
+  }
+  return value;
+}
+
+export function summarizeToolSchema(value, sourceKind = "extension-builtin", toolId = "unknown") {
   let summary;
   try {
-    summary = canonicalJson(projectSchema(value));
+    summary = canonicalJson(projectSchema(schemaWithArgumentContract(
+      providerJsonSchema(value),
+      sourceKind,
+      toolId,
+    )));
   } catch (error) {
     if (error instanceof ToolCatalogValidationError) throw error;
     throw new ToolCatalogValidationError("schema-hostile");
@@ -281,7 +301,11 @@ export function canonicalToolDescriptor(input) {
     TOOL_CATALOG_BOUNDS.maxDescriptionBytes,
     "description",
   );
-  const schemaSummary = summarizeToolSchema(ownData(input, "inputSchema"));
+  const schemaSummary = summarizeToolSchema(
+    ownData(input, "inputSchema"),
+    sourceKind,
+    toolId,
+  );
   const capabilities = normalizeList(ownData(input, "capabilities"), {
     maxItems: TOOL_CATALOG_BOUNDS.maxCapabilities,
     maxBytes: TOOL_CATALOG_BOUNDS.maxCapabilityBytes,

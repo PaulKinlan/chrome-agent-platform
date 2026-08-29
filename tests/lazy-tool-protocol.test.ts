@@ -17,8 +17,10 @@ import {
   LAZY_PROTOCOL_TOOL_WIRE,
   LAZY_TOOL_PROTOCOL_BOUNDS,
   LazyToolProtocol,
+  sanitizeLazyToolArguments,
 } from "../extension/lib/lazy-tool-protocol.js";
 import { ShadowToolCatalogController } from "../extension/lib/tool-catalog-shadow.js";
+import { canonicalToolDescriptor } from "../extension/lib/tool-catalog.js";
 import { ToolSelectionAuthority } from "../extension/lib/tool-selection.js";
 import { managementToolset } from "../extension/lib/management-tools.js";
 import { memoryToolset } from "../extension/lib/agent.js";
@@ -658,6 +660,80 @@ Deno.test("lazy provider capture: only two fixed protocol tools and selected sch
   assert(!wire.includes("NON_SELECTED_PROPERTY"));
   assert(!wire.includes("nonselected.secret.capability"));
   assert(!wire.includes("not_selected_tool"));
+});
+
+Deno.test("lazy protocol: every registered product schema shares the exact transport bounds enforced by sanitization", () => {
+  const records = [
+    ...executableBuiltinToolRecords(memoryToolset({
+      get: async () => null,
+      set: async () => {},
+      list: async () => [],
+      grep: async () => [],
+    }), adapterContext()),
+    ...executableBrowserToolRecords(browserToolset(false), adapterContext()),
+    ...executableManagementToolRecords(managementToolset({ callRoute: () => ({ ok: true }) }), adapterContext()),
+    ...executableWebMcpToolRecords([{
+      name: "page_probe",
+      source: "declared",
+      description: "probe",
+      inputSchema: { type: "object", properties: { value: { type: "string" } } },
+    }], {
+      origin: "https://example.test",
+      agentId: "hub",
+      documentId: "hub-doc",
+      sourceGeneration: "page:1",
+    }, () => ({ ok: true })),
+  ];
+  assert(records.length > 100, "the conformance walk must cover the full registered product catalog");
+
+  for (const record of records) {
+    const descriptor = canonicalToolDescriptor(record.descriptorInput);
+    const schema = JSON.parse(descriptor.schemaSummary);
+    const limits = schema["x-cap-argument-limits"];
+    assert(limits, `${descriptor.name}: schema must expose transport limits`);
+    assertEquals(limits.maxDepth, LAZY_TOOL_PROTOCOL_BOUNDS.maxArgumentDepth, descriptor.name);
+    assertEquals(limits.maxNodes, LAZY_TOOL_PROTOCOL_BOUNDS.maxArgumentNodes, descriptor.name);
+    assertEquals(limits.maxObjectKeys, LAZY_TOOL_PROTOCOL_BOUNDS.maxObjectKeys, descriptor.name);
+    assertEquals(limits.maxArrayItems, LAZY_TOOL_PROTOCOL_BOUNDS.maxArrayItems, descriptor.name);
+    assertEquals(limits.defaultMaxStringUtf8Bytes, LAZY_TOOL_PROTOCOL_BOUNDS.maxStringBytes, descriptor.name);
+
+    const field = limits.largeContent?.field ?? "value";
+    const stringLimit = limits.largeContent?.maxUtf8Bytes ?? limits.defaultMaxStringUtf8Bytes;
+    sanitizeLazyToolArguments({ [field]: "x".repeat(stringLimit) }, descriptor);
+    let error: unknown;
+    try {
+      sanitizeLazyToolArguments({ [field]: "x".repeat(stringLimit + 1) }, descriptor);
+    } catch (caught) {
+      error = caught;
+    }
+    assert(error instanceof Error, `${descriptor.name}: over-limit probe must fail`);
+  }
+});
+
+Deno.test("lazy protocol: search and list share the selected tool's accurate large-content schema", async () => {
+  const records = executableManagementToolRecords(
+    managementToolset({ callRoute: () => ({ ok: true }) }),
+    adapterContext(),
+  );
+  const protocol = new LazyToolProtocol({
+    readSources: () => records,
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+  });
+  const searched = await protocol.search({ query: "create_asset", limit: 1 }, runContext());
+  const searchSchema = JSON.parse(searched.results[0].schemaSummary);
+  assertEquals(searchSchema["x-cap-argument-limits"].largeContent, {
+    field: "content",
+    maxUtf8Bytes: 256 * 1024,
+  });
+  assertEquals(searchSchema.allOf[0].required, ["name", "content"]);
+  assertEquals(searchSchema.allOf[0].properties.key.maxLength, 64);
+
+  const listed = await protocol.list({ source: "management" }, runContext());
+  assertEquals(listed.ok, true);
+  const listedAsset = (listed as { tools: { management: Array<{ name: string; schemaSummary: string }> } })
+    .tools.management.find((entry) => entry.name === "create_asset");
+  assert(listedAsset);
+  assertEquals(listedAsset.schemaSummary, searched.results[0].schemaSummary);
 });
 
 Deno.test("lazy protocol: production provider cutover binds only the fixed pair and protected flow guidance", async () => {

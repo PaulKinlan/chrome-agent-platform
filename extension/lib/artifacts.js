@@ -41,6 +41,7 @@
 // existing bodies (valid-body identity — never resurrects stale metadata).
 
 import { masterMemory, siteMemory, canonicalOrigin } from "./memory.js";
+import { TOOL_ARGUMENT_LIMITS } from "./tool-argument-contract.js";
 
 const INDEX_KEY = "assets"; // reserved authority key (see memory.js)
 const REPAIR_KEY = "assetRepair"; // durable pending-deletion/restore state (reserved)
@@ -389,7 +390,7 @@ async function repairPendingLocked(store, origin) {
 }
 
 export const ASSET_BOUNDS = {
-  maxContentBytes: 256 * 1024,
+  maxContentBytes: TOOL_ARGUMENT_LIMITS.maxAssetContentUtf8Bytes,
   maxNameLength: 200,
   maxAssetsPerOrigin: 200,
   // The index byte bound used to be PER ORIGIN. The library is now one shared

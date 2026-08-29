@@ -12,7 +12,8 @@
 
 import { tool } from "ai";
 import { z } from "zod";
-import { ASSET_TYPES } from "./artifacts.js";
+import { ASSET_BOUNDS, ASSET_TYPES } from "./artifacts.js";
+import { SCRIPT_BOUNDS } from "./scripts.js";
 
 /** The fixed management tool names (for the orchestrator introspection route). */
 export const MANAGEMENT_TOOL_NAMES = [
@@ -113,9 +114,9 @@ export function managementToolset({ callRoute }) {
       inputSchema: z.object({
         origin: z.string().default("master").describe("'master' or an https origin"),
         type: z.enum([...ASSET_TYPES]).default("text"),
-        key: z.string().optional().describe("idempotency key (letters, digits, dot, dash, underscore, space; max 64 chars) — pass the same key to create-or-update the SAME artifact instead of duplicating"),
-        name: z.string().describe("a short, clear name"),
-        content: z.string().describe("the artifact content"),
+        key: z.string().max(64).regex(/^[a-zA-Z0-9][a-zA-Z0-9 ._\-]{0,63}$/u).optional().describe("idempotency key (letters, digits, dot, dash, underscore, space; max 64 chars) — pass the same key to create-or-update the SAME artifact instead of duplicating"),
+        name: z.string().max(ASSET_BOUNDS.maxNameLength).describe(`a short, clear name (max ${ASSET_BOUNDS.maxNameLength} characters)`),
+        content: z.string().describe(`the complete artifact content (max ${ASSET_BOUNDS.maxContentBytes} UTF-8 bytes; use this field directly, never truncate)`),
       }),
       execute: ({ origin, type, key, name, content }) =>
         call("asset.create", { origin, assetType: type, key, name, content }),
@@ -125,9 +126,9 @@ export function managementToolset({ callRoute }) {
       inputSchema: z.object({
         origin: z.string().default("master"),
         id: z.string(),
-        name: z.string().optional(),
+        name: z.string().max(ASSET_BOUNDS.maxNameLength).optional(),
         type: z.enum([...ASSET_TYPES]).optional(),
-        content: z.string().optional(),
+        content: z.string().optional().describe(`complete replacement content (max ${ASSET_BOUNDS.maxContentBytes} UTF-8 bytes; never truncate)`),
       }),
       execute: (args) =>
         call("asset.update", {
@@ -332,8 +333,8 @@ export function managementToolset({ callRoute }) {
       description:
         "Generate an interactive HTML UI (a page, a widget, a data visualization, a small app) for the owner. It is saved as an html artifact AND rendered LIVE in a sandboxed double-iframe in the conversation. The UI may use inline scripts + styles (interactive) but is fully sandboxed (no network, no access to the extension or the page). The owner's theme/locale is percolated in automatically.",
       inputSchema: z.object({
-        name: z.string().describe("a short, clear name for the generated UI"),
-        html: z.string().describe("the complete HTML (a document or a fragment with inline script/style) to render"),
+        name: z.string().max(ASSET_BOUNDS.maxNameLength).describe("a short, clear name for the generated UI"),
+        html: z.string().describe(`the complete HTML (max ${ASSET_BOUNDS.maxContentBytes} UTF-8 bytes; never truncate)`),
         origin: z.string().default("master").describe("'master' for a hub-level artifact, or an https origin"),
       }),
       execute: ({ name, html, origin }) =>
@@ -353,8 +354,8 @@ export function managementToolset({ callRoute }) {
       description:
         "Create a reusable JavaScript script (an async function body) that runs sandboxed + repeatedly without re-invoking the model. The script gets a controlled api: await fetch(url, opts) (reads an http/https page, returns {status, text}) + log(...). Return a value as the result. No DOM/extension/network access of its own.",
       inputSchema: z.object({
-        name: z.string().describe("a short, clear name for the script"),
-        source: z.string().describe("the JavaScript function body (async), e.g. `const r = await fetch('https://example.com'); return r.text.slice(0, 200);`"),
+        name: z.string().max(SCRIPT_BOUNDS.maxNameLength).describe("a short, clear name for the script"),
+        source: z.string().describe(`the complete JavaScript function body (max ${SCRIPT_BOUNDS.maxSourceBytes} UTF-8 bytes)`),
         origin: z.string().default("master").describe("'master' (hub-level script)"),
       }),
       execute: ({ name, source, origin }) => call("script.create", { origin, name, source }),
@@ -363,8 +364,8 @@ export function managementToolset({ callRoute }) {
       description: "Update a script's name/source.",
       inputSchema: z.object({
         id: z.string(),
-        name: z.string().optional(),
-        source: z.string().optional(),
+        name: z.string().max(SCRIPT_BOUNDS.maxNameLength).optional(),
+        source: z.string().optional().describe(`complete replacement source (max ${SCRIPT_BOUNDS.maxSourceBytes} UTF-8 bytes)`),
         origin: z.string().default("master"),
       }),
       execute: ({ id, name, source, origin }) => call("script.update", { origin, id, name, source }),

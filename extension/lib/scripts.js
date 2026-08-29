@@ -17,12 +17,13 @@
 // so list_scripts never reads every body.
 
 import { masterMemory, siteMemory, canonicalOrigin } from "./memory.js";
+import { TOOL_ARGUMENT_LIMITS } from "./tool-argument-contract.js";
 
 const INDEX_KEY = "scripts"; // reserved authority key (see memory.js)
 const CONTENT_PREFIX = "script:";
 
 export const SCRIPT_BOUNDS = {
-  maxSourceBytes: 64 * 1024, // 64 KiB of JS source per script
+  maxSourceBytes: TOOL_ARGUMENT_LIMITS.maxScriptSourceUtf8Bytes,
   maxNameLength: 200,
   maxScriptsPerOrigin: 200,
   maxFetchBytes: 512 * 1024, // a single fetch result the host returns to the script

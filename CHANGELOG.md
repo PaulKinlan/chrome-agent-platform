@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.402] — 2026-08-29
+- fix(CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01): publish truthful tool schemas
+
 ## [0.2.401] — 2026-08-29
 - fix(CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01): admit bounded artifact bodies
 
