@@ -143,18 +143,15 @@ Deno.test("bug 7 sweep: every Settings → pointer names REAL UI (a nav section 
   assert(offenders.length === 0, `pointers at UI that does not exist:\n${offenders.join("\n")}`);
 });
 
-Deno.test("bug 7 sweep: no permission REQUEST remains in any form (install-granted; contains() verifies, fail closed)", () => {
-  const offenders: string[] = [];
-  for (const [path, src] of sources) {
-    if (/chrome\.permissions\.request\s*\(/.test(src)) offenders.push(`${path}: chrome.permissions.request(`);
-    // Indirect seams (the first-run onboarding helpers took an injected
-    // permissionsApi and called .request on it).
-    if (/permissionsApi\.request\s*\(/.test(src)) offenders.push(`${path}: permissionsApi.request(`);
-    // Split-line variants: <anyObj>.request({ permissions: … }) — a Chrome
-    // permission request by shape regardless of the receiver's name.
-    if (/\.request\s*\(\s*\{[^}]*permissions\s*:/.test(src)) offenders.push(`${path}: .request({ permissions: … })`);
-  }
-  assert(offenders.length === 0, `runtime permission requests remain:\n${offenders.join("\n")}`);
+Deno.test("bug 7 sweep: permission REQUESTS live only in PAGES (never the SW)", () => {
+  // OPTIONAL + JIT model (owner directive 2026-08-29): chrome.permissions.request
+  // is the INTENDED JIT grant path from a genuine page gesture. The service
+  // worker has no gesture and must never request; the offscreen document
+  // (no DOM either) must not either.
+  const sw = sources.get([...sources.keys()].find((p) => p.endsWith("background/service-worker.js"))!) ?? "";
+  assert(!/chrome\.permissions\.request\s*\(/.test(sw), "the SW must never call chrome.permissions.request");
+  const offscreen = sources.get([...sources.keys()].find((p) => p.endsWith("offscreen/offscreen.js"))!) ?? "";
+  assert(!/chrome\.permissions\.request\s*\(/.test(offscreen), "the offscreen document must never call chrome.permissions.request");
 });
 
 Deno.test("bug 7 sweep: the inline approval card remains the runtime-grantable path", () => {

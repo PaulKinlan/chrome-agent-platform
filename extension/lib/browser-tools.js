@@ -368,6 +368,31 @@ const T8_CONTENT_SETTING_DEFAULTS = Object.freeze({
   popups: "block",
 });
 
+/** ONE shared producer for every missing-capability denial (review r6 P0-3):
+ *  the shape the conversation's normalizePermissionRequirement turns into the
+ *  inline Enable card, plus the permissionRequired marker for callers that
+ *  only need the capability name. `permissions` are the exact Chrome API
+ *  permissions the card requests from the owner's page gesture. */
+const PERMISSION_FOR_CAPABILITY = new Map([
+  ["system-cpu", "system.cpu"],
+  ["system-memory", "system.memory"],
+  ["system-storage", "system.storage"],
+  ["system-display", "system.display"],
+]);
+
+export function permissionDeniedResult(capability, { reason = `enable ${capability} for this action`, permissions = null } = {}) {
+  const perm = permissions ?? [PERMISSION_FOR_CAPABILITY.get(capability) ?? capability];
+  return {
+    error: `${capability} permission not granted — enable it from the chat when prompted, or in Settings → Permissions`,
+    permissionRequired: { capability },
+    waitingForPermission: true,
+    permissionRequirement: {
+      reason: `enable ${capability} for this action`,
+      permissions: [...perm],
+    },
+  };
+}
+
 /** Window-level mutation under the SAME grant discipline as close_tab
  * (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01): the window's tab origins
  * are re-read INSIDE the grant lock (a navigation/move since any earlier read
@@ -1881,8 +1906,7 @@ export function browserToolset(readOnly = false) {
       }).refine((v) => v.delayInMinutes !== undefined || v.periodInMinutes !== undefined || v.when !== undefined, "at least one scheduling field is required"),
       execute: async ({ name, delayInMinutes, periodInMinutes, when }) => {
         if (!(await hasPermission("alarms"))) {
-          return { error: "alarms permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "alarms" }, };
+          return permissionDeniedResult("alarms");
         }
         try {
           await assertRunOwned();
@@ -1917,8 +1941,7 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("alarms"))) {
-          return { error: "alarms permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "alarms" }, };
+          return permissionDeniedResult("alarms");
         }
         const alarms = await chrome.alarms.getAll();
         return {
@@ -1938,8 +1961,7 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ name }) => {
         if (!(await hasPermission("alarms"))) {
-          return { error: "alarms permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "alarms" }, };
+          return permissionDeniedResult("alarms");
         }
         try {
           await assertRunOwned();
@@ -1964,8 +1986,7 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ title, url, parentId }) => {
         if (!(await hasPermission("bookmarks"))) {
-          return { error: "bookmarks permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "bookmarks" }, };
+          return permissionDeniedResult("bookmarks");
         }
         try {
           await assertRunOwned();
@@ -1989,8 +2010,7 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ query, parentId, maxResults = 50 }) => {
         if (!(await hasPermission("bookmarks"))) {
-          return { error: "bookmarks permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "bookmarks" }, };
+          return permissionDeniedResult("bookmarks");
         }
         let items = [];
         if (query) {
@@ -2019,8 +2039,7 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ id }) => {
         if (!(await hasPermission("bookmarks"))) {
-          return { error: "bookmarks permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "bookmarks" }, };
+          return permissionDeniedResult("bookmarks");
         }
         try {
           await assertRunOwned();
@@ -2042,8 +2061,7 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ title, message, iconUrl, priority }) => {
         if (!(await hasPermission("notifications"))) {
-          return { error: "notifications permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "notifications" }, };
+          return permissionDeniedResult("notifications");
         }
         try {
           await assertRunOwned();
@@ -2071,8 +2089,7 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ notificationId }) => {
         if (!(await hasPermission("notifications"))) {
-          return { error: "notifications permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "notifications" }, };
+          return permissionDeniedResult("notifications");
         }
         try {
           await assertRunOwned();
@@ -2091,8 +2108,7 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ detectionIntervalInSeconds = 60 }) => {
         if (!(await hasPermission("idle"))) {
-          return { error: "idle permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "idle" }, };
+          return permissionDeniedResult("idle");
         }
         const state = await chrome.idle.queryState(detectionIntervalInSeconds);
         return { ok: true, state, detectionIntervalInSeconds };
@@ -2109,9 +2125,7 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ id, title, contexts, parentId }) => {
         if (!(await hasPermission("contextMenus"))) {
-          return { error: "contextMenus permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "contextMenus" },
- };
+          return permissionDeniedResult("contextMenus");
         }
         try {
           await assertRunOwned();
@@ -2130,9 +2144,7 @@ permissionRequired: { capability: "contextMenus" },
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("contextMenus"))) {
-          return { error: "contextMenus permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "contextMenus" },
- };
+          return permissionDeniedResult("contextMenus");
         }
         return { ok: true, supported: true };
       },
@@ -2145,9 +2157,7 @@ permissionRequired: { capability: "contextMenus" },
       }),
       execute: async ({ id }) => {
         if (!(await hasPermission("contextMenus"))) {
-          return { error: "contextMenus permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "contextMenus" },
- };
+          return permissionDeniedResult("contextMenus");
         }
         try {
           await assertRunOwned();
@@ -2179,8 +2189,7 @@ permissionRequired: { capability: "contextMenus" },
       }),
       execute: async ({ domain, url, maxResults = 50 }) => {
         if (!(await hasPermission("cookies"))) {
-          return { error: "cookies permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "cookies" }, };
+          return permissionDeniedResult("cookies");
         }
         if (!domain && !url) return { error: "pass a domain or a url" };
         const query = {};
@@ -2217,8 +2226,7 @@ permissionRequired: { capability: "contextMenus" },
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("cookies"))) {
-          return { error: "cookies permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "cookies" }, };
+          return permissionDeniedResult("cookies");
         }
         let stores = [];
         try {
@@ -2243,8 +2251,7 @@ permissionRequired: { capability: "contextMenus" },
       }),
       execute: async ({ url, name }) => {
         if (!(await hasPermission("cookies"))) {
-          return { error: "cookies permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "cookies" }, };
+          return permissionDeniedResult("cookies");
         }
         const origin = canonicalOrigin(url);
         if (!origin) return { error: "only http/https cookie URLs are supported" };
@@ -2285,8 +2292,7 @@ permissionRequired: { capability: "contextMenus" },
       }),
       execute: async ({ url, name, value }) => {
         if (!(await hasPermission("cookies"))) {
-          return { error: "cookies permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "cookies" }, };
+          return permissionDeniedResult("cookies");
         }
         const origin = canonicalOrigin(url);
         if (!origin) return { error: "only http/https cookie URLs are supported" };
@@ -2332,8 +2338,7 @@ permissionRequired: { capability: "contextMenus" },
       }),
       execute: async ({ url, name }) => {
         if (!(await hasPermission("cookies"))) {
-          return { error: "cookies permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "cookies" }, };
+          return permissionDeniedResult("cookies");
         }
         const origin = canonicalOrigin(url);
         if (!origin) return { error: "only http/https cookie URLs are supported" };
@@ -2384,9 +2389,7 @@ permissionRequired: { capability: "contextMenus" },
       }),
       execute: async ({ dataTypes, sinceMs }) => {
         if (!(await hasPermission("browsingData"))) {
-          return { error: "browsingData permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "browsingData" },
- };
+          return permissionDeniedResult("browsingData");
         }
         // The caller must ENUMERATE what to wipe — an empty list is refused by
         // the schema and there is NO implicit "everything" path: passing the
@@ -2433,9 +2436,7 @@ permissionRequired: { capability: "browsingData" },
       }),
       execute: async ({ resource, primaryPattern }) => {
         if (!(await hasPermission("contentSettings"))) {
-          return { error: "contentSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "contentSettings" },
- };
+          return permissionDeniedResult("contentSettings");
         }
         const pattern = t8SingleOriginPattern(primaryPattern);
         if (!pattern.ok) return { error: pattern.error };
@@ -2463,9 +2464,7 @@ permissionRequired: { capability: "contentSettings" },
       }),
       execute: async ({ resource, primaryPattern, setting }) => {
         if (!(await hasPermission("contentSettings"))) {
-          return { error: "contentSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "contentSettings" },
- };
+          return permissionDeniedResult("contentSettings");
         }
         const pattern = t8SingleOriginPattern(primaryPattern);
         if (!pattern.ok) return { error: pattern.error };
@@ -2509,9 +2508,7 @@ permissionRequired: { capability: "contentSettings" },
       }),
       execute: async ({ resource, primaryPattern }) => {
         if (!(await hasPermission("contentSettings"))) {
-          return { error: "contentSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "contentSettings" },
- };
+          return permissionDeniedResult("contentSettings");
         }
         const pattern = t8SingleOriginPattern(primaryPattern);
         if (!pattern.ok) return { error: pattern.error };
@@ -2737,8 +2734,7 @@ permissionRequired: { capability: "contentSettings" },
       }),
       execute: async ({ query, state, limit = 25 }) => {
         if (!(await hasPermission("downloads"))) {
-          return { error: "downloads permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "downloads" }, };
+          return permissionDeniedResult("downloads");
         }
         const searchQuery = { orderBy: ["-startTime"] };
         if (query !== undefined) searchQuery.query = query;
@@ -2928,8 +2924,7 @@ permissionRequired: { capability: "contentSettings" },
       inputSchema: z.object({ tabId: z.number().int() }),
       execute: async ({ tabId }) => {
         if (!(await hasTabsPermission())) {
-          return { error: "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "tabs" }, };
+          return permissionDeniedResult("tabs");
         }
         try {
           const zoomFactor = await chrome.tabs.getZoom(tabId);
@@ -2976,8 +2971,7 @@ permissionRequired: { capability: "contentSettings" },
       }).refine((v) => (v.tabIds !== undefined) !== (v.indices !== undefined), "exactly one of tabIds or indices is required"),
       execute: async ({ windowId, tabIds, indices }) => {
         if (!(await hasTabsPermission())) {
-          return { error: "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "tabs" }, };
+          return permissionDeniedResult("tabs");
         }
         return await withGrantLock(async () => {
           // Resolve the exact target tabs INSIDE the lock; when indices were
@@ -3225,9 +3219,7 @@ permissionRequired: { capability: "contentSettings" },
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("system.memory"))) {
-          return { error: "system.memory permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "system.memory" },
- };
+          return permissionDeniedResult("system.memory");
         }
         const info = await chrome.system.memory.getInfo();
         return {
@@ -3242,9 +3234,7 @@ permissionRequired: { capability: "system.memory" },
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("system.cpu"))) {
-          return { error: "system.cpu permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "system.cpu" },
- };
+          return permissionDeniedResult("system.cpu");
         }
         const info = await chrome.system.cpu.getInfo();
         const processors = (Array.isArray(info?.processors) ? info.processors : []).slice(0, 64).map((p) => ({
@@ -3267,9 +3257,7 @@ permissionRequired: { capability: "system.cpu" },
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("system.storage"))) {
-          return { error: "system.storage permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "system.storage" },
- };
+          return permissionDeniedResult("system.storage");
         }
         const units = await chrome.system.storage.getInfo();
         return {
@@ -3288,9 +3276,7 @@ permissionRequired: { capability: "system.storage" },
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("system.display"))) {
-          return { error: "system.display permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "system.display" },
- };
+          return permissionDeniedResult("system.display");
         }
         const displays = await chrome.system.display.getInfo();
         return {
@@ -3313,9 +3299,7 @@ permissionRequired: { capability: "system.display" },
       }),
       execute: async ({ maxResults = 20 }) => {
         if (!(await hasPermission("topSites"))) {
-          return { error: "topSites permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "topSites" },
- };
+          return permissionDeniedResult("topSites");
         }
         const sites = await chrome.topSites.get();
         return {
@@ -3357,9 +3341,7 @@ permissionRequired: { capability: "topSites" },
       }),
       execute: async ({ url, title, hasBeenRead = false }) => {
         if (!(await hasPermission("readingList"))) {
-          return { error: "readingList permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "readingList" },
- };
+          return permissionDeniedResult("readingList");
         }
         const scheme = (() => { try { return new URL(url).protocol; } catch { return null; } })();
         if (scheme !== "http:" && scheme !== "https:") {
@@ -3385,9 +3367,7 @@ permissionRequired: { capability: "readingList" },
       }),
       execute: async ({ url, title, hasBeenRead, maxResults = 50 }) => {
         if (!(await hasPermission("readingList"))) {
-          return { error: "readingList permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "readingList" },
- };
+          return permissionDeniedResult("readingList");
         }
         const query = {};
         if (url !== undefined) query.url = url;
@@ -3415,9 +3395,7 @@ permissionRequired: { capability: "readingList" },
       }),
       execute: async ({ url, title, hasBeenRead }) => {
         if (!(await hasPermission("readingList"))) {
-          return { error: "readingList permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "readingList" },
- };
+          return permissionDeniedResult("readingList");
         }
         const scheme = (() => { try { return new URL(url).protocol; } catch { return null; } })();
         if (scheme !== "http:" && scheme !== "https:") {
@@ -3446,9 +3424,7 @@ permissionRequired: { capability: "readingList" },
       }),
       execute: async ({ url }) => {
         if (!(await hasPermission("readingList"))) {
-          return { error: "readingList permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "readingList" },
- };
+          return permissionDeniedResult("readingList");
         }
         const scheme = (() => { try { return new URL(url).protocol; } catch { return null; } })();
         if (scheme !== "http:" && scheme !== "https:") {
@@ -3476,9 +3452,7 @@ permissionRequired: { capability: "readingList" },
           return { error: "run aborted — page not saved" };
         }
         if (!(await hasPermission("pageCapture"))) {
-          return { error: "pageCapture permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "pageCapture" },
- };
+          return permissionDeniedResult("pageCapture");
         }
         const target = tabId
           ? await chrome.tabs.get(tabId).catch(() => null)
@@ -3717,8 +3691,7 @@ permissionRequired: { capability: "pageCapture" },
       }),
       execute: async ({ text = "", startTime, endTime, maxResults = 50 }) => {
         if (!(await hasPermission("history"))) {
-          return { error: "history permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "history" }, };
+          return permissionDeniedResult("history");
         }
         const query = { text, maxResults: Math.min(maxResults, 200) };
         if (startTime !== undefined) query.startTime = startTime;
@@ -3745,8 +3718,7 @@ permissionRequired: { capability: "pageCapture" },
       }),
       execute: async ({ url, maxResults = 50 }) => {
         if (!(await hasPermission("history"))) {
-          return { error: "history permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "history" }, };
+          return permissionDeniedResult("history");
         }
         const visits = await chrome.history.getVisits({ url });
         const list = Array.isArray(visits) ? visits : [];
@@ -3766,8 +3738,7 @@ permissionRequired: { capability: "pageCapture" },
       inputSchema: z.object({ url: z.string().url().max(2048) }),
       execute: async ({ url }) => {
         if (!(await hasPermission("history"))) {
-          return { error: "history permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "history" }, };
+          return permissionDeniedResult("history");
         }
         const origin = canonicalOrigin(url);
         if (!origin) return { error: "only http/https URLs can be added to history" };
@@ -3799,8 +3770,7 @@ permissionRequired: { capability: "pageCapture" },
       inputSchema: z.object({ url: z.string().url().max(2048) }),
       execute: async ({ url }) => {
         if (!(await hasPermission("history"))) {
-          return { error: "history permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "history" }, };
+          return permissionDeniedResult("history");
         }
         const origin = canonicalOrigin(url);
         if (!origin) return { error: "only http/https URLs can be deleted from history" };
@@ -3835,8 +3805,7 @@ permissionRequired: { capability: "pageCapture" },
       }).refine((v) => v.endTime > v.startTime, "endTime must be after startTime"),
       execute: async ({ startTime, endTime }) => {
         if (!(await hasPermission("history"))) {
-          return { error: "history permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "history" }, };
+          return permissionDeniedResult("history");
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -3866,8 +3835,7 @@ permissionRequired: { capability: "pageCapture" },
           return { error: "refusing to clear ALL history without an explicit confirm:true" };
         }
         if (!(await hasPermission("history"))) {
-          return { error: "history permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "history" }, };
+          return permissionDeniedResult("history");
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -3908,8 +3876,7 @@ permissionRequired: { capability: "pageCapture" },
       }),
       execute: async ({ maxResults = 100 }) => {
         if (!(await hasManagementPermission())) {
-          return { error: "management permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "management" }, };
+          return permissionDeniedResult("management");
         }
         let all = [];
         try {
@@ -3944,8 +3911,7 @@ permissionRequired: { capability: "pageCapture" },
       }),
       execute: async ({ id }) => {
         if (!(await hasManagementPermission())) {
-          return { error: "management permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "management" }, };
+          return permissionDeniedResult("management");
         }
         let info = null;
         try {
@@ -3981,8 +3947,7 @@ permissionRequired: { capability: "pageCapture" },
       }),
       execute: async ({ id }) => {
         if (!(await hasManagementPermission())) {
-          return { error: "management permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "management" }, };
+          return permissionDeniedResult("management");
         }
         let warnings = [];
         try {
@@ -4104,8 +4069,7 @@ permissionRequired: { capability: "pageCapture" },
       }),
       execute: async ({ setting }) => {
         if (!(await hasPermission("privacy"))) {
-          return { error: "privacy permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "privacy" }, };
+          return permissionDeniedResult("privacy");
         }
         const chromeSetting = privacyChromeSetting(setting);
         if (!chromeSetting) return { error: `privacy setting unavailable: ${setting}` };
@@ -4131,8 +4095,7 @@ permissionRequired: { capability: "pageCapture" },
       }),
       execute: async ({ setting, value }) => {
         if (!(await hasPermission("privacy"))) {
-          return { error: "privacy permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "privacy" }, };
+          return permissionDeniedResult("privacy");
         }
         // Validate the value against the setting's kind BEFORE any grant/Chrome work.
         const valueError = privacyValueError(setting, value);
@@ -4171,8 +4134,7 @@ permissionRequired: { capability: "pageCapture" },
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("proxy"))) {
-          return { error: "proxy permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "proxy" }, };
+          return permissionDeniedResult("proxy");
         }
         let config;
         try {
@@ -4218,8 +4180,7 @@ permissionRequired: { capability: "pageCapture" },
       }),
       execute: async ({ mode, pacScript, rules }) => {
         if (!(await hasPermission("proxy"))) {
-          return { error: "proxy permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "proxy" }, };
+          return permissionDeniedResult("proxy");
         }
         // Build + validate the value BEFORE any grant work or Chrome call.
         const value = { mode };
@@ -4278,8 +4239,7 @@ permissionRequired: { capability: "pageCapture" },
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("proxy"))) {
-          return { error: "proxy permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "proxy" }, };
+          return permissionDeniedResult("proxy");
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -4313,9 +4273,7 @@ permissionRequired: { capability: "pageCapture" },
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("fontSettings"))) {
-          return { error: "fontSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "fontSettings" },
- };
+          return permissionDeniedResult("fontSettings");
         }
         let size = null;
         try {
@@ -4342,9 +4300,7 @@ permissionRequired: { capability: "fontSettings" },
       inputSchema: z.object({ pixelSize: z.number().int().min(1).max(100) }),
       execute: async ({ pixelSize }) => {
         if (!(await hasPermission("fontSettings"))) {
-          return { error: "fontSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "fontSettings" },
- };
+          return permissionDeniedResult("fontSettings");
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -4381,9 +4337,7 @@ permissionRequired: { capability: "fontSettings" },
       }),
       execute: async ({ genericFamily, fontId }) => {
         if (!(await hasPermission("fontSettings"))) {
-          return { error: "fontSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "fontSettings" },
- };
+          return permissionDeniedResult("fontSettings");
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -4417,9 +4371,7 @@ permissionRequired: { capability: "fontSettings" },
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("fontSettings"))) {
-          return { error: "fontSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "fontSettings" },
- };
+          return permissionDeniedResult("fontSettings");
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -4456,8 +4408,7 @@ permissionRequired: { capability: "fontSettings" },
       inputSchema: z.object({ level: z.enum(["system", "display"]) }),
       execute: async ({ level }) => {
         if (!(await hasPermission("power"))) {
-          return { error: "power permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "power" }, };
+          return permissionDeniedResult("power");
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -4492,8 +4443,7 @@ permissionRequired: { capability: "fontSettings" },
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("power"))) {
-          return { error: "power permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "power" }, };
+          return permissionDeniedResult("power");
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -4529,8 +4479,7 @@ permissionRequired: { capability: "fontSettings" },
       inputSchema: z.object({ text: z.string().min(1).max(512) }),
       execute: async ({ text }) => {
         if (!(await hasPermission("search"))) {
-          return { error: "search permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "search" }, };
+          return permissionDeniedResult("search");
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -4570,8 +4519,7 @@ permissionRequired: { capability: "fontSettings" },
       }),
       execute: async ({ text, voiceName, rate, pitch, volume }) => {
         if (!(await hasPermission("tts"))) {
-          return { error: "tts permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "tts" }, };
+          return permissionDeniedResult("tts");
         }
         const options = {};
         if (voiceName !== undefined) options.voiceName = voiceName;
@@ -4610,8 +4558,7 @@ permissionRequired: { capability: "fontSettings" },
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("tts"))) {
-          return { error: "tts permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "tts" }, };
+          return permissionDeniedResult("tts");
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -4647,8 +4594,7 @@ permissionRequired: { capability: "fontSettings" },
       }),
       execute: async ({ maxResults = 32 }) => {
         if (!(await hasPermission("tts"))) {
-          return { error: "tts permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "tts" }, };
+          return permissionDeniedResult("tts");
         }
         let voices = [];
         try {
@@ -4676,8 +4622,7 @@ permissionRequired: { capability: "fontSettings" },
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("tts"))) {
-          return { error: "tts permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "tts" }, };
+          return permissionDeniedResult("tts");
         }
         let speaking = false;
         try {
@@ -4701,9 +4646,7 @@ permissionRequired: { capability: "fontSettings" },
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("declarativeNetRequest"))) {
-          return { error: "declarativeNetRequest permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "declarativeNetRequest" },
- };
+          return permissionDeniedResult("declarativeNetRequest");
         }
         let rules = [];
         try {
@@ -4827,9 +4770,7 @@ permissionRequired: { capability: "declarativeNetRequest" },
       }),
       execute: async ({ url, tabId, resourceType }) => {
         if (!(await hasPermission("declarativeNetRequest"))) {
-          return { error: "declarativeNetRequest permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "declarativeNetRequest" },
- };
+          return permissionDeniedResult("declarativeNetRequest");
         }
         let parsed;
         try {
@@ -4868,9 +4809,7 @@ permissionRequired: { capability: "declarativeNetRequest" },
       }),
       execute: async ({ tabId }) => {
         if (!(await hasPermission("webNavigation"))) {
-          return { error: "webNavigation permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "webNavigation" },
- };
+          return permissionDeniedResult("webNavigation");
         }
         let frames;
         try {
@@ -4900,9 +4839,7 @@ permissionRequired: { capability: "webNavigation" },
       }),
       execute: async ({ tabId, frameId }) => {
         if (!(await hasPermission("webNavigation"))) {
-          return { error: "webNavigation permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "webNavigation" },
- };
+          return permissionDeniedResult("webNavigation");
         }
         let frame;
         try {
@@ -4931,9 +4868,7 @@ permissionRequired: { capability: "webNavigation" },
       }),
       execute: async ({ maxResults = 50, tabId, phase }) => {
         if (!(await hasPermission("webRequest"))) {
-          return { error: "webRequest permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "webRequest" },
- };
+          return permissionDeniedResult("webRequest");
         }
         const stored = await kvGet(REQUEST_ACTIVITY_KEY);
         const list = Array.isArray(stored[REQUEST_ACTIVITY_KEY]) ? stored[REQUEST_ACTIVITY_KEY] : [];
@@ -5018,9 +4953,7 @@ permissionRequired: { capability: "webRequest" },
       inputSchema: z.object({ id: z.string().min(1).max(64) }),
       execute: async ({ id }) => {
         if (!(await hasPermission("userScripts"))) {
-          return { error: "userScripts permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "userScripts" },
- };
+          return permissionDeniedResult("userScripts");
         }
         let scripts = [];
         try {
@@ -5080,9 +5013,7 @@ permissionRequired: { capability: "userScripts" },
       }),
       execute: async ({ maxResults = 50 }) => {
         if (!(await hasPermission("userScripts"))) {
-          return { error: "userScripts permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-permissionRequired: { capability: "userScripts" },
- };
+          return permissionDeniedResult("userScripts");
         }
         let scripts = [];
         try {
@@ -5163,8 +5094,7 @@ permissionRequired: { capability: "userScripts" },
       inputSchema: z.object({ id: z.string().min(1).max(64) }),
       execute: async ({ id }) => {
         if (!(await hasPermission("scripting"))) {
-          return { error: "scripting permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "scripting" }, };
+          return permissionDeniedResult("scripting");
         }
         let scripts = [];
         try {
@@ -5224,8 +5154,7 @@ permissionRequired: { capability: "userScripts" },
       }),
       execute: async ({ maxResults = 50 }) => {
         if (!(await hasPermission("scripting"))) {
-          return { error: "scripting permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "scripting" }, };
+          return permissionDeniedResult("scripting");
         }
         let scripts = [];
         try {

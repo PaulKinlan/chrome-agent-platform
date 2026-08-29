@@ -10,6 +10,9 @@ import {
 import { SKILL_ICON } from "../shared/skill-icons.js";
 import {
   CAPABILITIES,
+  capabilityState,
+  requestCapability,
+  revokeCapability,
   capabilityStatus,
 } from "../lib/capabilities.js";
 import { requestProviderHostAccess } from "../lib/provider-gate.js";
@@ -1857,7 +1860,11 @@ async function renderBrowser() {
 async function renderPermissions() {
   const list = $("#permission-list");
   list.replaceChildren();
+  const mandatory = new Set(chrome.runtime.getManifest().permissions ?? []);
   for (const cap of CAPABILITIES) {
+    // Mandatory caps render in the fixed required block below, never as
+    // optional rows with an ineffective Turn off.
+    if ((cap.permissions ?? []).every((p) => mandatory.has(p))) continue;
     const st = await capabilityState(cap.id);
     const row = document.createElement("div");
     row.className = "perm-row";

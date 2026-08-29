@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.403] — 2026-08-29
+- fix(permissions): remove ChromeOS-only audioCapture/videoCapture permissions entirely
+
 ## [0.2.402] — 2026-08-29
 - test(permissions): r5+r6 REDs — JIT request behavioral, conversation contract on denials, options import/runtime pins
 

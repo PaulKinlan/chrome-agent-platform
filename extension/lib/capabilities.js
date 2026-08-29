@@ -20,6 +20,158 @@ import { exactOriginPattern } from "./permission-orchestration.js";
 // own OPFS space).
 export const CAPABILITIES = [
   {
+    id: "bookmarks",
+    permissions: ["bookmarks"],
+    label: "Bookmarks",
+    hint: "Read, create and organize bookmarks. Without the grant, bookmark tools are refused with an Enable affordance.",
+    gates: "Gates: bookmark list/create/remove tools.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "history",
+    permissions: ["history"],
+    label: "History",
+    hint: "Search browsing history. Without the grant, history tools are refused with an Enable affordance.",
+    gates: "Gates: search_history and related history tools.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "contextMenus",
+    permissions: ["contextMenus"],
+    label: "Context menus",
+    hint: "Create the agent's right-click menu entries. Without the grant, menu tools are refused.",
+    gates: "Gates: context menu create/remove tools.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "idle",
+    permissions: ["idle"],
+    label: "Idle detection",
+    hint: "Detect when the browser is idle (used by scheduled runs). Without the grant, idle tools are refused.",
+    gates: "Gates: idle query tool.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "downloads",
+    permissions: ["downloads"],
+    label: "Downloads",
+    hint: "List, search and manage downloads. Without the grant, download tools are refused.",
+    gates: "Gates: download list/search tools.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "topSites",
+    permissions: ["topSites"],
+    label: "Top sites",
+    hint: "Read the most-visited sites. Without the grant, top-sites tools are refused.",
+    gates: "Gates: top sites tools.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "readingList",
+    permissions: ["readingList"],
+    label: "Reading list",
+    hint: "Read and manage the Chrome reading list. Without the grant, reading-list tools are refused.",
+    gates: "Gates: reading list tools.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "pageCapture",
+    permissions: ["pageCapture"],
+    label: "Page capture (MHTML)",
+    hint: "Capture a page as MHTML. Without the grant, page-capture tools are refused.",
+    gates: "Gates: MHTML page capture.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "management",
+    permissions: ["management"],
+    label: "Extension management",
+    hint: "List and manage other extensions. Without the grant, management tools are refused.",
+    gates: "Gates: extension management tools.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "privacy",
+    permissions: ["privacy"],
+    label: "Privacy controls",
+    hint: "Read and set Chrome privacy features (e.g. safe browsing). Without the grant, privacy tools are refused.",
+    gates: "Gates: privacy set/get tools.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "proxy",
+    permissions: ["proxy"],
+    label: "Proxy settings",
+    hint: "Configure Chrome proxy settings. Without the grant, proxy tools are refused.",
+    gates: "Gates: proxy set/clear tools.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "fontSettings",
+    permissions: ["fontSettings"],
+    label: "Font settings",
+    hint: "Read and set Chrome font settings. Without the grant, font tools are refused.",
+    gates: "Gates: font get/set tools.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "power",
+    permissions: ["power"],
+    label: "Power management",
+    hint: "Keep the system awake during long runs. Without the grant, power tools are refused.",
+    gates: "Gates: power keep-awake tool.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "search",
+    permissions: ["search"],
+    label: "Web search",
+    hint: "Query the default search engine. Without the grant, search tools are refused.",
+    gates: "Gates: search query tool.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "tts",
+    permissions: ["tts"],
+    label: "Text to speech",
+    hint: "Speak text aloud and list voices. Without the grant, TTS tools are refused.",
+    gates: "Gates: speak/stop/voice tools.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "system.cpu",
+    permissions: ["system.cpu"],
+    label: "System CPU info",
+    hint: "Read CPU diagnostics. Without the grant, CPU tools are refused.",
+    gates: "Gates: CPU info tool.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "system.memory",
+    permissions: ["system.memory"],
+    label: "System memory info",
+    hint: "Read memory diagnostics. Without the grant, memory tools are refused.",
+    gates: "Gates: memory info tool.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "system.storage",
+    permissions: ["system.storage"],
+    label: "System storage info",
+    hint: "Read storage device diagnostics. Without the grant, storage tools are refused.",
+    gates: "Gates: storage info tool.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "system.display",
+    permissions: ["system.display"],
+    label: "System display info",
+    hint: "Read display diagnostics. Without the grant, display tools are refused.",
+    gates: "Gates: display info tool.",
+    chromeOsOnly: false,
+  },
+  {
     id: "storage",
     permissions: ["storage"],
     label: "Memory & settings",
@@ -182,24 +334,17 @@ export async function capabilityStatus() {
 export async function requestCapability(id) {
   const cap = CAPABILITIES.find((c) => c.id === id);
   if (!cap) return { ok: false, error: `unknown capability ${id}` };
+  // OPTIONAL + JIT model (owner directive 2026-08-29, superseding the
+  // 2026-08-28 install-grant model for capabilities): the capability
+  // permissions live in manifest optional_permissions and are REQUESTED here
+  // from the owner's gesture (Settings toggle / chat affordance). ChromeOS-
+  // only permissions (audioCapture/videoCapture) are refused honestly when
+  // the platform lacks the API.
   try {
-    // HOST-PERMISSION SIMPLIFICATION (owner directive 2026-08-28: this
-    // extension is load-unpacked only and will never ship to the store): every
-    // capability permission is GRANTED AT INSTALL (manifest `permissions`).
-    // There is no runtime request left to make — confirm absence honestly and
-    // report the grant. The in-context owner approval for MUTATIONS is a
-    // separate policy layer and is unaffected.
-    const granted = await chrome.permissions.contains({
+    const granted = await chrome.permissions.request({
       permissions: cap.permissions,
     });
-    // NOTE: no .catch(() => true) — a contains() failure must surface as an
-    // honest error (the outer catch), NEVER as granted (fail closed).
-    if (!granted) {
-      // Install-granted permissions can never be absent; this is a lie-guard,
-      // not a request path.
-      return { ok: false, granted: false, capability: id, error: "capability not granted at install" };
-    }
-    return { ok: true, granted: true, capability: id };
+    return { ok: true, granted: Boolean(granted), capability: id };
   } catch (e) {
     return { ok: false, error: String(e?.message ?? e), capability: id };
   }
@@ -227,21 +372,6 @@ export async function requestCapability(id) {
  * runtime-revocable. Only the minimal mandatory boot set
  * (storage/alarms/sidePanel/offscreen) is non-revocable.
  */
-/**
- * Whether a manifest-listed capability permission is AVAILABLE on this
- * platform at all. audioCapture/videoCapture are ChromeOS-only: on
- * Linux/macOS/Windows the chrome.audioCapture/chrome.videoCapture namespaces
- * do not exist, chrome.permissions.contains answers false forever, and any
- * "reload the extension" advice is a lie. Detect by NAMESPACE existence (not
- * contains() — the two states must never collapse). Unknown permission
- * strings default to available (contains() remains the authority).
- */
-export function isPermissionPlatformAvailable(permission) {
-  if (permission === "audioCapture") return typeof chrome.audioCapture !== "undefined";
-  if (permission === "videoCapture") return typeof chrome.videoCapture !== "undefined";
-  return true;
-}
-
 /**
  * The THREE-STATE capability status (review: permissions UI must never
  * collapse "not granted" and "not available on this platform"):
