@@ -24,13 +24,13 @@ export function siteAgentSetupMessage(state, origin = "") {
   const site = siteLabel(origin);
   switch (state) {
     case "tabs-denied":
-      return "Tabs permission wasn't granted. Grant it to choose a tab and find site tools.";
+      return "The tabs permission is granted at install — if the tab list is still hidden, reload the extension and try again.";
     case "list-failed":
       return "Open tabs aren't available right now. Try again.";
     case "no-tabs":
       return "No open web tabs are available. Open a site in a tab, then try again.";
     case "permission-error":
-      return `Chrome couldn't request access for ${site}. Try again.`;
+      return `Site access couldn't be verified for ${site}. Reload the extension, then try again.`;
     case "permission-denied":
       return `Site access wasn't granted for ${site}. No Site Agent was added.`;
     case "checking":

@@ -229,8 +229,7 @@ Deno.test("perm gate (page client): no SW coordination → bounded direct reques
   let prompts = 0;
   globalThis.chrome = {
     permissions: {
-      request: () => new Promise((resolve) => { prompts++; setTimeout(() => resolve(true), 20); }),
-      contains: async () => false,
+      contains: () => new Promise((resolve) => { prompts++; setTimeout(() => resolve(true), 20); }),
     },
     // NO runtime.sendMessage — the SW authority is unavailable.
   };
@@ -262,8 +261,7 @@ Deno.test("perm gate (page client): lease-holder prompts; a second page WAITS an
   globalThis.chrome = {
     runtime: sw.runtime,
     permissions: {
-      request: () => new Promise((resolve) => { prompts++; resolvePrompt = resolve; }),
-      contains: async () => false,
+      contains: () => new Promise((resolve) => { prompts++; resolvePrompt = resolve; }),
     },
   };
   const gate = await import("../extension/lib/provider-gate.js");
@@ -407,8 +405,7 @@ Deno.test("consumer binding: onIssued delivers OUR generation atomically with ac
       onMessage: { addListener: (fn) => listeners.push(fn), removeListener: (fn) => { const i = listeners.indexOf(fn); if (i >= 0) listeners.splice(i, 1); } },
     },
     permissions: {
-      request: () => new Promise((resolve) => setTimeout(() => resolve(true), 30)),
-      contains: async () => false,
+      contains: () => new Promise((resolve) => setTimeout(() => resolve(true), 30)),
     },
   };
   const gate = await import("../extension/lib/provider-gate.js");
@@ -439,8 +436,7 @@ Deno.test("waiter: hostile stale/NEWER injections never resolve the competing-re
       onMessage: { addListener: (fn) => listeners.push(fn), removeListener: (fn) => { const i = listeners.indexOf(fn); if (i >= 0) listeners.splice(i, 1); } },
     },
     permissions: {
-      request: () => new Promise((resolve) => { promptResolve = resolve; }),
-      contains: async () => false,
+      contains: () => new Promise((resolve) => { promptResolve = resolve; }),
     },
   };
   const gate = await import("../extension/lib/provider-gate.js");
@@ -486,8 +482,7 @@ Deno.test("consumer binding: a WAITER on another surface's request binds THAT ob
       onMessage: { addListener: (fn) => listeners.push(fn), removeListener: (fn) => { const i = listeners.indexOf(fn); if (i >= 0) listeners.splice(i, 1); } },
     },
     permissions: {
-      request: () => new Promise((resolve) => { resolvePrompt = resolve; }),
-      contains: async () => false,
+      contains: () => new Promise((resolve) => { resolvePrompt = resolve; }),
     },
   };
   const gate = await import("../extension/lib/provider-gate.js");

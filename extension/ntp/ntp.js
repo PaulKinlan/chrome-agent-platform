@@ -475,10 +475,11 @@ async function renderWebmcpHubStatus() {
 async function discoverActivePage() {
   let listing = await send("agent.discoverable-tabs").catch(() => ({ ok: false }));
   if (listing?.needTabs) {
-    // Tab URLs/titles are hidden without the `tabs` permission — request it
-    // (the click IS the user gesture), then re-list.
+    // `tabs` is granted at install — VERIFY (fail closed). A needTabs response
+    // post-install-grant means a broken/revoked install; verify + report
+    // honestly instead of running an obsolete runtime request.
     const granted = await chrome.permissions
-      .request({ permissions: ["tabs"] })
+      .contains({ permissions: ["tabs"] })
       .catch(() => false);
     if (!granted) {
       setStatus(siteAgentSetupMessage("tabs-denied"), false);
@@ -526,16 +527,16 @@ function openDiscoverPicker(tabs) {
 }
 
 async function discoverTab(tab) {
-  // Request the exact origin's host permission + `scripting` together (one
-  // prompt) — the same owner-gesture the Settings Enroll button uses. The
-  // picked tab's id rides along so the SW can verify tab↔origin identity and
-  // report whether THAT tab was fully injected.
+  // The scripting permission + host access are GRANTED AT INSTALL (manifest
+  // permissions + host_permissions <all_urls>) — VERIFY the install grant
+  // rather than running an obsolete runtime request. A verification failure
+  // or absence is surfaced honestly (fail closed).
   let granted = false;
   try {
-    granted = await chrome.permissions.request({
+    granted = (await chrome.permissions.contains({
       permissions: ["scripting"],
       origins: [`${tab.origin}/*`],
-    });
+    })) === true;
   } catch (e) {
     setStatus(siteAgentSetupMessage("permission-error", tab.origin), false);
     return;
@@ -1173,6 +1174,32 @@ async function refreshFailedRuns() {
   });
   label.append(clearAll);
   section.append(label);
+  // ORPHANED-ALARM CLEANUP (owner P0): failed records whose agent is an
+  // agent-ref (background:/agent:) may be orphaned — the agent was deleted but
+  // its alarm survived. Offer one honest cleanup action that cancels every
+  // schedule whose agent no longer exists (the SW verifies against the live
+  // registry; it never cancels a live agent's schedule).
+  const hasAgentRefFailures = failed.some((fr) => typeof fr.agentId === "string" && /^(background:|agent:)/.test(fr.agentId));
+  if (hasAgentRefFailures) {
+    const orphanBtn = document.createElement("button");
+    orphanBtn.type = "button";
+    orphanBtn.className = "fr-retry fr-orphan-cleanup";
+    orphanBtn.textContent = "Cancel orphaned alarms";
+    orphanBtn.setAttribute("aria-label", "Cancel alarms whose agent was deleted");
+    orphanBtn.addEventListener("click", async () => {
+      orphanBtn.disabled = true;
+      orphanBtn.textContent = "…";
+      const r = await send("schedule.cancelOrphans").catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+      if (r?.ok) {
+        orphanBtn.textContent = r.count > 0 ? `Cancelled ${r.count} orphaned alarm${r.count === 1 ? "" : "s"}.` : "No orphaned alarms found.";
+        await refreshFailedRuns();
+      } else {
+        orphanBtn.textContent = "Cancel failed";
+        orphanBtn.disabled = false;
+      }
+    });
+    section.append(orphanBtn);
+  }
   for (const fr of failed) {
     const row = document.createElement("div");
     row.className = "fr-row";
@@ -2415,6 +2442,19 @@ async function runThreadTurn(text, attachments = [], mention = null) {
 const composer = document.getElementById("composer");
 composer.addEventListener("send", async (ev) => {
   const { text: task, attachments, agent } = ev.detail;
+  // TASK-LIFECYCLE-CONTRACT §2: a send must land in the conversation the user
+  // is looking at. If a task view is open, this send CONTINUES that thread —
+  // it may never silently fork a visible conversation into a new task (the
+  // owner's P0: "he should have all been in that one task"). A NEW task is
+  // started only when the hub surface is showing (no open task view).
+  if (!threadView.hidden && currentThreadId) {
+    // A send with an @mention while a task view is open CONTINUES the thread
+    // too — the mention rides along as a delegation to the referenced agent
+    // (same shape as the new-task mention path below); it must never fork the
+    // visible conversation into a new task (contract §2).
+    await runThreadTurn(task, attachments, agent?.ref ? { kind: agent.kind, id: agent.id, name: agent.name } : null);
+    return;
+  }
   runSurfaceOwner.claim(); // a NEW task replaces the surface — fence any in-flight run
   currentThreadId = null; // a new task → a new thread
   syncConversationRunControls();

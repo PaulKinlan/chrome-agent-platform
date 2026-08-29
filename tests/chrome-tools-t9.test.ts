@@ -202,22 +202,22 @@ Deno.test("T9 inventory: the 16 tranche-9 tools ship in the browser toolset; rea
 Deno.test("T9 permission fail-closed: every tool returns an honest Settings error without its optional permission", async () => {
   reset();
   const t = tools();
-  assertEquals((await t.get_privacy_setting.execute({ setting: "websites.doNotTrackEnabled" })).error, "privacy permission not granted — enable Privacy in Settings");
-  assertEquals((await t.set_privacy_setting.execute({ setting: "websites.doNotTrackEnabled", value: true })).error, "privacy permission not granted — enable Privacy in Settings");
-  assertEquals((await t.get_proxy_settings.execute({})).error, "proxy permission not granted — enable Proxy in Settings");
-  assertEquals((await t.set_proxy_settings.execute({ mode: "direct" })).error, "proxy permission not granted — enable Proxy in Settings");
-  assertEquals((await t.clear_proxy_settings.execute({})).error, "proxy permission not granted — enable Proxy in Settings");
-  assertEquals((await t.get_font_settings.execute({})).error, "fontSettings permission not granted — enable Font settings in Settings");
-  assertEquals((await t.set_font_size.execute({ pixelSize: 18 })).error, "fontSettings permission not granted — enable Font settings in Settings");
-  assertEquals((await t.set_default_font.execute({ genericFamily: "standard", fontId: "Arial" })).error, "fontSettings permission not granted — enable Font settings in Settings");
-  assertEquals((await t.clear_font_settings.execute({})).error, "fontSettings permission not granted — enable Font settings in Settings");
-  assertEquals((await t.request_keep_awake.execute({ level: "system" })).error, "power permission not granted — enable Power in Settings");
-  assertEquals((await t.release_keep_awake.execute({})).error, "power permission not granted — enable Power in Settings");
-  assertEquals((await t.search_query.execute({ text: "hello" })).error, "search permission not granted — enable Search in Settings");
-  assertEquals((await t.tts_speak.execute({ text: "hi" })).error, "tts permission not granted — enable Text-to-speech in Settings");
-  assertEquals((await t.tts_stop.execute({})).error, "tts permission not granted — enable Text-to-speech in Settings");
-  assertEquals((await t.list_tts_voices.execute({})).error, "tts permission not granted — enable Text-to-speech in Settings");
-  assertEquals((await t.tts_is_speaking.execute({})).error, "tts permission not granted — enable Text-to-speech in Settings");
+  assertEquals((await t.get_privacy_setting.execute({ setting: "websites.doNotTrackEnabled" })).error, "privacy permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.set_privacy_setting.execute({ setting: "websites.doNotTrackEnabled", value: true })).error, "privacy permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.get_proxy_settings.execute({})).error, "proxy permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.set_proxy_settings.execute({ mode: "direct" })).error, "proxy permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.clear_proxy_settings.execute({})).error, "proxy permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.get_font_settings.execute({})).error, "fontSettings permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.set_font_size.execute({ pixelSize: 18 })).error, "fontSettings permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.set_default_font.execute({ genericFamily: "standard", fontId: "Arial" })).error, "fontSettings permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.clear_font_settings.execute({})).error, "fontSettings permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.request_keep_awake.execute({ level: "system" })).error, "power permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.release_keep_awake.execute({})).error, "power permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.search_query.execute({ text: "hello" })).error, "search permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.tts_speak.execute({ text: "hi" })).error, "tts permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.tts_stop.execute({})).error, "tts permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.list_tts_voices.execute({})).error, "tts permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.tts_is_speaking.execute({})).error, "tts permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
   // No chrome mutation/read beyond the storage grant machinery reached without permission.
   assertEquals(chromeCalls.filter((c) => !["privacy.get"].includes(c[0])).length, 0, "no chrome API reached without its permission");
 });

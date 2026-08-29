@@ -69,9 +69,12 @@ Deno.test("preview: the host lives ONLY in the options page — SW-only sender, 
   assert(!routeBody.includes("ensureOffscreen"), "the preview route never opens an offscreen document");
   assert(!routeBody.includes('type: "wasm.preview\"'), "no old offscreen-target message type");
   assert(!routeBody.includes("ntp"), "no NTP fallback in the preview route");
-  // 5. The SW targets the options host + the manifest required permissions stay [].
+  // 5. The SW targets the options host. (HOST-PERMISSION SIMPLIFICATION:
+  // manifest permissions are GRANTED AT INSTALL — the least-authority pin that
+  // required empty permissions no longer applies; the preview still requires
+  // NO additional runtime grant.)
   assert(sw.includes('type: "wasm.preview.options"'), "the SW route sends to the options host");
-  assertEquals(manifest.permissions, [], "required permissions remain [] (least authority)");
+  assert((manifest.host_permissions ?? []).includes("<all_urls>"), "host access is install-granted (<all_urls>)");
 });
 
 Deno.test("preview: the route fetches runtime-RELATIVE wasm paths (no extension/ prefix)", async () => {

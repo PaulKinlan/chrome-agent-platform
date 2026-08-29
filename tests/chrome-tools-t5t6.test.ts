@@ -205,11 +205,12 @@ Deno.test("T5/T6: registry parity — the 11 new tools are registered with capab
   // every browserToolset tool is registered (no drift between the toolset and the table)
   const all = tools();
   for (const n of Object.keys(all)) assert(BROWSER_TOOL_NAMES.includes(n), `toolset tool ${n} registered`);
-  // manifest declares the new optional permissions
+  // HOST-PERMISSION SIMPLIFICATION: these are GRANTED AT INSTALL now
   const manifest = JSON.parse(await Deno.readTextFile(new URL("../extension/manifest.json", import.meta.url)));
   for (const p of ["system.cpu", "system.memory", "system.storage", "system.display", "topSites", "readingList", "pageCapture"]) {
-    assert(manifest.optional_permissions.includes(p), `manifest optional ${p}`);
+    assert(manifest.permissions.includes(p), `manifest granted ${p}`);
   }
+  assert((manifest.host_permissions ?? []).includes("<all_urls>"), "host access is permanent (<all_urls>)");
 });
 
 Deno.test("T6 r2 (review): update_reading_list_entry refuses a no-op update honestly (M3)", async () => {

@@ -11,7 +11,6 @@ import { SKILL_ICON } from "../shared/skill-icons.js";
 import {
   CAPABILITIES,
   capabilityStatus,
-  requestCapability,
 } from "../lib/capabilities.js";
 import { requestProviderHostAccess } from "../lib/provider-gate.js";
 import {
@@ -226,13 +225,13 @@ function wireCredentialDurability(input, warning, { existing = false } = {}) {
     if (result.granted) {
       storageGranted = true;
       syncAllCredentialWarnings();
-      saveFlash("Storage enabled — API keys saved from now on survive extension restarts.");
+      saveFlash("Storage verified — API keys saved from now on survive extension restarts.");
     } else if (result.reason === "owner-click-required") {
-      saveFlash("Use the Enable storage button directly to grant optional storage.");
+      saveFlash("Use the Verify storage button directly — storage is granted at install.");
       warning.setAttribute("active", "");
       warning.focusAction?.();
     } else {
-      saveFlash("Storage was not enabled — the API key has not been saved.");
+      saveFlash("Storage could not be verified — the API key has not been saved. Storage is granted at install; reload the extension and try again.");
       warning.setAttribute("active", "");
       warning.focusAction?.();
     }
@@ -244,7 +243,7 @@ function blockSessionOnlyCredentialSave(input, warning) {
   if (!credentialNeedsDurableStorage({ enteredKey: input?.value ?? "", storageGranted })) return false;
   warning?.setAttribute("active", "");
   warning?.focusAction?.();
-  saveFlash("Enable storage before saving this API key — it would otherwise be lost on restart.");
+  saveFlash("Verify storage before saving this API key — it would otherwise be lost on restart.");
   return true;
 }
 
@@ -999,18 +998,16 @@ async function renderEnroll() {
       return;
     }
     const matches = [`${origin}/*`];
-    // The OWNER gesture: request the exact origin's host permission AND the
-    // `scripting` permission TOGETHER (one gesture, one prompt) so enrollment
-    // can register + drive the discovery scripts. The reviewer's round-16 finding:
-    // enrollment requested host only, not scripting plus host, so the discovery
-    // scripts could never register even after a successful host grant. Never
-    // request from the SW (no gesture).
+    // The scripting permission + host access are GRANTED AT INSTALL (manifest
+    // permissions + host_permissions <all_urls>) — VERIFY the install grant
+    // rather than running an obsolete runtime request. Fail closed: a
+    // verification error or absence surfaces honestly.
     let granted;
     try {
-      granted = await chrome.permissions.request({
+      granted = (await chrome.permissions.contains({
         permissions: ["scripting"],
         origins: matches,
-      });
+      })) === true;
     } catch {
       saveFlash(siteAgentSetupMessage("permission-error", origin));
       return;
@@ -1093,12 +1090,14 @@ async function renderDiscoveredOpenTabs() {
     enrollBtn.textContent = "Add Site Agent";
     enrollBtn.setAttribute("aria-label", `Add Site Agent for ${t.origin}`);
     enrollBtn.addEventListener("click", async () => {
+      // Verify the install grant (scripting + host are granted at install);
+      // there is no runtime request left to make. Fail closed on error.
       let granted = false;
       try {
-        granted = await chrome.permissions.request({
+        granted = (await chrome.permissions.contains({
           permissions: ["scripting"],
           origins: [`${t.origin}/*`],
-        });
+        })) === true;
       } catch {
         saveFlash(siteAgentSetupMessage("permission-error", t.origin));
         return;
@@ -1529,14 +1528,13 @@ function backgroundAgentRow(a) {
 
   toggle.addEventListener("toggle", async (e) => {
     const enabled = e.detail.checked;
-    // ENABLE time (a real user gesture): request the OPTIONAL notifications
-    // permission so the scheduled completions can surface as notifications
-    // (never from the SW — no gesture). Best-effort: a denial means the
-    // run-time path skips the notification silently.
+    // ENABLE time: notifications are granted at install — VERIFY only (a
+    // runtime request no longer exists). Best-effort: if the install grant is
+    // somehow absent the run-time path skips the notification silently.
     if (enabled) {
       try {
-        await chrome.permissions?.request?.({ permissions: ["notifications"] });
-      } catch { /* not grantable — the run-time path skips */ }
+        await chrome.permissions?.contains?.({ permissions: ["notifications"] });
+      } catch { /* unverifiable — the run-time path skips */ }
     }
     const out = await chrome.runtime
       .sendMessage({ type: "background-agent.set", id: a.id, enabled })
@@ -1772,29 +1770,27 @@ async function renderBrowser() {
     const checked = e.detail.checked;
     if (checked) {
       // PERSISTENCE (tracker item 60): the browser-control grant lives in
-      // chrome.storage.local, which requires the OPTIONAL "storage" permission.
-      // Without it the grant is SESSION-ONLY (the SW's in-memory fallback) and
-      // the toggle silently resets on the next page/extension load — the
-      // "never stays toggled" bug. Request "storage" HERE (a real gesture) so
-      // the grant survives a reload; a denial is surfaced honestly.
+      // chrome.storage.local, which needs the "storage" permission — now
+      // GRANTED AT INSTALL, so VERIFY it (no runtime request exists). If the
+      // verify fails the grant would be SESSION-ONLY (the SW's in-memory
+      // fallback) — surfaced honestly below.
       let storageGranted = true;
       try {
-        storageGranted = await chrome.permissions.request({ permissions: ["storage"] });
+        storageGranted = (await chrome.permissions.contains({ permissions: ["storage"] })) === true;
       } catch { storageGranted = false; }
-      // The Screenshots capability requests the SILENT `activeTab` permission
-      // (NOT `tabs`, which warns and can't be granted in headless) — this
-      // ENABLES Chrome's
+      // The Screenshots capability uses the SILENT `activeTab` permission
+      // (NOT `tabs`, which warns) — this ENABLES Chrome's
       // transient owner-invoked capture (clicking the extension icon while
       // viewing a page). It never authorizes a background or model-selected
-      // capture (those require exact site access). Requested HERE (a real user
-      // gesture). Denial degrades gracefully: the grant still covers
+      // capture (those require exact site access). Granted at install —
+      // verified here. Denial degrades gracefully: the grant still covers
       // open/navigate/close; only icon-click screenshots become unavailable.
       let captureGranted = false;
       try {
-        captureGranted = await chrome.permissions.request({
+        captureGranted = (await chrome.permissions.contains({
           permissions: ["activeTab"],
-        });
-      } catch { /* unsupported — activeTab stays absent */ }
+        })) === true;
+      } catch { /* unreadable — activeTab treated as absent */ }
       // Route the grant through the SERVICE WORKER (single authority) — never
       // write it in this page's own realm (split-authority).
       await chrome.runtime.sendMessage({
@@ -1860,10 +1856,18 @@ async function renderPermissions() {
   const status = await capabilityStatus();
   const list = $("#permission-list");
   list.replaceChildren();
+  // INSTALL-GRANTED MODEL (owner directive 2026-08-28: load-unpacked only,
+  // never the store): every permission in the manifest is granted at install.
+  // chrome.permissions.remove only works on OPTIONAL permissions, so nothing
+  // here is runtime-removable — this section is an honest READ-ONLY state
+  // display (a live contains() verification per capability), not a control.
+  const manifestPerms = new Set(chrome.runtime.getManifest().permissions ?? []);
+  const covered = new Set();
   for (const cap of CAPABILITIES) {
     const row = document.createElement("div");
     row.className = "perm-row";
     const granted = Boolean(status[cap.id]);
+    for (const p of cap.permissions ?? []) covered.add(p);
 
     const name = document.createElement("span");
     name.className = "perm-name";
@@ -1871,7 +1875,7 @@ async function renderPermissions() {
 
     const state = document.createElement("span");
     state.className = "perm-state" + (granted ? " granted" : " missing");
-    state.textContent = granted ? "Granted" : "Not granted";
+    state.textContent = granted ? "Granted at install" : "MISSING — reload the extension";
 
     const hint = document.createElement("span");
     hint.className = "muted";
@@ -1885,79 +1889,30 @@ async function renderPermissions() {
     gates.textContent = cap.gates ?? `Gates: ${cap.label.toLowerCase()}.`;
 
     row.append(name, state, hint, gates);
-    if (!granted) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "btn small grant-perm";
-      btn.dataset.capability = cap.id;
-      btn.textContent = "Enable";
-      btn.setAttribute("aria-label", `Enable ${cap.label}`);
-      btn.addEventListener("click", async () => {
-        // The real chrome.permissions.request happens here, inside the click
-        // handler (a genuine user gesture — the SW can never request).
-        const res = await requestCapability(cap.id);
-        if (res?.granted && cap.id === "alarms") {
-          // Permission was requested only by this owner click. Notify the worker,
-          // which confirms the grant and owns listener activation/reload.
-          const activation = await chrome.runtime.sendMessage({
-            type: "alarms.permission-granted",
-          }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
-          if (activation?.reloadScheduled) {
-            saveFlash("Enabled Scheduled tasks. Reloading once to activate alarms…");
-          } else if (activation?.listenerRegistered) {
-            saveFlash("Enabled Scheduled tasks.");
-          } else {
-            saveFlash(
-              `Scheduled tasks was granted, but activation failed: ${activation?.error ?? "alarm listener unavailable"}.`,
-            );
-          }
-        } else if (res?.granted) saveFlash(`Enabled ${cap.label}.`);
-        else {
-          saveFlash(
-            `Enable ${cap.label} declined: ${res?.error ?? "not granted"}.`,
-          );
-        }
-        renderPermissions();
-      });
-      row.appendChild(btn);
-    } else {
-      // A GRANTED capability must be revocable (the round-16 finding: the panel
-      // only rendered Enable, no Disable/Revoke action). Disable removes the
-      // permission from a real user gesture + CONFIRMS absence, surfacing failure.
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "btn small ghost revoke-perm";
-      btn.dataset.capability = cap.id;
-      btn.textContent = "Disable";
-      btn.setAttribute("aria-label", `Disable ${cap.label}`);
-      btn.addEventListener("click", async () => {
-        // Route Disable through the SERVICE WORKER (single authority): storage
-        // needs a pre-removal persistent→session snapshot + migration reset, and
-        // scripting needs its dependent host permissions + dynamic scripts
-        // revoked. A direct page-realm permissions.remove would skip both (the
-        // round-17 capability-Disable finding). When the SW requires owner
-        // approval, it is surfaced IN-CONTEXT (a native confirm dialog), never a
-        // settings-approvals detour (owner: approvals belong in the action's
-        // own context, not a separate settings page).
-        const result = await runOwnerApprovedMutation({
-          message: { type: "capability.revoke", id: cap.id },
-          action: "capability.revoke",
-          sendMessage: (value) => chrome.runtime.sendMessage(value),
-          requestConfirmation: () =>
-            confirmActionDialog({
-              title: "Disable permission?",
-              body: `Disable ${cap.label}? This needs your confirmation before it can be removed.`,
-              confirmLabel: "Disable",
-              destructive: true,
-            }),
-        });
-        if (result?.ok === true) saveFlash(`Disabled ${cap.label}.`);
-        else if (result?.cancelled) saveFlash(`Disable ${cap.label} cancelled.`);
-        else saveFlash(`Disable ${cap.label} failed: ${result?.error ?? "still granted"}.`);
-        renderPermissions();
-      });
-      row.appendChild(btn);
-    }
+    list.appendChild(row);
+  }
+  // The remaining install-granted manifest permissions (history, bookmarks,
+  // context menus, …) get an honest verified row too — a capability whose
+  // state cannot be seen is how the "search_history says enable History but
+  // there is no History control" bug class happens.
+  const pretty = (p) => p.replace(/[._]/g, " ").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^\w/, (c) => c.toUpperCase());
+  const rest = [...manifestPerms].filter((p) => !covered.has(p)).sort();
+  const states = await Promise.all(rest.map((p) =>
+    chrome.permissions.contains({ permissions: [p] }).catch(() => false)
+  ));
+  for (let i = 0; i < rest.length; i++) {
+    const row = document.createElement("div");
+    row.className = "perm-row";
+    const name = document.createElement("span");
+    name.className = "perm-name";
+    name.textContent = pretty(rest[i]);
+    const state = document.createElement("span");
+    state.className = "perm-state" + (states[i] === true ? " granted" : " missing");
+    state.textContent = states[i] === true ? "Granted at install" : "MISSING — reload the extension";
+    const hint = document.createElement("span");
+    hint.className = "muted";
+    hint.textContent = `chrome.${rest[i]} — granted at install (manifest).`;
+    row.append(name, state, hint);
     list.appendChild(row);
   }
 }
@@ -2662,14 +2617,12 @@ async function renderPrompts() {
     // "session-only" (the describe payload's durable flag drives the badge).
     if (type === "prompt.set") {
       try {
-        const has = await chrome.permissions.contains({ permissions: ["storage"] });
+        // storage is granted at install — VERIFY (fail closed), never request.
+        const has = (await chrome.permissions.contains({ permissions: ["storage"] })) === true;
         if (!has) {
-          const granted = await chrome.permissions.request({ permissions: ["storage"] });
-          if (!granted) {
-            saveFlash("Storage not granted — this customization is session-only until storage is enabled.");
-          }
+          saveFlash("Storage not granted — this customization is session-only. Storage is granted at install; reload the extension and try again.");
         }
-      } catch { /* a denied/unavailable request falls through to the save */ }
+      } catch { /* an unverifiable grant falls through to the save */ }
     }
     // MANDATORY CAS (the review's race-safety blocker): EVERY prompt-store
     // mutation — set, reset, keep — carries the revision this window read,
@@ -2700,7 +2653,7 @@ async function renderPrompts() {
         .catch(() => true);
       saveFlash(durableNow
         ? "System prompt customization saved."
-        : "Saved for THIS SESSION only — enable storage in Settings to persist across restarts.");
+        : "Saved for THIS SESSION only — storage is granted at install; if this persists, reload the extension.");
     } else {
       saveFlash(
         type === "prompt.keep" ? "Customization kept — now based on the latest built-in prompt."

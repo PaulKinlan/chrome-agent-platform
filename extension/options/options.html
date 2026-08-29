@@ -186,7 +186,7 @@
       <section id="permissions" class="panel">
         <h2>Permissions</h2>
         <p
-          class="muted">Every permission is optional. The hub runs with none of these; enable each capability when you need it. Each Enable button asks Chrome for just that permission.</p>
+          class="muted">Every permission is granted at install (this extension is loaded unpacked; it never ships to a store). This is the live, verified state of each grant — there is nothing to enable here. If any row shows MISSING, reload the extension.</p>
         <div id="permission-list" class="permission-list"></div>
       </section>
 
@@ -209,7 +209,7 @@
       <section id="hooks" class="panel">
         <h2>System hooks</h2>
         <p
-          class="muted">Every chrome.* event an agent can listen to + respond to. <strong>Deny</strong> a hook to stop the agent ever using it — the deny-list is authoritative and the agent cannot break past it. A hook also needs its optional permission before it can run.</p>
+          class="muted">Every chrome.* event an agent can listen to + respond to. <strong>Deny</strong> a hook to stop the agent ever using it — the deny-list is authoritative and the agent cannot break past it. A hook's permission is granted at install; the deny-list is the control here.</p>
         <div id="hook-list" class="hook-list"></div>
       </section>
 

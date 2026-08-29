@@ -341,7 +341,7 @@ Deno.test("T4 list_downloads: bounded + permission-gated; read-only exposure", a
 
   granted.delete("downloads");
   const denied = await tools().list_downloads.execute({});
-  assertEquals(denied.error, "downloads permission not granted — enable Downloads in Settings");
+  assertEquals(denied.error, "downloads permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
 });
 
 // ──────────────────────────────────────────────────────────────────────────

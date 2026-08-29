@@ -4,7 +4,7 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { runOwnerApprovedMutation } from "../extension/lib/owner-approved-mutation.js";
 
-const REQUIRED = "This operation requires owner approval in Settings.";
+const REQUIRED = "This operation requires owner approval.";
 
 function providerService(initial) {
   let saved = structuredClone(initial);

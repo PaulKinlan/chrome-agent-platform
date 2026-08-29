@@ -289,7 +289,7 @@ Deno.test("T12 unregister_user_script: a script whose matches fail validation is
 Deno.test("T12 list_user_scripts: read-only, bounded, permission-gated", async () => {
   reset();
   const denied = await tools().list_user_scripts.execute({});
-  assertEquals(denied.error, "userScripts permission not granted — enable User scripts in Settings");
+  assertEquals(denied.error, "userScripts permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
   grantedPermissions.add("userScripts");
   for (let i = 0; i < 5; i++) userScripts.set(`s${i}`, { id: `s${i}`, js: "y".repeat(400), matches: ["https://a.example/*"], runAt: "document_idle" });
   const r = await tools().list_user_scripts.execute({ maxResults: 3 });
@@ -306,7 +306,7 @@ Deno.test("T12 list_user_scripts: read-only, bounded, permission-gated", async (
 Deno.test("T12 register_content_script: broad matches refused before Chrome; scripting permission gated", async () => {
   reset();
   const noPerm = await tools().register_content_script.execute({ id: "c1", js: "x", matches: ["https://a.example/*"] });
-  assertEquals(noPerm.error, "scripting permission not granted — enable Site Agents in Settings");
+  assertEquals(noPerm.error, "scripting permission not granted — all permissions are granted at install; if Settings → Permissions shows Site Agents missing, reload the extension");
   grantedPermissions.add("scripting");
   grantedOrigins.add("https://a.example/*");
   await setGlobalBrowserControlGrant();

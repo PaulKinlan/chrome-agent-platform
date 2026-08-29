@@ -186,7 +186,7 @@ export async function scheduleTask(
     const alarms = alarmsApi();
     if (!alarms) {
       throw new Error(
-        "alarms permission not granted — enable Scheduled tasks in Settings",
+        "alarms permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension",
       );
     }
     // Fail before persistence when Chrome's extension-wide alarm capacity is
@@ -425,7 +425,7 @@ export async function blockScheduledTaskForStorage(name, error) {
 export async function retryScheduledTask(name, { expectedOwner } = {}) {
   const alarms = alarmsApi();
   if (!alarms) {
-    return { ok: false, name, error: "alarms permission not granted — enable Scheduled tasks in Settings" };
+    return { ok: false, name, error: "alarms permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
   }
   try {
     await assertRunOwned();
@@ -594,7 +594,7 @@ export async function resumeScheduledTask(name, { expectedOwner } = {}) {
     : (task.at > now ? task.at : now + 1000);
   const alarms = alarmsApi();
   if (!alarms) {
-    return { ok: false, name, error: "alarms permission not granted — enable Scheduled tasks in Settings" };
+    return { ok: false, name, error: "alarms permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
   }
   try {
     await assertRunOwned();
@@ -725,7 +725,7 @@ export async function updateScheduledTask(
         curTasks[name] = restore;
         await kvSet({ [TASK_KEY]: curTasks });
       }
-      return { ok: false, name, error: "alarms permission not granted — enable Scheduled tasks in Settings" };
+      return { ok: false, name, error: "alarms permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
     }
     try {
       const info = { when };

@@ -2844,7 +2844,7 @@ function approvalExecutionId(context) {
 
 async function requireOwnerApproval(context, action, target, payload, { card = false } = {}) {
   const executionId = approvalExecutionId(context);
-  if (!executionId || !target) return { ok: false, error: "This operation requires owner approval in Settings." };
+  if (!executionId || !target) return { ok: false, error: "This operation requires owner approval." };
   // Owner-DIRECT actions: the owner's own click in an extension UI document IS
   // the approval — deleting an artifact from the artifact view must never wait
   // on a hidden Settings decision (CAP-FB-20260823-ARTIFACT-DELETE-PERMISSION-01).
@@ -2863,7 +2863,7 @@ async function requireOwnerApproval(context, action, target, payload, { card = f
     // install key, fail closed rather than publishing an ephemeral reference.
     targetRef = await opaqueTargetRef(target);
   } catch {
-    return { ok: false, error: "This operation requires owner approval in Settings." };
+    return { ok: false, error: "This operation requires owner approval." };
   }
   const consumed = consumeApproved(ownerApprovalStore, executionId, action, target, digest);
   if (consumed.ok) {
@@ -2883,9 +2883,9 @@ async function requireOwnerApproval(context, action, target, payload, { card = f
   // pending approval id and the EXACT retry consumes it by digest match.
   if (card && pending.ok) {
     return approvalCardDenial({ approvalId: pending.approvalId, action, targetRef }) ??
-      { ok: false, error: "This operation requires owner approval in Settings." };
+      { ok: false, error: "This operation requires owner approval." };
   }
-  return { ok: false, error: "This operation requires owner approval in Settings." };
+  return { ok: false, error: "This operation requires owner approval." };
 }
 
 function payloadFields(entries) {
@@ -3136,7 +3136,7 @@ const handlers = mergeRouteMaps(
       if (hasHost === false) {
         return {
           ok: false,
-          error: `network access to ${u.host} is not granted — enable the host permission (Settings → Permissions) or read the active tab instead`,
+          error: `network access to ${u.host} is not granted — host access is granted at install; if Settings → Permissions shows it missing, reload the extension`,
         };
       }
       const res = await fetch(u.href, { method: m });
@@ -3619,7 +3619,11 @@ const handlers = mergeRouteMaps(
       if (mention && !mentionRoute) {
         result = { ok: false, error: `cannot delegate to ${mention.name}: unknown agent kind ${mention.kind}` };
       } else if (mentionRoute === "agent.delegate") {
-        result = await handlers["agent.delegate"]({ origin: mention.id, task: m.task, threadId });
+        // uiRunId carries the UI attempt's run id so the delegate's progress
+        // events (incl. tool permission denials → approval cards) are accepted
+        // by the conversation's exact-runId fence; execId stays the durable
+        // authority for the run itself.
+        result = await handlers["agent.delegate"]({ origin: mention.id, task: m.task, threadId, uiRunId: m.runId ?? null });
       } else if (mentionRoute) {
         result = await handlers[mentionRoute]({
           id: mention.id,
@@ -4218,11 +4222,18 @@ const handlers = mergeRouteMaps(
         continue;
       }
       if (!origin || !/^https?:/.test(origin)) continue;
+      // Item-44 parity (owner directive): a page with ZERO registered WebMCP
+      // tools must not appear as an addable Site Agent. The per-origin tool
+      // count comes from the SAME registry the directory lists (listTools) —
+      // a page only appears when it actually exposes tools.
+      const registeredTools = await listTools(origin).catch(() => []);
+      if (!Array.isArray(registeredTools) || registeredTools.length === 0) continue;
       out.push({
         id: t.id,
         title: String(t.title ?? "").slice(0, 200),
         url: String(t.url).slice(0, 500),
         origin,
+        toolCount: registeredTools.length,
         active: t.active === true,
         lastAccessed: typeof t.lastAccessed === "number" ? t.lastAccessed : 0,
       });
@@ -4849,11 +4860,11 @@ const handlers = mergeRouteMaps(
     return { ok: run?.ok ?? false, result, error: run?.error, logs: run?.logs ?? [] };
   },
 
-  // ---- capability request (the agent can REQUEST; the owner approves) ----
+  // ---- capability request (install-granted: the SW VERIFIES, never asks) ----
   async "capability.request"({ id }) {
-    // requestCapability MUST be called from a user gesture; from the SW (an
-    // agent tool) there is no gesture, so it fails closed. Return an honest
-    // "needs owner gesture" — the agent tells the owner to click Enable.
+    // Every capability permission is granted at install — requestCapability
+    // VERIFIES the install grant (fail closed: an unreadable state is an
+    // honest error, never reported as granted).
     const res = await requestCapability(id);
     if (res.ok && res.granted) return { ok: true, granted: true, capability: id };
     return {
@@ -4861,7 +4872,7 @@ const handlers = mergeRouteMaps(
       granted: false,
       capability: id,
       error: res.ok
-        ? `capability ${id} needs a user gesture — ask the owner to click Enable in Settings`
+        ? `capability ${id} is not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension`
         : (res.error ?? `capability ${id} not granted`),
     };
   },
@@ -5072,6 +5083,39 @@ const handlers = mergeRouteMaps(
     }
     const executionId = String(m?.executionId ?? "");
     return { ok: true, executionId, logs: await durableRuns.listLogs(executionId) };
+  },
+  async "schedule.cancelOrphans"() {
+    // ORPHANED-ALARM CLEANUP (owner P0 2026-08-28): a deleted agent's schedule
+    // (recipe:<slug>) can survive as a live alarm that keeps firing failed runs
+    // and wasting tokens. An orphan is a recipe:<slug> scheduled task whose
+    // slug is neither a built-in/background recipe nor a custom recipe — the
+    // agent is gone, the alarm must go too. Cancels every orphan and reports
+    // exactly what was cancelled.
+    const tasks = await listScheduledTasks().catch(() => null);
+    const custom = await getCustomRecipes().catch(() => null);
+    // FAIL CLOSED (review P1-a): an unreadable registry means a live custom
+    // recipe is INDISTINGUISHABLE from an orphan — refuse to cancel anything
+    // rather than risk cancelling a live agent's schedule.
+    if (!Array.isArray(tasks) || !Array.isArray(custom)) {
+      return { ok: false, error: "the recipe/schedule registry could not be read — refusing to cancel anything", cancelled: [], count: 0 };
+    }
+    const known = new Set([
+      ...backgroundRecipes().map((r) => `recipe:${r.id}`),
+      ...custom.map((r) => `recipe:${r.id}`),
+    ]);
+    const cancelled = [];
+    const failed = [];
+    for (const t of tasks) {
+      if (!t?.name || !t.name.startsWith("recipe:")) continue;
+      if (known.has(t.name)) continue;
+      const r = await cancelScheduledTask(t.name).catch(() => null);
+      // Only a CONFIRMED cancellation is reported — a thrown cancel or an
+      // {ok:false}/{cancelled:false} result is a failure, never a success.
+      if (r?.ok === true && r.cancelled === true) cancelled.push(t.name);
+      else failed.push(t.name);
+    }
+    if (cancelled.length) broadcastRegistryChanged();
+    return { ok: true, cancelled, failed, count: cancelled.length };
   },
   async "task.list"() {
     // Owner-visible scheduled-task list (active + quarantined) so a quarantined
@@ -5916,7 +5960,7 @@ const handlers = mergeRouteMaps(
   async "agent.pending-cleanup"() {
     return { origins: await listPendingCleanup() };
   },
-  async "agent.delegate"({ origin, task, threadId = null, _executionId = null, _resumeGeneration = null, _resumeToken = null, _allowProviderChange = false }) {
+  async "agent.delegate"({ origin, task, threadId = null, _executionId = null, _resumeGeneration = null, _resumeToken = null, _allowProviderChange = false, uiRunId = null }) {
     // Direct, observable fan-out: run a WORKER agent (not the hub) for an
     // enrolled origin and journal its result to the worker's OWN per-origin
     // memory. Preemptive revocation: the generation is captured up front, the
@@ -6053,7 +6097,10 @@ const handlers = mergeRouteMaps(
           recordRunAttestation(bound);
         });
         a.setProgress?.((ev) => {
-          try { broadcastProgress({ ...ev, runId: execId, agentId: canonical }); } catch { /* best-effort */ }
+          // UI broadcasts ride the UI correlation id when one was supplied
+          // (the conversation fences on the UI attempt's runId); execId stays
+          // the durable authority everywhere else.
+          try { broadcastProgress({ ...ev, runId: uiRunId ?? execId, agentId: canonical }); } catch { /* best-effort */ }
           durableRuns.heartbeat(execId, { progressed: true }).catch(() => {
             try { a.abort?.(); } catch { /* already stopped */ }
           });
@@ -6835,7 +6882,7 @@ async function openSidePanelForCommand() {
   if (!granted) {
     pushDiagnostic(
       "warn",
-      "Side panel shortcut: the sidePanel permission is not granted — enable it in Settings → Permissions, then try again.",
+      "Side panel shortcut: the sidePanel permission is not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension.",
       "commands",
       "permission",
     );

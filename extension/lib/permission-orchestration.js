@@ -170,9 +170,11 @@ export async function computePermissionPlan(inputs, {
   });
 }
 
-/** MUST be invoked directly from the owner's click handler. There is
- * intentionally no await or other asynchronous work before request(). */
-export function requestPermissionBundleFromGesture(bundle, request = (b) => chrome.permissions.request(b)) {
+/** Verify the install grant for a bundle. Every API permission + host access
+ * is granted at install (manifest permissions + host_permissions <all_urls>),
+ * so there is no runtime request left — the default VERIFIES with contains()
+ * and fails CLOSED (a contains() error is NOT granted). */
+export function requestPermissionBundleFromGesture(bundle, request = (b) => chrome.permissions.contains(b)) {
   const normalized = requestableBundle([normalizeRequirement({
     tool: "owner grant", reason: "Approved permission plan",
     permissions: bundle?.permissions ?? [], origins: bundle?.origins ?? [],

@@ -699,12 +699,17 @@ class StorageDurabilityWarning extends Component {
     const provider = this.getAttribute("provider") || "provider";
     const busy = this.hasAttribute("busy");
     const state = this.getAttribute("state") || "idle";
-    const followup = state === "denied"
-      ? "Storage was not enabled. This key has not been saved."
-      : state === "owner-click-required"
-      ? "Use the Enable storage button directly to continue."
-      : state === "request-failed"
-      ? "Chrome could not open the storage prompt. Try again."
+    // Verify-only reasons (first-run-onboarding returns exactly these):
+    // owner-click-required, permissions-api-unavailable, granted,
+    // not-granted-at-install, verify-failed. There is no runtime request, so
+    // the old denied/request-failed states are dead — every failure
+    // remediation is verify-again, then reload the extension.
+    const followup = state === "owner-click-required"
+      ? "Use the Verify storage button to continue."
+      : state === "not-granted-at-install"
+      ? "Storage is granted at install but the grant is missing — reload the extension. If it persists, reinstall the extension."
+      : state === "verify-failed" || state === "permissions-api-unavailable"
+      ? "Storage couldn't be verified. Reload the extension and try again."
       : "";
     mountTemplate(this, `
       :host { display:block; grid-column:1 / -1; color:var(--text,#1d1b18); }
@@ -730,7 +735,7 @@ class StorageDurabilityWarning extends Component {
         <span>Without storage, the ${escapeHtml(provider)} key will be lost when the extension worker restarts.</span>
         ${followup ? `<span class="followup">${escapeHtml(followup)}</span>` : ""}
       </div>
-      <button type="button"${busy ? " disabled aria-busy=\"true\"" : ""}>${busy ? "Enabling…" : "Enable storage"}</button>
+      <button type="button"${busy ? " disabled aria-busy=\"true\"" : ""}>${busy ? "Verifying…" : "Verify storage"}</button>
     </div>`);
   }
   _wire() {
@@ -758,10 +763,10 @@ class FirstRunGuide extends Component {
     // and an inline status line names exactly what is missing — the same line
     // the button points at via aria-describedby so assistive tech announces it.
     const seedGateReason = !providerReady && !storageReady
-      ? "Configure a provider and enable storage to unlock the starter task."
+      ? "Configure a provider and verify storage to unlock the starter task."
       : !providerReady
       ? "Configure a provider to unlock the starter task."
-      : "Enable storage to unlock the starter task.";
+      : "Verify storage to unlock the starter task.";
     const check = `<span class="check" aria-hidden="true">${ICONS.check}</span>`;
     mountTemplate(this, `
       :host { display:block; margin-block-end:24px; color:var(--text,#1d1b18); }
@@ -816,7 +821,7 @@ class FirstRunGuide extends Component {
       <p class="intro">Connect one provider, keep its key across restarts, choose browser control, then create a visible artifact.</p>
       <ol>
         <li class="${providerReady ? "ready" : ""}"><span class="marker">${providerReady ? check : ""}</span><div class="step"><strong>Choose a provider</strong><span>${providerReady ? "Provider and key are ready." : "Pick a model service and enter its key."}</span></div></li>
-        <li class="${storageReady ? "ready" : ""}"><span class="marker">${storageReady ? check : ""}</span><div class="step"><strong>Keep the key</strong><span>${storageReady ? "Storage is enabled." : "Enable optional storage from the key warning."}</span></div></li>
+        <li class="${storageReady ? "ready" : ""}"><span class="marker">${storageReady ? check : ""}</span><div class="step"><strong>Keep the key</strong><span>${storageReady ? "Storage is enabled." : "Verify storage from the key warning (storage is granted at install)."}</span></div></li>
         <li><span class="marker"></span><div class="step"><strong>Create an artifact</strong><span>Use the starter task, review it, then choose Run task.</span></div></li>
       </ol>
       <div class="consent-card" aria-label="Browser control consent">
@@ -3972,16 +3977,17 @@ class AgentComposer extends Component {
   // gesture (the menu click) then acts. A missing/denied permission surfaces a
   // clear status (never a silent no-op).
 
-  /** Request optional permissions. MUST be the first await in the action so it
-   *  runs inside the menu-click user gesture (a preceding await breaks the
-   *  gesture and Chrome auto-denies). Supports both API permissions (perms) and
-   *  scoped host origins (origins). */
-  async _requestPermission(perms, origins) {
-    if (!chrome?.permissions?.request) return true; // no API → treat as available
+  /** Verify install-granted permissions. Every API permission + host access is
+   *  granted at install (manifest permissions + host_permissions <all_urls>),
+   *  so there is no runtime request left — this VERIFIES with contains() and
+   *  fails CLOSED: a contains() error is treated as NOT granted. Supports both
+   *  API permissions (perms) and scoped host origins (origins). */
+  async _verifyPermission(perms, origins) {
+    if (!chrome?.permissions?.contains) return true; // no API → treat as available
     const req = {};
     if (perms?.length) req.permissions = perms;
     if (origins?.length) req.origins = origins;
-    try { return (await chrome.permissions.request(req)) === true; }
+    try { return (await chrome.permissions.contains(req)) === true; }
     catch { return false; }
   }
 
@@ -4058,11 +4064,10 @@ class AgentComposer extends Component {
         // grab-screenshot activates + captures the chosen tab. Listing the tabs
         // needs `tabs`; capturing a SPECIFIC tab needs host access to THAT
         // origin (activeTab is transient + tied to the tab active at grant
-        // time, so it does not authorize a later-activated pick). The dynamic-
-        // permission-on-need principle: request the scoped host origin on the
-        // gesture, never fail with a bare "permission required".
-        const tabsGranted = await this._requestPermission(["tabs"]);
-        if (!tabsGranted) { this.setStatus("tab listing not granted — enable the Tabs permission in Settings.", false); return; }
+        // time, so it does not authorize a later-activated pick). Both are
+        // install-granted — verified here (fail closed), never a runtime ask.
+        const tabsGranted = await this._verifyPermission(["tabs"]);
+        if (!tabsGranted) { this.setStatus("tab listing unavailable — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension.", false); return; }
         const tabs = await chrome.tabs.query({}).catch(() => []);
         if (!tabs.length) { this.setStatus("no open tabs to pick from."); return; }
         const tab = await this._pickTab(tabs);
@@ -4072,11 +4077,11 @@ class AgentComposer extends Component {
           this.setStatus(`attached tab: ${tab.title || tab.url}`);
           return;
         }
-        // Capture the picked tab: request the scoped host origin on the gesture.
+        // Capture the picked tab: verify host access to that origin (install-granted).
         let origin = "";
         try { origin = new URL(tab.url || "").origin; } catch { /* keep empty */ }
         if (origin && origin !== "null") {
-          const granted = await this._requestPermission(null, [`${origin}/*`]);
+          const granted = await this._verifyPermission(null, [`${origin}/*`]);
           if (!granted) { this.setStatus(`screenshot blocked — grant access to ${origin} in the permission prompt.`, false); return; }
         }
         await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
@@ -4123,7 +4128,7 @@ class AgentComposer extends Component {
   async _captureMedia(kind) {
     try {
       const perm = kind === "record-audio" ? "audioCapture" : "videoCapture";
-      const ok = await this._requestPermission([perm]);
+      const ok = await this._verifyPermission([perm]);
       if (!ok) { this.setStatus(`${perm} permission denied — enable it to capture.`, false); return; }
       if (kind === "record-audio") {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -6767,7 +6772,7 @@ class SystemPromptEditor extends Component {
       <div class="spe-panel" role="tabpanel" id="spe-panel-custom"
         aria-labelledby="spe-tab-custom" ${this._tab === "custom" ? "" : "hidden"}>
         ${inheritedNote}
-        ${sessionOnly ? `<p class="spe-note" role="status"><strong>Session-only:</strong> the optional storage permission is not granted, so customizations last until the browser restarts. Saving asks for the storage permission so they persist.</p>` : ""}
+        ${sessionOnly ? `<p class="spe-note" role="status"><strong>Session-only:</strong> the storage grant could not be verified (it is granted at install — reload the extension if this persists), so customizations may last only until the browser restarts.</p>` : ""}
         <fieldset class="spe-modes">
           <legend class="spe-label">Composition mode</legend>
           <label class="spe-mode"><input type="radio" name="spe-mode" value="append" aria-label="Append" ${draft.mode === "append" ? "checked" : ""}>

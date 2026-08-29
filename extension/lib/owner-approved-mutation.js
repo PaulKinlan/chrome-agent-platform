@@ -3,7 +3,7 @@
 // approval; only an explicit owner decision can resolve it, and approval is
 // consumed by one exact retry. Ambiguous/stale approval queues fail closed.
 
-const OWNER_APPROVAL_REQUIRED = "This operation requires owner approval in Settings.";
+const OWNER_APPROVAL_REQUIRED = "This operation requires owner approval.";
 
 function cloneMessage(message) {
   if (!message || typeof message !== "object") throw new TypeError("message is required");

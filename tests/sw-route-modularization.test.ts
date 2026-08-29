@@ -136,6 +136,7 @@ const BASELINE_ROUTES = [
   "task.list",
   "task.retry",
   "task.cancel",
+  "schedule.cancelOrphans",
   "task.cancelBackground",
   // Per-agent schedule visibility + control (owner request): the routes are
   // mutation-gated (requireOwnerApproval) — task.pause/resume/update; the

@@ -84,7 +84,7 @@ function _swSend(message) {
 export async function requestProviderHostAccess(cfg, { onIssued = null } = {}) {
   const pattern = providerOriginPattern(cfg);
   if (!pattern) return { granted: true, pattern: null, error: null, generation: null };
-  if (typeof chrome === "undefined" || !chrome.permissions?.request) {
+  if (typeof chrome === "undefined" || !chrome.permissions?.contains) {
     return { granted: true, pattern, error: null, generation: null };
   }
   // 1. Acquire the single in-flight slot from the SW authority.
@@ -162,15 +162,16 @@ async function _awaitSettle(pattern, generation) {
   });
 }
 
-/** Fallback (no SW): a bounded direct request. */
+/** Fallback (no SW): a bounded install-grant VERIFICATION (no runtime request
+ * exists — host access is granted at install via <all_urls>). */
 async function _directBoundedRequest(pattern) {
   try {
     const outcome = await Promise.race([
-      chrome.permissions.request({ origins: [pattern] }),
+      chrome.permissions.contains({ origins: [pattern] }),
       new Promise((resolve) => setTimeout(() => resolve("timeout"), LEASE_TIMEOUT_MS)),
     ]);
-    if (outcome === "timeout") return { granted: false, pattern, error: "permission request timed out" };
-    return { granted: Boolean(outcome), pattern, error: outcome ? null : "permission request denied" };
+    if (outcome === "timeout") return { granted: false, pattern, error: "grant verification timed out" };
+    return { granted: outcome === true, pattern, error: outcome === true ? null : "install grant not verified" };
   } catch (e) {
     return { granted: false, pattern, error: safeProviderError(String(e?.message ?? e)) };
   }

@@ -11,7 +11,7 @@
 //   anything else (e.g. "unknown") — treat as durable/unknown: clear + hide.
 
 export const DURABILITY_TEXT = {
-  session: "Session-only — enable Storage in Settings to persist changes.",
+  session: "Session-only — storage is granted at install; if changes still do not persist, reload the extension.",
   error: "Couldn't save the sidebar state (storage failed).",
 };
 

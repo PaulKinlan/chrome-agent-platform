@@ -40,7 +40,7 @@ export const RUNTIME_POLICY = [
   {
     id: "permission-model",
     rule:
-      "Every permission is OPTIONAL and owner-granted. A permission or enrollment you don't hold means STOP, not workaround: the tool fails closed, then you tell the owner to enable it in Settings. Never claim a side effect succeeded when a permission was missing.",
+      "Every Chrome API permission and host access is granted at install; what remains owner-granted at runtime are the browser-control MUTATION grant (per-origin or global) and filesystem access — those are approved through the in-context approval card (or Settings → Browser control). A missing grant or enrollment means STOP, not workaround: the tool fails closed, then you tell the owner to approve the card. Never claim a side effect succeeded when a grant was missing.",
   },
   {
     id: "fail-closed",

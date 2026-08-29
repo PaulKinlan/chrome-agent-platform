@@ -16,7 +16,7 @@ export const FIRST_RUN_EXAMPLE_AGENTS = Object.freeze([
   Object.freeze({
     id: "weekly-browsing-review",
     name: "Weekly browsing review",
-    role: "A weekly reviewer of the owner's activity in this hub: read the recent browser events, usage, and artifacts, then produce a concise plain-language summary of what happened and what is worth following up. To run it automatically on a schedule, the owner can add it in Settings → Background agents (the alarms permission is requested only there).",
+    role: "A weekly reviewer of the owner's activity in this hub: read the recent browser events, usage, and artifacts, then produce a concise plain-language summary of what happened and what is worth following up. To run it automatically on a schedule, the owner can add it in Settings → Background agents (alarms are granted at install).",
   }),
 ]);
 
@@ -35,8 +35,11 @@ export function isGenuineOwnerClick(event, userActivation) {
 }
 
 /**
- * Request optional storage directly from a genuine owner click. There is no
- * await before permissions.request, so the browser receives the live gesture.
+ * Verify the install-granted storage permission from a genuine owner click.
+ * Storage is granted at install (manifest permissions) — there is no runtime
+ * request left; this VERIFIES with contains() and fails CLOSED (a contains()
+ * error is NOT granted). The genuine-click guard stays: the warning's action
+ * must remain a deliberate owner gesture.
  */
 export async function requestStorageFromOwnerClick({
   event,
@@ -44,30 +47,30 @@ export async function requestStorageFromOwnerClick({
   permissionsApi,
 } = {}) {
   if (!isGenuineOwnerClick(event, userActivation)) {
-    return { granted: false, requested: false, reason: "owner-click-required" };
+    return { granted: false, verified: false, reason: "owner-click-required" };
   }
-  if (typeof permissionsApi?.request !== "function") {
+  if (typeof permissionsApi?.contains !== "function") {
     return {
       granted: false,
-      requested: false,
+      verified: false,
       reason: "permissions-api-unavailable",
     };
   }
   try {
-    const granted = await permissionsApi.request({ permissions: ["storage"] });
+    const granted = (await permissionsApi.contains({ permissions: ["storage"] })) === true;
     return {
-      granted: granted === true,
-      requested: true,
-      reason: granted === true ? "granted" : "denied",
+      granted,
+      verified: true,
+      reason: granted ? "granted" : "not-granted-at-install",
     };
   } catch {
-    return { granted: false, requested: true, reason: "request-failed" };
+    return { granted: false, verified: true, reason: "verify-failed" };
   }
 }
 
 /**
- * Request optional browser control (tabs/activeTab) directly from a genuine owner click.
- * Uses the narrowest practical scope under the settled policy (no blanket <all_urls>).
+ * Verify the install-granted browser-control permission (tabs) from a genuine
+ * owner click. Granted at install — verifies with contains(), fails closed.
  */
 export async function requestBrowserControlFromOwnerClick({
   event,
@@ -75,24 +78,24 @@ export async function requestBrowserControlFromOwnerClick({
   permissionsApi,
 } = {}) {
   if (!isGenuineOwnerClick(event, userActivation)) {
-    return { granted: false, requested: false, reason: "owner-click-required" };
+    return { granted: false, verified: false, reason: "owner-click-required" };
   }
-  if (typeof permissionsApi?.request !== "function") {
+  if (typeof permissionsApi?.contains !== "function") {
     return {
       granted: false,
-      requested: false,
+      verified: false,
       reason: "permissions-api-unavailable",
     };
   }
   try {
-    const granted = await permissionsApi.request({ permissions: ["tabs"] });
+    const granted = (await permissionsApi.contains({ permissions: ["tabs"] })) === true;
     return {
-      granted: granted === true,
-      requested: true,
-      reason: granted === true ? "granted" : "denied",
+      granted,
+      verified: true,
+      reason: granted ? "granted" : "not-granted-at-install",
     };
   } catch {
-    return { granted: false, requested: true, reason: "request-failed" };
+    return { granted: false, verified: true, reason: "verify-failed" };
   }
 }
 

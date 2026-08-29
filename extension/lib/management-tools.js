@@ -227,7 +227,7 @@ export function managementToolset({ callRoute }) {
     }),
     subscribe_hook: tool({
       description:
-        "Subscribe a background recipe (or the master agent) to a system event, so the agent runs when it fires. Refused (fail-closed) if the hook is owner-denied or its optional permission is absent. recipeId may be omitted to subscribe the master agent.",
+        "Subscribe a background recipe (or the master agent) to a system event, so the agent runs when it fires. Refused (fail-closed) if the hook is owner-denied or its install-granted permission cannot be verified. recipeId may be omitted to subscribe the master agent.",
       inputSchema: z.object({
         hookId: z.string().describe("the hook id, e.g. tabs.onCreated"),
         recipeId: z.string().optional().describe("a background recipe id, or omit for the master agent"),
