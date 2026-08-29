@@ -32,7 +32,7 @@ one line each here:
 - **Tool library count disagreeing with the rows** — `0.2.312`: all 130 listed.
 - **Provider-run tool toggles were opaque and Gemini-only in copy** — the Providers panel now names Gemini + Anthropic search, explains provider billing, and says what each per-agent opt-in enables.
 - **Settings nav order drifting from panel order** — the nav now mirrors the rendered section order exactly, with a parser pin preventing another mismatch.
-- **Background agents separated from the agents list** — unified end to end: Settings has one Agents destination and one management list for named + scheduled agents (including stopped schedules), with persona/provider/schedule/toggle/delete actions kept in-row; the task sidebar also shows stopped scheduled agents with a plain cadence marker.
+- **Background agents separated from the agents list** — Settings has one Agents destination and one management list for agents the owner created or enabled; the built-in background catalogue stays in the compact add picker instead of becoming phantom rows. The task sidebar still shows scheduled agents with a plain cadence marker.
 - **Data & memory Clear looking like it did nothing** — `0.2.265`, `0.2.266`: the clear
   worked, the UI never refreshed; tree expansion is now preserved across the refresh.
 - **Surfaces dead-rendering on a suspended worker** — `0.2.302`: honest error + Retry.
@@ -41,6 +41,12 @@ one line each here:
 - **Theme switcher** — removed (`0.2.301`); it only ever worked on Settings.
 
 ## Open
+
+### Urgent Agents/create-dialog visual repair (2026-08-29 — implementation)
+- Restore the compact rich base-select + Add action for the built-in background-agent catalogue; management rows represent created/enabled agents only.
+- Remove duplicate base-select arrows, contain provider/template controls to one line, and keep agent edit actions in the row action group.
+- Restore create-dialog hierarchy to Name → what it does + voice → template → schedule → Advanced, with a stable width across disclosure states.
+- Real-browser before evidence reproduced all defects; the dedicated visual KAT pins the corrected structure, arrow count, containment, order and stable width.
 
 ### Create-agent dialog clutter and inconsistent controls (2026-08-29 — implementation)
 - Keep only Name and What it does on the primary path; avatar, templates, persona tools,

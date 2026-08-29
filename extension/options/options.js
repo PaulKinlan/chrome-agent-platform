@@ -8,6 +8,7 @@ import {
   normalizeSettingsSectionId,
 } from "../lib/pure.js";
 import { projectUnifiedAgents } from "../lib/named-agents.js";
+import { SKILL_ICON } from "../shared/skill-icons.js";
 import {
   agentScheduleMarker,
   backgroundAgentsForDisplay,
@@ -1654,6 +1655,77 @@ function editRecipePrompt(recipe) {
   textarea.focus();
 }
 
+function renderBackgroundAgentPicker(agents) {
+  const host = $("#background-agent-add");
+  if (!host) return;
+  host.replaceChildren();
+  if (!agents.length) {
+    host.hidden = true;
+    return;
+  }
+  host.hidden = false;
+
+  const copy = document.createElement("div");
+  copy.className = "background-agent-add-copy";
+  const title = document.createElement("h3");
+  title.textContent = "Add a background agent";
+  const hint = document.createElement("p");
+  hint.className = "muted";
+  hint.textContent = "Choose a built-in scheduled agent, then add it to your list.";
+  copy.append(title, hint);
+
+  const controls = document.createElement("div");
+  controls.className = "background-agent-add-controls";
+  const select = document.createElement("select");
+  select.className = "agent-select";
+  select.setAttribute("aria-label", "Background agent");
+  const selectButton = document.createElement("button");
+  selectButton.type = "button";
+  selectButton.append(document.createElement("selectedcontent"));
+  select.append(selectButton);
+  const empty = document.createElement("option");
+  empty.value = "";
+  empty.textContent = "Choose a background agent…";
+  select.append(empty);
+  for (const agent of agents) {
+    const option = document.createElement("option");
+    option.value = agent.id;
+    option.setAttribute("aria-label", agent.name);
+    const icon = document.createElement("span");
+    icon.className = "opt-icon";
+    icon.innerHTML = SKILL_ICON[agent.icon] ?? SKILL_ICON.default ?? "";
+    const text = document.createElement("span");
+    text.className = "opt-text";
+    const name = document.createElement("span");
+    name.className = "opt-title";
+    name.textContent = agent.name;
+    const description = document.createElement("span");
+    description.className = "opt-desc";
+    description.textContent = agent.description ?? "";
+    text.append(name, description);
+    option.append(icon, text);
+    select.append(option);
+  }
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "btn primary";
+  add.textContent = "Add";
+  add.disabled = true;
+  select.addEventListener("change", () => { add.disabled = !select.value; });
+  add.addEventListener("click", async () => {
+    const id = select.value;
+    const agent = agents.find((candidate) => candidate.id === id);
+    if (!id || !agent) return;
+    add.disabled = true;
+    const out = await chrome.runtime.sendMessage({ type: "background-agent.set", id, enabled: true })
+      .catch((error) => ({ ok: false, error: String(error?.message ?? error) }));
+    saveFlash(out?.ok ? `${agent.name} added.` : `Could not add ${agent.name}: ${out?.error ?? "failed"}.`);
+    await renderUnifiedAgentSettings();
+  });
+  controls.append(select, add);
+  host.append(copy, controls);
+}
+
 async function renderUnifiedAgentSettings() {
   const list = $("#unified-agent-list");
   if (!list) return;
@@ -1663,10 +1735,10 @@ async function renderUnifiedAgentSettings() {
     boundedSend("provider.get").catch(() => null),
   ]);
   const named = Array.isArray(namedRes?.agents) ? namedRes.agents : [];
-  // Settings is a display/management surface, not a callability filter: stopped
-  // scheduled agents remain visible so the owner can enable or edit them.
   const background = backgroundAgentsForDisplay(backgroundRes?.agents);
-  const unified = projectUnifiedAgents(named, background);
+  const existingBackground = background.filter((agent) => agent.enabled === true);
+  const unified = projectUnifiedAgents(named, existingBackground);
+  renderBackgroundAgentPicker(background.filter((agent) => agent.enabled !== true));
 
   list.replaceChildren();
   if (!unified.length) {

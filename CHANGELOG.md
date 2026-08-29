@@ -1,6 +1,10 @@
 # Changelog
 
+## [0.2.407] — 2026-08-29
+- fix(CAP-FB-20260829-URGENT-UI-REPAIR-01): restore background agent picker
+
 ## [0.2.406] — 2026-08-29
+- Settings → Agents again keeps the built-in background-agent catalogue in one compact picker; only agents you created or enabled appear as management rows
 - Scheduled agents now keep their conversation: when a background agent runs on its timer, the work it did shows up in that agent's chat — previously it vanished
 
 ## [0.2.405] — 2026-08-29
