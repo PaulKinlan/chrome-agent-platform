@@ -46,6 +46,27 @@ Deno.test("create-agent dialog: sticky footer sits outside scrollable body with 
   );
 });
 
+Deno.test("create-agent dialog: optional persona controls use one collapsed progressive disclosure", async () => {
+  const ntpJs = await Deno.readTextFile(
+    new URL("../extension/ntp/ntp.js", import.meta.url),
+  );
+
+  assert(
+    /configField\("What it does", "textarea"[\s\S]*?scrollBody\.append\(nameField\.wrap, roleField\.wrap\);/.test(ntpJs),
+    "name and what-it-does must remain the direct primary path",
+  );
+  assert(
+    /advancedDetails\.className = "agent-config-advanced";[\s\S]*?advancedSummary\.textContent = "Advanced";/.test(ntpJs),
+    "optional controls must live behind one clearly labelled disclosure",
+  );
+  for (const control of ["avatarRow", "roleTools", "skillsDetails", "scheduleField.wrap", "delegDetails", "assetsBox"]) {
+    assert(
+      ntpJs.includes(`advancedBody.append(${control})`),
+      `${control} must remain reachable inside Advanced`,
+    );
+  }
+});
+
 Deno.test("create-agent dialog: skills section is collapsible to keep footer visible", async () => {
   const ntpJs = await Deno.readTextFile(
     new URL("../extension/ntp/ntp.js", import.meta.url),

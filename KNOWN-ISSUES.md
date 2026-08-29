@@ -27,7 +27,16 @@ with it. Fixed under `CAP-FB-20260827-MAIN-GATES-RED-02`.
 
 ## Open findings
 
-Three, all with live entries in `TASKS.md`. Everything else previously listed here is done.
+### UI — create-agent asks for every specialist option at once
+`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01` · P1 · OPEN
+
+The dialog's primary creation path competes with avatar, template, persona tooling,
+skills, numeric scheduling, delegation and context-file controls. The active lane keeps
+all capability but progressively discloses specialist controls, replaces numeric schedule
+copy with deterministic English, aligns template selection with the shared native select,
+and repairs dark conversation token inheritance.
+
+All other open findings below retain live entries in `TASKS.md`.
 
 ### Infrastructure — worktree heads carried work that no ref was holding
 `CAP-FB-20260821-WORKTREE-HYGIENE-01` · P0 · OPEN (loss risk closed; cleanup awaits an owner decision)

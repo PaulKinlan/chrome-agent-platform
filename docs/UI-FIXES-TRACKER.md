@@ -41,6 +41,14 @@ one line each here:
 
 ## Open
 
+### Create-agent dialog clutter and inconsistent controls (2026-08-29 — implementation)
+- Keep only Name and What it does on the primary path; avatar, templates, persona tools,
+  skills, schedule, delegation and context files remain reachable under one collapsed
+  Advanced disclosure.
+- Remaining in this lane: deterministic plain-English schedules with inline interpretation,
+  a subtle native base-select template/background picker, and scheme-aware conversation
+  bubble contrast (`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`).
+
 ### Agent template picker is a plain select (2026-08-29 — candidate in review)
 - The create-agent picker is being replaced with shared visual cards showing the
   template name, a bounded persona summary, up to three skill badges, and a labelled

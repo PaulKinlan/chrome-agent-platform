@@ -177,6 +177,10 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
 
 ## In flight / next (the ordered queue)
 
+- [ ] **Create-agent dialog consistency** (`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`) —
+      progressive disclosure is in place; English schedule parsing, the shared native
+      template select and dark conversation contrast remain in the same bounded lane.
+
 The authority is the **Open work queue** table in [TASKS.md](TASKS.md) (39 open).
 **The demo path is the only P0 lane** (owner decision, 2026-08-27) — the Wasm platform
 dropped to P2 until after the exec demo, because it is invisible in one and largely blocked

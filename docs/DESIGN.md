@@ -50,6 +50,10 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 - `--control: 36px` hit targets; `--control-icon: 18px` stroke icons.
 - Every interactive component: default / hover / focus / active / disabled /
   loading / error.
+- Create-agent keeps Name and What it does as its direct path to the primary Create
+  action. Avatar, template choice, persona tools, skills, schedule, delegation and
+  context files remain available under one collapsed Advanced disclosure; progressive
+  disclosure reduces scan cost without removing capability.
 - Agent templates render through shared `<agent-template-card>`: name, a two-line
   persona summary, at most three skill badges plus an overflow count, and one
   labelled Use action. Curated starters come first and carry the Starter badge.

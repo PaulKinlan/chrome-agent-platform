@@ -1,6 +1,10 @@
 # Changelog
 
+## [0.2.401] — 2026-08-29
+- fix(CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01): disclose advanced agent options
+
 ## [0.2.400] — 2026-08-29
+- Creating an agent is quieter: Name and What it does stay on the direct path to Create, while avatar, templates, persona tools, skills, schedules, delegation and context files remain available under one collapsed Advanced section
 - Agents can now post work to a shared board and claim each other's jobs: the hub keeps a bounded, tamper-proof ledger (agents can't forge entries with their memory tools), claims expire and recover automatically, finished jobs shrink to compact receipts that never lose the result, and results are delivered back to the requester's conversation with automatic bounded retries
 
 ## [0.2.399] — 2026-08-29

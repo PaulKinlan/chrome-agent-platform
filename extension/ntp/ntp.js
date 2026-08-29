@@ -2207,7 +2207,6 @@ async function buildAgentConfigDialog(opts) {
     fr.readAsDataURL(f);
   });
   avatarRow.append(avatarImg, avatarLabel, uploadBtn, uploadInput);
-  scrollBody.append(avatarRow);
 
   const nameField = configField("Name", "input", opts.name ?? "");
 
@@ -2217,8 +2216,10 @@ async function buildAgentConfigDialog(opts) {
   // the owner can then edit ALL of it — rewrite the persona, add/remove
   // skills — before creating. "Custom agent" (blank) stays the default.
   let selectedTemplate = null;
+  let templateSection = null;
   if (opts.showTemplates) {
     const tplWrap = document.createElement("section");
+    templateSection = tplWrap;
     tplWrap.setAttribute("aria-labelledby", "agent-template-heading");
     tplWrap.style.display = "flex";
     tplWrap.style.flexDirection = "column";
@@ -2271,12 +2272,12 @@ async function buildAgentConfigDialog(opts) {
       tplGallery.append(card);
     }
     tplWrap.append(tplHeading, tplHint, tplGallery);
-    scrollBody.append(tplWrap);
   }
 
 
-  // Role (the system prompt / what the agent does) + mic (dictate) + refine.
-  const roleField = configField("Role / what it does", "textarea", opts.role ?? "", 4);
+  // The primary path is only name + what it does. Persona tooling and every
+  // optional capability stay reachable in one collapsed disclosure below.
+  const roleField = configField("What it does", "textarea", opts.role ?? "", 3);
   const roleTools = document.createElement("div");
   roleTools.style.display = "flex";
   roleTools.style.gap = "8px";
@@ -2291,7 +2292,25 @@ async function buildAgentConfigDialog(opts) {
   mic.addEventListener("mic-error", (e) => setStatus(e?.detail?.message ?? "mic error", false));
   const refineBtn = configButton("Refine", "secondary");
   roleTools.append(mic, refineBtn);
-  scrollBody.append(nameField.wrap, roleField.wrap, roleTools);
+  scrollBody.append(nameField.wrap, roleField.wrap);
+
+  const advancedDetails = document.createElement("details");
+  advancedDetails.className = "agent-config-advanced";
+  advancedDetails.style.border = "1px solid var(--border,#e3e0d9)";
+  advancedDetails.style.borderRadius = "8px";
+  advancedDetails.style.background = "var(--panel,#ffffff)";
+  advancedDetails.style.overflow = "hidden";
+  const advancedSummary = document.createElement("summary");
+  advancedSummary.textContent = "Advanced";
+  advancedSummary.style.cssText = "cursor:pointer;font-size:13px;font-weight:600;padding:10px 12px;";
+  const advancedBody = document.createElement("div");
+  advancedBody.className = "agent-config-advanced-body";
+  advancedBody.style.cssText = "display:flex;flex-direction:column;gap:12px;padding:4px 12px 12px;border-top:1px solid var(--border,#e3e0d9);";
+  advancedBody.append(avatarRow);
+  if (templateSection) advancedBody.append(templateSection);
+  advancedDetails.append(advancedSummary, advancedBody);
+  scrollBody.append(advancedDetails);
+  advancedBody.append(roleTools);
 
   // Collapsible skills section
   const skillsDetails = document.createElement("details");
@@ -2360,7 +2379,7 @@ async function buildAgentConfigDialog(opts) {
     }
   }
   skillsDetails.append(skillsList);
-  scrollBody.append(skillsDetails);
+  advancedBody.append(skillsDetails);
 
   // ── Optional schedule (ONE agent concept, owner directive 2026-08-28): an
   // agent is persona + skills + memory + an OPTIONAL schedule. Empty = an
@@ -2377,7 +2396,7 @@ async function buildAgentConfigDialog(opts) {
   scheduleHint.textContent = "With a schedule the agent runs itself recurringly — same persona, skills, and memory as its on-demand runs.";
   scheduleHint.style.cssText = "font-size:12px;color:var(--muted,#635e56);margin:4px 0 0;";
   scheduleField.wrap.append(scheduleHint);
-  scrollBody.append(scheduleField.wrap);
+  advancedBody.append(scheduleField.wrap);
 
   // Context files: files whose content becomes part of the agent's context.
   // "Assets" is not a user-facing word. These are NOT artifacts (agent
@@ -2416,7 +2435,7 @@ async function buildAgentConfigDialog(opts) {
       delegList.append(row);
     }
     delegDetails.append(delegList);
-    scrollBody.append(delegDetails);
+    advancedBody.append(delegDetails);
   }
 
   // Core assets: files whose content becomes part of the agent's context.
@@ -2468,7 +2487,7 @@ async function buildAgentConfigDialog(opts) {
   }
   renderAssets();
   assetsBox.append(attach, assetsList);
-  scrollBody.append(assetsBox);
+  advancedBody.append(assetsBox);
 
   // Sticky footer outside the scrollable body (Create / Cancel always visible)
   const footer = document.createElement("div");
