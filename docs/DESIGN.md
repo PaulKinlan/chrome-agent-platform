@@ -107,9 +107,13 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   rearms the same logical schedule; Delete remains the authoritative cancel.
   Every live conversation row and actively executing scheduled-task row also
   exposes a visible, labelled native Stop button without hover or confirmation.
-  It uses the danger token without overpowering the run label, sends the exact
-  durable execution ID through `run.cancel`, and settles as **Stopped**; stopping
-  is distinct from deleting the task or disabling its schedule.
+  It uses the danger token without overpowering the run label. The rendered
+  control captures its immutable execution ID and carries the original native
+  click; the abort boundary requires both a trusted click and live user activation,
+  then sends only that captured ID through `run.cancel`. A stale control can never
+  retarget a newer run. Success settles as **Stopped**; an already-settled run is
+  reported as a no-op. Stopping is distinct from deleting the task or disabling
+  its schedule.
 - **Approval happens in context, not in Settings** (changed at `0.2.303`/`0.2.313`;
   the Settings → Approvals section is deleted). When a tool needs a permission or a
   destructive operation needs consent, the request renders as an approval card in the

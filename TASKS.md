@@ -234,7 +234,7 @@ evidence every other task depends on).
 
 ## [CAP-FB-20260829-HARD-STOP-01] Running tasks and agents need an obvious hard stop
 - Feedback: 2026-08-29 — owner requested a visible hard Stop inside every live task/agent conversation and on running task rows, including background and scheduled agents
-- Updated: 2026-08-29 22:01 UTC
+- Updated: 2026-08-29 23:23 UTC
 - Status: IN_REVIEW
 - Resume: —
 - Priority: P0
@@ -245,12 +245,13 @@ evidence every other task depends on).
 - Candidate: this tracker commit
 - Shipping: —
 - Acceptance: A visible, danger-token, keyboard-operable Stop button appears without hover on every live conversation and exact running scheduled-task row; one click with no confirmation aborts the immutable durable execution, preserves `errorCategory: "aborted"` plus the durable cancellation mark, and settles visibly as Stopped without deleting the task or disabling its schedule.
-- Review: independent reviewer required; pending
-- Gates: focused status/component/accessibility/durable tests 102 pass; changed assertions RED on the base (5 runtime failures) and GREEN on the candidate; full Deno suite 2389 pass / 0 fail; loaded-extension lifecycle KAT 34/34 pass including the 4-check `@demo-slow` stop flow, exact-commit manifest, and stopped-state screenshot; production build clean (95 generated files verified, MV3 seam scan clean)
+- Review: independent review round 2 REVISE — Stop events were forgeable and task rows recomputed the latest execution at click time; revised candidate carries the native click, requires trusted live activation, and binds every rendered control to its captured immutable execution ID; independent re-review required
+- Gates: revised focused status/component tests 42 pass including forged-event, missing-activation, and stale-row exact-ID falsification; final post-commit full Deno suite and production build pending
 - Blockers: —
-- Next: obtain independent review of the committed candidate
+- Next: run final post-commit gates, then obtain independent re-review of the revised candidate
 - Recover: `git log --oneline --all --grep=CAP-FB-20260829-HARD-STOP-01`
 - History:
+  - 2026-08-29 23:23 UTC — review round 2 requested trusted activation and immutable render-time ID binding; removed click-time run lookup, carried the native click through the components, and added forged/missing-activation/stale-row falsification coverage
   - 2026-08-29 22:12 UTC — the loaded-extension lifecycle KAT passed 34/34 including exact-commit manifest binding; its saturation wait stays bounded at 20 seconds now that the hard-stop flow precedes the existing 12-warmup overlap probe
   - 2026-08-29 22:01 UTC — ownership: unassigned → implementation worker; implemented shared live-row and task-row Stop controls over the existing durable cancel route, added the real-browser slow-run stop flow, and moved the candidate to IN_REVIEW
 

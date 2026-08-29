@@ -42,10 +42,11 @@ one line each here:
 
 ## Open
 
-### Running tasks and agents have no obvious hard stop (2026-08-29 — candidate)
+### Running tasks and agents have no obvious hard stop (2026-08-29 — revised candidate)
 - Live conversation rows now show a visible danger-token Stop button without hover or confirmation; task rows show the same control only while their exact scheduled execution is live.
-- One click routes the immutable execution ID through durable `run.cancel`, retains aborted error semantics, and settles the UI to **Stopped** without deleting the task or disabling its schedule.
-- Focused component/status/durability tests and the loaded-extension `@demo-slow` stop flow are in the candidate; full-suite and required review gates remain (`CAP-FB-20260829-HARD-STOP-01`).
+- Each rendered control carries its original trusted click and captured immutable execution ID. The abort boundary also requires live user activation, so forged events do nothing and a stale row cannot retarget a newer run.
+- One genuine click routes only the captured ID through durable `run.cancel`, retains aborted error semantics, and settles the UI to **Stopped** without deleting the task or disabling its schedule. An already-settled ID is an honestly reported no-op.
+- Focused falsification tests cover forged events, missing activation, and stale-row exact-ID behavior; full-suite and required re-review gates remain (`CAP-FB-20260829-HARD-STOP-01`).
 
 ### Create-agent dialog clutter and inconsistent controls (2026-08-29 — implementation)
 - Keep only Name and What it does on the primary path; avatar, templates, persona tools,

@@ -3660,6 +3660,9 @@ class AgentConversation extends Component {
       message: typeof status?.message === "string" && status.message.trim() ? status.message.trim() : null,
       errorReason: typeof status?.errorReason === "string" && status.errorReason.trim() ? status.errorReason.trim() : null,
       actionLabel: typeof status?.actionLabel === "string" && status.actionLabel.trim() ? status.actionLabel.trim() : null,
+      executionId: Object.hasOwn(status ?? {}, "executionId")
+        ? (typeof status.executionId === "string" && status.executionId.trim() ? status.executionId.trim() : null)
+        : (this._liveStatusRow?.getAttribute("execution-id") || null),
     };
     const key = JSON.stringify(next);
     if (key === this._liveStatusKey && this._liveStatusRow?.isConnected) return;
@@ -3672,7 +3675,7 @@ class AgentConversation extends Component {
     }
     row.removeAttribute("hidden");
     row.setAttribute("state", next.state);
-    for (const [name, value] of [["activity", next.activity], ["message", next.message], ["error-reason", next.errorReason], ["action-label", next.actionLabel]]) {
+    for (const [name, value] of [["activity", next.activity], ["message", next.message], ["error-reason", next.errorReason], ["action-label", next.actionLabel], ["execution-id", next.executionId]]) {
       if (value) row.setAttribute(name, value);
       else row.removeAttribute(name);
     }
@@ -3680,6 +3683,14 @@ class AgentConversation extends Component {
     // bottom pin keeps it visible even when the owner scrolls up.
     this.appendChild(row);
     this.scrollTop = this.scrollHeight;
+  }
+  bindLiveStatusExecution(executionId) {
+    const row = this._liveStatusRow;
+    if (!row?.isConnected) return;
+    const id = typeof executionId === "string" ? executionId.trim() : "";
+    if (id) row.setAttribute("execution-id", id);
+    else row.removeAttribute("execution-id");
+    this._liveStatusKey = null;
   }
   clearLiveStatus() { this._clearLiveStatusRow(); }
   _clearLiveStatusRow() {
@@ -4715,7 +4726,7 @@ customElements.define("loading-state", LoadingState);
  * live region, and an optional recovery action. No nested spinner/live region. */
 class ConversationRunStatus extends Component {
   static get observedAttributes() {
-    return ["state", "activity", "message", "error-reason", "action-label"];
+    return ["state", "activity", "message", "error-reason", "action-label", "execution-id"];
   }
   _render() {
     const status = normalizeConversationRunStatus({
@@ -4729,6 +4740,7 @@ class ConversationRunStatus extends Component {
       return;
     }
     const actionLabel = this.getAttribute("action-label")?.trim() || "";
+    const executionId = this.getAttribute("execution-id")?.trim() || "";
     const cells = Array.from({ length: 9 }, (_, i) =>
       `<span class="px" style="animation-delay:${i * 60}ms" aria-hidden="true"></span>`
     ).join("");
@@ -4754,12 +4766,14 @@ class ConversationRunStatus extends Component {
     `, `<div class="surface" data-state="${status.state}" data-tone="${status.tone}" data-active="${status.active}" role="status" aria-live="polite" aria-atomic="true">
       <span class="grid" aria-hidden="true">${cells}</span>
       <span class="label">${escapeHtml(status.label)}</span>
-      ${status.stoppable ? `<button class="stop" type="button">Stop</button>` : ""}
+      ${status.stoppable && executionId ? `<button class="stop" type="button">Stop</button>` : ""}
       ${actionLabel ? `<button class="action" type="button">${escapeHtml(actionLabel)}</button>` : ""}
     </div>`);
   }
   _wire() {
-    this._root.querySelector(".stop")?.addEventListener("click", () => this._emit("stop"));
+    const executionId = this.getAttribute("execution-id")?.trim() || "";
+    this._root.querySelector(".stop")?.addEventListener("click", (sourceEvent) =>
+      this._emit("stop", { sourceEvent, executionId }));
     this._root.querySelector(".action")?.addEventListener("click", () => this._emit("action"));
   }
 }
@@ -4953,7 +4967,7 @@ customElements.define("tool-chips", ToolChips);
  * (the row is a non-interactive wrapper — nested-interactive), `retry` and
  * `delete` from their affordances. */
 class TaskRow extends Component {
-  static get observedAttributes() { return ["name", "status", "time", "active", "retryable", "paused", "pausable", "stoppable"]; }
+  static get observedAttributes() { return ["name", "status", "time", "active", "retryable", "paused", "pausable", "stoppable", "execution-id"]; }
   _render() {
     const name = this.getAttribute("name") || "Task";
     const status = this.getAttribute("status") || "completed";
@@ -5006,7 +5020,9 @@ class TaskRow extends Component {
   }
   _wire() {
     this._root.querySelector(".row-open")?.addEventListener("click", () => this._emit("open"));
-    this._root.querySelector(".stop")?.addEventListener("click", () => this._emit("stop"));
+    const executionId = this.getAttribute("execution-id")?.trim() || "";
+    this._root.querySelector(".stop")?.addEventListener("click", (sourceEvent) =>
+      this._emit("stop", { sourceEvent, executionId }));
     this._root.querySelector(".psep")?.addEventListener("click", () => {
       this._emit("toggle-pause");
     });

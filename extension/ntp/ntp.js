@@ -14,7 +14,7 @@ import { selectFailedRuns } from "../lib/run-retry.js";
 import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript } from "../shared/conversation.js";
 import { createRunSurfaceOwner } from "../shared/run-surface-owner.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
-import { projectConversationRunStatus } from "../shared/run-status.js";
+import { cancelRunFromRenderedStop, projectConversationRunStatus } from "../shared/run-status.js";
 import { safeJsonStringify } from "../shared/tool-tree.js";
 import {
   renderHtmlFrame,
@@ -159,6 +159,15 @@ if (durableRunRegistry) {
     // open re-projects the transcript (guarded by the execution-id change, so
     // heartbeats don't churn the subscription).
     projectSurfaceRunTranscript();
+    const surfaceRuns = actionableRunsForSurface(latestDurableRuns, {
+      threadId: currentAgentId === null ? currentThreadId : null,
+      agentId: currentAgentId,
+      agentKind: currentAgentKind,
+    });
+    const boundRun = liveClientRunId
+      ? surfaceRuns.find((run) => run?.clientCorrelationId === liveClientRunId)
+      : surfaceRuns.find((run) => run?.executionId === runTranscriptExecutionId);
+    threadConversation?.bindLiveStatusExecution?.(boundRun?.executionId ?? null);
     // Terminal reconciliation for the live status row: the registry is the
     // durable authority. When the open surface's latest run has SETTLED and
     // nothing actionable remains, resolve the row — the live terminal event
@@ -2621,45 +2630,33 @@ threadConversation?.addEventListener("action", (ev) => {
   openView("options/options.html", "Settings");
 });
 
-async function waitForSurfaceRun(surface, timeoutMs = 1200) {
-  const deadline = Date.now() + timeoutMs;
-  do {
-    // A brand-new task has no threadId until the run response returns. Its
-    // immutable client correlation id is therefore the only exact live owner
-    // during the window where Stop matters most.
-    const correlated = surface.clientCorrelationId
-      ? latestDurableRuns.find((run) => run?.clientCorrelationId === surface.clientCorrelationId &&
-        ["running", "settling", "resume-dispatching"].includes(run?.phase))
-      : null;
-    const run = correlated ?? actionableRunsForSurface(latestDurableRuns, surface)
-      .sort((a, b) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0))[0];
-    if (run?.executionId) return run;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  } while (Date.now() < deadline);
-  return null;
-}
-
 threadConversation?.addEventListener("stop", async (ev) => {
   if (!ev.target?.classList?.contains?.("live-status")) return;
-  const button = ev.target?._root?.querySelector?.(".stop");
-  if (button) { button.disabled = true; button.textContent = "Stopping…"; }
-  const surface = {
-    threadId: currentAgentId === null ? currentThreadId : null,
-    agentId: currentAgentId,
-    agentKind: currentAgentKind,
-    clientCorrelationId: liveClientRunId,
-  };
-  const run = await waitForSurfaceRun(surface);
-  const result = run
-    ? await cancelDurableRun(run.executionId, "stopped by owner").catch((error) => ({ ok: false, error: error?.message ?? String(error) }))
-    : { ok: false, error: "the run had not started" };
-  if (currentThreadId !== surface.threadId || currentAgentId !== surface.agentId || currentAgentKind !== surface.agentKind) return;
+  const row = ev.target;
+  const result = await cancelRunFromRenderedStop(ev, (executionId) => {
+    const button = row._root?.querySelector?.(".stop");
+    if (button) { button.disabled = true; button.textContent = "Stopping…"; }
+    return cancelDurableRun(executionId, "stopped by owner");
+  }, navigator.userActivation).catch((error) => ({
+    ok: false,
+    error: error?.message ?? String(error),
+    executionId: ev.detail?.executionId,
+  }));
+  if (result?.ignored) return;
+  const currentExecutionId = row.getAttribute("execution-id");
+  if (currentExecutionId && currentExecutionId !== result?.executionId) {
+    if (result?.error === "run_already_terminal") setStatus("That run already finished; the newer run was not stopped.");
+    return;
+  }
   if (result?.ok === true) {
     renderRunStatus({ state: "cancelled" });
     setStatus("Stopped.");
   } else {
-    renderRunStatus({ state: "failed", message: `Stop failed — ${result?.error ?? "unknown error"}`, errorCategory: "aborted" });
-    setStatus(`Stop failed: ${result?.error ?? "unknown error"}`, false);
+    const message = result?.error === "run_already_terminal"
+      ? "Stop had no effect — this run already finished."
+      : `Stop failed — ${result?.error ?? "unknown error"}`;
+    renderRunStatus({ state: "failed", message, errorCategory: "aborted" });
+    setStatus(message, false);
   }
 });
 
@@ -2703,8 +2700,11 @@ async function runThreadTurn(text, attachments = [], mention = null) {
     onStatus: (state) => runSurfaceOwner.commit(owner, () => renderRunStatus(state)),
     // Capture the exact per-attempt id BEFORE dispatch. Registry snapshots may
     // still contain run A while follow-up B is waiting for durable admission;
-    // only B's own clientCorrelationId may resolve B's row.
-    onRunRegistered: (runId) => runSurfaceOwner.commit(owner, () => { liveClientRunId = runId; }),
+    // only B's own clientCorrelationId may resolve B's row or bind its Stop.
+    onRunRegistered: (runId) => runSurfaceOwner.commit(owner, () => {
+      liveClientRunId = runId;
+      threadConversation?.bindLiveStatusExecution?.(null);
+    }),
     agentId: agentAtStart, // null for a thread; set when chatting with a named/background agent
     agentKind: kindAtStart,
     mention: mention ?? null,

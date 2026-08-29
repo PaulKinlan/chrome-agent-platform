@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.406] — 2026-08-29
+- Bind Stop controls to trusted execution clicks
+
 ## [0.2.405] — 2026-08-29
 - Running tasks and agents now have an obvious one-click Stop button in the conversation and task list. Stop needs no confirmation, aborts the exact live run, and settles visibly as Stopped
 - Settings now shows all your agents in one place — interactive and scheduled together, each schedule described in plain language — and the left-hand agents menu shows scheduled agents too. The 'provider server tools' section finally explains itself: which agents may search the web on your behalf and what that costs

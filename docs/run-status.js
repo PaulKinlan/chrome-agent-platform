@@ -63,6 +63,20 @@ export function runStatusActionLabel(input) {
   return RECOVERABLE_CATEGORY.test(category) ? "Fix in Settings" : null;
 }
 
+/** Cancel only the immutable execution named by a genuine rendered Stop click. */
+export async function cancelRunFromRenderedStop(event, cancel, userActivation, EventType = globalThis.Event) {
+  const sourceEvent = event?.detail?.sourceEvent;
+  const executionId = typeof event?.detail?.executionId === "string"
+    ? event.detail.executionId.trim()
+    : "";
+  if (typeof EventType !== "function" || !(sourceEvent instanceof EventType) ||
+      sourceEvent.isTrusted !== true || userActivation?.isActive !== true || !executionId) {
+    return { ok: false, ignored: true, error: "owner-click-required", executionId };
+  }
+  const result = await cancel(executionId);
+  return { ...result, executionId };
+}
+
 /** Project one canonical run status into an <agent-conversation>.
  * Shared by the NTP and sidepanel so terminal recovery actions cannot diverge. */
 export function projectConversationRunStatus(conversation, input) {
@@ -78,5 +92,6 @@ export function projectConversationRunStatus(conversation, input) {
     message: input?.message,
     errorReason: input?.errorReason,
     actionLabel: runStatusActionLabel(input),
+    ...(Object.hasOwn(input ?? {}, "executionId") ? { executionId: input.executionId } : {}),
   });
 }
