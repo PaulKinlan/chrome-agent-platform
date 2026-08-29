@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.379] — 2026-08-29
+- merge: profile-store lane (3b291399) — named-agent provider profiles with validated profileGrants at the SW routes (create/update), bounded grant cardinality, fail-closed malformed rejection with no pending-approval side effects, non-vacuous pending-count probes. Reviewed PASS (round 7 re-review, amended base-named RED evidence). Union: named-agent.create keeps main's schedule param AND the lane's profileGrants validation. Manifest resolved to main's P0 shape.
+
+## [0.2.378] — 2026-08-29
+- Named agents can now carry per-agent provider profiles with owner-approved grants; malformed grant changes are rejected at the route instead of silently cleared, and approval side effects are cleaned up on failure
+
 ## [0.2.377] — 2026-08-29
 - merge: recent-activity redaction lane (07eef98a) — redactResultValue scrubs every string leaf against RESULT_SECRET_SHAPES (sk-/AKIA/ghp_/xox*/AIza/JWT), try/finally exception-safe WeakSet cycle cleanup in pure.js + tool-summary.js + docs/pure.js mirror, '[Circular]' documented as display placeholder, DAG pin asserts both branches [REDACTED]. Reviewed PASS (round 6); coordinator RED-verified cyclic getter probe on b42a46a6. Manifest resolved to main's P0 shape.
 

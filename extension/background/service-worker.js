@@ -165,6 +165,8 @@ import {
   listNamedAgents,
   normalizeAgentProvider,
   normalizeCoreAssets,
+  normalizeProfileGrants,
+  validateProfileGrants,
   preserveExistingProviderKey,
   MAX_ROLE_LEN,
   MAX_SKILLS,
@@ -2928,22 +2930,26 @@ function namedCandidatePayload(candidate) {
     canonicalField("avatar", canonicalScalar(candidate.avatar)),
     canonicalField("skills", payloadStringArray(candidate.skills)),
     canonicalField("coreAssets", canonicalArray(...assetNodes)),
+    canonicalField("profileGrants", payloadStringArray(candidate.profileGrants)),
   );
 }
 
-function normalizedNamedPatch({ name, role, avatar, skills, coreAssets }) {
+function normalizedNamedPatch({ name, role, avatar, skills, coreAssets, profileGrants }) {
   const patch = Object.create(null);
   patch.name = name === undefined ? undefined : String(name).trim();
-  // CAP-FB-20260824-AGENT-ROLE-TRUNCATION-01 r2 (Gemini review): NO slice here —
-  // the previous hardcoded .slice(0, 200) silently clipped roles BEFORE they
-  // reached updateNamedAgent, defeating the raised bound. The authority
-  // (named-agents.js) trims + rejects over-cap honestly BEFORE the approval
-  // gate runs, so a big role never reaches the approval payload. Skills keep
-  // the list bound via the IMPORTED constant so the layers cannot drift again.
   patch.role = role === undefined ? undefined : String(role).trim();
   patch.avatar = avatar === undefined ? undefined : (avatar ? String(avatar) : null);
   patch.skills = skills === undefined ? undefined : (Array.isArray(skills) ? skills.slice(0, MAX_SKILLS) : []);
   patch.coreAssets = coreAssets === undefined ? undefined : normalizeCoreAssets(coreAssets);
+  if (profileGrants !== undefined) {
+    const validated = validateProfileGrants(profileGrants);
+    if (!validated.ok) {
+      const err = new Error(validated.error);
+      err.isValidationError = true;
+      throw err;
+    }
+    patch.profileGrants = validated.grants;
+  }
   return patch;
 }
 
@@ -2957,6 +2963,7 @@ function namedPatchPayload(id, patch) {
     canonicalField("type", canonicalScalar(asset.type)),
     canonicalField("content", canonicalScalar(asset.content)),
   )))));
+  fields.push(canonicalField("profileGrants", patch.profileGrants === undefined ? canonicalScalar(undefined) : payloadStringArray(patch.profileGrants)));
   return canonicalRecord(...fields);
 }
 
@@ -3877,9 +3884,13 @@ const handlers = mergeRouteMaps(
     const [enriched] = await enrichAgentsWithSchedules([agent]);
     return { ok: true, agent: enriched };
   },
-  async "named-agent.create"({ id, name, role, avatar, skills, coreAssets, schedule }, context) {
+  async "named-agent.create"({ id, name, role, avatar, skills, coreAssets, schedule, profileGrants }, context) {
+    if (profileGrants !== undefined) {
+      const validated = validateProfileGrants(profileGrants);
+      if (!validated.ok) return validated;
+    }
     const r = await createNamedAgent(
-      { id, name, role, avatar, skills, coreAssets },
+      { id, name, role, avatar, skills, coreAssets, profileGrants },
       {
         gateOnReplace: async ({ slug, existing, candidate }) => {
           let payload;
@@ -3930,8 +3941,13 @@ const handlers = mergeRouteMaps(
     }
     return r;
   },
-  async "named-agent.update"({ id, name, role, avatar, skills, coreAssets }, context) {
-    const patch = normalizedNamedPatch({ name, role, avatar, skills, coreAssets });
+  async "named-agent.update"({ id, name, role, avatar, skills, coreAssets, profileGrants }, context) {
+    let patch;
+    try {
+      patch = normalizedNamedPatch({ name, role, avatar, skills, coreAssets, profileGrants });
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
     const r = await updateNamedAgent(id, patch, {
       gateBeforeMutation: async ({ slug, existing }) => {
         let payload;
