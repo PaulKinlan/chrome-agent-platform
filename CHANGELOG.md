@@ -1,19 +1,7 @@
 # Changelog
 
 ## [0.2.404] — 2026-08-29
-- fix(board): r4 verdicts — pinned-dependency tombstone compaction, claim-churn compaction, live-settle drain kick (CAP-FB-20260829-AGENT-BOARD-01)
-
-## [0.2.403] — 2026-08-29
-- test(board): r4 RED battery — blockedBy-pinned tombstone compaction, claim-churn compaction, live-settle drain kick
-
-## [0.2.402] — 2026-08-29
-- test(board): r4 RED battery — blockedBy-pinned tombstone compaction, claim-churn compaction, live-settle drain kick
-
-## [0.2.401] — 2026-08-29
-- test(board): r4 RED battery — blockedBy-pinned tombstone compaction, claim-churn compaction, live-settle drain kick
-
-## [0.2.400] — 2026-08-29
-- chore(board): changelog entries for the board rounds in plain user language
+- The shared jobs board learns to protect its own memory: jobs that finished but still have dependents or undelivered results are kept as compact receipts instead of full histories, a job that changes hands over and over no longer piles up a record per hand-off, and if delivering a result back to its requester fails, the board now retries on its own with a patient backoff instead of waiting for a restart
 
 ## [0.2.399] — 2026-08-29
 - Internal reliability fixes for the agents' shared jobs board: failed result deliveries can no longer fill up its storage, and delivery now retries on its own until it succeeds
