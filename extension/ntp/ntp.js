@@ -2256,7 +2256,11 @@ async function buildAgentConfigDialog(opts) {
     templateSelect.id = "agent-template-select";
     templateSelect.setAttribute("label", "Start from a template");
     templateSelect.setAttribute("placeholder", "Custom agent");
-    templateSelect.providers = orderedTemplates.map((t) => ({ id: t.id, name: t.name }));
+    templateSelect.providers = orderedTemplates.map((t) => ({
+      id: t.id,
+      name: t.name,
+      icon: t.mode === "background" ? "terminal" : "user",
+    }));
     templateSelect.addEventListener("change", (event) => {
       applyTemplate(agentTemplateById(event.detail?.value));
     });

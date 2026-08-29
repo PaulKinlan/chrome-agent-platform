@@ -983,7 +983,7 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
    self-labeled shared component) whose CONTROL is exactly --input-h tall. */
 .agent-provider-row {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: minmax(210px, 1.25fr) repeat(2, minmax(180px, 1fr));
   gap: 12px;
   align-items: end;
   padding: 12px 0;
@@ -997,8 +997,12 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
 /* The agent name + the actions keep their natural width (never stretched). */
 .agent-provider-row .ag-name { grid-column: span 1; min-width: 0; }
 .agent-provider-row .ag-actions {
-  display: flex; gap: 8px; align-items: center;
-  justify-self: end;
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-self: start;
+  flex-wrap: wrap;
 }
 /* The Base URL cell spans full width when it wraps alone (openai-compatible). */
 .agent-provider-row .ag-base-url { grid-column: 1 / -1; }

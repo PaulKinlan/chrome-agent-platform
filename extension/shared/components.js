@@ -5747,7 +5747,7 @@ export function filterModels(models, query, { cap = 60 } = {}) {
 }
 
 const CONTROL_CSS = `
-  :host { display: block; }
+  :host { display: block; min-width: 0; }
   .field { display: grid; gap: 4px; }
   .field-label { font-size: var(--text-xs, 12px); color: var(--muted, #635e56); }
   .control {
@@ -5797,22 +5797,30 @@ class ProviderSelect extends Component {
     const value = this.getAttribute("value") ?? "";
     const providers = this.providers;
     const options = [
-      `<option value="">${escapeHtml(placeholder)}</option>`,
-      ...providers.map((p) =>
-        `<option value="${escapeHtml(p.id ?? "")}"${String(value) === String(p.id) ? " selected" : ""}>${escapeHtml(p.name ?? p.id ?? "")}</option>`
-      ),
+      `<option value=""><span class="option-text">${escapeHtml(placeholder)}</span></option>`,
+      ...providers.map((p) => {
+        const icon = ICONS[p.icon] ?? ICONS.user;
+        return `<option value="${escapeHtml(p.id ?? "")}"${String(value) === String(p.id) ? " selected" : ""}><span class="option-icon">${icon}</span><span class="option-text">${escapeHtml(p.name ?? p.id ?? "")}</span></option>`;
+      }),
     ].join("");
     mountTemplate(this, `${CONTROL_CSS}
-      select.control { cursor: pointer; padding-right: 30px; }
       select.control, select.control::picker(select) { appearance: base-select; }
-      /* the chevron (hidden when base-select draws its own arrow space) */
-      .wrap { position: relative; display: block; }
-      .wrap svg { position: absolute; right: 10px; top: 50%; translate: 0 -50%; pointer-events: none; color: var(--muted, #635e56); }
+      select.control { min-width: 0; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      select.control > button { min-width: 0; padding: 0; color: inherit; background: transparent; border: 0; font: inherit; text-align: left; }
+      select.control selectedcontent { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      select.control::picker-icon { color: var(--muted, #635e56); transition: rotate 150ms ease; }
+      select.control:open::picker-icon { rotate: 180deg; }
+      select.control::picker(select) { max-width: min(440px, 90vw); padding: 6px; color: var(--text, #1d1b18); background: var(--panel, #fff); border: 1px solid var(--border, #e3e0d9); border-radius: var(--radius-sm, 7px); box-shadow: 0 12px 28px rgba(0,0,0,.3); }
+      select.control option { display: flex; align-items: center; gap: 9px; padding: 8px; border-radius: 6px; }
+      select.control option::checkmark { display: none; }
+      select.control option:checked { color: var(--btn-fg, #fff); background: var(--accent, #0e6e63); }
+      .option-icon { display: inline-flex; flex: 0 0 18px; color: currentColor; }
+      .option-icon svg { width: 18px; height: 18px; }
+      .option-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     `, `
       <div class="field">
         <span class="field-label">${escapeHtml(label)}</span>
-        <span class="wrap"><select class="control" aria-label="${escapeHtml(label)}" ${this.hasAttribute("disabled") ? "disabled" : ""}>${options}</select>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></span>
+        <select class="control" aria-label="${escapeHtml(label)}" ${this.hasAttribute("disabled") ? "disabled" : ""}><button type="button"><selectedcontent></selectedcontent></button>${options}</select>
       </div>`);
     this._select = this._root.querySelector("select");
     if (this._select && this.getAttribute("value") != null) this._select.value = this.getAttribute("value");

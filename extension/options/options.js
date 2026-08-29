@@ -1301,17 +1301,13 @@ function agentProviderRowHtml(a, cur, globalCfg) {
   const baseURLDefault = needsBaseURL
     ? (cur.baseURL ?? (globalCfg?.provider === "openai-compatible" ? globalCfg.baseURL : ""))
     : "";
-  const providersAttr = escapeAttr(JSON.stringify(PROVIDERS.map((p) => ({ id: p.id, name: p.name }))));
+  const providersAttr = escapeAttr(JSON.stringify(PROVIDERS.map((p) => ({ id: p.id, name: p.name, icon: "terminal" }))));
   const internalDisabled = selection.hiddenInternal ? "disabled" : "";
   return `
     <div class="agent-row-summary">
       <div class="agent-row-copy">
         <div class="agent-row-title"><strong title="${escapeAttr(a.name)}">${escapeHtml(a.name)}</strong><span class="agent-mode-badge">${escapeHtml(agentScheduleMarker({ ...a, kind: "named" }))}</span></div>
         <span class="muted">${escapeHtml(a.role || "Interactive agent")}</span>
-      </div>
-      <div class="agent-actions">
-        <button class="btn small ghost edit-named-agent" type="button">Edit persona &amp; schedule</button>
-        <button class="btn small ghost delete-named-agent" type="button" style="color:var(--danger,#b3261e);border-color:var(--border);" aria-label="Delete ${escapeAttr(a.name)}">Delete</button>
       </div>
     </div>
     <provider-select class="ag-provider" providers="${providersAttr}" value="${escapeAttr(provider)}" label="Provider" placeholder="${selection.hiddenInternal ? "Choose a listed provider" : "Use the global provider"}"></provider-select>
@@ -1322,6 +1318,8 @@ function agentProviderRowHtml(a, cur, globalCfg) {
     <div class="ag-actions">
       <button class="btn small set-agent-provider" type="button" ${internalDisabled}>Save provider</button>
       ${!selection.hiddenInternal && cur.provider && cur.hasApiKey ? `<button class="btn small ghost clear-agent-key" type="button" aria-label="Clear the stored API key for ${escapeAttr(a.name)}">Clear key</button>` : ""}
+      <button class="btn small ghost edit-named-agent" type="button">Edit persona &amp; schedule</button>
+      <button class="btn small ghost delete-named-agent" type="button" style="color:var(--danger,#b3261e);border-color:var(--border);" aria-label="Delete ${escapeAttr(a.name)}">Delete</button>
     </div>
   `;
 }
