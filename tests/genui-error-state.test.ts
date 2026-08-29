@@ -155,6 +155,70 @@ Deno.test("genui-error: the happy-path wire delivers the staged payload to the f
   }
 });
 
+// ── Round 3 (P1): the LIVE-path headline bug — the owner-reported shape ──────
+// The live conversation path (conversation.js tool-result handling) stores
+// summarizeToolResult(...) in the card's tool-result attribute — "done" for the
+// owner's denied envelope (tool-summary.js's ok:true → "done" fallthrough) — and
+// the raw envelope in tool-detail. toolHeadline must headline the DENIAL from
+// the detail on an error card, never the bare "done" summary.
+
+Deno.test("genui-error: an ERROR card headlines the denial, never the live path's bare 'done' summary", () => {
+  // The reviewer's exact shape: the live path's attribute pairing.
+  assertEquals(toolHeadline("error", "done", OWNER_RESULT), "This operation requires owner approval in Settings.");
+  // A success status still prefers the result summary (order swap must not regress it).
+  assertEquals(toolHeadline("success", "created Paul (Researcher)", "{\"ok\":true}"), "created Paul (Researcher)");
+  // No detail → the result summary is all there is, error status or not.
+  assertEquals(toolHeadline("error", "done", null), "done");
+});
+
+Deno.test("genui-error: the LIVE tool-result path wires summary+detail so the error card headlines the denial", async () => {
+  // Drive conversation.js's REAL tool-result event handling (renderRunTranscript)
+  // with the owner envelope arriving as the event's result string — the shape the
+  // SW actually emits — and assert the attributes the card ends up with, then the
+  // headline those attributes produce.
+  const { renderRunTranscript } = await import(`../extension/shared/conversation.js?t=${Math.random()}`);
+  let portListener = null;
+  globalThis.chrome = {
+    runtime: {
+      lastError: null,
+      sendMessage: async () => ({ ok: true }),
+      connect: () => ({
+        onMessage: { addListener(fn) { portListener = fn; } },
+        onDisconnect: { addListener() {} },
+        postMessage() {},
+      }),
+    },
+  };
+  try {
+    const calls = [];
+    const c = {
+      appendUser() {}, appendAgent() {}, appendSystem() {}, appendError() {}, clear() {}, setAttribute() {},
+      appendTool(card) {
+        const entry = { kind: "tool", ...card, attrs: {} };
+        entry.setAttribute = (name, value) => { entry.attrs[name] = value; };
+        calls.push(entry);
+        return entry;
+      },
+    };
+    const unsub = renderRunTranscript(c, "exec-genui-live", {});
+    portListener({ type: "progress", event: { type: "tool-call", runId: "exec-genui-live", toolName: "execute_tool", toolArgs: { name: "update_asset" } } });
+    portListener({ type: "progress", event: { type: "tool-result", runId: "exec-genui-live", toolName: "execute_tool", ok: false, result: OWNER_RESULT } });
+    unsub();
+    assertEquals(calls.length, 1, "the result resolves the running card");
+    const attrs = calls[0].attrs;
+    assertEquals(attrs["tool-status"], "error", "a failed call resolves as the error status");
+    assertEquals(attrs["tool-result"], "done", "the summary the real code stores is the bare 'done'");
+    assertEquals(attrs["tool-detail"], OWNER_RESULT, "the raw envelope lands in the detail attribute");
+    // The rendered card headlines the denial, not the summary.
+    assertEquals(
+      toolHeadline(attrs["tool-status"], attrs["tool-result"], attrs["tool-detail"]),
+      "This operation requires owner approval in Settings.",
+    );
+  } finally {
+    delete globalThis.chrome;
+  }
+});
+
 // ── Source pins: the falsification gate (each FAILS on the pre-fix tree) ─────
 
 const COMPONENTS_SRC = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));

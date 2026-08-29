@@ -2387,7 +2387,12 @@ export function toolHeadline(status, result, detail) {
     }
     return "";
   };
-  const text = pick(result) || pick(detail);
+  // A FAILED call headlines the ERROR, never a bare summary: the live path
+  // stores summarizeToolResult(...) in `result` (the owner's denied envelope
+  // summarizes to "done") and the raw envelope in `detail`, so on error the
+  // detail's extracted error wins; the result stays the fallback when there is
+  // no detail (replay rows store the envelope in `result` itself).
+  const text = status === "error" ? pick(detail) || pick(result) : pick(result) || pick(detail);
   if (!text) return "";
   const oneLine = text.replace(/\s+/g, " ").trim();
   return oneLine.length > 140 ? `${oneLine.slice(0, 139)}…` : oneLine;

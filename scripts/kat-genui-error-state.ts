@@ -126,8 +126,19 @@ const PLAIN_ERROR_RESULT = JSON.stringify({ ok: false, error: "asset store is re
 const SUCCESS_RESULT = JSON.stringify({ ok: true, asset: { name: "Retirement Planner", content: HTML_DOC } });
 // A lazy-tool SUCCESS envelope: authorizes:false + requiresLiveAuthorization:true
 // is NORMAL success metadata (lazy-tool-protocol stamps it on ok:true projections)
-// — the preview must still render.
-const LAZY_SUCCESS_RESULT = JSON.stringify({ ok: true, asset: { name: "Retirement Planner", type: "html", content: HTML_DOC }, selectionRef: "sel_lazy_1", authorizes: false, requiresLiveAuthorization: true });
+// — the preview must still render. The EXACT owner-reported shape (pinned by
+// tests/artifacts-in-thread.test.ts from the live protocol): DOUBLE-WRAPPED —
+// outer {modelContent: inner}, inner the stringified execute_tool payload naming
+// selectedTool create_asset; the HTML itself lives in the create_asset ARGUMENTS.
+const LAZY_SUCCESS_ARGS = JSON.stringify({ content: HTML_DOC, origin: "master", type: "html", name: "OpenClaw Report" });
+const LAZY_SUCCESS_RESULT = JSON.stringify({
+  modelContent: JSON.stringify({
+    ok: true, selectedTool: "create_asset",
+    result: { ok: true, id: "a_real_1", asset: { id: "a_real_1", name: "OpenClaw Report", type: "html", origin: "master", size: 12000 } },
+    selectionRef: "sel_ba138fffcac9813515d075901fb166802eb9",
+    authorizes: false, requiresLiveAuthorization: true,
+  }),
+});
 
 // ── 1–3: message bubbles in the REAL NTP ────────────────────────────────────
 const ntp = await newView(`chrome-extension://${extId}/ntp/ntp.html`);
@@ -148,6 +159,7 @@ const bubbleReport = await ntp.ev(`(async () => {
       text: (((root.querySelector("details.tool"))?.textContent ?? root.textContent) || "").replace(/\\s+/g, " ").trim(),
       cardOpen: !!root.querySelector("details.tool[open]"),
       statusChip: root.querySelector(".tool-status")?.textContent ?? null,
+      lead: root.querySelector(".tool-lead")?.textContent ?? null,
     };
   };
   const approval = mk({ role: "tool", "tool-name": "update_asset", "tool-status": "error",
@@ -157,13 +169,19 @@ const bubbleReport = await ntp.ev(`(async () => {
   const happy = mk({ role: "tool", "tool-name": "create_asset", "tool-status": "done",
     "tool-args": "{}", "tool-result": ${JSON.stringify(SUCCESS_RESULT)} });
   const lazySuccess = mk({ role: "tool", "tool-name": "create_asset", "tool-status": "done",
-    "tool-args": "{}", "tool-result": ${JSON.stringify(LAZY_SUCCESS_RESULT)} });
+    "tool-args": ${JSON.stringify(LAZY_SUCCESS_ARGS)}, "tool-result": ${JSON.stringify(LAZY_SUCCESS_RESULT)} });
+  // The LIVE-path shape: conversation.js stores summarizeToolResult(...) in
+  // tool-result ("done" for the owner envelope) and the raw envelope in
+  // tool-detail — the error card must headline the DENIAL, never the bare
+  // summary (the round-3 owner bug).
+  const liveShape = mk({ role: "tool", "tool-name": "update_asset", "tool-status": "error",
+    "tool-args": ${JSON.stringify(OWNER_ARGS)}, "tool-result": "done", "tool-detail": ${JSON.stringify(OWNER_RESULT)} });
   // The owner envelope under a DONE status (what a persisted/replayed row carries)
   // — the card must still become the open error card, with the denial copy.
   const ownerDone = mk({ role: "tool", "tool-name": "update_asset", "tool-status": "done",
     "tool-args": ${JSON.stringify(OWNER_ARGS)}, "tool-result": ${JSON.stringify(OWNER_RESULT)} });
   await new Promise((r) => setTimeout(r, 300));
-  return { approval: read(approval), plain: read(plain), happy: read(happy), lazySuccess: read(lazySuccess), ownerDone: read(ownerDone) };
+  return { approval: read(approval), plain: read(plain), happy: read(happy), lazySuccess: read(lazySuccess), ownerDone: read(ownerDone), liveShape: read(liveShape) };
 })()`);
 
 check("approval-required error: NO preview frame is rendered", bubbleReport?.approval?.hasFrame === false, bubbleReport?.approval);
@@ -173,6 +191,9 @@ check("plain error: NO preview frame is rendered", bubbleReport?.plain?.hasFrame
 check("plain error: the error text is visible", /read-only/.test(bubbleReport?.plain?.text ?? ""), bubbleReport?.plain?.text);
 check("happy path: the preview frame STILL renders", bubbleReport?.happy?.hasFrame === true && String(bubbleReport?.happy?.iframeSrc ?? "").endsWith("sandbox/artifact-preview.html"), bubbleReport?.happy);
 check("lazy success envelope (auth metadata + ok:true): the preview frame STILL renders", bubbleReport?.lazySuccess?.hasFrame === true && String(bubbleReport?.lazySuccess?.iframeSrc ?? "").endsWith("sandbox/artifact-preview.html"), bubbleReport?.lazySuccess);
+check("live-path error shape (result='done' + detail=envelope): NO preview frame is rendered", bubbleReport?.liveShape?.hasFrame === false, bubbleReport?.liveShape);
+check("live-path error shape: the headline is the DENIAL, not the bare 'done' summary", /owner approval in Settings/.test(bubbleReport?.liveShape?.lead ?? ""), { lead: bubbleReport?.liveShape?.lead });
+check("live-path error shape: the card renders the error state open", bubbleReport?.liveShape?.cardOpen === true && bubbleReport?.liveShape?.statusChip === "error", { open: bubbleReport?.liveShape?.cardOpen, chip: bubbleReport?.liveShape?.statusChip });
 check("owner envelope under a DONE status: NO preview frame is rendered", bubbleReport?.ownerDone?.hasFrame === false, bubbleReport?.ownerDone);
 check("owner envelope under a DONE status: the card renders the error state open", bubbleReport?.ownerDone?.cardOpen === true && bubbleReport?.ownerDone?.statusChip === "error", { open: bubbleReport?.ownerDone?.cardOpen, chip: bubbleReport?.ownerDone?.statusChip });
 check("owner envelope under a DONE status: the denial copy is visible", /owner approval in Settings/.test(bubbleReport?.ownerDone?.text ?? ""), bubbleReport?.ownerDone?.text?.slice(0, 400));

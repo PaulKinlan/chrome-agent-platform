@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.356] — 2026-08-29
+- fix(genui): round 3 — a live FAILED tool card headlines the denial, never the bare 'done' summary
+
 ## [0.2.355] — 2026-08-29
 - fix(genui): round 2 — no more false failures on healthy results, and failed results always become error cards
 
