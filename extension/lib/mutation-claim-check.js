@@ -71,7 +71,7 @@ const CLAIMS = [
  * (the name words before "agent" must not read as a third-party subject).
  */
 const NEGATION_TAIL = /(?:haven['’]?t|hasn['’]?t|hadn['’]?t|didn['’]?t|don['’]?t|won['’]?t|wouldn['’]?t|couldn['’]?t|can['’]?t|cannot|not|never)(?:\s+[\w'’-]+){0,3}\s*$/i;
-const REFLEXIVE_FOLLOW = /^\s+(?:myself|ourselves)\b/i;
+const REFLEXIVE_FOLLOW = /^(?:\s*,\s*|\s+)(?:by\s+)?(?:myself|ourselves)\b/i;
 // Only subject-position first-person forms are evidence. In particular, `us`
 // is an object pronoun (and case-insensitively collides with the country US),
 // while `ours` cannot govern the mutation verb. A possessive `our` is handled

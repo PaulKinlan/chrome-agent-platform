@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.389] — 2026-08-29
+- fix: recognize natural reflexive mutation claims
+
 ## [0.2.388] — 2026-08-29
 - test: pin coordinated first-person resumptions
 

@@ -209,6 +209,20 @@ Deno.test("claim-check: coordinated predicates inherit subjects until first-pers
   }
 });
 
+Deno.test("claim-check: comma-separated reflexive resumes first-person", () => {
+  const text = "I confirmed OpenAI created an agent but then deleted the agent, myself.";
+  const out = correctUnsupportedMutationClaims(text, []);
+  assertEquals(out.corrections.length, 1);
+  assertStringIncludes(out.corrections[0], "deleted the agent");
+});
+
+Deno.test("claim-check: by-reflexive resumes first-person", () => {
+  const text = "I confirmed OpenAI created an agent but then deleted the agent by myself.";
+  const out = correctUnsupportedMutationClaims(text, []);
+  assertEquals(out.corrections.length, 1);
+  assertStringIncludes(out.corrections[0], "deleted the agent");
+});
+
 // ── Run-level: the correction must reach the AUTHORITATIVE returned result ──
 // (the conversation paints the SW's res.result, not the progress `done` event),
 // a FAILED nested lazy dispatch must not back a claim, and the success set
