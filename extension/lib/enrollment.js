@@ -206,23 +206,47 @@ export async function unregisterOriginScripts(origin) {
   // Host permission: remove, then CONFIRM absence (a `false` remove result is
   // "already absent", which is the goal — not a failure). A `remove` throw for a
   // never-granted origin is also fine — absence is re-confirmed via contains.
+  //
+  // EXCEPT under the install-granted model. When the manifest declares
+  // permanent host access (`host_permissions: ["<all_urls>"]`, owner directive
+  // 2026-08-28), `chrome.permissions.remove` cannot remove it — the API only
+  // operates on OPTIONAL permissions — so `contains()` stays true forever.
+  // Treating that as a teardown failure made every site-agent delete report
+  // "host permission still present after remove" while having correctly
+  // removed the scripts and cleared the state. Per-origin host revocation is
+  // NOT APPLICABLE in that model, not failed; the enrollment (scripts + state)
+  // is what deletion removes.
   let permissionRemoved = true;
+  let hostPermissionPermanent = false;
   try {
-    await chrome.permissions.remove({ origins: [`${canonical}/*`] });
-  } catch { /* remove may throw when the origin was never granted — confirm below */ }
-  try {
-    permissionRemoved = !(await chrome.permissions.contains({
-      origins: [`${canonical}/*`],
-    }));
-    if (!permissionRemoved && !error) error = "host permission still present after remove";
-  } catch {
+    const declared = chrome.runtime?.getManifest?.()?.host_permissions ?? [];
+    hostPermissionPermanent = Array.isArray(declared) &&
+      (declared.includes("<all_urls>") || declared.includes(`${canonical}/*`));
+  } catch { /* no manifest access — fall through to the removable path */ }
+
+  if (hostPermissionPermanent) {
+    // Nothing to remove and nothing to confirm: say so truthfully rather than
+    // reporting a failure the owner cannot act on.
     permissionRemoved = false;
+  } else {
+    try {
+      await chrome.permissions.remove({ origins: [`${canonical}/*`] });
+    } catch { /* remove may throw when the origin was never granted — confirm below */ }
+    try {
+      permissionRemoved = !(await chrome.permissions.contains({
+        origins: [`${canonical}/*`],
+      }));
+      if (!permissionRemoved && !error) error = "host permission still present after remove";
+    } catch {
+      permissionRemoved = false;
+    }
   }
   return {
-    ok: scriptsRemoved && permissionRemoved,
+    ok: scriptsRemoved && (permissionRemoved || hostPermissionPermanent),
     origin: canonical,
     scriptsRemoved,
     permissionRemoved,
+    hostPermissionPermanent,
     error,
   };
 }

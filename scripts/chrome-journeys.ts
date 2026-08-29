@@ -344,7 +344,7 @@ const EXPECTED = [
   "extension loaded",
   "SW attach returned a session id",
   "SW Runtime.enable succeeded",
-  "manifest: permissions list is empty (all optional)",
+  "manifest: permissions are install-granted, not optional",
   "manifest: debugger absent everywhere",
   "initial SW closed for a pre-attached restart",
   "SW woken for the pre-attached restart",
@@ -357,17 +357,10 @@ const EXPECTED = [
   "NTP: the typed task reached the agent journal",
   "Settings: Permissions panel present",
   "approval: forged NTP owner/activation fields are refused",
-  "permissions: all capabilities start ungranted and the driven ones are present",
-  "permissions: enabled storage (granted)",
-  "permissions: enabled alarms (granted)",
-  "permissions: enabled activeTab (granted)",
-  "permissions: enabled scripting (granted)",
-  "permissions: enabled sidePanel (granted)",
-  "permissions: tabs denied in headless (fail closed)",
-  "permissions: notifications denied in headless (fail closed)",
-  "permissions: storage Disable returns revoked (capability.revoke route)",
-  "permissions: provider survives storage Disable (session snapshot)",
-  "permissions: storage re-enabled + provider survived (migration)",
+  "permissions: every capability is granted at install and the driven ones are present",
+  "permissions: Settings permission panel is read-only install state",
+  "permissions: warning capabilities are install-granted too (no runtime request)",
+  "permissions: capability.revoke still requires owner approval (fail closed)",
   "Settings: OpenAI provider card rendered",
   "Settings: Clear key button present for the keyed provider",
   "Settings: clicked Clear key via a real click",
@@ -380,13 +373,13 @@ const EXPECTED = [
   "Settings: Enroll input present",
   "Settings: typed a loopback origin into the Enroll field",
   "Settings: clicked Enroll via a real click",
-  "enrollment: denied host permission → origin NOT enrolled (fail closed)",
+  "enrollment: origin enrolled under install-granted host access",
   "Settings: retained a driven-UI screenshot",
   "warm run 1 returns a concrete demo result",
   "warm run 2 (after re-save) returns a concrete demo result",
   "real red tab resolved (active tab id)",
   "screenshot: denied after revoke (secondary probe)",
-  "screenshot: capture denied in headless (fail closed)",
+  "screenshot: capture SUCCEEDS for the granted origin",
   "screenshot: wrong-origin grant is denied (secondary probe)",
   "screenshot: expired grant is denied (secondary probe)",
   "Settings: browser-grant checkbox present",
@@ -394,7 +387,7 @@ const EXPECTED = [
   "screenshot: granted browser control via a real checkbox click",
   "screenshot: typed the red origin into the allowed-origins field",
   "screenshot: grant scoped to the red origin via the UI",
-  "screenshot: UI-granted capture denied in headless (fail closed)",
+  "screenshot: UI-granted capture SUCCEEDS for the scoped origin",
   "screenshot: revoked via a real checkbox click",
   "screenshot: revoked → capture denied",
   "per-origin clear leaves B intact",
@@ -437,8 +430,8 @@ const EXPECTED = [
   "disenroll: an owner click needs no second approval (owner-direct action)",
   "disenroll: agent removed from list + enrollment tombstoned",
   "scripting Disable: two origins enrolled before the revoke",
-  "scripting Disable: capability revoked",
-  "scripting Disable: BOTH origins tombstoned (no lost update)",
+  "scripting Disable: refused because scripting is install-granted",
+  "scripting Disable: a refused revoke tombstones NOTHING",
   "mgmt: orchestrator exposes the management tool suite",
   "mgmt: create_agent returned ok",
   "mgmt: agent.directory lists it with enrollment state",
@@ -613,19 +606,22 @@ async function main() {
     // bar. tests/chrome-tools-t12.test.ts carries the matching source guard.
     const manifestText = await Deno.readTextFile(`${EXT}/manifest.json`);
     const manifest = JSON.parse(manifestText);
+    // The product moved to the INSTALL-GRANTED model (owner directive
+    // 2026-08-28, load-unpacked only): every permission is declared
+    // permanently and granted at install, `optional_permissions` is gone, and
+    // host access is `<all_urls>`. This check asserts that exact shape, so it
+    // fails both if a permission the suite drives is dropped AND if the
+    // all-optional model is reintroduced.
+    const DRIVEN_PERMISSIONS = [
+      "alarms", "storage", "sidePanel", "tabs", "activeTab", "scripting", "notifications",
+    ];
     check(
-      "manifest: permissions list is empty (all optional)",
-      Array.isArray(manifest.permissions) && manifest.permissions.length === 0 &&
-        Array.isArray(manifest.optional_permissions) &&
-        [
-          "alarms",
-          "storage",
-          "sidePanel",
-          "tabs",
-          "activeTab",
-          "scripting",
-          "notifications",
-        ].every((p) => manifest.optional_permissions.includes(p)),
+      "manifest: permissions are install-granted, not optional",
+      Array.isArray(manifest.permissions) &&
+        DRIVEN_PERMISSIONS.every((p) => manifest.permissions.includes(p)) &&
+        (manifest.optional_permissions ?? []).length === 0 &&
+        Array.isArray(manifest.host_permissions) &&
+        manifest.host_permissions.includes("<all_urls>"),
     );
     check(
       "manifest: debugger absent everywhere",
@@ -847,9 +843,10 @@ async function main() {
       "approval: forged NTP owner/activation fields are refused",
       forgedOwner?.ok === false && !Array.isArray(forgedOwner?.approvals),
     );
-    const capState0 = await evalOpts(
-      `[...document.querySelectorAll('#permission-list .perm-row')].map(r => ({ granted: !!r.querySelector('.perm-state.granted') }))`,
-    );
+    // The authoritative capability map from the worker, keyed by id. The DOM
+    // scrape this replaced carried no ids, so it could not tell you WHICH
+    // capability was granted — only how many rows looked green.
+    const capState0 = await msgValue({ type: "capabilities.status" });
     // A hard-coded count here silently rots every time a tool tranche adds a
     // capability — which is exactly what happened between 0.2.278 and 0.2.290
     // (7 -> 18) and left this assertion red for days. But simply deriving the
@@ -866,41 +863,63 @@ async function main() {
     const drivenCapabilities = [
       "storage", "alarms", "activeTab", "scripting", "sidePanel", "tabs", "notifications",
     ];
-    const capIds = await evalOpts(
-      `[...document.querySelectorAll('#permission-list .perm-row .grant-perm')].map(b => b.dataset.capability)`,
-    );
+    // INSTALL-GRANTED MODEL. There is no enable/disable journey any more:
+    // Settings renders a read-only diagnostic of what the install granted, so
+    // the old checks drove `.grant-perm` / `.revoke-perm` controls that no
+    // longer exist.
+    //
+    // Deliberately NOT derived from the product's own capability list — that
+    // was tried before and made the check tautological, because Settings
+    // renders its rows from the same list so both sides move together. The
+    // driven ids are named literally so dropping or renaming one breaks this.
     check(
-      "permissions: all capabilities start ungranted and the driven ones are present",
-      Array.isArray(capState0) && capState0.length > 0 &&
-        capState0.every((c) => c.granted === false) &&
-        Array.isArray(capIds) &&
-        drivenCapabilities.every((id) => capIds.includes(id)),
+      "permissions: every capability is granted at install and the driven ones are present",
+      capState0 !== null && typeof capState0 === "object" &&
+        drivenCapabilities.every((id) => capState0[id] === true) &&
+        Object.values(capState0).every((granted) => granted === true),
     );
-    for (const cap of ["storage", "alarms", "activeTab", "scripting", "sidePanel"]) {
-      const clicked = await clickSel(
-        cdp, optsSession, `.grant-perm[data-capability="${cap}"]`,
-      );
-      await sleep(800); // let the permission request + re-render settle
-      const status = await msgValue({ type: "capabilities.status" });
-      check(
-        `permissions: enabled ${cap} (granted)`,
-        clicked && status?.[cap] === true,
-      );
-    }
-    // WARNING permissions (tabs / notifications) deny in headless — assert the
-    // fail-closed grant path (the feature degrades gracefully until a headed
-    // browser grants them).
-    for (const cap of ["tabs", "notifications"]) {
-      const clicked = await clickSel(
-        cdp, optsSession, `.grant-perm[data-capability="${cap}"]`,
-      );
-      await sleep(800);
-      const status = await msgValue({ type: "capabilities.status" });
-      check(
-        `permissions: ${cap} denied in headless (fail closed)`,
-        clicked && status?.[cap] === false,
-      );
-    }
+    // The GUARD that the removed enable/disable model does not come back: real
+    // per-capability rows, stated as granted at install, and NO grant/revoke
+    // control anywhere in the panel.
+    const permPanel = await evalOpts(`(async () => {
+      // renderPermissions() awaits a contains() probe per capability, so the
+      // list can still be empty on first paint.
+      for (let i = 0; i < 40; i++) {
+        if (document.querySelectorAll('#permission-list .perm-row').length > 0) break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      return {
+        rows: document.querySelectorAll('#permission-list .perm-row').length,
+        controls: document.querySelectorAll(
+          '#permission-list .grant-perm, #permission-list .revoke-perm, #permission-list button, #permission-list input'
+        ).length,
+        states: document.querySelectorAll('#permission-list .perm-state').length,
+      };
+    })()`);
+    // This check owns ONE property: the panel is a read-only diagnostic. Whether
+    // the capabilities are actually granted is asserted above from the worker's
+    // authoritative map, so it is deliberately not re-asserted here through the
+    // DOM. (Two manifest permissions — audioCapture, videoCapture — legitimately
+    // report not-granted under headless, so a "every row is green" assertion
+    // here would fail for an environment reason rather than a product one.)
+    check(
+      "permissions: Settings permission panel is read-only install state",
+      permPanel?.rows > 0 && permPanel?.states === permPanel?.rows &&
+        permPanel?.controls === 0,
+    );
+
+    // `tabs` and `notifications` used to auto-deny in headless because they
+    // were optional and needed a runtime request. Asserted through the REAL
+    // permission API, not just our own status map, so this fails if the
+    // manifest declaration and the runtime ever disagree.
+    const warningCaps = await evalOpts(`Promise.all(
+      ["tabs", "notifications"].map((p) => chrome.permissions.contains({ permissions: [p] }))
+    )`);
+    check(
+      "permissions: warning capabilities are install-granted too (no runtime request)",
+      Array.isArray(warningCaps) && warningCaps.length === 2 &&
+        warningCaps.every((granted) => granted === true),
+    );
 
     await msgOpts({
       type: "provider.set",
@@ -912,36 +931,16 @@ async function main() {
       },
     });
 
-    // Storage Disable→re-enable round-trip (the round-17 blocker): Disabling the
-    // optional `storage` permission must (a) route through the SW capability.revoke
-    // route (snapshot persistent→session + permissions.remove), (b) keep the
-    // configured provider readable from the session fallback (no data loss), and
-    // (c) re-enable must migrate the session changes back (never restore stale
-    // values). This exercises the new SW-side permission removal end-to-end.
-    const storageDisableClicked = await approvedSettingsClick(
-      `.revoke-perm[data-capability="storage"]`,
-    );
-    await sleep(800);
-    const storageDisabledStatus = await msgValue({ type: "capabilities.status" });
-    const providerDuringDisable = await evalOpts(`chrome.runtime.sendMessage({ type: "provider.get" })`);
+    // The revoke ROUTE still exists in the worker even though no UI reaches it.
+    // Its security property is what survives from the deleted Disable journey:
+    // it must never act without owner approval. (chrome.permissions.remove only
+    // works on optional permissions, so revocation is unreachable now — this
+    // pins the gate, not the effect.)
+    const revokeUnapproved = await msgOpts({ type: "capability.revoke", id: "storage" });
     check(
-      "permissions: storage Disable returns revoked (capability.revoke route)",
-      storageDisableClicked && storageDisabledStatus?.storage === false,
-    );
-    check(
-      "permissions: provider survives storage Disable (session snapshot)",
-      providerDuringDisable?.provider === "openai",
-    );
-    const storageEnableClicked = await clickSel(
-      cdp, optsSession, `.grant-perm[data-capability="storage"]`,
-    );
-    await sleep(800);
-    const storageReenabledStatus = await msgValue({ type: "capabilities.status" });
-    const providerAfterReenable = await evalOpts(`chrome.runtime.sendMessage({ type: "provider.get" })`);
-    check(
-      "permissions: storage re-enabled + provider survived (migration)",
-      storageEnableClicked && storageReenabledStatus?.storage === true &&
-        providerAfterReenable?.provider === "openai",
+      "permissions: capability.revoke still requires owner approval (fail closed)",
+      revokeUnapproved?.ok === false &&
+        String(revokeUnapproved?.error ?? "").toLowerCase().includes("approval"),
     );
 
     // Re-open the Settings page so renderProviders picks up the openai config
@@ -1041,10 +1040,16 @@ async function main() {
     );
     await sleep(1500); // let the (denied) permission request settle
     const enrolledAfterDeny = await msgValue({ type: "agent.list" });
+    // Under the install-granted model host access is already present, so the
+    // old fail-closed deny path is unreachable and the POSITIVE path is what is
+    // observable: a genuine owner Enroll click now enrols the origin. The
+    // property that enrolment is never claimed without host access is still
+    // covered — `<all_urls>` is asserted in the manifest check above, and the
+    // wrong-origin/expired-grant probes below still exercise refusal.
     check(
-      "enrollment: denied host permission → origin NOT enrolled (fail closed)",
+      "enrollment: origin enrolled under install-granted host access",
       Array.isArray(enrolledAfterDeny) &&
-        !enrolledAfterDeny.includes(enrollOrigin),
+        enrolledAfterDeny.includes(enrollOrigin),
     );
 
     const optsShot = await captureShot(cdp, optsSession);
@@ -1110,9 +1115,16 @@ async function main() {
       expiryMs: 60000,
     });
     const allowedShot = await msgValue({ type: "capture.tab", tabId: redTabId });
+    // Previously asserted fail-closed because no grantable permission
+    // authorized capturing an arbitrary tab in headless. With `<all_urls>`
+    // install-granted that path is now genuinely available, so the meaningful
+    // assertion is that the GRANTED origin captures. Refusal is still covered
+    // by the wrong-origin, expired-grant and post-revoke probes below, which
+    // are what actually protect the browser-control scoping.
     check(
-      "screenshot: capture denied in headless (fail closed)",
-      allowedShot?.error !== undefined && allowedShot?.screenshot === undefined,
+      "screenshot: capture SUCCEEDS for the granted origin",
+      allowedShot?.error === undefined && typeof allowedShot?.screenshot === "string" &&
+        allowedShot.screenshot.length > 0,
     );
     // (c) wrong-origin (secondary probe).
     await msgValue({
@@ -1176,8 +1188,9 @@ async function main() {
     // message probe — activeTab cannot authorize an arbitrary tab without a
     // headed-browser invocation on that tab).
     check(
-      "screenshot: UI-granted capture denied in headless (fail closed)",
-      uiGrantShot?.error !== undefined && uiGrantShot?.screenshot === undefined,
+      "screenshot: UI-granted capture SUCCEEDS for the scoped origin",
+      uiGrantShot?.error === undefined && typeof uiGrantShot?.screenshot === "string" &&
+        uiGrantShot.screenshot.length > 0,
     );
     // Revoke via a genuine checkbox click (uncheck).
     check(
@@ -1605,17 +1618,24 @@ async function main() {
         preDisable.includes("https://script-disable-a.example") &&
         preDisable.includes("https://script-disable-b.example"),
     );
+    // Under the install-granted model `scripting` is a REQUIRED manifest
+    // permission, so Chrome can never remove it. The revoke is refused up
+    // front — and the property that matters is that a refusal destroys
+    // NOTHING. Previously the route tombstoned every enrolled origin first and
+    // only then discovered the removal could not commit, so an operation that
+    // could never succeed still took the origins' authority with it.
     const revokeScripting = await approvedMsg({ type: "capability.revoke", id: "scripting" });
     check(
-      "scripting Disable: capability revoked",
-      revokeScripting?.ok === true && revokeScripting?.revoked !== false,
+      "scripting Disable: refused because scripting is install-granted",
+      revokeScripting?.ok === false && revokeScripting?.required === true &&
+        revokeScripting?.revoked === false,
     );
     const postDisable = await msgValue({ type: "agent.list" });
     check(
-      "scripting Disable: BOTH origins tombstoned (no lost update)",
+      "scripting Disable: a refused revoke tombstones NOTHING",
       Array.isArray(postDisable) &&
-        !postDisable.includes("https://script-disable-a.example") &&
-        !postDisable.includes("https://script-disable-b.example"),
+        postDisable.includes("https://script-disable-a.example") &&
+        postDisable.includes("https://script-disable-b.example"),
     );
 
     // ─────────────────────────────────────────────────────────────

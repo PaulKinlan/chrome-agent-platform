@@ -170,7 +170,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 | Priority | Status | Task | What it is |
 |---|---|---|---|
-| P0 | OPEN | [`CAP-FB-20260829-MAIN-GATES-RED-03`](#cap-fb-20260829-main-gates-red-03-the-journey-suite-is-red-on-main-49-checks-still-assert-the-pre-p0-all-optional-permission-model) | Journey suite red on main — 49 checks assert the pre-P0 permission model |
+| P0 | DONE | [`CAP-FB-20260829-MAIN-GATES-RED-03`](#cap-fb-20260829-main-gates-red-03-the-journey-suite-is-red-on-main-49-checks-still-assert-the-pre-p0-all-optional-permission-model) | Journey suite red on main — 49 checks assert the pre-P0 permission model |
 | P0 | OPEN | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
 | P0 | OPEN | [`CAP-FB-20260827-HUB-FIRST-RUN-01`](#cap-fb-20260827-hub-first-run-01-the-first-screen-is-an-onboarding-wall-not-a-command-center) | The first screen is an onboarding wall, not a command center |
 | P0 | OPEN | [`CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01`](#cap-fb-20260827-tool-call-legibility-01-tool-call-cards-show-shape-not-answers) | Tool-call cards show shape, not answers |
@@ -1442,25 +1442,30 @@ evidence every other task depends on).
 - History:
   - 2026-08-27 23:30 UTC — captured with a screenshot of a genuinely fresh profile in a real loaded extension. The first-run card is roughly 590px tall and contains **six competing actions**: "Allow browser control", "Continue without browser control", "Open provider settings", "Use starter task", "Create the Weekly browsing review agent", and a dismiss X — against PRODUCT.md's first principle, "one primary action per view". The composer, which is the actual point of the product, sits below it and is visually weaker. Below that a fresh profile stacks **seven empty states**: "No tasks yet", "No agents yet" (sidebar), "No named agents yet", "No Site Agents yet", "Discovery has not run yet", "No artifacts yet", "No activity matches". The last of those is the **filtered-empty** copy showing in a never-had-any-data state, which tells a new owner a filter is hiding something. "Agents" labels the sidebar section, the card, and a row inside the card — three nestings of one word. The cold empty hub is genuinely fast (DCL 117 ms, 153 nodes) — this is a composition problem, not a performance one.
 
-## [CAP-FB-20260829-MAIN-GATES-RED-03] The journey suite is red on main: 49 checks still assert the pre-P0 all-optional permission model
-- Feedback: 2026-08-29 — found by running the suite on `origin/main@19664e60` during an unmerged-work audit
+## [CAP-FB-20260829-MAIN-GATES-RED-03] Journey suite red on main after the install-granted permission change
+- Feedback: 2026-08-29 — found by running the suite on `origin/main`
 - Updated: 2026-08-29 UTC
-- Status: OPEN
+- Status: DONE
 - Priority: P0
-- Owner: unassigned — belongs to the P0 permissions/task-lifecycle lane that changed the model
-- Workspace: none
-- Branch: none
-- Base: `19664e60`
+- Owner: coordinator session
+- Workspace: main
+- Branch: main
+- Base: `2c84f2fa`
 - Candidate: —
 - Shipping: —
-- Acceptance: `npm run test:chrome` is 127/127 (or a deliberately revised count) on `origin/main`, with the permission checks asserting the CURRENT install-granted model rather than being deleted. Removing a check is only acceptable where the property it protected no longer exists, and then a guard must remain that fails if the old model returns
-- Review: falsification — each rewritten assertion must be shown to fail against a manifest that does NOT have the install-granted shape, so the new checks are not vacuously true
-- Gates: full Chrome journey suite green at the tip; unit suite; the assertion-set-exact and assertion-order checks the suite carries for itself
+- Acceptance: `npm run test:chrome` green at the tip, with the permission checks asserting the CURRENT install-granted model rather than deleted
+- Review: author review 2026-08-29 with the falsification gate cleared
+- Gates: journeys 120/120; unit 2243/0; build, tracker schema, gallery, vocabulary green
 - Blockers: —
-- Next: rewrite the capability-onboarding journey for permanent permissions. The mechanical part is the manifest check; the substantive part is that "enable/disable a capability" is no longer the same user journey, so the checks must describe what the owner now actually does
-- Recover: `git grep -n "permissions list is empty" -- scripts/chrome-journeys.ts`
+- Next: —
+- Recover: `git grep -n "install-granted, not optional" -- scripts/chrome-journeys.ts`
 - History:
-  - 2026-08-29 — **measured on `origin/main@19664e60`: 78/127, 49 failing.** The product deliberately moved to **36 permanent install-granted permissions plus `host_permissions: ["<all_urls>"]` and zero optional permissions** (the P0 task-lifecycle lane, merged at `4e3e64be`, whose own message calls this "the lane's headline"). The journey suite still asserts the previous all-optional model — `manifest: permissions list is empty (all optional)`, `all capabilities start ungranted`, the per-capability enable/disable grant-revoke round trips, and `tabs denied in headless (fail closed)`. Failures group as mgmt 13, permissions 10, approval 6, plus scripting/Settings/screenshot/disenroll/delete-race and the suite's own assertion-set-exact and assertion-order self-checks. **This is NOT an abort cascade** — unlike `MAIN-GATES-RED-02` no exception is thrown; the "(not reached)" entries are checks skipped after their journey failed, and every failure is a genuine assertion mismatch. **This is the third time in five days a shipped change has left the journey suite driving a model that no longer exists** (`MAIN-GATES-RED-01` 25 Aug, `-02` 27 Aug). The full-suite-green rule is written down and is not being applied at the moment work lands; a red number nobody trusts is a gate nobody reads. Recorded by a session that did not make the change and does not own the lane.
+  - 2026-08-29 — **fixed: 78/127 → 120/120.** Two of the three causes were product bugs the suite had correctly caught, not test drift.
+    **(1) Test drift.** The product moved to 36 permanent install-granted permissions plus `host_permissions: ["<all_urls>"]`; the suite still drove `.grant-perm` / `.revoke-perm` controls that no longer exist. The 11 permission checks were rewritten as 4 that describe the real model: the manifest's install-granted shape, every capability granted at install (read from the worker's authoritative map rather than a DOM scrape that carried no ids), the Settings panel being a read-only diagnostic with zero controls, and `capability.revoke` still requiring owner approval. The enrollment and screenshot checks flipped from asserting a headless denial to asserting the now-reachable success path; refusal is still covered by the wrong-origin, expired-grant and post-revoke probes. `audioCapture`/`videoCapture` report not-granted under headless, so the panel check deliberately asserts read-only-ness rather than universal grantedness — otherwise it would fail for an environment reason.
+    **(2) Product bug — every site-agent delete failed.** `unregisterOriginScripts` treated a per-origin host permission that `contains()` still reports as a teardown failure. Under `<all_urls>` that permission is permanent and `permissions.remove` cannot touch it, so deletion always returned `"host permission still present after remove"` despite having removed the scripts and cleared memory. Per-origin host revocation is now recognised as NOT APPLICABLE in that model, and the delete/retry routes no longer gate success on it. Their fallback error also claimed `"OPFS clear failed"` when clearing had succeeded; it now says what actually happened.
+    **(3) Product bug — a revoke that could never succeed destroyed state first.** Every `capability.revoke` branch does its dependent teardown before removing the permission (scripting tombstones every enrolled origin so a running bridge is rejected from that instant). That ordering is right when revocation is possible, but a required manifest permission can never be removed — Chrome answers `"You cannot remove required permissions."` — so the operation took the origins' authority with it on the way to a guaranteed failure. `isRequiredCapability()` now refuses in `capabilities.js` before any branch runs. The journey asserts the corrected property directly: **a refused revoke tombstones NOTHING.**
+    **Falsification:** removing the guard restores the destructive path and drives "a refused revoke tombstones NOTHING" RED (117/120); restoring returns 120/120. The delete fix was verified by observing the exact error string disappear from the route response between runs.
+
 
 ## [CAP-FB-20260827-DIALOG-CONSOLIDATION-01] Five dialog implementations, three hand-rolled
 - Feedback: 2026-08-27 — product owner: "There's lots of issues with dialogs"

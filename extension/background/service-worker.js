@@ -112,6 +112,7 @@ import {
   capabilityStatus,
   requestCapability,
   revokeCapability,
+  isRequiredCapability,
 } from "../lib/capabilities.js";
 import {
   createAgent,
@@ -3801,6 +3802,13 @@ const handlers = mergeRouteMaps(
     try { payload = payloadFields([["id", id]]); } catch { return { ok: false, error: "invalid capability" }; }
     const approval = await requireOwnerApproval(context, "capability.revoke", target, payload);
     if (!approval.ok) return approval;
+    // Refuse BEFORE any dependent teardown. Every branch below destroys state
+    // first (storage snapshots, alarms disarm, scripting tombstones every
+    // enrolled origin) and removes the permission last — correct when
+    // revocation is possible, but under the install-granted model the removal
+    // can never commit, so that ordering destroyed state on the way to a
+    // guaranteed failure.
+    if (isRequiredCapability(id)) return await revokeCapability(id);
     if (id === "storage") {
       // The snapshot + permission removal + reset must be ONE atomic transition
       // under the storage-mode lock, so a concurrent KV write cannot slip between
@@ -6458,14 +6466,18 @@ const handlers = mergeRouteMaps(
       invalidateAgent();
       const scriptsRemoved = unreg.scriptsRemoved === true;
       const permissionRemoved = unreg.permissionRemoved === true;
-      if (scriptsRemoved && permissionRemoved && cleared) {
+      // Host access declared permanently in the manifest cannot be removed per
+      // origin; absence is not achievable and not required for teardown.
+      const hostPermanent = unreg.hostPermissionPermanent === true;
+      if (scriptsRemoved && (permissionRemoved || hostPermanent) && cleared) {
         await clearCleanupPending(canonical);
         broadcastRegistryChanged();
         return {
           ok: true,
           origin: canonical,
           scriptsRemoved: true,
-          permissionRemoved: true,
+          permissionRemoved,
+          hostPermissionPermanent: hostPermanent,
         };
       }
       // Record a RETRYABLE cleanup obligation (independent of enrollment, so it
@@ -6475,9 +6487,8 @@ const handlers = mergeRouteMaps(
         ok: false,
         origin: canonical,
         retryable: true,
-        error:
-          unreg.error ??
-          "OPFS clear failed",
+        error: unreg.error ??
+          (cleared ? "site teardown incomplete" : "OPFS clear failed"),
         scriptsRemoved,
         permissionRemoved,
         cleared,
@@ -6522,7 +6533,8 @@ const handlers = mergeRouteMaps(
       const cleared = clearRes.status === "fulfilled";
       const scriptsRemoved = unreg.scriptsRemoved === true;
       const permissionRemoved = unreg.permissionRemoved === true;
-      if (scriptsRemoved && permissionRemoved && cleared) {
+      const hostPermanent = unreg.hostPermissionPermanent === true;
+      if (scriptsRemoved && (permissionRemoved || hostPermanent) && cleared) {
         await clearCleanupPending(canonical);
         return { ok: true, origin: canonical };
       }
@@ -6530,7 +6542,8 @@ const handlers = mergeRouteMaps(
       return {
         ok: false,
         retryable: true,
-        error: unreg.error ?? "OPFS clear failed",
+        error: unreg.error ??
+          (cleared ? "site teardown incomplete" : "OPFS clear failed"),
         scriptsRemoved,
         permissionRemoved,
         cleared,

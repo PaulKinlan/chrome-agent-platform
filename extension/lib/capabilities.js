@@ -212,9 +212,40 @@ export async function requestCapability(id) {
  * which is the goal — not a failure). The UI must surface a failed revoke, never
  * claim success against a still-granted permission (the round-16 finding).
  */
+/**
+ * Whether a capability is backed ENTIRELY by permissions the manifest declares
+ * as required. `chrome.permissions.remove` only operates on OPTIONAL
+ * permissions, so such a capability can never be revoked at runtime — Chrome
+ * answers "You cannot remove required permissions."
+ *
+ * This matters beyond a nicer message: revoke paths do their DEPENDENT
+ * teardown first (scripting tombstones every enrolled origin so a running
+ * bridge is rejected from that instant, before the permission is removed).
+ * That ordering is right when revocation can actually happen, but under the
+ * install-granted model it meant an operation that could never succeed still
+ * destroyed enrollment state on its way to failing.
+ */
+export function isRequiredCapability(id) {
+  const cap = CAPABILITIES.find((c) => c.id === id);
+  if (!cap || !Array.isArray(cap.permissions) || cap.permissions.length === 0) return false;
+  let required = [];
+  try { required = chrome.runtime?.getManifest?.()?.permissions ?? []; } catch { return false; }
+  if (!Array.isArray(required) || required.length === 0) return false;
+  return cap.permissions.every((p) => required.includes(p));
+}
+
 export async function revokeCapability(id) {
   const cap = CAPABILITIES.find((c) => c.id === id);
   if (!cap) return { ok: false, error: `unknown capability ${id}` };
+  if (isRequiredCapability(id)) {
+    return {
+      ok: false,
+      revoked: false,
+      capability: id,
+      required: true,
+      error: `${cap.label ?? id} is granted at install and cannot be turned off at runtime`,
+    };
+  }
   try {
     const removed = await chrome.permissions.remove({
       permissions: cap.permissions,
