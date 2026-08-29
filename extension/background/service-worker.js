@@ -110,6 +110,10 @@ import {
   withStorageModeLock,
 } from "../lib/kv.js";
 import {
+  listKnownWebmcpOrigins,
+  reportWebmcpDetection,
+} from "../lib/webmcp-detection-registry.js";
+import {
   hasCapability,
   capabilityStatus,
   requestCapability,
@@ -3092,6 +3096,39 @@ const BRIDGE_NONCE_KEY = "cap:webmcpBridgeNonces";
 const BRIDGE_NONCE_MAX = 256;
 const bridgeNonceMemory = new Map(); // documentId → nonce
 
+const detectionNonceMemory = new Map(); // documentId → nonce
+
+function issueDetectionNonce(documentId) {
+  let nonce = detectionNonceMemory.get(documentId);
+  if (!nonce) {
+    nonce = crypto.randomUUID();
+    detectionNonceMemory.set(documentId, nonce);
+    if (detectionNonceMemory.size > BRIDGE_NONCE_MAX) {
+      detectionNonceMemory.delete(detectionNonceMemory.keys().next().value);
+    }
+  }
+  return nonce;
+}
+
+async function armDetectionProbe(tabId, documentId) {
+  const nonce = detectionNonceMemory.get(documentId);
+  if (!nonce) return false;
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, documentIds: [documentId] },
+      world: "MAIN",
+      func: (value) => {
+        const root = globalThis;
+        return root.__capWebmcpDetectBootstrap?.(value) === true;
+      },
+      args: [nonce],
+    });
+    return results?.[0]?.result === true;
+  } catch {
+    return false;
+  }
+}
+
 async function issueBridgeNonce(tabId, documentId, diagnostics) {
   let nonce = bridgeNonceMemory.get(documentId) ?? null;
   if (!nonce) {
@@ -5003,7 +5040,7 @@ const handlers = mergeRouteMaps(
   // enrollment. Tab URLs/titles are visible only with the OPTIONAL `tabs`
   // permission; without it we report `needTabs` honestly so the hub requests
   // it on the user's click.
-  async "agent.discoverable-tabs"({ toolsOnly = false } = {}) {
+  async "agent.discoverable-tabs"() {
     let tabs = null;
     try {
       tabs = await chrome.tabs.query({});
@@ -5015,6 +5052,9 @@ const handlers = mergeRouteMaps(
       // Every tab's URL is hidden — the `tabs` permission is absent.
       return { ok: false, needTabs: true, error: "tabs permission needed to list open pages" };
     }
+    const known = new Map(
+      (await listKnownWebmcpOrigins().catch(() => [])).map((entry) => [entry.origin, entry]),
+    );
     const out = [];
     for (const t of tabs) {
       if (t.id == null || !t.url) continue;
@@ -5025,13 +5065,16 @@ const handlers = mergeRouteMaps(
         continue;
       }
       if (!origin || !/^https?:/.test(origin)) continue;
-      // The explicit picker must include un-enrolled pages: their tools cannot
-      // enter the registry until the owner picks one and its scripts inject.
-      // Proactive surfaces opt into toolsOnly so they still advertise only
-      // origins that have already reported tools.
-      const registeredTools = await listTools(origin).catch(() => []);
-      const toolCount = Array.isArray(registeredTools) ? registeredTools.length : 0;
-      if (toolsOnly && toolCount === 0) continue;
+      // Match the browser's CURRENT top-level document, not merely its origin:
+      // another same-origin tab/document cannot borrow this page's detection.
+      const detected = known.get(origin);
+      if (!detected) continue;
+      const frame = await chrome.webNavigation.getFrame({ tabId: t.id, frameId: 0 }).catch(() => null);
+      const document = detected.documents.find((item) =>
+        item.tabId === t.id && item.documentId === frame?.documentId
+      );
+      if (!document) continue;
+      const toolCount = document.toolCount;
       out.push({
         id: t.id,
         title: String(t.title ?? "").slice(0, 200),
@@ -5262,6 +5305,62 @@ const handlers = mergeRouteMaps(
     if (res?.error) return { ok: false, error: res.error };
     if (res?.ok === false) return { ok: false, error: res.error ?? "invoke failed" };
     return { ok: true, result: res?.result };
+  },
+  async "webmcp.detect.bootstrap"({ origin, __sender }) {
+    const canonical = canonicalOrigin(origin);
+    if (
+      !canonical ||
+      __sender?.tabId == null ||
+      typeof __sender.documentId !== "string" ||
+      __sender.documentLifecycle !== "active"
+    ) return { ok: false, error: "invalid detection document" };
+    const senderTab = await chrome.tabs.get(__sender.tabId).catch(() => null);
+    if (!senderTab?.url || canonicalOrigin(senderTab.url) !== canonical) {
+      return { ok: false, error: "sender tab origin mismatch" };
+    }
+    return { ok: true, nonce: issueDetectionNonce(__sender.documentId) };
+  },
+  async "webmcp.detect.arm"({ origin, __sender }) {
+    const canonical = canonicalOrigin(origin);
+    if (
+      !canonical ||
+      __sender?.tabId == null ||
+      typeof __sender.documentId !== "string" ||
+      __sender.documentLifecycle !== "active"
+    ) return { ok: false, error: "invalid detection document" };
+    const senderTab = await chrome.tabs.get(__sender.tabId).catch(() => null);
+    if (!senderTab?.url || canonicalOrigin(senderTab.url) !== canonical) {
+      return { ok: false, error: "sender tab origin mismatch" };
+    }
+    const armed = await armDetectionProbe(__sender.tabId, __sender.documentId);
+    return armed ? { ok: true } : { ok: false, error: "detection probe not armed" };
+  },
+  async "webmcp.detected"({ origin, url, toolCount, __sender }) {
+    const canonical = canonicalOrigin(origin);
+    if (!canonical || !/^https?:/.test(canonical)) return { ok: false, error: "invalid origin" };
+    let reportedUrl;
+    try { reportedUrl = new URL(url); } catch { return { ok: false, error: "invalid URL" }; }
+    if (canonicalOrigin(reportedUrl.origin) !== canonical) return { ok: false, error: "URL origin mismatch" };
+
+    // Close the navigation race: authorization derived the sender origin from
+    // Chrome's MessageSender, then this handler re-reads the current tab before
+    // persisting. A payload can never register another origin.
+    const senderTab = __sender?.tabId != null ? await chrome.tabs.get(__sender.tabId).catch(() => null) : null;
+    if (!senderTab?.url || canonicalOrigin(senderTab.url) !== canonical) {
+      return { ok: false, error: "sender tab origin mismatch" };
+    }
+    if (
+      __sender?.documentLifecycle !== "active" ||
+      typeof __sender.documentId !== "string" ||
+      typeof __sender.url !== "string"
+    ) return { ok: false, error: "invalid detection document" };
+    return {
+      ok: true,
+      ...(await reportWebmcpDetection(canonical, __sender.url, toolCount, {
+        tabId: __sender.tabId,
+        documentId: __sender.documentId,
+      })),
+    };
   },
   async "tools.upsert"({ origin, tools, seq, epoch, pageUrl, title, __sender }) {
     const canonical = canonicalOrigin(origin);
@@ -7278,6 +7377,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         documentLifecycle: typeof sender?.documentLifecycle === "string"
           ? sender.documentLifecycle
           : null,
+        url: typeof sender?.url === "string" ? sender.url : null,
       },
     };
   } else if (auth.kind === "unmatched") {

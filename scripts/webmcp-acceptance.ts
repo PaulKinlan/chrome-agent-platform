@@ -6,9 +6,11 @@
 // tools.upsert directly from an extension page).
 //
 // This journey drives the REAL loaded-MV3 path end-to-end:
-//   1. the REAL discovery UI (hub "Discover this page" → the tab picker → the
-//      exact picked tab), clicked with real CDP Input events;
-//   2. verification of the extension's install-granted scripting/tabs/host access;
+//   1. passive detection admits the WebMCP fixture before enrollment while a
+//      concurrently-open plain http(s) page is absent from every picker;
+//   2. the REAL discovery UI (hub "Discover this page" → the filtered tab picker
+//      → the exact picked tab), clicked with real CDP Input events;
+//   3. verification of the extension's install-granted scripting/tabs/host access;
 //   3. dynamic registration + current-tab injection of BOTH packaged scripts;
 //   4. CDP Debugger.scriptParsed evidence that chrome-extension://…/content/
 //      main-world.js and …/content/content-script.js really executed in the
@@ -39,6 +41,7 @@ const EXT = `${ROOT}extension`;
 const CHROMIUM = "/usr/bin/chromium";
 const FIXTURE_PORT = 8934;
 const PAGE_ORIGIN = `http://127.0.0.1:${FIXTURE_PORT}`;
+const PLAIN_ORIGIN = `http://localhost:${FIXTURE_PORT}`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let pass = 0, fail = 0;
@@ -171,8 +174,15 @@ async function main() {
     check("Settings: diagnostics gate enabled", diagOn === true, diagOn);
     await send("Target.closeTarget", { targetId: optT.targetId });
 
-    // 3. The fixture page (Tab W) — attach BEFORE any injection so
-    //    Debugger.scriptParsed + console events capture the scripts executing.
+    // 3. Open a plain http(s) page first. Passive detection must report zero,
+    //    so its origin never enters the known-WebMCP picker registry.
+    const plainT = await send("Target.createTarget", { url: `${PLAIN_ORIGIN}/plain.html` });
+    const plainSession = (await send("Target.attachToTarget", { targetId: plainT.targetId, flatten: true })).sessionId;
+    await send("Runtime.enable", {}, plainSession);
+    await until(() => evalIn(plainSession, `document.readyState === "complete" ? true : null`), 8000);
+
+    // 4. The fixture page (Tab W) — passive detection runs before enrollment;
+    //    attach before the later full-bridge injection evidence is collected.
     const wT = await send("Target.createTarget", { url: `${PAGE_ORIGIN}/index.html` });
     const wsess = (await send("Target.attachToTarget", { targetId: wT.targetId, flatten: true })).sessionId;
     await send("Runtime.enable", {}, wsess);
@@ -182,7 +192,7 @@ async function main() {
     check("fixture page loaded", await evalIn(wsess, `document.getElementById("msg")?.textContent`) === "fixture loaded");
     const baselineParsed = scriptParsedUrls.length;
 
-    // 4. The hub (Tab N) — the REAL discovery UI.
+    // 5. The hub (Tab N) — the REAL discovery UI.
     const nT = await send("Target.createTarget", { url: `chrome-extension://${extId}/ntp/ntp.html` });
     const ns = (await send("Target.attachToTarget", { targetId: nT.targetId, flatten: true })).sessionId;
     await send("Runtime.enable", {}, ns);
@@ -190,7 +200,7 @@ async function main() {
     await sleep(1600);
     await send("Target.activateTarget", { targetId: nT.targetId });
 
-    // 5. Click "Discover this page" (real click).
+    // 6. Click "Discover this page" (real click).
     const discoverClicked = await clickSelector(ns, `document.getElementById("discover-page")`);
     check("hub: clicked Discover this page via a real click", discoverClicked);
     // The tab picker must appear listing the fixture tab (exact tab identity).
@@ -201,10 +211,17 @@ async function main() {
       const row = rows.find((r) => r.getAttribute("description") === ${JSON.stringify(PAGE_ORIGIN)});
       return row ? true : null;
     })()`), 8000);
-    check("hub: the tab picker lists the fixture tab (explicit tab identity)", pickerHasFixture === true);
+    check("hub: passive detection lists the WebMCP fixture before enrollment", pickerHasFixture === true);
+    const pickerHasPlain = await evalIn(ns, `(() => {
+      const dlg = document.querySelector("agent-dialog");
+      if (!dlg) return null;
+      return [...dlg.querySelectorAll("capability-row")]
+        .some((r) => r.getAttribute("description") === ${JSON.stringify(PLAIN_ORIGIN)});
+    })()`);
+    check("hub: a concurrently-open plain page is absent from the picker", pickerHasPlain === false, pickerHasPlain);
     await screenshot(ns, "webmcp-acceptance-tab-picker.png");
 
-    // 6. Pick the fixture tab (real click on the row's action).
+    // 7. Pick the fixture tab (real click on the row's action).
     const rowClicked = await clickSelector(ns, `(() => {
       const dlg = document.querySelector("agent-dialog");
       const rows = [...dlg.querySelectorAll("capability-row")];
@@ -213,7 +230,7 @@ async function main() {
     })()`);
     check("hub: picked the fixture tab in the picker via a real click", rowClicked);
 
-    // 7. Enrollment + injection of the EXACT picked tab.
+    // 8. Enrollment + injection of the EXACT picked tab.
     const enrolled = await until(async () => {
       const list = await evalIn(ns, `chrome.runtime.sendMessage({ type: "agent.list" })`);
       return Array.isArray(list) && list.includes(PAGE_ORIGIN) ? list : null;
@@ -229,7 +246,7 @@ async function main() {
       Array.isArray(status?.injection?.ready) && status.injection.ready.includes(fixtureTabId),
       { ready: status?.injection?.ready, fixtureTabId });
 
-    // 8. CDP scriptParsed: BOTH packaged scripts executed in Tab W (no reload).
+    // 9. CDP scriptParsed: BOTH packaged scripts executed in Tab W (no reload).
     const parsed = await until(() => {
       const main = scriptParsedUrls.some((u) => u === `chrome-extension://${extId}/content/main-world.js`);
       const bridge = scriptParsedUrls.some((u) => u === `chrome-extension://${extId}/content/content-script.js`);
@@ -239,13 +256,13 @@ async function main() {
     check("CDP scriptParsed: content/content-script.js executed in the picked tab", parsed === true || scriptParsedUrls.some((u) => u.endsWith("/content/content-script.js")));
     check("the discovery scripts executed WITHOUT a reload (immediate injection)", scriptParsedUrls.length > baselineParsed);
 
-    // 9. Console lifecycle events from BOTH worlds.
+    // 10. Console lifecycle events from BOTH worlds.
     const sawBridgeStart = await until(() => consoleEvents.some((e) => e.includes("[WebMCP:bridge]") && e.includes("start")) ? true : null, 8000);
     check("console: [WebMCP:bridge] start lifecycle event", sawBridgeStart === true, consoleEvents.slice(0, 4));
     const sawMainDiscover = await until(() => consoleEvents.some((e) => e.includes("[WebMCP:main]") && e.includes("discover")) ? true : null, 8000);
     check("console: [WebMCP:main] discover lifecycle event", sawMainDiscover === true, consoleEvents.slice(0, 6));
 
-    // 10. Discovery landed via the real bridge → tools.upsert → directory.
+    // 11. Discovery landed via the real bridge → tools.upsert → directory.
     const toolNames = await until(async () => {
       const list = await evalIn(ns, `chrome.runtime.sendMessage({ type: "tools.list", origin: ${JSON.stringify(PAGE_ORIGIN)} })`);
       const names = Array.isArray(list) ? list.map((t: any) => t.name) : [];

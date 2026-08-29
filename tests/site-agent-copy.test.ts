@@ -43,7 +43,7 @@ Deno.test("site-agent copy: error setup states explain recovery without leaking 
 
 Deno.test("site-agent copy: empty states distinguish no tabs, no Site Agent, and no tools", () => {
   const noTabs = siteAgentSetupMessage("no-tabs");
-  assertMatch(noTabs, /open a site in a tab/i);
+  assertMatch(noTabs, /open a page that exposes site tools/i);
   assertNotMatch(noTabs, INTERNAL_CHATTER);
 
   const notAdded = siteAgentToolsMessage("not-added");

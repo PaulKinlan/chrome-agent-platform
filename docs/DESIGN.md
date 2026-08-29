@@ -140,6 +140,24 @@ the current child and its exact nonce. Teardown removes the outer frame and the
 privileged staging entry; repeated async preview renders clean the prior listener
 and stage exactly one replacement.
 
+## WebMCP discovery boundary
+
+Every top-level http(s) document receives two small detection-only scripts at
+`document_start`: MAIN can inspect `document.modelContext` / `navigator.modelContext`
+and the positive `webmcpExpose` list, while ISOLATED can report through
+`chrome.runtime`. They carry only a bounded tool count and never arm the invocation
+bridge, enroll an origin, transport descriptors, or execute a tool. Delayed probes and
+capability-change events cover tools registered after initial parsing.
+
+The service worker derives the reporting origin from Chrome's `MessageSender`, checks
+`sender.origin`, re-reads `sender.tab.url` to close navigation races, and rejects any
+payload-origin mismatch. Positive reports enter a persisted, most-recent-first registry
+bounded to 100 origins and 24 hours; zero reports remove the origin immediately. Full
+URLs are not persisted. `agent.discoverable-tabs` intersects currently-open http(s) tabs
+with that registry for every caller, including the explicit **Find site tools** picker.
+Only after the owner chooses a detected tab does the existing MAC-authenticated,
+exact-document enrollment/invocation bridge run.
+
 ## Distribution archive boundary
 The production ZIP is a projection, not a copy of the developer's local
 `extension/` directory. Its only authorities are Git-tracked regular extension

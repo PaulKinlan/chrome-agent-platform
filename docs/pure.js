@@ -854,6 +854,9 @@ export function authorizeToolReport(
   if (!senderOrigin) {
     return { kind: "content-script", error: "invalid sender origin" };
   }
+  if (sender?.origin && canonicalOrigin(sender.origin) !== senderOrigin) {
+    return { kind: "content-script", error: "sender origin mismatch — tool report rejected" };
+  }
   if (messageOrigin && canonicalOrigin(messageOrigin) !== senderOrigin) {
     return {
       kind: "content-script",
@@ -1036,6 +1039,9 @@ export function redactDeep(value, depth = 0) {
 // NOTE: approval is an OWNER security decision and stays extension-only — a
 // content script must NEVER be able to approve its own page tools.
 export const PAGE_ALLOWED_ROUTES = new Set([
+  "webmcp.detect.bootstrap", // extension-private key delivery for passive detection
+  "webmcp.detect.arm", // arms the exact MAIN-world document after the relay has its key
+  "webmcp.detected", // detection-only capability snapshot; sender origin is browser-derived
   "tools.list",
   "tools.upsert",
   "tools.pending",
