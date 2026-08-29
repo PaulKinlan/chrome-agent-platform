@@ -130,32 +130,34 @@ int main(int argc, char **argv) {
     }
 
     struct tm tm_info;
-    if (utc) {
-        gmtime_r(&raw_time, &tm_info);
-    } else {
-        localtime_r(&raw_time, &tm_info);
+    struct tm *converted = utc ? gmtime_r(&raw_time, &tm_info) : localtime_r(&raw_time, &tm_info);
+    if (!converted) {
+        fprintf(stderr, "date: timestamp out of range\n");
+        return 1;
     }
 
-    char out[MAX_OUT_LEN];
-
+    const char *output_format;
     if (iso_spec != NULL) {
         if (strcmp(iso_spec, "hours") == 0 || strcmp(iso_spec, "hour") == 0) {
-            strftime(out, sizeof(out), "%Y-%m-%dT%H", &tm_info);
+            output_format = "%Y-%m-%dT%H";
         } else if (strcmp(iso_spec, "minutes") == 0 || strcmp(iso_spec, "minute") == 0) {
-            strftime(out, sizeof(out), "%Y-%m-%dT%H:%M", &tm_info);
+            output_format = "%Y-%m-%dT%H:%M";
         } else if (strcmp(iso_spec, "seconds") == 0 || strcmp(iso_spec, "second") == 0 || strcmp(iso_spec, "s") == 0) {
-            strftime(out, sizeof(out), "%Y-%m-%dT%H:%M:%S%z", &tm_info);
+            output_format = "%Y-%m-%dT%H:%M:%S%z";
         } else {
-            // default date: %Y-%m-%d
-            strftime(out, sizeof(out), "%Y-%m-%d", &tm_info);
+            output_format = "%Y-%m-%d";
         }
     } else if (format != NULL) {
-        strftime(out, sizeof(out), format, &tm_info);
+        output_format = format;
     } else {
-        // Standard default POSIX date format: %a %b %e %H:%M:%S %Z %Y
-        strftime(out, sizeof(out), "%a %b %e %H:%M:%S %Z %Y", &tm_info);
+        output_format = "%a %b %e %H:%M:%S %Z %Y";
     }
 
+    char out[MAX_OUT_LEN] = {0};
+    if (strftime(out, sizeof(out), output_format, &tm_info) == 0 && output_format[0] != '\0') {
+        fprintf(stderr, "date: formatted output exceeds limit\n");
+        return 1;
+    }
     puts(out);
     return 0;
 }

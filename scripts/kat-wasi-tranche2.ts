@@ -53,6 +53,9 @@ try {
         impossibleDate: await run("date_formatter_bounded", ["-u", "-d", "2024-02-31", "+%Y-%m-%d"], ""),
         overflowEpoch: await run("date_formatter_bounded", ["-u", "-d", "@999999999999999999999", "+%s"], ""),
         invalidIso: await run("date_formatter_bounded", ["--iso-8601garbage"], ""),
+        maxEpoch: await run("date_formatter_bounded", ["-u", "-d", "@9223372036854775807", "+%Y-%m-%d"], ""),
+        minEpoch: await run("date_formatter_bounded", ["-u", "-d", "@-9223372036854775808", "+%Y-%m-%d"], ""),
+        formatOverflow: await run("date_formatter_bounded", ["+" + "%c".repeat(255)], ""),
       };
       const panel = document.createElement("pre");
       panel.id = "wasi-tranche2-route-evidence";
@@ -70,6 +73,9 @@ try {
   check("nonexistent calendar date failed through tool.preview.run", boundedFailure(results?.impossibleDate), results?.impossibleDate);
   check("overflowing epoch failed through tool.preview.run", boundedFailure(results?.overflowEpoch), results?.overflowEpoch);
   check("garbage ISO suffix failed through tool.preview.run", boundedFailure(results?.invalidIso), results?.invalidIso);
+  check("maximum in-range epoch conversion failed closed", boundedFailure(results?.maxEpoch), results?.maxEpoch);
+  check("minimum in-range epoch conversion failed closed", boundedFailure(results?.minEpoch), results?.minEpoch);
+  check("format-buffer exhaustion failed closed", boundedFailure(results?.formatOverflow), results?.formatOverflow);
 
   const shot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false }, sessionId);
   await Deno.writeFile(`${OUT}/tool-preview-route.png`, Uint8Array.from(atob(shot.result.data), (c) => c.charCodeAt(0)));

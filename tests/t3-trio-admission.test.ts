@@ -177,4 +177,16 @@ Deno.test("t3-trio: date runtime KAT (custom formatting, UTC, ISO 8601, epoch pa
     assertEquals(invalidIso.stdout, "", badIso);
     assert(invalidIso.stderr.includes(`unrecognized option '${badIso}'`), invalidIso.stderr);
   }
+
+  for (const extreme of ["@9223372036854775807", "@-9223372036854775808"]) {
+    const outOfRange = await runDate(["-u", "-d", extreme, "+%Y-%m-%d"]);
+    assertEquals(outOfRange.code, 1, extreme);
+    assertEquals(outOfRange.stdout, "", extreme);
+    assert(outOfRange.stderr.includes("timestamp out of range"), outOfRange.stderr);
+  }
+
+  const formatOverflow = await runDate([`+${"%c".repeat(255)}`]);
+  assertEquals(formatOverflow.code, 1);
+  assertEquals(formatOverflow.stdout, "");
+  assert(formatOverflow.stderr.includes("formatted output exceeds limit"), formatOverflow.stderr);
 });
