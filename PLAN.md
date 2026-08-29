@@ -151,22 +151,22 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
       Ollama/LM Studio remain as local OpenAI-compatible endpoints.
 
 ### The Wasm tool platform — what actually ships vs what is proven
-- [x] **26 bundled Wasm packages ship** and are verified at build time (exact manifest,
+- [x] **28 bundled Wasm packages ship** and are verified at build time (exact manifest,
       CAS digests, bounded raw import/memory scan, SBOM + licence records):
-      base64, csvtool, cut, diff, du, grep, gzip, head, markdown, md5sum, patch,
-      sha256sum, sha512sum, sort, sqlite3-query-bounded, stat, tail, toml2json, touch,
-      tr, tree, truncate, uniq, uuid, wc, xxd.
+      awk-filter-bounded, base64, csvtool, cut, date-formatter-bounded, diff, du, grep,
+      gzip, head, markdown, md5sum, patch, sha256sum, sha512sum, sort,
+      sqlite3-query-bounded, stat, tail, toml2json, touch, tr, tree, truncate, uniq,
+      uuid, wc, xxd.
 - [x] **Live bounded lazy tool provider** — every run gets exactly two fixed definitions,
       `search_tools` and `execute_tool`, regardless of catalog size. Search authorizes
       nothing; execute accepts only a single-use run-bound reference and revalidates
       identity, permission, grant, document and run authority before and after dispatch.
-- [x] **The Rust→`wasm32-wasip1` lane is standing up** with reproducible builds and
-      lock-faithful licence censuses: **htmlq, numbat, bttf, sed, jq, xan, tokei** all
-      build and run. The `rayon-wasi` serial shim (a `[patch.crates-io]` replacement, no
-      tool-source change) is the single unblock for the rayon-dependent tools.
-- [ ] **Those seven are proven, not admitted** — they are build/census proofs under
-      `docs/plans/rust-lane/` and `docs/admissions/`, not entries in the shipped 26.
-      Admission is `CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01`.
+- [x] **Bounded awk/date are admitted** through the immutable Settings-only preview
+      route with retained byte-identical rebuilds and lock-faithful licence records.
+- [ ] **The remaining candidate lanes are separate** — htmlq, numbat, bttf, sed, jq,
+      xan, and tokei retain their own build/admission status under
+      `docs/plans/rust-lane/` and `docs/admissions/`; this tranche makes no completion
+      claim for them. Admission is `CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01`.
 - [ ] **Python via Pyodide (`0.2.319`)** — the bounded non-eval tool is built and tested
       (`runPythonAsync` + `setStdout`/`setStdin`, 2 KiB in / 64 KiB out, fail-closed) and
       the wiring is ready. The remaining step is the Pyodide runtime **binary**, a

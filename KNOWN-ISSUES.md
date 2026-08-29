@@ -57,7 +57,7 @@ Run `node scripts/worktree-audit.mjs` (read-only) before any cleanup.
 ### Platform — the Wasm tool operating layer is unfinished, and partly not ours to finish
 `CAP-FB-20260822-WASM-TOOL-PLATFORM-01` · P2 · OPEN
 
-26 bundled Wasm packages ship and are verified at build time. The lazy two-definition
+28 bundled Wasm packages ship and are verified at build time. The lazy two-definition
 provider (`search_tools` / `execute_tool`) is live. What remains open: signer trust,
 fresh-Worker integration and termination, owner-approved diff mutation, owner install, and
 the abuse/quota gates. Two of its blockers are **product decisions, not engineering** —

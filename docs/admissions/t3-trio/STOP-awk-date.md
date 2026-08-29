@@ -1,15 +1,32 @@
-# T3 trio — awk + date: STOP-and-report (honest blockers)
+# Bounded awk/date — tranche 2 admission checkpoint
 
-## awk (onetrueawk, Lucent permissive — NOT GPL): BLOCKED
-onetrueawk's core control flow is WASI-incompatible:
-- run.c: setjmp()/longjmp() (lines 184, 202) for break/next/exit control flow — requires the WebAssembly Exception-Handling proposal (`-mllvm -wasm-enable-sjlj`) + a runtime that implements EH. The house WASI runtime does not.
-- main.c:158 `signal(SIGFPE, fpecatch)` — signal emulation (`-D_WASI_EMULATED_SIGNAL` + `-lwasi-emulated-signal`) is NOT present in wasi-sysroot-22.0 (only getpid/mman/process-clocks emulation ships).
-- run.c:2110 `system()` — process spawn is impossible on WASI preview1.
-Porting requires rewriting awk's setjmp-based flow + stubbing signal/system — beyond a clean single-tool admission. RECOMMENDATION: a clean-room 0BSD awk-subset (the a2/b2 C-house precedent), not a port.
+## awk_filter_bounded: ADMITTED
 
-## date (toybox, 0BSD): BLOCKED (scope, not licence)
-toybox date is one applet of a large multi-applet project; a single-tool build requires the FULL toybox build system (config-generated toys.h + GLOBALS macro + the lib/*.c tree: lib.c, xwrap.c, args.c, portability.c, env.c, ...). No clean cherry-pick. RECOMMENDATION: a clean-room 0BSD date-subset (epoch/ISO/strftime via wasi-libc clock) — trivial vs porting toybox.
+The clean-room 0BSD subset is bundled through CAP's immutable package authority
+as `cap.bundled.awk.filter.bounded@1.0.0`. Its 58,623-byte preview-1 binary is
+content-addressed at SHA-256
+`e415ab94548da2d14bef43457cb9a990e66c3d8a151ba16e067f61d685d32312`.
+The Settings-only `tool.preview.run` route executes field extraction, `-F`,
+`BEGIN`/`END`, and literal patterns with optional `^`/`$` edge anchors. It does
+not claim general regular-expression compatibility. CAP projects an empty
+workspace, so this admission is stdin-only; direct file operands remain a
+supplementary build check and missing files fail nonzero.
 
-## RESULT
-sed = ADMITTED (built, reproducible, runs: "hello world" | sed 's/world/there/' → "hello there").
-awk + date = STOP, honest blockers above, with the clean-room recommendation.
+## date_formatter_bounded: ADMITTED
+
+The clean-room 0BSD formatter is bundled through the same authority as
+`cap.bundled.date.formatter.bounded@1.0.0`. Its 52,459-byte preview-1 binary is
+content-addressed at SHA-256
+`a762e1cdcbfa18f5497fd39a20a4158f74173737187e5bd85a67acebf6b737a8`.
+The Settings-only route executes UTC, ISO, numeric epoch, and exact ISO date
+formatting. Invalid dates and missing `-d` operands fail nonzero with bounded
+diagnostics rather than silently using the current time.
+
+Both binaries have retained byte-identical rebuilds, relative hash records,
+scrubbed receipts, wasi-libc component inventory, CycloneDX SBOMs, notices,
+immutable preview specs, manifest/CAS identities, direct runtime KATs, and a
+loaded-extension browser KAT through the production route.
+
+The adjacent sed artifact is only a supplementary direct-WASI build proof in
+this tranche; this checkpoint does not claim that sed is bundled or admitted.
+Tokei is outside this tranche and is not claimed here.

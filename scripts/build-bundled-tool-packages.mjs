@@ -59,6 +59,8 @@ const PATHS = {
   csvtool: join(EVIDENCE, "csvtool"),
   d3: join(EVIDENCE, "d3"),
   sqlite3: join(EVIDENCE, "sqlite3"),
+  awk: join(REPO, "docs/admissions/t3-trio/awk"),
+  date: join(REPO, "docs/admissions/t3-trio/date"),
   catalog: join(EVIDENCE, "catalog", "inventory.json"),
 };
 const missingEvidence = Object.entries(PATHS).filter(([, p]) => !existsSync(p));
@@ -135,6 +137,8 @@ export const AGENT_DESCRIPTIONS = Object.freeze({
   csvtool: "csvtool - parse, transform, and edit RFC 4180 CSV spreadsheet table data. Use for CSV editing, filtering, or formatting rows. In/out: CSV stdin (<=2 KiB) to CSV stdout. No flags. Example: stdin 'a,b\\n1,2' -> 'a,b\\n1,2'.",
   gzip: "gzip - compress or decompress data streams. Use to compress and decompress files or streams. In/out: stdin (<=2 KiB) to base64 stdout (<=64 KiB). Key flag: -d (decompress). Example: -d + base64 -> decompressed.",
   sqlite3_query_bounded: "sqlite3_query_bounded - execute SQL queries to read, search, and filter SQLite database tables. Use to query relational data. In/out: JSON request (<=2 KiB) with sql and params to row set (<=64 KiB). No flags. Example: 'SELECT * FROM test'.",
+  awk_filter_bounded: "awk_filter_bounded - split, filter, and print bounded text records. Use for field extraction and literal line filtering. In/out: stdin plus one program arg to stdout. Supports -F and literal /pattern/ with ^/$ edge anchors.",
+  date_formatter_bounded: "date_formatter_bounded - format current time, numeric epochs, or exact ISO dates. Use for UTC and ISO formatting. In/out: up to four bounded args to one stdout line. Invalid or missing date specs fail nonzero.",
 });
 
 // ── Read + hash-verify every binary against its evidence inventory ──────────
@@ -180,6 +184,26 @@ for (const toolId of LANES.c2.tools) {
   if (sha256(readFileSync(join(PATHS.d3, "inventory.json"))) !== "7ddeea056eec79eaa0c496522297d9f381293532816f2085611c027584482af9") throw new Error("d3 inventory hash mismatch");
   const mem = d3.tools[0].memory;
   packages.push({ toolId: "gzip", lane: "gzip", bytes: wasm, row: null, spdx: "Zlib AND Apache-2.0", licenseFile: "extension/wasm/licenses/Zlib-1.3.1.txt", notices: "extension/wasm/licenses/CAP-authored-Apache-2.0.txt", sbom: { src: join(PATHS.d3, "sbom/gzip-zlib-minigzip-stdio.cdx.json"), rel: "extension/wasm/sbom/gzip.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "clang 22.1.8; wasm-ld 22.1.8", buildScriptLane: "gzip", displayName: "gzip", category: "data", description: AGENT_DESCRIPTIONS.gzip, caveats: ["Stdin/stdout only; rejects file operands, recursion, unknown options.", "Experimental candidate; not the canonical full gzip."], replayClass: "read-only", capabilities: ["compute", "text.transform"], memoryOverride: { initialPages: mem.initialPages, maxPages: mem.maxPages } });
+}
+const T3_SOURCE = { repo: "https://github.com/PaulKinlan/chrome-agent-platform", commit: "486005dbfb84bd8ae9f469ee1f83f3e91f9b038c" };
+for (const [toolId, lane] of [["awk_filter_bounded", "awk"], ["date_formatter_bounded", "date"]]) {
+  const binaryName = lane === "awk" ? "awk.wasm" : "date.wasm";
+  const bytes = readFileSync(join(PATHS[lane], "binaries", binaryName));
+  const receipt = Object.fromEntries(readFileSync(join(PATHS[lane], "metadata/build-receipt.txt"), "utf8").trim().split("\n").map((line) => line.split(/=(.*)/s).slice(0, 2)));
+  if (sha256(bytes) !== receipt.binary_sha256 || bytes.byteLength !== Number(receipt.binary_bytes)) throw new Error(`${lane}: receipt binary identity mismatch`);
+  if (!readFileSync(join(PATHS[lane], "metadata/rebuild-" + binaryName)).equals(bytes)) throw new Error(`${lane}: rebuild is not byte-identical`);
+  packages.push({
+    toolId, lane, bytes, row: null, spdx: "0BSD AND Apache-2.0",
+    licenseFile: "extension/wasm/licenses/0BSD.txt",
+    notices: `extension/wasm/licenses/${lane}-NOTICES.txt`,
+    sbom: { src: join(PATHS[lane], "sbom.cdx.json"), rel: `extension/wasm/sbom/${lane}.cdx.json`, format: "cyclonedx-json@1.5" },
+    toolchain: "wasi-sdk clang 18.1.2", buildScriptLane: lane, sourceAnchor: T3_SOURCE,
+    displayName: toolId, category: lane === "awk" ? "text" : "time", description: AGENT_DESCRIPTIONS[toolId],
+    caveats: lane === "awk"
+      ? ["Bounded clean-room subset, not canonical awk; literal patterns with optional ^/$ edge anchors only.", "CAP preview is stdin-only; no owner files are projected."]
+      : ["Bounded clean-room formatter, not canonical date; exact numeric epoch and ISO date inputs only."],
+    replayClass: "read-only", capabilities: ["compute", "text.transform"],
+  });
 }
 
 // ── Clean + recreate output trees ───────────────────────────────────────────
@@ -229,6 +253,9 @@ const LICENSE_WRITES = {
   "extension/wasm/licenses/toml2json-NOTICES.txt": enc.encode(TOML_NOTICES),
   "extension/wasm/licenses/Zlib-1.3.1.txt": zlibUpstream,
   "extension/wasm/licenses/CAP-authored-Apache-2.0.txt": enc.encode(CAP_AUTHORED_GRANT),
+  "extension/wasm/licenses/0BSD.txt": enc.encode(`Copyright (C) 2026 Chrome Agent Platform Authors\n\nPermission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted.\n\nTHE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.\n`),
+  "extension/wasm/licenses/awk-NOTICES.txt": readFileSync(join(PATHS.awk, "NOTICES.md")),
+  "extension/wasm/licenses/date-NOTICES.txt": readFileSync(join(PATHS.date, "NOTICES.md")),
 };
 
 // ── Manifests (authority-schema-exact; canonical bytes; re-validated) ───────
@@ -244,7 +271,7 @@ const SIGNER = { lane: "bundled", keyId: "cap-bundled-release" };
 // (explicit owner click). Every other lane stays admitted:false / disabled:true
 // — no catalog/provider selection authority. New semantic tranches append so
 // the predecessor order stays stable.
-const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch", "sqlite3_query_bounded"]);
+const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch", "sqlite3_query_bounded", "awk_filter_bounded", "date_formatter_bounded"]);
 // Per-package source anchors: the original 25 keep the bundle-landing anchor;
 // SQLite (package 26) anchors at the exact 0.2.166 tabular parent.
 const SOURCE = { repo: "https://github.com/PaulKinlan/chrome-agent-platform", commit: "5e086c1fb0847ddccf1a16ba3129a4cf900eac8f" };
@@ -529,6 +556,12 @@ emit(join(REPO, "packages/bundled/gzip/build.sh"), `#!/usr/bin/env bash
 # the pinned source archive + overlay recorded in that receipt.
 echo "see receipts/gzip-build.json in the frozen evidence tree" >&2; exit 0
 `);
+for (const lane of ["awk", "date"]) {
+  if (!VERIFY) mkdirSync(join(REPO, `packages/bundled/${lane}/source`), { recursive: true });
+  emit(join(REPO, `packages/bundled/${lane}/build.sh`), readFileSync(join(PATHS[lane], "build.sh")));
+  emit(join(REPO, `packages/bundled/${lane}/source/main.c`), readFileSync(join(PATHS[lane], "source/main.c")));
+  emit(join(REPO, `packages/bundled/${lane}/PROVENANCE.md`), readFileSync(join(PATHS[lane], "PROVENANCE.md")));
+}
 if (!VERIFY) {
   mkdirSync(join(REPO, "packages/bundled/sqlite3/src"), { recursive: true });
   mkdirSync(join(REPO, "packages/bundled/sqlite3/host"), { recursive: true });
@@ -583,9 +616,9 @@ grant, or catalog entry
 consumes this package. Node host sources under host/ are public Apache-2.0
 provenance only — they are not shipped runtime code.
 `);
-emit(join(REPO, "packages/bundled/README.md"), `# Bundled tool packages (immutable; 23-tool Settings-preview tranche)
+emit(join(REPO, "packages/bundled/README.md"), `# Bundled tool packages (immutable; 28-tool Settings-preview tranche)
 
-26 single-tool Wasm packages generated by \`scripts/build-bundled-tool-packages.mjs\`
+28 single-tool Wasm packages generated by \`scripts/build-bundled-tool-packages.mjs\`
 from the pinned, independently reviewed evidence trees committed under
 \`packages/bundled/evidence/\` (catalog inventory sha256 ${catalogSha}).
 
@@ -593,16 +626,15 @@ from the pinned, independently reviewed evidence trees committed under
 - Manifests are authority-schema-exact canonical JSON in \`extension/wasm/manifests/\`.
 - SBOMs and licence texts ship in \`extension/wasm/sbom/\` and \`extension/wasm/licenses/\`.
 - The admission inventory is \`extension/lib/bundled-inventory-data.js\` (generated).
-- Descriptors (\`extension/lib/bundled-tool-packages.data.js\`): ONLY the static
-  tranche \`csvtool\`, \`uuid\`, \`head\`, \`tail\`, \`cut\`, \`base64\`,
-  \`md5sum\`, \`sha256sum\`, \`sha512sum\`, \`wc\`, \`xxd\`, \`sort\`,
-  \`uniq\`, \`tr\`, \`grep\`, \`toml2json\`, \`markdown\`, \`diff\`,
-  \`patch\`, \`stat\`, \`du\`, \`tree\` are
-  \`admitted:true\` + \`settingsPreview:true\` (Settings-only bounded previews,
-  explicit owner click, argv0 = the exact toolId; no catalog/provider selection
-  authority). The other 4 remain \`admitted:false\`, \`disabled:true\` (reason
-  \`no-execution-host\` or \`runtime-imports-unimplemented\`), \`canonicalNameClaim:false\`,
-  \`sourceKind:"bundled-package"\`.
+- Every descriptor in \`extension/lib/bundled-tool-packages.data.js\` is
+  \`admitted:true\` + \`settingsPreview:true\`: \`csvtool\`, \`uuid\`, \`head\`,
+  \`tail\`, \`cut\`, \`base64\`, \`md5sum\`, \`sha256sum\`, \`sha512sum\`, \`wc\`,
+  \`xxd\`, \`sort\`, \`uniq\`, \`tr\`, \`grep\`, \`toml2json\`, \`markdown\`,
+  \`diff\`, \`patch\`, \`stat\`, \`du\`, \`tree\`, \`gzip\`, \`truncate\`,
+  \`touch\`, \`sqlite3_query_bounded\`, \`awk_filter_bounded\`, and
+  \`date_formatter_bounded\`. These are Settings-only bounded previews with an
+  explicit owner click and argv0 equal to the exact toolId; they grant no
+  catalog/provider selection authority.
 - The ONLY execution route is \`tool.preview.run\` (exact Settings options
   document sender; the toolId resolves through the immutable spec map +
   revalidation of manifest/CAS/imports/memory/caps at every run). No provider

@@ -332,9 +332,9 @@ Deno.test("shadow summary: an empty catalog yields an empty toolsBySource (empty
 
 // ──────────────────────────────────────────────────────────────────────────
 // Details-slice product fix: the production shadow catalog projects the
-// bundled tools, so the Settings <details> bundled category lists all 26.
+// bundled tools, so the Settings <details> bundled category lists all 28.
 // ──────────────────────────────────────────────────────────────────────────
-Deno.test("shadow summary: the full BUNDLED row set projects into the catalog (26 rows in toolsBySource[bundled-package])", async () => {
+Deno.test("shadow summary: the full BUNDLED row set projects into the catalog (28 rows in toolsBySource[bundled-package])", async () => {
   const { BUNDLED_TOOL_PACKAGE_ROWS } = await import("../extension/lib/bundled-tool-packages.data.js");
   const { adaptBundledTools } = await import("../extension/lib/tool-catalog.js");
   const inputs = adaptBundledTools(BUNDLED_TOOL_PACKAGE_ROWS, {
@@ -348,8 +348,8 @@ Deno.test("shadow summary: the full BUNDLED row set projects into the catalog (2
   });
   const summary = await controller.inspect({ action: "summary" });
   const bundled = summary.toolsBySource["bundled-package"] ?? [];
-  assertEquals(bundled.length, 26, "all 26 bundled rows are listed");
-  assertEquals(summary.bySource["bundled-package"], 26, "the bySource count matches");
+  assertEquals(bundled.length, 28, "all 28 bundled rows are listed");
+  assertEquals(summary.bySource["bundled-package"], 28, "the bySource count matches");
   // every row carries the summary-only fields + the admitted-preview availability
   const admitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((r) => r.admitted === true && r.settingsPreview === true).length;
   assertEquals(bundled.filter((r) => r.available === true).length, admitted, "the available count equals the admitted previews");

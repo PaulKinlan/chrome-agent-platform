@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.394] — 2026-08-29
+- merge: WASI tranche-2 lane (020eb11) — awk + date admitted through the REAL tool.preview.run route as bounded bundled packages (cap.bundled.awk.filter + cap.bundled.date.formatter, 128KiB SAB-free memory, CAS-stored with sha256-pinned provenance + SBOMs + reproducible rebuilds cmp=0). awk: anchors + literal matching, honesty-contract scope. date: fail-closed throughout — impossible calendar dates (2024-02-31), strtoll overflow, gmtime_r/localtime_r NULL, and strftime buffer exhaustion all exit nonzero with bounded GNU-style diagnostics; exact -I/--iso-8601 forms only. Browser KAT 10/10 through the loaded extension. Reviewed PASS across three rounds (real-route admission, date fidelity, C-library boundary checks).
+
+## [0.2.393] — 2026-08-29
+- Two more built-in tools arrive: awk for filtering and reshaping text, and date for formatting and converting timestamps — both run sandboxed in the browser with fixed memory, and both now refuse to guess: impossible dates, out-of-range timestamps, and over-long output fail with a clear message instead of a plausible-looking wrong answer
+
 ## [0.2.392] — 2026-08-29
 - tasks: capture MAIN-GATES-RED-03 — journey suite asserts the pre-P0 permission model (found by the unmerged-work audit on origin/main@19664e60)
 

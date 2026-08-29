@@ -37,7 +37,7 @@ Deno.test("executableBundledToolRecords: constructs non-null validateArguments, 
     sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
   });
 
-  assertEquals(records.length, 26, "exact 26 bundled tool records");
+  assertEquals(records.length, 28, "exact 28 bundled tool records");
 
   for (const rec of records) {
     const toolId = rec.descriptorInput.toolId;
@@ -142,7 +142,7 @@ Deno.test("assertBundledExecutionAuthority: admits installed tools and fails clo
     assertEquals(auth1.authorized, true);
     assertEquals(auth1.policy, "owner-build-admission");
 
-    // A non-admitted descriptor fails closed (all 26 bundled tools are now
+    // A non-admitted descriptor fails closed (all 28 bundled tools are now
     // admitted after the R12 sqlite admission, so a fictional disabled row
     // stands in for the fail-closed check).
     let disabledThrew = false;

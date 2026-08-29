@@ -257,6 +257,13 @@ evidence every other task depends on).
 - Next: run the licence/feasibility triage across all eighteen candidates
 - Recover: `git grep -n "EXTENDED-TOOL-FAMILIES" -- TASKS.md`
 - History:
+  - 2026-08-29 08:30 UTC — bounded awk/date tranche candidate: clean-room
+    preview-1 binaries admitted through immutable bundled manifests/CAS and the
+    Settings-only `tool.preview.run` route. Awk documents literal matching with
+    optional edge anchors; date rejects invalid and missing `-d` operands.
+    Retained byte-identical rebuilds, provenance, notices, SBOMs, direct KATs,
+    and loaded-extension browser evidence are included. This event makes no
+    tokei or sed admission claim; the broader family task remains open.
   - 2026-08-27 01:11 UTC — RUST LANE STATUS: htmlq DONE (0.2.309-era, first
     lane proof), numbat DONE (runnable WASI calc), bttf DONE (direct CLI),
     tokei BLOCKED (native-only deps: memmap via grep-searcher, home via dirs,

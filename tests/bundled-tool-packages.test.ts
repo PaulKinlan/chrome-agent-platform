@@ -46,7 +46,7 @@ function diskInventory() {
 }
 
 Deno.test("SPDX: exact single tokens admitted, including Zlib", () => {
-  for (const id of ["Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", "MPL-2.0", "PSF-2.0", "Zlib", "blessing"]) {
+  for (const id of ["0BSD", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", "MPL-2.0", "PSF-2.0", "Zlib", "blessing"]) {
     assert(isValidLicenseExpression(id), id);
   }
 });
@@ -72,9 +72,9 @@ Deno.test("SPDX: everything else rejected fail-closed", () => {
   assert(!isValidLicenseExpression(null) && !isValidLicenseExpression(undefined) && !isValidLicenseExpression(42));
 });
 
-Deno.test("manifests: all 25 shipped manifests validate against the real authority (canonical bytes)", async () => {
+Deno.test("manifests: all 28 shipped manifests validate against the real authority (canonical bytes)", async () => {
   const probe = new WasmPackageAuthority();
-  assertEquals(BUNDLED_INVENTORY.manifests.length, 26);
+  assertEquals(BUNDLED_INVENTORY.manifests.length, 28);
   for (const row of BUNDLED_INVENTORY.manifests) {
     const rel = `extension/wasm/manifests/${row.pkg}-${row.version}.manifest.json`;
     const raw = await Deno.readTextFile(root(rel));
@@ -93,6 +93,10 @@ Deno.test("manifests: composite licence terms present exactly where intended", a
   assertEquals((await read("toml2json")).license.notices, "extension/wasm/licenses/toml2json-NOTICES.txt");
   assertEquals((await read("gzip")).license.spdx, "Zlib AND Apache-2.0");
   assertEquals((await read("gzip")).license.notices, "extension/wasm/licenses/CAP-authored-Apache-2.0.txt");
+  assertEquals((await read("awk.filter.bounded")).license.spdx, "0BSD AND Apache-2.0");
+  assertEquals((await read("awk.filter.bounded")).license.notices, "extension/wasm/licenses/awk-NOTICES.txt");
+  assertEquals((await read("date.formatter.bounded")).license.spdx, "0BSD AND Apache-2.0");
+  assertEquals((await read("date.formatter.bounded")).license.notices, "extension/wasm/licenses/date-NOTICES.txt");
   assertEquals((await read("csvtool")).license.spdx, "Apache-2.0");
   assertEquals((await read("markdown")).license.spdx, "BSD-2-Clause");
   assertEquals((await read("base64")).license.spdx, "MIT");
@@ -114,7 +118,7 @@ Deno.test("inventory: every declared file ships on disk with the exact pinned sh
   }
   // no unmanifested binaries: every CAS file maps to exactly one manifest executable
   const cas = BUNDLED_INVENTORY.files.filter((f) => f.rel.startsWith("extension/wasm/cas/"));
-  assertEquals(cas.length, 26);
+  assertEquals(cas.length, 28);
   const execShas = new Set();
   for (const m of BUNDLED_INVENTORY.manifests) {
     const manifest = JSON.parse(await Deno.readTextFile(root(`extension/wasm/manifests/${m.pkg}-${m.version}.manifest.json`)));
@@ -124,13 +128,13 @@ Deno.test("inventory: every declared file ships on disk with the exact pinned sh
   for (const f of cas) assert(execShas.has(f.rel.slice("extension/wasm/cas/".length, -".wasm".length)), f.rel);
 });
 
-Deno.test("admission: all 25 packages admit through the real authority over the real bytes; re-admission dedupes", async () => {
+Deno.test("admission: all 28 packages admit through the real authority over the real bytes; re-admission dedupes", async () => {
   const store = new FakeStore();
   const inventory = diskInventory();
   const authority = new WasmPackageAuthority({ getStore: () => store, inventory, now: () => 1000 });
   const first = await admitBundledToolPackages(authority, { inventory });
   assert(first.ok, JSON.stringify(first.results.filter((r) => !r.ok)));
-  assertEquals(first.results.length, 26);
+  assertEquals(first.results.length, 28);
   assert(first.results.every((r) => !r.deduped));
   for (const row of BUNDLED_TOOL_PACKAGES) {
     const q = await authority.query({ packageId: row.packageId });
@@ -158,14 +162,14 @@ Deno.test("admission: shipped CAS bytes pass the authority scanner unmanifested-
   assertEquals(violations, []);
 });
 
-Deno.test("posture: descriptors admit exactly the 26-tool gzip-appended Settings allowlist", () => {
-  assertEquals(BUNDLED_TOOL_PACKAGES.length, 26);
-  assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.packageId)).size, 26);
-  assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.toolId)).size, 26);
+Deno.test("posture: descriptors admit exactly the 28-tool Settings allowlist", () => {
+  assertEquals(BUNDLED_TOOL_PACKAGES.length, 28);
+  assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.packageId)).size, 28);
+  assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.toolId)).size, 28);
   const previewRows = BUNDLED_TOOL_PACKAGES.filter((row) => row.admitted === true);
   assertEquals(JSON.stringify(previewRows.map((r) => r.toolId).sort()), JSON.stringify(
-    ["base64", "csvtool", "cut", "diff", "du", "grep", "gzip", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
-  ), "exactly the 26-tool allowlist");
+    ["awk_filter_bounded", "base64", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
+  ), "exactly the 28-tool allowlist");
   for (const row of previewRows) {
     assertEquals(row.settingsPreview, true, row.toolId);
     assertEquals(row.disabled, false, row.toolId);
@@ -308,9 +312,9 @@ import { assertStoreTargetBoundary } from "../scripts/store-target-policy.mjs";
 
 const repoRoot = new URL("..", import.meta.url).pathname;
 
-Deno.test("store map: exact archivePath→executable mapping for ALL 26 shipped CAS binaries", async () => {
+Deno.test("store map: exact archivePath→executable mapping for ALL 28 shipped CAS binaries", async () => {
   const map = await buildBundledWasmManifestMap(repoRoot);
-  assertEquals(map.size, 26);
+  assertEquals(map.size, 28);
   for (const [archivePath, executable] of map) {
     assert(archivePath.startsWith("wasm/cas/") && archivePath.endsWith(".wasm"), archivePath);
     assertEquals(archivePath, `wasm/cas/${executable.sha256}.wasm`);
@@ -451,7 +455,7 @@ Deno.test("sqlite sources stay outside extension/; shipped code imports no Node 
 Deno.test("regeneration preserves all 25 predecessor manifest digests and CAS hashes", async () => {
   const identity26 = BUNDLED_INVENTORY.manifests.find((m) => m.pkg === "cap.bundled.sqlite3.query.bounded");
   assert(identity26, "sqlite identity present");
-  assertEquals(BUNDLED_INVENTORY.manifests.length, 26);
+  assertEquals(BUNDLED_INVENTORY.manifests.length, 28);
   // the 25 predecessors' manifest files must match the previous release's digests
   const prevText = await Deno.readTextFile("/home/paulkinlan/worktrees/cap-bundled-tool-packages-163/extension/lib/bundled-inventory-data.js").catch(() => null);
   if (prevText) {
