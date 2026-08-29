@@ -1,6 +1,10 @@
 # Changelog
 
+## [0.2.403] — 2026-08-29
+- fix(CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01): use shared template select
+
 ## [0.2.402] — 2026-08-29
+- The create-agent template/background choice is now a subtle native select using the same control, keyboard behavior and 36px grid as provider selection, instead of a large card list
 - feat(CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01): parse English schedules
 
 ## [0.2.401] — 2026-08-29

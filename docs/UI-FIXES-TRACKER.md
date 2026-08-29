@@ -49,16 +49,17 @@ one line each here:
   of minutes” and “every hour”), confirms the parsed recurrence inline, and blocks
   ambiguous/unsupported text; exact weekday times are honestly unsupported by the
   existing interval-only scheduler rather than approximated incorrectly.
-- Remaining in this lane: a subtle native base-select template/background picker and
-  scheme-aware conversation bubble contrast (`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`).
+- The former large card gallery is replaced in the create dialog by the shared
+  `<provider-select>` native base-select vocabulary: same tokens, keyboard behavior and
+  `--input-h` grid. The reusable visual card remains documented in the component gallery,
+  but no longer crowds the creation path.
+- Remaining in this lane: scheme-aware conversation bubble contrast
+  (`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`).
 
-### Agent template picker is a plain select (2026-08-29 — candidate in review)
-- The create-agent picker is being replaced with shared visual cards showing the
-  template name, a bounded persona summary, up to three skill badges, and a labelled
-  Use action. The curated six are ordered first and visibly marked Starter.
-- Candidate evidence: real loaded-extension KAT 9/9 applies Chief of Staff and
-  persists the agent; the existing template journey remains 38/38; axe is clean
-  and its blocked-fetch probe exits nonzero; full suite 2118/0. Review pending.
+### Agent template visual-card picker (2026-08-29 — superseded by owner direction)
+- The visual-card component remains a documented reusable primitive, but its large
+  create-dialog gallery was superseded by the owner's request for the subtle select
+  recorded above. Its one-click prefill behavior now comes from the native select.
 
 ### Scheduled task storage-full flood (2026-08-21 — local successor)
 - Retained Durable authority exhausted the owner/model master store's former 500-key ceiling, causing one-shot and recipe alarms to repeat a generic console failure. The fix removes that arbitrary count ceiling, retains byte quotas, isolates each execution's authority, and evicts no data.

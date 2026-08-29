@@ -2221,33 +2221,13 @@ async function buildAgentConfigDialog(opts) {
   let selectedTemplate = null;
   let templateSection = null;
   if (opts.showTemplates) {
-    const tplWrap = document.createElement("section");
-    templateSection = tplWrap;
-    tplWrap.setAttribute("aria-labelledby", "agent-template-heading");
-    tplWrap.style.display = "flex";
-    tplWrap.style.flexDirection = "column";
-    tplWrap.style.gap = "8px";
-    const tplHeading = document.createElement("h3");
-    tplHeading.id = "agent-template-heading";
-    tplHeading.textContent = "Start from a template";
-    tplHeading.style.cssText = "font-size:13px;line-height:1.4;margin:0;font-weight:600;";
-    const tplHint = document.createElement("p");
-    tplHint.textContent = "Choose a starting point, or keep the blank fields below for a custom agent.";
-    tplHint.style.cssText = "font-size:12px;line-height:1.4;color:var(--muted,#635e56);margin:0;";
-    const tplGallery = document.createElement("div");
-    tplGallery.id = "agent-template-gallery";
-    tplGallery.setAttribute("role", "list");
-    tplGallery.setAttribute("aria-label", "Agent templates — curated starters first");
-    tplGallery.style.cssText =
-      "display:grid;grid-template-columns:repeat(auto-fit,minmax(min(210px,100%),1fr));gap:8px;max-height:360px;overflow:auto;overscroll-behavior:contain;padding:3px;scroll-padding:3px;";
-
     const starterIds = new Set(STARTER_TEMPLATE_IDS);
     const orderedTemplates = [
       ...STARTER_TEMPLATE_IDS.map(agentTemplateById).filter(Boolean),
       ...AGENT_TEMPLATES.filter((t) => !starterIds.has(t.id)),
     ];
     const applyTemplate = (t) => {
-      if (!t) return;
+      if (!t) { selectedTemplate = null; return; }
       const pre = templatePrefill(t);
       selectedTemplate = t;
       nameField.el.value = pre.name;
@@ -2267,15 +2247,17 @@ async function buildAgentConfigDialog(opts) {
         countEl.textContent = count > 0 ? `${count} selected` : "0 selected";
       }
     };
-    for (const t of orderedTemplates) {
-      const card = document.createElement("agent-template-card");
-      card.setAttribute("role", "listitem");
-      card.template = t;
-      card.toggleAttribute("starter", starterIds.has(t.id));
-      card.addEventListener("use", () => applyTemplate(t));
-      tplGallery.append(card);
-    }
-    tplWrap.append(tplHeading, tplHint, tplGallery);
+    // Reuse the shared provider-select primitive: same native base-select,
+    // --input-h grid, tokens, keyboard behavior and subtle control styling.
+    const templateSelect = document.createElement("provider-select");
+    templateSelect.id = "agent-template-select";
+    templateSelect.setAttribute("label", "Start from a template");
+    templateSelect.setAttribute("placeholder", "Custom agent");
+    templateSelect.providers = orderedTemplates.map((t) => ({ id: t.id, name: t.name }));
+    templateSelect.addEventListener("change", (event) => {
+      applyTemplate(agentTemplateById(event.detail?.value));
+    });
+    templateSection = templateSelect;
   }
 
 
@@ -2615,9 +2597,7 @@ async function buildAgentConfigDialog(opts) {
   });
 
   dialog.show();
-  const firstTemplateUse = dialog.querySelector("#agent-template-gallery agent-template-card")?.shadowRoot?.querySelector(".use");
-  if (opts.showTemplates && firstTemplateUse) firstTemplateUse.focus();
-  else nameField.el.focus();
+  nameField.el.focus();
 }
 
 // ── the ONE live-status surface: the conversation's inline pinned bottom row ──

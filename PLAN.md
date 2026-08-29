@@ -178,8 +178,8 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
 ## In flight / next (the ordered queue)
 
 - [ ] **Create-agent dialog consistency** (`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`) —
-      progressive disclosure and deterministic English interval parsing are in place;
-      the shared native template select and dark conversation contrast remain in the
+      progressive disclosure, deterministic English interval parsing and the shared
+      native template select are in place; dark conversation contrast remains in the
       same bounded lane.
 
 The authority is the **Open work queue** table in [TASKS.md](TASKS.md) (39 open).

@@ -59,7 +59,7 @@ Deno.test("create-agent dialog: optional persona controls use one collapsed prog
     /advancedDetails\.className = "agent-config-advanced";[\s\S]*?advancedSummary\.textContent = "Advanced";/.test(ntpJs),
     "optional controls must live behind one clearly labelled disclosure",
   );
-  for (const control of ["avatarRow", "roleTools", "skillsDetails", "scheduleField.wrap", "delegDetails", "assetsBox"]) {
+  for (const control of ["avatarRow", "templateSection", "roleTools", "skillsDetails", "scheduleField.wrap", "delegDetails", "assetsBox"]) {
     assert(
       ntpJs.includes(`advancedBody.append(${control})`),
       `${control} must remain reachable inside Advanced`,

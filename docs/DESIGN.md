@@ -58,9 +58,11 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   inline. Unsupported calendar phrases remain invalid because the persisted scheduler
   has only `periodInMinutes`; the UI never turns a weekday/time phrase into a silently
   wrong daily interval.
-- Agent templates render through shared `<agent-template-card>`: name, a two-line
-  persona summary, at most three skill badges plus an overflow count, and one
-  labelled Use action. Curated starters come first and carry the Starter badge.
+- The create dialog's template/background choice reuses `<provider-select>`: a native
+  `appearance: base-select` control on the exact `--input-h` grid, with Custom agent as
+  its quiet default. The large card list does not compete with Name and What it does.
+  `<agent-template-card>` remains a documented gallery primitive for richer template
+  browsing outside this compact creation path.
 - SVG line-art icons, one stroke weight, currentColor. No emoji.
 - Capability rows: `28px | 1fr | auto` grid (icon | stacked name+description |
   right-aligned action) — aligned by construction.

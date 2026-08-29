@@ -106,36 +106,35 @@ check("the agents list shows the seeded agents (empty state replaced)", (rowsAft
 await ev(`document.getElementById('new-agent')?.click()`);
 await sleep(700);
 
-// 1. The visual gallery renders every shipped template. The blank form itself
-// is the custom-agent default; cards are optional starting points.
-const cards = await ev(`(() => {
-  const gallery = document.getElementById('agent-template-gallery');
-  const items = [...(gallery?.querySelectorAll('agent-template-card') ?? [])];
-  return { count: items.length, labelled: gallery?.getAttribute('aria-label') ?? '',
-    names: items.map((card) => card.template?.name ?? ''),
+// 1. The subtle shared base-select offers every template while the blank form
+// remains the custom-agent default.
+const picker = await ev(`(() => {
+  const host = document.getElementById('agent-template-select');
+  const select = host?.shadowRoot?.querySelector('select');
+  const options = [...(select?.options ?? [])];
+  return { count: options.length - 1, labelled: select?.getAttribute('aria-label') ?? '',
+    names: options.slice(1).map((option) => option.textContent ?? ''),
     blankName: [...document.querySelectorAll('.agent-config-scroll label')].find((label) => label.textContent.startsWith('Name'))?.querySelector('input')?.value ?? '',
-    labelledUse: items.every((card) => /Use .+ template/.test(card.shadowRoot?.querySelector('.use')?.getAttribute('aria-label') ?? '')) };
+    appearance: select ? getComputedStyle(select).appearance : '' };
 })()`);
-check("visual picker is labelled for assistive tech and every Use button names its template", /Agent templates/.test(cards?.labelled ?? '') && cards?.labelledUse === true, cards);
-check("the untouched form remains the custom-agent blank default", cards?.blankName === '', cards?.blankName);
-check("picker offers the 20 shipped templates", cards?.count === 20, cards?.count);
+check("template select is labelled for assistive tech and uses the shared select control", picker?.labelled === 'Start from a template' && !!picker?.appearance, picker);
+check("the untouched form remains the custom-agent blank default", picker?.blankName === '', picker?.blankName);
+check("picker offers the 20 shipped templates", picker?.count === 20, picker?.count);
 check("catalogue includes Chief of Staff / Research Analyst / Site Auditor",
-  !!cards && ["Chief of Staff", "Research Analyst", "Site Auditor"].every((n) => cards.names.includes(n)),
-  cards?.names);
+  !!picker && ["Chief of Staff", "Research Analyst", "Site Auditor"].every((n) => picker.names.includes(n)),
+  picker?.names);
 
-// 2. Use Chief of Staff → prefill (a starting point).
-await ev(`(() => { const card = [...document.querySelectorAll('#agent-template-gallery agent-template-card')].find((el) => el.template?.id === 'chief-of-staff');
-  card?.shadowRoot?.querySelector('.use')?.click(); })()`);
+// 2. Choose Chief of Staff → prefill (a starting point).
+await ev(`(() => { const select = document.getElementById('agent-template-select')?.shadowRoot?.querySelector('select');
+  if (select) { select.value = 'chief-of-staff'; select.dispatchEvent(new Event('change', { bubbles: true })); } })()`);
 await sleep(200);
 const prefill = await ev(`(() => {
   const name = [...document.querySelectorAll('.agent-config-scroll label')].find(l => l.textContent.startsWith('Name'))?.querySelector('input')?.value ?? '';
   const role = [...document.querySelectorAll('.agent-config-scroll textarea')][0]?.value ?? '';
-  const desc = [...document.querySelectorAll('#agent-template-gallery agent-template-card')].find((el) => el.template?.id === 'chief-of-staff')?.shadowRoot?.querySelector('.persona')?.textContent ?? '';
-  return { name, roleStart: role.slice(0, 40), roleLen: role.length, roleHasCoS: role.includes('Chief of Staff Persona'), desc, checks: [...document.querySelectorAll('.skills-list input[type=checkbox]')].filter(c => c.checked).length };
+  return { name, roleStart: role.slice(0, 40), roleLen: role.length, roleHasCoS: role.includes('Chief of Staff Persona'), checks: [...document.querySelectorAll('.skills-list input[type=checkbox]')].filter(c => c.checked).length };
 })()`);
 check("pick prefills the name", prefill?.name === "Chief of Staff", prefill?.name);
 check("pick prefills the persona (role textarea)", !!prefill && prefill.roleLen > 300 && prefill.roleHasCoS === true, prefill?.roleStart);
-check("pick shows the template description", !!prefill && /delegat/i.test(prefill.desc), prefill?.desc);
 check("pick checks the suggested skills (5 for chief-of-staff)", prefill?.checks === 5, prefill?.checks);
 await shot(`${OUT}/01-picker-prefilled.png`);
 
@@ -223,11 +222,11 @@ await ev(`document.getElementById('thread-back')?.click()`);
 await sleep(400);
 await ev(`document.getElementById('new-agent')?.click()`);
 await sleep(700);
-await ev(`(() => { const card = [...document.querySelectorAll('#agent-template-gallery agent-template-card')].find((el) => el.template?.id === 'tab-janitor');
-  card?.shadowRoot?.querySelector('.use')?.click(); })()`);
+await ev(`(() => { const select = document.getElementById('agent-template-select')?.shadowRoot?.querySelector('select');
+  if (select) { select.value = 'tab-janitor'; select.dispatchEvent(new Event('change', { bubbles: true })); } })()`);
 await sleep(200);
-const schedPrefill = await ev(`document.getElementById('agent-schedule-minutes')?.value ?? null`);
-check("a background template prefills the schedule field (120 min for tab-janitor)", schedPrefill === "120", schedPrefill);
+const schedPrefill = await ev(`document.getElementById('agent-schedule')?.value ?? null`);
+check("a background template prefills the English schedule (120 min for tab-janitor)", schedPrefill === "every 120 minutes", schedPrefill);
 await ev(`(() => {
   const btns = [...document.querySelectorAll('button')];
   (btns.find(b => /create agent/i.test(b.textContent ?? "")) ?? btns.at(-1))?.click();
@@ -261,10 +260,10 @@ check("the agents list shows the schedule chip ('every 120 min') with no backgro
 await ev(`document.getElementById('edit-agent')?.click()`);
 await sleep(700);
 const reopen = await ev(`(() => {
-  const f = document.getElementById('agent-schedule-minutes');
+  const f = document.getElementById('agent-schedule');
   return { field: f?.value ?? null };
 })()`);
-check("reopening a SCHEDULED agent's edit dialog shows the real schedule (120)", reopen?.field === "120", reopen);
+check("reopening a SCHEDULED agent's edit dialog shows the real schedule (120)", reopen?.field === "every 120 minutes", reopen);
 // Close without saving (Cancel) — the schedule must remain untouched.
 await ev(`(() => { const b = [...document.querySelectorAll('agent-dialog button')].find(x => /^cancel$/i.test((x.textContent ?? '').trim())); b?.click(); })()`);
 await sleep(400);
@@ -285,13 +284,13 @@ await sleep(800);
 await ev(`document.getElementById('edit-agent')?.click()`);
 await sleep(600);
 const editDialogOpen = await ev(`(() => {
-  const f = document.getElementById('agent-schedule-minutes');
+  const f = document.getElementById('agent-schedule');
   return { open: !!f, initial: f?.value ?? null };
 })()`);
 check("the edit dialog shows the schedule field, empty for an on-demand agent", editDialogOpen?.open === true && editDialogOpen.initial === "", editDialogOpen);
 await ev(`(() => {
-  const f = document.getElementById('agent-schedule-minutes');
-  f.value = '45'; f.dispatchEvent(new Event('input', { bubbles: true }));
+  const f = document.getElementById('agent-schedule');
+  f.value = 'every 45 minutes'; f.dispatchEvent(new Event('input', { bubbles: true }));
 })()`);
 await ev(`(() => {
   const btns = [...document.querySelectorAll('agent-dialog button')];
@@ -321,11 +320,11 @@ await ev(`(async () => { await chrome.runtime.sendMessage({ type: 'background-ag
 await sleep(600);
 await ev(`document.getElementById('new-agent')?.click()`);
 await sleep(700);
-await ev(`(() => { const card = [...document.querySelectorAll('#agent-template-gallery agent-template-card')].find((el) => el.template?.id === 'price-watcher');
-  card?.shadowRoot?.querySelector('.use')?.click(); })()`);
+await ev(`(() => { const select = document.getElementById('agent-template-select')?.shadowRoot?.querySelector('select');
+  if (select) { select.value = 'price-watcher'; select.dispatchEvent(new Event('change', { bubbles: true })); } })()`);
 await sleep(200);
-const pwPrefill = await ev(`document.getElementById('agent-schedule-minutes')?.value ?? null`);
-check("the price-watcher template prefills its schedule (60 min)", pwPrefill === "60", pwPrefill);
+const pwPrefill = await ev(`document.getElementById('agent-schedule')?.value ?? null`);
+check("the price-watcher template prefills its schedule (60 min)", pwPrefill === "every 60 minutes", pwPrefill);
 // Force the REAL collision: the agent's id derives from its NAME — rename to
 // the recipe's exact name ("Price watcher") so the agent id IS the recipe id.
 await ev(`(() => {
