@@ -39,6 +39,10 @@ export const BOARD_MAX_RESULT = 4000;
 export const BOARD_MAX_MESSAGE_BODY = 2000;
 export const BOARD_MAX_BLOCKED_BY = 8;
 export const BOARD_MAX_CAPABILITY = 64;
+// The serialized logs must stay under the memory store's 256 KiB per-value cap
+// (memory.js MAX_VALUE_BYTES) with real margin for the envelope — a count cap
+// alone let 200×2 KB messages cross the cap (review P1-4).
+export const BOARD_MAX_LOG_BYTES = 192 * 1024;
 
 // The claim lease constants are copied VERBATIM from the scheduler's
 // in-flight discipline (lib/scheduler.js INFLIGHT_LEASE_MS /
@@ -137,6 +141,7 @@ export function foldJobEvents(events, now = Date.now()) {
         targetAgentId: ev.targetAgentId ?? null,
         targetName: ev.targetName ?? null,
         blockedBy: Array.isArray(ev.blockedBy) ? ev.blockedBy : [],
+        posterThreadId: ev.posterThreadId ?? null,
         createdAt: ev.ts,
         status: "pending",
         claimantId: null,
@@ -150,7 +155,22 @@ export function foldJobEvents(events, now = Date.now()) {
     }
     const job = jobs.get(ev.jobId);
     if (!job) continue; // event for a pruned/unknown job — ignored
+    // Lazily expire the current claim AS OF THIS EVENT's time before any
+    // transition that depends on the claim state (review P1-2): the store
+    // admits a re-claim under the lock with expiry derived at that moment, so
+    // the fold must see the SAME expiry between events — not only in the
+    // end-of-fold pass against `now` (which silently dropped the re-claim).
+    const expireAt = (at) => {
+      if (job.status === "claimed" && Number.isFinite(job.leaseExpiry) && Number.isFinite(at) && job.leaseExpiry <= at) {
+        job.status = "pending";
+        job.claimantId = null;
+        job.claimantName = null;
+        job.claimedAt = null;
+        job.leaseExpiry = null;
+      }
+    };
     if (ev.type === "claimed") {
+      expireAt(ev.ts);
       if (job.status !== "pending") continue; // atomic transition: only pending→claimed
       job.status = "claimed";
       job.claimantId = ev.claimantId;
@@ -162,6 +182,7 @@ export function foldJobEvents(events, now = Date.now()) {
         job.leaseExpiry = ev.leaseExpiry;
       }
     } else if (ev.type === "completed" || ev.type === "failed") {
+      expireAt(ev.ts); // an expired claimant's late settle is dropped
       if (job.status !== "claimed" || job.claimantId !== ev.claimantId) continue;
       job.status = ev.type;
       job.result = ev.result ?? "";
@@ -209,15 +230,76 @@ export function foldMessageEvents(events) {
   return out.sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
 }
 
-/** Prune the job event log: settled jobs' events are dropped oldest-first once
- *  past BOARD_MAX_SETTLED_JOBS; open jobs' events are NEVER dropped. */
+/** Serialized size bound helper (UTF-8 JSON bytes — the same unit the memory
+ *  store's 256 KiB per-value cap measures). */
+function eventsBytes(events) {
+  let serialized;
+  try {
+    serialized = JSON.stringify(events);
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+  return new TextEncoder().encode(serialized).length;
+}
+
+/** Drop heartbeat events that carry no fold authority: every heartbeat but a
+ *  job's LATEST one is superseded (each fully replaces the prior lease), and
+ *  a settled job's heartbeats are dead weight (the fold ignores them once the
+ *  settle event landed). SAFE for store-generated logs: a re-claim is only
+ *  admitted after the prior lease expired, so dropping the superseded
+ *  heartbeat cannot make an expired-at-admission claim look live (review
+ *  P1-4). */
+function compactHeartbeatEvents(events) {
+  const lastHeartbeat = new Map(); // jobId -> index of its latest heartbeat
+  const settled = new Set();
+  (Array.isArray(events) ? events : []).forEach((ev, i) => {
+    if (ev?.type === "heartbeat") lastHeartbeat.set(ev.jobId, i);
+    if (ev?.type === "completed" || ev?.type === "failed") settled.add(ev.jobId);
+  });
+  return (Array.isArray(events) ? events : []).filter((ev, i) => {
+    if (ev?.type !== "heartbeat") return true;
+    if (settled.has(ev.jobId)) return false;
+    return lastHeartbeat.get(ev.jobId) === i;
+  });
+}
+
+/** Prune + bound the job event log (review P1-3/P1-4):
+ *   1. superseded/settled heartbeats are compacted away;
+ *   2. settled jobs are dropped oldest-first past BOARD_MAX_SETTLED_JOBS —
+ *      EXCEPT a settled job an OPEN job still references in blockedBy: dropping
+ *      its completion record would re-block the dependent forever;
+ *   3. if the serialized log still exceeds BOARD_MAX_LOG_BYTES, more
+ *      unreferenced settled jobs go (oldest first) until it fits.
+ *  OPEN jobs' events are NEVER dropped (the posting route refuses instead). */
 export function pruneJobEvents(events, now = Date.now()) {
-  const jobs = foldJobEvents(events, now);
+  const compacted = compactHeartbeatEvents(events);
+  const jobs = foldJobEvents(compacted, now);
+  const openIds = new Set(jobs.filter((j) => j.status === "pending" || j.status === "claimed").map((j) => j.id));
+  const pinnedIds = new Set();
+  for (const job of jobs) {
+    if (!openIds.has(job.id)) continue;
+    for (const dep of Array.isArray(job.blockedBy) ? job.blockedBy : []) pinnedIds.add(dep);
+  }
   const settled = jobs.filter((j) => j.status === "completed" || j.status === "failed")
     .sort((a, b) => (a.settledAt ?? 0) - (b.settledAt ?? 0));
-  const dropIds = new Set(settled.slice(0, Math.max(0, settled.length - BOARD_MAX_SETTLED_JOBS)).map((j) => j.id));
-  if (dropIds.size === 0) return events;
-  return (Array.isArray(events) ? events : []).filter((ev) => !dropIds.has(ev?.jobId));
+  const dropIds = new Set();
+  let surplus = settled.length - BOARD_MAX_SETTLED_JOBS;
+  for (const job of settled) {
+    if (surplus <= 0) break;
+    if (pinnedIds.has(job.id)) continue; // a live dependent still needs the record
+    dropIds.add(job.id);
+    surplus -= 1;
+  }
+  let out = compacted.filter((ev) => !dropIds.has(ev?.jobId));
+  // Byte authority: the count cap alone can exceed the memory per-value cap
+  // (settled jobs carry up to BOARD_MAX_RESULT of result text each).
+  while (eventsBytes(out) > BOARD_MAX_LOG_BYTES) {
+    const next = settled.find((j) => !dropIds.has(j.id) && !pinnedIds.has(j.id));
+    if (!next) break; // everything left is open or pinned — the post gate owns this
+    dropIds.add(next.id);
+    out = compacted.filter((ev) => !dropIds.has(ev?.jobId));
+  }
+  return out;
 }
 
 /**
@@ -226,21 +308,28 @@ export function pruneJobEvents(events, now = Date.now()) {
  * logic with an in-memory stand-in.
  */
 export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => Date.now() }) {
-  async function loadJobs() {
-    const events = (await memory.get(BOARD_JOBS_KEY).catch(() => null)) ?? [];
+  // The board logs are RESERVED authority keys (memory.js MASTER_RESERVED_KEYS
+  // + the internal/hidden namespace): the model's memory_set/memory_get can
+  // never forge or read them, so the store uses the TRUSTED paths exclusively
+  // (review P1-1).
+  const readLog = async (key) => {
+    const events = (await memory.getStrict(key).catch(() => null)) ?? [];
     return Array.isArray(events) ? events : [];
+  };
+  const writeLog = (key, events) => memory.setTrusted(key, events);
+  async function loadJobs() {
+    return readLog(BOARD_JOBS_KEY);
   }
   async function saveJobs(events) {
-    await memory.set(BOARD_JOBS_KEY, pruneJobEvents(events, now()));
+    await writeLog(BOARD_JOBS_KEY, pruneJobEvents(events, now()));
   }
   async function loadMessages() {
-    const events = (await memory.get(BOARD_MESSAGES_KEY).catch(() => null)) ?? [];
-    return Array.isArray(events) ? events : [];
+    return readLog(BOARD_MESSAGES_KEY);
   }
 
   const board = {
     /** Post a job. Returns { ok, job } or a structured guard denial. */
-    async postJob({ callerId, agents, description, requiredCapability = null, targetAgentRef = null, blockedBy = [] }) {
+    async postJob({ callerId, agents, description, requiredCapability = null, targetAgentRef = null, blockedBy = [], posterThreadId = null }) {
       return withLock(async () => {
         const target = targetAgentRef ? resolveTargetAgent(targetAgentRef, agents) : null;
         if (targetAgentRef && !target) {
@@ -277,7 +366,19 @@ export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => 
           targetAgentId: target?.id ?? null,
           targetName: target?.name ?? null,
           blockedBy: blocked,
+          // The poster's thread authority (review P1-6): captured by the ROUTE
+          // from the run registry, never from model args — a settlement result
+          // rides back to the poster's thread through the durable outbox seam.
+          posterThreadId: typeof posterThreadId === "string" && posterThreadId ? posterThreadId.slice(0, 200) : null,
         };
+        // Byte authority (review P1-4): refuse BEFORE the append when the new
+        // event would push the serialized log over budget — open jobs' events
+        // are never dropped to make room, so the gate is the only defense.
+        // Headroom covers the job's own claim + heartbeat + settle events.
+        const projected = [...events, job];
+        if (eventsBytes(projected) > BOARD_MAX_LOG_BYTES - BOARD_MAX_RESULT - 2048) {
+          return { ok: false, code: "board-full", error: "the board log is full — settle or release jobs first" };
+        }
         events.push(job);
         await saveJobs(events);
         return { ok: true, job: foldJobEvents([job], now())[0] };
@@ -386,7 +487,12 @@ export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => 
           refJobId: typeof refJobId === "string" && refJobId.trim() ? refJobId.trim() : null,
         };
         events.push(message);
-        await memory.set(BOARD_MESSAGES_KEY, events.slice(-BOARD_MAX_MESSAGES));
+        // Count cap, then BYTE authority (review P1-4): 200 max-size bodies
+        // cross the memory store's 256 KiB per-value cap — drop oldest until
+        // the serialized log fits the board budget.
+        let retained = events.slice(-BOARD_MAX_MESSAGES);
+        while (retained.length > 1 && eventsBytes(retained) > BOARD_MAX_LOG_BYTES) retained = retained.slice(1);
+        await writeLog(BOARD_MESSAGES_KEY, retained);
         return { ok: true, message: foldMessageEvents([message])[0] };
       });
     },
@@ -411,46 +517,90 @@ export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => 
  * authority seam: it maps the route CONTEXT (never model args) to the caller
  * identity (a named agent's id from the live run registry, else the hub).
  */
-export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCaller, broadcast, now }) {
+export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCaller, resolvePosterThreadId, commitThread, broadcast, now }) {
   const board = createAgentBoard({ memory, withLock, now });
   const agents = () => listAgents().catch(() => []);
+  // Caller identity comes from the route CONTEXT (never model args) and fails
+  // CLOSED: a MODEL principal whose execution id resolves to nothing is a
+  // STALE run context (the SW restarted or the run settled — review P1-5) and
+  // gets a structured denial. Only trusted owner/page surfaces (no model
+  // principal) default to the hub — mirroring named-agent.delegate.
+  const STALE_CONTEXT = { ok: false, code: "board-context-stale", error: "this run's identity can no longer be verified — start a fresh run" };
   const callerOf = (context) => {
     const id = typeof resolveCaller === "function" ? resolveCaller(context) : null;
-    return typeof id === "string" && id ? id : BOARD_HUB_ID;
+    if (typeof id === "string" && id) return { callerId: id };
+    if (context && context.principal === "model") return { denial: STALE_CONTEXT };
+    return { callerId: BOARD_HUB_ID };
   };
   const fire = (event) => { try { broadcast?.(event); } catch { /* UI wake is best-effort */ } };
+  // Settlement → the poster's thread (review P1-6): the existing durable
+  // thread-commit seam, idempotent by a per-job key — a replayed settle can
+  // never duplicate the result message.
+  const commitResult = async (job, outcome, result) => {
+    if (!job?.posterThreadId || typeof commitThread !== "function") return;
+    const claimant = job.claimantName ?? job.claimantId ?? "an agent";
+    const content = outcome === "completed"
+      ? `Board job "${job.description.slice(0, 140)}" completed by ${claimant}:\n\n${result}`
+      : `Board job "${job.description.slice(0, 140)}" FAILED (${claimant}): ${result}`;
+    try {
+      await commitThread(job.posterThreadId, `board:${job.id}`, {
+        role: outcome === "completed" ? "assistant" : "error",
+        content,
+      });
+    } catch { /* the log entry is the authority — the thread copy is best-effort */ }
+  };
 
   return {
     async "board.post"({ description, requiredCapability, targetAgent, blockedBy }, context) {
+      const caller = callerOf(context);
+      if (caller.denial) return caller.denial;
       const registry = await agents();
+      const posterThreadId = typeof resolvePosterThreadId === "function"
+        ? await resolvePosterThreadId(context).catch(() => null)
+        : null;
       const r = await board.postJob({
-        callerId: callerOf(context),
+        callerId: caller.callerId,
         agents: registry,
         description,
         requiredCapability,
         targetAgentRef: targetAgent,
         blockedBy,
+        posterThreadId: typeof posterThreadId === "string" ? posterThreadId : null,
       });
       if (r.ok) fire({ type: "board-job-posted", jobId: r.job.id, capability: r.job.requiredCapability ?? null, targetAgentId: r.job.targetAgentId ?? null });
       return r;
     },
     async "board.claim"({ jobId }, context) {
-      const r = await board.claimJob({ callerId: callerOf(context), agents: await agents(), jobId });
+      const caller = callerOf(context);
+      if (caller.denial) return caller.denial;
+      const r = await board.claimJob({ callerId: caller.callerId, agents: await agents(), jobId });
       if (r.ok) fire({ type: "board-job-claimed", jobId, claimantId: r.job.claimantId });
       return r;
     },
     async "board.complete"({ jobId, result }, context) {
-      const r = await board.settleJob({ callerId: callerOf(context), jobId, result, outcome: "completed" });
-      if (r.ok && !r.alreadySettled) fire({ type: "board-job-completed", jobId, posterId: r.job.posterId, claimantId: callerOf(context) });
+      const caller = callerOf(context);
+      if (caller.denial) return caller.denial;
+      const r = await board.settleJob({ callerId: caller.callerId, jobId, result, outcome: "completed" });
+      if (r.ok && !r.alreadySettled) {
+        fire({ type: "board-job-completed", jobId, posterId: r.job.posterId, claimantId: caller.callerId });
+        await commitResult(r.job, "completed", boardText(result, BOARD_MAX_RESULT));
+      }
       return r;
     },
     async "board.fail"({ jobId, result }, context) {
-      const r = await board.settleJob({ callerId: callerOf(context), jobId, result, outcome: "failed" });
-      if (r.ok && !r.alreadySettled) fire({ type: "board-job-failed", jobId, posterId: r.job.posterId, claimantId: callerOf(context) });
+      const caller = callerOf(context);
+      if (caller.denial) return caller.denial;
+      const r = await board.settleJob({ callerId: caller.callerId, jobId, result, outcome: "failed" });
+      if (r.ok && !r.alreadySettled) {
+        fire({ type: "board-job-failed", jobId, posterId: r.job.posterId, claimantId: caller.callerId });
+        await commitResult(r.job, "failed", boardText(result, BOARD_MAX_RESULT));
+      }
       return r;
     },
     async "board.heartbeat"({ jobId }, context) {
-      return board.heartbeatJob({ callerId: callerOf(context), jobId });
+      const caller = callerOf(context);
+      if (caller.denial) return caller.denial;
+      return board.heartbeatJob({ callerId: caller.callerId, jobId });
     },
     async "board.list"({ status }) {
       return { ok: true, jobs: await board.listJobs({ status: typeof status === "string" ? status : null }) };
@@ -460,7 +610,9 @@ export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCa
       return job ? { ok: true, job } : { ok: false, error: "no such job" };
     },
     async "board.message"({ to, body, refJobId }, context) {
-      const r = await board.sendMessage({ callerId: callerOf(context), agents: await agents(), to, body, refJobId });
+      const caller = callerOf(context);
+      if (caller.denial) return caller.denial;
+      const r = await board.sendMessage({ callerId: caller.callerId, agents: await agents(), to, body, refJobId });
       if (r.ok) fire({ type: "board-message-posted", messageId: r.message.id, toId: r.message.toId });
       return r;
     },

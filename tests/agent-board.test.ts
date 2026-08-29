@@ -24,10 +24,14 @@
 
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
+  BOARD_CLAIM_HEARTBEAT_MS,
   BOARD_CLAIM_LEASE_MS,
   BOARD_HUB_ID,
   BOARD_JOBS_KEY,
+  BOARD_MAX_BLOCKED_BY,
   BOARD_MAX_DESCRIPTION,
+  BOARD_MAX_LOG_BYTES,
+  BOARD_MAX_MESSAGE_BODY,
   BOARD_MAX_MESSAGES,
   BOARD_MAX_OPEN_JOBS,
   BOARD_MAX_SETTLED_JOBS,
@@ -41,7 +45,7 @@ import {
   foldMessageEvents,
   pruneJobEvents,
 } from "../extension/lib/agent-board.js";
-import { INFLIGHT_LEASE_MS } from "../extension/lib/scheduler.js";
+import { INFLIGHT_HEARTBEAT_MS, INFLIGHT_LEASE_MS } from "../extension/lib/scheduler.js";
 import { managementToolset, MANAGEMENT_TOOL_NAMES } from "../extension/lib/management-tools.js";
 import { MANAGEMENT_CAPABILITY_TOOL_NAMES } from "../extension/lib/chrome-tool-capabilities.js";
 
@@ -56,6 +60,10 @@ function mockMemory() {
   return {
     get: async (k) => (map.has(k) ? map.get(k) : null),
     set: async (k, v) => void map.set(k, v),
+    // The trusted internal paths the board uses (the model-facing get/set are
+    // RESERVED against the board keys — see the reservation tests below).
+    getStrict: async (k) => (map.has(k) ? map.get(k) : null),
+    setTrusted: async (k, v) => void map.set(k, v),
     _map: map,
   };
 }
@@ -64,6 +72,8 @@ function mockMemory() {
 Deno.test("board: the claim lease IS the scheduler's in-flight lease (drift fails)", () => {
   assertEquals(BOARD_CLAIM_LEASE_MS, INFLIGHT_LEASE_MS);
   assertEquals(BOARD_CLAIM_LEASE_MS, 5 * 60 * 1000);
+  assertEquals(BOARD_CLAIM_HEARTBEAT_MS, INFLIGHT_HEARTBEAT_MS);
+  assertEquals(BOARD_CLAIM_HEARTBEAT_MS, 30 * 1000);
 });
 
 // ── (1) guards ──────────────────────────────────────────────────────────────
@@ -388,4 +398,240 @@ Deno.test("board fold: pruneJobEvents is a no-op under the settled cap", () => {
   // Storage keys are the documented hub-tier keys.
   assertEquals(BOARD_JOBS_KEY, "cap:board-jobs");
   assertEquals(BOARD_MESSAGES_KEY, "cap:board-messages");
+});
+
+// ── review-revision battery (round-1 REVISE: P1-1…P1-6 + P2-2) ─────────────
+
+// (P1-1) The board logs are AUTHORITY: the model's memory_set must never
+// replace them with forged identities, and memory_get/keys must not expose
+// them. The reservation lives in memory.js; the KAT proves it behaviorally
+// against the loaded extension — this pins the source contract.
+Deno.test("board authority: memory.js reserves + hides both board log keys", async () => {
+  const src = await Deno.readTextFile(new URL("../extension/lib/memory.js", import.meta.url));
+  const reserved = src.match(/const MASTER_RESERVED_KEYS = new Set\(\[([\s\S]*?)\]\);/)?.[1] ?? "";
+  assertStringIncludes(reserved, '"cap:board-jobs"');
+  assertStringIncludes(reserved, '"cap:board-messages"');
+  const hidden = src.match(/const INTERNAL_KEY_RE = \/(.+)\//)?.[1] ?? "";
+  assertStringIncludes(hidden, "cap:board-");
+  // The model-facing read path (memory.get → memory_get tool) throws on them.
+  const getBody = src.match(/async get\(key\) \{([\s\S]*?)reserved on this store/)?.[1] ?? "";
+  assertStringIncludes(getBody, "cap:board-");
+});
+
+// (P1-1) The board store itself must use the TRUSTED paths — if it used the
+// model-facing set/get, reserving the keys would break the board.
+Deno.test("board authority: the store writes via setTrusted and reads via getStrict (never the model paths)", async () => {
+  const map = new Map();
+  const writes = [];
+  const memory = {
+    get: async () => { throw new Error("the board must not read its logs via the model-facing get"); },
+    set: async () => { throw new Error("the board must not write its logs via the model-facing set"); },
+    getStrict: async (k) => (map.has(k) ? map.get(k) : null),
+    setTrusted: async (k, v) => { writes.push(k); void map.set(k, v); },
+  };
+  const board = createAgentBoard({ memory });
+  const posted = await board.postJob({ callerId: BOARD_HUB_ID, agents: AGENTS, description: "reserved write path" });
+  assertEquals(posted.ok, true);
+  assert(writes.includes(BOARD_JOBS_KEY), "the job log write used setTrusted");
+  const listed = await board.listJobs();
+  assertEquals(listed.length, 1);
+  const msg = await board.sendMessage({ callerId: BOARD_HUB_ID, agents: AGENTS, body: "reserved message path" });
+  assertEquals(msg.ok, true);
+  assert(writes.includes(BOARD_MESSAGES_KEY), "the message log write used setTrusted");
+});
+
+// (P1-2) An expired claim is RECLAIMABLE: the fold expires a prior claim AS
+// OF each later event's time, so a claim the store legitimately admitted
+// after expiry is not dropped by the end-of-fold expiry pass.
+Deno.test("board fold: a claim appended after the previous lease expired wins (event-time expiry)", () => {
+  const t0 = 1_000_000;
+  const events = [
+    { type: "posted", jobId: "j1", ts: t0, posterId: "writer", description: "d" },
+    { type: "claimed", jobId: "j1", ts: t0 + 1_000, claimantId: "critic", leaseExpiry: t0 + 1_000 + BOARD_CLAIM_LEASE_MS },
+    // admitted by the store under the lock AFTER the critic's lease expired:
+    { type: "claimed", jobId: "j1", ts: t0 + 1_000 + BOARD_CLAIM_LEASE_MS + 5_000, claimantId: "researcher", leaseExpiry: t0 + 1_000 + 2 * BOARD_CLAIM_LEASE_MS + 5_000 },
+  ];
+  const [job] = foldJobEvents(events, t0 + 1_000 + BOARD_CLAIM_LEASE_MS + 6_000);
+  assertEquals(job.status, "claimed");
+  assertEquals(job.claimantId, "researcher");
+});
+
+Deno.test("board store: an expired-lease job is reclaimed end to end", async () => {
+  let now = 1_000_000;
+  const memory = mockMemory();
+  const board = createAgentBoard({ memory, now: () => now });
+  const posted = await board.postJob({ callerId: "writer", agents: AGENTS, description: "reclaim me" });
+  const claimed = await board.claimJob({ callerId: "critic", agents: AGENTS, jobId: posted.job.id });
+  assertEquals(claimed.ok, true);
+  // The claimant vanishes past the lease…
+  now += BOARD_CLAIM_LEASE_MS + 1_000;
+  const reclaimed = await board.claimJob({ callerId: "researcher", agents: AGENTS, jobId: posted.job.id });
+  assertEquals(reclaimed.ok, true);
+  assertEquals(reclaimed.job.claimantId, "researcher");
+  // …and a READ at the same instant shows the new claimant (the round-1 bug
+  // read the job as pending with no claimant).
+  const read = await board.getJob(posted.job.id);
+  assertEquals(read.status, "claimed");
+  assertEquals(read.claimantId, "researcher");
+  // The EXPIRED claimant can no longer settle.
+  const lateSettle = await board.settleJob({ callerId: "critic", jobId: posted.job.id, result: "too late" });
+  assertEquals(lateSettle.ok, false);
+});
+
+// (P1-3) Pruning never strands an open dependent: a settled job still
+// referenced by an OPEN job's blockedBy keeps its completion record.
+Deno.test("board fold: pruning preserves settled jobs an open job still depends on", () => {
+  let ts = 1_000_000;
+  const events = [
+    { type: "posted", jobId: "parent", ts: ts++, posterId: "writer", description: "parent" },
+    { type: "claimed", jobId: "parent", ts: ts++, claimantId: "critic", leaseExpiry: ts + BOARD_CLAIM_LEASE_MS },
+    { type: "completed", jobId: "parent", ts: ts++, claimantId: "critic", result: "done" },
+    { type: "posted", jobId: "child", ts: ts++, posterId: "writer", description: "child", blockedBy: ["parent"] },
+  ];
+  for (let i = 0; i < BOARD_MAX_SETTLED_JOBS + 5; i += 1) {
+    events.push({ type: "posted", jobId: `old${i}`, ts: ts++, posterId: "writer", description: "old" });
+    events.push({ type: "claimed", jobId: `old${i}`, ts: ts++, claimantId: "critic", leaseExpiry: ts + BOARD_CLAIM_LEASE_MS });
+    events.push({ type: "completed", jobId: `old${i}`, ts: ts++, claimantId: "critic", result: "done" });
+  }
+  const pruned = pruneJobEvents(events, ts + 1_000);
+  const jobs = foldJobEvents(pruned, ts + 1_000);
+  const child = jobs.find((j) => j.id === "child");
+  assert(child, "the open child survives pruning");
+  // The parent's completion record survives → the child is claimable NOW.
+  const guard = canClaimJob({ callerId: "critic", agents: AGENTS, job: child, settledJobs: jobs });
+  assertEquals(guard.ok, true);
+  // Unreferenced old settled jobs WERE pruned (the cap still bites).
+  assert(jobs.filter((j) => j.id.startsWith("old")).length <= BOARD_MAX_SETTLED_JOBS);
+});
+
+// (P1-4) Superseded heartbeats are compacted: one long-lived claimed job must
+// not grow the log unboundedly. The latest heartbeat keeps fold authority.
+Deno.test("board store: superseded heartbeats are compacted (fold authority retained)", async () => {
+  const memory = mockMemory();
+  const board = createAgentBoard({ memory });
+  const posted = await board.postJob({ callerId: "writer", agents: AGENTS, description: "long job" });
+  await board.claimJob({ callerId: "critic", agents: AGENTS, jobId: posted.job.id });
+  for (let i = 0; i < 200; i += 1) await board.heartbeatJob({ callerId: "critic", jobId: posted.job.id });
+  const events = memory._map.get(BOARD_JOBS_KEY);
+  const heartbeats = events.filter((e) => e.type === "heartbeat");
+  assert(heartbeats.length <= 1, `expected ≤1 retained heartbeat, got ${heartbeats.length}`);
+  const [folded] = foldJobEvents(events, Date.now());
+  assertEquals(folded.status, "claimed");
+  assertEquals(folded.claimantId, "critic");
+  assert(folded.leaseExpiry > Date.now(), "the surviving heartbeat still carries the live lease");
+});
+
+// (P1-4) BOTH serialized logs stay under the memory per-value cap (256 KiB)
+// with margin — the message count cap alone allowed 200×2 KB > 256 KiB.
+Deno.test("board store: both logs are byte-bounded below the memory per-value cap", async () => {
+  assert(BOARD_MAX_LOG_BYTES < 256 * 1024, "the board budget must stay under memory's 256 KiB per-value cap");
+  const memory = mockMemory();
+  const board = createAgentBoard({ memory });
+  for (let i = 0; i < BOARD_MAX_MESSAGES + 40; i += 1) {
+    const r = await board.sendMessage({ callerId: BOARD_HUB_ID, agents: AGENTS, body: "x".repeat(BOARD_MAX_MESSAGE_BODY) });
+    assertEquals(r.ok, true);
+  }
+  const messages = memory._map.get(BOARD_MESSAGES_KEY);
+  const bytes = new TextEncoder().encode(JSON.stringify(messages)).length;
+  assert(bytes <= BOARD_MAX_LOG_BYTES, `messages log ${bytes}B exceeds the ${BOARD_MAX_LOG_BYTES}B budget`);
+  assert(messages.length <= BOARD_MAX_MESSAGES);
+  assert(messages.length > 0, "recent messages survive byte-bounded pruning");
+});
+
+// (P1-4) Posting fails CLOSED (board-full) when the jobs log is byte-full —
+// an open job's events are never dropped to make room.
+Deno.test("board store: posting refuses when the jobs log is byte-full (open jobs are never dropped)", async () => {
+  const memory = mockMemory();
+  const board = createAgentBoard({ memory });
+  let refused = null;
+  let postedCount = 0;
+  for (let i = 0; i < BOARD_MAX_OPEN_JOBS + 20; i += 1) {
+    const r = await board.postJob({ callerId: "writer", agents: AGENTS, description: "y".repeat(BOARD_MAX_DESCRIPTION) });
+    if (!r.ok) { refused = r; break; }
+    postedCount += 1;
+  }
+  assert(refused, "the byte gate must bite before the memory cap can");
+  assertEquals(refused.code, "board-full");
+  const bytes = new TextEncoder().encode(JSON.stringify(memory._map.get(BOARD_JOBS_KEY))).length;
+  assert(bytes <= BOARD_MAX_LOG_BYTES, `jobs log ${bytes}B exceeds the budget`);
+  assert(postedCount > 10, `suspiciously few jobs fit (${postedCount}) — the gate should bite near the budget, not immediately`);
+});
+
+// (P1-5) A stale MODEL context fails CLOSED — it never escalates to hub
+// authority. Trusted owner/page surfaces (no model principal) default to hub.
+Deno.test("board routes: a stale model context is denied, never hub-escalated", async () => {
+  const routes = createAgentBoardRoutes({
+    memory: mockMemory(),
+    withLock: (fn) => fn(),
+    listAgents: async () => AGENTS,
+    resolveCaller: () => null, // production: the execution id is no longer live anywhere
+  });
+  const stale = { principal: "model", executionId: "exec-gone" };
+  for (const [route, body] of [
+    ["board.post", { description: "forge a hub post" }],
+    ["board.claim", { jobId: "job_x" }],
+    ["board.complete", { jobId: "job_x", result: "forged" }],
+    ["board.message", { body: "forged hub message" }],
+  ]) {
+    const r = await routes[route](body, stale);
+    assertEquals(r.ok, false, `${route} must deny a stale model context`);
+    assertEquals(r.code, "board-context-stale", `${route} denial code`);
+  }
+  // A trusted page surface (no model principal) still resolves to the hub.
+  const page = await routes["board.post"]({ description: "owner post" }, {});
+  assertEquals(page.ok, true);
+  assertEquals(page.job.posterId, BOARD_HUB_ID);
+});
+
+// (P1-6) A settlement commits the result into the POSTER's thread through the
+// durable thread-commit seam — idempotently (a repeated settle never
+// re-commits), and only when the post carried a thread authority.
+Deno.test("board routes: settlement commits the result to the poster's thread (idempotent)", async () => {
+  const commits = [];
+  const routes = createAgentBoardRoutes({
+    memory: mockMemory(),
+    withLock: (fn) => fn(),
+    listAgents: async () => AGENTS,
+    resolveCaller: (context) => ({ "exec-writer": "writer", "exec-critic": "critic" })[context?.executionId] ?? null,
+    resolvePosterThreadId: async (context) => (context?.executionId === "exec-writer" ? "thread-1" : null),
+    commitThread: async (threadId, key, terminal) => { commits.push({ threadId, key, terminal }); return {}; },
+  });
+  const posted = await routes["board.post"]({ description: "threaded job" }, { principal: "model", executionId: "exec-writer" });
+  assertEquals(posted.ok, true);
+  assertEquals(posted.job.posterThreadId, "thread-1");
+  const claimed = await routes["board.claim"]({ jobId: posted.job.id }, { principal: "model", executionId: "exec-critic" });
+  assertEquals(claimed.ok, true);
+  assertEquals(commits.length, 0, "no commit before settlement");
+  const done = await routes["board.complete"]({ jobId: posted.job.id, result: "the answer" }, { principal: "model", executionId: "exec-critic" });
+  assertEquals(done.ok, true);
+  assertEquals(commits.length, 1);
+  assertEquals(commits[0].threadId, "thread-1");
+  assertEquals(commits[0].key, `board:${posted.job.id}`);
+  assertEquals(commits[0].terminal.role, "assistant");
+  assertStringIncludes(commits[0].terminal.content, "the answer");
+  // Idempotent: the SAME claimant's repeated settle does NOT re-commit.
+  const again = await routes["board.complete"]({ jobId: posted.job.id, result: "the answer" }, { principal: "model", executionId: "exec-critic" });
+  assertEquals(again.alreadySettled, true);
+  assertEquals(commits.length, 1);
+});
+
+// (P1-6) A job posted without a thread authority (a bare page post) settles
+// without a thread commit — the broadcast wake remains the notification.
+Deno.test("board routes: a threadless post settles without a thread commit", async () => {
+  const commits = [];
+  const routes = createAgentBoardRoutes({
+    memory: mockMemory(),
+    withLock: (fn) => fn(),
+    listAgents: async () => AGENTS,
+    resolveCaller: (context) => (context?.executionId === "exec-critic" ? "critic" : null),
+    resolvePosterThreadId: async () => null,
+    commitThread: async (threadId, key, terminal) => { commits.push({ threadId, key, terminal }); return {}; },
+  });
+  const posted = await routes["board.post"]({ description: "page-posted job" }, {});
+  assertEquals(posted.ok, true);
+  assertEquals(posted.job.posterThreadId, null);
+  await routes["board.claim"]({ jobId: posted.job.id }, { principal: "model", executionId: "exec-critic" });
+  const done = await routes["board.complete"]({ jobId: posted.job.id, result: "done" }, { principal: "model", executionId: "exec-critic" });
+  assertEquals(done.ok, true);
+  assertEquals(commits.length, 0);
 });

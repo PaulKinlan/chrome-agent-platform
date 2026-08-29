@@ -1295,7 +1295,11 @@ async function refreshBoard() {
       : `posted by ${job.posterName ?? job.posterId}${job.targetName ? ` for ${job.targetName}` : ""}`;
     text.textContent = job.description;
     text.title = `${job.description} — ${state}`;
-    row.append(dot, text);
+    // Poster/claimant/status are VISIBLE (never title-only — review P2-1).
+    const meta = document.createElement("span");
+    meta.className = "fr-meta";
+    meta.textContent = state;
+    row.append(dot, text, meta);
     section.append(row);
   }
   for (const m of recent) {

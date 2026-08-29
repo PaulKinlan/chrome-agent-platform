@@ -1477,6 +1477,19 @@ evidence every other task depends on).
   - 2026-08-29 — lane built: board lib + SW routes + 6 management tools +
     capability/replay classifications + Tasks-sidebar grouping; 20 unit tests +
     12-check browser KAT (screenshot evidence) green; suite 2266/0.
+  - 2026-08-29 — review round 1 REVISE (6×P1 + 3×P2) fixed: board log keys
+    reserved from the model's memory_set/memory_get/keys (memory.js
+    MASTER_RESERVED_KEYS + hidden namespace; the store uses setTrusted/
+    getStrict); event-time lease expiry in the fold (expired claims are
+    reclaimable); pruning preserves settled jobs an open job still depends
+    on; both logs byte-bounded (192 KiB < the 256 KiB per-value cap) with
+    superseded-heartbeat compaction + a fail-closed board-full post gate;
+    stale model contexts denied (never hub-escalated); settlements commit
+    the result to the poster's thread through the durable thread-commit seam
+    (idempotent by board:<jobId>); visible row metadata (never title-only);
+    the browser KAT now drives a REAL named-agent claim→complete via the
+    @demo-board demo-model marker + asserts live UI refresh; heartbeat
+    parity pinned. 31 unit tests + 22-check KAT green; suite 2277/0.
 
 ## [CAP-FB-20260829-MAIN-GATES-RED-03] Journey suite red on main after the install-granted permission change
 - Feedback: 2026-08-29 — found by running the suite on `origin/main`

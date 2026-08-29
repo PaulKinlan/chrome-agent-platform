@@ -189,13 +189,19 @@ const MASTER_RESERVED_KEYS = new Set([
   "run-dismissed-failed",
   "wasmPkg",
   "wasmPkgRepair",
+  // The inter-agent board logs (jobs + messages, agent-board.js): event-
+  // sourced AUTHORITY — a forged replacement would let the model rewrite who
+  // posted/claimed/settled what (review P1-1). The board's store writes
+  // through setTrusted and reads through getStrict, like the thread code.
+  "cap:board-jobs",
+  "cap:board-messages",
 ]);
 // The INTERNAL namespace + the artifact/repair/package/profile prefixes are reserved on EVERY
 // store — the model's memory_set can never write the generation authority,
 // the WAL, a tombstone, or an artifact body/repair record.
 const INTERNAL_PREFIX_RE = /^(?:__gen|__tx|__wal|__epoch|__tombs|__wasmTx|profile:)/;
 // The full hidden namespace (keys()/get/list exclusion + set reservation).
-const INTERNAL_KEY_RE = /^(?:__gen|__tx|__wal|__epoch|__tombs|__wasmTx|assets|assetRepair|asset:|wasmPkg|wasmPkgRepair|profile:|profile$)/;
+const INTERNAL_KEY_RE = /^(?:__gen|__tx|__wal|__epoch|__tombs|__wasmTx|assets|assetRepair|asset:|wasmPkg|wasmPkgRepair|profile:|profile$|cap:board-)/;
 // Authority/registry keys that the MODEL's `memory_set` must never write on a
 // SITE store: a worker that could write `approvals` or `toolDirectory` would
 // bypass the owner's first-run approval or forge its own tool directory, and
@@ -737,8 +743,10 @@ function memoryStoreAt(path, { isMaster, origin }) {
     async get(key) {
       // The AUTHORITY files and reserved profile dossiers are never readable
       // via the model-facing memory.get route + agent memory_get tool; trusted
-      // internal subsystems use getStrict.
-      if (/^(?:__gen|__tx|__wal|__epoch|__tombs|profile:|profile$)/.test(String(key))) {
+      // internal subsystems use getStrict. The board logs join them: a forged
+      // board history must be neither writable (MASTER_RESERVED_KEYS) nor
+      // readable here (review P1-1).
+      if (/^(?:__gen|__tx|__wal|__epoch|__tombs|profile:|profile$|cap:board-)/.test(String(key))) {
         throw new Error(`key "${key}" is reserved on this store`);
       }
       const dir = await openDirOptional(path);

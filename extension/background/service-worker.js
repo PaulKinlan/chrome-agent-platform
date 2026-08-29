@@ -540,7 +540,7 @@ import {
 } from "../lib/owner-approval.js";
 import { bridgeAndAuditApprovalBindings } from "../lib/approval-bridge-audit.js";
 import { journalJson } from "../shared/tool-tree.js";
-import { createAgentBoardRoutes } from "../lib/agent-board.js";
+import { createAgentBoardRoutes, BOARD_HUB_ID } from "../lib/agent-board.js";
 import { capLog, dumpLogBuffer, clearLogBuffer, getLogVerbosity, setLogVerbosity } from "../lib/cap-log.js";
 import { perfSpan, perfSummary, perfClear } from "../lib/cap-perf.js";
 
@@ -3683,9 +3683,29 @@ const boardRoutes = createAgentBoardRoutes({
   // Caller identity comes from the route CONTEXT — the model-facing
   // dispatcher binds the run's execution id, and dispatchRoute strips
   // __-prefixed body keys, so a model can never forge who posted or
-  // claimed (the named-agent.delegate discipline). A call without a
-  // live named-agent run context resolves to the hub.
-  resolveCaller: (context) => activeDelegationRuns.get(context?.executionId)?.agentId ?? null,
+  // claimed (the named-agent.delegate discipline). FAIL CLOSED (review
+  // P1-5): a model principal whose execution id is live nowhere (the run
+  // settled or the SW restarted) resolves to null so the route returns a
+  // structured stale-context denial — never hub authority.
+  resolveCaller: (context) => {
+    const agentId = activeDelegationRuns.get(context?.executionId)?.agentId ?? null;
+    if (agentId) return agentId;
+    if (context?.principal === "model") {
+      const execId = typeof context.executionId === "string" ? context.executionId : "";
+      // A LIVE hub run's model calls are the hub; a stale one is denied.
+      return execId && activeExecutions.has(execId) ? BOARD_HUB_ID : null;
+    }
+    return BOARD_HUB_ID;
+  },
+  // The poster's thread authority (review P1-6): resolved from the durable
+  // run registry by the context's execution id — never from model args.
+  resolvePosterThreadId: async (context) => {
+    const execId = typeof context?.executionId === "string" ? context.executionId : "";
+    if (!execId) return null;
+    const record = (await durableRuns.list().catch(() => [])).find((r) => r?.executionId === execId);
+    return typeof record?.threadId === "string" && record.threadId ? record.threadId : null;
+  },
+  commitThread: commitThreadTerminal,
   broadcast: broadcastProgress,
 });
 

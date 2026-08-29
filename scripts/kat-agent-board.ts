@@ -95,7 +95,20 @@ try {
   const listed = await evaluate(sendExpr("board.list", { status: "pending" }), page);
   check("board.list returns the two open jobs", listed?.ok === true && listed?.jobs?.length === 2, listed?.jobs?.length);
 
-  // 5. The Tasks sidebar's Board grouping renders the jobs + the message.
+  // 4b. (P1-1) The board logs are RESERVED: the page/model memory surface
+  //     can never replace, read, or enumerate them — while the board routes
+  //     keep working over the trusted paths.
+  const forgeSet = await evaluate(sendExpr("memory.set", { origin: "master", key: "cap:board-jobs", value: [] }), page);
+  check("memory.set can never replace the board jobs log", forgeSet == null || forgeSet?.ok === false || typeof forgeSet?.error === "string", forgeSet);
+  const forgeGet = await evaluate(sendExpr("memory.get", { origin: "master", key: "cap:board-jobs" }), page);
+  check("memory.get can never read the board jobs log", forgeGet == null || forgeGet?.ok === false || typeof forgeGet?.error === "string", forgeGet);
+  const listKeys = await evaluate(sendExpr("memory.list", { origin: "master" }), page);
+  const keys = Array.isArray(listKeys) ? listKeys : (listKeys?.keys ?? listKeys?.value ?? []);
+  check("memory.list never enumerates the board keys", Array.isArray(keys) && !keys.some((k) => String(k).startsWith("cap:board-")), keys?.slice?.(0, 8));
+  const stillThere = await evaluate(sendExpr("board.list", {}), page);
+  check("the board still reads its log after the forge attempts", stillThere?.ok === true && stillThere?.jobs?.length === 2, stillThere?.jobs?.length);
+
+  // 4b. (P1-1) The board logs are RESERVED: the page/model memory surface
   //    renderTasks fires refreshBoard on load; give the async section a beat,
   //    then nudge a re-render via the progress bus isn't needed — read the DOM.
   await evaluate("window.dispatchEvent(new Event('focus'))", page);
@@ -132,6 +145,32 @@ try {
   })()`, page);
   check("the Board section fits inside the sidebar (no clipping)", geo?.insideParent === true, geo);
   check("the first Board row is fully visible (rest scroll inside the box)", geo?.firstRowVisible === true && geo?.rows >= 3 && geo?.overflowY === "auto", geo);
+
+  // 5c. (P2-2) A REAL named agent claims + completes a job through the lazy
+  //     tool protocol (@demo-board: board_list → board_claim_job →
+  //     board_complete_job), its identity resolved from the LIVE run registry.
+  //     Runs AFTER the render assertions: settlement removes the job from the
+  //     open list (that removal IS the live-refresh assertion below).
+  const created = await evaluate(sendExpr("named-agent.create", { name: "Board Worker", role: "You claim and complete board jobs." }), page);
+  check("the claimant agent is created", created?.ok === true, created);
+  const agentId = created?.agent?.id ?? "board-worker";
+  const run = await evaluate(sendExpr("named-agent.run", { id: agentId, task: "@demo-board" }), page);
+  check("the @demo-board run settles ok", run?.ok === true || run?.status === "done" || run?.done === true, run && Object.keys(run).slice(0, 8));
+  const settledJob = await evaluate(sendExpr("board.read", { jobId: posted2?.job?.id }), page);
+  check("the agent claimed the job (identity from the run registry)", settledJob?.job?.claimantId === agentId, settledJob?.job?.claimantId);
+  check("the agent completed the job with a result", settledJob?.job?.status === "completed" && typeof settledJob?.job?.result === "string" && settledJob.job.result.length > 0, settledJob?.job?.status);
+  // Live UI refresh: the open NTP page re-renders from the board-* progress
+  // events WITHOUT a reload — the completed job leaves the open list.
+  let labelAfter = null;
+  for (let i = 0; i < 20; i++) {
+    labelAfter = await evaluate(`document.querySelector("#board-section .fr-label")?.textContent ?? null`, page);
+    if (labelAfter === "Board (1 open)") break;
+    await sleep(300);
+  }
+  check("the Board grouping live-refreshes (2 open → 1 open, no reload)", labelAfter === "Board (1 open)", labelAfter);
+  // P2-1: poster/claimant metadata is VISIBLE text, not title-only.
+  const metaVisible = await evaluate(`[...document.querySelectorAll("#board-section .fr-meta")].map((m) => m.textContent)`, page);
+  check("board rows carry visible metadata spans", Array.isArray(metaVisible) && metaVisible.length >= 1 && metaVisible.every((t) => typeof t === "string" && t.length > 0), metaVisible);
 
   // 6. Screenshot evidence of the grouping.
   const shot = await cdp("Page.captureScreenshot", { format: "png" }, page);

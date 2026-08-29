@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.396] — 2026-08-29
+- Board review round 1: reserve the logs, reclaimable leases, byte bounds, fail-closed identity, poster-thread results
+
 ## [0.2.395] — 2026-08-29
 - Fixed two real bugs found while getting the browser test suite green again: deleting a site agent always reported a failure even though it had worked, and turning off a permission that cannot be turned off would still remove your enrolled sites on its way to failing. Neither can happen now
 
