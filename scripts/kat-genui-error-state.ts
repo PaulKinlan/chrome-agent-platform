@@ -13,20 +13,12 @@
 //       retry reloads back to the preparing state.
 //
 //   deno run -A scripts/kat-genui-error-state.ts <path-to-extension> [<out-dir>]
+import { launchChrome } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-genui-error-state`;
 const CHROMIUM = "/home/paulkinlan/.cache/puppeteer/chrome/linux-140.0.7339.82/chrome-linux64/chrome";
-// Pick a free debug port — killed KAT runs leave zombie chromiums holding a
-// fixed port, which then hangs every subsequent run's CDP handshake.
-async function freePort(from: number): Promise<number> {
-  for (let p = from; p < from + 200; p++) {
-    const l = Deno.listen({ port: p });
-    try { l.close(); return p; } catch { /* taken */ }
-  }
-  throw new Error("no free debug port in range");
-}
-const PORT = await freePort(9357);
 const STAMP = Date.now();
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail?: unknown) {
@@ -40,20 +32,21 @@ try { await Deno.stat(`${EXT}/dist/background/service-worker.js`); } catch {
   Deno.exit(1);
 }
 
-const proc = new Deno.Command(CHROMIUM, {
-  args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
-    `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-    `--remote-debugging-port=${PORT}`, "--remote-allow-origins=*",
-    `--user-data-dir=${ROOT}.cache/kat-genui-error-state-${STAMP}`, "about:blank"],
-  stdout: "null", stderr: "piped",
-}).spawn();
+// Kernel-assigned debugging port, read back from THIS Chrome by the shared
+// launcher — a hard-coded port can silently attach to another lane's browser
+// (CAP-FB-20260829-FIXED-DEBUG-PORTS-01).
+let proc: any;
 let ws: WebSocket | null = null;
 try {
-  const wsUrl = await new Promise<string>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("no devtools url")), 15000);
-    (async () => { for (;;) { try { const r = await fetch(`http://127.0.0.1:${PORT}/json/version`); const j = await r.json(); clearTimeout(t); resolve(j.webSocketDebuggerUrl); return; } catch { await sleep(300); } } })();
+  const launched = await launchChrome({
+    binary: CHROMIUM,
+    args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
+      `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
+      "--remote-allow-origins=*",
+      `--user-data-dir=${ROOT}.cache/kat-genui-error-state-${STAMP}`, "about:blank"],
   });
-  ws = new WebSocket(wsUrl);
+  proc = launched.proc;
+  ws = new WebSocket(launched.wsUrl);
   await new Promise((r) => ws!.onopen = r);
 } catch (e) {
   console.log(`FAIL: could not start Chrome for Testing — ${String(e)}`);
