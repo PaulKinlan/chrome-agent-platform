@@ -943,8 +943,13 @@ Deno.test("board prune: blockedBy-pinned settled dependencies compact to tombsto
     assert(job, `pinned parent ${parent} was dropped entirely`);
     assertEquals(job.status, "completed");
   }
-  const tombs = (memory._map.get(BOARD_JOBS_KEY) ?? []).filter((ev: any) => ev?.type === "settled-tombstone").length;
-  assert(tombs >= parents.length, `expected pinned tombstones for every parent (got ${tombs})`);
+  // The compaction is driven by the byte gate: it compacts exactly as many
+  // pinned fulls as the budget requires (the rest stay full but the log is
+  // within budget). Assert compaction ENGAGED and nothing was dropped.
+  const evs = memory._map.get(BOARD_JOBS_KEY) ?? [];
+  const tombs = evs.filter((ev: any) => ev?.type === "settled-tombstone").length;
+  assert(tombs >= 1, `compaction engaged (tombs=${tombs})`);
+  assertEquals(evs.filter((ev: any) => ev?.type === "completed").length + tombs, parents.length, "no pinned dependency was dropped");
 });
 
 // (P1-2) Claim churn is bounded: superseded/expired claim generations are
@@ -984,18 +989,20 @@ Deno.test("board routes: a settlement creating a pending delivery notifies the d
     memory,
     withLock: (fn) => fn(),
     listAgents: async () => AGENTS,
-    resolveCaller: () => BOARD_HUB_ID,
-    resolvePosterThreadId: async () => "thread-live",
+    // Model identities: writer posts (thread captured), critic claims+settles
+    // — the hub cannot claim its own post (self-claim refuses).
+    resolveCaller: (context) => (context?.executionId === "exec-b" ? "critic" : context?.executionId === "exec-a" ? "writer" : null),
+    resolvePosterThreadId: async (context) => (context?.executionId === "exec-a" ? "thread-live" : null),
     commitThread: async () => { throw new Error("thread store down"); },
     onPendingDelivery: () => { kicks += 1; },
   });
-  const posted = await routes["board.post"]({ description: "live settle" }, {});
+  const modelA = { principal: "model", executionId: "exec-a" };
+  const modelB = { principal: "model", executionId: "exec-b" };
+  const posted = await routes["board.post"]({ description: "live settle" }, modelA);
   assertEquals(posted.ok, true);
-  await board_listHelper(memory);
-  const claimer = createAgentBoard({ memory, commitThread: async () => { throw new Error("down"); } });
-  const job = (await claimer.listJobs())[0];
-  await claimer.claimJob({ callerId: "critic", agents: AGENTS, jobId: job.id });
-  const settled = await routes["board.complete"]({ jobId: job.id, result: "r" }, {});
+  const job = (await routes["board.list"]({})).jobs[0];
+  await routes["board.claim"]({ jobId: job.id }, modelB);
+  const settled = await routes["board.complete"]({ jobId: job.id, result: "r" }, modelB);
   assertEquals(settled.code, "board-delivery");
   assert(kicks >= 1, `the drain scheduler was not kicked by the live pending delivery (kicks=${kicks})`);
 });

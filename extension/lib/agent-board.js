@@ -392,8 +392,11 @@ export function pruneJobEvents(events, now = Date.now()) {
   };
   let out = rebuild();
   // Byte authority: the count cap alone can exceed the memory per-value cap
-  // (settled jobs carry up to BOARD_MAX_RESULT of result text each).
-  while (eventsBytes(out) > BOARD_MAX_LOG_BYTES) {
+  // (settled jobs carry up to BOARD_MAX_RESULT of result text each). The
+  // trigger is the GATE threshold (budget - worst-case settle - framing), so
+  // pinned compaction frees room BEFORE the posting route has to refuse —
+  // with the pinned tombstones themselves never dropped.
+  while (eventsBytes(out) > BOARD_MAX_LOG_BYTES - BOARD_MAX_RESULT - 2048) {
     const nextFull = full.find((j) => !evictFull.has(j.id) && !(j.delivery && !j.delivery.delivered));
     if (nextFull) {
       if (pinnedIds.has(nextFull.id)) pinnedTomb.add(nextFull.id); // compacted pinned deps stay pinned as tombstones

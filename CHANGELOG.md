@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.404] — 2026-08-29
+- fix(board): r4 verdicts — pinned-dependency tombstone compaction, claim-churn compaction, live-settle drain kick (CAP-FB-20260829-AGENT-BOARD-01)
+
 ## [0.2.403] — 2026-08-29
 - test(board): r4 RED battery — blockedBy-pinned tombstone compaction, claim-churn compaction, live-settle drain kick
 
