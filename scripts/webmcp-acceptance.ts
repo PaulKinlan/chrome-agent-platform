@@ -1,3 +1,4 @@
+// deno-fmt-ignore-file
 // webmcp-acceptance.ts — the PRODUCTION-PATH WebMCP discovery acceptance
 // journey (replaces the round-28-rejected scripts/webmcp-integration.ts, which
 // bypassed the implementation under test: it Runtime.evaluate'd the MAIN-world
@@ -7,7 +8,7 @@
 // This journey drives the REAL loaded-MV3 path end-to-end:
 //   1. the REAL discovery UI (hub "Discover this page" → the tab picker → the
 //      exact picked tab), clicked with real CDP Input events;
-//   2. the REAL permission request (chrome.permissions.request on the click);
+//   2. verification of the extension's install-granted scripting/tabs/host access;
 //   3. dynamic registration + current-tab injection of BOTH packaged scripts;
 //   4. CDP Debugger.scriptParsed evidence that chrome-extension://…/content/
 //      main-world.js and …/content/content-script.js really executed in the
@@ -28,31 +29,16 @@
 //   9. screenshots + a machine-verifiable manifest (test-artifacts/ by
 //      default, or WEBMCP_ARTIFACT_DIR for exact-clean-commit external evidence).
 //
-// THE PERMISSION GESTURE. Headless Chromium auto-denies optional HOST
-// permissions (probed 2026-08-18: real click + --enable-automation both deny),
-// and this environment has no display/Xvfb, so the OS-level "Allow" click
-// cannot be automated here. Two modes:
-//
-//   deno run -A scripts/webmcp-acceptance.ts            # automated, status OPEN
-//   deno run -A scripts/webmcp-acceptance.ts --headed   # the executable MANUAL MACRO
-//
-// Automated mode loads a TEST VARIANT of the extension that is byte-identical
-// to the shipped one EXCEPT the manifest pre-holds scripting+tabs+the fixture
-// host permission (recorded in the manifest as
-// permissionGrant:"test-manifest-pregranted"); the overall status stays OPEN
-// because the real permission-prompt gesture is unattested.
-//
-// --headed mode loads the SHIPPED extension in a headed browser, drives the
-// real UI to the permission prompt, then PAUSES and prints the exact manual
-// step ("click Allow on the Chrome permission prompt") — the one human action
-// — and continues every assertion automatically once the grant lands
-// (permissionGrant:"manual-user-allow"). See docs/WEBMCP-ACCEPTANCE.md.
+// The shipped manifest grants scripting, tabs, and host access at install, so
+// this headless journey loads the production extension unchanged. There is no
+// test-only manifest variant and no permission-prompt shortcut.
+import { launchChrome } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
 const CHROMIUM = "/usr/bin/chromium";
 const FIXTURE_PORT = 8934;
 const PAGE_ORIGIN = `http://127.0.0.1:${FIXTURE_PORT}`;
-const HEADED = Deno.args.includes("--headed");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let pass = 0, fail = 0;
@@ -73,30 +59,6 @@ function launchFixture() {
   return new Deno.Command("deno", { args: ["run", "-A", `${ROOT}fixtures/webmcp-server.ts`], stdout: "null", stderr: "null" }).spawn();
 }
 
-// The TEST VARIANT: byte-identical extension except the manifest pre-holds the
-// permissions the headed flow requests via the real prompt.
-async function makeVariant() {
-  const dir = `/tmp/cap-webmcp-variant-${Date.now()}`;
-  await Deno.mkdir(dir, { recursive: true });
-  const cp = new Deno.Command("cp", { args: ["-r", EXT + "/.", dir] }).spawn();
-  await cp.status;
-  const mf = JSON.parse(await Deno.readTextFile(`${dir}/manifest.json`));
-  mf.permissions = ["scripting", "tabs"];
-  mf.host_permissions = [`${PAGE_ORIGIN}/*`];
-  await Deno.writeTextFile(`${dir}/manifest.json`, JSON.stringify(mf, null, 2) + "\n");
-  return dir;
-}
-
-function launch(profile: string, extDir: string) {
-  const args = [
-    "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
-    "--silent-debugger-extension-api", `--disable-extensions-except=${extDir}`, `--load-extension=${extDir}`,
-    "--remote-debugging-port=0", "--remote-allow-origins=*", "--window-size=1400,1200",
-    `--user-data-dir=${profile}`, "about:blank",
-  ];
-  if (!HEADED) args.unshift("--headless=new");
-  return new Deno.Command(CHROMIUM, { args, stdout: "null", stderr: "piped" }).spawn();
-}
 
 async function main() {
   // 0. Fresh build (the SW bundle must match the sources under test) + fixture.
@@ -106,10 +68,15 @@ async function main() {
   const fixture = launchFixture();
   await sleep(800);
 
-  const extDir = HEADED ? EXT : await makeVariant();
   const profile = `/tmp/cap-webmcp-acc-${Date.now()}`;
   await Deno.mkdir(profile, { recursive: true });
-  const proc = launch(profile, extDir);
+  const chromeArgs = [
+    "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
+    "--silent-debugger-extension-api", `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
+    "--remote-allow-origins=*", "--window-size=1400,1200",
+    `--user-data-dir=${profile}`, "--headless=new", "about:blank",
+  ];
+  const { proc, wsUrl } = await launchChrome({ binary: CHROMIUM, args: chromeArgs });
 
   // Evidence collectors.
   const scriptParsedUrls: string[] = [];
@@ -123,16 +90,8 @@ async function main() {
   await Deno.mkdir(artifactDir, { recursive: true });
 
   try {
-    let port = 0;
-    for (let i = 0; i < 80 && !port; i++) {
-      await sleep(250);
-      const reader = proc.stderr.getReader();
-      const { value, done } = await reader.read(); reader.releaseLock();
-      const m = (done ? null : new TextDecoder().decode(value))?.match(/ws:\/\/127\.0\.0\.1:(\d+)/);
-      if (m) port = Number(m[1]);
-    }
-    const version = await fetchJson(`http://127.0.0.1:${port}/json/version`);
-    const ws = new WebSocket(version.webSocketDebuggerUrl);
+    const port = Number(new URL(wsUrl).port);
+    const ws = new WebSocket(wsUrl);
     await new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = rej; });
     let id = 0; const pend = new Map();
     ws.onmessage = (ev) => {
@@ -231,15 +190,9 @@ async function main() {
     await sleep(1600);
     await send("Target.activateTarget", { targetId: nT.targetId });
 
-    // 5. Click "Discover this page" (real click). Headed mode: this requests
-    //    the `tabs` permission with a REAL prompt — the one manual step.
+    // 5. Click "Discover this page" (real click).
     const discoverClicked = await clickSelector(ns, `document.getElementById("discover-page")`);
     check("hub: clicked Discover this page via a real click", discoverClicked);
-    if (HEADED) {
-      console.log("\n=== MANUAL STEP 1 of 2: a Chrome permission prompt is showing — click ALLOW (tabs). ===\n");
-      const granted = await until(() => evalIn(sws, `chrome.permissions.contains({ permissions: ["tabs"] })`), 180000, 500);
-      check("manual macro: the tabs permission was granted via the real prompt", granted === true);
-    }
     // The tab picker must appear listing the fixture tab (exact tab identity).
     const pickerHasFixture = await until(() => evalIn(ns, `(() => {
       const dlg = document.querySelector("agent-dialog");
@@ -251,8 +204,7 @@ async function main() {
     check("hub: the tab picker lists the fixture tab (explicit tab identity)", pickerHasFixture === true);
     await screenshot(ns, "webmcp-acceptance-tab-picker.png");
 
-    // 6. Pick the fixture tab (real click on the row's action) — this requests
-    //    the origin host permission (headed: the second manual prompt).
+    // 6. Pick the fixture tab (real click on the row's action).
     const rowClicked = await clickSelector(ns, `(() => {
       const dlg = document.querySelector("agent-dialog");
       const rows = [...dlg.querySelectorAll("capability-row")];
@@ -260,11 +212,6 @@ async function main() {
       return row?.shadowRoot?.querySelector("button.run") ?? null;
     })()`);
     check("hub: picked the fixture tab in the picker via a real click", rowClicked);
-    if (HEADED) {
-      console.log("\n=== MANUAL STEP 2 of 2: a Chrome permission prompt is showing — click ALLOW (host access for 127.0.0.1). ===\n");
-      const granted = await until(() => evalIn(sws, `chrome.permissions.contains({ origins: ["${PAGE_ORIGIN}/*"] })`), 180000, 500);
-      check("manual macro: the host permission was granted via the real prompt", granted === true);
-    }
 
     // 7. Enrollment + injection of the EXACT picked tab.
     const enrolled = await until(async () => {
@@ -427,7 +374,6 @@ async function main() {
     try { proc.kill("SIGKILL"); } catch {}
     try { fixture.kill("SIGKILL"); } catch {}
     await Deno.remove(profile, { recursive: true }).catch(() => {});
-    if (!HEADED) await Deno.remove(extDir, { recursive: true }).catch(() => {});
   }
 
   // The machine-verifiable manifest.
@@ -445,14 +391,10 @@ async function main() {
     worktreeDirtyFiles: dirty ? dirty.split("\n").filter(Boolean) : [],
     runId: `webmcp-acceptance-${Date.now()}`,
     ts: new Date().toISOString(),
-    mode: HEADED ? "headed-manual" : "automated-variant",
-    permissionGrant: HEADED ? "manual-user-allow" : "test-manifest-pregranted",
-    overallStatus: HEADED
-      ? (fail === 0 ? "ATTESTED" : "FAILED")
-      : "OPEN — the OS-level permission-prompt gesture is unattested in this environment (headless auto-denies optional host permissions; no display/Xvfb). Run with --headed to complete the attestation.",
-    variantNote: HEADED
-      ? "the SHIPPED extension was driven"
-      : "the loaded extension is byte-identical to the shipped one EXCEPT manifest.json pre-holds scripting+tabs+the fixture host permission (the headed flow's real prompt grants exactly these)",
+    mode: "automated-production",
+    permissionGrant: "install-manifest",
+    overallStatus: fail === 0 ? "ATTESTED" : "FAILED",
+    variantNote: "the shipped extension was driven with its install-granted scripting, tabs, and host permissions",
     passed: pass,
     failed: fail,
     checks,

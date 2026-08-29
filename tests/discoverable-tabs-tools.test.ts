@@ -1,8 +1,8 @@
+// deno-fmt-ignore-file
 // tests/discoverable-tabs-tools.test.ts — ROUTE-LEVEL (real SW dispatcher)
-// test for P0 bug 5 / the review P2: agent.discoverable-tabs must EXCLUDE open
-// tabs whose origin has ZERO registered WebMCP tools (the directory's item-44
-// rule), and must report toolCount per listed tab. The pre-fix route listed
-// every open http(s) tab — this test fails against it (falsification-gated).
+// coverage for both discovery modes: the explicit picker includes un-enrolled
+// pages so they can be injected, while proactive discovery excludes origins
+// that have not reported any tools.
 // @ts-nocheck — dynamic chrome/OPFS stubs (no types in Deno).
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
@@ -53,7 +53,7 @@ Object.defineProperty(globalThis.navigator, "storage", {
   configurable: true,
 });
 
-Deno.test("agent.discoverable-tabs ROUTE: zero-tool tabs are excluded and toolCount is returned", async () => {
+Deno.test("agent.discoverable-tabs ROUTE: picker includes unknown pages while proactive mode requires tools", async () => {
   const listeners = [];
   const noopListener = { addListener: () => {} };
   const localStore = new Map();
@@ -122,11 +122,15 @@ Deno.test("agent.discoverable-tabs ROUTE: zero-tool tabs are excluded and toolCo
     { name: "add_to_cart", description: "Add an item to the cart" },
   ]);
 
-  const res = await dispatch({ type: "agent.discoverable-tabs" });
-  assertEquals(res?.ok !== false, true, "the route answers");
-  const tabs = res?.tabs ?? [];
-  assertEquals(tabs.length, 1, "the zero-tool tab is EXCLUDED (pre-fix code listed every open tab)");
+  const picker = await dispatch({ type: "agent.discoverable-tabs" });
+  assertEquals(picker?.ok !== false, true, "the route answers");
+  assertEquals(picker.tabs?.length, 2, "the picker includes pages before their tools can be injected");
+  assertEquals(picker.tabs?.find((t) => t.origin === "https://plain.example")?.toolCount, 0);
+
+  const proactive = await dispatch({ type: "agent.discoverable-tabs", toolsOnly: true });
+  const tabs = proactive?.tabs ?? [];
+  assertEquals(tabs.length, 1, "proactive discovery excludes zero-tool pages");
   assertEquals(tabs[0]?.origin, "https://tooled.example");
   assertEquals(tabs[0]?.toolCount, 2, "the registered-tool count rides along");
-  assert(tabs.every((t) => t.origin !== "https://plain.example"), "plain.example must not appear");
+  assert(tabs.every((t) => t.origin !== "https://plain.example"));
 });

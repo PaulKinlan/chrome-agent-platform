@@ -419,7 +419,7 @@ async function renderSiteAgents() {
   // Proactive discovery (CAP-FB-20260825-SITE-DISCOVERABILITY-01): check for
   // open browser tabs that can be enrolled with one click.
   const enrolledOrigins = new Set((Array.isArray(res.agents) ? res.agents : []).map((a) => a.origin));
-  const discoverable = await send("agent.discoverable-tabs").catch(() => ({ ok: false }));
+  const discoverable = await send("agent.discoverable-tabs", { toolsOnly: true }).catch(() => ({ ok: false }));
   const unenrolledTabs = (discoverable?.ok && Array.isArray(discoverable.tabs))
     ? discoverable.tabs.filter((t) => !enrolledOrigins.has(t.origin))
     : [];
