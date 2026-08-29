@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.402] — 2026-08-29
+- test(permissions): r5+r6 REDs — JIT request behavioral, conversation contract on denials, options import/runtime pins
+
 ## [0.2.401] — 2026-08-29
 - fix(permissions): tests updated for the OPTIONAL + JIT capability model — three-state display, honest platform copy, audit exemptions for pinned blobs
 
