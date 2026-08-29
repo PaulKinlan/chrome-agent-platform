@@ -21,6 +21,10 @@ import {
   normaliseGeminiNativeModelId,
 } from "./models/gemini-native-model.js";
 import {
+  createAnthropicNativeModel,
+  isDefaultAnthropicEndpoint,
+} from "./models/anthropic-native-model.js";
+import {
   createPromptApiModel,
   isPromptApiAvailable,
 } from "./models/prompt-api-model.js";
@@ -163,6 +167,21 @@ export async function resolveModelFromConfig(cfg) {
         modelId: canonicalModel,
         providerName: id,
         providerLane: "gemini-native",
+      };
+    }
+    // NATIVE ANTHROPIC LANE: Anthropic's OpenAI-compatible endpoint does not
+    // carry provider-defined server tools (web_search_20250305), so the
+    // DEFAULT Anthropic config routes through @ai-sdk/anthropic's native
+    // Messages API (same credential + middleware). A CUSTOM base URL is a
+    // BYO/proxy endpoint and stays on the compatible adapter — provider
+    // server tools then honestly report owner-action-required.
+    if (id === "anthropic" && isDefaultAnthropicEndpoint(cfg.baseURL)) {
+      const m = createAnthropicNativeModel({ apiKey, model });
+      return {
+        model: m,
+        modelId: model,
+        providerName: id,
+        providerLane: "anthropic-native",
       };
     }
     const m = createOpenAICompatibleModel({ baseURL, apiKey, model });

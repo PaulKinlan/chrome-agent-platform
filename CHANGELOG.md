@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.398] — 2026-08-29
+- Claude models can search the web while answering (you opt in globally and per agent): answers show what was searched and link their sources, and every paid search is billed from Anthropic's own counter — with an honest counted-from-the-stream fallback whenever the counter is missing
+
 ## [0.2.397] — 2026-08-29
 - Agents now know how to keep their own notebooks: every agent organizes its memory with a living index it reads first and keeps truthful, topic pages that pair an evolving summary with a dated log, and a scratch space for throwaway notes — so what agents learn is easy to find and actually gets used
 

@@ -29,6 +29,8 @@ import {
   createServerGroundingAccumulator,
   createServerToolLatchRegistry,
   liveProviderServerToolRecords,
+  serverToolBillingFor,
+  serverToolSpecForProvider,
 } from "../lib/provider-server-tools.js";
 import { dispatchDurableProviderRun } from "../lib/durable-provider-dispatch.js";
 import {
@@ -2649,26 +2651,34 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       const serverGrounding = orch?.serverTooling?.groundingFor?.(executionId) ?? null;
       const serverLatchCount = orch?.serverTooling?.latchCount?.(executionId) ?? 0;
       if (serverGrounding && serverGrounding.queryOccurrenceCount > 0) {
-        const queryCount = serverGrounding.queryOccurrenceCount;
-        const estUsd = (queryCount * 0.014);
+        // A run is pinned to ONE model lane, so a single provider fed this
+        // accumulator; bill through that provider's catalogue spec. The billed
+        // total is the sum of per-CALL reconciliations (each call: provider's
+        // own usage counter when reported, else stream-observed occurrences).
+        const billingSpec = serverToolSpecForProvider(serverGrounding.provider) ?? serverToolSpecForProvider("gemini");
+        const auth = serverGrounding.authoritativeBilled ?? 0;
+        const obs = serverGrounding.observedBilled ?? 0;
+        const provenance = auth > 0 && obs > 0
+          ? `${auth} provider-reported + ${obs} stream-counted`
+          : auth > 0
+            ? "provider-reported count"
+            : obs > 0
+              ? "counted from the stream"
+              : null;
+        const billing = serverToolBillingFor(billingSpec, serverGrounding.queryOccurrenceCount, { provenance });
         try {
-          await recordToolCall("provider-server/gemini/google_search");
-          await recordServerToolUsage({
-            provider: "gemini",
-            tool: "google_search",
-            queries: queryCount,
-            estimatedUsd: estUsd,
-            note: `Web search: ${queryCount} call${queryCount === 1 ? "" : "s"} (Gemini) — est. $${estUsd.toFixed(4)} (ESTIMATE — the 5,000/mo free tier is metered provider-side and invisible to CAP)`,
-          });
+          await recordToolCall(billingSpec.name);
+          await recordServerToolUsage(billing);
         } catch { /* usage telemetry must never fail a settled run */ }
       }
+      const serverToolKind = serverToolSpecForProvider(serverGrounding?.provider)?.toolId ?? "google_search";
       const terminal = await durableRuns.settle(executionId, { ok: true, result, logicalId: taskId,
         ...(serverGrounding && (serverGrounding.citations.length > 0 || serverGrounding.queryOccurrenceCount > 0)
           ? {
             citations: serverGrounding.citations,
             // Presentation dedupes repeated queries; billing above deliberately
             // counts every provider-reported occurrence.
-            serverToolEvents: serverGrounding.displayQueries.map((query) => ({ kind: "google_search", query })),
+            serverToolEvents: serverGrounding.displayQueries.map((query) => ({ kind: serverToolKind, query })),
             serverToolLatches: serverLatchCount,
           }
           : {}),
@@ -2728,7 +2738,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
           ? { citations: serverGrounding.citations }
           : {}),
         ...(serverGrounding && serverGrounding.displayQueries.length > 0
-          ? { serverToolEvents: serverGrounding.displayQueries.map((query) => ({ kind: "google_search", query })) }
+          ? { serverToolEvents: serverGrounding.displayQueries.map((query) => ({ kind: serverToolKind, query })) }
           : {}),
       };
     } catch (error) {

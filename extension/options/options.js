@@ -1204,7 +1204,7 @@ async function renderAgents() {
   });
   $("#per-agent-provider").hidden = !on;
 
-  // Provider server tools (Gemini google_search): the GLOBAL toggle gates
+  // Provider server tools (Gemini google_search, Anthropic web_search): the GLOBAL toggle gates
   // every agent; a per-agent opt-in then admits each agent individually. Both
   // live in ONE kv record ({ enabled, agents: { [id]: bool } }) so the service
   // worker reads them atomically at every tool-source snapshot.
@@ -2098,7 +2098,7 @@ async function renderUsage(range = currentUsageRange) {
   mk("By day", ["Day", "Calls", "Tokens", "Cost"],
     detailByDay.slice().sort((a, b) => String(a.day).localeCompare(String(b.day))).map((d) => [d.day, String(d.calls), fmtTok(d), fmtCost(d)]));
 
-  // Provider server tools (Gemini google_search): per-run executed-query
+  // Provider server tools (Gemini google_search, Anthropic web_search): per-run executed-query
   // counts + the ESTIMATED spend (the provider's free-tier meter is invisible
   // to CAP — every figure here is labelled an estimate).
   const serverToolDays = Array.isArray(u?.serverTools) ? u.serverTools : [];

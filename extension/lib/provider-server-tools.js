@@ -10,6 +10,15 @@
 //
 // Slice 1 scope: Gemini google_search via the NATIVE @ai-sdk/google lane only
 // (the OpenAI-compatible endpoint silently drops provider-defined tools).
+// Slice 2 adds Anthropic web_search via the NATIVE @ai-sdk/anthropic lane
+// (Anthropic's OpenAI-compatible shim likewise does not carry server tools).
+//
+// Where the grounding arrives differs by provider: Gemini attaches a
+// groundingMetadata blob under providerMetadata.google; Anthropic streams
+// provider-executed tool-call parts (one per executed search request — the
+// billing signal), tool-result parts with the search results, and source
+// parts (inline citations carry providerMetadata.anthropic.citedText).
+// normalizeAnthropicWebSearchPart harvests those part shapes.
 //
 // Cost honesty: a latched search spends real money provider-side WITHOUT a
 // Chrome permission, so availability is double-gated (global Settings toggle
@@ -62,6 +71,38 @@ export const PROVIDER_SERVER_TOOL_SPECS = Object.freeze([
       args: Object.freeze({}),
     }),
   }),
+  Object.freeze({
+    toolId: "web_search",
+    provider: "anthropic",
+    lane: "anthropic-native",
+    name: "provider-server/anthropic/web_search",
+    aliases: Object.freeze([
+      "web search",
+      "search the web",
+      "look up online",
+      "current events",
+      "latest news",
+    ]),
+    description:
+      "Anthropic web search, executed by the provider inside the model call. " +
+      "Activate it once per run; the model may then search the web and answer " +
+      "with inline source citations. Costs real money per executed search " +
+      "request (estimate; CAP cannot see the provider's meter).",
+    inputSchema: Object.freeze({ type: "object", additionalProperties: false }),
+    cost: Object.freeze({
+      unit: "per-search-request",
+      rateUsd: 0.01,
+      freeTierNote:
+        "$10 per 1,000 searches per Anthropic's published pricing (no free tier is documented; pricing not re-verified against live documentation); the provider-side meter is invisible to CAP",
+    }),
+    citations: "source-parts",
+    v2: Object.freeze({
+      type: "provider",
+      id: "anthropic.web_search_20250305",
+      name: "web_search",
+      args: Object.freeze({}),
+    }),
+  }),
 ]);
 
 /** The per-run latch cap: at most this many latch OPERATIONS per run (the
@@ -86,6 +127,18 @@ function ownData(value, key) {
 export function geminiModelSupportsServerTools(modelId) {
   const id = String(modelId ?? "").toLowerCase();
   return /^gemini-[23][-.]/u.test(id) || /^gemini-[23]$/u.test(id);
+}
+
+/** Model support gate for web_search: the documented supported set (Claude
+ * 3.5 Sonnet (Oct 2024 refresh + -latest), 3.5 Haiku, 3.7 Sonnet, and all
+ * Claude 4 families). Older IDs (claude-3-*, claude-3-5-sonnet-20240620)
+ * cannot run server tools — fail closed and extend as Anthropic adds models.
+ * ANCHORED with suffix forms constrained to documented alias/date/version
+ * shapes: a near-miss like "claude-sonnet-4000" or "claude-3-7-sonnet-x"
+ * must NOT admit. */
+export function anthropicModelSupportsServerTools(modelId) {
+  const id = String(modelId ?? "").toLowerCase();
+  return /^claude-(?:(?:opus|sonnet|haiku)-4(?:-(?:\d+(?:-\d{8})?|latest))?|3-7-sonnet(?:-(?:\d{8}|latest))?|3-5-haiku(?:-(?:\d{8}|latest))?|3-5-sonnet(?:-20241022|-latest))$/u.test(id);
 }
 
 /** Resolve the catalog availability of one provider-server spec for the
@@ -114,6 +167,12 @@ export function resolveServerToolAvailability({
     return {
       availability: "owner-action-required",
       reason: `model ${String(modelId ?? "unknown")} does not support Google Search grounding (needs Gemini 2.0+)`,
+    };
+  }
+  if (spec.provider === "anthropic" && !anthropicModelSupportsServerTools(modelId)) {
+    return {
+      availability: "owner-action-required",
+      reason: `model ${String(modelId ?? "unknown")} does not support Anthropic web search (needs Claude 3.5 Sonnet (Oct 2024), 3.7 Sonnet, or a Claude 4 model)`,
     };
   }
   if (agentOptIn !== true) {
@@ -264,6 +323,7 @@ export function normalizeGeminiGrounding(groundingMetadata) {
       ? meta.searchEntryPoint.renderedContent.slice(0, 8192)
       : null;
   return Object.freeze({
+    provider: "gemini",
     citations: Object.freeze(citations),
     rawQueryCount,
     queries: Object.freeze(queries),
@@ -271,23 +331,238 @@ export function normalizeGeminiGrounding(groundingMetadata) {
   });
 }
 
+/** The per-provider billing descriptor used by the settle path: provider id,
+ * tool id, per-unit rate, and the honest ESTIMATE note (CAP cannot see any
+ * provider-side meter). provenance names the count's authority: Anthropic's
+ * response usage object carries server_tool_use.web_search_requests (the
+ * provider's OWN billable-request count — authoritative); when it is absent
+ * the count is CAP's stream-observed tool-call occurrences (fallback). */
+export function serverToolBillingFor(spec, queryCount, { provenance = null } = {}) {
+  const count = Math.max(0, Math.trunc(Number(queryCount) || 0));
+  const estUsd = count * (Number(spec?.cost?.rateUsd) || 0);
+  const label = spec?.provider === "anthropic" ? "Anthropic" : "Gemini";
+  const basis = spec?.provider === "anthropic"
+    ? "Anthropic's published $10 per 1,000 searches (pricing not re-verified against live documentation); no free tier is documented"
+    : "the 5,000/mo free tier is metered provider-side and invisible to CAP";
+  // Provenance wording is ANTHROPIC-ONLY: the Gemini ledger line stays
+  // byte-identical to slice 1 (no regression).
+  const suffix = spec?.provider === "anthropic" && provenance
+    ? `, ${provenance}`
+    : "";
+  return {
+    provider: String(spec?.provider ?? ""),
+    tool: String(spec?.toolId ?? ""),
+    queries: count,
+    estimatedUsd: estUsd,
+    provenance: spec?.provider === "anthropic" ? provenance : null,
+    note: `Web search: ${count} call${count === 1 ? "" : "s"} (${label}${suffix}) — est. $${estUsd.toFixed(4)} (ESTIMATE — ${basis})`,
+  };
+}
+
+/** Look up the catalogue spec for a provider id (fail closed: null). */
+export function serverToolSpecForProvider(provider) {
+  return PROVIDER_SERVER_TOOL_SPECS.find((s) => s.provider === provider) ?? null;
+}
+
+/** Normalize ONE LanguageModelV2 part (stream part or doGenerate content part)
+ * from the NATIVE Anthropic lane into the internal fragment shape. The
+ * SDK-verified shapes (@ai-sdk/anthropic 4.0.45):
+ *   - tool-call with providerExecuted + toolName "web_search" — one per
+ *     EXECUTED search request; input is a JSON string "{\"query\": ...}".
+ *     This is the FALLBACK billing signal: Anthropic's response usage object
+ *     carries the authoritative billable-request count (server_tool_use.
+ *     web_search_requests, preserved through the SDK's looseObject usage
+ *     schema); per-call reconciliation (createAnthropicCallReconciler)
+ *     prefers the provider counter and uses these occurrences only when a
+ *     call reports none.
+ *   - source with sourceType "url" — a cited source. Inline citations carry
+ *     providerMetadata.anthropic.citedText; plain search-result sources do
+ *     not. Dedup by URL happens in the accumulator.
+ *   - tool-result for "web_search" — result entries {type:"web_search_result",
+ *     url, title} are surfaced as unindexed citations (sources never dropped).
+ * Pure; never throws on hostile input (returns null when the part is not an
+ * Anthropic web-search observation). */
+export function normalizeAnthropicWebSearchPart(part) {
+  if (!part || typeof part !== "object") return null;
+  const type = ownData(part, "type");
+  if (type === "tool-call" && ownData(part, "providerExecuted") === true &&
+      ownData(part, "toolName") === "web_search") {
+    let query = null;
+    const input = ownData(part, "input");
+    if (typeof input === "string" && input.length > 0 && input.length <= 4096) {
+      try {
+        const parsed = JSON.parse(input);
+        if (typeof parsed?.query === "string" && parsed.query.trim().length > 0) {
+          query = parsed.query.slice(0, 512);
+        }
+      } catch { /* malformed provider input — no query, still one request */ }
+    }
+    // One tool-call part == one executed (billable) search request, even when
+    // the query text is unavailable.
+    return Object.freeze({
+      provider: "anthropic",
+      citations: Object.freeze([]),
+      rawQueryCount: 1,
+      queries: Object.freeze(query ? [query] : []),
+      searchEntryPointHtml: null,
+    });
+  }
+  if (type === "source" && ownData(part, "sourceType") === "url") {
+    const url = typeof ownData(part, "url") === "string" ? part.url : null;
+    if (!url || !/^https:\/\//u.test(url)) return null;
+    const citedText = ownData(ownData(ownData(part, "providerMetadata"), "anthropic"), "citedText");
+    return Object.freeze({
+      provider: "anthropic",
+      citations: Object.freeze([Object.freeze({
+        url: url.slice(0, 1024),
+        title: String(ownData(part, "title") ?? "").slice(0, 256),
+        citedText: typeof citedText === "string" ? citedText.slice(0, 512) : undefined,
+        provider: "anthropic",
+      })]),
+      rawQueryCount: 0,
+      queries: Object.freeze([]),
+      searchEntryPointHtml: null,
+    });
+  }
+  if (type === "tool-result" && ownData(part, "toolName") === "web_search") {
+    const results = Array.isArray(ownData(part, "result")) ? part.result : [];
+    const citations = [];
+    for (const r of results.slice(0, 32)) {
+      if (ownData(r, "type") !== "web_search_result") continue;
+      const url = typeof ownData(r, "url") === "string" ? r.url : null;
+      if (!url || !/^https:\/\//u.test(url)) continue;
+      citations.push(Object.freeze({
+        url: url.slice(0, 1024),
+        title: String(ownData(r, "title") ?? "").slice(0, 256),
+        provider: "anthropic",
+      }));
+    }
+    if (citations.length === 0) return null;
+    return Object.freeze({
+      provider: "anthropic",
+      citations: Object.freeze(citations),
+      rawQueryCount: 0,
+      queries: Object.freeze([]),
+      searchEntryPointHtml: null,
+    });
+  }
+  return null;
+}
+
+/** Read the AUTHORITATIVE billable-search count from Anthropic's own usage
+ * object: providerMetadata.anthropic.usage.server_tool_use.web_search_requests
+ * (the SDK parses usage with z.looseObject, so the raw field survives into
+ * both the stream finish part and the doGenerate result — verified against
+ * @ai-sdk/anthropic 4.0.45). Returns a fragment carrying ONLY the
+ * authoritative count, or null when absent/hostile. The count is PER API
+ * CALL; the accumulator sums across a run's calls. */
+export function anthropicAuthoritativeSearchRequests(providerMetadata) {
+  const usage = ownData(ownData(providerMetadata, "anthropic"), "usage");
+  const serverToolUse = ownData(usage, "server_tool_use");
+  const requests = ownData(serverToolUse, "web_search_requests");
+  if (!Number.isSafeInteger(requests) || requests < 0) return null;
+  return Object.freeze({
+    provider: "anthropic",
+    citations: Object.freeze([]),
+    rawQueryCount: 0,
+    queries: Object.freeze([]),
+    searchEntryPointHtml: null,
+    authoritativeSearchRequests: requests,
+  });
+}
+
+/** Per-MODEL-CALL billing reconciliation for Anthropic web search. Anthropic
+ * bills per search REQUEST and reports the authoritative count in each
+ * response's usage object — but only per call. A run makes several calls and
+ * some may carry no counter (e.g. an older beta), so the reconciliation must
+ * be PER CALL: each call bills (authoritative ?? observed-occurrences), and
+ * the run total is the SUM of the per-call bills. A run-global flip would
+ * underbill mixed runs (a counter-less call's observed searches would be
+ * swallowed by an earlier call's counter). */
+export function createAnthropicCallReconciler() {
+  let observedCount = 0;
+  let authoritative = null;
+  const queries = [];
+  const citations = [];
+  return Object.freeze({
+    /** Feed a normalizeAnthropicWebSearchPart fragment (tool-call/source/
+     * tool-result observations). Null is a no-op. */
+    addPart(fragment) {
+      if (!fragment || fragment.provider !== "anthropic") return;
+      observedCount += fragment.rawQueryCount;
+      for (const q of fragment.queries ?? []) queries.push(q);
+      for (const c of fragment.citations ?? []) citations.push(c);
+    },
+    /** Feed an anthropicAuthoritativeSearchRequests fragment (the finish
+     * part's / result's usage counter). Last writer wins within a call (the
+     * finish part arrives once). */
+    setAuthoritative(fragment) {
+      if (Number.isSafeInteger(fragment?.authoritativeSearchRequests) &&
+          fragment.authoritativeSearchRequests >= 0) {
+        authoritative = fragment.authoritativeSearchRequests;
+      }
+    },
+    /** The reconciled per-call fragment: billed = authoritative ?? observed.
+     * `reconciled: true` tells the run accumulator the count is FINAL (it may
+     * legitimately be lower than queries.length — e.g. provider says zero). */
+    flush() {
+      const billed = authoritative ?? observedCount;
+      return Object.freeze({
+        provider: "anthropic",
+        citations: Object.freeze(citations),
+        rawQueryCount: billed,
+        queries: Object.freeze(queries),
+        searchEntryPointHtml: null,
+        reconciled: true,
+        authoritativeCount: authoritative,
+        observedCount,
+      });
+    },
+    get seen() {
+      return observedCount > 0 || authoritative != null || queries.length > 0 || citations.length > 0;
+    },
+  });
+}
+
 /** Build one bounded per-run grounding accumulator. Query OCCURRENCES remain
  * distinct for cost accounting; presentation queries and citations are deduped.
  * The provider can execute the same query on later model calls and bill each
- * occurrence, so a Set is never the billing authority. */
+ * occurrence, so a Set is never the billing authority. When the provider's own
+ * billable-request counter is present (Anthropic's usage object), the
+ * AUTHORITATIVE sum is billed and stream-observed occurrences are fallback
+ * only — never both (no double-counting). */
 export function createServerGroundingAccumulator({ maxQueryOccurrences = 128, maxCitations = 128 } = {}) {
   const queryOccurrences = [];
   let queryOccurrenceCount = 0;
+  let authoritativeBilled = 0;
+  let observedBilled = 0;
   const displayQueries = new Set();
   const citations = new Map();
+  const providers = new Set();
   return Object.freeze({
     add(normalized) {
+      if (typeof normalized?.provider === "string" && normalized.provider) {
+        providers.add(normalized.provider);
+      }
       const retainedQueries = Array.isArray(normalized?.queries) ? normalized.queries : [];
-      const reportedCount = Number.isSafeInteger(normalized?.rawQueryCount) &&
-          normalized.rawQueryCount >= retainedQueries.length
+      // A reconciled fragment's count is FINAL (per-call authoritative ??
+      // observed — it may legitimately be lower than the retained queries).
+      // Otherwise keep the raw-vs-retained max rule (billing counts every
+      // provider-reported occurrence even when text retention is capped).
+      const rawCount = Number.isSafeInteger(normalized?.rawQueryCount) && normalized.rawQueryCount >= 0
         ? normalized.rawQueryCount
         : retainedQueries.length;
+      const reportedCount = normalized?.reconciled === true
+        ? rawCount
+        : Math.max(rawCount, retainedQueries.length);
       queryOccurrenceCount = Math.min(Number.MAX_SAFE_INTEGER, queryOccurrenceCount + reportedCount);
+      if (normalized?.reconciled === true) {
+        if (Number.isSafeInteger(normalized.authoritativeCount)) {
+          authoritativeBilled = Math.min(Number.MAX_SAFE_INTEGER, authoritativeBilled + reportedCount);
+        } else {
+          observedBilled = Math.min(Number.MAX_SAFE_INTEGER, observedBilled + reportedCount);
+        }
+      }
       for (const query of retainedQueries) {
         if (queryOccurrences.length < maxQueryOccurrences) queryOccurrences.push(query);
         if (displayQueries.size < maxQueryOccurrences) displayQueries.add(query);
@@ -298,7 +573,15 @@ export function createServerGroundingAccumulator({ maxQueryOccurrences = 128, ma
     },
     snapshot() {
       return Object.freeze({
+        provider: providers.size === 1 ? [...providers][0] : null,
+        providers: Object.freeze([...providers]),
         queryOccurrenceCount,
+        // Provenance split of the billed total: reconciled per-call fragments
+        // report whether each call's bill came from the provider's own usage
+        // counter or from stream-observed occurrences. Both zero for
+        // non-reconciled (Gemini) feeds.
+        authoritativeBilled,
+        observedBilled,
         queries: Object.freeze([...queryOccurrences]),
         displayQueries: Object.freeze([...displayQueries]),
         citations: Object.freeze([...citations.values()]),
