@@ -1006,3 +1006,25 @@ Deno.test("board routes: a settlement creating a pending delivery notifies the d
   assertEquals(settled.code, "board-delivery");
   assert(kicks >= 1, `the drain scheduler was not kicked by the live pending delivery (kicks=${kicks})`);
 });
+
+// ── review round-5 (P2 production wiring): the delivery-drain callback must
+//    be supplied by the REAL service-worker wiring — the settle routes'
+//    onPendingDelivery hook is dead code if production never passes it — and
+//    every drain rejection path (startup / live kick / alarm retry) must
+//    schedule the next bounded alarm through ONE shared scheduler.
+Deno.test("board wiring: production passes onPendingDelivery and kicks the drain loop", async () => {
+  const swSrc = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const wiring = swSrc.match(/const boardRoutes = createAgentBoardRoutes\(\{([\s\S]*?)\n\}\);/)?.[1] ?? "";
+  assert(wiring.includes("onPendingDelivery"), "production createAgentBoardRoutes must pass onPendingDelivery — live failed deliveries otherwise never kick the drain");
+  assert(/onPendingDelivery:\s*\(\)\s*=>\s*\{?\s*[^}]*kickBoardDrain\(\)/.test(wiring), "onPendingDelivery must kick the drain loop (reset + run)");
+});
+
+Deno.test("board wiring: drain rejections reschedule through one shared bounded scheduler", async () => {
+  const swSrc = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  // The shared scheduler exists and the rejection handler routes through it.
+  assert(swSrc.includes("function scheduleBoardDrain("), "a shared scheduleBoardDrain must exist");
+  const handlerRegion = swSrc.slice(swSrc.indexOf("function handleBoardDrainRejection("));
+  assert(handlerRegion.includes("scheduleBoardDrain("), "the shared rejection handler must schedule the next bounded alarm");
+  // Startup, alarm, and live-kick rejection paths all route through it.
+  assert((swSrc.match(/\.catch\(\(e\) => handleBoardDrainRejection\(/g) ?? []).length >= 3, "startup, alarm, and live-kick rejection paths must share the scheduler");
+});

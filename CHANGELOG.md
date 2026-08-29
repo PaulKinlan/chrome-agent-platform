@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.405] — 2026-08-29
+- test(board): r5 RED — production onPendingDelivery wiring + shared drain-rejection scheduler pins
+
 ## [0.2.404] — 2026-08-29
 - The shared jobs board learns to protect its own memory: jobs that finished but still have dependents or undelivered results are kept as compact receipts instead of full histories, a job that changes hands over and over no longer piles up a record per hand-off, and if delivering a result back to its requester fails, the board now retries on its own with a patient backoff instead of waiting for a restart
 
