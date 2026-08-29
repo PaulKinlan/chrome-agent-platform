@@ -1,7 +1,7 @@
 tool=date
 toolchain=clang version 18.1.2-wasi-sdk (https://github.com/llvm/llvm-project 26a1d6601d727a96f4301d0d8647b5a42760ae0c)
 flags=-O2 -DNDEBUG -Wall -Wextra -Werror -ffile-prefix-map=<source-root>=/src -Wl,--strip-all -Wl,--initial-memory=131072 -Wl,--max-memory=33554432
-source_sha256=fd9ffecdb44b8730c1214c5d38b65a0e76297f658dcb39ea7b2370ce6eb69790
-binary_sha256=ceb8b08f4b82f9eb4977f2d182ef6a3f3928e74ca2c8a9834f69a50ff10ffef0
-binary_bytes=52024
+source_sha256=8018b93306115905b8e149debb9ed25b2c47d946a9c6a6bd89e86154221baa23
+binary_sha256=cb8b4e72f1ea3ab9f5134c8e789f0f5343f4d6043218cca0a3253ff56eacfd66
+binary_bytes=52291
 reproducible=byte-identical

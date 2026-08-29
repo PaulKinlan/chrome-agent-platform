@@ -21,15 +21,19 @@
 #include <time.h>
 #include <stdbool.h>
 #include <ctype.h>
+#include <errno.h>
 
 #define MAX_OUT_LEN 4096
 
 static bool parse_epoch(const char *text, time_t *out) {
     if (!text || !*text) return false;
     char *end = NULL;
+    errno = 0;
     long long value = strtoll(text, &end, 10);
-    if (end == text || *end != '\0') return false;
-    *out = (time_t)value;
+    if (errno == ERANGE || end == text || *end != '\0') return false;
+    time_t converted = (time_t)value;
+    if ((long long)converted != value) return false;
+    *out = converted;
     return true;
 }
 
@@ -69,11 +73,19 @@ static bool parse_date_spec(const char *spec, time_t *out) {
     if (parsed == (time_t)-1) return false;
     struct tm roundtrip;
     if (!gmtime_r(&parsed, &roundtrip)) return false;
-    if (roundtrip.tm_year != tm_val.tm_year || roundtrip.tm_mon != tm_val.tm_mon ||
-        roundtrip.tm_mday != tm_val.tm_mday || roundtrip.tm_hour != tm_val.tm_hour ||
-        roundtrip.tm_min != tm_val.tm_min || roundtrip.tm_sec != tm_val.tm_sec) return false;
+    if (roundtrip.tm_year != year - 1900 || roundtrip.tm_mon != month - 1 ||
+        roundtrip.tm_mday != day || roundtrip.tm_hour != hour ||
+        roundtrip.tm_min != min || roundtrip.tm_sec != sec) return false;
     *out = parsed;
     return true;
+}
+
+static bool valid_iso_spec(const char *spec) {
+    return strcmp(spec, "") == 0 || strcmp(spec, "date") == 0 ||
+        strcmp(spec, "hours") == 0 || strcmp(spec, "hour") == 0 ||
+        strcmp(spec, "minutes") == 0 || strcmp(spec, "minute") == 0 ||
+        strcmp(spec, "seconds") == 0 || strcmp(spec, "second") == 0 ||
+        strcmp(spec, "s") == 0;
 }
 
 int main(int argc, char **argv) {
@@ -96,11 +108,12 @@ int main(int argc, char **argv) {
             date_str = argv[i];
         } else if (strncmp(arg, "--date=", 7) == 0) {
             date_str = arg + 7;
-        } else if (strncmp(arg, "-I", 2) == 0) {
+        } else if (strncmp(arg, "-I", 2) == 0 && valid_iso_spec(arg + 2)) {
             iso_spec = arg + 2;
-        } else if (strncmp(arg, "--iso-8601", 10) == 0) {
-            if (arg[10] == '=') iso_spec = arg + 11;
-            else iso_spec = "";
+        } else if (strcmp(arg, "--iso-8601") == 0) {
+            iso_spec = "";
+        } else if (strncmp(arg, "--iso-8601=", 11) == 0 && valid_iso_spec(arg + 11)) {
+            iso_spec = arg + 11;
         } else if (strcmp(arg, "--help") == 0) {
             printf("Usage: date [OPTION]... [+FORMAT]\n");
             return 0;

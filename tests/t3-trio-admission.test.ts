@@ -160,4 +160,21 @@ Deno.test("t3-trio: date runtime KAT (custom formatting, UTC, ISO 8601, epoch pa
   assertEquals(missing.code, 1);
   assertEquals(missing.stdout, "");
   assert(missing.stderr.includes("requires an argument"), missing.stderr);
+
+  const impossible = await runDate(["-u", "-d", "2024-02-31", "+%Y-%m-%d"]);
+  assertEquals(impossible.code, 1);
+  assertEquals(impossible.stdout, "");
+  assert(impossible.stderr.includes("invalid date '2024-02-31'"), impossible.stderr);
+
+  const overflow = await runDate(["-u", "-d", "@999999999999999999999", "+%s"]);
+  assertEquals(overflow.code, 1);
+  assertEquals(overflow.stdout, "");
+  assert(overflow.stderr.includes("invalid date '@999999999999999999999'"), overflow.stderr);
+
+  for (const badIso of ["-Igarbage", "--iso-8601garbage"]) {
+    const invalidIso = await runDate([badIso]);
+    assertEquals(invalidIso.code, 1, badIso);
+    assertEquals(invalidIso.stdout, "", badIso);
+    assert(invalidIso.stderr.includes(`unrecognized option '${badIso}'`), invalidIso.stderr);
+  }
 });
