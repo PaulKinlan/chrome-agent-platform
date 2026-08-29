@@ -25,6 +25,16 @@ Deno.test("capability rows: pinned gate truths (no invisible dependencies)", () 
   assert(byId.tabs.gates.includes("opening, navigating, closing and listing tabs"));
 });
 
+Deno.test("required capability refusal is wired before every dependent teardown", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const route = sw.slice(sw.indexOf('async "capability.revoke"'), sw.indexOf('async "invalidate-agent"'));
+  const approval = route.indexOf("if (!approval.ok) return approval");
+  const required = route.indexOf("if (isRequiredCapability(id)) return await revokeCapability(id)");
+  const firstTeardown = route.indexOf('if (id === "storage")');
+  assert(approval >= 0 && required > approval && firstTeardown > required,
+    "owner approval remains first, then required-permission refusal precedes storage/alarms/scripting teardown");
+});
+
 Deno.test("owner-approval audit grammar still accepts the owner-direct marker", async () => {
   const mod = await import("../extension/lib/diagnostics.js");
   const ref = "c".repeat(32);

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.411] — 2026-08-30
+- fix(CAP-FB-20260829-APPROVAL-JOURNEY-REGRESSION-01): restore owner-direct journeys
+
 ## [0.2.410] — 2026-08-30
 - fix(permissions): remove the hanging JIT click from the headless journey (chrome.permissions.request blocks forever in headless — the honest fix is a source pin confirming the JIT wiring); the actual grant/deny/retry/revoke is deferred to the headed run
 
