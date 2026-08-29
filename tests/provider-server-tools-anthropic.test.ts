@@ -18,6 +18,7 @@
 
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
+  anthropicAuthoritativeSearchRequests,
   anthropicModelSupportsServerTools,
   createServerGroundingAccumulator,
   createServerToolLatchRegistry,
@@ -71,9 +72,22 @@ Deno.test("anthropic-server: the model gate admits the documented set and fails 
   assert(!anthropicModelSupportsServerTools("claude-3-5-sonnet-20240620"));
   assert(!anthropicModelSupportsServerTools("claude-3-opus-20240229"));
   assert(!anthropicModelSupportsServerTools("claude-3-haiku-20240307"));
+  // r1: near-misses must NOT admit (the anchored gate).
+  assert(!anthropicModelSupportsServerTools("claude-sonnet-4000"));
+  assert(!anthropicModelSupportsServerTools("claude-3-7-sonnet-not-a-model"));
+  assert(!anthropicModelSupportsServerTools("claude-3-5-haiku-invalid"));
+  assert(!anthropicModelSupportsServerTools("claude-3-5-sonnet-20241023"));
+  assert(!anthropicModelSupportsServerTools("claude-3-5-sonnet"));
+  assert(!anthropicModelSupportsServerTools("claude-opus-3-9"));
+  assert(!anthropicModelSupportsServerTools("claude-sonnet-4-beta"));
   assert(!anthropicModelSupportsServerTools("gemini-3.7-flash"));
   assert(!anthropicModelSupportsServerTools(""));
   assert(!anthropicModelSupportsServerTools(null));
+  // Documented forms still admit.
+  assert(anthropicModelSupportsServerTools("claude-sonnet-4"));
+  assert(anthropicModelSupportsServerTools("claude-opus-4-20250514"));
+  assert(anthropicModelSupportsServerTools("claude-3-7-sonnet-latest"));
+  assert(anthropicModelSupportsServerTools("claude-3-5-haiku-latest"));
 });
 
 Deno.test("anthropic-server: availability gates on lane + model + both opt-ins, fail closed", () => {
@@ -245,23 +259,56 @@ Deno.test("anthropic-server: the accumulator bills every executed request and ta
 });
 
 Deno.test("anthropic-server: billing is spec-driven and honestly labelled", () => {
-  const billing = serverToolBillingFor(ANTHROPIC_SPEC, 3);
+  const billing = serverToolBillingFor(ANTHROPIC_SPEC, 3, { authoritative: true });
   assertEquals(billing.provider, "anthropic");
   assertEquals(billing.tool, "web_search");
   assertEquals(billing.queries, 3);
   assertEquals(billing.estimatedUsd, 0.03);
-  assertStringIncludes(billing.note, "(Anthropic)");
+  assertStringIncludes(billing.note, "(Anthropic, provider-reported count)");
   assertStringIncludes(billing.note, "ESTIMATE");
   assertStringIncludes(billing.note, "$10 per 1,000 searches");
-  // The Gemini line is byte-identical to slice 1 (no regression).
+  // r1 (P1-3): the persisted ledger note carries the re-verification caveat.
+  assertStringIncludes(billing.note, "pricing not re-verified against live documentation");
+  const observed = serverToolBillingFor(ANTHROPIC_SPEC, 2);
+  assertStringIncludes(observed.note, "(Anthropic, counted from the stream)");
+  // The Gemini line stays deterministic (provenance suffix is the only r1 change).
   const gemini = serverToolBillingFor(serverToolSpecForProvider("gemini"), 2);
   assertEquals(gemini.provider, "gemini");
   assertEquals(gemini.tool, "google_search");
   assertEquals(gemini.estimatedUsd, 0.028);
   assertEquals(
     gemini.note,
-    "Web search: 2 calls (Gemini) — est. $0.0280 (ESTIMATE — the 5,000/mo free tier is metered provider-side and invisible to CAP)",
+    "Web search: 2 calls (Gemini, counted from the stream) — est. $0.0280 (ESTIMATE — the 5,000/mo free tier is metered provider-side and invisible to CAP)",
   );
+});
+
+// ── the AUTHORITATIVE usage counter (r1: bills the provider's own count) ────
+
+Deno.test("anthropic-server: the provider usage object yields the authoritative billable count", () => {
+  // The shape verified in @ai-sdk/anthropic 4.0.45: BOTH the stream finish
+  // part and the doGenerate result expose providerMetadata.anthropic.usage as
+  // the raw response usage (z.looseObject — server_tool_use survives).
+  for (const metadata of [
+    { anthropic: { usage: { server_tool_use: { web_search_requests: 5 }, input_tokens: 10 } } },
+    { anthropic: { usage: { server_tool_use: { web_search_requests: 0 } } } },
+  ]) {
+    const fragment = anthropicAuthoritativeSearchRequests(metadata);
+    assert(fragment);
+    assertEquals(fragment.provider, "anthropic");
+    assertEquals(typeof fragment.authoritativeSearchRequests, "number");
+    assertEquals(fragment.rawQueryCount, 0, "authoritative fragments never add observed occurrences");
+  }
+  // Absent / hostile shapes read as nothing (never guessed).
+  for (const bad of [
+    null, {}, { anthropic: {} }, { anthropic: { usage: {} } },
+    { anthropic: { usage: { server_tool_use: {} } } },
+    { anthropic: { usage: { server_tool_use: { web_search_requests: -1 } } } },
+    { anthropic: { usage: { server_tool_use: { web_search_requests: 1.5 } } } },
+    { anthropic: { usage: { server_tool_use: { web_search_requests: "5" } } } },
+    { google: { groundingMetadata: { webSearchQueries: ["q"] } } },
+  ]) {
+    assertEquals(anthropicAuthoritativeSearchRequests(bad), null);
+  }
 });
 
 // ── the live records path (descriptor + dispatch through the real protocol) ──

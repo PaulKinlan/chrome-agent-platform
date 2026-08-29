@@ -93,7 +93,7 @@ export const PROVIDER_SERVER_TOOL_SPECS = Object.freeze([
       unit: "per-search-request",
       rateUsd: 0.01,
       freeTierNote:
-        "$10 per 1,000 searches per Anthropic's published pricing (no free tier is documented); the provider-side meter is invisible to CAP",
+        "$10 per 1,000 searches per Anthropic's published pricing (no free tier is documented; pricing not re-verified against live documentation); the provider-side meter is invisible to CAP",
     }),
     citations: "source-parts",
     v2: Object.freeze({
@@ -132,10 +132,13 @@ export function geminiModelSupportsServerTools(modelId) {
 /** Model support gate for web_search: the documented supported set (Claude
  * 3.5 Sonnet (Oct 2024 refresh + -latest), 3.5 Haiku, 3.7 Sonnet, and all
  * Claude 4 families). Older IDs (claude-3-*, claude-3-5-sonnet-20240620)
- * cannot run server tools — fail closed and extend as Anthropic adds models. */
+ * cannot run server tools — fail closed and extend as Anthropic adds models.
+ * ANCHORED with suffix forms constrained to documented alias/date/version
+ * shapes: a near-miss like "claude-sonnet-4000" or "claude-3-7-sonnet-x"
+ * must NOT admit. */
 export function anthropicModelSupportsServerTools(modelId) {
   const id = String(modelId ?? "").toLowerCase();
-  return /^claude-(?:opus-4|sonnet-4|haiku-4|3-7-sonnet|3-5-haiku|3-5-sonnet-(?:20241022|latest))/u.test(id);
+  return /^claude-(?:(?:opus|sonnet|haiku)-4(?:-(?:\d+(?:-\d{8})?|latest))?|3-7-sonnet(?:-(?:\d{8}|latest))?|3-5-haiku(?:-(?:\d{8}|latest))?|3-5-sonnet(?:-20241022|-latest))$/u.test(id);
 }
 
 /** Resolve the catalog availability of one provider-server spec for the
@@ -330,20 +333,25 @@ export function normalizeGeminiGrounding(groundingMetadata) {
 
 /** The per-provider billing descriptor used by the settle path: provider id,
  * tool id, per-unit rate, and the honest ESTIMATE note (CAP cannot see any
- * provider-side meter). */
-export function serverToolBillingFor(spec, queryCount) {
+ * provider-side meter). provenance names the count's authority: Anthropic's
+ * response usage object carries server_tool_use.web_search_requests (the
+ * provider's OWN billable-request count — authoritative); when it is absent
+ * the count is CAP's stream-observed tool-call occurrences (fallback). */
+export function serverToolBillingFor(spec, queryCount, { authoritative = false } = {}) {
   const count = Math.max(0, Math.trunc(Number(queryCount) || 0));
   const estUsd = count * (Number(spec?.cost?.rateUsd) || 0);
   const label = spec?.provider === "anthropic" ? "Anthropic" : "Gemini";
   const basis = spec?.provider === "anthropic"
-    ? "Anthropic's published $10 per 1,000 searches; no free tier is documented and the provider-side meter is invisible to CAP"
+    ? "Anthropic's published $10 per 1,000 searches (pricing not re-verified against live documentation); no free tier is documented"
     : "the 5,000/mo free tier is metered provider-side and invisible to CAP";
+  const provenance = authoritative ? "provider-reported count" : "counted from the stream";
   return {
     provider: String(spec?.provider ?? ""),
     tool: String(spec?.toolId ?? ""),
     queries: count,
     estimatedUsd: estUsd,
-    note: `Web search: ${count} call${count === 1 ? "" : "s"} (${label}) — est. $${estUsd.toFixed(4)} (ESTIMATE — ${basis})`,
+    authoritative,
+    note: `Web search: ${count} call${count === 1 ? "" : "s"} (${label}, ${provenance}) — est. $${estUsd.toFixed(4)} (ESTIMATE — ${basis})`,
   };
 }
 
@@ -433,13 +441,40 @@ export function normalizeAnthropicWebSearchPart(part) {
   return null;
 }
 
+/** Read the AUTHORITATIVE billable-search count from Anthropic's own usage
+ * object: providerMetadata.anthropic.usage.server_tool_use.web_search_requests
+ * (the SDK parses usage with z.looseObject, so the raw field survives into
+ * both the stream finish part and the doGenerate result — verified against
+ * @ai-sdk/anthropic 4.0.45). Returns a fragment carrying ONLY the
+ * authoritative count, or null when absent/hostile. The count is PER API
+ * CALL; the accumulator sums across a run's calls. */
+export function anthropicAuthoritativeSearchRequests(providerMetadata) {
+  const usage = ownData(ownData(providerMetadata, "anthropic"), "usage");
+  const serverToolUse = ownData(usage, "server_tool_use");
+  const requests = ownData(serverToolUse, "web_search_requests");
+  if (!Number.isSafeInteger(requests) || requests < 0) return null;
+  return Object.freeze({
+    provider: "anthropic",
+    citations: Object.freeze([]),
+    rawQueryCount: 0,
+    queries: Object.freeze([]),
+    searchEntryPointHtml: null,
+    authoritativeSearchRequests: requests,
+  });
+}
+
 /** Build one bounded per-run grounding accumulator. Query OCCURRENCES remain
  * distinct for cost accounting; presentation queries and citations are deduped.
  * The provider can execute the same query on later model calls and bill each
- * occurrence, so a Set is never the billing authority. */
+ * occurrence, so a Set is never the billing authority. When the provider's own
+ * billable-request counter is present (Anthropic's usage object), the
+ * AUTHORITATIVE sum is billed and stream-observed occurrences are fallback
+ * only — never both (no double-counting). */
 export function createServerGroundingAccumulator({ maxQueryOccurrences = 128, maxCitations = 128 } = {}) {
   const queryOccurrences = [];
   let queryOccurrenceCount = 0;
+  let authoritativeSum = 0;
+  let authoritativeSeen = false;
   const displayQueries = new Set();
   const citations = new Map();
   const providers = new Set();
@@ -447,6 +482,11 @@ export function createServerGroundingAccumulator({ maxQueryOccurrences = 128, ma
     add(normalized) {
       if (typeof normalized?.provider === "string" && normalized.provider) {
         providers.add(normalized.provider);
+      }
+      if (Number.isSafeInteger(normalized?.authoritativeSearchRequests) &&
+          normalized.authoritativeSearchRequests >= 0) {
+        authoritativeSeen = true;
+        authoritativeSum = Math.min(Number.MAX_SAFE_INTEGER, authoritativeSum + normalized.authoritativeSearchRequests);
       }
       const retainedQueries = Array.isArray(normalized?.queries) ? normalized.queries : [];
       const reportedCount = Number.isSafeInteger(normalized?.rawQueryCount) &&
@@ -467,6 +507,12 @@ export function createServerGroundingAccumulator({ maxQueryOccurrences = 128, ma
         provider: providers.size === 1 ? [...providers][0] : null,
         providers: Object.freeze([...providers]),
         queryOccurrenceCount,
+        // The provider's own billable-request count (summed across this run's
+        // calls), or null when the provider never reported one.
+        authoritativeSearchRequests: authoritativeSeen ? authoritativeSum : null,
+        // Billing authority: the provider-reported counter when present, else
+        // stream-observed occurrences. NEVER their sum.
+        billedSearchRequests: authoritativeSeen ? authoritativeSum : queryOccurrenceCount,
         queries: Object.freeze([...queryOccurrences]),
         displayQueries: Object.freeze([...displayQueries]),
         citations: Object.freeze([...citations.values()]),

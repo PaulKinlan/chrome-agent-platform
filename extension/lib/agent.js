@@ -19,6 +19,7 @@ import { perfSpan } from "./cap-perf.js";
 import { isToolResultFailure } from "./tool-summary.js";
 import { correctUnsupportedMutationClaims } from "./mutation-claim-check.js";
 import {
+  anthropicAuthoritativeSearchRequests,
   groundingFromProviderMetadata,
   injectLatchedServerTools,
   normalizeAnthropicWebSearchPart,
@@ -519,6 +520,12 @@ export function createAgent({
               if (grounding) {
                 try { onGrounding(runId, grounding); } catch { /* telemetry */ }
               }
+              // Anthropic's OWN billable-request counter rides the finish
+              // part's usage object (authoritative; supersedes part counts).
+              const authoritative = anthropicAuthoritativeSearchRequests(metadata);
+              if (authoritative) {
+                try { onGrounding(runId, authoritative); } catch { /* telemetry */ }
+              }
               // Anthropic streams server-tool observations as PARTS (provider-
               // executed tool-call per search request, source parts for
               // citations) rather than a providerMetadata blob.
@@ -536,6 +543,10 @@ export function createAgent({
       const grounding = groundingFromProviderMetadata(ownData(value, "providerMetadata"));
       if (grounding) {
         try { onGrounding(runId, grounding); } catch { /* telemetry */ }
+      }
+      const authoritative = anthropicAuthoritativeSearchRequests(ownData(value, "providerMetadata"));
+      if (authoritative) {
+        try { onGrounding(runId, authoritative); } catch { /* telemetry */ }
       }
       // doGenerate carries Anthropic server-tool observations in the content
       // array (same part shapes as the stream).

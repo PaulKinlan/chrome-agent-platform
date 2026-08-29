@@ -482,7 +482,9 @@ Deno.test("provider-server: source pins — the service worker wires the records
   assertStringIncludes(src, "clearProviderServerAgentOptIns([deletingAgent?.instanceId, slug])");
   assertStringIncludes(src, "providerServerAgentId = null");
   assertStringIncludes(src, "providerServerAgentId: typeof providerServerAgentId");
-  assertStringIncludes(src, "serverGrounding.queryOccurrenceCount");
+  // Slice-2 r1: billing rides the authoritative-vs-observed selector (the
+  // provider's own counter when reported, stream occurrences otherwise).
+  assertStringIncludes(src, "serverGrounding.billedSearchRequests");
   assertEquals((src.match(/serverGrounding\.displayQueries\.map/g) ?? []).length, 2, "live and durable rows dedupe identically");
 });
 
