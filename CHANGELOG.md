@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.407] — 2026-08-29
+- Initialize Stop binding before registry subscription
+
 ## [0.2.406] — 2026-08-29
 - Bind Stop controls to trusted execution clicks
 

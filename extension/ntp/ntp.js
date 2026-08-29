@@ -75,6 +75,7 @@ ntpLog.info("new tab page evaluated");
 
 const statusEl = document.getElementById("status");
 const durableRunRegistry = document.getElementById("durable-run-registry");
+const threadConversation = document.getElementById("thread-conversation");
 // The registry is a DEBUG overlay now (owner directive: the conversation is
 // the status surface — no visible registry panel). The toggle appears (and
 // hover-reveals the panel) only when the open surface has runs.
@@ -86,6 +87,8 @@ let currentThreadId = null;
 let currentAgentId = null;
 let currentAgentKind = null;
 let latestDurableRuns = [];
+// Declared before subscribeRunRegistry(), which emits its current snapshot synchronously.
+let liveClientRunId = null;
 
 function setRunDebugOpen(open, { pin = false, focusToggle = false } = {}) {
   if (!runDebugPanel || !runDebugToggle) return;
@@ -1537,7 +1540,6 @@ function renderTaskRows(threads, activeId = null) {
 // ── the full-screen thread surface ────────────────────────────────────────
 const threadView = document.getElementById("thread-view");
 const threadTitle = document.getElementById("thread-title");
-const threadConversation = document.getElementById("thread-conversation");
 const threadComposer = document.getElementById("thread-composer");
 
 // Artifacts rendered INSIDE a thread (CAP-FB-20260828-ARTIFACTS-IN-THREAD-01).
@@ -2668,8 +2670,8 @@ let statusOwner = 0;
  * The registry terminal-reconciliation resolves the live row ONLY from the
  * settled record whose clientCorrelationId IS this id (review P1-1: the
  * updatedAt-skew heuristic let a previous run's fresh terminal record clear a
- * just-started follow-up's row under queue saturation). */
-let liveClientRunId = null;
+ * just-started follow-up's row under queue saturation). Declared with the
+ * other registry state above because subscription emits synchronously. */
 /** The last run executionId the terminal reconciliation resolved the row for
  * (a settled run keeps matching every later snapshot — resolve it ONCE). */
 let lastReconciledTerminalId = null;
