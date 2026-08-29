@@ -81,6 +81,19 @@ function selectedToolFromResult(result) {
   return typeof selected === "string" ? selected : null;
 }
 
+/** Extract a run-originated structured permission denial from agent-do's
+ * normalized result, including the lazy execute_tool envelope. */
+export function permissionDenialFromToolResult(result) {
+  const env = lazyEnvelope(result);
+  const candidates = [ownData(env, "result"), ownData(result, "data"), result];
+  for (const candidate of candidates) {
+    if (ownData(candidate, "waitingForPermission") === true && ownData(candidate, "permissionRequirement")) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 // Whether a lazy envelope's NESTED selected-tool result failed. The outer
 // dispatch wraps every non-throwing dispatch as { ok:true, selectedTool,
 // result } — a denied/failed real tool arrives as outer ok:true with an inner
@@ -394,6 +407,9 @@ export function createAgent({
   // progress as the agent works. Optional (the SW threads its broadcast through
   // it); null means no progress stream (the legacy request/response path).
   onProgress = null,
+  // Run-originated permission/grant requests block inside agent-do's awaited
+  // post-tool hook until the originating surface resolves them.
+  onPermissionRequest = null,
   // `disposable` marks a per-origin WORKER agent: abort() (agent.delete →
   // abortWorker) permanently disables it so a stale in-flight delegation can
   // never start a new run (the round-22 check→start blocker). The hub/master is
@@ -786,6 +802,27 @@ export function createAgent({
         const toolKey = `${e.step}:${String(e.toolName ?? "unknown").slice(0, 64)}`;
         const tspan = toolSpans.get(toolKey);
         toolSpans.delete(toolKey);
+        const permissionDenial = permissionDenialFromToolResult(e.result);
+        if (permissionDenial && typeof onPermissionRequest === "function") {
+          const decision = await onPermissionRequest(permissionDenial);
+          // agent-do records this same normalized object after the awaited hook.
+          // Tell the model exactly what happened: deny/timeout is terminal for
+          // this action; approve requires a fresh lazy selection because the
+          // grant digest intentionally changed while the call was paused.
+          const selected = selectedToolFromResult(e.result) ?? e.toolName;
+          if (e.result && typeof e.result === "object") {
+            e.result.modelContent = decision === "approved"
+              ? `Error: Owner approved the requested capability, but this attempt did not run. Retry ${selected} now with a fresh search_tools selection.`
+              : decision === "expired"
+                ? `Approval expired. ${selected} was not performed; do not claim it succeeded.`
+                : `Owner denied the requested capability. ${selected} was not performed; do not retry it.`;
+            e.result.userSummary = decision === "approved"
+              ? `[${selected}] BLOCKED — approved; retry required`
+              : decision === "expired"
+                ? `[${selected}] DENIED — approval expired`
+                : `[${selected}] DENIED by owner`;
+          }
+        }
         const toolOk = !isToolResultFailure(e.result) && !lazyNestedFailure(e.result);
         if (toolOk) { try { okToolNames.add(selectedToolFromResult(e.result) ?? e.toolName); } catch { /* ignore */ } }
         if (tspan) tspan.end(toolOk ? "ok" : "error");
@@ -1039,6 +1076,7 @@ export function createOrchestrator({
                   // read-only browser set, so the master cannot persist state.
   onProgress = null, // async (event) => void — the live progress stream, threaded
                      // into BOTH the master agent and every delegated worker.
+  onPermissionRequest = null,
   serverTooling = null, // provider-server latch registry + grounding sink
                         // (master only — workers are site-origin agents whose
                         // tools are page-bound, not provider-bound)
@@ -1079,6 +1117,7 @@ export function createOrchestrator({
       // writes site memory / invokes page tools, defeating the scoping.
       readOnlyMemory: scoped,
       onProgress,
+      onPermissionRequest,
     });
     workerAgents.set(w.origin, a);
   }
@@ -1214,6 +1253,7 @@ export function createOrchestrator({
     readLazyScope: readMasterLazyScope,
     taskId,
     onProgress,
+    onPermissionRequest,
     // SCOPED (hook) runs: the master's memory is READ-ONLY (no memory_set) —
     // untrusted event data must never persist hub state.
     readOnlyMemory: scoped,
@@ -1281,6 +1321,7 @@ export function createOrchestrator({
           : null,
         disposable: true,
         onProgress,
+        onPermissionRequest,
       });
       workerAgents.set(config.origin, a);
       return a;

@@ -4799,7 +4799,7 @@ class PermissionApprovalCard extends Component {
     const permissions = this._jsonList("permissions");
     const origins = this._jsonList("origins");
     const isGlobal = this.getAttribute("global") === "true";
-    const state = ["granted", "denied", "error"].includes(this.getAttribute("state")) ? this.getAttribute("state") : "pending";
+    const state = ["granted", "denied", "expired", "error"].includes(this.getAttribute("state")) ? this.getAttribute("state") : "pending";
     const detail = (this.getAttribute("detail") ?? "").slice(0, 240);
     const needs = [];
     for (const permission of permissions) {
@@ -4814,7 +4814,9 @@ class PermissionApprovalCard extends Component {
     const stateText = state === "granted"
       ? "Approved — continuing…"
       : state === "denied"
-        ? "Declined. The agent will keep going without it."
+        ? "Declined. The action was not performed."
+        : state === "expired"
+          ? (detail || "The request expired. The action was not performed.")
         : state === "error"
           ? (detail || "The approval could not be completed — try again.")
           : "";
@@ -4835,8 +4837,8 @@ class PermissionApprovalCard extends Component {
       .state { font-size:12.5px; font-weight:600; }
       .state.granted { color:var(--success,#1a7f37); }
       .state.denied { color:var(--muted,#635e56); }
-      .state.error { color:var(--danger,#b3261e); }
-      :host([state="granted"]) .card, :host([state="denied"]) .card { border-color:var(--border,#e3e0d9); opacity:.85; }
+      .state.error, .state.expired { color:var(--danger,#b3261e); }
+      :host([state="granted"]) .card, :host([state="denied"]) .card, :host([state="expired"]) .card { border-color:var(--border,#e3e0d9); opacity:.85; }
     `, `<div class="card" role="group" aria-label="Permission request">
       <p class="title">Permission request</p>
       <p class="reason">The agent wants to ${escapeHtml(reason)}.</p>
@@ -5043,30 +5045,45 @@ customElements.define("streaming-text", StreamingText);
  * "Approval Card" primitive). The agent asks before acting; the owner Approves
  * or Denies. Emits `approve` / `deny`. */
 class ApprovalCard extends Component {
-  static get observedAttributes() { return ["title", "body", "approve-label", "deny-label"]; }
+  static get observedAttributes() { return ["title", "body", "approve-label", "deny-label", "state", "detail"]; }
   _render() {
     const title = this.getAttribute("title") || "Approve this action?";
     const body = this.getAttribute("body") || "";
     const approveLabel = this.getAttribute("approve-label") || "Approve";
     const denyLabel = this.getAttribute("deny-label") || "Deny";
+    const state = ["granted", "denied", "expired", "error"].includes(this.getAttribute("state")) ? this.getAttribute("state") : "pending";
+    const detail = (this.getAttribute("detail") || "").slice(0, 240);
+    const stateText = state === "granted"
+      ? "Approved — continuing the paused action."
+      : state === "denied"
+        ? "Denied. The action was not performed."
+        : state === "expired"
+          ? (detail || "Expired. The action was not performed.")
+          : (detail || "The decision could not be recorded — try again.");
     mountTemplate(this, `
-      :host { display:block; }
-      .card { border:1px solid var(--border,#e3e0d9); border-radius:12px; background:var(--panel,#ffffff); padding:14px 16px; max-width:440px; }
-      .title { font-size:14px; font-weight:600; color:var(--ink,#1d1b18); margin:0 0 4px; }
+      :host { display:block; margin-block-end:14px; }
+      .card { border:1px solid var(--accent,#0e6e63); border-radius:12px; background:var(--panel,#ffffff); padding:14px 16px; max-width:440px; }
+      .title { font-size:14px; font-weight:600; color:var(--ink,#1d1b18); margin:0 0 4px; overflow-wrap:anywhere; }
       .body { font-size:13px; color:var(--muted,#635e56); margin:0 0 12px; white-space:pre-wrap; overflow-wrap:anywhere; }
-      .actions { display:flex; gap:8px; }
-      .approve { border:0; border-radius:8px; padding:7px 16px; background:var(--accent,#0e6e63); color:var(--accent-contrast,#fff); cursor:pointer; font:inherit; font-weight:600; }
-      .deny { border:1px solid var(--border,#e3e0d9); border-radius:8px; padding:7px 16px; background:var(--panel,#ffffff); color:var(--ink,#1d1b18); cursor:pointer; font:inherit; }
+      .actions { display:flex; flex-wrap:wrap; gap:8px; }
+      .approve { border:0; border-radius:8px; padding:7px 16px; min-height:34px; background:var(--accent,#0e6e63); color:var(--accent-contrast,#fff); cursor:pointer; font:inherit; font-weight:600; }
+      .deny { border:1px solid var(--border,#e3e0d9); border-radius:8px; padding:7px 16px; min-height:34px; background:var(--panel,#ffffff); color:var(--ink,#1d1b18); cursor:pointer; font:inherit; }
       .approve:focus-visible, .deny:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .state { margin:0; font-size:12.5px; font-weight:600; color:var(--muted,#635e56); }
+      .state.granted { color:var(--success,#1a7f37); }
+      .state.error, .state.expired { color:var(--danger,#b3261e); }
+      :host([state="granted"]) .card, :host([state="denied"]) .card, :host([state="expired"]) .card, :host([state="error"]) .card { border-color:var(--border,#e3e0d9); }
     `, `<div class="card" role="group" aria-label="Approval request">
         <p class="title">${escapeHtml(title)}</p>
         ${body ? `<p class="body">${escapeHtml(body)}</p>` : ""}
-        <div class="actions"><button type="button" class="approve">${escapeHtml(approveLabel)}</button><button type="button" class="deny">${escapeHtml(denyLabel)}</button></div>
+        ${state === "pending"
+          ? `<div class="actions"><button type="button" class="approve">${escapeHtml(approveLabel)}</button><button type="button" class="deny">${escapeHtml(denyLabel)}</button></div>`
+          : `<p class="state ${state}" role="status">${escapeHtml(stateText)}</p>`}
       </div>`);
   }
   _wire() {
-    this._root.querySelector(".approve")?.addEventListener("click", () => this._emit("approve"));
-    this._root.querySelector(".deny")?.addEventListener("click", () => this._emit("deny"));
+    this._root.querySelector(".approve")?.addEventListener("click", (event) => this._emit("approve", { sourceEvent: event }));
+    this._root.querySelector(".deny")?.addEventListener("click", (event) => this._emit("deny", { sourceEvent: event }));
   }
 }
 customElements.define("approval-card", ApprovalCard);

@@ -21,6 +21,7 @@ import {
   opaqueTargetRefWithKey,
   payloadDigest,
   resolvePendingApproval,
+  waitForApprovalDecision,
 } from "../extension/lib/owner-approval.js";
 import { isExactOptionsSender } from "../extension/lib/pure.js";
 import { scrubEventDetail } from "../extension/lib/diagnostics.js";
@@ -167,15 +168,49 @@ Deno.test("approval store deduplicates exact requests, never evicts approved gra
   assertEquals(store.approvals.get(one.approvalId)?.status, "approved");
 });
 
-Deno.test("model approval dispatcher captures an immutable build-local execution id", () => {
+Deno.test("model approval dispatcher captures an immutable build-local execution id and progress seam", () => {
   const seen = [];
-  const dispatch = (_type, _args, context) => { seen.push(context.executionId); return context.executionId; };
-  const runA = bindModelApprovalDispatcher("exec:A", dispatch);
+  const events = [];
+  const dispatch = (_type, _args, context) => {
+    seen.push(context.executionId);
+    context.onApprovalEvent?.({ type: "approval-request" });
+    return context.executionId;
+  };
+  const runA = bindModelApprovalDispatcher("exec:A", dispatch, (event) => events.push(event));
   const runB = bindModelApprovalDispatcher("exec:B", dispatch);
   assertEquals(runA("asset.delete", {}), "exec:A");
   assertEquals(runB("asset.delete", {}), "exec:B");
   assertEquals(runA("asset.delete", {}), "exec:A", "a stale closure cannot borrow run B's id");
   assertEquals(seen, ["exec:A", "exec:B", "exec:A"]);
+  assertEquals(events, [{ type: "approval-request" }, { type: "approval-request" }], "run A's inline events stay on its captured progress channel");
+});
+
+Deno.test("inline decision wait: the tool stays pending, approve resumes exactly once, deny and timeout fail closed", async () => {
+  const digest = await payloadDigest(payload);
+
+  const approvedStore = createApprovalStore();
+  const approved = createPendingApproval(approvedStore, "exec:approve", action, target, digest, 1000);
+  let settled = false;
+  const approvalWait = waitForApprovalDecision(approvedStore, approved.approvalId).then((value) => { settled = true; return value; });
+  await Promise.resolve();
+  assertEquals(settled, false, "the originating tool promise remains pending before the owner decides");
+  assertEquals(resolvePendingApproval(approvedStore, approved.approvalId, true).decision, "approved");
+  assertEquals((await approvalWait).decision, "approved");
+  assertEquals(consumeApproved(approvedStore, "exec:approve", action, target, digest).ok, true, "the same tool invocation consumes the exact decision once");
+
+  const deniedStore = createApprovalStore();
+  const denied = createPendingApproval(deniedStore, "exec:deny", action, target, digest, 1000);
+  const denialWait = waitForApprovalDecision(deniedStore, denied.approvalId);
+  assertEquals(resolvePendingApproval(deniedStore, denied.approvalId, false).decision, "denied");
+  assertEquals((await denialWait).decision, "denied");
+  assertEquals(consumeApproved(deniedStore, "exec:deny", action, target, digest).ok, false, "deny grants nothing");
+
+  const expiredStore = createApprovalStore();
+  const expired = createPendingApproval(expiredStore, "exec:expire", action, target, digest, 15);
+  const expiry = await waitForApprovalDecision(expiredStore, expired.approvalId);
+  assertEquals(expiry.decision, "expired");
+  assertEquals(consumeApproved(expiredStore, "exec:expire", action, target, digest).ok, false, "timeout grants nothing");
+  assertEquals(resolvePendingApproval(expiredStore, expired.approvalId, true).ok, false, "a late click cannot revive expired work");
 });
 
 Deno.test("approval grants bind run/action/target/digest, expire, and consume exactly once", async () => {

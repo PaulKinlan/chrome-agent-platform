@@ -328,15 +328,19 @@ export async function opaqueTargetRef(target) {
 }
 
 /** Build-local model dispatcher: the execution id is captured once forever. */
-export function bindModelApprovalDispatcher(executionId, dispatch) {
+export function bindModelApprovalDispatcher(executionId, dispatch, onApprovalEvent = null) {
   if (typeof dispatch !== "function") throw new TypeError("dispatch function required");
   const captured = typeof executionId === "string" ? executionId : "";
-  const context = Object.freeze({ principal: "model", executionId: captured });
+  const context = Object.freeze({
+    principal: "model",
+    executionId: captured,
+    onApprovalEvent: typeof onApprovalEvent === "function" ? onApprovalEvent : null,
+  });
   return (type, args) => dispatch(type, args, context);
 }
 
 export function createApprovalStore() {
-  return { approvals: new Map(), byTuple: new Map() };
+  return { approvals: new Map(), byTuple: new Map(), waiters: new Map() };
 }
 
 function approvalKey(runId, action, target, digest) {
@@ -348,11 +352,23 @@ function randomId() {
   return `ap_${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 
+function settleWaiters(store, approvalId, result) {
+  const waiters = store?.waiters?.get(approvalId);
+  if (!waiters) return;
+  store.waiters.delete(approvalId);
+  for (const settle of waiters) settle(result);
+}
+
+function removeApproval(store, approvalId, entry) {
+  store.approvals.delete(approvalId);
+  store.byTuple.delete(entry.key);
+}
+
 function sweep(store, now = Date.now()) {
   for (const [id, entry] of store.approvals) {
     if (entry.expiresAt > now) continue;
-    store.approvals.delete(id);
-    store.byTuple.delete(entry.key);
+    removeApproval(store, id, entry);
+    settleWaiters(store, id, { ok: false, decision: "expired", error: "approval expired before a decision" });
   }
 }
 
@@ -396,12 +412,46 @@ export function resolvePendingApproval(store, approvalId, approve) {
   const entry = store.approvals.get(approvalId);
   if (!entry || entry.status !== "pending") return { ok: false, error: "no such pending approval" };
   if (approve !== true) {
-    store.approvals.delete(approvalId);
-    store.byTuple.delete(entry.key);
-    return { ok: true, decision: "denied" };
+    removeApproval(store, approvalId, entry);
+    const result = { ok: true, decision: "denied" };
+    settleWaiters(store, approvalId, result);
+    return result;
   }
   entry.status = "approved";
-  return { ok: true, decision: "approved" };
+  const result = { ok: true, decision: "approved" };
+  settleWaiters(store, approvalId, result);
+  return result;
+}
+
+/** Keep the originating tool invocation pending until its exact approval is
+ * resolved. The approval's own expiry is the timeout authority; timeout removes
+ * the tuple and fails closed, so a late click can never authorize stale work. */
+export function waitForApprovalDecision(store, approvalId) {
+  if (!store?.approvals || !store?.waiters || typeof approvalId !== "string") {
+    return Promise.resolve({ ok: false, decision: "invalid", error: "invalid approval" });
+  }
+  sweep(store);
+  const entry = store.approvals.get(approvalId);
+  if (!entry) return Promise.resolve({ ok: false, decision: "expired", error: "approval expired before a decision" });
+  if (entry.status === "approved") return Promise.resolve({ ok: true, decision: "approved" });
+  if (entry.status !== "pending") return Promise.resolve({ ok: false, decision: "invalid", error: "approval is not pending" });
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const waiters = store.waiters.get(approvalId) ?? new Set();
+    waiters.add(finish);
+    store.waiters.set(approvalId, waiters);
+    const timer = setTimeout(() => {
+      const current = store.approvals.get(approvalId);
+      if (current?.status === "pending") removeApproval(store, approvalId, current);
+      settleWaiters(store, approvalId, { ok: false, decision: "expired", error: "approval expired before a decision" });
+    }, Math.max(0, entry.expiresAt - Date.now()));
+  });
 }
 
 export function consumeApproved(store, runId, action, target, digest) {
@@ -475,12 +525,13 @@ export function approvalPendingCount(store) {
 export function approvalCardDenial({ approvalId, action, targetRef }) {
   if (typeof approvalId !== "string" || !approvalId || approvalId.length > 160) return null;
   if (typeof action !== "string" || !DESTRUCTIVE_ACTIONS.has(action)) return null;
+  const ref = String(targetRef ?? "").slice(0, 200);
   return {
     ok: false,
     waitingForPermission: true,
     permissionRequirement: {
-      reason: `${action}: ${String(targetRef ?? "").slice(0, 200)}`,
-      approvals: [{ approvalId, action }],
+      reason: `${action}: ${ref}`,
+      approvals: [{ approvalId, action, targetRef: ref }],
     },
   };
 }

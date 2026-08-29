@@ -471,6 +471,95 @@ Deno.test("P1-3: a schedule-approval requirement (approvals[], no permissions) n
     "Allow resolves the EXACT pending approval through the SW authority");
 });
 
+Deno.test("inline mutation approval: request renders in the originating conversation and wakes the same run without retry", async () => {
+  const sw = { runCount: 0, lastRunId: null, tasks: [], grantCalls: [], permissionRequests: [], resolved: [] };
+  installConversationChromeStub(sw);
+  const originalSend = globalThis.chrome.runtime.sendMessage;
+  globalThis.chrome.runtime.sendMessage = (msg, cb) => {
+    if (msg.type === "management.resolve-approval") {
+      sw.resolved.push({ approvalId: msg.approvalId, approve: msg.approve });
+      queueMicrotask(() => cb({ ok: true }));
+      return;
+    }
+    return originalSend(msg, cb);
+  };
+  globalThis.document = { createElement: (tag) => new FakeElement(tag) };
+  Object.defineProperty(globalThis, "navigator", { value: { userActivation: { isActive: true } }, configurable: true });
+  const { runConversationTurn } = await import("../extension/shared/conversation.js");
+  const appended = [];
+  const turn = runConversationTurn(makeConversationContainer(appended), { text: "delete the old artifact", onStatus: () => {} });
+  await waitForCondition(() => sw.lastRunId !== null && portState.listener !== null, 500, "run dispatch");
+  portState.listener({ type: "progress", event: {
+    type: "approval-request",
+    runId: sw.lastRunId,
+    approvalId: "ap_asset_1",
+    action: "asset.delete",
+    targetRef: "ref_7d9a",
+    result: {
+      ok: false,
+      waitingForPermission: true,
+      permissionRequirement: {
+        reason: "asset.delete: ref_7d9a",
+        approvals: [{ approvalId: "ap_asset_1", action: "asset.delete", targetRef: "ref_7d9a" }],
+      },
+    },
+  } });
+  await waitForCondition(() => appended.some((el) => el.tagName === "approval-card"), 500, "the inline action card");
+  const card = appended.find((el) => el.tagName === "approval-card");
+  assertStringIncludes(card.getAttribute("title"), "asset.delete");
+  assertStringIncludes(card.getAttribute("body"), "ref_7d9a");
+  await card.dispatch("approve", { sourceEvent: { isTrusted: true } });
+  await waitForCondition(() => sw.resolved.length === 1, 500, "the exact approval resolution");
+  assertEquals(sw.resolved, [{ approvalId: "ap_asset_1", approve: true }]);
+  portState.listener?.({ type: "progress", event: { type: "approval-settled", runId: sw.lastRunId, approvalId: "ap_asset_1", state: "granted" } });
+  assertEquals(card.getAttribute("state"), "granted");
+  await turn;
+  assertEquals(sw.runCount, 1, "approval resumes the original run; no whole-task retry is launched");
+});
+
+Deno.test("inline browser grant: the lazy tool remains paused until the exact card decision and the turn is not restarted", async () => {
+  const sw = { runCount: 0, lastRunId: null, tasks: [], grantCalls: [], permissionRequests: [], resolved: [] };
+  installConversationChromeStub(sw);
+  const originalSend = globalThis.chrome.runtime.sendMessage;
+  globalThis.chrome.runtime.sendMessage = (msg, cb) => {
+    if (msg.type === "run.resolve-inline-approval") {
+      sw.resolved.push({ requestId: msg.requestId, approve: msg.approve });
+      queueMicrotask(() => cb({ ok: true }));
+      return;
+    }
+    return originalSend(msg, cb);
+  };
+  globalThis.document = { createElement: (tag) => new FakeElement(tag) };
+  Object.defineProperty(globalThis, "navigator", { value: { userActivation: { isActive: true } }, configurable: true });
+  const { runConversationTurn } = await import("../extension/shared/conversation.js");
+  const appended = [];
+  const turn = runConversationTurn(makeConversationContainer(appended), { text: "group this site's tabs", onStatus: () => {} });
+  await waitForCondition(() => sw.lastRunId !== null && portState.listener !== null, 500, "run dispatch");
+  portState.listener({ type: "progress", event: {
+    type: "approval-request",
+    runId: sw.lastRunId,
+    requestId: "rp_browser_1",
+    result: {
+      waitingForPermission: true,
+      permissionRequirement: {
+        reason: "control tabs on https://example.com",
+        permissions: [],
+        grantOrigins: ["https://example.com"],
+        grantGlobal: false,
+      },
+    },
+  } });
+  await waitForCondition(() => appended.some((el) => el.tagName === "permission-approval-card"), 500, "permission card");
+  const card = appended.find((el) => el.tagName === "permission-approval-card");
+  await card.dispatch("approve", { sourceEvent: { isTrusted: true } });
+  await waitForCondition(() => sw.resolved.length === 1, 500, "paused tool resolution");
+  assertEquals(sw.grantCalls, [{ type: "browser-control.set", origins: ["https://example.com"], granted: true }]);
+  assertEquals(sw.resolved, [{ requestId: "rp_browser_1", approve: true }]);
+  assertEquals(card.getAttribute("state"), "granted");
+  await turn;
+  assertEquals(sw.runCount, 1, "no whole-turn retry: agent-do resumes the pending run itself");
+});
+
 Deno.test("P1-3: a malformed or failed approval requirement fails closed (no card, honest errors)", async () => {
   const { normalizePermissionRequirement, approvePermissionRequirement } = await import(
     `../extension/shared/conversation.js?conv-p13b=${Date.now()}`

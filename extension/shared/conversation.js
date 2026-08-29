@@ -425,9 +425,14 @@ export function normalizePermissionRequirement(result) {
     ? req.approvals
       .filter((a) => a && typeof a === "object" && !Array.isArray(a)
         && typeof a.approvalId === "string" && a.approvalId.length > 0 && a.approvalId.length <= 160
-        && typeof a.action === "string" && a.action.length > 0 && a.action.length <= 80)
+        && typeof a.action === "string" && a.action.length > 0 && a.action.length <= 80
+        && (a.targetRef === undefined || (typeof a.targetRef === "string" && a.targetRef.length <= 200)))
       .slice(0, 4)
-      .map((a) => ({ approvalId: a.approvalId, action: a.action }))
+      .map((a) => ({
+        approvalId: a.approvalId,
+        action: a.action,
+        ...(a.targetRef === undefined ? {} : { targetRef: a.targetRef }),
+      }))
     : [];
   if (Array.isArray(req.approvals) && req.approvals.length > 0 && approvals.length === 0) return null;
   if (!permissions.length && !grantOrigins.length && !grantGlobal && !approvals.length) return null;
@@ -459,6 +464,21 @@ export function normalizePermissionRequirement(result) {
  * broadened. "storage" is verified too so the grant PERSISTS (without it the
  * grant is session-only and evaporates with the MV3 worker). Returns an
  * honest outcome; every failure is surfaced, never swallowed. */
+export async function resolveApprovalRequirement(requirement, approve, { sendFn = send } = {}) {
+  const out = { ok: true, errors: [] };
+  for (const approval of requirement?.approvals ?? []) {
+    const res = await sendFn("management.resolve-approval", {
+      approvalId: approval.approvalId,
+      approve: approve === true,
+    }).catch((e) => ({ error: String(e?.message ?? e) }));
+    if (res?.ok !== true) {
+      out.ok = false;
+      out.errors.push(res?.error ?? `approval ${approval.approvalId} could not be resolved`);
+    }
+  }
+  return out;
+}
+
 export async function approvePermissionRequirement(requirement, {
   sendFn = send,
   verifyPermissions = async (permissions) => {
@@ -472,14 +492,9 @@ export async function approvePermissionRequirement(requirement, {
   // run-bound-only for extension principals — this call carries the owner's
   // card-click authority, nothing else.
   if (requirement?.approvals?.length) {
-    for (const a of requirement.approvals) {
-      const res = await sendFn("management.resolve-approval", { approvalId: a.approvalId, approve: true })
-        .catch((e) => ({ error: String(e?.message ?? e) }));
-      if (res?.ok !== true) {
-        out.ok = false;
-        out.errors.push(res?.error ?? `approval ${a.approvalId} could not be resolved`);
-      }
-    }
+    const resolved = await resolveApprovalRequirement(requirement, true, { sendFn });
+    out.ok = resolved.ok;
+    out.errors.push(...resolved.errors);
     return out;
   }
   if (requirement?.permissions?.length) {
@@ -1170,7 +1185,8 @@ export async function runConversationTurn(container, { text, attachments = [], h
   // the exact Chrome permission request + sets the exactly-scoped browser-
   // control grant, then retries the turn once so the task proceeds. Deny
   // dismisses; nothing is granted. One card per distinct requirement.
-  const pendingApprovals = new Map(); // key -> { requirement, status, card }
+  const pendingApprovals = new Map(); // key -> { requirement, status, card, blocking }
+  const approvalById = new Map();
   let approvalRetryRequested = false;
   // P1-A approval-retry binding: the approval ids the owner just resolved with
   // the Allow click. The retry turn's run start carries them so the service
@@ -1182,43 +1198,49 @@ export async function runConversationTurn(container, { text, attachments = [], h
   const handleApprovalDecision = async (requirement, card, sourceEvent, approve) => {
     const entry = pendingApprovals.get(requirement.key);
     if (!entry || entry.status !== "pending") return;
-    // A genuine owner gesture only (the Settings approvals surface's guard):
-    // the card's own click event must be browser-trusted with live transient
-    // activation — a scripted/model-forged "click" can never grant.
+    // A genuine owner gesture only: a scripted/model-forged click can never
+    // resolve a pending run capability.
     const liveActivation = typeof navigator === "undefined" || !navigator.userActivation
-      ? true // older engine without the API: isTrusted is the remaining bar
+      ? true
       : navigator.userActivation.isActive === true;
     if (sourceEvent?.isTrusted !== true || !liveActivation) return;
-    if (!approve) {
-      entry.status = "denied";
-      card?.setAttribute("state", "denied");
-      return;
+    entry.status = approve ? "granting" : "denying";
+    const outcome = approve
+      ? await approvePermissionRequirement(requirement)
+      : await resolveApprovalRequirement(requirement, false);
+    if (outcome.ok && entry.requestId) {
+      const resolved = await send("run.resolve-inline-approval", {
+        requestId: entry.requestId,
+        approve: approve === true,
+      }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+      if (resolved?.ok !== true) {
+        outcome.ok = false;
+        outcome.errors.push(resolved?.error ?? "the paused tool request could not be resolved");
+      }
     }
-    entry.status = "granting";
-    const outcome = await approvePermissionRequirement(requirement);
     if (outcome.ok) {
-      entry.status = "granted";
-      card?.setAttribute("state", "granted");
-      approvalRetryRequested = true;
-      approvalBindingForRetry = (requirement.approvals ?? [])
-        .map((a) => a.approvalId)
-        .filter((id) => typeof id === "string" && id.length > 0);
-      if (attemptSettled && !stale()) {
-        // The common case: the run already finished narrating the denial, then
-        // the owner clicked Allow — retry detached (the turn's result was
-        // already returned to the caller; the retry renders into this surface).
-        approvalRetryRequested = false;
-        Promise.resolve().then(() => executeTurn()).catch(() => {});
+      entry.status = approve ? "granted" : "denied";
+      card?.setAttribute("state", entry.status);
+      // A blocking request remains inside the original tool invocation: the SW
+      // wakes that exact promise. Legacy browser-grant denials still retry the
+      // turn because those tools currently report only after returning.
+      if (!entry.blocking && approve) {
+        approvalRetryRequested = true;
+        approvalBindingForRetry = (requirement.approvals ?? [])
+          .map((a) => a.approvalId)
+          .filter((id) => typeof id === "string" && id.length > 0);
+        if (attemptSettled && !stale()) {
+          approvalRetryRequested = false;
+          Promise.resolve().then(() => executeTurn()).catch(() => {});
+        }
       }
     } else {
-      // Stay actionable + honest: the card reports WHY it failed and can be
-      // retried (e.g. the owner dismissed Chrome's prompt the first time).
       entry.status = "pending";
       card?.setAttribute("state", "error");
       card?.setAttribute("detail", outcome.errors.join("; ") || "the approval could not be completed");
     }
   };
-  const maybeRenderApproval = (result) => {
+  const maybeRenderApproval = (result, { blocking = false, requestId = null } = {}) => {
     const requirement = normalizePermissionRequirement(result);
     if (!requirement) return;
     const existing = pendingApprovals.get(requirement.key);
@@ -1236,11 +1258,18 @@ export async function runConversationTurn(container, { text, attachments = [], h
     }
     let card = null;
     if (typeof document !== "undefined" && typeof c.append === "function") {
-      card = document.createElement("permission-approval-card");
-      card.setAttribute("reason", requirement.reason);
-      if (requirement.permissions.length) card.setAttribute("permissions", JSON.stringify(requirement.permissions));
-      if (requirement.grantOrigins.length) card.setAttribute("origins", JSON.stringify(requirement.grantOrigins));
-      if (requirement.grantGlobal) card.setAttribute("global", "true");
+      const actionApproval = requirement.approvals.length > 0;
+      card = document.createElement(actionApproval ? "approval-card" : "permission-approval-card");
+      if (actionApproval) {
+        const approval = requirement.approvals[0];
+        card.setAttribute("title", `Approve ${approval.action}?`);
+        card.setAttribute("body", `Action: ${approval.action}\nTarget reference: ${approval.targetRef || requirement.reason.split(": ").slice(1).join(": ")}`);
+      } else {
+        card.setAttribute("reason", requirement.reason);
+        if (requirement.permissions.length) card.setAttribute("permissions", JSON.stringify(requirement.permissions));
+        if (requirement.grantOrigins.length) card.setAttribute("origins", JSON.stringify(requirement.grantOrigins));
+        if (requirement.grantGlobal) card.setAttribute("global", "true");
+      }
       card.addEventListener("approve", (ev) => handleApprovalDecision(requirement, card, ev?.detail?.sourceEvent, true));
       card.addEventListener("deny", (ev) => handleApprovalDecision(requirement, card, ev?.detail?.sourceEvent, false));
       // Insert BEFORE the connected live-status row so the row stays the
@@ -1252,7 +1281,10 @@ export async function runConversationTurn(container, { text, attachments = [], h
         if (typeof c.scrollTop === "number") c.scrollTop = c.scrollHeight;
       }
     }
-    pendingApprovals.set(requirement.key, { requirement, status: "pending", card });
+    const entry = { requirement, status: "pending", card, blocking, requestId };
+    pendingApprovals.set(requirement.key, entry);
+    for (const approval of requirement.approvals) approvalById.set(approval.approvalId, entry);
+    if (requestId) approvalById.set(requestId, entry);
     status({
       state: "waiting-for-permission",
       message: `approval needed: ${requirement.reason}`,
@@ -1337,6 +1369,24 @@ export async function runConversationTurn(container, { text, attachments = [], h
           ? c.appendTool({ name: callEff.name, args: callEff.args, status: "running" })
           : appendBubble(c, "tool", `→ ${ev.toolName}`);
         toolCards.push(ev.toolName, card);
+        break;
+      }
+      case "approval-request": {
+        // The tool invocation is still pending in the worker. Render the card
+        // on this exact runId-filtered conversation; its decision wakes that
+        // same invocation rather than launching a second run.
+        maybeRenderApproval(ev.result, { blocking: true, requestId: ev.requestId ?? null });
+        break;
+      }
+      case "approval-settled": {
+        const entry = approvalById.get(String(ev.approvalId ?? ev.requestId ?? ""));
+        if (entry && ["granted", "denied", "expired"].includes(ev.state)) {
+          entry.status = ev.state;
+          entry.card?.setAttribute("state", ev.state);
+          if (ev.state === "expired") {
+            entry.card?.setAttribute("detail", "The request expired after 60 seconds. The action was not performed.");
+          }
+        }
         break;
       }
       case "tool-result": {

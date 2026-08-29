@@ -132,6 +132,7 @@ const BASELINE_ROUTES = [
   "run.list",
   "run.cancel",
   "run.resume",
+  "run.resolve-inline-approval",
   "run.dismissFailed",
   "run.dismissedFailed",
   "run.retry",
