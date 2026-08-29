@@ -998,8 +998,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "notices": "extension/wasm/licenses/date-NOTICES.txt"
   },
   "binary": {
-   "sha256": "cb8b4e72f1ea3ab9f5134c8e789f0f5343f4d6043218cca0a3253ff56eacfd66",
-   "bytes": 52291,
+   "sha256": "a762e1cdcbfa18f5497fd39a20a4158f74173737187e5bd85a67acebf6b737a8",
+   "bytes": 52459,
    "tier": "tiny",
    "initialPages": 2,
    "maxPages": 512

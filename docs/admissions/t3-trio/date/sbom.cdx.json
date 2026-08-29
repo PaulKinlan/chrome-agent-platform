@@ -16,7 +16,7 @@
       "name": "date_formatter_bounded clean-room source",
       "version": "1.0.0",
       "licenses": [{ "license": { "id": "0BSD" } }],
-      "hashes": [{ "alg": "SHA-256", "content": "8018b93306115905b8e149debb9ed25b2c47d946a9c6a6bd89e86154221baa23" }]
+      "hashes": [{ "alg": "SHA-256", "content": "d9dd6502f98c5b7cbc0f3cb155e539b33043c87c7c60ccda25c5bd046c8be530" }]
     },
     {
       "type": "library",

@@ -1,11 +1,11 @@
 # date_formatter_bounded provenance
 
 - **Source repository:** `https://github.com/PaulKinlan/chrome-agent-platform`
-- **Source commit:** `d748876ae51dd6b1def64fd206916adf9d33cc62`
+- **Source commit:** `486005dbfb84bd8ae9f469ee1f83f3e91f9b038c`
 - **Source file:** `docs/admissions/t3-trio/date/source/main.c`
-- **Source SHA-256:** `8018b93306115905b8e149debb9ed25b2c47d946a9c6a6bd89e86154221baa23`
-- **Binary SHA-256:** `cb8b4e72f1ea3ab9f5134c8e789f0f5343f4d6043218cca0a3253ff56eacfd66`
-- **Binary size:** 52,291 bytes
+- **Source SHA-256:** `d9dd6502f98c5b7cbc0f3cb155e539b33043c87c7c60ccda25c5bd046c8be530`
+- **Binary SHA-256:** `a762e1cdcbfa18f5497fd39a20a4158f74173737187e5bd85a67acebf6b737a8`
+- **Binary size:** 52,459 bytes
 - **Build receipt:** `metadata/build-receipt.txt` (scrubbed, retained)
 - **Toolchain:** wasi-sdk clang 18.1.2; wasm32-wasip1; wasi-libc from that SDK sysroot
 - **SBOM:** `sbom.cdx.json`
