@@ -157,10 +157,13 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
       gzip, head, markdown, md5sum, patch, sha256sum, sha512sum, sort,
       sqlite3-query-bounded, stat, tail, toml2json, touch, tr, tree, truncate, uniq,
       uuid, wc, xxd.
-- [x] **Live bounded lazy tool provider** — every run gets exactly two fixed definitions,
-      `search_tools` and `execute_tool`, regardless of catalog size. Search authorizes
-      nothing; execute accepts only a single-use run-bound reference and revalidates
-      identity, permission, grant, document and run authority before and after dispatch.
+- [x] **Live bounded lazy tool provider** — every run gets exactly three fixed definitions,
+      `search_tools`, `list_tools`, and `execute_tool`, regardless of catalog size. Search
+      authorizes nothing; list/search share each tool's real JSON Schema and exact
+      transport limits; execute accepts only a single-use run-bound reference and
+      revalidates identity, permission, grant, document and run authority before and
+      after dispatch. Complete artifact/script fields use only their documented backing-
+      store bounds while ordinary arguments retain the strict 16/32 KiB limits.
 - [x] **Bounded awk/date are admitted** through the immutable Settings-only preview
       route with retained byte-identical rebuilds and lock-faithful licence records.
 - [ ] **The remaining candidate lanes are separate** — htmlq, numbat, bttf, sed, jq,

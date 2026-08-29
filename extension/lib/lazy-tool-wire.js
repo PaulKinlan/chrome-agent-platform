@@ -7,6 +7,7 @@
 import { TOOL_SEARCH_BOUNDS } from "./tool-search.js";
 import { selectedCapabilitySummary } from "./chrome-tool-capabilities.js";
 import { TOOL_CATALOG_BOUNDS } from "./tool-catalog.js";
+import { toolArgumentContract } from "./tool-argument-contract.js";
 
 function ownData(value, key) {
   try {
@@ -65,7 +66,11 @@ export const LAZY_PROTOCOL_TOOL_WIRE = Object.freeze([
           type: "string",
           pattern: "^sel_[a-f0-9]{36}$",
         }),
-        arguments: Object.freeze({ type: "object" }),
+        arguments: Object.freeze({
+          type: "object",
+          description: "Arguments must match the selected tool's schemaSummary exactly. Its x-cap-argument-limits names the UTF-8 byte and shape bounds; designated largeContent fields are the only exception to ordinary limits.",
+          "x-cap-default-argument-limits": toolArgumentContract(),
+        }),
       }),
     }),
   }),

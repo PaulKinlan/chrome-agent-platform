@@ -14,7 +14,7 @@ export const TOOL_SEARCH_BOUNDS = Object.freeze({
   defaultTopK: 6,
   maxResultBytes: 32 * 1024,
   maxSummaryBytes: 512,
-  maxSchemaSummaryBytes: 1024,
+  maxSchemaSummaryBytes: 4096,
 });
 
 const FORBIDDEN =
@@ -127,8 +127,10 @@ export function projectToolSearchResult(descriptor) {
       descriptor.description,
       TOOL_SEARCH_BOUNDS.maxSummaryBytes,
     ),
-    schemaSummary: boundedSearchText(
-      descriptor.schemaSummary,
+    // Schema string leaves were already secret-redacted before canonical JSON
+    // serialization; do not run text redaction over JSON syntax here.
+    schemaSummary: truncateUtf8(
+      String(descriptor.schemaSummary ?? ""),
       TOOL_SEARCH_BOUNDS.maxSchemaSummaryBytes,
     ),
     sourceKind: descriptor.sourceKind,

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.403] — 2026-08-29
+- Big content no longer breaks tool calls: agents can save full documents and scripts (up to 256 KB for artifacts, 64 KB for script source), every tool now tells the model its exact size limits up front, and when a call is too large the error says which field, the limit, and how to fix it
+
 ## [0.2.402] — 2026-08-29
 - The new-tab hub gets easier to live with: creating an agent is a tidy dialog with the advanced bits tucked away, schedules can be written in plain English ('every 10 minutes'), picking a starting template is a slim dropdown instead of a wall of cards, the microphone starts listening the moment you click it, 'Find site tools' actually finds your pages again, and dark mode fixes grey-on-white chat bubbles and unreadable black-on-black tool results
 

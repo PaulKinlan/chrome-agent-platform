@@ -12,17 +12,21 @@ import { z } from "zod";
 import {
   executableBrowserToolRecords,
   executableBuiltinToolRecords,
+  executableBundledToolRecords,
   executableManagementToolRecords,
   executableWebMcpToolRecords,
   LAZY_PROTOCOL_TOOL_WIRE,
   LAZY_TOOL_PROTOCOL_BOUNDS,
   LazyToolProtocol,
+  sanitizeLazyToolArguments,
 } from "../extension/lib/lazy-tool-protocol.js";
 import { ShadowToolCatalogController } from "../extension/lib/tool-catalog-shadow.js";
+import { canonicalToolDescriptor } from "../extension/lib/tool-catalog.js";
 import { ToolSelectionAuthority } from "../extension/lib/tool-selection.js";
 import { managementToolset } from "../extension/lib/management-tools.js";
 import { memoryToolset } from "../extension/lib/agent.js";
 import { browserToolset } from "../extension/lib/browser-tools.js";
+import { BUNDLED_TOOL_PACKAGE_ROWS } from "../extension/lib/bundled-tool-packages.data.js";
 
 const HUB_SCOPE = { hub: true, agentId: "hub", origin: "", documentId: "" };
 
@@ -264,6 +268,35 @@ Deno.test("lazy protocol: unavailable tools are explainable but receive no execu
   assertEquals(protocol.diagnostics().activeSelections, 0);
 });
 
+Deno.test("lazy protocol: a 30 KiB HTML artifact uses the bounded large-content path without changing bytes", async () => {
+  const html = `<!doctype html><title>Large artifact</title><main>${"é<&>".repeat(6_000)}</main>`;
+  assert(new TextEncoder().encode(html).byteLength > LAZY_TOOL_PROTOCOL_BOUNDS.maxStringBytes);
+  let saved: Record<string, unknown> | undefined;
+  const records = executableManagementToolRecords(
+    managementToolset({
+      callRoute: (_type: string, args: Record<string, unknown>) => {
+        saved = args;
+        return { ok: true, id: "asset-1" };
+      },
+    }),
+    adapterContext(),
+  ).filter((record: { descriptorInput: { toolId: string } }) =>
+    record.descriptorInput.toolId === "create_asset"
+  );
+  const protocol = new LazyToolProtocol({
+    readSources: () => records,
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+  });
+  const context = runContext();
+  const searched = await protocol.search({ query: "create_asset", limit: 1 }, context);
+  const result = await protocol.execute({
+    selectionRef: searched.results[0].selectionRef,
+    arguments: { origin: "master", type: "html", name: "Large", content: html },
+  }, context);
+  assertEquals(result.ok, true);
+  assertEquals(saved?.content, html, "large-content writes must never normalize or truncate the document");
+});
+
 Deno.test("lazy protocol: hostile accessors, Unicode and oversized arguments fail without dispatch", async () => {
   let calls = 0;
   const protocol = new LazyToolProtocol({
@@ -295,6 +328,63 @@ Deno.test("lazy protocol: hostile accessors, Unicode and oversized arguments fai
   assertEquals(calls, 0);
 });
 
+Deno.test("lazy protocol: rejected size and shape errors name the field, actual size, limit, and remediation", async () => {
+  let calls = 0;
+  const tools = {
+    bounded: tool({
+      description: "bounded arguments",
+      inputSchema: z.object({ value: z.string().max(64), items: z.array(z.string()).optional() }),
+      execute: () => calls++,
+    }),
+  };
+  const protocol = new LazyToolProtocol({
+    readSources: () => executableBuiltinToolRecords(tools, adapterContext()),
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+  });
+  const context = runContext();
+  const invoke = async (arguments_: Record<string, unknown>) => {
+    const searched = await protocol.search({ query: "bounded", limit: 1 }, context);
+    return await protocol.execute({ selectionRef: searched.results[0].selectionRef, arguments: arguments_ }, context);
+  };
+
+  const transport = await invoke({ value: "x".repeat(LAZY_TOOL_PROTOCOL_BOUNDS.maxStringBytes + 1) });
+  assertEquals(transport.reason, "string-limit-exceeded");
+  assertStringIncludes(transport.detail, `value is ${LAZY_TOOL_PROTOCOL_BOUNDS.maxStringBytes + 1} UTF-8 bytes`);
+  assertStringIncludes(transport.detail, `limit ${LAZY_TOOL_PROTOCOL_BOUNDS.maxStringBytes}`);
+  assertStringIncludes(transport.detail, "create_asset.content large-content path");
+
+  const schema = await invoke({ value: "x".repeat(65) });
+  assertEquals(schema.reason, "parse-rejected");
+  assertStringIncludes(schema.detail, "value has 65 characters; limit 64");
+
+  const shape = await invoke({ value: "ok", items: Array(65).fill("x") });
+  assertEquals(shape.reason, "array-limit-exceeded");
+  assertStringIncludes(shape.detail, "items has 65 items; limit 64");
+  assertStringIncludes(shape.detail, "Split it into smaller calls");
+  assertEquals(calls, 0);
+});
+
+Deno.test("lazy protocol: over-limit large content reports the field and backing-store limit without truncation", async () => {
+  const records = executableManagementToolRecords(
+    managementToolset({ callRoute: () => ({ ok: true }) }),
+    adapterContext(),
+  ).filter((record: { descriptorInput: { toolId: string } }) => record.descriptorInput.toolId === "create_asset");
+  const protocol = new LazyToolProtocol({
+    readSources: () => records,
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+  });
+  const context = runContext();
+  const searched = await protocol.search({ query: "create_asset", limit: 1 }, context);
+  const actual = 256 * 1024 + 1;
+  const result = await protocol.execute({
+    selectionRef: searched.results[0].selectionRef,
+    arguments: { name: "too large", content: "x".repeat(actual) },
+  }, context);
+  assertEquals(result.reason, "string-limit-exceeded");
+  assertStringIncludes(result.detail, `content is ${actual} UTF-8 bytes; limit ${256 * 1024}`);
+  assertStringIncludes(result.detail, "never be silently truncated");
+});
+
 Deno.test("lazy protocol: Zod validation is applied before the existing dispatcher", async () => {
   let calls = 0;
   const protocol = new LazyToolProtocol({
@@ -308,7 +398,12 @@ Deno.test("lazy protocol: Zod validation is applied before the existing dispatch
       { selectionRef: ref, arguments: { value: 42 } },
       context,
     ),
-    { ok: false, error: "lazy-arguments-invalid", reason: "parse-rejected" },
+    {
+      ok: false,
+      error: "lazy-arguments-invalid",
+      reason: "parse-rejected",
+      detail: "value must be string; received number",
+    },
   );
   assertEquals(calls, 0);
 });
@@ -556,7 +651,7 @@ Deno.test("lazy protocol: results are bounded and secret-safe", async () => {
   assert(!wire.includes("abcdefghijklmnop"));
 });
 
-Deno.test("lazy provider capture: only two fixed protocol tools and selected schemas cross the wire", async () => {
+Deno.test("lazy provider capture: only three fixed protocol tools and selected schemas cross the wire", async () => {
   const inputs = [{
     sourceKind: "extension-builtin",
     packageId: "cap.core-tools",
@@ -631,7 +726,85 @@ Deno.test("lazy provider capture: only two fixed protocol tools and selected sch
   assert(!wire.includes("not_selected_tool"));
 });
 
-Deno.test("lazy protocol: production provider cutover binds only the fixed pair and protected flow guidance", async () => {
+Deno.test("lazy protocol: every registered product schema shares the exact transport bounds enforced by sanitization", () => {
+  const records = [
+    ...executableBuiltinToolRecords(memoryToolset({
+      get: async () => null,
+      set: async () => {},
+      list: async () => [],
+      grep: async () => [],
+    }), adapterContext()),
+    ...executableBrowserToolRecords(browserToolset(false), adapterContext()),
+    ...executableManagementToolRecords(managementToolset({ callRoute: () => ({ ok: true }) }), adapterContext()),
+    ...executableBundledToolRecords(BUNDLED_TOOL_PACKAGE_ROWS, {
+      scope: HUB_SCOPE,
+      sourceGeneration: "bundled-conformance:1",
+    }),
+    ...executableWebMcpToolRecords([{
+      name: "page_probe",
+      source: "declared",
+      description: "probe",
+      inputSchema: { type: "object", properties: { value: { type: "string" } } },
+    }], {
+      origin: "https://example.test",
+      agentId: "hub",
+      documentId: "hub-doc",
+      sourceGeneration: "page:1",
+    }, () => ({ ok: true })),
+  ];
+  assert(records.length > 100, "the conformance walk must cover the full registered product catalog");
+
+  for (const record of records) {
+    const descriptor = canonicalToolDescriptor(record.descriptorInput);
+    const schema = JSON.parse(descriptor.schemaSummary);
+    const limits = schema["x-cap-argument-limits"];
+    assert(limits, `${descriptor.name}: schema must expose transport limits`);
+    assertEquals(limits.maxDepth, LAZY_TOOL_PROTOCOL_BOUNDS.maxArgumentDepth, descriptor.name);
+    assertEquals(limits.maxNodes, LAZY_TOOL_PROTOCOL_BOUNDS.maxArgumentNodes, descriptor.name);
+    assertEquals(limits.maxObjectKeys, LAZY_TOOL_PROTOCOL_BOUNDS.maxObjectKeys, descriptor.name);
+    assertEquals(limits.maxArrayItems, LAZY_TOOL_PROTOCOL_BOUNDS.maxArrayItems, descriptor.name);
+    assertEquals(limits.defaultMaxStringUtf8Bytes, LAZY_TOOL_PROTOCOL_BOUNDS.maxStringBytes, descriptor.name);
+
+    const field = limits.largeContent?.field ?? "value";
+    const stringLimit = limits.largeContent?.maxUtf8Bytes ?? limits.defaultMaxStringUtf8Bytes;
+    sanitizeLazyToolArguments({ [field]: "x".repeat(stringLimit) }, descriptor);
+    let error: unknown;
+    try {
+      sanitizeLazyToolArguments({ [field]: "x".repeat(stringLimit + 1) }, descriptor);
+    } catch (caught) {
+      error = caught;
+    }
+    assert(error instanceof Error, `${descriptor.name}: over-limit probe must fail`);
+  }
+});
+
+Deno.test("lazy protocol: search and list share the selected tool's accurate large-content schema", async () => {
+  const records = executableManagementToolRecords(
+    managementToolset({ callRoute: () => ({ ok: true }) }),
+    adapterContext(),
+  );
+  const protocol = new LazyToolProtocol({
+    readSources: () => records,
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+  });
+  const searched = await protocol.search({ query: "create_asset", limit: 1 }, runContext());
+  const searchSchema = JSON.parse(searched.results[0].schemaSummary);
+  assertEquals(searchSchema["x-cap-argument-limits"].largeContent, {
+    field: "content",
+    maxUtf8Bytes: 256 * 1024,
+  });
+  assertEquals(searchSchema.allOf[0].required, ["name", "content"]);
+  assertEquals(searchSchema.allOf[0].properties.key.maxLength, 64);
+
+  const listed = await protocol.list({ source: "management" }, runContext());
+  assertEquals(listed.ok, true);
+  const listedAsset = (listed as { tools: { management: Array<{ name: string; schemaSummary: string }> } })
+    .tools.management.find((entry) => entry.name === "create_asset");
+  assert(listedAsset);
+  assertEquals(listedAsset.schemaSummary, searched.results[0].schemaSummary);
+});
+
+Deno.test("lazy protocol: production provider cutover binds only the fixed set and protected flow guidance", async () => {
   const agent = await Deno.readTextFile("extension/lib/agent.js");
   const policy = await Deno.readTextFile("extension/lib/runtime-policy.js");
   const worker = await Deno.readTextFile(

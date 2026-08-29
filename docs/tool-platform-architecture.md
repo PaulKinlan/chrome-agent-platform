@@ -157,8 +157,8 @@ authorization.
 `CAP-FB-20260823-LAZY-PROVIDER-CUTOVER-01` binds the reusable protocol core to
 every agent run while retaining the public Settings-only shadow capture:
 
-- the actual AI-SDK provider map contains exactly `search_tools` and
-  `execute_tool`; measured provider-definition bytes remain constant for
+- the actual AI-SDK provider map contains exactly `search_tools`, `list_tools`,
+  and `execute_tool`; measured provider-definition bytes remain constant for
   catalogs of 20, 100, and 1000 rows, and no dynamic descriptor/schema enters
   provider options or prompts;
 - search rebuilds the live bounded lexical catalog and returns only in-scope
@@ -170,6 +170,16 @@ every agent run while retaining the public Settings-only shadow capture:
   invented, expired, restarted, cross-scope, concurrent, or replayed references,
   and re-resolves every immutable and live authority fence before validation,
   before dispatch, and after dispatch;
+- list and search share each tool's provider JSON Schema plus an
+  `x-cap-argument-limits` contract (UTF-8 string/payload bytes, depth, nodes,
+  keys, and array items). The same contract drives lazy sanitization and the
+  artifact/script store ceilings, so discovery and enforcement cannot drift;
+- ordinary arguments retain 16 KiB/string and 32 KiB/payload limits. Only the
+  named product-owned fields (`create_asset.content`, `update_asset.content`,
+  `generate_ui.html`, and script `source`) receive their backing store's larger
+  bound. Those strings stay byte-exact and are never normalized or truncated;
+- rejected size/shape calls return the field/path, actual size, exact limit, and
+  a concrete retry instruction instead of an opaque `bad-data` detail;
 - adapters retain each source's existing Zod/schema validator and exact dispatch
   closure. Browser and management permissions/grants, memory run ownership, and
   WebMCP enrollment/document/source/approval checks remain the only execution
