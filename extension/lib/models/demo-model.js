@@ -86,8 +86,12 @@ function delegateChildTask(prompt) {
 // delegate tool calls, driving agent-do's concurrent same-step execution.
 function delegateParallelRefs(prompt) {
   const sliceText = extractText(latestRunSlice(prompt)?.slice ?? (Array.isArray(prompt) ? prompt : []));
-  const m = sliceText.match(/@demo-delegate-parallel\s+([\w.-]+)\s+([\w.-]+)/);
+  const m = sliceText.match(/@demo-delegate-parallel(?:-slow)?\s+([\w.-]+)\s+([\w.-]+)/);
   return m ? [m[1], m[2]] : null;
+}
+
+function wantsSlowFirstParallelDelegate(prompt) {
+  return /@demo-delegate-parallel-slow\b/.test(extractText(latestRunSlice(prompt)?.slice ?? (Array.isArray(prompt) ? prompt : [])));
 }
 
 // "@demo-delegate-x<N>" (after the agent marker) — N sequential delegations
@@ -241,7 +245,7 @@ function lazyDemoCall(prompt, { delegate = false, delegateAgent = false } = {}) 
       const [refA, refB] = [refs.at(-2), refs.at(-1)];
       return refA && refB
         ? [
-          { id: "execute_delegate_a", name: "execute_tool", input: { selectionRef: refA, arguments: { agent: parallelRefs[0], task: "@demo-tools" } } },
+          { id: "execute_delegate_a", name: "execute_tool", input: { selectionRef: refA, arguments: { agent: parallelRefs[0], task: wantsSlowFirstParallelDelegate(prompt) ? "@demo-tools @demo-slow" : "@demo-tools" } } },
           { id: "execute_delegate_b", name: "execute_tool", input: { selectionRef: refB, arguments: { agent: parallelRefs[1], task: "@demo-tools" } } },
         ]
         : null;

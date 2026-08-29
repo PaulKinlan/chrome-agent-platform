@@ -19,11 +19,12 @@
 //   5. UI: the parent's agent-chat surface renders the delegation (screenshot).
 //
 //   deno run -A scripts/kat-agent-delegation.ts <path-to-extension> [<out-dir>]
+import { launchChrome } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-agent-delegation`;
 const CHROMIUM = "/home/paulkinlan/.cache/puppeteer/chrome/linux-140.0.7339.82/chrome-linux64/chrome";
-const PORT = 9377;
 const STAMP = Date.now();
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail?: unknown) {
@@ -37,25 +38,23 @@ try { await Deno.stat(`${EXT}/dist/background/service-worker.js`); } catch {
   Deno.exit(1);
 }
 
-const proc = new Deno.Command(CHROMIUM, {
-  args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
-    `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-    `--remote-debugging-port=${PORT}`, "--remote-allow-origins=*",
-    `--user-data-dir=${ROOT}.cache/kat-agent-delegation-${STAMP}`, "about:blank"],
-  stdout: "null", stderr: "piped",
-}).spawn();
-
+// Kernel-assigned CDP port; the endpoint comes from THIS Chrome process.
+let proc: Deno.ChildProcess | null = null;
 let ws: WebSocket | null = null;
 try {
-  const wsUrl = await new Promise<string>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("no devtools url")), 15000);
-    (async () => { for (;;) { try { const r = await fetch(`http://127.0.0.1:${PORT}/json/version`); const j = await r.json(); clearTimeout(t); resolve(j.webSocketDebuggerUrl); return; } catch { await sleep(300); } } })();
+  const launched = await launchChrome({
+    binary: CHROMIUM,
+    args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
+      `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--remote-allow-origins=*",
+      `--user-data-dir=${ROOT}.cache/kat-agent-delegation-${STAMP}`, "about:blank"],
   });
-  ws = new WebSocket(wsUrl);
+  proc = launched.proc;
+  ws = new WebSocket(launched.wsUrl);
   await new Promise((r) => ws!.onopen = r);
 } catch (e) {
   console.log(`FAIL: could not start Chrome for Testing — ${String(e)}`);
-  proc.kill(); Deno.exit(1);
+  try { proc?.kill(); } catch { /* already gone */ }
+  Deno.exit(1);
 }
 let id = 0; const pending = new Map<string, (v: any) => void>();
 ws!.onmessage = (m: MessageEvent) => { const j = JSON.parse(m.data); if (j.id && pending.has(String(j.id))) { pending.get(String(j.id))!(j); pending.delete(String(j.id)); } };
@@ -70,7 +69,7 @@ for (let i = 0; i < 20 && !swTarget; i++) {
   const { result: { targetInfos } } = await send("Target.getTargets");
   swTarget = targetInfos.find((t: any) => t.type === "service_worker" && String(t.url).includes("dist/background"));
 }
-if (!swTarget) { console.log("FAIL: no service worker target"); proc.kill(); Deno.exit(1); }
+if (!swTarget) { console.log("FAIL: no service worker target"); proc?.kill(); Deno.exit(1); }
 const extId = new URL(swTarget.url).host;
 await Deno.mkdir(OUT, { recursive: true });
 
@@ -129,10 +128,12 @@ try {
   check("helper agent created", helper?.ok === true, helper);
   const solo = await page.ev(`globalThis.__katSend("named-agent.create", { name: "Solo Agent", role: "You work alone." })`);
   check("solo agent created (no delegation edges)", solo?.ok === true, solo);
-  const delegator = await page.ev(`globalThis.__katSend("named-agent.create", { name: "Delegator Prime", role: "You coordinate: delegate specialist subtasks to the agents in your delegation list and synthesize their results.", canDelegateTo: ["helper-bee", "mid-agent", "critic"] })`);
+  const permissionChild = await page.ev(`globalThis.__katSend("named-agent.create", { name: "Permission Child", role: "You use a provider whose host permission is intentionally absent." })`);
+  check("permission-denial child created", permissionChild?.ok === true, permissionChild);
+  const delegator = await page.ev(`globalThis.__katSend("named-agent.create", { name: "Delegator Prime", role: "You coordinate: delegate specialist subtasks to the agents in your delegation list and synthesize their results.", canDelegateTo: ["helper-bee", "mid-agent", "critic", "permission-child"] })`);
   check("delegator created with delegation edges", delegator?.ok === true, delegator);
   const got = await page.ev(`globalThis.__katSend("named-agent.get", { id: "delegator-prime" })`);
-  check("the edges persisted on the record", JSON.stringify(got?.agent?.canDelegateTo) === JSON.stringify(["helper-bee", "mid-agent", "critic"]), got?.agent?.canDelegateTo);
+  check("the edges persisted on the record", JSON.stringify(got?.agent?.canDelegateTo) === JSON.stringify(["helper-bee", "mid-agent", "critic", "permission-child"]), got?.agent?.canDelegateTo);
   const mid = await page.ev(`globalThis.__katSend("named-agent.create", { name: "Mid Agent", role: "You pass work down the chain.", canDelegateTo: ["leaf-agent"] })`);
   check("mid agent created (chain depth 1)", mid?.ok === true, mid);
   const leaf = await page.ev(`globalThis.__katSend("named-agent.create", { name: "Leaf Agent", role: "You are the end of the chain.", canDelegateTo: ["helper-bee"] })`);
@@ -167,6 +168,32 @@ try {
   const denied = await page.ev(`globalThis.__katSend("named-agent.run", { id: "solo-agent", task: "@demo-delegate-agent helper-bee" })`);
   check("the edge-less delegation completes honestly", denied?.ok === true, denied);
   check("the denial is the structured not-allowed text", typeof denied?.result === "string" && denied.result.includes("not allowed to delegate"), String(denied?.result ?? "").slice(0, 240));
+
+  // ── 4b. PROVIDER PERMISSION: delegated child terminal-fails honestly ─────
+  // Provider mutation and approval routes are intentionally Settings-only.
+  const settings = await newView(`chrome-extension://${extId}/options/options.html`);
+  await sleep(1000);
+  await settings.ev(ROUTE_HELPER);
+  const providerSet = await settings.ev(`(async () => {
+    const message = { type: "named-agent.set-provider", id: "permission-child", config: { provider: "openai", baseURL: "https://permission-denied.invalid/v1", model: "gpt-test", apiKey: "test-key" } };
+    const first = await globalThis.__katSend(message.type, message);
+    if (first?.ok === true) return { first, retry: first };
+    const pending = await globalThis.__katSend("management.pending-approvals", {});
+    const approval = (pending?.approvals ?? []).find((a) => a.action === "named-agent.set-provider");
+    if (!approval) return { first, pending, error: "no provider approval" };
+    const resolved = await globalThis.__katSend("management.resolve-approval", { approvalId: approval.approvalId, approve: true });
+    const retry = await globalThis.__katSend(message.type, message);
+    return { first, resolved, retry };
+  })()`);
+  check("permission child remote provider configured through owner approval", providerSet?.retry?.ok === true && providerSet?.resolved?.decision === "approved", providerSet);
+  const providerHostMissing = await page.ev(`chrome.permissions.contains({ origins: ["https://permission-denied.invalid/*"] })`);
+  check("provider host permission is genuinely absent", providerHostMissing === false, providerHostMissing);
+  const permissionRun = await page.ev(`globalThis.__katSend("named-agent.run", { id: "delegator-prime", task: "@demo-delegate-agent permission-child" })`);
+  check("permission-denied delegation completes parent honestly", permissionRun?.ok === true, permissionRun);
+  check("parent result reports provider permission denial", /permission|network access/i.test(String(permissionRun?.result ?? "")), permissionRun?.result);
+  const permissionRuns = await page.ev(`globalThis.__katSend("run.list", {})`);
+  const permissionChildRun = (permissionRuns?.runs ?? []).find((r) => r.agentId === "named:permission-child" && r.phase === "terminal" && r.terminal?.ok === false && String(r.clientCorrelationId ?? "").startsWith("delegate:permission-child:"));
+  check("permission-denied child is terminal failed, never paused", permissionChildRun?.phase === "terminal" && permissionChildRun?.terminal?.ok === false, permissionChildRun ?? permissionRuns);
 
   // ── 5. UI linkage: the parent's agent-chat renders the delegation ────────
   const chat = await newView(`chrome-extension://${extId}/ntp/ntp.html#agent=named:delegator-prime`);
@@ -243,17 +270,18 @@ try {
 
   // ── 7b. CANCEL DURING ADMISSION: allocation is observable BEFORE admit ───
   await page.ev(`(() => {
-    globalThis.__katAdmission = { armed: true, event: null, cancel: null, seen: [] };
+    globalThis.__katAdmission = { armed: true, event: null, fenceEvent: null, cancel: null, seen: [] };
     const port = chrome.runtime.connect({ name: "agent-progress" });
     globalThis.__katAdmission.port = port;
     port.onMessage.addListener((message) => {
       const ev = message?.type === "progress" ? message.event : message;
       globalThis.__katAdmission.seen.push(ev?.type ?? message?.type ?? "unknown");
       if (globalThis.__katAdmission.seen.length > 40) globalThis.__katAdmission.seen.shift();
+      if (ev?.type === "delegation-admission-cancelled") globalThis.__katAdmission.fenceEvent = ev;
       if (!globalThis.__katAdmission.armed || ev?.type !== "delegation-admission") return;
       globalThis.__katAdmission.armed = false;
       globalThis.__katAdmission.event = ev;
-      chrome.runtime.sendMessage({ type: "run.cancel", executionId: ev.parentRunId }, (res) => {
+      chrome.runtime.sendMessage({ type: "run.cancel", executionId: ev.executionId }, (res) => {
         globalThis.__katAdmission.cancel = res ?? { ok: false, error: chrome.runtime.lastError?.message ?? "no response" };
       });
     });
@@ -264,18 +292,19 @@ try {
   let admissionState = null;
   for (let i = 0; i < 80; i++) {
     await sleep(250);
-    admissionState = await page.ev(`(() => { const s = globalThis.__katAdmission; return s ? { event: s.event, cancel: s.cancel, seen: s.seen } : null; })()`);
-    if (admissionState?.event && admissionState?.cancel) break;
+    admissionState = await page.ev(`(() => { const s = globalThis.__katAdmission; return s ? { event: s.event, fenceEvent: s.fenceEvent, cancel: s.cancel, seen: s.seen } : null; })()`);
+    if (admissionState?.event && admissionState?.fenceEvent && admissionState?.cancel) break;
   }
   check("admission probe: child id allocated before durable admission", typeof admissionState?.event?.executionId === "string" && admissionState.event.executionId.length > 0, admissionState);
-  check("admission probe: parent cancellation accepted at the allocation fence", admissionState?.cancel?.ok === true, admissionState?.cancel);
+  check("admission probe: child cancellation accepted at the allocation fence", admissionState?.cancel?.ok === true, admissionState?.cancel);
+  check("admission probe: cancellation traversed the pending-admission fence", admissionState?.fenceEvent?.pendingAdmission === true && admissionState?.fenceEvent?.admissionPhase === "pending" && admissionState.fenceEvent.executionId === admissionState.event.executionId, admissionState?.fenceEvent);
   let admissionResult = null;
   for (let i = 0; i < 80 && !admissionResult; i++) {
     await sleep(250);
     const bg = await page.ev(`globalThis.__katBg["admissionCancel"]`);
     if (bg?.done) admissionResult = bg.res;
   }
-  check("admission probe: parent settles cancelled", admissionResult?.cancelled === true || String(admissionResult?.error ?? "").includes("cancel"), admissionResult);
+  check("admission probe: parent completes honestly after fenced-child cancellation", admissionResult?.ok === true || /cancel/i.test(String(admissionResult?.error ?? "")), admissionResult);
   const admissionChildId = admissionState?.event?.executionId ?? "";
   let admissionChildPhase = "";
   for (let i = 0; i < 40 && !admissionChildPhase; i++) {
@@ -301,6 +330,11 @@ try {
   check("audit: two sequential delegations recorded", settledCaps.length === 2, budgetRun.map((e) => ({ outcome: e.outcome, cap: e.childCap, rem: e.parentRemaining })));
   check("audit: the parent's remaining budget shrinks after child spend", settledRems.length === 2 && settledRems[0] > settledRems[1], settledRems);
   check("terminal budget: parent + subtree never exceeds the root cap", Number.isFinite(budget?.delegationSpend?.total) && budget.delegationSpend.total <= budget.delegationSpend.cap && budget.delegationSpend.cap === 12, budget?.delegationSpend);
+  const overCap = await page.ev(`globalThis.__katSend("named-agent.run", { id: "delegator-prime", task: "@demo-delegate-agent helper-bee @demo-delegate-x4" })`);
+  check("over-cap delegation is rejected, never committed successful", overCap?.ok === false && /budget/i.test(String(overCap?.error ?? "")), overCap);
+  const overCapRuns = await page.ev(`globalThis.__katSend("run.list", {})`);
+  const overCapRecord = (overCapRuns?.runs ?? []).find((r) => r.agentId === "named:delegator-prime" && r.phase === "terminal" && r.terminal?.ok === false && String(r.taskPreview ?? "").includes("@demo-delegate-x4"));
+  check("over-cap durable terminal record is failed", overCapRecord?.phase === "terminal" && overCapRecord?.terminal?.ok === false, overCapRecord ?? overCapRuns);
 
   // ── 9. PARALLEL SIBLINGS: two same-step delegations both complete + audit ─
   const parallel = await page.ev(`globalThis.__katSend("named-agent.run", { id: "delegator-prime", task: "@demo-delegate-agent helper-bee @demo-delegate-parallel helper-bee critic" })`);
@@ -312,8 +346,51 @@ try {
   check("audit: BOTH parallel siblings recorded with distinct child runs", sibs.length === 2 && new Set(sibs.map((e) => e.childRunId)).size === 2, sibs.map((e) => ({ to: e.toAgentId, childRunId: e.childRunId })));
   check("audit: the siblings fanned out to both targets", sibTargets.has("helper-bee") && sibTargets.has("critic"), [...sibTargets]);
   check("audit: the siblings share ONE parent run id", sibs.length === 2 && sibs[0].parentRunId === sibs[1].parentRunId, sibs.map((e) => e.parentRunId));
+
+  // ── 10. QUEUED-SIBLING CANCELLATION: second sibling never registers ─────
+  await page.ev(`(() => {
+    globalThis.__katQueued = { admissions: [] };
+    const port = chrome.runtime.connect({ name: "agent-progress" });
+    globalThis.__katQueued.port = port;
+    port.onMessage.addListener((message) => {
+      const ev = message?.type === "progress" ? message.event : message;
+      if (ev?.type === "delegation-admission") globalThis.__katQueued.admissions.push(ev);
+    });
+    return true;
+  })()`);
+  await page.ev(`globalThis.__katSendBg("queuedCancel", "named-agent.run", { id: "delegator-prime", task: "@demo-delegate-agent helper-bee @demo-delegate-parallel-slow helper-bee critic" })`);
+  let queuedParent = "", queuedChild = "";
+  for (let i = 0; i < 80 && (!queuedParent || !queuedChild); i++) {
+    await sleep(250);
+    const admissions = await page.ev(`globalThis.__katQueued?.admissions ?? []`);
+    const first = admissions?.[0];
+    if (first?.parentRunId) { queuedParent = first.parentRunId; queuedChild = first.executionId; }
+    if (queuedParent && queuedChild) {
+      const lst = await page.ev(`globalThis.__katSend("run.list", {})`);
+      const child = (lst?.runs ?? []).find((r) => r.executionId === queuedChild);
+      if (child?.phase === "running") break;
+    }
+  }
+  check("queued-sibling probe: first child holds the lock live", queuedParent.length > 0 && queuedChild.length > 0, { queuedParent, queuedChild });
+  const queuedCancel = await page.ev(`globalThis.__katSend("run.cancel", { executionId: "${queuedParent}" })`);
+  check("queued-sibling probe: parent cancellation accepted", queuedCancel?.ok === true, queuedCancel);
+  let queuedResult = null;
+  for (let i = 0; i < 100 && !queuedResult; i++) {
+    await sleep(250);
+    const bg = await page.ev(`globalThis.__katBg["queuedCancel"]`);
+    if (bg?.done) queuedResult = bg.res;
+  }
+  check("queued-sibling probe: parent settles cancelled", queuedResult?.cancelled === true || /cancel/i.test(String(queuedResult?.error ?? "")), queuedResult);
+  await sleep(500);
+  const queuedAdmissions = await page.ev(`globalThis.__katQueued?.admissions ?? []`);
+  const thisParentAdmissions = (queuedAdmissions ?? []).filter((ev) => ev.parentRunId === queuedParent);
+  check("queued sibling never allocates/registers after the cancellation snapshot", thisParentAdmissions.length === 1 && thisParentAdmissions[0].executionId === queuedChild, thisParentAdmissions);
+  const queuedAudit = await page.ev(`globalThis.__katSend("named-agent.delegations", {})`);
+  const queuedDenial = (queuedAudit?.entries ?? []).find((e) => e.parentRunId === queuedParent && e.outcome === "denied" && e.detail === "delegation-context");
+  check("queued sibling is denied by durable parent revalidation", queuedDenial?.outcome === "denied", queuedDenial);
+  await page.ev(`globalThis.__katQueued?.port?.disconnect()`);
 } finally {
-  try { proc.kill(); } catch { /* already gone */ }
+  try { proc?.kill(); } catch { /* already gone */ }
 }
 console.log(`\nKAT agent-delegation: ${pass} passed, ${fail} failed`);
 Deno.exit(fail ? 1 : 0);

@@ -193,6 +193,7 @@ import {
   createDelegationRegistry,
   delegationAuditRecord,
   delegationCancellationFailure,
+  durableDelegationParentIsRunning,
   evaluateDelegation,
   normalizeCanDelegateTo,
   remainingIterations,
@@ -2112,7 +2113,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         // A delegated child cannot resume through named-agent.run without
         // losing its parent/depth/cap authority. Fail terminally instead.
         if (!canPauseDelegatedRun(delegationState)) {
-          await durableRuns.settle(executionId, {
+          const terminal = await durableRuns.settle(executionId, {
             ok: false,
             error: early.reason,
             errorCategory: "permission",
@@ -2120,6 +2121,9 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
             errorAction: "Resolve the provider permission, then start a new parent run.",
             logicalId: taskId,
           });
+          if (terminal?.phase === "cancelled") {
+            return { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "cancelled", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId };
+          }
           return { ok: false, code: "delegation-permission-required", error: early.reason, errorCategory: "permission", executionId };
         }
         const paused = await durableRuns.pauseForPermission(executionId, {
@@ -2437,6 +2441,22 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
           : aborted;
       }
       await fence?.assertOwned?.();
+      // The terminal record is authoritative and idempotent: enforce the
+      // parent+subtree cap BEFORE committing success, because a later catch
+      // cannot replace an already-settled successful record.
+      const delegationSpend = delegationState
+        ? {
+          own: delegationState.step ?? 0,
+          descendants: delegationState.childSpend ?? 0,
+          total: (delegationState.step ?? 0) + (delegationState.childSpend ?? 0),
+          cap: delegationState.maxIterations,
+        }
+        : null;
+      if (delegationSpend && delegationSpend.total > delegationSpend.cap) {
+        const error = new Error("delegation subtree iteration budget exceeded");
+        error.code = "delegation-budget";
+        throw error;
+      }
       const terminal = await durableRuns.settle(executionId, { ok: true, result, logicalId: taskId });
       if (terminal?.phase === "cancelled") {
         return { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "cancelled", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId };
@@ -2482,19 +2502,6 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         }
         // Re-check ownership AFTER the notification commit as well.
         await fence?.assertOwned?.();
-      }
-      const delegationSpend = delegationState
-        ? {
-          own: delegationState.step ?? 0,
-          descendants: delegationState.childSpend ?? 0,
-          total: (delegationState.step ?? 0) + (delegationState.childSpend ?? 0),
-          cap: delegationState.maxIterations,
-        }
-        : null;
-      if (delegationSpend && delegationSpend.total > delegationSpend.cap) {
-        const error = new Error("delegation subtree iteration budget exceeded");
-        error.code = "delegation-budget";
-        throw error;
       }
       return { ok: true, result, executionId, ...(delegationSpend ? { delegationSpend } : {}) };
     } catch (error) {
@@ -3280,8 +3287,17 @@ async function runDelegatedChild(callerExecutionId, state, targetRef, task, brie
   if (!verdict.ok) {
     return await auditDenied(verdict.code, verdict.error, targetAgent.name ?? targetAgent.id, targetAgent.id);
   }
+  // FINAL authority check after every registry/provider lookup and immediately
+  // before the synchronous acquire/allocation/registration block. The
+  // in-memory state remains present while parent cancellation cascades; only
+  // the durable running phase can admit a queued sibling. There is deliberately
+  // NO await from this check's completion through children.add().
+  const parentSnapshot = await durableRuns.list();
+  if (!durableDelegationParentIsRunning(parentSnapshot, callerExecutionId)) {
+    return auditDenied("delegation-context", "the parent run is no longer durably running");
+  }
   if (!delegationRegistry.acquire(state.rootRunId)) {
-    return await auditDenied("delegation-cap", `this run already has ${MAX_DELEGATION_DESCENDANTS} delegated child runs — the per-run delegation cap`, targetAgent.name ?? targetAgent.id, targetAgent.id);
+    return auditDenied("delegation-cap", `this run already has ${MAX_DELEGATION_DESCENDANTS} delegated child runs — the per-run delegation cap`, targetAgent.name ?? targetAgent.id, targetAgent.id);
   }
   const childRunId = `delegate:${targetAgent.id}:${Date.now()}`;
   const brief = typeof briefContext === "string" && briefContext.trim()
@@ -3309,6 +3325,9 @@ async function runDelegatedChild(callerExecutionId, state, targetRef, task, brie
   // Trusted extension surfaces can deterministically cancel after allocation
   // but before admission; unknown progress types are ignored by normal UI.
   broadcastProgress({ type: "delegation-admission", parentRunId: callerExecutionId, executionId: childExecutionId, childRunId, agentId: targetAgent.id });
+  // Yield before durable admission so an owner cancellation triggered by the
+  // observable allocation event can fence the child before any work starts.
+  await new Promise((resolve) => setTimeout(resolve, 0));
   let result = null;
   let thrown = null;
   try {
@@ -3373,7 +3392,11 @@ async function runDelegatedChild(callerExecutionId, state, targetRef, task, brie
 async function cancelExecutionTree(executionId, { reason, requestId = null }) {
   const admission = delegationAdmissions.get(executionId);
   if (admission?.cancel?.(reason)) {
-    return { ok: true, cancelled: true, pendingAdmission: true, executionId };
+    const snapshot = admission.snapshot?.() ?? { phase: "pending" };
+    // Browser KAT authority: prove the cancellation hit the pre-admission
+    // fence, rather than merely observing an eventually-cancelled child.
+    broadcastProgress({ type: "delegation-admission-cancelled", executionId, pendingAdmission: true, admissionPhase: snapshot.phase });
+    return { ok: true, cancelled: true, pendingAdmission: true, admissionPhase: snapshot.phase, executionId };
   }
   const result = await durableRuns.cancel(executionId, {
     reason,

@@ -156,6 +156,14 @@ export function canStartDelegationIteration(state, step) {
   return Math.max(0, Math.floor(step)) + childSpend <= cap;
 }
 
+/** Durable authority for the final queued-delegation admission check. The
+ * in-memory live map intentionally outlives cancellation's child cascade, so
+ * only the durable running phase can authorize allocation after a lock wait. */
+export function durableDelegationParentIsRunning(snapshot, executionId) {
+  if (!executionId || !Array.isArray(snapshot?.runs)) return false;
+  return snapshot.runs.some((run) => run?.executionId === executionId && run?.phase === "running");
+}
+
 /** Explain a failed live-cancellation result; null means the cancellation was
  * accepted and its live abort did not report a failure. */
 export function delegationCancellationFailure(result) {

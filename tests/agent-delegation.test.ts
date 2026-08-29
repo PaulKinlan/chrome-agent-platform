@@ -32,6 +32,7 @@ import {
   createDelegationRegistry,
   delegationAuditRecord,
   delegationCancellationFailure,
+  durableDelegationParentIsRunning,
   evaluateDelegation,
   normalizeCanDelegateTo,
   resolveTargetAgent,
@@ -530,4 +531,37 @@ Deno.test("delegation SW pins (round 3): pre-admission fencing, dequeue revalida
   assertStringIncludes(sw, 'auditDenied("delegation-input"');
   assertStringIncludes(sw, "delegationCancellationFailure(child)");
   assertStringIncludes(sw, "delegationSpend.total > delegationSpend.cap");
+});
+
+// ── (9) ROUND-4 pins: durable dequeue fence + pre-settle budget/permission ─
+
+Deno.test("delegation durable parent authority: only a currently-running durable parent may allocate a queued child", () => {
+  const snapshot = { runs: [
+    { executionId: "parent-running", phase: "running" },
+    { executionId: "parent-cancelled", phase: "cancelled" },
+  ] };
+  assertEquals(durableDelegationParentIsRunning(snapshot, "parent-running"), true);
+  assertEquals(durableDelegationParentIsRunning(snapshot, "parent-cancelled"), false);
+  assertEquals(durableDelegationParentIsRunning(snapshot, "missing"), false);
+  assertEquals(durableDelegationParentIsRunning(null, "parent-running"), false);
+});
+
+Deno.test("delegation SW pins (round 4): durable revalidation is the final await; budget and permission outcomes precede success", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const child = sw.slice(sw.indexOf("async function runDelegatedChild"), sw.indexOf("// Cancel a run AND its live delegation subtree"));
+  const revalidateAt = child.indexOf("const parentSnapshot = await durableRuns.list()");
+  const registeredAt = child.indexOf("children.add(childExecutionId)");
+  assert(revalidateAt >= 0 && registeredAt > revalidateAt, "durable parent revalidation immediately precedes child registration");
+  const successPath = child.slice(revalidateAt + "const parentSnapshot = await durableRuns.list()".length, registeredAt);
+  assert(!successPath.includes("await "), "no event-loop gap exists between durable revalidation and child registration");
+  assertStringIncludes(sw, 'type: "delegation-admission-cancelled"');
+
+  const runBody = sw.slice(sw.indexOf("async function runTask"), sw.indexOf("async function runNamedAgentTask"));
+  const budgetAt = runBody.indexOf("delegationSpend.total > delegationSpend.cap");
+  const successSettleAt = runBody.indexOf("durableRuns.settle(executionId, { ok: true, result");
+  assert(budgetAt >= 0 && successSettleAt > budgetAt, "the subtree cap is enforced before durable success settles");
+
+  const permissionAt = runBody.indexOf('code: "delegation-permission-required"');
+  const permissionPrefix = runBody.slice(Math.max(0, permissionAt - 900), permissionAt);
+  assertStringIncludes(permissionPrefix, 'terminal?.phase === "cancelled"', "a concurrent parent cancellation remains the permission child's authority");
 });
