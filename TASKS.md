@@ -1368,7 +1368,7 @@ evidence every other task depends on).
 
 ## [CAP-FB-20260829-TEMPLATE-CARDS-01] Agent templates render as visual cards
 - Feedback: 2026-08-29 — product owner asked for visual template choices instead of plain list rows
-- Updated: 2026-08-29 06:39 UTC
+- Updated: 2026-08-29 07:11 UTC
 - Status: IN_REVIEW
 - Priority: P1
 - Owner: implementation session
@@ -1378,12 +1378,13 @@ evidence every other task depends on).
 - Candidate: this tracker commit
 - Shipping: —
 - Acceptance: the create-agent picker renders every shipped template through shared visual cards with name, a one-to-two-line persona summary, at most three skill badges plus an overflow count, and a labelled Use action; the curated six render first with a Starter badge; one Use click applies the editable persona/skills and Create persists it through the existing named-agent route; axe fails closed; a real loaded-extension screenshot proves the result
-- Review: fresh-session review required; pending
-- Gates: pre-change RED 3/3 source/component failures and 0/9 browser journey; focused 30/30; production build clean; visual-card KAT 9/9; existing template journey 38/38; blocked-axe probe exits 1 at the axe check while 8 other checks pass; full suite 2118/0; gallery/vocabulary/tracker/check-clean gates green
+- Review: fresh-session review round 1 REVISE (one P1: content-box articles overlapped adjacent rows by 22px); round 2 re-review pending
+- Gates: pre-change RED 3/3 source/component failures and 0/9 browser journey; round-2 geometry RED 9 pass / 1 fail with four -22px row gaps and content-box sizing; focused 30/30; production build clean; visual-card KAT 10/10 with equal-height, non-overlapping rows; existing template journey 38/38; blocked-axe probe exits 1 at the axe check while 8 other checks pass; full suite 2118/0; gallery/vocabulary/tracker/check-clean gates green
 - Blockers: —
-- Next: independent review of the candidate diff and browser evidence
+- Next: fresh-session round-2 re-review of the one-line sizing fix, geometry pin and replacement screenshot
 - Recover: `git log --oneline --all --grep CAP-FB-20260829-TEMPLATE-CARDS-01`
 - History:
+  - 2026-08-29 07:11 UTC — round-1 review's single P1 fixed without widening scope: `<agent-template-card>` articles now use border-box sizing, so their 14px padding and 1px border stay inside the equal-height grid track. The real-browser geometry pin failed before the fix with four -22px adjacent-row gaps (`content-box`) and passes after it; the replacement screenshot visibly shows clean row separation (SHA-256 `9378eb458b7489b7d96f42a6c854ce88ea21e759517b8f45b1a5b114ef1bb609`). Focused 30/30, visual-card KAT 10/10, existing template journey 38/38, production build clean, full suite 2118/0.
   - 2026-08-29 06:48 UTC — candidate gated. Shared `<agent-template-card>` renders name, bounded persona and skill badges with a Starter state; the create dialog orders the curated six first and one Use click applies the editable template. Real MV3 journey 9/9, existing template journey 38/38, full suite 2118/0. Axe ran clean on the gallery; repointing its fetch to a blocked local port made the same journey exit 1 at the axe gate. The rendered-gallery screenshot SHA-256 is `7187c6a9a74f15bbc8ffef873c387d42ba010a10edf8496f3bc2a0a1e4c28915`.
   - 2026-08-29 06:39 UTC — implementation started from current `origin/main`; baseline falsification recorded: all three source/component pins failed and the real-browser card journey failed 0/9 because the old picker rendered no cards
 

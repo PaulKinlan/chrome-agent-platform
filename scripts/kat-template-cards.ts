@@ -83,8 +83,42 @@ const galleryVisible = await ev(`(() => {
   const viewport = { width: innerWidth, height: innerHeight };
   return { focused: first?.shadowRoot?.activeElement === button, rect: rect ? { top: rect.top, bottom: rect.bottom, width: rect.width } : null, viewport };
 })()`);
+const cardGeometry = await ev(`(() => {
+  const rows = new Map();
+  for (const host of document.querySelectorAll('#agent-template-gallery agent-template-card')) {
+    const article = host.shadowRoot?.querySelector('article');
+    if (!article) continue;
+    const hostRect = host.getBoundingClientRect();
+    const articleRect = article.getBoundingClientRect();
+    const key = host.offsetTop;
+    if (!rows.has(key)) rows.set(key, []);
+    rows.get(key).push({
+      hostHeight: hostRect.height,
+      articleTop: articleRect.top,
+      articleBottom: articleRect.bottom,
+      boxSizing: getComputedStyle(article).boxSizing,
+    });
+  }
+  const orderedRows = [...rows.entries()].sort(([a], [b]) => a - b);
+  const gaps = orderedRows.slice(1).map(([, next], index) => {
+    const current = orderedRows[index][1];
+    return Math.min(...next.map((card) => card.articleTop)) - Math.max(...current.map((card) => card.articleBottom));
+  });
+  const equalHeights = orderedRows.every(([, row]) => {
+    const heights = row.map((card) => card.hostHeight);
+    return Math.max(...heights) - Math.min(...heights) < 1;
+  });
+  return {
+    rowCount: orderedRows.length,
+    gaps,
+    minGap: gaps.length ? Math.min(...gaps) : null,
+    equalHeights,
+    boxSizing: [...new Set(orderedRows.flatMap(([, row]) => row.map((card) => card.boxSizing)))],
+  };
+})()`);
 check("visual picker renders one card per shipped template", Array.isArray(cards) && cards.length === catalogueCount, { rendered: cards?.length, catalogueCount });
 check("dialog opens with the card gallery visible and its first Use action focused", galleryVisible?.focused === true && galleryVisible?.rect?.top >= 0 && galleryVisible?.rect?.bottom <= galleryVisible?.viewport?.height, galleryVisible);
+check("card rows have equal heights and never overlap", cardGeometry?.rowCount > 1 && cardGeometry?.equalHeights === true && cardGeometry?.gaps?.every((gap: number) => gap >= 0), cardGeometry);
 check("curated six are ordered first and visually marked Starter",
   Array.isArray(cards) && cards.length >= 6 && cards.slice(0, 6).every((card: any) => card.starter) && cards.slice(6).every((card: any) => !card.starter),
   cards?.slice(0, 8).map((card: any) => ({ id: card.id, starter: card.starter })));
