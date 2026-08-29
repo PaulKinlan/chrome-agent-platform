@@ -53,8 +53,11 @@ one line each here:
   `<provider-select>` native base-select vocabulary: same tokens, keyboard behavior and
   `--input-h` grid. The reusable visual card remains documented in the component gallery,
   but no longer crowds the creation path.
-- Remaining in this lane: scheme-aware conversation bubble contrast
-  (`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`).
+- Dark conversation contrast now resolves `--secondary-layer` through the
+  scheme-aware `--panel-2` token. The custom property inherits across the open shadow
+  boundary; the defect was the missing alias, which forced the light fallback.
+- Remaining in this lane: the same token-chain repair for JSON tool-response preview
+  text (`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`).
 
 ### Agent template visual-card picker (2026-08-29 — superseded by owner direction)
 - The visual-card component remains a documented reusable primitive, but its large

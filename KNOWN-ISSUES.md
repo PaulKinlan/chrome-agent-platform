@@ -34,7 +34,7 @@ The dialog's primary creation path competes with avatar, template, persona tooli
 skills, numeric scheduling, delegation and context-file controls. The active lane keeps
 all capability but progressively discloses specialist controls, replaces numeric schedule
 copy with deterministic English, aligns template selection with the shared native select,
-and repairs dark conversation token inheritance.
+and repairs dark conversation/tool-response token inheritance.
 
 All other open findings below retain live entries in `TASKS.md`.
 

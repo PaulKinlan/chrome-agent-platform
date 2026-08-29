@@ -138,6 +138,23 @@ for (const [name, path] of paths) {
     check(`${name}/${scheme}: contrast probe actually sampled styles`, sample.length >= minSample, { sampled: sample.length });
     const bad = sample.filter((s: any) => s.ratio < (s.large ? 3 : 4.5));
     check(`${name}/${scheme}: WCAG AA on ${sample.length} sampled text styles (worst ${Math.min(...sample.map((s: any) => s.ratio), 99)})`, bad.length === 0, bad.slice(0, 4));
+    if (name === "ntp-hub" && scheme === "dark") {
+      const userBubble = (await send("Runtime.evaluate", {
+        expression: `(() => {
+          ${lumJs}
+          const parse = (s) => (s.match(/\\d+(?:\\.\\d+)?/g) ?? []).slice(0, 3).map(Number);
+          const bubble = document.createElement('message-bubble');
+          bubble.setAttribute('role', 'user'); bubble.setAttribute('content', 'Dark contrast probe');
+          document.body.append(bubble);
+          const msg = bubble.shadowRoot.querySelector('.msg'); const body = bubble.shadowRoot.querySelector('.body');
+          const bg = getComputedStyle(msg).backgroundColor, fg = getComputedStyle(body).color;
+          const a = lum(parse(bg)), b = lum(parse(fg)); const ratio = (Math.max(a,b)+.05)/(Math.min(a,b)+.05);
+          bubble.remove(); return { bg, fg, ratio };
+        })()`,
+        returnByValue: true,
+      }, sessionId)).result?.result?.value;
+      check("ntp-hub/dark: user bubble resolves dark secondary-layer with AA ink", userBubble?.bg === "rgb(43, 40, 35)" && userBubble?.ratio >= 4.5, userBubble);
+    }
   }
   const d = String((globalThis as any).__darkBg), l = String((globalThis as any).__lightBg);
   check(`${name}: the two schemes resolve DIFFERENT palettes`, d !== l, { light: l, dark: d });

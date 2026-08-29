@@ -1,6 +1,10 @@
 # Changelog
 
+## [0.2.404] — 2026-08-29
+- fix(CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01): restore dark user-bubble contrast
+
 ## [0.2.403] — 2026-08-29
+- User messages now inherit the scheme-aware secondary surface token through their shadow root, fixing the light bubble fallback and restoring dark-mode text contrast
 - fix(CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01): use shared template select
 
 ## [0.2.402] — 2026-08-29

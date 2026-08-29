@@ -1387,13 +1387,14 @@ evidence every other task depends on).
 - Base: `origin/main@54d70a9b`
 - Candidate: —
 - Shipping: —
-- Acceptance: create-agent keeps name, what-it-does and Create dominant while every persona/advanced capability remains reachable; schedules parse deterministic supported English into the existing period/task shape and reject ambiguous text inline; the large template/background choice becomes the same native base-select vocabulary as provider selection; message bubbles inherit scheme-aware surface and ink tokens through their shadow boundary
+- Acceptance: create-agent keeps name, what-it-does and Create dominant while every persona/advanced capability remains reachable; schedules parse deterministic supported English into the existing period/task shape and reject ambiguous text inline; the large template/background choice becomes the same native base-select vocabulary as provider selection; message bubbles and JSON tool-response rows inherit scheme-aware surface and ink tokens through their shadow boundaries
 - Review: required; pending
 - Gates: focused dialog/parser/theme tests; full `deno test --allow-all tests/`; `npm run build`; loaded-extension browser check for the dialog and dark computed contrast
 - Blockers: —
 - Next: finish the four atomic concerns, run falsification and browser gates, then request review
 - Recover: `git log --oneline --all --grep CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`
 - History:
+  - 2026-08-29 21:15 UTC — diagnosed user-bubble dark contrast precisely: custom properties do inherit across the message-bubble shadow boundary, but `--secondary-layer` was never defined, so its light `#efede8` fallback won; it now aliases the scheme-aware `--panel-2` token. The new token-chain test was observed RED before the alias (5/6) and GREEN after (6/6); a loaded-extension computed-color assertion was added
   - 2026-08-29 21:00 UTC — the large create-dialog template card list now reuses the shared `<provider-select>` native base-select with Custom agent as its default; starter-first catalogue order and editable one-step prefill are preserved, and the loaded-extension template journeys were updated to drive the real select
   - 2026-08-29 20:45 UTC — schedule input now parses deterministic interval English into the existing period/task shape, presents the interpretation in a polite inline status, and blocks garbage or calendar timing the interval-only scheduler cannot represent; focused parser/dialog tests 10/10
   - 2026-08-29 20:30 UTC — implementation started from current origin/main; the primary name/what-it-does path now precedes one collapsed Advanced disclosure containing avatar, template, persona tools, skills, schedule, delegation and context files
