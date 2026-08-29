@@ -154,6 +154,23 @@ for (const [name, path] of paths) {
         returnByValue: true,
       }, sessionId)).result?.result?.value;
       check("ntp-hub/dark: user bubble resolves dark secondary-layer with AA ink", userBubble?.bg === "rgb(43, 40, 35)" && userBubble?.ratio >= 4.5, userBubble);
+      const toolTree = (await send("Runtime.evaluate", {
+        expression: `(() => {
+          ${lumJs}
+          const parse = (s) => (s.match(/\\d+(?:\\.\\d+)?/g) ?? []).slice(0, 3).map(Number);
+          const bubble = document.createElement('message-bubble');
+          bubble.setAttribute('role', 'tool'); bubble.setAttribute('tool-name', 'contrast_probe');
+          bubble.setAttribute('tool-status', 'done');
+          bubble.setAttribute('tool-result', JSON.stringify({ items: [{ title: 'Readable preview', count: 3 }] }));
+          document.body.append(bubble);
+          const preview = bubble.shadowRoot.querySelector('.tt-preview'); const tool = bubble.shadowRoot.querySelector('.tool');
+          const bg = getComputedStyle(tool).backgroundColor, fg = getComputedStyle(preview).color;
+          const a = lum(parse(bg)), b = lum(parse(fg)); const ratio = (Math.max(a,b)+.05)/(Math.min(a,b)+.05);
+          bubble.remove(); return { bg, fg, ratio, text: preview?.textContent ?? '' };
+        })()`,
+        returnByValue: true,
+      }, sessionId)).result?.result?.value;
+      check("ntp-hub/dark: JSON tree preview resolves scheme-aware ink", toolTree?.fg === "rgb(234, 230, 222)" && toolTree?.ratio >= 4.5 && /Readable/.test(toolTree?.text ?? ""), toolTree);
     }
   }
   const d = String((globalThis as any).__darkBg), l = String((globalThis as any).__lightBg);

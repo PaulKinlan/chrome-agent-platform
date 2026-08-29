@@ -28,7 +28,7 @@ with it. Fixed under `CAP-FB-20260827-MAIN-GATES-RED-02`.
 ## Open findings
 
 ### UI — create-agent asks for every specialist option at once
-`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01` · P1 · OPEN
+`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01` · P1 · IN_REVIEW
 
 The dialog's primary creation path competes with avatar, template, persona tooling,
 skills, numeric scheduling, delegation and context-file controls. The active lane keeps

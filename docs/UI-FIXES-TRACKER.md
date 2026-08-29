@@ -56,8 +56,15 @@ one line each here:
 - Dark conversation contrast now resolves `--secondary-layer` through the
   scheme-aware `--panel-2` token. The custom property inherits across the open shadow
   boundary; the defect was the missing alias, which forced the light fallback.
-- Remaining in this lane: the same token-chain repair for JSON tool-response preview
-  text (`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`).
+- JSON tool-response previews now resolve their legacy `--fg` spelling through
+  scheme-aware `--text`; keys, strings, numbers and nulls already used the `--ink`,
+  accent and muted chains. The missing preview alias was the black-on-black seam.
+- Five-commit candidate gated: post-review full suite 2367/0, developer build clean,
+  focused tests 21/21, loaded-extension template journeys 37/0 and 6/0, and both new
+  computed dark-color checks green. Independent review round 1 found that partial
+  schedule creation failures were hidden and invalid feedback recommended unsupported
+  weekday timing; both are fixed and independent round-2 review passed with no
+  remaining findings (`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`).
 
 ### Agent template visual-card picker (2026-08-29 — superseded by owner direction)
 - The visual-card component remains a documented reusable primitive, but its large

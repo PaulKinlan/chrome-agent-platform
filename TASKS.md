@@ -172,7 +172,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 |---|---|---|---|
 | P0 | DONE | [`CAP-FB-20260829-MAIN-GATES-RED-03`](#cap-fb-20260829-main-gates-red-03-the-journey-suite-is-red-on-main-49-checks-still-assert-the-pre-p0-all-optional-permission-model) | Journey suite red on main — 49 checks assert the pre-P0 permission model |
 | P1 | IN_REVIEW | [`CAP-FB-20260829-AGENT-BOARD-01`](#cap-fb-20260829-agent-board-01-the-shared-jobs-board-agents-post-and-claim-work) | The shared jobs board — agents post and claim work |
-| P1 | OPEN | [`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`](#cap-fb-20260829-create-dialog-declutter-01-create-agent-dialog-is-cluttered-and-its-scheduletheme-controls-are-inconsistent) | Create-agent dialog is cluttered and its schedule/theme controls are inconsistent |
+| P1 | IN_REVIEW | [`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`](#cap-fb-20260829-create-dialog-declutter-01-create-agent-dialog-is-cluttered-and-its-scheduletheme-controls-are-inconsistent) | Create-agent dialog is cluttered and its schedule/theme controls are inconsistent |
 | P0 | OPEN | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
 | P0 | OPEN | [`CAP-FB-20260827-HUB-FIRST-RUN-01`](#cap-fb-20260827-hub-first-run-01-the-first-screen-is-an-onboarding-wall-not-a-command-center) | The first screen is an onboarding wall, not a command center |
 | P0 | OPEN | [`CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01`](#cap-fb-20260827-tool-call-legibility-01-tool-call-cards-show-shape-not-answers) | Tool-call cards show shape, not answers |
@@ -1378,22 +1378,26 @@ evidence every other task depends on).
 
 ## [CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01] Create-agent dialog is cluttered and its schedule/theme controls are inconsistent
 - Feedback: 2026-08-29 — product owner asked to declutter persona controls, accept schedules in plain English, replace the large background-template list with a subtle select, and fix dark conversation contrast
-- Updated: 2026-08-29 20:30 UTC
-- Status: OPEN
+- Updated: 2026-08-29 21:30 UTC
+- Status: IN_REVIEW
 - Priority: P1
 - Owner: implementation session
 - Workspace: active (local path private)
 - Branch: `cap-create-dialog`
 - Base: `origin/main@54d70a9b`
-- Candidate: —
+- Candidate: this tracker commit
 - Shipping: —
 - Acceptance: create-agent keeps name, what-it-does and Create dominant while every persona/advanced capability remains reachable; schedules parse deterministic supported English into the existing period/task shape and reject ambiguous text inline; the large template/background choice becomes the same native base-select vocabulary as provider selection; message bubbles and JSON tool-response rows inherit scheme-aware surface and ink tokens through their shadow boundaries
-- Review: required; pending
-- Gates: focused dialog/parser/theme tests; full `deno test --allow-all tests/`; `npm run build`; loaded-extension browser check for the dialog and dark computed contrast
+- Review: independent round 1 REVISE (P1 partial schedule failure was discarded; P2 feedback recommended unsupported calendar timing); both fixed; independent round 2 PASS with no remaining findings
+- Gates: focused dialog/parser/select/dark tests 21/21; dark token tests observed RED before each missing alias and GREEN after; post-review full suite 2367/0 and developer build clean; loaded-extension template journeys 37/0 and 6/0; new user-bubble and JSON-preview computed dark-color checks green (the shared dark-scheme audit retains its three documented pre-existing failures)
 - Blockers: —
-- Next: finish the four atomic concerns, run falsification and browser gates, then request review
+- Next: coordinator merges the five-commit candidate
 - Recover: `git log --oneline --all --grep CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`
 - History:
+  - 2026-08-29 21:05 UTC — independent review round 2 PASS: verified `scheduleError` propagation, explicit partial-success warning, supported-only examples and regression pins; no remaining findings
+  - 2026-08-29 20:55 UTC — independent review round 1's two findings fixed: `{ ok: true, scheduleError }` now remains an honest partial success that opens the saved agent but warns that its schedule was not created, pinned across the SW and dialog contract; invalid feedback now suggests only schedules the parser accepts
+  - 2026-08-29 20:42 UTC — five-commit candidate gated: full suite 2366/0, developer build clean, template journeys 37/0 and 6/0, focused 20/20, and both new computed dark-color checks green. The shared dark-scheme audit remains 34/3 because its pre-existing Options active-tab and artifact sample-count findings are outside this lane; the candidate-specific checks pass
+  - 2026-08-29 21:30 UTC — diagnosed the related JSON response seam: keys/leaf values already resolve through scheme-aware ink/accent/muted tokens, but container preview text used undefined `--fg`, so near-black `#1c1a17` won on the dark panel. `--fg` now aliases `--text`; the new token test was observed RED before the alias (6/7) and GREEN after (7/7), with a loaded-extension computed-color assertion added
   - 2026-08-29 21:15 UTC — diagnosed user-bubble dark contrast precisely: custom properties do inherit across the message-bubble shadow boundary, but `--secondary-layer` was never defined, so its light `#efede8` fallback won; it now aliases the scheme-aware `--panel-2` token. The new token-chain test was observed RED before the alias (5/6) and GREEN after (6/6); a loaded-extension computed-color assertion was added
   - 2026-08-29 21:00 UTC — the large create-dialog template card list now reuses the shared `<provider-select>` native base-select with Custom agent as its default; starter-first catalogue order and editable one-step prefill are preserved, and the loaded-extension template journeys were updated to drive the real select
   - 2026-08-29 20:45 UTC — schedule input now parses deterministic interval English into the existing period/task shape, presents the interpretation in a polite inline status, and blocks garbage or calendar timing the interval-only scheduler cannot represent; focused parser/dialog tests 10/10

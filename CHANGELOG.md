@@ -1,22 +1,21 @@
 # Changelog
 
+## [0.2.407] — 2026-08-29
+- JSON tool-response previews now inherit the scheme-aware text token instead of a near-black fallback, fixing black-on-black rows in dark mode
+
 ## [0.2.404] — 2026-08-29
-- fix(CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01): restore dark user-bubble contrast
+- User messages now inherit the scheme-aware secondary surface token through their shadow root, fixing the light bubble fallback and restoring dark-mode text contrast
 
 ## [0.2.403] — 2026-08-29
-- User messages now inherit the scheme-aware secondary surface token through their shadow root, fixing the light bubble fallback and restoring dark-mode text contrast
-- fix(CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01): use shared template select
+- The create-agent template/background choice is now a subtle native select using the same control, keyboard behavior and 36px grid as provider selection, instead of a large card list
 
 ## [0.2.402] — 2026-08-29
-- The create-agent template/background choice is now a subtle native select using the same control, keyboard behavior and 36px grid as provider selection, instead of a large card list
-- feat(CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01): parse English schedules
+- Agent schedules now accept plain English such as “every couple of minutes” and “every hour”, show the exact interval before saving, and refuse unsupported or ambiguous calendar text instead of guessing
 
 ## [0.2.401] — 2026-08-29
-- Agent schedules now accept plain English such as “every couple of minutes” and “every hour”, show the exact interval before saving, and refuse unsupported or ambiguous calendar text instead of guessing
-- fix(CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01): disclose advanced agent options
+- Creating an agent is quieter: Name and What it does stay on the direct path to Create, while avatar, templates, persona tools, skills, schedules, delegation and context files remain available under one collapsed Advanced section
 
 ## [0.2.400] — 2026-08-29
-- Creating an agent is quieter: Name and What it does stay on the direct path to Create, while avatar, templates, persona tools, skills, schedules, delegation and context files remain available under one collapsed Advanced section
 - Agents can now post work to a shared board and claim each other's jobs: the hub keeps a bounded, tamper-proof ledger (agents can't forge entries with their memory tools), claims expire and recover automatically, finished jobs shrink to compact receipts that never lose the result, and results are delivered back to the requester's conversation with automatic bounded retries
 
 ## [0.2.399] — 2026-08-29

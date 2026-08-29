@@ -26,7 +26,7 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 - **Semantic**: danger `#b3261e`, success `#1a7f37`, warning `#9a6700`.
 - **Themes**: Sunlit (default light), Midnight (dark), Neon, Terminal. All
   restyle the same tokens (matching `extension/shared/theme.css`). Legacy semantic
-  spellings resolve through that chain: `--ink` → `--text` and
+  spellings resolve through that chain: `--ink` / `--fg` → `--text` and
   `--secondary-layer` → `--panel-2`, including inside component shadow roots.
 
 ## Directory function cards

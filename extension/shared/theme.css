@@ -65,6 +65,7 @@
   /* Legacy spellings some components predate: route them to their semantic
      twin so every surface resolves scheme-aware ink/surfaces. */
   --ink: var(--text);
+  --fg: var(--text);
   --secondary-layer: var(--panel-2);
   --warn: var(--warning);
   --bg-subtle: var(--panel-2);
