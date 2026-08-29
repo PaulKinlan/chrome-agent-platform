@@ -4491,10 +4491,10 @@ class AgentComposer extends Component {
       return;
     }
     const textLike = isTextLikeAttachment(file);
-    const canReadText = textLike && Number(file.size) <= MAX_LOCAL_TEXT_BYTES;
+    let attachAsText = textLike && Number(file.size) <= MAX_LOCAL_TEXT_BYTES;
     let dataURL = "";
     let type = String(file.type || (textLike ? "text/plain" : "application/octet-stream"));
-    if (canReadText) {
+    if (attachAsText) {
       const read = RUNTIME_SEND
         ? await RUNTIME_SEND("fs-grant.read-file", {
           grantId: file.grantId,
@@ -4503,7 +4503,9 @@ class AgentComposer extends Component {
           maxBytes: MAX_LOCAL_TEXT_BYTES,
         }).catch((err) => ({ ok: false, error: String(err?.message ?? err) }))
         : { ok: false, error: "extension runtime unavailable" };
-      if (!read?.ok || typeof read.content !== "string") {
+      if (read?.error === "fs_file_not_text") {
+        attachAsText = false;
+      } else if (!read?.ok || typeof read.content !== "string") {
         const recovery = read?.error === "fs_permission_lapsed"
           ? read.status === "denied"
             ? `${file.folderName} access was denied. Open Settings → Local folders, forget it, then add it again.`
@@ -4511,8 +4513,9 @@ class AgentComposer extends Component {
           : `Couldn't read ${file.name}: ${read?.error || "unknown error"}.`;
         this.setStatus(recovery, false);
         return;
+      } else {
+        dataURL = textToDataUrl(read.content, type);
       }
-      dataURL = textToDataUrl(read.content, type);
     }
     this.addAttachment({
       name: file.name,
@@ -4521,9 +4524,9 @@ class AgentComposer extends Component {
       dataURL,
       kind: "local-file",
     });
-    this.setStatus(canReadText
+    this.setStatus(attachAsText
       ? `Attached ${file.name} from ${file.folderName} as text context.`
-      : `Attached ${file.name} as a reference (${textLike ? "over 1 MiB" : "binary"}; contents weren't read).`);
+      : `Attached ${file.name} as a reference (${textLike && Number(file.size) > MAX_LOCAL_TEXT_BYTES ? "over 1 MiB" : "binary"}; contents weren't read).`);
   }
 
   // ── / command + @ mention popup ─────────────────────────────────────────

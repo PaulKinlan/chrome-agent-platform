@@ -235,7 +235,7 @@ evidence every other task depends on).
 ## [CAP-FB-20260829-COMPOSER-LOCAL-FILES-01] Attach files from persisted directory handles in the composer
 
 - Feedback: 2026-08-29 — the owner wants the composer to search a set of user-granted local directories and attach selected files as message context.
-- Updated: 2026-08-29 23:18 UTC
+- Updated: 2026-08-30 00:02 UTC
 - Status: IN_REVIEW
 - Resume: —
 - Priority: P1
@@ -247,11 +247,13 @@ evidence every other task depends on).
 - Shipping: —
 - Acceptance: supported Chrome desktop surfaces expose `/files`; it searches persisted directory handles by file-name substring with at most 50 results; selecting a text-like file up to 1 MiB attaches its bytes as context, while binary or larger text files attach metadata only; lapsed permissions name the Settings re-grant path; unsupported browsers do not expose the command; Settings retains grant, status, re-grant and forget controls.
 - Review: independent acceptance review pending
-- Gates: focused filesystem/component/attachment tests 66/66; full `nice -n 10 deno test --allow-all tests/` 2391 pass (14 steps), 0 fail after the final committed candidate; developer build green; browser KAT 5/5 for persisted-handle search and selection, with the operating-system directory picker documented as a manual gesture
+- Gates: review-fix regression proven RED against the prior candidate; focused filesystem/component/attachment tests 67/67 (74/74 including route assertions); full `nice -n 10 deno test --allow-all tests/` 2392 pass (14 steps), 0 fail after the committed review fix; developer build green; browser KAT 7/7 including binary fallback, with the operating-system directory picker documented as a manual gesture
 - Blockers: —
-- Next: independent acceptance review of the candidate diff and browser evidence
+- Next: independent re-review of the amended candidate and binary-fallback evidence
 - Recover: `git log -1 --oneline cap-fs-handles && git diff origin/main...cap-fs-handles`
 - History:
+  - 2026-08-30 00:02 UTC — review fix gates complete: focused 74/74 including route assertions, full 2392/0, developer build, and browser KAT 7/7; `04-binary-reference.png` shows the mislabelled `.txt` attached without bytes and with the honest binary-reference status.
+  - 2026-08-29 23:56 UTC — independent review requested revision: non-fatal UTF-8 decoding could turn a mislabelled binary `.txt` file into garbled model context. The reader now rejects malformed UTF-8 and binary control bytes, while the composer degrades that file to a metadata-only reference; the regression assertion was proven RED against the prior candidate before passing.
   - 2026-08-29 23:18 UTC — candidate gate complete: the deliberate route-set assertion went RED at 166 registered vs 165 baseline before its expected-list update, then focused 16/16 and full 2391/0 passed; the first full attempt also exposed transient contention on the shared security-suite lock and passed once the competing run released it.
   - 2026-08-29 23:02 UTC — implementation complete: reused the existing IndexedDB-backed Settings grant manager, added bounded recursive search and `/files` attachment flow, focused tests pass, and the production-path browser KAT lists and attaches a known text file; real directory selection remains one manual OS-picker gesture because CDP cannot supply a path to `showDirectoryPicker()`.
 

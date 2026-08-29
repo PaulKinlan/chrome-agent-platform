@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.412] — 2026-08-30
+- Reject binary bytes in local text files
+
+## [0.2.411] — 2026-08-29
+- Reject binary bytes in local text files
+
 ## [0.2.410] — 2026-08-29
 - Add local folder files to composer
 

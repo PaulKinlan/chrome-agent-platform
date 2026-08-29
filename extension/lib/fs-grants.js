@@ -624,10 +624,14 @@ export async function readFsGrantFile(
     if (bytes.byteLength > MAX_FS_TEXT_DECODE_BYTES) {
       textContent = `[Binary or text content exceeds decode limit (${MAX_FS_TEXT_DECODE_BYTES / (1024 * 1024)} MiB)]`;
     } else {
+      const hasBinaryControls = bytes.some((byte) =>
+        byte === 0 || (byte < 32 && byte !== 9 && byte !== 10 && byte !== 13) || byte === 127
+      );
       try {
-        textContent = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-      } catch {
-        textContent = null;
+        textContent = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      } catch { /* rejected below */ }
+      if (hasBinaryControls || textContent === null) {
+        return { ok: false, error: "fs_file_not_text", grantId, path: segments.join("/"), size: fileSize, sha256 };
       }
     }
   }

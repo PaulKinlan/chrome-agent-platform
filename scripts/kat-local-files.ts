@@ -21,6 +21,8 @@ const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-local-files`;
 const PROFILE = `${ROOT}.cache/kat-local-files-profile-${Date.now()}`;
 const FIXTURE_NAME = "composer-local-file-known.txt";
 const FIXTURE_TEXT = "Known local filesystem context from the browser KAT.";
+const BINARY_FIXTURE_NAME = "mislabelled-binary.txt";
+const BINARY_FIXTURE_BYTES = [0x66, 0x00, 0x80];
 await Deno.mkdir(OUT, { recursive: true });
 
 const { proc, wsUrl } = await launchChrome({
@@ -104,6 +106,10 @@ try {
     const writer = await file.createWritable();
     await writer.write(${JSON.stringify(FIXTURE_TEXT)});
     await writer.close();
+    const binary = await dir.getFileHandle(${JSON.stringify(BINARY_FIXTURE_NAME)}, { create: true });
+    const binaryWriter = await binary.createWritable();
+    await binaryWriter.write(new Uint8Array(${JSON.stringify(BINARY_FIXTURE_BYTES)}));
+    await binaryWriter.close();
     const { saveFsGrant } = await import(chrome.runtime.getURL("lib/fs-grants.js"));
     await saveFsGrant({ grantId: "fsg_composer_kat", handle: dir, name: "KAT local folder", kind: "directory", mode: "read" });
     return true;
@@ -125,6 +131,18 @@ try {
   })()`);
   check("/files lists the known file", commandShown?.labels?.includes(FIXTURE_NAME), commandShown);
   await screenshot(hub, "02-files-search-results.png");
+  await evaluate(hub, `(async () => {
+    const composer = document.querySelector("#composer");
+    const input = composer.querySelector("#task-input");
+    input.value = "/files:composer-local-file-known";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    for (let i = 0; i < 60; i++) {
+      const labels = [...composer.querySelectorAll(".popup .item .lbl")].map((node) => node.textContent);
+      if (labels.length === 1 && labels[0] === ${JSON.stringify(FIXTURE_NAME)}) return true;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return false;
+  })()`);
 
   await send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 }, hub);
   await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 }, hub);
@@ -150,6 +168,34 @@ try {
   check("selecting the result attaches the file as bounded text context", attached?.count === 1 && attached?.name === FIXTURE_NAME && attached?.kind === "local-file" && attached?.text === FIXTURE_TEXT, attached);
   check("the pending attachment is visible in the composer", attached?.chip === FIXTURE_NAME, attached);
   await screenshot(hub, "03-file-attached.png");
+
+  const binaryShown = await evaluate(hub, `(async () => {
+    const composer = document.querySelector("#composer");
+    const input = composer.querySelector("#task-input");
+    input.value = "/files:mislabelled-binary";
+    input.focus();
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    for (let i = 0; i < 60; i++) {
+      const labels = [...composer.querySelectorAll(".popup .item .lbl")].map((node) => node.textContent);
+      if (labels.includes(${JSON.stringify(BINARY_FIXTURE_NAME)})) return { labels };
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return { labels: [...composer.querySelectorAll(".popup .item .lbl")].map((node) => node.textContent) };
+  })()`);
+  check("/files substring search lists a mislabelled binary file", binaryShown?.labels?.includes(BINARY_FIXTURE_NAME), binaryShown);
+  await send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 }, hub);
+  await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 }, hub);
+  const binaryAttached = await evaluate(hub, `(async () => {
+    const composer = document.querySelector("#composer");
+    for (let i = 0; i < 60; i++) {
+      if (composer.attachments?.some((item) => item.name === ${JSON.stringify(BINARY_FIXTURE_NAME)})) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const item = composer.attachments?.find((entry) => entry.name === ${JSON.stringify(BINARY_FIXTURE_NAME)});
+    return { dataURL: item?.dataURL, kind: item?.kind, status: composer._status?.textContent || "" };
+  })()`);
+  check("mislabelled binary bytes degrade to a metadata-only reference", binaryAttached?.dataURL === "" && binaryAttached?.kind === "local-file" && binaryAttached?.status.includes("binary"), binaryAttached);
+  await screenshot(hub, "04-binary-reference.png");
 
   console.log(`MANUAL REMAINDER: choose a real directory once via Settings → Local folders → Add folder; CDP cannot select a showDirectoryPicker() directory in headless Chrome.`);
   console.log(`Evidence: ${OUT}`);

@@ -693,6 +693,32 @@ Deno.test("readFsGrantFile: reads text with SHA-256 digest and enforces maxBytes
   assertEquals(cappedRes.error, "fs_file_too_large");
 });
 
+Deno.test("readFsGrantFile: mislabelled .txt binary bytes fail closed instead of becoming replacement text", async () => {
+  for (const [grantId, bytes] of [
+    ["fsg_binary_utf8", new Uint8Array([0x66, 0x6f, 0x80])],
+    ["fsg_binary_control", new Uint8Array([0x66, 0x00, 0x6f])],
+  ] as const) {
+    await saveFsGrant({
+      grantId,
+      name: "mislabelled.txt",
+      kind: "file",
+      handle: {
+        kind: "file",
+        name: "mislabelled.txt",
+        queryPermission: async () => "granted",
+        getFile: async () => ({
+          name: "mislabelled.txt",
+          size: bytes.byteLength,
+          arrayBuffer: async () => bytes.buffer,
+        }),
+      },
+    });
+    const res = await readFsGrantFile(grantId, { asText: true });
+    assertEquals(res.ok, false);
+    assertEquals(res.error, "fs_file_not_text");
+  }
+});
+
 Deno.test("writeFsGrantFile: mode gate blocks write on read-only grant", async () => {
   const mockHandle = {
     kind: "directory",
