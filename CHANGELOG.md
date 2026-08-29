@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.399] — 2026-08-29
+- test(prompts): runtime-context round 5 — journey checks locate layers by badge, not position
+
 ## [0.2.398] — 2026-08-29
 - fix(prompts): runtime-context round 4 — strip-before-redact invariant, local-build attestation binding
 
