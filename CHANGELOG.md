@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.398] — 2026-08-29
+- fix(prompts): runtime-context round 4 — strip-before-redact invariant, local-build attestation binding
+
 ## [0.2.397] — 2026-08-29
 - fix(prompts): runtime-context round 3 — delegation parity, serialized-byte cap, documented trust class
 

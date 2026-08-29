@@ -6659,8 +6659,12 @@ const handlers = mergeRouteMaps(
       dispatch: async () => {
         // Do not even initialize or look up the worker until the production
         // provider gate has admitted this exact durable provider binding.
-        await ensureOrchestrator();
-        const a = orchestrator?.workers?.get(canonical);
+        // Retain the LOCAL build: the worker AND its layered receipts both
+        // come from it — no callback may read the racing global (an
+        // invalidate between capture and attestation would otherwise drop or
+        // swap the receipts under this worker).
+        const build = await ensureOrchestrator();
+        const a = build?.workers?.get(canonical);
         // The worker run is a SIDE-EFFECTING boundary: it must be fenced (an aborted
         // run must not start a delegated worker) AND serialized with the master via
         // withRunLock (the cached orchestrator's shared abort controller must never be
@@ -6700,7 +6704,7 @@ const handlers = mergeRouteMaps(
       try {
         const attestKeyState = await attestationKeyState();
         a.setAttestation?.((att) => {
-          const delegateLayers = boundaryLayersFor(orchestrator?.promptInfo, att.agentId);
+          const delegateLayers = boundaryLayersFor(build?.promptInfo, att.agentId);
           const bound = {
             runId: execId,
             taskId: logicalId,
@@ -6716,8 +6720,8 @@ const handlers = mergeRouteMaps(
             receipt: hmacSha256Hex(attestKeyState.bytes, String(att.digest ?? "")),
             composedReceipt: hmacSha256Hex(attestKeyState.bytes, String(att.composedDigest ?? "")),
             // Content-free layered receipts — same parity attach as the
-            // runTask boundary (this worker came from the cached orchestrator's
-            // build, whose promptInfo carries its layered receipts).
+            // runTask boundary, read from the LOCAL build that produced this
+            // worker (never the racing global).
             ...(delegateLayers ? { layers: delegateLayers } : {}),
           };
           recordRunAttestation(bound);

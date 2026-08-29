@@ -386,3 +386,37 @@ Deno.test("runtime-context r3: the roster NEVER composes into worker prompts, ev
   const hub = await gatherRuntimeContext({ scope: "hub", listAgents: spyList, memory: { get: async () => null }, chromeApi: null, now: new Date() });
   assertStringIncludes(hub.text, "Agents you can delegate to");
 });
+
+/* ── r4 (P1-1): strip-BEFORE-redact — control-split credentials stay dead ── */
+
+Deno.test("runtime-context r4: a NUL-split credential in the memory index never reassembles", () => {
+  const text = formatRuntimeContext(sampleContext({
+    memoryIndex: "notes\nBearer secr\x00et-token-12345\nmore\napi_key=sk-sp\x00lit-value-777",
+  }));
+  assert(!text.includes("secret-token-12345"), "the NUL-split bearer token never rejoins");
+  assert(!text.includes("sk-split-value-777"), "the NUL-split api key never rejoins");
+  assert(!text.includes("\x00"), "no raw control char reaches the prompt");
+  assertStringIncludes(text, "[REDACTED]");
+});
+
+Deno.test("runtime-context r4: roster fields strip controls before redaction too", () => {
+  const text = formatRuntimeContext(sampleContext({
+    roster: [{ name: "Be\x00e", role: "reader Bearer secr\x00et-tok-99999" }],
+  }));
+  assert(!text.includes("\x00"), "roster fields never emit raw control chars");
+  assert(!text.includes("secret-tok-99999"), "a control-split credential in a role never rejoins");
+  assertStringIncludes(text, "Bee"); // the name survives, cleaned
+});
+
+/* ── r4 (P1-2): boundary closures never read the RACING global build ────── */
+
+Deno.test("runtime-context r4: boundary closures read layered receipts from their LOCAL build only", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const closures = sw.match(/setAttestation\?\.\(\(att\) => \{[\s\S]*?recordRunAttestation\(bound\)/g) ?? [];
+  assert(closures.length >= 2, `expected the runTask + direct-delegation closures (found ${closures.length})`);
+  for (const c of closures) {
+    assert(c.includes("boundaryLayersFor("), "a boundary closure emits receipts without layered parity");
+    assert(!/\borchestrator\?\./.test(c) && !/\borchestrator\./.test(c),
+      "a boundary closure reads the global build at attestation time — invalidate/rebuild could swap or drop the receipts under a live worker");
+  }
+});
