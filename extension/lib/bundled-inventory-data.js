@@ -9,6 +9,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
  },
  "manifests": [
   {
+   "pkg": "cap.bundled.awk.filter.bounded",
+   "version": "1.0.0",
+   "digest": "8cbcb11400415f7a698bd46615a283c2e99c79f5eb607793e708b2045837922f"
+  },
+  {
    "pkg": "cap.bundled.base64",
    "version": "1.0.0",
    "digest": "961a8b5299debff5caa972ad648055da4181c4cada01579fdd8ad4064ee778a3"
@@ -22,6 +27,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "pkg": "cap.bundled.cut",
    "version": "1.0.0",
    "digest": "394b4b97b4af356d27701f6e966faf900436513a0b51f0ab9ba04ab88b4dbb14"
+  },
+  {
+   "pkg": "cap.bundled.date.formatter.bounded",
+   "version": "1.0.0",
+   "digest": "af8ec5960e7ec50e2e0e0793fc1957fce40d0a3fd436f133a4e91836a8b11f56"
   },
   {
    "pkg": "cap.bundled.diff",
@@ -251,6 +261,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 30190
   },
   {
+   "rel": "extension/wasm/cas/ceb8b08f4b82f9eb4977f2d182ef6a3f3928e74ca2c8a9834f69a50ff10ffef0.wasm",
+   "sha256": "ceb8b08f4b82f9eb4977f2d182ef6a3f3928e74ca2c8a9834f69a50ff10ffef0",
+   "size": 52024
+  },
+  {
    "rel": "extension/wasm/cas/d03a2558682ea04653d34753eae8df1fcd5cc8d92fc53de43106c3db0e1c57dc.wasm",
    "sha256": "d03a2558682ea04653d34753eae8df1fcd5cc8d92fc53de43106c3db0e1c57dc",
    "size": 56938
@@ -266,14 +281,29 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 32733
   },
   {
+   "rel": "extension/wasm/cas/e415ab94548da2d14bef43457cb9a990e66c3d8a151ba16e067f61d685d32312.wasm",
+   "sha256": "e415ab94548da2d14bef43457cb9a990e66c3d8a151ba16e067f61d685d32312",
+   "size": 58623
+  },
+  {
    "rel": "extension/wasm/cas/ebc062481bf0ba2bf1dfdae6e7cf32ffe47d665702fbc8646ec29e134a480aad.wasm",
    "sha256": "ebc062481bf0ba2bf1dfdae6e7cf32ffe47d665702fbc8646ec29e134a480aad",
    "size": 36095
   },
   {
+   "rel": "extension/wasm/licenses/0BSD.txt",
+   "sha256": "45ed5a16fbd326aace51906712b18c7b72b5407f8a28bcef7ac3240f8ef6ae91",
+   "size": 657
+  },
+  {
    "rel": "extension/wasm/licenses/Apache-2.0.txt",
    "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
    "size": 11357
+  },
+  {
+   "rel": "extension/wasm/licenses/awk-NOTICES.txt",
+   "sha256": "8359dc1bb7785c54dea8b7ad84f0a45238a0550c52378ece3d1170ce372aee2e",
+   "size": 1229
   },
   {
    "rel": "extension/wasm/licenses/BSD-2-Clause-cmark.txt",
@@ -284,6 +314,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": "extension/wasm/licenses/CAP-authored-Apache-2.0.txt",
    "sha256": "0072975ed6741b355546cc66b3d0e9ff94b9d12843890533266dc44141c4673d",
    "size": 12029
+  },
+  {
+   "rel": "extension/wasm/licenses/date-NOTICES.txt",
+   "sha256": "461a861c9ef404a0893fd2abccdc38417e2c56a7df17b559fecb85d47430f8c6",
+   "size": 1256
   },
   {
    "rel": "extension/wasm/licenses/MIT.txt",
@@ -306,6 +341,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 1002
   },
   {
+   "rel": "extension/wasm/manifests/cap.bundled.awk.filter.bounded-1.0.0.manifest.json",
+   "sha256": "8cbcb11400415f7a698bd46615a283c2e99c79f5eb607793e708b2045837922f",
+   "size": 1928
+  },
+  {
    "rel": "extension/wasm/manifests/cap.bundled.base64-1.0.0.manifest.json",
    "sha256": "961a8b5299debff5caa972ad648055da4181c4cada01579fdd8ad4064ee778a3",
    "size": 1809
@@ -319,6 +359,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": "extension/wasm/manifests/cap.bundled.cut-1.0.0.manifest.json",
    "sha256": "394b4b97b4af356d27701f6e966faf900436513a0b51f0ab9ba04ab88b4dbb14",
    "size": 1781
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.date.formatter.bounded-1.0.0.manifest.json",
+   "sha256": "af8ec5960e7ec50e2e0e0793fc1957fce40d0a3fd436f133a4e91836a8b11f56",
+   "size": 1938
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.diff-1.0.0.manifest.json",
@@ -441,6 +486,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 8534
   },
   {
+   "rel": "extension/wasm/sbom/awk.cdx.json",
+   "sha256": "9345ac1b7ada8fd56e142c2edea7e76cd38aace8fd7d9551124d652c2b264d5c",
+   "size": 867
+  },
+  {
    "rel": "extension/wasm/sbom/b2.cdx.json",
    "sha256": "0f3fd33ed5291426634a2064aae94b4d8c66589b3fe754aa233c1670f5aa8570",
    "size": 8972
@@ -454,6 +504,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": "extension/wasm/sbom/csvtool.cdx.json",
    "sha256": "5e429bf3e1dcc87f791218ac75a94b2bd6ff034c55d996ab508669a733e431e8",
    "size": 1131
+  },
+  {
+   "rel": "extension/wasm/sbom/date.cdx.json",
+   "sha256": "99fa1373046ff7815908cd127a64de166f6dbb015e866467a5fd3c5e5af792aa",
+   "size": 875
   },
   {
    "rel": "extension/wasm/sbom/gzip.cdx.json",

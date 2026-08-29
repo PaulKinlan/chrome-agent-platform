@@ -1,13 +1,32 @@
-# T3 trio — sed, awk, date (Tranche 2 Admission)
+# Bounded awk/date — tranche 2 admission checkpoint
 
-## sed (minised 1.16, BSD-3-Clause): ADMITTED
-minised 1.16 compiled byte-reproducibly to WASI preview-1 (`sed/binaries/sed.wasm`, 13 imports, 49,975 bytes).
+## awk_filter_bounded: ADMITTED
 
-## awk (clean-room 0BSD): ADMITTED
-Clean-room 0BSD awk engine implemented without setjmp/signal/fork (`awk/binaries/awk.wasm`), pure-WASI preview-1 (wasi-libc, default tier ≤16MiB, ~35KB). Field extraction ($1, $2, $NF, NF, NR, FS), patterns (/regex/, BEGIN, END), expressions, and print statements verified.
+The clean-room 0BSD subset is bundled through CAP's immutable package authority
+as `cap.bundled.awk.filter.bounded@1.0.0`. Its 58,623-byte preview-1 binary is
+content-addressed at SHA-256
+`e415ab94548da2d14bef43457cb9a990e66c3d8a151ba16e067f61d685d32312`.
+The Settings-only `tool.preview.run` route executes field extraction, `-F`,
+`BEGIN`/`END`, and literal patterns with optional `^`/`$` edge anchors. It does
+not claim general regular-expression compatibility. CAP projects an empty
+workspace, so this admission is stdin-only; direct file operands remain a
+supplementary build check and missing files fail nonzero.
 
-## date (clean-room 0BSD): ADMITTED
-Clean-room 0BSD date utility implemented (`date/binaries/date.wasm`), pure-WASI preview-1 backed by wasi-libc clock_time_get(CLOCK_REALTIME). Custom strftime formatting (+FORMAT), UTC (-u), ISO 8601 (-I), and epoch parsing (-d @EPOCH) verified.
+## date_formatter_bounded: ADMITTED
 
-## RESULT
-All three T3 trio tools (sed, awk, date) are now fully ADMITTED and runnable under the CAP WASI preview-1 runtime.
+The clean-room 0BSD formatter is bundled through the same authority as
+`cap.bundled.date.formatter.bounded@1.0.0`. Its 52,024-byte preview-1 binary is
+content-addressed at SHA-256
+`ceb8b08f4b82f9eb4977f2d182ef6a3f3928e74ca2c8a9834f69a50ff10ffef0`.
+The Settings-only route executes UTC, ISO, numeric epoch, and exact ISO date
+formatting. Invalid dates and missing `-d` operands fail nonzero with bounded
+diagnostics rather than silently using the current time.
+
+Both binaries have retained byte-identical rebuilds, relative hash records,
+scrubbed receipts, wasi-libc component inventory, CycloneDX SBOMs, notices,
+immutable preview specs, manifest/CAS identities, direct runtime KATs, and a
+loaded-extension browser KAT through the production route.
+
+The adjacent sed artifact is only a supplementary direct-WASI build proof in
+this tranche; this checkpoint does not claim that sed is bundled or admitted.
+Tokei is outside this tranche and is not claimed here.

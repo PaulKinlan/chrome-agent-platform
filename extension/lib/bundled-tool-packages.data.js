@@ -938,6 +938,81 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "disabledReason": null
  },
  {
+  "packageId": "cap.bundled.awk.filter.bounded",
+  "version": "1.0.0",
+  "toolId": "awk_filter_bounded",
+  "lane": "awk",
+  "displayName": "awk_filter_bounded",
+  "category": "text",
+  "description": "awk_filter_bounded - split, filter, and print bounded text records. Use for field extraction and literal line filtering. In/out: stdin plus one program arg to stdout. Supports -F and literal /pattern/ with ^/$ edge anchors.",
+  "caveats": [
+   "Bounded clean-room subset, not canonical awk; literal patterns with optional ^/$ edge anchors only.",
+   "CAP preview is stdin-only; no owner files are projected.",
+   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+  ],
+  "capabilities": [
+   "compute",
+   "text.transform"
+  ],
+  "replayClass": "read-only",
+  "licence": {
+   "spdx": "0BSD AND Apache-2.0",
+   "file": "extension/wasm/licenses/0BSD.txt",
+   "notices": "extension/wasm/licenses/awk-NOTICES.txt"
+  },
+  "binary": {
+   "sha256": "e415ab94548da2d14bef43457cb9a990e66c3d8a151ba16e067f61d685d32312",
+   "bytes": 58623,
+   "tier": "tiny",
+   "initialPages": 8,
+   "maxPages": 512
+  },
+  "manifestRef": "extension/wasm/manifests/cap.bundled.awk.filter.bounded-1.0.0.manifest.json",
+  "sourceKind": "bundled-package",
+  "canonicalNameClaim": false,
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
+ },
+ {
+  "packageId": "cap.bundled.date.formatter.bounded",
+  "version": "1.0.0",
+  "toolId": "date_formatter_bounded",
+  "lane": "date",
+  "displayName": "date_formatter_bounded",
+  "category": "time",
+  "description": "date_formatter_bounded - format current time, numeric epochs, or exact ISO dates. Use for UTC and ISO formatting. In/out: up to four bounded args to one stdout line. Invalid or missing date specs fail nonzero.",
+  "caveats": [
+   "Bounded clean-room formatter, not canonical date; exact numeric epoch and ISO date inputs only.",
+   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+  ],
+  "capabilities": [
+   "compute",
+   "text.transform"
+  ],
+  "replayClass": "read-only",
+  "licence": {
+   "spdx": "0BSD AND Apache-2.0",
+   "file": "extension/wasm/licenses/0BSD.txt",
+   "notices": "extension/wasm/licenses/date-NOTICES.txt"
+  },
+  "binary": {
+   "sha256": "ceb8b08f4b82f9eb4977f2d182ef6a3f3928e74ca2c8a9834f69a50ff10ffef0",
+   "bytes": 52024,
+   "tier": "tiny",
+   "initialPages": 2,
+   "maxPages": 512
+  },
+  "manifestRef": "extension/wasm/manifests/cap.bundled.date.formatter.bounded-1.0.0.manifest.json",
+  "sourceKind": "bundled-package",
+  "canonicalNameClaim": false,
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
+ },
+ {
   "packageId": "cap.bundled.sqlite3.query.bounded",
   "version": "1.0.0",
   "toolId": "sqlite3_query_bounded",

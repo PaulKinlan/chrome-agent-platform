@@ -46,7 +46,7 @@ const BUNDLED_ALLOWED_IMPORT_MODULE_SET = new Set(BUNDLED_ALLOWED_IMPORT_MODULES
 const PATH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/u;
 const REPLAY = new Set(["read-only", "idempotent", "mutating", "unknown"]);
 const PACKAGE_TYPES = new Set(["tool-bundle", "runtime", "library", "model-support"]);
-const SPDX_IDS = new Set(["Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", "MPL-2.0", "PSF-2.0", "Zlib", "blessing"]);
+const SPDX_IDS = new Set(["0BSD", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", "MPL-2.0", "PSF-2.0", "Zlib", "blessing"]);
 // Licence field: either one exact SPDX token from SPDX_IDS, or one exact
 // two-operand composite "<id> AND <id>" where BOTH operands are SPDX_IDS
 // tokens (e.g. "MIT AND Apache-2.0", "Zlib AND Apache-2.0"). Nothing else:
