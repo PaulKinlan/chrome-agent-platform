@@ -5,7 +5,7 @@
 //   - Uses modern window.navigation (navigate, navigatesuccess, navigateerror) where available.
 //   - Graceful fallback to popstate + hashchange when Navigation API is absent.
 //   - Exactly ONE active listener registration per window/document (no duplicate listeners).
-//   - History is the single source of truth: every route update produces a real history entry.
+//   - History is the single source of truth: Home is the root and only the current deep NTP route follows it.
 //   - Back/forward traversal restores full UI state (aria-current, data renders, scroll, focus, overlay state).
 //   - Deep links and reloads restore the exact target view/section.
 //   - Stale/invalid hashes fail closed safely without crashing.
@@ -218,6 +218,53 @@ export function parseNtpHash(hash) {
   if (mOmnibox) return { route: "omnibox", mode: decodeURIComponent(mOmnibox[1]), query: decodeURIComponent(mOmnibox[2]) };
 
   return { route: "hub" };
+}
+
+const NTP_ROOT_STATE = "capNtpRoot";
+const NTP_RETURNED_HOME_STATE = "capNtpReturnedHome";
+const NTP_ROOTED_STATE = "capNtpRooted";
+
+/** Seed a hub entry behind a direct deep link, while leaving normal hub loads
+ * as the single root entry. Reloaded rooted routes keep their existing stack. */
+export function ensureNtpHistoryRoot(win = typeof window !== "undefined" ? window : null) {
+  if (!win?.history?.replaceState || !win?.history?.pushState) return false;
+  const parsed = parseNtpHash(win.location?.hash ?? "");
+  const state = win.history.state && typeof win.history.state === "object" ? win.history.state : {};
+  if (parsed.route === "hub" || parsed.route === "compose" || parsed.route === "omnibox") {
+    win.history.replaceState({ ...state, [NTP_ROOT_STATE]: true }, "", win.location.href);
+    return false;
+  }
+  if (state[NTP_ROOTED_STATE] === true) return false;
+
+  const deepUrl = win.location.href;
+  win.history.replaceState({ route: "hub", [NTP_ROOT_STATE]: true }, "", `${win.location.pathname}${win.location.search}`);
+  win.history.pushState({ ...state, [NTP_ROOTED_STATE]: true }, "", deepUrl);
+  return true;
+}
+
+/** Keep the NTP stack rooted as [home, current view]. Moving between deep
+ * views replaces the current view instead of accumulating a breadcrumb trail. */
+export function navigateNtpRoute(win, hash, state, title = "") {
+  if (!win?.history?.pushState || !win?.history?.replaceState) return false;
+  const current = parseNtpHash(win.location?.hash ?? "");
+  const currentState = win.history.state && typeof win.history.state === "object" ? win.history.state : {};
+  const method = current.route === "hub" && currentState[NTP_RETURNED_HOME_STATE] !== true
+    ? "pushState"
+    : "replaceState";
+  win.history[method]({ ...(state ?? {}), [NTP_ROOTED_STATE]: true }, title, hash);
+  return method === "pushState" ? "push" : "replace";
+}
+
+/** Replace the current deep entry with the hub. This is a destination, not a
+ * Back command: older deep views cannot be replayed after Home or New task. */
+export function navigateHome(win = typeof window !== "undefined" ? window : null) {
+  if (!win?.history?.replaceState || parseNtpHash(win.location?.hash ?? "").route === "hub") return false;
+  win.history.replaceState(
+    { route: "hub", [NTP_ROOT_STATE]: true, [NTP_RETURNED_HOME_STATE]: true },
+    "",
+    `${win.location.pathname}${win.location.search}`,
+  );
+  return true;
 }
 
 /** A self-initiated same-document pushState/replaceState must NOT re-dispatch

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.410] — 2026-08-29
+- Fixed the visual regressions from the last update: the background-agent picker in Settings is back to its compact dropdown, dropdowns show a single arrow and stay on one line, the create-agent dialog has its sensible structure back with a stable width, the Chrome Agent Platform title at the top-left now takes you straight home, the + button starts fresh from home instead of walking backwards, and generated UI previews render in chat again
+
 ## [0.2.409] — 2026-08-29
 - Merge commit '3cf75034790b4c35777315cf2ccbbca443b1fe92' into HEAD
 

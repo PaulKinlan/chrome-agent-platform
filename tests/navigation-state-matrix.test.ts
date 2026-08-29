@@ -4,22 +4,29 @@
 // title/name, unknown routes fail closed to hub, and no blank "view" survives.
 // Pure helpers + a small history-stack model drive the owner's exact repros.
 // @ts-nocheck — the history-stack model is intentionally dynamic (house style).
-import { assertEquals } from "jsr:@std/assert@1";
+import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
+  ensureNtpHistoryRoot,
+  navigateHome,
+  navigateNtpRoute,
   parseNtpHash,
   resolveEntryMeta,
   shouldDispatchForNavigationType,
 } from "../extension/lib/navigation-controller.js";
 
-// A minimal history-stack model of the NTP navigation: each entry carries its
-// hash + the state pushed by openView/openThread/openAgentSurface.
+// A minimal rooted history model: the hub is entry zero and only the current
+// deep view follows it. Deep → deep replaces, so Back always means Home.
 function historyModel() {
   const stack = [{ hash: "", state: null }]; // the hub
   let index = 0;
   const push = (hash, state) => {
-    stack.splice(index + 1); // a push truncates the forward stack
-    stack.push({ hash, state });
-    index += 1;
+    stack.splice(index + 1); // a hub push truncates the forward stack
+    if (parseNtpHash(stack[index].hash).route === "hub") {
+      stack.push({ hash, state });
+      index += 1;
+    } else {
+      stack[index] = { hash, state };
+    }
   };
   return {
     get current() { return stack[index]; },
@@ -33,6 +40,74 @@ function historyModel() {
     },
   };
 }
+
+Deno.test("home is the navigation root: deep views replace in nav order and Home resets the stack", () => {
+  let href = "chrome-extension://cap/ntp/ntp.html#thread=one";
+  let index = 0;
+  const entries = [{ href, state: null }];
+  const setCurrent = (url, state, replace) => {
+    href = new URL(url, href).href;
+    const entry = { href, state };
+    if (replace) entries[index] = entry;
+    else {
+      entries.splice(index + 1, Infinity, entry);
+      index += 1;
+    }
+  };
+  const win = {
+    location: {
+      get href() { return href; },
+      get hash() { return new URL(href).hash; },
+      get pathname() { return new URL(href).pathname; },
+      get search() { return new URL(href).search; },
+    },
+    history: {
+      get state() { return entries[index].state; },
+      replaceState(state, _title, url) { setCurrent(url, state, true); },
+      pushState(state, _title, url) { setCurrent(url, state, false); },
+      back() {
+        if (index === 0) return false;
+        index -= 1;
+        href = entries[index].href;
+        return true;
+      },
+    },
+  };
+
+  assertEquals(ensureNtpHistoryRoot(win), true, "a direct deep link gets a hub root");
+  assertEquals(entries.map((entry) => new URL(entry.href).hash), ["", "#thread=one"]);
+  assertEquals(
+    navigateNtpRoute(win, "#view=options%2Foptions.html", { route: "view", title: "Settings" }),
+    "replace",
+    "deep → deep replaces rather than stacking another view",
+  );
+  assertEquals(entries.map((entry) => new URL(entry.href).hash), ["", "#view=options%2Foptions.html"]);
+
+  assertEquals(navigateHome(win), true);
+  assertEquals(new URL(entries[index].href).hash, "", "Home replaces the current deep route");
+  assertEquals(win.history.back(), true);
+  assertEquals(new URL(entries[index].href).hash, "", "Back from Home cannot resurrect the deep route");
+  assertEquals(win.history.back(), false, "the rooted stack has no older in-app view");
+
+  assertEquals(
+    navigateNtpRoute(win, "#agent=named:writer", { route: "agent", kind: "named", id: "writer" }),
+    "push",
+    "the next deep view follows home",
+  );
+  assertEquals(entries.map((entry) => new URL(entry.href).hash), ["", "#agent=named:writer"], "forward history was reset in nav order");
+  navigateHome(win);
+  assertEquals(new URL(entries[index].href).hash, "");
+});
+
+Deno.test("NTP brand and + both use the real Home destination before focusing a new task", async () => {
+  const html = await Deno.readTextFile(new URL("../extension/ntp/ntp.html", import.meta.url));
+  const js = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
+  assertStringIncludes(html, 'id="home" type="button" aria-label="Home"');
+  assertStringIncludes(js, 'document.getElementById("home")?.addEventListener("click", () => goHome());');
+  assertStringIncludes(js, 'document.getElementById("new-task")?.addEventListener("click", () => {\n  goHome({ focusAfter: composer });');
+  assertStringIncludes(js, "const changed = navigateHome(window);");
+  assertStringIncludes(js, "hideThreadView({ fromNavigation: true, focusAfter });");
+});
 
 Deno.test("parseNtpHash maps every route class (the owner's view classes)", () => {
   assertEquals(parseNtpHash(""), { route: "hub" });
@@ -64,16 +139,16 @@ Deno.test("resolveEntryMeta restores the EXACT title/name from the history state
   assertEquals(resolveEntryMeta(agent, null).name, null);
 });
 
-Deno.test("REPRO 1 — forward after back restores the task + settings with the exact state", () => {
+Deno.test("REPRO 1 — task → settings replaces the deep entry, then Back → Home", () => {
   const h = historyModel();
-  h.push("#thread=t1", { route: "thread", id: "t1" });          // click task
-  h.push("#view=options%2Foptions.html", { route: "view", path: "options/options.html", title: "Settings" }); // Settings
-  h.back();                                                    // back → the task
-  assertEquals(h.resolve().parsed, { route: "thread", id: "t1" });
-  h.forward();                                                 // FORWARD → Settings
+  h.push("#thread=t1", { route: "thread", id: "t1" });
+  h.push("#view=options%2Foptions.html", { route: "view", path: "options/options.html", title: "Settings" });
+  h.back();
+  assertEquals(h.resolve().parsed, { route: "hub" }, "Back from any deep view reaches Home");
+  h.forward();
   const r = h.resolve();
   assertEquals(r.parsed, { route: "view", path: "options/options.html" });
-  assertEquals(r.meta.title, "Settings", "forward restores the exact title, not a blank 'View'");
+  assertEquals(r.meta.title, "Settings", "forward restores the current deep view exactly");
 });
 
 Deno.test("REPRO 2 — Assets in-app back lands on hub, and forward re-opens 'Assets' (no blank 'view')", () => {
@@ -99,32 +174,22 @@ Deno.test("REPRO 3 — Skills → back → forward → back never produces a bla
   assertEquals(h.canForward, true, "the forward stack is intact, never truncated");
 });
 
-Deno.test("rapid alternation — the stack stays consistent across task/settings/assets/skills/agents", () => {
+Deno.test("rapid alternation keeps only Home + the latest deep view in navigation order", () => {
   const h = historyModel();
   const entries = [
     ["#thread=t1", { route: "thread", id: "t1" }],
     ["#view=options%2Foptions.html", { route: "view", path: "options/options.html", title: "Settings" }],
-    ["#view=artifacts%2Findex.html", { route: "view", path: "artifacts/index.html", title: "Assets" }],
-    ["#view=recipes%2Findex.html", { route: "view", path: "recipes/index.html", title: "Skills" }],
+    ["#view=artifacts%2Findex.html", { route: "view", path: "artifacts/index.html", title: "Artifacts" }],
     ["#agent=named:writer", { route: "agent", kind: "named", id: "writer", name: "Writer" }],
   ];
   for (const [hash, state] of entries) h.push(hash, state);
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const r = h.resolve();
-    const expected = parseNtpHash(entries[i][0]);
-    assertEquals(r.parsed, expected, `back #${i} restores the exact route`);
-    if (expected.route === "view") {
-      assertEquals(r.meta.title, entries[i][1].title, `view #${i} restores its title`);
-    }
-    if (expected.route === "agent") {
-      assertEquals(r.meta.name, entries[i][1].name, `agent #${i} restores its name`);
-    }
-    h.back();
-  }
+
+  assertEquals(h.resolve().parsed, { route: "agent", kind: "named", id: "writer" });
+  assertEquals(h.resolve().meta.name, "Writer");
+  h.back();
   assertEquals(h.resolve().parsed, { route: "hub" });
-  for (let i = 0; i < entries.length; i++) {
-    h.forward();
-    const r = h.resolve();
-    assertEquals(r.parsed, parseNtpHash(entries[i][0]), `forward #${i} restores the exact route`);
-  }
+  h.back();
+  assertEquals(h.resolve().parsed, { route: "hub" }, "there is no older in-app view behind Home");
+  h.forward();
+  assertEquals(h.resolve().parsed, { route: "agent", kind: "named", id: "writer" });
 });

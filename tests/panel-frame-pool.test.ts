@@ -34,10 +34,12 @@ Deno.test("PANEL-POOL: message-origin checks accept any pooled panel frame", () 
   assert(!/e\.source !== viewFrame\.contentWindow/.test(ntpJs), "no check may address the removed shared frame");
 });
 
-Deno.test("PANEL-POOL: the joint-history back-stack contract is preserved (pushState on open, back on close)", () => {
-  // CAP-FB-20260826-BACK-STACK-02: open pushes ONE history entry, close pops it.
+Deno.test("PANEL-POOL: the rooted-history contract is preserved (one routed entry, Back only for Back)", () => {
+  // Opening a panel routes through the controller so hub → view pushes once
+  // while deep → view replaces. The explicit Back control still traverses.
   const openView = ntpJs.slice(ntpJs.indexOf("function openView("), ntpJs.indexOf("function closeView("));
-  assert(/history\.pushState\(\{ route: "view"/.test(openView), "openView must keep the single pushState");
+  assert(/navigateNtpRoute\(window, hash, \{ route: "view"/.test(openView), "openView must use the rooted navigation controller");
+  assert(!/history\.pushState\(/.test(openView), "openView must not bypass rooted navigation with a direct push");
   const closeView = ntpJs.slice(ntpJs.indexOf("function closeView("), ntpJs.indexOf("// ── Multi-Page App"));
-  assert(/history\.back\(\)/.test(closeView), "closeView must keep the history.back() path");
+  assert(/history\.back\(\)/.test(closeView), "the explicit Back path must retain browser traversal");
 });
