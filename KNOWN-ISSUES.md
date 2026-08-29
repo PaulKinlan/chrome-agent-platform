@@ -37,15 +37,16 @@ history address it by immutable instance ID. The candidate uses the loaded agent
 instance ID; the real-browser gate creates and fires a schedule, opens the real agent row,
 and requires the scheduled prompt in the conversation.
 
-### Composer — macOS dictation is blocked by its decorative waveform meter
+### Composer — macOS dictation produces no transcript and obscures which microphone is alive
 `CAP-FB-20260829-MIC-DEAD-MACOS-01` · P0 · IN_REVIEW
 
-The waveform change awaited `getUserMedia({audio:true})` before constructing or starting
-SpeechRecognition. A denied request returned without entering the recording state, and a
-never-settling macOS permission request held the entire click forever. The candidate starts
-recognition first, uses the existing CSS fallback immediately, and upgrades the meter only
-when its parallel stream arrives; the composer already wires `mic-error` into its visible
-live status.
+The landed decoupling fix starts SpeechRecognition immediately, but the owner still gets no
+text and has multiple possible inputs. Web Speech cannot accept a `deviceId`: it follows the
+OS default, while only the decorative `getUserMedia` meter can be retargeted. The follow-up
+candidate exposes an anchored picker only for two or more physical inputs, persists a
+meter-only selection, gives each selection a brief real level check, handles disconnects,
+and makes no-speech/audio-capture/fallback states name that OS-default-versus-meter split
+with a System Settings recovery path.
 
 ### Infrastructure — worktree heads carried work that no ref was holding
 `CAP-FB-20260821-WORKTREE-HYGIENE-01` · P0 · OPEN (loss risk closed; cleanup awaits an owner decision)

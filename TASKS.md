@@ -1718,23 +1718,24 @@ evidence every other task depends on).
 
 ## [CAP-FB-20260829-MIC-DEAD-MACOS-01] macOS dictation has no transcript or trustworthy microphone diagnostics
 - Feedback: 2026-08-29 — product owner reports no transcript text on macOS, a constant fallback waveform, no way to configure microphone access, and multiple possible input devices
-- Updated: 2026-08-29 21:45 UTC
-- Status: OPEN
+- Updated: 2026-08-29 22:06 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P0
 - Owner: implementation worker
 - Workspace: active (local path private)
 - Branch: `cap-mic-devices`
-- Base: `55646faecb26115868fa2b42dec47b804875e64a`
-- Candidate: —
+- Base: `cebb4601a12b35385ff6e5272d9d2d4272586e5d`
+- Candidate: this commit
 - Shipping: —
 - Acceptance: preserve the landed immediate SpeechRecognition start; only when at least two physical audio inputs exist, offer an anchored microphone picker that requests labels once, persists a selected meter device, and briefly shows its genuine live level; clearly state that Web Speech transcription always follows the OS default input and cannot be retargeted by the picker; use the selection only for the dictation meter; handle device disconnect; no-speech and audio-capture errors identify likely OS-default versus selected meter inputs and point to system sound settings; fallback waveform state is explicitly exposed and never presented as live audio
 - Review: required by reviewer — pending
-- Gates: extend the real-browser mic KAT with multi-device, single-device, persistence, devicechange, and fallback-honesty checks; prove changed assertions RED on the unfixed product and GREEN on the candidate; focused unit tests, production build, and full suite green
-- Blockers: —
-- Next: implement the bounded device picker and diagnostics on the landed `0.2.402` mic-decoupling baseline
+- Gates: pre-fix real-browser mic KAT 43 pass / 1 device-picker fail (RED); candidate mic KAT 57/57 with live-level screenshot and axe clean; focused tests 17/17; full unit 2387/0; production security PASS; production build clean; full Chrome journey baseline currently stops at 85/120 on the unrelated inline-approval Settings-principal flow (`no owner approval was pending`), so the full-suite gate is not green
+- Blockers: required reviewer; known `origin/main@cebb4601` inline-approval journey regression fails outside this diff before 35 downstream checks, with its fix lane in flight
+- Next: reviewer checks the diff and browser evidence; rerun `npm run test:all` after the main approval-journey fix lands
 - Recover: `git show cap-mic-devices -- extension/shared/components.js scripts/kat-mic-state.ts tests/mic-button-state.test.ts`
 - History:
+  - 2026-08-29 22:06 UTC — candidate implemented and rebased onto `origin/main@cebb4601`: the picker renders only for two or more physical inputs (default/communications aliases excluded), requests labels once, persists the exact meter device, runs a bounded four-second live analyser preview, and handles devicechange without claiming to retarget Web Speech. Three no-speech rounds and `audio-capture` now name OS-default versus meter inputs and the macOS recovery path; fallback title/ARIA/status identify animation rather than live level. Falsification: unchanged product 43 pass / 1 explicit device-picker fail; candidate 57/57 with screenshot and axe clean. Focused 17/17, unit 2387/0, security PASS, production build clean. Full Chrome journeys reproduce the known new-main inline-approval regression at 85/120; its fix lane is in flight and the remaining 35 checks are not reached.
   - 2026-08-29 21:45 UTC — ownership: prior mic-decoupling lane → implementation worker (owner follow-up adds device discovery and no-transcript diagnostics on the landed fix). Platform constraint accepted: SpeechRecognition has no device-selection input and follows the OS default; the selected device controls only getUserMedia meter/preview streams.
   - 2026-08-29 20:30 UTC — diagnosis: commit `ce6247ef` changed `start()` to await `_requestMicStream()` before constructing and starting SpeechRecognition. The composer already displays `mic-error` through `setStatus`, and the real NTP KAT proves `offsetParent` is non-null in the visible layout. Falsification on the unfixed source produced 39 pass / 4 fail: a rejected meter left the button idle with the old permission error, a never-settling meter left it idle indefinitely, and recognition did not start in either case. The candidate starts recognition first, renders the CSS fallback immediately, then adopts the meter stream asynchronously under the existing generation guard. Rejection leaves recognition active and reports only that the live waveform is unavailable; late streams are stopped after cancellation. Green evidence: focused 9/9, mic KAT 43/43, full unit 2359/0, final build clean.
 

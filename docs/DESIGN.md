@@ -53,9 +53,14 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 - `<mic-button>` treats speech recognition as the primary action and the live
   AnalyserNode waveform as progressive enhancement: recognition and the visible
   CSS fallback start in the click turn; `getUserMedia` upgrades the waveform in
-  parallel, while rejection leaves dictation running and reports the fallback
-  in the composer's live status. Stop, hide, detach, pagehide, reduced-motion,
-  and late-stream generation guards remain authoritative.
+  parallel, while rejection leaves dictation running and labels the fallback as
+  a non-live animation in the control and composer status. When enumeration finds
+  at least two physical audio inputs, a small anchored popover lists them and runs
+  a brief genuine level check on the selected device. That persisted selection
+  drives only `getUserMedia` meter streams: Web Speech has no `deviceId` input and
+  always follows the OS default microphone, which the UI and errors state plainly.
+  Stop, hide, detach, devicechange, pagehide, reduced-motion, and late-stream
+  generation guards remain authoritative.
 - Agent templates render through shared `<agent-template-card>`: name, a two-line
   persona summary, at most three skill badges plus an overflow count, and one
   labelled Use action. Curated starters come first and carry the Starter badge.

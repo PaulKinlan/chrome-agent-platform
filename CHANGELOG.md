@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.2.408] — 2026-08-29
+- If you have multiple microphones, the mic button now offers a live level check for each one and remembers your meter choice; silent dictation errors explain that transcription still follows the macOS default input and show where to change it
+
 ## [0.2.407] — 2026-08-29
-- CAP-FB-20260829-MIC-DEAD-MACOS-01 claim diagnostics follow-up
+- Microphone troubleshooting now distinguishes the operating system's transcription input from the live level meter, so a silent microphone can be diagnosed without pretending the picker changes speech recognition
 
 ## [0.2.406] — 2026-08-29
 - Scheduled agents now keep their conversation: when a background agent runs on its timer, the work it did shows up in that agent's chat — previously it vanished
