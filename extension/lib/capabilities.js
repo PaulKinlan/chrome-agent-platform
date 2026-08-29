@@ -221,10 +221,57 @@ export async function requestCapability(id) {
  * This matters beyond a nicer message: revoke paths do their DEPENDENT
  * teardown first (scripting tombstones every enrolled origin so a running
  * bridge is rejected from that instant, before the permission is removed).
- * That ordering is right when revocation can actually happen, but under the
- * install-granted model it meant an operation that could never succeed still
- * destroyed enrollment state on its way to failing.
+ * That ordering is load-bearing on every revoke again: under the OPTIONAL +
+ * JIT model (owner directive 2026-08-29, superseding the 2026-08-28
+ * install-granted model for capabilities) capability permissions are
+ * runtime-revocable. Only the minimal mandatory boot set
+ * (storage/alarms/sidePanel/offscreen) is non-revocable.
  */
+/**
+ * Whether a manifest-listed capability permission is AVAILABLE on this
+ * platform at all. audioCapture/videoCapture are ChromeOS-only: on
+ * Linux/macOS/Windows the chrome.audioCapture/chrome.videoCapture namespaces
+ * do not exist, chrome.permissions.contains answers false forever, and any
+ * "reload the extension" advice is a lie. Detect by NAMESPACE existence (not
+ * contains() — the two states must never collapse). Unknown permission
+ * strings default to available (contains() remains the authority).
+ */
+export function isPermissionPlatformAvailable(permission) {
+  if (permission === "audioCapture") return typeof chrome.audioCapture !== "undefined";
+  if (permission === "videoCapture") return typeof chrome.videoCapture !== "undefined";
+  return true;
+}
+
+/**
+ * The THREE-STATE capability status (review: permissions UI must never
+ * collapse "not granted" and "not available on this platform"):
+ *   granted              — contains() says yes
+ *   requestable          — not granted, but grantable on this platform (JIT)
+ *   platform-unavailable — never grantable here (ChromeOS-only API absent)
+ */
+export async function capabilityState(id) {
+  const cap = CAPABILITIES.find((c) => c.id === id);
+  if (!cap) return { id, state: "unknown" };
+  const states = await Promise.all((cap.permissions ?? []).map(async (p) => {
+    if (!isPermissionPlatformAvailable(p)) return "platform-unavailable";
+    try {
+      return (await chrome.permissions.contains({ permissions: [p] })) ? "granted" : "requestable";
+    } catch {
+      return "platform-unavailable";
+    }
+  }));
+  if (states.every((st) => st === "granted")) return { id, state: "granted" };
+  if (states.includes("platform-unavailable")) {
+    const grantable = states.filter((st) => st !== "platform-unavailable");
+    return {
+      id,
+      state: grantable.length > 0 ? "partial-platform-unavailable" : "platform-unavailable",
+      unavailablePermissions: (cap.permissions ?? []).filter((_, i) => states[i] === "platform-unavailable"),
+    };
+  }
+  return { id, state: "requestable" };
+}
+
 export function isRequiredCapability(id) {
   const cap = CAPABILITIES.find((c) => c.id === id);
   if (!cap || !Array.isArray(cap.permissions) || cap.permissions.length === 0) return false;

@@ -3870,7 +3870,7 @@ const handlers = mergeRouteMaps(
       if (hasHost === false) {
         return {
           ok: false,
-          error: `network access to ${u.host} is not granted — host access is granted at install; if Settings → Permissions shows it missing, reload the extension`,
+          error: `network access to ${u.host} is not granted — host access is granted at install (<all_urls>); if Settings → Permissions shows it missing, reinstall the extension`,
         };
       }
       const res = await fetch(u.href, { method: m });
@@ -5597,7 +5597,7 @@ const handlers = mergeRouteMaps(
       granted: false,
       capability: id,
       error: res.ok
-        ? `capability ${id} is not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension`
+        ? `capability ${id} is not granted — request it from the chat when prompted, or in Settings → Permissions`
         : (res.error ?? `capability ${id} not granted`),
     };
   },
@@ -7610,7 +7610,7 @@ async function openSidePanelForCommand() {
   if (!granted) {
     pushDiagnostic(
       "warn",
-      "Side panel shortcut: the sidePanel permission is not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension.",
+      "Side panel shortcut: the sidePanel permission is a core boot permission — reload the extension to restore it.",
       "commands",
       "permission",
     );

@@ -99,7 +99,7 @@ document.getElementById("open-side-panel").addEventListener("click", async () =>
     // A window-scoped panel (the manifest declares a default_path side panel).
     await chrome.sidePanel.open({ windowId: (await chrome.windows.getCurrent()).id });
   } catch {
-    appendBubble(body, "agent", "The side panel permission is not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension.");
+    appendBubble(body, "agent", "The side panel permission is not granted — enable it in Settings → Permissions.");
   }
 });
 

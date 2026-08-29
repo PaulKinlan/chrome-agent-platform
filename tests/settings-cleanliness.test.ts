@@ -43,5 +43,11 @@ Deno.test("settings cleanliness: real owner controls and install-grant diagnosti
     'id="hook-list"',
   ]) assertStringIncludes(html, marker);
   assertStringIncludes(options, "async function renderPermissions()");
-  assertStringIncludes(options, 'state.textContent = granted ? "Granted at install" : "MISSING — reload the extension"');
+  // OPTIONAL + JIT model: the Permissions section is a live three-state
+  // display (granted / requestable with an Enable affordance /
+  // platform-unavailable) plus the fixed mandatory boot rows.
+  assertStringIncludes(options, 'state.textContent = "Granted"');
+  assertStringIncludes(options, 'state.textContent = "Not enabled"');
+  assertStringIncludes(options, 'state.textContent = "Not available on this platform"');
+  assertStringIncludes(options, 'state.textContent = "Granted at install (required)"');
 });

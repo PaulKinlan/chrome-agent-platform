@@ -68,22 +68,28 @@ const targets = new Set<string>();
 for (const m of optionsHtml.matchAll(/data-section="([^"]+)"/g)) targets.add(normalize(m[1]));
 for (const m of optionsHtml.matchAll(/<h[23][^>]*>([^<]+)/g)) targets.add(normalize(m[1]));
 
-Deno.test("bug 7 sweep: no string points at a Settings Enable control or a permission request (none exist)", () => {
+Deno.test("bug 7 sweep: denials point at the chat affordance or Settings — never a dead end", () => {
   const offenders: string[] = [];
+  // MANDATORY permissions keep reinstall as the honest remediation (reload
+  // restores the core grant); everything else must route to the chat
+  // affordance or Settings.
+  const MANDATORY_RELOAD_OK = /storage|sidePanel|side panel|offscreen|alarms/i;
   for (const [path, src] of sources) {
-    // Any "enable … Settings" variant (denial suffixes, description
-    // parentheticals, "enable it in Settings", "enable the host permission
-    // (Settings → Permissions)") — the install-granted model has no Enable
-    // controls and no runtime-enable remediation.
-    for (const m of src.matchAll(/enable[^"`'\n]{0,60}\bSettings\b/gi)) {
-      offenders.push(`${path}: ${m[0]}`);
+    for (const m of src.matchAll(/[^.`"\n]{0,120}reload the extension/gi)) {
+      const line = m[0];
+      // Reinstall is the honest fix for a CORE/mandatory grant problem
+      // (storage, sidePanel, alarms, offscreen, <all_urls> host access): the
+      // mandatory-reinstall phrasing is the standalone "Reload the extension"
+      // sentence, and version-refresh diagnostics reference the background
+      // worker. Both are exempt; capability denials still flag.
+      if (
+        MANDATORY_RELOAD_OK.test(line) ||
+        /newer background worker|reinstall/i.test(line) ||
+        /^Reload the extension$/.test(line.trim())
+      ) continue;
+      offenders.push(`${path}: ${line.trim().slice(0, 120)}`);
     }
-    // "Saving asks for the … permission"-style runtime-request copy.
-    for (const m of src.matchAll(/asks? for the [a-z ]*permission/gi)) {
-      offenders.push(`${path}: ${m[0]}`);
-    }
-    // "optional (storage )?permission" prose — nothing is optional anymore.
-    for (const m of src.matchAll(/optional (?:storage )?permission/gi)) {
+    for (const m of src.matchAll(/asks? for the [a-z ]*permission (?:in|from) the model/gi)) {
       offenders.push(`${path}: ${m[0]}`);
     }
   }

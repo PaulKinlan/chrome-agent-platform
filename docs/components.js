@@ -710,7 +710,7 @@ class FirstRunGuide extends Component {
     // and an inline status line names exactly what is missing — the same line
     // the button points at via aria-describedby so assistive tech announces it.
     const seedGateReason = !providerReady && !storageReady
-      ? "Configure a provider and reload the extension to restore storage before starting. If storage is still missing, reinstall the extension."
+      ? "Configure a provider first — then reload if the storage grant still needs restoring to restore storage before starting. If storage is still missing, reinstall the extension."
       : !providerReady
       ? "Configure a provider to unlock the starter task."
       : "Storage is missing — reload the extension before starting. If it is still missing, reinstall the extension.";
@@ -4267,7 +4267,7 @@ class AgentComposer extends Component {
         // time, so it does not authorize a later-activated pick). Both are
         // install-granted — verified here (fail closed), never a runtime ask.
         const tabsGranted = await this._verifyPermission(["tabs"]);
-        if (!tabsGranted) { this.setStatus("tab listing unavailable — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension.", false); return; }
+        if (!tabsGranted) { this.setStatus("tab listing unavailable — enable the Tabs permission in Settings → Permissions, or from the chat when prompted.", false); return; }
         const tabs = await chrome.tabs.query({}).catch(() => []);
         if (!tabs.length) { this.setStatus("no open tabs to pick from."); return; }
         const tab = await this._pickTab(tabs);
@@ -4323,13 +4323,33 @@ class AgentComposer extends Component {
 
   // ── media capture (record-audio / capture-camera) ──────────────────────
   // A short audio recording / a camera frame becomes a dataURL attachment (the
-  // SW bounds it + sends it to the model like any file). The audioCapture /
-  // videoCapture permission is requested in the SAME gesture before getUserMedia.
+  // SW bounds it + sends it to the model like any file).
+  //
+  // PLATFORM NOTE (owner report 2026-08-29): the audioCapture/videoCapture
+  // MANIFEST permissions gate only the ChromeOS-only chrome.audioCapture /
+  // chrome.videoCapture APIs. On Linux/macOS/Windows those namespaces do not
+  // exist, so a contains() gate would dead-end every capture with a
+  // "permission denied" that no reload can fix. Plain getUserMedia from this
+  // page needs NO manifest permission — the browser shows its own device
+  // prompt. So: when the permission is not granted, check whether it is even
+  // AVAILABLE here; only on a platform where the API exists does the gate
+  // apply (ChromeOS enterprise policy), and elsewhere we skip straight to
+  // getUserMedia, which self-prompts.
   async _captureMedia(kind) {
     try {
       const perm = kind === "record-audio" ? "audioCapture" : "videoCapture";
-      const ok = await this._verifyPermission([perm]);
-      if (!ok) { this.setStatus(`${perm} permission denied — enable it to capture.`, false); return; }
+      const granted = await this._verifyPermission([perm]);
+      if (!granted) {
+        const api = perm === "audioCapture" ? chrome.audioCapture : chrome.videoCapture;
+        if (typeof api === "undefined") {
+          // Platform-absent API: the manifest permission can never be granted
+          // here. getUserMedia self-prompts — no dead-end gate.
+          this.setStatus(`Using the browser's own ${kind === "record-audio" ? "microphone" : "camera"} prompt.`, true);
+        } else {
+          this.setStatus(`${perm} permission denied — enable it to capture.`, false);
+          return;
+        }
+      }
       if (kind === "record-audio") {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         const mime = MediaRecorder.isTypeSupported?.("audio/webm") ? "audio/webm" : "";

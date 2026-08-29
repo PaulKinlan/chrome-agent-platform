@@ -380,7 +380,8 @@ async function mutateWindowWithGrant(windowId, verb, mutate) {
   if (!(await hasTabsPermission())) {
     return {
       error:
-        "tabs permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension",
+        "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "tabs" },
     };
   }
   return await withGrantLock(async () => {
@@ -798,7 +799,8 @@ export async function readPage(tabId) {
     if (!(await hasScriptingPermission())) {
       return {
         error:
-          "scripting permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension",
+          "scripting permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "scripting" },
       };
     }
     const target = tabId
@@ -828,7 +830,7 @@ export async function readPage(tabId) {
 async function withTabIdsGrant(tabIds, verb, mutate) {
   if (!(await hasTabsPermission())) {
     return permissionDenial(
-      "tabs permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension",
+      "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
       {
         reason: `${verb === "grouped" ? "group" : verb === "ungrouped" ? "ungroup" : verb === "moved" ? "move" : "control"} your tabs`,
         permissions: ["tabs"],
@@ -896,7 +898,7 @@ async function withTabIdsGrant(tabIds, verb, mutate) {
 async function withTabGroupGrant(groupId, verb, mutate) {
   if (!(await hasTabsPermission())) {
     return permissionDenial(
-      "tabs permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension",
+      "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
       { reason: `${verb} a tab group`, permissions: ["tabs"] },
     );
   }
@@ -966,7 +968,8 @@ async function withDownloadsGrant(verb, mutate) {
   if (!(await hasPermission("downloads"))) {
     return {
       error:
-        "downloads permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension",
+        "downloads permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "downloads" },
     };
   }
   return await withGrantLock(async () => {
@@ -1058,7 +1061,8 @@ async function withManagementGrant(verb, mutate) {
   if (!(await hasManagementPermission())) {
     return {
       error:
-        "management permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension",
+        "management permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "management" },
     };
   }
   return await withGrantLock(async () => {
@@ -1105,7 +1109,8 @@ async function withNetworkRulesGrant(verb, mutate) {
   if (!(await hasPermission("declarativeNetRequest"))) {
     return {
       error:
-        "declarativeNetRequest permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension",
+        "declarativeNetRequest permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "declarativeNetRequest" },
     };
   }
   return await withGrantLock(async () => {
@@ -1271,20 +1276,20 @@ async function t12OriginsCovered(origins) {
 async function withScriptRegistrationGrant({ permission, permissionLabel, patterns, origins }, verb, mutate) {
   if (!(await hasPermission(permission))) {
     return {
-      error: `${permission} permission not granted — all permissions are granted at install; if Settings → Permissions shows ${permissionLabel} missing, reload the extension`,
+      error: `${permission} permission not granted — enable it from the chat when prompted, or in Settings → Permissions`,
     };
   }
   try {
     if (typeof chrome === "undefined" || !chrome.permissions) {
-      return { error: `${permission} host access unavailable — host access is granted at install; if Settings → Permissions shows it missing, reload the extension` };
+      return { error: `${permission} host access unavailable on this platform — capture is not possible here` };
     }
     if (!(await chrome.permissions.contains({ origins: patterns }))) {
       return {
-        error: `host permission not granted for every matches origin (${origins.join(", ")}) — host access is granted at install; if Settings → Permissions shows it missing, reload the extension`,
+        error: `host permission not granted for every matches origin (${origins.join(", ")}) — enable host access from the chat when prompted, or in Settings → Permissions`,
       };
     }
   } catch {
-    return { error: `host permission check failed — the grant state could not be read; reload the extension` };
+    return { error: `host permission check failed — the grant state could not be read; try again` };
   }
   return await withGrantLock(async () => {
     if (!(await t12OriginsCovered(origins))) {
@@ -1328,7 +1333,7 @@ export function browserToolset(readOnly = false) {
         if (!(await hasSidePanelPermission())) {
           return {
             error:
-              "sidePanel permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension (Side panel)",
+              "sidePanel permission not granted — enable it from the chat when prompted, or in Settings → Permissions (Side panel)",
           };
         }
         // Get the active tab so the panel is bound to it (chrome.sidePanel is
@@ -1365,7 +1370,8 @@ export function browserToolset(readOnly = false) {
         if (!(await hasTabsPermission())) {
           return {
             error:
-              "tabs permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension",
+              "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "tabs" },
           };
         }
         // Check the DESTINATION origin against the grant (a per-origin grant
@@ -1419,7 +1425,8 @@ export function browserToolset(readOnly = false) {
         if (!(await hasTabsPermission())) {
           return {
             error:
-              "tabs permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension",
+              "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "tabs" },
           };
         }
         // Check the DESTINATION origin (not just the current tab's origin): an
@@ -1529,7 +1536,8 @@ export function browserToolset(readOnly = false) {
         if (!(await hasTabsPermission())) {
           return {
             error:
-              "tabs permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension",
+              "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "tabs" },
           };
         }
         const tabs = await chrome.tabs.query({});
@@ -1546,7 +1554,8 @@ export function browserToolset(readOnly = false) {
         if (!(await hasTabsPermission())) {
           return {
             error:
-              "tabs permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension",
+              "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "tabs" },
           };
         }
         // Check the grant + perform the mutation under the SAME grant lock (a
@@ -1712,7 +1721,8 @@ export function browserToolset(readOnly = false) {
         if (!(await hasTabsPermission())) {
           return {
             error:
-              "tabs permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension",
+              "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "tabs" },
           };
         }
         let destOrigin;
@@ -1871,7 +1881,8 @@ export function browserToolset(readOnly = false) {
       }).refine((v) => v.delayInMinutes !== undefined || v.periodInMinutes !== undefined || v.when !== undefined, "at least one scheduling field is required"),
       execute: async ({ name, delayInMinutes, periodInMinutes, when }) => {
         if (!(await hasPermission("alarms"))) {
-          return { error: "alarms permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "alarms permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "alarms" }, };
         }
         try {
           await assertRunOwned();
@@ -1906,7 +1917,8 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("alarms"))) {
-          return { error: "alarms permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "alarms permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "alarms" }, };
         }
         const alarms = await chrome.alarms.getAll();
         return {
@@ -1926,7 +1938,8 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ name }) => {
         if (!(await hasPermission("alarms"))) {
-          return { error: "alarms permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "alarms permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "alarms" }, };
         }
         try {
           await assertRunOwned();
@@ -1951,7 +1964,8 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ title, url, parentId }) => {
         if (!(await hasPermission("bookmarks"))) {
-          return { error: "bookmarks permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "bookmarks permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "bookmarks" }, };
         }
         try {
           await assertRunOwned();
@@ -1975,7 +1989,8 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ query, parentId, maxResults = 50 }) => {
         if (!(await hasPermission("bookmarks"))) {
-          return { error: "bookmarks permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "bookmarks permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "bookmarks" }, };
         }
         let items = [];
         if (query) {
@@ -2004,7 +2019,8 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ id }) => {
         if (!(await hasPermission("bookmarks"))) {
-          return { error: "bookmarks permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "bookmarks permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "bookmarks" }, };
         }
         try {
           await assertRunOwned();
@@ -2026,7 +2042,8 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ title, message, iconUrl, priority }) => {
         if (!(await hasPermission("notifications"))) {
-          return { error: "notifications permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "notifications permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "notifications" }, };
         }
         try {
           await assertRunOwned();
@@ -2054,7 +2071,8 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ notificationId }) => {
         if (!(await hasPermission("notifications"))) {
-          return { error: "notifications permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "notifications permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "notifications" }, };
         }
         try {
           await assertRunOwned();
@@ -2073,7 +2091,8 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ detectionIntervalInSeconds = 60 }) => {
         if (!(await hasPermission("idle"))) {
-          return { error: "idle permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "idle permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "idle" }, };
         }
         const state = await chrome.idle.queryState(detectionIntervalInSeconds);
         return { ok: true, state, detectionIntervalInSeconds };
@@ -2090,7 +2109,9 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ id, title, contexts, parentId }) => {
         if (!(await hasPermission("contextMenus"))) {
-          return { error: "contextMenus permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "contextMenus permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "contextMenus" },
+ };
         }
         try {
           await assertRunOwned();
@@ -2109,7 +2130,9 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("contextMenus"))) {
-          return { error: "contextMenus permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "contextMenus permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "contextMenus" },
+ };
         }
         return { ok: true, supported: true };
       },
@@ -2122,7 +2145,9 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ id }) => {
         if (!(await hasPermission("contextMenus"))) {
-          return { error: "contextMenus permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "contextMenus permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "contextMenus" },
+ };
         }
         try {
           await assertRunOwned();
@@ -2154,7 +2179,8 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ domain, url, maxResults = 50 }) => {
         if (!(await hasPermission("cookies"))) {
-          return { error: "cookies permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "cookies permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "cookies" }, };
         }
         if (!domain && !url) return { error: "pass a domain or a url" };
         const query = {};
@@ -2191,7 +2217,8 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("cookies"))) {
-          return { error: "cookies permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "cookies permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "cookies" }, };
         }
         let stores = [];
         try {
@@ -2216,12 +2243,13 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ url, name }) => {
         if (!(await hasPermission("cookies"))) {
-          return { error: "cookies permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "cookies permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "cookies" }, };
         }
         const origin = canonicalOrigin(url);
         if (!origin) return { error: "only http/https cookie URLs are supported" };
         if (!(await hasOriginHostPermission(origin))) {
-          return { error: `host permission for ${origin} not granted — host access is granted at install for every site; if Settings → Permissions shows it missing, reload the extension (broad/all-sites access is never requested at runtime)` };
+          return { error: `host permission for ${origin} not granted — broad host access is granted at install (<all_urls>); if it is missing, reinstall the extension` };
         }
         let cookie = null;
         try {
@@ -2257,12 +2285,13 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ url, name, value }) => {
         if (!(await hasPermission("cookies"))) {
-          return { error: "cookies permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "cookies permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "cookies" }, };
         }
         const origin = canonicalOrigin(url);
         if (!origin) return { error: "only http/https cookie URLs are supported" };
         if (!(await hasOriginHostPermission(origin))) {
-          return { error: `host permission for ${origin} not granted — host access is granted at install for every site; if Settings → Permissions shows it missing, reload the extension (broad/all-sites access is never requested at runtime)` };
+          return { error: `host permission for ${origin} not granted — broad host access is granted at install (<all_urls>); if it is missing, reinstall the extension` };
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(origin))) {
@@ -2303,12 +2332,13 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ url, name }) => {
         if (!(await hasPermission("cookies"))) {
-          return { error: "cookies permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "cookies permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "cookies" }, };
         }
         const origin = canonicalOrigin(url);
         if (!origin) return { error: "only http/https cookie URLs are supported" };
         if (!(await hasOriginHostPermission(origin))) {
-          return { error: `host permission for ${origin} not granted — host access is granted at install for every site; if Settings → Permissions shows it missing, reload the extension (broad/all-sites access is never requested at runtime)` };
+          return { error: `host permission for ${origin} not granted — broad host access is granted at install (<all_urls>); if it is missing, reinstall the extension` };
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(origin))) {
@@ -2354,7 +2384,9 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ dataTypes, sinceMs }) => {
         if (!(await hasPermission("browsingData"))) {
-          return { error: "browsingData permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "browsingData permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "browsingData" },
+ };
         }
         // The caller must ENUMERATE what to wipe — an empty list is refused by
         // the schema and there is NO implicit "everything" path: passing the
@@ -2401,7 +2433,9 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ resource, primaryPattern }) => {
         if (!(await hasPermission("contentSettings"))) {
-          return { error: "contentSettings permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "contentSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "contentSettings" },
+ };
         }
         const pattern = t8SingleOriginPattern(primaryPattern);
         if (!pattern.ok) return { error: pattern.error };
@@ -2429,7 +2463,9 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ resource, primaryPattern, setting }) => {
         if (!(await hasPermission("contentSettings"))) {
-          return { error: "contentSettings permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "contentSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "contentSettings" },
+ };
         }
         const pattern = t8SingleOriginPattern(primaryPattern);
         if (!pattern.ok) return { error: pattern.error };
@@ -2473,7 +2509,9 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ resource, primaryPattern }) => {
         if (!(await hasPermission("contentSettings"))) {
-          return { error: "contentSettings permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "contentSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "contentSettings" },
+ };
         }
         const pattern = t8SingleOriginPattern(primaryPattern);
         if (!pattern.ok) return { error: pattern.error };
@@ -2523,7 +2561,7 @@ export function browserToolset(readOnly = false) {
       execute: async ({ windowId }) => {
         if (!(await hasPermission("tabGroups"))) {
           return permissionDenial(
-            "tab groups permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension",
+            "tab groups permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
             { reason: "list your tab groups", permissions: ["tabGroups"] },
           );
         }
@@ -2552,7 +2590,7 @@ export function browserToolset(readOnly = false) {
       execute: async ({ tabIds, title, color }) => {
         if (!(await hasPermission("tabGroups"))) {
           return permissionDenial(
-            "tab groups permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension",
+            "tab groups permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
             { reason: "group your tabs", permissions: ["tabGroups", "tabs"] },
           );
         }
@@ -2586,7 +2624,7 @@ export function browserToolset(readOnly = false) {
       execute: async ({ groupId, title, color, collapsed }) => {
         if (!(await hasPermission("tabGroups"))) {
           return permissionDenial(
-            "tab groups permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension",
+            "tab groups permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
             { reason: "update a tab group", permissions: ["tabGroups", "tabs"] },
           );
         }
@@ -2617,7 +2655,7 @@ export function browserToolset(readOnly = false) {
       execute: async ({ tabIds }) => {
         if (!(await hasPermission("tabGroups"))) {
           return permissionDenial(
-            "tab groups permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension",
+            "tab groups permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
             { reason: "ungroup your tabs", permissions: ["tabGroups", "tabs"] },
           );
         }
@@ -2641,7 +2679,7 @@ export function browserToolset(readOnly = false) {
       execute: async ({ tabIds, groupId }) => {
         if (!(await hasPermission("tabGroups"))) {
           return permissionDenial(
-            "tab groups permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension",
+            "tab groups permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
             { reason: "move tabs into a group", permissions: ["tabGroups", "tabs"] },
           );
         }
@@ -2699,7 +2737,8 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ query, state, limit = 25 }) => {
         if (!(await hasPermission("downloads"))) {
-          return { error: "downloads permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "downloads permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "downloads" }, };
         }
         const searchQuery = { orderBy: ["-startTime"] };
         if (query !== undefined) searchQuery.query = query;
@@ -2889,7 +2928,8 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({ tabId: z.number().int() }),
       execute: async ({ tabId }) => {
         if (!(await hasTabsPermission())) {
-          return { error: "tabs permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "tabs" }, };
         }
         try {
           const zoomFactor = await chrome.tabs.getZoom(tabId);
@@ -2936,7 +2976,8 @@ export function browserToolset(readOnly = false) {
       }).refine((v) => (v.tabIds !== undefined) !== (v.indices !== undefined), "exactly one of tabIds or indices is required"),
       execute: async ({ windowId, tabIds, indices }) => {
         if (!(await hasTabsPermission())) {
-          return { error: "tabs permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "tabs" }, };
         }
         return await withGrantLock(async () => {
           // Resolve the exact target tabs INSIDE the lock; when indices were
@@ -3060,7 +3101,7 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({ tabId: z.number().int().optional() }),
       execute: async ({ tabId }) => {
         if (!(await hasSidePanelPermission())) {
-          return { error: "sidePanel permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension (Side panel)" };
+          return { error: "sidePanel permission not granted — enable it from the chat when prompted, or in Settings → Permissions (Side panel)" };
         }
         try {
           const opts = await chrome.sidePanel.getOptions(tabId !== undefined ? { tabId } : {});
@@ -3087,7 +3128,7 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ path, enabled, tabId }) => {
         if (!(await hasSidePanelPermission())) {
-          return { error: "sidePanel permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension (Side panel)" };
+          return { error: "sidePanel permission not granted — enable it from the chat when prompted, or in Settings → Permissions (Side panel)" };
         }
         // Confinement proof against the runtime root: getURL must resolve the
         // path INSIDE the extension's own URL root (a hostile path must never
@@ -3144,7 +3185,7 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({ openPanelOnActionClick: z.boolean() }),
       execute: async ({ openPanelOnActionClick }) => {
         if (!(await hasSidePanelPermission())) {
-          return { error: "sidePanel permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension (Side panel)" };
+          return { error: "sidePanel permission not granted — enable it from the chat when prompted, or in Settings → Permissions (Side panel)" };
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -3184,7 +3225,9 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("system.memory"))) {
-          return { error: "system.memory permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "system.memory permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "system.memory" },
+ };
         }
         const info = await chrome.system.memory.getInfo();
         return {
@@ -3199,7 +3242,9 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("system.cpu"))) {
-          return { error: "system.cpu permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "system.cpu permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "system.cpu" },
+ };
         }
         const info = await chrome.system.cpu.getInfo();
         const processors = (Array.isArray(info?.processors) ? info.processors : []).slice(0, 64).map((p) => ({
@@ -3222,7 +3267,9 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("system.storage"))) {
-          return { error: "system.storage permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "system.storage permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "system.storage" },
+ };
         }
         const units = await chrome.system.storage.getInfo();
         return {
@@ -3241,7 +3288,9 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("system.display"))) {
-          return { error: "system.display permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "system.display permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "system.display" },
+ };
         }
         const displays = await chrome.system.display.getInfo();
         return {
@@ -3264,7 +3313,9 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ maxResults = 20 }) => {
         if (!(await hasPermission("topSites"))) {
-          return { error: "topSites permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "topSites permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "topSites" },
+ };
         }
         const sites = await chrome.topSites.get();
         return {
@@ -3306,7 +3357,9 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ url, title, hasBeenRead = false }) => {
         if (!(await hasPermission("readingList"))) {
-          return { error: "readingList permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "readingList permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "readingList" },
+ };
         }
         const scheme = (() => { try { return new URL(url).protocol; } catch { return null; } })();
         if (scheme !== "http:" && scheme !== "https:") {
@@ -3332,7 +3385,9 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ url, title, hasBeenRead, maxResults = 50 }) => {
         if (!(await hasPermission("readingList"))) {
-          return { error: "readingList permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "readingList permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "readingList" },
+ };
         }
         const query = {};
         if (url !== undefined) query.url = url;
@@ -3360,7 +3415,9 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ url, title, hasBeenRead }) => {
         if (!(await hasPermission("readingList"))) {
-          return { error: "readingList permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "readingList permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "readingList" },
+ };
         }
         const scheme = (() => { try { return new URL(url).protocol; } catch { return null; } })();
         if (scheme !== "http:" && scheme !== "https:") {
@@ -3389,7 +3446,9 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ url }) => {
         if (!(await hasPermission("readingList"))) {
-          return { error: "readingList permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "readingList permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "readingList" },
+ };
         }
         const scheme = (() => { try { return new URL(url).protocol; } catch { return null; } })();
         if (scheme !== "http:" && scheme !== "https:") {
@@ -3417,7 +3476,9 @@ export function browserToolset(readOnly = false) {
           return { error: "run aborted — page not saved" };
         }
         if (!(await hasPermission("pageCapture"))) {
-          return { error: "pageCapture permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "pageCapture permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "pageCapture" },
+ };
         }
         const target = tabId
           ? await chrome.tabs.get(tabId).catch(() => null)
@@ -3656,7 +3717,8 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ text = "", startTime, endTime, maxResults = 50 }) => {
         if (!(await hasPermission("history"))) {
-          return { error: "history permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "history permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "history" }, };
         }
         const query = { text, maxResults: Math.min(maxResults, 200) };
         if (startTime !== undefined) query.startTime = startTime;
@@ -3683,7 +3745,8 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ url, maxResults = 50 }) => {
         if (!(await hasPermission("history"))) {
-          return { error: "history permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "history permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "history" }, };
         }
         const visits = await chrome.history.getVisits({ url });
         const list = Array.isArray(visits) ? visits : [];
@@ -3703,7 +3766,8 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({ url: z.string().url().max(2048) }),
       execute: async ({ url }) => {
         if (!(await hasPermission("history"))) {
-          return { error: "history permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "history permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "history" }, };
         }
         const origin = canonicalOrigin(url);
         if (!origin) return { error: "only http/https URLs can be added to history" };
@@ -3735,7 +3799,8 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({ url: z.string().url().max(2048) }),
       execute: async ({ url }) => {
         if (!(await hasPermission("history"))) {
-          return { error: "history permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "history permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "history" }, };
         }
         const origin = canonicalOrigin(url);
         if (!origin) return { error: "only http/https URLs can be deleted from history" };
@@ -3770,7 +3835,8 @@ export function browserToolset(readOnly = false) {
       }).refine((v) => v.endTime > v.startTime, "endTime must be after startTime"),
       execute: async ({ startTime, endTime }) => {
         if (!(await hasPermission("history"))) {
-          return { error: "history permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "history permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "history" }, };
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -3800,7 +3866,8 @@ export function browserToolset(readOnly = false) {
           return { error: "refusing to clear ALL history without an explicit confirm:true" };
         }
         if (!(await hasPermission("history"))) {
-          return { error: "history permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "history permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "history" }, };
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -3841,7 +3908,8 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ maxResults = 100 }) => {
         if (!(await hasManagementPermission())) {
-          return { error: "management permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "management permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "management" }, };
         }
         let all = [];
         try {
@@ -3876,7 +3944,8 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ id }) => {
         if (!(await hasManagementPermission())) {
-          return { error: "management permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "management permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "management" }, };
         }
         let info = null;
         try {
@@ -3912,7 +3981,8 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ id }) => {
         if (!(await hasManagementPermission())) {
-          return { error: "management permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "management permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "management" }, };
         }
         let warnings = [];
         try {
@@ -4034,7 +4104,8 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ setting }) => {
         if (!(await hasPermission("privacy"))) {
-          return { error: "privacy permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "privacy permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "privacy" }, };
         }
         const chromeSetting = privacyChromeSetting(setting);
         if (!chromeSetting) return { error: `privacy setting unavailable: ${setting}` };
@@ -4060,7 +4131,8 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ setting, value }) => {
         if (!(await hasPermission("privacy"))) {
-          return { error: "privacy permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "privacy permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "privacy" }, };
         }
         // Validate the value against the setting's kind BEFORE any grant/Chrome work.
         const valueError = privacyValueError(setting, value);
@@ -4099,7 +4171,8 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("proxy"))) {
-          return { error: "proxy permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "proxy permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "proxy" }, };
         }
         let config;
         try {
@@ -4145,7 +4218,8 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ mode, pacScript, rules }) => {
         if (!(await hasPermission("proxy"))) {
-          return { error: "proxy permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "proxy permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "proxy" }, };
         }
         // Build + validate the value BEFORE any grant work or Chrome call.
         const value = { mode };
@@ -4204,7 +4278,8 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("proxy"))) {
-          return { error: "proxy permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "proxy permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "proxy" }, };
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -4238,7 +4313,9 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("fontSettings"))) {
-          return { error: "fontSettings permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "fontSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "fontSettings" },
+ };
         }
         let size = null;
         try {
@@ -4265,7 +4342,9 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({ pixelSize: z.number().int().min(1).max(100) }),
       execute: async ({ pixelSize }) => {
         if (!(await hasPermission("fontSettings"))) {
-          return { error: "fontSettings permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "fontSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "fontSettings" },
+ };
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -4302,7 +4381,9 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ genericFamily, fontId }) => {
         if (!(await hasPermission("fontSettings"))) {
-          return { error: "fontSettings permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "fontSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "fontSettings" },
+ };
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -4336,7 +4417,9 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("fontSettings"))) {
-          return { error: "fontSettings permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "fontSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "fontSettings" },
+ };
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -4373,7 +4456,8 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({ level: z.enum(["system", "display"]) }),
       execute: async ({ level }) => {
         if (!(await hasPermission("power"))) {
-          return { error: "power permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "power permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "power" }, };
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -4408,7 +4492,8 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("power"))) {
-          return { error: "power permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "power permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "power" }, };
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -4444,7 +4529,8 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({ text: z.string().min(1).max(512) }),
       execute: async ({ text }) => {
         if (!(await hasPermission("search"))) {
-          return { error: "search permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "search permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "search" }, };
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -4484,7 +4570,8 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ text, voiceName, rate, pitch, volume }) => {
         if (!(await hasPermission("tts"))) {
-          return { error: "tts permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "tts permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "tts" }, };
         }
         const options = {};
         if (voiceName !== undefined) options.voiceName = voiceName;
@@ -4523,7 +4610,8 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("tts"))) {
-          return { error: "tts permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "tts permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "tts" }, };
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -4559,7 +4647,8 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ maxResults = 32 }) => {
         if (!(await hasPermission("tts"))) {
-          return { error: "tts permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "tts permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "tts" }, };
         }
         let voices = [];
         try {
@@ -4587,7 +4676,8 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("tts"))) {
-          return { error: "tts permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "tts permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "tts" }, };
         }
         let speaking = false;
         try {
@@ -4611,7 +4701,9 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("declarativeNetRequest"))) {
-          return { error: "declarativeNetRequest permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "declarativeNetRequest permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "declarativeNetRequest" },
+ };
         }
         let rules = [];
         try {
@@ -4735,7 +4827,9 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ url, tabId, resourceType }) => {
         if (!(await hasPermission("declarativeNetRequest"))) {
-          return { error: "declarativeNetRequest permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "declarativeNetRequest permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "declarativeNetRequest" },
+ };
         }
         let parsed;
         try {
@@ -4774,7 +4868,9 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ tabId }) => {
         if (!(await hasPermission("webNavigation"))) {
-          return { error: "webNavigation permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "webNavigation permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "webNavigation" },
+ };
         }
         let frames;
         try {
@@ -4804,7 +4900,9 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ tabId, frameId }) => {
         if (!(await hasPermission("webNavigation"))) {
-          return { error: "webNavigation permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "webNavigation permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "webNavigation" },
+ };
         }
         let frame;
         try {
@@ -4833,7 +4931,9 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ maxResults = 50, tabId, phase }) => {
         if (!(await hasPermission("webRequest"))) {
-          return { error: "webRequest permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "webRequest permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "webRequest" },
+ };
         }
         const stored = await kvGet(REQUEST_ACTIVITY_KEY);
         const list = Array.isArray(stored[REQUEST_ACTIVITY_KEY]) ? stored[REQUEST_ACTIVITY_KEY] : [];
@@ -4918,7 +5018,9 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({ id: z.string().min(1).max(64) }),
       execute: async ({ id }) => {
         if (!(await hasPermission("userScripts"))) {
-          return { error: "userScripts permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "userScripts permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "userScripts" },
+ };
         }
         let scripts = [];
         try {
@@ -4938,11 +5040,11 @@ export function browserToolset(readOnly = false) {
             try {
               if (!(await chrome.permissions.contains({ origins: patterns }))) {
                 return {
-                  error: `host permission not granted for every matches origin (${origins.join(", ")}) — host access is granted at install; if Settings → Permissions shows it missing, reload the extension`,
+                  error: `host permission not granted for every matches origin (${origins.join(", ")}) — enable host access from the chat when prompted, or in Settings → Permissions`,
                 };
               }
             } catch {
-              return { error: "host permission check failed — the grant state could not be read; reload the extension" };
+              return { error: "host permission check failed — the grant state could not be read; try again" };
             }
           }
           if (!(await t12OriginsCovered(origins))) {
@@ -4978,7 +5080,9 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ maxResults = 50 }) => {
         if (!(await hasPermission("userScripts"))) {
-          return { error: "userScripts permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "userScripts permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+permissionRequired: { capability: "userScripts" },
+ };
         }
         let scripts = [];
         try {
@@ -5059,7 +5163,8 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({ id: z.string().min(1).max(64) }),
       execute: async ({ id }) => {
         if (!(await hasPermission("scripting"))) {
-          return { error: "scripting permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "scripting permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "scripting" }, };
         }
         let scripts = [];
         try {
@@ -5079,11 +5184,11 @@ export function browserToolset(readOnly = false) {
             try {
               if (!(await chrome.permissions.contains({ origins: patterns }))) {
                 return {
-                  error: `host permission not granted for every matches origin (${origins.join(", ")}) — host access is granted at install; if Settings → Permissions shows it missing, reload the extension`,
+                  error: `host permission not granted for every matches origin (${origins.join(", ")}) — enable host access from the chat when prompted, or in Settings → Permissions`,
                 };
               }
             } catch {
-              return { error: "host permission check failed — the grant state could not be read; reload the extension" };
+              return { error: "host permission check failed — the grant state could not be read; try again" };
             }
           }
           if (!(await t12OriginsCovered(origins))) {
@@ -5119,7 +5224,8 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ maxResults = 50 }) => {
         if (!(await hasPermission("scripting"))) {
-          return { error: "scripting permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "scripting permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "scripting" }, };
         }
         let scripts = [];
         try {
@@ -5250,7 +5356,8 @@ async function t13MutateTabWithGrant(tabId, verb, mutate) {
   if (!(await hasTabsPermission())) {
     return {
       error:
-        "tabs permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension",
+        "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+          permissionRequired: { capability: "tabs" },
     };
   }
   return await withGrantLock(async () => {
