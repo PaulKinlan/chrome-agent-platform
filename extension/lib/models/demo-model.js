@@ -64,6 +64,54 @@ function delegateAgentRef(prompt) {
   return m ? m[1] : "demo-agent";
 }
 
+// The task forwarded to a delegation CHILD: everything from the next "@demo"
+// marker AFTER the agent ref (enables chains like
+// "@demo-delegate-agent mid @demo-delegate-agent leaf" → mid receives
+// "@demo-delegate-agent leaf", and slow children via
+// "@demo-delegate-agent helper @demo-tools @demo-slow"); plain delegations
+// keep the historical "@demo-tools" child task. "@demo-delegate-slow" is a
+// PARENT-SIDE alias: the child receives "@demo-tools @demo-slow" WITHOUT the
+// parent's own model seeing the slow marker (the parent must stay fast so a
+// cancellation probe can observe the live child).
+function delegateChildTask(prompt) {
+  const sliceText = extractText(latestRunSlice(prompt)?.slice ?? (Array.isArray(prompt) ? prompt : []));
+  if (new RegExp(AGENT_DELEGATE_MARKER + "\\s+[\\w.-]+\\s+@demo-delegate-slow\\b").test(sliceText)) {
+    return "@demo-tools @demo-slow";
+  }
+  const m = sliceText.match(new RegExp(AGENT_DELEGATE_MARKER + "\\s+[\\w.-]+\\s+(@demo[\\s\\S]{0,300})"));
+  return m ? m[1].trim().slice(0, 300) : "@demo-tools";
+}
+
+// "@demo-delegate-parallel <agentA> <agentB>" — ONE model step returns TWO
+// delegate tool calls, driving agent-do's concurrent same-step execution.
+function delegateParallelRefs(prompt) {
+  const sliceText = extractText(latestRunSlice(prompt)?.slice ?? (Array.isArray(prompt) ? prompt : []));
+  const m = sliceText.match(/@demo-delegate-parallel\s+([\w.-]+)\s+([\w.-]+)/);
+  return m ? [m[1], m[2]] : null;
+}
+
+// "@demo-delegate-x<N>" (after the agent marker) — N sequential delegations
+// in one run, driving the combined-budget exhaustion path. N ≥ 4 gives the
+// children the LONGER tools plan ("@demo-tools-x2") so a budget denial is
+// reachable below the descendant cap.
+function delegateMultiCount(prompt) {
+  const sliceText = extractText(latestRunSlice(prompt)?.slice ?? (Array.isArray(prompt) ? prompt : []));
+  // NO \b after the count: agent-do's outer-iteration continuation is
+  // concatenated directly onto the task text ("…x4Continue working…"), and a
+  // digit→letter boundary does not exist for \b.
+  const m = sliceText.match(/@demo-delegate-x(\d)/);
+  return m ? Math.min(9, Number.parseInt(m[1], 10)) : 0;
+}
+
+// "@demo-tools-x2" — the doubled tools plan (12 actions ≈ 6 loop iterations),
+// so a delegated child can consume its full iteration cap in budget tests.
+function wantsDemoToolsX2(prompt) {
+  const sliceText = extractText(latestRunSlice(prompt)?.slice ?? (Array.isArray(prompt) ? prompt : []));
+  // NO \b: agent-do continuation text is concatenated directly onto the task
+  // ("@demo-tools-x2Continue working…") — a digit→letter boundary defeats \b.
+  return /@demo-tools-x2/.test(sliceText);
+}
+
 function delegateAgentId(prompt) {
   const msgs = Array.isArray(prompt) ? prompt : [];
   const last = [...msgs].reverse().find((m) => m?.role === "user");
@@ -172,13 +220,62 @@ function latestSelectionRef(prompt) {
 function lazyDemoCall(prompt, { delegate = false, delegateAgent = false } = {}) {
   const step = toolResultCount(prompt);
   if (delegateAgent) {
+    const parallelRefs = delegateParallelRefs(prompt);
+    if (parallelRefs) {
+      // TWO searches (a selectionRef is single-use — one per sibling), then
+      // TWO executes in ONE step, driving agent-do's concurrent same-step
+      // execution (the parallel-sibling delegation path).
+      const toolParts = runSlice(prompt)
+        .filter((m) => m?.role === "tool")
+        .flatMap((m) => (Array.isArray(m.content) ? m.content : [m.content]))
+        .filter((p) => p && typeof p === "object");
+      const searches = toolParts.filter((p) => p.toolName === "search_tools").length;
+      const executes = toolParts.filter((p) => p.toolName === "execute_tool").length;
+      if (executes >= 2) return null;
+      if (searches < 2) {
+        return [0, 1].map((i) => ({ id: `search_delegate_${i}`, name: "search_tools", input: { query: "delegate_to_agent", limit: 1 } }));
+      }
+      const refs = runSlice(prompt)
+        .filter((m) => m?.role === "tool")
+        .flatMap((m) => (Array.isArray(m.content) ? m.content : [m.content]))
+        .map((p) => JSON.stringify(p).match(/sel_[a-f0-9]{36}/u)?.[0])
+        .filter(Boolean);
+      const [refA, refB] = [refs.at(-2), refs.at(-1)];
+      return refA && refB
+        ? [
+          { id: "execute_delegate_a", name: "execute_tool", input: { selectionRef: refA, arguments: { agent: parallelRefs[0], task: "@demo-tools" } } },
+          { id: "execute_delegate_b", name: "execute_tool", input: { selectionRef: refB, arguments: { agent: parallelRefs[1], task: "@demo-tools" } } },
+        ]
+        : null;
+    }
+    const wantMulti = delegateMultiCount(prompt);
+    if (wantMulti > 0) {
+      // search → delegate → … → final: N SEQUENTIAL child runs against one
+      // budget. Round detection reads the tool parts' toolName (result
+      // messages can carry more than one part, so a naive result count
+      // miscounts rounds).
+      const toolParts = runSlice(prompt)
+        .filter((m) => m?.role === "tool")
+        .flatMap((m) => (Array.isArray(m.content) ? m.content : [m.content]))
+        .filter((p) => p && typeof p === "object");
+      const searches = toolParts.filter((p) => p.toolName === "search_tools").length;
+      const executes = toolParts.filter((p) => p.toolName === "execute_tool").length;
+      if (searches >= wantMulti && executes >= wantMulti) return null;
+      if (searches <= executes) {
+        return { id: `search_delegate_${searches}`, name: "search_tools", input: { query: "delegate_to_agent", limit: 1 } };
+      }
+      const selectionRef = latestSelectionRef(prompt);
+      return selectionRef
+        ? { id: `execute_delegate_${executes}`, name: "execute_tool", input: { selectionRef, arguments: { agent: delegateAgentRef(prompt), task: wantMulti >= 3 ? "@demo-tools-x2" : "@demo-tools" } } }
+        : null;
+    }
     if (step === 0) {
       return { id: "search_delegate_agent", name: "search_tools", input: { query: "delegate_to_agent", limit: 1 } };
     }
     if (step === 1) {
       const selectionRef = latestSelectionRef(prompt);
       return selectionRef
-        ? { id: "execute_delegate_agent", name: "execute_tool", input: { selectionRef, arguments: { agent: delegateAgentRef(prompt), task: "@demo-tools" } } }
+        ? { id: "execute_delegate_agent", name: "execute_tool", input: { selectionRef, arguments: { agent: delegateAgentRef(prompt), task: delegateChildTask(prompt) } } }
         : null;
     }
     return null;
@@ -203,7 +300,8 @@ function lazyDemoCall(prompt, { delegate = false, delegateAgent = false } = {}) 
     { type: "search", tool: "memory_get" },
     { type: "execute", args: { key: "demo" } },
   ];
-  const action = plan[step];
+  const fullPlan = wantsDemoToolsX2(prompt) ? [...plan, ...plan] : plan;
+  const action = fullPlan[step];
   if (!action) return null;
   if (action.type === "search") {
     return { id: `search_${step}`, name: "search_tools", input: { query: action.tool, limit: 1 } };
@@ -267,13 +365,14 @@ export function createDemoModel() {
         ? lazyDemoCall(options.prompt)
         : null;
       if (lazyCall) {
+        const lazyCalls = Array.isArray(lazyCall) ? lazyCall : [lazyCall];
         return Promise.resolve({
-          content: [{
+          content: lazyCalls.map((call) => ({
             type: "tool-call",
-            toolCallId: `call_demo_${lazyCall.id}`,
-            toolName: lazyCall.name,
-            input: JSON.stringify(lazyCall.input),
-          }],
+            toolCallId: `call_demo_${call.id}`,
+            toolName: call.name,
+            input: JSON.stringify(call.input),
+          })),
           finishReason: "tool-calls",
           usage: { inputTokens: 8, outputTokens: 12, totalTokens: 20 },
           warnings: [],
@@ -315,12 +414,15 @@ export function createDemoModel() {
             ? lazyDemoCall(options.prompt)
             : null;
           if (lazyCall) {
-            controller.enqueue({
-              type: "tool-call",
-              toolCallId: `call_demo_${lazyCall.id}`,
-              toolName: lazyCall.name,
-              input: JSON.stringify(lazyCall.input),
-            });
+            const lazyCalls = Array.isArray(lazyCall) ? lazyCall : [lazyCall];
+            for (const call of lazyCalls) {
+              controller.enqueue({
+                type: "tool-call",
+                toolCallId: `call_demo_${call.id}`,
+                toolName: call.name,
+                input: JSON.stringify(call.input),
+              });
+            }
             controller.enqueue({ type: "finish", usage, finishReason: "tool-calls" });
             controller.close();
             return;
@@ -444,7 +546,7 @@ export function createDemoModel() {
             controller.close();
             return;
           }
-          if (wantsTools && (toolResultCount(options.prompt) >= 6 || demoAlreadyFinal(options.prompt))) {
+          if (wantsTools && (toolResultCount(options.prompt) >= (wantsDemoToolsX2(options.prompt) ? 12 : 6) || demoAlreadyFinal(options.prompt))) {
             // STEP 4 (tools): the final summary — the reads' VALUES speak for
             // themselves (the run's tool results are the assertion target). The
             // continuation step (tool history stripped) re-emits the same

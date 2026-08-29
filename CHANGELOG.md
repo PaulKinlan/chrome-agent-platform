@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.348] — 2026-08-29
+- fix(delegation): REVIEW ROUND 2 — combined parent+child budget accounting, cancellation cascade, sibling serialization, complete audit
+
 ## [0.2.347] — 2026-08-28
 - Fixed a bug in the faster task-history storage: the row recording how a run finished was written where the new reader never looks, so every completed run quietly lost it from its log. Not visible in the UI (status comes from elsewhere), but wrong — and it blocked the batching work that comes next
 

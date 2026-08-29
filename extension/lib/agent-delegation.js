@@ -112,7 +112,7 @@ export function evaluateDelegation({ callerAgent, targetAgent, state, descendant
       error: `this run already has ${MAX_DELEGATION_DESCENDANTS} delegated child runs — the per-run delegation cap`,
     };
   }
-  const remaining = Math.max(0, (state.maxIterations ?? 0) - (state.step ?? 0));
+  const remaining = Math.max(0, (state.maxIterations ?? 0) - (state.step ?? 0) - (Number.isFinite(state.childSpend) ? state.childSpend : 0));
   if (remaining < MIN_REMAINING_ITERATIONS) {
     return {
       ok: false,
@@ -128,6 +128,24 @@ export function evaluateDelegation({ callerAgent, targetAgent, state, descendant
       maxIterations: Math.min(remaining, CHILD_ITERATION_CAP),
     },
   };
+}
+
+/** Charge a SETTLED child subtree's total iteration consumption (its own
+ *  steps plus everything charged to it by ITS children) to the caller's live
+ *  state, so parent + descendants can never spend the same allowance twice
+ *  (P1-a). Additive and undefined-safe; negative/NaN charges never refund. */
+export function chargeChildSpend(state, spent) {
+  if (!state || typeof state !== "object") return state;
+  const add = Number.isFinite(spent) && spent > 0 ? Math.floor(spent) : 0;
+  state.childSpend = (Number.isFinite(state.childSpend) ? state.childSpend : 0) + add;
+  return state;
+}
+
+/** The caller's remaining iterations after its own steps AND charged child
+ *  spend — the figure the audit record carries for every attempt. */
+export function remainingIterations(state) {
+  if (!state || typeof state !== "object") return 0;
+  return Math.max(0, (state.maxIterations ?? 0) - (state.step ?? 0) - (Number.isFinite(state.childSpend) ? state.childSpend : 0));
 }
 
 /** The per-root-run descendant counter (in-memory enforcement; the durable
@@ -171,13 +189,21 @@ export function createDelegationRegistry({ maxEntries = 64 } = {}) {
   };
 }
 
-/** The durable audit record (bounded text — no unbounded task bodies). */
+/** The durable audit record (bounded text — no unbounded task bodies).
+ *  Carries the STABLE agent ids (display names are not identity), the child
+ *  depth, the parent's remaining budget at attempt time, and the computed
+ *  child cap, for executed AND denied attempts. */
 export function delegationAuditRecord({
   rootRunId,
   parentRunId,
   childRunId,
   fromAgent,
   toAgent,
+  fromAgentId = "",
+  toAgentId = "",
+  depth = null,
+  parentRemaining = null,
+  childCap = null,
   task,
   outcome,
   detail = "",
@@ -189,8 +215,13 @@ export function delegationAuditRecord({
     childRunId: String(childRunId ?? "").slice(0, 160),
     from: String(fromAgent ?? "").slice(0, 80),
     to: String(toAgent ?? "").slice(0, 80),
+    fromAgentId: String(fromAgentId ?? "").slice(0, 128),
+    toAgentId: String(toAgentId ?? "").slice(0, 128),
+    depth: Number.isFinite(depth) ? depth : null,
+    parentRemaining: Number.isFinite(parentRemaining) ? parentRemaining : null,
+    childCap: Number.isFinite(childCap) ? childCap : null,
     task: String(task ?? "").slice(0, 140),
-    outcome: outcome === "ok" ? "ok" : "error",
+    outcome: ["ok", "denied", "cancelled"].includes(outcome) ? outcome : "error",
     detail: String(detail ?? "").slice(0, 200),
   };
 }

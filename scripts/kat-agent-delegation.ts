@@ -129,10 +129,16 @@ try {
   check("helper agent created", helper?.ok === true, helper);
   const solo = await page.ev(`globalThis.__katSend("named-agent.create", { name: "Solo Agent", role: "You work alone." })`);
   check("solo agent created (no delegation edges)", solo?.ok === true, solo);
-  const delegator = await page.ev(`globalThis.__katSend("named-agent.create", { name: "Delegator Prime", role: "You coordinate: delegate specialist subtasks to the agents in your delegation list and synthesize their results.", canDelegateTo: ["helper-bee"] })`);
-  check("delegator created with canDelegateTo=[helper-bee]", delegator?.ok === true, delegator);
+  const delegator = await page.ev(`globalThis.__katSend("named-agent.create", { name: "Delegator Prime", role: "You coordinate: delegate specialist subtasks to the agents in your delegation list and synthesize their results.", canDelegateTo: ["helper-bee", "mid-agent", "critic"] })`);
+  check("delegator created with delegation edges", delegator?.ok === true, delegator);
   const got = await page.ev(`globalThis.__katSend("named-agent.get", { id: "delegator-prime" })`);
-  check("the edge persisted on the record", JSON.stringify(got?.agent?.canDelegateTo) === JSON.stringify(["helper-bee"]), got?.agent?.canDelegateTo);
+  check("the edges persisted on the record", JSON.stringify(got?.agent?.canDelegateTo) === JSON.stringify(["helper-bee", "mid-agent", "critic"]), got?.agent?.canDelegateTo);
+  const mid = await page.ev(`globalThis.__katSend("named-agent.create", { name: "Mid Agent", role: "You pass work down the chain.", canDelegateTo: ["leaf-agent"] })`);
+  check("mid agent created (chain depth 1)", mid?.ok === true, mid);
+  const leaf = await page.ev(`globalThis.__katSend("named-agent.create", { name: "Leaf Agent", role: "You are the end of the chain.", canDelegateTo: ["helper-bee"] })`);
+  check("leaf agent created (chain depth 2)", leaf?.ok === true, leaf);
+  const critic = await page.ev(`globalThis.__katSend("named-agent.create", { name: "Critic", role: "You review work critically." })`);
+  check("critic created (parallel sibling target)", critic?.ok === true, critic);
 
   // ── 2. The allowed delegation runs end to end ────────────────────────────
   const run = await page.ev(`globalThis.__katSend("named-agent.run", { id: "delegator-prime", task: "@demo-delegate-agent helper-bee" })`);
@@ -168,6 +174,100 @@ try {
   const chatText = await chat.ev(`document.body.innerText.slice(0, 4000)`);
   check("the agent-chat surface renders the delegation", typeof chatText === "string" && /delegate_to_agent|Helper Bee/i.test(chatText), String(chatText ?? "").slice(0, 200));
   await chat.shot(`${OUT}/delegation-parent-chat.png`);
+
+  // Fire-and-poll route caller (the cancellation probe must cancel WHILE the
+  // parent run is live — an awaited sendMessage would block the page's eval).
+  await page.ev(`(() => {
+    globalThis.__katBg = {};
+    globalThis.__katSendBg = (name, type, payload) => {
+      globalThis.__katBg[name] = { done: false, res: null };
+      chrome.runtime.sendMessage({ type, ...payload }, (res) => {
+        globalThis.__katBg[name] = { done: true, res: res ?? { ok: false, error: chrome.runtime.lastError?.message ?? "no response" } };
+      });
+      return true;
+    };
+    return true;
+  })()`);
+
+  // ── 6. DEPTH-2 routing: delegator → mid → leaf, audited at each hop ──────
+  const chain = await page.ev(`globalThis.__katSend("named-agent.run", { id: "delegator-prime", task: "@demo-delegate-agent mid-agent @demo-delegate-agent leaf-agent" })`);
+  check("depth-2 chain run completed", chain?.ok === true, chain);
+  const audit2 = await page.ev(`globalThis.__katSend("named-agent.delegations", {})`);
+  const hop1 = (audit2?.entries ?? []).find((e) => e.fromAgentId === "delegator-prime" && e.toAgentId === "mid-agent" && e.outcome === "ok");
+  const hop2 = (audit2?.entries ?? []).find((e) => e.fromAgentId === "mid-agent" && e.toAgentId === "leaf-agent" && e.outcome === "ok");
+  check("audit: hop 1 delegator→mid at depth 1 with stable ids", hop1?.depth === 1 && typeof hop1?.fromAgentId === "string" && hop1.fromAgentId.length > 0, hop1);
+  check("audit: hop 2 mid→leaf at depth 2 with stable ids", hop2?.depth === 2 && hop2?.fromAgentId === "mid-agent" && hop2?.toAgentId === "leaf-agent", hop2);
+  check("audit: budget fields ride the executed records", Number.isFinite(hop1?.parentRemaining) && Number.isFinite(hop1?.childCap) && hop1.childCap > 0, hop1);
+
+  // ── 6b. DEPTH LIMIT: a depth-2 run's own delegation is DENIED + audited ──
+  const deep = await page.ev(`globalThis.__katSend("named-agent.run", { id: "delegator-prime", task: "@demo-delegate-agent mid-agent @demo-delegate-agent leaf-agent @demo-delegate-agent helper-bee" })`);
+  check("over-deep chain run completes honestly", deep?.ok === true, deep);
+  const audit3 = await page.ev(`globalThis.__katSend("named-agent.delegations", {})`);
+  const depthDenied = (audit3?.entries ?? []).find((e) => e.outcome === "denied" && e.fromAgentId === "leaf-agent");
+  check("audit: the leaf's depth-limit DENIAL is durably recorded", depthDenied?.detail === "delegation-depth" && depthDenied?.toAgentId === "helper-bee", depthDenied);
+
+  // ── 7. CANCELLATION CASCADE: cancelling the parent cancels the live child ─
+  // "@demo-delegate-slow" makes the CHILD slow while the parent stays fast.
+  await page.ev(`globalThis.__katSendBg("cancelrun", "named-agent.run", { id: "delegator-prime", task: "@demo-delegate-agent helper-bee @demo-delegate-slow" })`);
+  let parentExec = "", childExec = "";
+  for (let i = 0; i < 40 && (!parentExec || !childExec); i++) {
+    await sleep(500);
+    const lst = await page.ev(`globalThis.__katSend("run.list", {})`);
+    const runs = lst?.runs ?? [];
+    const p = runs.find((r) => r.agentId === "named:delegator-prime" && r.phase === "running");
+    const c = runs.find((r) => r.agentId === "named:helper-bee" && r.phase === "running");
+    if (p && !parentExec) parentExec = p.executionId;
+    if (c && !childExec) childExec = c.executionId;
+  }
+  check("cascade probe: parent + child runs are both live", parentExec.length > 0 && childExec.length > 0 && parentExec !== childExec, { parentExec, childExec });
+  const cancel = await page.ev(`globalThis.__katSend("run.cancel", { executionId: "${parentExec}" })`);
+  check("the parent cancellation is accepted", cancel?.ok === true, cancel);
+  let parentRes = null;
+  for (let i = 0; i < 60 && !parentRes; i++) {
+    await sleep(500);
+    const bg = await page.ev(`globalThis.__katBg["cancelrun"]`);
+    if (bg?.done) parentRes = bg.res;
+  }
+  check("the parent run settles cancelled", parentRes?.cancelled === true || String(parentRes?.error ?? "").includes("cancel"), parentRes);
+  let childFinalPhase = "";
+  for (let i = 0; i < 40 && !childFinalPhase; i++) {
+    await sleep(500);
+    const lst = await page.ev(`globalThis.__katSend("run.list", {})`);
+    const c = (lst?.runs ?? []).find((r) => r.executionId === childExec);
+    if (c && c.phase !== "running") childFinalPhase = c.phase;
+  }
+  check("the CHILD run is cancelled by the cascade — never left spending", childFinalPhase === "cancelled", { childFinalPhase });
+  const audit4 = await page.ev(`globalThis.__katSend("named-agent.delegations", {})`);
+  const cancelRec = (audit4?.entries ?? []).find((e) => e.outcome === "cancelled" && e.parentRunId === parentExec);
+  check("audit: the cancellation is recorded as CANCELLED (not a generic error)", cancelRec?.outcome === "cancelled" && cancelRec?.toAgentId === "helper-bee", cancelRec);
+
+  // ── 8. COMBINED BUDGET: three sequential delegations shrink the live cap ──
+  // (x3 with doubled-plan children: each child spends ~5 of the root's 12
+  // iterations, so attempt 3's cap must collapse to 2 — the live proof that
+  // child spend is charged against the parent's budget. The denial boundary
+  // itself is unit-tested; the agent-do outer-iteration budget (8 calls) fits
+  // exactly three search+execute rounds + final.)
+  const budget = await page.ev(`globalThis.__katSend("named-agent.run", { id: "delegator-prime", task: "@demo-delegate-agent helper-bee @demo-delegate-x3" })`);
+  check("the combined-budget run completes honestly", budget?.ok === true, budget);
+  const audit5 = await page.ev(`globalThis.__katSend("named-agent.delegations", {})`);
+  // Scope to THIS parent run's delegation attempts (its execution id).
+  const budgetRun = (audit5?.entries ?? []).filter((e) => e.parentRunId === budget?.executionId);
+  const settledCaps = budgetRun.filter((e) => e.outcome !== "denied").map((e) => e.childCap).reverse(); // the log is most-recent-first
+  const settledRems = budgetRun.filter((e) => e.outcome !== "denied").map((e) => e.parentRemaining).reverse();
+  check("audit: three sequential delegations recorded", settledCaps.length === 3, budgetRun.map((e) => ({ outcome: e.outcome, cap: e.childCap, rem: e.parentRemaining })));
+  check("audit: the third child's cap collapses under combined spend (6 → 6 → 2)", settledCaps[0] === 6 && settledCaps[1] === 6 && settledCaps[2] === 2, settledCaps);
+  check("audit: the parent's remaining budget shrinks by each child's spend", settledRems[0] > settledRems[1] && settledRems[1] > settledRems[2] && settledRems[2] <= 2, settledRems);
+
+  // ── 9. PARALLEL SIBLINGS: two same-step delegations both complete + audit ─
+  const parallel = await page.ev(`globalThis.__katSend("named-agent.run", { id: "delegator-prime", task: "@demo-delegate-agent helper-bee @demo-delegate-parallel helper-bee critic" })`);
+  check("the parallel-sibling run completes", parallel?.ok === true, parallel);
+  check("the model reflects a sibling result", typeof parallel?.result === "string" && parallel.result.includes("Agent delegation"), String(parallel?.result ?? "").slice(0, 240));
+  const audit6 = await page.ev(`globalThis.__katSend("named-agent.delegations", {})`);
+  const sibs = (audit6?.entries ?? []).filter((e) => e.parentRunId === parallel?.executionId);
+  const sibTargets = new Set(sibs.map((e) => e.toAgentId));
+  check("audit: BOTH parallel siblings recorded with distinct child runs", sibs.length === 2 && new Set(sibs.map((e) => e.childRunId)).size === 2, sibs.map((e) => ({ to: e.toAgentId, childRunId: e.childRunId })));
+  check("audit: the siblings fanned out to both targets", sibTargets.has("helper-bee") && sibTargets.has("critic"), [...sibTargets]);
+  check("audit: the siblings share ONE parent run id", sibs.length === 2 && sibs[0].parentRunId === sibs[1].parentRunId, sibs.map((e) => e.parentRunId));
 } finally {
   try { proc.kill(); } catch { /* already gone */ }
 }

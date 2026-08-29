@@ -25,6 +25,7 @@ import {
   MAX_DELEGATION_DEPTH,
   MAX_DELEGATION_DESCENDANTS,
   appendDelegationAudit,
+  chargeChildSpend,
   createDelegationRegistry,
   delegationAuditRecord,
   evaluateDelegation,
@@ -362,8 +363,9 @@ Deno.test("delegation SW pins: fail-closed context, no approval inheritance, loc
   // model-controlled body field — dispatchRoute strips __-prefixed keys).
   assertStringIncludes(sw, "routeContext?.executionId");
   assertStringIncludes(sw, "activeDelegationRuns.get(callerExecutionId)");
-  // The child inherits NO approvals.
-  const delegateRoute = sw.slice(sw.indexOf('async "named-agent.delegate"'), sw.indexOf('async "named-agent.history"'));
+  // The child inherits NO approvals (the wrapper lives in runDelegatedChild —
+  // the route itself is only the per-caller serialization lock).
+  const delegateRoute = sw.slice(sw.indexOf("async function runDelegatedChild"), sw.indexOf("const handlers = mergeRouteMaps"));
   assertStringIncludes(delegateRoute, "approvalBinding: null");
   assertStringIncludes(delegateRoute, "skipRunLock: true");
   // The lock bypass exists ONLY behind the skipRunLock flag in runTask.
@@ -373,4 +375,105 @@ Deno.test("delegation SW pins: fail-closed context, no approval inheritance, loc
   assertStringIncludes(sw, "activeDelegationRuns.delete(executionId)");
   // The run-context save/restore confines the singleton swap to nested runs.
   assertStringIncludes(sw, "savedRunContext");
+});
+
+// ── (7) ROUND-2 KATs: combined budget, audit completeness, route seams ──────
+
+Deno.test("delegation guard: child spend is charged against the parent's remaining budget", () => {
+  // 12 cap − 2 own steps − 6 already-spent by a settled child = 4 remaining.
+  const verdict = evaluateDelegation({
+    callerAgent: chief,
+    targetAgent: researcher,
+    state: rootState({ step: 2, childSpend: 6 }),
+    descendantCount: 0,
+  });
+  assertEquals(verdict.ok, true);
+  assertEquals(verdict.child.maxIterations, 4, "parent + child consumption can never exceed the cap together");
+});
+
+Deno.test("delegation guard: a combined-spent budget denies the next delegation", () => {
+  // 12 − 4 − 7 = 1 remaining < MIN_REMAINING_ITERATIONS → budget denial.
+  const verdict = evaluateDelegation({
+    callerAgent: chief,
+    targetAgent: researcher,
+    state: rootState({ step: 4, childSpend: 7 }),
+    descendantCount: 0,
+  });
+  assertEquals(verdict.ok, false);
+  assertEquals(verdict.code, "delegation-budget");
+});
+
+Deno.test("chargeChildSpend: accumulates settled-subtree consumption (undefined-safe)", () => {
+  const state = rootState({ step: 1 });
+  chargeChildSpend(state, 5);
+  chargeChildSpend(state, 2);
+  assertEquals(state.childSpend, 7, "two settled children both charge the parent");
+  const fresh = rootState();
+  delete fresh.childSpend;
+  chargeChildSpend(fresh, 3);
+  assertEquals(fresh.childSpend, 3, "a state without the field starts at zero");
+  chargeChildSpend(fresh, -99);
+  chargeChildSpend(fresh, Number.NaN);
+  assertEquals(fresh.childSpend, 3, "negative/NaN charges never REFUND budget");
+});
+
+Deno.test("delegation audit record: stable agent ids, depth, and budget fields ride every record", () => {
+  const rec = delegationAuditRecord({
+    rootRunId: "exec-root",
+    parentRunId: "exec-parent",
+    childRunId: "delegate:research-analyst:1",
+    fromAgent: "Chief of Staff",
+    toAgent: "Research Analyst",
+    fromAgentId: "chief-of-staff",
+    toAgentId: "research-analyst",
+    depth: 1,
+    parentRemaining: 9,
+    childCap: 6,
+    task: "t",
+    outcome: "ok",
+  });
+  assertEquals(rec.fromAgentId, "chief-of-staff");
+  assertEquals(rec.toAgentId, "research-analyst");
+  assertEquals(rec.depth, 1);
+  assertEquals(rec.parentRemaining, 9);
+  assertEquals(rec.childCap, 6);
+  assertEquals(rec.outcome, "ok");
+});
+
+Deno.test("delegation audit record: denied + cancelled outcomes are preserved verbatim", () => {
+  const denied = delegationAuditRecord({
+    rootRunId: "r", parentRunId: "p", childRunId: "",
+    fromAgent: "A", toAgent: "B", fromAgentId: "a", toAgentId: "b",
+    depth: 1, parentRemaining: 1, childCap: null,
+    task: "t", outcome: "denied", detail: "delegation-budget",
+  });
+  assertEquals(denied.outcome, "denied");
+  assertEquals(denied.detail, "delegation-budget");
+  const cancelled = delegationAuditRecord({
+    rootRunId: "r", parentRunId: "p", childRunId: "c",
+    fromAgent: "A", toAgent: "B", fromAgentId: "a", toAgentId: "b",
+    depth: 1, parentRemaining: 9, childCap: 6,
+    task: "t", outcome: "cancelled", detail: "run cancelled by owner",
+  });
+  assertEquals(cancelled.outcome, "cancelled");
+});
+
+Deno.test("delegation SW pins (round 2): spend charging, cancellation cascade, sibling serialization, denied audits", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  // P1-a: the settled child's consumption is recorded per execution and
+  // charged back to the caller's live state.
+  assertStringIncludes(sw, "delegationFinalSpend");
+  assertStringIncludes(sw, "chargeChildSpend");
+  // P1-b: live child executions are tracked per parent and cancelled with it.
+  assertStringIncludes(sw, "delegationChildren");
+  assertStringIncludes(sw, "cancelExecutionTree");
+  // A cancelled child propagates a STRUCTURED cancellation, not a generic error.
+  assertStringIncludes(sw, "delegation-cancelled");
+  // P1-c: sibling delegations from ONE caller are serialized (the singleton
+  // run context is save/restored per nested run).
+  assertStringIncludes(sw, "delegationLocks");
+  // P1-d: denied attempts land in the durable audit too.
+  assertStringIncludes(sw, 'outcome: "denied"');
+  // The child's execution id must be observable by the parent WHILE it runs.
+  assertStringIncludes(sw, "onExecutionStarted");
 });
