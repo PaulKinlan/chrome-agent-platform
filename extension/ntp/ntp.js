@@ -24,6 +24,7 @@ import {
   confirmActionDialog,
 } from "../shared/components.js";
 import { canonicalRef, findAgentByRef } from "../shared/agent-registry.js";
+import { agentScheduleMarker, backgroundAgentsForDisplay } from "../shared/agent-display.js";
 import { handleScriptRunMessage } from "../lib/script-host.js";
 import { initialAvatar } from "../lib/avatar.js";
 import { renderDurabilityState } from "../lib/durability-ui.js";
@@ -672,14 +673,18 @@ async function renderNamedAgents() {
     send("background-agent.list").catch(() => ({ agents: [] })),
   ]);
   const agents = Array.isArray(namedRes.agents) ? namedRes.agents : [];
-  const background = (Array.isArray(bgRes.agents) ? bgRes.agents : []).filter((a) => a.enabled);
-  // ONE projection keyed by agent id (owner directive — the unified agent
-  // model): a record present in both stores renders EXACTLY ONCE; the named
-  // record wins and a recipe-side schedule fills in when it has none.
-  const unified = projectUnifiedAgents(agents, background);
+  const background = backgroundAgentsForDisplay(bgRes.agents);
+  // The hub list keeps its established active-only view. The task sidebar is a
+  // display surface, not a callability filter, so it receives every scheduled
+  // agent below — including stopped ones the owner may want to inspect.
+  const active = projectUnifiedAgents(
+    agents,
+    backgroundAgentsForDisplay(background, { activeOnly: true }),
+  );
+  const navigation = projectUnifiedAgents(agents, background);
   if (el) {
     el.replaceChildren();
-    if (!unified.length) {
+    if (!active.length) {
       // First-run / empty state: ONE click seeds the curated starter set
       // (never automatic — the owner chooses).
       const empty = document.createElement("div");
@@ -694,7 +699,7 @@ async function renderNamedAgents() {
       empty.append(document.createElement("br"), starterBtn);
       el.append(empty);
     } else {
-      for (const a of unified) {
+      for (const a of active) {
         const row = document.createElement("capability-row");
         row.setAttribute("name", a.name || a.id);
         row.setAttribute("description", a.role || a.description || "an agent");
@@ -712,7 +717,7 @@ async function renderNamedAgents() {
         // ONE agents list (owner directive): a scheduled agent carries a small
         // schedule chip — no other distinction from an on-demand agent.
         if (a.schedule?.periodInMinutes) {
-          row.setAttribute("last-run", `every ${a.schedule.periodInMinutes} min`);
+          row.setAttribute("last-run", agentScheduleMarker(a));
         }
         row.addEventListener("open", () => {
           if (a.kind === "named") openAgentChat(a.id || a.name);
@@ -763,8 +768,8 @@ async function renderNamedAgents() {
       }
     }
   }
-  renderSidebarAgents(unified);
-  refreshAgentCount(unified);
+  renderSidebarAgents(navigation);
+  refreshAgentCount(active);
 }
 
 // ── the named agents in the SIDEBAR (a created agent must appear here, not
@@ -783,13 +788,13 @@ async function renderSidebarAgents(agents) {
   }
   for (const a of rows) {
     const isBackground = a.kind === "background";
-    const scheduleMin = a.schedule?.periodInMinutes ?? null;
+    const scheduleMarker = agentScheduleMarker(a);
     const item = document.createElement("button");
     item.type = "button";
     item.className = "agent-item";
     // ONE agent concept: no "background" label — the only distinction is the
     // small schedule marker; the tooltip carries the role/description.
-    item.title = (a.name || a.id) + (a.role ? " — " + a.role : a.description ? " — " + a.description : "") + (scheduleMin ? ` — every ${scheduleMin} min` : "");
+    item.title = (a.name || a.id) + (a.role ? " — " + a.role : a.description ? " — " + a.description : "") + ` — ${scheduleMarker}`;
     const avatar = document.createElement("img");
     avatar.className = "a-avatar";
     avatar.alt = "";
@@ -809,12 +814,10 @@ async function renderSidebarAgents(agents) {
       role.textContent = full.length > 88 ? full.slice(0, 88).trimEnd() + "…" : full;
       label.append(role);
     }
-    if (scheduleMin) {
-      const chip = document.createElement("span");
-      chip.className = "a-role";
-      chip.textContent = `every ${scheduleMin} min`;
-      label.append(chip);
-    }
+    const chip = document.createElement("span");
+    chip.className = "a-role agent-schedule-marker";
+    chip.textContent = scheduleMarker;
+    label.append(chip);
     item.append(avatar, label);
     item.addEventListener("click", () => {
       if (isBackground) openBackgroundAgentChat(a.id, a.name);
@@ -3441,6 +3444,16 @@ window.addEventListener("message", async (e) => {
     // Home — close the overlay (only our own embedded view may drive this).
     if (!isPanelFrameSource(e.source)) return;
     if (!viewOverlay?.hidden) closeView();
+    return;
+  }
+  if (d?.type === "cap:edit-named-agent") {
+    // Settings keeps persona + schedule editing reachable from its unified row
+    // without duplicating the maintained agent dialog. Only the embedded,
+    // extension-owned panel frame may request this navigation.
+    if (!isPanelFrameSource(e.source) || typeof d.id !== "string" || !d.id) return;
+    if (!viewOverlay?.hidden) closeView();
+    await openAgentChat(d.id);
+    editAgentBtn?.click();
     return;
   }
   if (d?.type === "use-skill") {

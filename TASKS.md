@@ -1503,6 +1503,27 @@ evidence every other task depends on).
     repeated-settle path re-attempt delivery. 37 unit tests + 22-check KAT
     green; suite 2283/0.
 
+## [CAP-FB-20260829-AGENTS-SETTINGS-MERGE-01] Unify interactive and scheduled agents in Settings and the task sidebar
+- Feedback: 2026-08-29 — owner directive: background agents and agents must be merged in Settings, and background agents must be visible in the left Agents menu on the task view
+- Updated: 2026-08-29 UTC
+- Status: IN_REVIEW
+- Priority: P1
+- Owner: implementation lane
+- Workspace: durable worktree
+- Branch: `cap-agents-merge`
+- Base: `54d70a9b`
+- Candidate: this commit
+- Shipping: —
+- Acceptance: Settings has one Agents nav destination and one management list containing named and scheduled/background agents without changing their stores or routes; rows distinguish on-demand, running schedules, and stopped schedules in plain language; persona/provider/schedule, enable/disable, duplicate, prompt edit, and delete remain reachable; the task sidebar lists stopped as well as running background agents and opens their existing detail/history surface
+- Review: required fresh-session review of the candidate diff plus browser evidence
+- Gates: focused agent display/deep-link/navigation/options tests; full Deno suite; developer build; loaded-extension Settings and task-sidebar interaction screenshots
+- Blockers: —
+- Next: independent acceptance review, then coordinator merge
+- Recover: `git log --oneline --all --grep=CAP-FB-20260829-AGENTS-SETTINGS-MERGE-01`
+- History:
+  - 2026-08-29 20:29 UTC — implementation started from `origin/main@54d70a9b`; presentation-only merge keeps named-agent and background-recipe stores/routes distinct, preserves legacy `#background` and `#background-agents` links by normalizing both to `#agents`, and deliberately leaves callable-only filtering in the execution picker rather than applying it to display surfaces.
+  - 2026-08-29 20:44 UTC — author falsification: with `agent-display.js` removed, its three changed tests failed type-check/import (RED); with `pure.js` and `options.html` restored to `origin/main`, the final deep-link/structure assertions failed 3 pass / 2 fail (RED). Restored candidate: focused suite 20/20 and build green.
+
 ## [CAP-FB-20260829-MAIN-GATES-RED-03] Journey suite red on main after the install-granted permission change
 - Feedback: 2026-08-29 — found by running the suite on `origin/main`
 - Updated: 2026-08-29 UTC

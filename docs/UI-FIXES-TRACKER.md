@@ -30,8 +30,7 @@ one line each here:
 - **Discovered-sites box butting against the container edge** — `0.2.312`.
 - **Add-agent empty state / agents-folder "+"** — `0.2.312`.
 - **Tool library count disagreeing with the rows** — `0.2.312`: all 130 listed.
-- **Background agents separated from the agents list** — `0.2.306`: unified, with a
-  runs-in-the-background marker, schedule and toggle; full named-agent delete added.
+- **Background agents separated from the agents list** — unified end to end: Settings has one Agents destination and one management list for named + scheduled agents (including stopped schedules), with persona/provider/schedule/toggle/delete actions kept in-row; the task sidebar also shows stopped scheduled agents with a plain cadence marker.
 - **Data & memory Clear looking like it did nothing** — `0.2.265`, `0.2.266`: the clear
   worked, the UI never refreshed; tree expansion is now preserved across the refresh.
 - **Surfaces dead-rendering on a suspended worker** — `0.2.302`: honest error + Retry.
@@ -110,7 +109,7 @@ one line each here:
 - The collapsed-rail task X (visible on hover + deletes) + the 24px hit target.
 - **Current-main Tasks/Agents sidebar parity (Paul Telegram, 2026-08-18)** — Tasks and Agents now use the same fixed-header/intrinsic-list layout, overflow ownership, stable expanded scrollbar gutters, row formatting, and inline-end + alignment. Collapsed lists stay scrollable without a scrollbar consuming the 60px rail; dots, avatars, and both + actions remain centered. The task X uses a centered 28px token-backed hover/focus control, Site-agent discovery copy is no longer duplicated, and `scripts/sidebar-parity.ts` drives populated expanded/collapsed/RTL/dark plus hover/focus/delete/new-task interactions in the real extension with external screenshots.
 - The task title single-line ellipsis + click-to-rename.
-- The unified Agents area (Background + Site groupings; only ACTIVE background agents shown + a Configure link).
+- The unified Agents area: named + scheduled agents share one list; Settings and the task sidebar show stopped schedules too, while execution pickers remain callable-only.
 - Click a named agent → its view (history + run log) + talk to it.
 - The background agents: independent, duplicable + editable (the built-in stays pristine), their own OPFS.
 - The Recent activity shows WHICH agent did it.

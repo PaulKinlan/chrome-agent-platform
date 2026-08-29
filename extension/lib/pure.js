@@ -777,7 +777,6 @@ export const SETTINGS_SECTIONS = Object.freeze([
   "tool-library",
   "skills",
   "agents",
-  "background",
   "browser",
   "permissions",
   "hooks",
@@ -790,7 +789,8 @@ export const SETTINGS_SECTIONS = Object.freeze([
 export function normalizeSettingsSectionId(hash) {
   if (typeof hash !== "string" || !hash) return null;
   const clean = hash.startsWith("#") ? hash.slice(1).trim() : hash.trim();
-  if (clean === "background-agents") return "background";
+  // Legacy background-agent deep links now land on the unified Agents section.
+  if (clean === "background-agents" || clean === "background") return "agents";
   if (SETTINGS_SECTIONS.includes(clean)) return clean;
   return null;
 }

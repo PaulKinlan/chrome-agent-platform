@@ -90,6 +90,8 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
       per-agent provider override, bundled llm-prices cost table.
 - [x] The named-agent layer — every agent (named/site/background) gets its own OPFS
       sandbox: memory + run history + skills + `memory_grep`.
+- [x] One owner-facing Agents model: Settings and the task sidebar list interactive +
+      scheduled agents together with cadence markers; execution pickers still filter by callability.
 - [x] Sites-as-sub-agents (WebMCP discovery + per-tool first-run approval) with
       Settings → Site agents → Diagnostics.
 - [x] Tasks-as-threads, skills (`/skill:<id>`), generative-UI artifacts, agent-generated
