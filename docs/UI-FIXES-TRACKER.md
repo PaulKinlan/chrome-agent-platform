@@ -41,13 +41,35 @@ one line each here:
 
 ## Open
 
-### Agent template picker is a plain select (2026-08-29 — candidate in review)
-- The create-agent picker is being replaced with shared visual cards showing the
-  template name, a bounded persona summary, up to three skill badges, and a labelled
-  Use action. The curated six are ordered first and visibly marked Starter.
-- Candidate evidence: real loaded-extension KAT 9/9 applies Chief of Staff and
-  persists the agent; the existing template journey remains 38/38; axe is clean
-  and its blocked-fetch probe exits nonzero; full suite 2118/0. Review pending.
+### Create-agent dialog clutter and inconsistent controls (2026-08-29 — implementation)
+- Keep only Name and What it does on the primary path; avatar, templates, persona tools,
+  skills, schedule, delegation and context files remain reachable under one collapsed
+  Advanced disclosure.
+- Schedule entry now deterministically accepts interval English (including “every couple
+  of minutes” and “every hour”), confirms the parsed recurrence inline, and blocks
+  ambiguous/unsupported text; exact weekday times are honestly unsupported by the
+  existing interval-only scheduler rather than approximated incorrectly.
+- The former large card gallery is replaced in the create dialog by the shared
+  `<provider-select>` native base-select vocabulary: same tokens, keyboard behavior and
+  `--input-h` grid. The reusable visual card remains documented in the component gallery,
+  but no longer crowds the creation path.
+- Dark conversation contrast now resolves `--secondary-layer` through the
+  scheme-aware `--panel-2` token. The custom property inherits across the open shadow
+  boundary; the defect was the missing alias, which forced the light fallback.
+- JSON tool-response previews now resolve their legacy `--fg` spelling through
+  scheme-aware `--text`; keys, strings, numbers and nulls already used the `--ink`,
+  accent and muted chains. The missing preview alias was the black-on-black seam.
+- Five-commit candidate gated: post-review full suite 2367/0, developer build clean,
+  focused tests 21/21, loaded-extension template journeys 37/0 and 6/0, and both new
+  computed dark-color checks green. Independent review round 1 found that partial
+  schedule creation failures were hidden and invalid feedback recommended unsupported
+  weekday timing; both are fixed and independent round-2 review passed with no
+  remaining findings (`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`).
+
+### Agent template visual-card picker (2026-08-29 — superseded by owner direction)
+- The visual-card component remains a documented reusable primitive, but its large
+  create-dialog gallery was superseded by the owner's request for the subtle select
+  recorded above. Its one-click prefill behavior now comes from the native select.
 
 ### Scheduled task storage-full flood (2026-08-21 — local successor)
 - Retained Durable authority exhausted the owner/model master store's former 500-key ceiling, causing one-shot and recipe alarms to repeat a generic console failure. The fix removes that arbitrary count ceiling, retains byte quotas, isolates each execution's authority, and evicts no data.

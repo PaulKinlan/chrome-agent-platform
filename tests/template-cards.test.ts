@@ -14,15 +14,16 @@ Deno.test("template cards: shared component renders persona, bounded skill badge
   assertStringIncludes(components, '<button class="use" type="button"');
 });
 
-Deno.test("template cards: picker is a starter-first visual gallery using the landed catalogue", () => {
+Deno.test("create-agent template picker reuses the subtle provider base-select", () => {
   assertEquals(STARTER_TEMPLATE_IDS.length, 7);
   assert(AGENT_TEMPLATES.length >= STARTER_TEMPLATE_IDS.length);
-  assertStringIncludes(ntp, 'document.createElement("agent-template-card")');
-  assertStringIncludes(ntp, 'card.toggleAttribute("starter", starterIds.has(t.id))');
-  assertStringIncludes(ntp, 'card.addEventListener("use"');
+  assertStringIncludes(ntp, 'document.createElement("provider-select")');
+  assertStringIncludes(ntp, 'templateSelect.setAttribute("placeholder", "Custom agent")');
   assertStringIncludes(ntp, "STARTER_TEMPLATE_IDS.map(agentTemplateById)");
-  assertStringIncludes(ntp, 'firstTemplateUse.focus()');
-  assert(!ntp.includes('const tplSelect = document.createElement("select")'), "plain select picker must be removed");
+  assertStringIncludes(ntp, "templateSelect.providers = orderedTemplates.map");
+  assertStringIncludes(ntp, 'templateSelect.addEventListener("change"');
+  assertStringIncludes(components, "select.control, select.control::picker(select) { appearance: base-select; }");
+  assert(!ntp.includes('id = "agent-template-gallery"'), "the create dialog must not render the large template list");
 });
 
 Deno.test("template cards: component gallery documents the reusable primitive", () => {

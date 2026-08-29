@@ -53,6 +53,33 @@ Deno.test("dark-scheme: the on-accent ink aliases route through --btn-fg", () =>
   }
 });
 
+Deno.test("dark-scheme: user message surface resolves through the scheme-aware panel chain", () => {
+  const css = read("extension/shared/theme.css");
+  const components = read("extension/shared/components.js");
+  assert(
+    /--secondary-layer:\s*var\(--panel-2\)/.test(css),
+    "--secondary-layer must alias --panel-2 instead of falling back to a light surface inside message-bubble",
+  );
+  assert(
+    components.includes(':host([role="user"]) .msg { background:var(--secondary-layer,#efede8); }'),
+    "the user bubble must consume the semantic secondary-layer token",
+  );
+  assert(/--ink:\s*var\(--text\)/.test(css), "message ink must resolve through the scheme-aware --text token");
+});
+
+Deno.test("dark-scheme: JSON tree preview text resolves through scheme-aware ink", () => {
+  const css = read("extension/shared/theme.css");
+  const components = read("extension/shared/components.js");
+  assert(
+    /--fg:\s*var\(--text\)/.test(css),
+    "--fg must alias --text instead of falling back to near-black inside the dark JSON tree",
+  );
+  assert(
+    components.includes(".tool .tt-preview { color:var(--fg,#1c1a17)"),
+    "the tool-response preview must consume the foreground token chain",
+  );
+});
+
 Deno.test("dark-scheme: primary pages declare the color-scheme meta", () => {
   for (const page of [
     "extension/ntp/ntp.html",

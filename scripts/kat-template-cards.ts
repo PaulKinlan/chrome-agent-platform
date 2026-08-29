@@ -1,7 +1,6 @@
-// kat-template-cards.ts — real-picker visual-card acceptance.
-// Proves the shipped catalogue renders as accessible cards, curated starters
-// come first, Use applies the editable template in one click, and Create saves
-// that exact persona/skill configuration through the real MV3 route.
+// kat-template-cards.ts — create-agent template-select acceptance.
+// Proves the shipped catalogue uses the shared subtle native select, stays
+// behind Advanced, applies an editable template, and saves through real MV3.
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
@@ -58,85 +57,31 @@ await sleep(3000);
 await ev(`document.getElementById('new-agent')?.click()`);
 await sleep(700);
 
-const cards = await ev(`(() => {
-  const cards = [...document.querySelectorAll('#agent-template-gallery agent-template-card')];
-  return cards.map((card) => {
-    const root = card.shadowRoot;
-    return {
-      id: card.template?.id ?? null,
-      starter: card.hasAttribute('starter'),
-      name: root?.querySelector('.name')?.textContent?.trim() ?? '',
-      persona: root?.querySelector('.persona')?.textContent?.trim() ?? '',
-      badges: [...(root?.querySelectorAll('.skill') ?? [])].map((el) => el.textContent?.trim()),
-      overflow: root?.querySelector('.overflow')?.textContent?.trim() ?? '',
-      use: root?.querySelector('.use')?.textContent?.trim() ?? '',
-      useLabel: root?.querySelector('.use')?.getAttribute('aria-label') ?? '',
-    };
-  });
-})()`);
 const catalogueCount = await ev(`import(chrome.runtime.getURL('lib/agent-templates.js')).then((m) => m.AGENT_TEMPLATES.length)`);
-const galleryVisible = await ev(`(() => {
-  const gallery = document.getElementById('agent-template-gallery');
-  const first = gallery?.querySelector('agent-template-card');
-  const button = first?.shadowRoot?.querySelector('.use');
-  const rect = first?.getBoundingClientRect();
-  const viewport = { width: innerWidth, height: innerHeight };
-  return { focused: first?.shadowRoot?.activeElement === button, rect: rect ? { top: rect.top, bottom: rect.bottom, width: rect.width } : null, viewport };
+const picker = await ev(`(() => {
+  const advanced = document.querySelector('.agent-config-advanced');
+  const host = document.getElementById('agent-template-select');
+  const select = host?.shadowRoot?.querySelector('select');
+  const primary = [...document.querySelectorAll('.agent-config-scroll > label')].map((label) => label.textContent?.trim());
+  const before = { advancedOpen: advanced?.open === true, primary, optionCount: (select?.options.length ?? 1) - 1,
+    label: select?.getAttribute('aria-label') ?? '', height: select ? getComputedStyle(select).height : '' };
+  if (advanced) advanced.open = true;
+  return before;
 })()`);
-const cardGeometry = await ev(`(() => {
-  const rows = new Map();
-  for (const host of document.querySelectorAll('#agent-template-gallery agent-template-card')) {
-    const article = host.shadowRoot?.querySelector('article');
-    if (!article) continue;
-    const hostRect = host.getBoundingClientRect();
-    const articleRect = article.getBoundingClientRect();
-    const key = host.offsetTop;
-    if (!rows.has(key)) rows.set(key, []);
-    rows.get(key).push({
-      hostHeight: hostRect.height,
-      articleTop: articleRect.top,
-      articleBottom: articleRect.bottom,
-      boxSizing: getComputedStyle(article).boxSizing,
-    });
-  }
-  const orderedRows = [...rows.entries()].sort(([a], [b]) => a - b);
-  const gaps = orderedRows.slice(1).map(([, next], index) => {
-    const current = orderedRows[index][1];
-    return Math.min(...next.map((card) => card.articleTop)) - Math.max(...current.map((card) => card.articleBottom));
-  });
-  const equalHeights = orderedRows.every(([, row]) => {
-    const heights = row.map((card) => card.hostHeight);
-    return Math.max(...heights) - Math.min(...heights) < 1;
-  });
-  return {
-    rowCount: orderedRows.length,
-    gaps,
-    minGap: gaps.length ? Math.min(...gaps) : null,
-    equalHeights,
-    boxSizing: [...new Set(orderedRows.flatMap(([, row]) => row.map((card) => card.boxSizing)))],
-  };
-})()`);
-check("visual picker renders one card per shipped template", Array.isArray(cards) && cards.length === catalogueCount, { rendered: cards?.length, catalogueCount });
-check("dialog opens with the card gallery visible and its first Use action focused", galleryVisible?.focused === true && galleryVisible?.rect?.top >= 0 && galleryVisible?.rect?.bottom <= galleryVisible?.viewport?.height, galleryVisible);
-check("card rows have equal heights and never overlap", cardGeometry?.rowCount > 1 && cardGeometry?.equalHeights === true && cardGeometry?.gaps?.every((gap: number) => gap >= 0), cardGeometry);
-check("curated six are ordered first and visually marked Starter",
-  Array.isArray(cards) && cards.length >= 6 && cards.slice(0, 6).every((card: any) => card.starter) && cards.slice(6).every((card: any) => !card.starter),
-  cards?.slice(0, 8).map((card: any) => ({ id: card.id, starter: card.starter })));
-const chief = cards?.find((card: any) => card.id === "chief-of-staff");
-check("card shows name and a non-empty persona summary", chief?.name === "Chief of Staff" && chief?.persona.length > 30, chief);
-check("skill badges are bounded to three with an overflow count", chief?.badges.length === 3 && chief?.overflow === "+2", chief);
-check("card exposes a labelled one-click Use action", chief?.use === "Use" && /Use Chief of Staff template/.test(chief?.useLabel ?? ""), chief);
-await shot("01-template-cards");
+check("dialog opens on the direct Name / What it does path with Advanced collapsed", picker?.advancedOpen === false && picker?.primary?.length === 2, picker);
+check("shared template select offers every shipped template", picker?.optionCount === catalogueCount, picker);
+check("template select is labelled and follows the 36px control grid", picker?.label === "Start from a template" && picker?.height === "36px", picker);
+await shot("01-template-select");
 
 const used = await ev(`(() => {
-  const card = [...document.querySelectorAll('#agent-template-gallery agent-template-card')].find((el) => el.template?.id === 'chief-of-staff');
-  card?.shadowRoot?.querySelector('.use')?.click();
+  const select = document.getElementById('agent-template-select')?.shadowRoot?.querySelector('select');
+  if (select) { select.value = 'chief-of-staff'; select.dispatchEvent(new Event('change', { bubbles: true })); }
   const name = [...document.querySelectorAll('.agent-config-scroll label')].find((label) => label.textContent.startsWith('Name'))?.querySelector('input')?.value ?? '';
   const role = [...document.querySelectorAll('.agent-config-scroll textarea')][0]?.value ?? '';
   const checked = [...document.querySelectorAll('.skills-list input[type=checkbox]')].filter((input) => input.checked).length;
-  return { card: !!card, name, roleHasPersona: role.includes('Chief of Staff Persona'), checked };
+  return { select: !!select, name, roleHasPersona: role.includes('Chief of Staff Persona'), checked };
 })()`);
-check("one click Use instantiates the editable template form", used?.card === true && used?.name === "Chief of Staff" && used?.roleHasPersona === true && used?.checked === 5, used);
+check("selecting a template instantiates the editable form", used?.select === true && used?.name === "Chief of Staff" && used?.roleHasPersona === true && used?.checked === 5, used);
 
 // Fail closed: inaccessible/unavailable axe is a failed KAT, never a skipped note.
 try {
@@ -146,8 +91,8 @@ try {
   if (injected?.error || injected?.result?.exceptionDetails) throw new Error("axe injection failed");
   const violations = await ev(`axe.run(document, { resultTypes: ['violations'] }).then((r) => r.violations.map((v) => ({ id: v.id, nodes: v.nodes.map((n) => (n.target || []).join(' ')) })))`);
   if (!Array.isArray(violations)) throw new Error("axe returned no violation array");
-  const relevant = violations.filter((violation: any) => (violation.nodes ?? []).some((node: string) => node.includes("agent-template-card") || node.includes("agent-template-gallery")));
-  check("axe finds no violations in the template gallery", Array.isArray(cards) && cards.length > 0 && relevant.length === 0, relevant);
+  const relevant = violations.filter((violation: any) => (violation.nodes ?? []).some((node: string) => node.includes("agent-template-select") || node.includes("agent-config-advanced")));
+  check("axe finds no violations in the template select", picker?.optionCount > 0 && relevant.length === 0, relevant);
 } catch (error) {
   check("axe loads and runs (fail closed)", false, String(error).slice(0, 160));
 }
@@ -158,7 +103,7 @@ await ev(`(() => {
 })()`);
 await sleep(1600);
 const saved = await ev(`chrome.runtime.sendMessage({ type: 'named-agent.get', id: 'chief-of-staff' }).then((res) => ({ ok: res?.ok === true, name: res?.agent?.name, role: res?.agent?.role ?? '', skills: (res?.agent?.skills ?? []).map((skill) => skill?.id ?? skill?.name ?? String(skill)) })).catch(() => null)`);
-check("Create persists the card-instantiated agent through named-agent.create", saved?.ok === true && saved?.name === "Chief of Staff" && saved?.role.includes("Chief of Staff Persona") && saved?.skills.length === 5, saved);
+check("Create persists the selected template through named-agent.create", saved?.ok === true && saved?.name === "Chief of Staff" && saved?.role.includes("Chief of Staff Persona") && saved?.skills.length === 5, saved);
 await shot("02-template-created");
 
 console.log(`\nkat-template-cards: ${pass} passed, ${fail} failed`);

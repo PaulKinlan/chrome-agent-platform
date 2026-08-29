@@ -46,6 +46,55 @@ Deno.test("create-agent dialog: sticky footer sits outside scrollable body with 
   );
 });
 
+Deno.test("create-agent dialog: optional persona controls use one collapsed progressive disclosure", async () => {
+  const ntpJs = await Deno.readTextFile(
+    new URL("../extension/ntp/ntp.js", import.meta.url),
+  );
+
+  assert(
+    /configField\("What it does", "textarea"[\s\S]*?scrollBody\.append\(nameField\.wrap, roleField\.wrap\);/.test(ntpJs),
+    "name and what-it-does must remain the direct primary path",
+  );
+  assert(
+    /advancedDetails\.className = "agent-config-advanced";[\s\S]*?advancedSummary\.textContent = "Advanced";/.test(ntpJs),
+    "optional controls must live behind one clearly labelled disclosure",
+  );
+  for (const control of ["avatarRow", "templateSection", "roleTools", "skillsDetails", "scheduleField.wrap", "delegDetails", "assetsBox"]) {
+    assert(
+      ntpJs.includes(`advancedBody.append(${control})`),
+      `${control} must remain reachable inside Advanced`,
+    );
+  }
+});
+
+Deno.test("create-agent dialog: schedule input confirms supported English and blocks invalid text", async () => {
+  const ntpJs = await Deno.readTextFile(
+    new URL("../extension/ntp/ntp.js", import.meta.url),
+  );
+
+  assert(ntpJs.includes('configField("Run on a schedule", "input"'), "schedule must be free text");
+  assert(ntpJs.includes('placeholder = "every couple of minutes"'), "schedule needs a natural-language example");
+  assert(ntpJs.includes('scheduleFeedback.setAttribute("aria-live", "polite")'), "interpretation must be announced without stealing focus");
+  assert(ntpJs.includes("Try: every 10 minutes / every hour"), "parse feedback must suggest only supported schedules");
+  assert(!ntpJs.includes("Try: every 10 minutes / every hour / weekdays at 9am"), "parse feedback must not recommend rejected calendar timing");
+  assert(
+    /if \(parsedSchedule\.error\) \{[\s\S]*?scheduleField\.el\.focus\(\);[\s\S]*?return;/.test(ntpJs),
+    "unparseable text must stop save rather than create a guessed schedule",
+  );
+});
+
+Deno.test("create-agent dialog: partial schedule failure is reported without hiding the saved agent", async () => {
+  const [ntpJs, serviceWorkerJs] = await Promise.all([
+    Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url)),
+    Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url)),
+  ]);
+
+  assert(serviceWorkerJs.includes('return { ...r, scheduleError: s?.error ?? "schedule failed" };'), "create route must expose partial schedule failure");
+  assert(/\{ ok: true, id: r\.agent\?\.id \?\? v\.name, firstTask: v\.firstTask, scheduleError: r\.scheduleError \}/.test(ntpJs), "dialog adapter must preserve scheduleError from an otherwise successful create");
+  assert(/r\.scheduleError\s*\? `Agent “\$\{name\}” saved, but its schedule was not created: \$\{r\.scheduleError\}`/.test(ntpJs), "{ ok: true, scheduleError } must render an explicit partial-success warning");
+  assert(/await opts\.onSaved\?\.\(r\);/.test(ntpJs), "partial success must still open the agent that was created");
+});
+
 Deno.test("create-agent dialog: skills section is collapsible to keep footer visible", async () => {
   const ntpJs = await Deno.readTextFile(
     new URL("../extension/ntp/ntp.js", import.meta.url),
