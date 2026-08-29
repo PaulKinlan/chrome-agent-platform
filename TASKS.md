@@ -1761,25 +1761,29 @@ evidence every other task depends on).
 - History:
   - 2026-08-27 23:30 UTC — five custom elements are defined and shipped in `extension/shared/components.js` but referenced only by `docs/components.html`, never by any extension page: `theme-picker`, `run-task-button`, `tool-chips`, `prompt-bar`, `agent-nav`. `theme-picker` is straightforward dead code — theme switching was removed at `0.2.301` and the component was left behind, which is a miss against the owner's own cross-subsystem-consistency rule. The others are unbuilt primitives; `tool-chips` in particular may be exactly what the tool-card redesign needs, so it is called out as a blocker rather than deleted.
 
-## [CAP-FB-20260829-MIC-DEAD-MACOS-01] Mic button is completely dead on macOS after the waveform change
-- Feedback: 2026-08-29 — product owner reports that clicking the microphone icon has no visible effect, error, or transcription on macOS Chrome
-- Updated: 2026-08-29 20:30 UTC
+## [CAP-FB-20260829-MIC-DEAD-MACOS-01] macOS dictation has no transcript or trustworthy microphone diagnostics
+- Feedback: 2026-08-29 — product owner reports no transcript text on macOS, a constant fallback waveform, no way to configure microphone access, and multiple possible input devices
+- Updated: 2026-08-29 23:24 UTC
 - Status: IN_REVIEW
 - Resume: —
 - Priority: P0
 - Owner: implementation worker
 - Workspace: active (local path private)
-- Branch: `cap-mic-fix`
-- Base: `54d70a9bb0041b9b40225003c8470256beea77e2`
-- Candidate: this tracker commit
+- Branch: `cap-mic-devices`
+- Base: `cebb4601a12b35385ff6e5272d9d2d4272586e5d`
+- Candidate: this commit
 - Shipping: —
-- Acceptance: SpeechRecognition starts in the click turn without awaiting the decorative `getUserMedia` meter; rejected or never-settling meter acquisition leaves dictation and a visible CSS fallback active; meter rejection surfaces in the composer's live status; late streams remain generation-fenced and stopped after stop, hide, pagehide, or detach; reduced motion stays static
-- Review: required by reviewer — pending
-- Gates: focused component test 9/9; real-browser mic KAT 43/43 with rejection/hang screenshots; `nice -n 10 deno test --allow-all tests/` 2359 pass / 0 fail; `npm run build` clean (95 generated files identical, 28 packages, CSP/oracle/Wasm assertions green)
-- Blockers: —
-- Next: reviewer checks the candidate diff and browser evidence, then the coordinator lands it without a manual version bump
-- Recover: `git show cap-mic-fix -- extension/shared/components.js scripts/kat-mic-state.ts tests/mic-button-state.test.ts`
+- Acceptance: preserve the landed immediate SpeechRecognition start; only when at least two physical audio inputs exist, offer an anchored microphone picker that requests labels once, persists a selected meter device, and briefly shows its genuine live level; clearly state that Web Speech transcription always follows the OS default input and cannot be retargeted by the picker; use the selection only for the dictation meter; handle device disconnect; no-speech and audio-capture errors identify likely OS-default versus selected meter inputs and point to system sound settings; fallback waveform state is explicitly exposed and never presented as live audio
+- Review: independent review REVISE on `3636164e` — P1 post-grant enumeration and P1 meter-request race fixes implemented; re-review pending
+- Gates: original pre-fix KAT 43 pass / 1 device-picker fail; review-fix falsification on `3636164e` 56 pass / 4 fail including post-grant discovery and out-of-order request RED; revised candidate mic KAT 60/60 with live-level screenshot and axe clean; final full unit 2387/0; production security PASS; production build clean; gallery/changelog/task checks green; known main Chrome journey regression remains outside this diff
+- Blockers: required reviewer; known `origin/main@cebb4601` inline-approval journey regression fails outside this diff before 35 downstream checks, with its fix lane in flight
+- Next: reviewer re-reviews the revised tip and its RED/GREEN browser evidence
+- Recover: `git show cap-mic-devices -- extension/shared/components.js scripts/kat-mic-state.ts tests/mic-button-state.test.ts`
 - History:
+  - 2026-08-29 23:24 UTC — post-commit final gates: full unit 2387/0, production security PASS with no survivor/residue/poison, mic KAT 60/60, and production build clean.
+  - 2026-08-29 23:14 UTC — review REVISE on `3636164e` raised two P1s. Fixed hidden pre-permission discovery by re-enumerating exactly once after the first successful meter capture and treating that capture as the label grant. Fixed out-of-order meter adoption with a dedicated monotonically increasing request generation plus the captured selected-device identity; stop/reselection/devicechange invalidate pending requests and stale resolutions stop their tracks. The expanded real-browser KAT is RED on `3636164e` at 56 pass / 4 fail and GREEN on the revision at 60/60, including three deferred meter requests resolved newest-first then stale.
+  - 2026-08-29 22:06 UTC — candidate implemented and rebased onto `origin/main@cebb4601`: the picker renders only for two or more physical inputs (default/communications aliases excluded), requests labels once, persists the exact meter device, runs a bounded four-second live analyser preview, and handles devicechange without claiming to retarget Web Speech. Three no-speech rounds and `audio-capture` now name OS-default versus meter inputs and the macOS recovery path; fallback title/ARIA/status identify animation rather than live level. Falsification: unchanged product 43 pass / 1 explicit device-picker fail; candidate 57/57 with screenshot and axe clean. Focused 17/17, unit 2387/0, security PASS, production build clean. Full Chrome journeys reproduce the known new-main inline-approval regression at 85/120; its fix lane is in flight and the remaining 35 checks are not reached.
+  - 2026-08-29 21:45 UTC — ownership: prior mic-decoupling lane → implementation worker (owner follow-up adds device discovery and no-transcript diagnostics on the landed fix). Platform constraint accepted: SpeechRecognition has no device-selection input and follows the OS default; the selected device controls only getUserMedia meter/preview streams.
   - 2026-08-29 20:30 UTC — diagnosis: commit `ce6247ef` changed `start()` to await `_requestMicStream()` before constructing and starting SpeechRecognition. The composer already displays `mic-error` through `setStatus`, and the real NTP KAT proves `offsetParent` is non-null in the visible layout. Falsification on the unfixed source produced 39 pass / 4 fail: a rejected meter left the button idle with the old permission error, a never-settling meter left it idle indefinitely, and recognition did not start in either case. The candidate starts recognition first, renders the CSS fallback immediately, then adopts the meter stream asynchronously under the existing generation guard. Rejection leaves recognition active and reports only that the live waveform is unavailable; late streams are stopped after cancellation. Green evidence: focused 9/9, mic KAT 43/43, full unit 2359/0, final build clean.
 
 ## [CAP-FB-20260829-BACKGROUND-RUN-TRANSCRIPT-01] Scheduled named-agent runs disappear from the agent conversation

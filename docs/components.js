@@ -852,6 +852,8 @@ class RunTaskButton extends Component {
 }
 customElements.define("run-task-button", RunTaskButton);
 
+const MIC_METER_DEVICE_KEY = "mic-meter-device-id";
+
 /* <mic-button listening> — self-contained Web Speech toggle + live waveform.
  * Recording state is signalled THREE ways: the `listening` attribute on the
  * host (state authority), `data-listening` on the inner button (visual state —
@@ -873,6 +875,19 @@ class MicButton extends Component {
     this._analyser = null;
     this._raf = 0;
     this._restartTimes = [];
+    this._audioDevices = [];
+    this._devices = [];
+    this._selectedDeviceId = null;
+    this._labelsRequested = false;
+    this._deviceMenuOpen = false;
+    this._previewStream = null;
+    this._previewCtx = null;
+    this._previewRaf = 0;
+    this._previewTimer = 0;
+    this._previewGen = 0;
+    this._deviceRows = new Map();
+    this._enumeratedAfterGrant = false;
+    this._meterRequestGen = 0;
     // Start-generation counter: every start() attempt bumps it; stop() and
     // disconnectedCallback() bump it too. A start whose getUserMedia resolves
     // AFTER its generation was superseded releases the late stream and exits
@@ -887,7 +902,7 @@ class MicButton extends Component {
     const idleLabel = this.getAttribute("label") || "Start listening";
     const label = listening ? "Stop listening" : idleLabel;
     mountTemplate(this, `
-      :host { display:inline-flex; }
+      :host { position:relative; display:inline-flex; align-items:center; }
       .mic { display:inline-flex; align-items:center; justify-content:center; width:var(--control,36px);
         height:var(--control,36px); background:transparent;
         border:1px solid var(--border, #333); color:var(--text, #eee); border-radius:var(--radius-sm,6px);
@@ -912,6 +927,30 @@ class MicButton extends Component {
       .stop-ic { display:none; align-items:center; justify-content:center; }
       .mic[data-listening]:hover .wave { display:none; }
       .mic[data-listening]:hover .stop-ic { display:inline-flex; }
+      .device-picker { display:inline-flex; align-items:center; justify-content:center; width:20px; height:var(--control,36px);
+        margin-inline-start:2px; padding:0; border:0; border-radius:var(--radius-sm,6px); background:transparent;
+        color:var(--muted,#635e56); cursor:pointer; anchor-name:--mic-device-anchor; }
+      .device-picker:hover { color:var(--text,#1d1b18); background:var(--bg,#f7f6f3); }
+      .device-picker:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .device-menu { position:absolute; inset:auto; margin:0; min-width:min(340px,calc(100vw - 24px)); max-width:380px;
+        padding:8px; color:var(--text,#1d1b18); background:var(--panel,#fff); border:1px solid var(--border,#e3e0d9);
+        border-radius:var(--radius-md,12px); box-shadow:0 8px 24px rgba(0,0,0,.25); z-index:20;
+        position-anchor:--mic-device-anchor; position-area:block-start span-inline-start;
+        position-try-fallbacks:flip-block,flip-inline; }
+      @supports not (position-area:top) { .device-menu { position:fixed; } }
+      .device-menu[hidden] { display:none; }
+      .device-title { margin:2px 6px 6px; font-size:13px; font-weight:600; }
+      .device-row { padding:2px; border-radius:var(--radius-sm,6px); }
+      .device-option { display:flex; align-items:center; gap:8px; width:100%; min-height:40px; padding:7px 8px;
+        border:0; border-radius:var(--radius-sm,6px); background:transparent; color:inherit; font:inherit; text-align:start; cursor:pointer; }
+      .device-option:hover,.device-option:focus-visible { background:var(--bg,#f7f6f3); outline:none; }
+      .device-option[aria-pressed="true"] { color:var(--accent,#0e6e63); font-weight:600; }
+      .device-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .device-check { display:inline-flex; width:16px; }
+      .device-level { display:block; width:calc(100% - 16px); height:4px; margin:0 8px 4px; accent-color:var(--accent,#0e6e63); }
+      .device-level:not([data-active]) { visibility:hidden; }
+      .device-status { min-height:16px; margin:0 8px 4px; color:var(--muted,#635e56); font-size:12px; }
+      .device-note { margin:8px 6px 2px; max-width:36ch; color:var(--muted,#635e56); font-size:12px; line-height:1.4; }
       @media (prefers-reduced-motion: reduce) { .wave span { animation:none; } }
     `, `<button part="button" class="mic" type="button" aria-label="${escapeHtml(label)}"
       aria-pressed="${listening}"${listening ? " data-listening" : ""}><span class="icon">${ICONS.mic}</span><span class="wave" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span><span class="stop-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></span></button>`);
@@ -919,6 +958,7 @@ class MicButton extends Component {
   }
   _wire() {
     this._button?.addEventListener("click", () => this.toggle());
+    this._syncDeviceUi();
   }
   get listening() { return this._listening; }
   toggle() {
@@ -960,14 +1000,305 @@ class MicButton extends Component {
       if (this._listening) this.stop();
     };
     window.addEventListener("pagehide", this._onPageHide);
+    this._onDeviceChange = () => void this._refreshDevices(true);
+    navigator.mediaDevices?.addEventListener?.("devicechange", this._onDeviceChange);
+    void this._loadDevices();
+  }
+  async _loadDevices() {
+    try {
+      const stored = await chrome.storage?.local?.get(MIC_METER_DEVICE_KEY);
+      this._selectedDeviceId = stored?.[MIC_METER_DEVICE_KEY] || null;
+    } catch { /* storage is optional; selection remains session-only */ }
+    await this._refreshDevices(false);
+  }
+  async _persistSelectedDevice() {
+    if (!this._selectedDeviceId) return;
+    try {
+      await chrome.storage?.local?.set({ [MIC_METER_DEVICE_KEY]: this._selectedDeviceId });
+    } catch { /* storage is optional; the current session still uses it */ }
+  }
+  _deviceName(deviceId) {
+    if (!deviceId) return "automatic meter input";
+    const device = this._audioDevices.find((d) => d.deviceId === deviceId);
+    const index = this._devices.findIndex((d) => d.deviceId === deviceId);
+    return device?.label || (index >= 0 ? `Microphone ${index + 1}` : "selected meter microphone");
+  }
+  _defaultDeviceName() {
+    const device = this._audioDevices.find((d) => d.deviceId === "default");
+    return device?.label || "OS default microphone";
+  }
+  _deviceDiagnostic() {
+    return `Speech recognition uses ${this._defaultDeviceName()}. The level meter uses ${this._deviceName(this._selectedDeviceId)}. Open macOS System Settings, then Sound → Input to change the default input.`;
+  }
+  async _refreshDevices(fromDeviceChange = false) {
+    const md = navigator.mediaDevices;
+    if (!md?.enumerateDevices) return;
+    let audioDevices;
+    try {
+      audioDevices = (await md.enumerateDevices()).filter((d) => d.kind === "audioinput");
+    } catch {
+      return;
+    }
+    const previous = this._selectedDeviceId;
+    this._audioDevices = audioDevices;
+    // `default` and `communications` are aliases, not extra physical mics.
+    // Excluding them is what keeps the picker off single-mic machines.
+    const concrete = audioDevices.filter((d) => d.deviceId !== "default" && d.deviceId !== "communications");
+    const seen = new Set();
+    this._devices = concrete.filter((d) => {
+      const identity = d.groupId || d.deviceId;
+      if (seen.has(identity)) return false;
+      seen.add(identity);
+      return true;
+    });
+    if (!this._devices.some((d) => d.deviceId === this._selectedDeviceId)) {
+      const defaultDevice = audioDevices.find((d) => d.deviceId === "default");
+      const matchingDefault = defaultDevice?.groupId && this._devices.find((d) => d.groupId === defaultDevice.groupId);
+      this._selectedDeviceId = (matchingDefault || this._devices[0])?.deviceId || null;
+      if (this._selectedDeviceId) void this._persistSelectedDevice();
+      if (fromDeviceChange && previous) {
+        this._stopPreview();
+        const next = this._selectedDeviceId ? this._deviceName(this._selectedDeviceId) : "no available microphone";
+        this._emit("mic-error", { message: `Selected level-meter microphone disconnected — using ${next}. Speech transcription still follows the OS default input; open macOS System Settings, then Sound → Input.` });
+        if (this._listening) {
+          this._stopMeter();
+          this._startMeter();
+          this._requestAndAdoptMeter(this._startGen);
+        }
+      }
+    }
+    this._syncDeviceUi();
+  }
+  _syncDeviceUi() {
+    const oldTrigger = this._root.querySelector?.(".device-picker");
+    const oldMenu = this._root.querySelector?.(".device-menu");
+    oldTrigger?.remove();
+    oldMenu?.remove();
+    this._deviceRows = new Map();
+    if (this._devices.length < 2 || !this._root.append) {
+      this._deviceMenuOpen = false;
+      return;
+    }
+
+    const trigger = document.createElement("button");
+    trigger.type = "button";
+    trigger.className = "device-picker";
+    trigger.setAttribute("aria-label", "Choose microphone for live level check");
+    trigger.setAttribute("aria-haspopup", "dialog");
+    trigger.setAttribute("aria-expanded", String(this._deviceMenuOpen));
+    trigger.innerHTML = '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>';
+
+    const menu = document.createElement("div");
+    menu.className = "device-menu";
+    menu.setAttribute("popover", "auto");
+    menu.setAttribute("role", "dialog");
+    menu.setAttribute("aria-label", "Microphone devices");
+    menu.hidden = true;
+    const title = document.createElement("p");
+    title.className = "device-title";
+    title.textContent = "Check microphone level";
+    menu.append(title);
+    this._devices.forEach((device, index) => {
+      const row = document.createElement("div");
+      row.className = "device-row";
+      const option = document.createElement("button");
+      option.type = "button";
+      option.className = "device-option";
+      option.dataset.deviceId = device.deviceId;
+      option.setAttribute("aria-pressed", String(device.deviceId === this._selectedDeviceId));
+      const name = document.createElement("span");
+      name.className = "device-name";
+      name.textContent = device.label || `Microphone ${index + 1}`;
+      const check = document.createElement("span");
+      check.className = "device-check";
+      check.setAttribute("aria-hidden", "true");
+      if (device.deviceId === this._selectedDeviceId) check.innerHTML = ICONS.check;
+      option.append(name, check);
+      const level = document.createElement("progress");
+      level.className = "device-level";
+      level.max = 1;
+      level.value = 0;
+      level.setAttribute("aria-label", `Live input level for ${name.textContent}`);
+      const status = document.createElement("p");
+      status.className = "device-status";
+      status.setAttribute("role", "status");
+      row.append(option, level, status);
+      menu.append(row);
+      this._deviceRows.set(device.deviceId, { level, status });
+    });
+    const note = document.createElement("p");
+    note.className = "device-note";
+    note.textContent = "This selection checks and drives only the live level meter. Speech transcription always uses the OS default input. Change it in macOS System Settings under Sound → Input.";
+    menu.append(note);
+    this._root.append(trigger, menu);
+    this._deviceTrigger = trigger;
+    this._deviceMenu = menu;
+    trigger.addEventListener("click", () => void this._toggleDeviceMenu(!this._deviceMenuOpen));
+    menu.addEventListener("toggle", (event) => {
+      this._deviceMenuOpen = event.newState === "open";
+      trigger.setAttribute("aria-expanded", String(this._deviceMenuOpen));
+      if (!this._deviceMenuOpen && this._deviceMenu === menu) this._stopPreview();
+    });
+    menu.addEventListener("click", (event) => {
+      const option = event.target.closest?.("button[data-device-id]");
+      if (option) void this._selectDevice(option.dataset.deviceId);
+    });
+    menu.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        void this._toggleDeviceMenu(false);
+        trigger.focus();
+        return;
+      }
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      const options = [...menu.querySelectorAll("button[data-device-id]")];
+      const index = options.indexOf(document.activeElement);
+      event.preventDefault();
+      options[(index + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length]?.focus();
+    });
+    if (this._deviceMenuOpen) queueMicrotask(() => void this._toggleDeviceMenu(true, false));
+  }
+  async _toggleDeviceMenu(open, requestLabels = true) {
+    if (!this._deviceMenu || !this._deviceTrigger) return;
+    if (!open) {
+      this._stopPreview();
+      try { this._deviceMenu.hidePopover?.(); } catch { /* already closed */ }
+      this._deviceMenu.hidden = true;
+      this._deviceMenuOpen = false;
+      this._deviceTrigger.setAttribute("aria-expanded", "false");
+      return;
+    }
+    if (!supportsAnchorPositioning()) placeFloating(this._deviceTrigger, this._deviceMenu, { minWidth: 340 });
+    this._deviceMenu.hidden = false;
+    try { this._deviceMenu.showPopover?.(); } catch { /* already open */ }
+    this._deviceMenuOpen = true;
+    this._deviceTrigger.setAttribute("aria-expanded", "true");
+    this._deviceMenu.querySelector("button[data-device-id]")?.focus();
+    if (requestLabels) await this._grantDeviceLabels();
+  }
+  async _grantDeviceLabels() {
+    if (this._labelsRequested) return;
+    this._labelsRequested = true;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((track) => track.stop());
+      this._refreshDevicesAfterGrant();
+    } catch {
+      this._emit("mic-error", { message: "Microphone access was not granted, so device names and live checks may be unavailable. Speech transcription still follows the OS default input." });
+    }
+  }
+  _refreshDevicesAfterGrant() {
+    if (this._enumeratedAfterGrant) return;
+    this._enumeratedAfterGrant = true;
+    this._labelsRequested = true;
+    // Before permission Chrome may expose only an unlabeled `default` alias.
+    // Re-enumerate exactly once after the first successful capture, when the
+    // physical inputs and their labels become available.
+    void this._refreshDevices(false);
+  }
+  async _selectDevice(deviceId) {
+    if (!this._devices.some((d) => d.deviceId === deviceId)) return;
+    this._selectedDeviceId = deviceId;
+    await this._persistSelectedDevice();
+    this._syncDeviceUi();
+    if (this._listening) {
+      this._stopMeter();
+      this._startMeter();
+      this._requestAndAdoptMeter(this._startGen);
+    }
+    await this._previewDevice(deviceId);
+  }
+  _setPreviewStatus(deviceId, message, level = null) {
+    const row = this._deviceRows.get(deviceId);
+    if (!row) return;
+    row.status.textContent = message;
+    if (level == null) {
+      row.level.removeAttribute("data-active");
+      row.level.value = 0;
+    } else {
+      row.level.setAttribute("data-active", "");
+      row.level.value = level;
+    }
+  }
+  _releasePreview() {
+    if (this._previewTimer) { clearTimeout(this._previewTimer); this._previewTimer = 0; }
+    if (this._previewRaf) { cancelAnimationFrame(this._previewRaf); this._previewRaf = 0; }
+    if (this._previewCtx) { try { this._previewCtx.close(); } catch { /* ignore */ } this._previewCtx = null; }
+    if (this._previewStream) {
+      try { this._previewStream.getTracks().forEach((track) => track.stop()); } catch { /* ignore */ }
+      this._previewStream = null;
+    }
+  }
+  _stopPreview() {
+    this._previewGen++;
+    this._releasePreview();
+  }
+  async _previewDevice(deviceId) {
+    const gen = ++this._previewGen;
+    this._releasePreview();
+    const name = this._deviceName(deviceId);
+    this._setPreviewStatus(deviceId, `Checking ${name} — speak now`, 0);
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId } } });
+    } catch {
+      if (gen === this._previewGen) this._setPreviewStatus(deviceId, `No live level from ${name}. Check access, connection, and mute state.`);
+      return;
+    }
+    if (gen !== this._previewGen) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    let ctx;
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) throw new Error("AudioContext unavailable");
+      ctx = new AC();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      ctx.createMediaStreamSource(stream).connect(analyser);
+      this._previewStream = stream;
+      this._previewCtx = ctx;
+      const data = new Uint8Array(analyser.fftSize);
+      const tick = () => {
+        if (gen !== this._previewGen) return;
+        analyser.getByteTimeDomainData(data);
+        let peak = 0;
+        for (let i = 0; i < data.length; i++) peak = Math.max(peak, Math.abs(data[i] - 128) / 128);
+        const level = Math.min(1, peak * 2.5);
+        this._setPreviewStatus(deviceId, `Live level from ${name}: ${Math.round(level * 100)}%`, level);
+        this._previewRaf = requestAnimationFrame(tick);
+      };
+      this._previewRaf = requestAnimationFrame(tick);
+      this._previewTimer = setTimeout(() => {
+        if (gen !== this._previewGen) return;
+        this._releasePreview();
+        this._setPreviewStatus(deviceId, `Live check finished for ${name}`);
+      }, 4000);
+    } catch {
+      try { ctx?.close(); } catch { /* ignore */ }
+      try { stream.getTracks().forEach((track) => track.stop()); } catch { /* ignore */ }
+      if (gen === this._previewGen) this._setPreviewStatus(deviceId, `Live level unavailable for ${name}`);
+    }
+  }
+  _setWaveformMode(mode, description) {
+    this.waveformMode = mode;
+    if (!this._button) return;
+    if (description) {
+      this._button.title = description;
+      this._button.setAttribute?.("aria-description", description);
+    } else {
+      this._button.removeAttribute?.("title");
+      this._button.removeAttribute?.("aria-description");
+    }
   }
   /** Request a stream for the decorative level meter. SpeechRecognition owns
    *  its own audio capture and must never wait for this promise: on macOS the
    *  getUserMedia permission prompt can reject or remain pending indefinitely.
    *  Returns true (no mediaDevices API), false (meter unavailable), or the
-   *  MediaStream. The stream is adopted only after the generation check, so a
-   *  superseded/cancelled start releases a late stream instead of leaking it. */
-  async _requestMicStream() {
+   *  MediaStream. The caller captures the selected device identity before this
+   *  async request starts, so a later selection cannot rewrite its meaning. */
+  async _requestMicStream(deviceId) {
     const md = navigator.mediaDevices;
     if (!md?.getUserMedia) return true; // no API — let SpeechRecognition try
     try {
@@ -975,25 +1306,38 @@ class MicButton extends Component {
       // AnalyserNode source for the live waveform. Tracks are stopped in
       // _stopMeter (called from stop()/disconnectedCallback) — the mic is
       // never left open after the state reverts.
-      return await md.getUserMedia({ audio: true });
+      const audio = deviceId
+        ? { deviceId: { exact: deviceId } }
+        : true;
+      return await md.getUserMedia({ audio });
     } catch {
       return false;
     }
   }
-  async _adoptMeterStream(gen, streamPromise) {
+  _requestAndAdoptMeter(startGen) {
+    const meterGen = ++this._meterRequestGen;
+    const deviceId = this._selectedDeviceId;
+    void this._adoptMeterStream(startGen, meterGen, deviceId, this._requestMicStream(deviceId));
+  }
+  async _adoptMeterStream(startGen, meterGen, deviceId, streamPromise) {
     const stream = await streamPromise;
     const stopTracks = (s) => {
       if (s && s !== true) { try { s.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ } }
     };
-    if (gen !== this._startGen || !this._listening) {
+    if (startGen !== this._startGen || meterGen !== this._meterRequestGen ||
+        deviceId !== this._selectedDeviceId || !this._listening) {
       stopTracks(stream);
       return;
     }
     if (stream === false) {
-      this._emit("mic-error", { message: "live microphone waveform unavailable — dictation continues" });
+      this._setWaveformMode("fallback", "Recording. Live microphone level is unavailable; the waveform is a recording-state animation, not a live meter.");
+      this._emit("mic-error", { message: "live microphone waveform unavailable — dictation continues with a non-live recording animation" });
       return;
     }
-    if (stream === true) return;
+    if (stream === true) {
+      this._setWaveformMode("fallback", "Recording. This browser cannot provide a live microphone level; the waveform is a recording-state animation.");
+      return;
+    }
     // The composer may hide while the meter permission prompt is pending.
     // Recognition has already started, so stop the PRIMARY capture too.
     if (this._button && this._button.offsetParent === null) {
@@ -1002,6 +1346,7 @@ class MicButton extends Component {
       this.stop();
       return;
     }
+    this._refreshDevicesAfterGrant();
     if (this._mediaStream && this._mediaStream !== stream) stopTracks(this._mediaStream);
     this._mediaStream = stream;
     this._startMeter();
@@ -1013,13 +1358,21 @@ class MicButton extends Component {
   _startMeter() {
     const wave = this._root.querySelector(".wave");
     const bars = wave ? [...wave.querySelectorAll("span")] : [];
-    if (!this._mediaStream || !bars.length || prefersReducedMotion()) {
-      this.waveformMode = "fallback";
+    if (!this._mediaStream || !bars.length) {
+      this._setWaveformMode("fallback", "Recording. Waiting for a live microphone level; the waveform is a recording-state animation.");
+      return;
+    }
+    if (prefersReducedMotion()) {
+      this._setWaveformMode("fallback", "Recording. The waveform is static because reduced motion is enabled.");
       return;
     }
     try {
       const AC = window.AudioContext || window.webkitAudioContext;
-      if (!AC) { this.waveformMode = "fallback"; return; }
+      if (!AC) {
+        this._setWaveformMode("fallback", "Recording. Live microphone level is unavailable; the waveform is a recording-state animation, not a live meter.");
+        this._emit("mic-error", { message: "live microphone waveform unavailable — dictation continues with a non-live recording animation" });
+        return;
+      }
       const ctx = new AC();
       let analyser;
       try {
@@ -1035,7 +1388,7 @@ class MicButton extends Component {
         try { ctx.close(); } catch { /* ignore */ }
         throw meterErr;
       }
-      this.waveformMode = "live";
+      this._setWaveformMode("live", `Recording. Waveform shows the live level from ${this._deviceName(this._selectedDeviceId)}; speech transcription still uses the OS default input.`);
       wave.classList.add("live");
       const data = new Uint8Array(analyser.fftSize);
       const heights = [6, 12, 16, 10, 7]; // the idle bar geometry
@@ -1055,11 +1408,16 @@ class MicButton extends Component {
       };
       this._raf = requestAnimationFrame(tick);
     } catch {
-      this.waveformMode = "fallback"; // CSS animation carries the state
+      this._setWaveformMode("fallback", "Recording. Live microphone level is unavailable; the waveform is a recording-state animation, not a live meter.");
+      this._emit("mic-error", { message: "live microphone waveform unavailable — dictation continues with a non-live recording animation" });
     }
   }
   _stopMeter() {
-    this.waveformMode = null;
+    this._meterRequestGen++; // invalidate every unresolved meter acquisition
+    this._setWaveformMode(null, "");
+    const wave = this._root.querySelector?.(".wave");
+    wave?.classList.remove?.("live");
+    wave?.querySelectorAll("span").forEach((bar) => { bar.style.transform = ""; });
     if (this._raf) { cancelAnimationFrame(this._raf); this._raf = 0; }
     if (this._audioCtx) {
       try { this._audioCtx.close(); } catch { /* ignore */ }
@@ -1117,7 +1475,7 @@ class MicButton extends Component {
         if (e.error === "no-speech") {
           this._noSpeech += 1;
           if (this._noSpeech >= 3) {
-            this._emit("mic-error", { message: "couldn't hear you — check the microphone is enabled and not muted" });
+            this._emit("mic-error", { message: `couldn't hear you. ${this._deviceDiagnostic()}` });
             this.stop();
           }
           return;
@@ -1125,6 +1483,8 @@ class MicButton extends Component {
         const msg =
           e.error === "not-allowed" || e.error === "service-not-allowed"
             ? "microphone permission denied"
+            : e.error === "audio-capture"
+            ? `Speech recognition could not capture audio. ${this._defaultDeviceName()} may be wrong, disconnected, muted, or dead. The level meter uses ${this._deviceName(this._selectedDeviceId)}. Open macOS System Settings, then Sound → Input to change the default input.`
             : e.error === "network"
             ? "speech service unavailable (network)"
             : "speech error: " + e.error;
@@ -1171,8 +1531,7 @@ class MicButton extends Component {
     }
     // Recognition is primary and is already running. Kick the decorative
     // meter request off inside the same click gesture, but never await it.
-    const streamPromise = this._requestMicStream();
-    void this._adoptMeterStream(gen, streamPromise);
+    this._requestAndAdoptMeter(gen);
   }
   stop() {
     this._startGen++; // invalidate any in-flight start (send-while-pending)
@@ -1193,6 +1552,11 @@ class MicButton extends Component {
     if (this._visObserver) { this._visObserver.disconnect(); this._visObserver = null; }
     if (this._mutObserver) { this._mutObserver.disconnect(); this._mutObserver = null; }
     if (this._onPageHide) { window.removeEventListener("pagehide", this._onPageHide); this._onPageHide = null; }
+    if (this._onDeviceChange) {
+      navigator.mediaDevices?.removeEventListener?.("devicechange", this._onDeviceChange);
+      this._onDeviceChange = null;
+    }
+    this._stopPreview();
     this._listening = false;
     this._startGen++; // invalidate any in-flight start (detach-while-pending)
     if (this._recognition) {
@@ -1204,7 +1568,7 @@ class MicButton extends Component {
       } catch { /* ignore */ }
       this._recognition = null;
     }
-    if (this._mediaStream || this._audioCtx) this._stopMeter();
+    this._stopMeter();
     super.disconnectedCallback?.();
     // Drop the state attribute LAST: super sets _rendered=false first, so this
     // removal cannot trigger a re-render of the DETACHED element — but it
