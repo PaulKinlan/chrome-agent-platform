@@ -93,11 +93,12 @@ Deno.test("providers side-tabs: narrow layout collapses the rail to a horizontal
   assert(wideBadge.length > 0, "the badge rule exists (kept at narrow width)");
 });
 
-Deno.test("providers side-tabs: editor wiring is untouched — set-default, test-connection, clear-key, durability", () => {
+Deno.test("providers side-tabs: editor wiring keeps real actions and the fail-closed durability guard", () => {
   assertStringIncludes(js, `bindProviderSetDefault({`);
   assertStringIncludes(js, `test-connection`);
   assertStringIncludes(js, `provider.clear-key`);
-  assertStringIncludes(js, `wireCredentialDurability(`);
+  assertStringIncludes(js, `blockSessionOnlyCredentialSave(credentialInput)`);
+  assert(!js.includes("storage-durability-warning"), "the request-era Verify storage control stays removed");
   // the journeys' card-level selectors keep working
   assertStringIncludes(js, `card.dataset.provider = p.id`);
 });

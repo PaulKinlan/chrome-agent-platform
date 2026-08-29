@@ -42,7 +42,6 @@ globalThis.CustomEvent = class CustomEvent {
 globalThis.matchMedia = () => ({ matches: false });
 
 const COMPONENTS = [
-  "storage-durability-warning",
   "first-run-guide",
   "run-task-button",
   "mic-button",

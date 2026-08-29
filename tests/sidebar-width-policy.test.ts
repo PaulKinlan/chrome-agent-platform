@@ -95,9 +95,9 @@ Deno.test("first-run CTA: the gate is visible, described, and never a dead end",
   assert(!components.includes('seed-task" type="button"${canSeed ? "" : " disabled"}'));
   // The status line names what is missing and is announced (role=status).
   assertStringIncludes(components, 'id="seed-status" role="status"');
-  assertStringIncludes(components, "Configure a provider and verify storage to unlock the starter task.");
+  assertStringIncludes(components, "Configure a provider and reload the extension to restore storage before starting. If storage is still missing, reinstall the extension.");
   assertStringIncludes(components, "Configure a provider to unlock the starter task.");
-  assertStringIncludes(components, "Verify storage to unlock the starter task.");
+  assertStringIncludes(components, "Storage is missing — reload the extension before starting. If it is still missing, reinstall the extension.");
   // A gated click routes to the unblock path instead of doing nothing.
   assertStringIncludes(components, 'this._root.querySelector(".open-settings")?.focus();');
   // focusNextAction honours the aria-disabled gate (no :disabled anymore).

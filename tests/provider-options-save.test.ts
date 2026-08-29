@@ -49,7 +49,7 @@ Deno.test("provider save: Options uses the guarded production binding and no pag
   );
   const binding = optionsSource.indexOf("bindProviderSetDefault({");
   const guard = optionsSource.indexOf(
-    "blockSessionOnlyCredentialSave(credentialInput, durabilityWarning)",
+    "blockSessionOnlyCredentialSave(credentialInput)",
     binding,
   );
   assert(

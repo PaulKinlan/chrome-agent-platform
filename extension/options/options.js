@@ -33,10 +33,7 @@ import {
   renderInternalProviderStatus,
 } from "../lib/provider-visibility.js";
 import { runOwnerApprovedMutation } from "../lib/owner-approved-mutation.js";
-import {
-  credentialNeedsDurableStorage,
-  requestStorageFromOwnerClick,
-} from "../lib/first-run-onboarding.js";
+import { credentialNeedsDurableStorage } from "../lib/first-run-onboarding.js";
 import {
   SITE_AGENT_COPY,
   enrollOutcomeState,
@@ -146,7 +143,7 @@ function boundedSend(type, payload = {}, timeoutMs = 12000) {
   ]);
 }
 // Shared key-value access routes through the SERVICE WORKER (the single
-// authority for shared state). When the optional storage permission is absent,
+// authority for shared state). If the install-granted storage permission cannot be verified,
 // kv.js's session fallback is realm-local, so a page writing to its OWN fallback
 // map would contradict the worker's (the round-15 split-authority finding).
 // Routing every read/write through the SW makes the SW's session Map the one
@@ -186,64 +183,9 @@ async function refreshStoragePermission() {
   return storageGranted;
 }
 
-function syncCredentialWarning(warning, { focused = false, existing = false } = {}) {
-  const input = warning?._credentialInput;
-  if (!warning || !input) return;
-  const active = !storageGranted && (focused || input.value.length > 0 || existing);
-  warning.toggleAttribute("active", active);
-  if (storageGranted) warning.removeAttribute("state");
-}
-
-function syncAllCredentialWarnings() {
-  document.querySelectorAll("storage-durability-warning").forEach((warning) =>
-    syncCredentialWarning(warning, {
-      focused: warning._credentialInput === document.activeElement,
-      existing: warning._existingCredential === true,
-    }));
-}
-
-function wireCredentialDurability(input, warning, { existing = false } = {}) {
-  if (!input || !warning) return;
-  warning._credentialInput = input;
-  warning._existingCredential = existing;
-  const sync = () => syncCredentialWarning(warning, {
-    focused: input === document.activeElement,
-    existing,
-  });
-  input.addEventListener("focus", sync);
-  input.addEventListener("input", sync);
-  input.addEventListener("blur", sync);
-  warning.addEventListener("enable-storage", async (event) => {
-    warning.setAttribute("busy", "");
-    const result = await requestStorageFromOwnerClick({
-      event: event.detail?.sourceEvent,
-      userActivation: navigator.userActivation,
-      permissionsApi: chrome.permissions,
-    });
-    warning.removeAttribute("busy");
-    warning.setAttribute("state", result.reason);
-    if (result.granted) {
-      storageGranted = true;
-      syncAllCredentialWarnings();
-      saveFlash("Storage verified — API keys saved from now on survive extension restarts.");
-    } else if (result.reason === "owner-click-required") {
-      saveFlash("Use the Verify storage button directly — storage is granted at install.");
-      warning.setAttribute("active", "");
-      warning.focusAction?.();
-    } else {
-      saveFlash("Storage could not be verified — the API key has not been saved. Storage is granted at install; reload the extension and try again.");
-      warning.setAttribute("active", "");
-      warning.focusAction?.();
-    }
-  });
-  sync();
-}
-
-function blockSessionOnlyCredentialSave(input, warning) {
+function blockSessionOnlyCredentialSave(input) {
   if (!credentialNeedsDurableStorage({ enteredKey: input?.value ?? "", storageGranted })) return false;
-  warning?.setAttribute("active", "");
-  warning?.focusAction?.();
-  saveFlash("Verify storage before saving this API key — it would otherwise be lost on restart.");
+  saveFlash("Storage is missing from this installation. Reload the extension; if it is still missing, reinstall the extension before saving an API key.");
   return true;
 }
 
@@ -866,8 +808,7 @@ async function renderProviders(restoreFocus = false) {
         }
         ${
           p.needsKey || p.needsModel
-            ? `<label class="field"><span class="field-label">API key</span><input class="api-key" type="password" placeholder="…" autocomplete="off"></label>
-              ${p.needsKey ? `<storage-durability-warning id="${escapeAttr(`storage-warning-${p.id}`)}" provider="${escapeAttr(p.name)}"></storage-durability-warning>` : ""}`
+            ? `<label class="field"><span class="field-label">API key</span><input class="api-key" type="password" placeholder="…" autocomplete="off"></label>`
             : ""
         }
         ${
@@ -881,20 +822,15 @@ async function renderProviders(restoreFocus = false) {
       <div class="test-status" role="status" hidden></div>
     `;
     const credentialInput = card.querySelector(".api-key");
-    const durabilityWarning = card.querySelector("storage-durability-warning");
-    wireCredentialDurability(credentialInput, durabilityWarning, {
-      existing: cfg.provider === p.id && cfg.hasApiKey === true,
-    });
     // The synchronous durability guard MUST run before the replacement save
     // path starts either the host request or provider.set. Once allowed, the
-    // existing owner click starts optional host access and provider persistence
-    // without awaiting native permission settlement.
+    // existing owner click coordinates the host-access check and provider
+    // persistence without awaiting native permission settlement.
     bindProviderSetDefault({
       card,
       provider: p,
       currentConfig: cfg,
-      shouldBlock: () =>
-        blockSessionOnlyCredentialSave(credentialInput, durabilityWarning),
+      shouldBlock: () => blockSessionOnlyCredentialSave(credentialInput),
       requestHostAccess: requestProviderHostAccess,
       sendMessage: (message) => chrome.runtime.sendMessage(message),
       onAccess(access) {
@@ -929,8 +865,7 @@ async function renderProviders(restoreFocus = false) {
       testStatus.className = "test-status testing";
       testStatus.textContent = "Testing…";
       testBtn.disabled = true;
-      // Request the provider's OPTIONAL host permission (this click is a real
-      // user gesture) — the test fetch fails without it.
+      // Coordinate the provider host-access check before the test fetch.
       await requestProviderHostAccess({ baseURL: fields.baseURL });
       const res = await chrome.runtime.sendMessage({ type: "provider.test", ...fields });
       testBtn.disabled = false;
@@ -980,7 +915,7 @@ async function renderProviders(restoreFocus = false) {
   }
 }
 
-// ── Site enrollment (owner-driven optional host permission) ──
+// ── Site enrollment (owner-driven, install-grant verified) ──
 async function renderEnroll() {
   const input = $("#enroll-origin");
   const btn = $("#enroll-btn");
@@ -1305,7 +1240,6 @@ function agentProviderRowHtml(a, cur, globalCfg) {
     <label class="field ag-base-url" ${needsBaseURL ? "" : "hidden"}><span class="field-label">Base URL</span><input class="agent-provider-base-url" type="text" placeholder="https://your-endpoint/v1" value="${escapeAttr(baseURLDefault)}"></label>
     <label class="field"><span class="field-label">API key (write-only)</span><input class="agent-provider-key" type="password" placeholder="${selection.hiddenInternal ? "Not used by the active internal provider" : cur.hasApiKey ? "(kept — blank keeps it)" : "…"}" autocomplete="off" title="${selection.hiddenInternal ? "Choose a listed provider before entering a key" : cur.hasApiKey ? "A saved key is kept when this field is left blank" : "API key"}" ${internalDisabled}></label>
     <p class="hint agent-provider-internal-status" hidden></p>
-    <storage-durability-warning id="${escapeAttr(`agent-storage-warning-${a.id}`)}" provider="${escapeAttr(a.name)}"></storage-durability-warning>
     <div class="ag-actions">
       <button class="btn small set-agent-provider" type="button" ${internalDisabled}>Save</button>
       ${!selection.hiddenInternal && cur.provider && cur.hasApiKey ? `<button class="btn small ghost clear-agent-key" type="button" aria-label="Clear the stored API key for ${escapeAttr(a.name)}">Clear key</button>` : ""}
@@ -1375,11 +1309,7 @@ async function renderAgentProviders() {
     const internalStatus = row.querySelector(".agent-provider-internal-status");
     renderInternalProviderStatus(internalStatus, storedSelection);
     const agentCredentialInput = row.querySelector(".agent-provider-key");
-    const agentDurabilityWarning = row.querySelector("storage-durability-warning");
     const setAgentProvider = row.querySelector(".set-agent-provider");
-    wireCredentialDurability(agentCredentialInput, agentDurabilityWarning, {
-      existing: cur.hasApiKey === true,
-    });
 
     // Provider change → swap the model catalogue + base-URL field to the
     // selected provider (the row stays a labeled grid; only the dependent
@@ -1463,7 +1393,7 @@ async function renderAgentProviders() {
       const provider = row.querySelector(".ag-provider")?.value ?? "";
       const model = row.querySelector(".ag-model")?.value?.trim() ?? "";
       const apiKey = agentCredentialInput.value;
-      if (blockSessionOnlyCredentialSave(agentCredentialInput, agentDurabilityWarning)) return;
+      if (blockSessionOnlyCredentialSave(agentCredentialInput)) return;
       trigger.disabled = true;
       const customBaseURL = row.querySelector(".agent-provider-base-url")?.value.trim() ?? "";
       let config = null;
@@ -1851,7 +1781,7 @@ async function renderBrowser() {
   });
 }
 
-// ── Permissions (optional capability onboarding) ──
+// ── Permissions (read-only install-grant diagnostics) ──
 async function renderPermissions() {
   const status = await capabilityStatus();
   const list = $("#permission-list");
@@ -1950,8 +1880,7 @@ async function renderHooks() {
     row.append(name, state, hint);
 
     // The deny-toggle is OWNER-ONLY + authoritative: denying stops the agent
-    // ever using the hook (fail-closed). Un-denying restores it (still gated by
-    // the optional permission).
+    // ever using the hook (fail-closed). Un-denying restores it (the install grant is still verified at use).
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "btn small " + (denied ? "ghost" : "danger");
@@ -2611,7 +2540,7 @@ async function renderPrompts() {
 
   async function mutate(type, payload = {}) {
     const scope = scopeSelect.value || "hub";
-    // On the owner's SAVE gesture, request the optional `storage` permission
+    // On the owner's SAVE gesture, verify the install-granted `storage` permission
     // so the customization is DURABLE (never silently session-only — the
     // review's persistence blocker). Denied → still save, but the UI says
     // "session-only" (the describe payload's durable flag drives the badge).
@@ -2646,8 +2575,8 @@ async function renderPrompts() {
         saveFlash(`Prompt not saved: ${r.error ?? "unknown error"}`);
       }
     } else if (type === "prompt.set") {
-      // Never claim "saved" when the backend is session-only (the optional
-      // storage permission is still absent after the Save-gesture request).
+      // Never claim "saved" when the backend is session-only (the required
+      // install grant is still absent after verification).
       const durableNow = await chrome.permissions
         .contains({ permissions: ["storage"] })
         .catch(() => true);
@@ -2841,24 +2770,10 @@ document.querySelectorAll(".nav-item").forEach((a) => {
 // (The legacy "Custom…" reveal wiring for the old select-based model field is
 // gone — the shared <model-picker> makes custom ids a first-class typed path.)
 
-// Permission-settle consumer (the acceptance review): Settings performs its
-// own permission requests via requestProviderHostAccess (whose waiter is
+// Permission-settle consumer (the acceptance review): Settings coordinates provider access via requestProviderHostAccess (whose waiter is
 // exact pattern+generation); no passive listener here. The status chip
 // re-reads from the SW on focus so a grant landed anywhere is reflected.
 window.addEventListener("focus", () => { providerStatusChanged(); }, { once: true });
-chrome.permissions?.onAdded?.addListener((change) => {
-  if (change?.permissions?.includes("storage")) {
-    storageGranted = true;
-    syncAllCredentialWarnings();
-  }
-});
-chrome.permissions?.onRemoved?.addListener((change) => {
-  if (change?.permissions?.includes("storage")) {
-    storageGranted = false;
-    syncAllCredentialWarnings();
-  }
-});
-
 await refreshStoragePermission();
 await renderProviders();
 await renderLocalFolders();

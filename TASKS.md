@@ -1435,22 +1435,23 @@ evidence every other task depends on).
 
 ## [CAP-FB-20260827-SETTINGS-MONOLITH-01] Settings is one 8.8-screen scroll with a nav that only scrolls
 - Feedback: 2026-08-27 — raised during the pre-exec-demo UX audit
-- Updated: 2026-08-27 23:30 UTC
+- Updated: 2026-08-29 UTC
 - Status: OPEN
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `139b6f92`
-- Candidate: —
+- Owner: unassigned (IA requires product-owner sign-off)
+- Workspace: `cap-settings-cleanliness`
+- Branch: `cap-settings-cleanliness`
+- Base: `54c92834`
+- Candidate: `cap-settings-cleanliness` (design + dead-control safe subset; pending review)
 - Shipping: —
 - Acceptance: opening Settings renders the requested section, not all twelve; the sidebar nav switches sections rather than scrolling to anchors; each section remains individually addressable by URL (the deep-link requirement the owner already set for the back-stack work); and the DOM node count on open drops substantially from the current 2,255. The single-history-entry back behaviour from `0.2.296` must be preserved
-- Review: independent review by a different model/session; before/after node counts and section heights from a real loaded extension
+- Review: required — fresh-session review of the design and safe-subset diff; the later monolith implementation still requires before/after node counts and section heights from a real loaded extension
 - Gates: Chrome journeys green (several journeys drive Settings sections by `.nav-item[data-section=...]`); a11y pass on the section switch (focus and heading order); the impeccable design pass
 - Blockers: —
-- Next: measure which sections are cheap to defer — `hooks` (2,818px) and `permissions` (2,182px) alone are 39% of the page
+- Next: owner sign-off on the six-group IA in `docs/SETTINGS-CLEANLINESS.md`; then implement one selected group at a time without combining that architecture change with the reviewed dead-control removal
 - Recover: `git grep -n 'section.panel' -- extension/options/options.html`
 - History:
+  - 2026-08-29 UTC — design-first cleanliness pass added `docs/SETTINGS-CLEANLINESS.md` with a six-group IA (Providers & models · Agents · Permissions & security · Tools · Data · Advanced). The safe subset removes only provably dead request-era UI: the unmatched Appearance nav/hash, the already-deleted Approvals hash, and the storage-verification button/component that could only repeat `permissions.contains()` for a required install grant. The long-page/one-section-at-a-time IA remains OPEN for owner sign-off.
   - 2026-08-27 23:30 UTC — measured in a real loaded extension: the Settings document is **12,837px tall — 8.8 viewport-heights — with 2,255 DOM nodes, and all twelve `section.panel` elements rendered and visible simultaneously** (`display:none` count: zero). The thirteen `.nav-item` controls scroll to anchors rather than switching views, so the information architecture the nav implies does not exist. Section heights: hooks 2,818 · permissions 2,182 · providers 1,762 · about 1,376 · tool-library 1,172 · prompts 1,016 · agents 729 · data 418 · local-folders 300 · background 269 · browser 211 · usage 202. Everything is built on every open regardless of what the owner came for.
 
 ## [CAP-FB-20260827-DEAD-COMPONENTS-01] Components ship to users but are only used by the gallery

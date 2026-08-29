@@ -5,7 +5,6 @@ import {
   firstRunGuideState,
   keyedProviderConfigured,
   loadFirstRunGuideState,
-  requestStorageFromOwnerClick,
   requestBrowserControlFromOwnerClick,
 } from "../extension/lib/first-run-onboarding.js";
 import { freshKv } from "./test-hooks.js";
@@ -28,49 +27,6 @@ Deno.test("first run: credential warning is required before an ungranted key can
     }),
     false,
   );
-});
-
-Deno.test("first run: storage VERIFICATION (not request) requires a genuine active owner click, and never calls permissions.request", async () => {
-  const calls = [];
-  const requests = [];
-  const permissionsApi = {
-    // The install-granted model: the seam VERIFIES with contains(); a request
-    // call would be the obsolete runtime path — record it so the test fails.
-    contains: (value) => {
-      calls.push(value);
-      return Promise.resolve(true);
-    },
-    request: (value) => {
-      requests.push(value);
-      return Promise.resolve(true);
-    },
-  };
-  assertEquals(
-    (await requestStorageFromOwnerClick({
-      event: { isTrusted: false },
-      userActivation: { isActive: true },
-      permissionsApi,
-    })).reason,
-    "owner-click-required",
-  );
-  assertEquals(
-    (await requestStorageFromOwnerClick({
-      event: { isTrusted: true },
-      userActivation: { isActive: false },
-      permissionsApi,
-    })).reason,
-    "owner-click-required",
-  );
-  assertEquals(calls.length, 0);
-
-  const accepted = await requestStorageFromOwnerClick({
-    event: { isTrusted: true },
-    userActivation: { isActive: true },
-    permissionsApi,
-  });
-  assertEquals(accepted, { granted: true, verified: true, reason: "granted" });
-  assertEquals(calls, [{ permissions: ["storage"] }], "verified with contains()");
-  assertEquals(requests, [], "no runtime permission request — storage is install-granted");
 });
 
 Deno.test("first run: zero-permission boot remains clean when every authority is unavailable", async () => {
@@ -218,7 +174,6 @@ Deno.test("first run: shared setup components use native labelled controls and r
   for (
     const marker of [
       'customElements.define("first-run-guide"',
-      'customElements.define("storage-durability-warning"',
       'type="button" aria-label="Dismiss first-run setup"',
       'class="primary seed-task" type="button"',
       'role="alert"',
@@ -233,13 +188,13 @@ Deno.test("first run: shared setup components use native labelled controls and r
   }
 });
 
-Deno.test("first run: options blocks session-only credentials before provider.set and exposes only optional storage", async () => {
+Deno.test("first run: options blocks session-only credentials before provider.set under install-granted storage", async () => {
   const source = await Deno.readTextFile(
     new URL("../extension/options/options.js", import.meta.url),
   );
   const binding = source.indexOf("bindProviderSetDefault({");
   const guard = source.indexOf(
-    "blockSessionOnlyCredentialSave(credentialInput, durabilityWarning)",
+    "blockSessionOnlyCredentialSave(credentialInput)",
     binding,
   );
   const hostRequest = source.indexOf(
@@ -263,8 +218,9 @@ Deno.test("first run: options blocks session-only credentials before provider.se
     bindStart >= 0 && helperGuard > bindStart && helperSave > helperGuard,
     "the synchronous durability guard must run before provider persistence",
   );
-  assert(source.includes("requestStorageFromOwnerClick"));
-  assert(source.includes("event.detail?.sourceEvent"));
+  assert(!source.includes("requestStorageFromOwnerClick"));
+  assert(!source.includes("storage-durability-warning"));
+  assert(source.includes("Storage is missing from this installation. Reload the extension; if it is still missing, reinstall the extension before saving an API key."));
 
   const manifest = JSON.parse(
     await Deno.readTextFile(

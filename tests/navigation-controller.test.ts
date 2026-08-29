@@ -263,7 +263,7 @@ Deno.test("Navigation Controller: Multi-step back/forward chain keeps aria-curre
     isAllowedHash: (id) => SETTINGS_SECTIONS.includes(id),
     onNavigate: async ({ sectionId, isTraverse }) => {
       currentSections.push(sectionId);
-      if (sectionId === "approvals") renderLog.push(`renderApprovals(traverse=${isTraverse})`);
+      if (sectionId === "hooks") renderLog.push(`renderHooks(traverse=${isTraverse})`);
       if (sectionId === "usage") renderLog.push(`renderUsage(traverse=${isTraverse})`);
     },
   });
@@ -271,10 +271,10 @@ Deno.test("Navigation Controller: Multi-step back/forward chain keeps aria-curre
   await ctrl.syncCurrent();
   assertEquals(currentSections[currentSections.length - 1], "providers");
 
-  // Step 1: Nav to approvals
-  await ctrl.navigate("#approvals");
-  assertEquals(currentSections[currentSections.length - 1], "approvals");
-  assertEquals(renderLog.includes("renderApprovals(traverse=false)"), true);
+  // Step 1: Nav to hooks
+  await ctrl.navigate("#hooks");
+  assertEquals(currentSections[currentSections.length - 1], "hooks");
+  assertEquals(renderLog.includes("renderHooks(traverse=false)"), true);
 
   // Step 2: Nav to usage
   await ctrl.navigate("#usage");
@@ -293,13 +293,13 @@ Deno.test("Navigation Controller: Multi-step back/forward chain keeps aria-curre
   assertEquals(currentSections[currentSections.length - 1], "usage");
   assertEquals(renderLog.includes("renderUsage(traverse=true)"), true);
 
-  // Step 5: Traverse back to approvals
-  await env.fakeNavigation.dispatchNavigate("chrome-extension://test/options/options.html#approvals", {
+  // Step 5: Traverse back to hooks
+  await env.fakeNavigation.dispatchNavigate("chrome-extension://test/options/options.html#hooks", {
     navigationType: "traverse",
     canIntercept: true,
   });
-  assertEquals(currentSections[currentSections.length - 1], "approvals");
-  assertEquals(renderLog.includes("renderApprovals(traverse=true)"), true);
+  assertEquals(currentSections[currentSections.length - 1], "hooks");
+  assertEquals(renderLog.includes("renderHooks(traverse=true)"), true);
 
   ctrl.dispose();
 });
@@ -423,10 +423,8 @@ Deno.test("OPTIONS_PRODUCT_HASHES contains all allowed settings deep links", () 
     "#agents",
     "#background",
     "#background-agents",
-    "#appearance",
     "#browser",
     "#permissions",
-    "#approvals",
     "#hooks",
     "#prompts",
     "#usage",
@@ -459,7 +457,7 @@ Deno.test("Back-stack fix: settings sub-nav with replace:true keeps ONE history 
   // Click through several settings sections with replace:true (what options.js now passes).
   await ctrl.navigate("#agents", { replace: true });
   await ctrl.navigate("#background", { replace: true });
-  await ctrl.navigate("#appearance", { replace: true });
+  await ctrl.navigate("#permissions", { replace: true });
 
   assertEquals(
     env.historyStack.length,
@@ -467,7 +465,7 @@ Deno.test("Back-stack fix: settings sub-nav with replace:true keeps ONE history 
     "settings sub-navigation must NOT push new history entries — the whole settings surface stays ONE entry (replaceState)",
   );
   // The current section still updated (linkable state), just not stacked.
-  assertEquals(env.fakeLocation.hash, "#appearance", "the last section is the live (replaceable) hash");
+  assertEquals(env.fakeLocation.hash, "#permissions", "the last section is the live (replaceable) hash");
 });
 
 Deno.test("Back-stack fix: settings sub-nav with replace:true uses history.replaceState, not pushState", async () => {

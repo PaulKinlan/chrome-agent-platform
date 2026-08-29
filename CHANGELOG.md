@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.383] — 2026-08-29
+- merge: settings-cleanliness lane (e4b88588) — dead Appearance nav + request-era storage-verification UI removed end to end; credential fail-closed, Browser control, local-folder grants and install-grant diagnostics preserved; design doc docs/SETTINGS-CLEANLINESS.md with deferred IA (owner sign-off required, NOT implemented). Reviewed PASS (round 1); coordinator candidate-mode KAT RED on base (2 removal checks fail, 4 preservation pass). Manifest unchanged semantically (lane base already had P0 shape).
+
+## [0.2.382] — 2026-08-29
+- Settings no longer shows dead controls: the empty Appearance section and the old storage-verification prompts are gone, while API keys, browser control, folder access and permission details all stay exactly where they were
+
 ## [0.2.381] — 2026-08-29
 - merge: tool-call clarity lane (3920003a) — collapsed-card describeToolCall action line + runtime mutation-claim honesty (correction reaches the returned result; nested lazy failures never back claims nor publish/persist as success; per-run success set; structural subject classification: plural/modifier-led true positives, negation/third-party/subordinate rejections). Reviewed PASS-with-notes (round 5); documented P2 follow-ups (bare proper-name subjects, coordinated-predicate subject propagation). Unions: SW args=journalJson(redactSecrets(...)), result=journalJson(redactToolResult(...)) — RA's string-leak seam kept, corrupting mid-string slices removed everywhere; components.js keeps BOTH the outcome headline (genui) and the action line (lane); RA source pin updated to the composed seam. Merge-caught fixes: containerPreview clip now pair-safe (main's code-unit slice split surrogates — caught by the lane's tree-walk test); sync-gallery rewrites ../lib/pure.js for docs/components.js.
 
