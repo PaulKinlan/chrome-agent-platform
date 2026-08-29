@@ -3954,14 +3954,10 @@ const handlers = mergeRouteMaps(
         };
       }
       const res = await fetch(u.href, { method: m });
-      const buf = await res.arrayBuffer();
       const MAX = 1_000_000;
-      let text = "";
-      if (buf.byteLength > MAX) {
-        text = (await res.text()).slice(0, MAX);
-      } else {
-        text = await res.text();
-      }
+      // Response bodies are one-shot streams: cache the single read before
+      // bounding it (arrayBuffer() followed by text() throws in Chrome).
+      const text = await res.text();
       return { ok: true, status: res.status, url: res.url, text: text.slice(0, MAX) };
     } catch (e) {
       return { ok: false, error: `fetch failed: ${e?.message ?? e}` };

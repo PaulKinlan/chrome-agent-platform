@@ -151,11 +151,31 @@ Deno.test("policy: the protected constraints are GENERATED from the single runti
   }
 });
 
-Deno.test("hub prompt: capability breadth — the chrome.* areas, the wasm suite, and search-FIRST discovery", () => {
-  // (a) search-first: the manual must put discovery before every tool use and
-  // teach the lexical matcher's query style (concrete tool-name nouns).
-  assertStringIncludes(MASTER_SKILL, "Tool discovery — SEARCH FIRST");
-  assertStringIncludes(MASTER_SKILL, "CALL search_tools BEFORE GUESSING");
+Deno.test("default prompts: MV3 execution grounding and one-search-then-invoke discipline", () => {
+  for (const [scope, text] of [
+    ["hub", baselineSystemPrompt("cap.hub.master")],
+    ["worker", baselineSystemPrompt("cap.worker.base")],
+  ]) {
+    assertStringIncludes(text, "INSIDE a Chrome Manifest V3 extension", `${scope}: MV3 context`);
+    for (const context of ["service worker", "SharedWorker", "offscreen document", "dedicated Workers", "sandboxed extension iframe", "MAIN world"]) {
+      assertStringIncludes(text, context, `${scope}: execution context ${context}`);
+    }
+    assertStringIncludes(text, "Response body is a\nONE-SHOT stream", `${scope}: one-shot Response body`);
+    assertStringIncludes(text, "response.clone() BEFORE", `${scope}: clone-before-double-read rule`);
+    assertStringIncludes(text, "DOM/window\nAPIs ONLY", `${scope}: page-only DOM/window rule`);
+    assertStringIncludes(text, "open_tab creates a tab", `${scope}: actual tab tool`);
+    assertStringIncludes(text, "Never assume window.open", `${scope}: no window.open assumption`);
+    assertStringIncludes(text, "search_tools\nEXACTLY ONCE", `${scope}: one discovery call`);
+    assertStringIncludes(text, "Never search twice for the same capability", `${scope}: no repeated discovery`);
+    assertStringIncludes(text, "report its error; do not re-search", `${scope}: first failure is reported`);
+  }
+});
+
+Deno.test("hub prompt: capability breadth — the chrome.* areas, the wasm suite, and search-once discovery", () => {
+  // (a) search-once: the manual must put one discovery call before invocation
+  // and teach the lexical matcher's query style (concrete tool-name nouns).
+  assertStringIncludes(MASTER_SKILL, "Tool discovery — SEARCH ONCE, THEN ACT");
+  assertStringIncludes(MASTER_SKILL, "CALL search_tools ONCE BEFORE GUESSING");
   assertStringIncludes(MASTER_SKILL, "executable\n  selectionRef");
   assert(MASTER_SKILL.includes('search_tools("network rule")'),
     "the manual must model concrete-noun queries (network rule)");
@@ -751,7 +771,7 @@ Deno.test("upgrade WITH override: flagged, the override still applies, and the d
   const reg = upgradedRegistry();
   const d = await describePrompt("hub", { registry: reg });
   assertEquals(d.builtinChanged, true, "the release-update state is detected");
-  assertEquals(d.override.baseVersion, "1.3.0");
+  assertEquals(d.override.baseVersion, "1.4.0");
   assertEquals(d.base.version, "2.0.0");
   assertStringIncludes(d.effective.text, "MY-CUSTOM");
   assertStringIncludes(d.effective.text, "Always name artifacts clearly.");
@@ -1341,14 +1361,13 @@ Deno.test("attestation: an EXPLICIT key attests without the install key state (e
   assertEquals(store.has("cap:attestationKey"), false);
 });
 
-Deno.test("memory doctrine: the registry versions carry the self-organizing memory doctrine", () => {
-  // The doctrine bump is a SEMANTIC version event: the hubs/worker prompts
-  // changed their memory contract, so the registry versions must move
-  // (attestation + Settings preview surface these versions).
+Deno.test("prompt registry versions carry the latest built-in grounding", () => {
+  // Prompt-content changes are semantic version events: attestation + Settings
+  // preview surface these versions so existing customizations show the update.
   const hub = PROMPT_REGISTRY.find((p) => p.id === "cap.hub.master");
   const worker = PROMPT_REGISTRY.find((p) => p.id === "cap.worker.base");
-  assertEquals(hub?.version, "1.3.0", "cap.hub.master carries the doctrine bump");
-  assertEquals(worker?.version, "1.1.0", "cap.worker.base carries the doctrine bump");
+  assertEquals(hub?.version, "1.4.0", "cap.hub.master carries the environment grounding bump");
+  assertEquals(worker?.version, "1.2.0", "cap.worker.base carries the environment grounding bump");
 });
 
 Deno.test("memory doctrine: the HUB prompt teaches the self-organizing store (composed path)", () => {

@@ -58,10 +58,9 @@ export async function runFetch(payload) {
   }
   let text = "";
   try {
-    const buf = await res.arrayBuffer();
-    text = buf.byteLength > SCRIPT_BOUNDS.maxFetchBytes
-      ? (await res.text()).slice(0, SCRIPT_BOUNDS.maxFetchBytes)
-      : await res.text();
+    // Response bodies are one-shot streams: cache the single read before
+    // bounding it (arrayBuffer() followed by text() throws in Chrome).
+    text = await res.text();
   } catch {
     text = "";
   }

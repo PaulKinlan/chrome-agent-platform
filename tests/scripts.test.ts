@@ -182,6 +182,27 @@ Deno.test("runFetch routes through the SW (no direct CORS-blocked fetch)", async
   delete (globalThis as any).chrome;
 });
 
+Deno.test("runFetch reads a one-shot Response body once and caches the text", async () => {
+  const { runFetch } = await import("../extension/lib/script-host.js");
+  const originalChrome = (globalThis as any).chrome;
+  const originalFetch = globalThis.fetch;
+  const response = new Response("one-shot body", {
+    status: 200,
+    headers: { "content-type": "text/plain" },
+  });
+  try {
+    delete (globalThis as any).chrome;
+    globalThis.fetch = async () => response;
+    const result = await runFetch({ url: "https://example.com/data", opts: {} });
+    assertEquals(result.text, "one-shot body");
+    assertEquals(response.bodyUsed, true, "the native Response stream was consumed once");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalChrome === undefined) delete (globalThis as any).chrome;
+    else (globalThis as any).chrome = originalChrome;
+  }
+});
+
 Deno.test("runFetch rejects credentials + non-GET methods", async () => {
   const { runFetch } = await import("../extension/lib/script-host.js");
   (globalThis as any).chrome = { runtime: { sendMessage: async () => ({ ok: true, status: 200, text: "" }) } };
