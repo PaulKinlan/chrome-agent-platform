@@ -3378,7 +3378,7 @@ class MessageBubble extends Component {
     }
     this._frameCleanups = [];
     const pref = currentFramePreference();
-    this.querySelectorAll?.(".html-frame").forEach((frame) => {
+    this._root.querySelectorAll?.(".html-frame").forEach((frame) => {
       const nonce = frame.dataset?.frameNonce;
       if (nonce) this._frameCleanups.push(wireHtmlFramePreference(frame, { nonce, ...pref }));
       // Deliver the staged guarded HTML to the sandbox-host iframe (the string

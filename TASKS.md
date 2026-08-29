@@ -235,23 +235,25 @@ evidence every other task depends on).
 ## [CAP-FB-20260829-ARTIFACT-PREVIEW-01] Generated-UI artifact preview never receives its content
 
 - Feedback: 2026-08-29 — owner reported that a successful create_asset HTML result renders “Preview unavailable — the content never arrived” in the chat's double-iframe preview
-- Updated: 2026-08-29 22:10 UTC
-- Status: OPEN
+- Updated: 2026-08-29 22:21 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P0
 - Owner: implementation lane
 - Workspace: active (local path private)
 - Branch: `cap-artifact-preview`
 - Base: `cebb4601`
-- Candidate: —
+- Candidate: branch tip (two atomic commits; not pushed)
 - Shipping: —
 - Acceptance: a successful create_asset HTML result rendered in a real loaded-extension chat delivers the complete stored document into the nested preview frame; the result envelope and asset identity remain intact
 - Review: independent acceptance review required
-- Gates: focused unit test with observed RED/GREEN; loaded-extension create/get/chat/nested-frame KAT with screenshot; full unit suite; developer build
-- Blockers: —
-- Next: fix the shared message-bubble delivery seam and prove the exact 21,250-byte create_asset case in a loaded extension
+- Gates: ShadowRoot wiring test observed RED then GREEN (16/16); focused preview/envelope suite 58/58; loaded-extension create/get/chat/two-frame KAT 6/6 with screenshot + MHTML; full unit suite 2388/0; developer build clean; gallery and tracker checks clean
+- Blockers: independent acceptance review
+- Next: independent review of the focused diff and browser evidence, then coordinator integration
 - Recover: `git log --oneline cebb4601..cap-artifact-preview`
 - History:
+  - 2026-08-29 22:21 UTC — candidate tip gated: focused preview/envelope 58/58, full unit suite 2388/0, developer build, gallery and tracker checks all clean; no push
+  - 2026-08-29 22:15 UTC — candidate ready: MessageBubble now discovers generated frames in its ShadowRoot, where the renderer mounted them, instead of its empty light DOM. The exact 21,250-byte artifact is byte-exact through create/get and visible inside the nested generated-document frame; browser KAT 6/6 with screenshot and MHTML
   - 2026-08-29 22:10 UTC — ownership: unassigned → implementation lane; reproduced the exact class in a loaded extension: asset.create and asset.get both preserve all 21,250 bytes, while the chat host stays at “Preparing restricted preview…” because no payload arrives
 
 ## [CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01] Tool-call argument robustness and schema accuracy

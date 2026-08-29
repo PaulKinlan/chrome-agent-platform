@@ -11,7 +11,9 @@
 //      and NEVER flags a success;
 //   2. the message-bubble tool branch CONSULTS it before mounting the frame
 //      (source pin — the falsification gate: absent on the pre-fix tree);
-//   3. the sandbox preview host has the bounded wait: timeout, honest failure
+//   3. the bubble wires staged payloads from inside its Shadow DOM rather than
+//      scanning its empty light DOM (the successful-create regression);
+//   4. the sandbox preview host has the bounded wait: timeout, honest failure
 //      text, and a retry (source pin — absent on the pre-fix tree).
 
 const registry = new Map();
@@ -123,6 +125,21 @@ Deno.test("genui-error: unwrapping is depth-bounded (pathological nesting is not
   let deep = { ok: true };
   for (let i = 0; i < 8; i++) deep = { modelContent: JSON.stringify(deep) };
   assertEquals(toolResultSignalsError("done", JSON.stringify(deep)), false);
+});
+
+Deno.test("genui-error: MessageBubble wires generated frames inside its Shadow DOM", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const start = source.indexOf("class MessageBubble extends Component");
+  const end = source.indexOf('customElements.define("message-bubble"', start);
+  const bubble = source.slice(start, end);
+  assert(
+    bubble.includes('this._root.querySelectorAll?.(".html-frame")'),
+    "the generated frame lives in MessageBubble's ShadowRoot; scanning the host light DOM never finds it",
+  );
+  assert(
+    !bubble.includes('this.querySelectorAll?.(".html-frame")'),
+    "the empty light-DOM scan must not return",
+  );
 });
 
 Deno.test("genui-error: the happy-path wire delivers the staged payload to the frame on load", () => {
