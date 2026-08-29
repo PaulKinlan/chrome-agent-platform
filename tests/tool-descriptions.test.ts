@@ -17,9 +17,9 @@ const FORBIDDEN_JARGON_PATTERNS = Object.freeze([
   "CAP-authored",
 ]);
 
-Deno.test("tool naming & descriptions: all 26 tools have Unix-name displayName and lead with '<toolname> - '", () => {
-  assertEquals(BUNDLED_TOOL_PACKAGE_ROWS.length, 26, "exact 26 bundled tool rows");
-  assertEquals(Object.keys(AGENT_DESCRIPTIONS).length, 26, "exact 26 agent descriptions");
+Deno.test("tool naming & descriptions: all 28 tools have Unix-name displayName and lead with '<toolname> - '", () => {
+  assertEquals(BUNDLED_TOOL_PACKAGE_ROWS.length, 28, "exact 28 bundled tool rows");
+  assertEquals(Object.keys(AGENT_DESCRIPTIONS).length, 28, "exact 28 agent descriptions");
 
   for (const row of BUNDLED_TOOL_PACKAGE_ROWS) {
     const { toolId, displayName, description, canonicalNameClaim } = row;

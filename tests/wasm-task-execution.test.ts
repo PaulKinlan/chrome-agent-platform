@@ -37,7 +37,7 @@ Deno.test("executableBundledToolRecords: constructs non-null validateArguments, 
     sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
   });
 
-  assertEquals(records.length, 26, "exact 26 bundled tool records");
+  assertEquals(records.length, 28, "exact 28 bundled tool records");
 
   for (const rec of records) {
     const toolId = rec.descriptorInput.toolId;

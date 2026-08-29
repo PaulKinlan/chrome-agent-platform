@@ -99,7 +99,7 @@ then capture a screenshot, then save an artifact report).
 
 ### Bundled WebAssembly tools — on-device compute
 
-26 on-device bundled Wasm tools run locally in sandboxed WASI environments
+28 on-device bundled Wasm tools run locally in sandboxed WASI environments
 (no network, no cloud). Grouped by purpose (authoritative list:
 list_tools("bundled-wasm")):
 
