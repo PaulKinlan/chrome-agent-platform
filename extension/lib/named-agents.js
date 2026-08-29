@@ -913,3 +913,34 @@ function avatarWithTimeout(promise, timeoutMs) {
 
 /** A deterministic fallback avatar (an SVG data URL with the agent's initial). */
 export { initialAvatar } from "./avatar.js";
+
+/**
+ * The ONE agents projection (owner directive 2026-08-28 — the unified agent
+ * model): named-agent records and enabled background recipes keyed by agent
+ * id, so a same-id record renders EXACTLY ONCE in every surface (main list,
+ * sidebar, count). The named record wins a collision (it carries the persona/
+ * skills/memory); a recipe-side schedule fills in only when the named record
+ * has none of its own. Pure — no store access.
+ */
+export function projectUnifiedAgents(namedAgents = [], backgroundAgents = []) {
+  const byId = new Map();
+  for (const a of Array.isArray(namedAgents) ? namedAgents : []) {
+    if (!a?.id) continue;
+    byId.set(a.id, { ...a, kind: "named" });
+  }
+  for (const b of Array.isArray(backgroundAgents) ? backgroundAgents : []) {
+    if (!b?.id) continue;
+    const recipeSchedule = b.schedule?.periodInMinutes
+      ? { periodInMinutes: b.schedule.periodInMinutes, task: b.schedule?.task ?? "" }
+      : null;
+    const existing = byId.get(b.id);
+    if (existing) {
+      if (!existing.schedule?.periodInMinutes && recipeSchedule) {
+        existing.schedule = recipeSchedule;
+      }
+    } else {
+      byId.set(b.id, { ...b, kind: "background", schedule: recipeSchedule });
+    }
+  }
+  return [...byId.values()];
+}

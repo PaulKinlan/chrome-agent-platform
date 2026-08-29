@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.366] — 2026-08-29
+- merge: agent-templates/unification lane (c2170d6a) — one agent concept (persona + optional schedule), extracted delete gate with structural approval→mark→delete ordering, set-schedule/delete race fences under the named-agents lock. Reviewed PASS (round 5). Union-resolved with the memory-routes + OPFS-teardown lanes: extracted gate composes with main's teardown injections; post-delete recipe:<slug> cancel DROPPED (recipe teardown stays under recipe deletion — the lane's wiring test pins this); lane test's OPFS-survival assertion re-keyed to instanceId (main's identity model); kat freePort helper superseded by the shared kernel-assigned-port launcher.
+
+## [0.2.365] — 2026-08-29
+- merge: agent-templates/unification lane (c2170d6a) — one agent concept (persona + optional schedule), extracted delete gate with structural approval→mark→delete ordering, set-schedule/delete race fences under the named-agents lock. Reviewed PASS (round 5). Conflicts resolved as unions with the memory-routes + OPFS-teardown lanes; kat freePort helper dropped in favour of the shared kernel-assigned-port launcher.
+
+## [0.2.364] — 2026-08-29
+- Agent templates and one-agent unification: an agent is persona + skills + memory + an optional schedule; creating from a template, scheduling, and deleting an agent are now race-safe and clean up after themselves
+
 ## [0.2.363] — 2026-08-29
 - merge: agent-cards lane (65525e04) — export/import shareable agent cards with pretty-serialization budget enforcement + canonical array-index validation. Reviewed PASS (round 5, gpt-5.6-sol): boundary exports stay under 2 MiB and round-trip; pseudo-indices rejected; suite 1982/0, builds rc=0 attested.
 

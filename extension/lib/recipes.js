@@ -761,6 +761,40 @@ export function getRecipe(id) {
   return RECIPES.find((r) => r.id === id);
 }
 
+/**
+ * Normalize an agent record's saved skills to a deduped id list. The record
+ * stores `{id,name,description}` objects (the create dialog), but tolerates
+ * bare strings (older records / imports). Pure — no store access.
+ */
+export function agentSkillIds(agent) {
+  const out = [];
+  for (const s of Array.isArray(agent?.skills) ? agent.skills : []) {
+    const id = typeof s === "string" ? s : (s?.id ?? s?.name);
+    if (typeof id === "string" && id && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+/**
+ * Merge skill/recipe objects for ONE run's composition, deduped by id with
+ * first occurrence winning (an agent's saved skills first, then any /skill:<id>
+ * references in the task text — a reference to an already-saved skill composes
+ * once, never twice). Pure — the caller resolves ids to records.
+ */
+export function mergeRunSkills(...lists) {
+  const out = [];
+  const seen = new Set();
+  for (const list of lists) {
+    for (const r of Array.isArray(list) ? list : []) {
+      const id = r?.id;
+      if (typeof id !== "string" || !id || seen.has(id)) continue;
+      seen.add(id);
+      out.push(r);
+    }
+  }
+  return out;
+}
+
 // ── Skills aliases ────────────────────────────────────────────────────────
 // Recipes are the user-facing SKILLS: reusable, composable capabilities you
 // INCLUDE in a task (anywhere in the composer string) or attach to an agent /

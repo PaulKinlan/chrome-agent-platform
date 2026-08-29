@@ -64,6 +64,44 @@ const shot = async (path: string) => {
 await Deno.mkdir(OUT, { recursive: true });
 await sleep(3200); // first-run surfaces settle
 
+// Attach to the SERVICE WORKER too — the real-alarm assertions (a schedule
+// must mint a live chrome.alarms entry, not just a store row) evaluate
+// chrome.alarms in the SW context.
+const { result: { sessionId: swSession } } = await send("Target.attachToTarget", { targetId: sw.targetId, flatten: true });
+await send("Runtime.enable", {}, swSession);
+const evSw = async (expr: string) => (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, swSession)).result?.result?.value;
+const alarms = async () => (await evSw(`chrome.alarms.getAll().then(a => a.map(x => ({ name: x.name, periodInMinutes: x.periodInMinutes ?? null })))`)) ?? [];
+
+// 0. FIRST-RUN OFFER (owner directive): a fresh profile with zero agents shows
+//    the one-click starter action in the empty state. Clicking it creates the
+//    curated six as REAL agents (never automatic — the owner clicked).
+const emptyOffer = await ev(`(() => {
+  const btn = document.getElementById('add-starter-agents');
+  return { present: !!btn, label: btn?.textContent ?? null };
+})()`);
+check("first-run empty state offers Add starter agents (one click, not automatic)", emptyOffer?.present === true && /starter agents/i.test(emptyOffer.label ?? ""), emptyOffer);
+await ev(`document.getElementById('add-starter-agents')?.click()`);
+await sleep(4000); // six creates + avatar follow-ups settle
+const starters = await ev(`(async () => {
+  const res = await chrome.runtime.sendMessage({ type: 'named-agent.list' }).catch(() => null);
+  return (res?.agents ?? []).map(a => ({ id: a.id, name: a.name }));
+})()`);
+const STARTERS = ["chief-of-staff", "research-analyst", "site-auditor", "critic", "webapp-test-pilot", "skill-smith"];
+// Agent ids derive from the template NAME (e.g. "Skill Smith (Recipe Author)"
+// → skill-smith-recipe-author) — assert by name against the catalogue.
+const starterNames = await ev(`(async () => {
+  const { AGENT_TEMPLATES } = await import(chrome.runtime.getURL('lib/agent-templates.js'));
+  return AGENT_TEMPLATES.filter(t => ${JSON.stringify(STARTERS)}.includes(t.id)).map(t => t.name);
+})()`);
+check("Add starter agents creates the curated six as real agents",
+  (starterNames ?? []).every((n) => (starters ?? []).some((a: any) => a.name === n)), starters);
+// None of the six starters is scheduled — no agent:<id> alarms may exist.
+const starterAlarms = (await alarms()).filter((a: any) => STARTERS.some((s) => a.name === `agent:${s}`));
+check("starter agents are on-demand (no schedule alarms minted)", starterAlarms.length === 0, starterAlarms);
+// The empty state is gone — the agents list shows rows now.
+const rowsAfterSeed = await ev(`document.querySelectorAll('#named-agents capability-row').length`);
+check("the agents list shows the seeded agents (empty state replaced)", (rowsAfterSeed ?? 0) >= 6, rowsAfterSeed);
+
 // Open the create-agent dialog.
 await ev(`document.getElementById('new-agent')?.click()`);
 await sleep(700);
@@ -83,7 +121,7 @@ const a11y = await ev(`(() => {
 })()`);
 check("picker is labelled for assistive tech (label[for] -> select)", a11y?.labelled === true && a11y?.owned === true, a11y);
 check("picker renders with a blank default", !!options && options.hasBlankSelected === true && options.blank === "Custom agent (blank)", options);
-check("picker offers the 19 shipped templates", !!options && options.count === 20, options?.count);
+check("picker offers the 20 shipped templates", !!options && options.count === 21, options?.count);
 check("catalogue includes Chief of Staff / Research Analyst / Site Auditor",
   !!options && ["Chief of Staff", "Research Analyst", "Site Auditor"].every((n) => options.names.includes(n)),
   options?.names);
@@ -143,6 +181,183 @@ check("saved record keeps the template persona beneath the override",
 check("saved record reflects the REMOVED skill (4 skills, not the template's 5)",
   !!record && record.skills.length === 4, record?.skills);
 await shot(`${OUT}/02-after-create.png`);
+
+// 5. P1-a: the first-task suggestion lands in the VISIBLE composer (the opened
+//    agent view's #thread-composer), never the hidden hub #composer.
+await sleep(700);
+const composers = await ev(`(() => ({
+  thread: document.getElementById('thread-composer')?.value ?? null,
+  hub: document.getElementById('composer')?.value ?? null,
+  threadVisible: (() => { const el = document.getElementById('thread-view'); return !!el && !el.hidden && getComputedStyle(el).display !== 'none'; })(),
+}))()`);
+check("the first-task suggestion lands in the VISIBLE thread composer",
+  !!composers && composers.threadVisible === true && typeof composers.thread === "string" && /Brief me:/i.test(composers.thread), composers);
+check("the hidden hub composer stays EMPTY (the suggestion is never stranded)",
+  !!composers && (composers.hub === "" || composers.hub === null), composers?.hub);
+
+// 6. UNIFIED AGENT MODEL (owner directive): one creation flow with an OPTIONAL
+//    schedule. Picking a background template prefills the schedule field;
+//    creating mints a REAL recurring alarm on the SAME agent record.
+//
+//    Precondition on THIS base: the "Scheduled tasks" capability (chrome alarms
+//    permission) is opt-in until the P0 permanent-permissions lane lands —
+//    grant it the way the owner would: a REAL click on its Settings row.
+const optT = await send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html` });
+const optS = await send("Target.attachToTarget", { targetId: optT.result.targetId, flatten: true });
+const optSession = optS.result.sessionId;
+await send("Runtime.enable", {}, optSession);
+const evOpt = async (expr: string) => (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, optSession)).result?.result?.value;
+for (let i = 0; i < 40; i++) {
+  const n = await evOpt(`document.querySelectorAll('.grant-perm[data-capability="alarms"]').length`);
+  if (Number(n) >= 1) break;
+  await sleep(200);
+}
+const grantRect = await evOpt(`(() => { const el = document.querySelector('.grant-perm[data-capability="alarms"]'); if (!el) return null; el.scrollIntoView({ block: 'center' }); const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+if (grantRect) {
+  const gx = Math.round(grantRect.x), gy = Math.round(grantRect.y);
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", x: gx, y: gy, button: "left", clickCount: 1 }, optSession);
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: gx, y: gy, button: "left", clickCount: 1 }, optSession);
+}
+await sleep(1200);
+const alarmsGranted = await evOpt(`chrome.permissions.contains({ permissions: ['alarms'] }).then(r => !!r).catch(() => false)`);
+check("the Scheduled tasks capability grants via a real Settings click (KAT precondition)", alarmsGranted === true, alarmsGranted);
+await send("Target.closeTarget", { targetId: optT.result.targetId });
+await ev(`document.getElementById('thread-back')?.click()`);
+await sleep(400);
+await ev(`document.getElementById('new-agent')?.click()`);
+await sleep(700);
+await ev(`(() => { const s = document.getElementById('agent-template-picker');
+  s.value = 'tab-janitor'; s.dispatchEvent(new Event('change')); })()`);
+await sleep(200);
+const schedPrefill = await ev(`document.getElementById('agent-schedule-minutes')?.value ?? null`);
+check("a background template prefills the schedule field (120 min for tab-janitor)", schedPrefill === "120", schedPrefill);
+await ev(`(() => {
+  const btns = [...document.querySelectorAll('button')];
+  (btns.find(b => /create agent/i.test(b.textContent ?? "")) ?? btns.at(-1))?.click();
+})()`);
+await sleep(1500);
+const janitor = await ev(`(async () => {
+  const res = await chrome.runtime.sendMessage({ type: 'named-agent.get', id: 'tab-janitor' }).catch(() => null);
+  const list = await chrome.runtime.sendMessage({ type: 'named-agent.list' }).catch(() => null);
+  const row = (list?.agents ?? []).find(a => a.id === 'tab-janitor');
+  const tasks = await chrome.runtime.sendMessage({ type: 'task.list' }).catch(() => null);
+  const sched = (tasks?.tasks ?? []).find(t => t.name === 'agent:tab-janitor');
+  return { exists: res?.ok === true, listedSchedule: row?.schedule?.periodInMinutes ?? null,
+           taskEntry: sched ? { periodInMinutes: sched.periodInMinutes, hasPrompt: (sched.task ?? '').length > 10 } : null };
+})()`);
+check("the background-template agent is a REAL named agent (one concept, no separate store path in the UI)", janitor?.exists === true, janitor);
+check("the agents list carries its schedule (the chip's data source)", janitor?.listedSchedule === 120, janitor?.listedSchedule);
+check("a REAL scheduled task exists (agent:tab-janitor, 120 min, recurring prompt)",
+  janitor?.taskEntry?.periodInMinutes === 120 && janitor?.taskEntry?.hasPrompt === true, janitor?.taskEntry);
+const janitorAlarm = (await alarms()).find((a: any) => a.name === "agent:tab-janitor");
+check("a LIVE chrome.alarms entry backs the schedule (not just a store row)", janitorAlarm?.periodInMinutes === 120, janitorAlarm);
+const chipRow = await ev(`(() => {
+  const rows = [...document.querySelectorAll('#named-agents capability-row')];
+  const row = rows.find(r => (r.getAttribute('name') ?? '') === 'Tab Janitor');
+  return row ? { lastRun: row.getAttribute('last-run') } : null;
+})()`);
+check("the agents list shows the schedule chip ('every 120 min') with no background segregation", chipRow?.lastRun === "every 120 min", chipRow);
+
+// 6b. P1-b: REOPENING the scheduled agent's edit dialog shows the real
+//     schedule (named-agent.get shares the list's enrichment). The create
+//     flow left us in Tab Janitor's agent view — open its Edit dialog.
+await ev(`document.getElementById('edit-agent')?.click()`);
+await sleep(700);
+const reopen = await ev(`(() => {
+  const f = document.getElementById('agent-schedule-minutes');
+  return { field: f?.value ?? null };
+})()`);
+check("reopening a SCHEDULED agent's edit dialog shows the real schedule (120)", reopen?.field === "120", reopen);
+// Close without saving (Cancel) — the schedule must remain untouched.
+await ev(`(() => { const b = [...document.querySelectorAll('agent-dialog button')].find(x => /^cancel$/i.test((x.textContent ?? '').trim())); b?.click(); })()`);
+await sleep(400);
+const janitorAfterCancel = (await alarms()).find((a: any) => a.name === "agent:tab-janitor");
+check("Cancel leaves the schedule untouched", janitorAfterCancel?.periodInMinutes === 120, janitorAfterCancel);
+
+// 7. SCHEDULE EDIT on an existing ON-DEMAND agent (add → alarm appears; remove
+//    → alarm gone, agent stays) — driven through the real edit dialog.
+await ev(`document.getElementById('thread-back')?.click()`);
+await sleep(300);
+// Open My Chief of Staff's agent view from the list, then its Edit dialog.
+await ev(`(() => {
+  const rows = [...document.querySelectorAll('#named-agents capability-row')];
+  const row = rows.find(r => (r.getAttribute('name') ?? '') === 'My Chief of Staff');
+  row?.dispatchEvent(new CustomEvent('open'));
+})()`);
+await sleep(800);
+await ev(`document.getElementById('edit-agent')?.click()`);
+await sleep(600);
+const editDialogOpen = await ev(`(() => {
+  const f = document.getElementById('agent-schedule-minutes');
+  return { open: !!f, initial: f?.value ?? null };
+})()`);
+check("the edit dialog shows the schedule field, empty for an on-demand agent", editDialogOpen?.open === true && editDialogOpen.initial === "", editDialogOpen);
+await ev(`(() => {
+  const f = document.getElementById('agent-schedule-minutes');
+  f.value = '45'; f.dispatchEvent(new Event('input', { bubbles: true }));
+})()`);
+await ev(`(() => {
+  const btns = [...document.querySelectorAll('agent-dialog button')];
+  (btns.find(b => /^save$/i.test((b.textContent ?? '').trim())) ?? btns.at(-1))?.click();
+})()`);
+await sleep(1200);
+const afterAdd = (await alarms()).find((a: any) => a.name === "agent:my-chief-of-staff");
+check("adding a schedule to an existing on-demand agent mints the alarm", afterAdd?.periodInMinutes === 45, afterAdd);
+// Remove it again — the alarm goes, the agent stays.
+await ev(`(async () => { await chrome.runtime.sendMessage({ type: 'named-agent.set-schedule', id: 'my-chief-of-staff', periodInMinutes: null }); })()`);
+await sleep(1000);
+const afterRemove = (await alarms()).find((a: any) => a.name === "agent:my-chief-of-staff");
+const stillThere = await ev(`(async () => {
+  const res = await chrome.runtime.sendMessage({ type: 'named-agent.get', id: 'my-chief-of-staff' }).catch(() => null);
+  return res?.ok === true;
+})()`);
+check("removing the schedule clears the alarm (agent:my-chief-of-staff gone)", !afterRemove, afterRemove);
+check("the agent itself SURVIVES the schedule removal", stillThere === true, stillThere);
+
+// 8. P1-c COLLISION (the unified list renders a same-id record ONCE):
+//    `price-watcher` exists as BOTH a background recipe AND a template. Enable
+//    the recipe AND create the agent from the template — one row, one sidebar
+//    item, named record wins (avatar + chat), schedule chip from the agent.
+await ev(`document.getElementById('thread-back')?.click()`);
+await sleep(300);
+await ev(`(async () => { await chrome.runtime.sendMessage({ type: 'background-agent.set', id: 'price-watcher', enabled: true }); })()`);
+await sleep(600);
+await ev(`document.getElementById('new-agent')?.click()`);
+await sleep(700);
+await ev(`(() => { const s = document.getElementById('agent-template-picker');
+  s.value = 'price-watcher'; s.dispatchEvent(new Event('change')); })()`);
+await sleep(200);
+const pwPrefill = await ev(`document.getElementById('agent-schedule-minutes')?.value ?? null`);
+check("the price-watcher template prefills its schedule (60 min)", pwPrefill === "60", pwPrefill);
+// Force the REAL collision: the agent's id derives from its NAME — rename to
+// the recipe's exact name ("Price watcher") so the agent id IS the recipe id.
+await ev(`(() => {
+  const nameInput = [...document.querySelectorAll('.agent-config-scroll label')].find(l => l.textContent.startsWith('Name'))?.querySelector('input');
+  nameInput.value = 'Price watcher';
+  nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+})()`);
+await ev(`(() => {
+  const btns = [...document.querySelectorAll('button')];
+  (btns.find(b => /create agent/i.test(b.textContent ?? "")) ?? btns.at(-1))?.click();
+})()`);
+await sleep(1500);
+const collision = await ev(`(() => {
+  const main = [...document.querySelectorAll('#named-agents capability-row')].filter(r => (r.getAttribute('name') ?? '') === 'Price watcher');
+  const side = [...document.querySelectorAll('#side-agents .agent-item')].filter(b => (b.textContent ?? '').includes('Price watcher'));
+  return { mainRows: main.length, mainChip: main[0]?.getAttribute('last-run') ?? null,
+           mainHasAvatar: !!main[0]?.getAttribute('icon'), sideRows: side.length,
+           sideHasBackgroundLabel: side.some(b => (b.textContent ?? '').includes('background')) };
+})()`);
+check("a same-id record in BOTH stores renders exactly ONCE in the main list", collision?.mainRows === 1, collision);
+check("the collision row is the NAMED agent (avatar + its own 60-min schedule chip beats the recipe's 360)",
+  collision?.mainHasAvatar === true && collision?.mainChip === "every 60 min", collision);
+check("the sidebar renders the collision once, with no 'background' label",
+  collision?.sideRows === 1 && collision?.sideHasBackgroundLabel === false, collision);
+const bothAlarms = (await alarms()).filter((a: any) => a.name === "agent:price-watcher" || a.name === "recipe:price-watcher");
+check("both schedules genuinely exist under the hood (agent: + recipe: families)",
+  bothAlarms.length === 2, bothAlarms);
+const countText = await ev(`document.getElementById('agent-count')?.textContent ?? ''`);
+check("the agent count is unified (no named/background split)", /agents? ·/.test(countText) && !/background/.test(countText), countText);
 
 console.log(`\nKAT agent-templates: ${pass} passed, ${fail} failed`);
 proc.kill();

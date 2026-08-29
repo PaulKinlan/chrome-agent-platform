@@ -99,8 +99,9 @@ Deno.test("bgagent delete: the delete control is WIRED to a delete event (stopPr
 
 Deno.test("bgagent delete: NTP row uses open-delete; delete goes through recipe.delete NON-BLOCKING with explicit success + focus restore", async () => {
   const src = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
-  // the background row is the ONLY open-delete user, and no toggle primitive remains
-  assertMatch(src, /action", "open-delete"/);
+  // the unified row builder gives recipe-store agents open-delete (the ONLY
+  // open-delete path), and no toggle primitive remains
+  assertMatch(src, /action", a\.kind === "named" \? "open" : "open-delete"/, "recipe-store rows get open-delete in the unified list");
   assertEquals(/open-toggle/.test(src), false, "open-toggle must be fully removed");
   assertEquals(/action", "toggle"/.test(src), false, "the plain toggle action is gone from the hub");
   // the row's delete flow: confirm → recipe.delete (agent record + schedule
