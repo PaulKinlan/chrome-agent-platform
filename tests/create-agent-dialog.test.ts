@@ -99,6 +99,23 @@ Deno.test("create-agent dialog: partial schedule failure is reported without hid
   assert(/await opts\.onSaved\?\.\(r\);/.test(ntpJs), "partial success must still open the agent that was created");
 });
 
+Deno.test("create-agent dialog: fixed inline size prevents disclosure width jitter", async () => {
+  const ntpJs = await Deno.readTextFile(
+    new URL("../extension/ntp/ntp.js", import.meta.url),
+  );
+
+  assert(
+    /container\.style\.width = "min\(88vw, 540px\)";[\s\S]*?container\.style\.minWidth = "0";[\s\S]*?container\.style\.maxWidth = "100%";/.test(ntpJs),
+    "dialog content must have one clamped width rather than a content-driven min-width",
+  );
+  for (const disclosure of ["advancedDetails", "skillsDetails"]) {
+    assert(
+      ntpJs.includes(`${disclosure}.style.minWidth = "0"`) && ntpJs.includes(`${disclosure}.style.maxWidth = "100%"`),
+      `${disclosure} must shrink inside the fixed dialog width`,
+    );
+  }
+});
+
 Deno.test("create-agent dialog: skills section is collapsible to keep footer visible", async () => {
   const ntpJs = await Deno.readTextFile(
     new URL("../extension/ntp/ntp.js", import.meta.url),

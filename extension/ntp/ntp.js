@@ -2152,7 +2152,9 @@ async function buildAgentConfigDialog(opts) {
   container.className = "agent-config-container";
   container.style.display = "flex";
   container.style.flexDirection = "column";
-  container.style.minWidth = "min(88vw, 540px)";
+  container.style.width = "min(88vw, 540px)";
+  container.style.minWidth = "0";
+  container.style.maxWidth = "100%";
   container.style.maxHeight = "min(78vh, 680px)";
   container.style.overflow = "hidden";
   container.style.overscrollBehavior = "contain";
@@ -2295,13 +2297,15 @@ async function buildAgentConfigDialog(opts) {
   advancedDetails.style.border = "1px solid var(--border,#e3e0d9)";
   advancedDetails.style.borderRadius = "8px";
   advancedDetails.style.background = "var(--panel,#ffffff)";
+  advancedDetails.style.minWidth = "0";
+  advancedDetails.style.maxWidth = "100%";
   advancedDetails.style.overflow = "hidden";
   const advancedSummary = document.createElement("summary");
   advancedSummary.textContent = "Advanced";
   advancedSummary.style.cssText = "cursor:pointer;font-size:13px;font-weight:600;padding:10px 12px;";
   const advancedBody = document.createElement("div");
   advancedBody.className = "agent-config-advanced-body";
-  advancedBody.style.cssText = "display:flex;flex-direction:column;gap:12px;padding:4px 12px 12px;border-top:1px solid var(--border,#e3e0d9);";
+  advancedBody.style.cssText = "display:flex;flex-direction:column;gap:12px;min-width:0;max-width:100%;padding:4px 12px 12px;border-top:1px solid var(--border,#e3e0d9);box-sizing:border-box;";
   advancedBody.append(avatarRow);
   advancedDetails.append(advancedSummary, advancedBody);
   scrollBody.append(advancedDetails);
@@ -2314,6 +2318,8 @@ async function buildAgentConfigDialog(opts) {
   skillsDetails.style.padding = "0";
   skillsDetails.style.margin = "0";
   skillsDetails.style.background = "var(--panel,#ffffff)";
+  skillsDetails.style.minWidth = "0";
+  skillsDetails.style.maxWidth = "100%";
   skillsDetails.style.overflow = "hidden";
 
   const selectedInitialCount = [...agentSkillIds].filter((id) => available.some((s) => (s?.id ?? s?.name ?? String(s)) === id)).length;
@@ -2325,6 +2331,8 @@ async function buildAgentConfigDialog(opts) {
   skillsSummary.style.display = "flex";
   skillsSummary.style.alignItems = "center";
   skillsSummary.style.justifyContent = "space-between";
+  skillsSummary.style.minWidth = "0";
+  skillsSummary.style.gap = "8px";
   skillsSummary.style.userSelect = "none";
   skillsSummary.innerHTML = `<span>Skills</span><span class="skill-count" style="font-size:12px;color:var(--muted,#635e56);font-weight:normal;">${selectedInitialCount > 0 ? `${selectedInitialCount} selected` : `${available.length} available`}</span>`;
   skillsDetails.append(skillsSummary);
