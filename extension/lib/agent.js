@@ -515,7 +515,7 @@ export function createAgent({
   const boundModel = new Proxy(model.model, {
     get(target, prop, receiver) {
       const pushAttempt = () => ({ id: crypto.randomUUID(), occurredAt: new Date().toISOString(), ordinal: ++attemptOrdinal });
-      const guarded = (fn, options, method = "doStream") => {
+      const guarded = async (fn, options, method = "doStream") => {
         emitAttestation(options);
         const entry = pushAttempt();
         attemptQueue.push(entry);
@@ -530,7 +530,15 @@ export function createAgent({
         const latched = latchRegistry && runIdForLatch
           ? latchRegistry.latchedToolsFor(runIdForLatch)
           : [];
-        if (latched.length > 0) options = injectLatchedServerTools(options, latched);
+        // A latch is not durable authorization. Re-read both owner switches at
+        // the last boundary before the paid provider call; revocation between
+        // execute_tool and this model step must stop injection immediately.
+        let serverToolsAuthorized = false;
+        if (latched.length > 0 && typeof serverTooling?.isAuthorized === "function") {
+          try { serverToolsAuthorized = await serverTooling.isAuthorized(runIdForLatch); }
+          catch { serverToolsAuthorized = false; }
+        }
+        options = injectLatchedServerTools(options, latched, serverToolsAuthorized);
         // Model round-trip observability: method + attempt ordinal + call
         // latency (time to the provider's response OBJECT — stream consumption
         // continues after). NEVER log options/content (prompts, messages).

@@ -179,6 +179,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | OPEN | [`CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`](#cap-fb-20260819-permission-remediation-ux-01-user-facing-permission-management-and-run-remediation) | User-facing permission management and run remediation |
 | P1 | OPEN | [`CAP-FB-20260819-UI-FLASH-RELAYOUT-01`](#cap-fb-20260819-ui-flash-relayout-01-intermittent-extension-wide-ui-flash-and-relayout-investigation) | Intermittent extension-wide UI flash and relayout investigation |
 | P1 | OPEN | [`CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01`](#cap-fb-20260820-semantic-tool-search-01-local-semantic-search-over-the-complete-tool-catalog) | Local semantic search over the complete tool catalog |
+| P1 | IN_REVIEW | [`CAP-FB-20260829-PROVIDER-SERVER-TOOLS-01`](#cap-fb-20260829-provider-server-tools-01-provider-executed-server-tools-with-owner-controlled-cost) | Provider-executed server tools with owner-controlled cost |
 | P1 | OPEN | [`CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01`](#cap-fb-20260823-extended-tool-families-01-extended-unixsystem-tool-family-admissions) | Extended Unix/system tool family admissions |
 | P1 | OPEN | [`CAP-FB-20260823-PYODIDE-PYTHON-01`](#cap-fb-20260823-pyodide-python-01-python-in-the-browser-via-pyodide) | Python in the browser via Pyodide |
 | P1 | OPEN | [`CAP-FB-20260825-DATA-EXPORT-IMPORT-01`](#cap-fb-20260825-data-export-import-01-owner-export-and-import-of-all-agent-data) | Owner export and import of all agent data |
@@ -223,6 +224,29 @@ evidence every other task depends on).
 
 
 ## Active
+
+
+## [CAP-FB-20260829-PROVIDER-SERVER-TOOLS-01] Provider-executed server tools with owner-controlled cost
+
+- Feedback: 2026-08-29 — provider-built-in tools must be usable without sending a paid call after revocation, leaking opt-ins across agent identities, or undercounting billable query occurrences.
+- Updated: 2026-08-29 08:29 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P1
+- Owner: implementation role
+- Workspace: active (local path private)
+- Branch: cap-provider-server-tools
+- Base: `550a9c8b`
+- Candidate: this tracker commit
+- Shipping: —
+- Acceptance: Gemini native Google Search is double-gated at the provider boundary; named opt-ins use immutable instance IDs and are deleted with the agent; background agents fail closed; model IDs are canonical; Clear usage clears every ledger; repeated query occurrences are billed separately; only HTTPS citations persist.
+- Review: independent review BLOCK on candidate `7c1017f1`; seven findings addressed in revision 1, re-review pending.
+- Gates: behavioral RED on the pre-feature base through pre-existing LazyToolProtocol/agent/usage/provider seams; focused tests, full suite, and production build SHA-stamped at the revision candidate.
+- Blockers: —
+- Next: independent re-review of revision 1.
+- Recover: `git switch cap-provider-server-tools && git status --short && deno test -A tests/provider-server-tools-behavioral-red.test.ts tests/provider-server-tools.test.ts tests/usage-tool-counts.test.ts`
+- History:
+  - 2026-08-29 08:29 UTC — revision 1 fixed provider-boundary revocation, immutable identity opt-ins, model normalization, full usage clearing, occurrence billing, behavioral falsification, and HTTPS-only citations after independent review BLOCK.
 
 
 ## [CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01] Extended Unix/system tool family admissions

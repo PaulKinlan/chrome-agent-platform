@@ -358,5 +358,12 @@ export async function clearUsage() {
   return await withUsageLock(async () => {
     await usageClear();
     await kvSet({ [TOOL_USAGE_KEY]: { v: 1, days: {} } });
+    // Serialize with any in-flight provider-server append: "Clear usage" is one
+    // owner action and must empty every usage ledger before it resolves.
+    const clearServerTools = serverToolUsageMutex.then(async () => {
+      await kvSet({ [SERVER_TOOL_USAGE_KEY]: { v: 1, days: {} } });
+    });
+    serverToolUsageMutex = clearServerTools.then(() => {}, () => {});
+    await clearServerTools;
   });
 }

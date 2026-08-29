@@ -18,6 +18,7 @@ import { createOpenAICompatibleModel } from "./models/openai-model.js";
 import {
   createGeminiNativeModel,
   isDefaultGeminiEndpoint,
+  normaliseGeminiNativeModelId,
 } from "./models/gemini-native-model.js";
 import {
   createPromptApiModel,
@@ -155,10 +156,11 @@ export async function resolveModelFromConfig(cfg) {
     // endpoint and stays on the compatible adapter — provider server tools
     // then honestly report owner-action-required.
     if (id === "gemini" && isDefaultGeminiEndpoint(cfg.baseURL)) {
-      const m = createGeminiNativeModel({ apiKey, model });
+      const canonicalModel = normaliseGeminiNativeModelId(model);
+      const m = createGeminiNativeModel({ apiKey, model: canonicalModel });
       return {
         model: m,
-        modelId: model,
+        modelId: canonicalModel,
         providerName: id,
         providerLane: "gemini-native",
       };

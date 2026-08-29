@@ -1304,19 +1304,21 @@ async function renderAgents() {
       const r = await boundedSend("named-agent.list");
       named = Array.isArray(r?.agents) ? r.agents : [];
     } catch { named = []; }
-    const rows = [{ id: "hub", name: "Hub (the main agent)" },
-      ...named.map((a) => ({ id: String(a?.id ?? ""), name: String(a?.name ?? a?.id ?? "agent") }))]
-      .filter((a) => a.id);
+    const rows = [{ key: "hub", name: "Hub (the main agent)" },
+      // Paid provider-tool authority follows the immutable instance identity.
+      // Legacy agents without one are omitted (fail closed), never slug-keyed.
+      ...named.map((a) => ({ key: String(a?.instanceId ?? ""), name: String(a?.name ?? a?.id ?? "agent") }))]
+      .filter((a) => a.key);
     for (const a of rows) {
       const field = document.createElement("div");
       field.className = "toggle-field";
       const t = document.createElement("switch-toggle");
       t.setAttribute("label", a.name);
-      t.checked = agents[a.id] === true;
+      t.checked = agents[a.key] === true;
       t.addEventListener("toggle", async (e) => {
         const latest = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
         const latestAgents = latest.agents && typeof latest.agents === "object" ? { ...latest.agents } : {};
-        latestAgents[a.id] = e.detail.checked === true;
+        latestAgents[a.key] = e.detail.checked === true;
         await persistServerTools({ ...latest, agents: latestAgents });
         saveFlash(`Provider server tools ${e.detail.checked ? "enabled" : "disabled"} for ${a.name}.`);
       });

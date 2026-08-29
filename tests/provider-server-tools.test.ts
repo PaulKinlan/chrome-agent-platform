@@ -1,15 +1,15 @@
 // tests/provider-server-tools.test.ts — KATs for provider-EXECUTED tools
 // (slice 1: Gemini google_search via the native @ai-sdk/google lane).
 //
-// Every test is falsification-gated: the module, source kind, lane, latch, and
-// rendering seams did not exist before this change, so each assertion fails on
-// the pre-change tree (the source-pin tests fail on a tree missing the wiring;
-// the functional tests fail with an import error).
+// This feature-focused suite covers the new module and wiring. Behavioral REDs
+// that must execute (not import-fail) on the pre-feature base live separately in
+// provider-server-tools-behavioral-red.test.ts and import only pre-existing seams.
 // @ts-nocheck — the chrome/kv mock + protocol envelope shapes are intentionally
 // dynamic (no types in Deno), matching the repo's established test pattern.
 
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
+  createServerGroundingAccumulator,
   createServerToolLatchRegistry,
   geminiModelSupportsServerTools,
   groundingFromProviderMetadata,
@@ -170,17 +170,19 @@ Deno.test("provider-server: injection adds the V2 provider tool and preserves fu
     tools: [{ type: "function", name: "search_tools" }],
     prompt: [],
   };
-  const injected = injectLatchedServerTools(options, latched);
+  const injected = injectLatchedServerTools(options, latched, true);
   assertEquals(injected.tools.length, 2);
   assert(injected.tools.some((t) => t.type === "provider" && t.id === "google.google_search"));
   assert(injected.tools.some((t) => t.type === "function" && t.name === "search_tools"));
   // The untouched case returns the SAME object (no-op, no copy).
-  assertEquals(injectLatchedServerTools(options, []), options);
+  assertEquals(injectLatchedServerTools(options, [], true), options);
+  // Fail closed at the final provider boundary when owner authorization is off.
+  assertEquals(injectLatchedServerTools(options, latched, false), options);
   // Dedupe: injecting twice can never declare the server tool twice.
-  const twice = injectLatchedServerTools(injected, latched);
+  const twice = injectLatchedServerTools(injected, latched, true);
   assertEquals(twice.tools.filter((t) => t.type === "provider").length, 1);
   // A run with no latch injects nothing.
-  assertEquals(injectLatchedServerTools(options, registry.latchedToolsFor("run-nope")), options);
+  assertEquals(injectLatchedServerTools(options, registry.latchedToolsFor("run-nope"), true), options);
 });
 
 Deno.test("provider-server: the latch → next-model-call seam (the proxy's exact call pattern)", () => {
@@ -188,7 +190,7 @@ Deno.test("provider-server: the latch → next-model-call seam (the proxy's exac
   const registry = createServerToolLatchRegistry();
   const calls = [];
   const fakeModelCall = (options) => {
-    calls.push(injectLatchedServerTools(options, registry.latchedToolsFor("run-1")));
+    calls.push(injectLatchedServerTools(options, registry.latchedToolsFor("run-1"), true));
   };
   fakeModelCall({ tools: [{ type: "function", name: "execute_tool" }] });
   assertEquals(calls[0].tools.filter((t) => t.type === "provider").length, 0);
@@ -230,11 +232,23 @@ Deno.test("provider-server: grounding normalization maps the documented Gemini s
 
 Deno.test("provider-server: chunks without support ranges still surface as sources", () => {
   const n = normalizeGeminiGrounding({
-    groundingChunks: [{ web: { uri: "https://example.com/x", title: "X" } }],
+    groundingChunks: [
+      { web: { uri: "http://insecure.example/x", title: "No" } },
+      { web: { uri: "https://example.com/x", title: "X" } },
+    ],
   });
   assertEquals(n.citations.length, 1);
   assertEquals(n.citations[0].url, "https://example.com/x");
   assertEquals(n.citations[0].startIndex, undefined);
+});
+
+Deno.test("provider-server: repeated query occurrences bill separately while presentation dedupes", () => {
+  const accumulator = createServerGroundingAccumulator();
+  accumulator.add({ queries: ["same query"], citations: [] });
+  accumulator.add({ queries: ["same query", "other query"], citations: [] });
+  const snapshot = accumulator.snapshot();
+  assertEquals(snapshot.queries, ["same query", "same query", "other query"]);
+  assertEquals(snapshot.displayQueries, ["same query", "other query"]);
 });
 
 Deno.test("provider-server: normalization never throws on hostile shapes and drops non-http urls", () => {
@@ -322,6 +336,12 @@ Deno.test("provider-server: execute authorization re-reads the switches live (to
   assertEquals(allowed.ok, true);
   const validated = await record.validateArguments({});
   assertEquals(validated.ok, true);
+  // Flip again after authorize: dispatch's final live read still refuses to latch.
+  switches = { globalEnabled: false, agentOptIn: true };
+  const dispatchDenied = await record.dispatch(validated.data, { runId: "run-x" });
+  assertEquals(dispatchDenied.ok, false);
+  assertEquals(registry.latchedToolsFor("run-x").length, 0);
+  switches = { globalEnabled: true, agentOptIn: true };
   const result = await record.dispatch(validated.data, { runId: "run-x" });
   assertEquals(result.ok, true);
   assertEquals(result.activated, "google_search");
@@ -407,6 +427,7 @@ Deno.test("provider-server: the gemini provider resolves through the NATIVE lane
   });
   assertEquals(resolved.providerLane, "gemini-native");
   assertEquals(resolved.providerName, "gemini");
+  assertEquals(resolved.modelId, "gemini-3.7-flash");
 });
 
 Deno.test("provider-server: a CUSTOM gemini base URL (BYO proxy) stays on the compatible adapter", async () => {
@@ -439,6 +460,9 @@ Deno.test("provider-server: source pins — the service worker wires the records
   assertStringIncludes(src, "cap:providerServerTools");
   assertStringIncludes(src, "serverToolEvents");
   assertStringIncludes(src, "recordServerToolUsage");
+  assertStringIncludes(src, "providerServerAgentId: agent.instanceId || null");
+  assertStringIncludes(src, "providerServerAgentId: null");
+  assertStringIncludes(src, "clearProviderServerAgentOptIns([deletingAgent?.instanceId, slug])");
 });
 
 Deno.test("provider-server: source pins — the settings toggle + rate card exist", async () => {
@@ -451,6 +475,8 @@ Deno.test("provider-server: source pins — the settings toggle + rate card exis
     new URL("../extension/options/options.js", import.meta.url),
   );
   assertStringIncludes(js, "cap:providerServerTools");
+  assertStringIncludes(js, "key: String(a?.instanceId ?? \"\")");
+  assert(!js.includes("latestAgents[a.id]"), "paid-tool opt-ins are never slug-keyed");
 });
 
 Deno.test("provider-server: source pins — usage records the labelled estimate", async () => {

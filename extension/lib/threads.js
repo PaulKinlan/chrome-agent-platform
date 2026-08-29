@@ -403,7 +403,7 @@ export async function commitThreadTerminal(id, executionId, terminal) {
           ...(Number.isInteger(c?.endIndex) ? { endIndex: c.endIndex } : {}),
           ...(typeof c?.citedText === "string" ? { citedText: boundText(c.citedText, 512) } : {}),
           provider: boundText(c?.provider ?? "", 32),
-        })).filter((c) => /^https?:\/\//u.test(c.url))
+        })).filter((c) => /^https:\/\//u.test(c.url))
         : null;
       const serverToolEvents = Array.isArray(terminal?.serverToolEvents)
         ? terminal.serverToolEvents.slice(0, 16).map((e) => ({

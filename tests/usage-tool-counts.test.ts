@@ -3,7 +3,15 @@
 // test. tests/usage-tool-counts.test.ts — the bounded per-tool call counters
 // that feed the Usage panel's tool-usage chart.
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { recordToolCall, getToolUsage, clearUsage, TOOL_USAGE_KEY } from "../extension/lib/usage.js";
+import {
+  clearUsage,
+  getServerToolUsage,
+  getToolUsage,
+  recordServerToolUsage,
+  recordToolCall,
+  SERVER_TOOL_USAGE_KEY,
+  TOOL_USAGE_KEY,
+} from "../extension/lib/usage.js";
 import { resetUsageMigration } from "../extension/lib/usage-store.js";
 import { installFakeIdb, resetFakeIdb } from "./fake-idb.js";
 import { installFakeLocks, resetFakeLocks } from "./fake-locks.js";
@@ -65,11 +73,14 @@ Deno.test("expired day buckets are excluded from the rollup", async () => {
   assertEquals(tools[0].tool, "fresh");
 });
 
-Deno.test("clearUsage clears the tool counters with the ledger", async () => {
+Deno.test("clearUsage clears ordinary + provider-server tool counters with the ledger", async () => {
   reset();
   await recordToolCall("tabs.create");
+  await recordServerToolUsage({ provider: "gemini", tool: "google_search", queries: 2 });
   await clearUsage();
-  const raw = await globalThis.chrome.storage.local.get(TOOL_USAGE_KEY);
+  const raw = await globalThis.chrome.storage.local.get([TOOL_USAGE_KEY, SERVER_TOOL_USAGE_KEY]);
   assertEquals(Object.keys(raw[TOOL_USAGE_KEY]?.days ?? {}).length, 0);
+  assertEquals(Object.keys(raw[SERVER_TOOL_USAGE_KEY]?.days ?? {}).length, 0);
   assertEquals((await getToolUsage()).length, 0);
+  assertEquals((await getServerToolUsage()).length, 0);
 });

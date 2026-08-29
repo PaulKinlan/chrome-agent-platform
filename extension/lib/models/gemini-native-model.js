@@ -28,12 +28,16 @@ export function isDefaultGeminiEndpoint(baseURL) {
   return url === "" || url === GEMINI_COMPAT_DEFAULT_BASE_URL;
 }
 
+export function normaliseGeminiNativeModelId(model) {
+  return normaliseModelId(model, GEMINI_COMPAT_DEFAULT_BASE_URL);
+}
+
 export function createGeminiNativeModel(config) {
   const { apiKey, model } = config ?? {};
   if (!apiKey || !model) {
     throw new Error("Gemini native provider requires apiKey and model");
   }
-  const resolvedModel = normaliseModelId(model, "");
+  const resolvedModel = normaliseGeminiNativeModelId(model);
   const google = createGoogleGenerativeAI({
     apiKey,
     fetch: makeLoggingFetch([apiKey]),

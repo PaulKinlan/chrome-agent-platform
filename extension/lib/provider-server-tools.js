@@ -182,12 +182,14 @@ export function createServerToolLatchRegistry({
 }
 
 /** Inject latched provider tools into a LanguageModelV2 call options object.
- * PURE (returns the input unchanged when there is nothing to add; a new
- * object otherwise). Dedupes by provider-tool id so a double-wrap can never
- * declare the same server tool twice. */
-export function injectLatchedServerTools(options, latched) {
+ * PURE (returns the input unchanged when there is nothing to add, authorization
+ * was revoked, or the input is invalid; a new object otherwise). Dedupes by
+ * provider-tool id so a double-wrap can never declare the same server tool
+ * twice. The authorization argument is deliberately fail-closed because this
+ * is the last boundary before a paid provider call. */
+export function injectLatchedServerTools(options, latched, authorized = false) {
   const tools = Array.isArray(latched) ? latched : [];
-  if (tools.length === 0) return options;
+  if (authorized !== true || tools.length === 0) return options;
   if (!options || typeof options !== "object") return options;
   const existing = Array.isArray(ownData(options, "tools"))
     ? ownData(options, "tools")
@@ -229,7 +231,7 @@ export function normalizeGeminiGrounding(groundingMetadata) {
       const chunk = chunks[index];
       const web = ownData(chunk, "web");
       const url = typeof ownData(web, "uri") === "string" ? web.uri : null;
-      if (!url || !/^https?:\/\//u.test(url)) continue;
+      if (!url || !/^https:\/\//u.test(url)) continue;
       citations.push(Object.freeze({
         url: url.slice(0, 1024),
         title: String(ownData(web, "title") ?? "").slice(0, 256),
@@ -246,7 +248,7 @@ export function normalizeGeminiGrounding(groundingMetadata) {
     for (const chunk of chunks.slice(0, 32)) {
       const web = ownData(chunk, "web");
       const url = typeof ownData(web, "uri") === "string" ? web.uri : null;
-      if (!url || !/^https?:\/\//u.test(url)) continue;
+      if (!url || !/^https:\/\//u.test(url)) continue;
       citations.push(Object.freeze({
         url: url.slice(0, 1024),
         title: String(ownData(web, "title") ?? "").slice(0, 256),
@@ -262,6 +264,34 @@ export function normalizeGeminiGrounding(groundingMetadata) {
     citations: Object.freeze(citations),
     queries: Object.freeze(queries),
     searchEntryPointHtml,
+  });
+}
+
+/** Build one bounded per-run grounding accumulator. Query OCCURRENCES remain
+ * distinct for cost accounting; presentation queries and citations are deduped.
+ * The provider can execute the same query on later model calls and bill each
+ * occurrence, so a Set is never the billing authority. */
+export function createServerGroundingAccumulator({ maxQueryOccurrences = 128, maxCitations = 128 } = {}) {
+  const queryOccurrences = [];
+  const displayQueries = new Set();
+  const citations = new Map();
+  return Object.freeze({
+    add(normalized) {
+      for (const query of normalized?.queries ?? []) {
+        if (queryOccurrences.length < maxQueryOccurrences) queryOccurrences.push(query);
+        if (displayQueries.size < maxQueryOccurrences) displayQueries.add(query);
+      }
+      for (const citation of normalized?.citations ?? []) {
+        if (citations.size < maxCitations && !citations.has(citation.url)) citations.set(citation.url, citation);
+      }
+    },
+    snapshot() {
+      return Object.freeze({
+        queries: Object.freeze([...queryOccurrences]),
+        displayQueries: Object.freeze([...displayQueries]),
+        citations: Object.freeze([...citations.values()]),
+      });
+    },
   });
 }
 
@@ -380,6 +410,12 @@ export async function liveProviderServerToolRecords(context) {
         const runId = String(ownData(dispatchContext, "runId") ?? "");
         if (!runId || !latchRegistry) {
           return { ok: false, error: "no active run to bind the server tool to" };
+        }
+        // Authorization can change after the protocol's before-dispatch fence;
+        // do one final live read immediately before mutating the latch registry.
+        const resolved = await availabilityFor(spec);
+        if (resolved.availability !== "ready") {
+          return { ok: false, error: resolved.reason };
         }
         const latched = latchRegistry.latch(runId, spec.toolId);
         if (!latched.ok) return { ok: false, error: latched.reason };
