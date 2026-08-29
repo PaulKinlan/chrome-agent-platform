@@ -541,6 +541,7 @@ import {
   opaqueTargetRef,
   payloadDigest,
   resolvePendingApproval,
+  waitForApprovalDecision,
 } from "../lib/owner-approval.js";
 import { bridgeAndAuditApprovalBindings } from "../lib/approval-bridge-audit.js";
 import { journalJson } from "../shared/tool-tree.js";
@@ -1497,7 +1498,11 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
         entry.add(normalized);
       },
     };
-    const modelManagementDispatch = bindModelApprovalDispatcher(approvalExecutionId, dispatchRoute);
+    const modelManagementDispatch = bindModelApprovalDispatcher(
+      approvalExecutionId,
+      dispatchRoute,
+      (event) => onProgress?.(event),
+    );
     const liveBrowserTools = browserToolset(scoped);
     const liveManagementTools = scoped ? {} : managementToolset({
       // Immutable build-local capture. A stale tool closure keeps its original
@@ -1549,6 +1554,11 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
         return { ok: true, gen: snap.gen };
       },
       onProgress,
+      onPermissionRequest: (result) => waitForInlinePermissionDecision(
+        approvalExecutionId,
+        result,
+        onProgress,
+      ),
     });
     // Bind each worker's run-generation getter into ITS OWN build-local cell
     // (the round-26/27 blocker): the cells were created alongside the tools in
@@ -3190,6 +3200,39 @@ async function recordWebmcpPageReport(origin, acceptedTools) {
 
 // ── owner-bound destructive-operation approvals ──────────────────────────
 const ownerApprovalStore = createApprovalStore();
+const inlinePermissionWaiters = new Map();
+const INLINE_PERMISSION_TTL_MS = 60_000;
+
+async function waitForInlinePermissionDecision(executionId, result, onProgress) {
+  if (!executionId || !activeExecutions.has(executionId) || typeof onProgress !== "function") return "denied";
+  if (inlinePermissionWaiters.size >= 64) return "denied";
+  const requestId = `rp_${crypto.randomUUID()}`;
+  return await new Promise(async (resolve) => {
+    let settled = false;
+    const finish = (decision) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      inlinePermissionWaiters.delete(requestId);
+      resolve(decision);
+    };
+    const timer = setTimeout(() => {
+      onProgress({ type: "approval-settled", requestId, state: "expired" });
+      finish("expired");
+    }, INLINE_PERMISSION_TTL_MS);
+    inlinePermissionWaiters.set(requestId, { executionId, finish });
+    try {
+      await onProgress({
+        type: "approval-request",
+        requestId,
+        expiresAt: Date.now() + INLINE_PERMISSION_TTL_MS,
+        result,
+      });
+    } catch {
+      finish("denied");
+    }
+  });
+}
 
 function approvalExecutionId(context) {
   if (context?.principal === "model") {
@@ -3207,13 +3250,12 @@ function approvalExecutionId(context) {
   return "";
 }
 
-async function requireOwnerApproval(context, action, target, payload, { card = false } = {}) {
+async function requireOwnerApproval(context, action, target, payload) {
   const executionId = approvalExecutionId(context);
   if (!executionId || !target) return { ok: false, error: "This operation requires owner approval." };
   // Owner-DIRECT actions: the owner's own click in an extension UI document IS
   // the approval — deleting an artifact from the artifact view must never wait
   // on a hidden Settings decision (CAP-FB-20260823-ARTIFACT-DELETE-PERMISSION-01).
-  // Model-initiated calls of the same action keep the full approval flow below.
   if (isOwnerDirectApproval(context, action)) {
     let directRef = "";
     try { directRef = await opaqueTargetRef(target); } catch { /* audited without a ref */ }
@@ -3224,8 +3266,6 @@ async function requireOwnerApproval(context, action, target, payload, { card = f
   let targetRef;
   try {
     digest = await payloadDigest(payload);
-    // Key persistence is part of the boundary. If OPFS cannot provide the
-    // install key, fail closed rather than publishing an ephemeral reference.
     targetRef = await opaqueTargetRef(target);
   } catch {
     return { ok: false, error: "This operation requires owner approval." };
@@ -3236,21 +3276,58 @@ async function requireOwnerApproval(context, action, target, payload, { card = f
     return { ok: true };
   }
   const pending = createPendingApproval(ownerApprovalStore, executionId, action, target, digest);
-  if (pending.ok) {
-    const row = ownerApprovalStore.approvals.get(pending.approvalId);
-    if (row) row.targetRef = targetRef;
-    if (!pending.deduped) securityApprovalEvent("requested", action, targetRef);
+  if (!pending.ok) return { ok: false, error: pending.error ?? "This operation requires owner approval." };
+  const row = ownerApprovalStore.approvals.get(pending.approvalId);
+  if (row) row.targetRef = targetRef;
+  if (!pending.deduped) securityApprovalEvent("requested", action, targetRef);
+
+  // A model-originated mutation stays inside THIS tool invocation. Publish its
+  // bounded request on the run's own progress channel, then await the exact
+  // owner decision. No model step can continue while this promise is pending.
+  if (context?.principal === "model") {
+    const request = approvalCardDenial({ approvalId: pending.approvalId, action, targetRef });
+    if (!request || typeof context.onApprovalEvent !== "function") {
+      resolvePendingApproval(ownerApprovalStore, pending.approvalId, false);
+      return { ok: false, error: "Owner approval was required but no originating conversation could show it." };
+    }
+    try {
+      await context.onApprovalEvent({
+        type: "approval-request",
+        approvalId: pending.approvalId,
+        action,
+        targetRef,
+        expiresAt: row?.expiresAt ?? Date.now(),
+        result: request,
+      });
+    } catch {
+      resolvePendingApproval(ownerApprovalStore, pending.approvalId, false);
+      return { ok: false, error: "Owner approval could not be shown in the originating conversation." };
+    }
+    const decision = await waitForApprovalDecision(ownerApprovalStore, pending.approvalId);
+    if (decision.decision === "approved") {
+      const exact = consumeApproved(ownerApprovalStore, executionId, action, target, digest);
+      if (exact.ok) {
+        securityApprovalEvent("consumed", action, targetRef);
+        context.onApprovalEvent({ type: "approval-settled", approvalId: pending.approvalId, state: "granted" });
+        return { ok: true };
+      }
+      return { ok: false, error: "The approval no longer matched this tool call." };
+    }
+    const expired = decision.decision === "expired";
+    context.onApprovalEvent({ type: "approval-settled", approvalId: pending.approvalId, state: expired ? "expired" : "denied" });
+    return {
+      ok: false,
+      approvalDenied: !expired,
+      approvalExpired: expired,
+      error: expired
+        ? `Approval for ${action} expired after 60 seconds; the action was not performed.`
+        : `The owner denied ${action}; the action was not performed.`,
+    };
   }
-  // Card mode (P1-3): surface the pending approval as a STRUCTURED in-context
-  // denial the conversation renders as an approval card — instead of a
-  // dead-end Settings pointer. Bounded: the requirement is a DESCRIPTION
-  // (action + opaque target ref); the real owner click resolves the exact
-  // pending approval id and the EXACT retry consumes it by digest match.
-  if (card && pending.ok) {
-    return approvalCardDenial({ approvalId: pending.approvalId, action, targetRef }) ??
-      { ok: false, error: "This operation requires owner approval." };
-  }
-  return { ok: false, error: "This operation requires owner approval." };
+
+  // Settings-level requests retain their existing pending-list + exact retry
+  // flow; they did not originate in a run and therefore have no conversation.
+  return { ok: false, error: "This operation requires owner approval in Settings." };
 }
 
 function payloadFields(entries) {
@@ -5441,6 +5518,13 @@ const handlers = mergeRouteMaps(
   async "management.pending-approvals"(_body, context) {
     if (context?.principal !== "owner-options") return { ok: false, error: "approvals are available only in Settings" };
     return { ok: true, approvals: await ownerApprovalRows() };
+  },
+  async "run.resolve-inline-approval"({ requestId, approve }, context) {
+    if (context?.principal !== "extension") return { ok: false, error: "only the originating conversation can resolve this request" };
+    const row = inlinePermissionWaiters.get(String(requestId ?? ""));
+    if (!row || !activeExecutions.has(row.executionId)) return { ok: false, error: "this permission request expired" };
+    row.finish(approve === true ? "approved" : "denied");
+    return { ok: true, decision: approve === true ? "approved" : "denied" };
   },
   async "management.resolve-approval"({ approvalId, approve }, context) {
     // Two resolver surfaces, strictly partitioned by WHICH approvals each may

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.404] — 2026-08-29
+- When an agent needs your approval — deleting something, changing an agent, granting a permission — the request now appears as a card right inside that conversation, and the task pauses until you answer. No more hunting for where to approve
+
 ## [0.2.403] — 2026-08-29
 - Big content no longer breaks tool calls: agents can save full documents and scripts (up to 256 KB for artifacts, 64 KB for script source), every tool now tells the model its exact size limits up front, and when a call is too large the error says which field, the limit, and how to fix it
 
