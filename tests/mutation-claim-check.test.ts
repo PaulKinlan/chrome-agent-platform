@@ -136,9 +136,16 @@ Deno.test("claim-check: first-person framing does not override a subordinate thi
   }
 });
 
-Deno.test("claim-check: a subjectless modifier-led action report is corrected", () => {
-  const { corrections } = correctUnsupportedMutationClaims("Already created the agent.", []);
-  assertEquals(corrections.length, 1);
+Deno.test("claim-check: subjectless modifier-led action reports are corrected", () => {
+  for (const text of [
+    "Already created the agent.",
+    "Just created the agent.",
+    "Now created the agent.",
+    "As requested, created the agent.",
+  ]) {
+    const { corrections } = correctUnsupportedMutationClaims(text, []);
+    assertEquals(corrections.length, 1, `missed subjectless action report: ${text}`);
+  }
 });
 
 Deno.test("claim-check: country US is not first-person evidence", () => {
@@ -167,6 +174,53 @@ Deno.test("claim-check: long complement keeps its third-party subject", () => {
   const out = correctUnsupportedMutationClaims(text, []);
   assertEquals(out.corrections.length, 0);
   assertEquals(out.text, text);
+});
+
+Deno.test("claim-check: conventional proper names and possessive noun subjects stay third-party", () => {
+  for (const text of [
+    "Alice created an agent.",
+    "Google created an agent.",
+    "Our vendor created an agent.",
+  ]) {
+    const out = correctUnsupportedMutationClaims(text, []);
+    assertEquals(out.corrections.length, 0, `false correction on third-party subject: ${text}`);
+    assertEquals(out.text, text);
+  }
+});
+
+Deno.test("claim-check: coordinated predicates inherit subjects until first-person resumes", () => {
+  for (const text of [
+    "I confirmed OpenAI created an agent and then deleted the agent.",
+    "I confirmed OpenAI created an agent but then deleted the agent.",
+  ]) {
+    const out = correctUnsupportedMutationClaims(text, []);
+    assertEquals(out.corrections.length, 0, `false correction on inherited third-party subject: ${text}`);
+    assertEquals(out.text, text);
+  }
+  for (const text of [
+    "I confirmed OpenAI created an agent, but then deleted the agent myself.",
+    "I confirmed OpenAI created an agent but then deleted the agent ourselves.",
+    "I confirmed OpenAI created an agent and I deleted the agent.",
+    "I confirmed OpenAI created an agent and we deleted the agent.",
+  ]) {
+    const out = correctUnsupportedMutationClaims(text, []);
+    assertEquals(out.corrections.length, 1, `missed explicit first-person resumption: ${text}`);
+    assertStringIncludes(out.corrections[0], "deleted the agent");
+  }
+});
+
+Deno.test("claim-check: comma-separated reflexive resumes first-person", () => {
+  const text = "I confirmed OpenAI created an agent but then deleted the agent, myself.";
+  const out = correctUnsupportedMutationClaims(text, []);
+  assertEquals(out.corrections.length, 1);
+  assertStringIncludes(out.corrections[0], "deleted the agent");
+});
+
+Deno.test("claim-check: by-reflexive resumes first-person", () => {
+  const text = "I confirmed OpenAI created an agent but then deleted the agent by myself.";
+  const out = correctUnsupportedMutationClaims(text, []);
+  assertEquals(out.corrections.length, 1);
+  assertStringIncludes(out.corrections[0], "deleted the agent");
 });
 
 // ── Run-level: the correction must reach the AUTHORITATIVE returned result ──

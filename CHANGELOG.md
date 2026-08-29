@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.389] — 2026-08-29
+- merge: mutation-claim genuineness P2 (0794f39f) — title-case/possessive third-party subjects (Alice/Google/My assistant) no longer mis-classified as self-claims; coordinated predicates inherit a third-party subject across unmarked and/but [then]; explicit I/we or reflexives (bare, comma, by-prefixed) resume first-person; semicolon case fixed. Reviewed PASS (round 4, adjudicated matrix); coordinator 16-case probe matrix + SHA-stamped gates (focused 42/42, suite 2173/0, build) all run at the candidate SHA. Documented residuals: relative-clause first person, lowercase possessives, quoted speech.
+
+## [0.2.388] — 2026-08-29
+- The agent's honesty check on its own claims is smarter: it no longer flags actions it only reported others taking (including across 'and then'/'but then'), and it catches more disguised self-claims like ', myself' and 'by myself'
+
 ## [0.2.387] — 2026-08-29
 - merge: agent-delegation lane (a45305a7) — delegate_to_agent agent-to-agent delegation: owner-approved canDelegateTo edges (bound into the approval payload, never ride unapproved), depth≤2/descendant≤4 caps, delegation-root run lock bypass (fresh child orchestrator), durable settlement ordering (executable race regressions: queued-sibling, over-cap settlement, permission-vs-cancel — RED on base via real production seams with injected durable stores). Reviewed PASS (round 5). Merge unions: profileGrants + schedule + canDelegateTo all flow through named-agent create/update/payloads; SW keeps BOTH chokepoint redaction AND delegation budget tracking; demo-model keeps BOTH the create-agent AND delegate-agent markers; instanceId-keyed agent memory + saved-skills composition ported into the lane's extracted runNamedAgentTask (its stale slug-keyed copy NOT taken). Manifest kept at main's P0 shape (lane was pre-P0).
 

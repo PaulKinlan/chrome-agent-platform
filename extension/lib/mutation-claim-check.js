@@ -71,28 +71,54 @@ const CLAIMS = [
  * (the name words before "agent" must not read as a third-party subject).
  */
 const NEGATION_TAIL = /(?:haven['’]?t|hasn['’]?t|hadn['’]?t|didn['’]?t|don['’]?t|won['’]?t|wouldn['’]?t|couldn['’]?t|can['’]?t|cannot|not|never)(?:\s+[\w'’-]+){0,3}\s*$/i;
+const REFLEXIVE_FOLLOW = /^(?:\s*,\s*|\s+)(?:by\s+)?(?:myself|ourselves)\b/i;
 // Only subject-position first-person forms are evidence. In particular, `us`
 // is an object pronoun (and case-insensitively collides with the country US),
-// while `ours` cannot govern the mutation verb. `our` remains for the pinned
-// possessive-subject shape "Our team created…".
-const FIRST_PERSON = /\b(?:i|we|our)\b/ig;
+// while `ours` cannot govern the mutation verb. A possessive `our` is handled
+// as part of the subject phrase below: "Our vendor created…" is about the
+// vendor, while the existing "Our team created…" self-report remains pinned.
+const FIRST_PERSON = /\b(?:i|we)\b/ig;
 const CLAUSE_COORDINATOR = /\b(?:and|but)(?:\s+then)?\b/ig;
 const DETERMINER_SUBJECT = /\b(?:the|a|an|another|this|these|those|some|any|each|every)\s+(?:[\w'’-]+\s+)*[\w'’-]+\s*$/i;
+const OUR_SUBJECT = /^our\s+(?:[\w'’-]+\s+)*[\w'’-]+\s*$/i;
+const SUBJECTLESS_STATUS = /^(?:already|just|now|done|all\s+set)(?:\s*[—–,:;]\s*)?$/i;
+const SUBJECTLESS_ADVERB = /^[A-Za-z]+ly(?:\s*[—–,:;]\s*)?$/i;
+const SUBJECTLESS_ADJUNCT = /^(?:(?:after|before|following|once)\b.*|as\s+requested)[,—–:;]\s*$/i;
 const WORD = /[A-Za-z][\w'’-]*/g;
 
 function lastFirstPersonTail(prefix) {
   let end = -1;
   for (const match of prefix.matchAll(FIRST_PERSON)) end = (match.index ?? 0) + match[0].length;
-  return end < 0 ? null : prefix.slice(end);
+  return end < 0 ? null : { end, tail: prefix.slice(end) };
+}
+
+function lastCoordinator(prefix) {
+  let found = null;
+  for (const match of prefix.matchAll(CLAUSE_COORDINATOR)) {
+    found = { index: match.index ?? 0, end: (match.index ?? 0) + match[0].length };
+  }
+  return found;
 }
 
 // A coordinated follow-on action has an empty subject position: in
 // "I created X and then deleted the agent", only the words after "and then"
 // can govern "deleted".
 function currentClauseTail(prefix) {
-  let end = -1;
-  for (const match of prefix.matchAll(CLAUSE_COORDINATOR)) end = (match.index ?? 0) + match[0].length;
-  return end < 0 ? prefix : prefix.slice(end);
+  const coordinator = lastCoordinator(prefix);
+  return coordinator ? prefix.slice(coordinator.end) : prefix;
+}
+
+function previousMutationMatch(text, start, end) {
+  const segment = text.slice(start, end);
+  let last = null;
+  for (const claim of CLAIMS) {
+    const flags = claim.re.flags.includes("g") ? claim.re.flags : claim.re.flags + "g";
+    for (const match of segment.matchAll(new RegExp(claim.re.source, flags))) {
+      const index = start + (match.index ?? 0);
+      if (!last || index > last.index) last = { index, text: match[0] };
+    }
+  }
+  return last;
 }
 
 /**
@@ -105,12 +131,20 @@ function currentClauseTail(prefix) {
 function hasExplicitThirdPartySubject(prefix) {
   const clause = prefix.trim();
   if (!clause) return false;
+  // These are grammatical action-report lead-ins, not subjects. Keep this
+  // structural and small: status phrases, adverbs, and bounded adjuncts.
+  if (SUBJECTLESS_STATUS.test(clause) || SUBJECTLESS_ADVERB.test(clause) || SUBJECTLESS_ADJUNCT.test(clause)) return false;
+  // Preserve the shipped first-person group pin, but do not let the possessive
+  // marker turn an ordinary governing noun into the assistant's subject.
+  if (/^our\s+team\s*$/i.test(clause)) return false;
+  if (OUR_SUBJECT.test(clause)) return true;
   if (DETERMINER_SUBJECT.test(clause)) return true;
   const words = [...clause.matchAll(WORD)];
-  return words.some((match, index) => {
+  return words.some((match) => {
     const word = match[0];
-    return /^[A-Z]{2,}$/.test(word) || /[a-z][A-Z]/.test(word) ||
-      (index > 0 && /^[A-Z][a-z]/.test(word));
+    // Conventional title-case names at word zero (Alice, Google) are subjects
+    // too; the approved subjectless lead-ins were removed above.
+    return /^[A-Z]{2,}$/.test(word) || /[a-z][A-Z]/.test(word) || /^[A-Z][a-z]/.test(word);
   });
 }
 
@@ -118,19 +152,35 @@ function genuineSelfClaim(text, matchIndex, matchedText) {
   // The sentence prefix: from the last sentence boundary before the match.
   const before = text.slice(0, matchIndex);
   const boundary = Math.max(before.lastIndexOf("."), before.lastIndexOf("!"), before.lastIndexOf("?"), before.lastIndexOf("\n"));
-  const prefix = before.slice(boundary + 1);
+  const sentenceStart = boundary + 1;
+  const prefix = before.slice(sentenceStart);
   if (NEGATION_TAIL.test(prefix)) return false;
+  // A trailing reflexive explicitly resumes the assistant as subject even
+  // when the predicate follows a third-party complement.
+  if (REFLEXIVE_FOLLOW.test(text.slice(matchIndex + matchedText.length))) return true;
   // The match may itself OPEN with the first-person marker (the claim regexes'
   // optional leading "I…" group) — then the prefix excludes it.
   if (/^\s*i\b/i.test(matchedText)) return true;
   // Passive agent-subject shapes carry the agent as their own subject.
   if (/^\s*(?:the\s+|your\s+)?(?:agent|task)\b/i.test(matchedText)) return true;
-  const firstPersonTail = lastFirstPersonTail(prefix);
-  if (firstPersonTail !== null) {
-    return !hasExplicitThirdPartySubject(currentClauseTail(firstPersonTail));
+  const firstPerson = lastFirstPersonTail(prefix);
+  if (firstPerson !== null) {
+    const coordinator = lastCoordinator(firstPerson.tail);
+    const clauseTail = currentClauseTail(firstPerson.tail);
+    if (hasExplicitThirdPartySubject(clauseTail)) return false;
+    if (coordinator) {
+      // An unmarked coordinated predicate keeps the previous mutation's
+      // subject across both `and [then]` and `but [then]`. An explicit I/we is
+      // the last first-person marker (so no coordinator remains in its tail),
+      // while a trailing myself/ourselves returned true above.
+      const coordinatorIndex = sentenceStart + firstPerson.end + coordinator.index;
+      const previous = previousMutationMatch(text, sentenceStart, coordinatorIndex);
+      if (previous && !genuineSelfClaim(text, previous.index, previous.text)) return false;
+    }
+    return true;
   }
   // No explicit subject means the mutation verb heads a terse action report;
-  // do not maintain an inevitably incomplete adverb/modifier whitelist.
+  // the approved status/adverb/adjunct lead-ins were classified above.
   return !hasExplicitThirdPartySubject(prefix);
 }
 
