@@ -29,6 +29,14 @@ with it. Fixed under `CAP-FB-20260827-MAIN-GATES-RED-02`.
 
 Current findings all have live entries in `TASKS.md`. Everything else previously listed here is done.
 
+### Agents — scheduled named-agent work is written outside its conversation
+`CAP-FB-20260829-BACKGROUND-RUN-TRANSCRIPT-01` · P0 · IN_REVIEW
+
+The alarm branch addressed named-agent memory by reusable slug, while interactive runs and
+history address it by immutable instance ID. The candidate uses the loaded agent row's same
+instance ID; the real-browser gate creates and fires a schedule, opens the real agent row,
+and requires the scheduled prompt in the conversation.
+
 ### Composer — macOS dictation is blocked by its decorative waveform meter
 `CAP-FB-20260829-MIC-DEAD-MACOS-01` · P0 · IN_REVIEW
 

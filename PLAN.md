@@ -140,7 +140,9 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
       Directory / Skills return to the hub in ONE press with no blank screen.
 - [x] **Background agents unified into the agents list (`0.2.306`)** with a "runs in the
       background" marker, schedule and toggle; full named-agent delete (folder, record,
-      memory, OPFS) and instant delete/disable (`0.2.305`).
+      memory, OPFS) and instant delete/disable (`0.2.305`). Scheduled named-agent runs
+      use the same immutable instance journal as interactive chat, so unattended work
+      remains visible when the agent conversation is opened.
 - [x] **Every data-loading surface is bounded (`0.2.302`)** — providers, usage, agents,
       activity and the tool library time out with an honest error + Retry instead of
       dead-rendering when the worker is suspended.

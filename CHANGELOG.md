@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.406] — 2026-08-29
+- Scheduled agents now keep their conversation: when a background agent runs on its timer, the work it did shows up in that agent's chat — previously it vanished
+
 ## [0.2.405] — 2026-08-29
 - Settings now shows all your agents in one place — interactive and scheduled together, each schedule described in plain language — and the left-hand agents menu shows scheduled agents too. The 'provider server tools' section finally explains itself: which agents may search the web on your behalf and what that costs
 
