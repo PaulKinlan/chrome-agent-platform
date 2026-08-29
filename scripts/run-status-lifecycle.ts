@@ -23,10 +23,9 @@
 //   - no production test seams, real CDP clicks/keys only (Input.*), genuine
 //     service-worker journal reads as the source of truth.
 //
-// CANCEL/ABORT (honest scope note): current main has NO user-reachable abort
-// producer — the run fence aborts only scheduled runs on ownership/heartbeat
-// loss (needs the alarms permission, auto-denied headless). That path is
-// unit-covered; there is nothing real to drive in a loaded-MV3 journey.
+// HARD STOP: the journey starts a deterministic @demo-slow run, clicks the
+// visible Stop button through CDP input, and verifies both the durable cancelled
+// record and the honest visible Stopped state.
 //
 // ATTESTATION: the manifest binds the exact tested commit (git rev-parse),
 // the worktree cleanliness (DERIVED from git status — never hardcoded), the
@@ -68,6 +67,10 @@ const EXPECTED = [
   "run 1: the status-row sequence was working → resolved (recorded, no duplicates/regressions)",
   "run 1: the result rendered + the SW journaled the task/result pair",
   "run 1: screenshot of the settled terminal state",
+  "hard stop: a slow live run exposes the visible Stop button",
+  "hard stop: one real click cancels the exact durable run",
+  "hard stop: the UI settles to Stopped without a successful result",
+  "hard stop: screenshot of the stopped state",
   "double-send: both turns genuinely started while run 1 was pending (two input-clear witnesses + genuine overlap)",
   "double-send: the banner never showed a terminal state from turn 1 while turn 2 was in flight",
   "double-send: two threads created; the LATEST turn owns the surface (title + single terminal)",
@@ -453,6 +456,42 @@ async function main() {
       bub1);
     check("run 1: screenshot of the settled terminal state", await shot(ntp, "run1-terminal"));
 
+    // ── hard stop: one click aborts a real admitted slow run ─────────────
+    await closeThread(ntp);
+    const stopMarker = `rs-stop-${Date.now() % 100000} @demo-slow`;
+    const sentStop = await sendWithWitness(ntp, COMPOSER, stopMarker);
+    const stopButtonExpr = `document.querySelector('#thread-conversation conversation-run-status.live-status')?.shadowRoot?.querySelector('.stop')`;
+    let stopReady = false;
+    let stopExecutionId = null;
+    for (let i = 0; i < 100 && !(stopReady && stopExecutionId); i++) {
+      stopReady = await evl(ntp, `!!(${stopButtonExpr}) && (${stopButtonExpr}).textContent.trim() === 'Stop'`);
+      const runs = await msg(ntp, { type: "run.list" });
+      stopExecutionId = (runs?.runs ?? []).find((run) => String(run?.taskPreview ?? "").includes("rs-stop-") && run?.phase === "running")?.executionId ?? null;
+      if (!(stopReady && stopExecutionId)) await sleep(50);
+    }
+    check("hard stop: a slow live run exposes the visible Stop button", sentStop && stopReady && !!stopExecutionId,
+      { sentStop, stopReady, stopExecutionId });
+    const stopClicked = stopReady && await clickExpr(ntp, stopButtonExpr);
+    let stoppedRun = null;
+    for (let i = 0; i < 120 && stoppedRun?.phase !== "cancelled"; i++) {
+      const runs = await msg(ntp, { type: "run.list" });
+      stoppedRun = (runs?.runs ?? []).find((run) => run?.executionId === stopExecutionId) ?? null;
+      if (stoppedRun?.phase !== "cancelled") await sleep(50);
+    }
+    check("hard stop: one real click cancels the exact durable run",
+      stopClicked && stoppedRun?.phase === "cancelled", { stopClicked, stoppedRun });
+    let stoppedUi = null;
+    for (let i = 0; i < 40 && stoppedUi?.label !== "Stopped"; i++) {
+      stoppedUi = await evl(ntp, `(() => { const row = document.querySelector('#thread-conversation conversation-run-status.live-status');
+        return row ? { state: row.getAttribute('state'), label: row.shadowRoot?.querySelector('.label')?.textContent?.trim() ?? '' } : null; })()`);
+      if (stoppedUi?.label !== "Stopped") await sleep(50);
+    }
+    const stopAgentResults = await evl(ntp, `[...document.querySelectorAll('#thread-conversation message-bubble[role="agent"]')].length`);
+    check("hard stop: the UI settles to Stopped without a successful result",
+      stoppedUi?.state === "cancelled" && stoppedUi?.label === "Stopped" && stopAgentResults === 0,
+      { stoppedUi, stopAgentResults });
+    check("hard stop: screenshot of the stopped state", await shot(ntp, "hard-stop-stopped"));
+
     // ── overlapping runs: the same-surface double-send ───────────────────
     const d1 = `rs-ds-first-${Date.now() % 100000}`;
     const d2 = `rs-ds-second-${Date.now() % 100000}`;
@@ -515,7 +554,9 @@ async function main() {
     const d1f = typeof dsD1 !== "undefined" ? dsD1 : d1;
     const d2f = typeof dsD2 !== "undefined" ? dsD2 : d2;
     let bothDone = false;
-    for (let i = 0; i < 100 && !bothDone; i++) {
+    // The added hard-stop journey runs before this saturation probe; retain a
+    // bounded 20s window for the 12 warmups + both real turns on loaded hosts.
+    for (let i = 0; i < 200 && !bothDone; i++) {
       bothDone = (await journalHas(ntp, d1f)) && (await journalHas(ntp, d2f));
       if (!bothDone) await sleep(100);
     }

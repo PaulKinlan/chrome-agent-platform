@@ -1,25 +1,25 @@
 // Focused contract tests for the single conversation run-status surface.
 import { assert, assertEquals } from "jsr:@std/assert";
-import { normalizeConversationRunStatus } from "../extension/shared/run-status.js";
+import { cancelRunFromRenderedStop, normalizeConversationRunStatus } from "../extension/shared/run-status.js";
 
 Deno.test("conversation run status: canonical lifecycle states use truthful labels and activity", () => {
   assertEquals(normalizeConversationRunStatus({ state: "queued" }), {
-    state: "queued", label: "Queued", active: true, tone: "muted",
+    state: "queued", label: "Queued", active: true, stoppable: true, tone: "muted",
   });
   assertEquals(normalizeConversationRunStatus({ state: "running", activity: "Reading tabs" }), {
-    state: "running", label: "Reading tabs", active: true, tone: "accent",
+    state: "running", label: "Reading tabs", active: true, stoppable: true, tone: "accent",
   });
   assertEquals(normalizeConversationRunStatus({ state: "retrying" }), {
-    state: "retrying", label: "Retrying…", active: true, tone: "accent",
+    state: "retrying", label: "Retrying…", active: true, stoppable: true, tone: "accent",
   });
   assertEquals(normalizeConversationRunStatus({ state: "completed" }), {
-    state: "completed", label: "Completed", active: false, tone: "success",
+    state: "completed", label: "Completed", active: false, stoppable: false, tone: "success",
   });
   assertEquals(normalizeConversationRunStatus({ state: "failed", errorReason: "runtime disconnected" }), {
-    state: "failed", label: "Failed — runtime disconnected", active: false, tone: "danger",
+    state: "failed", label: "Failed — runtime disconnected", active: false, stoppable: false, tone: "danger",
   });
   assertEquals(normalizeConversationRunStatus({ state: "cancelled" }), {
-    state: "cancelled", label: "Cancelled", active: false, tone: "muted",
+    state: "cancelled", label: "Stopped", active: false, stoppable: false, tone: "muted",
   });
 });
 
@@ -28,9 +28,104 @@ Deno.test("conversation run status: waiting for permission is an explicit paused
     state: "waiting-for-permission",
     label: "Waiting for permission — the provider origin is not granted",
     active: false,
+    stoppable: true,
     tone: "muted",
   });
   assertEquals(normalizeConversationRunStatus({ state: "waiting-for-permission" })?.label, "Waiting for permission");
+});
+
+Deno.test("hard stop: live conversation and scheduled-task surfaces expose one-click keyboard buttons", async () => {
+  const components = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const statusStart = components.indexOf("class ConversationRunStatus");
+  const statusEnd = components.indexOf('customElements.define("conversation-run-status"', statusStart);
+  const status = components.slice(statusStart, statusEnd);
+  assert(status.includes('class="stop" type="button">Stop</button>'), "the live row has an always-labelled native Stop button");
+  assert(status.includes('this._emit("stop", { sourceEvent, executionId })'), "the live row carries its native click and rendered execution id");
+  const taskStart = components.indexOf("class TaskRow");
+  const taskEnd = components.indexOf('customElements.define("task-row"', taskStart);
+  const task = components.slice(taskStart, taskEnd);
+  assert(task.includes('class="stop" aria-label="Stop ${escapeHtml(name)}">Stop</button>'), "running task rows have a labelled native Stop button");
+  assert(task.includes('status === "stopped"'), "a stopped task row replaces its running spinner with an honest stopped indicator");
+  assert(task.includes('this._emit("stop", { sourceEvent, executionId })'), "task rows carry their native click and rendered execution id");
+
+  const ntp = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
+  const stopStart = ntp.indexOf('addEventListener("stop"');
+  const ntpStop = ntp.slice(stopStart, ntp.indexOf("/** Which run owner", stopStart));
+  assert(ntpStop.includes("cancelRunFromRenderedStop(ev"), "the NTP Stop click crosses the trusted-click boundary");
+  assert(ntpStop.includes("cancelDurableRun(executionId"), "the NTP abort uses only the id carried by the rendered control");
+  assert(ntpStop.includes('{ state: "cancelled" }'), "successful stop settles the visible row");
+
+  const sidepanel = await Deno.readTextFile(new URL("../extension/sidepanel/sidepanel.js", import.meta.url));
+  assert(sidepanel.includes('historyEl.addEventListener("stop"'), "the sidepanel conversation has the same hard stop");
+  assert(sidepanel.includes('row.addEventListener("stop"'), "the scheduled/background task panel has the same hard stop");
+  assert(sidepanel.includes('row.setAttribute("execution-id", run.executionId)'), "a task row binds its exact live scheduled execution while rendering");
+  assert(sidepanel.includes('return cancelDurableRun(executionId'), "the sidepanel never recomputes a run at click time");
+  assert(sidepanel.includes('row.setAttribute("status", "stopped")'), "a successful task-row stop settles visibly instead of leaving a running spinner");
+});
+
+Deno.test("hard stop: forged clicks, missing activation, and stale rows cannot abort a newer run", async () => {
+  class NativeClick { isTrusted = true; }
+  const aborted: string[] = [];
+  const cancel = async (executionId: string) => {
+    aborted.push(executionId);
+    return executionId === "exec:settled-stale"
+      ? { ok: false, error: "run_already_terminal" }
+      : { ok: true, cancelled: true };
+  };
+
+  const forged = await cancelRunFromRenderedStop({
+    detail: { sourceEvent: { isTrusted: false }, executionId: "exec:forged" },
+  }, cancel, { isActive: true });
+  assertEquals(forged.ignored, true);
+  assertEquals(aborted, []);
+
+  const withoutActivation = await cancelRunFromRenderedStop({
+    detail: { sourceEvent: new NativeClick(), executionId: "exec:programmatic" },
+  }, cancel, { isActive: false }, NativeClick as unknown as typeof Event);
+  assertEquals(withoutActivation.ignored, true);
+  assertEquals(aborted, []);
+
+  const newerRun = "exec:newer";
+  const staleClick = await cancelRunFromRenderedStop({
+    detail: { sourceEvent: new NativeClick(), executionId: "exec:settled-stale" },
+  }, cancel, { isActive: true }, NativeClick as unknown as typeof Event);
+  assertEquals(staleClick.executionId, "exec:settled-stale");
+  assertEquals(staleClick.error, "run_already_terminal");
+  assertEquals(aborted, ["exec:settled-stale"]);
+  assertEquals(aborted.includes(newerRun), false, "the newer run remains untouched");
+});
+
+Deno.test("hard stop: cancellation helper sends the exact execution id to run.cancel", async () => {
+  const { cancelDurableRun } = await import("../extension/shared/conversation.js");
+  let sent: Record<string, unknown> | null = null;
+  const globals = globalThis as typeof globalThis & { chrome?: unknown };
+  const previous = globals.chrome;
+  globals.chrome = {
+    runtime: {
+      lastError: null,
+      sendMessage(message: Record<string, unknown>, callback: (result: unknown) => void) { sent = message; callback({ ok: true, cancelled: true }); },
+    },
+  };
+  try {
+    const result = await cancelDurableRun("exec:hard-stop", "stopped by owner");
+    assertEquals(result.ok, true);
+    const message = sent as Record<string, unknown> | null;
+    assertEquals(message?.type, "run.cancel");
+    assertEquals(message?.executionId, "exec:hard-stop");
+    assertEquals(message?.reason, "stopped by owner");
+    assert(typeof message?.requestId === "string" && message.requestId.length > 0);
+  } finally {
+    globals.chrome = previous;
+  }
+});
+
+Deno.test("hard stop: owner cancellation remains aborted semantically and durable physically", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  assert(sw.includes('return await cancelExecutionTree(executionId'), "run.cancel retains the durable cancellation authority");
+  assertEquals(sw.includes('aborted: true, error: "run cancelled by owner", errorCategory: "cancelled"'), false,
+    "owner stop must not escape as a non-aborted error category");
+  assert(sw.includes('aborted: true, error: "run cancelled by owner", errorCategory: "aborted"'),
+    "the stopped run response carries errorCategory=aborted");
 });
 
 Deno.test("conversation run status: legacy lifecycle names normalize to the one canonical surface", () => {

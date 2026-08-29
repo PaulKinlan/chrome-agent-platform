@@ -14,7 +14,7 @@ import { selectFailedRuns } from "../lib/run-retry.js";
 import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript } from "../shared/conversation.js";
 import { createRunSurfaceOwner } from "../shared/run-surface-owner.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
-import { projectConversationRunStatus } from "../shared/run-status.js";
+import { cancelRunFromRenderedStop, projectConversationRunStatus } from "../shared/run-status.js";
 import { safeJsonStringify } from "../shared/tool-tree.js";
 import {
   renderHtmlFrame,
@@ -82,6 +82,7 @@ ntpLog.info("new tab page evaluated");
 
 const statusEl = document.getElementById("status");
 const durableRunRegistry = document.getElementById("durable-run-registry");
+const threadConversation = document.getElementById("thread-conversation");
 // The registry is a DEBUG overlay now (owner directive: the conversation is
 // the status surface — no visible registry panel). The toggle appears (and
 // hover-reveals the panel) only when the open surface has runs.
@@ -93,6 +94,8 @@ let currentThreadId = null;
 let currentAgentId = null;
 let currentAgentKind = null;
 let latestDurableRuns = [];
+// Declared before subscribeRunRegistry(), which emits its current snapshot synchronously.
+let liveClientRunId = null;
 
 function setRunDebugOpen(open, { pin = false, focusToggle = false } = {}) {
   if (!runDebugPanel || !runDebugToggle) return;
@@ -166,6 +169,15 @@ if (durableRunRegistry) {
     // open re-projects the transcript (guarded by the execution-id change, so
     // heartbeats don't churn the subscription).
     projectSurfaceRunTranscript();
+    const surfaceRuns = actionableRunsForSurface(latestDurableRuns, {
+      threadId: currentAgentId === null ? currentThreadId : null,
+      agentId: currentAgentId,
+      agentKind: currentAgentKind,
+    });
+    const boundRun = liveClientRunId
+      ? surfaceRuns.find((run) => run?.clientCorrelationId === liveClientRunId)
+      : surfaceRuns.find((run) => run?.executionId === runTranscriptExecutionId);
+    threadConversation?.bindLiveStatusExecution?.(boundRun?.executionId ?? null);
     // Terminal reconciliation for the live status row: the registry is the
     // durable authority. When the open surface's latest run has SETTLED and
     // nothing actionable remains, resolve the row — the live terminal event
@@ -1536,7 +1548,6 @@ function renderTaskRows(threads, activeId = null) {
 // ── the full-screen thread surface ────────────────────────────────────────
 const threadView = document.getElementById("thread-view");
 const threadTitle = document.getElementById("thread-title");
-const threadConversation = document.getElementById("thread-conversation");
 const threadComposer = document.getElementById("thread-composer");
 
 // Artifacts rendered INSIDE a thread (CAP-FB-20260828-ARTIFACTS-IN-THREAD-01).
@@ -2642,6 +2653,36 @@ threadConversation?.addEventListener("action", (ev) => {
   openView("options/options.html", "Settings");
 });
 
+threadConversation?.addEventListener("stop", async (ev) => {
+  if (!ev.target?.classList?.contains?.("live-status")) return;
+  const row = ev.target;
+  const result = await cancelRunFromRenderedStop(ev, (executionId) => {
+    const button = row._root?.querySelector?.(".stop");
+    if (button) { button.disabled = true; button.textContent = "Stopping…"; }
+    return cancelDurableRun(executionId, "stopped by owner");
+  }, navigator.userActivation).catch((error) => ({
+    ok: false,
+    error: error?.message ?? String(error),
+    executionId: ev.detail?.executionId,
+  }));
+  if (result?.ignored) return;
+  const currentExecutionId = row.getAttribute("execution-id");
+  if (currentExecutionId && currentExecutionId !== result?.executionId) {
+    if (result?.error === "run_already_terminal") setStatus("That run already finished; the newer run was not stopped.");
+    return;
+  }
+  if (result?.ok === true) {
+    renderRunStatus({ state: "cancelled" });
+    setStatus("Stopped.");
+  } else {
+    const message = result?.error === "run_already_terminal"
+      ? "Stop had no effect — this run already finished."
+      : `Stop failed — ${result?.error ?? "unknown error"}`;
+    renderRunStatus({ state: "failed", message, errorCategory: "aborted" });
+    setStatus(message, false);
+  }
+});
+
 /** Which run owner last wrote the global #status (so a superseded run's
  * orphaned "running…" is reset exactly once, never clobbering a newer run). */
 let statusOwner = 0;
@@ -2650,8 +2691,8 @@ let statusOwner = 0;
  * The registry terminal-reconciliation resolves the live row ONLY from the
  * settled record whose clientCorrelationId IS this id (review P1-1: the
  * updatedAt-skew heuristic let a previous run's fresh terminal record clear a
- * just-started follow-up's row under queue saturation). */
-let liveClientRunId = null;
+ * just-started follow-up's row under queue saturation). Declared with the
+ * other registry state above because subscription emits synchronously. */
 /** The last run executionId the terminal reconciliation resolved the row for
  * (a settled run keeps matching every later snapshot — resolve it ONCE). */
 let lastReconciledTerminalId = null;
@@ -2682,8 +2723,11 @@ async function runThreadTurn(text, attachments = [], mention = null) {
     onStatus: (state) => runSurfaceOwner.commit(owner, () => renderRunStatus(state)),
     // Capture the exact per-attempt id BEFORE dispatch. Registry snapshots may
     // still contain run A while follow-up B is waiting for durable admission;
-    // only B's own clientCorrelationId may resolve B's row.
-    onRunRegistered: (runId) => runSurfaceOwner.commit(owner, () => { liveClientRunId = runId; }),
+    // only B's own clientCorrelationId may resolve B's row or bind its Stop.
+    onRunRegistered: (runId) => runSurfaceOwner.commit(owner, () => {
+      liveClientRunId = runId;
+      threadConversation?.bindLiveStatusExecution?.(null);
+    }),
     agentId: agentAtStart, // null for a thread; set when chatting with a named/background agent
     agentKind: kindAtStart,
     mention: mention ?? null,

@@ -2679,7 +2679,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
           const aborted = { ok: false, aborted: true, error: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted", executionId };
           const terminal = await durableRuns.settle(executionId, { ...aborted, logicalId: taskId });
           return terminal?.phase === "cancelled"
-            ? { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "cancelled", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId }
+            ? { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "aborted", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId }
             : aborted;
         }
         throw e;
@@ -2693,7 +2693,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         const aborted = { ok: false, aborted: true, error: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted", executionId };
         const terminal = await durableRuns.settle(executionId, { ...aborted, logicalId: taskId });
         return terminal?.phase === "cancelled"
-          ? { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "cancelled", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId }
+          ? { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "aborted", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId }
           : aborted;
       }
       await fence?.assertOwned?.();
@@ -2741,7 +2741,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
           }
           : {}),
       });      if (terminal?.phase === "cancelled") {
-        return { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "cancelled", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId };
+        return { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "aborted", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId };
       }
       await fence?.assertOwned?.();
       if (scheduled) {
@@ -2827,7 +2827,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         logicalId: taskId,
       }).catch(() => null);
       if (terminal?.phase === "cancelled") {
-        return { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "cancelled", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId };
+        return { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "aborted", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId };
       }
       try { error.executionId = executionId; } catch { /* immutable error */ }
       throw error;
@@ -7075,7 +7075,7 @@ const handlers = mergeRouteMaps(
       logicalId,
     });
     if (terminal?.phase === "cancelled") {
-      return { ok: false, cancelled: true, aborted: true, executionId: execId, error: "run cancelled by owner", errorCategory: "cancelled", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again." };
+      return { ok: false, cancelled: true, aborted: true, executionId: execId, error: "run cancelled by owner", errorCategory: "aborted", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again." };
     }
     // Atomically revalidate + COMMIT under the origin lifecycle lock, so a delete
     // (which tombstones + clears OPFS under the same lock) can never race the

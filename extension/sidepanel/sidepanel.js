@@ -16,13 +16,16 @@ import { send } from "../lib/messages.js";
 import {
   runConversationTurn,
   subscribeProgress,
+  subscribeRunRegistry,
+  cancelDurableRun,
   appendBubble,
 } from "../shared/conversation.js";
-import { projectConversationRunStatus } from "../shared/run-status.js";
+import { cancelRunFromRenderedStop, projectConversationRunStatus } from "../shared/run-status.js";
 import { findAgentByRef } from "../shared/agent-registry.js";
 import { siteAgentToolsMessage } from "../shared/site-agent-copy.js";
 import { confirmActionDialog } from "../shared/components.js"; // registers <agent-picker>, <agent-composer>, <agent-conversation>, <task-row>
 import { capLog } from "../lib/cap-log.js";
+import { actionableRunsForSurface } from "../lib/run-scope.js";
 
 capLog("sidepanel").info("side panel evaluated");
 
@@ -163,6 +166,8 @@ const detailName = document.getElementById("agent-detail-name");
 const detailKind = document.getElementById("agent-detail-kind");
 const historyEl = document.getElementById("agent-history");
 const agentComposer = document.getElementById("agent-composer");
+let latestDurableRuns = [];
+let liveClientRunId = null;
 
 // The inline live-status row's recovery action ("Fix in Settings") — fire ONLY
 // for the status row (message bubbles can also emit "action"), and route to the
@@ -171,6 +176,35 @@ const agentComposer = document.getElementById("agent-composer");
 historyEl.addEventListener("action", (ev) => {
   if (!ev.target?.classList?.contains?.("live-status")) return;
   chrome.runtime.openOptionsPage();
+});
+
+historyEl.addEventListener("stop", async (ev) => {
+  if (!ev.target?.classList?.contains?.("live-status")) return;
+  const row = ev.target;
+  const result = await cancelRunFromRenderedStop(ev, (executionId) => {
+    const button = row._root?.querySelector?.(".stop");
+    if (button) { button.disabled = true; button.textContent = "Stopping…"; }
+    return cancelDurableRun(executionId, "stopped by owner");
+  }, navigator.userActivation).catch((error) => ({
+    ok: false,
+    error: error?.message ?? String(error),
+    executionId: ev.detail?.executionId,
+  }));
+  if (result?.ignored) return;
+  const currentExecutionId = row.getAttribute("execution-id");
+  if (currentExecutionId && currentExecutionId !== result?.executionId) {
+    if (result?.error === "run_already_terminal") setStatus("That run already finished; the newer run was not stopped.");
+    return;
+  }
+  projectConversationRunStatus(historyEl, result?.ok === true
+    ? { state: "cancelled" }
+    : {
+      state: "failed",
+      message: result?.error === "run_already_terminal"
+        ? "Stop had no effect — this run already finished."
+        : `Stop failed — ${result?.error ?? "unknown error"}`,
+      errorCategory: "aborted",
+    });
 });
 
 const KIND_LABELS = { named: "Named agent", background: "Background agent", site: "Site Agent" };
@@ -262,6 +296,7 @@ async function loadHistory(kind, id) {
 
 async function openAgentDetail(agent) {
   openAgent = { ref: agent.ref, kind: agent.kind, id: agent.id, name: agent.name || agent.id };
+  liveClientRunId = null;
   persistSelection();
   detailName.textContent = openAgent.name;
   detailKind.textContent = KIND_LABELS[openAgent.kind] ?? "Agent";
@@ -278,6 +313,9 @@ async function openAgentDetail(agent) {
   const entries = await loadHistory(opened.kind, opened.id);
   if (openAgent !== opened) return; // the selection changed (or closed) mid-load
   renderHistory(entries);
+  const liveRun = actionableRunsForSurface(latestDurableRuns, { agentId: opened.id, agentKind: opened.kind })
+    .sort((a, b) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0))[0];
+  if (liveRun) projectConversationRunStatus(historyEl, { state: "running", activity: "Run in progress", executionId: liveRun.executionId });
   agentComposer.focus();
 }
 
@@ -359,6 +397,7 @@ async function renderTasks() {
   }
   for (const t of tasks) {
     const row = document.createElement("task-row");
+    row.dataset.scheduleName = String(t.name ?? "");
     row.setAttribute("name", t.name || "task");
     row.setAttribute("status", (t.quarantined || t.storageBlocked) ? "failed" : (t.paused ? "paused" : "running"));
     const when = t.paused
@@ -377,6 +416,31 @@ async function renderTasks() {
       row.setAttribute("retryable", "");
       row.title = t.remediation || "Execution storage was full. Retry or cancel this task.";
     }
+    row.addEventListener("stop", async (ev) => {
+      const result = await cancelRunFromRenderedStop(ev, (executionId) => {
+        row.removeAttribute("stoppable");
+        row.setAttribute("time", "Stopping…");
+        return cancelDurableRun(executionId, "stopped by owner");
+      }, navigator.userActivation).catch((error) => ({
+        ok: false,
+        error: error?.message ?? String(error),
+        executionId: ev.detail?.executionId,
+      }));
+      if (result?.ignored) return;
+      const currentExecutionId = row.getAttribute("execution-id");
+      if (currentExecutionId && currentExecutionId !== result?.executionId) {
+        if (result?.error === "run_already_terminal") setStatus("That run already finished; the newer run was not stopped.");
+        return;
+      }
+      row.removeAttribute("execution-id");
+      row.setAttribute("time", result?.ok === true
+        ? "Stopped"
+        : result?.error === "run_already_terminal"
+          ? "Already finished — nothing stopped"
+          : `Stop failed: ${result?.error ?? "unknown error"}`);
+      if (result?.ok === true) row.setAttribute("status", "stopped");
+      else if (result?.error !== "run_already_terminal") row.setAttribute("stoppable", "");
+    });
     row.addEventListener("toggle-pause", async () => {
       row.setAttribute("time", t.paused ? "Resuming…" : "Pausing…");
       const r = await send(t.paused ? "task.resume" : "task.pause", { name: t.name }).catch(() => null);
@@ -430,6 +494,19 @@ async function renderTasks() {
     });
     tasksEl.append(row);
   }
+  syncTaskStopButtons();
+}
+
+function syncTaskStopButtons() {
+  for (const row of tasksEl?.querySelectorAll?.("task-row") ?? []) {
+    const run = latestDurableRuns
+      .filter((candidate) => candidate?.scheduleName === row.dataset.scheduleName &&
+        ["running", "settling", "resume-dispatching"].includes(candidate?.phase))
+      .sort((a, b) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0))[0];
+    if (run?.executionId) row.setAttribute("execution-id", run.executionId);
+    else row.removeAttribute("execution-id");
+    row.toggleAttribute("stoppable", Boolean(run?.executionId));
+  }
 }
 
 /** Open an agent's conversation by canonical ref (the task rows' open path). */
@@ -442,6 +519,19 @@ async function openAgentByRef(ref) {
 
 renderTasks();
 
+subscribeRunRegistry(({ runs }) => {
+  latestDurableRuns = Array.isArray(runs) ? runs : [];
+  syncTaskStopButtons();
+  if (!openAgent) return;
+  const surfaceRuns = actionableRunsForSurface(latestDurableRuns, { agentId: openAgent.id, agentKind: openAgent.kind })
+    .sort((a, b) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0));
+  const active = liveClientRunId
+    ? surfaceRuns.find((run) => run?.clientCorrelationId === liveClientRunId)
+    : surfaceRuns[0];
+  historyEl.bindLiveStatusExecution?.(active?.executionId ?? null);
+  if (active) projectConversationRunStatus(historyEl, { state: "running", activity: "Run in progress", executionId: active.executionId });
+});
+
 agentComposer.addEventListener("send", async (ev) => {
   const { text, attachments, agent } = ev.detail;
   // A chip overrides the detail context (direct this message to ANOTHER agent);
@@ -452,6 +542,7 @@ agentComposer.addEventListener("send", async (ev) => {
     // Switch the open conversation to the chip's agent so the run shows in context.
     await openAgentDetail(agent);
   }
+  historyEl.bindLiveStatusExecution?.(null);
   setDetailStatus("Working…");
   await runConversationTurn(historyEl, {
     text,
@@ -462,6 +553,10 @@ agentComposer.addEventListener("send", async (ev) => {
     // promise resolves. Do not overwrite that complete status afterwards with
     // a bare error string — doing so stripped "Fix in Settings" from the row.
     onStatus: (s) => projectConversationRunStatus(historyEl, s),
+    onRunRegistered: (runId) => {
+      liveClientRunId = runId;
+      historyEl.bindLiveStatusExecution?.(null);
+    },
   });
 });
 
