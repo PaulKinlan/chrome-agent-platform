@@ -1359,6 +1359,10 @@ Deno.test("memory doctrine: the HUB prompt teaches the self-organizing store (co
   // (b) Entity keys with the Summary + dated Log shape + cross-references.
   assert(/Summary/i.test(text) && /Log/i.test(text), "entity keys carry Summary + Log");
   assert(/cross-referenc/i.test(text) || /see [`']?\w+-\w+/i.test(text), "keys cross-reference by name");
+  // (b2) Hub scope: the doctrine explicitly teaches CROSS-TASK topics and
+  // AGENT-ROSTER knowledge organization (the worker prompt is site-scoped).
+  assert(/cross-task/i.test(text), "hub doctrine covers cross-task topics");
+  assertStringIncludes(text, "agent-roster");
   // (c) journal stays the raw episodic log — never hand-edited, distilled FROM.
   assert(/journal/i.test(text) && /never hand-edit/i.test(text), "journal is raw, never hand-edited");
   // (d) stm:/ltm split: scratch under stm:, durable facts under entity keys.

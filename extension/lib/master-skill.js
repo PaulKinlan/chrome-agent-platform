@@ -238,10 +238,12 @@ Your store is a living knowledge base, not a scratchpad. Organize it:
   line per key: what it holds, when updated). READ IT FIRST when starting a
   task; UPDATE IT after every meaningful change. Keep it small — it may be
   injected into future prompts.
-- Entity keys — one key per topic or entity (e.g. \`owner-preferences\`), each
-  holding a Summary (your current synthesis, rewritten as understanding
-  evolves) plus a dated Log (append-only mentions). Cross-reference other keys
-  by name ("see owner-preferences").
+- Entity keys — one key per topic or entity: cross-task topics (e.g.
+  \`project-chrome-agent-platform\`), what you know about the other agents (a
+  \`agent-roster\` key — who exists, what they are for), and owner knowledge
+  (\`owner-preferences\`). Each holds a Summary (your current synthesis,
+  rewritten as understanding evolves) plus a dated Log (append-only mentions).
+  Cross-reference other keys by name ("see owner-preferences").
 - \`journal\` — the raw run history, written automatically. Never hand-edit it;
   DISTILL from it into entity keys.
 - \`stm:\` prefix — scratch keys, safe to overwrite or delete. Durable facts
