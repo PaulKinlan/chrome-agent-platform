@@ -1,6 +1,6 @@
 // kat-agent-templates.ts — agent template picker KAT (real browser).
 // Proves docs/AGENT-PRODUCT-GAPS.md G2 end to end:
-//   1. the create-agent dialog renders the template gallery (9 templates +
+//   1. the create-agent dialog renders the template gallery (21 templates +
 //      the default "Custom agent (blank)");
 //   2. picking Chief of Staff pre-fills name / role persona / suggested
 //     skills — a STARTING POINT;
@@ -74,33 +74,33 @@ const alarms = async () => (await evSw(`chrome.alarms.getAll().then(a => a.map(x
 
 // 0. FIRST-RUN OFFER (owner directive): a fresh profile with zero agents shows
 //    the one-click starter action in the empty state. Clicking it creates the
-//    curated six as REAL agents (never automatic — the owner clicked).
+//    curated seven as REAL agents (never automatic — the owner clicked).
 const emptyOffer = await ev(`(() => {
   const btn = document.getElementById('add-starter-agents');
   return { present: !!btn, label: btn?.textContent ?? null };
 })()`);
 check("first-run empty state offers Add starter agents (one click, not automatic)", emptyOffer?.present === true && /starter agents/i.test(emptyOffer.label ?? ""), emptyOffer);
 await ev(`document.getElementById('add-starter-agents')?.click()`);
-await sleep(4000); // six creates + avatar follow-ups settle
+await sleep(4000); // seven creates + avatar follow-ups settle
 const starters = await ev(`(async () => {
   const res = await chrome.runtime.sendMessage({ type: 'named-agent.list' }).catch(() => null);
   return (res?.agents ?? []).map(a => ({ id: a.id, name: a.name }));
 })()`);
-const STARTERS = ["chief-of-staff", "research-analyst", "site-auditor", "critic", "webapp-test-pilot", "skill-smith"];
+const STARTERS = ["chief-of-staff", "research-analyst", "advanced-web-developer", "site-auditor", "critic", "webapp-test-pilot", "skill-smith"];
 // Agent ids derive from the template NAME (e.g. "Skill Smith (Recipe Author)"
 // → skill-smith-recipe-author) — assert by name against the catalogue.
 const starterNames = await ev(`(async () => {
   const { AGENT_TEMPLATES } = await import(chrome.runtime.getURL('lib/agent-templates.js'));
   return AGENT_TEMPLATES.filter(t => ${JSON.stringify(STARTERS)}.includes(t.id)).map(t => t.name);
 })()`);
-check("Add starter agents creates the curated six as real agents",
+check("Add starter agents creates the curated seven as real agents",
   (starterNames ?? []).every((n: string) => (starters ?? []).some((a: any) => a.name === n)), starters);
-// None of the six starters is scheduled — no agent:<id> alarms may exist.
+// None of the seven starters is scheduled — no agent:<id> alarms may exist.
 const starterAlarms = (await alarms()).filter((a: any) => STARTERS.some((s) => a.name === `agent:${s}`));
 check("starter agents are on-demand (no schedule alarms minted)", starterAlarms.length === 0, starterAlarms);
 // The empty state is gone — the agents list shows rows now.
 const rowsAfterSeed = await ev(`document.querySelectorAll('#named-agents capability-row').length`);
-check("the agents list shows the seeded agents (empty state replaced)", (rowsAfterSeed ?? 0) >= 6, rowsAfterSeed);
+check("the agents list shows the seeded agents (empty state replaced)", (rowsAfterSeed ?? 0) >= 7, rowsAfterSeed);
 
 // Open the create-agent dialog.
 await ev(`document.getElementById('new-agent')?.click()`);
@@ -118,9 +118,9 @@ const cards = await ev(`(() => {
 })()`);
 check("visual picker is labelled for assistive tech and every Use button names its template", /Agent templates/.test(cards?.labelled ?? '') && cards?.labelledUse === true, cards);
 check("the untouched form remains the custom-agent blank default", cards?.blankName === '', cards?.blankName);
-check("picker offers the 20 shipped templates", cards?.count === 20, cards?.count);
-check("catalogue includes Chief of Staff / Research Analyst / Site Auditor",
-  !!cards && ["Chief of Staff", "Research Analyst", "Site Auditor"].every((n) => cards.names.includes(n)),
+check("picker offers the 21 shipped templates", cards?.count === 21, cards?.count);
+check("catalogue includes Chief of Staff / Research Analyst / Advanced Web Developer / Site Auditor",
+  !!cards && ["Chief of Staff", "Research Analyst", "Advanced Web Developer", "Site Auditor"].every((n) => cards.names.includes(n)),
   cards?.names);
 
 // 2. Use Chief of Staff → prefill (a starting point).

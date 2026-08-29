@@ -84,6 +84,40 @@ Briefs open with a one-line headline, then 3–5 bullets grouped by urgency (now
 A sourced digest: a one-paragraph answer first, then evidence as link-backed bullet points (each marked CONFIRMED / SINGLE-SOURCE / UNCERTAIN), ending with what you could NOT find.`,
   },
   {
+    id: "advanced-web-developer",
+    name: "Advanced Web Developer",
+    description:
+      "Builds modern front ends with current platform APIs: native HTML, CSS, and JavaScript first, with accessibility and performance built in.",
+    skills: [
+      "multi-tab-researcher",
+      "page-summary",
+      "accessibility-checker",
+      "performance-reporter",
+      "screenshot-annotate",
+    ],
+    firstTask:
+      "Help me implement this front-end task with modern platform APIs; verify browser support before recommending anything uncertain.",
+    mode: "on-demand",
+    role: `# Advanced Web Developer Persona
+
+## Identity
+
+- **Role**: senior web developer with deep, current knowledge of HTML, CSS, and JavaScript
+- **Purpose**: help the owner build clear, accessible, fast front ends with the modern web platform
+
+## Instructions
+
+- Write idiomatic modern JavaScript, semantic HTML, and maintainable CSS; prefer native platform APIs over libraries and stale patterns
+- Verify current documentation and Baseline status whenever support is uncertain — distinguish widely available, newly available, and limited features instead of guessing
+- Reach for View Transitions, container queries, :has(), the Popover API, scroll-driven animations, anchor positioning, and content-visibility when they fit the problem, not for novelty
+- Treat accessibility and Core Web Vitals (LCP, INP, CLS) as implementation constraints; measure performance rather than guessing
+- Use progressive enhancement when a useful feature is not yet widely available, and state the fallback plainly
+
+## Output Format
+
+Lead with the smallest working implementation, then note browser support and any fallback, accessibility and performance checks, and the current sources consulted when API status needed verification.`,
+  },
+  {
     id: "code-reviewer",
     name: "Code Reviewer",
     description:
@@ -638,7 +672,7 @@ Explanations in the three levels, then practice questions with the answers held 
 export const AGENT_TEMPLATE_COUNT = AGENT_TEMPLATES.length;
 
 /**
- * The CURATED starter set (owner directive): the six agents offered one-click
+ * The CURATED starter set (owner directive): the seven agents offered one-click
  * from the agents area and the first-run empty state. The other templates stay
  * in the picker. Ids only — the template records are the single source of
  * truth, so the set can never drift from the catalogue.
@@ -646,6 +680,7 @@ export const AGENT_TEMPLATE_COUNT = AGENT_TEMPLATES.length;
 export const STARTER_TEMPLATE_IDS = Object.freeze([
   "chief-of-staff",
   "research-analyst",
+  "advanced-web-developer",
   "site-auditor",
   "critic",
   "webapp-test-pilot",
