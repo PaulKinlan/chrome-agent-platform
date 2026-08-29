@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.399] — 2026-08-29
+- fix(board): r3 reviewer verdicts — delivery-capacity admission reserve, resolver fail-closed, drain retry (CAP-FB-20260829-AGENT-BOARD-01)
+
 ## [0.2.398] — 2026-08-29
 - test(board): r3 RED battery — delivery-capacity admission, resolver fail-closed, drain retry shape (carrier from the k3 lane, verified behavioral-RED on 2f53f407)
 

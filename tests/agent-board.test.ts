@@ -856,7 +856,7 @@ Deno.test("board routes: a thread-resolver failure on a model context fails clos
     resolveCaller: () => null,
     resolvePosterThreadId: async (context) => (context?.executionId ? (() => { throw new Error("registry down"); })() : null),
   });
-  const page = await routes3["board.post"]({ description: "page post stays threadless" }, {});
+  const page = await routes3.routes["board.post"]({ description: "page post stays threadless" }, {});
   assertEquals(page.ok, true);
   assertEquals(page.job.posterThreadId, null);
 });

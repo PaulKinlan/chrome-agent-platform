@@ -3702,18 +3702,41 @@ const boardRoutes = createAgentBoardRoutes({
   resolvePosterThreadId: async (context) => {
     const execId = typeof context?.executionId === "string" ? context.executionId : "";
     if (!execId) return null;
-    const record = (await durableRuns.list().catch(() => [])).find((r) => r?.executionId === execId);
+    // A registry read failure PROPAGATES (review r3 P1-2): the route turns it
+    // into a structured board-store-error for model principals — swallowing
+    // it here would silently orphan the settlement delivery.
+    const records = await durableRuns.list();
+    const record = records.find((r) => r?.executionId === execId);
     return typeof record?.threadId === "string" && record.threadId ? record.threadId : null;
   },
   commitThread: commitThreadTerminal,
   broadcast: broadcastProgress,
 });
 
-// Startup drain (review r2 P1-3): settlements whose poster-thread delivery
-// never committed (a restart between settle and commit) get their idempotent
-// commit re-attempted on every SW boot. Fire-and-forget — delivery retries
-// never block route registration.
-boardRoutes.drain().catch(() => {});
+// Startup drain (review r2 P1-3) + bounded backoff retry (review r3 P2):
+// settlements whose poster-thread delivery never committed get their
+// idempotent commit re-attempted on SW boot, and while deliveries REMAIN
+// (the drain reports remaining), a bounded exponential-backoff alarm keeps
+// re-draining (30s doubling, 5 attempts cap). The per-job commit stays
+// idempotent by its board:<jobId> key, so retries are safe. Fire-and-forget —
+// delivery retries never block route registration.
+const BOARD_DRAIN_ALARM = "board-drain-retry";
+let boardDrainAttempts = 0;
+async function boardDrainOnce() {
+  const { delivered, remaining } = await boardRoutes.drain();
+  boardDrainAttempts = remaining > 0 ? boardDrainAttempts + 1 : 0;
+  if (remaining > 0 && boardDrainAttempts < 5) {
+    chrome.alarms.create(BOARD_DRAIN_ALARM, { when: Date.now() + 30000 * 2 ** (boardDrainAttempts - 1) });
+  }
+  if (delivered > 0 || remaining > 0) {
+    swLog.info("board drain", { delivered, remaining, attempts: boardDrainAttempts });
+  }
+  return { delivered, remaining };
+}
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === BOARD_DRAIN_ALARM) boardDrainOnce().catch((e) => swLog.error("board drain retry failed", { error: String(e?.message ?? e) }));
+});
+boardDrainOnce().catch((e) => swLog.error("startup board drain failed", { error: String(e?.message ?? e) }));
 
 const handlers = mergeRouteMaps(
   activityRoutes,

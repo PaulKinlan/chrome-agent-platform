@@ -496,12 +496,23 @@ export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => 
           // rides back to the poster's thread through the durable outbox seam.
           posterThreadId: typeof posterThreadId === "string" && posterThreadId ? posterThreadId.slice(0, 200) : null,
         };
-        // Byte authority (review P1-4): refuse BEFORE the append when the new
-        // event would push the serialized log over budget — open jobs' events
-        // are never dropped to make room, so the gate is the only defense.
-        // Headroom covers the job's own claim + heartbeat + settle events.
+        // Byte authority (review P1-4 + r3 P1-1): refuse BEFORE the append
+        // when the new event would push the serialized log over budget. Open
+        // jobs' events are never dropped to make room, and a settled THREADED
+        // job's pending poster-delivery is pinned by pruneJobEvents until its
+        // commit succeeds — so admission must reserve the WORST-CASE settle
+        // capacity (BOARD_MAX_RESULT + framing) of EVERY open threaded job
+        // plus this job's own. Without the per-job reserve, sustained
+        // delivery failure wedges the log at the memory store's 256 KiB
+        // per-value wall (the r3 coordinator probe: 89 posts, then the 18th
+        // settle op dead with board-store-error).
+        const openThreaded = jobs.filter((j) =>
+          (j.status === "pending" || j.status === "claimed") && j.posterThreadId
+        ).length;
+        const deliveryReserve = (openThreaded + (job.posterThreadId ? 1 : 0)) *
+            (BOARD_MAX_RESULT + 2048) + 2048;
         const projected = [...events, job];
-        if (eventsBytes(projected) > BOARD_MAX_LOG_BYTES - BOARD_MAX_RESULT - 2048) {
+        if (eventsBytes(projected) > BOARD_MAX_LOG_BYTES - deliveryReserve) {
           return { ok: false, code: "board-full", error: "the board log is full — settle or release jobs first" };
         }
         events.push(job);
@@ -598,15 +609,21 @@ export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => 
 
     /** Drain persisted pending deliveries (startup + periodic paths): every
      *  settled job whose poster-thread delivery never committed gets its
-     *  idempotent commit re-attempted. Returns the number delivered. */
+     *  idempotent commit re-attempted (keyed board:<jobId>). Returns
+     *  { delivered, remaining } so the retry scheduler can bound its
+     *  backoff to what actually still needs a commit (review r3 P2). */
     async drainDeliveries() {
-      if (typeof commitThread !== "function") return 0;
+      if (typeof commitThread !== "function") return { delivered: 0, remaining: 0 };
       const jobs = await board.listJobs();
-      let drained = 0;
+      let delivered = 0;
+      let remaining = 0;
       for (const job of jobs) {
-        if (job.delivery && !job.delivery.delivered && (await deliverJob(job))) drained += 1;
+        if (job.delivery && !job.delivery.delivered) {
+          if (await deliverJob(job)) delivered += 1;
+          else remaining += 1;
+        }
       }
-      return drained;
+      return { delivered, remaining };
     },
 
     /** List jobs (folded; lease expiry derived at read). */
@@ -714,9 +731,23 @@ export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCa
       const caller = callerOf(context);
       if (caller.denial) return caller.denial;
       const registry = await agents();
-      const posterThreadId = typeof resolvePosterThreadId === "function"
-        ? await resolvePosterThreadId(context).catch(() => null)
-        : null;
+      // Poster-thread capture fails CLOSED (review r3 P1-2): a resolver
+      // FAILURE on a model principal is a structured store error — a
+      // silently threadless post would orphan the settlement delivery
+      // forever. Non-model surfaces (owner/UI) may legitimately resolve to
+      // null (threadless) — only a real failure of their own resolution is
+      // also surfaced, a null result is honored.
+      let posterThreadId = null;
+      if (typeof resolvePosterThreadId === "function") {
+        try {
+          posterThreadId = await resolvePosterThreadId(context);
+        } catch (e) {
+          if (context?.principal === "model") {
+            return { ok: false, code: "board-store-error", error: `resolving the poster's thread failed: ${String(e?.message ?? e).slice(0, 150)}` };
+          }
+        }
+        posterThreadId = typeof posterThreadId === "string" && posterThreadId ? posterThreadId : null;
+      }
       const r = await board.postJob({
         callerId: caller.callerId,
         agents: registry,
