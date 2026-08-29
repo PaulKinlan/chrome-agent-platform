@@ -265,6 +265,8 @@ Deno.test("authorizeToolReport: a fake extension id is not authorized", () => {
 });
 
 Deno.test("PAGE_ALLOWED_ROUTES is an allowlist (admin routes are NOT in it)", () => {
+  assert(PAGE_ALLOWED_ROUTES.has("webmcp.detect.bootstrap"));
+  assert(PAGE_ALLOWED_ROUTES.has("webmcp.detect.arm"));
   assert(PAGE_ALLOWED_ROUTES.has("webmcp.detected"));
   assert(PAGE_ALLOWED_ROUTES.has("tools.upsert"));
   assert(PAGE_ALLOWED_ROUTES.has("tools.list"));

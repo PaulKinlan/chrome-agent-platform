@@ -1,7 +1,12 @@
 // Lightweight MAIN-world capability probe. Detection only: no enrollment,
-// bridge arming, descriptor transport, or invocation surface.
+// bridge arming, descriptor transport, or invocation surface. Snapshots are
+// MAC'd with a per-document key delivered out-of-band by the extension.
 (() => {
   const CHANNEL = "__cap_webmcp_detect";
+  const HOOK_KEY = "__capWebmcpDetectBootstrap";
+  const auth = globalThis.CapBridgeAuth;
+  let nonce = null;
+  let sequence = 0;
   let lastCount = -1;
   let scans = Promise.resolve();
 
@@ -47,13 +52,34 @@
 
   function scan() {
     scans = scans.then(async () => {
+      if (!nonce || !auth) return;
       const names = new Set([...(await declaredNames()), ...exposedNames()]);
       const toolCount = Math.min(200, names.size);
       if (toolCount === lastCount) return;
       lastCount = toolCount;
-      window.postMessage({ [CHANNEL]: 1, type: "snapshot", toolCount }, "*");
+      window.postMessage(auth.seal(nonce, "detect", sequence++, {
+        [CHANNEL]: 1,
+        type: "snapshot",
+        toolCount,
+      }), "*");
     }).catch(() => {});
   }
+
+  const bootstrap = (value) => {
+    if (typeof value !== "string" || value.length < 16 || value.length > 128) return false;
+    nonce = value;
+    sequence = 0;
+    lastCount = -1;
+    scan();
+    return true;
+  };
+  try {
+    Object.defineProperty(globalThis, HOOK_KEY, {
+      value: bootstrap,
+      writable: false,
+      configurable: false,
+    });
+  } catch { /* a page that pre-seized the hook makes detection fail closed */ }
 
   for (const delay of [0, 500, 1500, 4000]) setTimeout(scan, delay);
   window.addEventListener("load", scan, { once: true });

@@ -3083,6 +3083,36 @@ const BRIDGE_NONCE_KEY = "cap:webmcpBridgeNonces";
 const BRIDGE_NONCE_MAX = 256;
 const bridgeNonceMemory = new Map(); // documentId → nonce
 
+const detectionNonceMemory = new Map(); // documentId → nonce
+
+function issueDetectionNonce(documentId) {
+  let nonce = detectionNonceMemory.get(documentId);
+  if (!nonce) {
+    nonce = crypto.randomUUID();
+    detectionNonceMemory.set(documentId, nonce);
+    if (detectionNonceMemory.size > BRIDGE_NONCE_MAX) {
+      detectionNonceMemory.delete(detectionNonceMemory.keys().next().value);
+    }
+  }
+  return nonce;
+}
+
+async function armDetectionProbe(tabId, documentId) {
+  const nonce = detectionNonceMemory.get(documentId);
+  if (!nonce) return false;
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, documentIds: [documentId] },
+      world: "MAIN",
+      func: (value) => globalThis.__capWebmcpDetectBootstrap?.(value) === true,
+      args: [nonce],
+    });
+    return results?.[0]?.result === true;
+  } catch {
+    return false;
+  }
+}
+
 async function issueBridgeNonce(tabId, documentId, diagnostics) {
   let nonce = bridgeNonceMemory.get(documentId) ?? null;
   if (!nonce) {
@@ -5189,6 +5219,35 @@ const handlers = mergeRouteMaps(
     if (res?.error) return { ok: false, error: res.error };
     if (res?.ok === false) return { ok: false, error: res.error ?? "invoke failed" };
     return { ok: true, result: res?.result };
+  },
+  async "webmcp.detect.bootstrap"({ origin, __sender }) {
+    const canonical = canonicalOrigin(origin);
+    if (
+      !canonical ||
+      __sender?.tabId == null ||
+      typeof __sender.documentId !== "string" ||
+      __sender.documentLifecycle !== "active"
+    ) return { ok: false, error: "invalid detection document" };
+    const senderTab = await chrome.tabs.get(__sender.tabId).catch(() => null);
+    if (!senderTab?.url || canonicalOrigin(senderTab.url) !== canonical) {
+      return { ok: false, error: "sender tab origin mismatch" };
+    }
+    return { ok: true, nonce: issueDetectionNonce(__sender.documentId) };
+  },
+  async "webmcp.detect.arm"({ origin, __sender }) {
+    const canonical = canonicalOrigin(origin);
+    if (
+      !canonical ||
+      __sender?.tabId == null ||
+      typeof __sender.documentId !== "string" ||
+      __sender.documentLifecycle !== "active"
+    ) return { ok: false, error: "invalid detection document" };
+    const senderTab = await chrome.tabs.get(__sender.tabId).catch(() => null);
+    if (!senderTab?.url || canonicalOrigin(senderTab.url) !== canonical) {
+      return { ok: false, error: "sender tab origin mismatch" };
+    }
+    const armed = await armDetectionProbe(__sender.tabId, __sender.documentId);
+    return armed ? { ok: true } : { ok: false, error: "detection probe not armed" };
   },
   async "webmcp.detected"({ origin, url, toolCount, __sender }) {
     const canonical = canonicalOrigin(origin);

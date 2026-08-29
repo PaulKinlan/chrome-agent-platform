@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.405] — 2026-08-29
+- fix(webmcp): authenticate passive detector snapshots
+
 ## [0.2.404] — 2026-08-29
 - Find site tools now shows only open pages that actually expose site tools: lightweight passive WebMCP detection notices them before setup, while plain pages stay out of the picker
 
