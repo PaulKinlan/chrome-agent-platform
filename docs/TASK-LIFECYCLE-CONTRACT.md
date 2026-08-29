@@ -1,8 +1,9 @@
 # Task Lifecycle Contract
 
 The short, testable statement of how task creation, follow-ups, history, and
-titles behave. Every behaviour here is pinned by
-`tests/task-lifecycle-contract.test.ts` (real-browser KAT) — if a refactor
+titles behave. Every behaviour here is pinned at SOURCE level by
+`tests/task-lifecycle-contract.test.ts`; the same behaviours are exercised end
+to end in a real browser by `scripts/kat-task-lifecycle.ts` — if a refactor
 breaks one of these statements, that refactor is wrong.
 
 ## 1. Surfaces and composers
@@ -57,3 +58,15 @@ A reply must land in the conversation the user is looking at.
   continue the agent's journal, not a hub task.
 - An @mention inside a task delegates work to the agent but the TASK stays the
   hub's thread; the result returns into the task.
+
+## 7. Orphaned alarms
+
+- A deleted agent's schedule (`recipe:<slug>`) must not survive as a live
+  alarm that keeps firing failed runs.
+- The `schedule.cancelOrphans` route cancels every `recipe:<slug>` scheduled
+  task whose slug is neither a built-in/background recipe nor a custom recipe,
+  and reports exactly what was cancelled.
+- The cleanup FAILS CLOSED: if the recipe/schedule registry cannot be read, a
+  live recipe is indistinguishable from an orphan and nothing is cancelled.
+- Settings exposes the affordance ("Cancel orphaned alarms"); only confirmed
+  cancellations are reported.

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.341] — 2026-08-29
+- fix(p0): REVISE round 3 — obsolete request-era copy removed; audit broadened with falsification self-check
+
 ## [0.2.340] — 2026-08-28
 - Fixed: deleting an agent (including background agents) now actually deletes it — every surface checks the result honestly, a running task is torn down in the background without freezing the UI, focus lands somewhere sane afterwards, and settings no longer claims success when nothing happened
 

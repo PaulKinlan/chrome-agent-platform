@@ -667,12 +667,17 @@ class StorageDurabilityWarning extends Component {
     const provider = this.getAttribute("provider") || "provider";
     const busy = this.hasAttribute("busy");
     const state = this.getAttribute("state") || "idle";
-    const followup = state === "denied"
-      ? "Storage was not enabled. This key has not been saved."
-      : state === "owner-click-required"
+    // Verify-only reasons (first-run-onboarding returns exactly these):
+    // owner-click-required, permissions-api-unavailable, granted,
+    // not-granted-at-install, verify-failed. There is no runtime request, so
+    // the old denied/request-failed states are dead — every failure
+    // remediation is verify-again, then reload the extension.
+    const followup = state === "owner-click-required"
       ? "Use the Verify storage button to continue."
-      : state === "request-failed"
-      ? "Chrome could not open the storage prompt. Try again."
+      : state === "not-granted-at-install"
+      ? "Storage is granted at install but the grant is missing — reload the extension. If it persists, reinstall the extension."
+      : state === "verify-failed" || state === "permissions-api-unavailable"
+      ? "Storage couldn't be verified. Reload the extension and try again."
       : "";
     mountTemplate(this, `
       :host { display:block; grid-column:1 / -1; color:var(--text,#1d1b18); }
@@ -726,10 +731,10 @@ class FirstRunGuide extends Component {
     // and an inline status line names exactly what is missing — the same line
     // the button points at via aria-describedby so assistive tech announces it.
     const seedGateReason = !providerReady && !storageReady
-      ? "Configure a provider and enable storage to unlock the starter task."
+      ? "Configure a provider and verify storage to unlock the starter task."
       : !providerReady
       ? "Configure a provider to unlock the starter task."
-      : "Enable storage to unlock the starter task.";
+      : "Verify storage to unlock the starter task.";
     const check = `<span class="check" aria-hidden="true">${ICONS.check}</span>`;
     mountTemplate(this, `
       :host { display:block; margin-block-end:24px; color:var(--text,#1d1b18); }

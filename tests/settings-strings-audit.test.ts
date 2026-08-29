@@ -90,6 +90,41 @@ Deno.test("bug 7 sweep: no string points at a Settings Enable control or a permi
   assert(offenders.length === 0, `stale Enable/request pointers:\n${offenders.join("\n")}`);
 });
 
+Deno.test("bug 7 sweep: no obsolete request-era storage/access remediation copy remains", () => {
+  // The verify-only contract: every API permission + host access is granted
+  // at install, so there is NOTHING to "enable", no Chrome prompt to fail,
+  // and no runtime access request — the only remediation is verify/reload.
+  const obsolete: Array<[RegExp, string]> = [
+    [/\benable storage\b/gi, "'Enable storage' call-to-action"],
+    [/storage prompt/gi, "'storage prompt' (no prompt exists)"],
+    [/couldn'?t request access/gi, "'couldn't request access' (verify-only)"],
+    [/storage was not enabled/gi, "'Storage was not enabled'"],
+    [/until storage is enabled/gi, "'until storage is enabled'"],
+  ];
+  // Falsification self-check: every pin must fire on its canonical obsolete
+  // string (a pin that matches nothing real would silently rot).
+  const samples = [
+    "Enable storage before saving this API key — it would otherwise be lost on restart.",
+    "Chrome could not open the storage prompt. Try again.",
+    "Chrome couldn't request access for example.com. Try again.",
+    "Storage was not enabled. This key has not been saved.",
+    "This customization is session-only until storage is enabled.",
+  ];
+  for (let i = 0; i < obsolete.length; i++) {
+    const [re, label] = obsolete[i];
+    re.lastIndex = 0;
+    assert(re.test(samples[i]), `pin ${label} must match its obsolete sample`);
+  }
+  const offenders: string[] = [];
+  for (const [path, src] of sources) {
+    for (const [re, label] of obsolete) {
+      re.lastIndex = 0;
+      for (const m of src.matchAll(re)) offenders.push(`${path}: ${label} — “${m[0]}”`);
+    }
+  }
+  assert(offenders.length === 0, `obsolete request-era copy:\n${offenders.join("\n")}`);
+});
+
 Deno.test("bug 7 sweep: every Settings → pointer names REAL UI (a nav section or heading in options.html)", () => {
   const offenders: string[] = [];
   for (const [path, src] of sources) {

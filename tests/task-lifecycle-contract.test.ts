@@ -39,7 +39,7 @@ Deno.test("contract §2: the thread composer always continues (never nulls the t
   assert(!body.includes("currentThreadId = null"), "the thread composer must not reset the thread");
 });
 
-Deno.test("contract §6: the orphaned-alarm cleanup route + UI affordance exist", () => {
+Deno.test("contract §7: the orphaned-alarm cleanup route + UI affordance exist", () => {
   assertStringIncludes(sw, 'async "schedule.cancelOrphans"()');
   assertStringIncludes(sw, 'cancelled.push(t.name)');
   assertStringIncludes(ntp, "Cancel orphaned alarms");

@@ -231,7 +231,7 @@ function wireCredentialDurability(input, warning, { existing = false } = {}) {
       warning.setAttribute("active", "");
       warning.focusAction?.();
     } else {
-      saveFlash("Storage was not enabled — the API key has not been saved.");
+      saveFlash("Storage could not be verified — the API key has not been saved. Storage is granted at install; reload the extension and try again.");
       warning.setAttribute("active", "");
       warning.focusAction?.();
     }
@@ -243,7 +243,7 @@ function blockSessionOnlyCredentialSave(input, warning) {
   if (!credentialNeedsDurableStorage({ enteredKey: input?.value ?? "", storageGranted })) return false;
   warning?.setAttribute("active", "");
   warning?.focusAction?.();
-  saveFlash("Enable storage before saving this API key — it would otherwise be lost on restart.");
+  saveFlash("Verify storage before saving this API key — it would otherwise be lost on restart.");
   return true;
 }
 
@@ -2486,7 +2486,7 @@ async function renderPrompts() {
         // storage is granted at install — VERIFY (fail closed), never request.
         const has = (await chrome.permissions.contains({ permissions: ["storage"] })) === true;
         if (!has) {
-          saveFlash("Storage not granted — this customization is session-only until storage is enabled.");
+          saveFlash("Storage not granted — this customization is session-only. Storage is granted at install; reload the extension and try again.");
         }
       } catch { /* an unverifiable grant falls through to the save */ }
     }
