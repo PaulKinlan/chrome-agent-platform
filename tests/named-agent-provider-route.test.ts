@@ -43,6 +43,14 @@ class FakeDirHandle {
     }
     return new FakeFileHandle(this.node.children.get(name));
   }
+  async removeEntry(name, opts = {}) {
+    this.node.children.delete(name);
+  }
+  async *entries() {
+    for (const [name, node] of this.node.children) {
+      yield [name, node.kind === "file" ? new FakeFileHandle(node) : new FakeDirHandle(node)];
+    }
+  }
 }
 const notFound = (name) => Object.assign(new Error(`not found: ${name}`), { name: "NotFoundError" });
 const root = dirNode();
@@ -118,4 +126,84 @@ Deno.test("named-agent.set-provider ROUTE: blank same-provider Save preserves th
   const cleared = await approvedSet({ provider: "deepseek", baseURL: "https://api.deepseek.com/v1", model: "deepseek-chat", apiKey: "" });
   assertEquals(cleared?.ok, true, "explicit clear succeeds");
   assertEquals(cleared?.agent?.provider?.hasApiKey, false, "explicit '' clears the key");
+
+  // 4. ROUTE VALIDATION: named-agent.create and named-agent.update with malformed profileGrants
+  const getPendingCount = async () => {
+    const pending = await dispatch({ type: "management.pending-approvals" });
+    assertEquals(pending?.ok, true, "management.pending-approvals query must succeed");
+    assert(Array.isArray(pending?.approvals), "pending.approvals must be an array");
+    return pending.approvals.length;
+  };
+
+  const initialPending = await getPendingCount();
+
+  // (a) CREATE with non-string entry [{}] -> fails closed, NO pending approval
+  const rCreateObj = await dispatch({
+    type: "named-agent.create",
+    name: "Invalid Grants Obj",
+    profileGrants: [{}],
+  });
+  assertEquals(rCreateObj?.ok, false);
+  assert(rCreateObj?.error?.includes("must be a string"));
+  assertEquals(await getPendingCount(), initialPending, "malformed create creates NO pending approval");
+
+  // (b) CREATE with 33 grant entries (> 32 bound) -> fails closed, NO pending approval
+  const rCreateHuge = await dispatch({
+    type: "named-agent.create",
+    name: "Invalid Grants Huge",
+    profileGrants: Array.from({ length: 33 }, () => "profile:basic"),
+  });
+  assertEquals(rCreateHuge?.ok, false);
+  assert(rCreateHuge?.error?.includes("exceeds maximum allowed length"));
+  assertEquals(await getPendingCount(), initialPending, "oversized create creates NO pending approval");
+
+  // (c) CREATE with null profileGrants -> fails closed, NO pending approval
+  const rCreateNull = await dispatch({
+    type: "named-agent.create",
+    name: "Invalid Grants Null",
+    profileGrants: null,
+  });
+  assertEquals(rCreateNull?.ok, false);
+  assert(rCreateNull?.error?.includes("must be an array"));
+  assertEquals(await getPendingCount(), initialPending, "null create creates NO pending approval");
+
+  // (d) CREATE with VALID profileGrants succeeds
+  const rCreateValid = await dispatch({
+    type: "named-agent.create",
+    id: "route-test-agent",
+    name: "Route Test Agent",
+    profileGrants: ["profile:basic"],
+  });
+  assertEquals(rCreateValid?.ok, true);
+  assertEquals(rCreateValid?.agent?.profileGrants, ["profile:basic"]);
+
+  // (e) UPDATE with non-string entry [{}] -> fails closed, NO pending approval
+  const rUpdateObj = await dispatch({
+    type: "named-agent.update",
+    id: "route-test-agent",
+    profileGrants: [{}],
+  });
+  assertEquals(rUpdateObj?.ok, false);
+  assert(rUpdateObj?.error?.includes("must be a string"));
+  assertEquals(await getPendingCount(), initialPending, "malformed update creates NO pending approval");
+
+  // (f) UPDATE with 33 grant entries -> fails closed, NO pending approval
+  const rUpdateHuge = await dispatch({
+    type: "named-agent.update",
+    id: "route-test-agent",
+    profileGrants: Array.from({ length: 33 }, () => "profile:basic"),
+  });
+  assertEquals(rUpdateHuge?.ok, false);
+  assert(rUpdateHuge?.error?.includes("exceeds maximum allowed length"));
+  assertEquals(await getPendingCount(), initialPending, "oversized update creates NO pending approval");
+
+  // (g) UPDATE with null profileGrants -> fails closed, NO pending approval
+  const rUpdateNull = await dispatch({
+    type: "named-agent.update",
+    id: "route-test-agent",
+    profileGrants: null,
+  });
+  assertEquals(rUpdateNull?.ok, false);
+  assert(rUpdateNull?.error?.includes("must be an array"));
+  assertEquals(await getPendingCount(), initialPending, "null update creates NO pending approval");
 });
