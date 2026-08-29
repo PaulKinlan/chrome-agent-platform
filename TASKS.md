@@ -1490,6 +1490,18 @@ evidence every other task depends on).
     the browser KAT now drives a REAL named-agent claim→complete via the
     @demo-board demo-model marker + asserts live UI refresh; heartbeat
     parity pinned. 31 unit tests + 22-check KAT green; suite 2277/0.
+  - 2026-08-29 — review round 2 REVISE (3×P1) fixed: failed/malformed log
+    reads propagate instead of becoming destructive empty-log writes (only a
+    successful null read means absent; routes surface a structured
+    board-store-error); byte/count eviction now leaves compact settled
+    TOMBSTONES (identity + outcome + truncated result + delivery state) so
+    acknowledged settlements stay retry-idempotent (alreadySettled) and
+    readable, with full records capped separately from tombstones;
+    poster-thread delivery is durable — the pending delivery persists WITH
+    the settle event, the settle ACK waits on the idempotent
+    board:<jobId> thread commit, and a startup drain plus the
+    repeated-settle path re-attempt delivery. 37 unit tests + 22-check KAT
+    green; suite 2283/0.
 
 ## [CAP-FB-20260829-MAIN-GATES-RED-03] Journey suite red on main after the install-granted permission change
 - Feedback: 2026-08-29 — found by running the suite on `origin/main`

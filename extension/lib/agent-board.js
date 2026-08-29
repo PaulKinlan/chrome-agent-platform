@@ -131,6 +131,34 @@ export function foldJobEvents(events, now = Date.now()) {
   const jobs = new Map();
   for (const ev of Array.isArray(events) ? events : []) {
     if (!ev || typeof ev !== "object" || typeof ev.jobId !== "string") continue;
+    if (ev.type === "settled-tombstone") {
+      // The compact authority left behind when a settled job's heavy event
+      // chain is byte-evicted (review r2 P1-2): identity + outcome + result
+      // (truncated) + delivery state survive, so retries stay idempotent and
+      // the result stays readable.
+      jobs.set(ev.jobId, {
+        id: ev.jobId,
+        posterId: ev.posterId ?? null,
+        posterName: ev.posterName ?? ev.posterId ?? null,
+        description: ev.description ?? "",
+        requiredCapability: null,
+        targetAgentId: null,
+        targetName: null,
+        blockedBy: [],
+        posterThreadId: ev.delivery?.threadId ?? null,
+        createdAt: ev.ts,
+        status: ev.outcome === "failed" ? "failed" : "completed",
+        claimantId: ev.claimantId ?? null,
+        claimantName: ev.claimantName ?? ev.claimantId ?? null,
+        claimedAt: null,
+        leaseExpiry: null,
+        result: ev.result ?? "",
+        settledAt: ev.settledAt ?? ev.ts,
+        delivery: ev.delivery ? { threadId: ev.delivery.threadId, delivered: ev.delivery.delivered === true } : null,
+        tombstone: true,
+      });
+      continue;
+    }
     if (ev.type === "posted") {
       jobs.set(ev.jobId, {
         id: ev.jobId,
@@ -150,6 +178,8 @@ export function foldJobEvents(events, now = Date.now()) {
         leaseExpiry: null,
         result: null,
         settledAt: null,
+        delivery: null,
+        tombstone: false,
       });
       continue;
     }
@@ -188,6 +218,12 @@ export function foldJobEvents(events, now = Date.now()) {
       job.result = ev.result ?? "";
       job.settledAt = ev.ts;
       job.leaseExpiry = null;
+      // The settlement carries its PENDING poster-thread delivery (review r2
+      // P1-3): durable with the settle event, so a restart between settle and
+      // commit never loses it.
+      job.delivery = ev.delivery ? { threadId: ev.delivery.threadId, delivered: false } : null;
+    } else if (ev.type === "delivered") {
+      if (job.delivery) job.delivery.delivered = true;
     } else if (ev.type === "released") {
       if (job.status === "claimed") {
         job.status = "pending";
@@ -263,17 +299,44 @@ function compactHeartbeatEvents(events) {
   });
 }
 
-/** Prune + bound the job event log (review P1-3/P1-4):
+// Tombstone bounds (review r2 P1-2): the compact record an evicted settled
+// job leaves behind — result truncated, delivery state preserved.
+export const BOARD_MAX_TOMBSTONE_RESULT = 500;
+export const BOARD_MAX_TOMBSTONES = 100;
+
+/** The compact authority record for an evicted settled job. */
+function tombstoneOf(job, now) {
+  return {
+    type: "settled-tombstone",
+    jobId: job.id,
+    ts: job.settledAt ?? now,
+    posterId: job.posterId ?? null,
+    posterName: job.posterName ?? null,
+    claimantId: job.claimantId ?? null,
+    claimantName: job.claimantName ?? null,
+    outcome: job.status,
+    description: String(job.description ?? "").slice(0, 200),
+    result: String(job.result ?? "").slice(0, BOARD_MAX_TOMBSTONE_RESULT),
+    settledAt: job.settledAt ?? null,
+    delivery: job.delivery ? { threadId: job.delivery.threadId, delivered: job.delivery.delivered === true } : null,
+  };
+}
+
+/** Prune + bound the job event log (review P1-3, r2 P1-2):
  *   1. superseded/settled heartbeats are compacted away;
- *   2. settled jobs are dropped oldest-first past BOARD_MAX_SETTLED_JOBS —
- *      EXCEPT a settled job an OPEN job still references in blockedBy: dropping
- *      its completion record would re-block the dependent forever;
- *   3. if the serialized log still exceeds BOARD_MAX_LOG_BYTES, more
- *      unreferenced settled jobs go (oldest first) until it fits.
+ *   2. settled jobs past BOARD_MAX_SETTLED_JOBS (or over the byte budget) are
+ *      EVICTED TO COMPACT TOMBSTONES — never dropped: an acknowledged
+ *      settlement must stay retry-idempotent (alreadySettled) and its result
+ *      readable. A settled job an OPEN job still references in blockedBy, or
+ *      whose delivery is still pending, keeps its full record;
+ *   3. tombstones past BOARD_MAX_TOMBSTONES (or still over budget) are the
+ *      final authority horizon — dropped oldest-first, but never while their
+ *      delivery is pending.
  *  OPEN jobs' events are NEVER dropped (the posting route refuses instead). */
 export function pruneJobEvents(events, now = Date.now()) {
   const compacted = compactHeartbeatEvents(events);
   const jobs = foldJobEvents(compacted, now);
+  const byId = new Map(jobs.map((j) => [j.id, j]));
   const openIds = new Set(jobs.filter((j) => j.status === "pending" || j.status === "claimed").map((j) => j.id));
   const pinnedIds = new Set();
   for (const job of jobs) {
@@ -282,22 +345,44 @@ export function pruneJobEvents(events, now = Date.now()) {
   }
   const settled = jobs.filter((j) => j.status === "completed" || j.status === "failed")
     .sort((a, b) => (a.settledAt ?? 0) - (b.settledAt ?? 0));
-  const dropIds = new Set();
-  let surplus = settled.length - BOARD_MAX_SETTLED_JOBS;
-  for (const job of settled) {
-    if (surplus <= 0) break;
+  const full = settled.filter((j) => !j.tombstone);
+  const tombs = settled.filter((j) => j.tombstone);
+  const evictFull = new Set(); // full chain → tombstone
+  const dropTomb = new Set();  // tombstone → gone (final horizon)
+  let surplusFull = full.length - BOARD_MAX_SETTLED_JOBS;
+  for (const job of full) {
+    if (surplusFull <= 0) break;
     if (pinnedIds.has(job.id)) continue; // a live dependent still needs the record
-    dropIds.add(job.id);
-    surplus -= 1;
+    if (job.delivery && !job.delivery.delivered) continue; // an unacknowledged delivery keeps its chain
+    evictFull.add(job.id);
+    surplusFull -= 1;
   }
-  let out = compacted.filter((ev) => !dropIds.has(ev?.jobId));
+  let surplusTomb = tombs.length - BOARD_MAX_TOMBSTONES;
+  for (const job of tombs) {
+    if (surplusTomb <= 0) break;
+    if (pinnedIds.has(job.id)) continue;
+    if (job.delivery && !job.delivery.delivered) continue;
+    dropTomb.add(job.id);
+    surplusTomb -= 1;
+  }
+  const rebuild = () => {
+    const kept = compacted.filter((ev) => !dropTomb.has(ev?.jobId) && !evictFull.has(ev?.jobId));
+    // Tombstones append at the end — the fold gives them the final word.
+    return [...kept, ...[...evictFull].map((id) => tombstoneOf(byId.get(id), now))];
+  };
+  let out = rebuild();
   // Byte authority: the count cap alone can exceed the memory per-value cap
   // (settled jobs carry up to BOARD_MAX_RESULT of result text each).
   while (eventsBytes(out) > BOARD_MAX_LOG_BYTES) {
-    const next = settled.find((j) => !dropIds.has(j.id) && !pinnedIds.has(j.id));
-    if (!next) break; // everything left is open or pinned — the post gate owns this
-    dropIds.add(next.id);
-    out = compacted.filter((ev) => !dropIds.has(ev?.jobId));
+    const nextFull = full.find((j) => !evictFull.has(j.id) && !pinnedIds.has(j.id) && !(j.delivery && !j.delivery.delivered));
+    if (nextFull) {
+      evictFull.add(nextFull.id);
+    } else {
+      const nextTomb = tombs.find((j) => !dropTomb.has(j.id) && !pinnedIds.has(j.id) && !(j.delivery && !j.delivery.delivered));
+      if (!nextTomb) break; // everything left is open, pinned, or undelivered — the post gate owns this
+      dropTomb.add(nextTomb.id);
+    }
+    out = rebuild();
   }
   return out;
 }
@@ -307,14 +392,19 @@ export function pruneJobEvents(events, now = Date.now()) {
  * (masterMemory()). Deps are injected so the KATs drive the exact production
  * logic with an in-memory stand-in.
  */
-export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => Date.now() }) {
+export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => Date.now(), commitThread = null }) {
   // The board logs are RESERVED authority keys (memory.js MASTER_RESERVED_KEYS
   // + the internal/hidden namespace): the model's memory_set/memory_get can
   // never forge or read them, so the store uses the TRUSTED paths exclusively
   // (review P1-1).
   const readLog = async (key) => {
-    const events = (await memory.getStrict(key).catch(() => null)) ?? [];
-    return Array.isArray(events) ? events : [];
+    // A failed or malformed read is NOT an empty log (review r2 P1-1): only a
+    // SUCCESSFUL null means absent. Everything else propagates — writing a
+    // guessed-empty log over unreadable authority would be destructive.
+    const events = await memory.getStrict(key);
+    if (events == null) return [];
+    if (!Array.isArray(events)) throw new Error(`board log "${key}" is malformed (not an array)`);
+    return events;
   };
   const writeLog = (key, events) => memory.setTrusted(key, events);
   async function loadJobs() {
@@ -325,6 +415,41 @@ export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => 
   }
   async function loadMessages() {
     return readLog(BOARD_MESSAGES_KEY);
+  }
+
+  /** The terminal content a delivery commits into the poster's thread. */
+  function deliveryTerminal(job) {
+    const claimant = job.claimantName ?? job.claimantId ?? "an agent";
+    const done = job.status === "completed";
+    return {
+      role: done ? "assistant" : "error",
+      content: done
+        ? `Board job "${String(job.description ?? "").slice(0, 140)}" completed by ${claimant}:\n\n${job.result ?? ""}`
+        : `Board job "${String(job.description ?? "").slice(0, 140)}" FAILED (${claimant}): ${job.result ?? ""}`,
+    };
+  }
+
+  /** Deliver a settled job's result to its poster's thread (review r2 P1-3).
+   *  The commit is idempotent by `board:<jobId>` (commitThreadTerminal's
+   *  execution-id idempotence), so a crash between commit and the delivered
+   *  event is safe. Returns true when there is nothing (left) to deliver. */
+  async function deliverJob(job) {
+    if (!job?.delivery || job.delivery.delivered) return true;
+    if (typeof commitThread !== "function") return false;
+    try {
+      await commitThread(job.delivery.threadId, `board:${job.id}`, deliveryTerminal(job));
+    } catch {
+      return false;
+    }
+    await withLock(async () => {
+      const events = await loadJobs();
+      const current = foldJobEvents(events, now()).find((j) => j.id === job.id);
+      if (current?.delivery && !current.delivery.delivered) {
+        events.push({ type: "delivered", jobId: job.id, ts: now() });
+        await saveJobs(events);
+      }
+    });
+    return true;
   }
 
   const board = {
@@ -423,16 +548,21 @@ export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => 
     },
 
     /** Settle a claimed job. Idempotent: a second completion by the SAME
-     *  claimant returns the already-settled record without a state change. */
+     *  claimant returns the already-settled record without a state change.
+     *  The settle event carries the PENDING poster-thread delivery (durable
+     *  with the settlement); the call is ACKNOWLEDGED only after the
+     *  idempotent thread commit succeeds — a transient failure returns
+     *  board-delivery and the caller's retry (or the startup drain)
+     *  re-attempts delivery (review r2 P1-3). */
     async settleJob({ callerId, jobId, result, outcome = "completed" }) {
-      return withLock(async () => {
+      const settled = await withLock(async () => {
         const events = await loadJobs();
         const jobs = foldJobEvents(events, now());
         const job = jobs.find((j) => j.id === jobId) ?? null;
         if (!job) return { ok: false, code: "board-no-job", error: "no such job" };
         if (job.status === "completed" || job.status === "failed") {
           if (job.claimantId === callerId) {
-            return { ok: true, alreadySettled: true, job };
+            return { alreadySettled: true, job };
           }
           return { ok: false, code: "board-settled", error: `job already ${job.status}` };
         }
@@ -440,10 +570,43 @@ export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => 
           return { ok: false, code: "board-not-claimant", error: "only the current claimant can settle a job" };
         }
         const text = boardText(result, BOARD_MAX_RESULT);
-        events.push({ type: outcome === "failed" ? "failed" : "completed", jobId, ts: now(), claimantId: callerId, result: text });
+        events.push({
+          type: outcome === "failed" ? "failed" : "completed",
+          jobId,
+          ts: now(),
+          claimantId: callerId,
+          result: text,
+          delivery: job.posterThreadId ? { threadId: job.posterThreadId } : null,
+        });
         await saveJobs(events);
-        return { ok: true, job: foldJobEvents(events, now()).find((j) => j.id === jobId) };
+        return { alreadySettled: false, job: foldJobEvents(events, now()).find((j) => j.id === jobId) };
       });
+      if (settled.ok === false) return settled;
+      const delivered = await deliverJob(settled.job);
+      if (!delivered) {
+        return {
+          ok: false,
+          code: "board-delivery",
+          error: "the job is settled on the board, but delivering the result to the poster's thread failed — settle again to retry delivery",
+          alreadySettled: settled.alreadySettled,
+          settled: !settled.alreadySettled,
+          job: settled.job,
+        };
+      }
+      return { ok: true, ...(settled.alreadySettled ? { alreadySettled: true } : {}), settled: !settled.alreadySettled, job: settled.job };
+    },
+
+    /** Drain persisted pending deliveries (startup + periodic paths): every
+     *  settled job whose poster-thread delivery never committed gets its
+     *  idempotent commit re-attempted. Returns the number delivered. */
+    async drainDeliveries() {
+      if (typeof commitThread !== "function") return 0;
+      const jobs = await board.listJobs();
+      let drained = 0;
+      for (const job of jobs) {
+        if (job.delivery && !job.delivery.delivered && (await deliverJob(job))) drained += 1;
+      }
+      return drained;
     },
 
     /** List jobs (folded; lease expiry derived at read). */
@@ -518,7 +681,10 @@ export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => 
  * identity (a named agent's id from the live run registry, else the hub).
  */
 export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCaller, resolvePosterThreadId, commitThread, broadcast, now }) {
-  const board = createAgentBoard({ memory, withLock, now });
+  // The store owns delivery (review r2 P1-3): commitThread rides into the
+  // board so settlement + pending-delivery persist together and the ACK
+  // waits on the idempotent thread commit.
+  const board = createAgentBoard({ memory, withLock, now, commitThread });
   const agents = () => listAgents().catch(() => []);
   // Caller identity comes from the route CONTEXT (never model args) and fails
   // CLOSED: a MODEL principal whose execution id resolves to nothing is a
@@ -533,25 +699,18 @@ export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCa
     return { callerId: BOARD_HUB_ID };
   };
   const fire = (event) => { try { broadcast?.(event); } catch { /* UI wake is best-effort */ } };
-  // Settlement → the poster's thread (review P1-6): the existing durable
-  // thread-commit seam, idempotent by a per-job key — a replayed settle can
-  // never duplicate the result message.
-  const commitResult = async (job, outcome, result) => {
-    if (!job?.posterThreadId || typeof commitThread !== "function") return;
-    const claimant = job.claimantName ?? job.claimantId ?? "an agent";
-    const content = outcome === "completed"
-      ? `Board job "${job.description.slice(0, 140)}" completed by ${claimant}:\n\n${result}`
-      : `Board job "${job.description.slice(0, 140)}" FAILED (${claimant}): ${result}`;
+  // A store read failure (corrupt/unreadable authority log — review r2 P1-1)
+  // surfaces as a structured denial, never a rejected route promise.
+  const guarded = (fn) => async (args, context) => {
     try {
-      await commitThread(job.posterThreadId, `board:${job.id}`, {
-        role: outcome === "completed" ? "assistant" : "error",
-        content,
-      });
-    } catch { /* the log entry is the authority — the thread copy is best-effort */ }
+      return await fn(args, context);
+    } catch (e) {
+      return { ok: false, code: "board-store-error", error: String(e?.message ?? e).slice(0, 200) };
+    }
   };
 
-  return {
-    async "board.post"({ description, requiredCapability, targetAgent, blockedBy }, context) {
+  const routes = {
+    "board.post": guarded(async ({ description, requiredCapability, targetAgent, blockedBy }, context) => {
       const caller = callerOf(context);
       if (caller.denial) return caller.denial;
       const registry = await agents();
@@ -569,56 +728,54 @@ export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCa
       });
       if (r.ok) fire({ type: "board-job-posted", jobId: r.job.id, capability: r.job.requiredCapability ?? null, targetAgentId: r.job.targetAgentId ?? null });
       return r;
-    },
-    async "board.claim"({ jobId }, context) {
+    }),
+    "board.claim": guarded(async ({ jobId }, context) => {
       const caller = callerOf(context);
       if (caller.denial) return caller.denial;
       const r = await board.claimJob({ callerId: caller.callerId, agents: await agents(), jobId });
       if (r.ok) fire({ type: "board-job-claimed", jobId, claimantId: r.job.claimantId });
       return r;
-    },
-    async "board.complete"({ jobId, result }, context) {
+    }),
+    "board.complete": guarded(async ({ jobId, result }, context) => {
       const caller = callerOf(context);
       if (caller.denial) return caller.denial;
       const r = await board.settleJob({ callerId: caller.callerId, jobId, result, outcome: "completed" });
-      if (r.ok && !r.alreadySettled) {
-        fire({ type: "board-job-completed", jobId, posterId: r.job.posterId, claimantId: caller.callerId });
-        await commitResult(r.job, "completed", boardText(result, BOARD_MAX_RESULT));
-      }
+      if (r.settled) fire({ type: "board-job-completed", jobId, posterId: r.job.posterId, claimantId: caller.callerId });
       return r;
-    },
-    async "board.fail"({ jobId, result }, context) {
+    }),
+    "board.fail": guarded(async ({ jobId, result }, context) => {
       const caller = callerOf(context);
       if (caller.denial) return caller.denial;
       const r = await board.settleJob({ callerId: caller.callerId, jobId, result, outcome: "failed" });
-      if (r.ok && !r.alreadySettled) {
-        fire({ type: "board-job-failed", jobId, posterId: r.job.posterId, claimantId: caller.callerId });
-        await commitResult(r.job, "failed", boardText(result, BOARD_MAX_RESULT));
-      }
+      if (r.settled) fire({ type: "board-job-failed", jobId, posterId: r.job.posterId, claimantId: caller.callerId });
       return r;
-    },
-    async "board.heartbeat"({ jobId }, context) {
+    }),
+    "board.heartbeat": guarded(async ({ jobId }, context) => {
       const caller = callerOf(context);
       if (caller.denial) return caller.denial;
       return board.heartbeatJob({ callerId: caller.callerId, jobId });
-    },
-    async "board.list"({ status }) {
+    }),
+    "board.list": guarded(async ({ status }) => {
       return { ok: true, jobs: await board.listJobs({ status: typeof status === "string" ? status : null }) };
-    },
-    async "board.read"({ jobId }) {
+    }),
+    "board.read": guarded(async ({ jobId }) => {
       const job = await board.getJob(jobId);
       return job ? { ok: true, job } : { ok: false, error: "no such job" };
-    },
-    async "board.message"({ to, body, refJobId }, context) {
+    }),
+    "board.message": guarded(async ({ to, body, refJobId }, context) => {
       const caller = callerOf(context);
       if (caller.denial) return caller.denial;
       const r = await board.sendMessage({ callerId: caller.callerId, agents: await agents(), to, body, refJobId });
       if (r.ok) fire({ type: "board-message-posted", messageId: r.message.id, toId: r.message.toId });
       return r;
-    },
-    async "board.messages"({ limit }) {
+    }),
+    "board.messages": guarded(async ({ limit }) => {
       const cap = Number.isInteger(limit) && limit > 0 ? Math.min(limit, BOARD_MAX_MESSAGES) : 50;
       return { ok: true, messages: await board.listMessages({ limit: cap }) };
-    },
+    }),
   };
+
+  // The drain is NOT a route (mergeRouteMaps copies every entry) — it is the
+  // startup/periodic delivery drain (review r2 P1-3).
+  return { routes, drain: () => board.drainDeliveries() };
 }

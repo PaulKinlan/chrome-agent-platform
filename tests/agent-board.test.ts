@@ -22,7 +22,7 @@
 //  (6) LEASE PARITY: the board's claim lease IS the scheduler's in-flight
 //      lease (copied verbatim — the test pins the values equal so drift fails).
 
-import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   BOARD_CLAIM_HEARTBEAT_MS,
   BOARD_CLAIM_LEASE_MS,
@@ -34,7 +34,9 @@ import {
   BOARD_MAX_MESSAGE_BODY,
   BOARD_MAX_MESSAGES,
   BOARD_MAX_OPEN_JOBS,
+  BOARD_MAX_RESULT,
   BOARD_MAX_SETTLED_JOBS,
+  BOARD_MAX_TOMBSTONES,
   BOARD_MESSAGES_KEY,
   boardText,
   canClaimJob,
@@ -259,7 +261,12 @@ Deno.test("board store: pruning drops oldest SETTLED jobs and never open ones", 
   }
   const jobs = await board.listJobs();
   const settled = jobs.filter((j) => j.status === "completed");
-  assertEquals(settled.length <= BOARD_MAX_SETTLED_JOBS, true);
+  // r2: eviction leaves compact TOMBSTONES — the FULL record count is capped,
+  // evicted jobs stay readable as settled tombstones (retry-idempotence), and
+  // the tombstone count is itself capped.
+  assertEquals(settled.filter((j) => !j.tombstone).length <= BOARD_MAX_SETTLED_JOBS, true);
+  assertEquals(settled.filter((j) => j.tombstone).length <= BOARD_MAX_TOMBSTONES, true);
+  assertEquals(settled.some((j) => j.tombstone), true, "eviction produced tombstones");
   for (const id of openIds) {
     assertEquals(jobs.some((j) => j.id === id && j.status === "pending"), true);
   }
@@ -326,7 +333,7 @@ Deno.test("board routes: caller identity comes from the route CONTEXT, never mod
   const broadcasts = [];
   // The SW resolver: a live run's agent id, else the hub. Model args carry no
   // identity field at all — the routes never read one from the body.
-  const routes = createAgentBoardRoutes({
+  const { routes } = createAgentBoardRoutes({
     memory: mockMemory(),
     withLock: (fn) => fn(),
     listAgents: async () => AGENTS,
@@ -500,8 +507,9 @@ Deno.test("board fold: pruning preserves settled jobs an open job still depends 
   // The parent's completion record survives → the child is claimable NOW.
   const guard = canClaimJob({ callerId: "critic", agents: AGENTS, job: child, settledJobs: jobs });
   assertEquals(guard.ok, true);
-  // Unreferenced old settled jobs WERE pruned (the cap still bites).
-  assert(jobs.filter((j) => j.id.startsWith("old")).length <= BOARD_MAX_SETTLED_JOBS);
+  // Unreferenced old settled jobs WERE evicted (full records capped; the
+  // evicted ones remain as tombstones — r2 semantics).
+  assert(jobs.filter((j) => j.id.startsWith("old") && !j.tombstone).length <= BOARD_MAX_SETTLED_JOBS);
 });
 
 // (P1-4) Superseded heartbeats are compacted: one long-lived claimed job must
@@ -560,7 +568,7 @@ Deno.test("board store: posting refuses when the jobs log is byte-full (open job
 // (P1-5) A stale MODEL context fails CLOSED — it never escalates to hub
 // authority. Trusted owner/page surfaces (no model principal) default to hub.
 Deno.test("board routes: a stale model context is denied, never hub-escalated", async () => {
-  const routes = createAgentBoardRoutes({
+  const { routes } = createAgentBoardRoutes({
     memory: mockMemory(),
     withLock: (fn) => fn(),
     listAgents: async () => AGENTS,
@@ -588,7 +596,7 @@ Deno.test("board routes: a stale model context is denied, never hub-escalated", 
 // re-commits), and only when the post carried a thread authority.
 Deno.test("board routes: settlement commits the result to the poster's thread (idempotent)", async () => {
   const commits = [];
-  const routes = createAgentBoardRoutes({
+  const { routes } = createAgentBoardRoutes({
     memory: mockMemory(),
     withLock: (fn) => fn(),
     listAgents: async () => AGENTS,
@@ -619,7 +627,7 @@ Deno.test("board routes: settlement commits the result to the poster's thread (i
 // without a thread commit — the broadcast wake remains the notification.
 Deno.test("board routes: a threadless post settles without a thread commit", async () => {
   const commits = [];
-  const routes = createAgentBoardRoutes({
+  const { routes } = createAgentBoardRoutes({
     memory: mockMemory(),
     withLock: (fn) => fn(),
     listAgents: async () => AGENTS,
@@ -634,4 +642,143 @@ Deno.test("board routes: a threadless post settles without a thread commit", asy
   const done = await routes["board.complete"]({ jobId: posted.job.id, result: "done" }, { principal: "model", executionId: "exec-critic" });
   assertEquals(done.ok, true);
   assertEquals(commits.length, 0);
+});
+
+// ── review round-2 battery (P2-block: P1-1…P1-3) ────────────────────────────
+
+// (P1-1) A FAILED or MALFORMED read must never become an empty log that the
+// next write overwrites: read errors propagate, malformed logs refuse, and
+// NOTHING is written.
+Deno.test("board store: a failed read never becomes a destructive empty-log write", async () => {
+  const writes = [];
+  const memory = {
+    getStrict: async () => { throw new Error("OPFS transient read failure"); },
+    setTrusted: async (k, v) => { writes.push([k, v]); },
+  };
+  const board = createAgentBoard({ memory });
+  await assertRejects(() => board.postJob({ callerId: BOARD_HUB_ID, agents: AGENTS, description: "x" }));
+  await assertRejects(() => board.listJobs());
+  await assertRejects(() => board.sendMessage({ callerId: BOARD_HUB_ID, agents: AGENTS, body: "x" }));
+  assertEquals(writes.length, 0, "no write may follow a failed read");
+});
+
+Deno.test("board store: a malformed (non-array) log refuses without writing", async () => {
+  const map = new Map([[BOARD_JOBS_KEY, { corrupted: true }]]);
+  const writes = [];
+  const memory = {
+    getStrict: async (k) => (map.has(k) ? map.get(k) : null),
+    setTrusted: async (k, v) => { writes.push([k, v]); void map.set(k, v); },
+  };
+  const board = createAgentBoard({ memory });
+  await assertRejects(() => board.postJob({ callerId: BOARD_HUB_ID, agents: AGENTS, description: "x" }));
+  assertEquals(writes.length, 0, "a corrupt authority log is never overwritten by a guess");
+  assertEquals(map.get(BOARD_JOBS_KEY), { corrupted: true }, "the corrupt log is preserved for forensics");
+});
+
+// (P1-1) Only a SUCCESSFUL null read means absent — the first post works.
+Deno.test("board store: an absent log (null read) still accepts the first post", async () => {
+  const board = createAgentBoard({ memory: mockMemory() });
+  const r = await board.postJob({ callerId: BOARD_HUB_ID, agents: AGENTS, description: "first" });
+  assertEquals(r.ok, true);
+});
+
+// (P1-2) Byte/count eviction leaves a compact TOMBSTONE: retry-idempotence
+// (alreadySettled), the settled status, and the result survive eviction.
+Deno.test("board store: evicted settled jobs leave tombstones (retry-idempotent, result readable)", async () => {
+  const memory = mockMemory();
+  const board = createAgentBoard({ memory });
+  // Settle enough full-result jobs to force byte eviction of the oldest.
+  const ids = [];
+  for (let i = 0; i < 40; i += 1) {
+    const posted = await board.postJob({ callerId: "writer", agents: AGENTS, description: `job ${i} ${"d".repeat(BOARD_MAX_DESCRIPTION)}` });
+    if (!posted.ok) break;
+    ids.push(posted.job.id);
+    await board.claimJob({ callerId: "critic", agents: AGENTS, jobId: posted.job.id });
+    const settled = await board.settleJob({ callerId: "critic", jobId: posted.job.id, result: `result ${i} ${"r".repeat(BOARD_MAX_RESULT)}` });
+    assertEquals(settled.ok, true, `settle ${i} must succeed`);
+  }
+  const bytes = new TextEncoder().encode(JSON.stringify(memory._map.get(BOARD_JOBS_KEY))).length;
+  assert(bytes <= BOARD_MAX_LOG_BYTES, `jobs log ${bytes}B exceeds the budget`);
+  // The OLDEST settled jobs were evicted — but their tombstones remain:
+  const oldest = await board.getJob(ids[0]);
+  assert(oldest, "the evicted job still reads");
+  assertEquals(oldest.status, "completed");
+  assertEquals(oldest.claimantId, "critic");
+  assertStringIncludes(oldest.result, "result 0"); // result survives (tombstone-truncated)
+  // Retry-idempotence: the claimant's repeated settle is alreadySettled,
+  // NEVER board-no-job (the round-2 finding).
+  const retry = await board.settleJob({ callerId: "critic", jobId: ids[0], result: "duplicate" });
+  assertEquals(retry.ok, true);
+  assertEquals(retry.alreadySettled, true);
+  // And the guard still refuses a fresh claim on it.
+  const claim = await board.claimJob({ callerId: "researcher", agents: AGENTS, jobId: ids[0] });
+  assertEquals(claim.ok, false);
+  assertEquals(claim.code, "board-settled");
+});
+
+// (P1-3) Settlement persists the PENDING delivery BEFORE acknowledgement; a
+// transient commit failure returns a delivery error (settlement stands), and
+// the caller's retry DRIVES the delivery (idempotent commit key).
+Deno.test("board store: settlement persists pending delivery; a failed commit is retried by the repeated settle", async () => {
+  const commits = [];
+  let failCommits = true;
+  const memory = mockMemory();
+  const board = createAgentBoard({
+    memory,
+    commitThread: async (threadId, key, terminal) => {
+      if (failCommits) throw new Error("transient thread-store failure");
+      commits.push({ threadId, key, terminal });
+      return {};
+    },
+  });
+  const posted = await board.postJob({ callerId: "writer", agents: AGENTS, description: "threaded", posterThreadId: "thread-9" });
+  assertEquals(posted.ok, true);
+  await board.claimJob({ callerId: "critic", agents: AGENTS, jobId: posted.job.id });
+  const first = await board.settleJob({ callerId: "critic", jobId: posted.job.id, result: "the answer" });
+  assertEquals(first.ok, false, "the settle is NOT acknowledged while delivery is pending");
+  assertEquals(first.code, "board-delivery");
+  assertEquals(commits.length, 0);
+  // …but the settlement itself is durable:
+  const read = await board.getJob(posted.job.id);
+  assertEquals(read.status, "completed");
+  assertEquals(read.delivery?.delivered, false, "the pending delivery is persisted with the settlement");
+  // The retry (alreadySettled path) drives delivery:
+  failCommits = false;
+  const retry = await board.settleJob({ callerId: "critic", jobId: posted.job.id, result: "the answer" });
+  assertEquals(retry.ok, true);
+  assertEquals(retry.alreadySettled, true);
+  assertEquals(commits.length, 1);
+  assertEquals(commits[0].key, `board:${posted.job.id}`);
+  const delivered = await board.getJob(posted.job.id);
+  assertEquals(delivered.delivery?.delivered, true);
+  // A further retry does NOT re-commit.
+  const again = await board.settleJob({ callerId: "critic", jobId: posted.job.id, result: "the answer" });
+  assertEquals(again.ok, true);
+  assertEquals(commits.length, 1);
+});
+
+// (P1-3) The startup/periodic drain delivers pending settlements that were
+// never acknowledged (SW restart between settle and commit).
+Deno.test("board store: drainDeliveries delivers persisted pending deliveries", async () => {
+  const commits = [];
+  let failCommits = true;
+  const memory = mockMemory();
+  const commitThread = async (threadId, key, terminal) => {
+    if (failCommits) throw new Error("down");
+    commits.push({ threadId, key, terminal });
+    return {};
+  };
+  const board = createAgentBoard({ memory, commitThread });
+  const posted = await board.postJob({ callerId: "writer", agents: AGENTS, description: "crash window", posterThreadId: "thread-7" });
+  await board.claimJob({ callerId: "critic", agents: AGENTS, jobId: posted.job.id });
+  const first = await board.settleJob({ callerId: "critic", jobId: posted.job.id, result: "r" });
+  assertEquals(first.ok, false);
+  // Simulate the restart: a FRESH store over the same memory (its drain runs
+  // at SW startup in production).
+  failCommits = false;
+  const revived = createAgentBoard({ memory, commitThread });
+  const drained = await revived.drainDeliveries();
+  assertEquals(drained, 1);
+  assertEquals(commits.length, 1);
+  assertEquals(commits[0].threadId, "thread-7");
 });

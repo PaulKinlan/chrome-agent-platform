@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.397] — 2026-08-29
+- Board review round 2: no destructive empty-log writes, settled tombstones, durable result delivery
+
 ## [0.2.396] — 2026-08-29
 - Board review round 1: reserve the logs, reclaimable leases, byte bounds, fail-closed identity, poster-thread results
 

@@ -3709,10 +3709,16 @@ const boardRoutes = createAgentBoardRoutes({
   broadcast: broadcastProgress,
 });
 
+// Startup drain (review r2 P1-3): settlements whose poster-thread delivery
+// never committed (a restart between settle and commit) get their idempotent
+// commit re-attempted on every SW boot. Fire-and-forget — delivery retries
+// never block route registration.
+boardRoutes.drain().catch(() => {});
+
 const handlers = mergeRouteMaps(
   activityRoutes,
   schedulerRoutes,
-  boardRoutes,
+  boardRoutes.routes,
   createMemoryRoutes(),
   agentScheduleRoutes,
   createAgentWorkerRoutes({
