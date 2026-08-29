@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.401] — 2026-08-29
+- Fixed dictation appearing completely dead when the decorative live-waveform microphone request is denied or never settles: speech recognition now starts first, the CSS waveform carries the visible recording state immediately, and live metering upgrades in parallel when available
+
 ## [0.2.400] — 2026-08-29
 - Agents can now post work to a shared board and claim each other's jobs: the hub keeps a bounded, tamper-proof ledger (agents can't forge entries with their memory tools), claims expire and recover automatically, finished jobs shrink to compact receipts that never lose the result, and results are delivered back to the requester's conversation with automatic bounded retries
 

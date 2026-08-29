@@ -50,6 +50,12 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 - `--control: 36px` hit targets; `--control-icon: 18px` stroke icons.
 - Every interactive component: default / hover / focus / active / disabled /
   loading / error.
+- `<mic-button>` treats speech recognition as the primary action and the live
+  AnalyserNode waveform as progressive enhancement: recognition and the visible
+  CSS fallback start in the click turn; `getUserMedia` upgrades the waveform in
+  parallel, while rejection leaves dictation running and reports the fallback
+  in the composer's live status. Stop, hide, detach, pagehide, reduced-motion,
+  and late-stream generation guards remain authoritative.
 - Agent templates render through shared `<agent-template-card>`: name, a two-line
   persona summary, at most three skill badges plus an overflow count, and one
   labelled Use action. Curated starters come first and carry the Starter badge.

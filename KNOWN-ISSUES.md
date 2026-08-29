@@ -27,7 +27,17 @@ with it. Fixed under `CAP-FB-20260827-MAIN-GATES-RED-02`.
 
 ## Open findings
 
-Three, all with live entries in `TASKS.md`. Everything else previously listed here is done.
+Current findings all have live entries in `TASKS.md`. Everything else previously listed here is done.
+
+### Composer — macOS dictation is blocked by its decorative waveform meter
+`CAP-FB-20260829-MIC-DEAD-MACOS-01` · P0 · IN_REVIEW
+
+The waveform change awaited `getUserMedia({audio:true})` before constructing or starting
+SpeechRecognition. A denied request returned without entering the recording state, and a
+never-settling macOS permission request held the entire click forever. The candidate starts
+recognition first, uses the existing CSS fallback immediately, and upgrades the meter only
+when its parallel stream arrives; the composer already wires `mic-error` into its visible
+live status.
 
 ### Infrastructure — worktree heads carried work that no ref was holding
 `CAP-FB-20260821-WORKTREE-HYGIENE-01` · P0 · OPEN (loss risk closed; cleanup awaits an owner decision)
