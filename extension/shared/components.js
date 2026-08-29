@@ -1614,7 +1614,7 @@ class AgentTemplateCard extends Component {
     mountTemplate(this, `
       :host { display:block; min-inline-size:0; }
       article { display:grid; grid-template-rows:auto minmax(2.8em,auto) auto auto; gap:10px;
-        min-block-size:154px; min-inline-size:0; padding:14px; border:1px solid var(--border,#e3e0d9);
+        block-size:100%; min-block-size:154px; min-inline-size:0; padding:14px; border:1px solid var(--border,#e3e0d9);
         border-radius:var(--radius-md,12px); background:var(--panel,#fff); color:var(--text,#1d1b18); }
       :host([starter]) article { border-color:var(--accent,#0e6e63); }
       header { display:flex; align-items:flex-start; gap:8px; min-inline-size:0; }

@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.2.379] — 2026-08-29
+- fix: align agent template card heights
+
 ## [0.2.378] — 2026-08-29
-- feat(CAP-FB-20260829-TEMPLATE-CARDS-01): render agent templates as visual cards
+- Agent templates now appear as visual cards with persona summaries, skill badges, curated starter labels, and a one-click Use action
 
 ## [0.2.377] — 2026-08-29
 - merge: recent-activity redaction lane (07eef98a) — redactResultValue scrubs every string leaf against RESULT_SECRET_SHAPES (sk-/AKIA/ghp_/xox*/AIza/JWT), try/finally exception-safe WeakSet cycle cleanup in pure.js + tool-summary.js + docs/pure.js mirror, '[Circular]' documented as display placeholder, DAG pin asserts both branches [REDACTED]. Reviewed PASS (round 6); coordinator RED-verified cyclic getter probe on b42a46a6. Manifest resolved to main's P0 shape.
