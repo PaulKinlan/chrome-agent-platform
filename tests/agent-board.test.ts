@@ -778,7 +778,119 @@ Deno.test("board store: drainDeliveries delivers persisted pending deliveries", 
   failCommits = false;
   const revived = createAgentBoard({ memory, commitThread });
   const drained = await revived.drainDeliveries();
-  assertEquals(drained, 1);
+  assertEquals(drained.delivered, 1);
+  assertEquals(drained.remaining, 0);
   assertEquals(commits.length, 1);
   assertEquals(commits[0].threadId, "thread-7");
+});
+
+// ── review round-3 battery (P1-1 admission reserve, P1-2 resolver fail-closed,
+//    P2 drain retry shape) ───────────────────────────────────────────────────
+
+// (P1-1) Admission accounts for the WORST-CASE pending-delivery capacity of
+// EVERY open threaded job: threaded posts are refused before the log can
+// wedge, and a full settle wave with ALWAYS-FAILING delivery never crosses
+// the byte budget (the r2 pin keeps undelivered chains unevictable, so the
+// reserve is the only thing standing between settlement and the 256 KiB wall).
+Deno.test("board store: admission reserves per-threaded-job settle capacity (no wedge under failed delivery)", async () => {
+  const memory = mockMemory();
+  const board = createAgentBoard({
+    memory,
+    commitThread: async () => { throw new Error("thread store down"); },
+  });
+  // Threaded posts are refused EARLIER than threadless ones (the reserve):
+  let threadedAccepted = 0;
+  for (let i = 0; i < BOARD_MAX_OPEN_JOBS + 20; i += 1) {
+    const r = await board.postJob({ callerId: "writer", agents: AGENTS, description: "z".repeat(BOARD_MAX_DESCRIPTION), posterThreadId: `thread-${i}` });
+    if (!r.ok) { assertEquals(r.code, "board-full"); break; }
+    threadedAccepted += 1;
+  }
+  const threadlessBoard = createAgentBoard({ memory: mockMemory() });
+  let threadlessAccepted = 0;
+  for (let i = 0; i < BOARD_MAX_OPEN_JOBS + 20; i += 1) {
+    const r = await threadlessBoard.postJob({ callerId: "writer", agents: AGENTS, description: "z".repeat(BOARD_MAX_DESCRIPTION) });
+    if (!r.ok) break;
+    threadlessAccepted += 1;
+  }
+  assert(threadedAccepted > 5, `suspiciously few threaded jobs (${threadedAccepted})`);
+  assert(threadedAccepted < threadlessAccepted, `the reserve must bite: threaded ${threadedAccepted} vs threadless ${threadlessAccepted}`);
+  // Settle EVERY accepted threaded job with delivery failing: the log must
+  // stay within budget (undelivered chains are pinned — the reserve made the
+  // room) and settles must return structured board-delivery, never throw.
+  const jobs = await board.listJobs();
+  let deliveryDenials = 0;
+  for (const job of jobs) {
+    await board.claimJob({ callerId: "critic", agents: AGENTS, jobId: job.id });
+    const settled = await board.settleJob({ callerId: "critic", jobId: job.id, result: "r".repeat(BOARD_MAX_RESULT) });
+    assertEquals(settled.ok, false);
+    assertEquals(settled.code, "board-delivery");
+    deliveryDenials += 1;
+    const bytes = new TextEncoder().encode(JSON.stringify(memory._map.get(BOARD_JOBS_KEY))).length;
+    assert(bytes <= BOARD_MAX_LOG_BYTES, `log wedged at ${bytes}B after ${deliveryDenials} failed-delivery settles`);
+  }
+  assert(deliveryDenials > 5, "the settle wave actually ran");
+});
+
+// (P1-2) Poster-thread resolution fails CLOSED: a resolver failure on a MODEL
+// context is a structured store error (never a silently threadless post), and
+// nothing is persisted. A non-model context may still post threadless.
+Deno.test("board routes: a thread-resolver failure on a model context fails closed (no threadless post)", async () => {
+  const memory = mockMemory();
+  const { routes } = createAgentBoardRoutes({
+    memory,
+    withLock: (fn) => fn(),
+    listAgents: async () => AGENTS,
+    resolveCaller: (context) => (context?.executionId === "exec-writer" ? "writer" : null),
+    resolvePosterThreadId: async () => { throw new Error("run registry read failed"); },
+  });
+  const r = await routes["board.post"]({ description: "must not persist" }, { principal: "model", executionId: "exec-writer" });
+  assertEquals(r.ok, false);
+  assertEquals(r.code, "board-store-error");
+  assertEquals((await board_listHelper(memory)).length, 0, "nothing was persisted");
+  // Page contexts carry no executionId — the resolver returns null before
+  // touching the registry; emulate that contract here (null, never a throw).
+  const routes3 = createAgentBoardRoutes({
+    memory,
+    withLock: (fn) => fn(),
+    listAgents: async () => AGENTS,
+    resolveCaller: () => null,
+    resolvePosterThreadId: async (context) => (context?.executionId ? (() => { throw new Error("registry down"); })() : null),
+  });
+  const page = await routes3["board.post"]({ description: "page post stays threadless" }, {});
+  assertEquals(page.ok, true);
+  assertEquals(page.job.posterThreadId, null);
+});
+async function board_listHelper(memory) {
+  return (await createAgentBoard({ memory }).listJobs());
+}
+
+// (P1-2) The SW resolver itself must not swallow registry failures — pinned
+// at source (the behavioral half is the route test above + the KAT).
+Deno.test("board wiring: neither resolver catch site swallows failures", async () => {
+  const swSrc = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const wiring = swSrc.match(/const boardRoutes = createAgentBoardRoutes\(\{([\s\S]*?)\}\);/)?.[1] ?? "";
+  assert(!wiring.includes(".catch("), "the SW board wiring must not swallow resolver failures");
+  const libSrc = await Deno.readTextFile(new URL("../extension/lib/agent-board.js", import.meta.url));
+  const postRoute = libSrc.match(/"board\.post": guarded\(([\s\S]*?)\}\),/)?.[1] ?? "";
+  assert(!postRoute.includes(".catch(() => null)"), "the post route must not catch resolver failures to null");
+});
+
+// (P2) The drain reports what REMAINS so the SW can schedule a bounded retry.
+Deno.test("board store: drainDeliveries reports delivered + remaining for the retry scheduler", async () => {
+  const memory = mockMemory();
+  let failCommits = true;
+  const board = createAgentBoard({
+    memory,
+    commitThread: async () => { if (failCommits) throw new Error("down"); return {}; },
+  });
+  const posted = await board.postJob({ callerId: "writer", agents: AGENTS, description: "pending", posterThreadId: "thread-r" });
+  await board.claimJob({ callerId: "critic", agents: AGENTS, jobId: posted.job.id });
+  await board.settleJob({ callerId: "critic", jobId: posted.job.id, result: "r" });
+  const first = await board.drainDeliveries();
+  assertEquals(first.delivered, 0);
+  assertEquals(first.remaining, 1, "the pending delivery is reported for retry scheduling");
+  failCommits = false;
+  const second = await board.drainDeliveries();
+  assertEquals(second.delivered, 1);
+  assertEquals(second.remaining, 0);
 });

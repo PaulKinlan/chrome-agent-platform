@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.398] — 2026-08-29
+- test(board): r3 RED battery — delivery-capacity admission, resolver fail-closed, drain retry shape (carrier from the k3 lane, verified behavioral-RED on 2f53f407)
+
 ## [0.2.397] — 2026-08-29
 - Board review round 2: no destructive empty-log writes, settled tombstones, durable result delivery
 
