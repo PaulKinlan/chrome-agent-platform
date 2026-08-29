@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.413] — 2026-08-29
+- The microphone picker is smarter: after you first allow the mic it refreshes and shows all your real inputs, each with a live level check, and switching devices mid-dictation can no longer pick up the wrong microphone
+
 ## [0.2.412] — 2026-08-29
 - Agents now know they run inside a Chrome extension: they're taught the real rules (fetch responses are read-once, tabs are opened with the tab tool, search once then use the tool), which stops whole classes of failed tool calls. Find-site-tools now lists only pages that genuinely have tools — never a plain page again — with tamper-proof detection. And every running task has a Stop button that stops exactly that run, instantly
 
