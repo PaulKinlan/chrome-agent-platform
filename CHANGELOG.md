@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.363] — 2026-08-29
+- merge: agent-cards lane (65525e04) — export/import shareable agent cards with pretty-serialization budget enforcement + canonical array-index validation. Reviewed PASS (round 5, gpt-5.6-sol): boundary exports stay under 2 MiB and round-trip; pseudo-indices rejected; suite 1982/0, builds rc=0 attested.
+
+## [0.2.362] — 2026-08-29
+- Shareable agent cards: an agent's definition can be exported to a card file and imported back, with strict size and shape validation so oversized or malformed cards are safely rejected
+
 ## [0.2.361] — 2026-08-29
 - Dialogs now behave the same everywhere. Three of them had been built by hand instead of using the shared ones, so each had its own quirks — one could not be dismissed by clicking outside it, another had no close button, and a fix to one never reached the others. They all use the shared dialogs now: click outside to dismiss, Escape to cancel, and a delete confirmation always starts on Cancel rather than Delete
 
