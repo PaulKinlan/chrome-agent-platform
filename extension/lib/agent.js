@@ -360,6 +360,7 @@ export function createAgent({
   skills = [],
   taskId = "adhoc",
   maxIterations = 12,
+  iterationGuard = null,
   enrollmentGuard = null,
   // `onProgress` receives normalized progress events (thinking / tool-call /
   // tool-result / text / done) from the agent-do loop, so the UI can show LIVE
@@ -626,6 +627,11 @@ export function createAgent({
       // The cap-log lines below are a PURE side-effect (verbose-gated): they
       // never alter hook return values, the progress flow, or timing.
       onStepStart: async (e) => {
+        if (iterationGuard && iterationGuard(e.step) !== true) {
+          const error = new Error("delegation subtree iteration budget exhausted");
+          error.code = "delegation-budget";
+          throw error;
+        }
         // A step is ONE model round-trip — the step span IS the model span
         // (agent-do exposes no separate onModelCall hook; its DebugConfig
         // channels carry content + emit into the progress stream, so they are
@@ -889,6 +895,7 @@ export function createOrchestrator({
   multiAgent = true,
   taskId = "adhoc",
   maxIterations = undefined, // delegation child budget (createAgent default when absent)
+  iterationGuard = null, // dynamic parent/subtree budget fence at each model step
   extraTools = {}, // retained as private source closures; never provider-eager
   readMasterLazySources = async () => [],
   readMasterLazyScope = async () => ({}),
@@ -1058,6 +1065,7 @@ export function createOrchestrator({
     system: masterSystem ?? system,
     memory: masterMemory,
     ...(maxIterations !== undefined ? { maxIterations } : {}),
+    iterationGuard,
     // `extraTools` stay out of this eager map. Their live records come from
     // readMasterLazySources; only delegation's existing closures are added to
     // the private built-in source map.

@@ -148,6 +148,50 @@ export function remainingIterations(state) {
   return Math.max(0, (state.maxIterations ?? 0) - (state.step ?? 0) - (Number.isFinite(state.childSpend) ? state.childSpend : 0));
 }
 
+/** Dynamic parent/subtree budget fence, checked at the model-step boundary. */
+export function canStartDelegationIteration(state, step) {
+  if (!state || typeof state !== "object" || !Number.isFinite(step)) return false;
+  const cap = Number.isFinite(state.maxIterations) ? state.maxIterations : 0;
+  const childSpend = Number.isFinite(state.childSpend) ? state.childSpend : 0;
+  return Math.max(0, Math.floor(step)) + childSpend <= cap;
+}
+
+/** Explain a failed live-cancellation result; null means the cancellation was
+ * accepted and its live abort did not report a failure. */
+export function delegationCancellationFailure(result) {
+  if (result?.ok !== true) return String(result?.error ?? "cancellation was refused");
+  if (result?.abortAttempt?.ok === false) return String(result.abortAttempt.error ?? "live abort failed");
+  return null;
+}
+
+/** A delegated child cannot be permission-paused: resuming through the generic
+ * named-agent route would lose its parent/depth/cap authority. */
+export function canPauseDelegatedRun(state) {
+  return !state || !Number.isFinite(state.depth) || state.depth === 0;
+}
+
+/** Cancellation fence for the child-id allocation → durable-admission gap. */
+export function createDelegationAdmissionFence() {
+  let phase = "pending";
+  let cancelled = false;
+  let reason = "";
+  return {
+    cancel(value = "parent cancelled during child admission") {
+      if (phase !== "pending") return false;
+      cancelled = true;
+      reason = String(value ?? "").slice(0, 500);
+      return true;
+    },
+    admit() {
+      phase = "admitted";
+      return { cancelled, reason };
+    },
+    snapshot() {
+      return { phase, cancelled, reason };
+    },
+  };
+}
+
 /** The per-root-run descendant counter (in-memory enforcement; the durable
  *  record is the audit log). Bounded: entries are deleted when their root run
  *  settles, and the map is hard-capped so a leak of unsettled entries cannot

@@ -241,22 +241,66 @@ try {
   const cancelRec = (audit4?.entries ?? []).find((e) => e.outcome === "cancelled" && e.parentRunId === parentExec);
   check("audit: the cancellation is recorded as CANCELLED (not a generic error)", cancelRec?.outcome === "cancelled" && cancelRec?.toAgentId === "helper-bee", cancelRec);
 
-  // ── 8. COMBINED BUDGET: three sequential delegations shrink the live cap ──
-  // (x3 with doubled-plan children: each child spends ~5 of the root's 12
-  // iterations, so attempt 3's cap must collapse to 2 — the live proof that
-  // child spend is charged against the parent's budget. The denial boundary
-  // itself is unit-tested; the agent-do outer-iteration budget (8 calls) fits
-  // exactly three search+execute rounds + final.)
-  const budget = await page.ev(`globalThis.__katSend("named-agent.run", { id: "delegator-prime", task: "@demo-delegate-agent helper-bee @demo-delegate-x3" })`);
+  // ── 7b. CANCEL DURING ADMISSION: allocation is observable BEFORE admit ───
+  await page.ev(`(() => {
+    globalThis.__katAdmission = { armed: true, event: null, cancel: null, seen: [] };
+    const port = chrome.runtime.connect({ name: "agent-progress" });
+    globalThis.__katAdmission.port = port;
+    port.onMessage.addListener((message) => {
+      const ev = message?.type === "progress" ? message.event : message;
+      globalThis.__katAdmission.seen.push(ev?.type ?? message?.type ?? "unknown");
+      if (globalThis.__katAdmission.seen.length > 40) globalThis.__katAdmission.seen.shift();
+      if (!globalThis.__katAdmission.armed || ev?.type !== "delegation-admission") return;
+      globalThis.__katAdmission.armed = false;
+      globalThis.__katAdmission.event = ev;
+      chrome.runtime.sendMessage({ type: "run.cancel", executionId: ev.parentRunId }, (res) => {
+        globalThis.__katAdmission.cancel = res ?? { ok: false, error: chrome.runtime.lastError?.message ?? "no response" };
+      });
+    });
+    return true;
+  })()`);
+  await sleep(1000); // let chrome.runtime.onConnect register before the run starts
+  await page.ev(`globalThis.__katSendBg("admissionCancel", "named-agent.run", { id: "delegator-prime", task: "@demo-delegate-agent helper-bee @demo-delegate-slow" })`);
+  let admissionState = null;
+  for (let i = 0; i < 80; i++) {
+    await sleep(250);
+    admissionState = await page.ev(`(() => { const s = globalThis.__katAdmission; return s ? { event: s.event, cancel: s.cancel, seen: s.seen } : null; })()`);
+    if (admissionState?.event && admissionState?.cancel) break;
+  }
+  check("admission probe: child id allocated before durable admission", typeof admissionState?.event?.executionId === "string" && admissionState.event.executionId.length > 0, admissionState);
+  check("admission probe: parent cancellation accepted at the allocation fence", admissionState?.cancel?.ok === true, admissionState?.cancel);
+  let admissionResult = null;
+  for (let i = 0; i < 80 && !admissionResult; i++) {
+    await sleep(250);
+    const bg = await page.ev(`globalThis.__katBg["admissionCancel"]`);
+    if (bg?.done) admissionResult = bg.res;
+  }
+  check("admission probe: parent settles cancelled", admissionResult?.cancelled === true || String(admissionResult?.error ?? "").includes("cancel"), admissionResult);
+  const admissionChildId = admissionState?.event?.executionId ?? "";
+  let admissionChildPhase = "";
+  for (let i = 0; i < 40 && !admissionChildPhase; i++) {
+    await sleep(250);
+    const lst = await page.ev(`globalThis.__katSend("run.list", {})`);
+    const child = (lst?.runs ?? []).find((r) => r.executionId === admissionChildId);
+    if (child && child.phase !== "running") admissionChildPhase = child.phase;
+  }
+  check("admission probe: late child is terminal-cancelled, never orphan-running", admissionChildPhase === "cancelled", { admissionChildId, admissionChildPhase });
+  await page.ev(`globalThis.__katAdmission?.port?.disconnect()`);
+
+  // ── 8. COMBINED BUDGET: sequential child spend caps the parent too ───────
+  // x2 keeps a successful terminal result while still proving that the second
+  // attempt sees the first child's spend; the returned terminal receipt proves
+  // own + descendant iterations never exceeded the root's cap.
+  const budget = await page.ev(`globalThis.__katSend("named-agent.run", { id: "delegator-prime", task: "@demo-delegate-agent helper-bee @demo-delegate-x2" })`);
   check("the combined-budget run completes honestly", budget?.ok === true, budget);
   const audit5 = await page.ev(`globalThis.__katSend("named-agent.delegations", {})`);
   // Scope to THIS parent run's delegation attempts (its execution id).
   const budgetRun = (audit5?.entries ?? []).filter((e) => e.parentRunId === budget?.executionId);
   const settledCaps = budgetRun.filter((e) => e.outcome !== "denied").map((e) => e.childCap).reverse(); // the log is most-recent-first
   const settledRems = budgetRun.filter((e) => e.outcome !== "denied").map((e) => e.parentRemaining).reverse();
-  check("audit: three sequential delegations recorded", settledCaps.length === 3, budgetRun.map((e) => ({ outcome: e.outcome, cap: e.childCap, rem: e.parentRemaining })));
-  check("audit: the third child's cap collapses under combined spend (6 → 6 → 2)", settledCaps[0] === 6 && settledCaps[1] === 6 && settledCaps[2] === 2, settledCaps);
-  check("audit: the parent's remaining budget shrinks by each child's spend", settledRems[0] > settledRems[1] && settledRems[1] > settledRems[2] && settledRems[2] <= 2, settledRems);
+  check("audit: two sequential delegations recorded", settledCaps.length === 2, budgetRun.map((e) => ({ outcome: e.outcome, cap: e.childCap, rem: e.parentRemaining })));
+  check("audit: the parent's remaining budget shrinks after child spend", settledRems.length === 2 && settledRems[0] > settledRems[1], settledRems);
+  check("terminal budget: parent + subtree never exceeds the root cap", Number.isFinite(budget?.delegationSpend?.total) && budget.delegationSpend.total <= budget.delegationSpend.cap && budget.delegationSpend.cap === 12, budget?.delegationSpend);
 
   // ── 9. PARALLEL SIBLINGS: two same-step delegations both complete + audit ─
   const parallel = await page.ev(`globalThis.__katSend("named-agent.run", { id: "delegator-prime", task: "@demo-delegate-agent helper-bee @demo-delegate-parallel helper-bee critic" })`);

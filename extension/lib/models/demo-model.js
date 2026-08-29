@@ -94,22 +94,20 @@ function delegateParallelRefs(prompt) {
 // in one run, driving the combined-budget exhaustion path. N ≥ 4 gives the
 // children the LONGER tools plan ("@demo-tools-x2") so a budget denial is
 // reachable below the descendant cap.
-function delegateMultiCount(prompt) {
+export function delegateMultiCount(prompt) {
   const sliceText = extractText(latestRunSlice(prompt)?.slice ?? (Array.isArray(prompt) ? prompt : []));
-  // NO \b after the count: agent-do's outer-iteration continuation is
-  // concatenated directly onto the task text ("…x4Continue working…"), and a
-  // digit→letter boundary does not exist for \b.
-  const m = sliceText.match(/@demo-delegate-x(\d)/);
+  // Accept only the marker boundary or agent-do's exact concatenated
+  // continuation — never arbitrary suffixes such as x3garbage.
+  const m = sliceText.match(/@demo-delegate-x(\d)(?=$|\s|Continue working)/);
   return m ? Math.min(9, Number.parseInt(m[1], 10)) : 0;
 }
 
 // "@demo-tools-x2" — the doubled tools plan (12 actions ≈ 6 loop iterations),
 // so a delegated child can consume its full iteration cap in budget tests.
-function wantsDemoToolsX2(prompt) {
+export function wantsDemoToolsX2(prompt) {
   const sliceText = extractText(latestRunSlice(prompt)?.slice ?? (Array.isArray(prompt) ? prompt : []));
-  // NO \b: agent-do continuation text is concatenated directly onto the task
-  // ("@demo-tools-x2Continue working…") — a digit→letter boundary defeats \b.
-  return /@demo-tools-x2/.test(sliceText);
+  // Accept the exact concatenated continuation, but not x20/x2garbage.
+  return /@demo-tools-x2(?=$|\s|Continue working)/.test(sliceText);
 }
 
 function delegateAgentId(prompt) {

@@ -25,15 +25,20 @@ import {
   MAX_DELEGATION_DEPTH,
   MAX_DELEGATION_DESCENDANTS,
   appendDelegationAudit,
+  canPauseDelegatedRun,
+  canStartDelegationIteration,
   chargeChildSpend,
+  createDelegationAdmissionFence,
   createDelegationRegistry,
   delegationAuditRecord,
+  delegationCancellationFailure,
   evaluateDelegation,
   normalizeCanDelegateTo,
   resolveTargetAgent,
 } from "../extension/lib/agent-delegation.js";
 import { managementToolset, MANAGEMENT_TOOL_NAMES } from "../extension/lib/management-tools.js";
 import { MANAGEMENT_CAPABILITY_TOOL_NAMES } from "../extension/lib/chrome-tool-capabilities.js";
+import { delegateMultiCount, wantsDemoToolsX2 } from "../extension/lib/models/demo-model.js";
 
 // ── (1) guard KATs ──────────────────────────────────────────────────────────
 
@@ -476,4 +481,53 @@ Deno.test("delegation SW pins (round 2): spend charging, cancellation cascade, s
   assertStringIncludes(sw, 'outcome: "denied"');
   // The child's execution id must be observable by the parent WHILE it runs.
   assertStringIncludes(sw, "onExecutionStarted");
+});
+
+// ── (8) ROUND-3 KATs: admission, pause, total budget, audit, marker bounds ──
+
+Deno.test("delegation admission fence: cancellation before durable admission stays authoritative", () => {
+  const fence = createDelegationAdmissionFence();
+  assertEquals(fence.cancel("parent stopped"), true);
+  assertEquals(fence.snapshot(), { phase: "pending", cancelled: true, reason: "parent stopped" });
+  assertEquals(fence.admit(), { cancelled: true, reason: "parent stopped" });
+  assertEquals(fence.cancel("too late"), false);
+});
+
+Deno.test("delegation budget: child spend reduces the parent's model-step boundary", () => {
+  const state = rootState({ maxIterations: 12, childSpend: 6 });
+  assertEquals(canStartDelegationIteration(state, 6), true);
+  assertEquals(canStartDelegationIteration(state, 7), false, "the parent cannot spend iteration 7 after its subtree spent 6");
+});
+
+Deno.test("delegation cancellation: child abort failures are surfaced", () => {
+  assertEquals(delegationCancellationFailure({ ok: true, abortAttempt: { ok: true } }), null);
+  assertEquals(delegationCancellationFailure({ ok: false, error: "refused" }), "refused");
+  assertEquals(delegationCancellationFailure({ ok: true, abortAttempt: { ok: false, error: "abort failed" } }), "abort failed");
+});
+
+Deno.test("delegation pause policy: roots may pause; children must terminalize", () => {
+  assertEquals(canPauseDelegatedRun(rootState({ depth: 0 })), true);
+  assertEquals(canPauseDelegatedRun(rootState({ depth: 1 })), false);
+  assertEquals(canPauseDelegatedRun(rootState({ depth: 2 })), false);
+});
+
+Deno.test("demo delegation markers reject suffix overmatches but accept the exact continuation", () => {
+  const prompt = (text) => [{ role: "user", content: [{ type: "text", text }] }];
+  assertEquals(delegateMultiCount(prompt("@demo-delegate-x3garbage")), 0);
+  assertEquals(delegateMultiCount(prompt("@demo-delegate-x3Continue working on this task")), 3);
+  assertEquals(delegateMultiCount(prompt("@demo-delegate-x3 other")), 3);
+  assertEquals(wantsDemoToolsX2(prompt("@demo-tools-x20")), false);
+  assertEquals(wantsDemoToolsX2(prompt("@demo-tools-x2garbage")), false);
+  assertEquals(wantsDemoToolsX2(prompt("@demo-tools-x2Continue working on this task")), true);
+});
+
+Deno.test("delegation SW pins (round 3): pre-admission fencing, dequeue revalidation, terminal child pauses, audited input, surfaced cancel failures", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  assertStringIncludes(sw, "delegationAdmissions.set(childExecutionId, admissionFence)");
+  assertStringIncludes(sw, 'type: "delegation-admission"');
+  assertStringIncludes(sw, "const liveState = activeDelegationRuns.get(callerExecutionId)");
+  assertStringIncludes(sw, "canPauseDelegatedRun(delegationState)");
+  assertStringIncludes(sw, 'auditDenied("delegation-input"');
+  assertStringIncludes(sw, "delegationCancellationFailure(child)");
+  assertStringIncludes(sw, "delegationSpend.total > delegationSpend.cap");
 });

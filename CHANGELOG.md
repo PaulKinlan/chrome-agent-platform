@@ -1,6 +1,7 @@
 # Changelog
 
 ## [0.2.348] — 2026-08-29
+- fix(delegation): REVIEW ROUND 3 — fence child admission before durable writes, terminalize delegated permission pauses, enforce the combined parent/subtree step cap, audit malformed inputs, and bound demo marker matching
 - fix(delegation): REVIEW ROUND 2 — combined parent+child budget accounting, cancellation cascade, sibling serialization, complete audit
 
 ## [0.2.347] — 2026-08-28

@@ -186,9 +186,13 @@ import {
   MAX_DELEGATION_DEPTH,
   MAX_DELEGATION_DESCENDANTS,
   appendDelegationAudit,
+  canPauseDelegatedRun,
+  canStartDelegationIteration,
   chargeChildSpend,
+  createDelegationAdmissionFence,
   createDelegationRegistry,
   delegationAuditRecord,
+  delegationCancellationFailure,
   evaluateDelegation,
   normalizeCanDelegateTo,
   remainingIterations,
@@ -520,6 +524,9 @@ const delegationFinalSpend = new Map(); // executionId -> iterations consumed
 // Delegation round-2 (P1-b): LIVE child execution ids per parent execution,
 // so run.cancel can cascade the tombstone + abort through the whole tree.
 const delegationChildren = new Map(); // parentExecutionId -> Set<childExecutionId>
+// Child ids are allocated and fenced BEFORE durable admission, closing the
+// parent-cancel → late-child-start window.
+const delegationAdmissions = new Map(); // childExecutionId -> admission fence
 // Delegation round-2 (P1-c): per-CALLER serialization of sibling delegations.
 // agent-do executes same-step tool calls concurrently and each child
 // saves/restores the singleton run context — two in-flight siblings can
@@ -1014,7 +1021,7 @@ function abortWorker(origin) {
   }
 }
 
-async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverride = null, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined) {
+async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverride = null, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined, iterationGuard = null) {
   // A BACKGROUND/SCHEDULED agent has its OWN memory (Paul: all agents get their
   // own OPFS). Build a FRESH orchestrator bound to that store — never the cached
   // shared master, whose memory tools would otherwise write to the master's
@@ -1034,6 +1041,7 @@ async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverr
       agentRole,
       approvalExecutionId,
       runMaxIterations,
+      iterationGuard,
     );
   }
   while (true) {
@@ -1253,7 +1261,7 @@ async function readSiteLazySources(origin, runGenCell) {
 // ensureOrchestrator's cache path AND the fresh per-background-agent path.
 // `promptScope`/`agentRole` select the system-prompt composition (the hub by
 // default; a named agent's own scope + role when it runs).
-async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined) {
+async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined, iterationGuard = null) {
     // A per-agent model override (the named-agent provider config) REPLACES the
     // global model for THIS build — the resolved { model, modelId, providerName }
     // is self-contained, so a per-agent model never mixes one provider's
@@ -1319,6 +1327,7 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       // The delegation child run's iteration budget (bounded by the parent's
       // REMAINING iterations upstream in the agent.delegate route).
       maxIterations: runMaxIterations,
+      iterationGuard,
       // The composed effective prompt for this run's scope (see above).
       masterSystem: masterComposed.text,
       // SCOPED (hook) runs: the read-only browser set (no open/navigate/close/schedule)
@@ -2001,7 +2010,7 @@ function providerResumeIdentity(config) {
   };
 }
 
-async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSurfaceRef = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null, onExecutionStarted = null }) {
+async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSurfaceRef = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, preallocatedExecutionId = null, admissionFence = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null, onExecutionStarted = null }) {
   // skipRunLock is ONLY for the delegation child path (agent.delegate): the
   // child builds a FRESH orchestrator (its own memory + abort controller via
   // the memoryOverride/promptScope/executionId path below), so the shared-
@@ -2019,7 +2028,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     const currentProviderBinding = resumedExecutionId
       ? providerResumeIdentity(providerConfig)
       : (providerBinding ?? providerResumeIdentity(providerConfig));
-    const executionId = resumedExecutionId || newExecutionId();
+    const executionId = resumedExecutionId || preallocatedExecutionId || newExecutionId();
     // ONE-SHOT approval bridge (per-agent alarms P1-A): the trusted surface
     // passes the approvalId(s) its owner just resolved with this retry's run
     // start; the approved-but-unconsumed tuples re-key onto THIS execution so
@@ -2082,8 +2091,16 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     // start() compensated this pre-authority refusal. Do not call rollback:
     // there is no readable execution authority from which deletion is safe.
     if (admissionFailure) return admissionFailure;
-    // The run is durable now — observers (the delegation parent registering
-    // its live child for budget charging + cancellation cascade) may bind.
+    // Close the allocated-child → durable-admission cancellation gap. A parent
+    // cancellation may have fenced this child before its record existed; now
+    // that admission is authoritative, terminalize it before any provider or
+    // orchestrator work can start.
+    const admission = admissionFence?.admit?.() ?? null;
+    if (admission?.cancelled) {
+      await cancelExecutionTree(executionId, { reason: admission.reason || "parent cancelled during child admission" });
+      return { ok: false, cancelled: true, aborted: true, code: "delegation-cancelled", error: "run cancelled by owner during admission", executionId };
+    }
+    // The run is durable now — observers may bind.
     try { onExecutionStarted?.(executionId); } catch { /* an observer must never break the run */ }
     if (resumedExecutionId) {
       const activated = await durableRuns.activateResume(executionId, resumeToken, currentProviderBinding, allowProviderChange);
@@ -2092,6 +2109,19 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     const early = await providerRunGate(providerConfig);
     if (!early.ok) {
       if (early.code === "permission_required") {
+        // A delegated child cannot resume through named-agent.run without
+        // losing its parent/depth/cap authority. Fail terminally instead.
+        if (!canPauseDelegatedRun(delegationState)) {
+          await durableRuns.settle(executionId, {
+            ok: false,
+            error: early.reason,
+            errorCategory: "permission",
+            errorReason: "delegated runs cannot pause and resume outside their hierarchy",
+            errorAction: "Resolve the provider permission, then start a new parent run.",
+            logicalId: taskId,
+          });
+          return { ok: false, code: "delegation-permission-required", error: early.reason, errorCategory: "permission", executionId };
+        }
         const paused = await durableRuns.pauseForPermission(executionId, {
           code: early.code,
           reason: early.reason,
@@ -2256,6 +2286,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         agentRole,
         executionId,
         delegationState ? delegationState.maxIterations : undefined,
+        delegationState ? (step) => canStartDelegationIteration(delegationState, step) : null,
       );
       durableRunAborters.set(executionId, () => {
         try { orch?.abort?.(); } catch { /* already stopped */ }
@@ -2452,7 +2483,20 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         // Re-check ownership AFTER the notification commit as well.
         await fence?.assertOwned?.();
       }
-      return { ok: true, result, executionId };
+      const delegationSpend = delegationState
+        ? {
+          own: delegationState.step ?? 0,
+          descendants: delegationState.childSpend ?? 0,
+          total: (delegationState.step ?? 0) + (delegationState.childSpend ?? 0),
+          cap: delegationState.maxIterations,
+        }
+        : null;
+      if (delegationSpend && delegationSpend.total > delegationSpend.cap) {
+        const error = new Error("delegation subtree iteration budget exceeded");
+        error.code = "delegation-budget";
+        throw error;
+      }
+      return { ok: true, result, executionId, ...(delegationSpend ? { delegationSpend } : {}) };
     } catch (error) {
       if (isNativeQuotaExceededError(error)) {
         // Settling allocates a retained payload and terminal outbox before it
@@ -3110,7 +3154,7 @@ function executeWorkerTool(toolName, args, context) {
 // child through the SAME path (own OPFS sandbox, own provider override, own
 // prompt scope) — delegation adds only the delegation context, the budget cap,
 // skipRunLock, and never forwards approvalBinding.
-async function runNamedAgentTask({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null, onExecutionStarted = null }) {
+async function runNamedAgentTask({ id, task, attachments, runId, threadId = null, _executionId = null, _preallocatedExecutionId = null, _admissionFence = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null, onExecutionStarted = null }) {
   // The agent runs the task with its OWN OPFS sandbox (namedAgentMemory — its
   // memory + history), so its runs read/write its own tier, never the
   // master's or a site's.
@@ -3145,6 +3189,8 @@ async function runNamedAgentTask({ id, task, attachments, runId, threadId = null
       approvalBinding: approvalBinding ?? null,
       runKind: "agent",
       executionId: _executionId,
+      preallocatedExecutionId: _preallocatedExecutionId,
+      admissionFence: _admissionFence,
       permissionResume: _permissionResume,
       resumeToken: _resumeToken,
       allowProviderChange: _allowProviderChange,
@@ -3192,13 +3238,11 @@ async function runNamedAgentTask({ id, task, attachments, runId, threadId = null
 // a cancelled child surfaces a STRUCTURED cancellation, not a generic error.
 async function runDelegatedChild(callerExecutionId, state, targetRef, task, briefContext) {
   const taskText = typeof task === "string" ? task.trim() : "";
-  if (!taskText) return { ok: false, code: "delegation-input", error: "a non-empty task is required" };
-  if (taskText.length > 4000) return { ok: false, code: "delegation-input", error: "task too long (4000 chars max)" };
   const callerAgent = await getNamedAgent(state.agentId);
   const agents = await listNamedAgents();
   const targetAgent = resolveTargetAgent(targetRef, agents);
-  // Denied attempts are audited too (P1-d) — the durable log is the only
-  // trace a model left when its delegation was refused.
+  // Denied attempts are audited too (P1-d) — including malformed input, which
+  // used to return before this helper existed.
   const auditDenied = async (code, detail, toAgent, toAgentId) => {
     await appendDelegationAudit(masterMemory(), delegationAuditRecord({
       rootRunId: state.rootRunId,
@@ -3217,6 +3261,8 @@ async function runDelegatedChild(callerExecutionId, state, targetRef, task, brie
     })).catch(() => {});
     return { ok: false, code, error: detail };
   };
+  if (!taskText) return await auditDenied("delegation-input", "a non-empty task is required", targetAgent?.name, targetAgent?.id);
+  if (taskText.length > 4000) return await auditDenied("delegation-input", "task too long (4000 chars max)", targetAgent?.name, targetAgent?.id);
   if (!callerAgent || callerAgent.id !== state.agentId) {
     return await auditDenied("delegation-context", "the calling run's agent identity could not be verified", "", "");
   }
@@ -3254,7 +3300,15 @@ async function runDelegatedChild(callerExecutionId, state, targetRef, task, brie
     childCap: verdict.child.maxIterations,
     task: taskText,
   };
-  let childExecutionId = "";
+  const childExecutionId = newExecutionId();
+  const admissionFence = createDelegationAdmissionFence();
+  delegationAdmissions.set(childExecutionId, admissionFence);
+  let children = delegationChildren.get(callerExecutionId);
+  if (!children) { children = new Set(); delegationChildren.set(callerExecutionId, children); }
+  children.add(childExecutionId);
+  // Trusted extension surfaces can deterministically cancel after allocation
+  // but before admission; unknown progress types are ignored by normal UI.
+  broadcastProgress({ type: "delegation-admission", parentRunId: callerExecutionId, executionId: childExecutionId, childRunId, agentId: targetAgent.id });
   let result = null;
   let thrown = null;
   try {
@@ -3263,18 +3317,13 @@ async function runDelegatedChild(callerExecutionId, state, targetRef, task, brie
       task: brief,
       runId: childRunId,
       threadId: null,
+      _preallocatedExecutionId: childExecutionId,
+      _admissionFence: admissionFence,
       approvalBinding: null, // the child inherits NO parent approvals — its tool approvals go through its own flow
       delegation: { agentId: targetAgent.id, depth: verdict.child.depth, path: verdict.child.path, rootRunId: state.rootRunId },
       maxIterations: verdict.child.maxIterations,
       skipRunLock: true,
       parentRunId: callerExecutionId,
-      onExecutionStarted: (id) => {
-        childExecutionId = String(id ?? "");
-        if (!childExecutionId) return;
-        let set = delegationChildren.get(callerExecutionId);
-        if (!set) { set = new Set(); delegationChildren.set(callerExecutionId, set); }
-        set.add(childExecutionId);
-      },
     });
   } catch (error) {
     thrown = error;
@@ -3282,12 +3331,11 @@ async function runDelegatedChild(callerExecutionId, state, targetRef, task, brie
     // P1-a: charge the settled child's TOTAL subtree consumption (its own
     // steps plus everything ITS children charged to it) to this caller, so
     // parent + descendants can never spend the same allowance twice.
-    if (childExecutionId) {
-      chargeChildSpend(state, delegationFinalSpend.get(childExecutionId) ?? 0);
-      delegationFinalSpend.delete(childExecutionId);
-      const set = delegationChildren.get(callerExecutionId);
-      if (set) { set.delete(childExecutionId); if (!set.size) delegationChildren.delete(callerExecutionId); }
-    }
+    chargeChildSpend(state, delegationFinalSpend.get(childExecutionId) ?? 0);
+    delegationFinalSpend.delete(childExecutionId);
+    delegationAdmissions.delete(childExecutionId);
+    const set = delegationChildren.get(callerExecutionId);
+    if (set) { set.delete(childExecutionId); if (!set.size) delegationChildren.delete(callerExecutionId); }
   }
   if (thrown) {
     const detail = String(thrown?.message ?? thrown).slice(0, 200);
@@ -3323,13 +3371,19 @@ async function runDelegatedChild(callerExecutionId, state, targetRef, task, brie
 // execution is cancelled recursively first — a parent never settles cancelled
 // while a child keeps spending.
 async function cancelExecutionTree(executionId, { reason, requestId = null }) {
-  return await durableRuns.cancel(executionId, {
+  const admission = delegationAdmissions.get(executionId);
+  if (admission?.cancel?.(reason)) {
+    return { ok: true, cancelled: true, pendingAdmission: true, executionId };
+  }
+  const result = await durableRuns.cancel(executionId, {
     reason,
     requestId,
     onAuthorityPersisted: async () => {
       const kids = [...(delegationChildren.get(executionId) ?? [])];
       for (const kid of kids) {
-        await cancelExecutionTree(kid, { reason: `parent run cancelled: ${reason}` }).catch(() => {});
+        const child = await cancelExecutionTree(kid, { reason: `parent run cancelled: ${reason}` });
+        const failure = delegationCancellationFailure(child);
+        if (failure) throw new Error(`delegated child cancellation failed (${kid}): ${failure}`);
       }
       const abort = durableRunAborters.get(executionId);
       if (!abort) return false;
@@ -3337,6 +3391,9 @@ async function cancelExecutionTree(executionId, { reason, requestId = null }) {
       return true;
     },
   });
+  const failure = delegationCancellationFailure(result);
+  if (failure) return { ...result, ok: false, error: `live cancellation failed: ${failure}` };
+  return result;
 }
 
 const handlers = mergeRouteMaps(
@@ -4317,8 +4374,7 @@ const handlers = mergeRouteMaps(
   // FRESH execution (skipRunLock — see runTask for why that is safe).
   async "named-agent.delegate"({ agent: targetRef, task, context: briefContext = "" }, routeContext) {
     const callerExecutionId = typeof routeContext?.executionId === "string" ? routeContext.executionId : "";
-    const state = callerExecutionId ? activeDelegationRuns.get(callerExecutionId) : null;
-    if (!state) {
+    if (!callerExecutionId || !activeDelegationRuns.has(callerExecutionId)) {
       return { ok: false, code: "delegation-context", error: "delegation is only available inside a running named agent" };
     }
     // P1-c: serialize delegations PER CALLER — agent-do executes same-step
@@ -4328,7 +4384,13 @@ const handlers = mergeRouteMaps(
     // delegating through its OWN execution id gets its own lock, so nested
     // delegation stays allowed.
     const prior = delegationLocks.get(callerExecutionId) ?? Promise.resolve();
-    const attempt = prior.then(() => runDelegatedChild(callerExecutionId, state, targetRef, task, briefContext));
+    const attempt = prior.then(() => {
+      // A sibling may have consumed the remaining budget or the parent may
+      // have settled/cancelled while this attempt waited for the lock.
+      const liveState = activeDelegationRuns.get(callerExecutionId);
+      if (!liveState) return { ok: false, code: "delegation-context", error: "the parent run settled before this queued delegation started" };
+      return runDelegatedChild(callerExecutionId, liveState, targetRef, task, briefContext);
+    });
     const tail = attempt.catch(() => {});
     delegationLocks.set(callerExecutionId, tail);
     tail.finally(() => { if (delegationLocks.get(callerExecutionId) === tail) delegationLocks.delete(callerExecutionId); });
