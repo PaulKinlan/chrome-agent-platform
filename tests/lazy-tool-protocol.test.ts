@@ -264,6 +264,35 @@ Deno.test("lazy protocol: unavailable tools are explainable but receive no execu
   assertEquals(protocol.diagnostics().activeSelections, 0);
 });
 
+Deno.test("lazy protocol: a 30 KiB HTML artifact uses the bounded large-content path without changing bytes", async () => {
+  const html = `<!doctype html><title>Large artifact</title><main>${"é<&>".repeat(6_000)}</main>`;
+  assert(new TextEncoder().encode(html).byteLength > LAZY_TOOL_PROTOCOL_BOUNDS.maxStringBytes);
+  let saved: Record<string, unknown> | undefined;
+  const records = executableManagementToolRecords(
+    managementToolset({
+      callRoute: (_type: string, args: Record<string, unknown>) => {
+        saved = args;
+        return { ok: true, id: "asset-1" };
+      },
+    }),
+    adapterContext(),
+  ).filter((record: { descriptorInput: { toolId: string } }) =>
+    record.descriptorInput.toolId === "create_asset"
+  );
+  const protocol = new LazyToolProtocol({
+    readSources: () => records,
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+  });
+  const context = runContext();
+  const searched = await protocol.search({ query: "create_asset", limit: 1 }, context);
+  const result = await protocol.execute({
+    selectionRef: searched.results[0].selectionRef,
+    arguments: { origin: "master", type: "html", name: "Large", content: html },
+  }, context);
+  assertEquals(result.ok, true);
+  assertEquals(saved?.content, html, "large-content writes must never normalize or truncate the document");
+});
+
 Deno.test("lazy protocol: hostile accessors, Unicode and oversized arguments fail without dispatch", async () => {
   let calls = 0;
   const protocol = new LazyToolProtocol({

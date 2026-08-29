@@ -51,6 +51,11 @@ export const LAZY_TOOL_PROTOCOL_BOUNDS = Object.freeze({
   maxArrayItems: 64,
   maxKeyBytes: 128,
   maxStringBytes: 16 * 1024,
+  // Deliberate large-content channel: only these product-owned artifact fields
+  // may use the artifact store's real 256 KiB body bound. Ordinary arguments
+  // retain the 16/32 KiB limits below; documents are never truncated.
+  maxLargeContentBytes: 256 * 1024,
+  maxLargeArgumentBytes: 288 * 1024,
   maxResultBytes: 64 * 1024,
   maxResultDepth: 8,
   maxResultNodes: 512,
@@ -117,7 +122,7 @@ function safeKey(key) {
   return normalized;
 }
 
-function projectData(value, limits, state, depth = 0) {
+function projectData(value, limits, state, depth = 0, path = []) {
   if (++state.nodes > limits.maxNodes || depth > limits.maxDepth) {
     throw new Error("data-bound-exceeded");
   }
@@ -128,14 +133,16 @@ function projectData(value, limits, state, depth = 0) {
   }
   if (typeof value === "string") {
     if (hasLoneSurrogates(value)) throw new Error("data-unicode-invalid");
-    const normalized = value.normalize("NFKC");
+    const fieldLimit = limits.stringLimit?.(path) ?? limits.maxStringBytes;
+    const preserve = limits.preserveString?.(path) === true;
+    const normalized = preserve ? value : value.normalize("NFKC");
     if (
       !limits.truncateStrings &&
-      utf8ByteLength(normalized) > limits.maxStringBytes
+      utf8ByteLength(normalized) > fieldLimit
     ) {
       throw new Error("data-string-bound");
     }
-    return truncateUtf8(normalized, limits.maxStringBytes);
+    return truncateUtf8(normalized, fieldLimit);
   }
   if (
     value === undefined || typeof value === "bigint" ||
@@ -167,7 +174,7 @@ function projectData(value, limits, state, depth = 0) {
       if (!descriptor || !("value" in descriptor)) {
         throw new Error("data-accessor");
       }
-      out.push(projectData(descriptor.value, limits, state, depth + 1));
+      out.push(projectData(descriptor.value, limits, state, depth + 1, [...path, index]));
     }
     return out;
   }
@@ -190,28 +197,42 @@ function projectData(value, limits, state, depth = 0) {
       const key = safeKey(rawKey);
       const descriptor = descriptors[rawKey];
       if (!key || !("value" in descriptor)) throw new Error("data-accessor");
-      out[key] = projectData(descriptor.value, limits, state, depth + 1);
+      out[key] = projectData(descriptor.value, limits, state, depth + 1, [...path, key]);
     }
     return out;
   }
   throw new Error("data-type-invalid");
 }
 
-export function sanitizeLazyToolArguments(value) {
+function largeContentField(descriptor) {
+  if (descriptor?.sourceKind !== "management") return null;
+  if (["create_asset", "update_asset"].includes(descriptor.toolId)) return "content";
+  if (descriptor.toolId === "generate_ui") return "html";
+  return null;
+}
+
+export function sanitizeLazyToolArguments(value, descriptor) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("arguments-must-be-object");
   }
+  const contentField = largeContentField(descriptor);
   const projected = projectData(value, {
     maxNodes: LAZY_TOOL_PROTOCOL_BOUNDS.maxArgumentNodes,
     maxDepth: LAZY_TOOL_PROTOCOL_BOUNDS.maxArgumentDepth,
     maxObjectKeys: LAZY_TOOL_PROTOCOL_BOUNDS.maxObjectKeys,
     maxArrayItems: LAZY_TOOL_PROTOCOL_BOUNDS.maxArrayItems,
     maxStringBytes: LAZY_TOOL_PROTOCOL_BOUNDS.maxStringBytes,
+    stringLimit: (path) => path.length === 1 && path[0] === contentField
+      ? LAZY_TOOL_PROTOCOL_BOUNDS.maxLargeContentBytes
+      : LAZY_TOOL_PROTOCOL_BOUNDS.maxStringBytes,
+    preserveString: (path) => path.length === 1 && path[0] === contentField,
     truncateStrings: false,
   }, { nodes: 0 });
+  const maxArgumentBytes = contentField
+    ? LAZY_TOOL_PROTOCOL_BOUNDS.maxLargeArgumentBytes
+    : LAZY_TOOL_PROTOCOL_BOUNDS.maxArgumentBytes;
   if (
-    utf8ByteLength(JSON.stringify(projected)) >
-      LAZY_TOOL_PROTOCOL_BOUNDS.maxArgumentBytes
+    utf8ByteLength(JSON.stringify(projected)) > maxArgumentBytes
   ) {
     throw new Error("arguments-too-large");
   }
@@ -370,7 +391,7 @@ async function liveSnapshot(readSources) {
   });
 }
 
-async function validateRecordArguments(record, args) {
+async function validateRecordArguments(record, args, descriptor) {
   const validate = ownData(record, "validateArguments");
   if (typeof validate !== "function") {
     return fixedError("lazy-validator-unavailable");
@@ -391,7 +412,7 @@ async function validateRecordArguments(record, args) {
   try {
     // A trusted validator may apply defaults/transforms. Bound and accessor-check
     // that derived object too before it reaches the existing dispatcher.
-    return Object.freeze({ ok: true, data: sanitizeLazyToolArguments(data) });
+    return Object.freeze({ ok: true, data: sanitizeLazyToolArguments(data, descriptor) });
   } catch {
     return validationError("bad-data", "the validator's payload failed sanitization");
   }
@@ -567,7 +588,7 @@ export class LazyToolProtocol {
     if (!firstResolved.ok) return firstResolved;
     let args;
     try {
-      args = sanitizeLazyToolArguments(ownData(request, "arguments"));
+      args = sanitizeLazyToolArguments(ownData(request, "arguments"), firstResolved.descriptor);
     } catch {
       return validationError("bad-data", "the arguments payload failed sanitization");
     }
@@ -580,7 +601,7 @@ export class LazyToolProtocol {
       "before-validation",
     );
     if (!firstAuthority.ok) return firstAuthority;
-    const validated = await validateRecordArguments(firstRecord, args);
+    const validated = await validateRecordArguments(firstRecord, args, firstResolved.descriptor);
     if (!validated.ok) return validated;
     if (isAborted(signal)) return fixedError("lazy-run-aborted");
 
@@ -614,6 +635,7 @@ export class LazyToolProtocol {
     const dispatchValidated = await validateRecordArguments(
       dispatchRecord,
       validated.data,
+      dispatchResolved.descriptor,
     );
     if (!dispatchValidated.ok) return dispatchValidated;
     const dispatch = ownData(dispatchRecord, "dispatch");
