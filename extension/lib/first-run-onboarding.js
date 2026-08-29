@@ -1,8 +1,8 @@
 // lib/first-run-onboarding.js — pure first-run and credential-durability rules.
 //
-// This module never requests a permission on its own. The only request helper
-// requires the native owner click and active user-activation object supplied by
-// the Settings page; model/service-worker routes cannot mint that authority.
+// This module never requests a permission on its own. Install-granted state is
+// verified by the owning surface; model/service-worker routes cannot mint owner
+// authority.
 
 export const FIRST_RUN_TASK_PROMPT =
   'Create or update a text artifact named "First task" in the master scope with three concise ways I can use this agent hub. Call create_asset with the idempotency key "first-task" so a repeated run updates the same artifact instead of creating a duplicate.';
@@ -32,40 +32,6 @@ export function credentialNeedsDurableStorage(
 
 export function isGenuineOwnerClick(event, userActivation) {
   return event?.isTrusted === true && userActivation?.isActive === true;
-}
-
-/**
- * Verify the install-granted storage permission from a genuine owner click.
- * Storage is granted at install (manifest permissions) — there is no runtime
- * request left; this VERIFIES with contains() and fails CLOSED (a contains()
- * error is NOT granted). The genuine-click guard stays: the warning's action
- * must remain a deliberate owner gesture.
- */
-export async function requestStorageFromOwnerClick({
-  event,
-  userActivation,
-  permissionsApi,
-} = {}) {
-  if (!isGenuineOwnerClick(event, userActivation)) {
-    return { granted: false, verified: false, reason: "owner-click-required" };
-  }
-  if (typeof permissionsApi?.contains !== "function") {
-    return {
-      granted: false,
-      verified: false,
-      reason: "permissions-api-unavailable",
-    };
-  }
-  try {
-    const granted = (await permissionsApi.contains({ permissions: ["storage"] })) === true;
-    return {
-      granted,
-      verified: true,
-      reason: granted ? "granted" : "not-granted-at-install",
-    };
-  } catch {
-    return { granted: false, verified: true, reason: "verify-failed" };
-  }
 }
 
 /**

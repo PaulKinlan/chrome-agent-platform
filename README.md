@@ -138,13 +138,13 @@ mandatory. Static PASS is not Chrome Web Store policy approval.
 
 ```
 extension/
-  manifest.json                 MV3 manifest (permissions: []; all optional)
+  manifest.json                 MV3 manifest (install-granted permissions; <all_urls>)
   background/service-worker.js  the router + agent core (bundled → dist/)
   ntp/                          the agent hub (new-tab page — the command center)
   sidepanel/                    the driven-page surface (chrome.sidePanel)
   chat/                         the conversation surface
-  options/                      the settings (providers, agents, appearance, permissions,
-                                hooks, advanced system prompts, usage, data & memory)
+  options/                      the settings (providers, agents, permissions, hooks,
+                                advanced system prompts, usage, data & memory)
   artifacts/                    the artifact gallery
   content/                      the WebMCP bridge + window.* tool inference (MAIN + isolated)
   shared/                       the single-source Web Components (the design system)

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.378] — 2026-08-29
+- Settings no longer offers dead storage verification or Appearance links, while keeping real owner controls and install-grant diagnostics intact
+
 ## [0.2.377] — 2026-08-29
 - merge: recent-activity redaction lane (07eef98a) — redactResultValue scrubs every string leaf against RESULT_SECRET_SHAPES (sk-/AKIA/ghp_/xox*/AIza/JWT), try/finally exception-safe WeakSet cycle cleanup in pure.js + tool-summary.js + docs/pure.js mirror, '[Circular]' documented as display placeholder, DAG pin asserts both branches [REDACTED]. Reviewed PASS (round 6); coordinator RED-verified cyclic getter probe on b42a46a6. Manifest resolved to main's P0 shape.
 
