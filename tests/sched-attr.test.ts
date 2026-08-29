@@ -166,7 +166,22 @@ Deno.test("schedule_task tool: persists the active run's surface as the payload 
 });
 
 // ────────────────────────────────────────────────────────────────────────────
-// Part 4 — SW BOOT: fire the REAL handleAlarm with an owner payload
+// Part 4 — named-agent alarm identity: scheduled and interactive runs must use
+// the SAME immutable instance namespace that named-agent.history reads.
+// ────────────────────────────────────────────────────────────────────────────
+Deno.test("scheduled named-agent fire resolves the live immutable memory namespace", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const start = source.indexOf('} else if (alarm.name.startsWith("agent:"))');
+  const end = source.indexOf("      // Surface attribution for the fired run", start + 1);
+  const namedAlarmPath = source.slice(start, end);
+  assert(namedAlarmPath.includes("memory: namedAgentMemory(agent.instanceId || slug)"),
+    "the scheduled fire must write where named-agent.history reads");
+  assert(!namedAlarmPath.includes("memory: namedAgentMemory(slug)"),
+    "the legacy slug directory must not receive new scheduled transcripts");
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Part 5 — SW BOOT: fire the REAL handleAlarm with an owner payload
 // ────────────────────────────────────────────────────────────────────────────
 
 // ---- minimal in-memory IndexedDB (usage-store.js is the run path's ledger;

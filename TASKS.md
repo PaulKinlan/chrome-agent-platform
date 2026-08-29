@@ -1642,4 +1642,26 @@ evidence every other task depends on).
 - History:
   - 2026-08-29 20:30 UTC — diagnosis: commit `ce6247ef` changed `start()` to await `_requestMicStream()` before constructing and starting SpeechRecognition. The composer already displays `mic-error` through `setStatus`, and the real NTP KAT proves `offsetParent` is non-null in the visible layout. Falsification on the unfixed source produced 39 pass / 4 fail: a rejected meter left the button idle with the old permission error, a never-settling meter left it idle indefinitely, and recognition did not start in either case. The candidate starts recognition first, renders the CSS fallback immediately, then adopts the meter stream asynchronously under the existing generation guard. Rejection leaves recognition active and reports only that the live waveform is unavailable; late streams are stopped after cancellation. Green evidence: focused 9/9, mic KAT 43/43, full unit 2359/0, final build clean.
 
+## [CAP-FB-20260829-BACKGROUND-RUN-TRANSCRIPT-01] Scheduled named-agent runs disappear from the agent conversation
+- Feedback: 2026-08-29 — product owner reports an hourly agent completes work in the background but opening that agent shows no conversation
+- Updated: 2026-08-29 21:22 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: implementation worker
+- Workspace: active (local path private)
+- Branch: `cap-bgrun-transcript`
+- Base: `55646fae`
+- Candidate: this tracker commit
+- Shipping: —
+- Acceptance: create a scheduled named agent, let its real alarm fire, open that agent through the real hub UI, and see the scheduled task/result in the same conversation as interactive runs
+- Review: required by reviewer — pending
+- Gates: focused scheduled-attribution 7/7; real-browser scheduled-run transcript RED 4/5 then GREEN 5/5 with screenshots; full unit 2370 pass / 0 fail; developer build clean (95 generated files, 28 packages, CSP/oracle/Wasm assertions green)
+- Blockers: —
+- Next: reviewer checks the candidate diff and behavioral evidence, then the coordinator lands it without a manual version bump
+- Recover: `git show cap-bgrun-transcript -- extension/background/service-worker.js tests/sched-attr.test.ts scripts/kat-background-run-transcript.ts`
+- History:
+  - 2026-08-29 21:22 UTC — real-browser RED: a real named agent and recurring schedule were created, the accelerated real alarm reached durable terminal state, and the real agent row opened, but its conversation had no transcript (4 pass / 1 fail). Root cause is an identity split introduced by immutable agent namespaces: interactive runs and `named-agent.history` use `agent.instanceId`, while the `agent:<slug>` alarm branch still wrote to `namedAgentMemory(slug)`. The candidate uses that already-loaded agent row's immutable instance ID, exactly matching the interactive and history paths, so both address the same OPFS journal.
+  - 2026-08-29 21:28 UTC — falsification and green gates complete. The focused identity assertion fails on the unfixed line and passes after restoration; focused suite 7/7. The same real-browser journey is GREEN 5/5 and captures the opened conversation with its scheduled user turn plus demo-agent result. Full unit suite 2370/0; final developer build and changelog sync clean. Author diff review found no security, accessibility, design, memory, or performance regression: this reuses the existing immutable instance identity already used by interactive runs and changes no authority or UI surface.
+
 

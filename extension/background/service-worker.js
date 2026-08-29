@@ -885,7 +885,9 @@ async function handleAlarm(alarm) {
           agentRole: agent.role ?? "",
           agentSkills: await resolveAgentSkills(agent),
           agentSurfaceRef: `named:${slug}`,
-          memory: namedAgentMemory(slug),
+          // Match runNamedAgentTask + named-agent.history: the immutable
+          // instance namespace, never the reusable/legacy slug directory.
+          memory: namedAgentMemory(agent.instanceId || slug),
         });
       }
     } else {
