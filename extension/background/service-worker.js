@@ -3711,6 +3711,11 @@ const boardRoutes = createAgentBoardRoutes({
   },
   commitThread: commitThreadTerminal,
   broadcast: broadcastProgress,
+  // Live kick (review r5 P2): the routes invoke this whenever a settlement
+  // creates a pending delivery — reset the backoff and drain NOW.
+  onPendingDelivery: () => {
+    void kickBoardDrain();
+  },
 });
 
 // Startup drain (review r2 P1-3) + bounded backoff retry (review r3 P2):
@@ -3721,22 +3726,40 @@ const boardRoutes = createAgentBoardRoutes({
 // idempotent by its board:<jobId> key, so retries are safe. Fire-and-forget —
 // delivery retries never block route registration.
 const BOARD_DRAIN_ALARM = "board-drain-retry";
+const BOARD_DRAIN_MAX_ATTEMPTS = 5;
+const BOARD_DRAIN_BASE_DELAY_MS = 30000;
 let boardDrainAttempts = 0;
+function scheduleBoardDrain(delayMs) {
+  chrome.alarms.create(BOARD_DRAIN_ALARM, { when: Date.now() + delayMs });
+}
+// ONE shared rejection handler for every drain entry point (startup, alarm
+// retry, live kick): logs and schedules the next bounded backoff alarm.
+function handleBoardDrainRejection(err, context) {
+  boardDrainAttempts += 1;
+  swLog.error(`board drain ${context} failed`, { error: String(err?.message ?? err), attempts: boardDrainAttempts });
+  if (boardDrainAttempts < BOARD_DRAIN_MAX_ATTEMPTS) scheduleBoardDrain(BOARD_DRAIN_BASE_DELAY_MS * 2 ** (boardDrainAttempts - 1));
+}
 async function boardDrainOnce() {
   const { delivered, remaining } = await boardRoutes.drain();
   boardDrainAttempts = remaining > 0 ? boardDrainAttempts + 1 : 0;
-  if (remaining > 0 && boardDrainAttempts < 5) {
-    chrome.alarms.create(BOARD_DRAIN_ALARM, { when: Date.now() + 30000 * 2 ** (boardDrainAttempts - 1) });
+  if (remaining > 0 && boardDrainAttempts < BOARD_DRAIN_MAX_ATTEMPTS) {
+    scheduleBoardDrain(BOARD_DRAIN_BASE_DELAY_MS * 2 ** (boardDrainAttempts - 1));
   }
   if (delivered > 0 || remaining > 0) {
     swLog.info("board drain", { delivered, remaining, attempts: boardDrainAttempts });
   }
   return { delivered, remaining };
 }
+// Live kick (review r5 P2): a settlement that just created a pending delivery
+// resets the backoff and drains NOW instead of waiting for the next restart.
+function kickBoardDrain() {
+  boardDrainAttempts = 0;
+  return boardDrainOnce().catch((e) => handleBoardDrainRejection(e, "live kick"));
+}
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === BOARD_DRAIN_ALARM) boardDrainOnce().catch((e) => swLog.error("board drain retry failed", { error: String(e?.message ?? e) }));
+  if (alarm.name === BOARD_DRAIN_ALARM) boardDrainOnce().catch((e) => handleBoardDrainRejection(e, "alarm retry"));
 });
-boardDrainOnce().catch((e) => swLog.error("startup board drain failed", { error: String(e?.message ?? e) }));
+boardDrainOnce().catch((e) => handleBoardDrainRejection(e, "startup drain"));
 
 const handlers = mergeRouteMaps(
   activityRoutes,

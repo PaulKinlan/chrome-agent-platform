@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.406] — 2026-08-29
+- fix(board): failed result deliveries now retry on their own until they reach the requesting agent's thread
+
 ## [0.2.405] — 2026-08-29
 - test(board): r5 RED — production onPendingDelivery wiring + shared drain-rejection scheduler pins
 
