@@ -936,17 +936,15 @@ async function renderEnroll() {
       return;
     }
     const matches = [`${origin}/*`];
-    // The scripting permission + host access are GRANTED AT INSTALL (manifest
-    // permissions + host_permissions <all_urls>) — VERIFY the install grant
-    // rather than running an obsolete runtime request. Fail closed: a
-    // verification error or absence surfaces honestly.
+    // OPTIONAL + JIT model: the enroll click IS the user gesture — request
+    // the scripting permission + the site's origin here.
     let granted;
     try {
-      granted = (await chrome.permissions.contains({
+      granted = (await chrome.permissions.request({
         permissions: ["scripting"],
         origins: matches,
       })) === true;
-    } catch {
+    } catch (e) {
       saveFlash(siteAgentSetupMessage("permission-error", origin));
       return;
     }

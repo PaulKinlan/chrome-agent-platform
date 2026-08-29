@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.404] — 2026-08-29
+- fix(permissions): the approval card now JIT-requests the missing capability from the owner's click; enrollment + journeys updated for the OPTIONAL + JIT model
+
 ## [0.2.403] — 2026-08-29
 - fix(permissions): remove ChromeOS-only audioCapture/videoCapture permissions entirely
 

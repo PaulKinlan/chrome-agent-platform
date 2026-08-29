@@ -606,20 +606,19 @@ async function main() {
     // bar. tests/chrome-tools-t12.test.ts carries the matching source guard.
     const manifestText = await Deno.readTextFile(`${EXT}/manifest.json`);
     const manifest = JSON.parse(manifestText);
-    // The product moved to the INSTALL-GRANTED model (owner directive
-    // 2026-08-28, load-unpacked only): every permission is declared
-    // permanently and granted at install, `optional_permissions` is gone, and
-    // host access is `<all_urls>`. This check asserts that exact shape, so it
-    // fails both if a permission the suite drives is dropped AND if the
-    // all-optional model is reintroduced.
-    const DRIVEN_PERMISSIONS = [
-      "alarms", "storage", "sidePanel", "tabs", "activeTab", "scripting", "notifications",
-    ];
+    // OPTIONAL + JIT model (owner directive 2026-08-29, superseding the
+    // 2026-08-28 install-grant model): four boot-critical permissions stay
+    // mandatory; every capability permission is optional (JIT from a page
+    // gesture); host access stays <all_urls>. Enterprise policy no longer
+    // refuses the install over capability permissions.
+    const MANDATORY = ["alarms", "offscreen", "sidePanel", "storage"];
+    const DRIVEN_OPTIONAL = ["tabs", "activeTab", "scripting", "notifications"];
     check(
-      "manifest: permissions are install-granted, not optional",
+      "manifest: boot-critical permissions mandatory, capabilities optional, <all_urls> host",
       Array.isArray(manifest.permissions) &&
-        DRIVEN_PERMISSIONS.every((p) => manifest.permissions.includes(p)) &&
-        (manifest.optional_permissions ?? []).length === 0 &&
+        MANDATORY.every((p) => manifest.permissions.includes(p)) &&
+        DRIVEN_OPTIONAL.every((p) => (manifest.optional_permissions ?? []).includes(p)) &&
+        manifest.permissions.every((p) => !((manifest.optional_permissions ?? []).includes(p))) &&
         Array.isArray(manifest.host_permissions) &&
         manifest.host_permissions.includes("<all_urls>"),
     );
@@ -860,6 +859,9 @@ async function main() {
     //      invariant — every permission is optional), and
     //   2. every capability this suite goes on to DRIVE is present by id, which
     //      breaks if one is renamed or dropped out from under the journey.
+    // OPTIONAL + JIT model: capabilities are NOT granted at install — the
+    // journey drives the grant through genuine page-gesture requests and
+    // asserts the honest denial when they are absent.
     const drivenCapabilities = [
       "storage", "alarms", "activeTab", "scripting", "sidePanel", "tabs", "notifications",
     ];
@@ -873,52 +875,43 @@ async function main() {
     // renders its rows from the same list so both sides move together. The
     // driven ids are named literally so dropping or renaming one breaks this.
     check(
-      "permissions: every capability is granted at install and the driven ones are present",
+      "permissions: optional capabilities start ungranted (JIT) and the mandatory boot set is granted",
       capState0 !== null && typeof capState0 === "object" &&
-        drivenCapabilities.every((id) => capState0[id] === true) &&
-        Object.values(capState0).every((granted) => granted === true),
+        capState0["storage"] === true && capState0["alarms"] === true &&
+        drivenCapabilities.filter((id) => id !== "storage" && id !== "alarms" && id !== "sidePanel")
+          .every((id) => capState0[id] === false),
     );
-    // The GUARD that the removed enable/disable model does not come back: real
-    // per-capability rows, stated as granted at install, and NO grant/revoke
-    // control anywhere in the panel.
+    // The Settings panel is the JIT request surface: real per-capability rows
+    // with three honest states (granted / requestable with Enable /
+    // platform-unavailable) plus the fixed mandatory boot rows.
     const permPanel = await evalOpts(`(async () => {
-      // renderPermissions() awaits a contains() probe per capability, so the
-      // list can still be empty on first paint.
       for (let i = 0; i < 40; i++) {
         if (document.querySelectorAll('#permission-list .perm-row').length > 0) break;
         await new Promise((r) => setTimeout(r, 100));
       }
       return {
         rows: document.querySelectorAll('#permission-list .perm-row').length,
-        controls: document.querySelectorAll(
-          '#permission-list .grant-perm, #permission-list .revoke-perm, #permission-list button, #permission-list input'
-        ).length,
+        enableButtons: document.querySelectorAll('#permission-list button').length,
         states: document.querySelectorAll('#permission-list .perm-state').length,
+        mandatoryRows: [...document.querySelectorAll('#permission-list .perm-state')].filter(
+          (el) => el.textContent?.includes("Granted at install")
+        ).length,
       };
     })()`);
-    // This check owns ONE property: the panel is a read-only diagnostic. Whether
-    // the capabilities are actually granted is asserted above from the worker's
-    // authoritative map, so it is deliberately not re-asserted here through the
-    // DOM. (Two manifest permissions — audioCapture, videoCapture — legitimately
-    // report not-granted under headless, so a "every row is green" assertion
-    // here would fail for an environment reason rather than a product one.)
     check(
-      "permissions: Settings permission panel is read-only install state",
-      permPanel?.rows > 0 && permPanel?.states === permPanel?.rows &&
-        permPanel?.controls === 0,
+      "permissions: Settings panel renders three-state rows + mandatory boot rows",
+      permPanel?.rows > 0 && permPanel?.enableButtons > 0 && permPanel?.states === permPanel?.rows &&
+        permPanel?.mandatoryRows >= 3,
     );
 
-    // `tabs` and `notifications` used to auto-deny in headless because they
-    // were optional and needed a runtime request. Asserted through the REAL
-    // permission API, not just our own status map, so this fails if the
-    // manifest declaration and the runtime ever disagree.
+    // tabs + notifications are OPTIONAL now — verified NOT granted at boot.
     const warningCaps = await evalOpts(`Promise.all(
       ["tabs", "notifications"].map((p) => chrome.permissions.contains({ permissions: [p] }))
     )`);
     check(
-      "permissions: warning capabilities are install-granted too (no runtime request)",
+      "permissions: optional capabilities start ungranted (JIT model)",
       Array.isArray(warningCaps) && warningCaps.length === 2 &&
-        warningCaps.every((granted) => granted === true),
+        warningCaps.every((granted) => granted === false),
     );
 
     await msgOpts({

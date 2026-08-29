@@ -179,7 +179,7 @@ Deno.test("P0 approval: an origins requirement sets ONLY the origin-scoped grant
     { reason: "group tabs", permissions: [], grantOrigins: ["https://a.example", "https://b.example"], grantGlobal: false },
     {
       sendFn: async (type, body) => { sent.push([type, body]); return { grant: { id: "g1", scope: "origins", origins: body.origins ?? [] } }; },
-      verifyPermissions: async (perms) => { requestedPerms.push([...perms]); return true; },
+      requestPermissions: async (perms) => { requestedPerms.push([...perms]); return true; },
     },
   );
   assertEquals(outcome.ok, true);
@@ -188,7 +188,7 @@ Deno.test("P0 approval: an origins requirement sets ONLY the origin-scoped grant
   assertEquals(grantCalls.length, 1, "exactly one grant write");
   assertEquals(grantCalls[0][1], { granted: true, origins: ["https://a.example", "https://b.example"] },
     "the grant is EXACTLY the requirement's origins — never widened, never the global form");
-  assertEquals(requestedPerms, [["storage"]], "storage is verified so the grant persists (the Settings toggle's behaviour)");
+  assertEquals(requestedPerms, [], "no API permission request needed — the grant is the browser-control policy layer");
 });
 
 Deno.test("P0 approval: a global requirement sends the global form ONLY because the tool required it", async () => {
@@ -213,7 +213,7 @@ Deno.test("P0 approval: install-granted Chrome permissions are verified exactly 
     { reason: "group tabs", permissions: ["tabGroups", "tabs"], grantOrigins: [], grantGlobal: false },
     {
       sendFn: async (type, body) => { sent.push([type, body]); return { grant: { id: "g3" } }; },
-      verifyPermissions: async (perms) => { requestedPerms.push([...perms]); return true; },
+      requestPermissions: async (perms) => { requestedPerms.push([...perms]); return true; },
     },
   );
   assertEquals(outcome.ok, true);
@@ -227,7 +227,7 @@ Deno.test("P0 approval: a declined permission grants NOTHING (honest failure, no
     { reason: "group tabs", permissions: ["tabGroups"], grantOrigins: ["https://a.example"], grantGlobal: false },
     {
       sendFn: async (type, body) => { sent.push([type, body]); return { grant: { id: "g4" } }; },
-      verifyPermissions: async () => false, // the install-grant verification failed
+      requestPermissions: async () => false, // the install-grant verification failed
     },
   );
   assertEquals(outcome.ok, false);
