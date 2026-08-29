@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.352] — 2026-08-29
+- fix(activity): round-6 exception-safe cycle redaction
+
 ## [0.2.351] — 2026-08-29
 - chore(docs): sync docs/pure.js with the round-5 redactSecrets cycle guard
 

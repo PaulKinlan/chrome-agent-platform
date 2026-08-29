@@ -259,9 +259,37 @@ Deno.test("redactToolResult: a SHARED (DAG, non-cyclic) reference is redacted at
   const { redactToolResult } = await import("../extension/lib/tool-summary.js");
   const shared = { value: "sk-live-DAGSECRET12" };
   const d = redactToolResult({ first: shared, second: shared });
+  assertEquals(d.first.value, "[REDACTED]");
+  assertEquals(d.second.value, "[REDACTED]");
   const s = JSON.stringify(d);
-  assert(!s.includes("DAGSECRET12"), `both references to a shared subtree must scrub: ${s}`);
   assert(!s.includes("[Circular]"), `a non-cyclic shared reference is NOT a cycle: ${s}`);
+});
+
+Deno.test("redactSecrets: a throwing getter never pollutes a caller-owned cycle guard", async () => {
+  const { redactSecrets } = await import("../extension/lib/pure.js");
+  const seen = new WeakSet();
+  let reads = 0;
+  const source = {};
+  Object.defineProperty(source, "nested", {
+    enumerable: true,
+    get() {
+      reads += 1;
+      if (reads === 1) throw new Error("getter failed");
+      return { apiKey: "sk-live-RETRYSECRET12" };
+    },
+  });
+
+  let threw = false;
+  try {
+    redactSecrets(source, seen);
+  } catch (error) {
+    threw = error instanceof Error && error.message === "getter failed";
+  }
+  assert(threw, "the first traversal must preserve the getter exception");
+
+  const retry = redactSecrets(source, seen);
+  assertNotEquals(retry, "[Circular]", "a failed traversal must release its cycle marker");
+  assertEquals(retry, { nested: { apiKey: "[REDACTED]" } });
 });
 
 // ── P1-a: covered refreshes are DEFERRED (dirty flag + flush on HUB return)

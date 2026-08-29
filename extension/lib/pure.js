@@ -980,22 +980,29 @@ export function redactSecrets(value, seen = new WeakSet()) {
   // ANCESTOR of the current position, so a cyclic payload degrades to a
   // "[Circular]" placeholder instead of throwing RangeError, while a
   // legitimately SHARED (DAG) subtree is still redacted at every site.
+  // "[Circular]" is display-only; a literal string with that value is
+  // intentionally indistinguishable because no consumer treats it semantically.
   if (Array.isArray(value)) {
     if (seen.has(value)) return "[Circular]";
     seen.add(value);
-    const out = value.map((v) => redactSecrets(v, seen));
-    seen.delete(value);
-    return out;
+    try {
+      return value.map((v) => redactSecrets(v, seen));
+    } finally {
+      seen.delete(value);
+    }
   }
   if (typeof value === "object") {
     if (seen.has(value)) return "[Circular]";
     seen.add(value);
-    const out = {};
-    for (const [k, v] of Object.entries(value)) {
-      out[k] = SECRET_KEY_RE.test(k) ? "[REDACTED]" : redactSecrets(v, seen);
+    try {
+      const out = {};
+      for (const [k, v] of Object.entries(value)) {
+        out[k] = SECRET_KEY_RE.test(k) ? "[REDACTED]" : redactSecrets(v, seen);
+      }
+      return out;
+    } finally {
+      seen.delete(value);
     }
-    seen.delete(value);
-    return out;
   }
   return value;
 }
