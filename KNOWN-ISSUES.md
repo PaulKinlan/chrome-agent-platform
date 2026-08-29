@@ -27,7 +27,16 @@ with it. Fixed under `CAP-FB-20260827-MAIN-GATES-RED-02`.
 
 ## Open findings
 
-Three, all with live entries in `TASKS.md`. Everything else previously listed here is done.
+### WebMCP — Find site tools cannot bootstrap an un-enrolled page
+`CAP-FB-20260829-WEBMCP-INJECTION-01` · P0 · IN_REVIEW
+
+The tab-list route filtered out every page whose tools were not already in the registry,
+but an un-enrolled page cannot report tools until the owner selects it and the extension
+injects its MAIN and ISOLATED scripts. The candidate lists all web tabs in the explicit
+picker while retaining a tools-only mode for proactive surfaces. Browser falsification:
+the fixture was absent and neither script ran on the base; the candidate passes the 35/35
+production-path WebMCP journey.
+
 
 ### Infrastructure — worktree heads carried work that no ref was holding
 `CAP-FB-20260821-WORKTREE-HYGIENE-01` · P0 · OPEN (loss risk closed; cleanup awaits an owner decision)

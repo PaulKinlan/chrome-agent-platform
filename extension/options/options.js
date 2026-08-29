@@ -975,7 +975,7 @@ async function renderDiscoveredOpenTabs() {
   const container = $("#discovered-tabs");
   if (!container) return;
   const enrolledOrigins = new Set(await boundedSend("agent.list").catch(() => []));
-  const listing = await boundedSend("agent.discoverable-tabs").catch(() => ({ ok: false }));
+  const listing = await boundedSend("agent.discoverable-tabs", { toolsOnly: true }).catch(() => ({ ok: false }));
   container.replaceChildren();
   if (!listing?.ok || !Array.isArray(listing.tabs) || !listing.tabs.length) {
     container.style.display = "none";

@@ -221,19 +221,14 @@ spreadsheet toolkit, tabular diff, abuse gates, the Gate-2 Worker host. Resumes 
 demo. **P3.** Dead components, recipes→skills rename, hub agent rows onto the shared picker.
 
 ### Known open defect classes
-- **WebMCP discovery — the code paths WORK; only the OS prompt is unattested.**
-  Verified 2026-08-28 by running `npm run test:webmcp` against the current tree:
-  **35/35 pass**. That covers the production path end to end — declared
-  (`document.modelContext`) AND inferred (`window.webmcpExpose`) discovery through the
-  real bridge, `tools.invoke` → `invokeSiteTool` hitting the exact approved tab and
-  active `documentId`, a second same-origin tab correctly NOT invoked, a declared tool
-  resolving over a colliding page global, generationless/source-less invokes rejected at
-  the relay, re-enrollment advancing the generation with exactly one side effect (no
-  duplicate listeners), and invocation surviving both a reload and a cross-document
-  navigation without re-enrollment. The single remaining gap is the OS-level host
-  permission prompt, which headless auto-denies and no harness can click:
-  `deno run -A scripts/webmcp-acceptance.ts --headed` plus two manual Allow clicks
-  (docs/WEBMCP-ACCEPTANCE.md).
+- **WebMCP discovery — bootstrap regression fixed in review.** The explicit picker had
+  filtered out pages until their tools were already registered, but tools cannot register
+  until the owner picks the page and injection runs. `CAP-FB-20260829-WEBMCP-INJECTION-01`
+  separates picker candidates (all open web tabs) from proactive suggestions (known tools
+  only). The unchanged base failed before either content script ran; the candidate's
+  production-path journey is **35/35 pass**, covering both worlds, exact-tab invocation,
+  bridge fencing, re-enrollment, reload, and navigation. The shipped install-granted
+  permission model needs no OS prompt or test manifest variant.
 - **Worktree hygiene** — 71 registered worktrees, and `/tmp` is RAM-backed at 92% inode
   use. Run `node scripts/worktree-audit.mjs` before any cleanup decision; nothing is
   removed until its HEAD is reachable from `origin/main` or a `rescue/*` tag.

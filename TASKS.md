@@ -160,7 +160,7 @@ On resume after a coordinator or worker loss:
 
 ## Open work queue
 
-**This file holds only what is in progress or still to do — 38 entries.** Completed work is archived in [TASKS-DONE.md](TASKS-DONE.md) at triage; **merged is done** (Paul, 2026-08-28), so nothing sits in a terminal state here. Most urgent first (regenerated 2026-08-28). The entry itself is always the authority; where it disagrees with this table, the entry wins.
+**This file holds only what is in progress or still to do — 39 entries.** Completed work is archived in [TASKS-DONE.md](TASKS-DONE.md) at triage; **merged is done** (Paul, 2026-08-28), so nothing sits in a terminal state here. Most urgent first (regenerated 2026-08-28). The entry itself is always the authority; where it disagrees with this table, the entry wins.
 
 Regenerate after any status change (this exact command reproduces the table below):
 
@@ -170,6 +170,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 | Priority | Status | Task | What it is |
 |---|---|---|---|
+| P0 | IN_REVIEW | [`CAP-FB-20260829-WEBMCP-INJECTION-01`](#cap-fb-20260829-webmcp-injection-01-find-site-tools-cannot-select-or-inject-a-new-webmcp-page) | Find site tools cannot select or inject a new WebMCP page |
 | P0 | DONE | [`CAP-FB-20260829-MAIN-GATES-RED-03`](#cap-fb-20260829-main-gates-red-03-the-journey-suite-is-red-on-main-49-checks-still-assert-the-pre-p0-all-optional-permission-model) | Journey suite red on main — 49 checks assert the pre-P0 permission model |
 | P1 | IN_REVIEW | [`CAP-FB-20260829-AGENT-BOARD-01`](#cap-fb-20260829-agent-board-01-the-shared-jobs-board-agents-post-and-claim-work) | The shared jobs board — agents post and claim work |
 | P0 | OPEN | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
@@ -227,6 +228,28 @@ evidence every other task depends on).
 
 
 ## Active
+
+## [CAP-FB-20260829-WEBMCP-INJECTION-01] Find site tools cannot select or inject a new WebMCP page
+
+- Feedback: 2026-08-29 — product owner reported that WebMCP content scripts no longer inject and the hub's Find site tools action does nothing
+- Updated: 2026-08-29 20:45 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: implementation worker
+- Workspace: active (local path private)
+- Branch: `cap-webmcp-fix`
+- Base: `54d70a9b`
+- Candidate: this tracker commit
+- Shipping: —
+- Acceptance: from a fresh profile, a real WebMCP page appears in the Find site tools picker before enrollment; choosing it injects both MAIN and ISOLATED scripts immediately, discovers its tools, and production invocation reaches the exact chosen tab; proactive discovery still excludes pages with no known tools
+- Review: independent review required; pending
+- Gates: production browser journey observed RED on the base (picker omitted the fixture) and GREEN after the fix (35/35); focused WebMCP tests 33/33; full unit suite 2358/0; developer build clean
+- Blockers: —
+- Next: commit the candidate, then send it for independent review
+- Recover: `git show cap-webmcp-fix && deno run -A scripts/webmcp-acceptance.ts`
+- History:
+  - 2026-08-29 20:45 UTC — root cause reproduced in the production browser path: `agent.discoverable-tabs` required tools to exist in the registry before it offered a page, but the page could not report tools until selection enrolled it and injected the bridge. The unchanged base omitted the fixture and never executed either content script; the candidate separates explicit picker candidates from tools-only proactive discovery and passes all 35 production-path browser checks.
 
 ## [CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01] Extended Unix/system tool family admissions
 

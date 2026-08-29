@@ -4924,7 +4924,7 @@ const handlers = mergeRouteMaps(
   // enrollment. Tab URLs/titles are visible only with the OPTIONAL `tabs`
   // permission; without it we report `needTabs` honestly so the hub requests
   // it on the user's click.
-  async "agent.discoverable-tabs"() {
+  async "agent.discoverable-tabs"({ toolsOnly = false } = {}) {
     let tabs = null;
     try {
       tabs = await chrome.tabs.query({});
@@ -4946,18 +4946,19 @@ const handlers = mergeRouteMaps(
         continue;
       }
       if (!origin || !/^https?:/.test(origin)) continue;
-      // Item-44 parity (owner directive): a page with ZERO registered WebMCP
-      // tools must not appear as an addable Site Agent. The per-origin tool
-      // count comes from the SAME registry the directory lists (listTools) —
-      // a page only appears when it actually exposes tools.
+      // The explicit picker must include un-enrolled pages: their tools cannot
+      // enter the registry until the owner picks one and its scripts inject.
+      // Proactive surfaces opt into toolsOnly so they still advertise only
+      // origins that have already reported tools.
       const registeredTools = await listTools(origin).catch(() => []);
-      if (!Array.isArray(registeredTools) || registeredTools.length === 0) continue;
+      const toolCount = Array.isArray(registeredTools) ? registeredTools.length : 0;
+      if (toolsOnly && toolCount === 0) continue;
       out.push({
         id: t.id,
         title: String(t.title ?? "").slice(0, 200),
         url: String(t.url).slice(0, 500),
         origin,
-        toolCount: registeredTools.length,
+        toolCount,
         active: t.active === true,
         lastAccessed: typeof t.lastAccessed === "number" ? t.lastAccessed : 0,
       });
