@@ -14,7 +14,16 @@ const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `/tmp/kat-recent-activity-${Date.now()}`;
 const CHROMIUM = "/usr/bin/chromium";
-const PORT = 9462;
+const BASE_PORT = 9462;
+// Pick a free debug port — killed KAT runs leave zombie chromiums holding the
+// fixed port, which then hangs every subsequent run's CDP handshake.
+async function freePort(from: number): Promise<number> {
+  for (let p = from; p < from + 200; p++) {
+    try { const l = Deno.listen({ port: p }); l.close(); return p; } catch { /* taken */ }
+  }
+  throw new Error("no free debug port in range");
+}
+const PORT = await freePort(BASE_PORT);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let pass = 0, fail = 0;
@@ -176,6 +185,10 @@ try {
       { ts: Date.now() - 1, source: "master", agentLabel: "hub", type: "tool-result", id: "t1", callId: "c1", tool: "read_page", result: JSON.stringify({ ok: true, title: "Example", links: [{ href: "/a" }, { href: "/b" }] }) },
       { ts: Date.now() - 2, source: "master", agentLabel: "hub", type: "error", id: "e1", error: "boom", stack: big },
       { ts: Date.now() - 3, source: "master", agentLabel: "hub", type: "tool-call", id: "t9", callId: "c9", tool: "http_request", args: JSON.stringify({ url: "https://api.example.com", apiKey: "sk-live-KATSECRET-dont-paint-918273645" }) },
+      // P1 (round-3): tool-RESULT secret probes — a bare JSON-string result and
+      // a WRAPPED (modelContent double-encoded) result, both carrying secrets.
+      { ts: Date.now() - 4, source: "master", agentLabel: "hub", type: "tool-result", id: "t10", callId: "c10", tool: "http_request", result: JSON.stringify({ status: "ok", apiKey: "sk-live-KATRESULT-dont-paint-564738291" }) },
+      { ts: Date.now() - 5, source: "master", agentLabel: "hub", type: "tool-result", id: "t11", callId: "c11", tool: "http_request", result: JSON.stringify({ modelContent: JSON.stringify({ count: 3, apiKey: "sk-live-KATWRAPPED-dont-paint-102938475" }) }) },
     ];
     return "seeded";
   })()`);
@@ -246,6 +259,39 @@ try {
   check("redaction: the detail tree renders [REDACTED], never the secret", redaction.treeLeaks === false && redaction.treeRedacted === true, redaction);
   check("redaction: the tree COPY is redacted too", redaction.copyLeaks === false && redaction.copyRedacted === true, redaction);
   await shot("04-redaction", ui);
+
+  // ── E2. Tool-RESULT redaction (round-3 P1): a secret in a RESULT must never
+  //         paint in the collapsed-row summary, the detail tree, or the tree
+  //         COPY — for a bare JSON-string result AND a wrapped (modelContent
+  //         double-encoded) result. Falsification: pre-fix code paints both.
+  const resultRedaction = await uiEval(`(async () => {
+    const SECRET = "sk-live-KATRESULT-dont-paint-564738291";
+    const WSECRET = "sk-live-KATWRAPPED-dont-paint-102938475";
+    const root = document.querySelector("#run-log activity-explorer")?.shadowRoot;
+    const entries = [...root.querySelectorAll("details.aex-entry")];
+    const probe = async (prefix, secret) => {
+      const entry = entries.find((d) => d.dataset.ekey?.startsWith(prefix));
+      if (!entry) return { missing: true, keys: entries.map((d) => d.dataset.ekey) };
+      entry.open = true;
+      const summaryText = entry.querySelector(".aex-text")?.textContent ?? "";
+      const treeText = [...entry.querySelectorAll(".tt-val")].map((n) => n.textContent).join(" ");
+      const captured = [];
+      Object.defineProperty(navigator, "clipboard", { value: { writeText: (t) => { captured.push(t); return Promise.resolve(); } }, configurable: true });
+      const copyJson = [...entry.querySelectorAll(".tt-copy")].find((b) => b.dataset.copy === "json");
+      copyJson?.click();
+      await new Promise((r) => setTimeout(r, 300));
+      const copied = captured.join(" ");
+      return { summaryLeaks: summaryText.includes(secret), summaryRedacted: summaryText.includes("[REDACTED]"),
+               treeLeaks: treeText.includes(secret), treeRedacted: treeText.includes("[REDACTED]"),
+               copyLeaks: copied.includes(secret), copyRedacted: copied.includes("[REDACTED]") };
+    };
+    return { bare: await probe("tool-result:t10", SECRET), wrapped: await probe("tool-result:t11", WSECRET) };
+  })()`);
+  check("result-redaction: bare JSON-string result — summary paints no secret", resultRedaction.bare?.summaryLeaks === false && resultRedaction.bare?.summaryRedacted === true, resultRedaction.bare);
+  check("result-redaction: bare JSON-string result — tree + copy are redacted", resultRedaction.bare?.treeLeaks === false && resultRedaction.bare?.treeRedacted === true && resultRedaction.bare?.copyLeaks === false && resultRedaction.bare?.copyRedacted === true, resultRedaction.bare);
+  check("result-redaction: wrapped modelContent result — summary paints no secret", resultRedaction.wrapped?.summaryLeaks === false && resultRedaction.wrapped?.summaryRedacted === true, resultRedaction.wrapped);
+  check("result-redaction: wrapped modelContent result — tree + copy render the redacted decoded view", resultRedaction.wrapped?.treeLeaks === false && resultRedaction.wrapped?.treeRedacted === true && resultRedaction.wrapped?.copyLeaks === false && resultRedaction.wrapped?.copyRedacted === true, resultRedaction.wrapped);
+  await shot("05-result-redaction", ui);
 
   // ── D. Seeded refresh() is a no-op (gallery owns its data) ────────────
   const seededRefresh = await uiEval(`(async () => {

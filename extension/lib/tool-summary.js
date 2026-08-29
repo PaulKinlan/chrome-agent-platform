@@ -1,6 +1,6 @@
 // lib/tool-summary.js — turn a raw tool result into a READABLE one-line summary
-// (never a raw JSON dump). Pure (no DOM, no imports) so both the browser pages
-// (conversation.js, ntp.js) and the Deno unit tests can import it directly.
+// (never a raw JSON dump). Pure (no DOM; lib/pure.js only) so both the browser
+// pages (conversation.js, ntp.js) and the Deno unit tests can import it.
 //
 // The agent-do runtime wraps tool results in {modelContent, userSummary}; we
 // prefer `userSummary` (already a compact, human summary) and then apply a
@@ -13,6 +13,8 @@
  * summary string. Pure — the SW uses it to tag the live tool-result event
  * with `ok`, so the UI can mark the card error instead of always success.
  */
+import { redactSecrets, redactSecretText } from "./pure.js";
+
 export function isToolResultFailure(raw) {
   const d = unwrapToolResult(raw);
   if (d && typeof d === "object" && !Array.isArray(d)) {
@@ -34,9 +36,27 @@ export function summarizeToolResult(name, raw) {
   return renderToolSummary(String(name ?? "tool"), data);
 }
 
+/** Decode + redact a raw tool result ONCE, for every surface that can paint
+ * it (activity summary line, detail tree, tree copy, journal persistence):
+ * unwraps the {modelContent, userSummary} envelope — whose values can
+ * themselves be JSON strings (double-encoded) — redacts secret-shaped keys in
+ * the decoded structure, and scrubs credential patterns from any remaining
+ * plain-text string. A row persisted before write-path redaction can never
+ * paint a secret when every reader routes through here. */
+export function redactToolResult(raw) {
+  const d = unwrapToolResult(raw);
+  if (typeof d === "string") return redactSecretText(d);
+  return redactSecrets(d);
+}
+
 /** Unwrap the {modelContent, userSummary} envelope into the underlying value. */
 function unwrapToolResult(raw) {
   if (raw == null) return null;
+  if (typeof raw === "object" && !Array.isArray(raw)) {
+    if (raw.userSummary != null) return coerceJson(raw.userSummary);
+    if (raw.modelContent != null) return coerceJson(raw.modelContent);
+    return raw;
+  }
   if (typeof raw === "string") {
     const s = raw.trim();
     if (!s) return null;

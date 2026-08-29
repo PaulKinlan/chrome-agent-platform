@@ -439,6 +439,7 @@ import {
   KEYBOARD_COMMANDS,
   hubUrlForCommand
 } from "../lib/pure.js";
+import { redactToolResult } from "../lib/tool-summary.js";
 import {
   canonicalArray,
   canonicalField,
@@ -2110,8 +2111,15 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       } else if (type === "tool-result") {
         let result;
         if (event.result == null) result = "";
-        else if (typeof event.result === "string") result = event.result;
-        else { try { result = JSON.stringify(redactSecrets(event.result)); } catch { result = String(event.result); } }
+        else {
+          // Strings AND objects go through the canonical decode+redact seam:
+          // a string result (or a modelContent/userSummary wrapper holding a
+          // double-encoded JSON string) is decoded, redacted, and re-serialized;
+          // plain text is credential-pattern scrubbed. Without this, a string
+          // result reached the journal raw (the activity-explorer leak).
+          const d = redactToolResult(event.result);
+          try { result = typeof d === "string" ? d : JSON.stringify(d); } catch { result = String(d ?? event.result); }
+        }
         if (result && result.length > 2000) result = result.slice(0, 2000) + "…";
         // Match the OLDEST pending callId for this tool name (FIFO — parallel
         // same-name calls pair in order) + persist the ok flag so a replay can

@@ -29,6 +29,7 @@ import { safeParse, buildTree, subtreeJson, safeJsonStringify } from "./tool-tre
 // explorer redacts again at render AND the tree/copy paths only ever see the
 // redacted value.
 import { redactSecrets } from "../lib/pure.js";
+import { redactToolResult } from "../lib/tool-summary.js";
 
 const ARIA_HIDDEN = "aria-hidden";
 const TRUE = ""; // boolean-attribute present marker
@@ -5726,44 +5727,18 @@ function timeAgo(ts) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-// Turn a raw tool result into a short readable one-liner. The agent-do runtime
-// wraps tool results in {modelContent, userSummary}, and BOTH can themselves be
-// JSON strings (double-encoded). Recursively unwrap, then render per-tool (never
-// a raw escaped JSON blob). Mirrors lib/tool-summary.js summarizeToolResult.
-function _coerce(v) {
-  if (typeof v === "string") {
-    const s = v.trim();
-    if (s.startsWith("{") || s.startsWith("[")) {
-      try { return JSON.parse(s); } catch { return s; }
-    }
-  }
-  return v;
-}
-function _unwrap(v) {
-  if (v == null) return null;
-  if (typeof v === "string") {
-    const s = v.trim();
-    if (!s) return null;
-    if (s.startsWith("{") || s.startsWith("[")) {
-      try {
-        const o = JSON.parse(s);
-        if (o && typeof o === "object" && !Array.isArray(o)) {
-          if (o.userSummary != null) return _coerce(o.userSummary);
-          if (o.modelContent != null) return _coerce(o.modelContent);
-        }
-        return o;
-      } catch { return s; }
-    }
-    return s;
-  }
-  return v;
-}
+// Turn a raw tool result into a short readable one-liner. Decode + redaction
+// go through lib/tool-summary.js's redactToolResult — the canonical seam
+// shared with the detail tree/copy path and the SW journal persistence — so a
+// wrapped (modelContent/userSummary double-encoded) or historical unredacted
+// result can never paint a secret into the collapsed row. Render per-tool,
+// never a raw escaped JSON blob.
 function _short(v, n = 72) {
   const s = String(v ?? "");
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
 function activityToolSummary(name, raw) {
-  const d = _unwrap(raw);
+  const d = redactToolResult(raw);
   if (d && typeof d === "object" && !Array.isArray(d) && Array.isArray(d.agents)) {
     const items = d.agents.map((a) => {
       const label = a?.name || a?.origin || a?.id || "agent";
@@ -6194,7 +6169,10 @@ class ActivityExplorer extends Component {
     };
     switch (e?.type) {
       case "tool-call": addBlock("inputs", e.args); break;
-      case "tool-result": addBlock("result", e.result); break;
+      // Normalize + redact ONCE (redactToolResult): the collapsed-row summary,
+      // this detail tree, and its copy path all render the same redacted
+      // decoded view — wrapped modelContent JSON strings included.
+      case "tool-result": addBlock("result", redactToolResult(e.result)); break;
       case "error": addBlock("error", [e.error, e.message, e.stack].filter(Boolean).join("\n") || "error"); break;
       case "task": addBlock("task", e.task); break;
       case "result": addBlock("result", e.result); break;

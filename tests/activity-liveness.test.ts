@@ -125,7 +125,57 @@ Deno.test("activity refresh: seeded (gallery) data is never re-queried", async (
 Deno.test("activity journal write path redacts tool args AND results at persistence", () => {
   const sw = Deno.readTextFileSync(new URL("../extension/background/service-worker.js", import.meta.url).pathname);
   assert(sw.includes("JSON.stringify(redactSecrets(event.toolArgs))"), "tool-call journal must redact args before stringify");
-  assert(sw.includes("JSON.stringify(redactSecrets(event.result))"), "tool-result journal must redact results before stringify");
+  assert(sw.includes("redactToolResult(event.result)"), "tool-result journal must decode + redact STRING and wrapped results before persist (round-3 P1)");
+});
+
+// ── round-3 P1: tool-RESULT secrets never reach any render surface ────────
+// FALSIFICATION: every pin below is RED on a2e3b1c7 — redactToolResult does
+// not exist there, the summary interpolates _unwrap(raw) raw, the detail
+// tree safeParses the WRAPPER only, and the SW persists string results
+// unchanged.
+
+Deno.test("redactToolResult: a bare JSON-string result redacts secret-shaped keys", async () => {
+  const { redactToolResult } = await import("../extension/lib/tool-summary.js");
+  const d = redactToolResult(JSON.stringify({ ok: true, apiKey: "sk-live-KATSECRET-result-1" }));
+  assertEquals(d.apiKey, "[REDACTED]");
+  assertEquals(d.ok, true);
+});
+
+Deno.test("redactToolResult: a wrapped modelContent double-encoded result redacts the INNER payload", async () => {
+  const { redactToolResult } = await import("../extension/lib/tool-summary.js");
+  const wrapped = JSON.stringify({ modelContent: JSON.stringify({ ok: true, apiKey: "sk-live-KATSECRET-result-2" }) });
+  const d = redactToolResult(wrapped);
+  const s = JSON.stringify(d);
+  assert(!s.includes("sk-live-KATSECRET-result-2"), `inner secret must not survive: ${s}`);
+  assert(s.includes("[REDACTED]"), `inner value must be redacted: ${s}`);
+});
+
+Deno.test("redactToolResult: a wrapped userSummary string is decoded + redacted too", async () => {
+  const { redactToolResult } = await import("../extension/lib/tool-summary.js");
+  const wrapped = JSON.stringify({ userSummary: JSON.stringify({ token: "sk-live-KATSECRET-result-3" }) });
+  const s = JSON.stringify(redactToolResult(wrapped));
+  assert(!s.includes("sk-live-KATSECRET-result-3") && s.includes("[REDACTED]"), s);
+});
+
+Deno.test("redactToolResult: plain-text results are credential-pattern scrubbed", async () => {
+  const { redactToolResult } = await import("../extension/lib/tool-summary.js");
+  const d = redactToolResult("authorization: Bearer sk-live-KATSECRET-result-4-tail");
+  assert(typeof d === "string" && !d.includes("sk-live-KATSECRET-result-4-tail"), String(d));
+  assert(d.includes("[REDACTED]"), String(d));
+});
+
+Deno.test("redactToolResult: non-secret values pass through unchanged", async () => {
+  const { redactToolResult } = await import("../extension/lib/tool-summary.js");
+  assertEquals(redactToolResult(JSON.stringify({ ok: true, title: "Example" })), { ok: true, title: "Example" });
+  assertEquals(redactToolResult("just text"), "just text");
+  assertEquals(redactToolResult(null), null);
+});
+
+Deno.test("activity explorer: summary + detail/copy route tool RESULTS through redactToolResult", () => {
+  const src = Deno.readTextFileSync(new URL("../extension/shared/components.js", import.meta.url).pathname);
+  assert(src.includes("redactToolResult(raw)"), "the collapsed-row summary must redact the decoded result");
+  assert(src.includes('addBlock("result", redactToolResult(e.result))'), "the detail tree + copy must render the redacted decoded view");
+  assert(!/const d = _unwrap\(raw\)/.test(src), "the raw _unwrap interpolation seam must be gone");
 });
 
 Deno.test("activity explorer redacts historical values before render + copy", () => {

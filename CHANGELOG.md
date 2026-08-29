@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.348] — 2026-08-29
+- fix(activity): tool-RESULT secrets can never paint — one canonical decode+redact seam (lib/tool-summary.js redactToolResult) shared by the collapsed-row summary, the detail tree + its copy path, and SW journal persistence; wrapped modelContent/userSummary double-encoded strings decode + redact the inner payload; plain-text results credential-scrubbed; KAT gains bare + wrapped tool-result probes (summary/tree/clipboard) and free-port selection — 6 unit pins + 3 KAT probes RED on a2e3b1c7
+
 ## [0.2.347] — 2026-08-28
 - Fixed a bug in the faster task-history storage: the row recording how a run finished was written where the new reader never looks, so every completed run quietly lost it from its log. Not visible in the UI (status comes from elsewhere), but wrong — and it blocked the batching work that comes next
 
