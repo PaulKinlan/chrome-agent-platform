@@ -52,6 +52,7 @@ const COMPONENTS = [
   "permission-row",
   "capability-row",
   "site-agent-card",
+  "agent-template-card",
   "tool-directory-card",
   "artifact-card",
   "artifact-inspector",

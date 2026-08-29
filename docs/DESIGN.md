@@ -50,6 +50,9 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 - `--control: 36px` hit targets; `--control-icon: 18px` stroke icons.
 - Every interactive component: default / hover / focus / active / disabled /
   loading / error.
+- Agent templates render through shared `<agent-template-card>`: name, a two-line
+  persona summary, at most three skill badges plus an overflow count, and one
+  labelled Use action. Curated starters come first and carry the Starter badge.
 - SVG line-art icons, one stroke weight, currentColor. No emoji.
 - Capability rows: `28px | 1fr | auto` grid (icon | stacked name+description |
   right-aligned action) — aligned by construction.

@@ -106,6 +106,14 @@
       </div>
 
       <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;agent-template-card&gt;</code> — an agent starting point</h3>
+        <div class="stage row" style="max-width:620px">
+          <agent-template-card id="agent-template-demo" starter></agent-template-card>
+        </div>
+        <p class="caption">bounded persona + three skill badges + overflow; curated starters carry the Starter badge; emits <code>use</code>.</p>
+      </div>
+
+      <div class="specimen">
         <h3 class="spec"><code class="tag">&lt;tool-directory-card&gt;</code> — one registry function with attached states</h3>
         <div class="stage column" style="max-width:720px">
           <tool-directory-card id="tool-directory-demo"></tool-directory-card>
@@ -424,6 +432,17 @@
       }
 
       // Directory function card uses the same production descriptor shape.
+      const agentTemplateDemo = document.getElementById("agent-template-demo");
+      if (agentTemplateDemo) {
+        agentTemplateDemo.template = {
+          id: "research-analyst",
+          name: "Research Analyst",
+          description: "Researches across tabs, cross-checks sources, and reports what it found with links.",
+          skills: ["multi-tab-researcher", "link-collector", "reader-mode", "data-extractor", "page-summary"],
+        };
+        agentTemplateDemo.addEventListener("use", () => log("#hub-log", "agent-template-card: use"));
+      }
+
       const toolDirectoryDemo = document.getElementById("tool-directory-demo");
       if (toolDirectoryDemo) {
         toolDirectoryDemo.tool = {
