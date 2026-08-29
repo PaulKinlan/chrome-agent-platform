@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.353] — 2026-08-29
+- fix(conversation): terminal reconciliation for the live row from the durable run registry — a run whose terminal event is lost (fenced turn, queue saturation, SW idle-kill mid-settle) used to leave the row stuck at 'working' forever; the registry authority now resolves it (guarded against stale snapshots + deduped). The lifecycle journey's follow-up probe is thread-authoritative (bounded journal evicts under warmup floods) and asserts the durable contract: no error, every live block resolves
+
+## [0.2.352] — 2026-08-29
+- fix(conversation): terminal reconciliation for the live row from the durable run registry — a run whose terminal event is lost (fenced turn, queue saturation, SW idle-kill mid-settle) used to leave the row stuck at 'working' forever; the registry authority now resolves it (guarded against stale snapshots + deduped). The lifecycle journey's follow-up probe is thread-authoritative (bounded journal evicts under warmup floods) and asserts the durable contract: no error, every live block resolves
+
 ## [0.2.351] — 2026-08-29
 - fix(conversation): the live status row stays the transcript's bottom row no matter what lands mid-run (tool cards, errors, permission cards, artifacts insert before it); the sidepanel gets the same 'Fix in Settings' recovery action as the NTP via one shared helper; the lifecycle journey drives the inline row (stale #run-status selectors migrated); KAT asserts last-child on every poll + grown-composer coexistence + axe with the row present
 

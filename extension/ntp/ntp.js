@@ -138,6 +138,36 @@ if (durableRunRegistry) {
     // open re-projects the transcript (guarded by the execution-id change, so
     // heartbeats don't churn the subscription).
     projectSurfaceRunTranscript();
+    // Terminal reconciliation for the live status row: the registry is the
+    // durable authority. When the open surface's latest run has SETTLED and
+    // nothing actionable remains, resolve the row — the live terminal event
+    // can be lost when the turn was fenced or queued behind other runs, and
+    // the row would otherwise stick at "working" forever (found by
+    // run-status-lifecycle under 20 concurrent queued runs, 2026-08-28).
+    // Paused/permission-waiting runs are actionable here, so an approval-wait
+    // row is never cleared by this path.
+    const surface = { threadId: currentAgentId === null ? currentThreadId : null, agentId: currentAgentId, agentKind: currentAgentKind };
+    const settled = latestRunForSurface(latestDurableRuns, surface);
+    if (
+      settled &&
+      settled.executionId !== lastReconciledTerminalId &&
+      // Never resolve from a snapshot that predates the live run's
+      // registration (skew allowance for the page/SW clock + write lag).
+      (settled.updatedAt ?? 0) >= surfaceRunLiveAt - 2000 &&
+      !actionableRunsForSurface(latestDurableRuns, surface).length
+    ) {
+      const phase = String(settled.phase ?? "");
+      if (phase === "cancelled" || phase === "terminal") {
+        lastReconciledTerminalId = settled.executionId;
+        if (phase === "cancelled") renderRunStatus({ state: "cancelled" });
+        else {
+          const ok = settled.terminal?.ok !== false;
+          renderRunStatus(ok
+            ? { state: "completed" }
+            : { state: "failed", message: settled.terminal?.summary ?? settled.terminal?.reason ?? "the run failed", errorCategory: settled.terminal?.errorCategory });
+        }
+      }
+    }
   });
   durableRunRegistry.addEventListener("run-cancel", async (event) => {
     const result = await cancelDurableRun(event.detail.executionId).catch((error) => ({ ok: false, error: error?.message ?? String(error) }));
@@ -2235,6 +2265,14 @@ threadConversation?.addEventListener("action", (ev) => {
 /** Which run owner last wrote the global #status (so a superseded run's
  * orphaned "running…" is reset exactly once, never clobbering a newer run). */
 let statusOwner = 0;
+/** When the open surface's live run started (page clock) — the registry
+ * terminal-reconciliation must never resolve the row from a STALE snapshot
+ * that predates the live run's registration (the follow-up-under-queue-saturation
+ * gap found by run-status-lifecycle, 2026-08-28). */
+let surfaceRunLiveAt = 0;
+/** The last run executionId the terminal reconciliation resolved the row for
+ * (a settled run keeps matching every later snapshot — resolve it ONCE). */
+let lastReconciledTerminalId = null;
 
 /** Run a turn in the thread surface (a new task, or a nudge). `mention` is an
  * @-mention delegation directive ({kind,id,name}): the task stays the hub's
@@ -2242,6 +2280,8 @@ let statusOwner = 0;
  * back in this thread (CAP-FB-20260824-TASK-AGENT-BOUNDARY-01). */
 async function runThreadTurn(text, attachments = [], mention = null) {
   const owner = runSurfaceOwner.claim();
+  surfaceRunLiveAt = Date.now();
+  lastReconciledTerminalId = null;
   showThreadView();
   setStatus("running…", false);
   statusOwner = owner;
