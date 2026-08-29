@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.407] — 2026-08-29
+- WebMCP tool failures now explain themselves in the page's own console: when a page's tool call fails, the full error detail appears in that page's DevTools console instead of a vague message, while the agent still sees only a safe summary
+
 ## [0.2.406] — 2026-08-29
 - Scheduled agents now keep their conversation: when a background agent runs on its timer, the work it did shows up in that agent's chat — previously it vanished
 

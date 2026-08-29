@@ -52,6 +52,7 @@ function makeModelContext(tools) {
 // fire during a test so in-flight cancellation can be observed).
 function makeWorld({ modelContext = null, pageGlobals = {} } = {}) {
   const posted = [];
+  const warnings = [];
   const messageListeners = [];
   const loadListeners = [];
   const windowObj = {
@@ -77,7 +78,7 @@ function makeWorld({ modelContext = null, pageGlobals = {} } = {}) {
   windowObj.CapBridgeAuth = bridgeAuth;
   const evaluate = () => {
     const fn = new Function(
-      "window", "document", "location", "setTimeout", "clearTimeout", "crypto", "globalThis",
+      "window", "document", "location", "setTimeout", "clearTimeout", "crypto", "globalThis", "console",
       SRC + "\n;",
     );
     fn(
@@ -86,6 +87,7 @@ function makeWorld({ modelContext = null, pageGlobals = {} } = {}) {
       () => {},
       { randomUUID: () => "test-nonce" },
       windowObj,
+      { log() {}, warn: (...args) => warnings.push(args) },
     );
   };
   evaluate();
@@ -94,14 +96,14 @@ function makeWorld({ modelContext = null, pageGlobals = {} } = {}) {
   };
   // Out-of-band arming (the production path: the SW calls the bootstrap hook
   // via chrome.scripting.executeScript func args — never over postMessage).
-  const arm = () => windowObj.__capMainWorldBootstrap(NONCE, false);
+  const arm = (diagnostics = false) => windowObj.__capMainWorldBootstrap(NONCE, diagnostics);
   // Sealed isolated→MAIN control messages (the production relay MACs every
   // message; a bare emit() simulates a page-script forgery).
   let downSeq = 0;
   const send = (msg) => emit({ __cap_bridge: true, ...bridgeAuth.seal(NONCE, "down", downSeq++, msg) });
   const sealWith = (key, msg) => ({ __cap_bridge: true, ...bridgeAuth.seal(key, "down", downSeq++, msg) });
   const liveListeners = () => messageListeners.length;
-  return { posted, emit, send, sealWith, arm, reevaluate: evaluate, windowObj, liveListeners };
+  return { posted, warnings, emit, send, sealWith, arm, reevaluate: evaluate, windowObj, liveListeners };
 }
 
 async function collectTools(modelContext, pageGlobals = {}) {
@@ -394,6 +396,26 @@ Deno.test("webmcp invoke: a genuine DOMException reports its BOUNDED spec name (
   assert(err.includes("DOMException: NotAllowedError"), `bounded name surfaced: ${err}`);
   assert(!err.includes("abc123-secret"), "the DOMException MESSAGE (attacker text) never crosses");
   assert(!err.includes("user gesture required"), "the message body stays redacted");
+});
+
+Deno.test("webmcp invoke: UnknownError stays redacted across the bridge but page diagnostics keep full detail", async () => {
+  const thrown = new DOMException("database shard customer-42 failed", "UnknownError");
+  function lookup() { throw thrown; }
+  const world = makeWorld({ pageGlobals: { webmcpExpose: [lookup], DOMException: globalThis.DOMException } });
+  world.arm(true);
+  await new Promise((r) => setTimeout(r, 30));
+  const results = await invokeTool(world, {
+    name: "lookup",
+    args: { accountId: "customer-42", options: { fresh: true } },
+    source: "inferred",
+  });
+
+  assertEquals(results[0]?.error, "tool failed (DOMException: UnknownError)");
+  assert(!String(results[0]?.error).includes("customer-42"), "the sensitive message never crosses the bridge");
+  assertEquals(world.warnings.length, 1, "the page console receives one full failure diagnostic");
+  assertEquals(world.warnings[0][0], "[WebMCP:main]");
+  assertEquals(world.warnings[0][2], { tool: "lookup", argsShape: "{ accountId, options }" });
+  assertEquals(world.warnings[0][3], thrown, "the page's original error object preserves message and stack detail");
 });
 
 Deno.test("webmcp invoke: a crafted DOMException with an arbitrary name falls back to the bare type", async () => {
