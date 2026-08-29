@@ -47,19 +47,19 @@ function refFactory() {
   return () => `sel_${(++value).toString(16).padStart(36, "0")}`;
 }
 
-Deno.test("chrome capability table is exact and complete for 126 browser + 34 management tools", () => {
+Deno.test("chrome capability table is exact and complete for 126 browser + 40 management tools", () => {
   const browser = browserToolset(false);
   const management = managementToolset({ callRoute: () => { throw new Error("must not dispatch"); } });
   assertEquals(Object.keys(browser), BROWSER_TOOL_NAMES);
   assertEquals(MANAGEMENT_TOOL_NAMES, MANAGEMENT_CAPABILITY_TOOL_NAMES);
   assertEquals(Object.keys(management).sort(), [...MANAGEMENT_CAPABILITY_TOOL_NAMES].sort());
-  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 160);
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 166);
   assertEquals(CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "chrome-api").length, 126);
-  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "management").length, 34);
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "management").length, 40);
   assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS, {
     browserTools: 126,
-    managementTools: 34,
-    totalTools: 160,
+    managementTools: 40,
+    totalTools: 166,
     maxCapabilityTokens: 4,
     maxCapabilityTokenBytes: 96,
     maxPermissions: 8,
@@ -125,7 +125,7 @@ Deno.test("catalog descriptors consume exact canonical capabilities and capabili
     ...adaptManagementTools(management, { ...context(), capabilitiesByTool: capabilitiesByTool(management, "management") }),
   ];
   const catalog = buildToolCatalog(inputs);
-  assertEquals(catalog.descriptors.length, 160);
+  assertEquals(catalog.descriptors.length, 166);
   for (const descriptor of catalog.descriptors) {
     const row = chromeToolCapability(descriptor.name, descriptor.sourceKind);
     assertEquals(descriptor.capabilities, row.capabilityTokens);
@@ -145,7 +145,7 @@ Deno.test("unbound lazy browser/management records preserve source closure and v
   const browserRecords = executableBrowserToolRecords(browser, { ...context(), capabilitiesByTool: capabilitiesByTool(browser, "chrome-api") });
   const managementRecords = executableManagementToolRecords(management, { ...context(), capabilitiesByTool: capabilitiesByTool(management, "management") });
   assertEquals(browserRecords.length, 126);
-  assertEquals(managementRecords.length, 34);
+  assertEquals(managementRecords.length, 40);
   for (const record of [...browserRecords, ...managementRecords]) {
     const name = record.descriptorInput.toolId;
     const sourceMap = record.descriptorInput.sourceKind === "chrome-api" ? browser : management;
@@ -188,7 +188,7 @@ Deno.test("shadow capture discloses bounded selected capability summaries and on
   assertEquals(capture.canExecute, false);
   assertEquals(capture.canGrant, false);
   assertEquals(capture.selectedCount, capture.selectedDescriptors.length);
-  assertEquals(capture.nonSelectedCount, 160 - capture.selectedCount);
+  assertEquals(capture.nonSelectedCount, 166 - capture.selectedCount);
   assertEquals(capture.omittedNonSelected, true);
   assert(capture.selectedCount > 0 && capture.selectedCount <= 2);
   for (const selected of capture.selectedDescriptors) {
@@ -222,12 +222,12 @@ Deno.test("selected capability summary is bounded for non-Chrome catalog sources
   assertEquals(summary.replayClass, "unknown");
 });
 
-Deno.test("unsafe-for-cutover list remains policy metadata and does not filter the 160-record catalog", () => {
+Deno.test("unsafe-for-cutover list remains policy metadata and does not filter the 166-record catalog", () => {
   for (const name of ["run_script", "schedule_task", "set_agent_provider", "capture_screenshot", "open_side_panel"]) {
     assert(FLAGGED_FOR_LATER_PROVIDER_CUTOVER.includes(name));
   }
-  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 160);
-  assertEquals(new Set(CHROME_TOOL_CAPABILITY_TABLE.map((row) => row.toolName)).size, 160);
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 166);
+  assertEquals(new Set(CHROME_TOOL_CAPABILITY_TABLE.map((row) => row.toolName)).size, 166);
 });
 
 Deno.test("Tranche 2 tools: permission-gated execution fails closed when permission is missing", async () => {

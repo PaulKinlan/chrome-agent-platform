@@ -6,8 +6,8 @@
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
   browserTools: 126,
-  managementTools: 34,
-  totalTools: 160,
+  managementTools: 40,
+  totalTools: 166,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -179,6 +179,12 @@ export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
   "schedules_resume",
   "schedules_update",
   "delegate_to_agent",
+  "board_post_job",
+  "board_claim_job",
+  "board_complete_job",
+  "board_send_message",
+  "board_list",
+  "board_read",
 ]);
 
 export const FLAGGED_FOR_LATER_PROVIDER_CUTOVER = Object.freeze([
@@ -445,6 +451,16 @@ const rows = [
   // route's own fail-closed guard (per-edge allow-list + depth/cycle/cap/budget)
   // is the authority; no Chrome permission is involved.
   record("delegate_to_agent", "management", ["management.agent.delegate"], [], "none", "mutating", false, "mutating", "management.named-agents"),
+  // The shared jobs board (async/broadcast agent→agent work): posting,
+  // claiming, and settling mutate the hub-level board store; list/read are
+  // read-only. No Chrome permission is involved; the route's own guard (known
+  // poster/claimant, atomic claim, lease) is the authority.
+  record("board_post_job", "management", ["management.board.post"], [], "none", "mutating", false, "mutating", "management.board"),
+  record("board_claim_job", "management", ["management.board.claim"], [], "none", "mutating", false, "mutating", "management.board"),
+  record("board_complete_job", "management", ["management.board.complete"], [], "none", "mutating", false, "mutating", "management.board"),
+  record("board_send_message", "management", ["management.board.message"], [], "none", "mutating", false, "mutating", "management.board"),
+  record("board_list", "management", ["management.board.list"], [], "none", "read-only", false, "read", "management.board"),
+  record("board_read", "management", ["management.board.read"], [], "none", "read-only", false, "read", "management.board"),
   // Tranche-12 Chrome API coverage:
   // browser-wide global grant), user scripts + dynamic content scripts
   // (single-origin matches; destination-origin grant coverage; host

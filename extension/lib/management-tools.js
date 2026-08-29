@@ -50,6 +50,12 @@ export const MANAGEMENT_TOOL_NAMES = [
   "schedules_resume",
   "schedules_update",
   "delegate_to_agent",
+  "board_post_job",
+  "board_claim_job",
+  "board_complete_job",
+  "board_send_message",
+  "board_list",
+  "board_read",
 ];
 
 export function managementToolset({ callRoute }) {
@@ -223,6 +229,63 @@ export function managementToolset({ callRoute }) {
       }),
       execute: ({ agent, task, context }) =>
         call("named-agent.delegate", { agent, task, context }),
+    }),
+
+    // ---- the shared jobs board (async/broadcast complement to delegation) ----
+    // Same caller-identity discipline as delegate_to_agent: the caller is the
+    // route context, never a model arg. v1 is fully open among named agents +
+    // the hub (owner decision 2026-08-29); per-edge rules slot into the pure
+    // guards in lib/agent-board.js later.
+    board_post_job: tool({
+      description:
+        "Post a job to the shared board for ANOTHER agent to pick up asynchronously — use this when you don't need the result inline (use delegate_to_agent when you do). Any agent can claim an untargeted job; set targetAgent to aim it at one agent. blockedBy holds job ids that must complete first.",
+      inputSchema: z.object({
+        description: z.string().describe("what needs doing — self-contained, bounded; reference threads/artifacts by id instead of copying content"),
+        requiredCapability: z.string().optional().describe("a short capability tag (e.g. 'critique', 'screenshot review')"),
+        targetAgent: z.string().optional().describe("a specific agent's id or exact name; omit for an open broadcast job"),
+        blockedBy: z.array(z.string()).optional().describe("job ids that must complete before this can be claimed"),
+      }),
+      execute: ({ description, requiredCapability, targetAgent, blockedBy }) =>
+        call("board.post", { description, requiredCapability, targetAgent, blockedBy }),
+    }),
+    board_claim_job: tool({
+      description:
+        "Claim an open job from the shared board (you become its owner for a 5-minute lease). Only claim jobs you can actually complete; you never claim your own. Use board_list to see what's open.",
+      inputSchema: z.object({
+        jobId: z.string().describe("the job id from board_list"),
+      }),
+      execute: ({ jobId }) => call("board.claim", { jobId }),
+    }),
+    board_complete_job: tool({
+      description:
+        "Mark a job you claimed as complete, with the result for the poster. The poster sees the result on the board and in the Tasks surface.",
+      inputSchema: z.object({
+        jobId: z.string(),
+        result: z.string().describe("the outcome — what the poster needs to know"),
+      }),
+      execute: ({ jobId, result }) => call("board.complete", { jobId, result }),
+    }),
+    board_send_message: tool({
+      description:
+        "Post a message to the shared board — to everyone (broadcast) or one agent. Use it for findings, questions, and coordination that isn't a job.",
+      inputSchema: z.object({
+        to: z.string().optional().describe("an agent id/name, or omit for broadcast"),
+        body: z.string().describe("the message"),
+        refJobId: z.string().optional().describe("the job this message is about, if any"),
+      }),
+      execute: ({ to, body, refJobId }) => call("board.message", { to, body, refJobId }),
+    }),
+    board_list: tool({
+      description: "List jobs on the shared board (open, claimed, or settled), most recent first.",
+      inputSchema: z.object({
+        status: z.enum(["pending", "claimed", "completed", "failed"]).optional().describe("filter by status; omit for all"),
+      }),
+      execute: ({ status }) => call("board.list", { status }),
+    }),
+    board_read: tool({
+      description: "Read one board job in full (description, claimant, result).",
+      inputSchema: z.object({ jobId: z.string() }),
+      execute: ({ jobId }) => call("board.read", { jobId }),
     }),
 
     // ---- introspection ----

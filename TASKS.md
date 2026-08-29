@@ -171,6 +171,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | Priority | Status | Task | What it is |
 |---|---|---|---|
 | P0 | DONE | [`CAP-FB-20260829-MAIN-GATES-RED-03`](#cap-fb-20260829-main-gates-red-03-the-journey-suite-is-red-on-main-49-checks-still-assert-the-pre-p0-all-optional-permission-model) | Journey suite red on main — 49 checks assert the pre-P0 permission model |
+| P1 | IN_REVIEW | [`CAP-FB-20260829-AGENT-BOARD-01`](#cap-fb-20260829-agent-board-01-the-shared-jobs-board-agents-post-and-claim-work) | The shared jobs board — agents post and claim work |
 | P0 | OPEN | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
 | P0 | OPEN | [`CAP-FB-20260827-HUB-FIRST-RUN-01`](#cap-fb-20260827-hub-first-run-01-the-first-screen-is-an-onboarding-wall-not-a-command-center) | The first screen is an onboarding wall, not a command center |
 | P0 | OPEN | [`CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01`](#cap-fb-20260827-tool-call-legibility-01-tool-call-cards-show-shape-not-answers) | Tool-call cards show shape, not answers |
@@ -1441,6 +1442,66 @@ evidence every other task depends on).
 - Recover: `git grep -n "first-run-guide" -- extension/shared/components.js extension/ntp/ntp.js`
 - History:
   - 2026-08-27 23:30 UTC — captured with a screenshot of a genuinely fresh profile in a real loaded extension. The first-run card is roughly 590px tall and contains **six competing actions**: "Allow browser control", "Continue without browser control", "Open provider settings", "Use starter task", "Create the Weekly browsing review agent", and a dismiss X — against PRODUCT.md's first principle, "one primary action per view". The composer, which is the actual point of the product, sits below it and is visually weaker. Below that a fresh profile stacks **seven empty states**: "No tasks yet", "No agents yet" (sidebar), "No named agents yet", "No Site Agents yet", "Discovery has not run yet", "No artifacts yet", "No activity matches". The last of those is the **filtered-empty** copy showing in a never-had-any-data state, which tells a new owner a filter is hiding something. "Agents" labels the sidebar section, the card, and a row inside the card — three nestings of one word. The cold empty hub is genuinely fast (DCL 117 ms, 153 nodes) — this is a composition problem, not a performance one.
+
+## [CAP-FB-20260829-AGENT-BOARD-01] The shared jobs board: agents post and claim work
+- Feedback: 2026-08-29 — owner voice note: "agents should be able to ask other agents for work… the chaos extension had a shared message board and a shared jobs board"
+- Updated: 2026-08-29 UTC
+- Status: IN_REVIEW
+- Priority: P1
+- Owner: coordinator session
+- Workspace: worker lane
+- Branch: cap-agent-board
+- Base: `c6406cc7`
+- Candidate: see lane evidence at `~/.local/state/chrome-agent-platform/agent-board/`
+- Shipping: —
+- What it is: the async/broadcast complement to `delegate_to_agent`. A hub-level
+  event-sourced board (jobs + messages logs in the master memory tier) where any
+  named agent or the hub posts work, and any capable agent claims it (atomic
+  claim + 5-minute lease + heartbeat, the scheduler's exact constants). Tools:
+  board_post_job / board_claim_job / board_complete_job / board_send_message /
+  board_list / board_read. Results ride back on the job record; the Tasks
+  sidebar gains a "Board" grouping (open jobs + latest messages, bounded,
+  textContent-only). Guards are pure functions in `extension/lib/agent-board.js`
+  mirroring `agent-delegation.js`; caller identity comes from the route context
+  (never model args).
+- Permission model (owner decision 2026-08-29): v1 is FULLY OPEN among named
+  agents + the hub. The guard seam (canPostJob/canClaimJob taking the agents
+  registry) and the data model (targetAgent/requiredCapability fields, poster +
+  claimant identity on every event) are built so a future per-edge deny layer
+  slots in without redesign.
+- DEFERRED (planned extensions, not in this lane): per-edge board permissions
+  (the deny layer over the guard seam); automatic wake of idle agents on post
+  (scheduler/alarm machinery — v1 wakes live surfaces via broadcastProgress);
+  bidding/auctions; cross-device boards; A2A wire-protocol interop.
+- History:
+  - 2026-08-29 — lane built: board lib + SW routes + 6 management tools +
+    capability/replay classifications + Tasks-sidebar grouping; 20 unit tests +
+    12-check browser KAT (screenshot evidence) green; suite 2266/0.
+  - 2026-08-29 — review round 1 REVISE (6×P1 + 3×P2) fixed: board log keys
+    reserved from the model's memory_set/memory_get/keys (memory.js
+    MASTER_RESERVED_KEYS + hidden namespace; the store uses setTrusted/
+    getStrict); event-time lease expiry in the fold (expired claims are
+    reclaimable); pruning preserves settled jobs an open job still depends
+    on; both logs byte-bounded (192 KiB < the 256 KiB per-value cap) with
+    superseded-heartbeat compaction + a fail-closed board-full post gate;
+    stale model contexts denied (never hub-escalated); settlements commit
+    the result to the poster's thread through the durable thread-commit seam
+    (idempotent by board:<jobId>); visible row metadata (never title-only);
+    the browser KAT now drives a REAL named-agent claim→complete via the
+    @demo-board demo-model marker + asserts live UI refresh; heartbeat
+    parity pinned. 31 unit tests + 22-check KAT green; suite 2277/0.
+  - 2026-08-29 — review round 2 REVISE (3×P1) fixed: failed/malformed log
+    reads propagate instead of becoming destructive empty-log writes (only a
+    successful null read means absent; routes surface a structured
+    board-store-error); byte/count eviction now leaves compact settled
+    TOMBSTONES (identity + outcome + truncated result + delivery state) so
+    acknowledged settlements stay retry-idempotent (alreadySettled) and
+    readable, with full records capped separately from tombstones;
+    poster-thread delivery is durable — the pending delivery persists WITH
+    the settle event, the settle ACK waits on the idempotent
+    board:<jobId> thread commit, and a startup drain plus the
+    repeated-settle path re-attempt delivery. 37 unit tests + 22-check KAT
+    green; suite 2283/0.
 
 ## [CAP-FB-20260829-MAIN-GATES-RED-03] Journey suite red on main after the install-granted permission change
 - Feedback: 2026-08-29 — found by running the suite on `origin/main`

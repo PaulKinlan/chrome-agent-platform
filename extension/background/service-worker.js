@@ -114,7 +114,6 @@ import {
   capabilityStatus,
   requestCapability,
   revokeCapability,
-  isRequiredCapability,
 } from "../lib/capabilities.js";
 import {
   createAgent,
@@ -545,6 +544,7 @@ import {
 } from "../lib/owner-approval.js";
 import { bridgeAndAuditApprovalBindings } from "../lib/approval-bridge-audit.js";
 import { journalJson } from "../shared/tool-tree.js";
+import { createAgentBoardRoutes, BOARD_HUB_ID } from "../lib/agent-board.js";
 import { capLog, dumpLogBuffer, clearLogBuffer, getLogVerbosity, setLogVerbosity } from "../lib/cap-log.js";
 import { perfSpan, perfSummary, perfClear } from "../lib/cap-perf.js";
 
@@ -3727,9 +3727,95 @@ async function cancelExecutionTree(executionId, { reason, requestId = null }) {
   return result;
 }
 
+const boardRoutes = createAgentBoardRoutes({
+  memory: masterMemory(),
+  withLock: withNamedAgentsLock,
+  listAgents: listNamedAgents,
+  // Caller identity comes from the route CONTEXT — the model-facing
+  // dispatcher binds the run's execution id, and dispatchRoute strips
+  // __-prefixed body keys, so a model can never forge who posted or
+  // claimed (the named-agent.delegate discipline). FAIL CLOSED (review
+  // P1-5): a model principal whose execution id is live nowhere (the run
+  // settled or the SW restarted) resolves to null so the route returns a
+  // structured stale-context denial — never hub authority.
+  resolveCaller: (context) => {
+    const agentId = activeDelegationRuns.get(context?.executionId)?.agentId ?? null;
+    if (agentId) return agentId;
+    if (context?.principal === "model") {
+      const execId = typeof context.executionId === "string" ? context.executionId : "";
+      // A LIVE hub run's model calls are the hub; a stale one is denied.
+      return execId && activeExecutions.has(execId) ? BOARD_HUB_ID : null;
+    }
+    return BOARD_HUB_ID;
+  },
+  // The poster's thread authority (review P1-6): resolved from the durable
+  // run registry by the context's execution id — never from model args.
+  resolvePosterThreadId: async (context) => {
+    const execId = typeof context?.executionId === "string" ? context.executionId : "";
+    if (!execId) return null;
+    // A registry read failure PROPAGATES (review r3 P1-2): the route turns it
+    // into a structured board-store-error for model principals — swallowing
+    // it here would silently orphan the settlement delivery.
+    const records = await durableRuns.list();
+    const record = records.find((r) => r?.executionId === execId);
+    return typeof record?.threadId === "string" && record.threadId ? record.threadId : null;
+  },
+  commitThread: commitThreadTerminal,
+  broadcast: broadcastProgress,
+  // Live kick (review r5 P2): the routes invoke this whenever a settlement
+  // creates a pending delivery — reset the backoff and drain NOW.
+  onPendingDelivery: () => {
+    void kickBoardDrain();
+  },
+});
+
+// Startup drain (review r2 P1-3) + bounded backoff retry (review r3 P2):
+// settlements whose poster-thread delivery never committed get their
+// idempotent commit re-attempted on SW boot, and while deliveries REMAIN
+// (the drain reports remaining), a bounded exponential-backoff alarm keeps
+// re-draining (30s doubling, 5 attempts cap). The per-job commit stays
+// idempotent by its board:<jobId> key, so retries are safe. Fire-and-forget —
+// delivery retries never block route registration.
+const BOARD_DRAIN_ALARM = "board-drain-retry";
+const BOARD_DRAIN_MAX_ATTEMPTS = 5;
+const BOARD_DRAIN_BASE_DELAY_MS = 30000;
+let boardDrainAttempts = 0;
+function scheduleBoardDrain(delayMs) {
+  chrome.alarms.create(BOARD_DRAIN_ALARM, { when: Date.now() + delayMs });
+}
+// ONE shared rejection handler for every drain entry point (startup, alarm
+// retry, live kick): logs and schedules the next bounded backoff alarm.
+function handleBoardDrainRejection(err, context) {
+  boardDrainAttempts += 1;
+  swLog.error(`board drain ${context} failed`, { error: String(err?.message ?? err), attempts: boardDrainAttempts });
+  if (boardDrainAttempts < BOARD_DRAIN_MAX_ATTEMPTS) scheduleBoardDrain(BOARD_DRAIN_BASE_DELAY_MS * 2 ** (boardDrainAttempts - 1));
+}
+async function boardDrainOnce() {
+  const { delivered, remaining } = await boardRoutes.drain();
+  boardDrainAttempts = remaining > 0 ? boardDrainAttempts + 1 : 0;
+  if (remaining > 0 && boardDrainAttempts < BOARD_DRAIN_MAX_ATTEMPTS) {
+    scheduleBoardDrain(BOARD_DRAIN_BASE_DELAY_MS * 2 ** (boardDrainAttempts - 1));
+  }
+  if (delivered > 0 || remaining > 0) {
+    swLog.info("board drain", { delivered, remaining, attempts: boardDrainAttempts });
+  }
+  return { delivered, remaining };
+}
+// Live kick (review r5 P2): a settlement that just created a pending delivery
+// resets the backoff and drains NOW instead of waiting for the next restart.
+function kickBoardDrain() {
+  boardDrainAttempts = 0;
+  return boardDrainOnce().catch((e) => handleBoardDrainRejection(e, "live kick"));
+}
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === BOARD_DRAIN_ALARM) boardDrainOnce().catch((e) => handleBoardDrainRejection(e, "alarm retry"));
+});
+boardDrainOnce().catch((e) => handleBoardDrainRejection(e, "startup drain"));
+
 const handlers = mergeRouteMaps(
   activityRoutes,
   schedulerRoutes,
+  boardRoutes.routes,
   createMemoryRoutes(),
   agentScheduleRoutes,
   createAgentWorkerRoutes({
@@ -3853,13 +3939,6 @@ const handlers = mergeRouteMaps(
     try { payload = payloadFields([["id", id]]); } catch { return { ok: false, error: "invalid capability" }; }
     const approval = await requireOwnerApproval(context, "capability.revoke", target, payload);
     if (!approval.ok) return approval;
-    // Refuse BEFORE any dependent teardown. Every branch below destroys state
-    // first (storage snapshots, alarms disarm, scripting tombstones every
-    // enrolled origin) and removes the permission last — correct when
-    // revocation is possible, but under the install-granted model the removal
-    // can never commit, so that ordering destroyed state on the way to a
-    // guaranteed failure.
-    if (isRequiredCapability(id)) return await revokeCapability(id);
     if (id === "storage") {
       // The snapshot + permission removal + reset must be ONE atomic transition
       // under the storage-mode lock, so a concurrent KV write cannot slip between
@@ -6517,18 +6596,14 @@ const handlers = mergeRouteMaps(
       invalidateAgent();
       const scriptsRemoved = unreg.scriptsRemoved === true;
       const permissionRemoved = unreg.permissionRemoved === true;
-      // Host access declared permanently in the manifest cannot be removed per
-      // origin; absence is not achievable and not required for teardown.
-      const hostPermanent = unreg.hostPermissionPermanent === true;
-      if (scriptsRemoved && (permissionRemoved || hostPermanent) && cleared) {
+      if (scriptsRemoved && permissionRemoved && cleared) {
         await clearCleanupPending(canonical);
         broadcastRegistryChanged();
         return {
           ok: true,
           origin: canonical,
           scriptsRemoved: true,
-          permissionRemoved,
-          hostPermissionPermanent: hostPermanent,
+          permissionRemoved: true,
         };
       }
       // Record a RETRYABLE cleanup obligation (independent of enrollment, so it
@@ -6538,8 +6613,9 @@ const handlers = mergeRouteMaps(
         ok: false,
         origin: canonical,
         retryable: true,
-        error: unreg.error ??
-          (cleared ? "site teardown incomplete" : "OPFS clear failed"),
+        error:
+          unreg.error ??
+          "OPFS clear failed",
         scriptsRemoved,
         permissionRemoved,
         cleared,
@@ -6584,8 +6660,7 @@ const handlers = mergeRouteMaps(
       const cleared = clearRes.status === "fulfilled";
       const scriptsRemoved = unreg.scriptsRemoved === true;
       const permissionRemoved = unreg.permissionRemoved === true;
-      const hostPermanent = unreg.hostPermissionPermanent === true;
-      if (scriptsRemoved && (permissionRemoved || hostPermanent) && cleared) {
+      if (scriptsRemoved && permissionRemoved && cleared) {
         await clearCleanupPending(canonical);
         return { ok: true, origin: canonical };
       }
@@ -6593,8 +6668,7 @@ const handlers = mergeRouteMaps(
       return {
         ok: false,
         retryable: true,
-        error: unreg.error ??
-          (cleared ? "site teardown incomplete" : "OPFS clear failed"),
+        error: unreg.error ?? "OPFS clear failed",
         scriptsRemoved,
         permissionRemoved,
         cleared,

@@ -30,7 +30,11 @@ const CREATE_AGENT_MARKER = "@demo-create-agent";
 // NAMED agent; the child runs "@demo-tools" in its OWN sandbox and the final
 // text reflects the delegation result. Checked BEFORE the site-delegation
 // marker (the strings share a prefix).
-const AGENT_DELEGATE_MARKER = "@demo-delegate-agent";// @demo-slow: the FIRST model step is delayed (a deterministic mid-run window
+const AGENT_DELEGATE_MARKER = "@demo-delegate-agent";// @demo-board: the demo model drives the REAL board flow through the lazy
+// protocol — board_list → claim the first claimable job → board_complete_job —
+// so the browser KAT attests a NAMED AGENT genuinely claims + settles a board
+// job (its execution id resolves through the live run registry).
+const BOARD_MARKER = "@demo-board";// @demo-slow: the FIRST model step is delayed (a deterministic mid-run window
 // for abort tests).
 const SLOW_MARKER = "@demo-slow";
 /** Public deterministic cancellation window used by the demo provider. This is
@@ -212,6 +216,7 @@ function latestRunSlice(prompt) {
       delegate: lastUser.includes(DELEGATE_MARKER) && !lastUser.includes(AGENT_DELEGATE_MARKER),
       delegateAgent: lastUser.includes(AGENT_DELEGATE_MARKER),
       createAgent: lastUser.includes(CREATE_AGENT_MARKER),
+      board: lastUser.includes(BOARD_MARKER),
     },
   };
 }
@@ -240,8 +245,93 @@ function latestSelectionRef(prompt) {
   }
 }
 
-function lazyDemoCall(prompt, { delegate = false, delegateAgent = false } = {}) {
+// ── @demo-board helpers ─────────────────────────────────────────────────────
+function wantsBoard(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.board;
+}
+
+/** Unwrap one tool-part output through the lazy protocol envelope
+ *  ({ ok, result } — string OR object form), the agent-delegation pattern. */
+function lazyUnwrap(output) {
+  let value = output;
+  if (typeof value === "string") {
+    try { value = JSON.parse(value); } catch { /* plain text */ }
+  }
+  if (value && typeof value === "object" && "result" in value) return value.result;
+  return value;
+}
+
+/** The tool parts of the CURRENT run slice (structured, not text). */
+function boardToolParts(prompt) {
+  return runSlice(prompt)
+    .filter((m) => m?.role === "tool")
+    .flatMap((m) => (Array.isArray(m.content) ? m.content : [m.content]))
+    .filter((p) => p && typeof p === "object");
+}
+
+/** The first CLAIMABLE job from the executed board_list result. */
+function boardListFirstJobId(prompt) {
+  for (const part of boardToolParts(prompt)) {
+    if (part?.type !== "tool-result") continue;
+    const value = lazyUnwrap(part.output?.value ?? part.output);
+    if (!value || typeof value !== "object" || !Array.isArray(value.jobs)) continue;
+    const pending = value.jobs.find((j) => j?.status === "pending") ?? value.jobs[0];
+    if (typeof pending?.id === "string") return pending.id;
+  }
+  return null;
+}
+
+function boardAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" &&
+    Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && /\[demo model\] Board job/.test(p.text ?? "")));
+}
+
+/** Honest final text: the claim + complete tool RESULTS decide what the run
+ *  reports — a denial reads as a failure, never a success. */
+function boardFinalText(prompt) {
+  const parts = boardToolParts(prompt);
+  const results = parts
+    .filter((p) => p?.type === "tool-result")
+    .map((p) => lazyUnwrap(p.output?.value ?? p.output))
+    .filter((v) => v && typeof v === "object");
+  const listed = results.find((v) => Array.isArray(v.jobs));
+  const claimed = results.find((v) => v.job && typeof v.job.claimantId === "string" && v.job.status === "claimed");
+  const completed = results.find((v) => v.job && v.job.status === "completed");
+  const denial = results.find((v) => v.ok === false);
+  if (completed) return `[demo model] Board job ${completed.job.id} claimed and completed — the result is on the board.`;
+  if (denial) return `[demo model] Board job flow DENIED/FAILED honestly: ${String(denial.error ?? denial.code ?? "unknown").slice(0, 160)}`;
+  if (claimed) return `[demo model] Board job ${claimed.job.id} claimed; completion did not settle.`;
+  if (listed) return "[demo model] Board job flow: no claimable job was listed.";
+  return "[demo model] Board job flow finished without board results.";
+}
+
+function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false } = {}) {
   const step = toolResultCount(prompt);
+  if (board) {
+    // search → execute per board tool (a selectionRef is single-use):
+    // board_list → board_claim_job(the first claimable) → board_complete_job.
+    const toolParts = boardToolParts(prompt);
+    const searches = toolParts.filter((p) => p.toolName === "search_tools").length;
+    const executes = toolParts.filter((p) => p.toolName === "execute_tool").length;
+    const plan = ["board_list", "board_claim_job", "board_complete_job"];
+    if (searches >= plan.length && executes >= plan.length) return null;
+    if (searches <= executes) {
+      return { id: `search_board_${searches}`, name: "search_tools", input: { query: plan[searches], limit: 1 } };
+    }
+    const selectionRef = latestSelectionRef(prompt);
+    if (!selectionRef) return null;
+    if (executes === 0) {
+      return { id: "execute_board_list", name: "execute_tool", input: { selectionRef, arguments: {} } };
+    }
+    const jobId = boardListFirstJobId(prompt);
+    if (!jobId) return null; // honest stop: the final text reports it
+    if (executes === 1) {
+      return { id: "execute_board_claim", name: "execute_tool", input: { selectionRef, arguments: { jobId } } };
+    }
+    return { id: "execute_board_complete", name: "execute_tool", input: { selectionRef, arguments: { jobId, result: "[demo] claimed and completed via @demo-board" } } };
+  }
   if (delegateAgent) {
     const parallelRefs = delegateParallelRefs(prompt);
     if (parallelRefs) {
@@ -424,6 +514,8 @@ export function createDemoModel() {
         (createAgentFinal(options.prompt) || toolResultCount(options.prompt) >= 2);
       const lazyCall = wantsAgentDelegate(options.prompt)
         ? lazyDemoCall(options.prompt, { delegateAgent: true })
+        : wantsBoard(options.prompt) && !boardAlreadyFinal(options.prompt)
+        ? lazyDemoCall(options.prompt, { board: true })
         : wantsDelegate(options.prompt)        ? lazyDemoCall(options.prompt, { delegate: true })
         : wantsCreateAgent(options.prompt) && !createAgentDone
         ? lazyDemoCall(options.prompt)
@@ -447,6 +539,16 @@ export function createDemoModel() {
       // The create-agent final/continuation text: honest about the outcome, and
       // the marker text lets the stripped-history continuation re-emit it so
       // the loop ends (mirrors the @demo-tools alreadyFinal pattern).
+      // The board final/continuation text: honest about the outcome (the
+      // marker lets the stripped-history continuation re-emit it + stop).
+      if (wantsBoard(options.prompt)) {
+        return Promise.resolve({
+          content: [{ type: "text", text: boardFinalText(options.prompt) }],
+          finishReason: "stop",
+          usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
+          warnings: [],
+        });
+      }
       if (wantsCreateAgent(options.prompt)) {
         return Promise.resolve({
           content: [{ type: "text", text: createAgentFinalText(options.prompt) }],
@@ -487,6 +589,8 @@ export function createDemoModel() {
             (createAgentFinal(options.prompt) || toolResultCount(options.prompt) >= 2);
           const lazyCall = wantsADel && !agentDelegateAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { delegateAgent: true })
+            : wantsBoard(options.prompt) && !boardAlreadyFinal(options.prompt)
+            ? lazyDemoCall(options.prompt, { board: true })
             : wantsDel            ? lazyDemoCall(options.prompt, { delegate: true })
             : wantsCreateAgent(options.prompt) && !createAgentDone
             ? lazyDemoCall(options.prompt)
@@ -630,6 +734,11 @@ export function createDemoModel() {
             controller.enqueue({ type: "finish", usage, finishReason: "stop" });
             controller.close();
             return;
+          }
+          else if (wantsBoard(options.prompt)) {
+            // The board flow's final/continuation text: the claim + complete
+            // tool results decide the outcome (never a neutral rewrite).
+            response = boardFinalText(options.prompt);
           }
           else if (wantsTools && (toolResultCount(options.prompt) >= (wantsDemoToolsX2(options.prompt) ? 12 : 6) || demoAlreadyFinal(options.prompt))) {            // STEP 4 (tools): the final summary — the reads' VALUES speak for
             // themselves (the run's tool results are the assertion target). The

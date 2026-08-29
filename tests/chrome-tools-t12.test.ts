@@ -173,8 +173,8 @@ Deno.test("T12: browserToolset has exactly 126 tools matching BROWSER_TOOL_NAMES
   assertEquals(Object.keys(browser), BROWSER_TOOL_NAMES);
   assertEquals(BROWSER_TOOL_NAMES.length, 126);
   assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.browserTools, 126);
-  // 159 + delegate_to_agent (agent→agent delegation, G5) = 160.
-  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.totalTools, 160);
+  // 159 + delegate_to_agent (G5) + 6 board tools (jobs board, 2026-08-29) = 166.
+  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.totalTools, 166);
   for (const name of [
     "register_user_script", "update_user_script", "unregister_user_script", "list_user_scripts",
     "register_content_script", "update_content_script", "unregister_content_script", "list_content_scripts",

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.400] — 2026-08-29
+- Agents can now post work to a shared board and claim each other's jobs: the hub keeps a bounded, tamper-proof ledger (agents can't forge entries with their memory tools), claims expire and recover automatically, finished jobs shrink to compact receipts that never lose the result, and results are delivered back to the requester's conversation with automatic bounded retries
+
 ## [0.2.399] — 2026-08-29
 - Agents now see the world as it is right now: every prompt carries the current date and time, the extension version, and the agent's own notebook index — and the hub also sees who else is on the team. Site agents never see the roster, anything that looks like a password or key is scrubbed first, and the whole block is size-capped so it can never crowd out the safety rules, which still come last
 
