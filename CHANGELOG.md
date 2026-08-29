@@ -1,7 +1,7 @@
 # Changelog
 
 ## [0.2.410] — 2026-08-29
-- fix(CAP-FB-20260829-URGENT-UI-REPAIR-01): stabilize create dialog width
+- Create Agent keeps one stable, contained width when Advanced or Skills opens instead of jumping wider
 
 ## [0.2.409] — 2026-08-29
 - Create Agent visibly follows Name → what it does with microphone → template → English schedule → Advanced

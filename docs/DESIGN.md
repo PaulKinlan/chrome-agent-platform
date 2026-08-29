@@ -64,6 +64,8 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   icons, and a one-line ellipsized closed state contained by `min-width: 0`.
 - The create-agent dialog's primary order is Name → what it does (with visible
   dictation/refine tools) → starting template → English schedule → Advanced.
+  Its inline size is a fixed viewport clamp; every disclosure uses shrink-safe
+  containment so opening Advanced or Skills never changes the dialog width.
 - SVG line-art icons, one stroke weight, currentColor. No emoji.
 - Capability rows: `28px | 1fr | auto` grid (icon | stacked name+description |
   right-aligned action) — aligned by construction.

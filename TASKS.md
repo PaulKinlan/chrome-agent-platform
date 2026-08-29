@@ -170,7 +170,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 | Priority | Status | Task | What it is |
 |---|---|---|---|
-| P0 | OPEN | [`CAP-FB-20260829-URGENT-UI-REPAIR-01`](#cap-fb-20260829-urgent-ui-repair-01-restore-agents-and-create-dialog-visual-quality) | Restore Agents and create-dialog visual quality |
+| P0 | IN_REVIEW | [`CAP-FB-20260829-URGENT-UI-REPAIR-01`](#cap-fb-20260829-urgent-ui-repair-01-restore-agents-and-create-dialog-visual-quality) | Restore Agents and create-dialog visual quality |
 | P0 | IN_REVIEW | [`CAP-FB-20260829-MIC-DEAD-MACOS-01`](#cap-fb-20260829-mic-dead-macos-01-mic-button-is-completely-dead-on-macos-after-the-waveform-change) | Mic button is completely dead on macOS after the waveform change |
 | P0 | DONE | [`CAP-FB-20260829-MAIN-GATES-RED-03`](#cap-fb-20260829-main-gates-red-03-the-journey-suite-is-red-on-main-49-checks-still-assert-the-pre-p0-all-optional-permission-model) | Journey suite red on main — 49 checks assert the pre-P0 permission model |
 | P0 | IN_REVIEW | [`CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01`](#cap-fb-20260829-tool-argument-robustness-01-tool-call-argument-robustness-and-schema-accuracy) | Tool-call argument robustness and schema accuracy |
@@ -1403,25 +1403,27 @@ evidence every other task depends on).
 
 ## [CAP-FB-20260829-URGENT-UI-REPAIR-01] Restore Agents and create-dialog visual quality
 - Feedback: 2026-08-29 — owner reported visual regressions from the landed Agents merge and create-dialog declutter lanes: the background picker was replaced by 22 phantom rows, provider/template selects showed double arrows, agent edit actions drifted out of their action group, the template and microphone disappeared behind Advanced, and disclosures changed the dialog width
-- Updated: 2026-08-29 23:52 BST
-- Status: OPEN
+- Updated: 2026-08-29 23:22 BST
+- Status: IN_REVIEW
 - Priority: P0
 - Owner: implementation lane
 - Workspace: durable worktree
 - Branch: `cap-ui-repair`
 - Base: `origin/main@cebb4601`
-- Candidate: —
+- Candidate: `36d60d40` plus this tracker/changelog commit
 - Shipping: —
 - Acceptance: Settings uses one compact rich background-agent picker and lists only created/enabled agents; every base-select has one arrow, rich options and contained single-line closed state; agent actions share one group; create dialog visibly orders Name, what it does with voice, template, English schedule, then Advanced; dialog width is stable with disclosures contained
-- Review: required fresh-session review of candidate diff plus before/after screenshots
-- Gates: dedicated real-browser KAT with falsified computed-style/geometry assertions; full Deno suite; developer build
+- Review: pending required independent acceptance review of candidate diff plus before/after screenshots
+- Gates: visual KAT 11/11; full Deno suite 2388/0; developer build clean; focused source tests 15/15; changed source pins observed RED against the unfixed sources and GREEN after
 - Blockers: —
-- Next: complete provider/select and create-dialog repairs, then run all gates
+- Next: independent acceptance review, then coordinator integration
 - Recover: `git log --oneline --all --grep CAP-FB-20260829-URGENT-UI-REPAIR-01`
 - History:
-  - 2026-08-29 23:52 BST — restored the create-dialog hierarchy requested after visual review: Name and What it does remain first; microphone/Refine are visibly attached to the purpose field; the rich template select and English schedule follow before Advanced. The real-browser order and visible-voice assertions turned green while the separate width-jitter assertion remains intentionally RED for the next atomic fix.
-  - 2026-08-29 23:40 BST — removed the hand-drawn chevron from the shared `<provider-select>` and styled the one native `::picker-icon`; rich options now carry safe inline SVG icons, the closed state is one-line/ellipsis/min-width contained, and Save/Edit/Delete share one wrapping `.ag-actions` row. Browser assertions for provider containment, one provider arrow, one template arrow and action grouping are green.
-  - 2026-08-29 23:20 BST — RED browser run captured 1/10 pass: Settings rendered all 22 disabled background templates as rows; provider/template each had the native picker icon plus a custom SVG; voice/template/schedule were behind Advanced; opening Skills widened the dialog from 582px to 878px. First repair restores the compact rich background picker with an explicit Add action and projects only created/enabled agents into management rows; its two focused KAT assertions are now green.
+  - 2026-08-29 23:22 BST — candidate gated: real loaded-extension KAT 11/11 (including genuine Add click and opened rich pickers), full suite 2388/0 and developer build clean. Dialog geometry is 582px in collapsed, Advanced-open and Skills-open states with zero horizontal overflow. The new fixed-width source assertion failed against the prior product and passed after; the corrected Settings projection assertions failed against `cebb4601` and passed after.
+  - 2026-08-29 23:18 BST — replaced the content-driven `min-width` with one clamped width plus shrink-safe Advanced/Skills containment. The browser width assertion moved from RED `[582,615.89,878.06]` to GREEN `[582,582,582]`; opened-disclosure screenshots were inspected and show no horizontal jump or overflow.
+  - 2026-08-29 23:14 BST — restored the create-dialog hierarchy requested after visual review: Name and What it does remain first; microphone/Refine are visibly attached to the purpose field; the rich template select and English schedule follow before Advanced. The real-browser order and visible-voice assertions turned green while the separate width-jitter assertion remained RED for the next atomic fix.
+  - 2026-08-29 23:10 BST — removed the hand-drawn chevron from the shared `<provider-select>` and styled the one native `::picker-icon`; rich options now carry safe inline SVG icons, the closed state is one-line/ellipsis/min-width contained, and Save/Edit/Delete share one wrapping `.ag-actions` row. Browser assertions for provider containment, one provider arrow, one template arrow and action grouping are green.
+  - 2026-08-29 23:05 BST — RED browser run captured 1/10 pass: Settings rendered all 22 disabled background templates as rows; provider/template each had the native picker icon plus a custom SVG; voice/template/schedule were behind Advanced; opening Skills widened the dialog from 582px to 878px. First repair restores the compact rich background picker with an explicit Add action and projects only created/enabled agents into management rows; its two focused KAT assertions are now green.
 
 ## [CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01] Create-agent dialog is cluttered and its schedule/theme controls are inconsistent
 - Feedback: 2026-08-29 — product owner asked to declutter persona controls, accept schedules in plain English, replace the large background-template list with a subtle select, and fix dark conversation contrast

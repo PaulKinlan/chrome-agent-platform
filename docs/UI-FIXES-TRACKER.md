@@ -46,7 +46,7 @@ one line each here:
 - Restore the compact rich base-select + Add action for the built-in background-agent catalogue; management rows represent created/enabled agents only.
 - Remove duplicate base-select arrows, contain provider/template controls to one line, and keep agent edit actions in the row action group.
 - Restore create-dialog hierarchy to Name → what it does + voice → template → schedule → Advanced, with a stable width across disclosure states.
-- Real-browser before evidence reproduced all defects; the dedicated visual KAT pins the corrected structure, arrow count, containment, order and stable width.
+- Real-browser before evidence reproduced all defects; the dedicated visual KAT now passes 11/11 and pins the corrected structure, working Add action, rich-option icons, arrow count, containment, order and stable 582px width across collapsed, Advanced-open and Skills-open states.
 
 ### Create-agent dialog clutter and inconsistent controls (2026-08-29 — corrected after owner review)
 - The owner's visual review superseded the over-collapsed hierarchy: the primary path is
