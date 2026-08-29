@@ -229,7 +229,7 @@ evidence every other task depends on).
 ## [CAP-FB-20260829-PROVIDER-SERVER-TOOLS-01] Provider-executed server tools with owner-controlled cost
 
 - Feedback: 2026-08-29 — provider-built-in tools must be usable without sending a paid call after revocation, leaking opt-ins across agent identities, or undercounting billable query occurrences.
-- Updated: 2026-08-29 08:29 UTC
+- Updated: 2026-08-29 08:49 UTC
 - Status: IN_REVIEW
 - Resume: —
 - Priority: P1
@@ -240,12 +240,13 @@ evidence every other task depends on).
 - Candidate: this tracker commit
 - Shipping: —
 - Acceptance: Gemini native Google Search is double-gated at the provider boundary; named opt-ins use immutable instance IDs and are deleted with the agent; background agents fail closed; model IDs are canonical; Clear usage clears every ledger; repeated query occurrences are billed separately; only HTTPS citations persist.
-- Review: independent review BLOCK on candidate `7c1017f1`; seven findings addressed in revision 1, re-review pending.
+- Review: independent review BLOCK round 2 on candidate `ec37b49e`; two P1 findings and one P2 addressed in revision 2, re-review pending.
 - Gates: behavioral RED on the pre-feature base through pre-existing LazyToolProtocol/agent/usage/provider seams; focused tests, full suite, and production build SHA-stamped at the revision candidate.
 - Blockers: —
 - Next: independent re-review of revision 1.
 - Recover: `git switch cap-provider-server-tools && git status --short && deno test -A tests/provider-server-tools-behavioral-red.test.ts tests/provider-server-tools.test.ts tests/usage-tool-counts.test.ts`
 - History:
+  - 2026-08-29 08:49 UTC — revision 2 persisted fail-closed identity through generic durable resume, separated unbounded occurrence billing from bounded text retention, and aligned live/durable query presentation after round-2 review BLOCK.
   - 2026-08-29 08:29 UTC — revision 1 fixed provider-boundary revocation, immutable identity opt-ins, model normalization, full usage clearing, occurrence billing, behavioral falsification, and HTTPS-only citations after independent review BLOCK.
 
 

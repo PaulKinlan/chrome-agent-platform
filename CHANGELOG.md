@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.351] — 2026-08-29
+- Resumed background work now stays barred from paid provider search instead of inheriting Hub access, repeated searches remain fully counted after text retention fills, and live search cards match their refreshed view
+
 ## [0.2.350] — 2026-08-29
 - Provider-run web search now stops before a paid call when you revoke access, keeps each agent’s opt-in tied to its immutable identity, clears search estimates with the rest of Usage, counts repeated billed queries honestly, and stores only HTTPS citations
 

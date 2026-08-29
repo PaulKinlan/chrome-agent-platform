@@ -273,11 +273,13 @@ export function normalizeGeminiGrounding(groundingMetadata) {
  * occurrence, so a Set is never the billing authority. */
 export function createServerGroundingAccumulator({ maxQueryOccurrences = 128, maxCitations = 128 } = {}) {
   const queryOccurrences = [];
+  let queryOccurrenceCount = 0;
   const displayQueries = new Set();
   const citations = new Map();
   return Object.freeze({
     add(normalized) {
       for (const query of normalized?.queries ?? []) {
+        queryOccurrenceCount = Math.min(Number.MAX_SAFE_INTEGER, queryOccurrenceCount + 1);
         if (queryOccurrences.length < maxQueryOccurrences) queryOccurrences.push(query);
         if (displayQueries.size < maxQueryOccurrences) displayQueries.add(query);
       }
@@ -287,6 +289,7 @@ export function createServerGroundingAccumulator({ maxQueryOccurrences = 128, ma
     },
     snapshot() {
       return Object.freeze({
+        queryOccurrenceCount,
         queries: Object.freeze([...queryOccurrences]),
         displayQueries: Object.freeze([...displayQueries]),
         citations: Object.freeze([...citations.values()]),

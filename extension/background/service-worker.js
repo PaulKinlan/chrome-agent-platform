@@ -2046,7 +2046,7 @@ function providerResumeIdentity(config) {
   };
 }
 
-async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSurfaceRef = null, providerServerAgentId = "hub", clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null }) {
+async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSurfaceRef = null, providerServerAgentId = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null }) {
   // Serialize master execution: the cached orchestrator is shared, so a second
   // run must queue behind the first rather than clobber its abort controller.
   return await withRunLock(async () => {
@@ -2087,6 +2087,11 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       promptScope: promptScope ?? null,
       agentRole: String(agentRole ?? ""),
       agentSurfaceRef: agentSurfaceRef == null ? null : String(agentSurfaceRef),
+      // Preserve explicit null through generic durable resume. Unknown/legacy
+      // requests fail closed; only true hub entry points persist "hub".
+      providerServerAgentId: typeof providerServerAgentId === "string" && providerServerAgentId
+        ? providerServerAgentId
+        : null,
       clientCorrelationId: clientCorrelationId ?? null,
       threadId: threadId ?? null,
       scheduleName: scheduleName ?? null,
@@ -2418,8 +2423,8 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // labelled ESTIMATE (CAP cannot see the provider's free-tier meter).
       const serverGrounding = orch?.serverTooling?.groundingFor?.(executionId) ?? null;
       const serverLatchCount = orch?.serverTooling?.latchCount?.(executionId) ?? 0;
-      if (serverGrounding && serverGrounding.queries.length > 0) {
-        const queryCount = serverGrounding.queries.length;
+      if (serverGrounding && serverGrounding.queryOccurrenceCount > 0) {
+        const queryCount = serverGrounding.queryOccurrenceCount;
         const estUsd = (queryCount * 0.014);
         try {
           await recordToolCall("provider-server/gemini/google_search");
@@ -2436,7 +2441,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         ok: true,
         result,
         logicalId: taskId,
-        ...(serverGrounding && (serverGrounding.citations.length > 0 || serverGrounding.queries.length > 0)
+        ...(serverGrounding && (serverGrounding.citations.length > 0 || serverGrounding.queryOccurrenceCount > 0)
           ? {
             citations: serverGrounding.citations,
             // Presentation dedupes repeated queries; billing above deliberately
@@ -2500,8 +2505,8 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         ...(serverGrounding && serverGrounding.citations.length > 0
           ? { citations: serverGrounding.citations }
           : {}),
-        ...(serverGrounding && serverGrounding.queries.length > 0
-          ? { serverToolEvents: serverGrounding.queries.map((query) => ({ kind: "google_search", query })) }
+        ...(serverGrounding && serverGrounding.displayQueries.length > 0
+          ? { serverToolEvents: serverGrounding.displayQueries.map((query) => ({ kind: "google_search", query })) }
           : {}),
       };
     } catch (error) {
@@ -3697,6 +3702,7 @@ const handlers = mergeRouteMaps(
         approvalBinding: m.approvalBinding ?? null,
         threadId,
         agentRole: "hub",
+        providerServerAgentId: "hub",
         onProgress: (event) => {
           if (event?.type === "tool-call") lastTool = event.toolName ?? null;
           broadcastProgress({
@@ -4989,7 +4995,7 @@ const handlers = mergeRouteMaps(
     return { ok: true, name, when };
   },
   async "run-task"(m) {
-    return await runTask({ id: m.id, task: m.task, clientCorrelationId: m.runId ?? null });
+    return await runTask({ id: m.id, task: m.task, providerServerAgentId: "hub", clientCorrelationId: m.runId ?? null });
   },
   async "run.list"() {
     await durableRecoveryReady;
@@ -5206,6 +5212,7 @@ const handlers = mergeRouteMaps(
       task: recipe.prompt,
       runKind: "agent",
       agentRole: `recipe:${recipe.id}`,
+      providerServerAgentId: null,
     });
   },
   async "background-agent.list"() {
@@ -6653,6 +6660,7 @@ async function dispatchHook(hookId, payload) {
       memory: backgroundAgentMemory(sub.recipeId ? `recipe:${sub.recipeId}` : `hook:${hookId}`),
       runKind: "agent",
       agentRole: sub.recipeId ? `recipe:${sub.recipeId}` : `hook:${hookId}`,
+      providerServerAgentId: null,
     }).catch((e) => {
       // A provider failure (missing host permission / open breaker / a model
       // that returns no output) must not flood the console per tab event —

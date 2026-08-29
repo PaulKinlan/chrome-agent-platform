@@ -247,6 +247,7 @@ Deno.test("provider-server: repeated query occurrences bill separately while pre
   accumulator.add({ queries: ["same query"], citations: [] });
   accumulator.add({ queries: ["same query", "other query"], citations: [] });
   const snapshot = accumulator.snapshot();
+  assertEquals(snapshot.queryOccurrenceCount, 3);
   assertEquals(snapshot.queries, ["same query", "same query", "other query"]);
   assertEquals(snapshot.displayQueries, ["same query", "other query"]);
 });
@@ -463,6 +464,10 @@ Deno.test("provider-server: source pins — the service worker wires the records
   assertStringIncludes(src, "providerServerAgentId: agent.instanceId || null");
   assertStringIncludes(src, "providerServerAgentId: null");
   assertStringIncludes(src, "clearProviderServerAgentOptIns([deletingAgent?.instanceId, slug])");
+  assertStringIncludes(src, "providerServerAgentId = null");
+  assertStringIncludes(src, "providerServerAgentId: typeof providerServerAgentId");
+  assertStringIncludes(src, "serverGrounding.queryOccurrenceCount");
+  assertEquals((src.match(/serverGrounding\.displayQueries\.map/g) ?? []).length, 2, "live and durable rows dedupe identically");
 });
 
 Deno.test("provider-server: source pins — the settings toggle + rate card exist", async () => {
