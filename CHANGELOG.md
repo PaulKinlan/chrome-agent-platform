@@ -1,16 +1,19 @@
 # Changelog
 
+## [0.2.400] — 2026-08-29
+- chore(board): changelog entries for the board rounds in plain user language
+
 ## [0.2.399] — 2026-08-29
-- fix(board): r3 reviewer verdicts — delivery-capacity admission reserve, resolver fail-closed, drain retry (CAP-FB-20260829-AGENT-BOARD-01)
+- Internal reliability fixes for the agents' shared jobs board: failed result deliveries can no longer fill up its storage, and delivery now retries on its own until it succeeds
 
 ## [0.2.398] — 2026-08-29
-- test(board): r3 RED battery — delivery-capacity admission, resolver fail-closed, drain retry shape (carrier from the k3 lane, verified behavioral-RED on 2f53f407)
+- Internal groundwork for the agents' shared jobs board — no user-visible change yet
 
 ## [0.2.397] — 2026-08-29
-- Board review round 2: no destructive empty-log writes, settled tombstones, durable result delivery
+- Internal hardening of the agents' shared jobs board — no user-visible change yet
 
 ## [0.2.396] — 2026-08-29
-- Board review round 1: reserve the logs, reclaimable leases, byte bounds, fail-closed identity, poster-thread results
+- Internal groundwork for the agents' shared jobs board — no user-visible change yet
 
 ## [0.2.395] — 2026-08-29
 - Fixed two real bugs found while getting the browser test suite green again: deleting a site agent always reported a failure even though it had worked, and turning off a permission that cannot be turned off would still remove your enrolled sites on its way to failing. Neither can happen now
