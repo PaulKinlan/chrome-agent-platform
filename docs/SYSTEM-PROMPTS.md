@@ -180,8 +180,15 @@ key history. Every receipt names its `keyVersion`; when optional `storage` is
 absent the service-worker-session key is honestly labelled `ephemeral: true`
 instead of being described as per-install durable. No prompt content, key
 bytes, or unkeyed stable fingerprint of owner text is ever routed/journaled. A
-run proves it sent the previewed composition when its `composedReceipt` equals
-`prompt.attest`'s `digestReceipt` for the same key version.
+run proves it sent the previewed composition when its layered boundary
+receipts match the preview's per layer: static layers compare by exact
+receipt, and the dynamic `runtime-context` layer (date/time, roster, memory
+index — legitimately per-assembly) compares by its TEMPLATE receipt (the
+preview renders that layer as its clearly-marked placeholder, so the
+preview's rendered receipt IS its template receipt). The comparator is
+`layerReceiptsMatch` in `extension/lib/system-prompts.js`; whole-composition
+receipts (`composedReceipt` vs `digestReceipt`) intentionally differ whenever
+the dynamic layer renders real values.
 
 ## Secrets + hidden reasoning
 

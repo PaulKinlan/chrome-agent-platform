@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.396] — 2026-08-29
+- fix(prompts): runtime-context round 2 — redaction, structural containment, usable attestation parity
+
 ## [0.2.395] — 2026-08-29
 - feat(prompts): runtime-context layer — agents stop being amnesiac about time, system state, and each other
 

@@ -1105,6 +1105,48 @@ export async function attestComposition(composed, scope = "hub", { key, keyVersi
   };
 }
 
+/**
+ * The preview↔run parity comparator. Static layers must match by their
+ * rendered receipt (byte-exact composition); DYNAMIC layers (runtime-context)
+ * legitimately carry per-assembly values, so they match on the TEMPLATE
+ * receipt — the preview's rendered receipt IS its template receipt (it
+ * renders the placeholder), and the run's templateReceipt anchors the same
+ * structure. Returns { ok, mismatches: [layerId, …] }.
+ */
+export function layerReceiptsMatch(previewLayers, runLayers) {
+  const a = Array.isArray(previewLayers) ? previewLayers : [];
+  const b = Array.isArray(runLayers) ? runLayers : [];
+  const mismatches = [];
+  if (a.length !== b.length || a.some((l, i) => l?.id !== b[i]?.id)) {
+    return { ok: false, mismatches: ["<layer-set>"] };
+  }
+  for (let i = 0; i < a.length; i++) {
+    const p = a[i], r = b[i];
+    if (p?.dynamic || r?.dynamic) {
+      if (!(p?.templateReceipt && r?.templateReceipt && p.templateReceipt === r.templateReceipt)) {
+        mismatches.push(p?.id ?? r?.id ?? "<unknown>");
+      }
+    } else if (p?.receipt !== r?.receipt) {
+      mismatches.push(p?.id ?? "<unknown>");
+    }
+  }
+  return { ok: mismatches.length === 0, mismatches };
+}
+
+/**
+ * Pick the layered receipts matching a boundary attestation event's agentId
+ * ("hub" → the master composition; a worker origin → that worker's
+ * composition). Content-free (receipts/ids/bytes only). Returns null when the
+ * build recorded no layers for the agent (older builds, unknown ids).
+ */
+export function boundaryLayersFor(promptInfo, agentId) {
+  if (!promptInfo || !agentId) return null;
+  if (agentId === "hub") return promptInfo.layers ?? null;
+  const workers = promptInfo.workerLayers;
+  if (workers && typeof workers === "object" && workers[agentId]) return workers[agentId];
+  return null;
+}
+
 /* ── Line diff (old-vs-new base, for the release-update UI) ─────────────── */
 
 const DIFF_MAX_LINES = 600;

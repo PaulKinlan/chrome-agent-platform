@@ -7234,6 +7234,7 @@ class SystemPromptEditor extends Component {
           : layer.source === "owner" ? "your customization"
           : layer.source === "agent" ? "agent role"
           : layer.source === "skills" ? "skills"
+          : layer.source === "runtime" ? "run-time context"
           : "built-in";
         head.append(src);
         if (layer.version) {

@@ -227,6 +227,7 @@ import {
   normalizeScope,
   PROMPT_OWNED_KEYS,
   resolveSystemPrompt,
+  boundaryLayersFor,
   restampPromptOverride,
   rotateAttestationKey,
   setPromptOverride,
@@ -1419,6 +1420,7 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     // A then failed site tools spuriously). A build-local map means each build
     // binds EXACTLY the cells it created, and the map is GC'd with the build.
     const buildCells = new Map(); // canonical origin -> { get: () => number|null }
+    const workerComposed = new Map(); // canonical origin -> composed prompt (for layered attestation)
     const workers = await Promise.all(origins.map(async (origin) => {
       const cell = { get: () => null };
       buildCells.set(origin, cell);
@@ -1431,6 +1433,8 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
         chromeApi: globalThis.chrome ?? null,
         now: new Date(),
       });
+      const workerText = await resolveSystemPrompt("worker", { skills, runtimeContext: workerRuntimeContext });
+      workerComposed.set(origin, workerText);
       return {
         origin,
         memory: siteMemory(origin),
@@ -1439,7 +1443,7 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
         // skills ride inside the composition (skills: [] below) so the
         // attestation hash covers exactly what the model receives — no
         // double-append in the agent core.
-        system: (await resolveSystemPrompt("worker", { skills, runtimeContext: workerRuntimeContext })).text,
+        system: workerText.text,
         skills: [],
         // WebMCP directories/navigation/approval are read for every lazy
         // search/execute fence; no build-time snapshot reaches the provider.
@@ -1553,8 +1557,16 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     }
     // The effective-prompt attestation (keyed receipts, no content) — journaled
     // at run start so a run can prove WHICH composition it was built with, and
-    // a debug/test path can verify the Settings preview matches it.
+    // a debug/test path can verify the Settings preview matches it. Workers are
+    // attested too: EVERY agent's boundary event can then carry its own layered
+    // receipts (content-free), so preview↔run parity works per layer — static
+    // layers exact, the dynamic runtime-context layer by its template receipt.
     orch.promptInfo = await attestComposition(masterComposed, promptScope ?? "hub");
+    const workerLayers = {};
+    for (const [origin, composed] of workerComposed) {
+      workerLayers[origin] = (await attestComposition(composed, "worker")).layers;
+    }
+    if (Object.keys(workerLayers).length) orch.promptInfo.workerLayers = workerLayers;
     // Expose the build-local provider-server observations so the run's settle
     // path can attach citations to the terminal message + record the usage
     // line. Read-only view; the maps themselves stay private to this build.
@@ -2516,6 +2528,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       await durableRuns.heartbeat(executionId);
       const attestKeyState = await attestationKeyState();
       orch.setAttestation?.((att) => {
+        const boundLayers = boundaryLayersFor(orch?.promptInfo, att.agentId);
         const bound = {
           runId: executionId, // the immutable per-attempt execution id
           taskId, // the LOGICAL id (task/schedule/thread) — kept separate
@@ -2533,6 +2546,12 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
           // digestReceipt to prove a run sent the previewed composition).
           receipt: hmacSha256Hex(attestKeyState.bytes, String(att.digest ?? "")),
           composedReceipt: hmacSha256Hex(attestKeyState.bytes, String(att.composedDigest ?? "")),
+          // Content-free layered receipts of the composition THIS agent was
+          // built with (master: promptInfo.layers; worker origin:
+          // promptInfo.workerLayers[origin]) — the preview↔run comparator
+          // (layerReceiptsMatch) consumes these: static layers exact, the
+          // dynamic runtime-context layer by template receipt.
+          ...(boundLayers ? { layers: boundLayers } : {}),
         };
         recordRunAttestation(bound);
         journalAppend(mem, { type: "prompt-attestation", ...bound }).catch(() => {});

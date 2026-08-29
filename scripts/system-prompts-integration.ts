@@ -18,6 +18,10 @@
 //   deno run -A scripts/system-prompts-integration.ts --retain   # retain to test-artifacts/
 
 const ROOT = new URL("..", import.meta.url).pathname;
+// The preview↔run comparator (the single source of truth lives in the
+// extension lib): static layers match by exact receipt; the dynamic
+// runtime-context layer matches by its template receipt.
+const { layerReceiptsMatch } = await import(`${ROOT}extension/lib/system-prompts.js`);
 const EXT = `${ROOT}extension`;
 const CHROMIUM = "/usr/bin/chromium";
 const RETAIN = Deno.args.includes("--retain");
@@ -443,10 +447,13 @@ try {
   check("run-bound attestation: the real run was captured at the model boundary (runId-tagged)",
     run?.ok === true && runAtt?.ok === true && Boolean(masterAtt),
     { runOk: run?.ok, error: run?.error, attOk: runAtt?.ok, attError: runAtt?.error });
-  check("run-bound attestation: the wire message EMBEDS the previewed composition (opaque receipts match + prefixMatch)",
-    masterAtt?.prefixMatch === true && Boolean(masterAtt?.composedReceipt) &&
-    masterAtt?.composedReceipt === attestCustom?.digestReceipt,
-    { composed: masterAtt?.composedReceipt?.slice(0, 16), preview: attestCustom?.digestReceipt?.slice(0, 16), prefix: masterAtt?.prefixMatch });
+  check("run-bound attestation: the wire message EMBEDS the previewed composition (prefixMatch + per-layer receipts: static exact, dynamic by template)",
+    masterAtt?.prefixMatch === true && Array.isArray(masterAtt?.layers) &&
+    layerReceiptsMatch(attestCustom?.layers, masterAtt?.layers).ok === true,
+    { prefix: masterAtt?.prefixMatch, layers: masterAtt?.layers?.length, mismatches: layerReceiptsMatch(attestCustom?.layers, masterAtt?.layers ?? []).mismatches });
+  check("run-bound attestation: whole-composition receipts DIFFER across preview/run only because of the dynamic layer (the placeholder is not the rendered values)",
+    masterAtt?.composedReceipt !== attestCustom?.digestReceipt,
+    { composed: masterAtt?.composedReceipt?.slice(0, 16), preview: attestCustom?.digestReceipt?.slice(0, 16) });
   check("run-bound attestation: exact wire receipt + UTF-8 bytes + provider/model, NO content, NO public fingerprint",
     /^[0-9a-f]{64}$/.test(masterAtt?.receipt ?? "") && masterAtt?.bytes > 0 &&
     typeof masterAtt?.provider === "string" && typeof masterAtt?.model === "string" &&
