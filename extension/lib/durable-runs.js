@@ -18,6 +18,7 @@ import {
   siteMemory,
 } from "./memory.js";
 import { REPLAY_MUTATING, perCallIdempotencyKey, worstSafety } from "./tool-replay-safety.js";
+import { redactSecretText } from "./pure.js";
 import { commitThreadCancellation, commitThreadTerminal } from "./threads.js";
 import { isNativeQuotaExceededError } from "./storage-errors.js";
 import {
@@ -84,9 +85,9 @@ function bounded(value, max = MAX_PREVIEW_CHARS) {
 }
 
 function redactedPreview(value) {
-  return bounded(value)
-    .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, "Bearer [redacted]")
-    .replace(/\b(api[_-]?key|token|secret|password|credential|access[_-]?key)\b\s*[:=]\s*\S+/gi, "$1=[redacted]");
+  // The CANONICAL redactor (the local regex missed the bare-whitespace form —
+  // "apiKey sk-…" leaked into the durable log's taskPreview).
+  return redactSecretText(bounded(value));
 }
 
 function validExecutionId(value) {

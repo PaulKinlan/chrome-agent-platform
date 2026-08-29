@@ -124,7 +124,7 @@ Deno.test("activity refresh: seeded (gallery) data is never re-queried", async (
 
 Deno.test("activity journal write path redacts tool args AND results at persistence", () => {
   const sw = Deno.readTextFileSync(new URL("../extension/background/service-worker.js", import.meta.url).pathname);
-  assert(sw.includes("JSON.stringify(redactSecrets(event.toolArgs))"), "tool-call journal must redact args before stringify");
+  assert(sw.includes("journalJson(redactSecrets(event.toolArgs))"), "tool-call journal must redact args before serialization (canonical redactor → valid bounded journalJson — a mid-string slice corrupts replays)");
   assert(sw.includes("redactToolResult(event.result)"), "tool-result journal must decode + redact STRING and wrapped results before persist (round-3 P1)");
 });
 

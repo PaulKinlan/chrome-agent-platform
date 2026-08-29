@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.381] — 2026-08-29
+- merge: tool-call clarity lane (3920003a) — collapsed-card describeToolCall action line + runtime mutation-claim honesty (correction reaches the returned result; nested lazy failures never back claims nor publish/persist as success; per-run success set; structural subject classification: plural/modifier-led true positives, negation/third-party/subordinate rejections). Reviewed PASS-with-notes (round 5); documented P2 follow-ups (bare proper-name subjects, coordinated-predicate subject propagation). Unions: SW args=journalJson(redactSecrets(...)), result=journalJson(redactToolResult(...)) — RA's string-leak seam kept, corrupting mid-string slices removed everywhere; components.js keeps BOTH the outcome headline (genui) and the action line (lane); RA source pin updated to the composed seam. Merge-caught fixes: containerPreview clip now pair-safe (main's code-unit slice split surrogates — caught by the lane's tree-walk test); sync-gallery rewrites ../lib/pure.js for docs/components.js.
+
+## [0.2.380] — 2026-08-29
+- Tool cards are honest and readable: collapsed rows say what each call did, failed calls show their error, the agent can no longer claim it created or changed something when no tool call actually succeeded, and activity journals always store valid redacted JSON
+
 ## [0.2.379] — 2026-08-29
 - merge: profile-store lane (3b291399) — named-agent provider profiles with validated profileGrants at the SW routes (create/update), bounded grant cardinality, fail-closed malformed rejection with no pending-approval side effects, non-vacuous pending-count probes. Reviewed PASS (round 7 re-review, amended base-named RED evidence). Union: named-agent.create keeps main's schedule param AND the lane's profileGrants validation. Manifest resolved to main's P0 shape.
 

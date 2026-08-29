@@ -15,6 +15,7 @@
 
 import { send } from "../lib/messages.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
+import { safeJsonStringify } from "./tool-tree.js";
 import { isAuthoritativeThreadResultProjected } from "./thread-projection-authority.js";
 
 // ── the live progress port ────────────────────────────────────────────────
@@ -249,10 +250,14 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
         const status = isToolErrorEvent(ev) ? "error" : "success";
         if (card) {
           // The result names the tool that actually ran; correct the header
-          // from `execute_tool` to that name now it is known.
+          // from `execute_tool` to that name now it is known. The event's own
+          // `selectedTool` (emitted by the runtime) is authoritative — the
+          // summarized result text no longer carries the envelope.
           const resEff = effectiveToolCall(ev.toolName, ev.toolArgs, ev.result);
-          if (resEff.lazy && resEff.name && resEff.name !== ev.toolName) {
-            card.setAttribute?.("tool-name", resEff.name);
+          const corrected = (typeof ev.selectedTool === "string" && ev.selectedTool) ||
+            (resEff.lazy && resEff.name !== ev.toolName ? resEff.name : "");
+          if ((ev.toolName === "execute_tool" || ev.toolName === "search_tools") && corrected && corrected !== ev.toolName) {
+            card.setAttribute?.("tool-name", corrected);
           }
           if (resEff.args != null) {
             try { card.setAttribute?.("tool-args", JSON.stringify(resEff.args)); } catch { /* keep what is there */ }
@@ -627,7 +632,6 @@ export function pairToolJournal(entries) {
   const out = [];
   for (const id of order) {
     const { call, result, ts } = byCall.get(id);
-    const tool = call?.tool ?? result?.tool ?? "tool";
     const ok = result?.ok;
     let status;
     if (!result) status = "done";
@@ -640,13 +644,29 @@ export function pairToolJournal(entries) {
     }
     out.push({
       type: "tool",
-      tool,
+      // Replay parity with the live card (the tool-call clarity fix): the
+      // journaled lazy-protocol envelope is unwrapped so history shows the
+      // tool that ACTUALLY ran — the persisted selectedTool (recorded from
+      // this fix onward) wins, then the result-envelope unwrap.
+      tool: (() => {
+        const rawTool = call?.tool ?? result?.tool ?? "tool";
+        if (typeof result?.selectedTool === "string" && result.selectedTool) return result.selectedTool;
+        const eff = effectiveToolCall(rawTool, call?.args ?? null, result?.result ?? null);
+        return eff.lazy && eff.name !== rawTool ? eff.name : rawTool;
+      })(),
       status,
       // the ORIGINAL immutable callId (the composite ${run}::${callId} stays
       // the INTERNAL pairing key only — persisting it would re-prefix on every
       // reload)
       callId: call?.callId ?? result?.callId ?? id,
-      args: call?.args ?? result?.args ?? null,
+      args: (() => {
+        const rawArgs = call?.args ?? result?.args ?? null;
+        const rawTool = call?.tool ?? result?.tool ?? "tool";
+        const eff = effectiveToolCall(rawTool, rawArgs, result?.result ?? null);
+        if (!eff.lazy || eff.args == null) return rawArgs;
+        // The unwrapped inner arguments (selectionRef plumbing never shown).
+        try { return typeof eff.args === "string" ? eff.args : safeJsonStringify(eff.args); } catch { return rawArgs; }
+      })(),
       result: result?.result ?? null,
       ok: result?.ok ?? null,
       ts,
@@ -783,6 +803,10 @@ export function toolRowsFromRunLog(executionId, logs) {
       args: r.args ?? null,
       result: r.result ?? null,
       ok: r.ok ?? null,
+      // The tool that ACTUALLY ran (the SW persists it on the result row) —
+      // pairToolJournal prefers it over the envelope unwrap, and without this
+      // mapping the replay could never recover it from a summarized result.
+      selectedTool: typeof r.selectedTool === "string" && r.selectedTool ? r.selectedTool : null,
       ts: typeof r.at === "number" ? r.at : null,
     }));
   return pairToolJournal(rows).flatMap((p) => {
@@ -933,6 +957,7 @@ export function projectThreadMessages(thread) {
       callId: m.toolCallId ?? null,
       run: null,
       tool: m.toolName ?? "tool",
+      selectedTool: m.selectedTool ?? null,
       args: m.toolArgs ?? null,
       result: m.toolResult ?? null,
       ok: m.toolOk ?? null,
@@ -1305,8 +1330,11 @@ export async function runConversationTurn(container, { text, attachments = [], h
       }
       case "tool-call": {
         status({ state: attempt > 1 ? "retrying" : "running", activity: friendlyActivityLabel(ev.toolName, ev.toolArgs) });
+        // Unwrap the lazy envelope immediately (the selectionRef plumbing is
+        // never shown); the header corrects to the real tool at result time.
+        const callEff = effectiveToolCall(ev.toolName, ev.toolArgs, null);
         const card = typeof c.appendTool === "function"
-          ? c.appendTool({ name: ev.toolName, args: ev.toolArgs, status: "running" })
+          ? c.appendTool({ name: callEff.name, args: callEff.args, status: "running" })
           : appendBubble(c, "tool", `→ ${ev.toolName}`);
         toolCards.push(ev.toolName, card);
         break;
@@ -1321,6 +1349,19 @@ export async function runConversationTurn(container, { text, attachments = [], h
         const err = isToolErrorEvent(ev);
         const status = err ? "error" : "success";
         if (card) {
+          // The result names the tool that actually ran (the lazy envelope):
+          // correct the header + unwrap the arguments now the real tool is
+          // known (the event's selectedTool is authoritative; the result
+          // envelope's is the fallback).
+          const resEff = effectiveToolCall(ev.toolName, ev.toolArgs, ev.result);
+          const corrected = (typeof ev.selectedTool === "string" && ev.selectedTool) ||
+            (resEff.lazy && resEff.name !== ev.toolName ? resEff.name : "");
+          if ((ev.toolName === "execute_tool" || ev.toolName === "search_tools") && corrected && corrected !== ev.toolName) {
+            card.setAttribute?.("tool-name", corrected);
+          }
+          if (resEff.lazy && resEff.args != null) {
+            try { card.setAttribute?.("tool-args", JSON.stringify(resEff.args)); } catch { /* keep the existing args */ }
+          }
           card.setAttribute?.("tool-status", status);
           if (ev.durationMs != null) card.setAttribute?.("tool-duration", String(ev.durationMs));
           if (summary) card.setAttribute?.("tool-result", summary);

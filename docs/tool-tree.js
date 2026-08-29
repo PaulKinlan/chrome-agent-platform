@@ -75,7 +75,9 @@ export function safeParse(value) {
 function truncate(s, max = TOOL_TREE_MAX_STRING) {
   const str = String(s);
   if (str.length <= max) return { text: str, truncated: false };
-  return { text: str.slice(0, max - 1) + "…", truncated: true };
+  // Code-point-safe (never splits a surrogate pair, drops lone surrogates);
+  // byte-bounded at `max` — the safe direction for a display cap.
+  return { text: truncateUtf8(str, Math.max(1, max - 1)) + "…", truncated: true };
 }
 
 function primitiveText(v) {
@@ -122,7 +124,9 @@ export function containerPreview(v, { chars = TOOL_TREE_PREVIEW_CHARS, depth = 0
   if (v === null || typeof v !== "object") return "";
   const clip = (s) => {
     const one = String(s).replace(/\s+/g, " ").trim();
-    return one.length > chars ? `${one.slice(0, chars - 1)}…` : one;
+    // Code-point-safe clip (never splits a surrogate pair) — a code-unit
+    // slice here split "📡"-class pairs into lone surrogates.
+    return one.length > chars ? truncateUtf8(one, Math.max(1, chars - 1)) + "…" : one;
   };
   const scalar = (x) => {
     if (x === null) return "null";
@@ -185,6 +189,10 @@ export function buildTree(value, opts = {}) {
   const maxDepth = opts.maxDepth ?? TOOL_TREE_MAX_DEPTH;
   const maxNodes = opts.maxNodes ?? TOOL_TREE_MAX_NODES;
   const containerCap = opts.containerCap ?? TOOL_TREE_CONTAINER_CAP;
+  // Nested JSON-string decodes allowed for the WHOLE tree (one logical
+  // payload could nest several times; the budget stops a hostile
+  // string-of-string-of-string from recursing without bound).
+  const decodeBudget = { n: opts.maxNestedDecodes ?? 8 };
   const rows = [];
   let budget = maxNodes;
   let truncated = false;
@@ -245,6 +253,20 @@ export function buildTree(value, opts = {}) {
       return;
     }
     // scalars
+    // A leaf string that is itself an embedded JSON payload (a tool result
+    // double-encoded into a field) is DECODED and rendered as a subtree — the
+    // owner's "big unreadable JSON blob" complaint. Bounded: the string must
+    // clearly begin a JSON value, fit the parse budget, and the per-tree
+    // decode budget (shared across the whole tree) stops pathological nesting.
+    if (typeof v === "string" && decodeBudget.n > 0 && v.length <= TOOL_TREE_PARSE_LIMIT && looksJsonish(v)) {
+      let decoded;
+      try { decoded = JSON.parse(v); } catch { decoded = undefined; }
+      if (decoded !== null && typeof decoded === "object") {
+        decodeBudget.n -= 1;
+        visit(segments, key, decoded, depth, chain);
+        return;
+      }
+    }
     const kind = typeof v === "string" ? "string" : typeof v === "number" ? "number" : typeof v === "boolean" ? "boolean" : "string";
     push({ segments, key, kind, depth, leaf: true, text: primitiveText(v), full: isTruncatedString(v) ? String(v) : undefined, source: "json" });
   };
@@ -272,7 +294,7 @@ export function buildTree(value, opts = {}) {
 // The CANONICAL secret-key matcher (shared with lib/pure.js — one semantic,
 // never a divergent anchored copy): any key matching it is redacted before it
 // reaches the UI/serializer or a truncation preview.
-import { SECRET_KEY_RE } from "./pure.js";
+import { SECRET_KEY_RE, redactSecretText, truncateUtf8 } from "./pure.js";
 const SECRET_KEY = SECRET_KEY_RE;
 
 /** The smallest maxBytes the serializer can honor (the fixed envelope + a
@@ -293,7 +315,7 @@ export function safeJsonStringify(value, opts = {}) {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const esc = (str) => JSON.stringify(str) ?? JSON.stringify(String(str));
-  const cut = (str) => (str.length > maxString ? str.slice(0, maxString - 1) + "…" : str);
+  const cut = (str) => (str.length > maxString ? truncateUtf8(str, Math.max(1, maxString - 1)) + "…" : str);
 
   const visit = (v, depth, chain) => {
     if (nodes >= maxNodes) { truncated = true; return null; }
@@ -357,11 +379,15 @@ export function safeJsonStringify(value, opts = {}) {
     // a VALID JSON string literal — BOUNDED to maxBytes (a huge root string
     // must never exceed the cap): shrink the string (byte-aware) until the
     // escaped output fits; an impossible cap yields the minimal envelope.
-    let str = value.length > maxString ? value.slice(0, maxString - 1) + "…" : value;
+    let str = value.length > maxString ? truncateUtf8(value, Math.max(1, maxString - 1)) + "…" : value;
     let jsonStr = esc(str);
     let guard = 0;
     while (encoder.encode(jsonStr).length > maxBytes && str.length > 1 && guard++ < 32) {
-      str = str.slice(0, Math.max(1, Math.floor(str.length / 2)));
+      // Byte-proportional shrink, code-point-safe (a code-unit slice can split
+      // a surrogate pair and leak lone surrogates into the journal).
+      const curBytes = encoder.encode(jsonStr).length;
+      const target = Math.max(1, Math.floor(encoder.encode(str).length * (maxBytes * 0.9) / curBytes));
+      str = truncateUtf8(str, target);
       jsonStr = esc(str);
     }
     if (encoder.encode(jsonStr).length > maxBytes) return '{"__gvs_truncated__":true}';
@@ -447,4 +473,59 @@ function boundSubtree(v, containerCap, depth = 0, cappedRef = { v: false }) {
     return { value: out, capped: cappedRef.v };
   }
   return { value: v, capped: cappedRef.v };
+}
+
+/**
+ * journalJson — the ONE serializer for persisted/broadcast tool-call payloads
+ * (the tool-call clarity fix). The old journal path did
+ * `JSON.stringify(v).slice(0, 2000) + "…"` — MID-STRING truncation that
+ * corrupted JSON, so the structured renderer could never parse a journaled
+ * payload and fell back to a raw one-line blob. This helper:
+ *   1. redacts credential-shaped strings (redactSecretText — key: sk-…,
+ *      Bearer …, apiKey=… patterns) at the text level,
+ *   2. serializes with safeJsonStringify (secret KEYS → "[redacted]", bounded
+ *      nodes/strings) so the output is ALWAYS valid parseable JSON for
+ *      objects (plain strings pass through as redacted bounded text),
+ *   3. serializes with headroom so the post-redaction text stays ≤ maxBytes
+ *      without a second (corrupting) truncation — redaction only ever
+ *      shortens or marks, and the headroom absorbs the marker delta.
+ * Never throws.
+ */
+export function journalJson(value, opts = {}) {
+  const maxBytes = opts.maxBytes ?? 2000;
+  const headroom = Math.max(SAFE_JSON_MIN_MAX_BYTES, maxBytes - 64);
+  const utf8 = new TextEncoder();
+  let s;
+  if (typeof value === "string") {
+    // A PRE-STRINGIFIED JSON payload must never be slice-truncated (that
+    // corrupts it — the exact bug this replaces): decode then re-serialize
+    // bounded so the journal stays parseable; genuinely plain text is simply
+    // bounded as text.
+    const t = value.trim();
+    const maybeJson = (looksJsonish(t) || (t.startsWith('"') && t.endsWith('"'))) && t.length <= TOOL_TREE_PARSE_LIMIT;
+    let parsed;
+    if (maybeJson) { try { parsed = JSON.parse(t); } catch { parsed = undefined; } }
+    if (parsed !== undefined) {
+      try { s = safeJsonStringify(parsed, { maxBytes: headroom, maxNodes: 80, maxString: 400 }); }
+      catch { s = "\"[unserializable value]\""; }
+    } else {
+      // `headroom` is a BYTE budget — UTF-16 length under-counts multibyte
+      // text (and a code-unit slice can split a surrogate pair), so bound by
+      // encoded bytes, reserving the ellipsis's 3 bytes.
+      s = utf8.encode(value).length > headroom
+        ? truncateUtf8(value, Math.max(1, headroom - 3)) + "…"
+        : value;
+    }
+  } else {
+    try {
+      s = safeJsonStringify(value, { maxBytes: headroom, maxNodes: 80, maxString: 400 });
+    } catch {
+      s = "\"[unserializable value]\"";
+    }
+  }
+  try {
+    return redactSecretText(s);
+  } catch {
+    return s;
+  }
 }
