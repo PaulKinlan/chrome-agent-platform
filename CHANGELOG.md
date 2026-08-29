@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.350] — 2026-08-29
+- fix(ntp): review round 2 — debug toggle anchors inline-end, hover panel is traversable, KAT falsification is auditable
+
 ## [0.2.349] — 2026-08-28
 - Deleting an agent now truly cleans up after itself: scheduled runs, permissions, workers, and stored data are removed together, safely, and anything half-finished is retried rather than lost
 - Internal bookkeeping: the completed task-loading work is closed out and archived, leaving the tracker showing only live work

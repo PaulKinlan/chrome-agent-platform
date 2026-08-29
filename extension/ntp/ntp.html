@@ -714,6 +714,10 @@
     }
     .run-debug[hidden] { display: none; }
     .run-debug-note { margin: 0 0 8px; font-size: .75rem; color: var(--muted, #635e56); }
+    /* The debug toggle anchors to the inline-end of the view head regardless
+       of title length — the auto margin consumes the free space so a short
+       title can't leave it stranded mid-row (inline-end flips in RTL). */
+    #run-debug-toggle { margin-inline-start: auto; }
     #thread-title {
       cursor: default;
       padding: 2px 6px;

@@ -182,9 +182,22 @@ if (runDebugToggle && runDebugPanel) {
     setRunDebugOpen(true, { pin: true });
   });
   if (globalThis.matchMedia?.("(pointer: fine)")?.matches) {
-    runDebugToggle.addEventListener("pointerenter", () => setRunDebugOpen(true));
-    runDebugPanel.addEventListener("pointerenter", () => setRunDebugOpen(true));
-    const hoverOut = () => { if (!runDebugPinned) setRunDebugOpen(false); };
+    // Hover reveal must be TRAVERSABLE: the panel hangs ~60px below the
+    // toggle, so a synchronous pointerleave close destroys it before the
+    // pointer can arrive. A short cancellable close delay bridges the gap —
+    // re-entering either the toggle or the panel cancels the pending close.
+    let hoverCloseTimer = 0;
+    const cancelHoverClose = () => {
+      if (hoverCloseTimer) { clearTimeout(hoverCloseTimer); hoverCloseTimer = 0; }
+    };
+    const hoverIn = () => { cancelHoverClose(); setRunDebugOpen(true); };
+    const hoverOut = () => {
+      if (runDebugPinned) return;
+      cancelHoverClose();
+      hoverCloseTimer = setTimeout(() => { hoverCloseTimer = 0; setRunDebugOpen(false); }, 250);
+    };
+    runDebugToggle.addEventListener("pointerenter", hoverIn);
+    runDebugPanel.addEventListener("pointerenter", hoverIn);
     runDebugToggle.addEventListener("pointerleave", hoverOut);
     runDebugPanel.addEventListener("pointerleave", hoverOut);
   }
