@@ -889,6 +889,11 @@ class MicButton extends Component {
     this._analyser = null;
     this._raf = 0;
     this._restartTimes = [];
+    // Start-generation counter: every start() attempt bumps it; stop() and
+    // disconnectedCallback() bump it too. A start whose getUserMedia resolves
+    // AFTER its generation was superseded releases the late stream and exits
+    // — no recording the owner already cancelled, no orphaned mic tracks.
+    this._startGen = 0;
     // KAT/owner-visible honesty: "live" (real level meter) | "fallback" (CSS
     // animation, no mic stream) | null (not recording).
     this.waveformMode = null;
@@ -961,22 +966,25 @@ class MicButton extends Component {
     this._onPageHide = () => { if (this._listening) this.stop(); };
     window.addEventListener("pagehide", this._onPageHide);
   }
-  /** Ensure the microphone permission BEFORE starting recognition. The Web
+  /** Request the microphone stream BEFORE starting recognition. The Web
    *  Speech API can start "successfully" with no audio when the mic permission
    *  is missing (the symptom Paul hit: the mic opens but NO text comes out, no
    *  error surfaced). Requesting getUserMedia audio first (a) grants the
    *  permission inside this click gesture and (b) lets us fail LOUDLY if the
-   *  mic is denied instead of silently never producing a transcript. */
-  async _ensureMicPermission() {
+   *  mic is denied instead of silently never producing a transcript.
+   *  Returns true (no mediaDevices API — let SpeechRecognition try), false
+   *  (denied), or the MediaStream. The stream is NOT assigned here: start()
+   *  only adopts it after the generation check, so a superseded/cancelled
+   *  start can release a late-resolving stream instead of leaking it. */
+  async _requestMicStream() {
     const md = navigator.mediaDevices;
     if (!md?.getUserMedia) return true; // no API — let SpeechRecognition try
     try {
-      // Keep the stream OPEN for the recording's lifetime: it doubles as the
+      // The stream stays OPEN for the recording's lifetime: it doubles as the
       // AnalyserNode source for the live waveform. Tracks are stopped in
       // _stopMeter (called from stop()/disconnectedCallback) — the mic is
       // never left open after the state reverts.
-      this._mediaStream = await md.getUserMedia({ audio: true });
-      return true;
+      return await md.getUserMedia({ audio: true });
     } catch {
       this._emit("mic-error", { message: "microphone permission denied — grant mic access to dictate" });
       return false;
@@ -997,11 +1005,20 @@ class MicButton extends Component {
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) { this.waveformMode = "fallback"; return; }
       const ctx = new AC();
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 256;
-      ctx.createMediaStreamSource(this._mediaStream).connect(analyser);
-      this._audioCtx = ctx;
-      this._analyser = analyser;
+      let analyser;
+      try {
+        analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        ctx.createMediaStreamSource(this._mediaStream).connect(analyser);
+        this._audioCtx = ctx;
+        this._analyser = analyser;
+      } catch (meterErr) {
+        // createAnalyser/createMediaStreamSource can throw AFTER the context
+        // exists — close the half-built context or it leaks (the outer catch
+        // only sees the fallback selection, never this local).
+        try { ctx.close(); } catch { /* ignore */ }
+        throw meterErr;
+      }
       this.waveformMode = "live";
       wave.classList.add("live");
       const data = new Uint8Array(analyser.fftSize);
@@ -1044,7 +1061,31 @@ class MicButton extends Component {
       this._emit("mic-error", { message: "speech recognition not available in this browser" });
       return;
     }
-    if (!(await this._ensureMicPermission())) return;
+    const gen = ++this._startGen;
+    const stream = await this._requestMicStream();
+    const stopTracks = (s) => {
+      if (s && s !== true) { try { s.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ } }
+    };
+    if (gen !== this._startGen) {
+      // stop()/disconnect/a second click happened while the permission request
+      // was in flight — the owner already cancelled this start. Release the
+      // late stream; never enter the recording state.
+      stopTracks(stream);
+      return;
+    }
+    if (stream === false) return;
+    if (stream !== true) {
+      if (this._mediaStream && this._mediaStream !== stream) stopTracks(this._mediaStream);
+      this._mediaStream = stream;
+    }
+    // The composer was hidden (view switch) while the permission request was
+    // in flight — never start a background recording the owner can't see.
+    if (this._button && this._button.offsetParent === null) {
+      stopTracks(this._mediaStream);
+      this._mediaStream = null;
+      this._emit("mic-error", { message: "recording stopped — the composer was hidden" });
+      return;
+    }
     if (!this._recognition) {
       this._recognition = new SR();
       this._recognition.continuous = true;
@@ -1130,6 +1171,7 @@ class MicButton extends Component {
     }
   }
   stop() {
+    this._startGen++; // invalidate any in-flight start (send-while-pending)
     this._stopMeter();
     this._listening = false;
     this._noSpeech = 0;
@@ -1148,6 +1190,7 @@ class MicButton extends Component {
     if (this._mutObserver) { this._mutObserver.disconnect(); this._mutObserver = null; }
     if (this._onPageHide) { window.removeEventListener("pagehide", this._onPageHide); this._onPageHide = null; }
     this._listening = false;
+    this._startGen++; // invalidate any in-flight start (detach-while-pending)
     if (this._recognition) {
       try {
         this._recognition.onresult = null;
@@ -1159,6 +1202,12 @@ class MicButton extends Component {
     }
     if (this._mediaStream || this._audioCtx) this._stopMeter();
     super.disconnectedCallback?.();
+    // Drop the state attribute LAST: super sets _rendered=false first, so this
+    // removal cannot trigger a re-render of the DETACHED element — but it
+    // keeps a reattached mic from resurrecting a false recording affordance
+    // (data-listening + aria-pressed=true) from the stale attribute while the
+    // internal state is idle.
+    this.removeAttribute("listening");
   }
 }
 customElements.define("mic-button", MicButton);

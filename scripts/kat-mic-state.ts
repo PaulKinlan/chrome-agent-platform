@@ -15,7 +15,17 @@ const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? "/tmp/cap-mic-state-kats";
 const CHROMIUM = "/usr/bin/chromium";
-const PORT = 9361;
+const BASE_PORT = 9361;
+// Pick a free debug port — killed KAT runs leave zombie chromiums holding the
+// fixed port, which then hangs every subsequent run's CDP handshake.
+async function freePort(from: number): Promise<number> {
+  for (let p = from; p < from + 200; p++) {
+    const l = Deno.listen({ port: p });
+    try { l.close(); return p; } catch { /* taken */ }
+  }
+  throw new Error("no free debug port in range");
+}
+const PORT = await freePort(BASE_PORT);
 
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail?: unknown) {
@@ -309,6 +319,90 @@ if (hasTaskRow && navPre.dataListening === true) {
     await evalJs(`window.__micErrors`));
 }
 await shot("07-after-nav");
+
+// ── round-2: detach/reattach honesty + pending-getUserMedia cancellation ────
+await evalJs(backToHub); await sleep(800);
+check("round-2 precondition: hub composer visible", (await evalJs(hubVisible)) === true);
+
+// 14 ─ detach while recording → reattach renders IDLE (no false affordance)
+await evalJs(clickMic); await sleep(1000);
+const recPreDetach = await evalJs(micState);
+check("detach precondition: recording before detach", recPreDetach.dataListening === true, recPreDetach);
+await evalJs(`(() => { const h = document.querySelector("#composer mic-button"); const p = h.parentNode; const n = h.nextSibling; h.remove(); p.insertBefore(h, n); return true; })()`);
+await sleep(600);
+const postReattach = await evalJs(`(() => {
+  const host = document.querySelector("#composer mic-button");
+  const b = host.shadowRoot.querySelector(".mic");
+  return {
+    hostAttr: host.hasAttribute("listening"),
+    pressed: b.getAttribute("aria-pressed"),
+    dataListening: b.hasAttribute("data-listening"),
+    internal: host._listening,
+    streamOpen: !!host._mediaStream,
+  };
+})()`);
+check("detach/reattach: the stale listening attribute is GONE — idle render, no false recording affordance",
+  postReattach.hostAttr === false && postReattach.pressed === "false" && postReattach.dataListening === false && postReattach.internal === false, postReattach);
+check("detach: the mic stream is released", postReattach.streamOpen === false, postReattach);
+await shot("08-after-reattach");
+
+// 15 ─ stop() during a PENDING getUserMedia cancels the start (the send path)
+await evalJs(`(() => {
+  const md = navigator.mediaDevices;
+  window.__origGum = md.getUserMedia.bind(md);
+  window.__pending = [];
+  md.getUserMedia = () => new Promise((res) => { window.__pending.push(res); });
+  return true;
+})()`);
+await evalJs(clickMic); await sleep(400);
+await evalJs(`document.querySelector("#composer mic-button").stop(); true`);
+const late = await evalJs(`(async () => {
+  const s = await window.__origGum({ audio: true });
+  const clone = s.clone();
+  window.__pending.shift()(clone); // the permission request resolves LATE
+  await new Promise((r) => setTimeout(r, 400));
+  const host = document.querySelector("#composer mic-button");
+  const res = {
+    listening: host._listening,
+    hostAttr: host.hasAttribute("listening"),
+    lateTrackState: clone.getTracks()[0].readyState,
+    retained: host._mediaStream === clone,
+  };
+  s.getTracks().forEach((t) => t.stop());
+  return res;
+})()`);
+check("pending-cancel: stop() during a pending getUserMedia prevents the late recording",
+  late.listening === false && late.hostAttr === false && late.retained === false, late);
+check("pending-cancel: the late stream's tracks are STOPPED, not leaked",
+  late.lateTrackState === "ended", late);
+
+// 16 ─ a second click while pending supersedes the first start (double-click)
+await evalJs(clickMic); await sleep(150);
+await evalJs(clickMic); await sleep(150);
+const dbl = await evalJs(`(async () => {
+  const s1 = await window.__origGum({ audio: true });
+  const s2 = await window.__origGum({ audio: true });
+  const c1 = s1.clone(); const c2 = s2.clone();
+  window.__pending.shift()(c1);
+  await new Promise((r) => setTimeout(r, 200));
+  window.__pending.shift()(c2);
+  await new Promise((r) => setTimeout(r, 500));
+  const host = document.querySelector("#composer mic-button");
+  const res = {
+    c1State: c1.getTracks()[0].readyState,
+    c2State: c2.getTracks()[0].readyState,
+    listening: host._listening,
+    hostAttr: host.hasAttribute("listening"),
+  };
+  s1.getTracks().forEach((t) => t.stop()); s2.getTracks().forEach((t) => t.stop());
+  return res;
+})()`);
+check("double-click pending: the superseded first stream is STOPPED (never orphaned), the second start wins",
+  dbl.c1State === "ended" && dbl.listening === true && dbl.hostAttr === true, dbl);
+check("double-click pending: the winning stream stays live", dbl.c2State === "live", dbl);
+await evalJs(`(() => { navigator.mediaDevices.getUserMedia = window.__origGum; document.querySelector("#composer mic-button").stop(); return true; })()`);
+await sleep(400);
+await shot("09-after-pending-cancels");
 
 console.log(`${pass} passed, ${fail} failed`);
 proc.kill();
