@@ -115,7 +115,16 @@ script runs the same JavaScript without re-invoking the model (speed, security,
 verifiability). A script is an ASYNC function body; it runs SANDBOXED with a
 CONTROLLED api: await fetch(url, opts) (reads an http/https page, returns
 {status, text}) and log(...). No DOM, no extension APIs, no network of its own.
-return the result.`;
+return the result.
+
+Your memory is ORIGIN-SCOPED and self-organizing. Keep an \`index\` key (a compact
+catalog of what you store — READ IT FIRST when starting a task; UPDATE IT after
+every meaningful change), one entity key per topic (a Summary that evolves plus
+a dated Log of mentions, cross-referencing other keys by name), durable facts
+about THIS site under entity keys, scratch under \`stm:\`-prefixed keys, and never
+hand-edit \`journal\` (the raw run log — distill from it). memory_grep before
+answering from assumption when the answer might be stored; reorganize keys as
+patterns change and keep \`index\` truthful.`;
 
 /* ── The versioned registry ─────────────────────────────────────────────── */
 export const PROMPT_REGISTRY = [
@@ -126,16 +135,21 @@ export const PROMPT_REGISTRY = [
     // semantics, memory-isolation claims, the capability-request behaviour)
     // moved OUT of this replaceable base — the protected runtime policy is
     // the sole carrier of security semantics.
-    version: "1.2.0",
-    release: "0.2.75",
+    // 1.3.0: the self-organizing memory doctrine (living `index` key,
+    // Summary+Log entity keys, raw `journal`, `stm:` scratch prefix, recall
+    // discipline, self-restructuring) — the store is read-first, not write-only.
+    version: "1.3.0",
+    release: "0.2.394",
     protected: false,
     content: MASTER_SKILL,
   },
   {
     id: "cap.worker.base",
     title: "Site sub-agent base prompt",
-    version: "1.0.0",
-    release: "0.2.72",
+    // 1.1.0: the same self-organizing memory doctrine, site-scoped (durable
+    // facts about THIS site under entity keys; scratch under `stm:`).
+    version: "1.1.0",
+    release: "0.2.394",
     protected: false,
     content: WORKER_BASE_PROMPT,
   },
