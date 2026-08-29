@@ -169,6 +169,25 @@ Deno.test("claim-check: long complement keeps its third-party subject", () => {
   assertEquals(out.text, text);
 });
 
+Deno.test("claim-check: conventional proper names and possessive noun subjects stay third-party", () => {
+  for (const text of [
+    "Alice created an agent.",
+    "Google created an agent.",
+    "Our vendor created an agent.",
+  ]) {
+    const out = correctUnsupportedMutationClaims(text, []);
+    assertEquals(out.corrections.length, 0, `false correction on third-party subject: ${text}`);
+    assertEquals(out.text, text);
+  }
+});
+
+Deno.test("claim-check: a third-party subject governs its coordinated mutation predicates", () => {
+  const text = "I confirmed OpenAI created an agent and then deleted the agent.";
+  const out = correctUnsupportedMutationClaims(text, []);
+  assertEquals(out.corrections.length, 0);
+  assertEquals(out.text, text);
+});
+
 // ── Run-level: the correction must reach the AUTHORITATIVE returned result ──
 // (the conversation paints the SW's res.result, not the progress `done` event),
 // a FAILED nested lazy dispatch must not back a claim, and the success set

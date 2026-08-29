@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.384] — 2026-08-29
+- fix(CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01): preserve third-party mutation subjects
+
 ## [0.2.383] — 2026-08-29
 - merge: settings-cleanliness lane (e4b88588) — dead Appearance nav + request-era storage-verification UI removed end to end; credential fail-closed, Browser control, local-folder grants and install-grant diagnostics preserved; design doc docs/SETTINGS-CLEANLINESS.md with deferred IA (owner sign-off required, NOT implemented). Reviewed PASS (round 1); coordinator candidate-mode KAT RED on base (2 removal checks fail, 4 preservation pass). Manifest unchanged semantically (lane base already had P0 shape).
 
