@@ -18,6 +18,7 @@ import {
   subscribeProgress,
   appendBubble,
 } from "../shared/conversation.js";
+import { projectConversationRunStatus } from "../shared/run-status.js";
 import { findAgentByRef } from "../shared/agent-registry.js";
 import { siteAgentToolsMessage } from "../shared/site-agent-copy.js";
 import { confirmActionDialog } from "../shared/components.js"; // registers <agent-picker>, <agent-composer>, <agent-conversation>, <task-row>
@@ -160,9 +161,17 @@ const detailPane = document.getElementById("agent-detail-pane");
 const picker = document.getElementById("agents-picker");
 const detailName = document.getElementById("agent-detail-name");
 const detailKind = document.getElementById("agent-detail-kind");
-const detailStatus = document.getElementById("agent-detail-status");
 const historyEl = document.getElementById("agent-history");
 const agentComposer = document.getElementById("agent-composer");
+
+// The inline live-status row's recovery action ("Fix in Settings") — fire ONLY
+// for the status row (message bubbles can also emit "action"), and route to the
+// real Settings page: the sidepanel is not the NTP, so openOptionsPage IS the
+// right route here (review P1-b: the sidepanel had no action listener at all).
+historyEl.addEventListener("action", (ev) => {
+  if (!ev.target?.classList?.contains?.("live-status")) return;
+  chrome.runtime.openOptionsPage();
+});
 
 const KIND_LABELS = { named: "Named agent", background: "Background agent", site: "Site Agent" };
 const SESSION_KEY = "cap:sidepanel:selected-agent";
@@ -190,10 +199,17 @@ for (const tab of [tabPage, tabAgents]) {
   });
 }
 
+// The ONE live-status surface for the agent detail conversation: the
+// conversation's own inline pinned bottom row (owner 2026-08-28 — no separate
+// status line duplicating the running conversation entry).
 function setDetailStatus(text, isError = false) {
-  detailStatus.hidden = !text;
-  detailStatus.textContent = text || "";
-  detailStatus.classList.toggle("error", isError);
+  if (!text) {
+    historyEl.clearLiveStatus?.();
+    return;
+  }
+  historyEl.setLiveStatus?.(isError
+    ? { state: "failed", errorReason: text }
+    : { state: "running", activity: text });
 }
 
 function persistSelection() {
@@ -437,23 +453,16 @@ agentComposer.addEventListener("send", async (ev) => {
     await openAgentDetail(agent);
   }
   setDetailStatus("Working…");
-  const res = await runConversationTurn(historyEl, {
+  await runConversationTurn(historyEl, {
     text,
     attachments,
     agentId: target.id,
     agentKind: target.kind,
-    onStatus: (s) => {
-      // The conversation turn emits the canonical lifecycle vocabulary
-      // (extension/shared/run-status.js); map it onto the detail status line.
-      if (s?.state === "queued") setDetailStatus("Queued");
-      else if (s?.state === "running" || s?.state === "retrying") setDetailStatus(s.activity || "Working…");
-      else if (s?.state === "waiting-for-permission") setDetailStatus(s.errorReason || s.message || "waiting for permission", true);
-      else if (s?.state === "completed") setDetailStatus("");
-      else if (s?.state === "cancelled") setDetailStatus(s.errorReason || "cancelled", true);
-      else if (s?.state === "failed") setDetailStatus(s.errorReason || s.message || "error", true);
-    },
+    // The conversation emits the authoritative terminal status before its
+    // promise resolves. Do not overwrite that complete status afterwards with
+    // a bare error string — doing so stripped "Fix in Settings" from the row.
+    onStatus: (s) => projectConversationRunStatus(historyEl, s),
   });
-  if (res?.ok === false) setDetailStatus(res.error ?? "run failed", true);
 });
 
 // Live registry updates: the picker re-fetches; an open conversation on a

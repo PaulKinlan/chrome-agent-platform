@@ -3390,6 +3390,12 @@ class AgentConversation extends Component {
       /* An artifact is a deliverable, not a chat line: it gets its own block on
          the 8px grid rather than being squeezed into the bubble column. */
       agent-conversation .msg-artifact { margin:var(--space-2,8px) 0; max-width:min(560px, 100%); }
+      /* The ONE live run-status surface: an inline row pinned (sticky) at the
+         bottom of the conversation viewport while a run is live — always
+         visible, part of the conversation flow (owner 2026-08-28: the label
+         belongs inline at the bottom of the chat, not as a separate banner
+         duplicating the running entry beneath it). */
+      agent-conversation .live-status { position: sticky; bottom: 0; z-index: 2; margin-block-start: 8px; flex: 0 0 auto; }
     `);
     const msgs = this.getAttribute("messages");
     if (msgs != null) this.setMessages(parseJSONAttr(msgs, []));
@@ -3398,6 +3404,18 @@ class AgentConversation extends Component {
     if (name === "messages" && ov !== nv && this._rendered) {
       this.setMessages(parseJSONAttr(nv, []));
     }
+  }
+  // Every transcript append goes through here: while the live-status row is
+  // connected, new content inserts BEFORE it so the row stays the LAST child
+  // (the pinned bottom-of-flow invariant) no matter what lands mid-run —
+  // tool cards, error bubbles, permission cards, artifact blocks (review
+  // P1-a: appends used to land AFTER the row, leaving it mid-transcript).
+  appendTranscript(node) {
+    const row = this._liveStatusRow;
+    if (row && row.isConnected) this.insertBefore(node, row);
+    else this.appendChild(node);
+    this.scrollTop = this.scrollHeight;
+    return node;
   }
   _bubble(role, content, extra) {
     const b = document.createElement("message-bubble");
@@ -3408,9 +3426,7 @@ class AgentConversation extends Component {
       if (v === "") b.setAttribute(k, "");
       else b.setAttribute(k, String(v));
     }
-    this.appendChild(b);
-    this.scrollTop = this.scrollHeight;
-    return b;
+    return this.appendTranscript(b);
   }
   // A subtle timestamp divider, inserted ONLY when there is a SIGNIFICANT time
   // gap between consecutive persisted messages (or at the first message — the
@@ -3426,7 +3442,7 @@ class AgentConversation extends Component {
     const d = document.createElement("div");
     d.className = "ts-gap";
     d.textContent = formatTsLabel(ts);
-    this.appendChild(d);
+    this.appendTranscript(d);
   }
   appendUser(text, ts, attachments) { if (ts) this._maybeTsGap(ts); return this._bubble("user", text, attachments?.length ? { attachments: JSON.stringify(attachments) } : null); }
   appendAgent(text, ts) { if (ts) this._maybeTsGap(ts); return this._bubble("agent", text); }
@@ -3460,8 +3476,7 @@ class AgentConversation extends Component {
     // Only what the thread actually handles.
     card.setAttribute("actions", "open-tab reuse");
     wrap.appendChild(card);
-    this.appendChild(wrap);
-    this.scrollTop = this.scrollHeight;
+    this.appendTranscript(wrap);
     return card;
   }
 
@@ -3487,8 +3502,61 @@ class AgentConversation extends Component {
       "tool-duration": durationMs != null ? String(durationMs) : null,
     });
   }
-  clear() { this.replaceChildren(); this._lastTs = null; }
+  clear() { this._clearLiveStatusRow(); this.replaceChildren(); this._lastTs = null; }
+
+  /* ── the inline live-status row (owner 2026-08-28) ──────────────────────
+   * ONE live-status surface per conversation, rendered as the LAST child and
+   * pinned (sticky) to the bottom of the scroll viewport while a run is live.
+   * Idle / completed remove the row — the final conversation entry IS the
+   * resolution; no orphan chrome. Failed / cancelled / waiting-for-permission
+   * persist because they carry the honest terminal state + recovery action.
+   * Re-renders are deduped on the normalized key so the aria-live region
+   * announces progress without spamming on no-op updates. */
+  setLiveStatus(status) {
+    const state = typeof status?.state === "string" ? status.state : "";
+    // Idle / completed / empty resolve the row: nothing renders.
+    if (!state || state === "idle" || state === "completed") {
+      this._clearLiveStatusRow();
+      return;
+    }
+    const next = {
+      state,
+      activity: typeof status?.activity === "string" && status.activity.trim() ? status.activity.trim() : null,
+      message: typeof status?.message === "string" && status.message.trim() ? status.message.trim() : null,
+      errorReason: typeof status?.errorReason === "string" && status.errorReason.trim() ? status.errorReason.trim() : null,
+      actionLabel: typeof status?.actionLabel === "string" && status.actionLabel.trim() ? status.actionLabel.trim() : null,
+    };
+    const key = JSON.stringify(next);
+    if (key === this._liveStatusKey && this._liveStatusRow?.isConnected) return;
+    this._liveStatusKey = key;
+    let row = this._liveStatusRow;
+    if (!row || !row.isConnected) {
+      row = document.createElement("conversation-run-status");
+      row.classList.add("live-status");
+      this._liveStatusRow = row;
+    }
+    row.removeAttribute("hidden");
+    row.setAttribute("state", next.state);
+    for (const [name, value] of [["activity", next.activity], ["message", next.message], ["error-reason", next.errorReason], ["action-label", next.actionLabel]]) {
+      if (value) row.setAttribute(name, value);
+      else row.removeAttribute(name);
+    }
+    // Append LAST so the row is the newest thing in the flow; the sticky
+    // bottom pin keeps it visible even when the owner scrolls up.
+    this.appendChild(row);
+    this.scrollTop = this.scrollHeight;
+  }
+  clearLiveStatus() { this._clearLiveStatusRow(); }
+  _clearLiveStatusRow() {
+    this._liveStatusKey = null;
+    this._liveStatusRow?.remove();
+    this._liveStatusRow = null;
+  }
+
   setMessages(messages) {
+    // Keep the live-status row across the rebuild: replaceChildren detaches
+    // it, so re-append it LAST afterwards (review P1-a).
+    const liveRow = this._liveStatusRow;
     this.replaceChildren();
     this._lastTs = null;
     const list = Array.isArray(messages) ? messages : [];
@@ -3497,22 +3565,23 @@ class AgentConversation extends Component {
       p.className = "empty";
       p.textContent = "No conversation yet — start one above.";
       this.appendChild(p);
-      return;
-    }
-    for (const m of list) {
-      if (!m || typeof m !== "object") continue;
-      const ts = typeof m.ts === "number" ? m.ts : null;
-      switch (m.role) {
-        case "user": this.appendUser(m.content, ts, m.attachments); break;
-        case "agent": this.appendAgent(m.content, ts); break;
-        case "system": this.appendSystem(m.content, ts); break;
-        case "thinking": this.appendThinking(m.content, m); break;
-        case "tool": this.appendTool(m); break;
-        case "artifact": this.appendArtifact(m); break;
-        case "error": this.appendError(m.content, { reason: m.reason ?? null, action: m.action ?? null, category: m.category ?? null }); break;
-        default: this.appendAgent(m.content, ts); break;
+    } else {
+      for (const m of list) {
+        if (!m || typeof m !== "object") continue;
+        const ts = typeof m.ts === "number" ? m.ts : null;
+        switch (m.role) {
+          case "user": this.appendUser(m.content, ts, m.attachments); break;
+          case "agent": this.appendAgent(m.content, ts); break;
+          case "system": this.appendSystem(m.content, ts); break;
+          case "thinking": this.appendThinking(m.content, m); break;
+          case "tool": this.appendTool(m); break;
+          case "artifact": this.appendArtifact(m); break;
+          case "error": this.appendError(m.content, { reason: m.reason ?? null, action: m.action ?? null, category: m.category ?? null }); break;
+          default: this.appendAgent(m.content, ts); break;
+        }
       }
     }
+    if (liveRow) this.appendChild(liveRow);
     this.scrollTop = this.scrollHeight;
   }
 }

@@ -13,6 +13,7 @@ import { selectFailedRuns } from "../lib/run-retry.js";
 import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript } from "../shared/conversation.js";
 import { createRunSurfaceOwner } from "../shared/run-surface-owner.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
+import { projectConversationRunStatus } from "../shared/run-status.js";
 import { safeJsonStringify } from "../shared/tool-tree.js";
 import {
   renderHtmlFrame,
@@ -46,7 +47,7 @@ import {
 } from "./route-focus.js";
 import { applySidebarNubPolicy, SIDEBAR_NARROW_QUERY, sidebarWidthPolicy } from "./view-policy.js";
 import { parseNtpHash, resolveEntryMeta, shouldDispatchForNavigationType } from "../lib/navigation-controller.js";
-import { actionableRunsForSurface, latestRunForSurface } from "../lib/run-scope.js";
+import { actionableRunsForSurface, isSettledLiveRunRecord, latestRunForSurface } from "../lib/run-scope.js";
 import {
   SITE_AGENT_COPY,
   enrollOutcomeState,
@@ -138,6 +139,39 @@ if (durableRunRegistry) {
     // open re-projects the transcript (guarded by the execution-id change, so
     // heartbeats don't churn the subscription).
     projectSurfaceRunTranscript();
+    // Terminal reconciliation for the live status row: the registry is the
+    // durable authority. When the open surface's latest run has SETTLED and
+    // nothing actionable remains, resolve the row — the live terminal event
+    // can be lost when the turn was fenced or queued behind other runs, and
+    // the row would otherwise stick at "working" forever (found by
+    // run-status-lifecycle under 20 concurrent queued runs, 2026-08-28).
+    // Paused/permission-waiting runs are actionable here, so an approval-wait
+    // row is never cleared by this path.
+    const surface = { threadId: currentAgentId === null ? currentThreadId : null, agentId: currentAgentId, agentKind: currentAgentKind };
+    const settled = latestRunForSurface(latestDurableRuns, surface);
+    if (
+      settled &&
+      settled.executionId !== lastReconciledTerminalId &&
+      // Reconcile ONLY from the settled record that IS the live run (review
+      // P1-1): a fresh terminal record for the PREVIOUS run must never clear a
+      // new live run's row — identity by the client's per-attempt run id, no
+      // timestamp heuristic (a stale snapshot's record fails this check even
+      // when its updatedAt lands inside any skew window).
+      isSettledLiveRunRecord(settled, liveClientRunId) &&
+      !actionableRunsForSurface(latestDurableRuns, surface).length
+    ) {
+      const phase = String(settled.phase ?? "");
+      if (phase === "cancelled" || phase === "terminal") {
+        lastReconciledTerminalId = settled.executionId;
+        if (phase === "cancelled") renderRunStatus({ state: "cancelled" });
+        else {
+          const ok = settled.terminal?.ok !== false;
+          renderRunStatus(ok
+            ? { state: "completed" }
+            : { state: "failed", message: settled.terminal?.summary ?? settled.terminal?.reason ?? "the run failed", errorCategory: settled.terminal?.errorCategory });
+        }
+      }
+    }
   });
   durableRunRegistry.addEventListener("run-cancel", async (event) => {
     const result = await cancelDurableRun(event.detail.executionId).catch((error) => ({ ok: false, error: error?.message ?? String(error) }));
@@ -2329,39 +2363,17 @@ async function buildAgentConfigDialog(opts) {
   nameField.el.focus();
 }
 
-// ── the ONE shared conversation run-status surface ───────────────────────
-const runStatusEl = document.getElementById("run-status");
+// ── the ONE live-status surface: the conversation's inline pinned bottom row ──
+// The status row lives INSIDE the agent-conversation (sticky at the bottom of
+// the chat viewport) — it replaced the separate banner element that duplicated
+// the running conversation entry below it (owner 2026-08-28).
 function renderRunStatus(s) {
-  if (!runStatusEl) return;
-  const state = typeof s?.state === "string" ? s.state : "";
-  if (!state || state === "idle") {
-    runStatusEl.hidden = true;
-    for (const name of ["state", "activity", "message", "error-reason", "action-label"]) {
-      runStatusEl.removeAttribute(name);
-    }
-    return;
-  }
-  runStatusEl.hidden = false;
-  runStatusEl.setAttribute("state", state);
-  const attrs = {
-    activity: s?.activity,
-    message: s?.message,
-    "error-reason": s?.errorReason,
-  };
-  for (const [name, value] of Object.entries(attrs)) {
-    if (typeof value === "string" && value.trim()) runStatusEl.setAttribute(name, value);
-    else runStatusEl.removeAttribute(name);
-  }
-  // A provider/config failure OR a permission wait gets the inline actionable
-  // recovery path ("Fix in Settings"), not just the message.
-  const recoverable = /host-permission|provider-auth|model-config|network/i.test(s?.errorCategory ?? "");
-  if ((state === "failed" || state === "error" || state === "waiting-for-permission") && recoverable) {
-    runStatusEl.setAttribute("action-label", "Fix in Settings");
-  } else {
-    runStatusEl.removeAttribute("action-label");
-  }
+  projectConversationRunStatus(threadConversation, s);
 }
-runStatusEl?.addEventListener("action", () => {
+// The recovery action bubbles from the inline status row (light DOM). Filter
+// to the status row itself — message bubbles can also emit "action".
+threadConversation?.addEventListener("action", (ev) => {
+  if (!ev.target?.classList?.contains?.("live-status")) return;
   // The run-status action is an NTP surface: route IN-CONTEXT like every other
   // Settings entry. chrome.runtime.openOptionsPage() creates no new target from
   // the NTP (it IS the new-tab page) and would strand the user outside the
@@ -2372,6 +2384,16 @@ runStatusEl?.addEventListener("action", () => {
 /** Which run owner last wrote the global #status (so a superseded run's
  * orphaned "running…" is reset exactly once, never clobbering a newer run). */
 let statusOwner = 0;
+/** The live run's immutable per-attempt client run id (each attempt of the
+ * open surface's turn registers its own — conversation.js onRunRegistered).
+ * The registry terminal-reconciliation resolves the live row ONLY from the
+ * settled record whose clientCorrelationId IS this id (review P1-1: the
+ * updatedAt-skew heuristic let a previous run's fresh terminal record clear a
+ * just-started follow-up's row under queue saturation). */
+let liveClientRunId = null;
+/** The last run executionId the terminal reconciliation resolved the row for
+ * (a settled run keeps matching every later snapshot — resolve it ONCE). */
+let lastReconciledTerminalId = null;
 
 /** Run a turn in the thread surface (a new task, or a nudge). `mention` is an
  * @-mention delegation directive ({kind,id,name}): the task stays the hub's
@@ -2379,6 +2401,8 @@ let statusOwner = 0;
  * back in this thread (CAP-FB-20260824-TASK-AGENT-BOUNDARY-01). */
 async function runThreadTurn(text, attachments = [], mention = null) {
   const owner = runSurfaceOwner.claim();
+  liveClientRunId = null;
+  lastReconciledTerminalId = null;
   showThreadView();
   setStatus("running…", false);
   statusOwner = owner;
@@ -2395,6 +2419,10 @@ async function runThreadTurn(text, attachments = [], mention = null) {
     // Fence at the actual shared-DOM commit boundary as well as through
     // isStale below. No old callback can reveal a banner on a newer surface.
     onStatus: (state) => runSurfaceOwner.commit(owner, () => renderRunStatus(state)),
+    // Capture the exact per-attempt id BEFORE dispatch. Registry snapshots may
+    // still contain run A while follow-up B is waiting for durable admission;
+    // only B's own clientCorrelationId may resolve B's row.
+    onRunRegistered: (runId) => runSurfaceOwner.commit(owner, () => { liveClientRunId = runId; }),
     agentId: agentAtStart, // null for a thread; set when chatting with a named/background agent
     agentKind: kindAtStart,
     mention: mention ?? null,

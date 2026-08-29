@@ -241,14 +241,11 @@
     /* Every rail row centres its single remaining icon when collapsed. */
     .side.collapsed .side-label-row { justify-content: center; }
     .side.collapsed .new-task { inline-size: 34px; block-size: 34px; margin-inline-start: 0; }
-    /* One shared grid-based lifecycle surface owns conversation run status,
-       rendered once at the bottom of the transcript (never top-of-thread). */
-    .run-status { display: block; margin-block-start: 8px; }
+    /* The live run status renders INLINE as the conversation's pinned bottom
+       row (agent-conversation .live-status) — no separate banner element. */
     /* the provider-status warning chip (the user must know BEFORE a run) */
     .provider-status { font: inherit; font-size: 12px; font-weight: 600; color: var(--danger, #b3261e); background: transparent; border: 1px solid var(--danger, #b3261e); border-radius: 999px; padding: 2px 10px; cursor: pointer; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .provider-status:hover { background: var(--danger, #b3261e); color: var(--btn-fg, #fff); }
-    /* Author styles beat the UA hidden rule; keep the hidden surface absent. */
-    .run-status[hidden] { display: none; }
     /* Author styles beat the UA hidden rule; a covered nub stays absent. */
     .side-toggle[hidden] { display: none; }
     .title-edit {
@@ -899,8 +896,7 @@
       </div>
       <div class="thread-body">
         <durable-run-registry id="durable-run-registry" hidden></durable-run-registry>
-        <agent-conversation id="thread-conversation" role="log" aria-live="polite" aria-relevant="additions"></agent-conversation>
-        <conversation-run-status class="run-status" id="run-status" hidden></conversation-run-status>
+        <agent-conversation id="thread-conversation" role="log" aria-live="polite" aria-relevant="additions" aria-label="Conversation transcript" tabindex="0"></agent-conversation>
         <agent-composer id="thread-composer" placeholder="Reply, or @mention an agent…" send-label="Send"></agent-composer>
       </div>
     </div>

@@ -31,7 +31,13 @@ Deno.test("Assets dialog lifecycle composes with no-argument follow-up focus neu
   );
   assertStringIncludes(
     ntp,
-    "async function runThreadTurn(text, attachments = [], mention = null) {\n  const owner = runSurfaceOwner.claim();\n  showThreadView();",
+    "async function runThreadTurn(text, attachments = [], mention = null) {\n  const owner = runSurfaceOwner.claim();",
+  );
+  assertStringIncludes(ntp, "liveClientRunId = null;");
+  assertStringIncludes(ntp, "onRunRegistered: (runId)");
+  assertStringIncludes(
+    ntp,
+    "  showThreadView();\n  setStatus(\"running…\", false);",
   );
   assertStringIncludes(ntp, "showThreadView({ focusAfter: threadComposer });");
 

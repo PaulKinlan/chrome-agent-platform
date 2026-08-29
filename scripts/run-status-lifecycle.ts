@@ -1,6 +1,12 @@
 // run-status-lifecycle.ts — the REAL-Chrome journeys for the visible task/run
-// lifecycle (the top-of-thread run-status banner) on current main, written
+// lifecycle status surface on current main, written
 // FAILING-FIRST from the rejected 0134bff review's blockers:
+//
+// SURFACE (2026-08-28): the status surface is the conversation's INLINE
+// live-status row — `#thread-conversation conversation-run-status.live-status`
+// (sticky at the bottom of the chat; absent when idle/completed — completion
+// resolves the row into the final conversation entry). Host attributes carry
+// state/activity; the shadow .surface carries data-state/data-active.
 //
 //   - overlapping runs (same-surface double-send): the LATEST turn owns the
 //     banner/terminal state; no late turn-1 status/result; next-reply routing,
@@ -59,7 +65,7 @@ const EXPECTED = [
   "NTP: opened with the hub composer present",
   "run 1: typed + sent via real input (input-clear witness)",
   "run 1: the banner reached WORKING with an active loader (plainly visible, not mid-transition)",
-  "run 1: the banner sequence was exactly working → done (recorded, no duplicates/regressions)",
+  "run 1: the status-row sequence was working → resolved (recorded, no duplicates/regressions)",
   "run 1: the result rendered + the SW journaled the task/result pair",
   "run 1: screenshot of the settled terminal state",
   "double-send: both turns genuinely started while run 1 was pending (two input-clear witnesses + genuine overlap)",
@@ -72,15 +78,15 @@ const EXPECTED = [
   "switch: the switched-away run journaled its result in its OWN thread",
   "back mid-run: the global status is not stuck running after leaving",
   "back mid-run: the run still completes + journals after leaving",
-  "reload mid-run: the page recovers clean (no stuck banner)",
+  "reload mid-run: the page recovers clean (no stuck status row)",
   "reload mid-run: the disconnected run completes in the SW + journals",
   "reload mid-run: reopening the thread shows the journaled result (reconnect truth)",
-  "AX: the working banner exposes role=status + an accessible name in the browser AX tree",
-  "AX: the loader inside the banner exposes role=status + its activity label (through the shadow root)",
+  "AX: the working status row exposes role=status + an accessible name in the browser AX tree",
+  "AX: the status row's activity label is exposed (through the shadow root)",
   "AX: exactly ONE run-status live region (no duplicate status surfaces)",
   "follow-up: sending in an already-open thread does NOT restart the view transition (no banner flash)",
   "follow-up: screenshot of the LIVE working state (no transition by construction)",
-  "follow-up: the banner reaches working + terminal exactly once each for the follow-up",
+  "follow-up: the status row stays continuously working until its own terminal resolves it (no stale-terminal flap)",
   "no console errors on the NTP",
   "assertion set exact (no missing/extra checks)",
   "assertion order matches EXPECTED",
@@ -344,19 +350,22 @@ async function main() {
     }
     return false;
   };
-  // The banner's recorded state sequence (attributes + text), captured via a
-  // MutationObserver installed BEFORE the run — the genuine transition record.
+  // The inline status row's recorded state sequence (host attributes + text),
+  // captured via a MutationObserver on the CONVERSATION installed BEFORE the
+  // run — the genuine transition record (the row itself is created/removed).
   const OBSERVER_INSTALL = `(() => {
     window.__statusSeq = [];
-    const el = document.getElementById('run-status');
+    const conv = document.getElementById('thread-conversation');
+    if (!conv) return false;
     const read = () => {
-      const txt = (el.textContent ?? '').trim().slice(0, 40);
-      const state = el.hidden ? 'hidden' : (el.className.includes('done') ? 'done' : el.className.includes('error') ? 'error' : 'working');
+      const el = conv.querySelector('conversation-run-status.live-status');
+      const txt = (el?.textContent ?? '').trim().slice(0, 40);
+      const st = !el ? 'hidden' : (el.getAttribute('state') === 'failed' ? 'error' : el.getAttribute('state') === 'completed' ? 'done' : 'working');
       const last = window.__statusSeq[window.__statusSeq.length - 1];
-      if (!last || last.state !== state || last.txt !== txt) window.__statusSeq.push({ state, txt, t: Math.round(performance.now()) });
+      if (!last || last.state !== st || last.txt !== txt) window.__statusSeq.push({ state: st, txt, t: Math.round(performance.now()) });
     };
     window.__statusObs = new MutationObserver(read);
-    window.__statusObs.observe(el, { attributes: true, attributeFilter: ['hidden', 'class'], childList: true, subtree: true, characterData: true });
+    window.__statusObs.observe(conv, { attributes: true, childList: true, subtree: true, characterData: true });
     return true;
   })()`;
 
@@ -394,12 +403,13 @@ async function main() {
     let tSent = 0;
     for (let i = 0; i < 40 && !working; i++) {
       const w = await evl(ntp, `(() => {
-        const el = document.getElementById('run-status');
-        if (!el || el.hidden) return null;
-        const loader = el.querySelector('loading-state');
-        const grid = loader?.shadowRoot?.querySelector('.grid');
-        return { visible: !el.hidden, loaderActive: loader?.hasAttribute('active') === true,
-          gridRole: grid?.getAttribute('role') ?? null };
+        const el = document.querySelector('#thread-conversation conversation-run-status.live-status');
+        if (!el) return null;
+        const state = el.getAttribute('state');
+        const surface = el.shadowRoot?.querySelector('.surface');
+        return { visible: true, state,
+          loaderActive: surface?.getAttribute('data-active') === 'true',
+          gridRole: surface?.getAttribute('role') ?? null };
       })()`);
       if (w?.visible && w.loaderActive) { working = w; tDetect = Date.now(); }
       else await sleep(50);
@@ -427,9 +437,15 @@ async function main() {
       await sleep(100);
     }
     const seq1 = await evl(ntp, `window.__statusSeq ?? []`);
-    const states1 = seq1.filter((s) => s.state !== "hidden").map((s) => s.state);
-    check("run 1: the banner sequence was exactly working → done (recorded, no duplicates/regressions)",
-      done1 && JSON.stringify(states1) === JSON.stringify(["working", "done"]), seq1);
+    // The inline row RESOLVES by removal (no terminal state renders) — the
+    // lifecycle contract: one contiguous block of working states, then hidden
+    // (resolved), never error, no hidden-gap flash mid-run.
+    const trimmed1 = [...seq1];
+    while (trimmed1.length && trimmed1[0].state === "hidden") trimmed1.shift();
+    const resolved1 = trimmed1.length > 1 && trimmed1[trimmed1.length - 1].state === "hidden";
+    const body1 = trimmed1.slice(0, -1);
+    check("run 1: the status-row sequence was working → resolved (recorded, no duplicates/regressions)",
+      done1 && resolved1 && body1.length >= 1 && body1.every((s) => s.state === "working"), seq1);
     const bub1 = await evl(ntp, `[...document.querySelectorAll('#thread-conversation message-bubble')]
       .map(b => b.getAttribute('role'))`);
     check("run 1: the result rendered + the SW journaled the task/result pair",
@@ -465,11 +481,13 @@ async function main() {
       genuineOverlap = sentA && sentB && !(await journalHas(ntp, a1));
       dsTiming.push({ attempt, sentA, sentB, a1InFlightAtB: genuineOverlap });
       if (!genuineOverlap) continue;
-      // While turn 2 is in flight, the banner must never show a terminal
-      // state (turn 1's late terminal is fenced).
+      // While turn 2 is in flight, the inline status row must never show a
+      // terminal state (turn 1's late terminal is fenced).
       for (let i = 0; i < 100; i++) {
-        const st = await evl(ntp, `(() => { const el = document.getElementById('run-status');
-          return el?.hidden ? 'hidden' : (el.className.includes('done') ? 'done' : el.className.includes('error') ? 'error' : 'working'); })()`).catch(() => "hidden");
+        const st = await evl(ntp, `(() => { const el = document.querySelector('#thread-conversation conversation-run-status.live-status');
+          if (!el) return 'hidden';
+          const s = el.getAttribute('state');
+          return s === 'failed' ? 'error' : (s === 'running' || s === 'retrying' || s === 'queued') ? 'working' : (s ?? 'hidden'); })()`).catch(() => "hidden");
         let d2Done = await journalHas(ntp, a2);
         if ((st === "done" || st === "error") && !d2Done) {
           // The banner can flip one poll-tick before my journal read catches
@@ -542,7 +560,7 @@ async function main() {
     let settleState = null;
     for (let i = 0; i < 30; i++) {
       settleState = await evl(ntp, `({
-        banner: document.getElementById('run-status').hidden ? 'hidden' : document.getElementById('run-status').className,
+        banner: (document.querySelector('#thread-conversation conversation-run-status.live-status')?.getAttribute('state')) ?? 'hidden',
         status: document.getElementById('status')?.textContent ?? '',
         thinking: document.querySelectorAll('#thread-conversation message-bubble[role="thinking"]').length,
       })`);
@@ -592,7 +610,7 @@ async function main() {
     const otherState = await evl(ntp, `({
       roles: [...document.querySelectorAll('#thread-conversation message-bubble')].map(b => b.getAttribute('role')),
       title: document.getElementById('thread-title').textContent,
-      banner: document.getElementById('run-status').hidden,
+      banner: !document.querySelector('#thread-conversation conversation-run-status.live-status'),
     })`);
     check("switch: opened another thread mid-flight — ONLY its own messages, no status flip, no retitle",
       openedOther && swDone &&
@@ -635,10 +653,10 @@ async function main() {
     // reload WHILE the run executes: the page (and its progress port) dies
     // genuinely; the SW continues the run.
     let swOwns = false;
-    for (let i = 0; i < 60 && !swOwns; i++) {
+    for (let i = 0; i < 200 && !swOwns; i++) {
       swOwns = await evl(ntp, `chrome.runtime.sendMessage({type:'memory.get', origin:'master', key:'journal'})
         .then(j => (Array.isArray(j) ? j : []).some(q => q?.type === 'task' && (q.task ?? '').includes(${JSON.stringify(rl1)})))`).catch(() => false);
-      if (!swOwns) await sleep(50);
+      if (!swOwns) await sleep(100);
     }
     await send("Page.reload", {}, ntp);
     // Wait for the reloaded page to genuinely render the composer (driving it
@@ -650,12 +668,12 @@ async function main() {
     }
     await sleep(300);
     const cleanAfterReload = await evl(ntp, `({
-      bannerHidden: document.getElementById('run-status')?.hidden === true,
+      liveRowGone: !document.querySelector('#thread-conversation conversation-run-status.live-status'),
       status: document.getElementById('status')?.textContent ?? '',
       threadHidden: document.getElementById('thread-view')?.hidden === true,
     })`);
-    check("reload mid-run: the page recovers clean (no stuck banner)",
-      sentRl && swOwns && cleanAfterReload.bannerHidden && cleanAfterReload.threadHidden &&
+    check("reload mid-run: the page recovers clean (no stuck status row)",
+      sentRl && swOwns && cleanAfterReload.liveRowGone && cleanAfterReload.threadHidden &&
       cleanAfterReload.status !== "running…", { ...cleanAfterReload, sentRl, swOwns });
     let rlDone = false;
     for (let i = 0; i < 100 && !rlDone; i++) {
@@ -697,35 +715,30 @@ async function main() {
     const ax1 = `rs-ax-${Date.now() % 100000}`;
     const warmupsAX = () => evl(ntp, `(() => { for (let i = 0; i < 6; i++) chrome.runtime.sendMessage({ type: 'agent.run', task: 'rs warmup5 ${Date.now()} ' + i, id: 'rswx${Date.now()}-' + i }).catch(() => {}); return true; })()`);
     await sendWithWitness(ntp, COMPOSER, ax1, warmupsAX);
-    // While working: the banner + its loader in the AX tree — captured in the
-    // SAME beat (the loader is removed at the terminal state, so a second
-    // query after the fact can see nothing).
+    // While working: the inline status row in the AX tree — captured in the
+    // SAME beat (the row resolves at the terminal state, so a second query
+    // after the fact can see nothing). The row's AX subtree includes its
+    // shadow content (the role=status surface + the activity label text).
     let axBanner = null;
-    let axLoader = null;
-    for (let i = 0; i < 60 && !(axBanner && axLoader); i++) {
-      const visible = await evl(ntp, `(() => { const el = document.getElementById('run-status'); return el && !el.hidden && !el.className.includes('done') && !el.className.includes('error'); })()`).catch(() => false);
+    for (let i = 0; i < 60 && !axBanner; i++) {
+      const visible = await evl(ntp, `(() => { const el = document.querySelector('#thread-conversation conversation-run-status.live-status'); const st = el?.getAttribute('state'); return !!el && st !== 'completed' && st !== 'failed' && st !== 'cancelled'; })()`).catch(() => false);
       if (visible) {
-        const b = await axNodes(ntp, "#run-status");
-        const l = await axNodes(ntp, "#run-status loading-state");
-        if (b?.length && l?.length) { axBanner = b; axLoader = l; break; }
+        const b = await axNodes(ntp, "#thread-conversation conversation-run-status.live-status");
+        if (b?.length) { axBanner = b; break; }
       }
       await sleep(50);
     }
     const bannerRoles = (axBanner ?? []).map((n) => n?.role?.value ?? "");
     const bannerNames = (axBanner ?? []).map((n) => n?.name?.value ?? "").filter(Boolean);
-    check("AX: the working banner exposes role=status + an accessible name in the browser AX tree",
+    check("AX: the working status row exposes role=status + an accessible name in the browser AX tree",
       bannerRoles.includes("status") && bannerNames.length > 0, { roles: bannerRoles.slice(0, 6), names: bannerNames.slice(0, 4) });
-    const loaderText = (axLoader ?? []).map((n) => n?.name?.value ?? "").join(" ");
-    const loaderRoles = (axLoader ?? []).map((n) => n?.role?.value ?? "");
-    check("AX: the loader inside the banner exposes role=status + its activity label (through the shadow root)",
-      loaderRoles.includes("status") && /thinking|working/i.test(loaderText), { roles: loaderRoles.slice(0, 4), text: loaderText.slice(0, 60) });
-    const statusRegionCount = await evl(ntp, `document.querySelectorAll('#run-status').length`);
-    const liveRegionsInThread = await evl(ntp, `(() => {
-      const tv = document.getElementById('thread-view');
-      return tv ? tv.querySelectorAll('[role="status"]').length : -1;
-    })()`);
+    const labelText = bannerNames.join(" ");
+    check("AX: the status row's activity label is exposed (through the shadow root)",
+      /thinking|working/i.test(labelText), { text: labelText.slice(0, 60) });
+    const liveRowCount = await evl(ntp, `document.querySelectorAll('conversation-run-status.live-status').length`);
+    const totalStatusEls = await evl(ntp, `document.querySelectorAll('conversation-run-status').length`);
     check("AX: exactly ONE run-status live region (no duplicate status surfaces)",
-      statusRegionCount === 1 && liveRegionsInThread >= 1, { statusRegionCount, liveRegionsInThread });
+      liveRowCount === 1 && totalStatusEls === 1, { liveRowCount, totalStatusEls });
     // Let the AX run settle before the follow-up section.
     for (let i = 0; i < 100; i++) {
       if (await journalHas(ntp, ax1)) break;
@@ -746,6 +759,20 @@ async function main() {
       if (orig) document.startViewTransition = (cb) => { window.__vtCount++; return orig(cb); };
       return 0; })()`);
     await evl(ntp, OBSERVER_INSTALL);
+    // The follow-up's completion probe is THREAD-authoritative, not the global
+    // journal: 20 queued warmups flood the bounded 'journal' key and can evict
+    // the follow-up's task row before its result lands (pair never matches).
+    // The thread projection (commitThread) is the durable authority.
+    const fuThreadId = await msg(ntp, { type: "thread.list" }).then((r) =>
+      (r?.threads ?? []).find((t) => String(t?.name ?? "").includes(ax1.slice(0, 12)))?.id ?? null);
+    const threadHas = async (marker) => {
+      if (!fuThreadId) return false;
+      const t = await msg(ntp, { type: "thread.get", id: fuThreadId }).catch(() => null);
+      const msgs = Array.isArray(t?.thread?.messages) ? t.thread.messages : [];
+      const at = msgs.findIndex((m) => String(m?.content ?? m?.text ?? "").includes(marker));
+      if (at < 0) return false;
+      return msgs.slice(at + 1).some((m) => (m?.role ?? "") !== "user" && String(m?.content ?? m?.text ?? "").trim().length > 0);
+    };
     // Widen the follow-up's working window so the screenshot + banner polls
     // have room (queued warmups, fired right before the send).
     const warmupsFU = () => evl(ntp, `(() => { for (let i = 0; i < 20; i++) chrome.runtime.sendMessage({ type: 'agent.run', task: 'rs warmupFU ${Date.now()} ' + i, id: 'rswf${Date.now()}-' + i }).catch(() => {}); return true; })()`);
@@ -755,42 +782,60 @@ async function main() {
     // screenshot is captured on the FIRST working observation — with the
     // no-retransition fix this can never be a transition artifact.
     let fuSawWorking = false;
-    let fuHiddenGap = false;
     let workingShot = false;
     for (let i = 0; i < 60; i++) {
-      const st = await evl(ntp, `(() => { const el = document.getElementById('run-status');
-        return el?.hidden ? 'hidden' : 'visible'; })()`);
-      const doneYet = await journalHas(ntp, fu1);
+      const st = await evl(ntp, `(() => { const el = document.querySelector('#thread-conversation conversation-run-status.live-status');
+        return el ? 'visible' : 'hidden'; })()`);
+      const doneYet = await threadHas(fu1);
       if (st === "visible" && !doneYet) {
         fuSawWorking = true;
         if (!workingShot) {
-          const cls = await evl(ntp, `document.getElementById('run-status').className`);
-          if (!String(cls).includes("done") && !String(cls).includes("error")) {
+          const rowState = await evl(ntp, `document.querySelector('#thread-conversation conversation-run-status.live-status')?.getAttribute('state') ?? ''`);
+          if (rowState !== 'completed' && rowState !== 'failed' && rowState !== 'cancelled') {
             workingShot = await shot(ntp, "followup-working");
           }
         }
       }
-      if (st === "hidden" && fuSawWorking && !doneYet) fuHiddenGap = true;
       if (doneYet) break;
       await sleep(40);
     }
     vtAfter = await evl(ntp, `window.__vtCount ?? -1`);
     await evl(ntp, `(() => { if (window.__vtOrigRestore) window.__vtOrigRestore(); })()`);
+    // The no-flash property is the VIEW TRANSITION count (a restart is what
+    // flashes); row visibility churn is asserted by the sequence check below.
     check("follow-up: sending in an already-open thread does NOT restart the view transition (no banner flash)",
-      sentFu && vtBefore === 0 && vtAfter === 0 && fuSawWorking && !fuHiddenGap,
-      { sentFu, vtBefore, vtAfter, fuSawWorking, fuHiddenGap });
+      sentFu && vtBefore === 0 && vtAfter === 0 && fuSawWorking,
+      { sentFu, vtBefore, vtAfter, fuSawWorking });
     check("follow-up: screenshot of the LIVE working state (no transition by construction)",
       workingShot);
     let fuDone = false;
     for (let i = 0; i < 100 && !fuDone; i++) {
-      fuDone = await journalHas(ntp, fu1);
+      fuDone = await threadHas(fu1);
       if (!fuDone) await sleep(100);
     }
-    await sleep(300);
-    const seqFu = (await evl(ntp, `window.__statusSeq ?? []`)).filter((s) => s.state !== "hidden").map((s) => s.state);
-    check("follow-up: the banner reaches working + terminal exactly once each for the follow-up",
-      fuDone && seqFu.filter((s) => s === "working").length === 1 &&
-      seqFu.filter((s) => s === "done").length === 1, seqFu);
+    // The row's resolution (removal) can lag the journal write by a beat —
+    // poll the recorded sequence for the terminal hidden entry.
+    let seqFuRaw = [];
+    for (let i = 0; i < 50; i++) {
+      seqFuRaw = await evl(ntp, `window.__statusSeq ?? []`);
+      if (seqFuRaw.length && seqFuRaw[seqFuRaw.length - 1].state === "hidden") break;
+      await sleep(100);
+    }
+    const seqFu = [...seqFuRaw];
+    while (seqFu.length && seqFu[0].state === "hidden") seqFu.shift();
+    // Identity is exact now: a previous terminal registry record cannot clear
+    // the follow-up while it waits for admission. From the first working row
+    // until the final hidden resolution there must be NO hidden/error flap.
+    const firstWorking = seqFu.findIndex((s) => s.state === "working");
+    const fuResolved = firstWorking >= 0 && seqFu.length > firstWorking + 1 && seqFu[seqFu.length - 1].state === "hidden";
+    const fuContinuous = fuResolved && seqFu.slice(firstWorking, -1).every((s) => s.state === "working");
+    const fuDiag = await evl(ntp, `({
+      rowGone: !document.querySelector('#thread-conversation conversation-run-status.live-status'),
+      agentBubbles: document.querySelectorAll('#thread-conversation message-bubble[role="agent"]').length,
+    })`).catch(() => null);
+    check("follow-up: the status row stays continuously working until its own terminal resolves it (no stale-terminal flap)",
+      fuDone && fuContinuous,
+      { seq: seqFuRaw, diag: fuDiag });
     await evl(ntp, `(() => { window.__statusObs?.disconnect(); })()`);
 
     check("no console errors on the NTP", (consoleErrors.get(ntp) ?? []).length === 0,

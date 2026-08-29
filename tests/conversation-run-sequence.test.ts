@@ -8,7 +8,7 @@
 import { assert, assertEquals } from "jsr:@std/assert";
 import { recordAuthoritativeThreadProjection } from "../extension/shared/thread-projection-authority.js";
 
-type Status = { state: string; activity?: string };
+type Status = { state: string; activity?: string; message?: string; errorReason?: string; errorCategory?: string };
 type Bubble = { role: string; content: string };
 
 function makeContainer(bubbles: Bubble[]) {
@@ -103,6 +103,20 @@ Deno.test("conversation run sequence: streamed final text + identical res.result
     `the streamed text and the identical res.result must not both project (got ${JSON.stringify(agentBubbles)})`);
   assertEquals(agentBubbles[0].content, "[demo] final answer");
   assertEquals(statuses.at(-1)?.state, "completed");
+});
+
+Deno.test("conversation run sequence: onRunRegistered exposes the exact run id sent to the durable route", async () => {
+  const sw: FakeSw = { runHoldMs: 20, resultText: "registered", lastRunId: null };
+  installChromeStub(sw);
+  const { runConversationTurn } = await import("../extension/shared/conversation.js");
+  const registered: string[] = [];
+  await runConversationTurn(makeContainer([]) as never, {
+    text: "capture run identity",
+    onRunRegistered: (runId: string) => registered.push(runId),
+  } as never);
+  assertEquals(registered.length, 1);
+  assertEquals(registered[0], sw.lastRunId,
+    "the caller tracks the same client run id persisted as clientCorrelationId");
 });
 
 Deno.test("conversation run sequence: a differing authoritative result still appends after streamed text", async () => {
@@ -310,10 +324,19 @@ Deno.test("conversation run sequence: ungranted provider preflight transitions q
   const bubbles: Bubble[] = [];
   const container = makeContainer(bubbles);
   const statuses: Status[] = [];
+  const liveStatus: { current: Record<string, unknown> | null } = { current: null };
+  const liveSurface = {
+    setLiveStatus(status: Record<string, unknown>) { liveStatus.current = status; },
+    clearLiveStatus() { liveStatus.current = null; },
+  };
+  const { projectConversationRunStatus } = await import("../extension/shared/run-status.js");
 
   const res = await runConversationTurn(container as never, {
     text: "query with ungranted provider",
-    onStatus: (s: Status) => statuses.push(s),
+    onStatus: (s: Status) => {
+      statuses.push(s);
+      projectConversationRunStatus(liveSurface, s);
+    },
   } as never);
 
   assertEquals(res.ok, false);
@@ -321,6 +344,8 @@ Deno.test("conversation run sequence: ungranted provider preflight transitions q
   assertEquals(res.errorCategory, "host-permission");
   assertEquals(statuses[0]?.state, "queued", "accepted turn emits queued first");
   assertEquals(statuses.at(-1)?.state, "waiting-for-permission", "transitions to waiting-for-permission");
+  assertEquals(liveStatus.current?.actionLabel, "Fix in Settings",
+    "the final post-resolution row retains the recovery action emitted by the real turn");
   const errBubbles = bubbles.filter((b) => b.role === "error");
   assertEquals(errBubbles.length, 1, "exactly one error bubble appended");
   assert(errBubbles[0].content.includes("127.0.0.1:9"), "error bubble names the ungranted origin");
@@ -344,7 +369,7 @@ Deno.test("conversation run sequence: real ntp.js event routing — thread follo
     const el = {
       id,
       tagName: tagName.toUpperCase(),
-      hidden: id === "thread-view" || id === "view" || id === "run-status" || id === "durable-run-registry",
+      hidden: id === "thread-view" || id === "view" || id === "durable-run-registry",
       textContent: "",
       innerHTML: "",
       style: {},
@@ -423,6 +448,16 @@ Deno.test("conversation run sequence: real ntp.js event routing — thread follo
       focus: () => {},
       clear: () => { children.length = 0; },
       setMessages: (msgs: any[]) => { children.splice(0, children.length, ...msgs); },
+      // Mirror agent-conversation's inline live-status contract: live states
+      // pin the row; idle/completed/empty resolve it to nothing.
+      liveStatus: null as any,
+      liveStatusLog: [] as any[],
+      setLiveStatus: (s: any) => {
+        el.liveStatusLog.push(s);
+        const st = typeof s?.state === "string" ? s.state : "";
+        el.liveStatus = st && st !== "idle" && st !== "completed" ? s : null;
+      },
+      clearLiveStatus: () => { el.liveStatus = null; },
       get children() { return children; },
     };
     elements.set(id, el);
@@ -435,7 +470,7 @@ Deno.test("conversation run sequence: real ntp.js event routing — thread follo
     "named-agents", "side-agents", "background-agents", "agent-count",
     "artifacts", "run-log", "hub-usage", "thread-sidebar", "thread-view",
     "thread-title", "thread-conversation", "thread-composer", "edit-agent",
-    "run-status", "composer", "thread-back", "provider-status", "side",
+    "composer", "thread-back", "provider-status", "side",
     "side-toggle", "sidebar-durability-hint", "new-task", "new-agent",
     "view", "view-frame", "view-title", "view-back", "open-settings",
     "open-directory", "open-artifacts", "artifact-quick-drawer", "bg-configure", "browse-artifacts",
@@ -566,26 +601,26 @@ Deno.test("conversation run sequence: real ntp.js event routing — thread follo
   const threadBackEl = getOrCreateElement("thread-back");
   const threadViewEl = getOrCreateElement("thread-view");
   const threadConvEl = getOrCreateElement("thread-conversation");
-  const runStatusEl = getOrCreateElement("run-status");
 
   // Step 1: Submit turn 1 via real hub composer listener
   composerEl.dispatchEvent({ type: "send", detail: { text: "turn 1", attachments: [], agent: null } });
   await waitForCondition(() => dispatchedRuns.length === 1 && threadConvEl.children.length === 2, 1000, "turn 1 execution");
   assertEquals(threadViewEl.hidden, false, "thread view shown by real showThreadView");
-  assertEquals(runStatusEl.getAttribute("state"), "completed");
+  assertEquals(threadConvEl.liveStatus, null, "turn 1 completed: the inline status row resolves (no orphan chrome)");
+  assertEquals(threadConvEl.liveStatusLog.at(-1)?.state, "completed", "the completed lifecycle event flowed through the conversation");
   assertEquals(threadConvEl.children.map((c: any) => c.getAttribute("content") || c.content), ["turn 1", "result 1"]);
 
   // Step 2: Submit turn 2 (J2) via real thread composer listener
   threadComposerEl.dispatchEvent({ type: "send", detail: { text: "turn 2", attachments: [], agent: null } });
   await waitForCondition(() => dispatchedRuns.length === 2 && threadConvEl.children.length === 4, 1000, "turn 2 execution");
   assertEquals(dispatchedRuns[1].threadId, "t_1", "turn 2 passed existing threadId");
-  assertEquals(runStatusEl.getAttribute("state"), "completed");
+  assertEquals(threadConvEl.liveStatus, null, "turn 2 completed: the inline status row resolves");
   assertEquals(threadConvEl.children.map((c: any) => c.getAttribute("content") || c.content), ["turn 1", "result 1", "turn 2", "result 2"]);
 
   // Step 3: Click thread-back via real listener (hideThreadView)
   threadBackEl.dispatchEvent({ type: "click" });
   assertEquals(threadViewEl.hidden, true, "thread view hidden by real hideThreadView");
-  assertEquals(runStatusEl.hidden, true, "runStatus hidden (idle)");
+  assertEquals(threadConvEl.liveStatus, null, "no live status row on the hub surface (idle)");
   assertEquals(threadConvEl.children.length, 0, "conversation cleared for hub");
 
   // Step 4: Submit turn 3 (J3) via real hub composer listener
@@ -593,7 +628,7 @@ Deno.test("conversation run sequence: real ntp.js event routing — thread follo
   await waitForCondition(() => dispatchedRuns.length === 3 && threadConvEl.children.length === 2, 1000, "turn 3 execution");
   assertEquals(threadViewEl.hidden, false, "thread view re-shown by real showThreadView");
   assertEquals(dispatchedRuns[2].threadId, null, "turn 3 allocated fresh thread");
-  assertEquals(runStatusEl.getAttribute("state"), "completed");
+  assertEquals(threadConvEl.liveStatus, null, "turn 3 completed: the inline status row resolves");
   assertEquals(threadConvEl.children.map((c: any) => c.getAttribute("content") || c.content), ["turn 3", "result 3"]);
 });
 

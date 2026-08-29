@@ -1066,7 +1066,7 @@ export function projectThreadMessages(thread) {
   return output;
 }
 
-export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null, isStale = null, projectionOwner = null, mention = null }) {
+export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null, isStale = null, projectionOwner = null, mention = null, onRunRegistered = null }) {
   const c = container;
   // The RUN-LIFECYCLE FENCE: the caller passes isStale() returning true once
   // this turn no longer owns the surface (a newer turn started, or the user
@@ -1218,8 +1218,14 @@ export async function runConversationTurn(container, { text, attachments = [], h
       if (requirement.grantGlobal) card.setAttribute("global", "true");
       card.addEventListener("approve", (ev) => handleApprovalDecision(requirement, card, ev?.detail?.sourceEvent, true));
       card.addEventListener("deny", (ev) => handleApprovalDecision(requirement, card, ev?.detail?.sourceEvent, false));
-      c.append(card);
-      if (typeof c.scrollTop === "number") c.scrollTop = c.scrollHeight;
+      // Insert BEFORE the connected live-status row so the row stays the
+      // conversation's last child (review P1-a); plain append() would land
+      // the card after it.
+      if (typeof c.appendTranscript === "function") c.appendTranscript(card);
+      else {
+        c.append(card);
+        if (typeof c.scrollTop === "number") c.scrollTop = c.scrollHeight;
+      }
     }
     pendingApprovals.set(requirement.key, { requirement, status: "pending", card });
     status({
@@ -1235,6 +1241,10 @@ export async function runConversationTurn(container, { text, attachments = [], h
   // A grant-retry re-enters here after its own permission awaits — re-check.
   if (stale()) return { ok: false, superseded: true, error: "the surface was replaced before the run started" };
   const runId = newRunId();
+  // The registry's terminal reconciliation keys on this exact per-attempt id
+  // (projected onto the durable record as clientCorrelationId) — the caller
+  // tracks it so ONLY this run's own settled record can resolve its live row.
+  onRunRegistered?.(runId);
   // Consume the P1-A binding once: only the attempt started BECAUSE of the
   // owner's Allow carries the resolved approval ids (null on every other turn).
   const approvalBinding = approvalBindingForRetry;

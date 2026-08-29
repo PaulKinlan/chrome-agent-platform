@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.373] — 2026-08-29
+- merge: progress-inline lane (2bfa1805) — inline pinned live row (no #run-status banner), exact per-attempt runId capture/reconciliation, sidepanel action-label preservation, fail-closed axe gates. Reviewed PASS (round 3); coordinator-attested blocked-CDN axe failure-path (rc=1) + behavioral RED on 9bc529a9. Manifest resolved to main's P0 shape (lane base predates it; lane has no manifest delta of its own).
+
+## [0.2.372] — 2026-08-29
+- Live progress is now an inline pinned row at the bottom of the conversation — no separate banner — it always shows the exact run it belongs to, keeps recovery actions working, and accessibility checks fail loudly instead of being skipped
+
 ## [0.2.371] — 2026-08-29
 - Task lifecycle stabilized end to end: follow-ups continue the same task with their history, titles stay current, approvals render as actionable cards instead of dead ends, browser access is granted permanently at install, and orphaned alarms are cleaned up
 
