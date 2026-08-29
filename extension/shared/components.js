@@ -788,7 +788,7 @@ class FirstRunGuide extends Component {
       ${canSeed ? "" : `<p class="seed-status" id="seed-status" role="status">${seedGateReason}</p>`}
       <div class="example-card" aria-label="Example agent (optional)">
         <strong>Add an example agent (optional)</strong>
-        <p>Create the <em>Weekly browsing review</em> agent — a named agent whose job is a weekly plain-language summary of your activity (recent browser events, usage, and artifacts). Creating it is a single explicit action; decline and nothing changes. To run it automatically on a schedule, add it later in Settings → Background agents.</p>
+        <p>Create the <em>Weekly browsing review</em> agent — a named agent whose job is a weekly plain-language summary of your activity (recent browser events, usage, and artifacts). Creating it is a single explicit action; decline and nothing changes. To run it automatically on a schedule, add it later in Settings → Agents.</p>
         <div class="consent-actions"><button class="create-example-agent" type="button">Create the Weekly browsing review agent</button></div>
       </div>
     </section>`);

@@ -1,16 +1,18 @@
 # Changelog
 
+## [0.2.405] — 2026-08-29
+- Agent settings links, accessibility labels, security coverage, and release notes now stay in sync with the unified Agents section
+
 ## [0.2.403] — 2026-08-29
-- CAP-FB-20260829-PROVIDER-TOOLS-COPY-01 clarify per-agent search toggles
+- Provider-run tool settings now name Gemini and Anthropic web search, explain provider billing, and say what each per-agent switch enables
 
 ## [0.2.402] — 2026-08-29
-- CAP-FB-20260829-SETTINGS-NAV-ORDER-01 align settings navigation
+- Settings navigation now follows the same order as the panels it opens
 
 ## [0.2.401] — 2026-08-29
-- CAP-FB-20260829-AGENTS-SETTINGS-MERGE-01 unify agent displays
+- Settings now has one Agents list for interactive and scheduled agents, and the task sidebar shows scheduled agents even when their schedule is off, with a clear cadence marker
 
 ## [0.2.400] — 2026-08-29
-- Settings now has one Agents list for interactive and scheduled agents, and the task sidebar shows scheduled agents even when their schedule is off, with a clear cadence marker
 - Agents can now post work to a shared board and claim each other's jobs: the hub keeps a bounded, tamper-proof ledger (agents can't forge entries with their memory tools), claims expire and recover automatically, finished jobs shrink to compact receipts that never lose the result, and results are delivered back to the requester's conversation with automatic bounded retries
 
 ## [0.2.399] — 2026-08-29

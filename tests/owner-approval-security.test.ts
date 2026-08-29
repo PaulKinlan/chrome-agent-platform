@@ -22,7 +22,7 @@ import {
   payloadDigest,
   resolvePendingApproval,
 } from "../extension/lib/owner-approval.js";
-import { isExactOptionsSender } from "../extension/lib/pure.js";
+import { isExactOptionsSender, SETTINGS_SECTIONS } from "../extension/lib/pure.js";
 import { scrubEventDetail } from "../extension/lib/diagnostics.js";
 
 const action = "asset.delete";
@@ -246,7 +246,7 @@ Deno.test("every shipped Settings navigation hash remains inside exact owner aut
   const exact = { id, url, origin: `chrome-extension://${id}`, frameId: 0, documentLifecycle: "active", documentId: "doc-1" };
   const html = Deno.readTextFileSync(new URL("../extension/options/options.html", import.meta.url));
   const hashes = [...html.matchAll(/<a\s+href="(#[^"]+)"\s+class="nav-item"/g)].map((match) => match[1]);
-  assertEquals(hashes.length, 13, "the complete Settings navigation is covered by this authority drift test");
+  assertEquals(hashes.length, SETTINGS_SECTIONS.length, "the complete Settings navigation is covered by this authority drift test");
   for (const hash of hashes) {
     assert(isExactOptionsSender({ ...exact, url: url + hash }, id, url), `Settings navigation hash ${hash} must retain owner authority`);
   }
