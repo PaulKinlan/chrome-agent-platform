@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.409] — 2026-08-29
+- Merge commit '3cf75034790b4c35777315cf2ccbbca443b1fe92' into HEAD
+
 ## [0.2.408] — 2026-08-29
 - Merge commit '7cd18009e3b4e68ea07ef5a7f4cb9569989e3d21' into HEAD
 
