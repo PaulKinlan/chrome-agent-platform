@@ -61,10 +61,24 @@ Deno.test("known-WebMCP registry is LRU-bounded and drops stale/zero signals", (
   const now = 2_000_000_000_000;
   const raw = Array.from({ length: WEBMCP_REGISTRY_MAX + 5 }, (_, i) => ({
     origin: `https://site-${i}.example`,
-    toolCount: i === 0 ? 0 : 1,
-    lastSeen: now - i,
+    documents: [{
+      tabId: i,
+      documentId: `doc-${i}`,
+      url: `https://site-${i}.example/tools`,
+      toolCount: i === 0 ? 0 : 1,
+      lastSeen: now - i,
+    }],
   }));
-  raw.push({ origin: "https://stale.example", toolCount: 3, lastSeen: now - WEBMCP_REGISTRY_STALE_MS - 1 });
+  raw.push({
+    origin: "https://stale.example",
+    documents: [{
+      tabId: 999,
+      documentId: "doc-stale",
+      url: "https://stale.example/tools",
+      toolCount: 3,
+      lastSeen: now - WEBMCP_REGISTRY_STALE_MS - 1,
+    }],
+  });
   const entries = pruneWebmcpRegistry(raw, now);
   assertEquals(entries.length, WEBMCP_REGISTRY_MAX);
   assertEquals(entries.some((entry) => entry.origin === "https://site-0.example"), false);
@@ -76,6 +90,11 @@ Deno.test("agent.discoverable-tabs ROUTE: only passively detected WebMCP origins
   const listeners = [];
   const noopListener = { addListener: () => {} };
   const localStore = new Map();
+  const openTabs = [
+    { id: 1, url: "https://same.example/tools", title: "Tools", active: true, lastAccessed: 100 },
+    { id: 2, url: "https://same.example/plain", title: "Plain", active: false, lastAccessed: 200 },
+  ];
+  const frameDocuments = new Map([[1, "doc-1"], [2, "doc-2"]]);
   globalThis.chrome = {
     runtime: {
       id: "test-extension-id",
@@ -108,20 +127,17 @@ Deno.test("agent.discoverable-tabs ROUTE: only passively detected WebMCP origins
     tabs: {
       onCreated: noopListener, onActivated: noopListener, onUpdated: noopListener, onRemoved: noopListener,
       onAttached: noopListener, onZoomChange: noopListener,
-      query: async () => [
-        { id: 1, url: "https://tooled.example/page", title: "Tooled", active: true, lastAccessed: 100 },
-        { id: 2, url: "https://plain.example/page", title: "Plain", active: false, lastAccessed: 200 },
-      ],
-      get: async (id) => id === 1
-        ? { id: 1, url: "https://tooled.example/page", title: "Tooled" }
-        : { id: 2, url: "https://plain.example/page", title: "Plain" },
+      query: async () => structuredClone(openTabs),
+      get: async (id) => structuredClone(openTabs.find((tab) => tab.id === id)),
       sendMessage: async () => {}, create: async () => ({ id: 1 }), update: async () => ({}), remove: async () => {},
     },
     windows: { onCreated: noopListener, onRemoved: noopListener, onFocusChanged: noopListener },
     scripting: { executeScript: async () => [], getRegisteredContentScripts: async () => [], registerContentScripts: async () => {} },
     offscreen: { closeDocument: async () => {}, getContexts: async () => [] },
     contextMenus: { onClicked: noopListener },
-    webNavigation: {},
+    webNavigation: {
+      getFrame: async ({ tabId }) => ({ documentId: frameDocuments.get(tabId) }),
+    },
     notifications: {},
   };
   await import("../extension/background/service-worker.js");
@@ -148,44 +164,52 @@ Deno.test("agent.discoverable-tabs ROUTE: only passively detected WebMCP origins
 
   // A plain page reports zero and never becomes eligible.
   const plain = await dispatch(
-    { type: "webmcp.detected", origin: "https://plain.example", url: "https://plain.example/page", toolCount: 0 },
-    contentSender(2, "https://plain.example/page"),
+    { type: "webmcp.detected", origin: "https://same.example", url: "https://same.example/plain", toolCount: 0 },
+    contentSender(2, "https://same.example/plain"),
   );
   assertEquals(plain?.ok, true);
   let picker = await dispatch({ type: "agent.discoverable-tabs" });
   assertEquals(picker?.tabs?.length, 0, "zero-tool pages are excluded from the picker");
 
-  // A positive report from the real content-script sender admits its origin.
+  // A positive report admits only its exact browser-attested tab/document.
   const detected = await dispatch(
-    { type: "webmcp.detected", origin: "https://tooled.example", url: "https://tooled.example/page", toolCount: 2 },
-    contentSender(1, "https://tooled.example/page"),
+    { type: "webmcp.detected", origin: "https://same.example", url: "https://same.example/tools", toolCount: 2 },
+    contentSender(1, "https://same.example/tools"),
   );
   assertEquals(detected?.ok, true);
 
   picker = await dispatch({ type: "agent.discoverable-tabs" });
   assertEquals(picker?.ok !== false, true, "the route answers");
-  assertEquals(picker.tabs?.length, 1, "the explicit picker only includes known WebMCP origins");
-  assertEquals(picker.tabs?.[0]?.origin, "https://tooled.example");
+  assertEquals(picker.tabs?.length, 1, "only the reporting document is listed");
+  assertEquals(picker.tabs?.[0]?.origin, "https://same.example");
+  assertEquals(picker.tabs?.[0]?.id, 1, "the same-origin plain tab cannot borrow the tools report");
   assertEquals(picker.tabs?.[0]?.toolCount, 2, "the passive capability count rides along");
 
   const proactive = await dispatch({ type: "agent.discoverable-tabs", toolsOnly: true });
   assertEquals(proactive?.tabs, picker.tabs, "toolsOnly no longer changes picker eligibility");
-  assert((picker.tabs ?? []).every((t) => t.origin !== "https://plain.example"));
+  assert((picker.tabs ?? []).every((t) => t.id !== 2));
 
   // Never trust a payload that claims a different origin than Chrome's sender.
   const spoof = await dispatch(
     { type: "webmcp.detected", origin: "https://victim.example", url: "https://victim.example/", toolCount: 9 },
-    contentSender(2, "https://plain.example/page"),
+    contentSender(2, "https://same.example/plain"),
   );
   assertEquals(spoof?.ok, false);
   picker = await dispatch({ type: "agent.discoverable-tabs" });
   assertEquals(picker.tabs?.some((t) => t.origin === "https://victim.example"), false);
 
-  // A later zero snapshot removes an origin whose page stopped exposing tools.
+  // Browser-attested navigation changes the document identity immediately;
+  // the old /tools report cannot keep the new /plain document listed.
+  openTabs[0].url = "https://same.example/plain";
+  frameDocuments.set(1, "doc-1-navigation");
+  picker = await dispatch({ type: "agent.discoverable-tabs" });
+  assertEquals(picker.tabs?.length, 0, "navigating the reporting tab removes its picker row");
+
+  // A later zero snapshot removes the reporting tab's persisted document too.
   await dispatch(
-    { type: "webmcp.detected", origin: "https://tooled.example", url: "https://tooled.example/page", toolCount: 0 },
-    contentSender(1, "https://tooled.example/page"),
+    { type: "webmcp.detected", origin: "https://same.example", url: "https://same.example/plain", toolCount: 0 },
+    contentSender(1, "https://same.example/plain"),
   );
   picker = await dispatch({ type: "agent.discoverable-tabs" });
-  assertEquals(picker.tabs?.length, 0, "a zero snapshot removes the stale capability");
+  assertEquals(picker.tabs?.length, 0, "a zero snapshot keeps the stale capability removed");
 });

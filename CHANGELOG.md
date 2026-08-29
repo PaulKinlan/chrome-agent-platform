@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.406] — 2026-08-29
+- fix(webmcp): scope passive detections to documents
+
 ## [0.2.405] — 2026-08-29
 - fix(webmcp): authenticate passive detector snapshots
 

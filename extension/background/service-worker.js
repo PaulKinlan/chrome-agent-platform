@@ -4983,12 +4983,16 @@ const handlers = mergeRouteMaps(
         continue;
       }
       if (!origin || !/^https?:/.test(origin)) continue;
-      // Every discovery surface is fed by the passive detection registry. A
-      // generic web tab is never an enrollment candidate merely because it is
-      // open; its origin must have recently reported at least one site tool.
+      // Match the browser's CURRENT top-level document, not merely its origin:
+      // another same-origin tab/document cannot borrow this page's detection.
       const detected = known.get(origin);
       if (!detected) continue;
-      const toolCount = detected.toolCount;
+      const frame = await chrome.webNavigation.getFrame({ tabId: t.id, frameId: 0 }).catch(() => null);
+      const document = detected.documents.find((item) =>
+        item.tabId === t.id && item.documentId === frame?.documentId
+      );
+      if (!document) continue;
+      const toolCount = document.toolCount;
       out.push({
         id: t.id,
         title: String(t.title ?? "").slice(0, 200),
@@ -5263,7 +5267,18 @@ const handlers = mergeRouteMaps(
     if (!senderTab?.url || canonicalOrigin(senderTab.url) !== canonical) {
       return { ok: false, error: "sender tab origin mismatch" };
     }
-    return { ok: true, ...(await reportWebmcpDetection(canonical, senderTab.url, toolCount)) };
+    if (
+      __sender?.documentLifecycle !== "active" ||
+      typeof __sender.documentId !== "string" ||
+      typeof __sender.url !== "string"
+    ) return { ok: false, error: "invalid detection document" };
+    return {
+      ok: true,
+      ...(await reportWebmcpDetection(canonical, __sender.url, toolCount, {
+        tabId: __sender.tabId,
+        documentId: __sender.documentId,
+      })),
+    };
   },
   async "tools.upsert"({ origin, tools, seq, epoch, pageUrl, title, __sender }) {
     const canonical = canonicalOrigin(origin);
@@ -7265,6 +7280,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         documentLifecycle: typeof sender?.documentLifecycle === "string"
           ? sender.documentLifecycle
           : null,
+        url: typeof sender?.url === "string" ? sender.url : null,
       },
     };
   } else if (auth.kind === "unmatched") {
