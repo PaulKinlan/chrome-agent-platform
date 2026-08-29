@@ -173,7 +173,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P0 | IN_REVIEW | [`CAP-FB-20260829-MIC-DEAD-MACOS-01`](#cap-fb-20260829-mic-dead-macos-01-mic-button-is-completely-dead-on-macos-after-the-waveform-change) | Mic button is completely dead on macOS after the waveform change |
 | P0 | DONE | [`CAP-FB-20260829-MAIN-GATES-RED-03`](#cap-fb-20260829-main-gates-red-03-the-journey-suite-is-red-on-main-49-checks-still-assert-the-pre-p0-all-optional-permission-model) | Journey suite red on main — 49 checks assert the pre-P0 permission model |
 | P0 | IN_REVIEW | [`CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01`](#cap-fb-20260829-tool-argument-robustness-01-tool-call-argument-robustness-and-schema-accuracy) | Tool-call argument robustness and schema accuracy |
-| P1 | IN_REVIEW | [`CAP-FB-20260829-AGENT-BOARD-01`](#cap-fb-20260829-agent-board-01-the-shared-jobs-board-agents-post-and-claim-work) | The shared jobs board — agents post and claim work |
+| P1 | DONE | [`CAP-FB-20260829-AGENT-BOARD-01`](#cap-fb-20260829-agent-board-01-the-shared-jobs-board-agents-post-and-claim-work) | The shared jobs board — agents post and claim work |
 | P1 | IN_REVIEW | [`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`](#cap-fb-20260829-create-dialog-declutter-01-create-agent-dialog-is-cluttered-and-its-scheduletheme-controls-are-inconsistent) | Create-agent dialog is cluttered and its schedule/theme controls are inconsistent |
 | P0 | OPEN | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
 | P0 | OPEN | [`CAP-FB-20260827-HUB-FIRST-RUN-01`](#cap-fb-20260827-hub-first-run-01-the-first-screen-is-an-onboarding-wall-not-a-command-center) | The first screen is an onboarding wall, not a command center |
@@ -1499,14 +1499,20 @@ evidence every other task depends on).
 ## [CAP-FB-20260829-AGENT-BOARD-01] The shared jobs board: agents post and claim work
 - Feedback: 2026-08-29 — owner voice note: "agents should be able to ask other agents for work… the chaos extension had a shared message board and a shared jobs board"
 - Updated: 2026-08-29 UTC
-- Status: IN_REVIEW
+- Status: DONE
 - Priority: P1
 - Owner: coordinator session
 - Workspace: worker lane
 - Branch: cap-agent-board
 - Base: `c6406cc7`
-- Candidate: see lane evidence at `~/.local/state/chrome-agent-platform/agent-board/`
-- Shipping: —
+- Candidate: `cdb8b491` (r5) — landed as merge `54d70a9b`
+- Shipping: 0.2.400
+- Acceptance: six management tools, claim lease/expiry, blockedBy DAG, delivery to poster thread, Tasks sidebar Board section
+- Review: independent reviewer PASS (round 6); six rounds closed data-integrity findings (fold divergence, forgeable keys, destructive reads, eviction, admission reserve, claim churn, drain kick)
+- Gates: suite 2358/0 at merge, board KAT 22/22, build green
+- Blockers: none
+- Next: per-edge deny layer (deferred), idle-agent wake (deferred)
+- Recover: revert merge `54d70a9b`
 - What it is: the async/broadcast complement to `delegate_to_agent`. A hub-level
   event-sourced board (jobs + messages logs in the master memory tier) where any
   named agent or the hub posts work, and any capable agent claims it (atomic
