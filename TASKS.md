@@ -170,6 +170,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 | Priority | Status | Task | What it is |
 |---|---|---|---|
+| P0 | IN_REVIEW | [`CAP-FB-20260829-MIC-DEAD-MACOS-01`](#cap-fb-20260829-mic-dead-macos-01-mic-button-is-completely-dead-on-macos-after-the-waveform-change) | Mic button is completely dead on macOS after the waveform change |
 | P0 | DONE | [`CAP-FB-20260829-MAIN-GATES-RED-03`](#cap-fb-20260829-main-gates-red-03-the-journey-suite-is-red-on-main-49-checks-still-assert-the-pre-p0-all-optional-permission-model) | Journey suite red on main — 49 checks assert the pre-P0 permission model |
 | P1 | IN_REVIEW | [`CAP-FB-20260829-AGENT-BOARD-01`](#cap-fb-20260829-agent-board-01-the-shared-jobs-board-agents-post-and-claim-work) | The shared jobs board — agents post and claim work |
 | P0 | OPEN | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
@@ -1590,5 +1591,26 @@ evidence every other task depends on).
 - Recover: `git grep -n "customElements.define" -- extension/shared/components.js`
 - History:
   - 2026-08-27 23:30 UTC — five custom elements are defined and shipped in `extension/shared/components.js` but referenced only by `docs/components.html`, never by any extension page: `theme-picker`, `run-task-button`, `tool-chips`, `prompt-bar`, `agent-nav`. `theme-picker` is straightforward dead code — theme switching was removed at `0.2.301` and the component was left behind, which is a miss against the owner's own cross-subsystem-consistency rule. The others are unbuilt primitives; `tool-chips` in particular may be exactly what the tool-card redesign needs, so it is called out as a blocker rather than deleted.
+
+## [CAP-FB-20260829-MIC-DEAD-MACOS-01] Mic button is completely dead on macOS after the waveform change
+- Feedback: 2026-08-29 — product owner reports that clicking the microphone icon has no visible effect, error, or transcription on macOS Chrome
+- Updated: 2026-08-29 20:30 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: implementation worker
+- Workspace: active (local path private)
+- Branch: `cap-mic-fix`
+- Base: `54d70a9bb0041b9b40225003c8470256beea77e2`
+- Candidate: this tracker commit
+- Shipping: —
+- Acceptance: SpeechRecognition starts in the click turn without awaiting the decorative `getUserMedia` meter; rejected or never-settling meter acquisition leaves dictation and a visible CSS fallback active; meter rejection surfaces in the composer's live status; late streams remain generation-fenced and stopped after stop, hide, pagehide, or detach; reduced motion stays static
+- Review: required by reviewer — pending
+- Gates: focused component test 9/9; real-browser mic KAT 43/43 with rejection/hang screenshots; `nice -n 10 deno test --allow-all tests/` 2359 pass / 0 fail; `npm run build` clean (95 generated files identical, 28 packages, CSP/oracle/Wasm assertions green)
+- Blockers: —
+- Next: reviewer checks the candidate diff and browser evidence, then the coordinator lands it without a manual version bump
+- Recover: `git show cap-mic-fix -- extension/shared/components.js scripts/kat-mic-state.ts tests/mic-button-state.test.ts`
+- History:
+  - 2026-08-29 20:30 UTC — diagnosis: commit `ce6247ef` changed `start()` to await `_requestMicStream()` before constructing and starting SpeechRecognition. The composer already displays `mic-error` through `setStatus`, and the real NTP KAT proves `offsetParent` is non-null in the visible layout. Falsification on the unfixed source produced 39 pass / 4 fail: a rejected meter left the button idle with the old permission error, a never-settling meter left it idle indefinitely, and recognition did not start in either case. The candidate starts recognition first, renders the CSS fallback immediately, then adopts the meter stream asynchronously under the existing generation guard. Rejection leaves recognition active and reports only that the live waveform is unavailable; late streams are stopped after cancellation. Green evidence: focused 9/9, mic KAT 43/43, full unit 2359/0, final build clean.
 
 

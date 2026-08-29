@@ -11,12 +11,13 @@
 // REAL (Chromium's fake audio device emits a tone), so the waveform is
 // genuinely level-driven in this run.
 
-import { launchChrome } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? "/tmp/cap-mic-state-kats";
-const CHROMIUM = "/usr/bin/chromium";
+// Arch Chromium ignores --load-extension; Chrome for Testing honors it.
+const CHROMIUM = "/home/paulkinlan/.cache/puppeteer/chrome/linux-140.0.7339.82/chrome-linux64/chrome";
 
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail?: unknown) {
@@ -49,9 +50,8 @@ ws.onmessage = (m) => {
   if (j.id && pending.has(String(j.id))) { pending.get(String(j.id))!(j); pending.delete(String(j.id)); }
 };
 
-const { result: { targetInfos } } = await send("Target.getTargets");
-const sw = targetInfos.find((t: any) => t.type === "service_worker");
-if (!sw) { console.log("FAIL: no service worker target"); Deno.exit(1); }
+const sw = await waitForServiceWorker(send);
+if (!sw) { console.log("FAIL: no service worker target"); proc.kill(); Deno.exit(1); }
 const extId = new URL(sw.url).host;
 
 const { result: { targetId } } = await send("Target.createTarget", { url: `chrome-extension://${extId}/ntp/ntp.html` });
@@ -119,6 +119,7 @@ const micState = `(() => {
     ctxState: host._audioCtx ? host._audioCtx.state : null,
     srStarted: window.__fakeSR ? window.__fakeSR.started : -1,
     srStopped: window.__fakeSR ? window.__fakeSR.stopped : -1,
+    composerStatus: document.querySelector("#composer .composer-status")?.textContent || "",
   };
 })()`;
 
@@ -365,33 +366,63 @@ check("pending-cancel: stop() during a pending getUserMedia prevents the late re
 check("pending-cancel: the late stream's tracks are STOPPED, not leaked",
   late.lateTrackState === "ended", late);
 
-// 16 ─ a second click while pending supersedes the first start (double-click)
+// 16 ─ double-click while the decorative stream is pending starts then stops
+// recognition immediately; the late stream is still released.
+const srStopsBeforeDouble = (await evalJs(micState)).srStopped;
 await evalJs(clickMic); await sleep(150);
 await evalJs(clickMic); await sleep(150);
 const dbl = await evalJs(`(async () => {
-  const s1 = await window.__origGum({ audio: true });
-  const s2 = await window.__origGum({ audio: true });
-  const c1 = s1.clone(); const c2 = s2.clone();
-  window.__pending.shift()(c1);
-  await new Promise((r) => setTimeout(r, 200));
-  window.__pending.shift()(c2);
-  await new Promise((r) => setTimeout(r, 500));
+  const s = await window.__origGum({ audio: true });
+  const clone = s.clone();
+  window.__pending.shift()(clone);
+  await new Promise((r) => setTimeout(r, 400));
   const host = document.querySelector("#composer mic-button");
   const res = {
-    c1State: c1.getTracks()[0].readyState,
-    c2State: c2.getTracks()[0].readyState,
+    trackState: clone.getTracks()[0].readyState,
     listening: host._listening,
     hostAttr: host.hasAttribute("listening"),
+    retained: host._mediaStream === clone,
+    srStopped: window.__fakeSR.stopped,
   };
-  s1.getTracks().forEach((t) => t.stop()); s2.getTracks().forEach((t) => t.stop());
+  s.getTracks().forEach((t) => t.stop());
   return res;
 })()`);
-check("double-click pending: the superseded first stream is STOPPED (never orphaned), the second start wins",
-  dbl.c1State === "ended" && dbl.listening === true && dbl.hostAttr === true, dbl);
-check("double-click pending: the winning stream stays live", dbl.c2State === "live", dbl);
-await evalJs(`(() => { navigator.mediaDevices.getUserMedia = window.__origGum; document.querySelector("#composer mic-button").stop(); return true; })()`);
+check("double-click pending: the second click stops dictation instead of waiting for the meter",
+  dbl.listening === false && dbl.hostAttr === false && dbl.srStopped > srStopsBeforeDouble, dbl);
+check("double-click pending: the late stream is STOPPED and never retained",
+  dbl.trackState === "ended" && dbl.retained === false, dbl);
+
+// 17 ─ getUserMedia rejection affects only the decorative meter. Recognition
+// starts, the fallback waveform is visible, and the composer tells the owner.
+await evalJs(`navigator.mediaDevices.getUserMedia = () => Promise.reject(new DOMException("denied", "NotAllowedError")); true`);
+const srBeforeReject = (await evalJs(micState)).srStarted;
+await evalJs(clickMic); await sleep(400);
+const rejectedMeter = await evalJs(micState);
+check("meter rejection: recognition starts and visible fallback recording state remains active",
+  rejectedMeter.srStarted === srBeforeReject + 1 && rejectedMeter.dataListening === true &&
+  rejectedMeter.waveDisplay !== "none" && rejectedMeter.mode === "fallback", rejectedMeter);
+check("meter rejection: failure is visible in the composer without claiming dictation failed",
+  /waveform unavailable/i.test(rejectedMeter.composerStatus) && /dictation continues/i.test(rejectedMeter.composerStatus),
+  rejectedMeter.composerStatus);
+await evalJs(`document.querySelector("#composer mic-button").scrollIntoView({ block: "center" }); true`);
+await sleep(200);
+await shot("09-meter-rejected-fallback");
+await evalJs(clickMic); await sleep(300);
+
+// 18 ─ a never-settling getUserMedia promise cannot hold the primary function
+// hostage: recognition and the fallback recording affordance start immediately.
+await evalJs(`navigator.mediaDevices.getUserMedia = () => new Promise(() => {}); true`);
+const srBeforeHang = (await evalJs(micState)).srStarted;
+await evalJs(clickMic); await sleep(250);
+const hangingMeter = await evalJs(micState);
+check("meter hang: recognition starts without waiting and the fallback state is visible",
+  hangingMeter.srStarted === srBeforeHang + 1 && hangingMeter.dataListening === true &&
+  hangingMeter.waveDisplay !== "none" && hangingMeter.mode === "fallback", hangingMeter);
+await evalJs(`document.querySelector("#composer mic-button").scrollIntoView({ block: "center" }); true`);
+await sleep(200);
+await shot("10-meter-hanging-fallback");
+await evalJs(`(() => { document.querySelector("#composer mic-button").stop(); navigator.mediaDevices.getUserMedia = window.__origGum; return true; })()`);
 await sleep(400);
-await shot("09-after-pending-cancels");
 
 console.log(`${pass} passed, ${fail} failed`);
 proc.kill();

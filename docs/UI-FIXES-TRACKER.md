@@ -126,6 +126,7 @@ one line each here:
 - The media bytes reach the model (the multimodal image part) + render inline in the thread.
 
 ### Conversation / thread
+- **macOS mic dead after waveform change (2026-08-29, CAP-FB-20260829-MIC-DEAD-MACOS-01 — candidate):** dictation no longer awaits the decorative `getUserMedia` meter. SpeechRecognition and the fallback waveform start immediately; a rejected meter leaves dictation active and surfaces “live microphone waveform unavailable — dictation continues” through the existing composer status. The real-browser KAT proves rejected and never-settling meter requests red on the prior tree and green on the candidate while preserving hide/stop/detach/reduced-motion races.
 - The unified thread surface (Run task → a full-screen thread; the sidebar persists; the current thread selected).
 - A single visible view (the hub hidden + the body scroll frozen when a thread/overlay opens — no background scrollbar).
 - One conversation-owned run-status surface (the shared `<conversation-run-status>` pixel grid: queued / running / retrying / waiting-for-permission / completed / failed / cancelled + the live tool activity) at the BOTTOM of the thread, below the transcript and above the composer; the legacy top-of-thread banner and the duplicate generic thinking spinner are removed (CAP-FB-20260819-CONVERSATION-RUN-STATUS-01).

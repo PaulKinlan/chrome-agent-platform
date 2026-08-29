@@ -114,7 +114,7 @@ function installFakeSR() {
     }
     start() { this.started++; }
     stop() { this.stopped++; }
-    abort() {}
+    abort() { this.aborted = (this.aborted || 0) + 1; }
   }
   window.SpeechRecognition = FakeSR;
   window.webkitSpeechRecognition = FakeSR;
@@ -122,22 +122,41 @@ function installFakeSR() {
 }
 
 // ── P1-a: pending getUserMedia must be cancellable ─────────────────────────
-Deno.test("mic state: stop() during a PENDING getUserMedia cancels the start — no late recording, no leaked stream", async () => {
+Deno.test("mic state: SpeechRecognition starts without waiting for a PENDING meter stream, and stop releases the late stream", async () => {
   const { el } = makeMic();
   const srMade = installFakeSR();
   const gum = deferred();
   navigator.mediaDevices = { getUserMedia: () => gum.promise };
-  const startP = el.start();
-  await tick();
+  await el.start();
+  assertEquals(el._listening, true, "dictation must enter its visible listening state immediately");
+  assertEquals(srMade.length, 1, "recognition must be constructed while the meter request is pending");
+  assertEquals(srMade[0].started, 1, "recognition must start without waiting for the meter");
+  assertEquals(el.waveformMode, "fallback", "the CSS waveform carries the state until a live meter is ready");
   el.stop(); // the send path calls stop() unconditionally on accepted send
   const stream = fakeStream();
   gum.resolve(stream);
-  await startP;
-  assertEquals(el._listening, false, "must not enter listening after stop() during pending");
-  assertEquals(el.hasAttribute("listening"), false, "the listening attribute must never be set");
+  await tick();
+  assertEquals(el._listening, false, "stop() must leave dictation idle");
+  assertEquals(el.hasAttribute("listening"), false, "the listening attribute must be removed");
   assertEquals(stream.tracks[0].stopped, 1, "the late stream must be stopped, not leaked");
   assertEquals(el._mediaStream, null, "the late stream must not be retained");
-  assertEquals(srMade.length, 0, "recognition must not even be constructed");
+  assertEquals(srMade[0].stopped, 1, "recognition must be stopped independently of the pending meter");
+});
+
+Deno.test("mic state: a rejected meter stream keeps recognition running with a visible fallback", async () => {
+  const { el, events } = makeMic();
+  const srMade = installFakeSR();
+  navigator.mediaDevices = { getUserMedia: () => Promise.reject(new DOMException("denied", "NotAllowedError")) };
+  await el.start();
+  await tick();
+  assertEquals(el._listening, true, "meter permission must not block dictation");
+  assertEquals(srMade[0].started, 1);
+  assertEquals(el.waveformMode, "fallback");
+  assert(
+    events.some((e) => e.type === "mic-error" && /dictation continues/.test(e.detail?.message ?? "")),
+    "the owner must be told that only the live waveform failed",
+  );
+  el.stop();
 });
 
 Deno.test("mic state: disconnect during a PENDING getUserMedia cancels the start and releases the late stream", async () => {
@@ -151,14 +170,17 @@ Deno.test("mic state: disconnect during a PENDING getUserMedia cancels the start
   const stream = fakeStream();
   gum.resolve(stream);
   await startP;
+  await tick();
   assertEquals(el._listening, false);
   assertEquals(el.hasAttribute("listening"), false);
   assertEquals(stream.tracks[0].stopped, 1, "the late stream must be stopped after disconnect");
   assertEquals(el._mediaStream, null);
-  assertEquals(srMade.length, 0);
+  assertEquals(srMade.length, 1, "recognition starts before the decorative stream request");
+  assertEquals(srMade[0].started, 1);
+  assertEquals(srMade[0].aborted, 1, "disconnect aborts recognition while the meter is pending");
 });
 
-Deno.test("mic state: a second click during a PENDING getUserMedia supersedes the first — the first stream is stopped, never orphaned", async () => {
+Deno.test("mic state: a newer start during PENDING getUserMedia supersedes the first — the first stream is stopped, never orphaned", async () => {
   const { el } = makeMic();
   installFakeSR();
   const gums = [deferred(), deferred()];
@@ -170,8 +192,10 @@ Deno.test("mic state: a second click during a PENDING getUserMedia supersedes th
   const streamB = fakeStream();
   gums[0].resolve(streamA);
   await p1;
+  await tick();
   gums[1].resolve(streamB);
   await p2;
+  await tick();
   assertEquals(streamA.tracks[0].stopped, 1, "the superseded stream must be stopped");
   assertEquals(streamB.tracks[0].stopped, 0, "the winning stream stays open");
   assertEquals(el._mediaStream, streamB, "the live stream is the second start's");
@@ -190,10 +214,12 @@ Deno.test("mic state: composer hidden while getUserMedia is PENDING — the late
   const stream = fakeStream();
   gum.resolve(stream);
   await startP;
+  await tick();
   assertEquals(el._listening, false, "must not start recording into a hidden composer");
   assertEquals(el.hasAttribute("listening"), false);
   assertEquals(stream.tracks[0].stopped, 1, "the late stream must be stopped");
-  assertEquals(srMade.length, 0);
+  assertEquals(srMade.length, 1, "recognition starts before the decorative stream request");
+  assertEquals(srMade[0].stopped, 1, "the hidden-composer guard stops recognition");
   assert(
     events.some((e) => e.type === "mic-error" && /hidden/.test(e.detail?.message ?? "")),
     "the owner must be told why the recording did not start",
@@ -212,11 +238,13 @@ Deno.test("mic state: PAGEHIDE while getUserMedia is PENDING invalidates the sta
   const stream = fakeStream();
   gum.resolve(stream);
   await startP;
+  await tick();
   assertEquals(el._listening, false, "must not record into a hidden page");
   assertEquals(el.hasAttribute("listening"), false, "the listening attribute must never be set");
   assertEquals(stream.tracks[0].stopped, 1, "the late stream must be stopped, not leaked");
   assertEquals(el._mediaStream, null, "the late stream must not be retained");
-  assertEquals(srMade.length, 0, "recognition must not even be constructed");
+  assertEquals(srMade.length, 1, "recognition starts before the decorative stream request");
+  assertEquals(srMade[0].stopped, 1, "pagehide stops recognition while the meter is pending");
 });
 
 // ── P1-b: disconnect must not leave a false recording affordance ───────────

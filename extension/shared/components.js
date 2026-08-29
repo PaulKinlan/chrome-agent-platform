@@ -961,16 +961,12 @@ class MicButton extends Component {
     };
     window.addEventListener("pagehide", this._onPageHide);
   }
-  /** Request the microphone stream BEFORE starting recognition. The Web
-   *  Speech API can start "successfully" with no audio when the mic permission
-   *  is missing (the symptom Paul hit: the mic opens but NO text comes out, no
-   *  error surfaced). Requesting getUserMedia audio first (a) grants the
-   *  permission inside this click gesture and (b) lets us fail LOUDLY if the
-   *  mic is denied instead of silently never producing a transcript.
-   *  Returns true (no mediaDevices API — let SpeechRecognition try), false
-   *  (denied), or the MediaStream. The stream is NOT assigned here: start()
-   *  only adopts it after the generation check, so a superseded/cancelled
-   *  start can release a late-resolving stream instead of leaking it. */
+  /** Request a stream for the decorative level meter. SpeechRecognition owns
+   *  its own audio capture and must never wait for this promise: on macOS the
+   *  getUserMedia permission prompt can reject or remain pending indefinitely.
+   *  Returns true (no mediaDevices API), false (meter unavailable), or the
+   *  MediaStream. The stream is adopted only after the generation check, so a
+   *  superseded/cancelled start releases a late stream instead of leaking it. */
   async _requestMicStream() {
     const md = navigator.mediaDevices;
     if (!md?.getUserMedia) return true; // no API — let SpeechRecognition try
@@ -981,9 +977,34 @@ class MicButton extends Component {
       // never left open after the state reverts.
       return await md.getUserMedia({ audio: true });
     } catch {
-      this._emit("mic-error", { message: "microphone permission denied — grant mic access to dictate" });
       return false;
     }
+  }
+  async _adoptMeterStream(gen, streamPromise) {
+    const stream = await streamPromise;
+    const stopTracks = (s) => {
+      if (s && s !== true) { try { s.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ } }
+    };
+    if (gen !== this._startGen || !this._listening) {
+      stopTracks(stream);
+      return;
+    }
+    if (stream === false) {
+      this._emit("mic-error", { message: "live microphone waveform unavailable — dictation continues" });
+      return;
+    }
+    if (stream === true) return;
+    // The composer may hide while the meter permission prompt is pending.
+    // Recognition has already started, so stop the PRIMARY capture too.
+    if (this._button && this._button.offsetParent === null) {
+      stopTracks(stream);
+      this._emit("mic-error", { message: "recording stopped — the composer was hidden" });
+      this.stop();
+      return;
+    }
+    if (this._mediaStream && this._mediaStream !== stream) stopTracks(this._mediaStream);
+    this._mediaStream = stream;
+    this._startMeter();
   }
   /** Drive the wave bars from the real mic level. Falls back to the CSS
    *  animation (honest "recording", not a fake meter) when AudioContext or
@@ -1056,31 +1077,12 @@ class MicButton extends Component {
       this._emit("mic-error", { message: "speech recognition not available in this browser" });
       return;
     }
-    const gen = ++this._startGen;
-    const stream = await this._requestMicStream();
-    const stopTracks = (s) => {
-      if (s && s !== true) { try { s.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ } }
-    };
-    if (gen !== this._startGen) {
-      // stop()/disconnect/a second click happened while the permission request
-      // was in flight — the owner already cancelled this start. Release the
-      // late stream; never enter the recording state.
-      stopTracks(stream);
-      return;
-    }
-    if (stream === false) return;
-    if (stream !== true) {
-      if (this._mediaStream && this._mediaStream !== stream) stopTracks(this._mediaStream);
-      this._mediaStream = stream;
-    }
-    // The composer was hidden (view switch) while the permission request was
-    // in flight — never start a background recording the owner can't see.
+    // Never prompt or start capture for a composer that is already hidden.
     if (this._button && this._button.offsetParent === null) {
-      stopTracks(this._mediaStream);
-      this._mediaStream = null;
       this._emit("mic-error", { message: "recording stopped — the composer was hidden" });
       return;
     }
+    const gen = ++this._startGen;
     if (!this._recognition) {
       this._recognition = new SR();
       this._recognition.continuous = true;
@@ -1157,13 +1159,20 @@ class MicButton extends Component {
     this._restartTimes = [];
     this.setAttribute("listening", TRUE);
     this._emit("mic-toggle", { listening: true });
+    // Show the CSS fallback immediately. A late live stream upgrades it to an
+    // AnalyserNode meter; failure leaves this honest recording affordance.
     this._startMeter();
     try {
       this._recognition.start();
     } catch (err) {
       this._emit("mic-error", { message: "could not start speech recognition: " + (err?.message || err) });
       this.stop();
+      return;
     }
+    // Recognition is primary and is already running. Kick the decorative
+    // meter request off inside the same click gesture, but never await it.
+    const streamPromise = this._requestMicStream();
+    void this._adoptMeterStream(gen, streamPromise);
   }
   stop() {
     this._startGen++; // invalidate any in-flight start (send-while-pending)
