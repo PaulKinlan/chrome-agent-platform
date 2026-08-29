@@ -9,6 +9,7 @@ import { send } from "../lib/messages.js";
 import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, templatePrefill } from "../lib/agent-templates.js";
 import { projectUnifiedAgents } from "../lib/named-agents.js";
 import { schedulePreviewText } from "../lib/schedule-preview.js";
+import { parseEnglishSchedule } from "../shared/schedule-parser.js";
 import { selectFailedRuns } from "../lib/run-retry.js";
 import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript } from "../shared/conversation.js";
 import { createRunSurfaceOwner } from "../shared/run-surface-owner.js";
@@ -2113,7 +2114,9 @@ function openQuickCreateAgent() {
         name: v.name, role: v.role, avatar: v.avatar, skills: v.skills, coreAssets: v.coreAssets,
         canDelegateTo: v.canDelegateTo, schedule: v.schedule,
       }).catch(() => ({ ok: false }));
-      return r?.ok ? { ok: true, id: r.agent?.id ?? v.name, firstTask: v.firstTask } : { ok: false, error: r?.error ?? "unknown" };
+      return r?.ok
+        ? { ok: true, id: r.agent?.id ?? v.name, firstTask: v.firstTask, scheduleError: r.scheduleError }
+        : { ok: false, error: r?.error ?? "unknown" };
     },
     onSaved: async (result) => {
       renderNamedAgents();
@@ -2251,7 +2254,8 @@ async function buildAgentConfigDialog(opts) {
       roleField.el.value = pre.role;
       // A background template is just an agent WITH a schedule (the unified
       // model): prefill the schedule field; an on-demand template clears it.
-      scheduleField.el.value = pre.schedule ? String(pre.schedule.periodInMinutes) : "";
+      scheduleField.el.value = pre.schedule ? `every ${pre.schedule.periodInMinutes} minutes` : "";
+      scheduleField.el.dispatchEvent(new Event("input", { bubbles: true }));
       // Suggested skills: CHECK the template's suggestions on top of whatever
       // the owner already picked — removal is theirs (full specialization).
       for (const [id, cb] of skillChecks) {
@@ -2381,22 +2385,36 @@ async function buildAgentConfigDialog(opts) {
   skillsDetails.append(skillsList);
   advancedBody.append(skillsDetails);
 
-  // ── Optional schedule (ONE agent concept, owner directive 2026-08-28): an
-  // agent is persona + skills + memory + an OPTIONAL schedule. Empty = an
-  // on-demand agent; a number of minutes = the agent runs on a recurring
-  // alarm. Background templates prefill this; it stays fully editable.
-  const scheduleField = configField("Run on a schedule (every N minutes — empty = on demand)", "input", opts.schedule != null ? String(opts.schedule) : "", 1);
-  scheduleField.el.type = "number";
-  scheduleField.el.min = "1";
-  scheduleField.el.step = "1";
-  scheduleField.el.id = "agent-schedule-minutes";
-  scheduleField.el.placeholder = "on demand";
-  const scheduleHint = document.createElement("p");
-  scheduleHint.id = "agent-schedule-hint";
-  scheduleHint.textContent = "With a schedule the agent runs itself recurringly — same persona, skills, and memory as its on-demand runs.";
-  scheduleHint.style.cssText = "font-size:12px;color:var(--muted,#635e56);margin:4px 0 0;";
-  scheduleField.wrap.append(scheduleHint);
+  // Optional interval schedule, entered in the owner's language. The parser is
+  // local and deterministic; unsupported calendar timing is rejected rather
+  // than approximated into a recurrence that would fire on the wrong days.
+  const initialScheduleText = opts.schedule != null ? `every ${opts.schedule} minutes` : "";
+  const scheduleField = configField("Run on a schedule", "input", initialScheduleText, 1);
+  scheduleField.el.id = "agent-schedule";
+  scheduleField.el.placeholder = "every couple of minutes";
+  scheduleField.el.setAttribute("aria-describedby", "agent-schedule-feedback");
+  const scheduleFeedback = document.createElement("p");
+  scheduleFeedback.id = "agent-schedule-feedback";
+  scheduleFeedback.setAttribute("role", "status");
+  scheduleFeedback.setAttribute("aria-live", "polite");
+  scheduleFeedback.style.cssText = "font-size:12px;color:var(--muted,#635e56);margin:4px 0 0;min-height:1.4em;";
+  const updateScheduleFeedback = () => {
+    const parsed = parseEnglishSchedule(scheduleField.el.value);
+    if (parsed.error) {
+      scheduleFeedback.textContent = `${parsed.error} Try: every 10 minutes / every hour`;
+      scheduleFeedback.style.color = "var(--warning,#9a6700)";
+      scheduleField.el.setAttribute("aria-invalid", "true");
+    } else {
+      scheduleFeedback.textContent = parsed.interpretation;
+      scheduleFeedback.style.color = "var(--muted,#635e56)";
+      scheduleField.el.removeAttribute("aria-invalid");
+    }
+    return parsed;
+  };
+  scheduleField.el.addEventListener("input", updateScheduleFeedback);
+  scheduleField.wrap.append(scheduleFeedback);
   advancedBody.append(scheduleField.wrap);
+  updateScheduleFeedback();
 
   // Context files: files whose content becomes part of the agent's context.
   // "Assets" is not a user-facing word. These are NOT artifacts (agent
@@ -2562,16 +2580,19 @@ async function buildAgentConfigDialog(opts) {
         skills.push(s ? { id: s.id ?? s.name, name: s.name ?? s.id, description: s.description ?? "" } : { id, name: id });
       }
     }
+    const parsedSchedule = parseEnglishSchedule(
+      scheduleField.el.value,
+      // A background template carries its own recurring prompt; a manual
+      // schedule falls back to the SW's role-derived default.
+      selectedTemplate?.schedule?.prompt ?? null,
+    );
+    if (parsedSchedule.error) {
+      updateScheduleFeedback();
+      scheduleField.el.focus();
+      return;
+    }
     saveBtn.disabled = true;
-    const schedMinutes = Number(scheduleField.el.value);
-    const schedule = Number.isFinite(schedMinutes) && schedMinutes >= 1
-      ? {
-          periodInMinutes: Math.floor(schedMinutes),
-          // A background template carries its own recurring prompt; a manual
-          // schedule falls back to the SW's role-derived default.
-          task: selectedTemplate?.schedule?.prompt ?? null,
-        }
-      : null;
+    const schedule = parsedSchedule.schedule;
     const canDelegateTo = [...delegChecks.entries()].filter(([, cb]) => cb.checked).map(([id]) => id);
     const r = await opts.onSave({
       name, role, avatar: avatarValue, skills, coreAssets,
@@ -2581,7 +2602,12 @@ async function buildAgentConfigDialog(opts) {
     saveBtn.disabled = false;
     if (r?.ok) {
       dialog.close();
-      setStatus(`Agent “${name}” saved.`);
+      setStatus(
+        r.scheduleError
+          ? `Agent “${name}” saved, but its schedule was not created: ${r.scheduleError}`
+          : `Agent “${name}” saved.`,
+        !r.scheduleError,
+      );
       await opts.onSaved?.(r);
     } else {
       setStatus(`Save failed: ${r?.error ?? "unknown"}`, false);

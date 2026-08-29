@@ -1394,6 +1394,7 @@ evidence every other task depends on).
 - Next: finish the four atomic concerns, run falsification and browser gates, then request review
 - Recover: `git log --oneline --all --grep CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`
 - History:
+  - 2026-08-29 20:45 UTC — schedule input now parses deterministic interval English into the existing period/task shape, presents the interpretation in a polite inline status, and blocks garbage or calendar timing the interval-only scheduler cannot represent; focused parser/dialog tests 10/10
   - 2026-08-29 20:30 UTC — implementation started from current origin/main; the primary name/what-it-does path now precedes one collapsed Advanced disclosure containing avatar, template, persona tools, skills, schedule, delegation and context files
 
 ## [CAP-FB-20260829-TEMPLATE-CARDS-01] Agent templates render as visual cards

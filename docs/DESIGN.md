@@ -54,6 +54,10 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   action. Avatar, template choice, persona tools, skills, schedule, delegation and
   context files remain available under one collapsed Advanced disclosure; progressive
   disclosure reduces scan cost without removing capability.
+- Schedule entry uses deterministic interval English and previews the exact recurrence
+  inline. Unsupported calendar phrases remain invalid because the persisted scheduler
+  has only `periodInMinutes`; the UI never turns a weekday/time phrase into a silently
+  wrong daily interval.
 - Agent templates render through shared `<agent-template-card>`: name, a two-line
   persona summary, at most three skill badges plus an overflow count, and one
   labelled Use action. Curated starters come first and carry the Starter badge.

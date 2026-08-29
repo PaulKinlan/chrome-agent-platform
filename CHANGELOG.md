@@ -1,6 +1,10 @@
 # Changelog
 
+## [0.2.402] — 2026-08-29
+- feat(CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01): parse English schedules
+
 ## [0.2.401] — 2026-08-29
+- Agent schedules now accept plain English such as “every couple of minutes” and “every hour”, show the exact interval before saving, and refuse unsupported or ambiguous calendar text instead of guessing
 - fix(CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01): disclose advanced agent options
 
 ## [0.2.400] — 2026-08-29
