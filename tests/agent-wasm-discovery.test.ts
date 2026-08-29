@@ -148,7 +148,7 @@ Deno.test("master-skill: every cited tool name resolves to a real registry entry
   const management = new Set([
     ...Object.keys(managementToolset({ callRoute: () => Promise.resolve({ ok: true }) })),
     "schedule_task", "delegate_task", "memory_get", "memory_set",
-    "memory_list", "get_usage", "get_memory_overview", "search_tools",
+    "memory_list", "memory_grep", "get_usage", "get_memory_overview", "search_tools",
     "list_tools", "execute_tool", "read_page", "capture_screenshot",
   ]);
   const cited = [...MASTER_SKILL.matchAll(/\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b/g)]

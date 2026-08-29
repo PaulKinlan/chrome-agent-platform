@@ -751,7 +751,7 @@ Deno.test("upgrade WITH override: flagged, the override still applies, and the d
   const reg = upgradedRegistry();
   const d = await describePrompt("hub", { registry: reg });
   assertEquals(d.builtinChanged, true, "the release-update state is detected");
-  assertEquals(d.override.baseVersion, "1.2.0");
+  assertEquals(d.override.baseVersion, "1.3.0");
   assertEquals(d.base.version, "2.0.0");
   assertStringIncludes(d.effective.text, "MY-CUSTOM");
   assertStringIncludes(d.effective.text, "Always name artifacts clearly.");
@@ -1337,4 +1337,60 @@ Deno.test("attestation: an EXPLICIT key attests without the install key state (e
   assertEquals(att.ephemeral, false);
   // The install key was never established as a side effect.
   assertEquals(store.has("cap:attestationKey"), false);
+});
+
+Deno.test("memory doctrine: the registry versions carry the self-organizing memory doctrine", () => {
+  // The doctrine bump is a SEMANTIC version event: the hubs/worker prompts
+  // changed their memory contract, so the registry versions must move
+  // (attestation + Settings preview surface these versions).
+  const hub = PROMPT_REGISTRY.find((p) => p.id === "cap.hub.master");
+  const worker = PROMPT_REGISTRY.find((p) => p.id === "cap.worker.base");
+  assertEquals(hub?.version, "1.3.0", "cap.hub.master carries the doctrine bump");
+  assertEquals(worker?.version, "1.1.0", "cap.worker.base carries the doctrine bump");
+});
+
+Deno.test("memory doctrine: the HUB prompt teaches the self-organizing store (composed path)", () => {
+  // Through the real composition, not the raw constant.
+  const text = baselineSystemPrompt("cap.hub.master");
+  // (a) The living index: read-first + update-after-change + named `index` key.
+  assertStringIncludes(text, "`index`");
+  assert(/read (it |the index )?first/i.test(text), "index is read first");
+  assert(/update (it|the index) after every/i.test(text), "index updated after every change");
+  // (b) Entity keys with the Summary + dated Log shape + cross-references.
+  assert(/Summary/i.test(text) && /Log/i.test(text), "entity keys carry Summary + Log");
+  assert(/cross-referenc/i.test(text) || /see [`']?\w+-\w+/i.test(text), "keys cross-reference by name");
+  // (b2) Hub scope: the doctrine explicitly teaches CROSS-TASK topics and
+  // AGENT-ROSTER knowledge organization (the worker prompt is site-scoped).
+  assert(/cross-task/i.test(text), "hub doctrine covers cross-task topics");
+  assertStringIncludes(text, "agent-roster");
+  // (c) journal stays the raw episodic log — never hand-edited, distilled FROM.
+  assert(/journal/i.test(text) && /never hand-edit/i.test(text), "journal is raw, never hand-edited");
+  // (d) stm:/ltm split: scratch under stm:, durable facts under entity keys.
+  assertStringIncludes(text, "`stm:`");
+  assert(/scratch/i.test(text), "stm: is the scratch prefix");
+  // (e) Recall discipline: grep before answering from assumption.
+  assert(/memory_grep/.test(text) && /assumption/i.test(text), "grep before assumption");
+  // (f) Self-restructuring with a truthful index.
+  assert(/reorganiz/i.test(text), "agents may reorganize their store");
+});
+
+Deno.test("memory doctrine: the WORKER base teaches the same conventions, site-scoped", () => {
+  const text = baselineSystemPrompt("cap.worker.base");
+  assertStringIncludes(text, "`index`");
+  assertStringIncludes(text, "`stm:`");
+  assert(/never\s+hand-edit/i.test(text), "journal hand-edit ban");
+  assert(/memory_grep/.test(text) && /assumption/i.test(text), "grep before assumption");
+  assert(/Summary/i.test(text) && /Log/i.test(text), "entity Summary + Log shape");
+  // Site scope: durable facts are about THIS site, not hub-general.
+  assert(/this site/i.test(text), "worker doctrine is origin-scoped");
+});
+
+Deno.test("memory doctrine: the protected constraints STILL compose after the doctrine (both scopes)", () => {
+  for (const baseId of ["cap.hub.master", "cap.worker.base"]) {
+    const text = baselineSystemPrompt(baseId);
+    const doctrineAt = text.indexOf("`stm:`");
+    const constraintsAt = text.indexOf("Safety constraints");
+    assert(doctrineAt > 0 && constraintsAt > doctrineAt,
+      `${baseId}: doctrine lands BEFORE the protected constraints (constraints stay last)`);
+  }
 });

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.397] — 2026-08-29
+- merge: memory-doctrine lane (58e0d21c) — journal-style self-organizing memory doctrine in the versioned base prompts (cap.hub.master 1.3.0, cap.worker.base 1.1.0): living index key (read-first, update-after-every-change, kept small for future prompt injection), entity keys as Summary+dated-Log with plain-text cross-references, journal stays the raw episodic log (distill, never hand-edit), stm:/ltm split, recall discipline (grep before answering from assumption), self-restructuring with index-truthfulness. Hub scope explicitly covers cross-task topics, the agent-roster key, and owner knowledge; worker scope is site-scoped. Reviewed PASS round 2 (58e0d21c; memory_grep accuracy-pin updated rather than doctrine removed). Merge folded in the reviewer's one-word editorial (an agent-roster). Aligns with the runtime-context lane's literal index-key injection.
+
+## [0.2.396] — 2026-08-29
+- Agents now know how to keep their own notebooks: every agent organizes its memory with a living index it reads first and keeps truthful, topic pages that pair an evolving summary with a dated log, and a scratch space for throwaway notes — so what agents learn is easy to find and actually gets used
+
 ## [0.2.395] — 2026-08-29
 - Fixed two real bugs found while getting the browser test suite green again: deleting a site agent always reported a failure even though it had worked, and turning off a permission that cannot be turned off would still remove your enrolled sites on its way to failing. Neither can happen now
 
