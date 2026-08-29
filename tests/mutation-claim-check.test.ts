@@ -199,7 +199,9 @@ Deno.test("claim-check: coordinated predicates inherit subjects until first-pers
   }
   for (const text of [
     "I confirmed OpenAI created an agent, but then deleted the agent myself.",
+    "I confirmed OpenAI created an agent but then deleted the agent ourselves.",
     "I confirmed OpenAI created an agent and I deleted the agent.",
+    "I confirmed OpenAI created an agent and we deleted the agent.",
   ]) {
     const out = correctUnsupportedMutationClaims(text, []);
     assertEquals(out.corrections.length, 1, `missed explicit first-person resumption: ${text}`);

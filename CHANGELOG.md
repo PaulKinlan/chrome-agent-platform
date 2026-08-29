@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.388] — 2026-08-29
+- test: pin coordinated first-person resumptions
+
 ## [0.2.387] — 2026-08-29
 - fix: preserve coordinated mutation subjects
 
