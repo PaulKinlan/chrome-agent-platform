@@ -1,10 +1,13 @@
 # Changelog
 
+## [0.2.403] — 2026-08-29
+- Rejected tool calls now tell the agent which field failed, its actual size or shape, the exact limit, and how to retry instead of returning an opaque sanitization error
+
 ## [0.2.402] — 2026-08-29
-- fix(CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01): publish truthful tool schemas
+- Tool discovery now shows the real argument schema and transport limits for every tool, including the larger documented fields used for complete artifacts and scripts
 
 ## [0.2.401] — 2026-08-29
-- fix(CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01): admit bounded artifact bodies
+- Agents can save complete HTML artifacts up to the artifact store's 256 KiB limit without the tool layer rejecting, changing, or truncating the document
 
 ## [0.2.400] — 2026-08-29
 - Agents can now post work to a shared board and claim each other's jobs: the hub keeps a bounded, tamper-proof ledger (agents can't forge entries with their memory tools), claims expire and recover automatically, finished jobs shrink to compact receipts that never lose the result, and results are delivered back to the requester's conversation with automatic bounded retries

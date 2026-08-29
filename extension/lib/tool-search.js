@@ -127,8 +127,10 @@ export function projectToolSearchResult(descriptor) {
       descriptor.description,
       TOOL_SEARCH_BOUNDS.maxSummaryBytes,
     ),
-    schemaSummary: boundedSearchText(
-      descriptor.schemaSummary,
+    // Schema string leaves were already secret-redacted before canonical JSON
+    // serialization; do not run text redaction over JSON syntax here.
+    schemaSummary: truncateUtf8(
+      String(descriptor.schemaSummary ?? ""),
       TOOL_SEARCH_BOUNDS.maxSchemaSummaryBytes,
     ),
     sourceKind: descriptor.sourceKind,

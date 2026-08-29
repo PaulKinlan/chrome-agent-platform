@@ -90,6 +90,26 @@ function fixedError(code) {
   return Object.freeze({ ok: false, error: code });
 }
 
+class ArgumentSanitizationError extends Error {
+  constructor(reason, detail) {
+    super(reason);
+    this.name = "ArgumentSanitizationError";
+    this.reason = reason;
+    this.detail = detail;
+  }
+}
+
+function argumentPath(path) {
+  return path.length ? path.map((part) => typeof part === "number" ? `[${part}]` : String(part)).join(".").replace(".[", "[") : "(arguments)";
+}
+
+function sanitizationFailure(error, prefix = "") {
+  if (error instanceof ArgumentSanitizationError) {
+    return validationError(error.reason, `${prefix}${error.detail}`);
+  }
+  return validationError("bad-data", `${prefix}arguments must be a plain, finite JSON object within the published x-cap-argument-limits`);
+}
+
 /** The lazy-arguments-invalid error, enriched with a NAMED reason + bounded,
  * secret-redacted detail so the MODEL can see exactly which field failed and
  * repair its arguments (CAP-FB-20260824-WEBMCP-ARGSVALIDATION-01) — the opaque
@@ -126,24 +146,47 @@ function safeKey(key) {
 }
 
 function projectData(value, limits, state, depth = 0, path = []) {
-  if (++state.nodes > limits.maxNodes || depth > limits.maxDepth) {
-    throw new Error("data-bound-exceeded");
+  if (++state.nodes > limits.maxNodes) {
+    throw new ArgumentSanitizationError(
+      "node-limit-exceeded",
+      `${argumentPath(path)} makes the payload ${state.nodes} nodes; limit ${limits.maxNodes}. Remove fields or split the operation.`,
+    );
+  }
+  if (depth > limits.maxDepth) {
+    throw new ArgumentSanitizationError(
+      "depth-limit-exceeded",
+      `${argumentPath(path)} is at depth ${depth}; limit ${limits.maxDepth}. Flatten the object before retrying.`,
+    );
   }
   if (value === null || typeof value === "boolean") return value;
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new Error("data-number-invalid");
+    if (!Number.isFinite(value)) {
+      throw new ArgumentSanitizationError(
+        "invalid-number",
+        `${argumentPath(path)} must be a finite JSON number.`,
+      );
+    }
     return value;
   }
   if (typeof value === "string") {
-    if (hasLoneSurrogates(value)) throw new Error("data-unicode-invalid");
+    if (hasLoneSurrogates(value)) {
+      throw new ArgumentSanitizationError(
+        "invalid-unicode",
+        `${argumentPath(path)} contains an unpaired Unicode surrogate; send valid Unicode text.`,
+      );
+    }
     const fieldLimit = limits.stringLimit?.(path) ?? limits.maxStringBytes;
     const preserve = limits.preserveString?.(path) === true;
     const normalized = preserve ? value : value.normalize("NFKC");
-    if (
-      !limits.truncateStrings &&
-      utf8ByteLength(normalized) > fieldLimit
-    ) {
-      throw new Error("data-string-bound");
+    const actualBytes = utf8ByteLength(normalized);
+    if (!limits.truncateStrings && actualBytes > fieldLimit) {
+      const remediation = preserve
+        ? `Reduce the complete content to ≤${fieldLimit} UTF-8 bytes; it will never be silently truncated.`
+        : `Shorten this field to ≤${fieldLimit} UTF-8 bytes, or use the designated create_asset.content large-content path for a complete document.`;
+      throw new ArgumentSanitizationError(
+        "string-limit-exceeded",
+        `${argumentPath(path)} is ${actualBytes} UTF-8 bytes; limit ${fieldLimit}. ${remediation}`,
+      );
     }
     return truncateUtf8(normalized, fieldLimit);
   }
@@ -151,7 +194,10 @@ function projectData(value, limits, state, depth = 0, path = []) {
     value === undefined || typeof value === "bigint" ||
     typeof value === "function" || typeof value === "symbol"
   ) {
-    throw new Error("data-type-invalid");
+    throw new ArgumentSanitizationError(
+      "invalid-type",
+      `${argumentPath(path)} has unsupported type ${typeof value}; send JSON data only.`,
+    );
   }
   if (Array.isArray(value)) {
     let length;
@@ -164,7 +210,10 @@ function projectData(value, limits, state, depth = 0, path = []) {
       !Number.isSafeInteger(length) || length < 0 ||
       length > limits.maxArrayItems
     ) {
-      throw new Error("data-array-bound");
+      throw new ArgumentSanitizationError(
+        "array-limit-exceeded",
+        `${argumentPath(path)} has ${length} items; limit ${limits.maxArrayItems}. Split it into smaller calls.`,
+      );
     }
     const out = [];
     for (let index = 0; index < length; index++) {
@@ -175,7 +224,10 @@ function projectData(value, limits, state, depth = 0, path = []) {
         throw new Error("data-hostile");
       }
       if (!descriptor || !("value" in descriptor)) {
-        throw new Error("data-accessor");
+        throw new ArgumentSanitizationError(
+          "invalid-shape",
+          `${argumentPath([...path, index])} must be a plain data value, not a hole or accessor.`,
+        );
       }
       out.push(projectData(descriptor.value, limits, state, depth + 1, [...path, index]));
     }
@@ -189,17 +241,34 @@ function projectData(value, limits, state, depth = 0, path = []) {
       throw new Error("data-hostile");
     }
     const keys = Reflect.ownKeys(descriptors);
-    if (
-      keys.some((key) => typeof key !== "string") ||
-      keys.length > limits.maxObjectKeys
-    ) {
-      throw new Error("data-object-bound");
+    if (keys.some((key) => typeof key !== "string")) {
+      throw new ArgumentSanitizationError(
+        "invalid-key",
+        `${argumentPath(path)} contains a symbol key; object keys must be plain strings.`,
+      );
+    }
+    if (keys.length > limits.maxObjectKeys) {
+      throw new ArgumentSanitizationError(
+        "object-limit-exceeded",
+        `${argumentPath(path)} has ${keys.length} keys; limit ${limits.maxObjectKeys}. Remove fields or split the operation.`,
+      );
     }
     const out = Object.create(null);
     for (const rawKey of keys.sort()) {
       const key = safeKey(rawKey);
       const descriptor = descriptors[rawKey];
-      if (!key || !("value" in descriptor)) throw new Error("data-accessor");
+      if (!key) {
+        throw new ArgumentSanitizationError(
+          "invalid-key",
+          `${argumentPath([...path, rawKey])} is forbidden, invalid Unicode, or exceeds ${LAZY_TOOL_PROTOCOL_BOUNDS.maxKeyBytes} UTF-8 bytes; rename the field.`,
+        );
+      }
+      if (!("value" in descriptor)) {
+        throw new ArgumentSanitizationError(
+          "invalid-shape",
+          `${argumentPath([...path, rawKey])} must be a plain data value, not an accessor.`,
+        );
+      }
       out[key] = projectData(descriptor.value, limits, state, depth + 1, [...path, key]);
     }
     return out;
@@ -209,7 +278,10 @@ function projectData(value, limits, state, depth = 0, path = []) {
 
 export function sanitizeLazyToolArguments(value, descriptor) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("arguments-must-be-object");
+    throw new ArgumentSanitizationError(
+      "arguments-must-be-object",
+      `(arguments) must be an object; received ${Array.isArray(value) ? "array" : value === null ? "null" : typeof value}.`,
+    );
   }
   const contract = toolArgumentContract(descriptor?.sourceKind, descriptor?.toolId);
   const contentField = contract.largeContent?.field ?? null;
@@ -227,10 +299,12 @@ export function sanitizeLazyToolArguments(value, descriptor) {
     truncateStrings: false,
   }, { nodes: 0 });
   const maxArgumentBytes = contract.maxJsonUtf8Bytes;
-  if (
-    utf8ByteLength(JSON.stringify(projected)) > maxArgumentBytes
-  ) {
-    throw new Error("arguments-too-large");
+  const actualArgumentBytes = utf8ByteLength(JSON.stringify(projected));
+  if (actualArgumentBytes > maxArgumentBytes) {
+    throw new ArgumentSanitizationError(
+      "payload-limit-exceeded",
+      `(arguments) is ${actualArgumentBytes} JSON UTF-8 bytes; limit ${maxArgumentBytes}. Split the operation into smaller calls${contentField ? ` while keeping ${contentField} complete and ≤${contentLimit} bytes` : ", or use the designated large-content path for documents"}.`,
+    );
   }
   return projected;
 }
@@ -387,6 +461,33 @@ async function liveSnapshot(readSources) {
   });
 }
 
+function valueAtPath(value, path) {
+  let current = value;
+  for (const part of path) current = ownData(current, String(part));
+  return current;
+}
+
+function validationIssueDetail(args, issues) {
+  return (issues ?? []).slice(0, 8).map((issue) => {
+    const path = Array.isArray(issue?.path) ? issue.path : [];
+    const field = argumentPath(path);
+    const actual = valueAtPath(args, path);
+    if (issue?.code === "too_big") {
+      const unit = issue?.type === "string" ? "characters" : issue?.type === "array" ? "items" : "values";
+      const size = typeof actual === "string" || Array.isArray(actual) ? actual.length : "unknown";
+      return `${field} has ${size} ${unit}; limit ${issue.maximum}`;
+    }
+    if (issue?.code === "too_small") {
+      const size = typeof actual === "string" || Array.isArray(actual) ? actual.length : "unknown";
+      return `${field} has ${size} ${issue?.type === "array" ? "items" : "characters"}; minimum ${issue.minimum}`;
+    }
+    if (issue?.code === "invalid_type") {
+      return `${field} must be ${issue.expected}; received ${issue.received}`;
+    }
+    return `${field}: ${String(issue?.message ?? "invalid; follow the published schema")}`;
+  }).join("; ");
+}
+
 async function validateRecordArguments(record, args, descriptor) {
   const validate = ownData(record, "validateArguments");
   if (typeof validate !== "function") {
@@ -409,8 +510,8 @@ async function validateRecordArguments(record, args, descriptor) {
     // A trusted validator may apply defaults/transforms. Bound and accessor-check
     // that derived object too before it reaches the existing dispatcher.
     return Object.freeze({ ok: true, data: sanitizeLazyToolArguments(data, descriptor) });
-  } catch {
-    return validationError("bad-data", "the validator's payload failed sanitization");
+  } catch (error) {
+    return sanitizationFailure(error, "the validator returned invalid data: ");
   }
 }
 
@@ -532,10 +633,7 @@ export class LazyToolProtocol {
         capabilities: Array.isArray(desc.capabilities) ? desc.capabilities.slice(0, 8) : [],
         availability: desc.availability ?? "ready",
         sourceKind: desc.sourceKind ?? "extension-builtin",
-        schemaSummary: truncateUtf8(
-          redactSecretText(String(desc.schemaSummary ?? "")),
-          4096,
-        ),
+        schemaSummary: truncateUtf8(String(desc.schemaSummary ?? ""), 4096),
       };
 
       const entryBytes = utf8ByteLength(JSON.stringify(entry));
@@ -589,8 +687,8 @@ export class LazyToolProtocol {
     let args;
     try {
       args = sanitizeLazyToolArguments(ownData(request, "arguments"), firstResolved.descriptor);
-    } catch {
-      return validationError("bad-data", "the arguments payload failed sanitization");
+    } catch (error) {
+      return sanitizationFailure(error);
     }
     const firstRecord = first.byStableId.get(firstResolved.descriptor.stableId);
     const firstAuthority = await authorizeRecord(
@@ -746,9 +844,23 @@ function trustedAiValidator(aiTool) {
     } catch {
       return { ok: false };
     }
-    return ownData(parsed, "success") === true
-      ? { ok: true, data: ownData(parsed, "data") }
-      : { ok: false };
+    if (ownData(parsed, "success") === true) {
+      return { ok: true, data: ownData(parsed, "data") };
+    }
+    let issues;
+    try {
+      // Zod exposes `error` as an accessor on the parse-result envelope. The
+      // schema is product-owned here, so read it inside the guard rather than
+      // dropping the model-repair detail through ownData's accessor defence.
+      issues = parsed.error?.issues;
+    } catch {
+      issues = [];
+    }
+    return {
+      ok: false,
+      reason: "parse-rejected",
+      detail: validationIssueDetail(args, issues),
+    };
   };
 }
 
@@ -1056,10 +1168,10 @@ export function executableWebMcpToolRecords(tools, context, dispatch) {
       validator = async (args) => {
         const parsed = compiled.zodSchema.safeParse(args);
         if (parsed.success) return { ok: true, data: parsed.data };
-        const issues = (parsed.error?.issues ?? []).slice(0, 8).map((issue) =>
-          `${Array.isArray(issue?.path) && issue.path.length ? issue.path.join(".") : "(root)"}: ${String(issue?.message ?? "invalid")}`
+        const detail = truncateUtf8(
+          redactSecretText(validationIssueDetail(args, parsed.error?.issues)),
+          600,
         );
-        const detail = truncateUtf8(redactSecretText(issues.join("; ")), 600);
         deny("parse-rejected", detail);
         return { ok: false, reason: "parse-rejected", detail };
       };

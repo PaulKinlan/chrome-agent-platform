@@ -11,6 +11,7 @@ import {
 } from "./tool-argument-contract.js";
 import {
   hasLoneSurrogates,
+  redactSecretText,
   sha256Hex,
   truncateUtf8,
   utf8ByteLength,
@@ -135,7 +136,7 @@ function projectSchema(value, depth = 0, budget = { nodes: 0 }) {
   if (++budget.nodes > 256 || depth > 6) return "[bounded]";
   if (value == null || typeof value === "boolean") return value;
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  if (typeof value === "string") return truncateUtf8(value, 256);
+  if (typeof value === "string") return truncateUtf8(redactSecretText(value), 256);
   if (typeof value === "bigint") return "[bigint]";
   if (typeof value === "function" || typeof value === "symbol") {
     return "[opaque]";

@@ -160,7 +160,7 @@ On resume after a coordinator or worker loss:
 
 ## Open work queue
 
-**This file holds only what is in progress or still to do — 38 entries.** Completed work is archived in [TASKS-DONE.md](TASKS-DONE.md) at triage; **merged is done** (Paul, 2026-08-28), so nothing sits in a terminal state here. Most urgent first (regenerated 2026-08-28). The entry itself is always the authority; where it disagrees with this table, the entry wins.
+**This file holds only what is in progress or still to do — 39 entries.** Completed work is archived in [TASKS-DONE.md](TASKS-DONE.md) at triage; **merged is done** (Paul, 2026-08-28), so nothing sits in a terminal state here. Most urgent first (regenerated 2026-08-28). The entry itself is always the authority; where it disagrees with this table, the entry wins.
 
 Regenerate after any status change (this exact command reproduces the table below):
 
@@ -171,6 +171,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | Priority | Status | Task | What it is |
 |---|---|---|---|
 | P0 | DONE | [`CAP-FB-20260829-MAIN-GATES-RED-03`](#cap-fb-20260829-main-gates-red-03-the-journey-suite-is-red-on-main-49-checks-still-assert-the-pre-p0-all-optional-permission-model) | Journey suite red on main — 49 checks assert the pre-P0 permission model |
+| P0 | IN_REVIEW | [`CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01`](#cap-fb-20260829-tool-argument-robustness-01-tool-call-argument-robustness-and-schema-accuracy) | Tool-call argument robustness and schema accuracy |
 | P1 | IN_REVIEW | [`CAP-FB-20260829-AGENT-BOARD-01`](#cap-fb-20260829-agent-board-01-the-shared-jobs-board-agents-post-and-claim-work) | The shared jobs board — agents post and claim work |
 | P0 | OPEN | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
 | P0 | OPEN | [`CAP-FB-20260827-HUB-FIRST-RUN-01`](#cap-fb-20260827-hub-first-run-01-the-first-screen-is-an-onboarding-wall-not-a-command-center) | The first screen is an onboarding wall, not a command center |
@@ -227,6 +228,28 @@ evidence every other task depends on).
 
 
 ## Active
+
+## [CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01] Tool-call argument robustness and schema accuracy
+
+- Feedback: 2026-08-29 — owner reported frequent argument sanitization failures, including a complete HTML document rejected while saving an artifact, and asked that every model-visible schema state the real enforced constraints
+- Updated: 2026-08-29 20:52 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: implementation lane
+- Workspace: active (local path private)
+- Branch: `cap-tool-args`
+- Base: `54d70a9b`
+- Candidate: branch tip (three atomic commits; not pushed)
+- Shipping: —
+- Acceptance: complete artifact/script bodies use a designated bounded channel without truncation; list/search descriptors expose the source schema plus exact transport limits; every registered product schema passes schema/enforcement probes; rejected size/shape calls name the field, actual size, limit and remediation
+- Review: independent acceptance review required
+- Gates: 30 KiB HTML RED on base and GREEN after; focused lazy/catalog/search/cutover/Wasm discovery tests; full `nice -n 10 deno test --allow-all tests/` 2363/0; `npm run build` clean
+- Blockers: independent review and coordinator integration
+- Next: review the three-commit diff, then merge and run the same gates at the integration tip
+- Recover: `git log --oneline 54d70a9b..cap-tool-args`
+- History:
+  - 2026-08-29 20:52 UTC — implemented a per-field elevated path matching the artifact (256 KiB) and script (64 KiB) stores while retaining ordinary 16 KiB string / 32 KiB payload / shape limits; schemas and enforcement now share one contract; failures are actionable. The 30 KiB owner case failed before the fix and passed byte-exact after it. Full suite and build pass; no push.
 
 ## [CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01] Extended Unix/system tool family admissions
 
