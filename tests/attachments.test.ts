@@ -3,10 +3,26 @@
 // persisted + rendered in the conversation.
 // @ts-nocheck — the attachment shapes are intentionally dynamic.
 
-import { assert, assertEquals } from "jsr:@std/assert@1";
-import { buildMultimodalTask, sanitizeAttachments } from "../extension/lib/attachments.js";
+import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { attachmentContext, buildMultimodalTask, sanitizeAttachments } from "../extension/lib/attachments.js";
 
 const IMG = "data:image/png;base64,iVBORw0KGgo=";
+
+Deno.test("attachmentContext preserves UTF-8 text in agent-facing context", () => {
+  const text = "Report body ✓";
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  const context = attachmentContext([{
+    name: "report.txt",
+    type: "text/plain",
+    size: bytes.length,
+    kind: "file",
+    dataURL: `data:text/plain;base64,${btoa(binary)}`,
+  }]);
+  assertStringIncludes(context, text);
+  assert(!context.includes("â"), "UTF-8 bytes must not be treated as Latin-1");
+});
 
 Deno.test("buildMultimodalTask: no image attachments → the plain task string", () => {
   const r = buildMultimodalTask("summarise this", [

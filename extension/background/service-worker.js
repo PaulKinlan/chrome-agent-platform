@@ -81,7 +81,7 @@ import {
   scanFsGrantManifest,
 } from "../lib/fs-grants.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
-import { buildMultimodalTask } from "../lib/attachments.js";
+import { attachmentContext, buildMultimodalTask } from "../lib/attachments.js";
 import {
   canonicalOrigin,
   journalAppend,
@@ -2201,50 +2201,6 @@ async function waitForSnapshotBinding(canonical, tabId, { budgetMs = 15_000, int
     await new Promise((r) => setTimeout(r, intervalMs));
   }
   return null;
-}
-
-/** Build a bounded, honest context string from attachments (never an object). */
-function attachmentContext(attachments) {
-  if (!Array.isArray(attachments) || attachments.length === 0) return "";
-  const parts = [];
-  for (const a of attachments) {
-    if (a.kind === "tab" || a.url) {
-      // A tab reference (add-tab): the model gets the title + URL so it can
-      // reason about / act on the chosen page (granted the browser tools).
-      parts.push(`[tab: ${a.name ?? "tab"} — ${a.url ?? "(no url)"}]`);
-      continue;
-    }
-    parts.push(
-      `[attachment: ${a.name ?? "unnamed"} (${a.kind ?? "file"}, ${
-        a.type ?? "unknown"
-      }, ${a.size ?? "?"} bytes)]`,
-    );
-    // TEXT attachments are inlined so the model can actually read the bytes.
-    // Media (image/audio/video) bytes are NOT supplied to the model in this
-    // build — they are honestly labelled as attached-but-unprocessed until a
-    // multimodal provider path is wired. Never claim the bytes reach the model.
-    const type = String(a.type ?? "").toLowerCase();
-    const name = String(a.name ?? "").toLowerCase();
-    const textish =
-      type.startsWith("text/") ||
-      /json|xml|yaml|yml|toml|csv|markdown|\.md$/.test(type) ||
-      /\.(json|xml|yaml|yml|toml|csv|md|txt|log)$/.test(name);
-    if (a.dataURL && textish) {
-      try {
-        const body = atob(a.dataURL.split(",")[1] ?? "");
-        parts.push("--- text content ---\n" + body.slice(0, 4000) + "\n---");
-      } catch { /* not decodable */ }
-    } else if (a.dataURL && type.startsWith("image/")) {
-      // The image bytes are now supplied to the model as a MULTIMODAL vision
-      // part (buildMultimodalTask), not described here.
-      parts.push("  (image attached — provided to the model as a vision input)");
-    } else if (!textish) {
-      parts.push(
-        "  (media attached — not transcribed/described in this build)",
-      );
-    }
-  }
-  return "Attachments:\n" + parts.join("\n");
 }
 
 function providerResumeIdentity(config) {
@@ -5801,7 +5757,7 @@ const handlers = mergeRouteMaps(
     // Every capability permission is granted at install — requestCapability
     // VERIFIES the install grant (fail closed: an unreadable state is an
     // honest error, never reported as granted).
-    const res = await requestCapability(id);
+    const res = await requestCapability(id, { request: false });
     if (res.ok && res.granted) return { ok: true, granted: true, capability: id };
     return {
       ok: false,

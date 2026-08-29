@@ -130,7 +130,7 @@ Deno.test("alarm lifecycle: unrelated permission changes are ignored", () => {
   assertEquals(h.lifecycle.status().disarmed, false);
 });
 
-Deno.test("alarm lifecycle: alarms are install-granted — the Settings Permissions section is a read-only verified display, never a request path", async () => {
+Deno.test("alarm lifecycle: required alarms stay read-only while optional capabilities use the Settings request path", async () => {
   const optionsSource = await Deno.readTextFile(
     new URL("../extension/options/options.js", import.meta.url),
   );
@@ -140,16 +140,9 @@ Deno.test("alarm lifecycle: alarms are install-granted — the Settings Permissi
   const lifecycleSource = await Deno.readTextFile(
     new URL("../extension/lib/alarm-permission-lifecycle.js", import.meta.url),
   );
-  // The install-granted model: no capability request path exists in Settings.
-  assert(
-    !optionsSource.includes("requestCapability("),
-    "Settings must not request capabilities at runtime — they are granted at install",
-  );
-  assertStringIncludes(
-    optionsSource,
-    "chrome.permissions.contains({ permissions: [p] })",
-    "the Permissions section VERIFIES each grant (the read-only state display)",
-  );
+  assertStringIncludes(optionsSource, "const required = (cap.permissions ?? []).every");
+  assertStringIncludes(optionsSource, "if (!required && !granted)");
+  assertStringIncludes(optionsSource, "requestCapability(cap.id)");
   // The worker-side activation route remains (harmless; the lifecycle listener
   // still owns disarm/re-arm on any permission change).
   assertStringIncludes(

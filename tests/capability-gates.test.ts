@@ -2,8 +2,8 @@
 // state which actions each capability gates (truth-in-UI), and artifact
 // deletion must NEVER be gated by a Chrome permission (it lives in OPFS).
 // @ts-nocheck
-import { assert } from "jsr:@std/assert@1";
-import { CAPABILITIES } from "../extension/lib/capabilities.js";
+import { assert, assertEquals } from "jsr:@std/assert@1";
+import { CAPABILITIES, requestCapability } from "../extension/lib/capabilities.js";
 
 Deno.test("capability rows: every permission states the exact actions it gates", () => {
   for (const cap of CAPABILITIES) {
@@ -23,6 +23,27 @@ Deno.test("capability rows: pinned gate truths (no invisible dependencies)", () 
   assert(/artifacts? [^.]*never need/i.test(byId.storage.gates));
   // Spot-pin one more row so drift is caught exactly.
   assert(byId.tabs.gates.includes("opening, navigating, closing and listing tabs"));
+});
+
+Deno.test("optional bookmark capability requests directly from the Settings owner gesture", async () => {
+  const previous = globalThis.chrome;
+  const calls = [];
+  globalThis.chrome = {
+    permissions: {
+      request: (query) => { calls.push(query); return Promise.resolve(true); },
+      contains: () => { throw new Error("contains preflight would lose user activation"); },
+    },
+  };
+  try {
+    assertEquals(await requestCapability("bookmarks"), {
+      ok: true,
+      granted: true,
+      capability: "bookmarks",
+    });
+    assertEquals(calls, [{ permissions: ["bookmarks"] }]);
+  } finally {
+    globalThis.chrome = previous;
+  }
 });
 
 Deno.test("required capability refusal is wired before every dependent teardown", async () => {

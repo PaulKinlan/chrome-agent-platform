@@ -16,6 +16,7 @@ import {
 import {
   CAPABILITIES,
   capabilityStatus,
+  requestCapability,
 } from "../lib/capabilities.js";
 import { requestProviderHostAccess } from "../lib/provider-gate.js";
 import {
@@ -1887,16 +1888,11 @@ async function renderBrowser() {
   });
 }
 
-// ── Permissions (read-only install-grant diagnostics) ──
+// ── Permissions ──
 async function renderPermissions() {
   const status = await capabilityStatus();
   const list = $("#permission-list");
   list.replaceChildren();
-  // INSTALL-GRANTED MODEL (owner directive 2026-08-28: load-unpacked only,
-  // never the store): every permission in the manifest is granted at install.
-  // chrome.permissions.remove only works on OPTIONAL permissions, so nothing
-  // here is runtime-removable — this section is an honest READ-ONLY state
-  // display (a live contains() verification per capability), not a control.
   const manifestPerms = new Set(chrome.runtime.getManifest().permissions ?? []);
   const covered = new Set();
   for (const cap of CAPABILITIES) {
@@ -1910,8 +1906,11 @@ async function renderPermissions() {
     name.textContent = cap.label;
 
     const state = document.createElement("span");
+    const required = (cap.permissions ?? []).every((permission) => manifestPerms.has(permission));
     state.className = "perm-state" + (granted ? " granted" : " missing");
-    state.textContent = granted ? "Granted at install" : "MISSING — reload the extension";
+    state.textContent = granted
+      ? (required ? "Granted at install" : "Granted")
+      : (required ? "MISSING — reload the extension" : "Not enabled");
 
     const hint = document.createElement("span");
     hint.className = "muted";
@@ -1924,13 +1923,26 @@ async function renderPermissions() {
     gates.className = "perm-gates";
     gates.textContent = cap.gates ?? `Gates: ${cap.label.toLowerCase()}.`;
 
-    row.append(name, state, hint, gates);
+    row.append(name, state);
+    if (!required && !granted) {
+      const enable = document.createElement("button");
+      enable.className = "btn small";
+      enable.textContent = "Enable";
+      enable.addEventListener("click", async () => {
+        enable.disabled = true;
+        const result = await requestCapability(cap.id).catch(() => ({ granted: false }));
+        if (result.granted) renderPermissions();
+        else {
+          enable.disabled = false;
+          enable.textContent = "Enable failed — try again";
+        }
+      });
+      row.appendChild(enable);
+    }
+    row.append(hint, gates);
     list.appendChild(row);
   }
-  // The remaining install-granted manifest permissions (history, bookmarks,
-  // context menus, …) get an honest verified row too — a capability whose
-  // state cannot be seen is how the "search_history says enable History but
-  // there is no History control" bug class happens.
+  // Remaining install-granted permissions get an honest verified row too.
   const pretty = (p) => p.replace(/[._]/g, " ").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^\w/, (c) => c.toUpperCase());
   const rest = [...manifestPerms].filter((p) => !covered.has(p)).sort();
   const states = await Promise.all(rest.map((p) =>

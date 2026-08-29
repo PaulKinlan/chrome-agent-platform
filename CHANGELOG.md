@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.415] — 2026-08-30
+- Add browser context commands to the composer
+
 ## [0.2.414] — 2026-08-30
 - Much better debugging: every tool call is logged with its arguments, result, and duration; there's a Settings switch for full detail in local logs (exports stay protected); and every run now has a View log showing its complete tool-call timeline
 

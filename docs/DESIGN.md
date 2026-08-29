@@ -95,6 +95,12 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   loading/error states, popover top-layer presentation anchored with logical
   `position-area` + `position-try-fallbacks` (JS `placeFloating` fallback). The
   selected agent shows as a removable accent chip in the composer's chip row.
+- The composer's command palette keeps only actionable commands. `/tabs`,
+  `/artifacts`, `/bookmarks`, and `/history` open searchable, keyboard-operable
+  lists backed by the corresponding live Chrome/library authority; a selection
+  leaves both a readable reference and a removable context chip. `/agent` opens
+  its shared picker directly. Commands for removed or unclear product concepts
+  do not remain as inert suggestions.
 - Hub sidebar Tasks/Agents sections share one intrinsic flex primitive: fixed
   headers with inline-end actions, independently scrolling lists with stable
   symmetric gutters while expanded, and gutter-free scrollable lists in the

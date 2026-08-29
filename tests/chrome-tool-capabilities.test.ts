@@ -241,7 +241,7 @@ Deno.test("Tranche 2 tools: permission-gated execution fails closed when permiss
   assertEquals(listAlarmsRes.error, "alarms permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
 
   const bmRes = await browser.create_bookmark.execute({ title: "Test" });
-  assertEquals(bmRes.error, "bookmarks permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals(bmRes.error, "bookmarks permission not granted — Enable Bookmarks in Settings");
 
   const notifyRes = await browser.notify.execute({ title: "Test", message: "Hello" });
   assertEquals(notifyRes.error, "notifications permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");

@@ -22,6 +22,12 @@ import {
   shouldApplyRegistrySnapshot,
 } from "./agent-registry.js";
 import { parseMentionToken, parseSlashCommand } from "./command-parser.js";
+import {
+  COMMAND_NAMESPACES,
+  loadComposerCommandItems,
+  resolveComposerCommandSelection,
+} from "./composer-commands.js";
+export { COMMAND_NAMESPACES } from "./composer-commands.js";
 import { normalizeConversationRunStatus } from "./run-status.js";
 import { safeParse, buildTree, subtreeJson, safeJsonStringify } from "./tool-tree.js";
 // The CANONICAL secret redactor (lib/pure.js — one semantic, shared with the
@@ -515,65 +521,13 @@ function shortOrigin(o) {
   return String(o).replace(/^https?:\/\//, "").replace(/\/.*/, "");
 }
 
-// Command namespaces (the / palette). Selecting one either opens its sub-items
-// or inserts the prefix for free-text commands (remember).
-export const COMMAND_NAMESPACES = [
-  { id: "skill", label: "skill", description: "invoke a skill", kind: "skill" },
-  { id: "schedule", label: "schedule", description: "run a skill in the background", kind: "background" },
-  { id: "agent", label: "agent", description: "direct the message to an agent", kind: "agent" },
-  { id: "model", label: "model", description: "switch the provider/model", kind: "model" },
-  { id: "theme", label: "theme", description: "switch the theme", kind: "theme" },
-  { id: "remember", label: "remember", description: "write something to memory", kind: "free" },
-  { id: "focus", label: "focus", description: "protect attention", kind: "skill" },
-];
-
-// Sub-items for a selected command namespace, filtered by the typed argument.
-// currentAgentId/currentAgentKind exclude the agent the composer is currently
-// scoped to (you can't call the agent you're talking to).
-async function commandItems(ns, arg = "", currentAgentId = null, currentAgentKind = null) {
-  const q = (arg || "").toLowerCase();
-  const matches = (s) => !q || String(s ?? "").toLowerCase().includes(q);
-  switch (ns) {
-    case "skill": {
-      // The recipes were renamed to SKILLS (f7a49fc). `skill.list` returns the
-      // built-in + imported skills ({ skills: [{ id, name, description, ... }] }).
-      const res = RUNTIME_SEND ? await RUNTIME_SEND("skill.list").catch(() => ({})) : {};
-      return (res.skills || [])
-        .filter((r) => matches(r.name) || matches(r.id))
-        .map((r) => ({ id: `skill:${r.id}`, label: r.name, description: r.description || "", kind: "skill" }));
-    }
-    case "schedule": {
-      const res = RUNTIME_SEND ? await RUNTIME_SEND("skill.list").catch(() => ({})) : {};
-      return (res.skills || [])
-        .filter((r) => r.mode === "background")
-        .filter((r) => matches(r.name) || matches(r.id))
-        .map((r) => ({ id: `skill:${r.id}`, label: r.name, description: r.description || "", kind: "background" }));
-    }
-    case "agent":
-      // The /agent sub-items are NOT rendered here: /agent opens the ONE shared
-      // <agent-picker> (see AgentComposer._openSlashAgentPicker), so the slash
-      // list and every other picker surface share the single renderer + a11y
-      // contract and can never drift.
-      return [];
-    case "model": {
-      const res = RUNTIME_SEND ? await RUNTIME_SEND("provider.models").catch(() => ({})) : {};
-      return (res.choices || [])
-        .filter((c) => matches(c.label || "") || matches(c.id || ""))
-        .map((c) => ({ id: `model:${c.id}`, label: c.label || c.id, description: "", kind: "model" }));
-    }
-    case "theme":
-      return THEMES.filter((t) => matches(t.label) || matches(t.id))
-        .map((t) => ({ id: `theme:${t.id}`, label: t.label, description: "theme", kind: "theme" }));
-    case "focus": {
-      const res = RUNTIME_SEND ? await RUNTIME_SEND("skill.list").catch(() => ({})) : {};
-      return (res.skills || [])
-        .filter((r) => r.mode === "background" && (r.category === "focus" || (r.id || "").includes("focus")))
-        .filter((r) => matches(r.name) || matches(r.id))
-        .map((r) => ({ id: `skill:${r.id}`, label: r.name, description: r.description || "", kind: "skill" }));
-    }
-    default:
-      return [];
-  }
+// Sub-items for the / palette come from the DOM-free, dependency-injected
+// command module; the live component supplies the extension runtime + Chrome.
+async function commandItems(ns, arg = "") {
+  return await loadComposerCommandItems(ns, arg, {
+    runtimeSend: RUNTIME_SEND,
+    chromeApi: typeof chrome === "undefined" ? undefined : chrome,
+  });
 }
 
 // @ mention candidates: every CALLABLE agent comes from the same redacted,
@@ -589,7 +543,7 @@ async function mentionCandidates(q = "", currentAgentId = null, currentAgentKind
     const [registry, skills, assets] = await Promise.all([
       RUNTIME_SEND("agent.registry").catch(() => ({ groups: [] })),
       RUNTIME_SEND("skill.list").catch(() => ({ skills: [] })),
-      RUNTIME_SEND("asset.list", { origin: "master" }).catch(() => ({ assets: [] })),
+      RUNTIME_SEND("asset.list", { origin: "all" }).catch(() => ({ assets: [] })),
     ]);
     const excludeRef = currentAgentId && currentAgentKind
       ? canonicalRef(currentAgentKind, currentAgentId)
@@ -4817,11 +4771,10 @@ class AgentComposer extends Component {
     // positive); the token ends at the first space, so the task text after
     // "/agent:<ref> " is plain text again.
     const slash = parseSlashCommand(text, caret);
-    if (slash && slash.hasColon && slash.ns === "agent") {
-      // /agent[:query] — the ONE shared <agent-picker> (the same renderer +
-      // a11y contract as the + menu's Choose agent), driven by the composer
-      // text: the typed arg is the picker's query; Arrow/Home/End/Enter/Tab/
-      // Escape are forwarded to it (see the keydown handler).
+    if (slash?.ns === "agent") {
+      // /agent or /agent:query — the ONE shared <agent-picker> (the same
+      // renderer + a11y contract as the + menu's Choose agent). Exact /agent
+      // opens immediately; a colon adds a live search query.
       this._hidePopup();
       this._openSlashAgentPicker({ start: slash.start, end: slash.end, arg: slash.arg });
       return;
@@ -4834,6 +4787,24 @@ class AgentComposer extends Component {
       const ns = slash.ns;
       const arg = slash.arg.trim();
       if (!slash.hasColon) {
+        // Chrome-deep commands open their picker as soon as their full name is
+        // typed (/tabs); adding a colon turns the remainder into the search.
+        const direct = COMMAND_NAMESPACES.find((item) => item.direct && item.id === ns);
+        if (direct) {
+          let items;
+          try { items = await commandItems(ns, ""); }
+          catch (error) {
+            this._hidePopup();
+            this.setStatus(`couldn't list ${ns}: ${error?.message ?? error}`, false);
+            return;
+          }
+          // Ignore a slow API response after the owner has edited the token.
+          if (input.value !== text || (input.selectionStart ?? input.value.length) !== caret) return;
+          this._showPopup(items.map((item) => ({ ...item, ns })), {
+            type: "command", start: slashPos, end: caret, ns, arg: "",
+          });
+          return;
+        }
         // No colon typed yet — FILTER the namespace list by the typed prefix
         // (/ → all, /s → schedule + skill, /sk → skill).
         const items = COMMAND_NAMESPACES
@@ -4850,7 +4821,15 @@ class AgentComposer extends Component {
         this._showPopup(items, { type: "command", start: slashPos, end: caret, ns: "", arg: "" });
         return;
       }
-      const items = await commandItems(ns, arg, this._currentAgentId, this._currentAgentKind);
+      let items;
+      try { items = await commandItems(ns, arg); }
+      catch (error) {
+        this._hidePopup();
+        this.setStatus(`couldn't search ${ns}: ${error?.message ?? error}`, false);
+        return;
+      }
+      // API-backed searches can resolve out of order while the owner types.
+      if (input.value !== text || (input.selectionStart ?? input.value.length) !== caret) return;
       if (!items.length && ns === "remember") {
         this._showPopup([{ id: "free:remember", label: "/remember ", description: "write to memory", kind: "free", ns: "remember", free: true }],
           { type: "command", start: slashPos, end: caret, ns, arg });
@@ -4952,12 +4931,30 @@ class AgentComposer extends Component {
         input.focus();
         return;
       }
-      // A concrete command item → insert its full reference (with the /).
-      input.setRangeText(`/${item.id}`, token.start, token.end, "end");
+      if (item.kind === "capability") {
+        this._hidePopup();
+        this.setStatus(`${item.label} — ${item.description}`, false);
+        globalThis.chrome?.runtime?.openOptionsPage?.();
+        input.focus();
+        return;
+      }
+      // A concrete item resolves to its textual reference and, for Chrome-deep
+      // commands, the pending context attachment the agent actually receives.
+      const fallbackText = `/${item.id}`;
+      input.setRangeText(fallbackText, token.start, token.end, "end");
       this._hidePopup();
-      // NOTE: /agent items never reach this path — /agent: opens the shared
-      // <agent-picker> (_openSlashAgentPicker), whose agent-select handler both
-      // inserts the canonical reference AND selects the agent chip.
+      Promise.resolve(resolveComposerCommandSelection(item, { runtimeSend: RUNTIME_SEND }))
+        .then((selection) => {
+          if (!selection) return;
+          if (selection.text !== fallbackText) {
+            input.setRangeText(selection.text, token.start, token.start + fallbackText.length, "end");
+          }
+          if (selection.attachment) this._attachMedia(selection.attachment);
+          this._autoGrow();
+        })
+        .catch((error) => this.setStatus(`couldn't attach ${item.kind}: ${error?.message ?? error}`, false));
+      // NOTE: /agent items never reach this path — /agent opens the shared
+      // <agent-picker>, whose agent-select handler inserts the canonical ref.
       this._emit("command", { namespace: item.ns, item });
       input.focus();
       return;
