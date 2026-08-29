@@ -34,6 +34,7 @@ import {
   createSchedulerRoutes,
   createAgentScheduleRoutes,
   createNamedAgentDeleteGate,
+  createApplyAgentSchedule,
   kvRoutes,
   mergeRouteMaps,
   permLeaseRoutes,
@@ -399,43 +400,16 @@ async function enrichAgentsWithSchedules(agents) {
       : a;
   });
 }
-// The single schedule code path for named agents: create-with-schedule and
-// edit-schedule both land here. A scheduled agent fires as a REAL named-agent
-// run (its own OPFS memory, its role layer, its saved skills — the fire
-// path's `agent:` branch); removing the schedule cancels the alarm and the
-// agent itself is untouched.
-async function applyAgentSchedule(id, periodInMinutes, task = null) {
-  const agent = await getNamedAgent(id);
-  if (!agent) return { ok: false, error: `no agent ${id}` };
-  const slug = slugifyAgentId(id);
-  const name = `agent:${slug}`;
-  if (periodInMinutes == null || periodInMinutes === 0) {
-    const handle = cancelScheduledTaskBackground(name);
-    try {
-      await handle.marked;
-    } catch (err) {
-      return { ok: false, error: `schedule removal failed before it was durable: ${err?.message ?? String(err)}` };
-    }
-    broadcastRegistryChanged();
-    return { ok: true, scheduled: false, name, stopping: handle.stopping };
-  }
-  const minutes = Number(periodInMinutes);
-  if (!Number.isFinite(minutes) || minutes < 1) {
-    return { ok: false, error: "periodInMinutes must be a number ≥ 1" };
-  }
-  const prompt = typeof task === "string" && task.trim()
-    ? task.trim()
-    : `Perform your scheduled run as ${agent.name ?? slug}, per your role.`;
-  await scheduleTask({
-    task: prompt,
-    delayMs: minutes * 60 * 1000,
-    periodInMinutes: minutes,
-    name,
-    owner: { agentRole: `named:${slug}`, agentSurfaceRef: `named:${slug}` },
-  });
-  broadcastRegistryChanged();
-  return { ok: true, scheduled: true, name, periodInMinutes: minutes };
-}
+// The single schedule code path for named agents (extracted to
+// routes/agent-schedule.js so tests drive the REAL function — including the
+// set-schedule/delete revalidation fence — with controlled interleavings).
+const applyAgentSchedule = createApplyAgentSchedule({
+  getNamedAgent,
+  scheduleTask,
+  cancelScheduledTaskBackground,
+  broadcastRegistryChanged,
+  slugifyAgentId,
+});
 import {
   checkHookAllowed,
   getHook,

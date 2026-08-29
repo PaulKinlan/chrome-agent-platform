@@ -295,10 +295,97 @@ Deno.test("P1-d: delete durably cancels agent:<slug> BEFORE the row/OPFS deletio
   assert(stillArmed && stillArmed.cancelling !== true, "the schedule was not half-marked — it is still live and retryable");
 });
 
+// ── P1-e: the set-schedule/delete race leaves NO orphan recurring alarm ────
+Deno.test("P1-e: an agent deleted mid-schedule-creation leaves no live agent:<slug> alarm (revalidation fence)", async () => {
+  const { createNamedAgent, deleteNamedAgent, getNamedAgent, slugifyAgentId } = namedAgents;
+  const { scheduleTask, cancelScheduledTaskBackground, listScheduledTasks } = scheduler;
+  const { createApplyAgentSchedule } = await import("../extension/background/routes/agent-schedule.js");
+
+  const created = await createNamedAgent({ name: "Race Target", role: "deleted mid-schedule" });
+  assert(created.ok);
+  const slug = created.agent.id;
+
+  // Deterministic interleaving: the schedule's FIRST agent read resolves,
+  // then applyAgentSchedule pauses BEFORE scheduleTask; the deletion runs to
+  // completion while NO task exists (its gate's cancel is a no-op); then the
+  // schedule resumes.
+  let releaseRead;
+  const readGate = new Promise((r) => { releaseRead = r; });
+  let reads = 0;
+  const pausingGet = async (id) => {
+    reads++;
+    const a = await getNamedAgent(id);
+    if (reads === 1) await readGate;
+    return a;
+  };
+  const applyAgentSchedule = createApplyAgentSchedule({
+    getNamedAgent: pausingGet,
+    scheduleTask,
+    cancelScheduledTaskBackground,
+    broadcastRegistryChanged: () => {},
+    slugifyAgentId,
+  });
+
+  const applying = applyAgentSchedule(slug, 30, "recurring work");
+  for (let i = 0; i < 100 && reads === 0; i++) await new Promise((r) => setTimeout(r, 1));
+  assertEquals(reads, 1, "the schedule creation is parked after its agent read");
+
+  const gateDeps = {
+    requireOwnerApproval: async () => ({ ok: true }),
+    canonicalOperationTarget: oa.canonicalOperationTarget,
+    namedBoundMutationPayload: (p) => p,
+    payloadFields,
+    cancelScheduledTaskBackground,
+  };
+  const del = await deleteNamedAgent(slug, {
+    gateBeforeDelete: createNamedAgentDeleteGate({ principal: "extension", documentId: "doc-race" }, gateDeps),
+  });
+  assertEquals(del.ok, true, "the deletion completes (no task existed to cancel)");
+  assertEquals(await getNamedAgent(slug), null, "the row is gone before the schedule resumes");
+
+  releaseRead();
+  const res = await applying;
+  assertEquals(res.ok, false, "the schedule is honestly NOT applied to a deleted agent");
+  assert(/deleted while its schedule was being created/.test(res.error ?? ""), "the error names the race");
+  assert(!alarmRegistry.has(`agent:${slug}`), "FALSIFICATION TARGET: no orphan recurring alarm survives");
+  const live = (await listScheduledTasks()).find((t) => t.name === `agent:${slug}`);
+  assert(!live || live.cancelling === true, "no live task row survives either");
+
+  // Same-instance guard: a schedule created while the agent is REPLACED (new
+  // instanceId, same slug) is torn down too — the new row never asked for it.
+  const v1 = await createNamedAgent({ name: "Replaced Agent" });
+  const rslug = v1.agent.id;
+  const firstInstance = v1.agent.instanceId;
+  let releaseRead2;
+  const readGate2 = new Promise((r) => { releaseRead2 = r; });
+  let reads2 = 0;
+  const pausingGet2 = async (id) => {
+    reads2++;
+    const a = await getNamedAgent(id);
+    if (reads2 === 1) await readGate2;
+    return a;
+  };
+  const apply2 = createApplyAgentSchedule({
+    getNamedAgent: pausingGet2, scheduleTask, cancelScheduledTaskBackground,
+    broadcastRegistryChanged: () => {}, slugifyAgentId,
+  });
+  const applying2 = apply2(rslug, 15, "for the old instance");
+  for (let i = 0; i < 100 && reads2 === 0; i++) await new Promise((r) => setTimeout(r, 1));
+  await deleteNamedAgent(rslug, { gateBeforeDelete: createNamedAgentDeleteGate({ principal: "extension", documentId: "d2" }, gateDeps) });
+  const v2 = await createNamedAgent({ name: "Replaced Agent" });
+  assert(v2.agent.instanceId !== firstInstance, "the replacement has a fresh instanceId");
+  releaseRead2();
+  const res2 = await applying2;
+  assertEquals(res2.ok, false, "the stale-instance schedule is not applied to the replacement");
+  assert(!alarmRegistry.has(`agent:${rslug}`), "no schedule armed for an instance that never asked");
+});
+
 // ── wiring pins ─────────────────────────────────────────────────────────────
 Deno.test("wiring: the SW routes through the extracted factory + the gate, and never crosses recipe: on agent delete", async () => {
   const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
   assert(sw.includes("agentScheduleRoutes"), "the merged handlers include the extracted schedule routes");
+  assert(sw.includes("createApplyAgentSchedule({"), "the SW wires the extracted applyAgentSchedule factory (the revalidation fence lives in it)");
+  assert(!/async function applyAgentSchedule/.test(sw), "no inline applyAgentSchedule remains in the SW (the fence would be untestable)");
   assert(sw.includes("createNamedAgentDeleteGate(context"), "named-agent.delete composes the extracted gate");
   const deleteBlock = sw.match(/async "named-agent\.delete"[\s\S]*?\n  \},\n/);
   assert(deleteBlock, "named-agent.delete route found");

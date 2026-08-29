@@ -47,6 +47,79 @@ export function createAgentScheduleRoutes({
 }
 
 /**
+ * The ONE named-agent schedule application path (extracted from the service
+ * worker so tests drive the REAL function with controlled interleavings).
+ * Create-with-schedule and edit-schedule both land here. A scheduled agent
+ * fires as a REAL named-agent run (its own OPFS memory, its role layer, its
+ * saved skills — the fire path's `agent:` branch); removing the schedule
+ * cancels the alarm and the agent itself is untouched.
+ *
+ * REVISE-3 race fix: the agent read and the schedule creation are NOT one
+ * atomic section — a deletion can complete in between (the delete gate saw no
+ * task to cancel). The REVALIDATION FENCE after scheduleTask re-reads the
+ * agent; if it is gone (or replaced — a different instanceId), the
+ * just-created schedule is durably cancelled, so no orphan recurring
+ * `agent:<slug>` alarm survives for a ghost (the alarm handler intentionally
+ * leaves recurring orphans armed). Every interleaving converges: a deletion
+ * after the fence cancels through its own gate; a deletion before it is
+ * caught here.
+ */
+export function createApplyAgentSchedule({
+  getNamedAgent,
+  scheduleTask,
+  cancelScheduledTaskBackground,
+  broadcastRegistryChanged,
+  slugifyAgentId,
+}) {
+  return async function applyAgentSchedule(id, periodInMinutes, task = null) {
+    const agent = await getNamedAgent(id);
+    if (!agent) return { ok: false, error: `no agent ${id}` };
+    const slug = slugifyAgentId(id);
+    const name = `agent:${slug}`;
+    if (periodInMinutes == null || periodInMinutes === 0) {
+      const handle = cancelScheduledTaskBackground(name);
+      try {
+        await handle.marked;
+      } catch (err) {
+        return { ok: false, error: `schedule removal failed before it was durable: ${err?.message ?? String(err)}` };
+      }
+      broadcastRegistryChanged();
+      return { ok: true, scheduled: false, name, stopping: handle.stopping };
+    }
+    const minutes = Number(periodInMinutes);
+    if (!Number.isFinite(minutes) || minutes < 1) {
+      return { ok: false, error: "periodInMinutes must be a number ≥ 1" };
+    }
+    const prompt = typeof task === "string" && task.trim()
+      ? task.trim()
+      : `Perform your scheduled run as ${agent.name ?? slug}, per your role.`;
+    await scheduleTask({
+      task: prompt,
+      delayMs: minutes * 60 * 1000,
+      periodInMinutes: minutes,
+      name,
+      owner: { agentRole: `named:${slug}`, agentSurfaceRef: `named:${slug}` },
+    });
+    const after = await getNamedAgent(id);
+    if (!after || (agent.instanceId && after.instanceId !== agent.instanceId)) {
+      const undo = cancelScheduledTaskBackground(name);
+      try {
+        await undo.marked;
+      } catch (err) {
+        return {
+          ok: false,
+          error: `the agent was deleted while its schedule was being created, and the schedule teardown failed (${err?.message ?? String(err)}) — cancel ${name} from Tasks`,
+        };
+      }
+      broadcastRegistryChanged();
+      return { ok: false, error: `agent ${id} was deleted while its schedule was being created — the schedule was not applied` };
+    }
+    broadcastRegistryChanged();
+    return { ok: true, scheduled: true, name, periodInMinutes: minutes };
+  };
+}
+
+/**
  * The named-agent delete-time schedule teardown, composed as the
  * deleteNamedAgent gate so the ordering is structural (REVISE-2 P1): approval
  * FIRST, then the durable cancelling mark + live-run abort for `agent:<slug>`,

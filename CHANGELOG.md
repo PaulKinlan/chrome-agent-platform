@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.346] — 2026-08-29
+- fix(agents): REVISE-3 — the set-schedule/delete race leaves no orphan recurring alarm. applyAgentSchedule extracted to routes/agent-schedule.js (createApplyAgentSchedule — tests drive the REAL function with controlled interleavings) and gains a revalidation fence: after scheduleTask, re-read the agent; if it was deleted mid-creation (or replaced — a different instanceId), durably cancel the just-created agent:<slug> schedule instead of leaving a recurring orphan the alarm handler intentionally keeps armed. P1-e: deterministic interleave test (read pauses → delete completes with no task to cancel → schedule resumes) asserts no alarm/task survives + the stale-instance replacement case; falsification-proven RED with the fence disabled (res.ok===true caught). Suite 1930/0, both builds rc=0, KAT 38/38.
+
 ## [0.2.345] — 2026-08-28
 - Internal groundwork only, no user-visible change: kept the pieces of the faster task-history storage that stand on their own, and backed out the switch-over after it produced a result I could not explain. Not worth guessing with your task history
 
