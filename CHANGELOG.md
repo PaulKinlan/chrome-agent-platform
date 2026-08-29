@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.407] — 2026-08-29
+- CAP-FB-20260829-MIC-DEAD-MACOS-01 claim diagnostics follow-up
+
 ## [0.2.406] — 2026-08-29
 - Scheduled agents now keep their conversation: when a background agent runs on its timer, the work it did shows up in that agent's chat — previously it vanished
 
