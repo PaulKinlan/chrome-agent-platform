@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.391] — 2026-08-29
+- merge: provider-server-tools lane (20040a03) — Gemini google_search grounding slice 1: execution-as-declaration latch (cap 10/run), double-gated availability (global toggle + per-agent opt-in keyed by IMMUTABLE instanceId, background fail-closed, deletion clears opt-ins), groundingMetadata→citation normalization (https-only) harvested at the model boundary, citation rendering live + persisted through the durable outbox, ESTIMATE-labelled usage ledger billing EVERY provider-reported query occurrence (rawQueryCount — neither the 32-text cap nor the 128-accumulator cap undercounts), resume identity persisted explicitly (null stays fail-closed across generic durable resume), display-name model IDs normalized canonically, Clear Usage clears the server ledger, revocation re-checked at the paid-call boundary. Reviewed PASS (round 4). Merge unions: delegation's runMaxIterations/iterationGuard + providerServerAgentId ride all orchestrator signatures; terminal settle carries BOTH delegationSpend enforcement AND grounding attach; runNamedAgentTask keeps instanceId memory/skills AND gains the lane's providerServerAgentId: agent.instanceId || null; components renders serverToolRows under agent answers inside main's hydrated-list structure. Manifest kept at main's P0 shape.
+
+## [0.2.390] — 2026-08-29
+- Gemini can search the web while answering (you opt in globally and per agent): answers show what was searched and link their sources, every paid search is counted with an honest cost estimate, and turning the switch off stops paid calls immediately — even mid-run or after a restart
+
 ## [0.2.389] — 2026-08-29
 - merge: mutation-claim genuineness P2 (0794f39f) — title-case/possessive third-party subjects (Alice/Google/My assistant) no longer mis-classified as self-claims; coordinated predicates inherit a third-party subject across unmarked and/but [then]; explicit I/we or reflexives (bare, comma, by-prefixed) resume first-person; semicolon case fixed. Reviewed PASS (round 4, adjudicated matrix); coordinator 16-case probe matrix + SHA-stamped gates (focused 42/42, suite 2173/0, build) all run at the candidate SHA. Documented residuals: relative-clause first person, lowercase possessives, quoted speech.
 

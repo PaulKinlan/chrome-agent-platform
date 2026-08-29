@@ -25,6 +25,11 @@ import {
   isLocalProvider,
   providerOriginPattern,
 } from "../lib/provider-gate.js";
+import {
+  createServerGroundingAccumulator,
+  createServerToolLatchRegistry,
+  liveProviderServerToolRecords,
+} from "../lib/provider-server-tools.js";
 import { dispatchDurableProviderRun } from "../lib/durable-provider-dispatch.js";
 import {
   closeAgentWorkerFor,
@@ -116,7 +121,7 @@ import {
   memoryToolset,
   RunAbortedError,
 } from "../lib/agent.js";
-import { clearUsage, getUsage, recordToolCall, recordUsage } from "../lib/usage.js";
+import { clearUsage, getServerToolUsage, getUsage, recordServerToolUsage, recordToolCall, recordUsage } from "../lib/usage.js";
 import { createWebmcpAuthorizationGuard } from "../lib/webmcp-authority.js";
 import {
   diagnosticClear,
@@ -903,6 +908,9 @@ async function handleAlarm(alarm) {
         threadId: fireOwner?.threadId ?? null,
         agentRole: fireOwner?.agentRole ?? "",
         agentSurfaceRef: fireOwner?.agentSurfaceRef ?? null,
+        // Unattended agent fires have no immutable named-agent identity in the
+        // schedule payload, so paid provider tools fail closed (never hub).
+        providerServerAgentId: fireOwner ? null : "hub",
         // A background/scheduled agent gets its OWN OPFS (memory + run log),
         // keyed by the schedule name — never the master's memory.
         memory: backgroundAgentMemory(alarm.name),
@@ -1116,7 +1124,7 @@ function abortWorker(origin) {
   }
 }
 
-async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverride = null, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined, iterationGuard = null) {
+async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverride = null, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined, iterationGuard = null, providerServerAgentId = "hub") {
   // A BACKGROUND/SCHEDULED agent has its OWN memory (Paul: all agents get their
   // own OPFS). Build a FRESH orchestrator bound to that store — never the cached
   // shared master, whose memory tools would otherwise write to the master's
@@ -1137,6 +1145,7 @@ async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverr
       approvalExecutionId,
       runMaxIterations,
       iterationGuard,
+      providerServerAgentId,
     );
   }
   while (true) {
@@ -1189,7 +1198,7 @@ async function lazyPermissionDigest() {
   }
 }
 
-async function liveChromeLazyRecords({ browserTools, managementTools, executionId, scoped }) {
+async function liveChromeLazyRecords({ browserTools, managementTools, executionId, scoped, providerServer = null }) {
   const version = String(chrome.runtime.getManifest()?.version ?? "0");
   const extensionDigest = sha256Hex(`cap-extension:${version}`);
   const permissionDigest = await lazyPermissionDigest();
@@ -1257,6 +1266,23 @@ async function liveChromeLazyRecords({ browserTools, managementTools, executionI
       sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
       closureGeneration: "task-execution-core",
     }),
+    // Provider-EXECUTED (server-side) tools — discovery through the same lazy
+    // index; "execution" latches the provider-defined tool onto the run (the
+    // agent-core proxy declares it on the next model call). Availability is
+    // resolved live from the provider lane + the owner's toggles.
+    // SCOPED (hook) runs are driven by UNTRUSTED browser events — a paid
+    // provider-side tool must never be latchable from one, so scoped runs get
+    // no provider-server records at all.
+    ...(providerServer && !scoped
+      ? await liveProviderServerToolRecords({
+        lane: providerServer.lane,
+        modelId: providerServer.modelId,
+        readSwitches: providerServer.readSwitches,
+        latchRegistry: providerServer.latchRegistry,
+        sourceGeneration: `${sourceGeneration}:provider-server`,
+        scope,
+      })
+      : []),
   ];
   return records;
 }
@@ -1356,7 +1382,7 @@ async function readSiteLazySources(origin, runGenCell) {
 // ensureOrchestrator's cache path AND the fresh per-background-agent path.
 // `promptScope`/`agentRole` select the system-prompt composition (the hub by
 // default; a named agent's own scope + role when it runs).
-async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined, iterationGuard = null) {
+async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined, iterationGuard = null, providerServerAgentId = "hub") {
     // A per-agent model override (the named-agent provider config) REPLACES the
     // global model for THIS build — the resolved { model, modelId, providerName }
     // is self-contained, so a per-agent model never mixes one provider's
@@ -1405,6 +1431,43 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     // provider.set-style invalidation so a saved change rebuilds the orchestrator.
     const prefs = (await kvGet("cap:multiAgent")) ?? {};
     const multiAgent = prefs["cap:multiAgent"] !== false;
+    // Provider-server tooling for THIS build (slice 1: Gemini google_search).
+    // The latch registry + grounding observations are BUILD-LOCAL (an
+    // invalidated orchestrator starts clean; a stale build's latches can never
+    // leak into a new build's model). Named-agent opt-ins are keyed ONLY by the
+    // immutable instanceId; unattended/background runs pass no identity and
+    // therefore fail closed instead of aliasing the hub.
+    const serverToolLatchRegistry = createServerToolLatchRegistry();
+    const serverToolGrounding = new Map(); // runId -> bounded accumulator
+    const optInKey = typeof providerServerAgentId === "string" && providerServerAgentId
+      ? providerServerAgentId
+      : null;
+    const readServerToolSwitches = async () => {
+      const store = (await kvGet(SERVER_TOOLS_KEY).catch(() => null)) ?? {};
+      const cfg = store[SERVER_TOOLS_KEY];
+      return {
+        globalEnabled: cfg?.enabled === true,
+        agentOptIn: optInKey != null && cfg?.agents?.[optInKey] === true,
+      };
+    };
+    const serverTooling = {
+      latchRegistry: serverToolLatchRegistry,
+      isAuthorized: async () => {
+        const switches = await readServerToolSwitches();
+        return switches.globalEnabled === true && switches.agentOptIn === true;
+      },
+      onGrounding: (runId, normalized) => {
+        let entry = serverToolGrounding.get(runId);
+        if (!entry) {
+          entry = createServerGroundingAccumulator();
+          serverToolGrounding.set(runId, entry);
+          if (serverToolGrounding.size > 256) {
+            serverToolGrounding.delete(serverToolGrounding.keys().next().value);
+          }
+        }
+        entry.add(normalized);
+      },
+    };
     const modelManagementDispatch = bindModelApprovalDispatcher(approvalExecutionId, dispatchRoute);
     const liveBrowserTools = browserToolset(scoped);
     const liveManagementTools = scoped ? {} : managementToolset({
@@ -1436,7 +1499,14 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
         managementTools: liveManagementTools,
         executionId: approvalExecutionId,
         scoped,
+        providerServer: {
+          lane: model.providerLane ?? "openai-compatible",
+          modelId: model.modelId ?? "",
+          readSwitches: readServerToolSwitches,
+          latchRegistry: serverToolLatchRegistry,
+        },
       }),
+      serverTooling,
       delegateGuard: async (origin) => {
         // The model-facing delegate_task must revalidate LIVE enrollment before
         // running a cached worker (the internal path previously bypassed the
@@ -1463,6 +1533,13 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     // at run start so a run can prove WHICH composition it was built with, and
     // a debug/test path can verify the Settings preview matches it.
     orch.promptInfo = await attestComposition(masterComposed, promptScope ?? "hub");
+    // Expose the build-local provider-server observations so the run's settle
+    // path can attach citations to the terminal message + record the usage
+    // line. Read-only view; the maps themselves stay private to this build.
+    orch.serverTooling = {
+      latchCount: (runId) => serverToolLatchRegistry.latchCount(runId),
+      groundingFor: (runId) => serverToolGrounding.get(runId)?.snapshot() ?? null,
+    };
     return orch;
 }
 
@@ -2105,7 +2182,7 @@ function providerResumeIdentity(config) {
   };
 }
 
-async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSkills = [], agentSurfaceRef = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, preallocatedExecutionId = null, admissionFence = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null, onExecutionStarted = null }) {
+async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSkills = [], agentSurfaceRef = null, providerServerAgentId = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, preallocatedExecutionId = null, admissionFence = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null, onExecutionStarted = null }) {
   // skipRunLock is ONLY for the delegation child path (agent.delegate): the
   // child builds a FRESH orchestrator (its own memory + abort controller via
   // the memoryOverride/promptScope/executionId path below), so the shared-
@@ -2165,6 +2242,11 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       promptScope: promptScope ?? null,
       agentRole: String(agentRole ?? ""),
       agentSurfaceRef: agentSurfaceRef == null ? null : String(agentSurfaceRef),
+      // Preserve explicit null through generic durable resume. Unknown/legacy
+      // requests fail closed; only true hub entry points persist "hub".
+      providerServerAgentId: typeof providerServerAgentId === "string" && providerServerAgentId
+        ? providerServerAgentId
+        : null,
       clientCorrelationId: clientCorrelationId ?? null,
       threadId: threadId ?? null,
       scheduleName: scheduleName ?? null,
@@ -2401,6 +2483,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         executionId,
         delegationState ? delegationState.maxIterations : undefined,
         delegationState ? (step) => canStartDelegationIteration(delegationState, step) : null,
+        providerServerAgentId,
       );
       durableRunAborters.set(executionId, () => {
         try { orch?.abort?.(); } catch { /* already stopped */ }
@@ -2557,8 +2640,38 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // parent+subtree cap BEFORE committing success, because a later catch
       // cannot replace an already-settled successful record.
       const delegationSpend = assertDelegationSpendWithinCap(delegationState);
-      const terminal = await durableRuns.settle(executionId, { ok: true, result, logicalId: taskId });
-      if (terminal?.phase === "cancelled") {
+
+      // Provider-server tool outcomes for THIS run: grounding harvested from the
+      // provider stream (queries + citations) + the latch count. Attach to the
+      // terminal message for citation rendering and record the usage line as a
+      // labelled ESTIMATE (CAP cannot see the provider's free-tier meter).
+      const serverGrounding = orch?.serverTooling?.groundingFor?.(executionId) ?? null;
+      const serverLatchCount = orch?.serverTooling?.latchCount?.(executionId) ?? 0;
+      if (serverGrounding && serverGrounding.queryOccurrenceCount > 0) {
+        const queryCount = serverGrounding.queryOccurrenceCount;
+        const estUsd = (queryCount * 0.014);
+        try {
+          await recordToolCall("provider-server/gemini/google_search");
+          await recordServerToolUsage({
+            provider: "gemini",
+            tool: "google_search",
+            queries: queryCount,
+            estimatedUsd: estUsd,
+            note: `Web search: ${queryCount} call${queryCount === 1 ? "" : "s"} (Gemini) — est. $${estUsd.toFixed(4)} (ESTIMATE — the 5,000/mo free tier is metered provider-side and invisible to CAP)`,
+          });
+        } catch { /* usage telemetry must never fail a settled run */ }
+      }
+      const terminal = await durableRuns.settle(executionId, { ok: true, result, logicalId: taskId,
+        ...(serverGrounding && (serverGrounding.citations.length > 0 || serverGrounding.queryOccurrenceCount > 0)
+          ? {
+            citations: serverGrounding.citations,
+            // Presentation dedupes repeated queries; billing above deliberately
+            // counts every provider-reported occurrence.
+            serverToolEvents: serverGrounding.displayQueries.map((query) => ({ kind: "google_search", query })),
+            serverToolLatches: serverLatchCount,
+          }
+          : {}),
+      });      if (terminal?.phase === "cancelled") {
         return { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "cancelled", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId };
       }
       await fence?.assertOwned?.();
@@ -2603,7 +2716,20 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         // Re-check ownership AFTER the notification commit as well.
         await fence?.assertOwned?.();
       }
-      return { ok: true, result, executionId, ...(delegationSpend ? { delegationSpend } : {}) };
+      return {
+        ok: true,
+        result,
+        executionId,
+        ...(delegationSpend ? { delegationSpend } : {}),
+        // Live-surface citation rendering (reopened threads render the same
+        // rows from the persisted terminal message).
+        ...(serverGrounding && serverGrounding.citations.length > 0
+          ? { citations: serverGrounding.citations }
+          : {}),
+        ...(serverGrounding && serverGrounding.displayQueries.length > 0
+          ? { serverToolEvents: serverGrounding.displayQueries.map((query) => ({ kind: "google_search", query })) }
+          : {}),
+      };
     } catch (error) {
       if (isNativeQuotaExceededError(error)) {
         // Settling allocates a retained payload and terminal outbox before it
@@ -2768,6 +2894,28 @@ const WEBMCP_STATUS_KEY = "cap:webmcpStatus";
 // acceptToolSnapshot/syncSnapshotDocument) — a second same-origin tab or a
 // stale document can never replace the bound tab's current snapshot.
 const SNAPSHOT_GATE_KEY = "cap:webmcpSnapshotGate";
+// Provider server tools (slice 1: Gemini google_search): the owner's GLOBAL
+// toggle + per-agent opt-in map. Both default OFF — a provider-side search
+// spends real money without a Chrome permission, so nothing latches without
+// an explicit owner choice.
+const SERVER_TOOLS_KEY = "cap:providerServerTools";
+
+async function clearProviderServerAgentOptIns(ids) {
+  const remove = new Set((ids ?? []).filter((id) => typeof id === "string" && id));
+  if (remove.size === 0) return;
+  const store = (await kvGet(SERVER_TOOLS_KEY).catch(() => null)) ?? {};
+  const cfg = store[SERVER_TOOLS_KEY];
+  if (!cfg || typeof cfg !== "object" || !cfg.agents || typeof cfg.agents !== "object") return;
+  const agents = { ...cfg.agents };
+  let changed = false;
+  for (const id of remove) {
+    if (Object.prototype.hasOwnProperty.call(agents, id)) {
+      delete agents[id];
+      changed = true;
+    }
+  }
+  if (changed) await kvSet({ [SERVER_TOOLS_KEY]: { ...cfg, agents } });
+}
 
 // Metadata-only shadow catalog (CAP-FB-20260822-TOOL-CATALOG-CONTRACT-01).
 // It observes the REAL current tool maps and WebMCP directory, but owns no
@@ -3315,6 +3463,9 @@ async function runNamedAgentTask({ id, task, attachments, runId, threadId = null
       // /skill:<id> reference takes) — saved skills are real, not decorative.
       agentSkills: await resolveAgentSkills(agent),
       agentSurfaceRef: `named:${slug}`,
+      // Paid provider-tool authority follows the immutable identity, not the
+      // reusable slug. A legacy agent missing instanceId fails closed.
+      providerServerAgentId: agent.instanceId || null,
       // Agent→agent delegation (G5): a top-level named-agent run is a
       // delegation ROOT (depth 0); a child run carries its extended path.
       // The delegate_to_agent tool is present either way — the per-call
@@ -4091,6 +4242,7 @@ const handlers = mergeRouteMaps(
         approvalBinding: m.approvalBinding ?? null,
         threadId,
         agentRole: "hub",
+        providerServerAgentId: "hub",
         onProgress: (event) => {
           if (event?.type === "tool-call") lastTool = event.toolName ?? null;
           broadcastProgress({
@@ -4428,6 +4580,7 @@ const handlers = mergeRouteMaps(
   },
   async "named-agent.delete"({ id }, context) {
     const slug = slugifyAgentId(id);
+    const deletingAgent = await getNamedAgent(slug);
     const r = await deleteNamedAgent(slug, {
       // Approval → durable schedule mark → row/OPFS deletion is STRUCTURAL
       // (the extracted gate, routes/agent-schedule.js): a marking failure
@@ -4475,6 +4628,10 @@ const handlers = mergeRouteMaps(
       closeAgentWorker: (agentId) => closeAgentWorkerFor(agentId, { kvGet, kvSet }),
     });
     if (r?.ok !== false) {
+      // Paid provider-tool opt-ins are identity-scoped state. Clear the current
+      // instanceId plus any legacy slug key so a recreated same-name agent can
+      // never inherit paid-tool authority.
+      await clearProviderServerAgentOptIns([deletingAgent?.instanceId, slug]).catch(() => null);
       // Failed-runs cascade (owner 2026-08-28): the deleted agent's terminal
       // failed records are purged from the durable registry (record, index,
       // stored prompt payload, logs) so the Tasks sidebar neither shows them
@@ -5133,7 +5290,8 @@ const handlers = mergeRouteMaps(
   },
 
   async "usage.get"() {
-    return await getUsage();
+    const usage = await getUsage();
+    return { ...usage, serverTools: await getServerToolUsage() };
   },
   async "usage.clear"() {
     await clearUsage();
@@ -5380,7 +5538,7 @@ const handlers = mergeRouteMaps(
     return { ok: true, name, when };
   },
   async "run-task"(m) {
-    return await runTask({ id: m.id, task: m.task, clientCorrelationId: m.runId ?? null });
+    return await runTask({ id: m.id, task: m.task, providerServerAgentId: "hub", clientCorrelationId: m.runId ?? null });
   },
   async "run.list"() {
     await durableRecoveryReady;
@@ -5621,6 +5779,7 @@ const handlers = mergeRouteMaps(
       task: recipe.prompt,
       runKind: "agent",
       agentRole: `recipe:${recipe.id}`,
+      providerServerAgentId: null,
     });
   },
   async "background-agent.list"() {
@@ -5925,6 +6084,7 @@ const handlers = mergeRouteMaps(
         runKind: "agent",
         agentRole: `background:${recipe.id}`,
         agentSurfaceRef: `background:${recipe.id}`,
+        providerServerAgentId: null,
         executionId: _executionId,
         permissionResume: _permissionResume,
         resumeToken: _resumeToken,
@@ -7070,6 +7230,7 @@ async function dispatchHook(hookId, payload) {
       memory: backgroundAgentMemory(sub.recipeId ? `recipe:${sub.recipeId}` : `hook:${hookId}`),
       runKind: "agent",
       agentRole: sub.recipeId ? `recipe:${sub.recipeId}` : `hook:${hookId}`,
+      providerServerAgentId: null,
     }).catch((e) => {
       // A provider failure (missing host permission / open breaker / a model
       // that returns no output) must not flood the console per tab event —

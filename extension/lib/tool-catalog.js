@@ -38,6 +38,10 @@ export const TOOL_SOURCE_KINDS = Object.freeze([
   "webmcp-declared",
   "webmcp-inferred",
   "bundled-package",
+  // Provider-EXECUTED (server-side) tools — e.g. Gemini google_search. Their
+  // "dispatch" is a per-run latch, not a client execution
+  // (extension/lib/provider-server-tools.js).
+  "provider-server",
 ]);
 
 export const TOOL_AVAILABILITIES = Object.freeze([

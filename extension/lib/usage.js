@@ -20,6 +20,51 @@ const MAX_TOOL_NAMES_PER_DAY = 64;
 const MAX_TOOL_NAME_LEN = 128;
 let toolUsageMutex = Promise.resolve();
 
+// ── Provider server-tool usage (per-run query counts + cost ESTIMATES) ──────
+// Server-side tools (Gemini google_search, …) bill PER EXECUTED QUERY, not per
+// token, and the provider's free-tier meter is invisible to CAP — every figure
+// here is a labelled estimate. Key: cap:usage:server-tools:v1 → { v:1, days: {
+// "YYYY-MM-DD": [ { provider, tool, queries, estimatedUsd, note, at } ] } }.
+export const SERVER_TOOL_USAGE_KEY = "cap:usage:server-tools:v1";
+const SERVER_TOOL_USAGE_MAX_PER_DAY = 128;
+let serverToolUsageMutex = Promise.resolve();
+
+/** Record ONE run's provider-server usage. Fire-and-forget safe. */
+export async function recordServerToolUsage(entry, nowMs = Date.now()) {
+  const provider = String(entry?.provider ?? "").slice(0, 64);
+  const tool = String(entry?.tool ?? "").slice(0, 64);
+  const queries = Math.max(0, Math.min(1000, Math.trunc(Number(entry?.queries) || 0)));
+  if (!provider || !tool || queries === 0) return;
+  const estimatedUsd = Math.max(0, Number(entry?.estimatedUsd) || 0);
+  const note = String(entry?.note ?? "").slice(0, 256);
+  const run = serverToolUsageMutex.then(async () => {
+    const store = await kvGet([SERVER_TOOL_USAGE_KEY]);
+    const cur = store?.[SERVER_TOOL_USAGE_KEY];
+    const days = cur && typeof cur === "object" && cur.days && typeof cur.days === "object" ? cur.days : {};
+    const day = todayKey(new Date(nowMs));
+    const rows = Array.isArray(days[day]) ? days[day] : [];
+    if (rows.length < SERVER_TOOL_USAGE_MAX_PER_DAY) {
+      rows.push({ provider, tool, queries, estimatedUsd, note, at: new Date(nowMs).toISOString() });
+    }
+    days[day] = rows;
+    await kvSet({ [SERVER_TOOL_USAGE_KEY]: { v: 1, days: trimToolUsageDays(days) } });
+  });
+  serverToolUsageMutex = run.then(() => {}, () => {});
+  return run;
+}
+
+/** Read the server-tool usage rows (usage panel). */
+export async function getServerToolUsage() {
+  return await serverToolUsageMutex.then(() => {}, () => {}).then(async () => {
+    const store = await kvGet([SERVER_TOOL_USAGE_KEY]);
+    const days = store?.[SERVER_TOOL_USAGE_KEY]?.days;
+    if (!days || typeof days !== "object") return [];
+    return Object.entries(days)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([day, rows]) => ({ day, rows: Array.isArray(rows) ? rows : [] }));
+  });
+}
+
 function todayKey(now = new Date()) {
   return now.toISOString().slice(0, 10);
 }
@@ -313,5 +358,12 @@ export async function clearUsage() {
   return await withUsageLock(async () => {
     await usageClear();
     await kvSet({ [TOOL_USAGE_KEY]: { v: 1, days: {} } });
+    // Serialize with any in-flight provider-server append: "Clear usage" is one
+    // owner action and must empty every usage ledger before it resolves.
+    const clearServerTools = serverToolUsageMutex.then(async () => {
+      await kvSet({ [SERVER_TOOL_USAGE_KEY]: { v: 1, days: {} } });
+    });
+    serverToolUsageMutex = clearServerTools.then(() => {}, () => {});
+    await clearServerTools;
   });
 }

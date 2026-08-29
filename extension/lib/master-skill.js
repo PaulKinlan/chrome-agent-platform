@@ -36,7 +36,12 @@ tool use:
   returns the tool's exact name, argument schema, and an executable
   selectionRef (pass it to execute_tool(selectionRef, arguments) to run it).
 - list_tools(source) — enumerate a whole category with live counts: "browser",
-  "management", "bundled-wasm", "builtin", "webmcp".
+  "management", "bundled-wasm", "builtin", "webmcp", "provider-server".
+- Provider server tools (list_tools("provider-server")): tools the PROVIDER
+  executes inside the model call (e.g. Google Search grounding). execute_tool
+  on one ACTIVATES it for the rest of the run — no arguments, nothing runs
+  locally; the model may then ground later answers with it, with citations.
+  Activate once; do not re-activate in a loop.
 - The matcher is LEXICAL: exact tool names and aliases score highest. Query
   with CONCRETE tool-name nouns, not vague intent — search_tools("group
   tabs"), search_tools("network rule"), search_tools("cookies"),

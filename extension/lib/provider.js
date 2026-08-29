@@ -16,6 +16,11 @@
 
 import { createOpenAICompatibleModel } from "./models/openai-model.js";
 import {
+  createGeminiNativeModel,
+  isDefaultGeminiEndpoint,
+  normaliseGeminiNativeModelId,
+} from "./models/gemini-native-model.js";
+import {
   createPromptApiModel,
   isPromptApiAvailable,
 } from "./models/prompt-api-model.js";
@@ -51,7 +56,7 @@ export const PROVIDER_CHOICES = [
   },
   {
     id: "gemini",
-    label: "Google Gemini (OpenAI-compatible endpoint, your key)",
+    label: "Google Gemini (native API, your key — a custom base URL uses the OpenAI-compatible adapter)",
     needsKey: true,
     baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
     needsModel: true,
@@ -144,8 +149,24 @@ export async function resolveModelFromConfig(cfg) {
         } — fell back to demo)`,
       };
     }
+    // NATIVE GEMINI LANE: the Gemini OpenAI-compatible endpoint silently drops
+    // provider-defined server tools (google_search, url_context, code_exec), so
+    // the DEFAULT Gemini config routes through @ai-sdk/google's native API
+    // (same credential + middleware). A CUSTOM base URL is a BYO/proxy
+    // endpoint and stays on the compatible adapter — provider server tools
+    // then honestly report owner-action-required.
+    if (id === "gemini" && isDefaultGeminiEndpoint(cfg.baseURL)) {
+      const canonicalModel = normaliseGeminiNativeModelId(model);
+      const m = createGeminiNativeModel({ apiKey, model: canonicalModel });
+      return {
+        model: m,
+        modelId: canonicalModel,
+        providerName: id,
+        providerLane: "gemini-native",
+      };
+    }
     const m = createOpenAICompatibleModel({ baseURL, apiKey, model });
-    return { model: m, modelId: model, providerName: id };
+    return { model: m, modelId: model, providerName: id, providerLane: "openai-compatible" };
   }
 
   if (id === "prompt-api") {

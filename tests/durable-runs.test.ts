@@ -859,6 +859,42 @@ Deno.test("durable runs: permission pause resumes only after resolution state an
   await restarted.registry.activateResume(executionId, automatic.token, automatic.resumeRequest.providerBinding);
 });
 
+Deno.test("durable runs: generic scheduled resume preserves fail-closed provider-server identity", async () => {
+  const store = new FakeStore();
+  const first = harness(store);
+  const scheduledExecutionId = "exec_provider_identity_resume_0001";
+  const admission = await admitDurableRun(first.registry, {
+    executionId: scheduledExecutionId,
+    clientCorrelationId: "scheduled-provider-identity",
+    threadId: null,
+    kind: "scheduled",
+    taskPreview: "background work",
+    journalTarget: "agent:background",
+    // This models a generic/legacy caller with UNKNOWN identity. Admission must
+    // persist explicit null so spreading the resumed request can never trigger
+    // runTask's hub behavior.
+    resumeRequest: {
+      id: "schedule:background",
+      task: "background work",
+      scheduled: true,
+      memoryOrigin: "agent:background",
+      providerBinding: { schemaVersion: 1, provider: "demo", model: "demo", requestedScope: null, local: true },
+      idempotencyKey: scheduledExecutionId,
+    },
+  });
+  assertEquals(admission, null);
+
+  const restarted = harness(store, { bootId: "boot-provider-identity-resume" });
+  await restarted.registry.recover();
+  const prepared = await restarted.registry.resumeAfterInterruption(scheduledExecutionId);
+  assert(Object.prototype.hasOwnProperty.call(prepared.resumeRequest, "providerServerAgentId"));
+  assertEquals(prepared.resumeRequest.providerServerAgentId, null);
+  // Exact generic dispatch shape: the durable request is spread back into
+  // runTask, so the explicit null must survive that spread.
+  const genericResumeArgs = { ...prepared.resumeRequest, executionId: scheduledExecutionId };
+  assertEquals(genericResumeArgs.providerServerAgentId, null);
+});
+
 Deno.test("durable runs: rejected resume dispatch re-pauses visibly and bounds automatic attempts", async () => {
   const store = new FakeStore();
   const first = harness(store);

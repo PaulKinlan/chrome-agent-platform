@@ -27,7 +27,16 @@ export function durableQuotaResponse(error, executionId) {
  */
 export async function admitDurableRun(durableRuns, meta) {
   try {
-    await durableRuns.start(meta);
+    // Paid provider-tool identity must survive every durable resume. Older or
+    // generic callers that omit it are UNKNOWN and therefore fail closed; an
+    // explicit null/background identity remains null, while the hub must name
+    // itself explicitly.
+    const resumeRequest = meta?.resumeRequest;
+    const normalizedMeta = resumeRequest && typeof resumeRequest === "object" &&
+        !Object.prototype.hasOwnProperty.call(resumeRequest, "providerServerAgentId")
+      ? { ...meta, resumeRequest: { ...resumeRequest, providerServerAgentId: null } }
+      : meta;
+    await durableRuns.start(normalizedMeta);
     return null;
   } catch (error) {
     if (!isNativeQuotaExceededError(error)) throw error;

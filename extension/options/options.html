@@ -72,6 +72,15 @@
           <div id="provider-panels" class="provider-panels"></div>
         </div>
         <p id="provider-selection-status" class="hint" role="status" aria-live="polite" aria-atomic="true" hidden></p>
+        <div class="toggle-field" id="server-tools-card">
+          <switch-toggle id="server-tools-enabled" label="Provider server tools"></switch-toggle>
+          <div class="toggle-text">
+            <span class="toggle-name">Provider server tools</span>
+            <span class="muted">Let agents activate tools the PROVIDER executes inside the model call (no local code runs). Today: Google Search grounding for the Gemini provider.
+              <strong>Cost:</strong> 5,000 free searches/mo shared (Gemini 3.x), then $14 per 1,000 searches — CAP shows estimates only; the provider's free-tier meter is not visible here.</span>
+          </div>
+        </div>
+        <div id="server-tools-agents" class="server-tools-agents" hidden></div>
       </section>
 
       <section id="local-folders" class="panel">

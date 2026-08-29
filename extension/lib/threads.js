@@ -391,11 +391,33 @@ export async function commitThreadTerminal(id, executionId, terminal) {
     if (!existing) {
       const role = terminal?.role === "assistant" ? "assistant" : "error";
       const content = boundText(terminal?.content ?? (role === "error" ? "run failed" : ""));
+      // Provider-server grounding rows (render-only): citations are bounded
+      // {url,title,startIndex,endIndex} records; serverToolEvents are the
+      // executed provider-side queries ("🔎 Searched: …" cards). NEVER routed
+      // back to the model — historyFromThread projects content text only.
+      const citations = Array.isArray(terminal?.citations)
+        ? terminal.citations.slice(0, 32).map((c) => ({
+          url: boundText(c?.url ?? "", 1024),
+          title: boundText(c?.title ?? "", 256),
+          ...(Number.isInteger(c?.startIndex) ? { startIndex: c.startIndex } : {}),
+          ...(Number.isInteger(c?.endIndex) ? { endIndex: c.endIndex } : {}),
+          ...(typeof c?.citedText === "string" ? { citedText: boundText(c.citedText, 512) } : {}),
+          provider: boundText(c?.provider ?? "", 32),
+        })).filter((c) => /^https:\/\//u.test(c.url))
+        : null;
+      const serverToolEvents = Array.isArray(terminal?.serverToolEvents)
+        ? terminal.serverToolEvents.slice(0, 16).map((e) => ({
+          kind: boundText(e?.kind ?? "", 64),
+          query: boundText(e?.query ?? "", 512),
+        })).filter((e) => e.kind && e.query)
+        : null;
       thread.messages.push({
         role,
         content,
         executionId,
         ts: Date.now(),
+        ...(citations && citations.length > 0 ? { citations } : {}),
+        ...(serverToolEvents && serverToolEvents.length > 0 ? { serverToolEvents } : {}),
         ...(role === "error"
           ? {
             tool: terminal?.tool ?? undefined,

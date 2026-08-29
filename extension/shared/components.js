@@ -3083,6 +3083,7 @@ class MessageBubble extends Component {
       :host([role="user"]) { justify-content:flex-end; }
       .msg { max-width:78%; border-radius:12px; padding:10px 14px; overflow-wrap:anywhere; }
       .body { font-size:14px; line-height:1.55; color:var(--ink,#1d1b18); }
+      .body .cite-ref a { color:var(--accent,#0e6e63); text-decoration:none; font-size:0.75em; margin-left:1px; }
       :host([role="user"]) .msg { background:var(--secondary-layer,#efede8); }
       :host([role="agent"]) .msg, :host([role="system"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); }
       :host([role="error"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--danger,#b3261e); }
@@ -3386,6 +3387,46 @@ class MessageBubble extends Component {
 }
 customElements.define("message-bubble", MessageBubble);
 
+// Inline citation superscripts: locate each citation's citedText in the agent
+// bubble's rendered body and append a superscript link after the match. The
+// body is markdown-rendered HTML inside the bubble's shadow root; matching is
+// text-node based (never innerHTML mutation — no HTML-injection sink), and a
+// miss is silent (the sources list still carries the attribution).
+function applyInlineCitations(bubble, citations) {
+  try {
+    const root = bubble?._root ?? bubble?.shadowRoot;
+    const body = root?.querySelector?.(".body");
+    if (!body) return;
+    const withText = (Array.isArray(citations) ? citations : [])
+      .map((c, i) => ({ c, n: i + 1 }))
+      .filter(({ c }) => typeof c?.citedText === "string" && c.citedText.length >= 8 && /^https:\/\//u.test(String(c?.url ?? "")));
+    if (withText.length === 0) return;
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    let node;
+    while ((node = walker.nextNode())) nodes.push(node);
+    for (const { c, n } of withText.slice(0, 16)) {
+      const needle = c.citedText;
+      for (const textNode of nodes) {
+        const idx = textNode.nodeValue?.indexOf(needle) ?? -1;
+        if (idx < 0) continue;
+        const sup = document.createElement("sup");
+        const a = document.createElement("a");
+        a.href = String(c.url);
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.className = "cite-ref";
+        a.textContent = `[${n}]`;
+        a.title = String(c.title ?? c.url).slice(0, 200);
+        sup.appendChild(a);
+        const after = textNode.splitText(idx + needle.length);
+        textNode.parentNode.insertBefore(sup, after);
+        break;
+      }
+    }
+  } catch { /* rendering must never break the conversation */ }
+}
+
 /* <agent-conversation messages='[{role,content,…}]'>
  * The unified conversational surface (the "Now" section + the chat). A
  * light-DOM flex column that hosts <message-bubble> children. Imperative API:
@@ -3418,6 +3459,11 @@ class AgentConversation extends Component {
       agent-conversation { display:flex; flex-direction:column; min-height:0; }
       agent-conversation .empty { color:var(--muted,#635e56); font-size:var(--text-sm,13px); padding:2px 0; }
       agent-conversation .ts-gap { align-self:center; margin:10px 0 4px; font-size:var(--text-xs,12px); color:var(--muted,#635e56); letter-spacing:.02em; user-select:none; }
+      agent-conversation .citation-sources { display:flex; flex-wrap:wrap; gap:4px 10px; align-items:baseline; margin:2px 0 6px 8px; font-size:var(--text-xs,12px); }
+      agent-conversation .citation-sources-label { color:var(--muted,#635e56); font-weight:600; margin-right:2px; }
+      agent-conversation .citation-link { color:var(--accent,#0e6e63); text-decoration:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:32ch; display:inline-block; vertical-align:bottom; }
+      agent-conversation .citation-link:hover { text-decoration:underline; }
+      message-bubble .cite-ref a, .cite-ref a { color:var(--accent,#0e6e63); text-decoration:none; font-size:0.75em; }
       /* An artifact is a deliverable, not a chat line: it gets its own block on
          the 8px grid rather than being squeezed into the bubble column. */
       agent-conversation .msg-artifact { margin:var(--space-2,8px) 0; max-width:min(560px, 100%); }
@@ -3477,6 +3523,55 @@ class AgentConversation extends Component {
   }
   appendUser(text, ts, attachments) { if (ts) this._maybeTsGap(ts); return this._bubble("user", text, attachments?.length ? { attachments: JSON.stringify(attachments) } : null); }
   appendAgent(text, ts) { if (ts) this._maybeTsGap(ts); return this._bubble("agent", text); }
+  /** Render-only provider-server rows for a message: the collapsed tool-step
+   *  card per executed provider-side query ("🔎 Searched: …" — NEVER routed
+   *  back through the agent loop) + a bounded sources list with clickable
+   *  citation links. Where a citation carries a citedText range, the agent
+   *  bubble's rendered body gets an inline superscript link at the first
+   *  matching text occurrence (best-effort; the sources list is the
+   *  always-present attribution). */
+  appendServerToolRows(m = {}) {
+    const events = Array.isArray(m.serverToolEvents) ? m.serverToolEvents.slice(0, 16) : [];
+    const citations = Array.isArray(m.citations) ? m.citations.slice(0, 32) : [];
+    if (events.length === 0 && citations.length === 0) return;
+    // Capture the answer bubble BEFORE appending any cards — the inline
+    // citation superscripts splice into ITS rendered body.
+    const answerBubble = this.lastElementChild?.tagName === "MESSAGE-BUBBLE" &&
+      this.lastElementChild.getAttribute("role") === "agent"
+      ? this.lastElementChild : null;
+    for (const ev of events) {
+      const query = String(ev?.query ?? "").slice(0, 512);
+      if (!query) continue;
+      this.appendTool({
+        name: `provider:${ev?.kind ?? "server-tool"}`,
+        status: "done",
+        args: { query },
+        result: "Executed by the provider (server-side) — sources below.",
+      });
+    }
+    if (citations.length > 0) {
+      if (answerBubble) applyInlineCitations(answerBubble, citations);
+      const wrap = document.createElement("div");
+      wrap.className = "citation-sources";
+      const label = document.createElement("span");
+      label.className = "citation-sources-label";
+      label.textContent = "Sources";
+      wrap.appendChild(label);
+      citations.forEach((c, i) => {
+        const url = String(c?.url ?? "");
+        if (!/^https:\/\//u.test(url)) return; // https only — never javascript:
+        const a = document.createElement("a");
+        a.href = url;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.className = "citation-link";
+        a.textContent = `[${i + 1}] ${String(c?.title ?? url).slice(0, 120)}`;
+        wrap.appendChild(a);
+      });
+      this.appendChild(wrap);
+      this.scrollTop = this.scrollHeight;
+    }
+  }
   appendSystem(text, ts) { if (ts) this._maybeTsGap(ts); return this._bubble("system", text); }
   appendError(text, { reason, action, category, ts } = {}) {
     if (ts) this._maybeTsGap(ts);
@@ -3602,7 +3697,12 @@ class AgentConversation extends Component {
         const ts = typeof m.ts === "number" ? m.ts : null;
         switch (m.role) {
           case "user": this.appendUser(m.content, ts, m.attachments); break;
-          case "agent": this.appendAgent(m.content, ts); break;
+          case "agent": {
+            this.appendAgent(m.content, ts);
+            // Provider-server grounding rows render UNDER their answer.
+            if (m.serverToolEvents || m.citations) this.appendServerToolRows(m);
+            break;
+          }
           case "system": this.appendSystem(m.content, ts); break;
           case "thinking": this.appendThinking(m.content, m); break;
           case "tool": this.appendTool(m); break;

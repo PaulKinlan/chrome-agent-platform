@@ -213,6 +213,21 @@ Deno.test("commitThreadTerminal is idempotent by executionId and later tool repl
   assertEquals(saved.status, "done");
 });
 
+Deno.test("commitThreadTerminal persists only HTTPS grounding citations", async () => {
+  const thread = await createThread("grounded task");
+  await commitThreadTerminal(thread.id, "exec-grounding-001", {
+    role: "assistant",
+    content: "grounded answer",
+    citations: [
+      { url: "http://insecure.example/source", title: "No" },
+      { url: "https://secure.example/source", title: "Yes" },
+    ],
+  });
+  const saved = await getThread(thread.id);
+  const terminal = saved.messages.find((message) => message.executionId === "exec-grounding-001");
+  assertEquals(terminal.citations, [{ url: "https://secure.example/source", title: "Yes", provider: "" }]);
+});
+
 Deno.test("commitThreadCancellation replaces a partial terminal and remains singular", async () => {
   const thread = await createThread("cancel me");
   await commitThreadTerminal(thread.id, "exec_cancel", { role: "assistant", content: "partial", status: "done" });
