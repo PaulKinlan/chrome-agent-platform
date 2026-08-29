@@ -112,6 +112,8 @@ const REGISTRY_READ_TOOLS = new Set([
   "get_agent", "list_agents", "get_asset", "list_assets", "get_usage", "get_memory_overview",
   "get_named_agent", "list_named_agents", "list_hooks", "list_scripts", "get_script", "list_skills", "list_tools",
   "schedules_list",
+  // The shared jobs board (2026-08-29): reads.
+  "board_list", "board_read",
 ]);
 // Key-bound writes (replaying writes the same value under the same key — the
 // last-write-wins effect is identical) or idempotent-by-identity creations.
@@ -235,6 +237,9 @@ const BUILT_IN_TOOLS = new Set([
   "schedules_pause", "schedules_resume", "schedules_update",
   // Agent→agent delegation (G5): spawns a child run — mutating built-in.
   "delegate_to_agent",
+  // The shared jobs board (2026-08-29): posting/claiming/settling/messaging
+  // mutate the hub-level board store — mutating built-ins (reads above).
+  "board_post_job", "board_claim_job", "board_complete_job", "board_send_message",
 ]);
 
 /** The WORST (least replayable) of two classifications. Invalid inputs are

@@ -112,7 +112,6 @@ import {
   capabilityStatus,
   requestCapability,
   revokeCapability,
-  isRequiredCapability,
 } from "../lib/capabilities.js";
 import {
   createAgent,
@@ -541,6 +540,7 @@ import {
 } from "../lib/owner-approval.js";
 import { bridgeAndAuditApprovalBindings } from "../lib/approval-bridge-audit.js";
 import { journalJson } from "../shared/tool-tree.js";
+import { createAgentBoardRoutes } from "../lib/agent-board.js";
 import { capLog, dumpLogBuffer, clearLogBuffer, getLogVerbosity, setLogVerbosity } from "../lib/cap-log.js";
 import { perfSpan, perfSummary, perfClear } from "../lib/cap-perf.js";
 
@@ -3676,9 +3676,23 @@ async function cancelExecutionTree(executionId, { reason, requestId = null }) {
   return result;
 }
 
+const boardRoutes = createAgentBoardRoutes({
+  memory: masterMemory(),
+  withLock: withNamedAgentsLock,
+  listAgents: listNamedAgents,
+  // Caller identity comes from the route CONTEXT — the model-facing
+  // dispatcher binds the run's execution id, and dispatchRoute strips
+  // __-prefixed body keys, so a model can never forge who posted or
+  // claimed (the named-agent.delegate discipline). A call without a
+  // live named-agent run context resolves to the hub.
+  resolveCaller: (context) => activeDelegationRuns.get(context?.executionId)?.agentId ?? null,
+  broadcast: broadcastProgress,
+});
+
 const handlers = mergeRouteMaps(
   activityRoutes,
   schedulerRoutes,
+  boardRoutes,
   createMemoryRoutes(),
   agentScheduleRoutes,
   createAgentWorkerRoutes({
@@ -3802,13 +3816,6 @@ const handlers = mergeRouteMaps(
     try { payload = payloadFields([["id", id]]); } catch { return { ok: false, error: "invalid capability" }; }
     const approval = await requireOwnerApproval(context, "capability.revoke", target, payload);
     if (!approval.ok) return approval;
-    // Refuse BEFORE any dependent teardown. Every branch below destroys state
-    // first (storage snapshots, alarms disarm, scripting tombstones every
-    // enrolled origin) and removes the permission last — correct when
-    // revocation is possible, but under the install-granted model the removal
-    // can never commit, so that ordering destroyed state on the way to a
-    // guaranteed failure.
-    if (isRequiredCapability(id)) return await revokeCapability(id);
     if (id === "storage") {
       // The snapshot + permission removal + reset must be ONE atomic transition
       // under the storage-mode lock, so a concurrent KV write cannot slip between
@@ -6466,18 +6473,14 @@ const handlers = mergeRouteMaps(
       invalidateAgent();
       const scriptsRemoved = unreg.scriptsRemoved === true;
       const permissionRemoved = unreg.permissionRemoved === true;
-      // Host access declared permanently in the manifest cannot be removed per
-      // origin; absence is not achievable and not required for teardown.
-      const hostPermanent = unreg.hostPermissionPermanent === true;
-      if (scriptsRemoved && (permissionRemoved || hostPermanent) && cleared) {
+      if (scriptsRemoved && permissionRemoved && cleared) {
         await clearCleanupPending(canonical);
         broadcastRegistryChanged();
         return {
           ok: true,
           origin: canonical,
           scriptsRemoved: true,
-          permissionRemoved,
-          hostPermissionPermanent: hostPermanent,
+          permissionRemoved: true,
         };
       }
       // Record a RETRYABLE cleanup obligation (independent of enrollment, so it
@@ -6487,8 +6490,9 @@ const handlers = mergeRouteMaps(
         ok: false,
         origin: canonical,
         retryable: true,
-        error: unreg.error ??
-          (cleared ? "site teardown incomplete" : "OPFS clear failed"),
+        error:
+          unreg.error ??
+          "OPFS clear failed",
         scriptsRemoved,
         permissionRemoved,
         cleared,
@@ -6533,8 +6537,7 @@ const handlers = mergeRouteMaps(
       const cleared = clearRes.status === "fulfilled";
       const scriptsRemoved = unreg.scriptsRemoved === true;
       const permissionRemoved = unreg.permissionRemoved === true;
-      const hostPermanent = unreg.hostPermissionPermanent === true;
-      if (scriptsRemoved && (permissionRemoved || hostPermanent) && cleared) {
+      if (scriptsRemoved && permissionRemoved && cleared) {
         await clearCleanupPending(canonical);
         return { ok: true, origin: canonical };
       }
@@ -6542,8 +6545,7 @@ const handlers = mergeRouteMaps(
       return {
         ok: false,
         retryable: true,
-        error: unreg.error ??
-          (cleared ? "site teardown incomplete" : "OPFS clear failed"),
+        error: unreg.error ?? "OPFS clear failed",
         scriptsRemoved,
         permissionRemoved,
         cleared,

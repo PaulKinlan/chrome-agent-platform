@@ -381,6 +381,11 @@
       border-radius: 10px;
     }
     .failed-runs[hidden] { display: none; }
+    /* The Board grouping is its OWN sidebar section (the Tasks/Agents sections
+       are flex-1 shares with overflow:clip — the board would be squeezed inside
+       either). Content-sized up to a third of the sidebar; long boards scroll
+       inside the box. */
+    #board-section { flex: 0 1 auto; max-height: 34%; overflow-y: auto; }
     .failed-runs .fr-label {
       display: flex;
       align-items: center;
@@ -800,6 +805,7 @@
         <section id="agent-schedules" class="failed-runs" hidden aria-label="Schedules for this agent"></section>
         <nav class="side-list thread-list" id="thread-sidebar" aria-label="Task threads" tabindex="0"></nav>
       </section>
+      <section id="board-section" class="side-section failed-runs" hidden aria-label="Shared jobs board"></section>
       <section class="side-section side-agents" aria-label="Agent list">
         <div class="side-label-row">
           <span class="side-label" id="agents-label">Agents</span>

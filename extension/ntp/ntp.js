@@ -1049,6 +1049,8 @@ function flushRunLogDirty() {
 subscribeProgress((ev) => {
   if (!ev || typeof ev !== "object") return;
   if (["tool-call", "tool-result", "done", "error", "text"].includes(ev.type)) scheduleRunLogRefresh();
+  // Board changes re-render the sidebar section live (post/claim/settle/message).
+  if (typeof ev.type === "string" && ev.type.startsWith("board-")) refreshBoard();
 });
 subscribeRunRegistry(() => scheduleRunLogRefresh(), { emitCurrent: false });
 
@@ -1247,6 +1249,67 @@ function agentScheduleEditor(t, done) {
 }
 
 let failedRunsOwner = 0;
+// The shared jobs board grouping (owner green-lit 2026-08-29): open jobs
+// (poster, claimant, status) + the three most recent board messages, rendered
+// ABOVE the thread rows. Read-only owner surface — all agent-authored content
+// renders via textContent only. Bounded: 8 jobs + 3 messages.
+let boardOwner = 0;
+async function refreshBoard() {
+  const owner = ++boardOwner;
+  const section = document.getElementById("board-section");
+  if (!section) return;
+  let jobs = null;
+  let messages = null;
+  try {
+    const [jobsRes, msgsRes] = await Promise.all([
+      send("board.list"),
+      send("board.messages", { limit: 3 }).catch(() => null),
+    ]);
+    if (jobsRes?.ok !== false && Array.isArray(jobsRes?.jobs)) jobs = jobsRes.jobs;
+    if (msgsRes?.ok && Array.isArray(msgsRes?.messages)) messages = msgsRes.messages;
+  } catch {
+    jobs = null; // worker restarting — the next authoritative render re-fetches
+  }
+  if (owner !== boardOwner) return; // a newer render superseded this one
+  section.replaceChildren();
+  const open = (jobs ?? []).filter((j) => j && (j.status === "pending" || j.status === "claimed"));
+  const recent = (messages ?? []).slice(0, 3);
+  if (!open.length && !recent.length) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  const label = document.createElement("div");
+  label.className = "fr-label";
+  label.textContent = `Board (${open.length} open)`;
+  section.append(label);
+  for (const job of open.slice(0, 8)) {
+    const row = document.createElement("div");
+    row.className = "fr-row";
+    const dot = document.createElement("span");
+    dot.className = "t-dot" + (job.status === "claimed" ? " running" : "");
+    const text = document.createElement("span");
+    text.className = "fr-text";
+    const state = job.status === "claimed"
+      ? `${job.claimantName ?? job.claimantId} is on it`
+      : `posted by ${job.posterName ?? job.posterId}${job.targetName ? ` for ${job.targetName}` : ""}`;
+    text.textContent = job.description;
+    text.title = `${job.description} — ${state}`;
+    row.append(dot, text);
+    section.append(row);
+  }
+  for (const m of recent) {
+    const row = document.createElement("div");
+    row.className = "fr-row";
+    const text = document.createElement("span");
+    text.className = "fr-text";
+    text.textContent = `${m.fromName} → ${m.toName}: ${m.body}`;
+    text.title = text.textContent;
+    row.append(text);
+    section.append(row);
+  }
+}
+
 async function refreshFailedRuns() {
   const owner = ++failedRunsOwner;
   const section = document.getElementById("failed-runs");
@@ -1386,6 +1449,9 @@ function renderTaskRows(threads, activeId = null) {
   // thread rows — a submitted prompt must never vanish into a silent failure.
   // Fire-and-forget: the section refreshes itself; the thread render stays sync.
   refreshFailedRuns();
+  // The shared jobs board (async agent→agent work): open jobs + the latest
+  // messages render as a bounded section; fire-and-forget like failed runs.
+  refreshBoard();
   if (!threads.length) {
     const empty = document.createElement("div");
     empty.className = "thread-empty";
