@@ -70,6 +70,14 @@ Deno.test("Configure call sites in ntp.js use exact deep-link hash", async () =>
   );
 });
 
+Deno.test("named-agent editing works from embedded and standalone Settings", async () => {
+  const options = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
+  const ntp = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
+  assert(options.includes('postMessage(message, "*")'), "embedded Settings must request its parent NTP editor");
+  assert(options.includes("&edit=1"), "standalone Settings must navigate to the explicit edit route");
+  assert(ntp.includes('parsed.kind === "named" && parsed.edit === true'), "the NTP must open the maintained editor for that route");
+});
+
 Deno.test("options.html has one unified Agents section and keeps no background section", async () => {
   const html = await Deno.readTextFile(
     new URL("../extension/options/options.html", import.meta.url),

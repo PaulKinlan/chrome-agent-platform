@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.406] — 2026-08-29
+- Edit persona & schedule now opens the maintained agent editor from standalone Settings as well as the in-app panel
+
 ## [0.2.405] — 2026-08-29
 - Agent settings links, accessibility labels, security coverage, and release notes now stay in sync with the unified Agents section
 

@@ -391,6 +391,7 @@ Deno.test("parseNtpHash: correctly parses all multi-page NTP routes", () => {
   assertEquals(JSON.stringify(parseNtpHash("#thread=task-123")), JSON.stringify({ route: "thread", id: "task-123" }));
   assertEquals(JSON.stringify(parseNtpHash("#agent=background:bg-agent-1")), JSON.stringify({ route: "agent", kind: "background", id: "bg-agent-1" }));
   assertEquals(JSON.stringify(parseNtpHash("#agent=named:reviewer")), JSON.stringify({ route: "agent", kind: "named", id: "reviewer" }));
+  assertEquals(JSON.stringify(parseNtpHash("#agent=named:reviewer&edit=1")), JSON.stringify({ route: "agent", kind: "named", id: "reviewer", edit: true }));
   assertEquals(JSON.stringify(parseNtpHash("#view=options%2Foptions.html")), JSON.stringify({ route: "view", path: "options/options.html" }));
   assertEquals(JSON.stringify(parseNtpHash("#omnibox=thread:find-files")), JSON.stringify({ route: "omnibox", mode: "thread", query: "find-files" }));
   assertEquals(JSON.stringify(parseNtpHash("#unknown-hash")), JSON.stringify({ route: "hub" }));

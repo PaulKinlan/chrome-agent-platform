@@ -3275,6 +3275,9 @@ async function applyCurrentHashRoute(isTraverse = false) {
         if (currentAgentId !== parsed.id || currentAgentKind !== parsed.kind || threadView?.hidden) {
           await openAgentSurface({ kind: parsed.kind, id: parsed.id, name: meta.name ?? null }, { pushHistory: false });
         }
+        // A standalone Settings tab cannot postMessage to the NTP parent frame.
+        // Its explicit edit route still opens the one maintained persona dialog.
+        if (parsed.kind === "named" && parsed.edit === true) await openAgentConfig();
       }
     } else if (parsed.route === "view") {
       const title = meta.title ?? "View";

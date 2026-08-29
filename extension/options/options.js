@@ -1361,7 +1361,7 @@ function openNamedAgentEditor(agent) {
     window.parent.postMessage(message, "*");
     return;
   }
-  window.location.href = chrome.runtime.getURL(`ntp/ntp.html#agent=named:${encodeURIComponent(agent.id)}`);
+  window.location.href = chrome.runtime.getURL(`ntp/ntp.html#agent=named:${encodeURIComponent(agent.id)}&edit=1`);
 }
 
 async function renderAgentProviders(list, agents, globalCfg) {
