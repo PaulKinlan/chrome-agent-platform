@@ -114,6 +114,7 @@ import {
   capabilityStatus,
   requestCapability,
   revokeCapability,
+  isRequiredCapability,
 } from "../lib/capabilities.js";
 import {
   createAgent,
@@ -4018,6 +4019,9 @@ const handlers = mergeRouteMaps(
     try { payload = payloadFields([["id", id]]); } catch { return { ok: false, error: "invalid capability" }; }
     const approval = await requireOwnerApproval(context, "capability.revoke", target, payload);
     if (!approval.ok) return approval;
+    // Required manifest permissions cannot be revoked. Refuse before ANY
+    // dependent teardown (especially scripting's enrollment tombstones).
+    if (isRequiredCapability(id)) return await revokeCapability(id);
     if (id === "storage") {
       // The snapshot + permission removal + reset must be ONE atomic transition
       // under the storage-mode lock, so a concurrent KV write cannot slip between
@@ -6683,14 +6687,19 @@ const handlers = mergeRouteMaps(
       invalidateAgent();
       const scriptsRemoved = unreg.scriptsRemoved === true;
       const permissionRemoved = unreg.permissionRemoved === true;
-      if (scriptsRemoved && permissionRemoved && cleared) {
+      const hostPermissionPermanent = unreg.hostPermissionPermanent === true;
+      // unregisterOriginScripts is the single authority for whether scripts +
+      // host access are clean. Under install-granted <all_urls>, permanent host
+      // access is not removable and its honest {ok:true} is cleanup success.
+      if (unreg.ok === true && cleared) {
         await clearCleanupPending(canonical);
         broadcastRegistryChanged();
         return {
           ok: true,
           origin: canonical,
-          scriptsRemoved: true,
-          permissionRemoved: true,
+          scriptsRemoved,
+          permissionRemoved,
+          hostPermissionPermanent,
         };
       }
       // Record a RETRYABLE cleanup obligation (independent of enrollment, so it
@@ -6705,6 +6714,7 @@ const handlers = mergeRouteMaps(
           "OPFS clear failed",
         scriptsRemoved,
         permissionRemoved,
+        hostPermissionPermanent,
         cleared,
       };
     });
@@ -6747,9 +6757,10 @@ const handlers = mergeRouteMaps(
       const cleared = clearRes.status === "fulfilled";
       const scriptsRemoved = unreg.scriptsRemoved === true;
       const permissionRemoved = unreg.permissionRemoved === true;
-      if (scriptsRemoved && permissionRemoved && cleared) {
+      const hostPermissionPermanent = unreg.hostPermissionPermanent === true;
+      if (unreg.ok === true && cleared) {
         await clearCleanupPending(canonical);
-        return { ok: true, origin: canonical };
+        return { ok: true, origin: canonical, scriptsRemoved, permissionRemoved, hostPermissionPermanent };
       }
       await markCleanupPending(canonical);
       return {
@@ -6758,6 +6769,7 @@ const handlers = mergeRouteMaps(
         error: unreg.error ?? "OPFS clear failed",
         scriptsRemoved,
         permissionRemoved,
+        hostPermissionPermanent,
         cleared,
       };
     });

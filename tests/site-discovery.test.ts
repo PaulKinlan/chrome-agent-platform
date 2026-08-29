@@ -19,8 +19,12 @@ Object.defineProperty(globalThis, "navigator", { value: { storage: { async getDi
 let registeredScripts = [];
 let grantedOrigins = new Set();
 let grantedPermissions = new Set(["scripting"]);
+let permanentHostAccess = false;
 
 globalThis.chrome = {
+  runtime: {
+    getManifest: () => ({ host_permissions: permanentHostAccess ? ["<all_urls>"] : [] }),
+  },
   permissions: {
     contains: async ({ origins = [], permissions = [] }) => {
       if (permissions.some((p) => !grantedPermissions.has(p))) return false;
@@ -104,6 +108,22 @@ Deno.test("site discovery: unregisterOriginScripts cleanly removes dynamic scrip
   assertEquals(registeredScripts.some((s) => s.id.includes("to-remove")), false);
 });
 
+Deno.test("site discovery: permanent manifest host access is honest cleanup success", async () => {
+  const origin = "https://permanent-host.example";
+  permanentHostAccess = true;
+  grantedOrigins.add(`${origin}/*`);
+  await ensureOriginScriptsRegistered(origin);
+  try {
+    const unreg = await unregisterOriginScripts(origin);
+    assertEquals(unreg.ok, true);
+    assertEquals(unreg.scriptsRemoved, true);
+    assertEquals(unreg.permissionRemoved, false);
+    assertEquals(unreg.hostPermissionPermanent, true);
+  } finally {
+    permanentHostAccess = false;
+  }
+});
+
 Deno.test("site discovery WIRING (source pins): boot recovery and proactive discovery UI are wired", async () => {
   const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
   const ntp = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
@@ -127,5 +147,13 @@ Deno.test("site discovery WIRING (source pins): boot recovery and proactive disc
   assert(
     options.includes("renderDiscoveredOpenTabs()"),
     "Options must render discovered open tabs",
+  );
+  // Delete and retry-cleanup must trust unregisterOriginScripts' authoritative
+  // result; it already distinguishes removable permission from permanent
+  // manifest host access.
+  assertEquals(
+    sw.match(/if \(unreg\.ok === true && cleared\)/g)?.length,
+    2,
+    "both cleanup paths accept permanent host authority as non-removable success",
   );
 });
