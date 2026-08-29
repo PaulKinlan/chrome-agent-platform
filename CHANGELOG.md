@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.2.358] — 2026-08-29
+- Correction to the previous entry: the bug reported there does not exist. If you configure your own API key but have not yet allowed the extension to reach that provider, the task does tell you so, names the exact site, and offers a link to fix it in Settings. My test script had been looking at the wrong part of the page and reported silence where there was none; it has been fixed so it cannot make that mistake again
+
 ## [0.2.357] — 2026-08-28
-- Recorded a serious bug found by driving the real product: if you configure your own API key but have not yet allowed the extension to reach that provider, starting a task does nothing at all — no reply, no error, no prompt to allow it. The fix comes next; this lands the evidence and a new script that drives a genuine task end to end so problems like it are caught in the seams the unit tests cannot reach
+- Added a script that drives a genuine task end to end through the real extension, so problems can be caught in the seams the unit tests cannot reach. (The bug this entry originally reported turned out not to exist — see the next release.)
 
 ## [0.2.356] — 2026-08-28
 - Internal bookkeeping only, no user-visible change: recorded a defect in our own test harnesses (several of them could attach to the wrong browser and report a confident pass against code they were not testing) and closed out the naming clean-up that shipped earlier

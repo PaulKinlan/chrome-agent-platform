@@ -185,7 +185,21 @@ for (let i = 0; i < 90 && !settled; i++) {
     return JSON.stringify({ cards: cards.length, running, bubbles,
       status: statusEl?.textContent?.trim()?.slice(0,120) ?? null,
       names: cards.map(c => c.querySelector('.tool-name')?.textContent),
-      bodyTail: document.body.innerText.split(/[^!-~]+/).join(" ").slice(-260) });
+      // Read the CONVERSATION, through its shadow root, bubble by bubble.
+      // An earlier version of this probe sampled document.body.innerText and
+      // concluded the product had rendered nothing, when in fact it had
+      // rendered a correct error inside the shadow DOM. A harness that can
+      // report "nothing happened" when something did is worse than no harness.
+      convo: (() => {
+        const el = document.getElementById('thread-conversation');
+        const r = el?.shadowRoot ?? el;
+        if (!r) return 'NO_CONTAINER';
+        return [...r.children].map(b => {
+          const br = b.shadowRoot ?? b;
+          const body = br.querySelector('.body, .msg');
+          return (b.getAttribute('role') || b.tagName.toLowerCase()) + ': ' + (body?.textContent ?? '').trim().slice(0, 200);
+        }).join(' | ').slice(0, 900);
+      })() });
   })()`);
   const s = typeof state === "string" ? JSON.parse(state) : null;
   if (i % 3 === 0) console.log(`  t+${(i + 1) * 2}s`, JSON.stringify(s));

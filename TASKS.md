@@ -171,11 +171,11 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | Priority | Status | Task | What it is |
 |---|---|---|---|
 | P0 | OPEN | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
-| P0 | OPEN | [`CAP-FB-20260829-SILENT-PROVIDER-RUN-01`](#cap-fb-20260829-silent-provider-run-01-a-task-with-a-keyed-provider-but-no-host-grant-runs-nothing-and-says-nothing) | A keyed provider with no host grant runs nothing and says nothing |
 | P0 | OPEN | [`CAP-FB-20260827-HUB-FIRST-RUN-01`](#cap-fb-20260827-hub-first-run-01-the-first-screen-is-an-onboarding-wall-not-a-command-center) | The first screen is an onboarding wall, not a command center |
 | P0 | OPEN | [`CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01`](#cap-fb-20260827-tool-call-legibility-01-tool-call-cards-show-shape-not-answers) | Tool-call cards show shape, not answers |
 | P0 | DONE | [`CAP-FB-20260828-NOUN-DISCIPLINE-01`](#cap-fb-20260828-noun-discipline-01-one-name-per-concept--assetsartifacts-skillsrecipes-agents-three-deep) | One name per concept — Assets/Artifacts, Skills/recipes, Agents three deep |
 | P1 | **BLOCKED** | [`CAP-FB-20260819-PROACTIVE-TAB-DISCOVERY-01`](#cap-fb-20260819-proactive-tab-discovery-01-proactive-per-tab-site-agent-discovery-before-run) | Proactive per-tab Site Agent discovery before Run |
+| P3 | OPEN | [`CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01`](#cap-fb-20260829-provider-set-no-baseurl-01-saving-a-preset-provider-without-a-base-url-yields-a-config-that-can-never-run) | Saving a preset provider without a base URL yields a config that can never run |
 | P1 | OPEN | [`CAP-FB-20260829-FIXED-DEBUG-PORTS-01`](#cap-fb-20260829-fixed-debug-ports-01-nine-harnesses-hard-code-a-debug-port-so-a-kat-can-report-green-against-the-wrong-browser) | Nine harnesses hard-code a debug port and can pass against the wrong browser |
 | P1 | OPEN | [`CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01`](#cap-fb-20260819-directory-tool-explorer-01-agent-directory-tool-explorer-and-enrollment-policy) | Agent Directory tool explorer and enrollment policy |
 | P1 | OPEN | [`CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`](#cap-fb-20260819-permission-remediation-ux-01-user-facing-permission-management-and-run-remediation) | User-facing permission management and run remediation |
@@ -1304,25 +1304,46 @@ evidence every other task depends on).
 - History:
   - 2026-08-28 01:10 UTC — captured from a product audit. Settings, Directory, Skills and Artifacts are separate HTML documents loaded into an iframe of the new-tab page — all same-origin extension pages, so the iframe buys no isolation. It costs: a joint history stack between the top frame and the iframe (two separate back-button fixes, `0.2.296` and `0.2.304`), a full document bootstrap per view switch, and the Settings monolith, because when a view is a document the way to add a feature is to append a `<section>` — which is how Settings reached 12,837px with all twelve panels rendered simultaneously. Five tracked defects trace to this one decision. `CAP-FB-20260827-SETTINGS-MONOLITH-01` can be done independently and first; this entry is the general fix.
 
-## [CAP-FB-20260829-SILENT-PROVIDER-RUN-01] A task with a keyed provider but no host grant runs nothing and says nothing
-- Feedback: 2026-08-29 — found by driving a real task end-to-end in a loaded extension while verifying the tool-card work
+## [CAP-FB-20260829-SILENT-PROVIDER-RUN-01] WITHDRAWN — the provider gate does report itself; the harness was reading the wrong DOM
+- Feedback: 2026-08-29 — raised by this session, then withdrawn by this session on better evidence
 - Updated: 2026-08-29 UTC
-- Status: OPEN
+- Status: ABANDONED
 - Priority: P0
-- Owner: unassigned
-- Workspace: none
-- Branch: none
+- Owner: coordinator session
+- Workspace: main
+- Branch: main
 - Base: `8f3b03d0`
 - Candidate: —
 - Shipping: —
-- Acceptance: on a fresh profile with a keyed provider configured and its host permission NOT granted, starting a task produces a visible, plain-English explanation in the transcript and an in-context control to grant the access on the owner's gesture — never an empty thread. The first failure is reported even though the circuit-breaker may quieten later ones. Verified by driving a real task, not by reading the code
-- Review: falsification — the assertion must go red against the current build, which renders nothing
-- Gates: `deno run -A scripts/live-run-evidence.ts` with a keyed provider; Chrome journeys; unit suite
-- Blockers: a headless profile cannot answer Chrome's permission prompt, so the GRANT half needs the headed acceptance lane (`CAP-FB-20260825-HEADED-ACCEPTANCE-LANE-01`). The MESSAGE half is verifiable headless today and is the P0 part
-- Next: surface the first provider-gate failure in the transcript. The gate already knows why it failed — `extension/lib/provider-gate.js` derives the exact origin pattern — so the message can name the site and offer the grant
-- Recover: `git grep -n "providerRunGate\|requestProviderHostAccess" -- extension/`
+- Acceptance: n/a — withdrawn. The behaviour it described does not exist
+- Review: n/a
+- Gates: n/a
+- Blockers: —
+- Next: nothing. The one genuine observation that came out of it is tracked separately as `CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01`
+- Recover: `git log --oneline --all --grep=SILENT-PROVIDER-RUN-01`
 - History:
-  - 2026-08-29 — measured in a loaded MV3 extension on a fresh profile. Configured the Anthropic provider with a real key via `provider.set` (`hasApiKey: true` confirmed by `provider.get`), typed a task into the hub composer with real CDP input events and clicked Run. **The thread view opened with the title "New task" and then nothing happened for the full two-minute observation: no assistant message, no error, no status text, no approval card, and no run route reaching the service worker** — only the routine `diagnostics.list` / `security.state` polling. An exec who configures their own API key sees the product do nothing at all. The mechanism is understood: a keyed provider fetch needs the extension's OPTIONAL host permission for the provider origin, which a fresh profile has not granted (`optional_host_permissions` is `http://*/*`, `https://*/*` with no `host_permissions`). `extension/lib/provider-gate.js` documents this and its circuit-breaker deliberately makes runs "fail quietly, no run, no per-event log" — but that is meant for runs AFTER repeated failures; the FIRST one still owes the owner an explanation. This is the exact failure mode AGENTS.md already prohibits ("Ask for permissions on need, never fail silently... a feature that just fails with 'permission required' is a bug") — and silence is worse than that message. **Control:** the identical harness against the local `demo` provider (no network, no host permission) dispatches correctly and renders the assistant reply, so the composer, the dispatch and the run path are all sound — the gate is the difference. Landed `scripts/live-run-evidence.ts` so this is reproducible.
+  - 2026-08-29 — **WITHDRAWN. The claim was false and the fault was in my measurement, not the product.** I reported that a keyed provider without host access produced "no assistant message, no error, no status, no approval card". It produces a correct, styled error bubble with a remediation action. Re-measured reading the conversation through its shadow root: with a valid base URL the transcript says *"the configured provider's exact origin is not granted / grant the exact provider origin in Settings, then run this task again"* with a **Fix in Settings** control, and `runConversationTurn` sets `state: "waiting-for-permission"` before it. My probe sampled `document.body.innerText.slice(-260)` — the composer area — and counted `message-bubble` elements in the light DOM, so it could not see anything the conversation had rendered inside `<agent-conversation>`'s shadow root. It reported silence because it was looking somewhere silent. The harness has been fixed to read the bubbles themselves; a harness that can report "nothing happened" when something did is worse than no harness, which is the same class of defect as `CAP-FB-20260829-FIXED-DEBUG-PORTS-01`. **The "Fix in Settings" routing is also deliberate, not a shortfall:** `runConversationTurn` documents that calling `chrome.permissions.request` after the asynchronous provider lookup is rejected by Chrome as not being a user gesture, so Settings is the only surface that can genuinely request it. That is a considered design, and the AGENTS.md rule it appeared to violate is in fact satisfied — the failure names the exact origin and offers the remedy.
+
+
+## [CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01] Saving a preset provider without a base URL yields a config that can never run
+- Feedback: 2026-08-29 — the one real observation left from the withdrawn `CAP-FB-20260829-SILENT-PROVIDER-RUN-01`
+- Updated: 2026-08-29 UTC
+- Status: OPEN
+- Priority: P3
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `84991bdd`
+- Candidate: —
+- Shipping: —
+- Acceptance: saving a provider that HAS a known preset base URL (`anthropic`, `openai`, `gemini`, `deepseek`) without supplying one stores that preset rather than an empty string, so the permission preflight can derive a real origin; the BYO-endpoint provider, which has no preset, still requires one and says so
+- Review: falsification — the assertion must go red against the current route, which stores `baseURL: ""`
+- Gates: unit suite; the provider journeys
+- Blockers: —
+- Next: default `baseURL` from the provider descriptor in the `provider.set` route when the chosen provider has one
+- Recover: `git grep -n "provider.set" -- extension/background/routes/provider.js`
+- History:
+  - 2026-08-29 — measured. `provider.set` with `{ provider: "anthropic", apiKey, model }` and no `baseURL` stores `baseURL: ""`, even though `extension/lib/provider.js` carries `https://api.anthropic.com/v1` as that provider's preset. The permission preflight then derives no origin and the run fails with *"provider permission preflight failed closed: configured provider origin is invalid"* — which blames the origin rather than the missing default. Supplying the base URL explicitly produces the correct message instead (*"the configured provider's exact origin is not granted"*). Low priority because the Settings UI fills the preset, so this is reachable mainly by the route; but a config that can never run should not be storable when the product already knows the right value.
 
 ## [CAP-FB-20260829-FIXED-DEBUG-PORTS-01] Nine harnesses hard-code a debug port, so a KAT can report green against the wrong browser
 - Feedback: 2026-08-29 — surfaced by the noun-discipline lane: "an early KAT run gave a full page of false failures because a fixed debug port silently attached to another lane's chromium"
