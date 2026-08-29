@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.408] — 2026-08-29
+- Teach agents where tools run and stop reading fetch bodies twice
+
 ## [0.2.407] — 2026-08-29
 - WebMCP tool failures now explain themselves in the page's own console: when a page's tool call fails, the full error detail appears in that page's DevTools console instead of a vague message, while the agent still sees only a safe summary
 

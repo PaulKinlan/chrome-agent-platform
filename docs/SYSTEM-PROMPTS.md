@@ -47,6 +47,18 @@ those single sources.
 | `cap.worker.base` | Site sub-agent base prompt | no |
 | `cap.constraints.core` | Protected safety constraints (the runtime policy) | yes |
 
+The hub and worker defaults share one execution-environment grounding block.
+It states that the agent runs inside a Chrome MV3 extension: loops run in the
+service worker or offscreen-hosted per-agent SharedWorkers, privileged built-in
+tools execute through the service worker, bundled compute uses fresh dedicated
+Workers, and reusable JavaScript runs in an opaque sandboxed iframe hosted by
+the offscreen document (with the open hub as fallback). Only page-side WebMCP
+or inferred tools expose page DOM/window APIs. It also pins one-shot Response
+body handling, `open_tab` / `create_window` rather than `window.open`, and the
+one-search rule: call `search_tools` exactly once for a missing capability,
+invoke the best match immediately, and report a first failure without searching
+again.
+
 ## Scopes
 
 - `hub` — the hub agent; also the scope for background, scheduled, hook

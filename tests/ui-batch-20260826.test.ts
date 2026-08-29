@@ -49,8 +49,8 @@ Deno.test("Approvals: the orphaned settings section is gone; revoke confirmation
   assertMatch(js, /runOwnerApprovedMutation/, "revoke confirmation routes through the in-context owner-approved mutation");
 });
 
-Deno.test("System prompt: search-then-execute guidance present and context-bounded", () => {
-  assertMatch(MASTER_SKILL, /SEARCH FIRST/, "search-first directive present");
+Deno.test("System prompt: search-once-then-execute guidance present and context-bounded", () => {
+  assertMatch(MASTER_SKILL, /SEARCH ONCE, THEN ACT/, "one-search directive present");
   assertMatch(MASTER_SKILL, /search_tools/, "search_tools referenced");
   assertMatch(MASTER_SKILL, /list_tools/, "list_tools referenced");
   const bytes = new TextEncoder().encode(MASTER_SKILL).length;

@@ -86,7 +86,7 @@
 // the preview and a run without being dictionary-testable against guessed
 // owner text. Only product-authored content carries public SHA-256 hashes.
 
-import { MASTER_SKILL } from "./master-skill.js";
+import { MASTER_SKILL, PLATFORM_ENVIRONMENT_GROUNDING } from "./master-skill.js";
 import {
   hasLoneSurrogates,
   hmacSha256Hex,
@@ -109,6 +109,8 @@ export const WORKER_BASE_PROMPT =
   `You are the Chrome Agent Platform hub agent. You help the
 user get things done on the web. You can read and write memory, call tools, and
 delegate to per-site sub-agents. Be concise; prefer actions over prose.
+
+${PLATFORM_ENVIRONMENT_GROUNDING}
 
 For REPEATABLE work, write a script (create_script) and run it (run_script) or
 schedule it (schedule_task with scriptId) instead of re-reasoning every time — a
@@ -139,8 +141,10 @@ export const PROMPT_REGISTRY = [
     // 1.3.0: the self-organizing memory doctrine (living `index` key,
     // Summary+Log entity keys, raw `journal`, `stm:` scratch prefix, recall
     // discipline, self-restructuring) — the store is read-first, not write-only.
-    version: "1.3.0",
-    release: "0.2.394",
+    // 1.4.0: MV3 execution-context grounding, one-shot Response bodies,
+    // browser-tool tab creation, and one-search-then-invoke discipline.
+    version: "1.4.0",
+    release: "0.2.408",
     protected: false,
     content: MASTER_SKILL,
   },
@@ -149,8 +153,9 @@ export const PROMPT_REGISTRY = [
     title: "Site sub-agent base prompt",
     // 1.1.0: the same self-organizing memory doctrine, site-scoped (durable
     // facts about THIS site under entity keys; scratch under `stm:`).
-    version: "1.1.0",
-    release: "0.2.394",
+    // 1.2.0: shares the hub's execution-context and tool-call grounding.
+    version: "1.2.0",
+    release: "0.2.408",
     protected: false,
     content: WORKER_BASE_PROMPT,
   },
