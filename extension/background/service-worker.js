@@ -231,6 +231,7 @@ import {
   rotateAttestationKey,
   setPromptOverride,
 } from "../lib/system-prompts.js";
+import { gatherRuntimeContext } from "../lib/runtime-context.js";
 import {
   createAsset,
   createOrUpdateAssetKeyed,
@@ -1394,7 +1395,20 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     // The SAME composition backs the Settings → Advanced preview, so the
     // preview IS the platform composition the run is built with (the exact
     // wire message is proven per run by the run-bound attestation).
-    const masterComposed = await resolveSystemPrompt(promptScope ?? "hub", { role: agentRole });
+    // The volatile layer (lib/runtime-context.js): date/time, extension +
+    // platform identity, the hub-scope agent roster, and the run's own memory
+    // index — gathered per BUILD (named/background/approval runs build fresh
+    // per run; the cached hub carries assembly-time values, honestly labelled).
+    // Gathering never breaks a build (every read is failure-isolated).
+    const runtimeContext = await gatherRuntimeContext({
+      scope: promptScope ?? "hub",
+      agentLabel: promptScope ? `named agent "${promptScope.replace(/^agent:/, "")}"` : "hub",
+      memory: mem ?? masterMemory(),
+      listAgents: promptScope ? null : listNamedAgents,
+      chromeApi: globalThis.chrome ?? null,
+      now: new Date(),
+    });
+    const masterComposed = await resolveSystemPrompt(promptScope ?? "hub", { role: agentRole, runtimeContext });
     // Workers = enrolled site origins, each with its own memory + skills.
     const origins = await listOrigins();
     // BUILD-LOCAL run-generation cells (the round-27 blocker 4): the cells are
@@ -1409,6 +1423,14 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       const cell = { get: () => null };
       buildCells.set(origin, cell);
       const skills = await getSkills(origin);
+      const workerRuntimeContext = await gatherRuntimeContext({
+        scope: "worker",
+        agentLabel: `site worker (${origin})`,
+        memory: siteMemory(origin),
+        listAgents: null, // the roster is hub-scope knowledge
+        chromeApi: globalThis.chrome ?? null,
+        now: new Date(),
+      });
       return {
         origin,
         memory: siteMemory(origin),
@@ -1417,7 +1439,7 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
         // skills ride inside the composition (skills: [] below) so the
         // attestation hash covers exactly what the model receives — no
         // double-append in the agent core.
-        system: (await resolveSystemPrompt("worker", { skills })).text,
+        system: (await resolveSystemPrompt("worker", { skills, runtimeContext: workerRuntimeContext })).text,
         skills: [],
         // WebMCP directories/navigation/approval are read for every lazy
         // search/execute fence; no build-time snapshot reaches the provider.
@@ -6013,7 +6035,7 @@ const handlers = mergeRouteMaps(
       const agent = await getNamedAgent(s.slice("agent:".length));
       role = agent?.role ?? "";
     }
-    const composed = await resolveSystemPrompt(s, { role });
+    const composed = await resolveSystemPrompt(s, { role, runtimeContext: { placeholder: true } });
     // Keyed receipts ONLY (the review's oracle blocker): the unkeyed
     // composition hash is NOT returned — a stable unkeyed digest of
     // owner-customized text is a public fingerprint/dictionary oracle. Parity

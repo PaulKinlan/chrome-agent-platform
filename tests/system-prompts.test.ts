@@ -826,7 +826,7 @@ Deno.test("Unicode: CJK + emoji + RTL text round-trips and hashes deterministica
   assertEquals(r.ok, true);
   const d = await describePrompt("hub");
   assertStringIncludes(d.effective.text, text);
-  const c2 = composeSystemPrompt({ baseId: "cap.hub.master", override: d.override });
+  const c2 = composeSystemPrompt({ baseId: "cap.hub.master", override: d.override, runtimeContext: { placeholder: true } });
   assertEquals(c2.hash, d.effective.hash, "hash stable across composes");
   assert(/^[0-9a-f]{64}$/.test(c2.hash), "SHA-256 over the UTF-8 bytes");
 });
@@ -899,6 +899,8 @@ Deno.test("describe: the full UI payload (viewer + editor + preview + revision +
   assertEquals(labels, [
     "cap.worker.base:built-in:omitted",
     "owner-replace:owner:sent",
+    // The volatile layer renders as its clearly-marked template in previews.
+    "runtime-context:runtime:sent",
     "cap.constraints.core:protected:sent",
   ]);
   assertEquals(d.effective.text.includes("WORKER-CUSTOM"), true);
