@@ -21,10 +21,12 @@ isolated OPFS memory, run history, skills, and avatar.
   "Choose agent" (a removable agent chip routes the run by canonical ID), and
   the `/agent` slash command (grouped, keyboard-complete, stale selections
   rejected).
-- **Sites as sub-agents** — enrolled origins expose their WebMCP tools; the agent
-  discovers + invokes them (first-run approval per tool). Discovery is observable:
-  enable **Settings → Site agents → Diagnostics** for gated `[WebMCP]` logs (page
-  DevTools console) + a status readout (last discovery, origin, script state, tool count).
+- **Sites as sub-agents** — lightweight detection-only scripts notice WebMCP on every
+  http(s) page, so **Find site tools** lists only open origins known to expose tools;
+  plain pages never become setup candidates. Choosing one then installs the authenticated
+  invocation bridge (first-run approval per tool). Discovery is observable: enable
+  **Settings → Site agents → Diagnostics** for gated `[WebMCP]` logs (page DevTools
+  console) + a status readout (last discovery, origin, script state, tool count).
 - **Tasks as threads** — a task is a distinct thread (auto-named, full-screen, with
   live progress + per-task error detail + a nudge/continue composer).
 - **Skills** — reusable capabilities (the recipes reworked into skills): include a
@@ -146,7 +148,7 @@ extension/
   options/                      the settings (providers, agents, permissions, hooks,
                                 advanced system prompts, usage, data & memory)
   artifacts/                    the artifact gallery
-  content/                      the WebMCP bridge + window.* tool inference (MAIN + isolated)
+  content/                      passive WebMCP detector + enrolled invocation bridge (MAIN + isolated)
   shared/                       the single-source Web Components (the design system)
   lib/                          provider, memory, named-agents, skills, hooks, artifacts,
                                 tool-catalog/search/selection shadow authorities,

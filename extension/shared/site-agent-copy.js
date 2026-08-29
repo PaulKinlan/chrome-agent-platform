@@ -28,7 +28,7 @@ export function siteAgentSetupMessage(state, origin = "") {
     case "list-failed":
       return "Open tabs aren't available right now. Try again.";
     case "no-tabs":
-      return "No open web tabs are available. Open a site in a tab, then try again.";
+      return "No pages with site tools are open. Open a page that exposes site tools, then try again.";
     case "permission-error":
       return `Site access couldn't be verified for ${site}. Reload the extension, then try again.`;
     case "permission-denied":

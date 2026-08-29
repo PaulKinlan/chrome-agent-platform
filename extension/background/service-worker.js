@@ -110,6 +110,10 @@ import {
   withStorageModeLock,
 } from "../lib/kv.js";
 import {
+  listKnownWebmcpOrigins,
+  reportWebmcpDetection,
+} from "../lib/webmcp-detection-registry.js";
+import {
   hasCapability,
   capabilityStatus,
   requestCapability,
@@ -4924,7 +4928,7 @@ const handlers = mergeRouteMaps(
   // enrollment. Tab URLs/titles are visible only with the OPTIONAL `tabs`
   // permission; without it we report `needTabs` honestly so the hub requests
   // it on the user's click.
-  async "agent.discoverable-tabs"({ toolsOnly = false } = {}) {
+  async "agent.discoverable-tabs"() {
     let tabs = null;
     try {
       tabs = await chrome.tabs.query({});
@@ -4936,6 +4940,9 @@ const handlers = mergeRouteMaps(
       // Every tab's URL is hidden — the `tabs` permission is absent.
       return { ok: false, needTabs: true, error: "tabs permission needed to list open pages" };
     }
+    const known = new Map(
+      (await listKnownWebmcpOrigins().catch(() => [])).map((entry) => [entry.origin, entry]),
+    );
     const out = [];
     for (const t of tabs) {
       if (t.id == null || !t.url) continue;
@@ -4946,13 +4953,12 @@ const handlers = mergeRouteMaps(
         continue;
       }
       if (!origin || !/^https?:/.test(origin)) continue;
-      // The explicit picker must include un-enrolled pages: their tools cannot
-      // enter the registry until the owner picks one and its scripts inject.
-      // Proactive surfaces opt into toolsOnly so they still advertise only
-      // origins that have already reported tools.
-      const registeredTools = await listTools(origin).catch(() => []);
-      const toolCount = Array.isArray(registeredTools) ? registeredTools.length : 0;
-      if (toolsOnly && toolCount === 0) continue;
+      // Every discovery surface is fed by the passive detection registry. A
+      // generic web tab is never an enrollment candidate merely because it is
+      // open; its origin must have recently reported at least one site tool.
+      const detected = known.get(origin);
+      if (!detected) continue;
+      const toolCount = detected.toolCount;
       out.push({
         id: t.id,
         title: String(t.title ?? "").slice(0, 200),
@@ -5183,6 +5189,22 @@ const handlers = mergeRouteMaps(
     if (res?.error) return { ok: false, error: res.error };
     if (res?.ok === false) return { ok: false, error: res.error ?? "invoke failed" };
     return { ok: true, result: res?.result };
+  },
+  async "webmcp.detected"({ origin, url, toolCount, __sender }) {
+    const canonical = canonicalOrigin(origin);
+    if (!canonical || !/^https?:/.test(canonical)) return { ok: false, error: "invalid origin" };
+    let reportedUrl;
+    try { reportedUrl = new URL(url); } catch { return { ok: false, error: "invalid URL" }; }
+    if (canonicalOrigin(reportedUrl.origin) !== canonical) return { ok: false, error: "URL origin mismatch" };
+
+    // Close the navigation race: authorization derived the sender origin from
+    // Chrome's MessageSender, then this handler re-reads the current tab before
+    // persisting. A payload can never register another origin.
+    const senderTab = __sender?.tabId != null ? await chrome.tabs.get(__sender.tabId).catch(() => null) : null;
+    if (!senderTab?.url || canonicalOrigin(senderTab.url) !== canonical) {
+      return { ok: false, error: "sender tab origin mismatch" };
+    }
+    return { ok: true, ...(await reportWebmcpDetection(canonical, senderTab.url, toolCount)) };
   },
   async "tools.upsert"({ origin, tools, seq, epoch, pageUrl, title, __sender }) {
     const canonical = canonicalOrigin(origin);

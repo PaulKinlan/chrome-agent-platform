@@ -197,6 +197,19 @@ Deno.test("authorizeToolReport: a content script reports its OWN origin (accepte
   assertEquals(r.origin, "https://example.com");
 });
 
+Deno.test("authorizeToolReport: browser-reported sender.origin must match sender.tab.url", () => {
+  const sender = {
+    id: "ext-id",
+    url: "https://example.com/page",
+    origin: "https://victim.example",
+    tab: { url: "https://example.com/page" },
+    frameId: 0,
+  };
+  const r = authorizeToolReport(sender, "https://example.com", canonicalOrigin, "ext-id");
+  assertEquals(r.kind, "content-script");
+  assertEquals(r.error, "sender origin mismatch — tool report rejected");
+});
+
 Deno.test("authorizeToolReport: a message claiming a DIFFERENT origin is rejected", () => {
   const sender = {
     id: "ext-id",
@@ -252,6 +265,7 @@ Deno.test("authorizeToolReport: a fake extension id is not authorized", () => {
 });
 
 Deno.test("PAGE_ALLOWED_ROUTES is an allowlist (admin routes are NOT in it)", () => {
+  assert(PAGE_ALLOWED_ROUTES.has("webmcp.detected"));
   assert(PAGE_ALLOWED_ROUTES.has("tools.upsert"));
   assert(PAGE_ALLOWED_ROUTES.has("tools.list"));
   assert(!PAGE_ALLOWED_ROUTES.has("memory.set"));

@@ -86,6 +86,7 @@ const BASELINE_ROUTES = [
   "agent.registry",
   "agent.get",
   "agent.update",
+  "webmcp.detected",
   "tools.list",
   "tools.invoke",
   "tools.upsert",

@@ -160,7 +160,7 @@ On resume after a coordinator or worker loss:
 
 ## Open work queue
 
-**This file holds only what is in progress or still to do — 38 entries.** Completed work is archived in [TASKS-DONE.md](TASKS-DONE.md) at triage; **merged is done** (Paul, 2026-08-28), so nothing sits in a terminal state here. Most urgent first (regenerated 2026-08-28). The entry itself is always the authority; where it disagrees with this table, the entry wins.
+**This file holds only what is in progress or still to do — 39 entries.** Completed work is archived in [TASKS-DONE.md](TASKS-DONE.md) at triage; **merged is done** (Paul, 2026-08-28), so nothing sits in a terminal state here. Most urgent first (regenerated 2026-08-28). The entry itself is always the authority; where it disagrees with this table, the entry wins.
 
 Regenerate after any status change (this exact command reproduces the table below):
 
@@ -171,6 +171,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | Priority | Status | Task | What it is |
 |---|---|---|---|
 | P0 | IN_REVIEW | [`CAP-FB-20260829-MIC-DEAD-MACOS-01`](#cap-fb-20260829-mic-dead-macos-01-mic-button-is-completely-dead-on-macos-after-the-waveform-change) | Mic button is completely dead on macOS after the waveform change |
+| P0 | IN_REVIEW | [`CAP-FB-20260829-WEBMCP-PASSIVE-DETECTION-01`](#cap-fb-20260829-webmcp-passive-detection-01-find-site-tools-lists-only-passively-detected-webmcp-pages) | Find site tools lists only passively detected WebMCP pages |
 | P0 | DONE | [`CAP-FB-20260829-MAIN-GATES-RED-03`](#cap-fb-20260829-main-gates-red-03-the-journey-suite-is-red-on-main-49-checks-still-assert-the-pre-p0-all-optional-permission-model) | Journey suite red on main — 49 checks assert the pre-P0 permission model |
 | P1 | IN_REVIEW | [`CAP-FB-20260829-AGENT-BOARD-01`](#cap-fb-20260829-agent-board-01-the-shared-jobs-board-agents-post-and-claim-work) | The shared jobs board — agents post and claim work |
 | P1 | IN_REVIEW | [`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`](#cap-fb-20260829-create-dialog-declutter-01-create-agent-dialog-is-cluttered-and-its-scheduletheme-controls-are-inconsistent) | Create-agent dialog is cluttered and its schedule/theme controls are inconsistent |
@@ -1643,3 +1644,24 @@ evidence every other task depends on).
   - 2026-08-29 20:30 UTC — diagnosis: commit `ce6247ef` changed `start()` to await `_requestMicStream()` before constructing and starting SpeechRecognition. The composer already displays `mic-error` through `setStatus`, and the real NTP KAT proves `offsetParent` is non-null in the visible layout. Falsification on the unfixed source produced 39 pass / 4 fail: a rejected meter left the button idle with the old permission error, a never-settling meter left it idle indefinitely, and recognition did not start in either case. The candidate starts recognition first, renders the CSS fallback immediately, then adopts the meter stream asynchronously under the existing generation guard. Rejection leaves recognition active and reports only that the live waveform is unavailable; late streams are stopped after cancellation. Green evidence: focused 9/9, mic KAT 43/43, full unit 2359/0, final build clean.
 
 
+
+## [CAP-FB-20260829-WEBMCP-PASSIVE-DETECTION-01] Find site tools lists only passively detected WebMCP pages
+- Feedback: 2026-08-29 — owner directed that the picker list only pages known to expose WebMCP, never every open web page
+- Updated: 2026-08-29 21:43 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: implementation worker
+- Workspace: active (local path private)
+- Branch: cap-webmcp-detect
+- Base: 55646fae
+- Candidate: this tracker commit
+- Shipping: —
+- Acceptance: Visiting a WebMCP page passively records its sender-attested origin and makes its open tab eligible; a plain page never appears; zero/stale reports remove eligibility; every discovery surface uses the same rule
+- Review: independent reviewer required; pending
+- Gates: working-tree RED reproduced before implementation; focused route/security Deno 64/0; production-path Chromium acceptance 36/36 with screenshot evidence; full Deno suite 2371/0; build PASS
+- Blockers: —
+- Next: commit the candidate, rerun exact-clean-commit browser acceptance, then send the diff and evidence for independent review
+- Recover: git switch cap-webmcp-detect && git log -1 --oneline
+- History:
+  - 2026-08-29 21:43 UTC — owner correction captured; passive detection registry implemented and working-tree browser journey passed 36/36, including positive fixture admission and plain-page exclusion

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.404] — 2026-08-29
+- Find site tools now shows only open pages that actually expose site tools: lightweight passive WebMCP detection notices them before setup, while plain pages stay out of the picker
+
 ## [0.2.402] — 2026-08-29
 - The new-tab hub gets easier to live with: creating an agent is a tidy dialog with the advanced bits tucked away, schedules can be written in plain English ('every 10 minutes'), picking a starting template is a slim dropdown instead of a wall of cards, the microphone starts listening the moment you click it, 'Find site tools' actually finds your pages again, and dark mode fixes grey-on-white chat bubbles and unreadable black-on-black tool results
 
