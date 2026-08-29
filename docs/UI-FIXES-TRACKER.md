@@ -42,6 +42,11 @@ one line each here:
 
 ## Open
 
+### NTP brand is a direct Home control (2026-08-29 — in review)
+
+- **Owner ask:** The top-left “Chrome Agent Platform” brand must be a subtle, keyboard-accessible Home control. The + new-task action inside a task/agent must also navigate Home before focusing a fresh composer. Neither path may issue Back or let an older deep view reappear.
+- **Tracked as:** `CAP-FB-20260829-HUB-HOME-BUTTON-01`.
+
 ### Create-agent dialog clutter and inconsistent controls (2026-08-29 — implementation)
 - Keep only Name and What it does on the primary path; avatar, templates, persona tools,
   skills, schedule, delegation and context files remain reachable under one collapsed

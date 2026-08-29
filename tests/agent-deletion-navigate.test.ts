@@ -7,10 +7,12 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 Deno.test("agent-deletion-navigate: NTP source wiring ensures return to base hub and hash reset on delete", async () => {
   const ntpJs = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
 
-  // Invariant 1: Deletion button listener checks outcome and hides thread view to return to base hub
+  // Invariant 1: successful deletion uses the shared Home destination. It must
+  // not push another hash entry or masquerade as a Back command.
   assert(ntpJs.includes("deleteAgentBtn?.addEventListener"), "must attach click listener to deleteAgentBtn");
-  assert(ntpJs.includes('hideThreadView({ fromNavigation: true, focusAfter: composer })'), "must call hideThreadView to return to base NTP hub");
-  assert(ntpJs.includes('window.history.pushState(null, "", "#")'), "must reset location hash to base #");
+  const deleteHandler = ntpJs.slice(ntpJs.indexOf("deleteAgentBtn?.addEventListener"), ntpJs.indexOf("threadTitle.addEventListener"));
+  assert(deleteHandler.includes("goHome({ focusAfter: composer })"), "must navigate Home after deletion");
+  assert(!deleteHandler.includes("history.pushState") && !deleteHandler.includes("history.back"), "delete must not push or traverse history");
 
   // Invariant 2: Deny / cancel does not navigate away
   assert(ntpJs.includes("if (!confirmed) return;"), "cancelling confirmation must return early without navigating");

@@ -1761,3 +1761,26 @@ evidence every other task depends on).
   - 2026-08-29 21:43 UTC — independent review REVISE (P1): `scripts/kat-background-run-transcript.ts` asserted only the scheduled user bubble, so the prior screenshot/claim did not prove a result transcript. Fixed with the explicit deterministic `@demo-tools` result, separate exact user and agent bubble assertions, bounded render polling, and a taller screenshot viewport. Re-run GREEN 6/6; the recaptured screenshot visibly contains the scheduled prompt, completed tool rows, and non-empty demo-model result. Re-review pending.
 
 
+
+## [CAP-FB-20260829-HUB-HOME-BUTTON-01] NTP brand returns directly Home
+- Feedback: 2026-08-29 — owner asked for the top-left Chrome Agent Platform title to become a Home control because browser Back replayed every task and view before reaching the hub
+- Updated: 2026-08-29 22:28 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P1
+- Owner: implementation worker
+- Workspace: active (local path private)
+- Branch: `cap-home-button`
+- Base: `cebb4601a12b35385ff6e5272d9d2d4272586e5d`
+- Candidate: this tracker commit
+- Shipping: —
+- Acceptance: the NTP brand is a subtle keyboard-accessible control named Home; activating it from a task returns directly to the hub; + from a task/agent replaces that deep route with Home and focuses a fresh hub composer; no Home/new-task action issues Back, and Back from the resulting Home cannot resurrect an older deep view
+- Review: author review 2026-08-29 PASS (security/a11y/design/history diff + falsification gates); independent acceptance review required and pending
+- Gates: focused rooted-navigation/navigation-order set 29/29 GREEN (new assertion RED on base); full `nice -n 10 deno test --allow-all tests/` 2389/0 GREEN; `npm run build` rc=0; loaded-extension CDP clicks verified brand → hub, + → focused fresh composer, then Back stayed on hub; before/after screenshots retained as private evidence
+- Blockers: —
+- Next: independent acceptance review, then coordinator merge
+- Recover: `git log --oneline --all --grep=CAP-FB-20260829-HUB-HOME-BUTTON-01`
+- History:
+  - 2026-08-29 22:12 UTC — implementation candidate prepared: the brand is a semantic Home button, deep-to-deep navigation replaces the current entry, direct deep links seed a hub root, and focused coverage pins root reset plus navigation order
+  - 2026-08-29 22:12 UTC — owner expanded the same navigation lane: + from a task/agent must be a real Home destination, not Back. The shared `goHome` path now replace-navigates before closing the surface and focusing the fresh composer; settings Home, delete/invalid-surface recovery, artifact reuse and skill-use paths use the same destination semantics
+  - 2026-08-29 22:28 UTC — author review PASS: the changed assertion failed against the unmodified controller and passed on the candidate; focused 29/29, full suite 2389/0, developer build rc=0. A loaded extension was driven with genuine CDP clicks: brand returned task → hub with Home focused; + returned a live task → hub with the fresh task input focused; browser Back did not restore the task. Three screenshots retained privately

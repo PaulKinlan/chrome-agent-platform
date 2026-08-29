@@ -1,6 +1,10 @@
 # Changelog
 
+## [0.2.407] — 2026-08-29
+- fix(ntp): CAP-FB-20260829-HUB-HOME-BUTTON-01 make brand and + return Home
+
 ## [0.2.406] — 2026-08-29
+- The Chrome Agent Platform title and the + new-task action now return straight Home without replaying old tasks and views; + lands on a fresh hub composer
 - Scheduled agents now keep their conversation: when a background agent runs on its timer, the work it did shows up in that agent's chat — previously it vanished
 
 ## [0.2.405] — 2026-08-29

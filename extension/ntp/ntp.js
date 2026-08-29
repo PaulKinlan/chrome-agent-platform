@@ -48,7 +48,14 @@ import {
   VIEW_ROUTE,
 } from "./route-focus.js";
 import { applySidebarNubPolicy, SIDEBAR_NARROW_QUERY, sidebarWidthPolicy } from "./view-policy.js";
-import { parseNtpHash, resolveEntryMeta, shouldDispatchForNavigationType } from "../lib/navigation-controller.js";
+import {
+  ensureNtpHistoryRoot,
+  navigateHome,
+  navigateNtpRoute,
+  parseNtpHash,
+  resolveEntryMeta,
+  shouldDispatchForNavigationType,
+} from "../lib/navigation-controller.js";
 import { actionableRunsForSurface, isSettledLiveRunRecord, latestRunForSurface } from "../lib/run-scope.js";
 import {
   SITE_AGENT_COPY,
@@ -305,6 +312,7 @@ function handleFactoryResetBoot() {
   }
 }
 handleFactoryResetBoot();
+ensureNtpHistoryRoot(window);
 
 function firstRunDismissed() {
   try { return localStorage.getItem(FIRST_RUN_DISMISSED_KEY) === "1"; }
@@ -1518,7 +1526,7 @@ function renderTaskRows(threads, activeId = null) {
         setStatus(`couldn't delete ${t.name || "task"}`, false);
         return;
       }
-      if (currentThreadId === t.id) hideThreadView();
+      if (currentThreadId === t.id) goHome({ focusAfter: composer });
       await renderTasks();
     });
     el.append(item);
@@ -1729,7 +1737,7 @@ async function openThread(id) {
   if (typeof window !== "undefined" && window.history?.pushState) {
     const hash = `#thread=${encodeURIComponent(id)}`;
     if (location.hash !== hash) {
-      window.history.pushState({ route: "thread", id }, "", hash);
+      navigateNtpRoute(window, hash, { route: "thread", id });
     }
   }
   // Hide the previous run's banner at the ownership hand-off, not after the
@@ -1791,7 +1799,7 @@ async function openBackgroundAgentChat(id, name) {
   if (typeof window !== "undefined" && window.history?.pushState) {
     const hash = `#agent=background:${encodeURIComponent(id)}`;
     if (location.hash !== hash) {
-      window.history.pushState({ route: "agent", kind: "background", id, name }, "", hash);
+      navigateNtpRoute(window, hash, { route: "agent", kind: "background", id, name });
     }
   }
   renderRunStatus({ state: "idle" });
@@ -1855,7 +1863,7 @@ async function openAgentSurface({ kind, id, name }) {
   if (typeof window !== "undefined" && window.history?.pushState) {
     const hash = `#agent=${encodeURIComponent(kind)}:${encodeURIComponent(id)}`;
     if (location.hash !== hash) {
-      window.history.pushState({ route: "agent", kind, id, name }, "", hash);
+      navigateNtpRoute(window, hash, { route: "agent", kind, id, name });
     }
   }
   renderRunStatus({ state: "idle" });
@@ -2831,10 +2839,7 @@ deleteAgentBtn?.addEventListener("click", async () => {
 
   if (out?.ok === true) {
     setStatus(`Deleted ${agentName}.`, true);
-    if (typeof window !== "undefined" && window.history?.pushState) {
-      window.history.pushState(null, "", "#");
-    }
-    hideThreadView({ fromNavigation: true, focusAfter: composer });
+    goHome({ focusAfter: composer });
     await Promise.all([renderNamedAgents(), renderSiteAgents(), renderBackgroundAgents()]);
   } else {
     setStatus(`Could not delete ${agentName}: ${out?.error ?? "failed"}.`, false);
@@ -2961,7 +2966,7 @@ async function revalidateOpenAgent() {
   const ref = canonicalRef(kind, id);
   const found = ref ? findAgentByRef(res.groups, ref) : null;
   if (!found || (found.kind === "background" && found.enabled !== true)) {
-    hideThreadView();
+    goHome({ focusAfter: composer });
     setStatus("That agent is no longer available — its conversation was closed.", false);
     return;
   }
@@ -3120,19 +3125,17 @@ async function restoreSidebar() {
 }
 restoreSidebar();
 
-// The "+" new-task button returns to the hub + focuses the composer. When the
-// user is inside a task thread, it also closes the thread view so the composer
-// (on the hub) can receive focus (item 26).
+// The "+" new-task button is a destination, not Back: replace the current
+// deep route with Home, close the task/agent surface, then focus a fresh hub
+// composer. No prior task can reappear behind the new conversation.
 document.getElementById("new-task")?.addEventListener("click", () => {
-  if (!threadView.hidden) hideThreadView({ focusAfter: composer });
-  else composer.focus();
+  goHome({ focusAfter: composer });
 });
 
-// The "+" create-agent button in the sidebar Agents section (item: a quick
-// create path — opens the create dialog; it returns to the hub first so the
-// dialog is not stacked behind the thread overlay).
+// Creating an agent likewise starts from Home before opening the dialog, so
+// the dialog is never stacked behind a task/agent surface.
 document.getElementById("new-agent")?.addEventListener("click", () => {
-  if (!threadView.hidden) hideThreadView({ focusAfter: null });
+  goHome({ focusAfter: null });
   openQuickCreateAgent();
 });
 
@@ -3213,7 +3216,7 @@ function openView(path, title, trigger) {
     const hash = `#view=${encodeURIComponent(path)}`;
     if (location.hash !== hash) {
       try {
-        window.history.pushState({ route: "view", path, title }, title, hash);
+        navigateNtpRoute(window, hash, { route: "view", path, title }, title);
       } catch {
         // Ignored in non-browser testing contexts
       }
@@ -3257,6 +3260,17 @@ function closeView({ fromNavigation = false } = {}) {
   renderFirstRunGuide().then(() => {
     if (shouldRestoreGuideFocus && !firstRunGuide?.hidden) firstRunGuide.focusNextAction?.();
   });
+}
+
+function goHome({ focusAfter = document.getElementById("home") } = {}) {
+  const changed = navigateHome(window);
+  if (!viewOverlay?.hidden) closeView({ fromNavigation: true });
+  if (!threadView?.hidden) hideThreadView({ fromNavigation: true, focusAfter });
+  if (focusAfter) {
+    if (typeof focusAfter.focusInput === "function") focusAfter.focusInput();
+    else focusAfter.focus?.();
+  }
+  return changed;
 }
 
 // ── Multi-Page App Navigation API Router ────────────────────────────────────
@@ -3367,6 +3381,7 @@ if (typeof window !== "undefined") {
   });
 }
 
+document.getElementById("home")?.addEventListener("click", () => goHome());
 document.getElementById("view-back")?.addEventListener("click", closeView);
 
 document.getElementById("open-settings")?.addEventListener(
@@ -3459,8 +3474,8 @@ async function attachArtifactToComposer({ id, name, type, origin }, { closeOverl
     artifactOrigin: artifact.origin ?? origin ?? "master",
     artifactType: artifact.type ?? type,
   });
-  if (closeOverlay) closeView();
-  composer.focus();
+  if (closeOverlay) goHome({ focusAfter: composer });
+  else composer.focus();
   setStatus(`Attached "${artifact.name ?? name}" to a new task`);
   return true;
 }
@@ -3469,9 +3484,9 @@ window.addEventListener("message", async (e) => {
   const d = e.data;
   if (d?.type === "cap:go-home") {
     // CAP-FB-20260826-HEADER-HOME-01: the settings panel's brand asked to go
-    // Home — close the overlay (only our own embedded view may drive this).
+    // Home — replace the deep route (never masquerade as Back).
     if (!isPanelFrameSource(e.source)) return;
-    if (!viewOverlay?.hidden) closeView();
+    goHome({ focusAfter: composer });
     return;
   }
   if (d?.type === "cap:edit-named-agent") {
@@ -3479,7 +3494,7 @@ window.addEventListener("message", async (e) => {
     // without duplicating the maintained agent dialog. Only the embedded,
     // extension-owned panel frame may request this navigation.
     if (!isPanelFrameSource(e.source) || typeof d.id !== "string" || !d.id) return;
-    if (!viewOverlay?.hidden) closeView();
+    if (!viewOverlay?.hidden) closeView({ fromNavigation: true });
     await openAgentChat(d.id);
     editAgentBtn?.click();
     return;
@@ -3490,7 +3505,7 @@ window.addEventListener("message", async (e) => {
     // task, not run in isolation).
     if (!isPanelFrameSource(e.source)) return;
     const id = String(d.id ?? "").trim();
-    closeView();
+    goHome({ focusAfter: composer });
     composer.value = composer.value ? `${composer.value} /skill:${id}` : `/skill:${id}`;
     composer.focus();
     return;
