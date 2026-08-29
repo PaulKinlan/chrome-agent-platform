@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.408] — 2026-08-29
+- fix(webmcp): use native detector authentication
+
 ## [0.2.407] — 2026-08-29
 - fix(webmcp): keep detector bootstrap build-safe
 

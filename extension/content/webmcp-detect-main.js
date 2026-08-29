@@ -4,11 +4,24 @@
 (() => {
   const CHANNEL = "__cap_webmcp_detect";
   const HOOK_KEY = "__capWebmcpDetectBootstrap";
-  const auth = globalThis.CapBridgeAuth;
+  const encoder = new TextEncoder();
+  const subtle = crypto.subtle;
   let nonce = null;
   let sequence = 0;
   let lastCount = -1;
   let scans = Promise.resolve();
+
+  async function sign(value) {
+    const key = await subtle.importKey(
+      "raw",
+      encoder.encode(nonce),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    const bytes = new Uint8Array(await subtle.sign("HMAC", key, encoder.encode(value)));
+    return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
 
   function toolName(value) {
     return value && typeof value.name === "string" && value.name.length > 0 && value.name.length <= 128
@@ -52,16 +65,19 @@
 
   function scan() {
     scans = scans.then(async () => {
-      if (!nonce || !auth) return;
+      if (!nonce) return;
       const names = new Set([...(await declaredNames()), ...exposedNames()]);
       const toolCount = Math.min(200, names.size);
       if (toolCount === lastCount) return;
       lastCount = toolCount;
-      window.postMessage(auth.seal(nonce, "detect", sequence++, {
+      const seq = sequence++;
+      window.postMessage({
         [CHANNEL]: 1,
         type: "snapshot",
         toolCount,
-      }), "*");
+        seq,
+        tag: await sign(`detect|${seq}|${toolCount}`),
+      }, "*");
     }).catch(() => {});
   }
 
