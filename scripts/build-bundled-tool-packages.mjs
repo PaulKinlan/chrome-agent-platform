@@ -185,7 +185,7 @@ for (const toolId of LANES.c2.tools) {
   const mem = d3.tools[0].memory;
   packages.push({ toolId: "gzip", lane: "gzip", bytes: wasm, row: null, spdx: "Zlib AND Apache-2.0", licenseFile: "extension/wasm/licenses/Zlib-1.3.1.txt", notices: "extension/wasm/licenses/CAP-authored-Apache-2.0.txt", sbom: { src: join(PATHS.d3, "sbom/gzip-zlib-minigzip-stdio.cdx.json"), rel: "extension/wasm/sbom/gzip.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "clang 22.1.8; wasm-ld 22.1.8", buildScriptLane: "gzip", displayName: "gzip", category: "data", description: AGENT_DESCRIPTIONS.gzip, caveats: ["Stdin/stdout only; rejects file operands, recursion, unknown options.", "Experimental candidate; not the canonical full gzip."], replayClass: "read-only", capabilities: ["compute", "text.transform"], memoryOverride: { initialPages: mem.initialPages, maxPages: mem.maxPages } });
 }
-const T3_SOURCE = { repo: "https://github.com/PaulKinlan/chrome-agent-platform", commit: "1bb429c733c1328719a87c220739063e92f7d5f0" };
+const T3_SOURCE = { repo: "https://github.com/PaulKinlan/chrome-agent-platform", commit: "d748876ae51dd6b1def64fd206916adf9d33cc62" };
 for (const [toolId, lane] of [["awk_filter_bounded", "awk"], ["date_formatter_bounded", "date"]]) {
   const binaryName = lane === "awk" ? "awk.wasm" : "date.wasm";
   const bytes = readFileSync(join(PATHS[lane], "binaries", binaryName));

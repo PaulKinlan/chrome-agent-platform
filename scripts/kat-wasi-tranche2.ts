@@ -50,6 +50,9 @@ try {
         awk: await run("awk_filter_bounded", ["/^alice/ { print $1 }"], "alice 30\\nbob 25\\n"),
         date: await run("date_formatter_bounded", ["-u", "-d", "@1724000000", "+%Y-%m-%d"], ""),
         invalidDate: await run("date_formatter_bounded", ["-u", "-d", "not-a-date", "+%s"], ""),
+        impossibleDate: await run("date_formatter_bounded", ["-u", "-d", "2024-02-31", "+%Y-%m-%d"], ""),
+        overflowEpoch: await run("date_formatter_bounded", ["-u", "-d", "@999999999999999999999", "+%s"], ""),
+        invalidIso: await run("date_formatter_bounded", ["--iso-8601garbage"], ""),
       };
       const panel = document.createElement("pre");
       panel.id = "wasi-tranche2-route-evidence";
@@ -62,7 +65,11 @@ try {
   const results = evaluated?.result?.result?.value;
   check("awk ran through tool.preview.run with anchored matching", results?.awk?.ok === true && results.awk.result?.ok === true && results.awk.result?.stdout === "alice\n", results?.awk);
   check("date ran through tool.preview.run with deterministic UTC output", results?.date?.ok === true && results.date.result?.ok === true && results.date.result?.stdout?.trim() === "2024-08-18", results?.date);
-  check("invalid date failed through tool.preview.run with bounded diagnostics", results?.invalidDate?.ok === true && results.invalidDate.result?.ok === false && results.invalidDate.result?.errno === 1 && /proc_exit\(1\)/.test(results.invalidDate.result?.error ?? "") && String(results.invalidDate.result?.error ?? "").length <= 1024, results?.invalidDate);
+  const boundedFailure = (response: any) => response?.ok === true && response.result?.ok === false && response.result?.errno === 1 && /proc_exit\(1\)/.test(response.result?.error ?? "") && String(response.result?.error ?? "").length <= 1024;
+  check("invalid date failed through tool.preview.run with bounded diagnostics", boundedFailure(results?.invalidDate), results?.invalidDate);
+  check("nonexistent calendar date failed through tool.preview.run", boundedFailure(results?.impossibleDate), results?.impossibleDate);
+  check("overflowing epoch failed through tool.preview.run", boundedFailure(results?.overflowEpoch), results?.overflowEpoch);
+  check("garbage ISO suffix failed through tool.preview.run", boundedFailure(results?.invalidIso), results?.invalidIso);
 
   const shot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false }, sessionId);
   await Deno.writeFile(`${OUT}/tool-preview-route.png`, Uint8Array.from(atob(shot.result.data), (c) => c.charCodeAt(0)));

@@ -15,9 +15,9 @@ supplementary build check and missing files fail nonzero.
 ## date_formatter_bounded: ADMITTED
 
 The clean-room 0BSD formatter is bundled through the same authority as
-`cap.bundled.date.formatter.bounded@1.0.0`. Its 52,024-byte preview-1 binary is
+`cap.bundled.date.formatter.bounded@1.0.0`. Its 52,291-byte preview-1 binary is
 content-addressed at SHA-256
-`ceb8b08f4b82f9eb4977f2d182ef6a3f3928e74ca2c8a9834f69a50ff10ffef0`.
+`cb8b4e72f1ea3ab9f5134c8e789f0f5343f4d6043218cca0a3253ff56eacfd66`.
 The Settings-only route executes UTC, ISO, numeric epoch, and exact ISO date
 formatting. Invalid dates and missing `-d` operands fail nonzero with bounded
 diagnostics rather than silently using the current time.
