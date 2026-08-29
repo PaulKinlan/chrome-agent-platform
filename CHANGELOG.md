@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.385] — 2026-08-29
+- merge: template-cards lane (edc76319) — agent-template picker renders visual cards (name, 1-2 line persona, bounded 3+overflow skill badges, one-click Use through the real named-agent.create flow, curated starters marked), border-box sizing with a browser geometry pin (no adjacent-row overlap). Reviewed PASS (round 2); coordinator geometry probes RED -22.36px → GREEN +7.64px; candidate-mode KAT RED 9/9 on base.
+
+## [0.2.384] — 2026-08-29
+- The agent template picker now shows visual cards — each template's name, a short persona summary, skill badges, and a one-click Use button — with the curated starter templates marked, and cards no longer overlap each other
+
 ## [0.2.383] — 2026-08-29
 - merge: settings-cleanliness lane (e4b88588) — dead Appearance nav + request-era storage-verification UI removed end to end; credential fail-closed, Browser control, local-folder grants and install-grant diagnostics preserved; design doc docs/SETTINGS-CLEANLINESS.md with deferred IA (owner sign-off required, NOT implemented). Reviewed PASS (round 1); coordinator candidate-mode KAT RED on base (2 removal checks fail, 4 preservation pass). Manifest unchanged semantically (lane base already had P0 shape).
 

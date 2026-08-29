@@ -94,7 +94,7 @@ const starterNames = await ev(`(async () => {
   return AGENT_TEMPLATES.filter(t => ${JSON.stringify(STARTERS)}.includes(t.id)).map(t => t.name);
 })()`);
 check("Add starter agents creates the curated six as real agents",
-  (starterNames ?? []).every((n) => (starters ?? []).some((a: any) => a.name === n)), starters);
+  (starterNames ?? []).every((n: string) => (starters ?? []).some((a: any) => a.name === n)), starters);
 // None of the six starters is scheduled — no agent:<id> alarms may exist.
 const starterAlarms = (await alarms()).filter((a: any) => STARTERS.some((s) => a.name === `agent:${s}`));
 check("starter agents are on-demand (no schedule alarms minted)", starterAlarms.length === 0, starterAlarms);
@@ -106,34 +106,31 @@ check("the agents list shows the seeded agents (empty state replaced)", (rowsAft
 await ev(`document.getElementById('new-agent')?.click()`);
 await sleep(700);
 
-// 1. The gallery renders: 9 templates + the blank default.
-const options = await ev(`(() => {
-  const s = document.getElementById('agent-template-picker');
-  if (!s) return null;
-  return { count: s.options.length, blank: s.options[0]?.textContent, hasBlankSelected: s.selectedIndex === 0,
-           names: [...s.options].slice(1).map(o => o.textContent) };
+// 1. The visual gallery renders every shipped template. The blank form itself
+// is the custom-agent default; cards are optional starting points.
+const cards = await ev(`(() => {
+  const gallery = document.getElementById('agent-template-gallery');
+  const items = [...(gallery?.querySelectorAll('agent-template-card') ?? [])];
+  return { count: items.length, labelled: gallery?.getAttribute('aria-label') ?? '',
+    names: items.map((card) => card.template?.name ?? ''),
+    blankName: [...document.querySelectorAll('.agent-config-scroll label')].find((label) => label.textContent.startsWith('Name'))?.querySelector('input')?.value ?? '',
+    labelledUse: items.every((card) => /Use .+ template/.test(card.shadowRoot?.querySelector('.use')?.getAttribute('aria-label') ?? '')) };
 })()`);
-// Accessibility: the select has a programmatic label (label[for] -> #id).
-const a11y = await ev(`(() => {
-  const sel = document.getElementById('agent-template-picker');
-  const lbl = document.querySelector('label[for="agent-template-picker"]');
-  return { labelled: !!sel && !!lbl, owned: lbl?.htmlFor === 'agent-template-picker' };
-})()`);
-check("picker is labelled for assistive tech (label[for] -> select)", a11y?.labelled === true && a11y?.owned === true, a11y);
-check("picker renders with a blank default", !!options && options.hasBlankSelected === true && options.blank === "Custom agent (blank)", options);
-check("picker offers the 20 shipped templates", !!options && options.count === 21, options?.count);
+check("visual picker is labelled for assistive tech and every Use button names its template", /Agent templates/.test(cards?.labelled ?? '') && cards?.labelledUse === true, cards);
+check("the untouched form remains the custom-agent blank default", cards?.blankName === '', cards?.blankName);
+check("picker offers the 20 shipped templates", cards?.count === 20, cards?.count);
 check("catalogue includes Chief of Staff / Research Analyst / Site Auditor",
-  !!options && ["Chief of Staff", "Research Analyst", "Site Auditor"].every((n) => options.names.includes(n)),
-  options?.names);
+  !!cards && ["Chief of Staff", "Research Analyst", "Site Auditor"].every((n) => cards.names.includes(n)),
+  cards?.names);
 
-// 2. Pick Chief of Staff → prefill (a starting point).
-await ev(`(() => { const s = document.getElementById('agent-template-picker');
-  s.value = 'chief-of-staff'; s.dispatchEvent(new Event('change')); })()`);
+// 2. Use Chief of Staff → prefill (a starting point).
+await ev(`(() => { const card = [...document.querySelectorAll('#agent-template-gallery agent-template-card')].find((el) => el.template?.id === 'chief-of-staff');
+  card?.shadowRoot?.querySelector('.use')?.click(); })()`);
 await sleep(200);
 const prefill = await ev(`(() => {
   const name = [...document.querySelectorAll('.agent-config-scroll label')].find(l => l.textContent.startsWith('Name'))?.querySelector('input')?.value ?? '';
   const role = [...document.querySelectorAll('.agent-config-scroll textarea')][0]?.value ?? '';
-  const desc = document.getElementById('agent-template-description')?.textContent ?? '';
+  const desc = [...document.querySelectorAll('#agent-template-gallery agent-template-card')].find((el) => el.template?.id === 'chief-of-staff')?.shadowRoot?.querySelector('.persona')?.textContent ?? '';
   return { name, roleStart: role.slice(0, 40), roleLen: role.length, roleHasCoS: role.includes('Chief of Staff Persona'), desc, checks: [...document.querySelectorAll('.skills-list input[type=checkbox]')].filter(c => c.checked).length };
 })()`);
 check("pick prefills the name", prefill?.name === "Chief of Staff", prefill?.name);
@@ -226,8 +223,8 @@ await ev(`document.getElementById('thread-back')?.click()`);
 await sleep(400);
 await ev(`document.getElementById('new-agent')?.click()`);
 await sleep(700);
-await ev(`(() => { const s = document.getElementById('agent-template-picker');
-  s.value = 'tab-janitor'; s.dispatchEvent(new Event('change')); })()`);
+await ev(`(() => { const card = [...document.querySelectorAll('#agent-template-gallery agent-template-card')].find((el) => el.template?.id === 'tab-janitor');
+  card?.shadowRoot?.querySelector('.use')?.click(); })()`);
 await sleep(200);
 const schedPrefill = await ev(`document.getElementById('agent-schedule-minutes')?.value ?? null`);
 check("a background template prefills the schedule field (120 min for tab-janitor)", schedPrefill === "120", schedPrefill);
@@ -324,8 +321,8 @@ await ev(`(async () => { await chrome.runtime.sendMessage({ type: 'background-ag
 await sleep(600);
 await ev(`document.getElementById('new-agent')?.click()`);
 await sleep(700);
-await ev(`(() => { const s = document.getElementById('agent-template-picker');
-  s.value = 'price-watcher'; s.dispatchEvent(new Event('change')); })()`);
+await ev(`(() => { const card = [...document.querySelectorAll('#agent-template-gallery agent-template-card')].find((el) => el.template?.id === 'price-watcher');
+  card?.shadowRoot?.querySelector('.use')?.click(); })()`);
 await sleep(200);
 const pwPrefill = await ev(`document.getElementById('agent-schedule-minutes')?.value ?? null`);
 check("the price-watcher template prefills its schedule (60 min)", pwPrefill === "60", pwPrefill);

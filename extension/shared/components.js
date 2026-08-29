@@ -1528,6 +1528,72 @@ class SiteAgentCard extends Component {
 }
 customElements.define("site-agent-card", SiteAgentCard);
 
+/* <agent-template-card> — one reusable, bounded template choice. The template
+ * record is assigned through the property (large persona text never crosses an
+ * HTML attribute); the component emits `use` with the canonical template id. */
+class AgentTemplateCard extends Component {
+  static get observedAttributes() { return ["starter"]; }
+  constructor() {
+    super();
+    this._template = {};
+  }
+  set template(value) {
+    this._template = value && typeof value === "object" ? value : {};
+    if (this._rendered) { this._render(); this._wire(); }
+  }
+  get template() { return this._template; }
+  _render() {
+    const template = this._template;
+    const name = String(template.name || "Unnamed template");
+    const persona = String(template.description || "").trim() || "No persona summary provided.";
+    const skills = Array.isArray(template.skills) ? template.skills.map(String) : [];
+    const shownSkills = skills.slice(0, 3);
+    const overflow = skills.length - shownSkills.length;
+    const starter = this.hasAttribute("starter");
+    const titleId = `template-title-${Math.random().toString(36).slice(2)}`;
+    const personaId = `${titleId}-persona`;
+    mountTemplate(this, `
+      :host { display:block; min-inline-size:0; }
+      article { display:grid; grid-template-rows:auto minmax(2.8em,auto) auto auto; gap:10px;
+        box-sizing:border-box; block-size:100%; min-block-size:154px; min-inline-size:0; padding:14px; border:1px solid var(--border,#e3e0d9);
+        border-radius:var(--radius-md,12px); background:var(--panel,#fff); color:var(--text,#1d1b18); }
+      :host([starter]) article { border-color:var(--accent,#0e6e63); }
+      header { display:flex; align-items:flex-start; gap:8px; min-inline-size:0; }
+      .name { margin:0; flex:1; min-inline-size:0; font-size:var(--text-base,14px); line-height:1.35;
+        font-weight:700; overflow-wrap:anywhere; }
+      .starter { flex:0 0 auto; padding:2px 7px; border:1px solid var(--accent,#0e6e63);
+        border-radius:999px; color:var(--accent,#0e6e63); font-size:10px; font-weight:700; line-height:1.4; }
+      .persona { display:-webkit-box; margin:0; color:var(--muted,#635e56); font-size:var(--text-xs,12px);
+        line-height:1.4; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; overflow-wrap:anywhere; }
+      .skills { display:flex; flex-wrap:wrap; align-items:center; gap:5px; min-inline-size:0; }
+      .skill, .overflow { display:inline-flex; max-inline-size:100%; padding:2px 7px; border-radius:999px;
+        background:var(--panel-2,#efede8); color:var(--muted,#635e56); font-size:10px; line-height:1.5;
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .overflow { border:1px solid var(--border,#e3e0d9); background:transparent; font-weight:700; }
+      .use { justify-self:start; min-block-size:36px; padding:0 14px; border:0; border-radius:var(--radius-sm,6px);
+        background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); cursor:pointer; font:600 var(--text-sm,13px)/1 inherit; }
+      .use:hover { background:var(--accent-hover,#0a5c53); }
+      .use:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      @media (forced-colors:active) { article, .starter, .overflow, .use { border:1px solid CanvasText; } }
+    `, `<article aria-labelledby="${titleId}" aria-describedby="${personaId}">
+      <header><h3 class="name" id="${titleId}">${escapeHtml(name)}</h3>${starter ? '<span class="starter">Starter</span>' : ""}</header>
+      <p class="persona" id="${personaId}">${escapeHtml(persona)}</p>
+      <div class="skills" aria-label="Skills: ${escapeHtml(skills.join(", "))}">
+        ${shownSkills.map((skill) => `<span class="skill" title="${escapeHtml(skill)}">${escapeHtml(skill.replace(/[-_]+/g, " "))}</span>`).join("")}
+        ${overflow > 0 ? `<span class="overflow" aria-label="${overflow} more skills">+${overflow}</span>` : ""}
+      </div>
+      <button class="use" type="button" aria-label="Use ${escapeHtml(name)} template">Use</button>
+    </article>`);
+  }
+  _wire() {
+    this._root.querySelector(".use")?.addEventListener("click", () => {
+      const template = this._template;
+      if (template?.id) this._emit("use", { id: template.id });
+    });
+  }
+}
+customElements.define("agent-template-card", AgentTemplateCard);
+
 /* <tool-directory-card> — one production-registry function in semantic order:
  * name → bounded registry description/schema metadata → per-function states.
  * The component owns its responsive geometry so Directory embeds cannot detach

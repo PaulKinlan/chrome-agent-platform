@@ -41,6 +41,14 @@ one line each here:
 
 ## Open
 
+### Agent template picker is a plain select (2026-08-29 — candidate in review)
+- The create-agent picker is being replaced with shared visual cards showing the
+  template name, a bounded persona summary, up to three skill badges, and a labelled
+  Use action. The curated six are ordered first and visibly marked Starter.
+- Candidate evidence: real loaded-extension KAT 9/9 applies Chief of Staff and
+  persists the agent; the existing template journey remains 38/38; axe is clean
+  and its blocked-fetch probe exits nonzero; full suite 2118/0. Review pending.
+
 ### Scheduled task storage-full flood (2026-08-21 — local successor)
 - Retained Durable authority exhausted the owner/model master store's former 500-key ceiling, causing one-shot and recipe alarms to repeat a generic console failure. The fix removes that arbitrary count ceiling, retains byte quotas, isolates each execution's authority, and evicts no data.
 - A storage-blocked scheduled row now shows the failed state plus **Storage full — retry or cancel**, exposes a labelled keyboard-focusable Retry action, and retains Delete as owner cancellation. The exact alarm is disarmed after the first transition; a stale already-queued delivery is silent.

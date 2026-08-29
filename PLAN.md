@@ -210,7 +210,8 @@ it structurally — is in [PRODUCT.md](PRODUCT.md), "Where the product is going"
 Also P0: `CAP-FB-20260827-MAIN-GATES-RED-02` (fixed and shipped; author review with the falsification gates) and
 `CAP-FB-20260821-WORKTREE-HYGIENE-01` (it protects the evidence everything else cites).
 
-**P1.** Dialog consolidation (five implementations, three hand-rolled outside the component
+**P1.** Template picker visual cards (`CAP-FB-20260829-TEMPLATE-CARDS-01`, candidate in
+review); dialog consolidation (five implementations, three hand-rolled outside the component
 system); Settings sectioning (12,837 px, 8.8 screens, all twelve panels rendered at once);
 permission-remediation UX; semantic tool search; Store release path; owner export/import;
 the headed acceptance lane; `scripts/ui-integration.ts` red; the UI flash/relayout.

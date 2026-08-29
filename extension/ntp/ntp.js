@@ -2146,37 +2146,32 @@ async function buildAgentConfigDialog(opts) {
   // skills — before creating. "Custom agent" (blank) stays the default.
   let selectedTemplate = null;
   if (opts.showTemplates) {
-    const tplWrap = document.createElement("div");
+    const tplWrap = document.createElement("section");
+    tplWrap.setAttribute("aria-labelledby", "agent-template-heading");
     tplWrap.style.display = "flex";
     tplWrap.style.flexDirection = "column";
-    tplWrap.style.gap = "6px";
-    const tplLabel = document.createElement("label");
-    tplLabel.textContent = "Start from a template";
-    tplLabel.setAttribute("for", "agent-template-picker");
-    tplLabel.style.fontWeight = "600";
-    tplLabel.style.fontSize = "13px";
-    const tplSelect = document.createElement("select");
-    tplSelect.id = "agent-template-picker";
-    tplSelect.style.cssText =
-      "width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border,#e3e0d9);background:var(--panel,#ffffff);color:var(--text,#1f1d1a);font:inherit;";
-    const blank = document.createElement("option");
-    blank.value = "";
-    blank.textContent = "Custom agent (blank)";
-    tplSelect.append(blank);
-    for (const t of AGENT_TEMPLATES) {
-      const o = document.createElement("option");
-      o.value = t.id;
-      o.textContent = t.name;
-      tplSelect.append(o);
-    }
-    const tplDesc = document.createElement("div");
-    tplDesc.id = "agent-template-description";
-    tplDesc.style.cssText =
-      "font-size:12px;color:var(--muted,#635e56);min-height:15px;";
-    tplSelect.addEventListener("change", () => {
-      const t = agentTemplateById(tplSelect.value);
-      tplDesc.textContent = t ? t.description : "";
-      if (!t) { selectedTemplate = null; scheduleField.el.value = ""; return; }
+    tplWrap.style.gap = "8px";
+    const tplHeading = document.createElement("h3");
+    tplHeading.id = "agent-template-heading";
+    tplHeading.textContent = "Start from a template";
+    tplHeading.style.cssText = "font-size:13px;line-height:1.4;margin:0;font-weight:600;";
+    const tplHint = document.createElement("p");
+    tplHint.textContent = "Choose a starting point, or keep the blank fields below for a custom agent.";
+    tplHint.style.cssText = "font-size:12px;line-height:1.4;color:var(--muted,#635e56);margin:0;";
+    const tplGallery = document.createElement("div");
+    tplGallery.id = "agent-template-gallery";
+    tplGallery.setAttribute("role", "list");
+    tplGallery.setAttribute("aria-label", "Agent templates — curated starters first");
+    tplGallery.style.cssText =
+      "display:grid;grid-template-columns:repeat(auto-fit,minmax(min(210px,100%),1fr));gap:8px;max-height:360px;overflow:auto;overscroll-behavior:contain;padding:3px;scroll-padding:3px;";
+
+    const starterIds = new Set(STARTER_TEMPLATE_IDS);
+    const orderedTemplates = [
+      ...STARTER_TEMPLATE_IDS.map(agentTemplateById).filter(Boolean),
+      ...AGENT_TEMPLATES.filter((t) => !starterIds.has(t.id)),
+    ];
+    const applyTemplate = (t) => {
+      if (!t) return;
       const pre = templatePrefill(t);
       selectedTemplate = t;
       nameField.el.value = pre.name;
@@ -2194,8 +2189,16 @@ async function buildAgentConfigDialog(opts) {
         const count = [...skillChecks.values()].filter((c) => c.checked).length;
         countEl.textContent = count > 0 ? `${count} selected` : "0 selected";
       }
-    });
-    tplWrap.append(tplLabel, tplSelect, tplDesc);
+    };
+    for (const t of orderedTemplates) {
+      const card = document.createElement("agent-template-card");
+      card.setAttribute("role", "listitem");
+      card.template = t;
+      card.toggleAttribute("starter", starterIds.has(t.id));
+      card.addEventListener("use", () => applyTemplate(t));
+      tplGallery.append(card);
+    }
+    tplWrap.append(tplHeading, tplHint, tplGallery);
     scrollBody.append(tplWrap);
   }
 
@@ -2458,7 +2461,9 @@ async function buildAgentConfigDialog(opts) {
   });
 
   dialog.show();
-  nameField.el.focus();
+  const firstTemplateUse = dialog.querySelector("#agent-template-gallery agent-template-card")?.shadowRoot?.querySelector(".use");
+  if (opts.showTemplates && firstTemplateUse) firstTemplateUse.focus();
+  else nameField.el.focus();
 }
 
 // ── the ONE live-status surface: the conversation's inline pinned bottom row ──
