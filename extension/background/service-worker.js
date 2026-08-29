@@ -492,6 +492,7 @@ import {
   KEYBOARD_COMMANDS,
   hubUrlForCommand
 } from "../lib/pure.js";
+import { redactToolResult } from "../lib/tool-summary.js";
 import {
   canonicalArray,
   canonicalField,
@@ -782,11 +783,15 @@ async function handleAlarm(alarm) {
         // The scheduled-script journal row matches the tool-journal schema:
         // run instance + callId + ok — a replay restores a FAILED script as an
         // error card (the absent-ok heuristic previously passed "script not
-        // found" / arbitrary error text as success).
+        // found" / arbitrary error text as success). The result/error routes
+        // through the canonical redactToolResult seam BEFORE persistence — a
+        // script that prints a credential must never land in the journal raw.
+        const scriptResultRaw = run?.ok ? (typeof result === "string" ? result : JSON.stringify(result ?? null)) : (run?.error ?? "script failed");
+        const scriptResultSafe = (() => { const r = redactToolResult(scriptResultRaw); return typeof r === "string" ? r : JSON.stringify(r); })();
         journalAppend(backgroundAgentMemory(alarm.name), {
           type: "tool-result", id: alarm.name, run: runInstance, callId: `${alarm.name}:${runInstance}:script:1`,
           tool: `script:${task.scriptId}`,
-          result: run?.ok ? (typeof result === "string" ? result : JSON.stringify(result ?? null)) : (run?.error ?? "script failed"),
+          result: scriptResultSafe,
           ok: run?.ok === true,
         }).catch(() => {});
       } else {
@@ -2181,8 +2186,11 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         const cq = callQueue.get(event.toolName) ?? [];
         cq.push(callId); // the result side shifts the OLDEST pending id (FIFO)
         callQueue.set(event.toolName, cq);
+        // Redact at PERSISTENCE with the canonical redactor: journal rows are
+        // rendered + copied by the activity explorer — a credential-shaped
+        // tool argument must never be readable back from storage.
         let args = "";
-        try { args = event.toolArgs != null ? JSON.stringify(event.toolArgs) : ""; } catch { args = String(event.toolArgs ?? ""); }
+        try { args = event.toolArgs != null ? JSON.stringify(redactSecrets(event.toolArgs)) : ""; } catch { args = String(event.toolArgs ?? ""); }
         if (args && args.length > 2000) args = args.slice(0, 2000) + "…";
         const log = { type: "tool-call", id: taskId, executionId, run: runInstance, callId, tool: event.toolName ?? "tool", args };
         journalAppend(mem, log).catch(() => {});
@@ -2190,8 +2198,15 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       } else if (type === "tool-result") {
         let result;
         if (event.result == null) result = "";
-        else if (typeof event.result === "string") result = event.result;
-        else { try { result = JSON.stringify(event.result); } catch { result = String(event.result); } }
+        else {
+          // Strings AND objects go through the canonical decode+redact seam:
+          // a string result (or a modelContent/userSummary wrapper holding a
+          // double-encoded JSON string) is decoded, redacted, and re-serialized;
+          // plain text is credential-pattern scrubbed. Without this, a string
+          // result reached the journal raw (the activity-explorer leak).
+          const d = redactToolResult(event.result);
+          try { result = typeof d === "string" ? d : JSON.stringify(d); } catch { result = String(d ?? event.result); }
+        }
         if (result && result.length > 2000) result = result.slice(0, 2000) + "…";
         // Match the OLDEST pending callId for this tool name (FIFO — parallel
         // same-name calls pair in order) + persist the ok flag so a replay can

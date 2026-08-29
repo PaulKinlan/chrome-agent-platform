@@ -1013,7 +1013,44 @@ async function renderRunLog() {
   const explorer = document.createElement("activity-explorer");
   explorer.setAttribute("limit", "100");
   el.replaceChildren(explorer);
+  runLogExplorer = explorer;
 }
+
+// LIVE Recent activity (owner bug: the section froze at page-load state — the
+// explorer loaded ONCE at mount and nothing ever re-queried, so a run that
+// happened while the NTP was open never appeared until a reload). Journal
+// writes are fire-and-forget during a run; re-query the explorer on run
+// progress + registry changes, TRAILING-DEBOUNCED (the aggregation walk is
+// bounded but not free — one settle per burst, not one per tool call).
+// Skipped while the hub is covered — but DEFERRED, never dropped: a covered
+// burst marks the log dirty and the route return to HUB flushes exactly one
+// refresh (activity created while Settings/Directory or a task thread is open
+// must be there when the owner comes back).
+let runLogExplorer = null;
+let runLogRefreshTimer = 0;
+let runLogDirty = false;
+function runLogCovered() {
+  const view = document.getElementById("view");
+  if (view && view.hidden !== true) return true;
+  return typeof threadView !== "undefined" && threadView && threadView.hidden !== true;
+}
+function scheduleRunLogRefresh() {
+  if (!runLogExplorer) return;
+  if (runLogCovered()) { runLogDirty = true; return; }
+  clearTimeout(runLogRefreshTimer);
+  runLogRefreshTimer = setTimeout(() => { runLogExplorer?.refresh?.().catch(() => {}); }, 1500);
+}
+function flushRunLogDirty() {
+  if (!runLogDirty) return;
+  runLogDirty = false;
+  clearTimeout(runLogRefreshTimer);
+  runLogExplorer?.refresh?.().catch(() => {});
+}
+subscribeProgress((ev) => {
+  if (!ev || typeof ev !== "object") return;
+  if (["tool-call", "tool-result", "done", "error", "text"].includes(ev.type)) scheduleRunLogRefresh();
+});
+subscribeRunRegistry(() => scheduleRunLogRefresh(), { emitCurrent: false });
 
 // A small usage summary on the hub (the recent calls/tokens/cost) — reads the
 // SW's single-authority usage aggregate, so you see at a glance how much the
@@ -1568,6 +1605,7 @@ function hideThreadView({
   }, {
     focusAfter,
   });
+  flushRunLogDirty(); // activity written while the thread was open appears now
 }
 
 let threadProjectionGeneration = 0;
@@ -3067,6 +3105,7 @@ function closeView({ fromNavigation = false } = {}) {
     // disposition rather than focusing underneath the closing overlay.
     focusAfter: { focus: () => viewFocus.close(() => {}) },
   });
+  flushRunLogDirty(); // activity written while Settings/Directory was open appears now
   // Returning from Settings/Directory is an owner navigation boundary. A
   // fresh authoritative read both restores the row promptly and fences any
   // older delayed sidebar read that began before the view switch.

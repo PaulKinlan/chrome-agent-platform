@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.377] — 2026-08-29
+- merge: recent-activity redaction lane (07eef98a) — redactResultValue scrubs every string leaf against RESULT_SECRET_SHAPES (sk-/AKIA/ghp_/xox*/AIza/JWT), try/finally exception-safe WeakSet cycle cleanup in pure.js + tool-summary.js + docs/pure.js mirror, '[Circular]' documented as display placeholder, DAG pin asserts both branches [REDACTED]. Reviewed PASS (round 6); coordinator RED-verified cyclic getter probe on b42a46a6. Manifest resolved to main's P0 shape.
+
+## [0.2.376] — 2026-08-29
+- Activity summaries no longer leak secrets or hang on circular data — every string in a tool result is scrubbed for API keys and tokens, and circular references are safely collapsed even when a getter throws
+
 ## [0.2.375] — 2026-08-29
 - merge: task-view lane (b8413b3f) — registry panel becomes an on-demand debug overlay (hover/click toggle), conversation remains the status surface. Reviewed PASS (round 3). Union with landed progress-inline: lane's <conversation-run-status> element DROPPED (progress-inline removed the banner; merged ntp keeps the inline pinned row); overlay wrapper kept; conversation element keeps progress-inline attributes. Manifest resolved to main's P0 shape.
 

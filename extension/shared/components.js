@@ -24,6 +24,12 @@ import {
 import { parseMentionToken, parseSlashCommand } from "./command-parser.js";
 import { normalizeConversationRunStatus } from "./run-status.js";
 import { safeParse, buildTree, subtreeJson, safeJsonStringify } from "./tool-tree.js";
+// The CANONICAL secret redactor (lib/pure.js — one semantic, shared with the
+// SW write path): activity journals may predate write-path redaction, so the
+// explorer redacts again at render AND the tree/copy paths only ever see the
+// redacted value.
+import { redactSecrets } from "../lib/pure.js";
+import { redactToolResult } from "../lib/tool-summary.js";
 
 const ARIA_HIDDEN = "aria-hidden";
 const TRUE = ""; // boolean-attribute present marker
@@ -6310,44 +6316,18 @@ function timeAgo(ts) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-// Turn a raw tool result into a short readable one-liner. The agent-do runtime
-// wraps tool results in {modelContent, userSummary}, and BOTH can themselves be
-// JSON strings (double-encoded). Recursively unwrap, then render per-tool (never
-// a raw escaped JSON blob). Mirrors lib/tool-summary.js summarizeToolResult.
-function _coerce(v) {
-  if (typeof v === "string") {
-    const s = v.trim();
-    if (s.startsWith("{") || s.startsWith("[")) {
-      try { return JSON.parse(s); } catch { return s; }
-    }
-  }
-  return v;
-}
-function _unwrap(v) {
-  if (v == null) return null;
-  if (typeof v === "string") {
-    const s = v.trim();
-    if (!s) return null;
-    if (s.startsWith("{") || s.startsWith("[")) {
-      try {
-        const o = JSON.parse(s);
-        if (o && typeof o === "object" && !Array.isArray(o)) {
-          if (o.userSummary != null) return _coerce(o.userSummary);
-          if (o.modelContent != null) return _coerce(o.modelContent);
-        }
-        return o;
-      } catch { return s; }
-    }
-    return s;
-  }
-  return v;
-}
+// Turn a raw tool result into a short readable one-liner. Decode + redaction
+// go through lib/tool-summary.js's redactToolResult — the canonical seam
+// shared with the detail tree/copy path and the SW journal persistence — so a
+// wrapped (modelContent/userSummary double-encoded) or historical unredacted
+// result can never paint a secret into the collapsed row. Render per-tool,
+// never a raw escaped JSON blob.
 function _short(v, n = 72) {
   const s = String(v ?? "");
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
 function activityToolSummary(name, raw) {
-  const d = _unwrap(raw);
+  const d = redactToolResult(raw);
   if (d && typeof d === "object" && !Array.isArray(d) && Array.isArray(d.agents)) {
     const items = d.agents.map((a) => {
       const label = a?.name || a?.origin || a?.id || "agent";
@@ -6393,7 +6373,20 @@ function activityText(e) {
   switch (e?.type) {
     case "task": return e.task || "";
     case "result": return e.result || "";
-    case "tool-call": return (e.tool || "tool") + (e.args ? ` ${shortText(e.args, 60)}` : "");
+    case "tool-call": {
+      // The args preview in the summary line goes through safeJsonStringify —
+      // which redacts secret-like KEYS before serialization — so a historical
+      // (pre-write-redaction) journal row can never paint a credential into
+      // the collapsed row either.
+      const preview = (() => {
+        if (!e.args) return "";
+        const p = safeParse(e.args);
+        if (p.kind !== "json") return e.args;
+        try { return safeJsonStringify(redactSecrets(p.value), { maxBytes: 256, maxNodes: 24 }); }
+        catch { return ""; }
+      })();
+      return (e.tool || "tool") + (preview ? ` ${shortText(preview, 60)}` : "");
+    }
     case "tool-result": return (e.tool || "tool") + " → " + activityToolSummary(e.tool, e.result);
     case "screenshot": return e.url || "screenshot";
     case "error": return e.error || e.message || "error";
@@ -6401,20 +6394,54 @@ function activityText(e) {
   }
 }
 
-// The FULL detail for a journal entry (shown in the expanded row).
-function activityDetail(e) {
-  switch (e?.type) {
-    case "tool-result": {
-      const raw = e.result;
-      const s = typeof raw === "string" ? raw : (raw == null ? "" : JSON.stringify(raw, null, 2));
-      return s || "(no result)";
-    }
-    case "tool-call": return typeof e.args === "string" ? e.args : (e.args == null ? "" : JSON.stringify(e.args, null, 2));
-    case "error": return [e.error, e.message, e.stack].filter(Boolean).join("\n") || "error";
-    case "task": return e.task || "";
-    case "result": return e.result || "";
-    default: return e?.detail || e?.url || "";
+// Plain-text details are bounded inline; longer payloads truncate with a
+// "show more" reveal (the SW already caps journaled args/results at 2 KiB —
+// this bound is the defensive ceiling for every other source, e.g. error
+// stacks). The copy button copies the FULL text, never the truncated view.
+const AEX_PLAIN_DETAIL_INLINE = 2048;
+function plainDetailBlock(label, text) {
+  const wrap = document.createElement("div");
+  wrap.className = "aex-plain";
+  const head = document.createElement("div");
+  head.className = "aex-plain-head";
+  const l = document.createElement("span");
+  l.className = "aex-plain-label";
+  l.textContent = label;
+  head.appendChild(l);
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "aex-plain-copy";
+  copy.textContent = "copy";
+  copy.setAttribute("aria-label", `Copy ${label}`);
+  copy.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    const restore = () => setTimeout(() => { copy.textContent = "copy"; }, 1400);
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(() => { copy.textContent = "copied"; restore(); })
+        .catch(() => { copy.textContent = "copy failed"; restore(); });
+    } else { copy.textContent = "copy failed"; restore(); }
+  });
+  head.appendChild(copy);
+  wrap.appendChild(head);
+  const pre = document.createElement("pre");
+  pre.className = "aex-detail";
+  if (text.length > AEX_PLAIN_DETAIL_INLINE) {
+    pre.textContent = text.slice(0, AEX_PLAIN_DETAIL_INLINE) + "\n…";
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "aex-plain-more";
+    more.textContent = `show more (${(text.length - AEX_PLAIN_DETAIL_INLINE).toLocaleString()} more chars)`;
+    more.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      pre.textContent = text;
+      more.remove();
+    });
+    head.appendChild(more);
+    // keep copy last in the head for a stable layout
+    head.appendChild(copy);
   }
+  wrap.appendChild(pre);
+  return wrap;
 }
 
 class ActivityExplorer extends Component {
@@ -6461,6 +6488,44 @@ class ActivityExplorer extends Component {
           color:var(--accent,#0e6e63); background:var(--bg,#f7f6f3); border:1px solid var(--border,#e3e0d9);
           border-radius:var(--radius-sm,8px); }
         .aex-count { font-size:11px; color:var(--muted,#635e56); }
+        /* Structured detail blocks (the same bounded tool-tree renderer the
+           conversation cards use — styles duplicated per shadow-root
+           isolation, scoped under .aex-blocks). */
+        .aex-blocks { padding:0 12px 10px 12px; display:flex; flex-direction:column; gap:6px; }
+        .aex-blocks .tt-block { border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,8px); }
+        .aex-blocks .tt-block summary { list-style:none; cursor:pointer; display:flex; align-items:baseline; gap:8px; padding:6px 10px; color:var(--muted,#635e56); font-size:12px; user-select:none; }
+        .aex-blocks .tt-block summary::-webkit-details-marker { display:none; }
+        .aex-blocks .tt-block summary:hover { color:var(--text,#1d1b18); }
+        .aex-blocks .tt-block summary:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:-2px; }
+        .aex-blocks .tt-block-label { font-weight:600; color:var(--ink,#1d1b18); }
+        .aex-blocks .tt-block-meta { color:var(--muted,#635e56); }
+        .aex-blocks .tt-tree { padding:2px 6px 8px; max-height:260px; overflow:auto; }
+        .aex-blocks .tt-row { display:flex; align-items:center; gap:6px; padding:2px 4px; border-radius:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; line-height:1.5; min-height:22px; }
+        .aex-blocks .tt-row:hover { background:var(--panel-2,#efede8); }
+        .aex-blocks .tt-row[hidden] { display:none; }
+        .aex-blocks .tt-toggle { display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; padding:0; border:0; background:transparent; color:var(--muted,#635e56); cursor:pointer; border-radius:4px; flex:0 0 auto; }
+        .aex-blocks .tt-toggle:hover { color:var(--ink,#1d1b18); background:var(--panel-2,#efede8); }
+        .aex-blocks .tt-toggle:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:0; }
+        .aex-blocks .tt-toggle .tt-caret { transition:transform .15s ease; }
+        .aex-blocks .tt-toggle[aria-expanded="true"] .tt-caret { transform:rotate(90deg); }
+        .aex-blocks .tt-ic { width:18px; height:18px; flex:0 0 auto; }
+        .aex-blocks .tt-key { color:var(--accent,#0e6e63); font-weight:600; white-space:nowrap; }
+        .aex-blocks .tt-val { color:var(--ink,#1d1b18); overflow-wrap:anywhere; min-width:0; }
+        .aex-blocks .tt-val-number, .aex-blocks .tt-val-boolean { color:var(--accent,#0e6e63); }
+        .aex-blocks .tt-val-null { color:var(--muted,#635e56); font-style:italic; }
+        .aex-blocks .tt-kind { color:var(--muted,#635e56); font-size:11px; margin-left:2px; }
+        .aex-blocks .tt-copy { margin-left:auto; flex:0 0 auto; font:inherit; font-size:11px; color:var(--muted,#635e56); background:transparent; border:1px solid var(--border,#e3e0d9); border-radius:5px; padding:1px 7px; cursor:pointer; opacity:0; transition:opacity .12s ease; }
+        .aex-blocks .tt-row:hover .tt-copy, .aex-blocks .tt-copy:focus-visible { opacity:1; }
+        .aex-blocks .tt-copy:hover { color:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); }
+        .aex-plain { border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,8px); }
+        .aex-plain-head { display:flex; align-items:baseline; gap:8px; padding:6px 10px 0; }
+        .aex-plain-label { font-size:12px; font-weight:600; color:var(--ink,#1d1b18); }
+        .aex-plain-copy, .aex-plain-more { margin-left:auto; font:inherit; font-size:11px; color:var(--muted,#635e56);
+          background:transparent; border:1px solid var(--border,#e3e0d9); border-radius:5px; padding:1px 7px; cursor:pointer; }
+        .aex-plain-copy:hover, .aex-plain-more:hover { color:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); }
+        .aex-plain-copy:focus-visible, .aex-plain-more:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:0; }
+        .aex-plain .aex-detail { padding:4px 10px 8px; }
+        @media (prefers-reduced-motion: reduce) { .aex-blocks .tt-toggle .tt-caret { transition:none; } .aex-blocks .tt-copy { transition:none; } }
       </style>
       <div class="aex">
         <div class="aex-toolbar">
@@ -6477,7 +6542,7 @@ class ActivityExplorer extends Component {
     this._entries = this._entries || [];
     this._search.addEventListener("input", () => this._refresh());
     this._agent.addEventListener("change", () => this._refresh());
-    this._load();
+    this.refresh();
   }
   // Set demo entries directly (the gallery has no extension backend).
   set entries(v) {
@@ -6488,7 +6553,62 @@ class ActivityExplorer extends Component {
   get entries() {
     return this._entries;
   }
+  // Re-query the backend NOW (live activity: the NTP calls this,
+  // trailing-debounced, when run progress events land — the section used to
+  // freeze at whatever it showed when the page opened). At most ONE request
+  // is ever in flight plus ONE pending trailing refresh: bursts coalesce
+  // instead of overlapping, and a stale response can never overwrite newer
+  // data (only the in-flight request applies; the trailing one re-queries).
+  refresh() {
+    if (this._seeded) return Promise.resolve(); // gallery demos own their data
+    if (this._loadInFlight) {
+      this._trailingRefresh = true;
+      return this._loadInFlight;
+    }
+    const p = this._load();
+    this._loadInFlight = p;
+    const settle = () => {
+      if (this._loadInFlight === p) this._loadInFlight = null;
+      if (this._trailingRefresh) {
+        this._trailingRefresh = false;
+        this.refresh();
+      }
+    };
+    p.then(settle, settle);
+    return p;
+  }
+  // A cheap change signature: skip the re-render entirely when the fetched
+  // entries are identical (protects aria-live from spam + keeps open rows
+  // from collapsing on a no-op refresh). The signature must cover EVERY
+  // rendered identity/label/content field + the load error — the old
+  // count+first-row form suppressed renames (agentLabel) and empty-success ↔
+  // empty-error transitions. FNV-1a-style double hash over the fields (cheap,
+  // no large allocation).
+  _signature() {
+    const es = this._entries || [];
+    let h1 = 0x811c9dc5, h2 = 0x01000193;
+    const mix = (v) => {
+      const str = String(v ?? "");
+      for (let i = 0; i < str.length; i++) {
+        h1 = Math.imul(h1 ^ str.charCodeAt(i), 0x01000193) >>> 0;
+        h2 = (Math.imul(h2, 31) + str.charCodeAt(i)) >>> 0;
+      }
+      h1 = Math.imul(h1 ^ 0xff, 0x01000193) >>> 0;
+      h2 = (Math.imul(h2, 31) + 0xff) >>> 0;
+    };
+    mix(this._loadError ?? "");
+    for (const e of es) {
+      mix(e.ts); mix(e.type); mix(e.id); mix(e.callId); mix(e.source);
+      mix(e.agentLabel); mix(e.tool); mix(e.task); mix(e.args); mix(e.result);
+      mix(e.error); mix(e.message); mix(e.stack); mix(e.detail); mix(e.url);
+      mix(e.ok);
+    }
+    return `${es.length}:${h1.toString(16)}:${h2.toString(16)}`;
+  }
   async _load() {
+    // Sequence guard: a response applies ONLY if no newer request was issued
+    // meanwhile (stale responses never overwrite newer data).
+    const seq = (this._loadSeq = (this._loadSeq ?? 0) + 1);
     // If entries were seeded synchronously (the gallery), never clobber them
     // with the empty backend result (the _load await would race the setter).
     if (!this._seeded) {
@@ -6500,6 +6620,7 @@ class ActivityExplorer extends Component {
           agent: this.getAttribute("agent") || undefined,
           limit: Number(this.getAttribute("limit")) || 200,
         });
+        if (seq !== this._loadSeq) return; // superseded mid-flight
         if (!this._seeded) {
           this._entries = Array.isArray(res?.entries) ? res.entries : [];
           this._loadError = Array.isArray(res?.entries)
@@ -6507,11 +6628,15 @@ class ActivityExplorer extends Component {
             : (res?.error || "couldn't load the activity log");
         }
       } catch {
+        if (seq !== this._loadSeq) return; // superseded mid-flight
         if (!this._seeded) {
           this._entries = [];
           this._loadError = "the activity log didn't answer — the agent worker may be busy";
         }
       }
+      const sig = this._signature();
+      if (sig === this._lastSignature && this._rendered) return; // nothing new — leave the DOM (and open rows) alone
+      this._lastSignature = sig;
     }
     const seen = new Map();
     for (const e of this._entries) {
@@ -6538,6 +6663,12 @@ class ActivityExplorer extends Component {
       }
       return true;
     });
+    // Rows that are open BEFORE the rebuild stay open after it (a live
+    // refresh must not collapse what the owner is reading).
+    const openBefore = new Set();
+    for (const d of this._list.querySelectorAll("details.aex-entry[open]")) {
+      if (d.dataset.ekey) openBefore.add(d.dataset.ekey);
+    }
     this._list.replaceChildren();
     if (!filtered.length) {
       const d = document.createElement("div");
@@ -6550,7 +6681,7 @@ class ActivityExplorer extends Component {
         retry.type = "button";
         retry.className = "aex-retry";
         retry.textContent = "Retry";
-        retry.addEventListener("click", () => this._load());
+        retry.addEventListener("click", () => this.refresh());
         d.append(retry);
       }
       this._list.append(d);
@@ -6577,16 +6708,66 @@ class ActivityExplorer extends Component {
       ts.textContent = timeAgo(e.ts);
       summary.append(who, main, ts);
       entry.append(summary);
-      // The expanded detail (only for entries that have more than the one-liner).
-      const detail = activityDetail(e);
-      if (detail) {
-        const body = document.createElement("pre");
-        body.className = "aex-detail";
-        body.textContent = detail;
-        entry.append(body);
-      }
+      // The expanded detail — STRUCTURED for tool calls/results (the same
+      // bounded tree renderer the conversation tool cards use), plain text
+      // with truncation + copy for everything else. Never raw JSON blobs.
+      const body = this._detailBody(e);
+      if (body) entry.append(body);
+      const ekey = this._detailKey(e);
+      entry.dataset.ekey = ekey;
+      if (openBefore.has(ekey)) entry.open = true;
       this._list.append(entry);
     }
+  }
+  _detailKey(e) {
+    return `${e.type}:${e.id ?? ""}:${e.callId ?? ""}:${e.ts ?? ""}`;
+  }
+  // Build the expanded detail body for an entry: tool-call inputs and
+  // tool-result output become collapsible, syntax-aware tree blocks
+  // (buildToolTreeBlock over safeParse/buildTree — the conversation card's
+  // renderer, reused per the no-parallel-renderers rule). Each entry gets a
+  // persistent expansion-state map so the owner's collapse/expand choices
+  // survive re-renders.
+  _detailBody(e) {
+    const key = this._detailKey(e);
+    if (!this._blockStates) this._blockStates = new Map();
+    let st = this._blockStates.get(key);
+    if (!st) { st = new Map(); this._blockStates.set(key, st); }
+    // Bound the state maps with the entry volume (they die with the entries).
+    if (this._blockStates.size > 400) this._blockStates.clear();
+    const wrap = document.createElement("div");
+    wrap.className = "aex-blocks";
+    let any = false;
+    const addBlock = (label, raw) => {
+      if (raw == null || raw === "") return;
+      any = true;
+      const parsed = safeParse(raw);
+      if (parsed.kind === "json") {
+        // Historical journal rows may predate write-path redaction — redact
+        // AGAIN at render with the canonical redactor so a secret never
+        // paints, and the tree's COPY path (subtreeJson over this same value)
+        // can only ever copy the redacted form.
+        const safeValue = redactSecrets(parsed.value);
+        const tree = buildTree(safeValue);
+        if (tree.rows.length >= 1) {
+          wrap.appendChild(buildToolTreeBlock(label, safeValue, tree.rows, tree.maxNodes, st));
+          return;
+        }
+      }
+      wrap.appendChild(plainDetailBlock(label, String(parsed.value ?? raw ?? "")));
+    };
+    switch (e?.type) {
+      case "tool-call": addBlock("inputs", e.args); break;
+      // Normalize + redact ONCE (redactToolResult): the collapsed-row summary,
+      // this detail tree, and its copy path all render the same redacted
+      // decoded view — wrapped modelContent JSON strings included.
+      case "tool-result": addBlock("result", redactToolResult(e.result)); break;
+      case "error": addBlock("error", [e.error, e.message, e.stack].filter(Boolean).join("\n") || "error"); break;
+      case "task": addBlock("task", e.task); break;
+      case "result": addBlock("result", e.result); break;
+      default: addBlock("detail", e?.detail || e?.url || "");
+    }
+    return any ? wrap : null;
   }
 }
 customElements.define("activity-explorer", ActivityExplorer);

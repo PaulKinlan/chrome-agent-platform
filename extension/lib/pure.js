@@ -973,16 +973,36 @@ export function safeProviderError(text, knownSecrets = []) {
  * additionally passes only KEY NAMES, never values (see the storage.onChanged
  * map in the service worker), so a credential string is never serialized.
  */
-export function redactSecrets(value) {
+export function redactSecrets(value, seen = new WeakSet()) {
   if (value === null || value === undefined) return value;
   if (typeof value === "string") return value;
-  if (Array.isArray(value)) return value.map(redactSecrets);
-  if (typeof value === "object") {
-    const out = {};
-    for (const [k, v] of Object.entries(value)) {
-      out[k] = SECRET_KEY_RE.test(k) ? "[REDACTED]" : redactSecrets(v);
+  // Path-scoped cycle guard: an object is only "seen" while it is an
+  // ANCESTOR of the current position, so a cyclic payload degrades to a
+  // "[Circular]" placeholder instead of throwing RangeError, while a
+  // legitimately SHARED (DAG) subtree is still redacted at every site.
+  // "[Circular]" is display-only; a literal string with that value is
+  // intentionally indistinguishable because no consumer treats it semantically.
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return "[Circular]";
+    seen.add(value);
+    try {
+      return value.map((v) => redactSecrets(v, seen));
+    } finally {
+      seen.delete(value);
     }
-    return out;
+  }
+  if (typeof value === "object") {
+    if (seen.has(value)) return "[Circular]";
+    seen.add(value);
+    try {
+      const out = {};
+      for (const [k, v] of Object.entries(value)) {
+        out[k] = SECRET_KEY_RE.test(k) ? "[REDACTED]" : redactSecrets(v, seen);
+      }
+      return out;
+    } finally {
+      seen.delete(value);
+    }
   }
   return value;
 }

@@ -1,6 +1,6 @@
 // lib/tool-summary.js — turn a raw tool result into a READABLE one-line summary
-// (never a raw JSON dump). Pure (no DOM, no imports) so both the browser pages
-// (conversation.js, ntp.js) and the Deno unit tests can import it directly.
+// (never a raw JSON dump). Pure (no DOM; lib/pure.js only) so both the browser
+// pages (conversation.js, ntp.js) and the Deno unit tests can import it.
 //
 // The agent-do runtime wraps tool results in {modelContent, userSummary}; we
 // prefer `userSummary` (already a compact, human summary) and then apply a
@@ -13,6 +13,8 @@
  * summary string. Pure — the SW uses it to tag the live tool-result event
  * with `ok`, so the UI can mark the card error instead of always success.
  */
+import { redactSecrets, redactSecretText } from "./pure.js";
+
 export function isToolResultFailure(raw) {
   const d = unwrapToolResult(raw);
   if (d && typeof d === "object" && !Array.isArray(d)) {
@@ -34,36 +36,102 @@ export function summarizeToolResult(name, raw) {
   return renderToolSummary(String(name ?? "tool"), data);
 }
 
-/** Unwrap the {modelContent, userSummary} envelope into the underlying value. */
-function unwrapToolResult(raw) {
-  if (raw == null) return null;
-  if (typeof raw === "string") {
-    const s = raw.trim();
-    if (!s) return null;
-    if (s.startsWith("{") || s.startsWith("[")) {
-      try {
-        const outer = JSON.parse(s);
-        if (outer && typeof outer === "object" && !Array.isArray(outer)) {
-          if (outer.userSummary != null) return coerceJson(outer.userSummary);
-          if (outer.modelContent != null) return coerceJson(outer.modelContent);
-        }
-        return outer;
-      } catch {
-        return s;
-      }
-    }
-    return s;
-  }
-  return raw;
+/** Decode + redact a raw tool result ONCE, for every surface that can paint
+ * it (activity summary line, detail tree, tree copy, journal persistence):
+ * unwraps the {modelContent, userSummary} envelope — whose values can
+ * themselves be JSON strings (double-encoded) — redacts secret-shaped keys in
+ * the decoded structure, and scrubs credential patterns from ANY string leaf
+ * (tool results are DATA, not prose, so the scrub is stricter than the
+ * prose-collision-safe generic text redactor). A row persisted before
+ * write-path redaction can never paint a secret when every reader routes
+ * through here. */
+export function redactToolResult(raw) {
+  const d = unwrapToolResult(raw);
+  if (d == null) return d;
+  // redactSecrets masks secret-NAMED keys; redactResultValue then scrubs
+  // every remaining STRING LEAF (nested Bearer/sk-/AKIA/… shapes survive
+  // redactSecrets by design — it never touches string values).
+  return redactResultValue(redactSecrets(d));
 }
 
-/** If a value is a JSON string, parse it; otherwise pass it through. */
-function coerceJson(v) {
-  if (typeof v === "string") {
-    const s = v.trim();
-    if (s.startsWith("{") || s.startsWith("[")) {
-      try { return JSON.parse(s); } catch { return v; }
+/** Result-specific credential SHAPES: bare tokens with no keyword context.
+ * Tool results are data payloads, so the prose-collision caution of
+ * redactSecretText does not apply — a bare sk-…/AKIA… in a result IS a
+ * credential. The generic redactor stays untouched (prose stays safe). */
+const RESULT_SECRET_SHAPES = [
+  /\b(?:sk|rk|pk|key|tok)-[A-Za-z0-9_-]{8,}/g, // sk-live-…, rk-…, tok-…
+  /\bAKIA[0-9A-Z]{16}\b/g, // AWS access key id
+  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}/g, // GitHub tokens
+  /\bxox[baprs]-[A-Za-z0-9-]{8,}/g, // Slack tokens
+  /\bAIza[0-9A-Za-z_-]{20,}/g, // Google API keys
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}/g, // JWTs
+];
+
+/** Scrub credential patterns from result TEXT: the generic keyword-context
+ * redactor first, then the bare-shape pass. */
+function redactResultText(s) {
+  let out = redactSecretText(s);
+  for (const re of RESULT_SECRET_SHAPES) out = out.replace(re, "[REDACTED]");
+  return out;
+}
+
+/** Recursively scrub every string leaf of a decoded result structure.
+ * Path-scoped cycle guard (same contract as redactSecrets): a cyclic result
+ * degrades to "[Circular]" instead of throwing RangeError; shared (DAG)
+ * subtrees are still scrubbed at every site. The placeholder is display-only;
+ * literal "[Circular]" input is intentionally indistinguishable. */
+function redactResultValue(v, seen = new WeakSet()) {
+  if (typeof v === "string") return redactResultText(v);
+  if (Array.isArray(v)) {
+    if (seen.has(v)) return "[Circular]";
+    seen.add(v);
+    try {
+      return v.map((x) => redactResultValue(x, seen));
+    } finally {
+      seen.delete(v);
     }
+  }
+  if (v && typeof v === "object") {
+    if (seen.has(v)) return "[Circular]";
+    seen.add(v);
+    try {
+      const out = {};
+      for (const [k, val] of Object.entries(v)) out[k] = redactResultValue(val, seen);
+      return out;
+    } finally {
+      seen.delete(v);
+    }
+  }
+  return v;
+}
+
+/** Unwrap the {modelContent, userSummary} envelope into the underlying value.
+ * Envelopes nest (modelContent can itself be a JSON string of another
+ * envelope), so unwrap ITERATIVELY — bounded at MAX_UNWRAP_DEPTH; at the cap
+ * the raw string is returned so the text scrubber still covers it. */
+const MAX_UNWRAP_DEPTH = 4;
+function unwrapToolResult(raw) {
+  let v = raw;
+  for (let depth = 0; depth <= MAX_UNWRAP_DEPTH; depth++) {
+    if (v == null) return null;
+    if (typeof v === "object" && !Array.isArray(v)) {
+      let next = v;
+      if (v.userSummary != null) next = v.userSummary;
+      else if (v.modelContent != null) next = v.modelContent;
+      if (next === v) return v; // no envelope (or a self-reference) — done
+      v = next;
+      continue;
+    }
+    if (typeof v === "string") {
+      const s = v.trim();
+      if (!s) return null;
+      if (s.startsWith("{") || s.startsWith("[")) {
+        if (depth === MAX_UNWRAP_DEPTH) return s; // bounded: scrub as text
+        try { v = JSON.parse(s); continue; } catch { return s; }
+      }
+      return s;
+    }
+    return v;
   }
   return v;
 }
