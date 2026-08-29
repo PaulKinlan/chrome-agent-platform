@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.402] — 2026-08-29
+- CAP-FB-20260829-SETTINGS-NAV-ORDER-01 align settings navigation
+
 ## [0.2.401] — 2026-08-29
 - CAP-FB-20260829-AGENTS-SETTINGS-MERGE-01 unify agent displays
 

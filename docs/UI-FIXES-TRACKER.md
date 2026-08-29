@@ -30,6 +30,7 @@ one line each here:
 - **Discovered-sites box butting against the container edge** — `0.2.312`.
 - **Add-agent empty state / agents-folder "+"** — `0.2.312`.
 - **Tool library count disagreeing with the rows** — `0.2.312`: all 130 listed.
+- **Settings nav order drifting from panel order** — the nav now mirrors the rendered section order exactly, with a parser pin preventing another mismatch.
 - **Background agents separated from the agents list** — unified end to end: Settings has one Agents destination and one management list for named + scheduled agents (including stopped schedules), with persona/provider/schedule/toggle/delete actions kept in-row; the task sidebar also shows stopped scheduled agents with a plain cadence marker.
 - **Data & memory Clear looking like it did nothing** — `0.2.265`, `0.2.266`: the clear
   worked, the UI never refreshed; tree expansion is now preserved across the refresh.

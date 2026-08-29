@@ -1524,6 +1524,26 @@ evidence every other task depends on).
   - 2026-08-29 20:29 UTC — implementation started from `origin/main@54d70a9b`; presentation-only merge keeps named-agent and background-recipe stores/routes distinct, preserves legacy `#background` and `#background-agents` links by normalizing both to `#agents`, and deliberately leaves callable-only filtering in the execution picker rather than applying it to display surfaces.
   - 2026-08-29 20:44 UTC — author falsification: with `agent-display.js` removed, its three changed tests failed type-check/import (RED); with `pure.js` and `options.html` restored to `origin/main`, the final deep-link/structure assertions failed 3 pass / 2 fail (RED). Restored candidate: focused suite 20/20 and build green.
 
+## [CAP-FB-20260829-SETTINGS-NAV-ORDER-01] Settings nav follows the rendered document order
+- Feedback: 2026-08-29 — while unifying Agents, the owner observed that Settings navigation listed Skills before Agents while the document rendered Agents before Skills
+- Updated: 2026-08-29 UTC
+- Status: IN_REVIEW
+- Priority: P2
+- Owner: implementation lane
+- Workspace: durable worktree
+- Branch: `cap-agents-merge`
+- Base: `a7dd6b8`
+- Candidate: this commit
+- Shipping: —
+- Acceptance: Settings left-nav href order exactly equals the top-level panel section order
+- Review: required with the parent Agents merge candidate
+- Gates: parser pin over `options.html`; full suite and build
+- Blockers: —
+- Next: independent acceptance review, then coordinator merge
+- Recover: `git log --oneline --all --grep=CAP-FB-20260829-SETTINGS-NAV-ORDER-01`
+- History:
+  - 2026-08-29 20:47 UTC — falsification RED: the new parser pin showed Skills before Agents in nav but after Permissions in the document; moved the existing Skills nav item after Permissions, producing exact order parity without moving any panel.
+
 ## [CAP-FB-20260829-MAIN-GATES-RED-03] Journey suite red on main after the install-granted permission change
 - Feedback: 2026-08-29 — found by running the suite on `origin/main`
 - Updated: 2026-08-29 UTC
