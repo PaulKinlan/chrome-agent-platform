@@ -199,6 +199,17 @@ UI warns against pasting credentials. Only product-authored prompt content is
 ever shown in the UI — there is no hidden chain-of-thought in the
 composition.
 
+The dynamic `runtime-context` layer follows the same trust class: the memory
+index it carries is the agent's OWN store content, already fully reachable by
+the model via `memory_grep`/`memory_list` in the same prompts, and the roster
+is hub-only and already reachable via `list_agents`. The layer changes WHEN
+this content appears (every composition), never WHO sees it or WHERE it goes —
+all prompt content flows to the configured provider by platform design (page
+content, journals, grep results already do), so PII in prompts is accepted.
+The contract is CREDENTIAL-redaction: every agent-written field in the layer
+passes through `redactSecretText` before any truncation or encoding, so a
+credential-shape string in a store reaches the prompt only as `[REDACTED]`.
+
 ## Tests
 
 - `tests/system-prompts.test.ts` — the runtime-policy drift guard (policy ⊆

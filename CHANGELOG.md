@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.397] — 2026-08-29
+- fix(prompts): runtime-context round 3 — delegation parity, serialized-byte cap, documented trust class
+
 ## [0.2.396] — 2026-08-29
 - fix(prompts): runtime-context round 2 — redaction, structural containment, usable attestation parity
 

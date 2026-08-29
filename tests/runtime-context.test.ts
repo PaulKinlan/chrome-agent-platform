@@ -323,3 +323,66 @@ Deno.test("runtime-context r2: boundaryLayersFor picks the master or the matchin
   assertEquals(boundaryLayersFor(promptInfo, "https://unknown.example"), null);
   assertEquals(boundaryLayersFor(null, "hub"), null);
 });
+
+/* ── r3 (P1-2): the byte cap binds the SERIALIZED line ──────────────────── */
+
+function memoryBlockLine(text) {
+  const blockStart = text.indexOf("### Memory index");
+  if (blockStart < 0) return null;
+  const bodyLines = text.slice(blockStart).split("\n").slice(1).filter((l) => l.length > 0);
+  return bodyLines[0] ?? null;
+}
+
+Deno.test("runtime-context r3: escape-heavy input — the encoded line stays within the byte budget", () => {
+  for (const flood of ['"'.repeat(2048), "\\".repeat(2048), 'a"\\b'.repeat(512)]) {
+    const text = formatRuntimeContext(sampleContext({ memoryIndex: flood }));
+    const line = memoryBlockLine(text);
+    assert(line, "a block renders for escape-heavy input");
+    const bytes = new TextEncoder().encode(line).length;
+    assert(bytes <= 2048, `encoded line ${bytes}B exceeds the 2048B budget`);
+    assertStringIncludes(text, "memory index truncated", "truncation is honestly marked");
+  }
+});
+
+Deno.test("runtime-context r3: control chars are stripped; a pure-control index renders no block", () => {
+  const nulOnly = formatRuntimeContext(sampleContext({ memoryIndex: "\x00".repeat(2048) }));
+  assert(!nulOnly.includes("### Memory index"), "2048 NULs carry no information — no block, no 12KB line");
+  const mixed = formatRuntimeContext(sampleContext({ memoryIndex: "a\x00b\x07c\x1f" }));
+  const line = memoryBlockLine(mixed);
+  assertEquals(line, '"abc"', "controls stripped, content survives");
+});
+
+/* ── r3 (P1-1): EVERY production boundary closure attaches layered receipts ── */
+
+Deno.test("runtime-context r3: every setAttestation boundary closure in the service worker attaches layers", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const closures = sw.match(/setAttestation\?\.\(\(att\) => \{[\s\S]*?recordRunAttestation\(bound\)/g) ?? [];
+  assert(closures.length >= 2, `expected the runTask + direct-delegation closures (found ${closures.length})`);
+  for (const c of closures) {
+    assert(c.includes("boundaryLayersFor("), "a boundary closure emits receipts without layered parity");
+  }
+});
+
+/* ── r3 (P1-3c): the trust-class claim stays true — roster is hub-only ──── */
+
+Deno.test("runtime-context r3: the roster NEVER composes into worker prompts, even when offered", async () => {
+  const spyRoster = [{ name: "Bee", role: "reader" }];
+  let listCalls = 0;
+  const spyList = () => { listCalls++; return spyRoster; };
+  // Format level: a roster passed with worker scope is ignored.
+  const formatted = formatRuntimeContext(sampleContext({ scope: "worker", roster: spyRoster }));
+  assert(!formatted.includes("Agents you can delegate to"), "worker-scope format ignores an offered roster");
+  // Gather level: a listAgents fn offered at worker scope is never even called.
+  const gathered = await gatherRuntimeContext({
+    scope: "worker",
+    listAgents: spyList,
+    memory: { get: async () => null },
+    chromeApi: null,
+    now: new Date(),
+  });
+  assertEquals(listCalls, 0, "worker-scope gather never touches the roster source");
+  assert(!gathered.text.includes("Agents you can delegate to"));
+  // …while hub scope still carries it (the asymmetry IS the contract).
+  const hub = await gatherRuntimeContext({ scope: "hub", listAgents: spyList, memory: { get: async () => null }, chromeApi: null, now: new Date() });
+  assertStringIncludes(hub.text, "Agents you can delegate to");
+});

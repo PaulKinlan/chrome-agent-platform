@@ -6700,6 +6700,7 @@ const handlers = mergeRouteMaps(
       try {
         const attestKeyState = await attestationKeyState();
         a.setAttestation?.((att) => {
+          const delegateLayers = boundaryLayersFor(orchestrator?.promptInfo, att.agentId);
           const bound = {
             runId: execId,
             taskId: logicalId,
@@ -6714,6 +6715,10 @@ const handlers = mergeRouteMaps(
             ephemeral: !attestKeyState.durable,
             receipt: hmacSha256Hex(attestKeyState.bytes, String(att.digest ?? "")),
             composedReceipt: hmacSha256Hex(attestKeyState.bytes, String(att.composedDigest ?? "")),
+            // Content-free layered receipts — same parity attach as the
+            // runTask boundary (this worker came from the cached orchestrator's
+            // build, whose promptInfo carries its layered receipts).
+            ...(delegateLayers ? { layers: delegateLayers } : {}),
           };
           recordRunAttestation(bound);
         });
