@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.407] — 2026-08-29
+- fix(webmcp): keep detector bootstrap build-safe
+
 ## [0.2.406] — 2026-08-29
 - fix(webmcp): scope passive detections to documents
 

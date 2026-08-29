@@ -3104,7 +3104,10 @@ async function armDetectionProbe(tabId, documentId) {
     const results = await chrome.scripting.executeScript({
       target: { tabId, documentIds: [documentId] },
       world: "MAIN",
-      func: (value) => globalThis.__capWebmcpDetectBootstrap?.(value) === true,
+      func: (value) => {
+        const root = globalThis;
+        return root.__capWebmcpDetectBootstrap?.(value) === true;
+      },
       args: [nonce],
     });
     return results?.[0]?.result === true;
