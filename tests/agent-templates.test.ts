@@ -13,9 +13,9 @@ import {
 import { RECIPES, getRecipe, agentSkillIds, mergeRunSkills } from "../extension/lib/recipes.js";
 import { composeSystemPrompt } from "../extension/lib/system-prompts.js";
 
-Deno.test("templates: the catalogue ships 20 starting agents with unique ids/names", () => {
-  assertEquals(AGENT_TEMPLATES.length, 20);
-  assertEquals(AGENT_TEMPLATE_COUNT, 20);
+Deno.test("templates: the catalogue ships 21 starting agents with unique ids/names", () => {
+  assertEquals(AGENT_TEMPLATES.length, 21);
+  assertEquals(AGENT_TEMPLATE_COUNT, 21);
   const ids = new Set(AGENT_TEMPLATES.map((t) => t.id));
   const names = new Set(AGENT_TEMPLATES.map((t) => t.name));
   assertEquals(ids.size, AGENT_TEMPLATES.length);
@@ -151,10 +151,32 @@ Deno.test("templates: background templates carry a schedule (period + recurring 
   }
 });
 
-Deno.test("templates: the starter set is the owner's curated six, all present in the catalogue", () => {
+Deno.test("templates: Advanced Web Developer has the required interactive persona fields", () => {
+  const t = agentTemplateById("advanced-web-developer");
+  assertExists(t);
+  assertEquals(t.name, "Advanced Web Developer");
+  assert(t.description.length > 20);
+  assertEquals(t.mode, "on-demand");
+  assertEquals(t.schedule, undefined);
+  assertEquals(t.skills, [
+    "multi-tab-researcher",
+    "page-summary",
+    "accessibility-checker",
+    "performance-reporter",
+    "screenshot-annotate",
+  ]);
+  assert(t.firstTask.length > 10);
+  assert(t.role.includes("current documentation"));
+  assert(t.role.includes("Baseline"));
+  assert(t.role.includes("View Transitions"));
+  assert(t.role.includes("Core Web Vitals"));
+});
+
+Deno.test("templates: the starter set is the owner's curated seven, all resolve from the catalogue", () => {
   assertEquals([...STARTER_TEMPLATE_IDS], [
     "chief-of-staff",
     "research-analyst",
+    "advanced-web-developer",
     "site-auditor",
     "critic",
     "webapp-test-pilot",

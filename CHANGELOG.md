@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.401] — 2026-08-29
+- A new starter agent: the Advanced Web Developer — a senior front-end engineer who builds with modern, native web platform features (view transitions, container queries, popovers, scroll-driven animations), checks real browser support instead of guessing, and treats accessibility and speed as part of the job. Add it in one click from the agents area
+
 ## [0.2.400] — 2026-08-29
 - Agents can now post work to a shared board and claim each other's jobs: the hub keeps a bounded, tamper-proof ledger (agents can't forge entries with their memory tools), claims expire and recover automatically, finished jobs shrink to compact receipts that never lose the result, and results are delivered back to the requester's conversation with automatic bounded retries
 

@@ -15,7 +15,7 @@ Deno.test("template cards: shared component renders persona, bounded skill badge
 });
 
 Deno.test("template cards: picker is a starter-first visual gallery using the landed catalogue", () => {
-  assertEquals(STARTER_TEMPLATE_IDS.length, 6);
+  assertEquals(STARTER_TEMPLATE_IDS.length, 7);
   assert(AGENT_TEMPLATES.length >= STARTER_TEMPLATE_IDS.length);
   assertStringIncludes(ntp, 'document.createElement("agent-template-card")');
   assertStringIncludes(ntp, 'card.toggleAttribute("starter", starterIds.has(t.id))');
