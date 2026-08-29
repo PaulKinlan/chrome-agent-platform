@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.360] — 2026-08-29
+- Internal bookkeeping only, no user-visible change
+
 ## [0.2.359] — 2026-08-29
 - Internal only, no user-visible change: the browser-driven tests each get their own browser now. They used to share a small set of fixed connection numbers, so a leftover browser from an earlier run — or simply two test runs at once — could quietly hand a test the wrong browser, and it would then report confident pass/fail results about a build it was never looking at. A new check fails the build if a fixed number ever comes back
 

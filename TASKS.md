@@ -1353,8 +1353,8 @@ evidence every other task depends on).
 - Workspace: active (local path private)
 - Branch: `cap-fb-20260829-fixed-debug-ports-01`
 - Base: `84991bddd` (`origin/main` at the rebase)
-- Candidate: this tracker commit
-- Shipping: `origin/main@872b7417`
+- Candidate: `origin/main@ab454213`
+- Shipping: `origin/main@ab454213`
 - Acceptance: no browser-driving script hard-codes a debug port; every one launches with `--remote-debugging-port=0` and discovers the real port from the `DevTools listening` line (the pattern 28 scripts already use); each converted harness still passes on its own; and two harnesses that previously shared a port pass when run CONCURRENTLY, which is the case that produced false results
 - Review: author review 2026-08-29 — falsification cleared in real browsers (a decoy browser holding the old fixed port; the pre-change harness reported the decoy tree's string, the converted harness reported its own). No independent review: no second model is available, per AGENTS.md "Review without a second model"
 - Gates: each converted KAT green individually; a concurrent run of the previously-colliding pair green; `npm run build`, `npm test`, `npm run test:chrome`, `npm run check:gallery`, `node scripts/check-tasks.mjs`
