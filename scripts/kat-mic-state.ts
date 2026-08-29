@@ -11,21 +11,12 @@
 // REAL (Chromium's fake audio device emits a tone), so the waveform is
 // genuinely level-driven in this run.
 
+import { launchChrome } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? "/tmp/cap-mic-state-kats";
 const CHROMIUM = "/usr/bin/chromium";
-const BASE_PORT = 9361;
-// Pick a free debug port — killed KAT runs leave zombie chromiums holding the
-// fixed port, which then hangs every subsequent run's CDP handshake.
-async function freePort(from: number): Promise<number> {
-  for (let p = from; p < from + 200; p++) {
-    const l = Deno.listen({ port: p });
-    try { l.close(); return p; } catch { /* taken */ }
-  }
-  throw new Error("no free debug port in range");
-}
-const PORT = await freePort(BASE_PORT);
 
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail?: unknown) {
@@ -35,18 +26,16 @@ function check(name: string, cond: boolean, detail?: unknown) {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 await Deno.mkdir(OUT, { recursive: true });
 
-const proc = new Deno.Command(CHROMIUM, {
+// The debugging port is kernel-assigned and read back from THIS Chrome by the
+// shared launcher — a hard-coded port can silently attach to another lane's
+// browser (CAP-FB-20260829-FIXED-DEBUG-PORTS-01).
+const { proc, wsUrl } = await launchChrome({
+  binary: CHROMIUM,
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-    `--remote-debugging-port=${PORT}`, "--remote-allow-origins=*",
+    "--remote-allow-origins=*",
     `--user-data-dir=${ROOT}.cache/kat-mic-state-${Date.now()}`, "about:blank"],
-  stdout: "null", stderr: "piped",
-}).spawn();
-
-const wsUrl = await new Promise<string>((resolve, reject) => {
-  const t = setTimeout(() => reject(new Error("no devtools url")), 15000);
-  (async () => { for (;;) { try { const r = await fetch(`http://127.0.0.1:${PORT}/json/version`); const j = await r.json(); clearTimeout(t); resolve(j.webSocketDebuggerUrl); return; } catch { await sleep(300); } } })();
 });
 const ws = new WebSocket(wsUrl);
 await new Promise(r => ws.onopen = r);
