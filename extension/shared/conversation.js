@@ -798,6 +798,10 @@ export function toolRowsFromRunLog(executionId, logs) {
       args: r.args ?? null,
       result: r.result ?? null,
       ok: r.ok ?? null,
+      // The tool that ACTUALLY ran (the SW persists it on the result row) —
+      // pairToolJournal prefers it over the envelope unwrap, and without this
+      // mapping the replay could never recover it from a summarized result.
+      selectedTool: typeof r.selectedTool === "string" && r.selectedTool ? r.selectedTool : null,
       ts: typeof r.at === "number" ? r.at : null,
     }));
   return pairToolJournal(rows).flatMap((p) => {

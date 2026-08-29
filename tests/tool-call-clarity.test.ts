@@ -6,7 +6,7 @@
 // truncation, no named-agent tools in the hub prompt, no demo marker).
 
 import { describeToolCall } from "../extension/lib/tool-summary.js";
-import { buildTree, journalJson, safeParse } from "../extension/shared/tool-tree.js";
+import { buildTree, journalJson, safeJsonStringify, safeParse } from "../extension/shared/tool-tree.js";
 import { redactDeep } from "../extension/lib/pure.js";
 import { MASTER_SKILL } from "../extension/lib/master-skill.js";
 import { createDemoModel } from "../extension/lib/models/demo-model.js";
@@ -155,4 +155,62 @@ Deno.test("pairToolJournal: a journaled execute_tool pair replays as the REAL to
   const args = JSON.parse(paired[0].args);
   if (args.selectionRef) throw new Error("the selectionRef plumbing leaked into the replayed card");
   if (args.name !== "KAT Bot") throw new Error("inner arguments not unwrapped");
+});
+
+Deno.test("toolRowsFromRunLog: the durable-log replay keeps the persisted selectedTool (the mapping dropped it)", async () => {
+  const { toolRowsFromRunLog } = await import("../extension/shared/conversation.js");
+  const logs = [
+    { type: "tool-call", id: "t1", callId: "c1", run: "r1", at: 1, tool: "execute_tool",
+      args: JSON.stringify({ selectionRef: "sel_x", arguments: { path: "/tmp/a.csv" } }) },
+    // The SW persists selectedTool on the result row; the RESULT payload is the
+    // summarized string (no envelope left to unwrap) — without the mapping the
+    // replay can only show `execute_tool`.
+    { type: "tool-result", id: "t1", callId: "c1", run: "r1", at: 2, tool: "execute_tool",
+      result: "Read 42 rows", ok: true, selectedTool: "read_file" },
+  ];
+  const rows = toolRowsFromRunLog("exec-1", logs);
+  const toolRow = rows.find((r) => r.role === "tool") as any;
+  if (!toolRow) throw new Error("no derived tool row");
+  if (toolRow.toolName !== "read_file") {
+    throw new Error(`replay shows ${toolRow.toolName} — the persisted selectedTool was dropped by toolRowsFromRunLog`);
+  }
+});
+
+Deno.test("journalJson: multibyte text is BYTE-bounded and never splits a surrogate pair", () => {
+  const enc = new TextEncoder();
+  const LONE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  // 1200 four-byte emoji = 4800 bytes; the old UTF-16 length check (1200 <= headroom) passed it through whole.
+  const s = journalJson("🔥".repeat(1200), { maxBytes: 2000 });
+  const bytes = enc.encode(s).length;
+  if (bytes > 2000) throw new Error(`journalJson emitted ${bytes} bytes > 2000 (UTF-16 length compared against a byte budget)`);
+  if (LONE.test(s)) throw new Error("a surrogate pair was split mid-character");
+});
+
+Deno.test("safeJsonStringify: a huge multibyte ROOT string stays byte-bounded, pair-safe, valid JSON", () => {
+  const enc = new TextEncoder();
+  const LONE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  // Odd-aligned pairs ("a🌊" = 3 code units) + a maxString whose cut lands on
+  // a HIGH surrogate (slice(0,8) of a 3-unit pattern) — the old code-unit cut
+  // leaks a lone surrogate into the parsed value; RED pre-fix.
+  const out = safeJsonStringify("a🌊".repeat(50), { maxBytes: 512, maxString: 9 });
+  const bytes = enc.encode(out).length;
+  if (bytes > 512) throw new Error(`safeJsonStringify emitted ${bytes} bytes > 512`);
+  // JSON.stringify ESCAPES a split pair ("\ud83c") — the evidence only shows
+  // in the PARSED value (a real lone surrogate leaks to every consumer).
+  const parsed = JSON.parse(out);
+  if (LONE.test(parsed)) throw new Error("a surrogate pair was split mid-character");
+});
+
+Deno.test("buildTree: leaf truncation never splits a surrogate pair", () => {
+  const LONE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  const tree = buildTree({ note: "📡".repeat(500) });
+  // Check the RAW row strings (JSON.stringify would escape the evidence).
+  const strings: string[] = [];
+  const walk = (v: unknown) => {
+    if (typeof v === "string") strings.push(v);
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === "object") Object.values(v).forEach(walk);
+  };
+  walk(tree);
+  if (strings.some((t) => LONE.test(t))) throw new Error("a leaf truncation split a surrogate pair");
 });

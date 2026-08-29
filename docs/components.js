@@ -24,7 +24,7 @@ import {
 import { parseMentionToken, parseSlashCommand } from "./command-parser.js";
 import { normalizeConversationRunStatus } from "./run-status.js";
 import { safeParse, buildTree, subtreeJson, safeJsonStringify } from "./tool-tree.js";
-import { describeToolCall } from "../lib/tool-summary.js";
+import { describeToolCall } from "./tool-summary.js";
 
 const ARIA_HIDDEN = "aria-hidden";
 const TRUE = ""; // boolean-attribute present marker

@@ -24,6 +24,8 @@ const FILES = [
   ["extension/shared/tool-tree.js", "docs/tool-tree.js"],
   // The canonical secret matcher (tool-tree.js imports it — the gallery must resolve it).
   ["extension/lib/pure.js", "docs/pure.js"],
+  // The human tool-summary renderer (components.js imports it).
+  ["extension/lib/tool-summary.js", "docs/tool-summary.js"],
 ];
 
 export async function syncGallery({ check = false } = {}) {
@@ -37,6 +39,12 @@ export async function syncGallery({ check = false } = {}) {
     // deterministic transform in write and check modes so drift checks compare
     // against the generated artifact rather than the untransformed source.
     if (dst === "docs/tool-tree.js") {
+      expected = Buffer.from(expected.toString("utf8").replace('../lib/pure.js', './pure.js'));
+    }
+    if (dst === "docs/components.js") {
+      expected = Buffer.from(expected.toString("utf8").replace('../lib/tool-summary.js', './tool-summary.js'));
+    }
+    if (dst === "docs/tool-summary.js") {
       expected = Buffer.from(expected.toString("utf8").replace('../lib/pure.js', './pure.js'));
     }
     if (check) {

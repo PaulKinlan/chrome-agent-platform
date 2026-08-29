@@ -17,6 +17,7 @@ import { sha256Hex, utf8ByteLength } from "./pure.js";
 import { capLog } from "./cap-log.js";
 import { perfSpan } from "./cap-perf.js";
 import { isToolResultFailure } from "./tool-summary.js";
+import { correctUnsupportedMutationClaims } from "./mutation-claim-check.js";
 import {
   createLazyProviderToolset,
   executableBrowserToolRecords,
@@ -594,6 +595,10 @@ export function createAgent({
   let stepSpans = new Map();
   let toolSpans = new Map();
   let runStartedAt = null;
+  // The REAL tool names (post lazy-envelope unwrap) that returned success in
+  // THIS run — the runtime backstop against unsupported mutation claims in
+  // the final reply (the prompt clause alone is model-compliance-dependent).
+  const okToolNames = new Set();
   const makeAgent = (sysPrompt) => {
     stepSpans = new Map();
     toolSpans = new Map();
@@ -666,6 +671,7 @@ export function createAgent({
         const tspan = toolSpans.get(toolKey);
         toolSpans.delete(toolKey);
         const toolOk = !isToolResultFailure(e.result);
+        if (toolOk) { try { okToolNames.add(selectedToolFromResult(e.result) ?? e.toolName); } catch { /* ignore */ } }
         if (tspan) tspan.end(toolOk ? "ok" : "error");
         agentDoLog.debug(`tool ${String(e.toolName ?? "unknown").slice(0, 64)} ${toolOk ? "ok" : "error"} in ${(e.durationMs ?? 0).toFixed ? e.durationMs.toFixed(1) : "?"}ms (step ${e.step})`);
         try {
@@ -683,7 +689,14 @@ export function createAgent({
       onComplete: async (e) => {
         const runDur = runStartedAt == null ? 0 : Date.now() - runStartedAt;
         agentDoLog.debug(`run complete: ${e.totalSteps ?? "?"} steps in ${runDur}ms${e.aborted ? " (aborted)" : ""}`);
-        try { progressCb?.({ type: "done", text: e.result, totalSteps: e.totalSteps, aborted: e.aborted }); } catch { /* ignore */ }
+        try {
+          // Runtime honesty backstop: a final text that CLAIMS a mutation with
+          // no successful matching tool call gets a visible correction — the
+          // owner is never misled by a non-compliant model.
+          const checked = correctUnsupportedMutationClaims(e.result, okToolNames);
+          if (checked.corrections.length > 0) agentDoLog.warn(`mutation-claim correction appended (${checked.corrections.length})`);
+          progressCb?.({ type: "done", text: checked.text, totalSteps: e.totalSteps, aborted: e.aborted });
+        } catch { /* ignore */ }
       },
       onUsage: async (record) => {
         agentDoLog.debug(`usage: in ${record.inputTokens ?? 0} out ${record.outputTokens ?? 0} estCost ${record.estimatedCost ?? 0}`);

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.350] — 2026-08-29
+- fix(tool-calls): REVISE round 2 — runtime mutation-claim honesty (a final text claiming an agent create/update/delete/schedule with NO successful matching tool call gets a visible correction appended, not just a prompt clause); the durable-log replay keeps the persisted selectedTool through toolRowsFromRunLog (replays showed execute_tool); the gallery resolves again (docs/tool-summary.js synced + the generated import rewritten, with a graph-resolve test); journalJson/safeJsonStringify/leaf truncation are byte-bounded + surrogate-pair-safe via truncateUtf8 (multibyte text exceeded byte budgets and code-unit cuts split pairs). Every new test falsification-proven RED on 68e50482
+
 ## [0.2.349] — 2026-08-28
 - Deleting an agent now truly cleans up after itself: scheduled runs, permissions, workers, and stored data are removed together, safely, and anything half-finished is retried rather than lost
 - Internal bookkeeping: the completed task-loading work is closed out and archived, leaving the tracker showing only live work
