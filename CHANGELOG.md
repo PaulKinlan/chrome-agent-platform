@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.375] — 2026-08-29
+- merge: task-view lane (b8413b3f) — registry panel becomes an on-demand debug overlay (hover/click toggle), conversation remains the status surface. Reviewed PASS (round 3). Union with landed progress-inline: lane's <conversation-run-status> element DROPPED (progress-inline removed the banner; merged ntp keeps the inline pinned row); overlay wrapper kept; conversation element keeps progress-inline attributes. Manifest resolved to main's P0 shape.
+
+## [0.2.374] — 2026-08-29
+- Task view no longer shows the internal run-registry panel — the conversation is the status view; the registry is now an on-demand debug overlay for cancel, resume and logs
+
 ## [0.2.373] — 2026-08-29
 - merge: progress-inline lane (2bfa1805) — inline pinned live row (no #run-status banner), exact per-attempt runId capture/reconciliation, sidepanel action-label preservation, fail-closed axe gates. Reviewed PASS (round 3); coordinator-attested blocked-CDN axe failure-path (rc=1) + behavioral RED on 9bc529a9. Manifest resolved to main's P0 shape (lane base predates it; lane has no manifest delta of its own).
 
