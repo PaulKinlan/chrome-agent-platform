@@ -941,8 +941,12 @@ class MicButton extends Component {
     this._listening ? this.stop() : this.start();
   }
   _stopIfHidden() {
-    if (!this._listening) return;
     if (this._button && this._button.offsetParent === null) {
+      // Invalidate UNCONDITIONALLY: while getUserMedia is pending _listening is
+      // still false, and stop() alone would leave the start's generation valid
+      // — the late stream would be adopted the moment the composer re-shows.
+      this._startGen++;
+      if (!this._listening) return;
       this._emit("mic-error", { message: "recording stopped — the composer was hidden" });
       this.stop();
     }
@@ -963,7 +967,14 @@ class MicButton extends Component {
     this._mutObserver.observe(document.body, {
       attributes: true, attributeFilter: ["class", "hidden", "style"], subtree: true,
     });
-    this._onPageHide = () => { if (this._listening) this.stop(); };
+    this._onPageHide = () => {
+      // Pagehide while getUserMedia is PENDING: _listening is still false, so
+      // "stop only when listening" leaves the in-flight start valid and the
+      // late stream becomes a background recording after the page hides.
+      // Invalidate the generation first, unconditionally.
+      this._startGen++;
+      if (this._listening) this.stop();
+    };
     window.addEventListener("pagehide", this._onPageHide);
   }
   /** Request the microphone stream BEFORE starting recognition. The Web

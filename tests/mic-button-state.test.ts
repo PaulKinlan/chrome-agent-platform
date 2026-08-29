@@ -200,6 +200,25 @@ Deno.test("mic state: composer hidden while getUserMedia is PENDING — the late
   );
 });
 
+Deno.test("mic state: PAGEHIDE while getUserMedia is PENDING invalidates the start — the late stream is stopped, never adopted", async () => {
+  const { el } = makeMic();
+  const srMade = installFakeSR();
+  el.connectedCallback(); // registers the real pagehide listener on window
+  const gum = deferred();
+  navigator.mediaDevices = { getUserMedia: () => gum.promise };
+  const startP = el.start();
+  await tick();
+  window.dispatchEvent(new Event("pagehide")); // page hides mid-permission-prompt
+  const stream = fakeStream();
+  gum.resolve(stream);
+  await startP;
+  assertEquals(el._listening, false, "must not record into a hidden page");
+  assertEquals(el.hasAttribute("listening"), false, "the listening attribute must never be set");
+  assertEquals(stream.tracks[0].stopped, 1, "the late stream must be stopped, not leaked");
+  assertEquals(el._mediaStream, null, "the late stream must not be retained");
+  assertEquals(srMade.length, 0, "recognition must not even be constructed");
+});
+
 // ── P1-b: disconnect must not leave a false recording affordance ───────────
 Deno.test("mic state: disconnect drops the host listening attribute — reattach renders IDLE, and the detached removal does not re-render", () => {
   const { el, root } = makeMic();
