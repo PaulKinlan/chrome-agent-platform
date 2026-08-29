@@ -807,7 +807,11 @@ async function main() {
     };
     const approvedMsg = async (payload) => {
       const first = await msgValue(payload);
-      if (first?.ok === true) return first;
+      // Owner-direct actions execute on the first extension-document call. A
+      // genuine cleanup/operation failure must be returned as-is — never
+      // mistaken for an approval denial and never resolved against an unrelated
+      // pending row. Only the explicit approval gate enters the Settings flow.
+      if (first?.ok === true || !/requires owner approval/i.test(String(first?.error ?? ""))) return first;
       await resolveNextApproval(true);
       return await msgValue(payload);
     };

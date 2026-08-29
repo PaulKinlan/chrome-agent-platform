@@ -231,6 +231,26 @@ evidence every other task depends on).
 
 ## Active
 
+## [CAP-FB-20260829-APPROVAL-JOURNEY-REGRESSION-01] Restore owner-direct approval journeys after inline approvals
+- Feedback: 2026-08-29 — the landed inline-approval merge left the full Chrome journey suite stopping at agent.delete because its helper treated every operational failure as a pending approval
+- Updated: 2026-08-29 23:00 UTC
+- Status: IN_REVIEW
+- Priority: P0
+- Owner: implementer (worktree lane)
+- Workspace: active (local path private)
+- Branch: `cap-approvals-journey-fix`
+- Base: `cebb4601`
+- Candidate: `cap-approvals-journey-fix` (local, not pushed)
+- Shipping: —
+- Acceptance: model-originated destructive calls retain inline stop-and-wait approval; owner-direct extension actions do not wait for a nonexistent Settings row; the journey helper enters the Settings resolver only for an explicit approval-gate response; required capabilities refuse before dependent teardown; permanent manifest host access is accepted as non-removable cleanup success
+- Review: required fresh-session review of the candidate diff and falsification evidence before merge
+- Gates: Chrome journeys 120/120; full Deno suite; production build; focused approval/capability/site-discovery tests; changed source pins observed RED without the fix and GREEN with it
+- Blockers: —
+- Next: independent review, then coordinator merge and rerun the gates on main
+- Recover: `git show cap-approvals-journey-fix && git diff origin/main...cap-approvals-journey-fix`
+- History:
+  - 2026-08-29 23:00 UTC — reproduced the landed stop at 85/120. Root cause: owner-direct agent.delete executed immediately and returned an honest cleanup result, but the journey assumed every non-ok response meant an approval row existed. Restricted the resolver retry to explicit approval-gate errors. The newly reached checks exposed and repaired two existing install-grant consistency defects: required scripting refusal now precedes enrollment teardown, and agent cleanup trusts unregisterOriginScripts' authoritative success when host access is permanent. Falsification: focused source pins failed 2/9 without the service-worker fix and passed after restoration. Final gates: focused 44/44; Chrome journeys 120/120; full Deno 2389/2389; build passed.
+
 ## [CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01] Tool-call argument robustness and schema accuracy
 
 - Feedback: 2026-08-29 — owner reported frequent argument sanitization failures, including a complete HTML document rejected while saving an artifact, and asked that every model-visible schema state the real enforced constraints

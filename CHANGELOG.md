@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.407] — 2026-08-29
+- Owner actions now finish without waiting for a second approval, while agent-requested changes still pause for the approval card; deleting an agent also handles permanent browser access cleanly
+
 ## [0.2.406] — 2026-08-29
 - Scheduled agents now keep their conversation: when a background agent runs on its timer, the work it did shows up in that agent's chat — previously it vanished
 
