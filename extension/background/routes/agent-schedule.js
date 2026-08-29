@@ -70,6 +70,7 @@ export function createApplyAgentSchedule({
   cancelScheduledTaskBackground,
   broadcastRegistryChanged,
   slugifyAgentId,
+  withNamedAgentsLock,
 }) {
   return async function applyAgentSchedule(id, periodInMinutes, task = null) {
     const agent = await getNamedAgent(id);
@@ -100,8 +101,18 @@ export function createApplyAgentSchedule({
       name,
       owner: { agentRole: `named:${slug}`, agentSurfaceRef: `named:${slug}` },
     });
-    const after = await getNamedAgent(id);
-    if (!after || (agent.instanceId && after.instanceId !== agent.instanceId)) {
+    // REVISE-5 P1-a: the fence re-read runs UNDER the named-agents lock.
+    // deleteNamedAgent holds that same lock across gate-cancel → prompt
+    // cleanup → row delete, so the read either lands BEFORE the deletion
+    // (the deletion's own gate then cancels the just-created schedule) or
+    // AFTER it (the row reads gone and we cancel here). An unlocked read can
+    // observe the still-present row between the gate's cancel and the row
+    // delete and return success for a schedule nothing will ever cancel.
+    // REVISE-5 P1-b: the identity compare is UNCONDITIONAL — persisted legacy
+    // rows have no instanceId, and `undefined !== <new id>` must still detect
+    // a delete+recreate that happened mid-schedule.
+    const after = await withNamedAgentsLock(() => getNamedAgent(id));
+    if (!after || after.instanceId !== agent.instanceId) {
       const undo = cancelScheduledTaskBackground(name);
       try {
         await undo.marked;

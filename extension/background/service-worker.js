@@ -409,6 +409,7 @@ const applyAgentSchedule = createApplyAgentSchedule({
   cancelScheduledTaskBackground,
   broadcastRegistryChanged,
   slugifyAgentId,
+  withNamedAgentsLock,
 });
 import {
   checkHookAllowed,
