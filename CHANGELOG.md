@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.361] — 2026-08-29
+- Dialogs now behave the same everywhere. Three of them had been built by hand instead of using the shared ones, so each had its own quirks — one could not be dismissed by clicking outside it, another had no close button, and a fix to one never reached the others. They all use the shared dialogs now: click outside to dismiss, Escape to cancel, and a delete confirmation always starts on Cancel rather than Delete
+
 ## [0.2.360] — 2026-08-29
 - Internal bookkeeping only, no user-visible change
 

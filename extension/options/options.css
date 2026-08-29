@@ -672,21 +672,9 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   display: inline-flex;
   gap: 6px;
 }
-.recipe-edit {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 18px;
-  max-width: min(90vw, 560px);
-  background: var(--panel);
-  color: var(--text);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.recipe-edit::backdrop {
-  background: rgba(0, 0, 0, 0.5);
-}
-.recipe-edit textarea {
+/* The prompt editor now renders inside <agent-dialog>, which owns the shell
+   (panel, backdrop, sizing, overflow). Only the slotted content is styled here. */
+.recipe-edit-textarea {
   width: 100%;
   box-sizing: border-box;
   font: inherit;
@@ -697,6 +685,7 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   border-radius: var(--radius-sm);
   padding: 12px;
   resize: vertical;
+  margin-bottom: 8px;
 }
 .recipe-edit-actions {
   display: flex;

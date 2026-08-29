@@ -78,42 +78,20 @@ async function render() {
   }
 }
 
-// Native <dialog> confirmation for artifact deletion (the direct owner
-// action). The modal names the EXACT object being deleted; Cancel and Escape
-// mutate nothing. Resolves true only on an explicit Delete click.
+// Artifact deletion uses the SHARED confirm (CAP-FB-20260827-DIALOG-CONSOLIDATION-01).
+// This was a hand-rolled <dialog> duplicating confirmActionDialog — the exact
+// pattern the project rules forbid, and why dialogs behaved inconsistently: each
+// copy owned its own focus, dismiss and sizing behaviour, so a fix to one never
+// reached the others. The shared one is also strictly better here: it adds
+// backdrop light-dismiss, an aria-label, and a settled guard, and it already
+// implements the rule this dialog cared about — a destructive confirm focuses
+// Cancel, not the destructive button.
 function confirmDeleteDialog(name, type) {
-  return new Promise((resolve) => {
-    const dialog = document.createElement("dialog");
-    dialog.className = "delete-dialog";
-    const heading = document.createElement("h3");
-    heading.textContent = "Delete artifact";
-    const body = document.createElement("p");
-    body.textContent = `Delete "${name ?? "Untitled"}" (${type ?? "data"})? This permanently removes it from the artifact store.`;
-    const controls = document.createElement("div");
-    controls.className = "dialog-controls";
-    const cancel = document.createElement("button");
-    cancel.type = "button";
-    cancel.textContent = "Cancel";
-    const del = document.createElement("button");
-    del.type = "button";
-    del.className = "danger";
-    del.textContent = "Delete";
-    controls.append(cancel, del);
-    dialog.append(heading, body, controls);
-    document.body.append(dialog);
-    const close = (confirmed) => {
-      dialog.close();
-      dialog.remove();
-      resolve(confirmed);
-    };
-    cancel.addEventListener("click", () => close(false));
-    del.addEventListener("click", () => close(true));
-    dialog.addEventListener("cancel", (e) => { e.preventDefault(); close(false); });
-    dialog.addEventListener("close", () => { dialog.remove(); resolve(false); }, { once: true });
-    // Default focus lands on the LEAST destructive control (Cancel); Escape
-    // cancels. The deletion itself still requires the explicit Delete click.
-    dialog.showModal();
-    cancel.focus();
+  return confirmActionDialog({
+    title: "Delete artifact",
+    body: `Delete "${name ?? "Untitled"}" (${type ?? "data"})? This permanently removes it from the artifact store.`,
+    confirmLabel: "Delete",
+    destructive: true,
   });
 }
 

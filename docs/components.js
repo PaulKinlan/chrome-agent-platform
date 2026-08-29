@@ -4759,7 +4759,8 @@ class AgentDialog extends Component {
 }
 customElements.define("agent-dialog", AgentDialog);
 
-/* confirmActionDialog({ title, body, confirmLabel, destructive }) — the ONE
+/* confirmActionDialog({ title, body, confirmLabel, destructive, note,
+ * requireGenuineGesture, returnFocusTo }) — the ONE
  * promise-based replacement for window.confirm/window.alert/window.prompt in
  * extension pages (CAP-FB-20260823-DIALOG-CONFIRM-MODERNIZATION-01). Built on a
  * native <dialog> shown with showModal() so the focus trap, Escape (cancel),
@@ -4768,7 +4769,23 @@ customElements.define("agent-dialog", AgentDialog);
  * light-dismiss all resolve false and mutate nothing. Caller text is assigned
  * via textContent (never innerHTML). House theme vars, logical layout, and
  * max-width:90vw keep it theme/RTL/narrow-safe; destructive dialogs name the
- * exact object in the caller-provided body and focus Cancel by default. */
+ * exact object in the caller-provided body and focus Cancel by default.
+ *
+ * `requireGenuineGesture` additionally refuses to resolve true unless the click
+ * is `isTrusted` AND `navigator.userActivation.isActive` — a script-driven
+ * click can still DISMISS the dialog, but can never mint an approval. This was
+ * the one property that justified a hand-rolled copy in options.js for the
+ * per-agent provider mutation; it belongs in the shared vocabulary instead
+ * (CAP-FB-20260827-DIALOG-CONSOLIDATION-01), so any future approval gets it by
+ * construction rather than by remembering to re-implement it.
+ *
+ * `returnFocusTo` restores focus to the element that opened the dialog. The
+ * native <dialog> returns focus on its own in most cases; an opener that is
+ * re-rendered while the dialog is up is the case that needs this, so the
+ * element is checked for `isConnected` first.
+ *
+ * `note` renders a muted secondary line under the body — used to state the
+ * exact scope of what a single approval covers. */
 let confirmDialogStyleMounted = false;
 function mountConfirmDialogStyle(doc) {
   if (confirmDialogStyleMounted || doc.getElementById("cap-confirm-dialog-style")) {
@@ -4781,7 +4798,9 @@ function mountConfirmDialogStyle(doc) {
 .cap-confirm-dialog { background:var(--panel,#ffffff); color:var(--text,#1d1b18); border:1px solid var(--border,#e3e0d9); border-radius:14px; padding:20px; min-width:300px; max-width:90vw; box-shadow:0 20px 60px rgba(0,0,0,.4); }
 .cap-confirm-dialog::backdrop { background:rgba(0,0,0,.5); }
 .cap-confirm-title { margin:0 0 10px; font-size:16px; font-weight:700; }
-.cap-confirm-body { margin:0 0 18px; font-size:14px; line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere; }
+.cap-confirm-body { margin:0 0 12px; font-size:14px; line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere; }
+.cap-confirm-note { margin:0 0 18px; font-size:12.5px; line-height:1.45; color:var(--muted,#635e56); }
+.cap-confirm-dialog:not(:has(.cap-confirm-note)) .cap-confirm-body { margin-bottom:18px; }
 .cap-confirm-actions { display:flex; justify-content:flex-end; gap:10px; }
 .cap-confirm-actions button { border-radius:10px; padding:8px 14px; font-size:13px; cursor:pointer; border:1px solid var(--border,#e3e0d9); background:var(--panel,#ffffff); color:var(--text,#1d1b18); }
 .cap-confirm-actions button:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
@@ -4792,7 +4811,7 @@ function mountConfirmDialogStyle(doc) {
   (doc.head ?? doc.documentElement).append(style);
   confirmDialogStyleMounted = true;
 }
-export function confirmActionDialog({ title = "Confirm", body = "", confirmLabel = "Confirm", destructive = false } = {}) {
+export function confirmActionDialog({ title = "Confirm", body = "", confirmLabel = "Confirm", destructive = false, note = "", requireGenuineGesture = false, returnFocusTo = null } = {}) {
   return new Promise((resolve) => {
     mountConfirmDialogStyle(document);
     const dialog = document.createElement("dialog");
@@ -4804,6 +4823,11 @@ export function confirmActionDialog({ title = "Confirm", body = "", confirmLabel
     const message = document.createElement("p");
     message.className = "cap-confirm-body";
     message.textContent = String(body);
+    const noteEl = note ? document.createElement("p") : null;
+    if (noteEl) {
+      noteEl.className = "cap-confirm-note";
+      noteEl.textContent = String(note);
+    }
     const actions = document.createElement("div");
     actions.className = "cap-confirm-actions";
     const cancel = document.createElement("button");
@@ -4815,17 +4839,29 @@ export function confirmActionDialog({ title = "Confirm", body = "", confirmLabel
     accept.className = destructive ? "cap-confirm-accept destructive" : "cap-confirm-accept";
     accept.textContent = String(confirmLabel);
     actions.append(cancel, accept);
-    dialog.append(heading, message, actions);
+    if (noteEl) dialog.append(heading, message, noteEl, actions);
+    else dialog.append(heading, message, actions);
     let settled = false;
     const settle = (ok) => {
       if (settled) return;
       settled = true;
       if (dialog.open) dialog.close();
       dialog.remove();
+      // Focus return for an opener that was re-rendered while the dialog was
+      // up — the native <dialog> cannot restore focus to a detached element.
+      if (returnFocusTo?.isConnected) { try { returnFocusTo.focus(); } catch { /* not focusable */ } }
       resolve(ok);
     };
     cancel.addEventListener("click", () => settle(false));
-    accept.addEventListener("click", () => settle(true));
+    accept.addEventListener("click", (event) => {
+      // A script-triggered click may dismiss, but must never mint an approval.
+      if (requireGenuineGesture &&
+          (!event.isTrusted || navigator.userActivation?.isActive !== true)) {
+        if (noteEl) noteEl.textContent = "Use a real click to approve this.";
+        return;
+      }
+      settle(true);
+    });
     // Escape fires cancel; preventDefault keeps the close path single-owned by settle().
     dialog.addEventListener("cancel", (e) => { e.preventDefault(); settle(false); });
     // Light dismiss: with showModal() a click outside the content lands on the

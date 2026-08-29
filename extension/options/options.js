@@ -1316,64 +1316,24 @@ function agentProviderRowHtml(a, cur, globalCfg) {
 }
 
 // A per-agent provider change is a destructive named-agent mutation. The SW
-// deliberately returns a pending capability on the first exact call. This
-// native modal is the explicit owner decision between that call and its one
-// exact retry — dismissal/cancel can only deny, never approve.
+// deliberately returns a pending capability on the first exact call. This modal
+// is the explicit owner decision between that call and its one exact retry —
+// dismissal/cancel can only deny, never approve.
+//
+// This was a hand-rolled <dialog> (CAP-FB-20260827-DIALOG-CONSOLIDATION-01).
+// The one property that justified the copy — approve only on a genuine,
+// trusted click — now lives in the shared confirm as `requireGenuineGesture`,
+// so it is available to every future approval by construction instead of being
+// re-implemented from memory. Semantics are unchanged: Cancel, Escape and
+// backdrop dismissal all deny, and a script-driven click cannot approve.
 function confirmAgentProviderMutation(agentName, description, trigger) {
-  return new Promise((resolve) => {
-    const dialog = document.createElement("dialog");
-    dialog.className = "recipe-edit provider-approval-dialog";
-    dialog.setAttribute("aria-label", "Approve provider change?");
-
-    const title = document.createElement("h2");
-    title.textContent = "Approve provider change?";
-    const body = document.createElement("p");
-    body.textContent = `${description} for ${agentName}? This changes which model service the agent may use.`;
-    const status = document.createElement("p");
-    status.className = "muted";
-    status.textContent = "Only Approve once saves this exact change.";
-    const actions = document.createElement("div");
-    actions.className = "recipe-edit-actions";
-    const cancel = document.createElement("button");
-    cancel.type = "button";
-    cancel.className = "btn ghost cancel-provider-change";
-    cancel.textContent = "Cancel";
-    const approve = document.createElement("button");
-    approve.type = "button";
-    approve.className = "btn primary approve-provider-change";
-    approve.textContent = "Approve once";
-    actions.append(cancel, approve);
-    dialog.append(title, body, status, actions);
-    document.body.append(dialog);
-
-    let decision = false;
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      dialog.remove();
-      if (trigger?.isConnected) trigger.focus();
-      resolve(decision);
-    };
-    cancel.addEventListener("click", () => dialog.close());
-    approve.addEventListener("click", (event) => {
-      // A script-triggered click can dismiss/cancel, but can never mint an
-      // approval. Match the existing Approvals surface's genuine-click check.
-      if (!event.isTrusted || navigator.userActivation?.isActive !== true) {
-        status.textContent = "Use a real click to approve this provider change.";
-        return;
-      }
-      decision = true;
-      dialog.close();
-    });
-    dialog.addEventListener("cancel", () => { decision = false; });
-    dialog.addEventListener("close", finish, { once: true });
-    try {
-      dialog.showModal();
-      cancel.focus(); // safe default + deterministic keyboard focus
-    } catch {
-      finish();
-    }
+  return confirmActionDialog({
+    title: "Approve provider change?",
+    body: `${description} for ${agentName}? This changes which model service the agent may use.`,
+    note: "Only Approve once saves this exact change.",
+    confirmLabel: "Approve once",
+    requireGenuineGesture: true,
+    returnFocusTo: trigger ?? null,
   });
 }
 
@@ -1642,19 +1602,25 @@ function backgroundAgentRow(a) {
   return row;
 }
 
-// Edit a custom recipe's prompt (item 56): a dialog with the current prompt in
-// a textarea + Save (recipe.update). Built with the native <dialog> + textContent
-// (never innerHTML for the user-edited value).
+// Edit a skill's system prompt: a dialog with the current prompt in a textarea
+// + Save. The user-edited value is set via .value / textContent, never innerHTML.
+//
+// This was the third hand-rolled <dialog> (CAP-FB-20260827-DIALOG-CONSOLIDATION-01).
+// It is a CONTENT dialog rather than a decision, so it uses <agent-dialog> — the
+// shared shell — which brings the close button, backdrop light-dismiss, Escape,
+// the focus trap, focus return and scrollable overflow that the hand-rolled copy
+// only partly had. In particular the copy had no close button and no light
+// dismiss, so a fix to either of the other two dialogs never reached it.
 function editRecipePrompt(recipe) {
-  const dialog = document.createElement("dialog");
-  dialog.className = "recipe-edit";
-  const label = document.createElement("label");
-  label.textContent = `${recipe.name} — system prompt`;
-  label.className = "field-label";
+  const dialog = document.createElement("agent-dialog");
+  dialog.setAttribute("title", `${recipe.name} — system prompt`);
+
   const textarea = document.createElement("textarea");
   textarea.rows = 8;
+  textarea.className = "recipe-edit-textarea";
   textarea.value = recipe.prompt ?? "";
   textarea.setAttribute("aria-label", `System prompt for ${recipe.name}`);
+
   const actions = document.createElement("div");
   actions.className = "recipe-edit-actions";
   const cancel = document.createElement("button");
@@ -1675,10 +1641,14 @@ function editRecipePrompt(recipe) {
     renderBackgroundAgents();
   });
   actions.append(cancel, save);
-  dialog.append(label, textarea, actions);
+
+  dialog.append(textarea, actions);
   document.body.append(dialog);
-  dialog.showModal();
+  // The shell emits "close" for Escape, the X and the backdrop alike, so there
+  // is one removal path rather than one per dismissal route.
   dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  dialog.show();
+  textarea.focus();
 }
 
 // The "Add background agent" control uses the NEW customizable HTML select

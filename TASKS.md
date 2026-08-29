@@ -189,7 +189,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | OPEN | [`CAP-FB-20260825-SITE-AGENT-SHOWCASE-01`](#cap-fb-20260825-site-agent-showcase-01-make-sites-as-sub-agents-demonstrable-in-under-a-minute) | Make sites-as-sub-agents demonstrable in under a minute |
 | P1 | OPEN | [`CAP-FB-20260825-UI-INTEGRATION-RED-01`](#cap-fb-20260825-ui-integration-red-01-scriptsui-integrationts-is-red-and-never-finishes) | scripts/ui-integration.ts is red and never finishes |
 | P1 | OPEN | [`CAP-FB-20260825-WEBSTORE-RELEASE-01`](#cap-fb-20260825-webstore-release-01-the-path-to-a-published-extension) | The path to a published extension |
-| P1 | OPEN | [`CAP-FB-20260827-DIALOG-CONSOLIDATION-01`](#cap-fb-20260827-dialog-consolidation-01-five-dialog-implementations-three-hand-rolled) | Five dialog implementations, three hand-rolled |
+| P1 | IN_REVIEW | [`CAP-FB-20260827-DIALOG-CONSOLIDATION-01`](#cap-fb-20260827-dialog-consolidation-01-five-dialog-implementations-three-hand-rolled) | Five dialog implementations, three hand-rolled |
 | P1 | OPEN | [`CAP-FB-20260827-SETTINGS-MONOLITH-01`](#cap-fb-20260827-settings-monolith-01-settings-is-one-88-screen-scroll-with-a-nav-that-only-scrolls) | Settings is one 8.8-screen scroll with a nav that only scrolls |
 | P1 | OPEN | [`CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01`](#cap-fb-20260828-artifact-library-capacity-01-the-library-still-evicts-the-owners-oldest-artifact-silently) | The library still evicts the owner's oldest artifact silently |
 | P1 | OPEN | [`CAP-FB-20260828-HUB-AS-TIMELINE-01`](#cap-fb-20260828-hub-as-timeline-01-the-hub-is-a-dashboard-it-should-be-a-composer-and-a-timeline) | The hub is a dashboard; it should be a composer and a timeline |
@@ -1414,21 +1414,22 @@ evidence every other task depends on).
 ## [CAP-FB-20260827-DIALOG-CONSOLIDATION-01] Five dialog implementations, three hand-rolled
 - Feedback: 2026-08-27 — product owner: "There's lots of issues with dialogs"
 - Updated: 2026-08-27 23:30 UTC
-- Status: OPEN
+- Status: IN_REVIEW
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
+- Owner: coordinator session
+- Workspace: main
+- Branch: main
 - Base: `139b6f92`
 - Candidate: —
 - Shipping: —
 - Acceptance: every modal in the extension is raised through the shared component vocabulary — `<agent-dialog>` for a content dialog, `confirmActionDialog` for a decision — with no hand-rolled `document.createElement("dialog")` left outside `extension/shared/components.js`. Focus trap, Escape, backdrop light-dismiss, focus return, the destructive default-focus rule, scrollable overflow and theme/RTL/narrow behaviour are then identical everywhere by construction. Each converted site keeps its exact current semantics — in particular the provider-approval dialog must still be able only to DENY on dismissal, never approve
-- Review: independent review by a different model/session; a11y pass on each converted dialog (focus trap, focus return, Escape, announced label)
+- Review: author review 2026-08-29 with the falsification gates cleared (see History); a11y behaviours driven in a real loaded extension by `scripts/kat-dialog-consolidation.ts` rather than asserted from source
 - Gates: full unit suite; Chrome journeys green; gallery drift check green; the impeccable design pass
 - Blockers: —
-- Next: convert `extension/artifacts/index.js` first — it is the simplest and is a plain destructive confirm that `confirmActionDialog` already models exactly
+- Next: owner review of the three converted surfaces in the product. The remaining consolidation work — the ~30 other scripts and any future modal — is now prevented by construction rather than by convention, since there is one confirm and one shell
 - Recover: `git grep -n 'createElement("dialog")' -- extension/`
 - History:
+  - 2026-08-29 — **all three hand-rolled dialogs converted; `createElement("dialog")` now appears exactly once in the extension, inside the shared component itself.** (1) `extension/artifacts/index.js` artifact delete → `confirmActionDialog`, gaining backdrop light-dismiss, an `aria-label` and a settled guard it did not have; its 13 lines of bespoke `.delete-dialog` CSS are deleted. (2) `confirmAgentProviderMutation` → the shared confirm. **This one carried a security property the shared confirm lacked** — approve only on a click that is `isTrusted` AND has active user activation — so rather than keep the duplicate for it, the property moved INTO the shared component as `requireGenuineGesture`, alongside `returnFocusTo` and `note`. Every future approval now gets it by construction instead of by remembering to re-implement it. (3) `editRecipePrompt` → `<agent-dialog>`, the content shell; it gains a close button and backdrop dismissal it never had, and its bespoke panel/backdrop CSS is replaced by the shell's. **Evidence, driven in a real loaded extension (`scripts/kat-dialog-consolidation.ts`, 18/18):** a destructive confirm focuses Cancel; a backdrop click resolves false and removes the node; a non-destructive confirm focuses the confirm control; **an untrusted scripted click cannot approve** and the refusal is explained in the dialog; Escape denies; the shell is announced by its title and its body scrolls on overflow. That last group is why this is a KAT and not only a unit test — a DOM shim cannot tell you whether `event.isTrusted` gating actually holds. **Falsification:** `tests/provider-options-approval.test.ts` pinned the OLD implementation's source lines and had to be rewritten; it now pins the property across BOTH halves (the call site must ASK for the check, the component must IMPLEMENT it and gate the true result on it), because asserting only one half would let the flag become a no-op or let the call site quietly stop passing it. Four deliberate regressions — call site drops the flag, component drops the trusted-click check, the guard warns without refusing, and the hand-rolled duplicate returns — each drove it red before being reverted. **Gates:** build clean; unit **2004 pass / 0 fail**; Chrome journeys **127/127**; gallery, vocabulary and tracker schema green.
   - 2026-08-27 23:30 UTC — captured by source audit. **Five dialog implementations ship.** Two are the intended shared ones in `extension/shared/components.js`: `<agent-dialog>` (the content-dialog shell) and `confirmActionDialog` (the promise-based confirm). Three are hand-rolled duplicates outside the component system: `extension/artifacts/index.js:83` (artifact delete), `extension/options/options.js:1236` (`confirmAgentProviderMutation`), and `extension/options/options.js:1555` (`editRecipePrompt`). This is precisely the failure mode the owner already named as a project rule — "never hand-roll a one-off version of an existing component (the blank-toggle + menu bugs came from hand-rolled duplicates)" — and it is the most likely explanation for dialogs behaving inconsistently: each of the five owns its own focus, dismiss, overflow and sizing behaviour, so a fix to one does not reach the others.
   - 2026-08-27 23:30 UTC — **good news worth recording:** `window.confirm` / `window.alert` / `window.prompt` are already fully eliminated from the extension; the only remaining occurrence is the explanatory comment above `confirmActionDialog`. `CAP-FB-20260823-DIALOG-CONFIRM-MODERNIZATION-01` is therefore substantially further along than its OPEN status suggests — what is left of that task is this consolidation.
 

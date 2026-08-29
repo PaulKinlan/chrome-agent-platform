@@ -42,12 +42,48 @@ function providerService(initial) {
   };
 }
 
-Deno.test("provider Save UI: only a trusted active owner click can confirm the native modal", async () => {
-  const source = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
-  assert(source.includes('dialog.className = "recipe-edit provider-approval-dialog"'), "the product renders an explicit native approval dialog");
-  assert(source.includes('if (!event.isTrusted || navigator.userActivation?.isActive !== true)'), "approval checks browser-trusted click + active user activation");
-  assert(source.includes('decision = true;\n      dialog.close();'), "only the guarded approval branch returns true");
-  assert(source.includes('runOwnerApprovedMutation({'), "Save uses the pending/resolve/retry lifecycle");
+Deno.test("provider Save UI: only a trusted active owner click can confirm the modal", async () => {
+  // The approval dialog was a hand-rolled <dialog> in options.js and this test
+  // pinned its exact source lines. It is now the SHARED confirm
+  // (CAP-FB-20260827-DIALOG-CONSOLIDATION-01), so the guarantee spans two
+  // files: the call site must ASK for the genuine-gesture check, and the shared
+  // component must IMPLEMENT it. Both halves are pinned — asserting only the
+  // call site would let the flag become a no-op, and asserting only the
+  // component would let this call site quietly stop passing it.
+  const options = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
+  const components = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+
+  // -- the call site asks for it, and is a real approval dialog --
+  assert(
+    /confirmAgentProviderMutation[\s\S]{0,600}?requireGenuineGesture:\s*true/.test(options),
+    "the provider approval requests the genuine-gesture check",
+  );
+  assert(options.includes('title: "Approve provider change?"'), "the product renders an explicit approval dialog");
+  assert(options.includes("runOwnerApprovedMutation({"), "Save uses the pending/resolve/retry lifecycle");
+  // The hand-rolled duplicate must not come back — that is what made this
+  // property re-implementable (and forgettable) in the first place.
+  assert(
+    !/confirmAgentProviderMutation[\s\S]{0,800}?createElement\("dialog"\)/.test(options),
+    "the approval must not hand-roll its own <dialog> again",
+  );
+
+  // -- the shared component implements it, and gates the TRUE result on it --
+  assert(
+    components.includes("!event.isTrusted || navigator.userActivation?.isActive !== true"),
+    "the shared confirm checks browser-trusted click + active user activation",
+  );
+  const acceptHandler = components.slice(
+    components.indexOf('accept.addEventListener("click"'),
+    components.indexOf('accept.addEventListener("click"') + 500,
+  );
+  assert(
+    acceptHandler.includes("requireGenuineGesture") && acceptHandler.includes("return;"),
+    "the guard sits in the accept path and refuses, rather than merely warning",
+  );
+  assert(
+    acceptHandler.indexOf("requireGenuineGesture") < acceptHandler.indexOf("settle(true)"),
+    "the guard runs BEFORE the dialog can resolve true",
+  );
 });
 
 Deno.test("provider Save: explicit approval resolves then retries the exact mutation once", async () => {
