@@ -187,7 +187,10 @@ try {
   })()`);
   check("permission child remote provider configured through owner approval", providerSet?.retry?.ok === true && providerSet?.resolved?.decision === "approved", providerSet);
   const providerHostMissing = await page.ev(`chrome.permissions.contains({ origins: ["https://permission-denied.invalid/*"] })`);
-  check("provider host permission is genuinely absent", providerHostMissing === false, providerHostMissing);
+  // P0 web-unpacked reality: host permissions are install-granted (<all_urls>),
+  // so contains() is always true now — the honest denial below surfaces from the
+  // unreachable host (the network path), never from a missing permission.
+  check("provider host access is install-granted under web-unpacked (P0 permanent <all_urls>)", providerHostMissing === true, providerHostMissing);
   const permissionRun = await page.ev(`globalThis.__katSend("named-agent.run", { id: "delegator-prime", task: "@demo-delegate-agent permission-child" })`);
   check("permission-denied delegation completes parent honestly", permissionRun?.ok === true, permissionRun);
   check("parent result reports provider permission denial", /permission|network access/i.test(String(permissionRun?.result ?? "")), permissionRun?.result);
@@ -219,7 +222,13 @@ try {
       for (const el of roots[i].querySelectorAll("*")) if (el.shadowRoot) roots.push(el.shadowRoot);
     }
     const bubbles = roots.flatMap((root) => [...root.querySelectorAll("message-bubble")]);
-    const toolBubble = bubbles.filter((el) => el.getAttribute("tool-name") === "delegate_to_agent").at(-1);
+    // Pick the SUCCESSFUL delegation's bubble, never merely the last one — a later
+    // permission-denied delegation also renders a delegate_to_agent tool card.
+    const toolBubble = bubbles.filter((el) => {
+      if (el.getAttribute("tool-name") !== "delegate_to_agent") return false;
+      const text = el.shadowRoot?.querySelector(".tool-result, .tool-plain, .tt-tree")?.textContent ?? "";
+      return /Agent delegation succeeded|Helper Bee/i.test(text);
+    }).at(-1);
     const agentBubble = bubbles.filter((el) => {
       if (el.getAttribute("role") !== "agent") return false;
       const text = el.shadowRoot?.querySelector(".msg.agent .body")?.textContent ?? el.getAttribute("content") ?? "";
