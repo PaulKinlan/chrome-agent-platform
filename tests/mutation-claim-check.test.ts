@@ -136,9 +136,16 @@ Deno.test("claim-check: first-person framing does not override a subordinate thi
   }
 });
 
-Deno.test("claim-check: a subjectless modifier-led action report is corrected", () => {
-  const { corrections } = correctUnsupportedMutationClaims("Already created the agent.", []);
-  assertEquals(corrections.length, 1);
+Deno.test("claim-check: subjectless modifier-led action reports are corrected", () => {
+  for (const text of [
+    "Already created the agent.",
+    "Just created the agent.",
+    "Now created the agent.",
+    "As requested, created the agent.",
+  ]) {
+    const { corrections } = correctUnsupportedMutationClaims(text, []);
+    assertEquals(corrections.length, 1, `missed subjectless action report: ${text}`);
+  }
 });
 
 Deno.test("claim-check: country US is not first-person evidence", () => {
@@ -181,11 +188,15 @@ Deno.test("claim-check: conventional proper names and possessive noun subjects s
   }
 });
 
-Deno.test("claim-check: a third-party subject governs its coordinated mutation predicates", () => {
-  const text = "I confirmed OpenAI created an agent and then deleted the agent.";
-  const out = correctUnsupportedMutationClaims(text, []);
-  assertEquals(out.corrections.length, 0);
-  assertEquals(out.text, text);
+Deno.test("claim-check: coordinated subjectless mutations remain assistant action reports", () => {
+  for (const text of [
+    "I confirmed OpenAI created an agent and then deleted the agent.",
+    "I confirmed that OpenAI created an agent, but then deleted the agent myself.",
+  ]) {
+    const out = correctUnsupportedMutationClaims(text, []);
+    assertEquals(out.corrections.length, 1, `missed coordinated assistant action: ${text}`);
+    assertStringIncludes(out.corrections[0], "deleted the agent");
+  }
 });
 
 // ── Run-level: the correction must reach the AUTHORITATIVE returned result ──

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.386] — 2026-08-29
+- fix: preserve subjectless mutation action reports
+
 ## [0.2.385] — 2026-08-29
 - fix: describe mutation-claim correction in user language
 
