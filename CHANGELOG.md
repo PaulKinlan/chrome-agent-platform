@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.355] — 2026-08-29
+- fix(genui): round 2 — no more false failures on healthy results, and failed results always become error cards
+
 ## [0.2.354] — 2026-08-28
 - CAP-FB-20260821-WORKTREE-HYGIENE-01: bind every at-risk worktree head, correct the stale facts
 

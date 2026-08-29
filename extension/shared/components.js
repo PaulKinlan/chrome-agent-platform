@@ -230,7 +230,10 @@ export function toolResultSignalsError(status, result) {
     if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
     if (obj.ok === false) return true;
     if (typeof obj.error === "string" && obj.error !== "") return true;
-    if (obj.requiresLiveAuthorization === true && obj.authorizes === false) return true;
+    // authorizes:false + requiresLiveAuthorization:true is NORMAL metadata on a
+    // SUCCESSFUL lazy-tool envelope (lazy-tool-protocol stamps it on every ok:true
+    // projection) — it only signals failure when this layer is not ok:true.
+    if (obj.requiresLiveAuthorization === true && obj.authorizes === false && obj.ok !== true) return true;
     cur = typeof obj.modelContent === "string" ? obj.modelContent
       : (obj.result && typeof obj.result === "object") ? obj.result
       : (typeof obj.result === "string" ? obj.result : null);
@@ -2359,9 +2362,9 @@ function stripToolEnvelope(value, status) {
 /** The one line a collapsed tool card shows: for a failure the actual error, for
  *  a success the short summary the caller already computed. Bounded, because
  *  this sits on one line in a transcript. */
-function toolHeadline(status, result, detail) {
-  const pick = (v) => {
-    if (v == null || v === "") return "";
+export function toolHeadline(status, result, detail) {
+  const pick = (v, depth = 0) => {
+    if (v == null || v === "" || depth > 4) return "";
     if (typeof v === "string") {
       const t = v.trim();
       if (!t.startsWith("{") && !t.startsWith("[")) return t;
@@ -2370,6 +2373,9 @@ function toolHeadline(status, result, detail) {
         if (o && typeof o === "object" && !Array.isArray(o)) {
           if (typeof o.error === "string" && o.error) return o.error;
           if (typeof o.summary === "string" && o.summary) return o.summary;
+          // Envelopes double-wrap the payload ({modelContent:"{\"result\":…}"}),
+          // so the denial text lives a layer down — descend, bounded.
+          return pick(o.modelContent, depth + 1) || pick(o.result, depth + 1);
         }
       } catch { /* not JSON — fall through */ }
       return "";
@@ -2377,6 +2383,7 @@ function toolHeadline(status, result, detail) {
     if (typeof v === "object" && !Array.isArray(v)) {
       if (typeof v.error === "string" && v.error) return v.error;
       if (typeof v.summary === "string" && v.summary) return v.summary;
+      return pick(v.modelContent, depth + 1) || pick(v.result, depth + 1);
     }
     return "";
   };
@@ -3051,7 +3058,9 @@ class MessageBubble extends Component {
         if (!this._ttExpanded) this._ttExpanded = new Map();
         this._cardDom = buildToolCardDom({
           name,
-          status,
+          // A done/success status with a FAILED result envelope must render as
+          // the error card (open, error chip) — not a collapsed green "done".
+          status: resultFailed ? "error" : status,
           args,
           result,
           detail,

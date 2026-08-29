@@ -36,7 +36,7 @@ globalThis.CustomEvent = class { constructor(type, init = {}) { this.type = type
 globalThis.matchMedia = () => ({ matches: false });
 
 import { assert, assertEquals } from "jsr:@std/assert";
-const { toolResultSignalsError, renderHtmlFrame, wireHtmlFrameContent } = await import("../extension/shared/components.js");
+const { toolResultSignalsError, toolHeadline, renderHtmlFrame, wireHtmlFrameContent } = await import("../extension/shared/components.js");
 
 // The owner's captured payload, verbatim shape: the outer tool-result envelope
 // wraps a modelContent string whose result is the approval-required denial.
@@ -70,6 +70,40 @@ Deno.test("genui-error: a bare error string field signals error", () => {
 
 Deno.test("genui-error: approval-required (authorizes:false + requiresLiveAuthorization) signals error", () => {
   assertEquals(toolResultSignalsError("done", '{"authorizes":false,"requiresLiveAuthorization":true}'), true);
+});
+
+// The REAL lazy-tool success envelope (shape pinned by tests/artifacts-in-thread.test.ts
+// from the live protocol, lazy-tool-protocol.js's success projection): ok:true AND
+// authorizes:false + requiresLiveAuthorization:true — the pair is NORMAL SUCCESS
+// metadata there, so it must never flag the call as failed.
+const LAZY_SUCCESS_RESULT = JSON.stringify({
+  modelContent: JSON.stringify({
+    ok: true,
+    selectedTool: "create_asset",
+    result: { ok: true, id: "a_real_1", asset: { id: "a_real_1", name: "OpenClaw Report", type: "html", origin: "master", size: 12000 } },
+    selectionRef: "sel_ba138fffcac9813515d075901fb166802eb9",
+    authorizes: false,
+    requiresLiveAuthorization: true,
+  }),
+});
+
+Deno.test("genui-error: the REAL lazy-tool success envelope (auth metadata + ok:true) never signals error", () => {
+  assertEquals(toolResultSignalsError("done", LAZY_SUCCESS_RESULT), false);
+  // The pair at the SAME layer as ok:true is success metadata too.
+  assertEquals(
+    toolResultSignalsError("done", '{"ok":true,"authorizes":false,"requiresLiveAuthorization":true,"asset":{"name":"x","content":"<html></html>"}}'),
+    false,
+  );
+  // And a successful envelope still yields NO headline error text.
+  assertEquals(toolHeadline("done", LAZY_SUCCESS_RESULT, null), "");
+});
+
+Deno.test("genui-error: the headline unwraps the double-wrapped envelope for the denial text", () => {
+  assertEquals(toolHeadline("error", OWNER_RESULT, null), "This operation requires owner approval in Settings.");
+  // Bounded: pathological nesting deeper than the unwrap limit yields no headline.
+  let deep: any = { error: "too deep" };
+  for (let i = 0; i < 8; i++) deep = { modelContent: JSON.stringify(deep) };
+  assertEquals(toolHeadline("error", JSON.stringify(deep), null), "");
 });
 
 Deno.test("genui-error: SUCCESS results never signal error", () => {
@@ -134,6 +168,14 @@ Deno.test("genui-error: the tool branch consults toolResultSignalsError BEFORE m
   assert(frameRender > gate, "the genui frame render happens AFTER the gate");
   assert(/if \(!resultFailed && genHtml != null/.test(COMPONENTS_SRC), "the genui branch is skipped when the result failed");
 });
+
+Deno.test("genui-error: a result-derived failure is promoted to the error status for the card", () => {
+  // A "done" status with a failing result envelope must render the ERROR card
+  // (open, error chip) — not a collapsed green "done" card.
+  assert(
+    /status:\s*resultFailed \? "error" : status/.test(COMPONENTS_SRC),
+    "buildToolCardDom receives the effective error status when the result failed",
+  );});
 
 Deno.test("genui-error: the preview host has the bounded wait — timeout, honest text, retry", () => {
   assert(/PREVIEW_TIMEOUT_MS\s*=\s*15000/.test(PREVIEW_SRC), "a 15s bounded wait exists");
