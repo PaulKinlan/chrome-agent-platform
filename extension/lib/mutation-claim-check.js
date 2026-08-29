@@ -57,11 +57,13 @@ const CLAIMS = [
  * match decides whether the assistant is reporting ITS OWN action:
  * - a negation immediately governing the verb ("I haven't created…",
  *   "I did not delete…") is a NON-claim;
- * - a first-person marker anywhere earlier in the sentence ("I…", including
- *   a coordinated clause — "I created X and then deleted the agent") is a
+ * - a first-person marker anywhere earlier in the sentence ("I…", "We…",
+ *   including a coordinated clause — "I created X and then deleted the
+ *   agent") is a self-claim unless a subordinate clause gives the mutation
+ *   an explicit third-party subject;
+ * - an empty / action-report-only prefix ("Created the agent.", "Done —
+ *   created it", "Successfully created it") is a terse action report — a
  *   self-claim;
- * - an empty / function-word-only prefix ("Created the agent.", "Done —
- *   created it") is a terse action report — a self-claim;
  * - any OTHER subject ("OpenAI created an agent", "The system updated the
  *   agent") is third-party discussion — NOT a claim about this turn.
  * Passive agent-subject matches ("The Research Analyst agent was deleted")
@@ -69,8 +71,15 @@ const CLAIMS = [
  * (the name words before "agent" must not read as a third-party subject).
  */
 const NEGATION_TAIL = /(?:haven['’]?t|hasn['’]?t|hadn['’]?t|didn['’]?t|don['’]?t|won['’]?t|wouldn['’]?t|couldn['’]?t|can['’]?t|cannot|not|never)(?:\s+[\w'’-]+){0,3}\s*$/i;
-const FIRST_PERSON = /\bi\b/i;
-const FUNCTION_WORDS_ONLY = /^[\s,;—–-]*(?:(?:and|then|also|next|finally|so|just|now|the|a|an|your|my)\b[\s,;—–-]*)*$/i;
+const FIRST_PERSON = /\b(?:i|we|us|our|ours)\b/ig;
+const ACTION_REPORT_WORDS_ONLY = /^[\s,;:—–-]*(?:(?:and|then|also|next|finally|so|just|now|the|a|an|your|my|our|successfully|done|all\s+set)\b[\s,;:—–-]*)*$/i;
+const SUBORDINATE_THIRD_PARTY_TAIL = /\b(?:that|because|while|when|although|if)\s+(?!(?:i|we|us|our|ours)\b)(?:[\w'’-]+\s+){0,4}[\w'’-]+\s*$/i;
+
+function lastFirstPersonTail(prefix) {
+  let end = -1;
+  for (const match of prefix.matchAll(FIRST_PERSON)) end = (match.index ?? 0) + match[0].length;
+  return end < 0 ? null : prefix.slice(end);
+}
 
 function genuineSelfClaim(text, matchIndex, matchedText) {
   // The sentence prefix: from the last sentence boundary before the match.
@@ -83,8 +92,12 @@ function genuineSelfClaim(text, matchIndex, matchedText) {
   if (/^\s*i\b/i.test(matchedText)) return true;
   // Passive agent-subject shapes carry the agent as their own subject.
   if (/^\s*(?:the\s+|your\s+)?(?:agent|task)\b/i.test(matchedText)) return true;
-  if (FIRST_PERSON.test(prefix)) return true;
-  return FUNCTION_WORDS_ONLY.test(prefix);
+  const firstPersonTail = lastFirstPersonTail(prefix);
+  if (firstPersonTail !== null) {
+    if (SUBORDINATE_THIRD_PARTY_TAIL.test(firstPersonTail)) return false;
+    return true;
+  }
+  return ACTION_REPORT_WORDS_ONLY.test(prefix);
 }
 
 export function correctUnsupportedMutationClaims(text, successfulTools) {

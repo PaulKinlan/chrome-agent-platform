@@ -5,6 +5,7 @@
 
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { correctUnsupportedMutationClaims } from "../extension/lib/mutation-claim-check.js";
+import { toolRowsFromRunLog } from "../extension/shared/conversation.js";
 
 Deno.test("claim-check: a fabricated create claim with NO tool call is detected and corrected", () => {
   const { text, corrections } = correctUnsupportedMutationClaims(
@@ -107,7 +108,12 @@ Deno.test("claim-check: first-person / terse / coordinated / passive TRUE positi
   for (const t of [
     "I've created the agent.",
     "I created the agent.",
+    "We created the agent.",
+    "Our team created the agent.",
     "Created the agent for you.",
+    "Successfully created the agent.",
+    "Done — created the agent.",
+    "All set — created the agent.",
     "Done! Created the agent.",
     "I created the agent and then deleted the agent.",
     "The Research Analyst agent was created successfully.",
@@ -116,6 +122,17 @@ Deno.test("claim-check: first-person / terse / coordinated / passive TRUE positi
   ]) {
     const { corrections } = correctUnsupportedMutationClaims(t, []);
     assert(corrections.length >= 1, `missed true claim: ${t}`);
+  }
+});
+
+Deno.test("claim-check: first-person framing does not override a subordinate third-party subject", () => {
+  for (const t of [
+    "I confirmed that OpenAI created an agent.",
+    "We reported that the system deleted the agent.",
+  ]) {
+    const { text, corrections } = correctUnsupportedMutationClaims(t, []);
+    assertEquals(corrections.length, 0, `false correction on mixed subject: ${t}`);
+    assertEquals(text, t);
   }
 });
 
@@ -233,17 +250,33 @@ Deno.test("claim-check run: the correction reaches the RETURNED result (not just
   assertStringIncludes(result, "no such change was made");
 });
 
-Deno.test("claim-check run: a FAILED nested lazy dispatch does NOT back a later create claim", async () => {
+Deno.test("claim-check run: a FAILED nested lazy dispatch publishes and replays as an error", async () => {
   let invoked = 0;
-  const failCreate = makeCreateTool(async () => { invoked++; return { ok: false, error: "named-agent create denied (test double)" }; });
+  const events = [];
+  const failCreate = makeCreateTool(async () => { invoked++; return { ok: false, error: "owner approval required (test double)" }; });
   const agent = createAgent({
     model: { model: scriptedModel(), providerName: "test", modelId: "test-scripted" },
     id: "hub", name: "hub", memory: null,
     tools: { create_named_agent: failCreate },
+    onProgress: (event) => events.push(event),
   });
   const result = await agent.run("@test-create the agent", "ctx", []);
   assertEquals(invoked, 1, "the real create tool ran (and failed)");
   assertStringIncludes(result, "⚠️ Correction");
+
+  const failed = events.find((event) => event?.type === "tool-result" && event?.selectedTool === "create_named_agent");
+  assert(failed, "the selected create tool publishes a result event");
+  assertEquals(failed.ok, false, "the nested failure publishes ok:false");
+
+  const rows = toolRowsFromRunLog("exec_failed_create", [
+    { type: "tool-call", callId: "create_1", tool: "execute_tool", args: {}, at: 1 },
+    { type: "tool-result", callId: "create_1", tool: "execute_tool", selectedTool: failed.selectedTool, result: failed.result, ok: failed.ok, at: 2 },
+  ]);
+  const row = rows.find((candidate) => candidate.role === "tool");
+  assert(row, "durable replay produces a tool row");
+  assertEquals(row.toolName, "create_named_agent");
+  assertEquals(row.toolStatus, "error", "the failed selected tool replays as an error row");
+  assertEquals(row.toolOk, false);
 });
 
 Deno.test("claim-check run: a SUCCESSFUL create backs the claim in ITS run but NOT the next run", async () => {

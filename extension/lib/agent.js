@@ -701,7 +701,7 @@ export function createAgent({
             step: e.step,
             durationMs: e.durationMs,
             result: summarizeToolResult(e.result),
-            ok: !isToolResultFailure(e.result),
+            ok: toolOk,
           });
         } catch { /* ignore */ }
       },
