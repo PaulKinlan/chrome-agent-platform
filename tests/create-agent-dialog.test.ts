@@ -46,20 +46,24 @@ Deno.test("create-agent dialog: sticky footer sits outside scrollable body with 
   );
 });
 
-Deno.test("create-agent dialog: optional persona controls use one collapsed progressive disclosure", async () => {
+Deno.test("create-agent dialog: primary hierarchy keeps voice, template and schedule visible before Advanced", async () => {
   const ntpJs = await Deno.readTextFile(
     new URL("../extension/ntp/ntp.js", import.meta.url),
   );
 
   assert(
-    /configField\("What it does", "textarea"[\s\S]*?scrollBody\.append\(nameField\.wrap, roleField\.wrap\);/.test(ntpJs),
-    "name and what-it-does must remain the direct primary path",
+    /configField\("What it does", "textarea"[\s\S]*?roleField\.wrap\.append\(roleTools\);[\s\S]*?scrollBody\.append\(nameField\.wrap, roleField\.wrap\);[\s\S]*?if \(templateSection\) scrollBody\.append\(templateSection\);/.test(ntpJs),
+    "name, purpose with voice tools, and template must remain on the direct primary path",
+  );
+  assert(
+    /scrollBody\.insertBefore\(scheduleField\.wrap, advancedDetails\);/.test(ntpJs),
+    "the English schedule must remain visible immediately before Advanced",
   );
   assert(
     /advancedDetails\.className = "agent-config-advanced";[\s\S]*?advancedSummary\.textContent = "Advanced";/.test(ntpJs),
-    "optional controls must live behind one clearly labelled disclosure",
+    "less-common controls must remain behind one clearly labelled disclosure",
   );
-  for (const control of ["avatarRow", "templateSection", "roleTools", "skillsDetails", "scheduleField.wrap", "delegDetails", "assetsBox"]) {
+  for (const control of ["avatarRow", "skillsDetails", "delegDetails", "assetsBox"]) {
     assert(
       ntpJs.includes(`advancedBody.append(${control})`),
       `${control} must remain reachable inside Advanced`,
@@ -93,6 +97,23 @@ Deno.test("create-agent dialog: partial schedule failure is reported without hid
   assert(/\{ ok: true, id: r\.agent\?\.id \?\? v\.name, firstTask: v\.firstTask, scheduleError: r\.scheduleError \}/.test(ntpJs), "dialog adapter must preserve scheduleError from an otherwise successful create");
   assert(/r\.scheduleError\s*\? `Agent “\$\{name\}” saved, but its schedule was not created: \$\{r\.scheduleError\}`/.test(ntpJs), "{ ok: true, scheduleError } must render an explicit partial-success warning");
   assert(/await opts\.onSaved\?\.\(r\);/.test(ntpJs), "partial success must still open the agent that was created");
+});
+
+Deno.test("create-agent dialog: fixed inline size prevents disclosure width jitter", async () => {
+  const ntpJs = await Deno.readTextFile(
+    new URL("../extension/ntp/ntp.js", import.meta.url),
+  );
+
+  assert(
+    /container\.style\.width = "min\(88vw, 540px\)";[\s\S]*?container\.style\.minWidth = "0";[\s\S]*?container\.style\.maxWidth = "100%";/.test(ntpJs),
+    "dialog content must have one clamped width rather than a content-driven min-width",
+  );
+  for (const disclosure of ["advancedDetails", "skillsDetails"]) {
+    assert(
+      ntpJs.includes(`${disclosure}.style.minWidth = "0"`) && ntpJs.includes(`${disclosure}.style.maxWidth = "100%"`),
+      `${disclosure} must shrink inside the fixed dialog width`,
+    );
+  }
 });
 
 Deno.test("create-agent dialog: skills section is collapsible to keep footer visible", async () => {

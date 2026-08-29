@@ -26,24 +26,25 @@ Deno.test("agent schedule markers distinguish on-demand, running, and disabled s
   );
 });
 
-Deno.test("Settings and task nav display all background agents; the hub opts into active-only", async () => {
+Deno.test("Settings lists only enabled background agents; task navigation still includes stopped schedules", async () => {
   const options = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
   const ntp = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
-  assertEquals(options.includes("backgroundAgentsForDisplay(backgroundRes?.agents)"), true);
+  assertEquals(options.includes("const existingBackground = background.filter((agent) => agent.enabled === true)"), true);
+  assertEquals(options.includes("renderBackgroundAgentPicker(background.filter((agent) => agent.enabled !== true))"), true);
   assertEquals(ntp.includes("backgroundAgentsForDisplay(background, { activeOnly: true })"), true);
   assertEquals(ntp.includes("const navigation = projectUnifiedAgents(agents, background)"), true);
 });
 
-Deno.test("Settings renders a same-id named/background collision as one row with both management sources", async () => {
+Deno.test("Settings projects a same-id named/enabled-background collision as one management row", async () => {
   const named = { id: "sorting-hat", name: "Sorting Hat", role: "Named persona" };
-  const background = { id: "sorting-hat", name: "Sorting Hat", enabled: false, schedule: { periodInMinutes: 30 } };
+  const background = { id: "sorting-hat", name: "Sorting Hat", enabled: true, schedule: { periodInMinutes: 30 } };
   const rows = projectUnifiedAgents([named], [background]);
   assertEquals(rows.length, 1);
   assertEquals(rows[0].namedAgent, named);
   assertEquals(rows[0].backgroundAgent, background);
 
   const options = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
-  assertEquals(options.includes("const unified = projectUnifiedAgents(named, background)"), true);
+  assertEquals(options.includes("const unified = projectUnifiedAgents(named, existingBackground)"), true);
   assertEquals(options.includes("backgroundAgentRow(projected.backgroundAgent, row)"), true);
   assertEquals(options.includes("for (const agent of background) list.appendChild(backgroundAgentRow(agent))"), false);
 });

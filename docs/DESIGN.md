@@ -59,6 +59,13 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 - Agent templates render through shared `<agent-template-card>`: name, a two-line
   persona summary, at most three skill badges plus an overflow count, and one
   labelled Use action. Curated starters come first and carry the Starter badge.
+- Customizable selects use the shared native `appearance: base-select` vocabulary:
+  one browser `::picker-icon` (never a second drawn chevron), safe inline SVG option
+  icons, and a one-line ellipsized closed state contained by `min-width: 0`.
+- The create-agent dialog's primary order is Name → what it does (with visible
+  dictation/refine tools) → starting template → English schedule → Advanced.
+  Its inline size is a fixed viewport clamp; every disclosure uses shrink-safe
+  containment so opening Advanced or Skills never changes the dialog width.
 - SVG line-art icons, one stroke weight, currentColor. No emoji.
 - Capability rows: `28px | 1fr | auto` grid (icon | stacked name+description |
   right-aligned action) — aligned by construction.

@@ -2152,7 +2152,9 @@ async function buildAgentConfigDialog(opts) {
   container.className = "agent-config-container";
   container.style.display = "flex";
   container.style.flexDirection = "column";
-  container.style.minWidth = "min(88vw, 540px)";
+  container.style.width = "min(88vw, 540px)";
+  container.style.minWidth = "0";
+  container.style.maxWidth = "100%";
   container.style.maxHeight = "min(78vh, 680px)";
   container.style.overflow = "hidden";
   container.style.overscrollBehavior = "contain";
@@ -2256,7 +2258,11 @@ async function buildAgentConfigDialog(opts) {
     templateSelect.id = "agent-template-select";
     templateSelect.setAttribute("label", "Start from a template");
     templateSelect.setAttribute("placeholder", "Custom agent");
-    templateSelect.providers = orderedTemplates.map((t) => ({ id: t.id, name: t.name }));
+    templateSelect.providers = orderedTemplates.map((t) => ({
+      id: t.id,
+      name: t.name,
+      icon: t.mode === "background" ? "terminal" : "user",
+    }));
     templateSelect.addEventListener("change", (event) => {
       applyTemplate(agentTemplateById(event.detail?.value));
     });
@@ -2264,10 +2270,11 @@ async function buildAgentConfigDialog(opts) {
   }
 
 
-  // The primary path is only name + what it does. Persona tooling and every
-  // optional capability stay reachable in one collapsed disclosure below.
+  // The primary path follows the owner's task order: identity, purpose,
+  // starting template, then schedule. Less common persona data stays in Advanced.
   const roleField = configField("What it does", "textarea", opts.role ?? "", 3);
   const roleTools = document.createElement("div");
+  roleTools.className = "agent-role-tools";
   roleTools.style.display = "flex";
   roleTools.style.gap = "8px";
   roleTools.style.alignItems = "center";
@@ -2281,25 +2288,27 @@ async function buildAgentConfigDialog(opts) {
   mic.addEventListener("mic-error", (e) => setStatus(e?.detail?.message ?? "mic error", false));
   const refineBtn = configButton("Refine", "secondary");
   roleTools.append(mic, refineBtn);
+  roleField.wrap.append(roleTools);
   scrollBody.append(nameField.wrap, roleField.wrap);
+  if (templateSection) scrollBody.append(templateSection);
 
   const advancedDetails = document.createElement("details");
   advancedDetails.className = "agent-config-advanced";
   advancedDetails.style.border = "1px solid var(--border,#e3e0d9)";
   advancedDetails.style.borderRadius = "8px";
   advancedDetails.style.background = "var(--panel,#ffffff)";
+  advancedDetails.style.minWidth = "0";
+  advancedDetails.style.maxWidth = "100%";
   advancedDetails.style.overflow = "hidden";
   const advancedSummary = document.createElement("summary");
   advancedSummary.textContent = "Advanced";
   advancedSummary.style.cssText = "cursor:pointer;font-size:13px;font-weight:600;padding:10px 12px;";
   const advancedBody = document.createElement("div");
   advancedBody.className = "agent-config-advanced-body";
-  advancedBody.style.cssText = "display:flex;flex-direction:column;gap:12px;padding:4px 12px 12px;border-top:1px solid var(--border,#e3e0d9);";
+  advancedBody.style.cssText = "display:flex;flex-direction:column;gap:12px;min-width:0;max-width:100%;padding:4px 12px 12px;border-top:1px solid var(--border,#e3e0d9);box-sizing:border-box;";
   advancedBody.append(avatarRow);
-  if (templateSection) advancedBody.append(templateSection);
   advancedDetails.append(advancedSummary, advancedBody);
   scrollBody.append(advancedDetails);
-  advancedBody.append(roleTools);
 
   // Collapsible skills section
   const skillsDetails = document.createElement("details");
@@ -2309,6 +2318,8 @@ async function buildAgentConfigDialog(opts) {
   skillsDetails.style.padding = "0";
   skillsDetails.style.margin = "0";
   skillsDetails.style.background = "var(--panel,#ffffff)";
+  skillsDetails.style.minWidth = "0";
+  skillsDetails.style.maxWidth = "100%";
   skillsDetails.style.overflow = "hidden";
 
   const selectedInitialCount = [...agentSkillIds].filter((id) => available.some((s) => (s?.id ?? s?.name ?? String(s)) === id)).length;
@@ -2320,6 +2331,8 @@ async function buildAgentConfigDialog(opts) {
   skillsSummary.style.display = "flex";
   skillsSummary.style.alignItems = "center";
   skillsSummary.style.justifyContent = "space-between";
+  skillsSummary.style.minWidth = "0";
+  skillsSummary.style.gap = "8px";
   skillsSummary.style.userSelect = "none";
   skillsSummary.innerHTML = `<span>Skills</span><span class="skill-count" style="font-size:12px;color:var(--muted,#635e56);font-weight:normal;">${selectedInitialCount > 0 ? `${selectedInitialCount} selected` : `${available.length} available`}</span>`;
   skillsDetails.append(skillsSummary);
@@ -2398,7 +2411,7 @@ async function buildAgentConfigDialog(opts) {
   };
   scheduleField.el.addEventListener("input", updateScheduleFeedback);
   scheduleField.wrap.append(scheduleFeedback);
-  advancedBody.append(scheduleField.wrap);
+  scrollBody.insertBefore(scheduleField.wrap, advancedDetails);
   updateScheduleFeedback();
 
   // Context files: files whose content becomes part of the agent's context.
