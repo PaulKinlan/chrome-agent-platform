@@ -188,13 +188,21 @@ Deno.test("claim-check: conventional proper names and possessive noun subjects s
   }
 });
 
-Deno.test("claim-check: coordinated subjectless mutations remain assistant action reports", () => {
+Deno.test("claim-check: coordinated predicates inherit subjects until first-person resumes", () => {
   for (const text of [
     "I confirmed OpenAI created an agent and then deleted the agent.",
-    "I confirmed that OpenAI created an agent, but then deleted the agent myself.",
+    "I confirmed OpenAI created an agent but then deleted the agent.",
   ]) {
     const out = correctUnsupportedMutationClaims(text, []);
-    assertEquals(out.corrections.length, 1, `missed coordinated assistant action: ${text}`);
+    assertEquals(out.corrections.length, 0, `false correction on inherited third-party subject: ${text}`);
+    assertEquals(out.text, text);
+  }
+  for (const text of [
+    "I confirmed OpenAI created an agent, but then deleted the agent myself.",
+    "I confirmed OpenAI created an agent and I deleted the agent.",
+  ]) {
+    const out = correctUnsupportedMutationClaims(text, []);
+    assertEquals(out.corrections.length, 1, `missed explicit first-person resumption: ${text}`);
     assertStringIncludes(out.corrections[0], "deleted the agent");
   }
 });

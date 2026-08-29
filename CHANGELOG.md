@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.387] — 2026-08-29
+- fix: preserve coordinated mutation subjects
+
 ## [0.2.386] — 2026-08-29
 - fix: preserve subjectless mutation action reports
 
