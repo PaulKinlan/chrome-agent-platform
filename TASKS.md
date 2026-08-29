@@ -170,6 +170,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 | Priority | Status | Task | What it is |
 |---|---|---|---|
+| P0 | OPEN | [`CAP-FB-20260829-MAIN-GATES-RED-03`](#cap-fb-20260829-main-gates-red-03-the-journey-suite-is-red-on-main-49-checks-still-assert-the-pre-p0-all-optional-permission-model) | Journey suite red on main — 49 checks assert the pre-P0 permission model |
 | P0 | OPEN | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
 | P0 | OPEN | [`CAP-FB-20260827-HUB-FIRST-RUN-01`](#cap-fb-20260827-hub-first-run-01-the-first-screen-is-an-onboarding-wall-not-a-command-center) | The first screen is an onboarding wall, not a command center |
 | P0 | OPEN | [`CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01`](#cap-fb-20260827-tool-call-legibility-01-tool-call-cards-show-shape-not-answers) | Tool-call cards show shape, not answers |
@@ -1433,6 +1434,26 @@ evidence every other task depends on).
 - Recover: `git grep -n "first-run-guide" -- extension/shared/components.js extension/ntp/ntp.js`
 - History:
   - 2026-08-27 23:30 UTC — captured with a screenshot of a genuinely fresh profile in a real loaded extension. The first-run card is roughly 590px tall and contains **six competing actions**: "Allow browser control", "Continue without browser control", "Open provider settings", "Use starter task", "Create the Weekly browsing review agent", and a dismiss X — against PRODUCT.md's first principle, "one primary action per view". The composer, which is the actual point of the product, sits below it and is visually weaker. Below that a fresh profile stacks **seven empty states**: "No tasks yet", "No agents yet" (sidebar), "No named agents yet", "No Site Agents yet", "Discovery has not run yet", "No artifacts yet", "No activity matches". The last of those is the **filtered-empty** copy showing in a never-had-any-data state, which tells a new owner a filter is hiding something. "Agents" labels the sidebar section, the card, and a row inside the card — three nestings of one word. The cold empty hub is genuinely fast (DCL 117 ms, 153 nodes) — this is a composition problem, not a performance one.
+
+## [CAP-FB-20260829-MAIN-GATES-RED-03] The journey suite is red on main: 49 checks still assert the pre-P0 all-optional permission model
+- Feedback: 2026-08-29 — found by running the suite on `origin/main@19664e60` during an unmerged-work audit
+- Updated: 2026-08-29 UTC
+- Status: OPEN
+- Priority: P0
+- Owner: unassigned — belongs to the P0 permissions/task-lifecycle lane that changed the model
+- Workspace: none
+- Branch: none
+- Base: `19664e60`
+- Candidate: —
+- Shipping: —
+- Acceptance: `npm run test:chrome` is 127/127 (or a deliberately revised count) on `origin/main`, with the permission checks asserting the CURRENT install-granted model rather than being deleted. Removing a check is only acceptable where the property it protected no longer exists, and then a guard must remain that fails if the old model returns
+- Review: falsification — each rewritten assertion must be shown to fail against a manifest that does NOT have the install-granted shape, so the new checks are not vacuously true
+- Gates: full Chrome journey suite green at the tip; unit suite; the assertion-set-exact and assertion-order checks the suite carries for itself
+- Blockers: —
+- Next: rewrite the capability-onboarding journey for permanent permissions. The mechanical part is the manifest check; the substantive part is that "enable/disable a capability" is no longer the same user journey, so the checks must describe what the owner now actually does
+- Recover: `git grep -n "permissions list is empty" -- scripts/chrome-journeys.ts`
+- History:
+  - 2026-08-29 — **measured on `origin/main@19664e60`: 78/127, 49 failing.** The product deliberately moved to **36 permanent install-granted permissions plus `host_permissions: ["<all_urls>"]` and zero optional permissions** (the P0 task-lifecycle lane, merged at `4e3e64be`, whose own message calls this "the lane's headline"). The journey suite still asserts the previous all-optional model — `manifest: permissions list is empty (all optional)`, `all capabilities start ungranted`, the per-capability enable/disable grant-revoke round trips, and `tabs denied in headless (fail closed)`. Failures group as mgmt 13, permissions 10, approval 6, plus scripting/Settings/screenshot/disenroll/delete-race and the suite's own assertion-set-exact and assertion-order self-checks. **This is NOT an abort cascade** — unlike `MAIN-GATES-RED-02` no exception is thrown; the "(not reached)" entries are checks skipped after their journey failed, and every failure is a genuine assertion mismatch. **This is the third time in five days a shipped change has left the journey suite driving a model that no longer exists** (`MAIN-GATES-RED-01` 25 Aug, `-02` 27 Aug). The full-suite-green rule is written down and is not being applied at the moment work lands; a red number nobody trusts is a gate nobody reads. Recorded by a session that did not make the change and does not own the lane.
 
 ## [CAP-FB-20260827-DIALOG-CONSOLIDATION-01] Five dialog implementations, three hand-rolled
 - Feedback: 2026-08-27 — product owner: "There's lots of issues with dialogs"

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.392] — 2026-08-29
+- tasks: capture MAIN-GATES-RED-03 — journey suite asserts the pre-P0 permission model (found by the unmerged-work audit on origin/main@19664e60)
+
 ## [0.2.391] — 2026-08-29
 - merge: provider-server-tools lane (20040a03) — Gemini google_search grounding slice 1: execution-as-declaration latch (cap 10/run), double-gated availability (global toggle + per-agent opt-in keyed by IMMUTABLE instanceId, background fail-closed, deletion clears opt-ins), groundingMetadata→citation normalization (https-only) harvested at the model boundary, citation rendering live + persisted through the durable outbox, ESTIMATE-labelled usage ledger billing EVERY provider-reported query occurrence (rawQueryCount — neither the 32-text cap nor the 128-accumulator cap undercounts), resume identity persisted explicitly (null stays fail-closed across generic durable resume), display-name model IDs normalized canonically, Clear Usage clears the server ledger, revocation re-checked at the paid-call boundary. Reviewed PASS (round 4). Merge unions: delegation's runMaxIterations/iterationGuard + providerServerAgentId ride all orchestrator signatures; terminal settle carries BOTH delegationSpend enforcement AND grounding attach; runNamedAgentTask keeps instanceId memory/skills AND gains the lane's providerServerAgentId: agent.instanceId || null; components renders serverToolRows under agent answers inside main's hydrated-list structure. Manifest kept at main's P0 shape.
 
