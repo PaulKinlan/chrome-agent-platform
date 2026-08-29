@@ -189,6 +189,36 @@ Deno.test("components: every design-system element registers as a custom element
   }
 });
 
+Deno.test("composer local files: unsupported browsers omit /files and binary selections stay references", async () => {
+  const mod = await import("../extension/shared/components.js");
+  if (mod.COMMAND_NAMESPACES.some((item) => item.id === "files")) {
+    throw new Error("/files must be absent without showDirectoryPicker");
+  }
+  if (!mod.supportsLocalFilesCommand({ showDirectoryPicker() {} })) {
+    throw new Error("showDirectoryPicker support was not detected");
+  }
+  const AgentComposer = registry.get("agent-composer");
+  const composer = new AgentComposer();
+  let attached = null;
+  let status = "";
+  composer.addAttachment = (value) => { attached = value; return value; };
+  composer.setStatus = (value) => { status = value; };
+  await composer._attachLocalFile({
+    grantId: "folder-1",
+    folderName: "Photos",
+    relativePath: "shot.png",
+    name: "shot.png",
+    type: "image/png",
+    size: 2048,
+  });
+  if (attached?.dataURL !== "" || attached?.kind !== "local-file") {
+    throw new Error("binary local file bytes were read instead of attaching a reference");
+  }
+  if (!status.includes("binary") || !status.includes("weren't read")) {
+    throw new Error("binary reference status was not honest");
+  }
+});
+
 Deno.test("components: mention keyboard completion routes every agent kind by canonical ref", async () => {
   await import("../extension/shared/components.js");
   const AgentComposer = registry.get("agent-composer");

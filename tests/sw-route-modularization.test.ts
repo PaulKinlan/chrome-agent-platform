@@ -57,6 +57,7 @@ const BASELINE_ROUTES = [
   "fs-grant.get",
   "fs-grant.remove",
   "fs-grant.list-entries",
+  "fs-grant.search",
   "fs-grant.read-file",
   "fs-grant.write-file",
   "fs-grant.scan",

@@ -160,7 +160,7 @@ On resume after a coordinator or worker loss:
 
 ## Open work queue
 
-**This file holds only what is in progress or still to do — 39 entries.** Completed work is archived in [TASKS-DONE.md](TASKS-DONE.md) at triage; **merged is done** (Paul, 2026-08-28), so nothing sits in a terminal state here. Most urgent first (regenerated 2026-08-28). The entry itself is always the authority; where it disagrees with this table, the entry wins.
+**This file holds only what is in progress or still to do — 40 entries.** Completed work is archived in [TASKS-DONE.md](TASKS-DONE.md) at triage; **merged is done** (Paul, 2026-08-28), so nothing sits in a terminal state here. Most urgent first (regenerated 2026-08-29). The entry itself is always the authority; where it disagrees with this table, the entry wins.
 
 Regenerate after any status change (this exact command reproduces the table below):
 
@@ -175,6 +175,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P0 | IN_REVIEW | [`CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01`](#cap-fb-20260829-tool-argument-robustness-01-tool-call-argument-robustness-and-schema-accuracy) | Tool-call argument robustness and schema accuracy |
 | P1 | DONE | [`CAP-FB-20260829-AGENT-BOARD-01`](#cap-fb-20260829-agent-board-01-the-shared-jobs-board-agents-post-and-claim-work) | The shared jobs board — agents post and claim work |
 | P1 | IN_REVIEW | [`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`](#cap-fb-20260829-create-dialog-declutter-01-create-agent-dialog-is-cluttered-and-its-scheduletheme-controls-are-inconsistent) | Create-agent dialog is cluttered and its schedule/theme controls are inconsistent |
+| P1 | IN_REVIEW | [`CAP-FB-20260829-COMPOSER-LOCAL-FILES-01`](#cap-fb-20260829-composer-local-files-01-attach-files-from-persisted-directory-handles-in-the-composer) | Attach files from persisted directory handles in the composer |
 | P0 | OPEN | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
 | P0 | OPEN | [`CAP-FB-20260827-HUB-FIRST-RUN-01`](#cap-fb-20260827-hub-first-run-01-the-first-screen-is-an-onboarding-wall-not-a-command-center) | The first screen is an onboarding wall, not a command center |
 | P0 | OPEN | [`CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01`](#cap-fb-20260827-tool-call-legibility-01-tool-call-cards-show-shape-not-answers) | Tool-call cards show shape, not answers |
@@ -230,6 +231,29 @@ evidence every other task depends on).
 
 
 ## Active
+
+## [CAP-FB-20260829-COMPOSER-LOCAL-FILES-01] Attach files from persisted directory handles in the composer
+
+- Feedback: 2026-08-29 — the owner wants the composer to search a set of user-granted local directories and attach selected files as message context.
+- Updated: 2026-08-29 23:18 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P1
+- Owner: implementation worker
+- Workspace: active (local path private)
+- Branch: `cap-fs-handles`
+- Base: `90b4a8371cbe7a018bfefb205de1c3ca3bd53f85`
+- Candidate: this tracker commit
+- Shipping: —
+- Acceptance: supported Chrome desktop surfaces expose `/files`; it searches persisted directory handles by file-name substring with at most 50 results; selecting a text-like file up to 1 MiB attaches its bytes as context, while binary or larger text files attach metadata only; lapsed permissions name the Settings re-grant path; unsupported browsers do not expose the command; Settings retains grant, status, re-grant and forget controls.
+- Review: independent acceptance review pending
+- Gates: focused filesystem/component/attachment tests 66/66; full `nice -n 10 deno test --allow-all tests/` 2391 pass (14 steps), 0 fail after the final committed candidate; developer build green; browser KAT 5/5 for persisted-handle search and selection, with the operating-system directory picker documented as a manual gesture
+- Blockers: —
+- Next: independent acceptance review of the candidate diff and browser evidence
+- Recover: `git log -1 --oneline cap-fs-handles && git diff origin/main...cap-fs-handles`
+- History:
+  - 2026-08-29 23:18 UTC — candidate gate complete: the deliberate route-set assertion went RED at 166 registered vs 165 baseline before its expected-list update, then focused 16/16 and full 2391/0 passed; the first full attempt also exposed transient contention on the shared security-suite lock and passed once the competing run released it.
+  - 2026-08-29 23:02 UTC — implementation complete: reused the existing IndexedDB-backed Settings grant manager, added bounded recursive search and `/files` attachment flow, focused tests pass, and the production-path browser KAT lists and attaches a known text file; real directory selection remains one manual OS-picker gesture because CDP cannot supply a path to `showDirectoryPicker()`.
 
 ## [CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01] Tool-call argument robustness and schema accuracy
 

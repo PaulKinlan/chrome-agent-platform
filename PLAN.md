@@ -105,6 +105,9 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
       `lib/runtime-policy.js`, Settings → Advanced) — docs/SYSTEM-PROMPTS.md.
 - [x] Unified agent access — the one shared `<agent-picker>` for the + menu, `/agent`,
       and the side-panel Agents view.
+- [x] Persistent local folder handles — Settings owns the picker, live permission state,
+      re-grant and forget controls; the composer `/files` command searches granted trees
+      with bounded results and attaches bounded text or metadata-only binary references.
 - [x] Durable run authority — service-worker/OPFS run registry, outbox projection,
       bounded recovery, reload persistence. docs/DURABLE-RUN-ARCHITECTURE.md.
 

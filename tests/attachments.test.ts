@@ -4,9 +4,25 @@
 // @ts-nocheck — the attachment shapes are intentionally dynamic.
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { buildMultimodalTask, sanitizeAttachments } from "../extension/lib/attachments.js";
+import {
+  buildMultimodalTask,
+  isTextLikeAttachment,
+  MAX_LOCAL_TEXT_BYTES,
+  sanitizeAttachments,
+  textToDataUrl,
+} from "../extension/lib/attachments.js";
 
 const IMG = "data:image/png;base64,iVBORw0KGgo=";
+
+Deno.test("local file attachments: text detection and UTF-8 data URLs are bounded inputs", () => {
+  assertEquals(MAX_LOCAL_TEXT_BYTES, 1024 * 1024);
+  assert(isTextLikeAttachment({ name: "report.md", type: "" }));
+  assert(isTextLikeAttachment({ name: "data", type: "application/json" }));
+  assertEquals(isTextLikeAttachment({ name: "photo.png", type: "image/png" }), false);
+  const url = textToDataUrl("héllo", "text/plain");
+  assert(url.startsWith("data:text/plain;charset=utf-8;base64,"));
+  assertEquals(new TextDecoder().decode(Uint8Array.from(atob(url.split(",")[1]), (c) => c.charCodeAt(0))), "héllo");
+});
 
 Deno.test("buildMultimodalTask: no image attachments → the plain task string", () => {
   const r = buildMultimodalTask("summarise this", [

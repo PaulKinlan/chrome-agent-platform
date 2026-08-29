@@ -1,6 +1,16 @@
 # Changelog
 
+## [0.2.410] — 2026-08-29
+- Add local folder files to composer
+
+## [0.2.409] — 2026-08-29
+- Add local folder files to composer
+
+## [0.2.408] — 2026-08-29
+- Add local folder files to composer
+
 ## [0.2.407] — 2026-08-29
+- The composer can now search files inside every folder granted in Settings: type `/files` (or `/files:name`), choose a result, and bounded text files become message context while binary and large files stay metadata-only references; lapsed folder permissions point back to the re-grant control
 - WebMCP tool failures now explain themselves in the page's own console: when a page's tool call fails, the full error detail appears in that page's DevTools console instead of a vague message, while the agent still sees only a safe summary
 
 ## [0.2.406] — 2026-08-29
