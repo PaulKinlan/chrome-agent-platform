@@ -214,7 +214,7 @@ Deno.test("restore RUNNING task: transcript + status + controls restored on leav
   await waitFor(() => conv.children.some((c) => c.getAttribute?.("content") === "all packed"), "settled conclusion rendered");
 });
 
-Deno.test("restore COMPLETED task: terminal state shown, no live controls, no phantom banner", async () => {
+Deno.test("restore COMPLETED task: terminal state and retained log control shown, no phantom banner", async () => {
   const harness = makeHarness({
     thread: {
       id: "t_done", name: "done job", messages: [
@@ -231,7 +231,7 @@ Deno.test("restore COMPLETED task: terminal state shown, no live controls, no ph
   await waitFor(() => harness.getOrCreateElement("thread-view").hidden === false, "thread view open");
   assert(conv.children.some((c) => c.content === "the summary" || c.getAttribute?.("content") === "the summary"), "terminal answer restored");
   assertEquals(conv.liveStatus, null, "no phantom live-status row for a terminal run");
-  assertEquals(harness.getOrCreateElement("durable-run-registry").hidden, true, "no live controls for a terminal run");
+  assertEquals(harness.getOrCreateElement("durable-run-registry").hidden, false, "retained logs remain reachable for a terminal run");
 });
 
 Deno.test("restore FAILED task: terminal error shown; re-open does not duplicate rows", async () => {

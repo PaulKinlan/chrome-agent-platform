@@ -12,8 +12,11 @@ import {
   capLogReady,
   clearLogBuffer,
   dumpLogBuffer,
+  getLogFullDetail,
   getLogVerbosity,
+  observeToolCall,
   scrubLogValue,
+  setLogFullDetail,
   setLogVerbosity,
 } from "../extension/lib/cap-log.js";
 
@@ -105,6 +108,23 @@ Deno.test("cap-log: redaction masks token-shaped strings and bounds length", () 
   assertStringIncludes(err, "«redacted»");
 });
 
+Deno.test("cap-log: export ring redacts short values under secret-bearing keys", async () => {
+  clearLogBuffer();
+  const { restore } = captureConsole();
+  try {
+    await setLogVerbosity("off");
+    capLog("test:key-redaction").info({ password: "hunter2", nested: { token: "tiny", note: "kept" } });
+    const message = dumpLogBuffer().entries[0].msg;
+    assert(!message.includes("hunter2"), "short password never reaches trace/export ring");
+    assert(!message.includes("tiny"), "short token never reaches trace/export ring");
+    assertStringIncludes(message, "«redacted»");
+    assertStringIncludes(message, "kept");
+  } finally {
+    restore();
+    clearLogBuffer();
+  }
+});
+
 Deno.test("cap-log: ring buffer is bounded with an honest dropped counter", async () => {
   clearLogBuffer();
   const { restore } = captureConsole();
@@ -121,6 +141,62 @@ Deno.test("cap-log: ring buffer is bounded with an honest dropped counter", asyn
   } finally {
     restore();
     clearLogBuffer();
+  }
+});
+
+Deno.test("cap-log: full local detail affects DevTools only; the export ring stays redacted", async () => {
+  clearLogBuffer();
+  const log = capLog("test:detail");
+  const { calls, restore } = captureConsole();
+  const secret = "sk-owner-local-detail-12345678901234567890";
+  try {
+    await setLogVerbosity("verbose");
+    await setLogFullDetail(false);
+    log.debug("payload", { secret });
+    assert(!String(calls.debug[0][2]).includes(secret), "default console payload is redacted");
+
+    await setLogFullDetail(true);
+    assertEquals(getLogFullDetail(), true);
+    log.debug("payload", { secret });
+    assertEquals(calls.debug[1][2].secret, secret, "explicit local detail reaches DevTools unchanged");
+    const dump = dumpLogBuffer();
+    assert(!dump.entries.some((entry) => entry.msg.includes(secret)), "trace/export ring remains redacted");
+  } finally {
+    restore();
+    await setLogFullDetail(false);
+    await setLogVerbosity("off");
+    clearLogBuffer();
+  }
+});
+
+Deno.test("cap-log: observeToolCall emits paired start/end details and preserves errors", async () => {
+  const { calls, restore } = captureConsole();
+  try {
+    await setLogVerbosity("verbose");
+    await setLogFullDetail(true);
+    const result = await observeToolCall("management/list_agents", { scope: "all" }, async () => ({ ok: true, count: 2 }), { source: "management", runId: "run-1" });
+    assertEquals(result.count, 2);
+    assertEquals(calls.debug.length, 2);
+    assertEquals(calls.debug[0][1], "tool-call:start");
+    assertEquals(calls.debug[1][1], "tool-call:end");
+    assertEquals(calls.debug[0][2].callId, calls.debug[1][2].callId, "pair uses one call id");
+    assertEquals(calls.debug[1][2].outcome, "ok");
+    assert(typeof calls.debug[1][2].durationMs === "number");
+
+    const failure = new TypeError("complete tool failure");
+    let caught = null;
+    try {
+      await observeToolCall("webmcp/fail", { value: 1 }, async () => { throw failure; }, { source: "webmcp-declared" });
+    } catch (error) {
+      caught = error;
+    }
+    assertEquals(caught, failure, "observer never changes error identity");
+    assertEquals(calls.debug.at(-1)[2].error, failure, "full local error reaches DevTools with stack/cause");
+    assertEquals(calls.debug.at(-1)[2].outcome, "threw");
+  } finally {
+    restore();
+    await setLogFullDetail(false);
+    await setLogVerbosity("off");
   }
 });
 

@@ -7500,10 +7500,16 @@ class DurableRunRegistry extends Component {
     this._runs = [];
     this._pending = new Set();
     this._logs = new Map();
+    this._logTruncated = new Set();
+    this._page = 0;
     this._message = "";
     this._error = "";
   }
-  set runs(value) { this._runs = Array.isArray(value) ? structuredClone(value) : []; this._render(); this._wire(); }
+  set runs(value) {
+    this._runs = Array.isArray(value) ? structuredClone(value) : [];
+    this._page = Math.min(this._page, Math.max(0, Math.ceil(this._runs.length / 10) - 1));
+    this._render(); this._wire();
+  }
   get runs() { return structuredClone(this._runs); }
   setLogs(executionId, logs) { this._logs.set(executionId, Array.isArray(logs) ? structuredClone(logs) : []); this._render(); this._wire(); }
   _context(run) { return String(run.taskPreview || run.agentId || run.kind || "run").slice(0, 120); }
@@ -7548,7 +7554,11 @@ class DurableRunRegistry extends Component {
     const ok = result?.ok === true || result?.cancelled === true;
     this._message = ok ? `${action} succeeded for ${this._context(this._runs.find((run) => run.executionId === executionId) || {})}.` : "";
     this._error = ok ? "" : String(result?.error || `${action} failed`);
-    if (action === "View logs" && ok) this._logs.set(executionId, result.logs || []);
+    if ((action === "View log" || action === "View logs") && ok) {
+      this._logs.set(executionId, result.logs || []);
+      if (result.truncated === true) this._logTruncated.add(executionId);
+      else this._logTruncated.delete(executionId);
+    }
     this._render(); this._wire();
   }
   _emitAction(type, run, action) {
@@ -7564,13 +7574,12 @@ class DurableRunRegistry extends Component {
     } }));
   }
   _render() {
-    // Subtle: the owner said the run cards push everything off screen. Cap the
-    // visible list to the 3 most-recent runs; older ones become a muted
-    // "+N earlier runs" line (the full history is in the logs/activity view).
-    const MAX_VISIBLE = 3;
+    // Keep the DOM bounded while making EVERY retained run reachable. The old
+    // three-row cap turned older logs into a dead end; page instead of growing.
+    const PAGE_SIZE = 10;
     const all = this._runs;
-    const shown = all.slice(0, MAX_VISIBLE);
-    const overflow = all.length - shown.length;
+    const pageCount = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
+    const shown = all.slice(this._page * PAGE_SIZE, (this._page + 1) * PAGE_SIZE);
     const items = shown.map((run, index) => {
       const context = this._context(run);
       const short = this._shortContext(run);
@@ -7585,13 +7594,13 @@ class DurableRunRegistry extends Component {
         <div class="actions">
           ${this._cancellable(run.phase) ? `<button type="button" data-action="cancel" aria-describedby="${descriptionId}" ${pending ? "disabled" : ""}>Cancel</button>` : ""}
           ${this._resumable(run.phase) ? `<button type="button" data-action="resume" aria-describedby="${descriptionId}" ${pending ? "disabled" : ""}>${run.phase === "paused-side-effect-uncertain" ? "Retry" : "Resume"}</button>` : ""}
-          <button type="button" data-action="logs" aria-describedby="${descriptionId}" ${pending ? "disabled" : ""}>View logs</button>
+          <button type="button" data-action="logs" aria-describedby="${descriptionId}" ${pending ? "disabled" : ""}>View log</button>
         </div>
-        ${logs ? `<pre class="logs" tabindex="0" aria-label="Retained logs for ${escapeHtml(context)}">${escapeHtml(JSON.stringify(logs, null, 2))}</pre>` : ""}
+        ${logs ? `${this._logTruncated.has(run.executionId) ? '<p class="log-note">Showing the latest 200 log entries.</p>' : ""}<pre class="logs" tabindex="0" aria-label="Retained logs for ${escapeHtml(context)}">${escapeHtml(JSON.stringify(logs, null, 2))}</pre>` : ""}
       </li>`;
     }).join("");
-    const overflowLine = overflow > 0
-      ? `<li class="overflow" role="note">+${overflow} earlier ${overflow === 1 ? "run" : "runs"} — see activity for the full history.</li>`
+    const pager = pageCount > 1
+      ? `<nav class="pager" aria-label="Run log pages"><button type="button" data-page="newer" ${this._page === 0 ? "disabled" : ""}>Newer</button><span>Page ${this._page + 1} of ${pageCount}</span><button type="button" data-page="earlier" ${this._page >= pageCount - 1 ? "disabled" : ""}>Earlier</button></nav>`
       : "";
     mountTemplate(this, `
       :host { display:block; min-inline-size:0; }
@@ -7599,7 +7608,6 @@ class DurableRunRegistry extends Component {
       .heading { margin:0 0 .5rem; font-size:1rem; color:var(--ink,#1d1b18); }
       ul { list-style:none; margin:0; padding:0; display:grid; gap:.625rem; }
       .run { min-inline-size:0; padding:.75rem; border:1px solid var(--border,#e3e0d9); border-radius:.75rem; background:var(--panel,#fff); }
-      .overflow { list-style:none; color:var(--muted,#635e56); font-size:.8125rem; padding-inline:.25rem; }
       .summary { display:flex; flex-wrap:wrap; align-items:baseline; gap:.375rem .75rem; min-inline-size:0; }
       strong { overflow-wrap:anywhere; }
       .phase { color:var(--muted,#635e56); font-size:.8125rem; }
@@ -7610,12 +7618,20 @@ class DurableRunRegistry extends Component {
       button:hover:not(:disabled) { border-color:var(--accent,#0e6e63); }
       button:focus-visible, .logs:focus-visible { outline:.1875rem solid var(--accent,#0e6e63); outline-offset:.125rem; }
       button:disabled { cursor:wait; opacity:.6; }
-      .logs { max-block-size:14rem; overflow:auto; margin:.625rem 0 0; padding:.625rem; border-radius:.5rem; background:var(--panel-2,#efede8); white-space:pre-wrap; overflow-wrap:anywhere; font-size:.75rem; }
+      .logs { max-block-size:14rem; overflow:auto; margin:.375rem 0 0; padding:.625rem; border-radius:.5rem; background:var(--panel-2,#efede8); white-space:pre-wrap; overflow-wrap:anywhere; font-size:.75rem; }
+      .log-note { margin:.625rem 0 0; color:var(--muted,#635e56); font-size:.75rem; }
+      .pager { display:flex; align-items:center; justify-content:flex-end; gap:.625rem; margin-block-start:.625rem; color:var(--muted,#635e56); font-size:.8125rem; }
       .status { min-block-size:1.25rem; margin:.5rem 0 0; color:var(--muted,#635e56); }
       .error { color:var(--danger,#b3261e); }
-    `, `<section aria-label="Current conversation run controls"><h2 class="heading">Current run</h2><ul role="list">${items}${overflowLine}</ul><p class="status ${this._error ? "error" : ""}" role="status" aria-live="polite">${escapeHtml(this._error || this._message)}</p></section>`);
+    `, `<section aria-label="Conversation run logs"><h2 class="heading">Run logs</h2><ul role="list">${items}</ul>${pager}<p class="status ${this._error ? "error" : ""}" role="status" aria-live="polite">${escapeHtml(this._error || this._message)}</p></section>`);
   }
   _wire() {
+    for (const button of this._root.querySelectorAll("button[data-page]")) {
+      button.addEventListener("click", () => {
+        this._page += button.dataset.page === "earlier" ? 1 : -1;
+        this._render(); this._wire();
+      });
+    }
     for (const button of this._root.querySelectorAll("button[data-action]")) {
       button.addEventListener("click", async () => {
         const row = button.closest(".run");
@@ -7638,7 +7654,7 @@ class DurableRunRegistry extends Component {
             confirmLabel: "Resume",
           }) !== true) return;
           this._emitAction("run-resume", run, "Resume");
-        } else this._emitAction("run-logs", run, "View logs");
+        } else this._emitAction("run-logs", run, "View log");
       });
     }
   }

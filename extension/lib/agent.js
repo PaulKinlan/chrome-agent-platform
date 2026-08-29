@@ -721,6 +721,7 @@ export function createAgent({
   // Re-initialized per makeAgent() call so a fresh per-run agent starts clean.
   let stepSpans = new Map();
   let toolSpans = new Map();
+  let toolCallSequence = 0;
   let runStartedAt = null;
   // The REAL tool names (post lazy-envelope unwrap) that returned success in
   // THIS run — the runtime backstop against unsupported mutation claims in
@@ -729,6 +730,7 @@ export function createAgent({
   const makeAgent = (sysPrompt) => {
     stepSpans = new Map();
     toolSpans = new Map();
+    toolCallSequence = 0;
     runStartedAt = null;
     return agentDoCreateAgent({
     id,
@@ -747,6 +749,7 @@ export function createAgent({
     ...(() => {
       stepSpans = new Map();
       toolSpans = new Map();
+      toolCallSequence = 0;
       runStartedAt = null;
       return {};
     })(),
@@ -786,11 +789,16 @@ export function createAgent({
         // refusal propagates so the tool execution is REFUSED (the run never
         // mutates before its authority is durable); ordinary broadcast errors
         // remain non-fatal.
-        // Tool-use span + start line BEFORE the progress await (the durable
-        // pre-tool authority): the name ONLY — never args/page content.
-        const toolKey = `${e.step}:${String(e.toolName ?? "unknown").slice(0, 64)}`;
-        toolSpans.set(toolKey, perfSpan(`agent-do:tool:${String(e.toolName ?? "unknown").slice(0, 48)}`, { ns: "agent-do" }));
-        agentDoLog.debug(`tool ${String(e.toolName ?? "unknown").slice(0, 64)} start (step ${e.step})`);
+        // Pair concurrent same-name calls with a FIFO per step/name. The
+        // owner-grade console includes arguments; cap-log applies the local
+        // full-detail toggle while its export ring remains redacted.
+        const toolName = String(e.toolName ?? "unknown").slice(0, 64);
+        const toolKey = `${e.step}:${toolName}`;
+        const callId = `${toolKey}#${++toolCallSequence}`;
+        const queue = toolSpans.get(toolKey) ?? [];
+        queue.push({ callId, span: perfSpan(`agent-do:tool:${toolName.slice(0, 48)}`, { ns: "agent-do" }) });
+        toolSpans.set(toolKey, queue);
+        agentDoLog.debug("tool-call:start", { callId, name: toolName, step: e.step, arguments: e.args });
         try {
           await progressCb?.({ type: "tool-call", toolName: e.toolName, toolArgs: e.args, step: e.step });
         } catch (error) {
@@ -799,9 +807,13 @@ export function createAgent({
         }
       },
       onPostToolUse: async (e) => {
-        const toolKey = `${e.step}:${String(e.toolName ?? "unknown").slice(0, 64)}`;
-        const tspan = toolSpans.get(toolKey);
-        toolSpans.delete(toolKey);
+        const toolName = String(e.toolName ?? "unknown").slice(0, 64);
+        const toolKey = `${e.step}:${toolName}`;
+        const queue = toolSpans.get(toolKey) ?? [];
+        const observed = queue.shift() ?? { callId: `${toolKey}#orphan`, span: null };
+        if (queue.length) toolSpans.set(toolKey, queue);
+        else toolSpans.delete(toolKey);
+        const tspan = observed.span;
         const permissionDenial = permissionDenialFromToolResult(e.result);
         if (permissionDenial && typeof onPermissionRequest === "function") {
           const decision = await onPermissionRequest(permissionDenial);
@@ -826,7 +838,15 @@ export function createAgent({
         const toolOk = !isToolResultFailure(e.result) && !lazyNestedFailure(e.result);
         if (toolOk) { try { okToolNames.add(selectedToolFromResult(e.result) ?? e.toolName); } catch { /* ignore */ } }
         if (tspan) tspan.end(toolOk ? "ok" : "error");
-        agentDoLog.debug(`tool ${String(e.toolName ?? "unknown").slice(0, 64)} ${toolOk ? "ok" : "error"} in ${(e.durationMs ?? 0).toFixed ? e.durationMs.toFixed(1) : "?"}ms (step ${e.step})`);
+        agentDoLog.debug("tool-call:end", {
+          callId: observed.callId,
+          name: selectedToolFromResult(e.result) ?? toolName,
+          envelopeName: toolName,
+          step: e.step,
+          durationMs: e.durationMs ?? null,
+          outcome: toolOk ? "ok" : "error",
+          result: e.result,
+        });
         try {
           progressCb?.({
             type: "tool-result",
