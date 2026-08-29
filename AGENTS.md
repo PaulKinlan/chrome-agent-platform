@@ -24,6 +24,32 @@ there. The reviewer agents check against it.
 4. Re-review (the reviewer confirms each finding resolved, with evidence).
 5. Push only after re-review clears.
 
+## Concurrent work: worktrees, merges, and forward-only recovery (owner directive 2026-08-29)
+Many agents work on this repo AT THE SAME TIME. That is the expected mode, not
+an exception. These rules make that safe:
+
+1. **Every agent works in its OWN git worktree on a fresh branch off the
+   `origin/main` tip** (`git fetch origin && git worktree add <path> -b <branch> origin/main`).
+   Never implement directly in the primary checkout (`~/chrome-agent-platform`)
+   — the primary checkout is shared by every session, and one session moving
+   its `main` ref or leaving dirty files breaks everyone else (this happened
+   on 2026-08-29 and briefly rewound remote `main`).
+2. **Merges land through the coordinator.** The merge preserves BOTH sides'
+   features (union-resolve semantic conflicts; never drop one lane's behavior
+   to make the conflict go away), then runs the gates in order: production
+   build → focused tests → full suite green → browser-driven verification
+   where the lane touches behavior. Only then push.
+3. **Push explicit SHAs, never the local `main` ref**
+   (`git push origin <sha>:main`) — the local ref can be moved by another
+   session between your checks and your push. Never use
+   `--force`/`--force-with-lease` from the shared checkout.
+4. **Forward-only recovery.** When histories collide or something lands
+   wrongly, preserve both sides, rebase/merge forward, and keep every landed
+   commit intact — the project always moves forward. Reverts and history
+   rewrites are reserved for genuinely critical fixes (rare; owner-approved).
+   If you find another session's uncommitted or unpushed work in a shared
+   place, preserve it and coordinate — never delete it to unblock yourself.
+
 ## Hard rules
 - **TASKS.md is the source of truth for task state — update it after EVERY completion.** Whenever a task lands, is reviewed, changes state, or a bug is captured, update its TASKS.md entry in the SAME commit cycle (status, Shipping `origin/main@<sha>`, a dated History line). A completion that does not update TASKS.md is not complete. Mark landed work DONE with the exact public commit and archive it to `TASKS-DONE.md` at triage; never leave landed work marked OPEN/IN_REVIEW.
 - Never accept "it serves" as "it works" — drive the real behavior in a browser
