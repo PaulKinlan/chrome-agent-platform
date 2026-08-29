@@ -22,21 +22,18 @@
         <a href="#tool-library" class="nav-item" data-section="tool-library">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
         Tool library</a>
-        <a href="#skills" class="nav-item" data-section="skills">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M12 2l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4L4.2 7.7l5.4-.8z"/></svg>
-        Skills</a>
         <a href="#agents" class="nav-item" data-section="agents">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         Agents</a>
-        <a href="#background" class="nav-item" data-section="background">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-        Background agents</a>
         <a href="#browser" class="nav-item" data-section="browser">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         Browser control</a>
         <a href="#permissions" class="nav-item" data-section="permissions">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
         Permissions</a>
+        <a href="#skills" class="nav-item" data-section="skills">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M12 2l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4L4.2 7.7l5.4-.8z"/></svg>
+        Skills</a>
         <a href="#hooks" class="nav-item" data-section="hooks">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
         Hooks</a>
@@ -76,11 +73,15 @@
           <switch-toggle id="server-tools-enabled" label="Provider server tools"></switch-toggle>
           <div class="toggle-text">
             <span class="toggle-name">Provider server tools</span>
-            <span class="muted">Let agents activate tools the PROVIDER executes inside the model call (no local code runs). Today: Google Search grounding for the Gemini provider.
+            <span class="muted">Let agents activate tools the provider executes inside the model call (no local code runs). Today: Google Search grounding (Gemini) and web search (Anthropic).
               <strong>Cost:</strong> 5,000 free searches/mo shared (Gemini 3.x), then $14 per 1,000 searches — CAP shows estimates only; the provider's free-tier meter is not visible here.</span>
           </div>
         </div>
-        <div id="server-tools-agents" class="server-tools-agents" hidden></div>
+        <div id="server-tools-agents" class="server-tools-agents" hidden>
+          <h3>Agents that may use provider-run tools</h3>
+          <p class="muted">Each enabled agent can run provider-side web searches during its tasks. Usage is billed by the provider; estimates appear below.</p>
+          <div id="server-tools-agent-list"></div>
+        </div>
       </section>
 
       <section id="local-folders" class="panel">
@@ -121,6 +122,8 @@
 
       <section id="agents" class="panel">
         <h2>Agents</h2>
+        <p class="muted">Interactive and scheduled agents live together here. The marker shows which agents run automatically; use each row to manage its persona, provider, schedule, or enabled state.</p>
+        <div id="unified-agent-list" class="unified-agent-list" aria-live="polite"></div>
         <div class="toggle-field">
           <switch-toggle id="multi-agent" label="Multiple agents"></switch-toggle>
           <div class="toggle-text">
@@ -154,19 +157,6 @@
           </div>
           <div id="webmcp-status-body" class="origin-list" aria-live="polite"></div>
         </div>
-        <div id="per-agent-provider" class="per-agent" hidden>
-          <h3>Per-agent providers</h3>
-          <p
-            class="muted">Each named agent can use its own provider + model (overriding the global). Its key is stored with the agent and never shown back here.</p>
-          <div id="agent-provider-list" class="agent-provider-list"></div>
-        </div>
-      </section>
-
-      <section id="background" class="panel">
-        <h2>Background agents</h2>
-        <p
-          class="muted">Agents that run quietly on a schedule (each wraps a skill). Enable one to let it work in the background — e.g. the Sorting Hat groups your tabs by domain every 30 minutes.</p>
-        <div id="background-agent-list" class="background-agent-list"></div>
       </section>
 
       <section id="browser" class="panel">

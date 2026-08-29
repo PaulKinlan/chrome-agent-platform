@@ -183,6 +183,7 @@ export function createNavigationController({
  *   - "" or "#" -> { route: "hub" }
  *   - "#thread=<id>" -> { route: "thread", id: "<id>" }
  *   - "#agent=<kind>:<id>" -> { route: "agent", kind: "<kind>", id: "<id>" }
+ *   - "#agent=named:<id>&edit=1" -> the same route with { edit: true }
  *   - "#view=<path>" -> { route: "view", path: "<path>" }
  *   - "#omnibox=<mode>:<query>" -> { route: "omnibox", mode: "<mode>", query: "<query>" }
  *   - "#compose" -> { route: "compose" }  (hub, with the task composer focused)
@@ -202,8 +203,13 @@ export function parseNtpHash(hash) {
   const mThread = /^thread=(.+)$/.exec(clean);
   if (mThread) return { route: "thread", id: decodeURIComponent(mThread[1]) };
 
-  const mAgent = /^agent=([^:]+):(.+)$/.exec(clean);
-  if (mAgent) return { route: "agent", kind: decodeURIComponent(mAgent[1]), id: decodeURIComponent(mAgent[2]) };
+  const mAgent = /^agent=([^:]+):(.+?)(?:&(edit)=1)?$/.exec(clean);
+  if (mAgent) return {
+    route: "agent",
+    kind: decodeURIComponent(mAgent[1]),
+    id: decodeURIComponent(mAgent[2]),
+    ...(mAgent[3] ? { edit: true } : {}),
+  };
 
   const mView = /^view=(.+)$/.exec(clean);
   if (mView) return { route: "view", path: decodeURIComponent(mView[1]) };

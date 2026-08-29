@@ -7,7 +7,11 @@ import {
   SETTINGS_SECTIONS,
   normalizeSettingsSectionId,
 } from "../lib/pure.js";
-import { SKILL_ICON } from "../shared/skill-icons.js";
+import { projectUnifiedAgents } from "../lib/named-agents.js";
+import {
+  agentScheduleMarker,
+  backgroundAgentsForDisplay,
+} from "../shared/agent-display.js";
 import {
   CAPABILITIES,
   capabilityStatus,
@@ -1192,7 +1196,6 @@ async function renderAgents() {
   toggle.addEventListener("toggle", async (e) => {
     const checked = e.detail.checked;
     await storage.set({ "cap:multiAgent": checked });
-    $("#per-agent-provider").hidden = !checked;
     // Rebuild the running orchestrator so the fan-out / solo switch takes effect
     // immediately (the worker reads cap:multiAgent at orchestration time).
     try {
@@ -1202,7 +1205,6 @@ async function renderAgents() {
     }
     saveFlash("Agent mode saved.");
   });
-  $("#per-agent-provider").hidden = !on;
 
   // Provider server tools (Gemini google_search, Anthropic web_search): the GLOBAL toggle gates
   // every agent; a per-agent opt-in then admits each agent individually. Both
@@ -1227,9 +1229,10 @@ async function renderAgents() {
   });
   async function renderServerToolAgents(globalOn) {
     const box = $("#server-tools-agents");
-    if (!box) return;
+    const list = $("#server-tools-agent-list");
+    if (!box || !list) return;
     box.hidden = !globalOn;
-    box.replaceChildren();
+    list.replaceChildren();
     if (!globalOn) return;
     const cur = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
     const agents = cur.agents && typeof cur.agents === "object" ? cur.agents : {};
@@ -1261,17 +1264,19 @@ async function renderAgents() {
       const nm = document.createElement("span");
       nm.className = "toggle-name";
       nm.textContent = a.name;
-      text.appendChild(nm);
+      const hint = document.createElement("span");
+      hint.className = "muted";
+      hint.textContent = "Can search the web during its runs.";
+      text.append(nm, hint);
       field.append(t, text);
-      box.appendChild(field);
+      list.appendChild(field);
     }
   }
   await renderServerToolAgents(stToggle.checked);
 
-  // Per-agent provider overrides: each named agent can use its OWN provider +
-  // model (a COMPLETE config). The apiKey is written to storage but NEVER read
-  // back here — the field shows a blank placeholder when a key exists.
-  await renderAgentProviders();
+  // Interactive and scheduled agents share one management list. The data
+  // models remain separate; this function only joins their presentation.
+  await renderUnifiedAgentSettings();
 }
 
 /** The per-agent override row: SHARED components (provider-select +
@@ -1298,16 +1303,24 @@ function agentProviderRowHtml(a, cur, globalCfg) {
   const providersAttr = escapeAttr(JSON.stringify(PROVIDERS.map((p) => ({ id: p.id, name: p.name }))));
   const internalDisabled = selection.hiddenInternal ? "disabled" : "";
   return `
-    <label class="field ag-name"><span class="field-label">Agent</span><span class="agent-provider-name" title="${escapeAttr(a.name)}">${escapeHtml(a.name)}</span></label>
+    <div class="agent-row-summary">
+      <div class="agent-row-copy">
+        <div class="agent-row-title"><strong title="${escapeAttr(a.name)}">${escapeHtml(a.name)}</strong><span class="agent-mode-badge">${escapeHtml(agentScheduleMarker({ ...a, kind: "named" }))}</span></div>
+        <span class="muted">${escapeHtml(a.role || "Interactive agent")}</span>
+      </div>
+      <div class="agent-actions">
+        <button class="btn small ghost edit-named-agent" type="button">Edit persona &amp; schedule</button>
+        <button class="btn small ghost delete-named-agent" type="button" style="color:var(--danger,#b3261e);border-color:var(--border);" aria-label="Delete ${escapeAttr(a.name)}">Delete</button>
+      </div>
+    </div>
     <provider-select class="ag-provider" providers="${providersAttr}" value="${escapeAttr(provider)}" label="Provider" placeholder="${selection.hiddenInternal ? "Choose a listed provider" : "Use the global provider"}"></provider-select>
     <model-picker class="ag-model" models="${escapeAttr(JSON.stringify(models))}" value="${escapeAttr(selection.hiddenInternal ? "" : (cur.model ?? ""))}" label="Model id" placeholder="${models.length ? "Search or type a model id…" : "model id"}" ${provider ? "" : "disabled"}></model-picker>
     <label class="field ag-base-url" ${needsBaseURL ? "" : "hidden"}><span class="field-label">Base URL</span><input class="agent-provider-base-url" type="text" placeholder="https://your-endpoint/v1" value="${escapeAttr(baseURLDefault)}"></label>
     <label class="field"><span class="field-label">API key (write-only)</span><input class="agent-provider-key" type="password" placeholder="${selection.hiddenInternal ? "Not used by the active internal provider" : cur.hasApiKey ? "(kept — blank keeps it)" : "…"}" autocomplete="off" title="${selection.hiddenInternal ? "Choose a listed provider before entering a key" : cur.hasApiKey ? "A saved key is kept when this field is left blank" : "API key"}" ${internalDisabled}></label>
     <p class="hint agent-provider-internal-status" hidden></p>
     <div class="ag-actions">
-      <button class="btn small set-agent-provider" type="button" ${internalDisabled}>Save</button>
+      <button class="btn small set-agent-provider" type="button" ${internalDisabled}>Save provider</button>
       ${!selection.hiddenInternal && cur.provider && cur.hasApiKey ? `<button class="btn small ghost clear-agent-key" type="button" aria-label="Clear the stored API key for ${escapeAttr(a.name)}">Clear key</button>` : ""}
-      <button class="btn small ghost delete-named-agent" type="button" style="color:var(--danger,#b3261e);border-color:var(--border);" aria-label="Delete ${escapeAttr(a.name)}">Delete</button>
     </div>
   `;
 }
@@ -1343,28 +1356,21 @@ async function runAgentProviderMutation({ message, agentName, description, trigg
   });
 }
 
-async function renderAgentProviders() {
-  const list = $("#agent-provider-list");
-  if (!list) return;
-  list.innerHTML = "";
-  let agents = [];
-  try {
-    const r = await boundedSend("named-agent.list");
-    agents = Array.isArray(r?.agents) ? r.agents : [];
-  } catch {
-    agents = [];
-  }
-  if (!agents.length) {
-    const empty = document.createElement("p");
-    empty.className = "muted";
-    empty.textContent = "No named agents yet — create one first, then assign it a provider.";
-    list.appendChild(empty);
+function openNamedAgentEditor(agent) {
+  const message = { type: "cap:edit-named-agent", id: agent.id };
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage(message, "*");
     return;
   }
-  const globalCfg = await boundedSend("provider.get").catch(() => null);
-  for (const a of agents) {
+  window.location.href = chrome.runtime.getURL(`ntp/ntp.html#agent=named:${encodeURIComponent(agent.id)}&edit=1`);
+}
+
+async function renderAgentProviders(list, projectedAgents, globalCfg) {
+  for (const projected of projectedAgents) {
+    const a = projected.namedAgent;
+    if (!a) continue;
     const row = document.createElement("div");
-    row.className = "agent-provider-row";
+    row.className = "agent-settings-row agent-provider-row";
     // The stored override is REDACTED (no key) — the provider + model are shown,
     // the key is entered (and only ever written, never read back).
     const cur = a.provider ?? {};
@@ -1374,6 +1380,7 @@ async function renderAgentProviders() {
     renderInternalProviderStatus(internalStatus, storedSelection);
     const agentCredentialInput = row.querySelector(".agent-provider-key");
     const setAgentProvider = row.querySelector(".set-agent-provider");
+    row.querySelector(".edit-named-agent")?.addEventListener("click", () => openNamedAgentEditor(a));
 
     // Provider change → swap the model catalogue + base-URL field to the
     // selected provider (the row stays a labeled grid; only the dependent
@@ -1427,7 +1434,7 @@ async function renderAgentProviders() {
       });
       if (r.ok) {
         saveFlash(`${a.name}: API key cleared.`);
-        await renderAgentProviders();
+        await renderUnifiedAgentSettings();
       } else {
         trigger.disabled = false;
         trigger.focus();
@@ -1450,7 +1457,7 @@ async function renderAgentProviders() {
       } else {
         saveFlash(`Could not delete ${a.name}: ${res?.error ?? "failed"}.`);
       }
-      await renderAgentProviders();
+      await renderUnifiedAgentSettings();
     });
     setAgentProvider.addEventListener("click", async (event) => {
       const trigger = event.currentTarget;
@@ -1484,37 +1491,34 @@ async function renderAgentProviders() {
       });
       if (r.ok) {
         saveFlash(`${a.name}: provider updated.`);
-        await renderAgentProviders();
+        await renderUnifiedAgentSettings();
       } else {
         trigger.disabled = false;
         trigger.focus();
         saveFlash(`Provider not saved: ${r.error ?? "unknown error"}`);
       }
     });
+    if (projected.backgroundAgent) backgroundAgentRow(projected.backgroundAgent, row);
     list.appendChild(row);
   }
 }
 
 // ── Background agents (scheduled recipes) ──
-function backgroundAgentRow(a) {
-  const row = document.createElement("div");
-  row.className = "background-agent-row";
+function backgroundAgentRow(a, hostRow = null) {
+  const row = hostRow ?? document.createElement("div");
+  row.classList.add("agent-settings-row", "background-agent-row");
 
   const name = document.createElement("span");
   name.className = "perm-name";
-  name.textContent = a.name;
+  name.textContent = hostRow ? "Scheduled automation" : a.name;
 
   const state = document.createElement("span");
-  state.className = "perm-state" + (a.enabled ? " running" : " stopped");
-  state.textContent = a.enabled ? "Running" : "Stopped";
+  state.className = "agent-mode-badge";
+  state.textContent = agentScheduleMarker({ ...a, kind: "background" });
 
   const hint = document.createElement("span");
   hint.className = "muted";
-  hint.textContent =
-    (a.description || "") +
-    (a.schedule?.periodInMinutes
-      ? ` · runs every ${a.schedule.periodInMinutes} min`
-      : "");
+  hint.textContent = a.description || "Scheduled agent";
 
   const toggle = document.createElement("switch-toggle");
   toggle.setAttribute("label", `${a.enabled ? "Disable" : "Enable"} ${a.name}`);
@@ -1590,7 +1594,14 @@ function backgroundAgentRow(a) {
     actions.append(del);
   }
 
-  row.append(name, state, hint, toggle, actions);
+  if (hostRow) {
+    const controls = document.createElement("div");
+    controls.className = "background-agent-controls";
+    controls.append(name, state, hint, toggle, actions);
+    row.append(controls);
+  } else {
+    row.append(name, state, hint, toggle, actions);
+  }
   return row;
 }
 
@@ -1643,102 +1654,36 @@ function editRecipePrompt(recipe) {
   textarea.focus();
 }
 
-// The "Add background agent" control uses the NEW customizable HTML select
-// (appearance: base-select) with rich icon+name+description options — the
-// modern-web-guidance rich-media-picker pattern. Built with DOM APIs so the
-// rich content survives (innerHTML would be stripped by the select parser).
-function addBackgroundAgentSelect(disabled, onChange) {
-  const wrap = document.createElement("div");
-  wrap.className = "agent-select-wrap";
+async function renderUnifiedAgentSettings() {
+  const list = $("#unified-agent-list");
+  if (!list) return;
+  const [namedRes, backgroundRes, globalCfg] = await Promise.all([
+    boundedSend("named-agent.list").catch(() => ({ agents: [] })),
+    boundedSend("background-agent.list").catch(() => ({ agents: [] })),
+    boundedSend("provider.get").catch(() => null),
+  ]);
+  const named = Array.isArray(namedRes?.agents) ? namedRes.agents : [];
+  // Settings is a display/management surface, not a callability filter: stopped
+  // scheduled agents remain visible so the owner can enable or edit them.
+  const background = backgroundAgentsForDisplay(backgroundRes?.agents);
+  const unified = projectUnifiedAgents(named, background);
 
-  const label = document.createElement("label");
-  label.className = "field-label";
-  label.textContent = "Add a background agent";
-
-  const select = document.createElement("select");
-  select.className = "agent-select";
-  select.setAttribute("aria-label", "Add a background agent");
-
-  const button = document.createElement("button");
-  button.type = "button";
-  const selectedcontent = document.createElement("selectedcontent");
-  const chevron = document.createElement("span");
-  chevron.className = "chevron";
-  chevron.setAttribute("aria-hidden", "true");
-  chevron.textContent = "▾";
-  button.append(selectedcontent, chevron);
-  select.append(button);
-
-  const empty = document.createElement("option");
-  empty.value = "";
-  empty.textContent = "Add a background agent…";
-  empty.selected = true;
-  select.append(empty);
-
-  for (const a of disabled) {
-    const opt = document.createElement("option");
-    opt.value = a.id;
-    opt.setAttribute("aria-label", a.name);
-    const svg = SKILL_ICON[a.icon] ?? "";
-    const name = document.createElement("span");
-    name.className = "opt-title";
-    name.textContent = a.name;
-    const desc = document.createElement("span");
-    desc.className = "opt-desc";
-    desc.textContent = a.description ?? "";
-    const text = document.createElement("span");
-    text.className = "opt-text";
-    text.append(name, desc);
-    opt.append(text);
-    if (svg) {
-      const icon = document.createElement("span");
-      icon.className = "opt-icon";
-      icon.innerHTML = svg;
-      opt.prepend(icon);
-    }
-    select.append(opt);
+  list.replaceChildren();
+  if (!unified.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No agents yet.";
+    list.appendChild(empty);
+    return;
   }
-
-  select.addEventListener("change", async () => {
-    const id = select.value;
-    if (!id) return;
-    const agent = disabled.find((a) => a.id === id);
-    const out = await chrome.runtime
-      .sendMessage({ type: "background-agent.set", id, enabled: true })
-      .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
-    saveFlash(
-      out?.ok
-        ? `${agent?.name ?? id} enabled.`
-        : `Could not enable ${agent?.name ?? id}: ${out?.error ?? "failed"}.`,
-    );
-    select.value = "";
-    onChange();
-  });
-
-  wrap.append(label, select);
-  return wrap;
+  await renderAgentProviders(list, unified.filter((agent) => agent.namedAgent), globalCfg);
+  for (const projected of unified) {
+    if (!projected.namedAgent) list.appendChild(backgroundAgentRow(projected.backgroundAgent));
+  }
 }
 
 async function renderBackgroundAgents() {
-  const res = await boundedSend("background-agent.list").catch(() => ({ agents: [] }));
-  const agents = Array.isArray(res.agents) ? res.agents : [];
-  const enabled = agents.filter((a) => a.enabled);
-  const disabled = agents.filter((a) => !a.enabled);
-
-  const list = $("#background-agent-list");
-  list.replaceChildren();
-
-  if (!enabled.length) {
-    const p = document.createElement("p");
-    p.className = "muted";
-    p.textContent = "No background agents running.";
-    list.appendChild(p);
-  }
-  for (const a of enabled) list.appendChild(backgroundAgentRow(a));
-
-  if (disabled.length) {
-    list.appendChild(addBackgroundAgentSelect(disabled, renderBackgroundAgents));
-  }
+  await renderUnifiedAgentSettings();
 }
 
 
@@ -2721,8 +2666,7 @@ export function handleSettingsHashNavigation(hash, isTraverse = false) {
 
   document.querySelectorAll(".nav-item").forEach((x) => {
     const match = x.dataset.section === sectionId ||
-      x.getAttribute("href") === `#${sectionId}` ||
-      (sectionId === "background" && (x.dataset.section === "background" || x.getAttribute("href") === "#background"));
+      x.getAttribute("href") === `#${sectionId}`;
     if (match) {
       x.setAttribute("aria-current", "true");
     } else {
@@ -2856,7 +2800,6 @@ await renderProviders();
 await renderLocalFolders();
 await renderToolLibrary();
 await renderAgents();
-await renderBackgroundAgents();
 await renderEnroll();
 await renderBrowser();
 await renderPermissions();

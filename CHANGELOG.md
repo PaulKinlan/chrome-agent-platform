@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.405] — 2026-08-29
+- Settings now shows all your agents in one place — interactive and scheduled together, each schedule described in plain language — and the left-hand agents menu shows scheduled agents too. The 'provider server tools' section finally explains itself: which agents may search the web on your behalf and what that costs
+
 ## [0.2.404] — 2026-08-29
 - When an agent needs your approval — deleting something, changing an agent, granting a permission — the request now appears as a card right inside that conversation, and the task pauses until you answer. No more hunting for where to approve
 

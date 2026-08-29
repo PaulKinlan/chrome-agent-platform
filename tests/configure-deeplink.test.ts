@@ -36,10 +36,10 @@ Deno.test("isExactOptionsSender: accepts registered #background-agents hash", ()
   assert(!isExactOptionsSender({ ...exact, url: `${url}?param=1#background` }, id, url), "query params must fail closed");
 });
 
-Deno.test("normalizeSettingsSectionId: correctly normalizes aliases and valid sections", () => {
-  assertEquals(normalizeSettingsSectionId("#background-agents"), "background");
-  assertEquals(normalizeSettingsSectionId("background-agents"), "background");
-  assertEquals(normalizeSettingsSectionId("#background"), "background");
+Deno.test("normalizeSettingsSectionId: legacy background links land on unified Agents", () => {
+  assertEquals(normalizeSettingsSectionId("#background-agents"), "agents");
+  assertEquals(normalizeSettingsSectionId("background-agents"), "agents");
+  assertEquals(normalizeSettingsSectionId("#background"), "agents");
   assertEquals(normalizeSettingsSectionId("#providers"), "providers");
   assertEquals(normalizeSettingsSectionId("#tool-library"), "tool-library");
   assertEquals(normalizeSettingsSectionId("#agents"), "agents");
@@ -70,16 +70,20 @@ Deno.test("Configure call sites in ntp.js use exact deep-link hash", async () =>
   );
 });
 
-Deno.test("options.html contains background section with matching id", async () => {
+Deno.test("named-agent editing works from embedded and standalone Settings", async () => {
+  const options = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
+  const ntp = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
+  assert(options.includes('postMessage(message, "*")'), "embedded Settings must request its parent NTP editor");
+  assert(options.includes("&edit=1"), "standalone Settings must navigate to the explicit edit route");
+  assert(ntp.includes('parsed.kind === "named" && parsed.edit === true'), "the NTP must open the maintained editor for that route");
+});
+
+Deno.test("options.html has one unified Agents section and keeps no background section", async () => {
   const html = await Deno.readTextFile(
     new URL("../extension/options/options.html", import.meta.url),
   );
-  assert(
-    html.includes('<section id="background"'),
-    "options.html must contain section with id='background'",
-  );
-  assert(
-    html.includes('data-section="background"'),
-    "options.html nav-item must link to background section",
-  );
+  assert(html.includes('<section id="agents"'), "Settings must contain the Agents section");
+  assert(html.includes('id="unified-agent-list"'), "Agents must own the unified management list");
+  assert(!html.includes('<section id="background"'), "a separate background-agent section must not return");
+  assert(!html.includes('data-section="background"'), "a separate background-agent nav item must not return");
 });

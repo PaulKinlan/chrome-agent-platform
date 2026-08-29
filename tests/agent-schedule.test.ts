@@ -210,9 +210,13 @@ Deno.test("P1-c: projectUnifiedAgents — same-id collision renders ONCE, named 
   assertEquals(shared[0].kind, "named", "the named record wins the collision");
   assertEquals(shared[0].role, "the persona", "the winner keeps its persona");
   assertEquals(shared[0].schedule?.periodInMinutes, 60, "the recipe-side schedule fills the named record's empty schedule");
+  assertEquals(shared[0].namedAgent, named[0], "management keeps the named source record");
+  assertEquals(shared[0].backgroundAgent, background[0], "management keeps the background source record");
   const recipeOnly = rows.find((r) => r.id === "recipe-only");
   assertEquals(recipeOnly.kind, "background");
   assertEquals(recipeOnly.schedule?.periodInMinutes, 15);
+  assertEquals(recipeOnly.namedAgent, null);
+  assertEquals(recipeOnly.backgroundAgent, background[1]);
   // A named agent with its OWN schedule keeps it over the recipe's.
   const both = projectUnifiedAgents(
     [{ id: "x", name: "X", schedule: { periodInMinutes: 45, task: "t" } }],

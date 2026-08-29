@@ -11,12 +11,12 @@ export const FIRST_RUN_TASK_PROMPT =
  * EXAMPLE-AGENT-01). Each entry is a named agent the owner can OPT IN to create
  * during first run (an explicit owner action — never auto-created). The role is
  * a truthful capability description; `scheduleHint` is prose the owner can act
- * on later (Settings → Background agents) — no permission is requested here. */
+ * on later (Settings → Agents) — no permission is requested here. */
 export const FIRST_RUN_EXAMPLE_AGENTS = Object.freeze([
   Object.freeze({
     id: "weekly-browsing-review",
     name: "Weekly browsing review",
-    role: "A weekly reviewer of the owner's activity in this hub: read the recent browser events, usage, and artifacts, then produce a concise plain-language summary of what happened and what is worth following up. To run it automatically on a schedule, the owner can add it in Settings → Background agents (alarms are granted at install).",
+    role: "A weekly reviewer of the owner's activity in this hub: read the recent browser events, usage, and artifacts, then produce a concise plain-language summary of what happened and what is worth following up. To run it automatically on a schedule, the owner can add it in Settings → Agents (alarms are granted at install).",
   }),
 ]);
 

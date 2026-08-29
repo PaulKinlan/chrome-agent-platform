@@ -198,7 +198,7 @@ Deno.test("Navigation Controller: Deep links (#background-agents, #browser, #too
 
   await ctrl.syncCurrent();
   assertEquals(navigated.length, 1);
-  assertEquals(navigated[0], "background", "#background-agents must normalize to 'background'");
+  assertEquals(navigated[0], "agents", "#background-agents must normalize to unified 'agents'");
 
   await ctrl.navigate("#browser");
   assertEquals(navigated[1], "browser");
@@ -344,7 +344,7 @@ Deno.test("Navigation Controller: Reload-after-back preserves normalized target 
     },
   });
   await ctrl1.syncCurrent();
-  assertEquals(landedSection, "background", "initial load must normalize #background-agents to 'background'");
+  assertEquals(landedSection, "agents", "initial load must normalize #background-agents to unified 'agents'");
   ctrl1.dispose();
 
   // Navigate to #permissions, then back, then reload
@@ -358,7 +358,7 @@ Deno.test("Navigation Controller: Reload-after-back preserves normalized target 
     },
   });
   await ctrl2.syncCurrent();
-  assertEquals(landedSection, "background");
+  assertEquals(landedSection, "agents");
 
   await ctrl2.navigate("#permissions");
   assertEquals(landedSection, "permissions");
@@ -367,7 +367,7 @@ Deno.test("Navigation Controller: Reload-after-back preserves normalized target 
     navigationType: "traverse",
     canIntercept: true,
   });
-  assertEquals(landedSection, "background");
+  assertEquals(landedSection, "agents");
 
   // Reload simulation: new instance reading the hash
   reloadEnv.fakeLocation.hash = "#background";
@@ -380,7 +380,7 @@ Deno.test("Navigation Controller: Reload-after-back preserves normalized target 
     },
   });
   await reloadCtrl.syncCurrent();
-  assertEquals(landedSection, "background", "reload after back must maintain consistent section state");
+  assertEquals(landedSection, "agents", "reload after back must maintain consistent section state");
   ctrl2.dispose();
   reloadCtrl.dispose();
 });
@@ -391,6 +391,7 @@ Deno.test("parseNtpHash: correctly parses all multi-page NTP routes", () => {
   assertEquals(JSON.stringify(parseNtpHash("#thread=task-123")), JSON.stringify({ route: "thread", id: "task-123" }));
   assertEquals(JSON.stringify(parseNtpHash("#agent=background:bg-agent-1")), JSON.stringify({ route: "agent", kind: "background", id: "bg-agent-1" }));
   assertEquals(JSON.stringify(parseNtpHash("#agent=named:reviewer")), JSON.stringify({ route: "agent", kind: "named", id: "reviewer" }));
+  assertEquals(JSON.stringify(parseNtpHash("#agent=named:reviewer&edit=1")), JSON.stringify({ route: "agent", kind: "named", id: "reviewer", edit: true }));
   assertEquals(JSON.stringify(parseNtpHash("#view=options%2Foptions.html")), JSON.stringify({ route: "view", path: "options/options.html" }));
   assertEquals(JSON.stringify(parseNtpHash("#omnibox=thread:find-files")), JSON.stringify({ route: "omnibox", mode: "thread", query: "find-files" }));
   assertEquals(JSON.stringify(parseNtpHash("#unknown-hash")), JSON.stringify({ route: "hub" }));

@@ -1556,6 +1556,72 @@ evidence every other task depends on).
     repeated-settle path re-attempt delivery. 37 unit tests + 22-check KAT
     green; suite 2283/0.
 
+## [CAP-FB-20260829-AGENTS-SETTINGS-MERGE-01] Unify interactive and scheduled agents in Settings and the task sidebar
+- Feedback: 2026-08-29 — owner directive: background agents and agents must be merged in Settings, and background agents must be visible in the left Agents menu on the task view
+- Updated: 2026-08-29 UTC
+- Status: IN_REVIEW
+- Priority: P1
+- Owner: implementation lane
+- Workspace: durable worktree
+- Branch: `cap-agents-merge`
+- Base: `54d70a9b`
+- Candidate: this commit
+- Shipping: —
+- Acceptance: Settings has one Agents nav destination and one management list containing named and scheduled/background agents without changing their stores or routes; rows distinguish on-demand, running schedules, and stopped schedules in plain language; persona/provider/schedule, enable/disable, duplicate, prompt edit, and delete remain reachable; the task sidebar lists stopped as well as running background agents and opens their existing detail/history surface
+- Review: required fresh-session review of the candidate diff plus browser evidence
+- Gates: focused agent display/deep-link/navigation/options tests; full Deno suite; developer build; loaded-extension Settings and task-sidebar interaction screenshots
+- Blockers: —
+- Next: independent acceptance review, then coordinator merge
+- Recover: `git log --oneline --all --grep=CAP-FB-20260829-AGENTS-SETTINGS-MERGE-01`
+- History:
+  - 2026-08-29 20:29 UTC — implementation started from `origin/main@54d70a9b`; presentation-only merge keeps named-agent and background-recipe stores/routes distinct, preserves legacy `#background` and `#background-agents` links by normalizing both to `#agents`, and deliberately leaves callable-only filtering in the execution picker rather than applying it to display surfaces.
+  - 2026-08-29 20:44 UTC — author falsification: with `agent-display.js` removed, its three changed tests failed type-check/import (RED); with `pure.js` and `options.html` restored to `origin/main`, the final deep-link/structure assertions failed 3 pass / 2 fail (RED). Restored candidate: focused suite 20/20 and build green.
+  - 2026-08-29 21:02 UTC — first full suite reached 2359 pass / 4 fail and exposed cross-surface drift: generated changelog copy carried internal IDs, the security pin still hard-coded 13 Settings destinations, two onboarding strings named the removed Background agents section, and the sidebar repeated “Agents” in its accessible name. All four root causes fixed; focused regression set 34/34 and vocabulary/gallery/build green.
+  - 2026-08-29 21:55 UTC — suite 2363 pass / 0 fail and developer build green. Real loaded-extension CDP acceptance seeded interactive agents, observed stopped schedules in the task sidebar, opened a stopped agent surface, deep-linked Settings to the unified list, enabled a stopped schedule and observed its marker change, then enabled provider tools and verified the Gemini/Anthropic billing copy plus per-agent search consequence.
+  - 2026-08-29 22:02 UTC — expanded browser acceptance falsified the standalone Settings “Edit persona & schedule” fallback: it navigated to the agent surface but did not open the maintained dialog. Added one explicit, parsed `&edit=1` route; embedded Settings still uses its extension-owned parent message. Focused route/deep-link/display tests 20/20, suite 2364/0, and build green.
+  - 2026-08-29 22:12 UTC — independent review REVISE (P1): Settings bypassed `projectUnifiedAgents`, so a named slug matching a recipe ID rendered one conceptual agent in the hub/sidebar but two conflicting Settings rows. Settings now consumes the shared projection; projected rows retain both source records and a collision renders one row with named controls plus a “Scheduled automation” subrow. Collision regression included; focused suite 29/29 and loaded-extension acceptance 12/12 with screenshots `.cache/agents-merge-evidence/01`–`06`.
+  - 2026-08-29 22:24 UTC — first post-review full run 2364/1 caught the responsive source pin no longer matching a comma-grouped selector; retained the explicit narrow `.background-agent-row` rule and added its collision-control sibling. Focused responsive/display/schedule set 14/14, final suite 2365/0, developer build green.
+
+## [CAP-FB-20260829-SETTINGS-NAV-ORDER-01] Settings nav follows the rendered document order
+- Feedback: 2026-08-29 — while unifying Agents, the owner observed that Settings navigation listed Skills before Agents while the document rendered Agents before Skills
+- Updated: 2026-08-29 UTC
+- Status: IN_REVIEW
+- Priority: P2
+- Owner: implementation lane
+- Workspace: durable worktree
+- Branch: `cap-agents-merge`
+- Base: `486066fc`
+- Candidate: this commit
+- Shipping: —
+- Acceptance: Settings left-nav href order exactly equals the top-level panel section order
+- Review: required with the parent Agents merge candidate
+- Gates: parser pin over `options.html`; full suite and build
+- Blockers: —
+- Next: independent acceptance review, then coordinator merge
+- Recover: `git log --oneline --all --grep=CAP-FB-20260829-SETTINGS-NAV-ORDER-01`
+- History:
+  - 2026-08-29 20:47 UTC — falsification RED: the new parser pin showed Skills before Agents in nav but after Permissions in the document; moved the existing Skills nav item after Permissions, producing exact order parity without moving any panel.
+
+## [CAP-FB-20260829-PROVIDER-TOOLS-COPY-01] Explain provider-run tool toggles per agent
+- Feedback: 2026-08-29 — owner could not tell what the per-agent provider-tool toggles enabled, and the global explainer still described Gemini only after Anthropic web search shipped
+- Updated: 2026-08-29 UTC
+- Status: IN_REVIEW
+- Priority: P2
+- Owner: implementation lane
+- Workspace: durable worktree
+- Branch: `cap-agents-merge`
+- Base: `e52b22a6`
+- Candidate: this commit
+- Shipping: —
+- Acceptance: the Providers panel names both Gemini grounding and Anthropic web search; the per-agent block has a visible heading, billing hint, and a consequence line saying enabled agents may search the web during runs; no controls move out of Providers
+- Review: required with the parent Agents merge candidate
+- Gates: focused copy contract; full suite and build
+- Blockers: —
+- Next: independent acceptance review, then coordinator merge
+- Recover: `git log --oneline --all --grep=CAP-FB-20260829-PROVIDER-TOOLS-COPY-01`
+- History:
+  - 2026-08-29 20:52 UTC — falsification RED: the copy pin failed on the Gemini-only global explainer before the subheading, billing hint, stable per-agent list, and per-row consequence line were added.
+
 ## [CAP-FB-20260829-MAIN-GATES-RED-03] Journey suite red on main after the install-granted permission change
 - Feedback: 2026-08-29 — found by running the suite on `origin/main`
 - Updated: 2026-08-29 UTC
