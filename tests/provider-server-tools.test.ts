@@ -220,6 +220,7 @@ Deno.test("provider-server: grounding normalization maps the documented Gemini s
     ],
   };
   const n = normalizeGeminiGrounding(meta);
+  assertEquals(n.rawQueryCount, 2);
   assertEquals(n.queries, ["cap provider tools", "gemini grounding"]);
   assertEquals(n.citations.length, 2);
   assertEquals(n.citations[0].url, "https://example.com/a");
@@ -250,6 +251,19 @@ Deno.test("provider-server: repeated query occurrences bill separately while pre
   assertEquals(snapshot.queryOccurrenceCount, 3);
   assertEquals(snapshot.queries, ["same query", "same query", "other query"]);
   assertEquals(snapshot.displayQueries, ["same query", "other query"]);
+});
+
+Deno.test("provider-server: normalization bills raw query occurrences while retaining at most 32 texts", () => {
+  const providerQueries = Array.from({ length: 40 }, (_, i) => `query ${i}`);
+  const normalized = normalizeGeminiGrounding({ webSearchQueries: providerQueries });
+  const accumulator = createServerGroundingAccumulator();
+  accumulator.add(normalized);
+  const snapshot = accumulator.snapshot();
+  assertEquals(normalized.rawQueryCount, 40);
+  assertEquals(normalized.queries.length, 32);
+  assertEquals(snapshot.queryOccurrenceCount, 40);
+  assertEquals(snapshot.queries.length, 32);
+  assertEquals(snapshot.displayQueries.length, 32);
 });
 
 Deno.test("provider-server: normalization never throws on hostile shapes and drops non-http urls", () => {

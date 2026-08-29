@@ -215,10 +215,13 @@ export function normalizeGeminiGrounding(groundingMetadata) {
   const meta = groundingMetadata && typeof groundingMetadata === "object"
     ? groundingMetadata
     : {};
-  const queries = (Array.isArray(meta.webSearchQueries) ? meta.webSearchQueries : [])
-    .filter((q) => typeof q === "string" && q.trim().length > 0)
-    .slice(0, 32)
-    .map((q) => q.slice(0, 512));
+  const validQueries = (Array.isArray(meta.webSearchQueries) ? meta.webSearchQueries : [])
+    .filter((q) => typeof q === "string" && q.trim().length > 0);
+  // Billing counts every valid provider-reported occurrence; only retained text
+  // is capped. Truncating before exposing this scalar silently undercharged a
+  // single grounding result with more than 32 queries.
+  const rawQueryCount = validQueries.length;
+  const queries = validQueries.slice(0, 32).map((q) => q.slice(0, 512));
   const chunks = Array.isArray(meta.groundingChunks) ? meta.groundingChunks : [];
   const supports = Array.isArray(meta.groundingSupports) ? meta.groundingSupports : [];
   const citations = [];
@@ -262,6 +265,7 @@ export function normalizeGeminiGrounding(groundingMetadata) {
       : null;
   return Object.freeze({
     citations: Object.freeze(citations),
+    rawQueryCount,
     queries: Object.freeze(queries),
     searchEntryPointHtml,
   });
@@ -278,8 +282,13 @@ export function createServerGroundingAccumulator({ maxQueryOccurrences = 128, ma
   const citations = new Map();
   return Object.freeze({
     add(normalized) {
-      for (const query of normalized?.queries ?? []) {
-        queryOccurrenceCount = Math.min(Number.MAX_SAFE_INTEGER, queryOccurrenceCount + 1);
+      const retainedQueries = Array.isArray(normalized?.queries) ? normalized.queries : [];
+      const reportedCount = Number.isSafeInteger(normalized?.rawQueryCount) &&
+          normalized.rawQueryCount >= retainedQueries.length
+        ? normalized.rawQueryCount
+        : retainedQueries.length;
+      queryOccurrenceCount = Math.min(Number.MAX_SAFE_INTEGER, queryOccurrenceCount + reportedCount);
+      for (const query of retainedQueries) {
         if (queryOccurrences.length < maxQueryOccurrences) queryOccurrences.push(query);
         if (displayQueries.size < maxQueryOccurrences) displayQueries.add(query);
       }
