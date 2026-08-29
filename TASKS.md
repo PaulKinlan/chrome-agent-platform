@@ -160,7 +160,7 @@ On resume after a coordinator or worker loss:
 
 ## Open work queue
 
-**This file holds only what is in progress or still to do — 39 entries.** Completed work is archived in [TASKS-DONE.md](TASKS-DONE.md) at triage; **merged is done** (Paul, 2026-08-28), so nothing sits in a terminal state here. Most urgent first (regenerated 2026-08-28). The entry itself is always the authority; where it disagrees with this table, the entry wins.
+**This file holds only what is in progress or still to do — 40 entries.** Completed work is archived in [TASKS-DONE.md](TASKS-DONE.md) at triage; **merged is done** (Paul, 2026-08-28), so nothing sits in a terminal state here. Most urgent first (regenerated 2026-08-29). The entry itself is always the authority; where it disagrees with this table, the entry wins.
 
 Regenerate after any status change (this exact command reproduces the table below):
 
@@ -170,6 +170,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 | Priority | Status | Task | What it is |
 |---|---|---|---|
+| P0 | IN_REVIEW | [`CAP-FB-20260829-HARD-STOP-01`](#cap-fb-20260829-hard-stop-01-running-tasks-and-agents-need-an-obvious-hard-stop) | Running tasks and agents need an obvious hard stop |
 | P0 | IN_REVIEW | [`CAP-FB-20260829-MIC-DEAD-MACOS-01`](#cap-fb-20260829-mic-dead-macos-01-mic-button-is-completely-dead-on-macos-after-the-waveform-change) | Mic button is completely dead on macOS after the waveform change |
 | P0 | DONE | [`CAP-FB-20260829-MAIN-GATES-RED-03`](#cap-fb-20260829-main-gates-red-03-the-journey-suite-is-red-on-main-49-checks-still-assert-the-pre-p0-all-optional-permission-model) | Journey suite red on main — 49 checks assert the pre-P0 permission model |
 | P0 | IN_REVIEW | [`CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01`](#cap-fb-20260829-tool-argument-robustness-01-tool-call-argument-robustness-and-schema-accuracy) | Tool-call argument robustness and schema accuracy |
@@ -230,6 +231,28 @@ evidence every other task depends on).
 
 
 ## Active
+
+## [CAP-FB-20260829-HARD-STOP-01] Running tasks and agents need an obvious hard stop
+- Feedback: 2026-08-29 — owner requested a visible hard Stop inside every live task/agent conversation and on running task rows, including background and scheduled agents
+- Updated: 2026-08-29 22:01 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: implementation worker
+- Workspace: active (local path private)
+- Branch: cap-hard-stop
+- Base: d6e695deb3441e1f01794dffac4c3c055d2765c2
+- Candidate: this tracker commit
+- Shipping: —
+- Acceptance: A visible, danger-token, keyboard-operable Stop button appears without hover on every live conversation and exact running scheduled-task row; one click with no confirmation aborts the immutable durable execution, preserves `errorCategory: "aborted"` plus the durable cancellation mark, and settles visibly as Stopped without deleting the task or disabling its schedule.
+- Review: independent reviewer required; pending
+- Gates: focused status/component/accessibility/durable tests 102 pass; changed assertions RED on the base (5 runtime failures) and GREEN on the candidate; full Deno suite 2389 pass / 0 fail; loaded-extension lifecycle KAT 34/34 pass including the 4-check `@demo-slow` stop flow, exact-commit manifest, and stopped-state screenshot; production build clean (95 generated files verified, MV3 seam scan clean)
+- Blockers: —
+- Next: obtain independent review of the committed candidate
+- Recover: `git log --oneline --all --grep=CAP-FB-20260829-HARD-STOP-01`
+- History:
+  - 2026-08-29 22:12 UTC — the loaded-extension lifecycle KAT passed 34/34 including exact-commit manifest binding; its saturation wait stays bounded at 20 seconds now that the hard-stop flow precedes the existing 12-warmup overlap probe
+  - 2026-08-29 22:01 UTC — ownership: unassigned → implementation worker; implemented shared live-row and task-row Stop controls over the existing durable cancel route, added the real-browser slow-run stop flow, and moved the candidate to IN_REVIEW
 
 ## [CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01] Tool-call argument robustness and schema accuracy
 

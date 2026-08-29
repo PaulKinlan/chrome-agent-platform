@@ -31,19 +31,19 @@ export function normalizeConversationRunStatus(input) {
 
   switch (state) {
     case "queued":
-      return { state, label: activity || "Queued", active: true, tone: "muted" };
+      return { state, label: activity || "Queued", active: true, stoppable: true, tone: "muted" };
     case "running":
-      return { state, label: activity || "Working…", active: true, tone: "accent" };
+      return { state, label: activity || "Working…", active: true, stoppable: true, tone: "accent" };
     case "retrying":
-      return { state, label: activity || "Retrying…", active: true, tone: "accent" };
+      return { state, label: activity || "Retrying…", active: true, stoppable: true, tone: "accent" };
     case "waiting-for-permission":
-      return { state, label: `Waiting for permission${reason ? ` — ${reason}` : ""}`, active: false, tone: "muted" };
+      return { state, label: `Waiting for permission${reason ? ` — ${reason}` : ""}`, active: false, stoppable: true, tone: "muted" };
     case "completed":
-      return { state, label: "Completed", active: false, tone: "success" };
+      return { state, label: "Completed", active: false, stoppable: false, tone: "success" };
     case "failed":
-      return { state, label: `Failed${reason ? ` — ${reason}` : ""}`, active: false, tone: "danger" };
+      return { state, label: `Failed${reason ? ` — ${reason}` : ""}`, active: false, stoppable: false, tone: "danger" };
     case "cancelled":
-      return { state, label: "Cancelled", active: false, tone: "muted" };
+      return { state, label: "Stopped", active: false, stoppable: false, tone: "muted" };
     default:
       return null;
   }

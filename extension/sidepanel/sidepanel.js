@@ -16,6 +16,8 @@ import { send } from "../lib/messages.js";
 import {
   runConversationTurn,
   subscribeProgress,
+  subscribeRunRegistry,
+  cancelDurableRun,
   appendBubble,
 } from "../shared/conversation.js";
 import { projectConversationRunStatus } from "../shared/run-status.js";
@@ -23,6 +25,7 @@ import { findAgentByRef } from "../shared/agent-registry.js";
 import { siteAgentToolsMessage } from "../shared/site-agent-copy.js";
 import { confirmActionDialog } from "../shared/components.js"; // registers <agent-picker>, <agent-composer>, <agent-conversation>, <task-row>
 import { capLog } from "../lib/cap-log.js";
+import { actionableRunsForSurface } from "../lib/run-scope.js";
 
 capLog("sidepanel").info("side panel evaluated");
 
@@ -163,6 +166,7 @@ const detailName = document.getElementById("agent-detail-name");
 const detailKind = document.getElementById("agent-detail-kind");
 const historyEl = document.getElementById("agent-history");
 const agentComposer = document.getElementById("agent-composer");
+let latestDurableRuns = [];
 
 // The inline live-status row's recovery action ("Fix in Settings") — fire ONLY
 // for the status row (message bubbles can also emit "action"), and route to the
@@ -171,6 +175,35 @@ const agentComposer = document.getElementById("agent-composer");
 historyEl.addEventListener("action", (ev) => {
   if (!ev.target?.classList?.contains?.("live-status")) return;
   chrome.runtime.openOptionsPage();
+});
+
+async function waitForOpenAgentRun(timeoutMs = 1200) {
+  const agent = openAgent;
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const run = actionableRunsForSurface(latestDurableRuns, {
+      agentId: agent?.id,
+      agentKind: agent?.kind,
+    }).sort((a, b) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0))[0];
+    if (run?.executionId) return run;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  } while (Date.now() < deadline && openAgent === agent);
+  return null;
+}
+
+historyEl.addEventListener("stop", async (ev) => {
+  if (!ev.target?.classList?.contains?.("live-status")) return;
+  const button = ev.target?._root?.querySelector?.(".stop");
+  if (button) { button.disabled = true; button.textContent = "Stopping…"; }
+  const agent = openAgent;
+  const run = await waitForOpenAgentRun();
+  const result = run
+    ? await cancelDurableRun(run.executionId, "stopped by owner").catch((error) => ({ ok: false, error: error?.message ?? String(error) }))
+    : { ok: false, error: "the run had not started" };
+  if (openAgent !== agent) return;
+  projectConversationRunStatus(historyEl, result?.ok === true
+    ? { state: "cancelled" }
+    : { state: "failed", message: `Stop failed — ${result?.error ?? "unknown error"}`, errorCategory: "aborted" });
 });
 
 const KIND_LABELS = { named: "Named agent", background: "Background agent", site: "Site Agent" };
@@ -278,6 +311,8 @@ async function openAgentDetail(agent) {
   const entries = await loadHistory(opened.kind, opened.id);
   if (openAgent !== opened) return; // the selection changed (or closed) mid-load
   renderHistory(entries);
+  const liveRun = actionableRunsForSurface(latestDurableRuns, { agentId: opened.id, agentKind: opened.kind })[0];
+  if (liveRun) projectConversationRunStatus(historyEl, { state: "running", activity: "Run in progress" });
   agentComposer.focus();
 }
 
@@ -359,6 +394,7 @@ async function renderTasks() {
   }
   for (const t of tasks) {
     const row = document.createElement("task-row");
+    row.dataset.scheduleName = String(t.name ?? "");
     row.setAttribute("name", t.name || "task");
     row.setAttribute("status", (t.quarantined || t.storageBlocked) ? "failed" : (t.paused ? "paused" : "running"));
     const when = t.paused
@@ -377,6 +413,18 @@ async function renderTasks() {
       row.setAttribute("retryable", "");
       row.title = t.remediation || "Execution storage was full. Retry or cancel this task.";
     }
+    row.addEventListener("stop", async () => {
+      const run = latestDurableRuns
+        .filter((candidate) => candidate?.scheduleName === t.name && ["running", "settling", "resume-dispatching"].includes(candidate?.phase))
+        .sort((a, b) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0))[0];
+      if (!run?.executionId) return;
+      row.removeAttribute("stoppable");
+      row.setAttribute("time", "Stopping…");
+      const result = await cancelDurableRun(run.executionId, "stopped by owner").catch((error) => ({ ok: false, error: error?.message ?? String(error) }));
+      row.setAttribute("time", result?.ok === true ? "Stopped" : `Stop failed: ${result?.error ?? "unknown error"}`);
+      if (result?.ok === true) row.setAttribute("status", "stopped");
+      else row.setAttribute("stoppable", "");
+    });
     row.addEventListener("toggle-pause", async () => {
       row.setAttribute("time", t.paused ? "Resuming…" : "Pausing…");
       const r = await send(t.paused ? "task.resume" : "task.pause", { name: t.name }).catch(() => null);
@@ -430,6 +478,16 @@ async function renderTasks() {
     });
     tasksEl.append(row);
   }
+  syncTaskStopButtons();
+}
+
+function syncTaskStopButtons() {
+  const runningSchedules = new Set(latestDurableRuns
+    .filter((run) => ["running", "settling", "resume-dispatching"].includes(run?.phase) && run?.scheduleName)
+    .map((run) => run.scheduleName));
+  for (const row of tasksEl?.querySelectorAll?.("task-row") ?? []) {
+    row.toggleAttribute("stoppable", runningSchedules.has(row.dataset.scheduleName));
+  }
 }
 
 /** Open an agent's conversation by canonical ref (the task rows' open path). */
@@ -441,6 +499,14 @@ async function openAgentByRef(ref) {
 }
 
 renderTasks();
+
+subscribeRunRegistry(({ runs }) => {
+  latestDurableRuns = Array.isArray(runs) ? runs : [];
+  syncTaskStopButtons();
+  if (!openAgent) return;
+  const active = actionableRunsForSurface(latestDurableRuns, { agentId: openAgent.id, agentKind: openAgent.kind })[0];
+  if (active) projectConversationRunStatus(historyEl, { state: "running", activity: "Run in progress" });
+});
 
 agentComposer.addEventListener("send", async (ev) => {
   const { text, attachments, agent } = ev.detail;

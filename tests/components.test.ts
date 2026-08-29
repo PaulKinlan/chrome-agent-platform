@@ -687,10 +687,11 @@ Deno.test("task-row: pause and retry are DISTINCT controls — exactly one dispa
   const emissions = [];
   element._emit = (name) => emissions.push(name);
   element._wire();
+  wired.get(".stop")._fn(); // the hard Stop control
   wired.get(".psep")._fn(); // the Pause/Resume control
   wired.get(".retry")._fn(); // the Retry control
   wired.get(".row-open")._fn(); // the open affordance
-  if (JSON.stringify(emissions) !== JSON.stringify(["toggle-pause", "retry", "open"])) {
+  if (JSON.stringify(emissions) !== JSON.stringify(["stop", "toggle-pause", "retry", "open"])) {
     throw new Error(`wrong dispatches: ${JSON.stringify(emissions)}`);
   }
   // Source pin: the pause button must NOT carry the retry class (the r1 defect

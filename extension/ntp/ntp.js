@@ -2621,6 +2621,48 @@ threadConversation?.addEventListener("action", (ev) => {
   openView("options/options.html", "Settings");
 });
 
+async function waitForSurfaceRun(surface, timeoutMs = 1200) {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    // A brand-new task has no threadId until the run response returns. Its
+    // immutable client correlation id is therefore the only exact live owner
+    // during the window where Stop matters most.
+    const correlated = surface.clientCorrelationId
+      ? latestDurableRuns.find((run) => run?.clientCorrelationId === surface.clientCorrelationId &&
+        ["running", "settling", "resume-dispatching"].includes(run?.phase))
+      : null;
+    const run = correlated ?? actionableRunsForSurface(latestDurableRuns, surface)
+      .sort((a, b) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0))[0];
+    if (run?.executionId) return run;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  } while (Date.now() < deadline);
+  return null;
+}
+
+threadConversation?.addEventListener("stop", async (ev) => {
+  if (!ev.target?.classList?.contains?.("live-status")) return;
+  const button = ev.target?._root?.querySelector?.(".stop");
+  if (button) { button.disabled = true; button.textContent = "Stopping…"; }
+  const surface = {
+    threadId: currentAgentId === null ? currentThreadId : null,
+    agentId: currentAgentId,
+    agentKind: currentAgentKind,
+    clientCorrelationId: liveClientRunId,
+  };
+  const run = await waitForSurfaceRun(surface);
+  const result = run
+    ? await cancelDurableRun(run.executionId, "stopped by owner").catch((error) => ({ ok: false, error: error?.message ?? String(error) }))
+    : { ok: false, error: "the run had not started" };
+  if (currentThreadId !== surface.threadId || currentAgentId !== surface.agentId || currentAgentKind !== surface.agentKind) return;
+  if (result?.ok === true) {
+    renderRunStatus({ state: "cancelled" });
+    setStatus("Stopped.");
+  } else {
+    renderRunStatus({ state: "failed", message: `Stop failed — ${result?.error ?? "unknown error"}`, errorCategory: "aborted" });
+    setStatus(`Stop failed: ${result?.error ?? "unknown error"}`, false);
+  }
+});
+
 /** Which run owner last wrote the global #status (so a superseded run's
  * orphaned "running…" is reset exactly once, never clobbering a newer run). */
 let statusOwner = 0;
