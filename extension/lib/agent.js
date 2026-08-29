@@ -20,6 +20,7 @@ import { isToolResultFailure } from "./tool-summary.js";
 import { correctUnsupportedMutationClaims } from "./mutation-claim-check.js";
 import {
   anthropicAuthoritativeSearchRequests,
+  createAnthropicCallReconciler,
   groundingFromProviderMetadata,
   injectLatchedServerTools,
   normalizeAnthropicWebSearchPart,
@@ -510,6 +511,10 @@ export function createAgent({
       if (value && typeof value === "object" && value.stream instanceof ReadableStream) {
         const [consumed, observed] = value.stream.tee();
         (async () => {
+          // Per-CALL reconciliation (the round-2 review): Anthropic's
+          // authoritative usage counter applies to THIS call only — the run
+          // total is the sum of per-call (authoritative ?? observed).
+          const reconciler = createAnthropicCallReconciler();
           const reader = observed.getReader();
           try {
             for (;;) {
@@ -520,22 +525,14 @@ export function createAgent({
               if (grounding) {
                 try { onGrounding(runId, grounding); } catch { /* telemetry */ }
               }
-              // Anthropic's OWN billable-request counter rides the finish
-              // part's usage object (authoritative; supersedes part counts).
-              const authoritative = anthropicAuthoritativeSearchRequests(metadata);
-              if (authoritative) {
-                try { onGrounding(runId, authoritative); } catch { /* telemetry */ }
-              }
-              // Anthropic streams server-tool observations as PARTS (provider-
-              // executed tool-call per search request, source parts for
-              // citations) rather than a providerMetadata blob.
-              const serverPart = normalizeAnthropicWebSearchPart(part);
-              if (serverPart) {
-                try { onGrounding(runId, serverPart); } catch { /* telemetry */ }
-              }
+              reconciler.setAuthoritative(anthropicAuthoritativeSearchRequests(metadata));
+              reconciler.addPart(normalizeAnthropicWebSearchPart(part));
             }
           } catch { /* observation failure must not reach the run */ } finally {
             try { reader.releaseLock(); } catch { /* ignore */ }
+            if (reconciler.seen) {
+              try { onGrounding(runId, reconciler.flush()); } catch { /* telemetry */ }
+            }
           }
         })();
         return { ...value, stream: consumed };
@@ -544,18 +541,18 @@ export function createAgent({
       if (grounding) {
         try { onGrounding(runId, grounding); } catch { /* telemetry */ }
       }
-      const authoritative = anthropicAuthoritativeSearchRequests(ownData(value, "providerMetadata"));
-      if (authoritative) {
-        try { onGrounding(runId, authoritative); } catch { /* telemetry */ }
-      }
       // doGenerate carries Anthropic server-tool observations in the content
-      // array (same part shapes as the stream).
+      // array (same part shapes as the stream) plus the authoritative counter
+      // in the result's providerMetadata.anthropic.usage — one call, one
+      // reconciliation.
+      const reconciler = createAnthropicCallReconciler();
+      reconciler.setAuthoritative(anthropicAuthoritativeSearchRequests(ownData(value, "providerMetadata")));
       const content = Array.isArray(ownData(value, "content")) ? value.content : [];
       for (const part of content) {
-        const serverPart = normalizeAnthropicWebSearchPart(part);
-        if (serverPart) {
-          try { onGrounding(runId, serverPart); } catch { /* telemetry */ }
-        }
+        reconciler.addPart(normalizeAnthropicWebSearchPart(part));
+      }
+      if (reconciler.seen) {
+        try { onGrounding(runId, reconciler.flush()); } catch { /* telemetry */ }
       }
     } catch { /* telemetry must never break a model call */ }
     return value;

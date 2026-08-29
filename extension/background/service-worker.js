@@ -2649,15 +2649,22 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // labelled ESTIMATE (CAP cannot see the provider's free-tier meter).
       const serverGrounding = orch?.serverTooling?.groundingFor?.(executionId) ?? null;
       const serverLatchCount = orch?.serverTooling?.latchCount?.(executionId) ?? 0;
-      if (serverGrounding && serverGrounding.billedSearchRequests > 0) {
+      if (serverGrounding && serverGrounding.queryOccurrenceCount > 0) {
         // A run is pinned to ONE model lane, so a single provider fed this
         // accumulator; bill through that provider's catalogue spec. The billed
-        // count is the provider's own billable-request counter when reported
-        // (authoritative), else stream-observed occurrences — never both.
+        // total is the sum of per-CALL reconciliations (each call: provider's
+        // own usage counter when reported, else stream-observed occurrences).
         const billingSpec = serverToolSpecForProvider(serverGrounding.provider) ?? serverToolSpecForProvider("gemini");
-        const billing = serverToolBillingFor(billingSpec, serverGrounding.billedSearchRequests, {
-          authoritative: serverGrounding.authoritativeSearchRequests != null,
-        });
+        const auth = serverGrounding.authoritativeBilled ?? 0;
+        const obs = serverGrounding.observedBilled ?? 0;
+        const provenance = auth > 0 && obs > 0
+          ? `${auth} provider-reported + ${obs} stream-counted`
+          : auth > 0
+            ? "provider-reported count"
+            : obs > 0
+              ? "counted from the stream"
+              : null;
+        const billing = serverToolBillingFor(billingSpec, serverGrounding.queryOccurrenceCount, { provenance });
         try {
           await recordToolCall(billingSpec.name);
           await recordServerToolUsage(billing);

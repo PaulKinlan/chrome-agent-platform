@@ -337,21 +337,25 @@ export function normalizeGeminiGrounding(groundingMetadata) {
  * response usage object carries server_tool_use.web_search_requests (the
  * provider's OWN billable-request count — authoritative); when it is absent
  * the count is CAP's stream-observed tool-call occurrences (fallback). */
-export function serverToolBillingFor(spec, queryCount, { authoritative = false } = {}) {
+export function serverToolBillingFor(spec, queryCount, { provenance = null } = {}) {
   const count = Math.max(0, Math.trunc(Number(queryCount) || 0));
   const estUsd = count * (Number(spec?.cost?.rateUsd) || 0);
   const label = spec?.provider === "anthropic" ? "Anthropic" : "Gemini";
   const basis = spec?.provider === "anthropic"
     ? "Anthropic's published $10 per 1,000 searches (pricing not re-verified against live documentation); no free tier is documented"
     : "the 5,000/mo free tier is metered provider-side and invisible to CAP";
-  const provenance = authoritative ? "provider-reported count" : "counted from the stream";
+  // Provenance wording is ANTHROPIC-ONLY: the Gemini ledger line stays
+  // byte-identical to slice 1 (no regression).
+  const suffix = spec?.provider === "anthropic" && provenance
+    ? `, ${provenance}`
+    : "";
   return {
     provider: String(spec?.provider ?? ""),
     tool: String(spec?.toolId ?? ""),
     queries: count,
     estimatedUsd: estUsd,
-    authoritative,
-    note: `Web search: ${count} call${count === 1 ? "" : "s"} (${label}, ${provenance}) — est. $${estUsd.toFixed(4)} (ESTIMATE — ${basis})`,
+    provenance: spec?.provider === "anthropic" ? provenance : null,
+    note: `Web search: ${count} call${count === 1 ? "" : "s"} (${label}${suffix}) — est. $${estUsd.toFixed(4)} (ESTIMATE — ${basis})`,
   };
 }
 
@@ -365,8 +369,12 @@ export function serverToolSpecForProvider(provider) {
  * SDK-verified shapes (@ai-sdk/anthropic 4.0.45):
  *   - tool-call with providerExecuted + toolName "web_search" — one per
  *     EXECUTED search request; input is a JSON string "{\"query\": ...}".
- *     This is the billing signal: Anthropic meters per search request and the
- *     SDK does not surface the usage counter, so occurrences are counted here.
+ *     This is the FALLBACK billing signal: Anthropic's response usage object
+ *     carries the authoritative billable-request count (server_tool_use.
+ *     web_search_requests, preserved through the SDK's looseObject usage
+ *     schema); per-call reconciliation (createAnthropicCallReconciler)
+ *     prefers the provider counter and uses these occurrences only when a
+ *     call reports none.
  *   - source with sourceType "url" — a cited source. Inline citations carry
  *     providerMetadata.anthropic.citedText; plain search-result sources do
  *     not. Dedup by URL happens in the accumulator.
@@ -463,6 +471,59 @@ export function anthropicAuthoritativeSearchRequests(providerMetadata) {
   });
 }
 
+/** Per-MODEL-CALL billing reconciliation for Anthropic web search. Anthropic
+ * bills per search REQUEST and reports the authoritative count in each
+ * response's usage object — but only per call. A run makes several calls and
+ * some may carry no counter (e.g. an older beta), so the reconciliation must
+ * be PER CALL: each call bills (authoritative ?? observed-occurrences), and
+ * the run total is the SUM of the per-call bills. A run-global flip would
+ * underbill mixed runs (a counter-less call's observed searches would be
+ * swallowed by an earlier call's counter). */
+export function createAnthropicCallReconciler() {
+  let observedCount = 0;
+  let authoritative = null;
+  const queries = [];
+  const citations = [];
+  return Object.freeze({
+    /** Feed a normalizeAnthropicWebSearchPart fragment (tool-call/source/
+     * tool-result observations). Null is a no-op. */
+    addPart(fragment) {
+      if (!fragment || fragment.provider !== "anthropic") return;
+      observedCount += fragment.rawQueryCount;
+      for (const q of fragment.queries ?? []) queries.push(q);
+      for (const c of fragment.citations ?? []) citations.push(c);
+    },
+    /** Feed an anthropicAuthoritativeSearchRequests fragment (the finish
+     * part's / result's usage counter). Last writer wins within a call (the
+     * finish part arrives once). */
+    setAuthoritative(fragment) {
+      if (Number.isSafeInteger(fragment?.authoritativeSearchRequests) &&
+          fragment.authoritativeSearchRequests >= 0) {
+        authoritative = fragment.authoritativeSearchRequests;
+      }
+    },
+    /** The reconciled per-call fragment: billed = authoritative ?? observed.
+     * `reconciled: true` tells the run accumulator the count is FINAL (it may
+     * legitimately be lower than queries.length — e.g. provider says zero). */
+    flush() {
+      const billed = authoritative ?? observedCount;
+      return Object.freeze({
+        provider: "anthropic",
+        citations: Object.freeze(citations),
+        rawQueryCount: billed,
+        queries: Object.freeze(queries),
+        searchEntryPointHtml: null,
+        reconciled: true,
+        authoritativeCount: authoritative,
+        observedCount,
+      });
+    },
+    get seen() {
+      return observedCount > 0 || authoritative != null || queries.length > 0 || citations.length > 0;
+    },
+  });
+}
+
 /** Build one bounded per-run grounding accumulator. Query OCCURRENCES remain
  * distinct for cost accounting; presentation queries and citations are deduped.
  * The provider can execute the same query on later model calls and bill each
@@ -473,8 +534,8 @@ export function anthropicAuthoritativeSearchRequests(providerMetadata) {
 export function createServerGroundingAccumulator({ maxQueryOccurrences = 128, maxCitations = 128 } = {}) {
   const queryOccurrences = [];
   let queryOccurrenceCount = 0;
-  let authoritativeSum = 0;
-  let authoritativeSeen = false;
+  let authoritativeBilled = 0;
+  let observedBilled = 0;
   const displayQueries = new Set();
   const citations = new Map();
   const providers = new Set();
@@ -483,17 +544,25 @@ export function createServerGroundingAccumulator({ maxQueryOccurrences = 128, ma
       if (typeof normalized?.provider === "string" && normalized.provider) {
         providers.add(normalized.provider);
       }
-      if (Number.isSafeInteger(normalized?.authoritativeSearchRequests) &&
-          normalized.authoritativeSearchRequests >= 0) {
-        authoritativeSeen = true;
-        authoritativeSum = Math.min(Number.MAX_SAFE_INTEGER, authoritativeSum + normalized.authoritativeSearchRequests);
-      }
       const retainedQueries = Array.isArray(normalized?.queries) ? normalized.queries : [];
-      const reportedCount = Number.isSafeInteger(normalized?.rawQueryCount) &&
-          normalized.rawQueryCount >= retainedQueries.length
+      // A reconciled fragment's count is FINAL (per-call authoritative ??
+      // observed — it may legitimately be lower than the retained queries).
+      // Otherwise keep the raw-vs-retained max rule (billing counts every
+      // provider-reported occurrence even when text retention is capped).
+      const rawCount = Number.isSafeInteger(normalized?.rawQueryCount) && normalized.rawQueryCount >= 0
         ? normalized.rawQueryCount
         : retainedQueries.length;
+      const reportedCount = normalized?.reconciled === true
+        ? rawCount
+        : Math.max(rawCount, retainedQueries.length);
       queryOccurrenceCount = Math.min(Number.MAX_SAFE_INTEGER, queryOccurrenceCount + reportedCount);
+      if (normalized?.reconciled === true) {
+        if (Number.isSafeInteger(normalized.authoritativeCount)) {
+          authoritativeBilled = Math.min(Number.MAX_SAFE_INTEGER, authoritativeBilled + reportedCount);
+        } else {
+          observedBilled = Math.min(Number.MAX_SAFE_INTEGER, observedBilled + reportedCount);
+        }
+      }
       for (const query of retainedQueries) {
         if (queryOccurrences.length < maxQueryOccurrences) queryOccurrences.push(query);
         if (displayQueries.size < maxQueryOccurrences) displayQueries.add(query);
@@ -507,12 +576,12 @@ export function createServerGroundingAccumulator({ maxQueryOccurrences = 128, ma
         provider: providers.size === 1 ? [...providers][0] : null,
         providers: Object.freeze([...providers]),
         queryOccurrenceCount,
-        // The provider's own billable-request count (summed across this run's
-        // calls), or null when the provider never reported one.
-        authoritativeSearchRequests: authoritativeSeen ? authoritativeSum : null,
-        // Billing authority: the provider-reported counter when present, else
-        // stream-observed occurrences. NEVER their sum.
-        billedSearchRequests: authoritativeSeen ? authoritativeSum : queryOccurrenceCount,
+        // Provenance split of the billed total: reconciled per-call fragments
+        // report whether each call's bill came from the provider's own usage
+        // counter or from stream-observed occurrences. Both zero for
+        // non-reconciled (Gemini) feeds.
+        authoritativeBilled,
+        observedBilled,
         queries: Object.freeze([...queryOccurrences]),
         displayQueries: Object.freeze([...displayQueries]),
         citations: Object.freeze([...citations.values()]),

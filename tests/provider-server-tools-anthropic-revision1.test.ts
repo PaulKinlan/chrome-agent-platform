@@ -1,17 +1,16 @@
-// Revision-1 falsification tests for slice 2 (the BLOCK findings): imports
-// ONLY seams that already exist on candidate b294cabe, so each test FAILS ON
-// THE R0 CANDIDATE for a behavioral reason (no authoritative counter, no
-// billed/observed split, unanchored model gate, no pricing caveat).
+// Revision-1 tests for slice 2 (authoritative counter, anchored gate, pricing
+// caveat), UPDATED in r2 to the per-call reconciliation mechanism (the r1
+// run-global flip underbilled mixed runs — see revision2 REDs).
 // @ts-nocheck — dynamic shapes, matching the repo's test pattern.
 
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   anthropicModelSupportsServerTools,
+  createAnthropicCallReconciler,
   createServerGroundingAccumulator,
   normalizeAnthropicWebSearchPart,
   PROVIDER_SERVER_TOOL_SPECS,
   serverToolBillingFor,
-  serverToolSpecForProvider,
 } from "../extension/lib/provider-server-tools.js";
 
 const ANTHROPIC_SPEC = PROVIDER_SERVER_TOOL_SPECS.find((s) => s.provider === "anthropic");
@@ -23,60 +22,70 @@ const SEARCH_CALL = {
   providerExecuted: true,
 };
 
-Deno.test("r1 RED: the accumulator exposes the authoritative counter and bills it over observed parts", () => {
+Deno.test("r1: within ONE call the provider counter supersedes observed parts (never summed)", () => {
+  const call = createAnthropicCallReconciler();
+  call.addPart(normalizeAnthropicWebSearchPart(SEARCH_CALL));
+  call.addPart(normalizeAnthropicWebSearchPart(SEARCH_CALL));
+  call.setAuthoritative({ authoritativeSearchRequests: 5 });
+  const fragment = call.flush();
+  assertEquals(fragment.rawQueryCount, 5, "provider count wins within the call — 5, not 5+2");
+  assertEquals(fragment.reconciled, true);
+  assertEquals(fragment.authoritativeCount, 5);
+  assertEquals(fragment.observedCount, 2);
   const acc = createServerGroundingAccumulator();
-  // Two searches observed as stream parts…
-  acc.add(normalizeAnthropicWebSearchPart(SEARCH_CALL));
-  acc.add(normalizeAnthropicWebSearchPart(SEARCH_CALL));
-  // …but the provider's OWN usage object says FIVE billable requests happened
-  // (the SDK preserves server_tool_use.web_search_requests via z.looseObject).
-  acc.add({
-    provider: "anthropic",
-    queries: [],
-    rawQueryCount: 0,
-    citations: [],
-    authoritativeSearchRequests: 5,
-  });
-  const snap = acc.snapshot();
-  assertEquals(snap.authoritativeSearchRequests, 5, "authoritative sum rides the snapshot");
-  assertEquals(snap.queryOccurrenceCount, 2, "observed occurrences stay tracked separately");
-  assertEquals(snap.billedSearchRequests, 5, "billing takes the provider count — never the sum (5+2=7 would double-count)");
+  acc.add(fragment);
+  assertEquals(acc.snapshot().queryOccurrenceCount, 5);
 });
 
-Deno.test("r1 RED: observed occurrences are the billing fallback when the provider reports nothing", () => {
+Deno.test("r1: observed occurrences are the billing fallback when a call reports no counter", () => {
+  const call = createAnthropicCallReconciler();
+  call.addPart(normalizeAnthropicWebSearchPart(SEARCH_CALL));
+  call.addPart(normalizeAnthropicWebSearchPart(SEARCH_CALL));
+  const fragment = call.flush();
+  assertEquals(fragment.rawQueryCount, 2);
+  assertEquals(fragment.authoritativeCount, null);
   const acc = createServerGroundingAccumulator();
-  acc.add(normalizeAnthropicWebSearchPart(SEARCH_CALL));
-  acc.add(normalizeAnthropicWebSearchPart(SEARCH_CALL));
-  const snap = acc.snapshot();
-  assertEquals(snap.authoritativeSearchRequests, null);
-  assertEquals(snap.billedSearchRequests, 2);
+  acc.add(fragment);
+  assertEquals(acc.snapshot().queryOccurrenceCount, 2);
+  assertEquals(acc.snapshot().observedBilled, 2);
+  assertEquals(acc.snapshot().authoritativeBilled, 0);
 });
 
-Deno.test("r1 RED: an authoritative ZERO is honored (searches declared but none executed bill nothing)", () => {
+Deno.test("r1: an authoritative ZERO is honored (searches declared but none executed bill nothing)", () => {
+  const call = createAnthropicCallReconciler();
+  call.addPart(normalizeAnthropicWebSearchPart(SEARCH_CALL));
+  call.setAuthoritative({ authoritativeSearchRequests: 0 });
+  const fragment = call.flush();
+  assertEquals(fragment.rawQueryCount, 0, "provider says zero billable — the observed part is not billed");
   const acc = createServerGroundingAccumulator();
-  acc.add(normalizeAnthropicWebSearchPart(SEARCH_CALL));
-  acc.add({ provider: "anthropic", queries: [], rawQueryCount: 0, citations: [], authoritativeSearchRequests: 0 });
-  const snap = acc.snapshot();
-  assertEquals(snap.authoritativeSearchRequests, 0);
-  assertEquals(snap.billedSearchRequests, 0, "provider says zero billable — the observed part is not billed");
+  acc.add(fragment);
+  // reconciled counts are verbatim — the max(raw, retained) rule must NOT
+  // resurrect the observed query.
+  assertEquals(acc.snapshot().queryOccurrenceCount, 0);
 });
 
-Deno.test("r1 RED: authoritative counts SUM across a run's model calls", () => {
+Deno.test("r1: per-call bills SUM across a run's model calls", () => {
   const acc = createServerGroundingAccumulator();
-  acc.add({ provider: "anthropic", queries: [], rawQueryCount: 0, citations: [], authoritativeSearchRequests: 2 });
-  acc.add({ provider: "anthropic", queries: [], rawQueryCount: 0, citations: [], authoritativeSearchRequests: 3 });
-  assertEquals(acc.snapshot().billedSearchRequests, 5);
-});
-
-Deno.test("r1 RED: hostile authoritative shapes are ignored, not trusted", () => {
-  const acc = createServerGroundingAccumulator();
-  for (const bad of [-1, 1.5, "3", NaN, Infinity, null, undefined]) {
-    acc.add({ provider: "anthropic", queries: [], rawQueryCount: 0, citations: [], authoritativeSearchRequests: bad });
+  for (const n of [2, 3]) {
+    const call = createAnthropicCallReconciler();
+    call.setAuthoritative({ authoritativeSearchRequests: n });
+    acc.add(call.flush());
   }
-  assertEquals(acc.snapshot().authoritativeSearchRequests, null);
+  assertEquals(acc.snapshot().queryOccurrenceCount, 5);
+  assertEquals(acc.snapshot().authoritativeBilled, 5);
 });
 
-Deno.test("r1 RED: the model gate is anchored — near-miss ids fail closed", () => {
+Deno.test("r1: hostile authoritative shapes are ignored, not trusted", () => {
+  const call = createAnthropicCallReconciler();
+  for (const bad of [-1, 1.5, "3", NaN, Infinity, null, undefined, {}]) {
+    call.setAuthoritative({ authoritativeSearchRequests: bad });
+  }
+  call.setAuthoritative(null);
+  call.addPart(normalizeAnthropicWebSearchPart(SEARCH_CALL));
+  assertEquals(call.flush().rawQueryCount, 1, "no valid counter — observed fallback");
+});
+
+Deno.test("r1: the model gate is anchored — near-miss ids fail closed", () => {
   assert(!anthropicModelSupportsServerTools("claude-sonnet-4000"));
   assert(!anthropicModelSupportsServerTools("claude-3-7-sonnet-not-a-model"));
   assert(!anthropicModelSupportsServerTools("claude-3-5-haiku-invalid"));
@@ -84,9 +93,18 @@ Deno.test("r1 RED: the model gate is anchored — near-miss ids fail closed", ()
   assert(!anthropicModelSupportsServerTools("claude-sonnet-4-beta"));
 });
 
-Deno.test("r1 RED: the persisted billing note carries the pricing re-verification caveat", () => {
-  const billing = serverToolBillingFor(ANTHROPIC_SPEC, 1, { authoritative: true });
+Deno.test("r1: the persisted billing note carries the pricing re-verification caveat", () => {
+  const billing = serverToolBillingFor(ANTHROPIC_SPEC, 1, { provenance: "provider-reported count" });
   assertStringIncludes(billing.note, "pricing not re-verified against live documentation");
   // And the descriptor's cost card carries it too.
   assertStringIncludes(ANTHROPIC_SPEC.cost.freeTierNote, "pricing not re-verified");
+});
+
+Deno.test("r1: an untouched call reconciles to nothing and is never emitted", () => {
+  const call = createAnthropicCallReconciler();
+  assertEquals(call.seen, false);
+  call.addPart(null);
+  assertEquals(call.seen, false);
+  call.addPart(normalizeAnthropicWebSearchPart(SEARCH_CALL));
+  assertEquals(call.seen, true);
 });

@@ -10,8 +10,11 @@
 //     (toolName "web_search", input JSON "{\"query\":...}", providerExecuted:
 //     true), tool-result parts (result: web_search_result[]), and source parts
 //     (sourceType "url"; inline citations carry providerMetadata.anthropic.
-//     citedText). The SDK does NOT surface Anthropic's server_tool_use usage
-//     counter, so billing counts one tool-call part per executed search.
+//     citedText). The SDK ALSO preserves Anthropic's authoritative billable
+//     counter (providerMetadata.anthropic.usage.server_tool_use.
+//     web_search_requests, via the looseObject usage schema) on BOTH the
+//     stream finish part and the doGenerate result — billing reconciles PER
+//     CALL: the provider counter when reported, part occurrences as fallback.
 // Behavioral REDs against pre-existing seams live in
 // provider-server-tools-anthropic-red.test.ts.
 // @ts-nocheck — dynamic protocol envelopes, matching the repo's test pattern.
@@ -20,6 +23,7 @@ import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   anthropicAuthoritativeSearchRequests,
   anthropicModelSupportsServerTools,
+  createAnthropicCallReconciler,
   createServerGroundingAccumulator,
   createServerToolLatchRegistry,
   injectLatchedServerTools,
@@ -240,6 +244,45 @@ Deno.test("anthropic-server: web_search tool-results surface unindexed source ci
   assertEquals(normalizeAnthropicWebSearchPart({ type: "tool-result", toolName: "web_search", result: [] }), null);
 });
 
+// ── per-call reconciliation (r2: billing is per model call, not run-global) ──
+
+Deno.test("anthropic-server: MIXED multi-call run bills each call's (authoritative ?? observed) — never a run-global flip", () => {
+  // The round-2 reviewer's scenario: call 1 reports a counter (3) while two
+  // search parts were observed; call 2 reports NO counter and four searches
+  // were observed. The honest bill is 3 + 4 = 7 — a run-global authoritative
+  // flip would bill 3 (call 2's searches silently unbilled).
+  const acc = createServerGroundingAccumulator();
+  const call1 = createAnthropicCallReconciler();
+  call1.addPart(normalizeAnthropicWebSearchPart(SEARCH_CALL));
+  call1.addPart(normalizeAnthropicWebSearchPart(SEARCH_CALL));
+  call1.setAuthoritative(anthropicAuthoritativeSearchRequests({
+    anthropic: { usage: { server_tool_use: { web_search_requests: 3 } } },
+  }));
+  acc.add(call1.flush());
+  const call2 = createAnthropicCallReconciler();
+  for (let i = 0; i < 4; i++) call2.addPart(normalizeAnthropicWebSearchPart(SEARCH_CALL));
+  acc.add(call2.flush());
+  const snap = acc.snapshot();
+  assertEquals(snap.queryOccurrenceCount, 7, "3 provider-reported + 4 stream-observed = 7");
+  assertEquals(snap.authoritativeBilled, 3);
+  assertEquals(snap.observedBilled, 4);
+  assertEquals(snap.provider, "anthropic");
+});
+
+Deno.test("anthropic-server: per-call flush carries the call's queries and citations through", () => {
+  const call = createAnthropicCallReconciler();
+  call.addPart(normalizeAnthropicWebSearchPart(SEARCH_CALL));
+  call.addPart(normalizeAnthropicWebSearchPart({
+    type: "source", sourceType: "url", id: "s1", url: "https://example.com/x", title: "X",
+    providerMetadata: { anthropic: { citedText: "claim" } },
+  }));
+  call.setAuthoritative({ authoritativeSearchRequests: 1 });
+  const fragment = call.flush();
+  assertEquals(fragment.queries, ["chrome agent platform news"]);
+  assertEquals(fragment.citations.length, 1);
+  assertEquals(fragment.rawQueryCount, 1);
+});
+
 // ── accumulation + billing ──────────────────────────────────────────────────
 
 Deno.test("anthropic-server: the accumulator bills every executed request and tags the provider", () => {
@@ -259,7 +302,7 @@ Deno.test("anthropic-server: the accumulator bills every executed request and ta
 });
 
 Deno.test("anthropic-server: billing is spec-driven and honestly labelled", () => {
-  const billing = serverToolBillingFor(ANTHROPIC_SPEC, 3, { authoritative: true });
+  const billing = serverToolBillingFor(ANTHROPIC_SPEC, 3, { provenance: "provider-reported count" });
   assertEquals(billing.provider, "anthropic");
   assertEquals(billing.tool, "web_search");
   assertEquals(billing.queries, 3);
@@ -269,16 +312,18 @@ Deno.test("anthropic-server: billing is spec-driven and honestly labelled", () =
   assertStringIncludes(billing.note, "$10 per 1,000 searches");
   // r1 (P1-3): the persisted ledger note carries the re-verification caveat.
   assertStringIncludes(billing.note, "pricing not re-verified against live documentation");
-  const observed = serverToolBillingFor(ANTHROPIC_SPEC, 2);
+  const observed = serverToolBillingFor(ANTHROPIC_SPEC, 2, { provenance: "counted from the stream" });
   assertStringIncludes(observed.note, "(Anthropic, counted from the stream)");
-  // The Gemini line stays deterministic (provenance suffix is the only r1 change).
+  // r2 (P1-2): the Gemini line is BYTE-IDENTICAL to slice 1 — provenance
+  // wording never touches it.
   const gemini = serverToolBillingFor(serverToolSpecForProvider("gemini"), 2);
   assertEquals(gemini.provider, "gemini");
   assertEquals(gemini.tool, "google_search");
   assertEquals(gemini.estimatedUsd, 0.028);
+  assertEquals(gemini.provenance, null);
   assertEquals(
     gemini.note,
-    "Web search: 2 calls (Gemini, counted from the stream) — est. $0.0280 (ESTIMATE — the 5,000/mo free tier is metered provider-side and invisible to CAP)",
+    "Web search: 2 calls (Gemini) — est. $0.0280 (ESTIMATE — the 5,000/mo free tier is metered provider-side and invisible to CAP)",
   );
 });
 
