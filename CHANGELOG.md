@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.407] — 2026-08-29
+- chore(CAP-FB-20260829-ARTIFACT-PREVIEW-01): claim preview delivery bug
+
 ## [0.2.406] — 2026-08-29
 - Scheduled agents now keep their conversation: when a background agent runs on its timer, the work it did shows up in that agent's chat — previously it vanished
 

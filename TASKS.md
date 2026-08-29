@@ -170,6 +170,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 | Priority | Status | Task | What it is |
 |---|---|---|---|
+| P0 | OPEN | [`CAP-FB-20260829-ARTIFACT-PREVIEW-01`](#cap-fb-20260829-artifact-preview-01-generated-ui-artifact-preview-never-receives-its-content) | Generated-UI artifact preview never receives its content |
 | P0 | IN_REVIEW | [`CAP-FB-20260829-MIC-DEAD-MACOS-01`](#cap-fb-20260829-mic-dead-macos-01-mic-button-is-completely-dead-on-macos-after-the-waveform-change) | Mic button is completely dead on macOS after the waveform change |
 | P0 | DONE | [`CAP-FB-20260829-MAIN-GATES-RED-03`](#cap-fb-20260829-main-gates-red-03-the-journey-suite-is-red-on-main-49-checks-still-assert-the-pre-p0-all-optional-permission-model) | Journey suite red on main — 49 checks assert the pre-P0 permission model |
 | P0 | IN_REVIEW | [`CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01`](#cap-fb-20260829-tool-argument-robustness-01-tool-call-argument-robustness-and-schema-accuracy) | Tool-call argument robustness and schema accuracy |
@@ -230,6 +231,28 @@ evidence every other task depends on).
 
 
 ## Active
+
+## [CAP-FB-20260829-ARTIFACT-PREVIEW-01] Generated-UI artifact preview never receives its content
+
+- Feedback: 2026-08-29 — owner reported that a successful create_asset HTML result renders “Preview unavailable — the content never arrived” in the chat's double-iframe preview
+- Updated: 2026-08-29 22:10 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: implementation lane
+- Workspace: active (local path private)
+- Branch: `cap-artifact-preview`
+- Base: `cebb4601`
+- Candidate: —
+- Shipping: —
+- Acceptance: a successful create_asset HTML result rendered in a real loaded-extension chat delivers the complete stored document into the nested preview frame; the result envelope and asset identity remain intact
+- Review: independent acceptance review required
+- Gates: focused unit test with observed RED/GREEN; loaded-extension create/get/chat/nested-frame KAT with screenshot; full unit suite; developer build
+- Blockers: —
+- Next: fix the shared message-bubble delivery seam and prove the exact 21,250-byte create_asset case in a loaded extension
+- Recover: `git log --oneline cebb4601..cap-artifact-preview`
+- History:
+  - 2026-08-29 22:10 UTC — ownership: unassigned → implementation lane; reproduced the exact class in a loaded extension: asset.create and asset.get both preserve all 21,250 bytes, while the chat host stays at “Preparing restricted preview…” because no payload arrives
 
 ## [CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01] Tool-call argument robustness and schema accuracy
 
