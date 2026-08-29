@@ -71,14 +71,47 @@ const CLAIMS = [
  * (the name words before "agent" must not read as a third-party subject).
  */
 const NEGATION_TAIL = /(?:haven['’]?t|hasn['’]?t|hadn['’]?t|didn['’]?t|don['’]?t|won['’]?t|wouldn['’]?t|couldn['’]?t|can['’]?t|cannot|not|never)(?:\s+[\w'’-]+){0,3}\s*$/i;
-const FIRST_PERSON = /\b(?:i|we|us|our|ours)\b/ig;
-const ACTION_REPORT_WORDS_ONLY = /^[\s,;:—–-]*(?:(?:and|then|also|next|finally|so|just|now|the|a|an|your|my|our|successfully|done|all\s+set)\b[\s,;:—–-]*)*$/i;
-const SUBORDINATE_THIRD_PARTY_TAIL = /\b(?:that|because|while|when|although|if)\s+(?!(?:i|we|us|our|ours)\b)(?:[\w'’-]+\s+){0,4}[\w'’-]+\s*$/i;
+// Only subject-position first-person forms are evidence. In particular, `us`
+// is an object pronoun (and case-insensitively collides with the country US),
+// while `ours` cannot govern the mutation verb. `our` remains for the pinned
+// possessive-subject shape "Our team created…".
+const FIRST_PERSON = /\b(?:i|we|our)\b/ig;
+const CLAUSE_COORDINATOR = /\b(?:and|but)(?:\s+then)?\b/ig;
+const DETERMINER_SUBJECT = /\b(?:the|a|an|another|this|these|those|some|any|each|every)\s+(?:[\w'’-]+\s+)*[\w'’-]+\s*$/i;
+const WORD = /[A-Za-z][\w'’-]*/g;
 
 function lastFirstPersonTail(prefix) {
   let end = -1;
   for (const match of prefix.matchAll(FIRST_PERSON)) end = (match.index ?? 0) + match[0].length;
   return end < 0 ? null : prefix.slice(end);
+}
+
+// A coordinated follow-on action has an empty subject position: in
+// "I created X and then deleted the agent", only the words after "and then"
+// can govern "deleted".
+function currentClauseTail(prefix) {
+  let end = -1;
+  for (const match of prefix.matchAll(CLAUSE_COORDINATOR)) end = (match.index ?? 0) + match[0].length;
+  return end < 0 ? prefix : prefix.slice(end);
+}
+
+/**
+ * Whether the clause before the mutation verb ends in an explicit third-party
+ * subject. This is structural rather than a list of complement conjunctions:
+ * an article/determiner-led noun phrase or a proper-name token can govern the
+ * verb at any distance. A bare modifier prefix has neither, so action reports
+ * such as "Already created…" and "Successfully created…" remain subjectless.
+ */
+function hasExplicitThirdPartySubject(prefix) {
+  const clause = prefix.trim();
+  if (!clause) return false;
+  if (DETERMINER_SUBJECT.test(clause)) return true;
+  const words = [...clause.matchAll(WORD)];
+  return words.some((match, index) => {
+    const word = match[0];
+    return /^[A-Z]{2,}$/.test(word) || /[a-z][A-Z]/.test(word) ||
+      (index > 0 && /^[A-Z][a-z]/.test(word));
+  });
 }
 
 function genuineSelfClaim(text, matchIndex, matchedText) {
@@ -94,10 +127,11 @@ function genuineSelfClaim(text, matchIndex, matchedText) {
   if (/^\s*(?:the\s+|your\s+)?(?:agent|task)\b/i.test(matchedText)) return true;
   const firstPersonTail = lastFirstPersonTail(prefix);
   if (firstPersonTail !== null) {
-    if (SUBORDINATE_THIRD_PARTY_TAIL.test(firstPersonTail)) return false;
-    return true;
+    return !hasExplicitThirdPartySubject(currentClauseTail(firstPersonTail));
   }
-  return ACTION_REPORT_WORDS_ONLY.test(prefix);
+  // No explicit subject means the mutation verb heads a terse action report;
+  // do not maintain an inevitably incomplete adverb/modifier whitelist.
+  return !hasExplicitThirdPartySubject(prefix);
 }
 
 export function correctUnsupportedMutationClaims(text, successfulTools) {

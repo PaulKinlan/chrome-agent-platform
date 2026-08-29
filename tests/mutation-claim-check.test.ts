@@ -136,6 +136,39 @@ Deno.test("claim-check: first-person framing does not override a subordinate thi
   }
 });
 
+Deno.test("claim-check: a subjectless modifier-led action report is corrected", () => {
+  const { corrections } = correctUnsupportedMutationClaims("Already created the agent.", []);
+  assertEquals(corrections.length, 1);
+});
+
+Deno.test("claim-check: country US is not first-person evidence", () => {
+  const text = "US researchers created an agent.";
+  const out = correctUnsupportedMutationClaims(text, []);
+  assertEquals(out.corrections.length, 0);
+  assertEquals(out.text, text);
+});
+
+Deno.test("claim-check: object-pronoun us is not first-person evidence", () => {
+  const text = "The vendor asked us to verify the tool created an agent.";
+  const out = correctUnsupportedMutationClaims(text, []);
+  assertEquals(out.corrections.length, 0);
+  assertEquals(out.text, text);
+});
+
+Deno.test("claim-check: omitted-that complement keeps its third-party subject", () => {
+  const text = "I confirmed OpenAI created an agent.";
+  const out = correctUnsupportedMutationClaims(text, []);
+  assertEquals(out.corrections.length, 0);
+  assertEquals(out.text, text);
+});
+
+Deno.test("claim-check: long complement keeps its third-party subject", () => {
+  const text = "I confirmed that the external OpenAI platform research team created an agent.";
+  const out = correctUnsupportedMutationClaims(text, []);
+  assertEquals(out.corrections.length, 0);
+  assertEquals(out.text, text);
+});
+
 // ── Run-level: the correction must reach the AUTHORITATIVE returned result ──
 // (the conversation paints the SW's res.result, not the progress `done` event),
 // a FAILED nested lazy dispatch must not back a claim, and the success set
