@@ -75,13 +75,25 @@ function redactResultText(s) {
   return out;
 }
 
-/** Recursively scrub every string leaf of a decoded result structure. */
-function redactResultValue(v) {
+/** Recursively scrub every string leaf of a decoded result structure.
+ * Path-scoped cycle guard (same contract as redactSecrets): a cyclic result
+ * degrades to "[Circular]" instead of throwing RangeError; shared (DAG)
+ * subtrees are still scrubbed at every site. */
+function redactResultValue(v, seen = new WeakSet()) {
   if (typeof v === "string") return redactResultText(v);
-  if (Array.isArray(v)) return v.map(redactResultValue);
+  if (Array.isArray(v)) {
+    if (seen.has(v)) return "[Circular]";
+    seen.add(v);
+    const out = v.map((x) => redactResultValue(x, seen));
+    seen.delete(v);
+    return out;
+  }
   if (v && typeof v === "object") {
+    if (seen.has(v)) return "[Circular]";
+    seen.add(v);
     const out = {};
-    for (const [k, val] of Object.entries(v)) out[k] = redactResultValue(val);
+    for (const [k, val] of Object.entries(v)) out[k] = redactResultValue(val, seen);
+    seen.delete(v);
     return out;
   }
   return v;

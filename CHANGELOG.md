@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.350] — 2026-08-29
+- fix(activity): round-5 redaction — cyclic results can never crash the redaction seam
+
 ## [0.2.349] — 2026-08-29
 - fix(activity): round-4 redaction — decoded results scrub EVERY string leaf (nested Bearer), envelopes unwrap iteratively (depth-capped, cap residue text-scrubbed), bare credential shapes (sk-/AKIA/ghp_/xox/AIza/JWT) scrub in result data, and scheduled-script journal writes route through redactToolResult before persist — 5 unit pins + 3 KAT probes RED on 82a7cd71
 

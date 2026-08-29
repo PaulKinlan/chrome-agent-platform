@@ -228,6 +228,42 @@ Deno.test("SW persistence: scheduled-script results route through redactToolResu
   assert(sw.includes("redactToolResult(scriptResultRaw)"), "the scheduled-script result/error must be redacted before persist (round-4 P1-d)");
 });
 
+// ── round-5 P1: cyclic structures can never crash redaction ──────────────
+// FALSIFICATION: the two cyclic pins are RED on bedc76cc — redactSecrets and
+// redactResultValue recurse with no cycle tracking, so a self-referential
+// result throws RangeError (coordinator probe confirmed). The DAG pin stays
+// GREEN pre-fix and guards the guard: path-scoped cycle tracking must not
+// drop legitimately-shared subtrees.
+
+Deno.test("redactToolResult: a SELF-REFERENTIAL envelope is redacted, never throws", async () => {
+  const { redactToolResult } = await import("../extension/lib/tool-summary.js");
+  const cyc = { modelContent: null, note: "Bearer sk-live-CYCSECRET123" };
+  cyc.modelContent = cyc;
+  const d = redactToolResult(cyc);
+  const s = JSON.stringify(d);
+  assert(!s.includes("CYCSECRET123"), `the secret leaf must still scrub: ${s}`);
+  assert(s.includes("[Circular]"), `the cycle must degrade to a safe placeholder: ${s}`);
+});
+
+Deno.test("redactToolResult: a cycle reachable TWO LEVELS deep is redacted, never throws", async () => {
+  const { redactToolResult } = await import("../extension/lib/tool-summary.js");
+  const a = { data: { token: "sk-live-DEEP2SECRET", child: null } };
+  a.data.child = a;
+  const d = redactToolResult(a);
+  const s = JSON.stringify(d);
+  assert(!s.includes("DEEP2SECRET"), `a secret on the cycle path must still redact: ${s}`);
+  assert(s.includes("[Circular]"), s);
+});
+
+Deno.test("redactToolResult: a SHARED (DAG, non-cyclic) reference is redacted at BOTH sites", async () => {
+  const { redactToolResult } = await import("../extension/lib/tool-summary.js");
+  const shared = { value: "sk-live-DAGSECRET12" };
+  const d = redactToolResult({ first: shared, second: shared });
+  const s = JSON.stringify(d);
+  assert(!s.includes("DAGSECRET12"), `both references to a shared subtree must scrub: ${s}`);
+  assert(!s.includes("[Circular]"), `a non-cyclic shared reference is NOT a cycle: ${s}`);
+});
+
 // ── P1-a: covered refreshes are DEFERRED (dirty flag + flush on HUB return)
 
 Deno.test("ntp: a covered refresh marks the log dirty; returning to HUB flushes it", () => {
