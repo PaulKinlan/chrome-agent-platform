@@ -187,7 +187,8 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
 - [ ] **macOS dictation diagnostics** (`CAP-FB-20260829-MIC-DEAD-MACOS-01`) —
       the immediate-start fix is landed; the follow-up candidate distinguishes Web
       Speech's OS-default input from a persisted meter-only device, exposes a live
-      multi-mic check without cluttering single-mic machines, and strengthens silent/
+      multi-mic check without cluttering single-mic machines, re-enumerates after the
+      first grant, rejects stale out-of-order meter streams, and strengthens silent/
       audio-capture/fallback diagnostics. Mic KAT, unit, security and build gates pass;
       review and the unrelated red main Chrome-journey baseline remain.
 - [ ] **Create-agent dialog consistency** (`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`) —

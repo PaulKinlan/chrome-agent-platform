@@ -886,6 +886,8 @@ class MicButton extends Component {
     this._previewTimer = 0;
     this._previewGen = 0;
     this._deviceRows = new Map();
+    this._enumeratedAfterGrant = false;
+    this._meterRequestGen = 0;
     // Start-generation counter: every start() attempt bumps it; stop() and
     // disconnectedCallback() bump it too. A start whose getUserMedia resolves
     // AFTER its generation was superseded releases the late stream and exits
@@ -1061,7 +1063,7 @@ class MicButton extends Component {
         if (this._listening) {
           this._stopMeter();
           this._startMeter();
-          void this._adoptMeterStream(this._startGen, this._requestMicStream());
+          this._requestAndAdoptMeter(this._startGen);
         }
       }
     }
@@ -1180,10 +1182,19 @@ class MicButton extends Component {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.getTracks().forEach((track) => track.stop());
+      this._refreshDevicesAfterGrant();
     } catch {
       this._emit("mic-error", { message: "Microphone access was not granted, so device names and live checks may be unavailable. Speech transcription still follows the OS default input." });
     }
-    await this._refreshDevices(false);
+  }
+  _refreshDevicesAfterGrant() {
+    if (this._enumeratedAfterGrant) return;
+    this._enumeratedAfterGrant = true;
+    this._labelsRequested = true;
+    // Before permission Chrome may expose only an unlabeled `default` alias.
+    // Re-enumerate exactly once after the first successful capture, when the
+    // physical inputs and their labels become available.
+    void this._refreshDevices(false);
   }
   async _selectDevice(deviceId) {
     if (!this._devices.some((d) => d.deviceId === deviceId)) return;
@@ -1193,7 +1204,7 @@ class MicButton extends Component {
     if (this._listening) {
       this._stopMeter();
       this._startMeter();
-      void this._adoptMeterStream(this._startGen, this._requestMicStream());
+      this._requestAndAdoptMeter(this._startGen);
     }
     await this._previewDevice(deviceId);
   }
@@ -1285,9 +1296,9 @@ class MicButton extends Component {
    *  its own audio capture and must never wait for this promise: on macOS the
    *  getUserMedia permission prompt can reject or remain pending indefinitely.
    *  Returns true (no mediaDevices API), false (meter unavailable), or the
-   *  MediaStream. The stream is adopted only after the generation check, so a
-   *  superseded/cancelled start releases a late stream instead of leaking it. */
-  async _requestMicStream() {
+   *  MediaStream. The caller captures the selected device identity before this
+   *  async request starts, so a later selection cannot rewrite its meaning. */
+  async _requestMicStream(deviceId) {
     const md = navigator.mediaDevices;
     if (!md?.getUserMedia) return true; // no API — let SpeechRecognition try
     try {
@@ -1295,20 +1306,26 @@ class MicButton extends Component {
       // AnalyserNode source for the live waveform. Tracks are stopped in
       // _stopMeter (called from stop()/disconnectedCallback) — the mic is
       // never left open after the state reverts.
-      const audio = this._selectedDeviceId
-        ? { deviceId: { exact: this._selectedDeviceId } }
+      const audio = deviceId
+        ? { deviceId: { exact: deviceId } }
         : true;
       return await md.getUserMedia({ audio });
     } catch {
       return false;
     }
   }
-  async _adoptMeterStream(gen, streamPromise) {
+  _requestAndAdoptMeter(startGen) {
+    const meterGen = ++this._meterRequestGen;
+    const deviceId = this._selectedDeviceId;
+    void this._adoptMeterStream(startGen, meterGen, deviceId, this._requestMicStream(deviceId));
+  }
+  async _adoptMeterStream(startGen, meterGen, deviceId, streamPromise) {
     const stream = await streamPromise;
     const stopTracks = (s) => {
       if (s && s !== true) { try { s.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ } }
     };
-    if (gen !== this._startGen || !this._listening) {
+    if (startGen !== this._startGen || meterGen !== this._meterRequestGen ||
+        deviceId !== this._selectedDeviceId || !this._listening) {
       stopTracks(stream);
       return;
     }
@@ -1329,6 +1346,7 @@ class MicButton extends Component {
       this.stop();
       return;
     }
+    this._refreshDevicesAfterGrant();
     if (this._mediaStream && this._mediaStream !== stream) stopTracks(this._mediaStream);
     this._mediaStream = stream;
     this._startMeter();
@@ -1395,6 +1413,7 @@ class MicButton extends Component {
     }
   }
   _stopMeter() {
+    this._meterRequestGen++; // invalidate every unresolved meter acquisition
     this._setWaveformMode(null, "");
     const wave = this._root.querySelector?.(".wave");
     wave?.classList.remove?.("live");
@@ -1512,8 +1531,7 @@ class MicButton extends Component {
     }
     // Recognition is primary and is already running. Kick the decorative
     // meter request off inside the same click gesture, but never await it.
-    const streamPromise = this._requestMicStream();
-    void this._adoptMeterStream(gen, streamPromise);
+    this._requestAndAdoptMeter(gen);
   }
   stop() {
     this._startGen++; // invalidate any in-flight start (send-while-pending)

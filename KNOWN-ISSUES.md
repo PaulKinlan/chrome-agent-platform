@@ -43,10 +43,12 @@ and requires the scheduled prompt in the conversation.
 The landed decoupling fix starts SpeechRecognition immediately, but the owner still gets no
 text and has multiple possible inputs. Web Speech cannot accept a `deviceId`: it follows the
 OS default, while only the decorative `getUserMedia` meter can be retargeted. The follow-up
-candidate exposes an anchored picker only for two or more physical inputs, persists a
-meter-only selection, gives each selection a brief real level check, handles disconnects,
-and makes no-speech/audio-capture/fallback states name that OS-default-versus-meter split
-with a System Settings recovery path.
+candidate exposes an anchored picker only for two or more physical inputs, re-enumerates
+once after the first successful capture so pre-permission default-only enumeration cannot
+hide it, persists a meter-only selection, gives each selection a brief real level check,
+and fences out-of-order reselection/devicechange streams with their own request generation.
+No-speech/audio-capture/fallback states name the OS-default-versus-meter split with a
+System Settings recovery path.
 
 ### Infrastructure — worktree heads carried work that no ref was holding
 `CAP-FB-20260821-WORKTREE-HYGIENE-01` · P0 · OPEN (loss risk closed; cleanup awaits an owner decision)

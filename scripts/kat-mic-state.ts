@@ -430,7 +430,11 @@ await sleep(400);
 const deviceFeature = await evalJs(`(async () => {
   const md = navigator.mediaDevices;
   window.__origEnumerate = md.enumerateDevices.bind(md);
+  // Chrome's pre-permission shape: only an unlabeled default alias is visible.
   window.__deviceFixture = [
+    { kind: "audioinput", deviceId: "default", groupId: "", label: "" },
+  ];
+  window.__postGrantDeviceFixture = [
     { kind: "audioinput", deviceId: "default", groupId: "built-in-group", label: "Default — MacBook Microphone" },
     { kind: "audioinput", deviceId: "built-in", groupId: "built-in-group", label: "MacBook Microphone" },
     { kind: "audioinput", deviceId: "usb-mic", groupId: "usb-group", label: "USB Podcast Mic" },
@@ -440,16 +444,46 @@ const deviceFeature = await evalJs(`(async () => {
   md.enumerateDevices = async () => window.__deviceFixture.map((d) => ({ ...d }));
   md.getUserMedia = async (constraints) => {
     window.__pickerGumCalls.push(structuredClone(constraints));
-    return await window.__origGum({ audio: true });
+    const stream = await window.__origGum({ audio: true });
+    window.__deviceFixture = window.__postGrantDeviceFixture;
+    return stream;
   };
   const host = document.querySelector("#composer mic-button");
   if (typeof host._refreshDevices !== "function") return false;
+  host._enumeratedAfterGrant = false;
+  host._labelsRequested = false;
   await host._refreshDevices(false);
   return true;
 })()`);
 check("device picker seam exists on the mic component", deviceFeature === true, deviceFeature);
 if (deviceFeature) {
 await sleep(300);
+const prePermissionPicker = await evalJs(`(() => {
+  const host = document.querySelector("#composer mic-button");
+  return { arrow: !!host.shadowRoot.querySelector(".device-picker"), devices: host._devices.length };
+})()`);
+check("pre-permission enumeration: default alias alone keeps the picker hidden",
+  prePermissionPicker.arrow === false && prePermissionPicker.devices === 0, prePermissionPicker);
+await evalJs(clickMic);
+await sleep(700);
+const postGrantPicker = await evalJs(`(() => {
+  const host = document.querySelector("#composer mic-button");
+  return {
+    arrow: !!host.shadowRoot.querySelector(".device-picker"),
+    devices: host._devices.map((d) => d.label),
+    refreshDone: host._enumeratedAfterGrant,
+  };
+})()`);
+check("first successful dictation meter grant: re-enumerates once and reveals physical microphones",
+  postGrantPicker.arrow && postGrantPicker.refreshDone && postGrantPicker.devices.length === 2 &&
+  postGrantPicker.devices.includes("USB Podcast Mic"), postGrantPicker);
+// Falsification recovery only: let an unfixed component continue far enough to
+// exercise the independent out-of-order meter-request assertion below.
+if (!postGrantPicker.arrow) {
+  await evalJs(`document.querySelector("#composer mic-button")._refreshDevices(false)`);
+  await sleep(300);
+}
+await evalJs(clickMic); await sleep(300);
 const multiPicker = await evalJs(`(() => {
   const host = document.querySelector("#composer mic-button");
   const arrow = host.shadowRoot.querySelector(".device-picker");
@@ -531,9 +565,56 @@ check("dictation meter: selected deviceId is applied to getUserMedia", meterCons
 check("SpeechRecognition truth: the recognition object is not given a deviceId", (await evalJs(`window.__fakeSR.deviceId`)) === undefined);
 await evalJs(clickMic); await sleep(300);
 
+// Three meter requests in one dictation lifetime resolve newest-first, then
+// stale. Only the newest selection may remain adopted; both stale streams must
+// be stopped even when one has the same device identity as the winner.
+const meterRace = await evalJs(`(async () => {
+  const host = document.querySelector("#composer mic-button");
+  if (typeof host._requestAndAdoptMeter !== "function") return { missing: true };
+  const md = navigator.mediaDevices;
+  const source = await window.__origGum({ audio: true });
+  const streams = [source.clone(), source.clone(), source.clone()];
+  const pending = [];
+  md.getUserMedia = () => new Promise((resolve) => pending.push(resolve));
+  host._selectedDeviceId = "built-in";
+  await host.start(); // request 0: built-in
+  host._selectedDeviceId = "usb-mic";
+  host._requestAndAdoptMeter(host._startGen); // request 1: USB
+  host._selectedDeviceId = "built-in";
+  host._requestAndAdoptMeter(host._startGen); // request 2: newest built-in
+  pending[2](streams[2]);
+  await new Promise((r) => setTimeout(r, 200));
+  const newestAdopted = host._mediaStream === streams[2];
+  pending[1](streams[1]);
+  await new Promise((r) => setTimeout(r, 100));
+  pending[0](streams[0]);
+  await new Promise((r) => setTimeout(r, 200));
+  const result = {
+    pending: pending.length,
+    newestAdopted,
+    retainedNewest: host._mediaStream === streams[2],
+    staleUsb: streams[1].getTracks()[0].readyState,
+    staleOriginal: streams[0].getTracks()[0].readyState,
+    newestBeforeStop: streams[2].getTracks()[0].readyState,
+  };
+  host.stop();
+  result.newestAfterStop = streams[2].getTracks()[0].readyState;
+  source.getTracks().forEach((track) => track.stop());
+  md.getUserMedia = async (constraints) => {
+    window.__pickerGumCalls.push(structuredClone(constraints));
+    return await window.__origGum({ audio: true });
+  };
+  return result;
+})()`);
+check("meter request race: out-of-order stale streams stop and cannot replace the latest device",
+  meterRace.pending === 3 && meterRace.newestAdopted && meterRace.retainedNewest &&
+  meterRace.staleUsb === "ended" && meterRace.staleOriginal === "ended" &&
+  meterRace.newestBeforeStop === "live" && meterRace.newestAfterStop === "ended", meterRace);
+
 // Disconnect the selected USB mic. One physical input remains: selection moves
 // honestly, the arrow disappears, and the owner gets an OS-default warning.
 await evalJs(`(() => {
+  document.querySelector("#composer mic-button")._selectedDeviceId = "usb-mic";
   window.__deviceFixture = [
     { kind: "audioinput", deviceId: "default", groupId: "built-in-group", label: "Default — MacBook Microphone" },
     { kind: "audioinput", deviceId: "built-in", groupId: "built-in-group", label: "MacBook Microphone" },

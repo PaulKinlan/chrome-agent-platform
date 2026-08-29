@@ -56,11 +56,14 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   parallel, while rejection leaves dictation running and labels the fallback as
   a non-live animation in the control and composer status. When enumeration finds
   at least two physical audio inputs, a small anchored popover lists them and runs
-  a brief genuine level check on the selected device. That persisted selection
-  drives only `getUserMedia` meter streams: Web Speech has no `deviceId` input and
-  always follows the OS default microphone, which the UI and errors state plainly.
-  Stop, hide, detach, devicechange, pagehide, reduced-motion, and late-stream
-  generation guards remain authoritative.
+  a brief genuine level check on the selected device. Because pre-permission Chrome
+  may expose only an unlabeled default alias, the first successful capture triggers
+  exactly one re-enumeration. That persisted selection drives only `getUserMedia`
+  meter streams: Web Speech has no `deviceId` input and always follows the OS default
+  microphone, which the UI and errors state plainly. A dedicated meter-request
+  generation plus captured device identity rejects out-of-order streams after a
+  reselection or devicechange. Stop, hide, detach, devicechange, pagehide,
+  reduced-motion, and late-stream generation guards remain authoritative.
 - Agent templates render through shared `<agent-template-card>`: name, a two-line
   persona summary, at most three skill badges plus an overflow count, and one
   labelled Use action. Curated starters come first and carry the Starter badge.

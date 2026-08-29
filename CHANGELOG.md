@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.409] — 2026-08-29
+- The microphone picker now appears after the first successful mic grant even when Chrome initially hides device details, and rapidly switching microphones can no longer let an older level stream replace the latest choice
+
 ## [0.2.408] — 2026-08-29
 - If you have multiple microphones, the mic button now offers a live level check for each one and remembers your meter choice; silent dictation errors explain that transcription still follows the macOS default input and show where to change it
 
