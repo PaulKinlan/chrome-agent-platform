@@ -59,9 +59,9 @@ isolated OPFS memory, run history, skills, and avatar.
   md5sum, patch, sha256sum, sha512sum, sort, sqlite3 (bounded query), stat, tail,
   toml2json, touch, tr, tree, truncate, uniq, uuid, wc, xxd. Each ships with an exact
   manifest, CAS digest, SBOM and licence record, verified at build time by a bounded raw
-  import/memory scan. A Rust→`wasm32-wasip1` lane (htmlq, numbat, bttf, sed, jq, xan,
-  tokei) builds and runs with reproducible builds and lock-faithful licence censuses —
-  those seven are **proven, not yet admitted** to the shipped set.
+  import/memory scan. A Rust/C→`wasm32-wasip1` lane (htmlq, numbat, bttf, sed, jq, xan,
+  tokei, awk, date) builds and runs with reproducible builds and lock-faithful licence censuses —
+  those nine are **proven, not yet admitted** to the shipped set.
 - **Usage + cost accounting** — per-call token/cost records against the bundled
   llm-prices table, aggregated per run and per agent. Providers that don't report usage
   are recorded as unknown, never faked.

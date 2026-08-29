@@ -160,11 +160,11 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
       `search_tools` and `execute_tool`, regardless of catalog size. Search authorizes
       nothing; execute accepts only a single-use run-bound reference and revalidates
       identity, permission, grant, document and run authority before and after dispatch.
-- [x] **The Rust→`wasm32-wasip1` lane is standing up** with reproducible builds and
-      lock-faithful licence censuses: **htmlq, numbat, bttf, sed, jq, xan, tokei** all
+- [x] **The Rust/C→`wasm32-wasip1` lane is standing up** with reproducible builds and
+      lock-faithful licence censuses: **htmlq, numbat, bttf, sed, jq, xan, tokei, awk, date** all
       build and run. The `rayon-wasi` serial shim (a `[patch.crates-io]` replacement, no
       tool-source change) is the single unblock for the rayon-dependent tools.
-- [ ] **Those seven are proven, not admitted** — they are build/census proofs under
+- [ ] **Those nine are proven, not admitted** — they are build/census proofs under
       `docs/plans/rust-lane/` and `docs/admissions/`, not entries in the shipped 26.
       Admission is `CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01`.
 - [ ] **Python via Pyodide (`0.2.319`)** — the bounded non-eval tool is built and tested

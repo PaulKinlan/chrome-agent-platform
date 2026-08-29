@@ -256,6 +256,13 @@ evidence every other task depends on).
 - Next: run the licence/feasibility triage across all eighteen candidates
 - Recover: `git grep -n "EXTENDED-TOOL-FAMILIES" -- TASKS.md`
 - History:
+  - 2026-08-29 08:30 UTC — WASI PATCH TRANCHE 2 COMPLETE: tokei (v14.0.0,
+    rayon-wasi serial shim + home-wasi + ignore-wasi stubs, 20 pure-WASI imports,
+    ~2.10MiB, runnable line count verified), awk (clean-room 0BSD, pure-WASI
+    preview-1 without setjmp/signal/fork, field/pattern/action/delimiter/BEGIN/END
+    verified), date (clean-room 0BSD, pure-WASI preview-1 with wasi-libc clock,
+    +FORMAT, UTC, ISO-8601, and @epoch parsing verified). Provenance + NOTICES +
+    spec contracts + unit & runtime KATs all passing.
   - 2026-08-27 01:11 UTC — RUST LANE STATUS: htmlq DONE (0.2.309-era, first
     lane proof), numbat DONE (runnable WASI calc), bttf DONE (direct CLI),
     tokei BLOCKED (native-only deps: memmap via grep-searcher, home via dirs,

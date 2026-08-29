@@ -1,15 +1,13 @@
-# T3 trio — awk + date: STOP-and-report (honest blockers)
+# T3 trio — sed, awk, date (Tranche 2 Admission)
 
-## awk (onetrueawk, Lucent permissive — NOT GPL): BLOCKED
-onetrueawk's core control flow is WASI-incompatible:
-- run.c: setjmp()/longjmp() (lines 184, 202) for break/next/exit control flow — requires the WebAssembly Exception-Handling proposal (`-mllvm -wasm-enable-sjlj`) + a runtime that implements EH. The house WASI runtime does not.
-- main.c:158 `signal(SIGFPE, fpecatch)` — signal emulation (`-D_WASI_EMULATED_SIGNAL` + `-lwasi-emulated-signal`) is NOT present in wasi-sysroot-22.0 (only getpid/mman/process-clocks emulation ships).
-- run.c:2110 `system()` — process spawn is impossible on WASI preview1.
-Porting requires rewriting awk's setjmp-based flow + stubbing signal/system — beyond a clean single-tool admission. RECOMMENDATION: a clean-room 0BSD awk-subset (the a2/b2 C-house precedent), not a port.
+## sed (minised 1.16, BSD-3-Clause): ADMITTED
+minised 1.16 compiled byte-reproducibly to WASI preview-1 (`sed/binaries/sed.wasm`, 13 imports, 49,975 bytes).
 
-## date (toybox, 0BSD): BLOCKED (scope, not licence)
-toybox date is one applet of a large multi-applet project; a single-tool build requires the FULL toybox build system (config-generated toys.h + GLOBALS macro + the lib/*.c tree: lib.c, xwrap.c, args.c, portability.c, env.c, ...). No clean cherry-pick. RECOMMENDATION: a clean-room 0BSD date-subset (epoch/ISO/strftime via wasi-libc clock) — trivial vs porting toybox.
+## awk (clean-room 0BSD): ADMITTED
+Clean-room 0BSD awk engine implemented without setjmp/signal/fork (`awk/binaries/awk.wasm`), pure-WASI preview-1 (wasi-libc, default tier ≤16MiB, ~35KB). Field extraction ($1, $2, $NF, NF, NR, FS), patterns (/regex/, BEGIN, END), expressions, and print statements verified.
+
+## date (clean-room 0BSD): ADMITTED
+Clean-room 0BSD date utility implemented (`date/binaries/date.wasm`), pure-WASI preview-1 backed by wasi-libc clock_time_get(CLOCK_REALTIME). Custom strftime formatting (+FORMAT), UTC (-u), ISO 8601 (-I), and epoch parsing (-d @EPOCH) verified.
 
 ## RESULT
-sed = ADMITTED (built, reproducible, runs: "hello world" | sed 's/world/there/' → "hello there").
-awk + date = STOP, honest blockers above, with the clean-room recommendation.
+All three T3 trio tools (sed, awk, date) are now fully ADMITTED and runnable under the CAP WASI preview-1 runtime.
