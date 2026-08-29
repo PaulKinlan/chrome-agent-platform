@@ -189,6 +189,12 @@ try {
       // a WRAPPED (modelContent double-encoded) result, both carrying secrets.
       { ts: Date.now() - 4, source: "master", agentLabel: "hub", type: "tool-result", id: "t10", callId: "c10", tool: "http_request", result: JSON.stringify({ status: "ok", apiKey: "sk-live-KATRESULT-dont-paint-564738291" }) },
       { ts: Date.now() - 5, source: "master", agentLabel: "hub", type: "tool-result", id: "t11", callId: "c11", tool: "http_request", result: JSON.stringify({ modelContent: JSON.stringify({ count: 3, apiKey: "sk-live-KATWRAPPED-dont-paint-102938475" }) }) },
+      // P1 (round-4): a NESTED string leaf (Bearer inside a plain value), a
+      // BARE credential shape with no keyword context, and a DOUBLE-encoded
+      // envelope — all three survived round-3 redaction (falsification).
+      { ts: Date.now() - 6, source: "master", agentLabel: "hub", type: "tool-result", id: "t12", callId: "c12", tool: "http_request", result: JSON.stringify({ message: "Bearer sk-live-KATNESTED-dont-paint-111111111" }) },
+      { ts: Date.now() - 7, source: "master", agentLabel: "hub", type: "tool-result", id: "t13", callId: "c13", tool: "http_request", result: "fetch ok: sk-live-KATBARE-dont-paint-222222222 key AKIAKATBAREKEYS0000X" },
+      { ts: Date.now() - 8, source: "master", agentLabel: "hub", type: "tool-result", id: "t14", callId: "c14", tool: "http_request", result: JSON.stringify({ modelContent: JSON.stringify({ modelContent: JSON.stringify({ apiKey: "sk-live-KATDEEP-dont-paint-333333333" }) }) }) },
     ];
     return "seeded";
   })()`);
@@ -292,6 +298,29 @@ try {
   check("result-redaction: wrapped modelContent result — summary paints no secret", resultRedaction.wrapped?.summaryLeaks === false && resultRedaction.wrapped?.summaryRedacted === true, resultRedaction.wrapped);
   check("result-redaction: wrapped modelContent result — tree + copy render the redacted decoded view", resultRedaction.wrapped?.treeLeaks === false && resultRedaction.wrapped?.treeRedacted === true && resultRedaction.wrapped?.copyLeaks === false && resultRedaction.wrapped?.copyRedacted === true, resultRedaction.wrapped);
   await shot("05-result-redaction", ui);
+
+  // ── E3. Round-4 shapes: nested string leaf, BARE credential shapes (no
+  //         keyword context), double-encoded envelope — the whole entry
+  //         (summary + detail, any renderer) must never contain the secret.
+  const r4 = await uiEval(`(async () => {
+    const root = document.querySelector("#run-log activity-explorer")?.shadowRoot;
+    const entries = [...root.querySelectorAll("details.aex-entry")];
+    const probe = (prefix, secrets) => {
+      const entry = entries.find((d) => d.dataset.ekey?.startsWith(prefix));
+      if (!entry) return { missing: true };
+      entry.open = true;
+      const text = entry.textContent ?? "";
+      return { leaks: secrets.filter((s) => text.includes(s)), redacted: text.includes("[REDACTED]") };
+    };
+    return {
+      nested: probe("tool-result:t12", ["KATNESTED-dont-paint-111111111"]),
+      bare: probe("tool-result:t13", ["KATBARE-dont-paint-222222222", "AKIAKATBAREKEYS0000X"]),
+      deep: probe("tool-result:t14", ["KATDEEP-dont-paint-333333333"]),
+    };
+  })()`);
+  check("r4-redaction: nested Bearer leaf never paints", r4.nested?.leaks?.length === 0 && r4.nested?.redacted === true, r4.nested);
+  check("r4-redaction: bare sk-/AKIA shapes never paint", r4.bare?.leaks?.length === 0 && r4.bare?.redacted === true, r4.bare);
+  check("r4-redaction: double-encoded envelope's deepest secret never paints", r4.deep?.leaks?.length === 0 && r4.deep?.redacted === true, r4.deep);
 
   // ── D. Seeded refresh() is a no-op (gallery owns its data) ────────────
   const seededRefresh = await uiEval(`(async () => {

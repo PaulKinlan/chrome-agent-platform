@@ -40,50 +40,80 @@ export function summarizeToolResult(name, raw) {
  * it (activity summary line, detail tree, tree copy, journal persistence):
  * unwraps the {modelContent, userSummary} envelope — whose values can
  * themselves be JSON strings (double-encoded) — redacts secret-shaped keys in
- * the decoded structure, and scrubs credential patterns from any remaining
- * plain-text string. A row persisted before write-path redaction can never
- * paint a secret when every reader routes through here. */
+ * the decoded structure, and scrubs credential patterns from ANY string leaf
+ * (tool results are DATA, not prose, so the scrub is stricter than the
+ * prose-collision-safe generic text redactor). A row persisted before
+ * write-path redaction can never paint a secret when every reader routes
+ * through here. */
 export function redactToolResult(raw) {
   const d = unwrapToolResult(raw);
-  if (typeof d === "string") return redactSecretText(d);
-  return redactSecrets(d);
+  if (d == null) return d;
+  // redactSecrets masks secret-NAMED keys; redactResultValue then scrubs
+  // every remaining STRING LEAF (nested Bearer/sk-/AKIA/… shapes survive
+  // redactSecrets by design — it never touches string values).
+  return redactResultValue(redactSecrets(d));
 }
 
-/** Unwrap the {modelContent, userSummary} envelope into the underlying value. */
+/** Result-specific credential SHAPES: bare tokens with no keyword context.
+ * Tool results are data payloads, so the prose-collision caution of
+ * redactSecretText does not apply — a bare sk-…/AKIA… in a result IS a
+ * credential. The generic redactor stays untouched (prose stays safe). */
+const RESULT_SECRET_SHAPES = [
+  /\b(?:sk|rk|pk|key|tok)-[A-Za-z0-9_-]{8,}/g, // sk-live-…, rk-…, tok-…
+  /\bAKIA[0-9A-Z]{16}\b/g, // AWS access key id
+  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}/g, // GitHub tokens
+  /\bxox[baprs]-[A-Za-z0-9-]{8,}/g, // Slack tokens
+  /\bAIza[0-9A-Za-z_-]{20,}/g, // Google API keys
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}/g, // JWTs
+];
+
+/** Scrub credential patterns from result TEXT: the generic keyword-context
+ * redactor first, then the bare-shape pass. */
+function redactResultText(s) {
+  let out = redactSecretText(s);
+  for (const re of RESULT_SECRET_SHAPES) out = out.replace(re, "[REDACTED]");
+  return out;
+}
+
+/** Recursively scrub every string leaf of a decoded result structure. */
+function redactResultValue(v) {
+  if (typeof v === "string") return redactResultText(v);
+  if (Array.isArray(v)) return v.map(redactResultValue);
+  if (v && typeof v === "object") {
+    const out = {};
+    for (const [k, val] of Object.entries(v)) out[k] = redactResultValue(val);
+    return out;
+  }
+  return v;
+}
+
+/** Unwrap the {modelContent, userSummary} envelope into the underlying value.
+ * Envelopes nest (modelContent can itself be a JSON string of another
+ * envelope), so unwrap ITERATIVELY — bounded at MAX_UNWRAP_DEPTH; at the cap
+ * the raw string is returned so the text scrubber still covers it. */
+const MAX_UNWRAP_DEPTH = 4;
 function unwrapToolResult(raw) {
-  if (raw == null) return null;
-  if (typeof raw === "object" && !Array.isArray(raw)) {
-    if (raw.userSummary != null) return coerceJson(raw.userSummary);
-    if (raw.modelContent != null) return coerceJson(raw.modelContent);
-    return raw;
-  }
-  if (typeof raw === "string") {
-    const s = raw.trim();
-    if (!s) return null;
-    if (s.startsWith("{") || s.startsWith("[")) {
-      try {
-        const outer = JSON.parse(s);
-        if (outer && typeof outer === "object" && !Array.isArray(outer)) {
-          if (outer.userSummary != null) return coerceJson(outer.userSummary);
-          if (outer.modelContent != null) return coerceJson(outer.modelContent);
-        }
-        return outer;
-      } catch {
-        return s;
+  let v = raw;
+  for (let depth = 0; depth <= MAX_UNWRAP_DEPTH; depth++) {
+    if (v == null) return null;
+    if (typeof v === "object" && !Array.isArray(v)) {
+      let next = v;
+      if (v.userSummary != null) next = v.userSummary;
+      else if (v.modelContent != null) next = v.modelContent;
+      if (next === v) return v; // no envelope (or a self-reference) — done
+      v = next;
+      continue;
+    }
+    if (typeof v === "string") {
+      const s = v.trim();
+      if (!s) return null;
+      if (s.startsWith("{") || s.startsWith("[")) {
+        if (depth === MAX_UNWRAP_DEPTH) return s; // bounded: scrub as text
+        try { v = JSON.parse(s); continue; } catch { return s; }
       }
+      return s;
     }
-    return s;
-  }
-  return raw;
-}
-
-/** If a value is a JSON string, parse it; otherwise pass it through. */
-function coerceJson(v) {
-  if (typeof v === "string") {
-    const s = v.trim();
-    if (s.startsWith("{") || s.startsWith("[")) {
-      try { return JSON.parse(s); } catch { return v; }
-    }
+    return v;
   }
   return v;
 }

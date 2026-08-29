@@ -730,11 +730,15 @@ async function handleAlarm(alarm) {
         // The scheduled-script journal row matches the tool-journal schema:
         // run instance + callId + ok — a replay restores a FAILED script as an
         // error card (the absent-ok heuristic previously passed "script not
-        // found" / arbitrary error text as success).
+        // found" / arbitrary error text as success). The result/error routes
+        // through the canonical redactToolResult seam BEFORE persistence — a
+        // script that prints a credential must never land in the journal raw.
+        const scriptResultRaw = run?.ok ? (typeof result === "string" ? result : JSON.stringify(result ?? null)) : (run?.error ?? "script failed");
+        const scriptResultSafe = (() => { const r = redactToolResult(scriptResultRaw); return typeof r === "string" ? r : JSON.stringify(r); })();
         journalAppend(backgroundAgentMemory(alarm.name), {
           type: "tool-result", id: alarm.name, run: runInstance, callId: `${alarm.name}:${runInstance}:script:1`,
           tool: `script:${task.scriptId}`,
-          result: run?.ok ? (typeof result === "string" ? result : JSON.stringify(result ?? null)) : (run?.error ?? "script failed"),
+          result: scriptResultSafe,
           ok: run?.ok === true,
         }).catch(() => {});
       } else {

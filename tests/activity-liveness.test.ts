@@ -185,6 +185,49 @@ Deno.test("activity explorer redacts historical values before render + copy", ()
   assert(src.includes("redactSecrets(p.value)"), "the summary-line args preview is redacted too");
 });
 
+// ── round-4 P1s: decoded leaves, nested envelopes, bare shapes, SW persist ──
+// FALSIFICATION: every pin below is RED on 82a7cd71 — decoded objects kept
+// string leaves raw, unwrap stopped after one envelope, bare sk-/AKIA had no
+// pattern, and the scheduled-script journal write bypassed the seam.
+
+Deno.test("redactToolResult: decoded structures scrub NESTED string leaves (Bearer inside a value)", async () => {
+  const { redactToolResult } = await import("../extension/lib/tool-summary.js");
+  const d = redactToolResult(JSON.stringify({ message: "Bearer sk-live-NESTEDSECRET123" }));
+  const s = JSON.stringify(d);
+  assert(!s.includes("NESTEDSECRET123"), `nested string leaf must be scrubbed: ${s}`);
+  assert(s.includes("[REDACTED]"), s);
+});
+
+Deno.test("redactToolResult: double-encoded envelopes unwrap to the deepest payload", async () => {
+  const { redactToolResult } = await import("../extension/lib/tool-summary.js");
+  const deep = JSON.stringify({ modelContent: JSON.stringify({ modelContent: JSON.stringify({ apiKey: "sk-live-DEEPSECRET123" }) }) });
+  const s = JSON.stringify(redactToolResult(deep));
+  assert(!s.includes("DEEPSECRET123"), `deepest payload must be reached + redacted: ${s}`);
+  assert(s.includes("[REDACTED]"), s);
+});
+
+Deno.test("redactToolResult: unwrapping is BOUNDED and the cap still text-scrubs", async () => {
+  const { redactToolResult } = await import("../extension/lib/tool-summary.js");
+  let payload = JSON.stringify({ secret: "sk-live-CAPDEPTHSECRET" });
+  for (let i = 0; i < 12; i++) payload = JSON.stringify({ modelContent: payload });
+  const s = JSON.stringify(redactToolResult(payload));
+  assert(!s.includes("CAPDEPTHSECRET"), `beyond-cap residue must be text-scrubbed: ${s}`);
+});
+
+Deno.test("redactToolResult: BARE credential shapes scrub without keyword context", async () => {
+  const { redactToolResult } = await import("../extension/lib/tool-summary.js");
+  for (const bare of ["sk-live-BARESECRET123", "AKIA1234567890ABCDEF", "ghp_BARETOKENabcdefghij12"]) {
+    const d = redactToolResult(`fetch ok: ${bare}`);
+    assert(typeof d === "string" && !d.includes(bare), `bare shape must scrub: ${d}`);
+    assert(d.includes("[REDACTED]"), String(d));
+  }
+});
+
+Deno.test("SW persistence: scheduled-script results route through redactToolResult before journalAppend", () => {
+  const sw = Deno.readTextFileSync(new URL("../extension/background/service-worker.js", import.meta.url).pathname);
+  assert(sw.includes("redactToolResult(scriptResultRaw)"), "the scheduled-script result/error must be redacted before persist (round-4 P1-d)");
+});
+
 // ── P1-a: covered refreshes are DEFERRED (dirty flag + flush on HUB return)
 
 Deno.test("ntp: a covered refresh marks the log dirty; returning to HUB flushes it", () => {
