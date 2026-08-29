@@ -51,20 +51,39 @@ function ownData(value, key) {
   }
 }
 
+// The lazy execute_tool envelope: { ok, selectedTool, result, … } — found as a
+// direct object, inside an agent-do {modelContent} wrapper, or as a raw JSON
+// string. Returns the envelope object or null for a non-lazy result.
+function lazyEnvelope(result) {
+  if (typeof ownData(result, "selectedTool") === "string") return result;
+  for (const candidate of [ownData(result, "modelContent"), result]) {
+    if (typeof candidate !== "string" || candidate.length > 128 * 1024) continue;
+    const s = candidate.trim();
+    if (!s.startsWith("{")) continue;
+    try {
+      const parsed = JSON.parse(s);
+      if (typeof ownData(parsed, "selectedTool") === "string") return parsed;
+    } catch { /* not a lazy envelope */ }
+  }
+  return null;
+}
+
 function selectedToolFromResult(result) {
-  const direct = ownData(result, "selectedTool");
-  if (typeof direct === "string") return direct;
-  const modelContent = ownData(result, "modelContent");
-  if (typeof modelContent !== "string" || modelContent.length > 128 * 1024) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(modelContent);
-    const selected = ownData(parsed, "selectedTool");
-    return typeof selected === "string" ? selected : null;
-  } catch {
-    return null;
-  }
+  const env = lazyEnvelope(result);
+  const selected = env ? ownData(env, "selectedTool") : null;
+  return typeof selected === "string" ? selected : null;
+}
+
+// Whether a lazy envelope's NESTED selected-tool result failed. The outer
+// dispatch wraps every non-throwing dispatch as { ok:true, selectedTool,
+// result } — a denied/failed real tool arrives as outer ok:true with an inner
+// { ok:false, error }, and must NOT count as a successful mutation.
+function lazyNestedFailure(result) {
+  const env = lazyEnvelope(result);
+  if (!env) return false;
+  const nested = ownData(env, "result");
+  if (nested === undefined || nested === null) return false;
+  return isToolResultFailure(nested);
 }
 
 /** Extract the EXACT system message a provider/model adapter is about to
@@ -670,7 +689,7 @@ export function createAgent({
         const toolKey = `${e.step}:${String(e.toolName ?? "unknown").slice(0, 64)}`;
         const tspan = toolSpans.get(toolKey);
         toolSpans.delete(toolKey);
-        const toolOk = !isToolResultFailure(e.result);
+        const toolOk = !isToolResultFailure(e.result) && !lazyNestedFailure(e.result);
         if (toolOk) { try { okToolNames.add(selectedToolFromResult(e.result) ?? e.toolName); } catch { /* ignore */ } }
         if (tspan) tspan.end(toolOk ? "ok" : "error");
         agentDoLog.debug(`tool ${String(e.toolName ?? "unknown").slice(0, 64)} ${toolOk ? "ok" : "error"} in ${(e.durationMs ?? 0).toFixed ? e.durationMs.toFixed(1) : "?"}ms (step ${e.step})`);
@@ -813,6 +832,10 @@ export function createAgent({
             return { error: "origin re-enrolled before run — task not started" };
           }
         }
+        // The successful-mutation set is PER RUN: a success in run 1 must never
+        // back a fabricated claim in run 2 (the set is allocated once per
+        // createAgent, so it is cleared here at every run start).
+        okToolNames.clear();
         const result = await runAgent.run(task, context, history);
         // Post-run generation revalidation: a re-enroll DURING the model loop
         // must discard the result rather than return it to the caller under a
@@ -833,7 +856,13 @@ export function createAgent({
           err.partialText = result;
           throw err;
         }
-        return result;
+        // The claim-honesty correction must reach the AUTHORITATIVE returned
+        // result, not just the progress `done` event — the conversation paints
+        // the SW's res.result (this return value), so a correction visible only
+        // on the event would be invisible on the primary path.
+        return typeof result === "string"
+          ? correctUnsupportedMutationClaims(result, okToolNames).text
+          : result;
       } finally {
         // DURABLE per-run outcome: capture the abort state BEFORE activeRun is
         // cleared (the SW's isAborted() check runs after orch.run resolves —

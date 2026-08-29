@@ -51,13 +51,55 @@ const CLAIMS = [
  *   corrected text + the list of corrections appended (empty when every claim
  *   is backed, or there are no claims).
  */
+/**
+ * Whether a matched claim phrase is a genuine SELF-CLAIM by the assistant.
+ * The claim regexes deliberately match broad shapes; the prefix before the
+ * match decides whether the assistant is reporting ITS OWN action:
+ * - a negation immediately governing the verb ("I haven't created…",
+ *   "I did not delete…") is a NON-claim;
+ * - a first-person marker anywhere earlier in the sentence ("I…", including
+ *   a coordinated clause — "I created X and then deleted the agent") is a
+ *   self-claim;
+ * - an empty / function-word-only prefix ("Created the agent.", "Done —
+ *   created it") is a terse action report — a self-claim;
+ * - any OTHER subject ("OpenAI created an agent", "The system updated the
+ *   agent") is third-party discussion — NOT a claim about this turn.
+ * Passive agent-subject matches ("The Research Analyst agent was deleted")
+ * already name the agent as the subject, so only the negation check applies
+ * (the name words before "agent" must not read as a third-party subject).
+ */
+const NEGATION_TAIL = /(?:haven['’]?t|hasn['’]?t|hadn['’]?t|didn['’]?t|don['’]?t|won['’]?t|wouldn['’]?t|couldn['’]?t|can['’]?t|cannot|not|never)(?:\s+[\w'’-]+){0,3}\s*$/i;
+const FIRST_PERSON = /\bi\b/i;
+const FUNCTION_WORDS_ONLY = /^[\s,;—–-]*(?:(?:and|then|also|next|finally|so|just|now|the|a|an|your|my)\b[\s,;—–-]*)*$/i;
+
+function genuineSelfClaim(text, matchIndex, matchedText) {
+  // The sentence prefix: from the last sentence boundary before the match.
+  const before = text.slice(0, matchIndex);
+  const boundary = Math.max(before.lastIndexOf("."), before.lastIndexOf("!"), before.lastIndexOf("?"), before.lastIndexOf("\n"));
+  const prefix = before.slice(boundary + 1);
+  if (NEGATION_TAIL.test(prefix)) return false;
+  // The match may itself OPEN with the first-person marker (the claim regexes'
+  // optional leading "I…" group) — then the prefix excludes it.
+  if (/^\s*i\b/i.test(matchedText)) return true;
+  // Passive agent-subject shapes carry the agent as their own subject.
+  if (/^\s*(?:the\s+|your\s+)?(?:agent|task)\b/i.test(matchedText)) return true;
+  if (FIRST_PERSON.test(prefix)) return true;
+  return FUNCTION_WORDS_ONLY.test(prefix);
+}
+
 export function correctUnsupportedMutationClaims(text, successfulTools) {
   const s = typeof text === "string" ? text : "";
   if (!s) return { text: s, corrections: [] };
   const ok = new Set(successfulTools ?? []);
   const corrections = [];
   for (const c of CLAIMS) {
-    if (!c.re.test(s)) continue;
+    const flags = c.re.flags.includes("g") ? c.re.flags : c.re.flags + "g";
+    const re = new RegExp(c.re.source, flags);
+    let claimed = false;
+    for (const m of s.matchAll(re)) {
+      if (genuineSelfClaim(s, m.index ?? 0, m[0])) { claimed = true; break; }
+    }
+    if (!claimed) continue;
     let backed = false;
     for (const t of c.tools) { if (ok.has(t)) { backed = true; break; } }
     if (!backed) {

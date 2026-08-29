@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.351] — 2026-08-29
+- fix(tool-calls): REVISE round 3 — claim corrections reach the returned result; failed nested lazy dispatches no longer back claims; the success set is per-run; negated/third-party statements are not corrected
+
 ## [0.2.350] — 2026-08-29
 - fix(tool-calls): REVISE round 2 — runtime mutation-claim honesty (a final text claiming an agent create/update/delete/schedule with NO successful matching tool call gets a visible correction appended, not just a prompt clause); the durable-log replay keeps the persisted selectedTool through toolRowsFromRunLog (replays showed execute_tool); the gallery resolves again (docs/tool-summary.js synced + the generated import rewritten, with a graph-resolve test); journalJson/safeJsonStringify/leaf truncation are byte-bounded + surrogate-pair-safe via truncateUtf8 (multibyte text exceeded byte budgets and code-unit cuts split pairs). Every new test falsification-proven RED on 68e50482
 
