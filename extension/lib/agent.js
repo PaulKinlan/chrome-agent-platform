@@ -21,6 +21,7 @@ import { correctUnsupportedMutationClaims } from "./mutation-claim-check.js";
 import {
   groundingFromProviderMetadata,
   injectLatchedServerTools,
+  normalizeAnthropicWebSearchPart,
 } from "./provider-server-tools.js";
 import {
   createLazyProviderToolset,
@@ -518,6 +519,13 @@ export function createAgent({
               if (grounding) {
                 try { onGrounding(runId, grounding); } catch { /* telemetry */ }
               }
+              // Anthropic streams server-tool observations as PARTS (provider-
+              // executed tool-call per search request, source parts for
+              // citations) rather than a providerMetadata blob.
+              const serverPart = normalizeAnthropicWebSearchPart(part);
+              if (serverPart) {
+                try { onGrounding(runId, serverPart); } catch { /* telemetry */ }
+              }
             }
           } catch { /* observation failure must not reach the run */ } finally {
             try { reader.releaseLock(); } catch { /* ignore */ }
@@ -528,6 +536,15 @@ export function createAgent({
       const grounding = groundingFromProviderMetadata(ownData(value, "providerMetadata"));
       if (grounding) {
         try { onGrounding(runId, grounding); } catch { /* telemetry */ }
+      }
+      // doGenerate carries Anthropic server-tool observations in the content
+      // array (same part shapes as the stream).
+      const content = Array.isArray(ownData(value, "content")) ? value.content : [];
+      for (const part of content) {
+        const serverPart = normalizeAnthropicWebSearchPart(part);
+        if (serverPart) {
+          try { onGrounding(runId, serverPart); } catch { /* telemetry */ }
+        }
       }
     } catch { /* telemetry must never break a model call */ }
     return value;

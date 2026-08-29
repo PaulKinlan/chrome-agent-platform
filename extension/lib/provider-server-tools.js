@@ -10,6 +10,15 @@
 //
 // Slice 1 scope: Gemini google_search via the NATIVE @ai-sdk/google lane only
 // (the OpenAI-compatible endpoint silently drops provider-defined tools).
+// Slice 2 adds Anthropic web_search via the NATIVE @ai-sdk/anthropic lane
+// (Anthropic's OpenAI-compatible shim likewise does not carry server tools).
+//
+// Where the grounding arrives differs by provider: Gemini attaches a
+// groundingMetadata blob under providerMetadata.google; Anthropic streams
+// provider-executed tool-call parts (one per executed search request — the
+// billing signal), tool-result parts with the search results, and source
+// parts (inline citations carry providerMetadata.anthropic.citedText).
+// normalizeAnthropicWebSearchPart harvests those part shapes.
 //
 // Cost honesty: a latched search spends real money provider-side WITHOUT a
 // Chrome permission, so availability is double-gated (global Settings toggle
@@ -62,6 +71,38 @@ export const PROVIDER_SERVER_TOOL_SPECS = Object.freeze([
       args: Object.freeze({}),
     }),
   }),
+  Object.freeze({
+    toolId: "web_search",
+    provider: "anthropic",
+    lane: "anthropic-native",
+    name: "provider-server/anthropic/web_search",
+    aliases: Object.freeze([
+      "web search",
+      "search the web",
+      "look up online",
+      "current events",
+      "latest news",
+    ]),
+    description:
+      "Anthropic web search, executed by the provider inside the model call. " +
+      "Activate it once per run; the model may then search the web and answer " +
+      "with inline source citations. Costs real money per executed search " +
+      "request (estimate; CAP cannot see the provider's meter).",
+    inputSchema: Object.freeze({ type: "object", additionalProperties: false }),
+    cost: Object.freeze({
+      unit: "per-search-request",
+      rateUsd: 0.01,
+      freeTierNote:
+        "$10 per 1,000 searches per Anthropic's published pricing (no free tier is documented); the provider-side meter is invisible to CAP",
+    }),
+    citations: "source-parts",
+    v2: Object.freeze({
+      type: "provider",
+      id: "anthropic.web_search_20250305",
+      name: "web_search",
+      args: Object.freeze({}),
+    }),
+  }),
 ]);
 
 /** The per-run latch cap: at most this many latch OPERATIONS per run (the
@@ -86,6 +127,15 @@ function ownData(value, key) {
 export function geminiModelSupportsServerTools(modelId) {
   const id = String(modelId ?? "").toLowerCase();
   return /^gemini-[23][-.]/u.test(id) || /^gemini-[23]$/u.test(id);
+}
+
+/** Model support gate for web_search: the documented supported set (Claude
+ * 3.5 Sonnet (Oct 2024 refresh + -latest), 3.5 Haiku, 3.7 Sonnet, and all
+ * Claude 4 families). Older IDs (claude-3-*, claude-3-5-sonnet-20240620)
+ * cannot run server tools — fail closed and extend as Anthropic adds models. */
+export function anthropicModelSupportsServerTools(modelId) {
+  const id = String(modelId ?? "").toLowerCase();
+  return /^claude-(?:opus-4|sonnet-4|haiku-4|3-7-sonnet|3-5-haiku|3-5-sonnet-(?:20241022|latest))/u.test(id);
 }
 
 /** Resolve the catalog availability of one provider-server spec for the
@@ -114,6 +164,12 @@ export function resolveServerToolAvailability({
     return {
       availability: "owner-action-required",
       reason: `model ${String(modelId ?? "unknown")} does not support Google Search grounding (needs Gemini 2.0+)`,
+    };
+  }
+  if (spec.provider === "anthropic" && !anthropicModelSupportsServerTools(modelId)) {
+    return {
+      availability: "owner-action-required",
+      reason: `model ${String(modelId ?? "unknown")} does not support Anthropic web search (needs Claude 3.5 Sonnet (Oct 2024), 3.7 Sonnet, or a Claude 4 model)`,
     };
   }
   if (agentOptIn !== true) {
@@ -264,11 +320,117 @@ export function normalizeGeminiGrounding(groundingMetadata) {
       ? meta.searchEntryPoint.renderedContent.slice(0, 8192)
       : null;
   return Object.freeze({
+    provider: "gemini",
     citations: Object.freeze(citations),
     rawQueryCount,
     queries: Object.freeze(queries),
     searchEntryPointHtml,
   });
+}
+
+/** The per-provider billing descriptor used by the settle path: provider id,
+ * tool id, per-unit rate, and the honest ESTIMATE note (CAP cannot see any
+ * provider-side meter). */
+export function serverToolBillingFor(spec, queryCount) {
+  const count = Math.max(0, Math.trunc(Number(queryCount) || 0));
+  const estUsd = count * (Number(spec?.cost?.rateUsd) || 0);
+  const label = spec?.provider === "anthropic" ? "Anthropic" : "Gemini";
+  const basis = spec?.provider === "anthropic"
+    ? "Anthropic's published $10 per 1,000 searches; no free tier is documented and the provider-side meter is invisible to CAP"
+    : "the 5,000/mo free tier is metered provider-side and invisible to CAP";
+  return {
+    provider: String(spec?.provider ?? ""),
+    tool: String(spec?.toolId ?? ""),
+    queries: count,
+    estimatedUsd: estUsd,
+    note: `Web search: ${count} call${count === 1 ? "" : "s"} (${label}) — est. $${estUsd.toFixed(4)} (ESTIMATE — ${basis})`,
+  };
+}
+
+/** Look up the catalogue spec for a provider id (fail closed: null). */
+export function serverToolSpecForProvider(provider) {
+  return PROVIDER_SERVER_TOOL_SPECS.find((s) => s.provider === provider) ?? null;
+}
+
+/** Normalize ONE LanguageModelV2 part (stream part or doGenerate content part)
+ * from the NATIVE Anthropic lane into the internal fragment shape. The
+ * SDK-verified shapes (@ai-sdk/anthropic 4.0.45):
+ *   - tool-call with providerExecuted + toolName "web_search" — one per
+ *     EXECUTED search request; input is a JSON string "{\"query\": ...}".
+ *     This is the billing signal: Anthropic meters per search request and the
+ *     SDK does not surface the usage counter, so occurrences are counted here.
+ *   - source with sourceType "url" — a cited source. Inline citations carry
+ *     providerMetadata.anthropic.citedText; plain search-result sources do
+ *     not. Dedup by URL happens in the accumulator.
+ *   - tool-result for "web_search" — result entries {type:"web_search_result",
+ *     url, title} are surfaced as unindexed citations (sources never dropped).
+ * Pure; never throws on hostile input (returns null when the part is not an
+ * Anthropic web-search observation). */
+export function normalizeAnthropicWebSearchPart(part) {
+  if (!part || typeof part !== "object") return null;
+  const type = ownData(part, "type");
+  if (type === "tool-call" && ownData(part, "providerExecuted") === true &&
+      ownData(part, "toolName") === "web_search") {
+    let query = null;
+    const input = ownData(part, "input");
+    if (typeof input === "string" && input.length > 0 && input.length <= 4096) {
+      try {
+        const parsed = JSON.parse(input);
+        if (typeof parsed?.query === "string" && parsed.query.trim().length > 0) {
+          query = parsed.query.slice(0, 512);
+        }
+      } catch { /* malformed provider input — no query, still one request */ }
+    }
+    // One tool-call part == one executed (billable) search request, even when
+    // the query text is unavailable.
+    return Object.freeze({
+      provider: "anthropic",
+      citations: Object.freeze([]),
+      rawQueryCount: 1,
+      queries: Object.freeze(query ? [query] : []),
+      searchEntryPointHtml: null,
+    });
+  }
+  if (type === "source" && ownData(part, "sourceType") === "url") {
+    const url = typeof ownData(part, "url") === "string" ? part.url : null;
+    if (!url || !/^https:\/\//u.test(url)) return null;
+    const citedText = ownData(ownData(ownData(part, "providerMetadata"), "anthropic"), "citedText");
+    return Object.freeze({
+      provider: "anthropic",
+      citations: Object.freeze([Object.freeze({
+        url: url.slice(0, 1024),
+        title: String(ownData(part, "title") ?? "").slice(0, 256),
+        citedText: typeof citedText === "string" ? citedText.slice(0, 512) : undefined,
+        provider: "anthropic",
+      })]),
+      rawQueryCount: 0,
+      queries: Object.freeze([]),
+      searchEntryPointHtml: null,
+    });
+  }
+  if (type === "tool-result" && ownData(part, "toolName") === "web_search") {
+    const results = Array.isArray(ownData(part, "result")) ? part.result : [];
+    const citations = [];
+    for (const r of results.slice(0, 32)) {
+      if (ownData(r, "type") !== "web_search_result") continue;
+      const url = typeof ownData(r, "url") === "string" ? r.url : null;
+      if (!url || !/^https:\/\//u.test(url)) continue;
+      citations.push(Object.freeze({
+        url: url.slice(0, 1024),
+        title: String(ownData(r, "title") ?? "").slice(0, 256),
+        provider: "anthropic",
+      }));
+    }
+    if (citations.length === 0) return null;
+    return Object.freeze({
+      provider: "anthropic",
+      citations: Object.freeze(citations),
+      rawQueryCount: 0,
+      queries: Object.freeze([]),
+      searchEntryPointHtml: null,
+    });
+  }
+  return null;
 }
 
 /** Build one bounded per-run grounding accumulator. Query OCCURRENCES remain
@@ -280,8 +442,12 @@ export function createServerGroundingAccumulator({ maxQueryOccurrences = 128, ma
   let queryOccurrenceCount = 0;
   const displayQueries = new Set();
   const citations = new Map();
+  const providers = new Set();
   return Object.freeze({
     add(normalized) {
+      if (typeof normalized?.provider === "string" && normalized.provider) {
+        providers.add(normalized.provider);
+      }
       const retainedQueries = Array.isArray(normalized?.queries) ? normalized.queries : [];
       const reportedCount = Number.isSafeInteger(normalized?.rawQueryCount) &&
           normalized.rawQueryCount >= retainedQueries.length
@@ -298,6 +464,8 @@ export function createServerGroundingAccumulator({ maxQueryOccurrences = 128, ma
     },
     snapshot() {
       return Object.freeze({
+        provider: providers.size === 1 ? [...providers][0] : null,
+        providers: Object.freeze([...providers]),
         queryOccurrenceCount,
         queries: Object.freeze([...queryOccurrences]),
         displayQueries: Object.freeze([...displayQueries]),

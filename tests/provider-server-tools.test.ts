@@ -303,7 +303,9 @@ Deno.test("provider-server: records expose the descriptor for a ready gemini age
     latchRegistry: registry,
     sourceGeneration: "test-gen",
   });
-  assertEquals(readyRecords.length, 1);
+  // Slice 2: BOTH provider specs are returned (gemini first); the gemini
+  // record is the ready one on a gemini lane.
+  assertEquals(readyRecords.length, 2);
   assertEquals(readyRecords[0].descriptorInput.sourceKind, "provider-server");
   assertEquals(readyRecords[0].descriptorInput.availability, "ready");
   assertEquals(readyRecords[0].descriptorInput.name, "provider-server/gemini/google_search");
@@ -409,8 +411,8 @@ Deno.test("provider-server: the descriptor is discoverable through the REAL lazy
   assert(names.includes("provider-server/gemini/google_search"));
   const listed = await protocol.list({}, ctx);
   assertEquals(listed.ok, true);
-  assertEquals(listed.counts.providerServer, 1);
-  assertEquals((listed.tools["provider-server"] ?? []).length, 1);
+  assertEquals(listed.counts.providerServer, 2);
+  assertEquals((listed.tools["provider-server"] ?? []).length, 2);
 });
 
 Deno.test("provider-server: a non-gemini run sees the descriptor as owner-action-required through the REAL search", async () => {
