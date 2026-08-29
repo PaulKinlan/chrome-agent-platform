@@ -25,7 +25,12 @@ const DELEGATE_MARKER = "@demo-delegate";
 // bug. A credential-carrying value rides the args to prove journal/UI
 // redaction end-to-end.
 const CREATE_AGENT_MARKER = "@demo-create-agent";
-// @demo-slow: the FIRST model step is delayed (a deterministic mid-run window
+// @demo-delegate-agent <agentIdOrName>: the demo model issues a REAL
+// delegate_to_agent management call (agent→agent delegation, G5) targeting a
+// NAMED agent; the child runs "@demo-tools" in its OWN sandbox and the final
+// text reflects the delegation result. Checked BEFORE the site-delegation
+// marker (the strings share a prefix).
+const AGENT_DELEGATE_MARKER = "@demo-delegate-agent";// @demo-slow: the FIRST model step is delayed (a deterministic mid-run window
 // for abort tests).
 const SLOW_MARKER = "@demo-slow";
 /** Public deterministic cancellation window used by the demo provider. This is
@@ -51,6 +56,68 @@ function abortableDelay(ms, signal) {
 
 function wantsDelegate(prompt) {
   return !!latestRunSlice(prompt)?.marker?.delegate;
+}
+
+function wantsAgentDelegate(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.delegateAgent;
+}
+
+function delegateAgentRef(prompt) {
+  // Scope to the SAME run slice the marker check uses — the last user message
+  // of the WHOLE prompt can be an agent-do continuation without the marker.
+  const sliceText = extractText(latestRunSlice(prompt)?.slice ?? (Array.isArray(prompt) ? prompt : []));
+  const m = sliceText.match(new RegExp(AGENT_DELEGATE_MARKER + "\\s+([\\w.-]+)"));
+  return m ? m[1] : "demo-agent";
+}
+
+// The task forwarded to a delegation CHILD: everything from the next "@demo"
+// marker AFTER the agent ref (enables chains like
+// "@demo-delegate-agent mid @demo-delegate-agent leaf" → mid receives
+// "@demo-delegate-agent leaf", and slow children via
+// "@demo-delegate-agent helper @demo-tools @demo-slow"); plain delegations
+// keep the historical "@demo-tools" child task. "@demo-delegate-slow" is a
+// PARENT-SIDE alias: the child receives "@demo-tools @demo-slow" WITHOUT the
+// parent's own model seeing the slow marker (the parent must stay fast so a
+// cancellation probe can observe the live child).
+function delegateChildTask(prompt) {
+  const sliceText = extractText(latestRunSlice(prompt)?.slice ?? (Array.isArray(prompt) ? prompt : []));
+  if (new RegExp(AGENT_DELEGATE_MARKER + "\\s+[\\w.-]+\\s+@demo-delegate-slow\\b").test(sliceText)) {
+    return "@demo-tools @demo-slow";
+  }
+  const m = sliceText.match(new RegExp(AGENT_DELEGATE_MARKER + "\\s+[\\w.-]+\\s+(@demo[\\s\\S]{0,300})"));
+  return m ? m[1].trim().slice(0, 300) : "@demo-tools";
+}
+
+// "@demo-delegate-parallel <agentA> <agentB>" — ONE model step returns TWO
+// delegate tool calls, driving agent-do's concurrent same-step execution.
+function delegateParallelRefs(prompt) {
+  const sliceText = extractText(latestRunSlice(prompt)?.slice ?? (Array.isArray(prompt) ? prompt : []));
+  const m = sliceText.match(/@demo-delegate-parallel(?:-slow)?\s+([\w.-]+)\s+([\w.-]+)/);
+  return m ? [m[1], m[2]] : null;
+}
+
+function wantsSlowFirstParallelDelegate(prompt) {
+  return /@demo-delegate-parallel-slow\b/.test(extractText(latestRunSlice(prompt)?.slice ?? (Array.isArray(prompt) ? prompt : [])));
+}
+
+// "@demo-delegate-x<N>" (after the agent marker) — N sequential delegations
+// in one run, driving the combined-budget exhaustion path. N ≥ 4 gives the
+// children the LONGER tools plan ("@demo-tools-x2") so a budget denial is
+// reachable below the descendant cap.
+export function delegateMultiCount(prompt) {
+  const sliceText = extractText(latestRunSlice(prompt)?.slice ?? (Array.isArray(prompt) ? prompt : []));
+  // Accept only the marker boundary or agent-do's exact concatenated
+  // continuation — never arbitrary suffixes such as x3garbage.
+  const m = sliceText.match(/@demo-delegate-x(\d)(?=$|\s|Continue working)/);
+  return m ? Math.min(9, Number.parseInt(m[1], 10)) : 0;
+}
+
+// "@demo-tools-x2" — the doubled tools plan (12 actions ≈ 6 loop iterations),
+// so a delegated child can consume its full iteration cap in budget tests.
+export function wantsDemoToolsX2(prompt) {
+  const sliceText = extractText(latestRunSlice(prompt)?.slice ?? (Array.isArray(prompt) ? prompt : []));
+  // Accept the exact concatenated continuation, but not x20/x2garbage.
+  return /@demo-tools-x2(?=$|\s|Continue working)/.test(sliceText);
 }
 
 function delegateAgentId(prompt) {
@@ -142,7 +209,8 @@ function latestRunSlice(prompt) {
     slice: msgs.slice(lastIdx),
     marker: {
       tools: lastUser.includes(TOOLS_MARKER),
-      delegate: lastUser.includes(DELEGATE_MARKER),
+      delegate: lastUser.includes(DELEGATE_MARKER) && !lastUser.includes(AGENT_DELEGATE_MARKER),
+      delegateAgent: lastUser.includes(AGENT_DELEGATE_MARKER),
       createAgent: lastUser.includes(CREATE_AGENT_MARKER),
     },
   };
@@ -172,8 +240,69 @@ function latestSelectionRef(prompt) {
   }
 }
 
-function lazyDemoCall(prompt, { delegate = false } = {}) {
+function lazyDemoCall(prompt, { delegate = false, delegateAgent = false } = {}) {
   const step = toolResultCount(prompt);
+  if (delegateAgent) {
+    const parallelRefs = delegateParallelRefs(prompt);
+    if (parallelRefs) {
+      // TWO searches (a selectionRef is single-use — one per sibling), then
+      // TWO executes in ONE step, driving agent-do's concurrent same-step
+      // execution (the parallel-sibling delegation path).
+      const toolParts = runSlice(prompt)
+        .filter((m) => m?.role === "tool")
+        .flatMap((m) => (Array.isArray(m.content) ? m.content : [m.content]))
+        .filter((p) => p && typeof p === "object");
+      const searches = toolParts.filter((p) => p.toolName === "search_tools").length;
+      const executes = toolParts.filter((p) => p.toolName === "execute_tool").length;
+      if (executes >= 2) return null;
+      if (searches < 2) {
+        return [0, 1].map((i) => ({ id: `search_delegate_${i}`, name: "search_tools", input: { query: "delegate_to_agent", limit: 1 } }));
+      }
+      const refs = runSlice(prompt)
+        .filter((m) => m?.role === "tool")
+        .flatMap((m) => (Array.isArray(m.content) ? m.content : [m.content]))
+        .map((p) => JSON.stringify(p).match(/sel_[a-f0-9]{36}/u)?.[0])
+        .filter(Boolean);
+      const [refA, refB] = [refs.at(-2), refs.at(-1)];
+      return refA && refB
+        ? [
+          { id: "execute_delegate_a", name: "execute_tool", input: { selectionRef: refA, arguments: { agent: parallelRefs[0], task: wantsSlowFirstParallelDelegate(prompt) ? "@demo-tools @demo-slow" : "@demo-tools" } } },
+          { id: "execute_delegate_b", name: "execute_tool", input: { selectionRef: refB, arguments: { agent: parallelRefs[1], task: "@demo-tools" } } },
+        ]
+        : null;
+    }
+    const wantMulti = delegateMultiCount(prompt);
+    if (wantMulti > 0) {
+      // search → delegate → … → final: N SEQUENTIAL child runs against one
+      // budget. Round detection reads the tool parts' toolName (result
+      // messages can carry more than one part, so a naive result count
+      // miscounts rounds).
+      const toolParts = runSlice(prompt)
+        .filter((m) => m?.role === "tool")
+        .flatMap((m) => (Array.isArray(m.content) ? m.content : [m.content]))
+        .filter((p) => p && typeof p === "object");
+      const searches = toolParts.filter((p) => p.toolName === "search_tools").length;
+      const executes = toolParts.filter((p) => p.toolName === "execute_tool").length;
+      if (searches >= wantMulti && executes >= wantMulti) return null;
+      if (searches <= executes) {
+        return { id: `search_delegate_${searches}`, name: "search_tools", input: { query: "delegate_to_agent", limit: 1 } };
+      }
+      const selectionRef = latestSelectionRef(prompt);
+      return selectionRef
+        ? { id: `execute_delegate_${executes}`, name: "execute_tool", input: { selectionRef, arguments: { agent: delegateAgentRef(prompt), task: wantMulti >= 3 ? "@demo-tools-x2" : "@demo-tools" } } }
+        : null;
+    }
+    if (step === 0) {
+      return { id: "search_delegate_agent", name: "search_tools", input: { query: "delegate_to_agent", limit: 1 } };
+    }
+    if (step === 1) {
+      const selectionRef = latestSelectionRef(prompt);
+      return selectionRef
+        ? { id: "execute_delegate_agent", name: "execute_tool", input: { selectionRef, arguments: { agent: delegateAgentRef(prompt), task: delegateChildTask(prompt) } } }
+        : null;
+    }
+    return null;
+  }
   if (delegate) {
     if (step === 0) {
       return { id: "search_delegate", name: "search_tools", input: { query: "delegate_task", limit: 1 } };
@@ -210,7 +339,8 @@ function lazyDemoCall(prompt, { delegate = false } = {}) {
     { type: "search", tool: "memory_get" },
     { type: "execute", args: { key: "demo" } },
   ];
-  const action = plan[step];
+  const fullPlan = wantsDemoToolsX2(prompt) ? [...plan, ...plan] : plan;
+  const action = fullPlan[step];
   if (!action) return null;
   if (action.type === "search") {
     return { id: `search_${step}`, name: "search_tools", input: { query: action.tool, limit: 1 } };
@@ -259,6 +389,13 @@ function delegateAlreadyFinal(prompt) {
     m.content.some((p) => p?.type === "text" && /\[demo model\] Delegation/.test(p.text ?? "")));
 }
 
+function agentDelegateAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" &&
+    Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && /\[demo model\] Agent delegation/.test(p.text ?? "")));
+}
+
 // A deterministic, RICH tool-call payload (nested arrays/objects/unicode — the
 // structured renderer's showcase + the journal's real persisted rows).
 const DEMO_ARGS = {
@@ -285,21 +422,23 @@ export function createDemoModel() {
       const text = extractText(options.prompt);
       const createAgentDone = wantsCreateAgent(options.prompt) &&
         (createAgentFinal(options.prompt) || toolResultCount(options.prompt) >= 2);
-      const lazyCall = wantsDelegate(options.prompt)
-        ? lazyDemoCall(options.prompt, { delegate: true })
+      const lazyCall = wantsAgentDelegate(options.prompt)
+        ? lazyDemoCall(options.prompt, { delegateAgent: true })
+        : wantsDelegate(options.prompt)        ? lazyDemoCall(options.prompt, { delegate: true })
         : wantsCreateAgent(options.prompt) && !createAgentDone
         ? lazyDemoCall(options.prompt)
         : wantsDemoTools(options.prompt) && !demoAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt)
         : null;
       if (lazyCall) {
+        const lazyCalls = Array.isArray(lazyCall) ? lazyCall : [lazyCall];
         return Promise.resolve({
-          content: [{
+          content: lazyCalls.map((call) => ({
             type: "tool-call",
-            toolCallId: `call_demo_${lazyCall.id}`,
-            toolName: lazyCall.name,
-            input: JSON.stringify(lazyCall.input),
-          }],
+            toolCallId: `call_demo_${call.id}`,
+            toolName: call.name,
+            input: JSON.stringify(call.input),
+          })),
           finishReason: "tool-calls",
           usage: { inputTokens: 8, outputTokens: 12, totalTokens: 20 },
           warnings: [],
@@ -337,6 +476,7 @@ export function createDemoModel() {
       const text = extractText(options.prompt);
       const wantsTools = wantsDemoTools(options.prompt);
       const wantsDel = wantsDelegate(options.prompt);
+      const wantsADel = wantsAgentDelegate(options.prompt);
       const id = `demo-${crypto.randomUUID?.() ?? Math.random()}`;
       const usage = { inputTokens: 8, outputTokens: 32, totalTokens: 40 };
       const stream = new ReadableStream({
@@ -345,20 +485,24 @@ export function createDemoModel() {
           let response = "";
           const createAgentDone = wantsCreateAgent(options.prompt) &&
             (createAgentFinal(options.prompt) || toolResultCount(options.prompt) >= 2);
-          const lazyCall = wantsDel
-            ? lazyDemoCall(options.prompt, { delegate: true })
+          const lazyCall = wantsADel && !agentDelegateAlreadyFinal(options.prompt)
+            ? lazyDemoCall(options.prompt, { delegateAgent: true })
+            : wantsDel            ? lazyDemoCall(options.prompt, { delegate: true })
             : wantsCreateAgent(options.prompt) && !createAgentDone
             ? lazyDemoCall(options.prompt)
             : wantsTools && !demoAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt)
             : null;
           if (lazyCall) {
-            controller.enqueue({
-              type: "tool-call",
-              toolCallId: `call_demo_${lazyCall.id}`,
-              toolName: lazyCall.name,
-              input: JSON.stringify(lazyCall.input),
-            });
+            const lazyCalls = Array.isArray(lazyCall) ? lazyCall : [lazyCall];
+            for (const call of lazyCalls) {
+              controller.enqueue({
+                type: "tool-call",
+                toolCallId: `call_demo_${call.id}`,
+                toolName: call.name,
+                input: JSON.stringify(call.input),
+              });
+            }
             controller.enqueue({ type: "finish", usage, finishReason: "tool-calls" });
             controller.close();
             return;
@@ -428,8 +572,66 @@ export function createDemoModel() {
             // the create-agent final/continuation text (honest outcome; the
             // marker lets the stripped-history continuation re-emit + stop)
             response = createAgentFinalText(options.prompt);
-          } else if (wantsTools && (toolResultCount(options.prompt) >= 6 || demoAlreadyFinal(options.prompt))) {
-            // STEP 4 (tools): the final summary — the reads' VALUES speak for
+          }
+          else if (wantsADel && agentDelegateAlreadyFinal(options.prompt)) {
+            // Continuation AFTER the final text (agent-do compacts the tool
+            // exchange away, then asks to continue): re-emit the EXACT prior
+            // final — never restart the search/execute sequence.
+            const prior = runSlice(options.prompt)
+              .filter((m) => m?.role === "assistant" && Array.isArray(m?.content))
+              .flatMap((m) => m.content)
+              .find((p2) => p2?.type === "text" && /\[demo model\] Agent delegation/.test(p2.text ?? ""));
+            response = prior?.text ?? "[demo model] Agent delegation finished.";
+            controller.enqueue({ type: "text-start", id });
+            const chunks = response.match(/.{1,24}/g) ?? [response];
+            for (const chunk of chunks) controller.enqueue({ type: "text-delta", id, delta: chunk });
+            controller.enqueue({ type: "text-end", id });
+            controller.enqueue({ type: "finish", usage, finishReason: "stop" });
+            controller.close();
+            return;
+          }
+          else if (wantsADel) {
+            // STEP 2 (delegate-to-agent): reflect the child run's outcome with
+            // the SAME structural tool-part parsing as the site-delegation path.
+            // The lazy execute_tool wrapper reports { ok:true, result: <route
+            // result> } for a COMPLETED call — a structured DENIAL rides inside
+            // as result.ok === false, so look one level in before deciding.
+            const lastTool = [...runSlice(options.prompt)].reverse().find((m) => m?.role === "tool");
+            const parts = Array.isArray(lastTool?.content) ? lastTool.content : [];
+            let succeeded = false;
+            for (const part of parts) {
+              if (part?.type === "tool-result" && part?.output) {
+                if (part.output.type === "error-text") { succeeded = false; break; }
+                succeeded = true;
+              } else if (part?.type === "tool-error") { succeeded = false; break; }
+            }
+            const outValue = parts.find((pt) => pt?.type === "tool-result" && pt?.output && pt.output.type !== "error-text")?.output?.value ?? "";
+            const errValue = parts.find((pt) => pt?.output?.type === "error-text")?.output?.value ?? parts.find((pt) => pt?.type === "tool-error")?.error ?? "";
+            let outText = typeof outValue === "string" ? outValue : JSON.stringify(outValue ?? "");
+            // Unwrap the lazy protocol envelope (string OR object form).
+            let inner = outValue;
+            if (typeof outValue === "string") {
+              try { inner = JSON.parse(outValue); } catch { inner = outValue; }
+            }
+            const routeResult = inner && typeof inner === "object" && "result" in inner ? inner.result : inner;
+            if (succeeded && routeResult && typeof routeResult === "object" && routeResult.ok === false) {
+              succeeded = false;
+              outText = String(routeResult.error ?? "delegation denied");
+            } else if (succeeded && routeResult && typeof routeResult === "object" && typeof routeResult.result === "string") {
+              outText = routeResult.result;
+            }
+            response = succeeded
+              ? `[demo model] Agent delegation succeeded. Child result: ${String(outText).slice(0, 200)}`
+              : `[demo model] Agent delegation DENIED/FAILED: ${String(succeeded ? "" : (routeResult?.error ?? outText ?? errValue)).slice(0, 200)}`;
+            controller.enqueue({ type: "text-start", id });
+            const chunks = response.match(/.{1,24}/g) ?? [response];
+            for (const chunk of chunks) controller.enqueue({ type: "text-delta", id, delta: chunk });
+            controller.enqueue({ type: "text-end", id });
+            controller.enqueue({ type: "finish", usage, finishReason: "stop" });
+            controller.close();
+            return;
+          }
+          else if (wantsTools && (toolResultCount(options.prompt) >= (wantsDemoToolsX2(options.prompt) ? 12 : 6) || demoAlreadyFinal(options.prompt))) {            // STEP 4 (tools): the final summary — the reads' VALUES speak for
             // themselves (the run's tool results are the assertion target). The
             // continuation step (tool history stripped) re-emits the same
             // summary, so the loop ends on the text-only step.

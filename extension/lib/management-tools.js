@@ -49,6 +49,7 @@ export const MANAGEMENT_TOOL_NAMES = [
   "schedules_pause",
   "schedules_resume",
   "schedules_update",
+  "delegate_to_agent",
 ];
 
 export function managementToolset({ callRoute }) {
@@ -204,6 +205,24 @@ export function managementToolset({ callRoute }) {
         }).nullable().describe("a complete provider config, or null to inherit the global"),
       }),
       execute: ({ id, config }) => call("named-agent.set-provider", { id, config }),
+    }),
+
+    // ---- agent→agent delegation (G5) ----
+    // The caller identity is NOT a tool arg: the model-facing dispatcher binds
+    // the run's execution id into the route CONTEXT (bindModelApprovalDispatcher),
+    // and dispatchRoute strips __-prefixed body keys, so the model can never
+    // forge the caller. The named-agent.delegate route resolves the caller from
+    // context.executionId against the live run registry (fail closed).
+    delegate_to_agent: tool({
+      description:
+        "Delegate a task to ANOTHER named agent and return its result. Only works inside a running named agent, and only for agents in your own 'Can delegate to' list (set by the owner). The target runs with its own persona, memory, and provider; its approvals are its own. Use list_named_agents to see who exists.",
+      inputSchema: z.object({
+        agent: z.string().describe("the target agent's id (slug) or exact name"),
+        task: z.string().describe("the complete, self-contained brief for the target agent"),
+        context: z.string().optional().describe("extra context the target needs (findings so far, constraints)"),
+      }),
+      execute: ({ agent, task, context }) =>
+        call("named-agent.delegate", { agent, task, context }),
     }),
 
     // ---- introspection ----

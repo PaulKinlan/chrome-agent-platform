@@ -233,6 +233,8 @@ const BUILT_IN_TOOLS = new Set([
   // Per-agent schedule controls: mutating built-ins (route-gated by owner
   // approval; a replay re-runs the gated route, so the gate re-arms).
   "schedules_pause", "schedules_resume", "schedules_update",
+  // Agent→agent delegation (G5): spawns a child run — mutating built-in.
+  "delegate_to_agent",
 ]);
 
 /** The WORST (least replayable) of two classifications. Invalid inputs are

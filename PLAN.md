@@ -30,7 +30,7 @@ changes that never updated the gate, all fixed 2026-08-27 under
    at `c5ccb2d0`. The permission, the four CDP tools, the capability row and the
    Settings label are gone; the browser-tool count is **126** (was 130) and the
    capability table dropped to **155** at the time (it has since regrown to
-   **159** with later tool work). `tests/chrome-tools-t12.test.ts` carries a
+   **160** with later tool work, incl. the delegation tool). `tests/chrome-tools-t12.test.ts` carries a
    removal guard so it cannot come back by accident — re-adding it must be a
    deliberate act. The user-scripts half of T12 is untouched.
 3. **The capability count is now derived**, not hard-coded. The assertion read

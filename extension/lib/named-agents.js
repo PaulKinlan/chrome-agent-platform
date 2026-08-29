@@ -16,6 +16,7 @@
 import { kvGet, kvSet } from "./kv.js";
 import { namedAgentMemory, purgeStoreDir } from "./memory.js";
 import { deleteAgentPromptOverride } from "./system-prompts.js";
+import { normalizeCanDelegateTo } from "./agent-delegation.js";
 
 const AGENTS_KEY = "cap:namedAgents";
 
@@ -214,7 +215,7 @@ export async function getNamedAgentProvider(id) {
  * sandbox (its `agents.md` operating instructions).
  */
 export async function createNamedAgent(
-  { id, name, role = "", avatar = null, skills = [], coreAssets = [], profileGrants = [], agentsMd = null, provider = null },
+  { id, name, role = "", avatar = null, skills = [], coreAssets = [], profileGrants = [], agentsMd = null, provider = null, canDelegateTo = [] },
   { gateOnReplace = null } = {},
 ) {
   const cleanName = String(name ?? "").trim();
@@ -255,6 +256,10 @@ export async function createNamedAgent(
         ? cleanProfileGrants
         : (existing?.profileGrants ?? []),
       provider: normalizeAgentProvider(provider) ?? (existing?.provider ?? null),
+      // Agent→agent delegation (G5): the owner-configured allow-list of agent
+      // ids this agent may delegate to. Empty = cannot delegate. Normalized by
+      // the shared guard module so the record and the route can never disagree.
+      canDelegateTo: normalizeCanDelegateTo(canDelegateTo.length ? canDelegateTo : (existing?.canDelegateTo ?? [])),
       // Non-reusable row identity + monotonic per-row revision let an owner
       // approval bind the exact current agent without hashing large avatars or
       // credential-bearing provider state.
@@ -318,6 +323,7 @@ export async function updateNamedAgent(id, patch = {}, { gateBeforeMutation = nu
       // `null` clears the override (inherit the global); a complete config sets it.
       next.provider = normalizeAgentProvider(patch.provider);
     }
+    if (patch.canDelegateTo !== undefined) next.canDelegateTo = normalizeCanDelegateTo(patch.canDelegateTo);
     next.instanceId = existing.instanceId ?? crypto.randomUUID();
     next.revision = (Number.isSafeInteger(existing.revision) ? existing.revision : 0) + 1;
     next.updatedAt = Date.now();

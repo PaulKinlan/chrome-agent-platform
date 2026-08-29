@@ -6,8 +6,8 @@
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
   browserTools: 126,
-  managementTools: 33,
-  totalTools: 159,
+  managementTools: 34,
+  totalTools: 160,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -178,6 +178,7 @@ export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
   "schedules_pause",
   "schedules_resume",
   "schedules_update",
+  "delegate_to_agent",
 ]);
 
 export const FLAGGED_FOR_LATER_PROVIDER_CUTOVER = Object.freeze([
@@ -440,6 +441,10 @@ const rows = [
   record("schedules_pause", "management", ["management.task.pause"], [], "none", "mutating", false, "mutating", "management.schedules"),
   record("schedules_resume", "management", ["management.task.resume"], [], "none", "mutating", false, "mutating", "management.schedules"),
   record("schedules_update", "management", ["management.task.update"], [], "none", "mutating", false, "mutating", "management.schedules"),
+  // Agent→agent delegation (G5): spawns a child run — mutating, and the
+  // route's own fail-closed guard (per-edge allow-list + depth/cycle/cap/budget)
+  // is the authority; no Chrome permission is involved.
+  record("delegate_to_agent", "management", ["management.agent.delegate"], [], "none", "mutating", false, "mutating", "management.named-agents"),
   // Tranche-12 Chrome API coverage:
   // browser-wide global grant), user scripts + dynamic content scripts
   // (single-origin matches; destination-origin grant coverage; host
