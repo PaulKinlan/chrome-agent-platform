@@ -2958,6 +2958,18 @@ class AgentConversation extends Component {
       this.setMessages(parseJSONAttr(nv, []));
     }
   }
+  // Every transcript append goes through here: while the live-status row is
+  // connected, new content inserts BEFORE it so the row stays the LAST child
+  // (the pinned bottom-of-flow invariant) no matter what lands mid-run —
+  // tool cards, error bubbles, permission cards, artifact blocks (review
+  // P1-a: appends used to land AFTER the row, leaving it mid-transcript).
+  appendTranscript(node) {
+    const row = this._liveStatusRow;
+    if (row && row.isConnected) this.insertBefore(node, row);
+    else this.appendChild(node);
+    this.scrollTop = this.scrollHeight;
+    return node;
+  }
   _bubble(role, content, extra) {
     const b = document.createElement("message-bubble");
     b.setAttribute("role", role);
@@ -2967,9 +2979,7 @@ class AgentConversation extends Component {
       if (v === "") b.setAttribute(k, "");
       else b.setAttribute(k, String(v));
     }
-    this.appendChild(b);
-    this.scrollTop = this.scrollHeight;
-    return b;
+    return this.appendTranscript(b);
   }
   // A subtle timestamp divider, inserted ONLY when there is a SIGNIFICANT time
   // gap between consecutive persisted messages (or at the first message — the
@@ -2985,7 +2995,7 @@ class AgentConversation extends Component {
     const d = document.createElement("div");
     d.className = "ts-gap";
     d.textContent = formatTsLabel(ts);
-    this.appendChild(d);
+    this.appendTranscript(d);
   }
   appendUser(text, ts, attachments) { if (ts) this._maybeTsGap(ts); return this._bubble("user", text, attachments?.length ? { attachments: JSON.stringify(attachments) } : null); }
   appendAgent(text, ts) { if (ts) this._maybeTsGap(ts); return this._bubble("agent", text); }
@@ -3019,8 +3029,7 @@ class AgentConversation extends Component {
     // Only what the thread actually handles.
     card.setAttribute("actions", "open-tab reuse");
     wrap.appendChild(card);
-    this.appendChild(wrap);
-    this.scrollTop = this.scrollHeight;
+    this.appendTranscript(wrap);
     return card;
   }
 
@@ -3098,6 +3107,9 @@ class AgentConversation extends Component {
   }
 
   setMessages(messages) {
+    // Keep the live-status row across the rebuild: replaceChildren detaches
+    // it, so re-append it LAST afterwards (review P1-a).
+    const liveRow = this._liveStatusRow;
     this.replaceChildren();
     this._lastTs = null;
     const list = Array.isArray(messages) ? messages : [];
@@ -3106,22 +3118,23 @@ class AgentConversation extends Component {
       p.className = "empty";
       p.textContent = "No conversation yet — start one above.";
       this.appendChild(p);
-      return;
-    }
-    for (const m of list) {
-      if (!m || typeof m !== "object") continue;
-      const ts = typeof m.ts === "number" ? m.ts : null;
-      switch (m.role) {
-        case "user": this.appendUser(m.content, ts, m.attachments); break;
-        case "agent": this.appendAgent(m.content, ts); break;
-        case "system": this.appendSystem(m.content, ts); break;
-        case "thinking": this.appendThinking(m.content, m); break;
-        case "tool": this.appendTool(m); break;
-        case "artifact": this.appendArtifact(m); break;
-        case "error": this.appendError(m.content, { reason: m.reason ?? null, action: m.action ?? null, category: m.category ?? null }); break;
-        default: this.appendAgent(m.content, ts); break;
+    } else {
+      for (const m of list) {
+        if (!m || typeof m !== "object") continue;
+        const ts = typeof m.ts === "number" ? m.ts : null;
+        switch (m.role) {
+          case "user": this.appendUser(m.content, ts, m.attachments); break;
+          case "agent": this.appendAgent(m.content, ts); break;
+          case "system": this.appendSystem(m.content, ts); break;
+          case "thinking": this.appendThinking(m.content, m); break;
+          case "tool": this.appendTool(m); break;
+          case "artifact": this.appendArtifact(m); break;
+          case "error": this.appendError(m.content, { reason: m.reason ?? null, action: m.action ?? null, category: m.category ?? null }); break;
+          default: this.appendAgent(m.content, ts); break;
+        }
       }
     }
+    if (liveRow) this.appendChild(liveRow);
     this.scrollTop = this.scrollHeight;
   }
 }

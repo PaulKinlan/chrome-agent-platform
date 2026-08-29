@@ -18,6 +18,7 @@ import {
   subscribeProgress,
   appendBubble,
 } from "../shared/conversation.js";
+import { runStatusActionLabel } from "../shared/run-status.js";
 import { findAgentByRef } from "../shared/agent-registry.js";
 import { siteAgentToolsMessage } from "../shared/site-agent-copy.js";
 import { confirmActionDialog } from "../shared/components.js"; // registers <agent-picker>, <agent-composer>, <agent-conversation>, <task-row>
@@ -162,6 +163,15 @@ const detailName = document.getElementById("agent-detail-name");
 const detailKind = document.getElementById("agent-detail-kind");
 const historyEl = document.getElementById("agent-history");
 const agentComposer = document.getElementById("agent-composer");
+
+// The inline live-status row's recovery action ("Fix in Settings") — fire ONLY
+// for the status row (message bubbles can also emit "action"), and route to the
+// real Settings page: the sidepanel is not the NTP, so openOptionsPage IS the
+// right route here (review P1-b: the sidepanel had no action listener at all).
+historyEl.addEventListener("action", (ev) => {
+  if (!ev.target?.classList?.contains?.("live-status")) return;
+  chrome.runtime.openOptionsPage();
+});
 
 const KIND_LABELS = { named: "Named agent", background: "Background agent", site: "Site Agent" };
 const SESSION_KEY = "cap:sidepanel:selected-agent";
@@ -452,6 +462,9 @@ agentComposer.addEventListener("send", async (ev) => {
       // The conversation turn emits the canonical lifecycle vocabulary
       // (extension/shared/run-status.js); the conversation's own inline
       // live-status row renders it (idle/completed resolve to nothing).
+      // errorCategory feeds the shared recovery-action authority so provider
+      // permission/config failures get the same "Fix in Settings" path the
+      // NTP has (review P1-b: the sidepanel used to drop it).
       if (!s?.state || s.state === "idle" || s.state === "completed") {
         setDetailStatus("");
         return;
@@ -461,6 +474,7 @@ agentComposer.addEventListener("send", async (ev) => {
         activity: s.activity,
         message: s.message,
         errorReason: s.errorReason,
+        actionLabel: runStatusActionLabel(s),
       });
     },
   });

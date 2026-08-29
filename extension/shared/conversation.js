@@ -1213,8 +1213,14 @@ export async function runConversationTurn(container, { text, attachments = [], h
       if (requirement.grantGlobal) card.setAttribute("global", "true");
       card.addEventListener("approve", (ev) => handleApprovalDecision(requirement, card, ev?.detail?.sourceEvent, true));
       card.addEventListener("deny", (ev) => handleApprovalDecision(requirement, card, ev?.detail?.sourceEvent, false));
-      c.append(card);
-      if (typeof c.scrollTop === "number") c.scrollTop = c.scrollHeight;
+      // Insert BEFORE the connected live-status row so the row stays the
+      // conversation's last child (review P1-a); plain append() would land
+      // the card after it.
+      if (typeof c.appendTranscript === "function") c.appendTranscript(card);
+      else {
+        c.append(card);
+        if (typeof c.scrollTop === "number") c.scrollTop = c.scrollHeight;
+      }
     }
     pendingApprovals.set(requirement.key, { requirement, status: "pending", card });
     status({

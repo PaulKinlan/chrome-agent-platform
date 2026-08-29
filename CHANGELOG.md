@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.351] — 2026-08-29
+- fix(conversation): the live status row stays the transcript's bottom row no matter what lands mid-run (tool cards, errors, permission cards, artifacts insert before it); the sidepanel gets the same 'Fix in Settings' recovery action as the NTP via one shared helper; the lifecycle journey drives the inline row (stale #run-status selectors migrated); KAT asserts last-child on every poll + grown-composer coexistence + axe with the row present
+
 ## [0.2.350] — 2026-08-28
 - The task box grows as you type (up to ten lines), so you can always see what you're writing
 

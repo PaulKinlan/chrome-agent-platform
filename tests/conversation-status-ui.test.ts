@@ -100,3 +100,41 @@ Deno.test("conversation run status: the Settings route target reveals in place a
     js.includes('openView("options/options.html", "Settings", event.currentTarget)'),
     "the standard Settings entries use the identical in-context route (with the trigger for focus restore)");
 });
+
+Deno.test("runStatusActionLabel: one shared authority for the Settings recovery action", async () => {
+  const { runStatusActionLabel } = await import("../extension/shared/run-status.js");
+  assertEquals(runStatusActionLabel({ state: "failed", errorCategory: "provider-auth" }), "Fix in Settings");
+  assertEquals(runStatusActionLabel({ state: "error", errorCategory: "model-config" }), "Fix in Settings", "the legacy error alias canonicalizes");
+  assertEquals(runStatusActionLabel({ state: "waiting-for-permission", errorCategory: "host-permission" }), "Fix in Settings");
+  assertEquals(runStatusActionLabel({ state: "waiting-for-permission", errorCategory: "network" }), "Fix in Settings");
+  assertEquals(runStatusActionLabel({ state: "failed", errorCategory: "aborted" }), null, "an abort is not Settings-recoverable");
+  assertEquals(runStatusActionLabel({ state: "failed" }), null, "no category, no action");
+  assertEquals(runStatusActionLabel({ state: "running", errorCategory: "network" }), null, "a live run never carries the action");
+  assertEquals(runStatusActionLabel({ state: "completed", errorCategory: "network" }), null);
+  assertEquals(runStatusActionLabel(null), null);
+});
+
+Deno.test("sidepanel parity: the live row keeps the recovery action and routes it to Settings (review P1-b)", async () => {
+  const sp = await Deno.readTextFile(new URL("../extension/sidepanel/sidepanel.js", import.meta.url));
+  assert(sp.includes("runStatusActionLabel"), "the sidepanel uses the shared recovery-action authority");
+  const statusCall = sp.slice(sp.indexOf("onStatus: (s)"));
+  assert(/errorCategory/.test(statusCall.slice(0, 700)) || sp.includes("runStatusActionLabel(s)"),
+    "the status object's errorCategory feeds the recovery action (it used to be dropped)");
+  const listener = sp.indexOf('historyEl.addEventListener("action"');
+  assert(listener > -1, "the sidepanel wires the status-row action listener");
+  const handler = sp.slice(listener, sp.indexOf("});", listener) + 3);
+  assert(handler.includes('contains?.("live-status")'), "the listener fires ONLY for the live-status row");
+  assert(handler.includes("chrome.runtime.openOptionsPage()"),
+    "the sidepanel routes the action to the real Settings page (openOptionsPage is correct off the NTP)");
+  const ntp = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
+  assert(ntp.includes("runStatusActionLabel(s)"), "the NTP uses the SAME shared authority (no divergent copies)");
+});
+
+Deno.test("run-status-lifecycle: no stale #run-status / loading-state selectors remain (review P2)", async () => {
+  const src = await Deno.readTextFile(new URL("../scripts/run-status-lifecycle.ts", import.meta.url));
+  assertEquals(src.includes("getElementById('run-status')"), false, "the deleted banner element is no longer queried");
+  assertEquals(src.includes('getElementById("run-status")'), false);
+  assertEquals(src.includes("#run-status"), false, "no #run-status selector survives anywhere in the journey");
+  assertEquals(src.includes("loading-state"), false, "the deleted loader element is no longer queried");
+  assert(src.includes("conversation-run-status.live-status"), "the journey drives the inline live-status row");
+});

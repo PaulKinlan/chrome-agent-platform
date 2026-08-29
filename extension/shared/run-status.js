@@ -48,3 +48,17 @@ export function normalizeConversationRunStatus(input) {
       return null;
   }
 }
+
+// The recovery action for a terminal/waiting status whose cause the owner can
+// fix in Settings (provider auth, model config, host permission, network).
+// ONE authority shared by the NTP thread surface and the sidepanel — the
+// sidepanel dropping this logic was review P1-b (2026-08-28).
+const RECOVERABLE_CATEGORY = /host-permission|provider-auth|model-config|network/i;
+
+export function runStatusActionLabel(input) {
+  const raw = typeof input?.state === "string" ? input.state.trim().toLowerCase() : "";
+  const state = STATE_ALIASES[raw] ?? raw;
+  if (state !== "failed" && state !== "waiting-for-permission") return null;
+  const category = typeof input?.errorCategory === "string" ? input.errorCategory : "";
+  return RECOVERABLE_CATEGORY.test(category) ? "Fix in Settings" : null;
+}

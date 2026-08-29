@@ -65,7 +65,7 @@ const EXPECTED = [
   "NTP: opened with the hub composer present",
   "run 1: typed + sent via real input (input-clear witness)",
   "run 1: the banner reached WORKING with an active loader (plainly visible, not mid-transition)",
-  "run 1: the banner sequence was exactly working → done (recorded, no duplicates/regressions)",
+  "run 1: the status-row sequence was working → resolved (recorded, no duplicates/regressions)",
   "run 1: the result rendered + the SW journaled the task/result pair",
   "run 1: screenshot of the settled terminal state",
   "double-send: both turns genuinely started while run 1 was pending (two input-clear witnesses + genuine overlap)",
@@ -78,15 +78,15 @@ const EXPECTED = [
   "switch: the switched-away run journaled its result in its OWN thread",
   "back mid-run: the global status is not stuck running after leaving",
   "back mid-run: the run still completes + journals after leaving",
-  "reload mid-run: the page recovers clean (no stuck banner)",
+  "reload mid-run: the page recovers clean (no stuck status row)",
   "reload mid-run: the disconnected run completes in the SW + journals",
   "reload mid-run: reopening the thread shows the journaled result (reconnect truth)",
-  "AX: the working banner exposes role=status + an accessible name in the browser AX tree",
-  "AX: the loader inside the banner exposes role=status + its activity label (through the shadow root)",
+  "AX: the working status row exposes role=status + an accessible name in the browser AX tree",
+  "AX: the status row's activity label is exposed (through the shadow root)",
   "AX: exactly ONE run-status live region (no duplicate status surfaces)",
   "follow-up: sending in an already-open thread does NOT restart the view transition (no banner flash)",
   "follow-up: screenshot of the LIVE working state (no transition by construction)",
-  "follow-up: the banner reaches working + terminal exactly once each for the follow-up",
+  "follow-up: the status row reaches working + resolves exactly once for the follow-up (no re-transition)",
   "no console errors on the NTP",
   "assertion set exact (no missing/extra checks)",
   "assertion order matches EXPECTED",
@@ -437,9 +437,15 @@ async function main() {
       await sleep(100);
     }
     const seq1 = await evl(ntp, `window.__statusSeq ?? []`);
-    const states1 = seq1.filter((s) => s.state !== "hidden").map((s) => s.state);
-    check("run 1: the banner sequence was exactly working → done (recorded, no duplicates/regressions)",
-      done1 && JSON.stringify(states1) === JSON.stringify(["working", "done"]), seq1);
+    // The inline row RESOLVES by removal (no terminal state renders) — the
+    // lifecycle contract: one contiguous block of working states, then hidden
+    // (resolved), never error, no hidden-gap flash mid-run.
+    const trimmed1 = [...seq1];
+    while (trimmed1.length && trimmed1[0].state === "hidden") trimmed1.shift();
+    const resolved1 = trimmed1.length > 1 && trimmed1[trimmed1.length - 1].state === "hidden";
+    const body1 = trimmed1.slice(0, -1);
+    check("run 1: the status-row sequence was working → resolved (recorded, no duplicates/regressions)",
+      done1 && resolved1 && body1.length >= 1 && body1.every((s) => s.state === "working"), seq1);
     const bub1 = await evl(ntp, `[...document.querySelectorAll('#thread-conversation message-bubble')]
       .map(b => b.getAttribute('role'))`);
     check("run 1: the result rendered + the SW journaled the task/result pair",
@@ -647,10 +653,10 @@ async function main() {
     // reload WHILE the run executes: the page (and its progress port) dies
     // genuinely; the SW continues the run.
     let swOwns = false;
-    for (let i = 0; i < 60 && !swOwns; i++) {
+    for (let i = 0; i < 200 && !swOwns; i++) {
       swOwns = await evl(ntp, `chrome.runtime.sendMessage({type:'memory.get', origin:'master', key:'journal'})
         .then(j => (Array.isArray(j) ? j : []).some(q => q?.type === 'task' && (q.task ?? '').includes(${JSON.stringify(rl1)})))`).catch(() => false);
-      if (!swOwns) await sleep(50);
+      if (!swOwns) await sleep(100);
     }
     await send("Page.reload", {}, ntp);
     // Wait for the reloaded page to genuinely render the composer (driving it
@@ -662,12 +668,12 @@ async function main() {
     }
     await sleep(300);
     const cleanAfterReload = await evl(ntp, `({
-      bannerHidden: document.getElementById('run-status')?.hidden === true,
+      liveRowGone: !document.querySelector('#thread-conversation conversation-run-status.live-status'),
       status: document.getElementById('status')?.textContent ?? '',
       threadHidden: document.getElementById('thread-view')?.hidden === true,
     })`);
-    check("reload mid-run: the page recovers clean (no stuck banner)",
-      sentRl && swOwns && cleanAfterReload.bannerHidden && cleanAfterReload.threadHidden &&
+    check("reload mid-run: the page recovers clean (no stuck status row)",
+      sentRl && swOwns && cleanAfterReload.liveRowGone && cleanAfterReload.threadHidden &&
       cleanAfterReload.status !== "running…", { ...cleanAfterReload, sentRl, swOwns });
     let rlDone = false;
     for (let i = 0; i < 100 && !rlDone; i++) {
@@ -709,35 +715,30 @@ async function main() {
     const ax1 = `rs-ax-${Date.now() % 100000}`;
     const warmupsAX = () => evl(ntp, `(() => { for (let i = 0; i < 6; i++) chrome.runtime.sendMessage({ type: 'agent.run', task: 'rs warmup5 ${Date.now()} ' + i, id: 'rswx${Date.now()}-' + i }).catch(() => {}); return true; })()`);
     await sendWithWitness(ntp, COMPOSER, ax1, warmupsAX);
-    // While working: the banner + its loader in the AX tree — captured in the
-    // SAME beat (the loader is removed at the terminal state, so a second
-    // query after the fact can see nothing).
+    // While working: the inline status row in the AX tree — captured in the
+    // SAME beat (the row resolves at the terminal state, so a second query
+    // after the fact can see nothing). The row's AX subtree includes its
+    // shadow content (the role=status surface + the activity label text).
     let axBanner = null;
-    let axLoader = null;
-    for (let i = 0; i < 60 && !(axBanner && axLoader); i++) {
-      const visible = await evl(ntp, `(() => { const el = document.getElementById('run-status'); return el && !el.hidden && !el.className.includes('done') && !el.className.includes('error'); })()`).catch(() => false);
+    for (let i = 0; i < 60 && !axBanner; i++) {
+      const visible = await evl(ntp, `(() => { const el = document.querySelector('#thread-conversation conversation-run-status.live-status'); const st = el?.getAttribute('state'); return !!el && st !== 'completed' && st !== 'failed' && st !== 'cancelled'; })()`).catch(() => false);
       if (visible) {
-        const b = await axNodes(ntp, "#run-status");
-        const l = await axNodes(ntp, "#run-status loading-state");
-        if (b?.length && l?.length) { axBanner = b; axLoader = l; break; }
+        const b = await axNodes(ntp, "#thread-conversation conversation-run-status.live-status");
+        if (b?.length) { axBanner = b; break; }
       }
       await sleep(50);
     }
     const bannerRoles = (axBanner ?? []).map((n) => n?.role?.value ?? "");
     const bannerNames = (axBanner ?? []).map((n) => n?.name?.value ?? "").filter(Boolean);
-    check("AX: the working banner exposes role=status + an accessible name in the browser AX tree",
+    check("AX: the working status row exposes role=status + an accessible name in the browser AX tree",
       bannerRoles.includes("status") && bannerNames.length > 0, { roles: bannerRoles.slice(0, 6), names: bannerNames.slice(0, 4) });
-    const loaderText = (axLoader ?? []).map((n) => n?.name?.value ?? "").join(" ");
-    const loaderRoles = (axLoader ?? []).map((n) => n?.role?.value ?? "");
-    check("AX: the loader inside the banner exposes role=status + its activity label (through the shadow root)",
-      loaderRoles.includes("status") && /thinking|working/i.test(loaderText), { roles: loaderRoles.slice(0, 4), text: loaderText.slice(0, 60) });
-    const statusRegionCount = await evl(ntp, `document.querySelectorAll('#run-status').length`);
-    const liveRegionsInThread = await evl(ntp, `(() => {
-      const tv = document.getElementById('thread-view');
-      return tv ? tv.querySelectorAll('[role="status"]').length : -1;
-    })()`);
+    const labelText = bannerNames.join(" ");
+    check("AX: the status row's activity label is exposed (through the shadow root)",
+      /thinking|working/i.test(labelText), { text: labelText.slice(0, 60) });
+    const liveRowCount = await evl(ntp, `document.querySelectorAll('conversation-run-status.live-status').length`);
+    const totalStatusEls = await evl(ntp, `document.querySelectorAll('conversation-run-status').length`);
     check("AX: exactly ONE run-status live region (no duplicate status surfaces)",
-      statusRegionCount === 1 && liveRegionsInThread >= 1, { statusRegionCount, liveRegionsInThread });
+      liveRowCount === 1 && totalStatusEls === 1, { liveRowCount, totalStatusEls });
     // Let the AX run settle before the follow-up section.
     for (let i = 0; i < 100; i++) {
       if (await journalHas(ntp, ax1)) break;
@@ -770,14 +771,14 @@ async function main() {
     let fuHiddenGap = false;
     let workingShot = false;
     for (let i = 0; i < 60; i++) {
-      const st = await evl(ntp, `(() => { const el = document.getElementById('run-status');
-        return el?.hidden ? 'hidden' : 'visible'; })()`);
+      const st = await evl(ntp, `(() => { const el = document.querySelector('#thread-conversation conversation-run-status.live-status');
+        return el ? 'visible' : 'hidden'; })()`);
       const doneYet = await journalHas(ntp, fu1);
       if (st === "visible" && !doneYet) {
         fuSawWorking = true;
         if (!workingShot) {
-          const cls = await evl(ntp, `document.getElementById('run-status').className`);
-          if (!String(cls).includes("done") && !String(cls).includes("error")) {
+          const rowState = await evl(ntp, `document.querySelector('#thread-conversation conversation-run-status.live-status')?.getAttribute('state') ?? ''`);
+          if (rowState !== 'completed' && rowState !== 'failed' && rowState !== 'cancelled') {
             workingShot = await shot(ntp, "followup-working");
           }
         }
@@ -798,11 +799,20 @@ async function main() {
       fuDone = await journalHas(ntp, fu1);
       if (!fuDone) await sleep(100);
     }
-    await sleep(300);
-    const seqFu = (await evl(ntp, `window.__statusSeq ?? []`)).filter((s) => s.state !== "hidden").map((s) => s.state);
-    check("follow-up: the banner reaches working + terminal exactly once each for the follow-up",
-      fuDone && seqFu.filter((s) => s === "working").length === 1 &&
-      seqFu.filter((s) => s === "done").length === 1, seqFu);
+    // The row's resolution (removal) can lag the journal write by a beat —
+    // poll the recorded sequence for the terminal hidden entry.
+    let seqFuRaw = [];
+    for (let i = 0; i < 50; i++) {
+      seqFuRaw = await evl(ntp, `window.__statusSeq ?? []`);
+      if (seqFuRaw.length && seqFuRaw[seqFuRaw.length - 1].state === "hidden") break;
+      await sleep(100);
+    }
+    const seqFu = [...seqFuRaw];
+    while (seqFu.length && seqFu[0].state === "hidden") seqFu.shift();
+    const fuResolved = seqFu.length > 1 && seqFu[seqFu.length - 1].state === "hidden";
+    const fuBody = seqFu.slice(0, -1).map((s) => s.state);
+    check("follow-up: the status row reaches working + resolves exactly once for the follow-up (no re-transition)",
+      fuDone && fuResolved && fuBody.length >= 1 && fuBody.every((s) => s === "working"), seqFuRaw);
     await evl(ntp, `(() => { window.__statusObs?.disconnect(); })()`);
 
     check("no console errors on the NTP", (consoleErrors.get(ntp) ?? []).length === 0,

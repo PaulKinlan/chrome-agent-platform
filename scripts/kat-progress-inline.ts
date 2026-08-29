@@ -139,7 +139,14 @@ await ev(`(() => {
 // while the row is live, count duplicate carriers of its text (folded into the
 // same run — a second dispatched run would race the first).
 const labels: string[] = [];
-let sawInline = false, sawSticky = false, sawLastChild = false, sawOldBanner = false, sawMultiRows = false, sawRowOutside = false;
+let sawInline = false, sawSticky = false, sawOldBanner = false, sawMultiRows = false, sawRowOutside = false;
+// The row must be the conversation's LAST child at EVERY poll, not just once
+// (review P1-a: a tool card appended after the row leaves it mid-transcript).
+let notLastViolations = 0;
+let notLastDetail: unknown = null;
+let axeDuringRun: unknown = "not-run";
+let axeSrcCache = "";
+let composerGrow: unknown = null;
 let dupDetail: unknown = null;
 let dupOk = false;
 let done = false;
@@ -154,8 +161,35 @@ while (Date.now() < deadline && !done) {
     if (s.rowPresent) {
       if (s.rowInsideConversation) sawInline = true; else sawRowOutside = true;
       if (s.rowSticky) sawSticky = true;
-      if (s.rowIsLastChild) sawLastChild = true;
+      if (!s.rowIsLastChild) { notLastViolations++; if (!notLastDetail) notLastDetail = s; }
       if (s.rowLabel && labels[labels.length - 1] !== s.rowLabel) labels.push(s.rowLabel);
+      // axe WITH the live row present (review: the old scan ran after the row
+      // resolved, so the live surface was never audited).
+      if (axeDuringRun === "not-run") {
+        try {
+          if (!axeSrcCache) axeSrcCache = await (await fetch("https://cdn.jsdelivr.net/npm/axe-core@4.10.2/axe.min.js")).text();
+          await send("Runtime.evaluate", { expression: axeSrcCache }, page);
+          axeDuringRun = await ev(`axe.run(document, { resultTypes: ['violations'] }).then(r => r.violations.map(v => ({ id: v.id, nodes: v.nodes.map(n => (n.target || []).join(' ')) })))`, page);
+        } catch (e) { axeDuringRun = `unavailable: ${String(e).slice(0, 60)}`; }
+      }
+      // Composer auto-grow coexistence (review residual): grow the thread
+      // composer mid-run and prove the live row survives it as last + sticky.
+      if (!composerGrow) {
+        composerGrow = await ev(`(async () => {
+          const input = document.querySelector('#thread-composer #task-input');
+          const conv = document.getElementById('thread-conversation');
+          const row = conv?.querySelector('conversation-run-status.live-status');
+          if (!input || !row) return { skipped: true, input: !!input, row: !!row };
+          const before = input.getBoundingClientRect().height;
+          input.value = Array.from({ length: 15 }, (_, i) => 'line ' + i + ' of a long draft').join(String.fromCharCode(10));
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+          const after = input.getBoundingClientRect().height;
+          return { before, after, grew: after > before + 10,
+            rowStillLast: conv.lastElementChild === row,
+            rowStillSticky: getComputedStyle(row).position === 'sticky' };
+        })()`, page);
+      }
       if (!dupOk && s.rowLabel && String(s.rowLabel).length >= 4) {
         const d = await ev(`(() => {
           const row = document.querySelector('#thread-conversation conversation-run-status.live-status');
@@ -183,10 +217,24 @@ await shot("01-after-completion");
 check("running: exactly ONE status surface at every tick (never 2+ rows)", done && !sawMultiRows);
 check("running: the status row is INLINE (a child of the conversation)", sawInline && !sawRowOutside);
 check("running: the row is sticky-pinned at the conversation bottom", sawSticky);
-check("running: the row is the conversation's LAST child (bottom of the flow)", sawLastChild);
+check("running: the row is the conversation's LAST child at EVERY poll (never mid-transcript)", done && notLastViolations === 0, { notLastViolations, first: notLastDetail });
 check("the old separate #run-status banner NEVER appears", !sawOldBanner);
 check("the label UPDATES across >=2 step transitions", labels.length >= 2, { labels });
 check("no duplicate step/status text anywhere else in the conversation", dupOk, dupDetail);
+{
+  const g: any = composerGrow;
+  check("the grown composer coexists with the live row (row stays last + sticky)",
+    !!g && (g.skipped === true ? false : g.grew === true && g.rowStillLast === true && g.rowStillSticky === true), g);
+}
+{
+  const a: any = axeDuringRun;
+  if (Array.isArray(a)) {
+    const relevant = a.filter((v: any) => (v.nodes ?? []).some((n: string) => n.includes("live-status") || n.includes("thread-conversation")));
+    check("axe DURING the run: no violations on the live row / conversation", relevant.length === 0, relevant);
+  } else {
+    console.log(`NOTE: axe-during-run ${typeof a === "string" ? a : "unavailable"} — the settled axe scan below stands.`);
+  }
+}
 
 // The row must RESOLVE on completion (removed — no orphan chrome).
 const settled = await ev(ROW_SNAPSHOT, page);

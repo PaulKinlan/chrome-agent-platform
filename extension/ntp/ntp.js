@@ -12,6 +12,7 @@ import { selectFailedRuns } from "../lib/run-retry.js";
 import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript } from "../shared/conversation.js";
 import { createRunSurfaceOwner } from "../shared/run-surface-owner.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
+import { runStatusActionLabel } from "../shared/run-status.js";
 import { safeJsonStringify } from "../shared/tool-tree.js";
 import {
   renderHtmlFrame,
@@ -2210,17 +2211,14 @@ function renderRunStatus(s) {
     return;
   }
   // A provider/config failure OR a permission wait gets the inline actionable
-  // recovery path ("Fix in Settings"), not just the message.
-  const recoverable = /host-permission|provider-auth|model-config|network/i.test(s?.errorCategory ?? "");
-  const actionLabel = (state === "failed" || state === "error" || state === "waiting-for-permission") && recoverable
-    ? "Fix in Settings"
-    : null;
+  // recovery path ("Fix in Settings"), not just the message — one shared
+  // authority (runStatusActionLabel) so every surface agrees.
   threadConversation.setLiveStatus?.({
     state,
     activity: s?.activity,
     message: s?.message,
     errorReason: s?.errorReason,
-    actionLabel,
+    actionLabel: runStatusActionLabel(s),
   });
 }
 // The recovery action bubbles from the inline status row (light DOM). Filter
