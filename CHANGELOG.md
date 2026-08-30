@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.443] — 2026-08-30
+- Tracker: the full-answer transcript fix is recorded as landed.
+
 ## [0.2.442] — 2026-08-30
 - Landed: the conversation now keeps the agent's full answer instead of replacing it with a short summary, and reopening a thread shows exactly what was said.
 
