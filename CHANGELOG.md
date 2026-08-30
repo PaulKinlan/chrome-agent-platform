@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.423] — 2026-08-30
+- Refresh the WebMCP acceptance status
+
 ## [0.2.422] — 2026-08-30
 - Mark WebMCP discovery pending the merged detector
 
