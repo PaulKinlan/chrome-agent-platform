@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.462] — 2026-08-30
+- Tracker: the working jobs board is recorded as landed.
+
 ## [0.2.461] — 2026-08-30
 - Landed: the jobs board now works end to end. An agent can post a job for another agent, the other agent wakes up, claims it, and delivers the result back into the conversation that asked.
 
