@@ -102,7 +102,7 @@ const EXPECTED = [
   "navigation: sidepanel.openPage rejects requests without an owner gesture",
   "navigation: sidepanel.openPage rejects non-http(s) URLs",
   "navigation: the Go flow opens a REAL tab via the SW authority (real typing + real click)",
-  "sidepanel: the Agents view lists all groups (browse shows disabled too)",
+  "sidepanel: the Agents view lists all groups (enabled/callable agents only — no disabled templates)",
   "sidepanel: the task list shows the seeded scheduled task",
   "sidepanel: agents + tasks screenshot",
   "sidepanel: search filters (real typing)",
@@ -110,8 +110,8 @@ const EXPECTED = [
   "sidepanel: a task row opens its background agent's conversation",
   "sidepanel: deleting the task row cancels the schedule + disables the agent (live)",
   "sidepanel: rapid A→B selection renders only B's conversation (fenced history load)",
-  "lifecycle: recipe.duplicate broadcasts — the copy appears live (no reload)",
-  "lifecycle: recipe.update renames the copy live",
+  "lifecycle: recipe.duplicate broadcasts — the picker refreshes live (no reload); the disabled copy is a template, not a row",
+  "lifecycle: recipe.update renames the copy live in the registry; the picker refreshes and still lists no template",
   "lifecycle: recipe.delete removes the copy live",
   "lifecycle: a created named agent appears live (no reload)",
   "sidepanel: selecting opens the agent's conversation surface",
@@ -356,6 +356,8 @@ async function main() {
     const regJson = JSON.stringify(reg);
     check("registry: no provider keys / internal paths leak",
       !regJson.includes("apiKey") && !regJson.includes("memory/") && !regJson.includes("baseURL"));
+    const disabledBgNames = (regGroups.find((g) => g.id === "background")?.agents ?? [])
+      .filter((a) => a.enabled !== true).map((a) => a.name);
     const regRev = Number(reg?.revision);
     check("registry: the response carries a monotonic revision", Number.isFinite(regRev) && regRev > 0, reg?.revision);
 
@@ -678,9 +680,13 @@ async function main() {
         groups: [...p.shadowRoot.querySelectorAll('.group-h')].map(n => n.textContent),
         agentsVisible: !document.getElementById('agents-view').hidden };
     })()`);
-    check("sidepanel: the Agents view lists all groups (browse shows disabled too)",
+    // CAP-FB-20260830-FRESH-PROFILE-TEMPLATE-AGENTS-01: the side panel lists the
+    // same set as every other agent surface — the ENABLED background agent
+    // only; the 21 disabled recipes are templates, never agent rows.
+    check("sidepanel: the Agents view lists all groups (enabled/callable agents only — no disabled templates)",
       spList.agentsVisible && spList.groups.length === 3 && spList.opts.includes("Reader") &&
-      spList.opts.includes("@example.com"), spList);
+      spList.opts.includes("@example.com") && spList.opts.includes(bgName) &&
+      !spList.opts.some((n) => disabledBgNames.includes(n)), { ...spList, disabledBgNames: disabledBgNames.length });
     // The task list (the Agents view's third surface): the seeded recipe task.
     const spTasks = await evl(sp, `[...document.querySelectorAll('#agents-tasks task-row')].map(r => r.getAttribute('name'))`);
     check("sidepanel: the task list shows the seeded scheduled task",
@@ -752,17 +758,33 @@ async function main() {
     //    mutation must broadcast agent-registry-changed) ─────────────────
     await clickExpr(sp, `document.getElementById('agent-back')`);
     await sleep(400);
+    // CAP-FB-20260830-FRESH-PROFILE-TEMPLATE-AGENTS-01: a duplicated recipe is
+    // DISABLED, so it is a template and never an agent row. The live-broadcast
+    // property is measured on the picker's applied registry revision (it
+    // re-fetched without a reload) and on the registry route itself.
+    const revBeforeDup = await evl(sp, `${SP_PICK}._appliedRevision`);
     const dupRes = await msg(sp, { type: "recipe.duplicate", id: bgFirst?.id });
     const copyId = dupRes?.recipe?.id;
     await sleep(1500); // broadcast → picker.refresh()
+    const revAfterDup = await evl(sp, `${SP_PICK}._appliedRevision`);
     const spAfterDup = await evl(sp, `[...${SP_PICK}.shadowRoot.querySelectorAll('.opt .name')].map(n => n.textContent)`);
-    check("lifecycle: recipe.duplicate broadcasts — the copy appears live (no reload)",
-      !!copyId && spAfterDup.includes(`${bgName} (copy)`), { copyId, spAfterDup });
+    const regAfterDup = await msg(sp, { type: "agent.registry" });
+    const bgAfterDup = regAfterDup?.groups?.find((g) => g.id === "background")?.agents ?? [];
+    check("lifecycle: recipe.duplicate broadcasts — the picker refreshes live (no reload); the disabled copy is a template, not a row",
+      !!copyId && Number(revAfterDup) > Number(revBeforeDup) &&
+      bgAfterDup.some((a) => a.id === copyId && a.name === `${bgName} (copy)` && a.enabled === false) &&
+      !spAfterDup.includes(`${bgName} (copy)`), { copyId, revBeforeDup, revAfterDup, spAfterDup });
     await msg(sp, { type: "recipe.update", id: copyId, name: "Renamed Copy" });
     await sleep(1500);
+    const revAfterRename = await evl(sp, `${SP_PICK}._appliedRevision`);
     const spAfterRename = await evl(sp, `[...${SP_PICK}.shadowRoot.querySelectorAll('.opt .name')].map(n => n.textContent)`);
-    check("lifecycle: recipe.update renames the copy live",
-      spAfterRename.includes("Renamed Copy") && !spAfterRename.includes(`${bgName} (copy)`), spAfterRename);
+    const regAfterRename = await msg(sp, { type: "agent.registry" });
+    const bgAfterRename = regAfterRename?.groups?.find((g) => g.id === "background")?.agents ?? [];
+    check("lifecycle: recipe.update renames the copy live in the registry; the picker refreshes and still lists no template",
+      Number(revAfterRename) > Number(revAfterDup) &&
+      bgAfterRename.some((a) => a.id === copyId && a.name === "Renamed Copy") &&
+      !spAfterRename.includes("Renamed Copy") && !spAfterRename.includes(`${bgName} (copy)`),
+      { revAfterDup, revAfterRename, spAfterRename });
     await msg(sp, { type: "recipe.delete", id: copyId });
     await sleep(1500);
     const spAfterDelete = await evl(sp, `[...${SP_PICK}.shadowRoot.querySelectorAll('.opt .name')].map(n => n.textContent)`);
@@ -821,12 +843,14 @@ async function main() {
       !spDeleted.opts.includes("Reader Pro") && spDeleted.opts.includes("Live Agent"), spDeleted);
     check("sidepanel: live-update screenshot", await shot(sp, "after-08-sidepanel-live"));
 
-    // A DISABLED background agent is never restored (the round-2 blocker):
-    // select it (the browse list shows disabled agents), reload, and the
-    // stale saved selection must be dropped — the detail stays closed.
-    await clickExpr(sp, spPickOptByName(bgName));
-    await sleep(800);
-    const disabledSaved = await evl(sp, `sessionStorage.getItem('cap:sidepanel:selected-agent')`);
+    // A DISABLED background agent is never restored (the round-2 blocker).
+    // The browse list no longer shows disabled agents (they are templates), so
+    // a stale saved selection can only come from a session that selected the
+    // agent BEFORE it was disabled — write that saved selection the way the
+    // panel persists it, reload, and it must be dropped: the detail stays closed.
+    const disabledSaved = await evl(sp, `(() => { const v = JSON.stringify({ ref: ${JSON.stringify(bgRef)}, kind: "background",
+      id: ${JSON.stringify(bgFirst?.id ?? "")}, name: ${JSON.stringify(bgName)} });
+      sessionStorage.setItem('cap:sidepanel:selected-agent', v); return v; })()`);
     await send("Page.reload", {}, sp);
     await sleep(2500);
     const spDisabledRestore = await evl(sp, `(() => ({ detail: !document.getElementById('agent-detail-pane').hidden,

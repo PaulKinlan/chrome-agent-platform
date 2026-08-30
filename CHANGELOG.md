@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.431] — 2026-08-30
+- A fresh profile no longer shows 22 switched-off automations as agents. The hub sidebar, the Agents panel, the side panel and Settings now list the same agents (the ones you created plus any background agent you turned on); the built-in ones stay available as templates when you create an agent.
+
 ## [0.2.430] — 2026-08-30
 - Six fixes are now in progress in parallel and recorded as claimed in the task tracker so no two agents work the same item.
 

@@ -349,6 +349,9 @@ const EXPECTED = [
   "initial SW closed for a pre-attached restart",
   "SW woken for the pre-attached restart",
   "initial SW boot observed via pre-attached restart",
+  "fresh profile: the four agent surfaces agree (0)",
+  "after enabling one recipe the four agent surfaces agree (1)",
+  "after disabling that recipe the four agent surfaces agree (0) again",
   "NTP: task input present",
   "NTP: typed a task via Input events",
   "NTP: textarea reflects the typed text",
@@ -722,6 +725,100 @@ async function main() {
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 1 — GENUINE CDP INPUT on the NTP: type a task + click Run.
+    // ─────────────────────────────────────────────────────────────
+    // CAP-FB-20260830-FRESH-PROFILE-TEMPLATE-AGENTS-01 — the four agent
+    // surfaces (hub sidebar, hub Agents panel, Settings → Agents, side panel
+    // Agents tab) list the SAME set: created named agents + ENABLED background
+    // agents. A fresh profile shows the empty state everywhere (the 22 disabled
+    // recipes are templates, not agents); enabling one recipe shows exactly one
+    // row everywhere. Each measurement opens fresh pages (not reloads — a
+    // navigation breaks the CDP eval context), so the projection is measured
+    // as a new visit renders it, then closes them.
+    const measureAgentSurfaces = async () => {
+      const pages = [];
+      const open = async (path) => {
+        const page = await openPage(port, `chrome-extension://${extId}/${path}`);
+        pages.push(page);
+        await sleep(1800);
+        const session = await attachRuntime(cdp, page.id);
+        cdp.pageSessions.add(session);
+        return session;
+      };
+      try {
+        const hub = await open("ntp/ntp.html");
+        const opts = await open("options/options.html#agents");
+        const sp = await open("sidepanel/sidepanel.html");
+        await evalIn(cdp, sp, `document.getElementById('tab-agents')?.click()`);
+        await sleep(1200); // the picker's live registry fetch
+        const sidebarRows = await evalIn(cdp, hub, `document.querySelectorAll('#side-agents .agent-item').length`);
+        const sidebarEmpty = await evalIn(cdp, hub, `document.querySelector('#side-agents .thread-empty')?.textContent ?? ''`);
+        const panelCount = await evalIn(cdp, hub, `document.getElementById('agent-count')?.textContent ?? ''`);
+        const panelRows = await evalIn(cdp, hub, `document.querySelectorAll('#named-agents capability-row').length`);
+        const settingsRows = await evalIn(cdp, opts, `document.querySelectorAll('#unified-agent-list .agent-settings-row').length`);
+        const settingsText = await evalIn(cdp, opts, `document.getElementById('unified-agent-list')?.textContent?.trim().slice(0, 60) ?? ''`);
+        const sidepanelRows = await evalIn(cdp, sp, `document.getElementById('agents-picker')?.shadowRoot?.querySelectorAll('.opt').length ?? -1`);
+        const sidepanelEmpty = await evalIn(cdp, sp, `document.getElementById('agents-picker')?.shadowRoot?.querySelector('.state')?.textContent ?? ''`);
+        const shot = await captureShot(cdp, hub);
+        return { sidebarRows, sidebarEmpty, panelCount, panelRows, settingsRows, settingsText, sidepanelRows, sidepanelEmpty, shot };
+      } finally {
+        for (const page of pages) {
+          await fetch(`http://127.0.0.1:${port}/json/close/${page.id}`).catch(() => {});
+        }
+      }
+    };
+    const surfaces0 = await measureAgentSurfaces();
+    if (surfaces0.shot) await writeEvidence("fresh-profile-sidebar.png", surfaces0.shot);
+    console.log("agent surfaces (fresh):", JSON.stringify({ ...surfaces0, shot: undefined }));
+    check(
+      "fresh profile: the four agent surfaces agree (0)",
+      surfaces0.sidebarRows === 0 && /No agents yet/.test(surfaces0.sidebarEmpty) &&
+        /^0 agents/.test(surfaces0.panelCount) && surfaces0.panelRows === 0 &&
+        /^No agents yet\./.test(surfaces0.settingsText) &&
+        surfaces0.sidepanelRows === 0 && /No agents yet/.test(surfaces0.sidepanelEmpty),
+    );
+    // Enable ONE recipe. Headless Chrome auto-denies chrome.permissions.request,
+    // so background-agent.set fails closed here (by design); seed the enabled
+    // state the way the scheduler persists it — the SW's own cap:scheduledTasks
+    // authority — so every surface derives `enabled` from the real store.
+    const bgListForSeed = await msgValue({ type: "background-agent.list" });
+    const seedRecipe = (bgListForSeed?.agents ?? []).find((a) => a?.schedule?.periodInMinutes);
+    const seedName = `recipe:${seedRecipe?.id}`;
+    const seeded = seedRecipe
+      ? await msgValue({
+        type: "kv.set",
+        values: {
+          "cap:scheduledTasks": {
+            [seedName]: {
+              name: seedName,
+              task: seedRecipe.prompt ?? "seeded schedule",
+              at: Date.now() + 3600e3,
+              periodInMinutes: seedRecipe.schedule.periodInMinutes,
+            },
+          },
+        },
+      })
+      : { ok: false, error: "no scheduled recipe" };
+    const surfaces1 = await measureAgentSurfaces();
+    if (surfaces1.shot) await writeEvidence("one-recipe-enabled-sidebar.png", surfaces1.shot);
+    console.log("agent surfaces (one enabled):", JSON.stringify({ ...surfaces1, shot: undefined, seeded, seedName }));
+    check(
+      "after enabling one recipe the four agent surfaces agree (1)",
+      seeded?.ok === true &&
+        surfaces1.sidebarRows === 1 && /^1 agent /.test(surfaces1.panelCount) && surfaces1.panelRows === 1 &&
+        surfaces1.settingsRows === 1 && !/^No agents yet\./.test(surfaces1.settingsText) &&
+        surfaces1.sidepanelRows === 1,
+    );
+    // Disable it again (clear the seeded schedule) so the rest of the suite
+    // sees the fresh profile it expects — and the surfaces return to 0.
+    const unseeded = await msgValue({ type: "kv.set", values: { "cap:scheduledTasks": {} } });
+    const surfaces2 = await measureAgentSurfaces();
+    console.log("agent surfaces (disabled again):", JSON.stringify({ ...surfaces2, shot: undefined, unseeded }));
+    check(
+      "after disabling that recipe the four agent surfaces agree (0) again",
+      unseeded?.ok === true && surfaces2.sidebarRows === 0 && /^0 agents/.test(surfaces2.panelCount) &&
+        surfaces2.panelRows === 0 && /^No agents yet\./.test(surfaces2.settingsText) && surfaces2.sidepanelRows === 0,
+    );
+
     // ─────────────────────────────────────────────────────────────
     check(
       "NTP: task input present",
