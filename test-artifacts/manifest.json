@@ -1,13 +1,13 @@
 {
-  "testedSourceCommit": "ba12fb30484836e431b271807edd89508391eee9",
+  "testedSourceCommit": "c58f8300278c63a9d1b0cbaef0536bf9f6f93f91",
   "evidenceCommitNote": "committed AFTER this run — a tracked manifest cannot contain its own commit hash",
   "worktreeClean": true,
   "worktreeDirtyFiles": [],
-  "runId": "cap-1787149966431",
+  "runId": "cap-1788060411185",
   "retain": true,
-  "ts": "2026-08-19T14:33:54.478Z",
-  "evidenceDir": "/tmp/cap-approval-current-main/test-artifacts",
-  "passed": 126,
+  "ts": "2026-08-30T03:27:43.200Z",
+  "evidenceDir": "/home/paulkinlan/worktrees/cap-permissions-optional/test-artifacts",
+  "passed": 131,
   "failed": 0,
   "checks": [
     {
@@ -27,7 +27,7 @@
       "pass": true
     },
     {
-      "name": "manifest: permissions list is empty (all optional)",
+      "name": "manifest: boot-critical permissions mandatory, capabilities optional, <all_urls> host",
       "pass": true
     },
     {
@@ -79,47 +79,63 @@
       "pass": true
     },
     {
-      "name": "permissions: all seven capabilities start ungranted",
+      "name": "permissions: optional capabilities start ungranted (JIT) and the mandatory boot set is granted",
       "pass": true
     },
     {
-      "name": "permissions: enabled storage (granted)",
+      "name": "permissions: Settings panel renders three-state rows + mandatory boot rows",
       "pass": true
     },
     {
-      "name": "permissions: enabled alarms (granted)",
+      "name": "permissions: optional capabilities start ungranted (JIT model)",
       "pass": true
     },
     {
-      "name": "permissions: enabled activeTab (granted)",
+      "name": "permissions: Context menus Enable button found in the Settings panel",
       "pass": true
     },
     {
-      "name": "permissions: enabled scripting (granted)",
+      "name": "permissions: Context menus Enable clicked via a trusted gesture",
       "pass": true
     },
     {
-      "name": "permissions: enabled sidePanel (granted)",
+      "name": "permissions: Context menus granted after Enable settled",
       "pass": true
     },
     {
-      "name": "permissions: tabs denied in headless (fail closed)",
+      "name": "permissions: Context menus Turn off clicked via a trusted gesture",
       "pass": true
     },
     {
-      "name": "permissions: notifications denied in headless (fail closed)",
+      "name": "permissions: Context menus absent after Turn off settled",
       "pass": true
     },
     {
-      "name": "permissions: storage Disable returns revoked (capability.revoke route)",
+      "name": "permissions: Context menus retry Enable clicked via a trusted gesture",
       "pass": true
     },
     {
-      "name": "permissions: provider survives storage Disable (session snapshot)",
+      "name": "permissions: Context menus granted after retry settled",
       "pass": true
     },
     {
-      "name": "permissions: storage re-enabled + provider survived (migration)",
+      "name": "permissions: Bookmarks Enable clicked via a trusted gesture",
+      "pass": true
+    },
+    {
+      "name": "permissions: Bookmarks prompt cancelled and permission settled absent in headless",
+      "pass": true
+    },
+    {
+      "name": "permissions: Tab groups Enable clicked via a trusted gesture",
+      "pass": true
+    },
+    {
+      "name": "permissions: Tab groups prompt cancelled and permission settled absent in headless",
+      "pass": true
+    },
+    {
+      "name": "permissions: capability.revoke still requires owner approval (fail closed)",
       "pass": true
     },
     {
@@ -171,7 +187,7 @@
       "pass": true
     },
     {
-      "name": "enrollment: denied host permission → origin NOT enrolled (fail closed)",
+      "name": "enrollment: origin enrolled under JIT grant",
       "pass": true
     },
     {
@@ -195,7 +211,7 @@
       "pass": true
     },
     {
-      "name": "screenshot: capture denied in headless (fail closed)",
+      "name": "screenshot: capture SUCCEEDS for the granted origin",
       "pass": true
     },
     {
@@ -227,7 +243,7 @@
       "pass": true
     },
     {
-      "name": "screenshot: UI-granted capture denied in headless (fail closed)",
+      "name": "screenshot: UI-granted capture SUCCEEDS for the scoped origin",
       "pass": true
     },
     {
@@ -387,6 +403,10 @@
       "pass": true
     },
     {
+      "name": "disenroll: an owner click needs no second approval (owner-direct action)",
+      "pass": true
+    },
+    {
       "name": "disenroll: agent removed from list + enrollment tombstoned",
       "pass": true
     },
@@ -395,11 +415,11 @@
       "pass": true
     },
     {
-      "name": "scripting Disable: capability revoked",
+      "name": "scripting Disable: optional permission revoked",
       "pass": true
     },
     {
-      "name": "scripting Disable: BOTH origins tombstoned (no lost update)",
+      "name": "scripting Disable: successful revoke tombstones every enrolled origin",
       "pass": true
     },
     {
@@ -439,7 +459,7 @@
       "pass": true
     },
     {
-      "name": "approval: deny row is singular and capability material absent from DOM",
+      "name": "approval: deny row is singular and capability material absent from the payload",
       "pass": true
     },
     {
@@ -518,23 +538,28 @@
   "files": [
     {
       "name": "ntp-driven.png",
-      "sha256": "3221b6d063b1f08d55d8d64521aa70258d7288751a4634779a444033b028f859",
-      "bytes": 58989
+      "sha256": "573ddc47383dec7a903aeba5a7da4b36ed1e48542255225ac89157beb130745e",
+      "bytes": 58258
     },
     {
       "name": "options-driven.png",
-      "sha256": "c500706e347bcb1e2fa992a19bd3122401f1ad8cfae27d3304eddb370e512419",
-      "bytes": 234620
+      "sha256": "aa1aa53e7c0f8d2e0a65b1b5bda1fa5f92a8d1e58db6b712eade5ffa77d19a2c",
+      "bytes": 223840
+    },
+    {
+      "name": "approval-iframe-denied.png",
+      "sha256": "0bf629968d01a052e4fffd5a15e669da53af7b903fb48b1322da4cd88a6ec2ef",
+      "bytes": 218366
     },
     {
       "name": "approval-deny-pending.png",
-      "sha256": "3c4f3e7821dc7d11b43517528b6aedff38800fb455d97261ccb6e07cf16727f5",
-      "bytes": 241127
+      "sha256": "48a68d37271bb63b9231880164d88f73630fcdf4a70a0c046490b0a6a7fca2bc",
+      "bytes": 221686
     },
     {
       "name": "approval-deny-resolved.png",
-      "sha256": "8282ed4da1b95317f1affef4140159ed93985df9972ef7af12626e3467e8535f",
-      "bytes": 253777
+      "sha256": "48a68d37271bb63b9231880164d88f73630fcdf4a70a0c046490b0a6a7fca2bc",
+      "bytes": 221686
     }
   ]
 }

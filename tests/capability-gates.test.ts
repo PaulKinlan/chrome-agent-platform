@@ -46,6 +46,7 @@ Deno.test("optional bookmark capability requests directly from the Settings owne
   }
 });
 
+
 Deno.test("required capability refusal is wired before every dependent teardown", async () => {
   const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
   const route = sw.slice(sw.indexOf('async "capability.revoke"'), sw.indexOf('async "invalidate-agent"'));

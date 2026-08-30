@@ -22,15 +22,137 @@ export const CAPABILITIES = [
     id: "bookmarks",
     permissions: ["bookmarks"],
     label: "Bookmarks",
-    hint: "Read and organize bookmarks. Without it, bookmark commands and tools stay unavailable.",
+    hint: "Read, create and organize bookmarks. Without the grant, bookmark tools and the /bookmarks command are refused with an Enable affordance.",
     gates: "Gates: /bookmarks and bookmark list/create/remove tools.",
+    chromeOsOnly: false,
   },
   {
     id: "history",
     permissions: ["history"],
     label: "History",
-    hint: "Search browsing history. Without it, history commands and tools stay unavailable.",
+    hint: "Search browsing history. Without the grant, history tools and the /history command are refused with an Enable affordance.",
     gates: "Gates: /history and browsing-history tools.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "contextMenus",
+    permissions: ["contextMenus"],
+    label: "Context menus",
+    hint: "Create the agent's right-click menu entries. Without the grant, menu tools are refused.",
+    gates: "Gates: context menu create/remove tools.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "idle",
+    permissions: ["idle"],
+    label: "Idle detection",
+    hint: "Detect when the browser is idle (used by scheduled runs). Without the grant, idle tools are refused.",
+    gates: "Gates: idle query tool.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "topSites",
+    permissions: ["topSites"],
+    label: "Top sites",
+    hint: "Read the most-visited sites. Without the grant, top-sites tools are refused.",
+    gates: "Gates: top sites tools.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "readingList",
+    permissions: ["readingList"],
+    label: "Reading list",
+    hint: "Read and manage the Chrome reading list. Without the grant, reading-list tools are refused.",
+    gates: "Gates: reading list tools.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "pageCapture",
+    permissions: ["pageCapture"],
+    label: "Page capture (MHTML)",
+    hint: "Capture a page as MHTML. Without the grant, page-capture tools are refused.",
+    gates: "Gates: MHTML page capture.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "privacy",
+    permissions: ["privacy"],
+    label: "Privacy controls",
+    hint: "Read and set Chrome privacy features (e.g. safe browsing). Without the grant, privacy tools are refused.",
+    gates: "Gates: privacy set/get tools.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "proxy",
+    permissions: ["proxy"],
+    label: "Proxy settings",
+    hint: "Configure Chrome proxy settings. Without the grant, proxy tools are refused.",
+    gates: "Gates: proxy set/clear tools.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "fontSettings",
+    permissions: ["fontSettings"],
+    label: "Font settings",
+    hint: "Read and set Chrome font settings. Without the grant, font tools are refused.",
+    gates: "Gates: font get/set tools.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "power",
+    permissions: ["power"],
+    label: "Power management",
+    hint: "Keep the system awake during long runs. Without the grant, power tools are refused.",
+    gates: "Gates: power keep-awake tool.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "search",
+    permissions: ["search"],
+    label: "Web search",
+    hint: "Query the default search engine. Without the grant, search tools are refused.",
+    gates: "Gates: search query tool.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "tts",
+    permissions: ["tts"],
+    label: "Text to speech",
+    hint: "Speak text aloud and list voices. Without the grant, TTS tools are refused.",
+    gates: "Gates: speak/stop/voice tools.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "system.cpu",
+    permissions: ["system.cpu"],
+    label: "System CPU info",
+    hint: "Read CPU diagnostics. Without the grant, CPU tools are refused.",
+    gates: "Gates: CPU info tool.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "system.memory",
+    permissions: ["system.memory"],
+    label: "System memory info",
+    hint: "Read memory diagnostics. Without the grant, memory tools are refused.",
+    gates: "Gates: memory info tool.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "system.storage",
+    permissions: ["system.storage"],
+    label: "System storage info",
+    hint: "Read storage device diagnostics. Without the grant, storage tools are refused.",
+    gates: "Gates: storage info tool.",
+    chromeOsOnly: false,
+  },
+  {
+    id: "system.display",
+    permissions: ["system.display"],
+    label: "System display info",
+    hint: "Read display diagnostics. Without the grant, display tools are refused.",
+    gates: "Gates: display info tool.",
+    chromeOsOnly: false,
   },
   {
     id: "storage",
@@ -195,6 +317,12 @@ export async function capabilityStatus() {
 export async function requestCapability(id, { request = true } = {}) {
   const cap = CAPABILITIES.find((c) => c.id === id);
   if (!cap) return { ok: false, error: `unknown capability ${id}` };
+  // OPTIONAL + JIT model (owner directive 2026-08-29, superseding the
+  // 2026-08-28 install-grant model for capabilities): the capability
+  // permissions live in manifest optional_permissions and are REQUESTED here
+  // from the owner's gesture (Settings toggle / chat affordance). ChromeOS-
+  // only permissions (audioCapture/videoCapture) are refused honestly when
+  // the platform lacks the API.
   try {
     const query = { permissions: cap.permissions };
     if (!request) {
@@ -230,10 +358,54 @@ export async function requestCapability(id, { request = true } = {}) {
  * This matters beyond a nicer message: revoke paths do their DEPENDENT
  * teardown first (scripting tombstones every enrolled origin so a running
  * bridge is rejected from that instant, before the permission is removed).
- * That ordering is right when revocation can actually happen, but under the
- * install-granted model it meant an operation that could never succeed still
- * destroyed enrollment state on its way to failing.
+ * That ordering is load-bearing on every revoke again: under the OPTIONAL +
+ * JIT model (owner directive 2026-08-29, superseding the 2026-08-28
+ * install-granted model for capabilities) capability permissions are
+ * runtime-revocable. Only the minimal mandatory boot set
+ * (storage/alarms/sidePanel/offscreen) is non-revocable.
  */
+/**
+ * The THREE-STATE capability status (review: permissions UI must never
+ * collapse "not granted" and "not available on this platform"):
+ *   granted              — contains() says yes
+ *   requestable          — not granted, but grantable on this platform (JIT)
+ *   platform-unavailable — never grantable here (ChromeOS-only API absent)
+ */
+/**
+ * Whether a manifest-listed capability permission is AVAILABLE on this
+ * platform. audioCapture/videoCapture are ChromeOS-only (their rows were
+ * removed from CAPABILITIES entirely), but the check is kept for future
+ * platform-gated permissions.
+ */
+export function isPermissionPlatformAvailable(permission) {
+  if (permission === "audioCapture") return typeof chrome.audioCapture !== "undefined";
+  if (permission === "videoCapture") return typeof chrome.videoCapture !== "undefined";
+  return true;
+}
+
+export async function capabilityState(id) {
+  const cap = CAPABILITIES.find((c) => c.id === id);
+  if (!cap) return { id, state: "unknown" };
+  const states = await Promise.all((cap.permissions ?? []).map(async (p) => {
+    if (!isPermissionPlatformAvailable(p)) return "platform-unavailable";
+    try {
+      return (await chrome.permissions.contains({ permissions: [p] })) ? "granted" : "requestable";
+    } catch {
+      return "platform-unavailable";
+    }
+  }));
+  if (states.every((st) => st === "granted")) return { id, state: "granted" };
+  if (states.includes("platform-unavailable")) {
+    const grantable = states.filter((st) => st !== "platform-unavailable");
+    return {
+      id,
+      state: grantable.length > 0 ? "partial-platform-unavailable" : "platform-unavailable",
+      unavailablePermissions: (cap.permissions ?? []).filter((_, i) => states[i] === "platform-unavailable"),
+    };
+  }
+  return { id, state: "requestable" };
+}
+
 export function isRequiredCapability(id) {
   const cap = CAPABILITIES.find((c) => c.id === id);
   if (!cap || !Array.isArray(cap.permissions) || cap.permissions.length === 0) return false;

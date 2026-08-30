@@ -2,14 +2,15 @@
 //
 // CAP-FB-20260825-HEADED-ACCEPTANCE-LANE-01. Consolidates the three residuals
 // that headless CANNOT prove into ONE repeatable macro:
-//   (a) the screenshot SUCCESS path (headless auto-denies arbitrary-tab
+//   (a) a prompted Settings capability grant → Turn off → retry lifecycle,
+//   (b) the screenshot SUCCESS path (headless auto-denies arbitrary-tab
 //       capture; only a real action click grants the transient activeTab),
-//   (b) the full enrollment lifecycle as one journey — enroll, discover,
+//   (c) the full enrollment lifecycle as one journey — enroll, discover,
 //       invoke, clean up, retry — through the REAL extension UI (real CDP
 //       clicks; the same #enroll-origin / #enroll-btn / #discover-page /
 //       picker / .disenroll-origin selectors the headless suite drives),
-//   (c) the two WebMCP OS permission prompts (tabs at "Discover this page",
-//       host access at the picker pick) from docs/WEBMCP-ACCEPTANCE.md.
+//   (d) the WebMCP OS permission prompt for tabs at "Discover this page";
+//       install-granted <all_urls> host access is asserted separately.
 //
 // It drives production code only (the shipped extension, no manifest variant,
 // no injected main-world source) — the round-28 block was acceptance that
@@ -21,7 +22,7 @@
 //
 // Evidence goes to DURABLE storage (default
 // $HOME/cap-evidence/headed-acceptance/<ISO-timestamp>; /tmp and /dev/shm are
-// refused). Every step is labelled MANUAL (a human clicked an OS prompt) or
+// refused). Every step is labelled MANUAL (a human completed required browser UI) or
 // AUTOMATED, in the printed log AND in headed-acceptance-manifest.json.
 // The headless suites are untouched and still assert fail-closed denial.
 //
@@ -250,6 +251,20 @@ async function clickSel(cdp: Cdp, session: string, selector: string) {
   return true;
 }
 
+async function capabilityButtonSelector(cdp: Cdp, session: string, label: string, text: string) {
+  const index = await evalIn(cdp, session, `(() => [...document.querySelectorAll('#permission-list .perm-row')]
+    .findIndex((row) => row.querySelector('.perm-name')?.textContent === ${JSON.stringify(label)} &&
+      row.querySelector('button')?.textContent === ${JSON.stringify(text)}))()`);
+  return Number.isInteger(index) && index >= 0
+    ? `#permission-list > .perm-row:nth-child(${index + 1}) button`
+    : null;
+}
+
+async function clickCapability(cdp: Cdp, session: string, label: string, text: string) {
+  const selector = await capabilityButtonSelector(cdp, session, label, text);
+  return selector !== null && await clickSel(cdp, session, selector);
+}
+
 async function typeText(cdp: Cdp, session: string, text: string) {
   for (const ch of text) {
     await cdp.send("Input.dispatchKeyEvent", { type: "char", text: ch, unmodifiedText: ch }, session);
@@ -375,6 +390,37 @@ async function main() {
     await cdp.send("Page.enable", {}, ns);
     const msgNs = (msg: unknown) => evalIn(cdp, ns, `chrome.runtime.sendMessage(${JSON.stringify(msg)})`);
 
+    // ── STEP K — PROMPTED SETTINGS CAPABILITY LIFECYCLE. ────────────────
+    const tabGroupsReady = await until(async () =>
+      (await capabilityButtonSelector(cdp, opts, "Tab groups", "Enable")) ?? null, 12000);
+    check("Settings capability: Tab groups Enable button present", tabGroupsReady !== null);
+    const tabGroupsClicked = await clickCapability(cdp, opts, "Tab groups", "Enable");
+    check("Settings capability: clicked Tab groups Enable via a real click", tabGroupsClicked);
+    const tabGroupsGranted = tabGroupsClicked && await manual(1, 4,
+      "a Chrome permission prompt is showing for Tab groups — click ALLOW.",
+      async () => (await evalIn(cdp, opts, `chrome.permissions.contains({ permissions: ["tabGroups"] })`)) === true);
+    check("Settings capability: OS prompt granted Tab groups", tabGroupsGranted, "manual-user-click");
+    const turnOffReady = await until(async () =>
+      (await capabilityButtonSelector(cdp, opts, "Tab groups", "Turn off")) ?? null, 12000);
+    check("Settings capability: Tab groups Turn off button present", turnOffReady !== null);
+    check(
+      "Settings capability: clicked Tab groups Turn off via a real click",
+      await clickCapability(cdp, opts, "Tab groups", "Turn off"),
+    );
+    const tabGroupsAbsent = await until(async () => {
+      const absent = (await evalIn(cdp, opts, `chrome.permissions.contains({ permissions: ["tabGroups"] })`)) === false;
+      const enable = await capabilityButtonSelector(cdp, opts, "Tab groups", "Enable");
+      return absent && enable !== null ? true : null;
+    }, 12000);
+    check("Settings capability: Tab groups absent after Turn off settled", tabGroupsAbsent === true);
+    const tabGroupsRetryClicked = await clickCapability(cdp, opts, "Tab groups", "Enable");
+    check("Settings capability: clicked Tab groups Enable again via a real click", tabGroupsRetryClicked);
+    const tabGroupsRetryGranted = tabGroupsRetryClicked && await manual(2, 4,
+      "the Tab groups permission prompt is showing again — click ALLOW to verify retry.",
+      async () => (await evalIn(cdp, opts, `chrome.permissions.contains({ permissions: ["tabGroups"] })`)) === true);
+    check("Settings capability: retry OS prompt granted Tab groups", tabGroupsRetryGranted, "manual-user-click");
+    await grimShot("settings-capability-retry");
+
     // Fixture page (attach BEFORE any injection so main-world scriptParsed events are honest).
     const fT = await cdp.send("Target.createTarget", { url: `${PAGE_ORIGIN}/index.html` });
     const wsess = (await cdp.send("Target.attachToTarget", { targetId: fT.result!.targetId, flatten: true })).result!.sessionId as string;
@@ -384,14 +430,18 @@ async function main() {
     check("fixture page loaded", true);
     const fixtureTabId = await evalIn(cdp, sws, `chrome.tabs.query({}).then(ts => ts.find(t => t.url && t.url.startsWith(${JSON.stringify(PAGE_ORIGIN)}))?.id ?? null)`);
 
-    // ── STEP E — ENROLL (the headless fail-closed path's headed success). ──
+    // ── STEP E — ENROLL (host access is install-granted, not prompted). ──
+    const permanentHostAccess = await evalIn(cdp, sws, `Promise.all([
+      chrome.runtime.getManifest().host_permissions?.includes("<all_urls>") === true,
+      chrome.permissions.contains({ origins: [${JSON.stringify(PAGE_ORIGIN + "/*")}] }),
+    ]).then(([declared, granted]) => declared && granted)`);
+    check("host access: <all_urls> is install-granted and covers the fixture page", permanentHostAccess === true);
     check("Settings: Enroll input present", (await boxOf(cdp, opts, "#enroll-origin")) !== null);
     check("Settings: typed the fixture origin into the Enroll field", await typeInto(cdp, opts, "#enroll-origin", PAGE_ORIGIN));
     check("Settings: clicked Enroll via a real click", await clickSel(cdp, opts, "#enroll-btn"));
-    const enrolled = await manual(1, 4,
-      "a Chrome prompt is asking for host access to 127.0.0.1:8934 — click ALLOW.",
-      async () => (await msgSw({ type: "agent.list" }))?.includes?.(PAGE_ORIGIN) === true);
-    check("enrollment: OS prompt granted → origin ENROLLED (headed success of the headless fail-closed denial)", enrolled, "manual-user-click");
+    const enrolled = await until(async () =>
+      (await msgSw({ type: "agent.list" }))?.includes?.(PAGE_ORIGIN) === true ? true : null, 12000);
+    check("enrollment: origin enrolled under permanent host access", enrolled === true);
     await grimShot("enrolled-settings");
 
     // ── STEP S — SCREENSHOT SUCCESS (the headed-only capture path). ──
@@ -402,29 +452,29 @@ async function main() {
     await sleep(500);
     const journalBefore = await msgNs({ type: "memory.get", origin: "master", key: "journal" }).catch(() => null);
     const shotsBefore = Array.isArray(journalBefore) ? journalBefore.filter((e: any) => e?.type === "screenshot").length : 0;
-    const actionShot = await manual(2, 4,
+    const actionShot = await manual(3, 4,
       "click the extension ACTION icon (puzzle → Chrome Agent Platform) while viewing the 127.0.0.1 fixture page — this is the transient owner-invoked screenshot gesture.",
       async () => {
         const j = await msgNs({ type: "memory.get", origin: "master", key: "journal" }).catch(() => null);
         return Array.isArray(j) && j.filter((e: any) => e?.type === "screenshot").length > shotsBefore;
       });
     check("screenshot: owner action click journaled a REAL screenshot entry to the hub memory (the headless auto-denied path)", actionShot, "manual-user-click");
-    // (b) the exact-host path: with the OS host grant from STEP E, capture.tab
+    // (b) the exact-host path: with the install-granted host access from STEP E, capture.tab
     // returns real PNG bytes (headless asserts this FAILS — see the journeys'
     // screenshot matrix; headed asserts the SUCCESS here).
     const capture = await msgNs({ type: "capture.tab", tabId: fixtureTabId });
     const pngOk = typeof capture?.screenshot === "string" && capture.screenshot.startsWith("data:image/png") && capture.screenshot.length > 200;
-    check("screenshot: capture.tab returns real PNG bytes once the OS host grant is live", pngOk);
+    check("screenshot: capture.tab returns real PNG bytes with install-granted host access", pngOk);
     await grimShot("fixture-page-with-extension");
     const shot = await captureShot(cdp, wsess);
     if (shot) await writeEvidence("fixture-page-cdp.png", shot);
 
-    // ── STEP D — DISCOVER (WebMCP OS prompt #1: tabs). ──
-    check("hub: clicked Discover this page via a real click", await clickSel(cdp, ns, `document.getElementById("discover-page")`));
-    const tabsGranted = await manual(3, 4,
-      "a Chrome permission prompt is showing — click ALLOW (tabs). This is WebMCP OS prompt 1 of 2.",
+    // ── STEP D — DISCOVER (WebMCP OS prompt: tabs). ──
+    check("hub: clicked Discover this page via a real click", await clickSel(cdp, ns, "#discover-page"));
+    const tabsGranted = await manual(4, 4,
+      "a Chrome permission prompt is showing — click ALLOW (tabs).",
       async () => (await evalIn(cdp, sws, `chrome.permissions.contains({ permissions: ["tabs"] })`)) === true);
-    check("webmcp prompt 1: the tabs permission was granted via the real OS prompt", tabsGranted, "manual-user-click");
+    check("webmcp prompt: the tabs permission was granted via the real OS prompt", tabsGranted, "manual-user-click");
     const pickerHasFixture = await until(() => evalIn(cdp, ns, `(() => {
       const dlg = document.querySelector("agent-dialog");
       if (!dlg) return null;
@@ -434,13 +484,9 @@ async function main() {
     check("hub: the tab picker lists the fixture tab (exact tab identity)", pickerHasFixture === true);
     await grimShot("tab-picker");
 
-    // ── STEP P — PICK (WebMCP OS prompt #2: host access). ──
-    const rowClicked = await clickSel(cdp, ns, `document.querySelector("agent-dialog capability-row[description=${JSON.stringify(PAGE_ORIGIN)}]")`);
+    // ── STEP P — PICK (host access was already asserted install-granted). ──
+    const rowClicked = await clickSel(cdp, ns, `agent-dialog capability-row[description="${PAGE_ORIGIN}"]`);
     check("hub: picked the fixture tab in the picker via a real click", rowClicked);
-    const hostGranted = await manual(4, 4,
-      "a Chrome permission prompt is showing — click ALLOW (host access for 127.0.0.1:8934). This is WebMCP OS prompt 2 of 2.",
-      async () => (await evalIn(cdp, sws, `chrome.permissions.contains({ origins: [${JSON.stringify(PAGE_ORIGIN + "/*")}] })`)) === true);
-    check("webmcp prompt 2: the fixture host permission was granted via the real OS prompt", hostGranted, "manual-user-click");
 
     // ── STEP I — INVOKE (production site invocation with a visible side effect). ──
     const toolNames = await until(async () => {
@@ -472,7 +518,7 @@ async function main() {
     check("retry: typed the origin again", await typeInto(cdp, opts, "#enroll-origin", PAGE_ORIGIN));
     check("retry: clicked Enroll again", await clickSel(cdp, opts, "#enroll-btn"));
     const reenrolled = await until(async () => (await msgSw({ type: "agent.list" }))?.includes?.(PAGE_ORIGIN) === true ? true : null, 15000);
-    check("retry: re-enrolled without a second OS prompt (permission already granted)", reenrolled === true);
+    check("retry: re-enrolled under permanent host access", reenrolled === true);
     const greetAgain = await msgNs({ type: "tools.invoke", origin: PAGE_ORIGIN, name: "greet", args: { name: "paul" } });
     check("retry: production invocation works again on the re-enrolled bridge", greetAgain?.ok === true && greetAgain?.result === "hello paul");
 

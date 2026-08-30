@@ -1,28 +1,19 @@
 # Changelog
 
-## [0.2.424] — 2026-08-30
-- Board deny: drive the Settings section in the browser journey (nav → dropdowns → add → persisted row → remove → gone)
-
-## [0.2.423] — 2026-08-30
-- Board deny rules: single owner-restricted route set (duplicate keys removed), corrupt policy store fails closed and is never overwritten, route-level tests with real callers and exact denial codes
-
-## [0.2.422] — 2026-08-30
-- test(board): fix deny-route tests to pass owner-options principal context
-
 ## [0.2.421] — 2026-08-30
-- fix(board): fail-closed deny-rule loading (corrupt store denies); tightened guard validation; added round-5 route-level + corrupt-store + denial-text tests
+- Merge main (permissions-optional model) into the board deny lane
 
 ## [0.2.420] — 2026-08-30
-- feat(board): add per-edge deny rules with owner Settings UI
+- merge fix: restore the permissions-optional manifest arrays (4 mandatory + 31 optional; audioCapture/videoCapture removed) — clobbered by a version-file revert during the merge
 
 ## [0.2.419] — 2026-08-30
-- fix(permissions): add board-permissions to SETTINGS_SECTIONS + OPTIONS_PRODUCT_HASHES
+- merge: permissions-optional lane (475a25dd) — 4 mandatory boot permissions, 31 optional capabilities with JIT grant from genuine owner gestures (Settings three-state panel, in-chat Enable affordance); audioCapture/videoCapture removed (packaged-apps-only); the approvals journey drives the real grant/revoke/retry lifecycle with trusted clicks
 
 ## [0.2.418] — 2026-08-30
-- feat(board): add Board permissions section to Settings + nav item
+- merge: test-bypass removal (7fd9c637) — isTrusted gates unconditional; scanner needle; tests migrated to DI
 
 ## [0.2.417] — 2026-08-30
-- test(board): RED deny-matrix battery — per-edge deny rules, malformed fail-closed, bounded rules, default open
+- Remove untrusted event test bypass
 
 ## [0.2.416] — 2026-08-30
 - The composer slash menu got an overhaul: dead commands are gone (/theme, /focus, /model, /schedule), and new ones pull real Chrome context into your message — /tabs picks any open tab, /artifacts attaches a saved artifact, /bookmarks and /history search and insert links, /files attaches files from folders you've granted

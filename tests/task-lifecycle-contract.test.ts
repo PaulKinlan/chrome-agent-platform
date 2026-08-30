@@ -45,10 +45,16 @@ Deno.test("contract §7: the orphaned-alarm cleanup route + UI affordance exist"
   assertStringIncludes(ntp, "Cancel orphaned alarms");
 });
 
-Deno.test("contract: host access stays permanent while only bookmark/history reads are optional", () => {
+Deno.test("contract: host access is permanent and capability permissions are OPTIONAL (JIT)", () => {
   assert((manifest.host_permissions ?? []).includes("<all_urls>"));
-  assert(
-    JSON.stringify([...(manifest.optional_permissions ?? [])].sort()) === JSON.stringify(["bookmarks", "history"]),
-    "only bookmarks/history may be optional in this lane",
-  );
+  const required = manifest.permissions ?? [];
+  assert(required.includes("storage"), "storage stays mandatory");
+  assert(required.includes("alarms"), "alarms stays mandatory");
+  assert(required.includes("sidePanel"), "sidePanel stays mandatory");
+  assert(required.includes("offscreen"), "offscreen stays mandatory");
+  const optional = manifest.optional_permissions ?? [];
+  assert(optional.includes("bookmarks"), "bookmarks is optional (JIT)");
+  assert(optional.includes("history"), "history is optional (JIT)");
+  for (const p of optional) assert(!required.includes(p), p + " appears in both lists");
+  for (const p of required) assert(!optional.includes(p), p + " appears in both lists");
 });

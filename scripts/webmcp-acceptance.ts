@@ -1,4 +1,3 @@
-// deno-fmt-ignore-file
 // webmcp-acceptance.ts — the PRODUCTION-PATH WebMCP discovery acceptance
 // journey (replaces the round-28-rejected scripts/webmcp-integration.ts, which
 // bypassed the implementation under test: it Runtime.evaluate'd the MAIN-world
@@ -6,11 +5,9 @@
 // tools.upsert directly from an extension page).
 //
 // This journey drives the REAL loaded-MV3 path end-to-end:
-//   1. passive detection admits the WebMCP fixture before enrollment while a
-//      concurrently-open plain http(s) page is absent from every picker;
-//   2. the REAL discovery UI (hub "Discover this page" → the filtered tab picker
-//      → the exact picked tab), clicked with real CDP Input events;
-//   3. verification of the extension's install-granted scripting/tabs/host access;
+//   1. the REAL discovery UI (hub "Discover this page" → the tab picker → the
+//      exact picked tab), clicked with real CDP Input events;
+//   2. the REAL permission request (chrome.permissions.request on the click);
 //   3. dynamic registration + current-tab injection of BOTH packaged scripts;
 //   4. CDP Debugger.scriptParsed evidence that chrome-extension://…/content/
 //      main-world.js and …/content/content-script.js really executed in the
@@ -31,17 +28,35 @@
 //   9. screenshots + a machine-verifiable manifest (test-artifacts/ by
 //      default, or WEBMCP_ARTIFACT_DIR for exact-clean-commit external evidence).
 //
-// The shipped manifest grants scripting, tabs, and host access at install, so
-// this headless journey loads the production extension unchanged. There is no
-// test-only manifest variant and no permission-prompt shortcut.
-import { launchChrome } from "./lib/chrome-launch.ts";
-
+// THE PERMISSION GESTURE. Headless Chromium auto-denies prompted optional
+// permissions (probed 2026-08-18: real click + --enable-automation both deny),
+// and this environment has no display/Xvfb, so the OS-level "Allow" click
+// cannot be automated here. Two modes:
+//
+//   deno run -A scripts/webmcp-acceptance.ts            # automated, status OPEN
+//   deno run -A scripts/webmcp-acceptance.ts --headed   # the executable MANUAL MACRO
+//
+// Automated mode loads a TEST VARIANT of the extension that is byte-identical
+// to the shipped one EXCEPT the manifest pre-holds scripting+tabs. Shipped
+// <all_urls> host access remains unchanged (recorded in the manifest as
+// permissionGrant:"test-manifest-pregranted"); the overall status stays OPEN
+// because the real permission-prompt gesture is unattested.
+//
+// --headed mode loads the SHIPPED extension in a headed browser, drives the
+// real UI to the permission prompt, then PAUSES and prints the exact manual
+// step ("click Allow on the Chrome permission prompt") — the one human action
+// — and continues every assertion automatically once the grant lands
+// (permissionGrant:"manual-user-allow"). See docs/WEBMCP-ACCEPTANCE.md.
+//
+// This permissions branch predates main's passive WebMCP detector. On that
+// base the fresh-profile picker is circular and cannot run honestly, so the
+// harness emits NOT RUNNABLE evidence instead of claiming those steps passed.
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
 const CHROMIUM = "/usr/bin/chromium";
 const FIXTURE_PORT = 8934;
 const PAGE_ORIGIN = `http://127.0.0.1:${FIXTURE_PORT}`;
-const PLAIN_ORIGIN = `http://localhost:${FIXTURE_PORT}`;
+const HEADED = Deno.args.includes("--headed");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let pass = 0, fail = 0;
@@ -62,24 +77,92 @@ function launchFixture() {
   return new Deno.Command("deno", { args: ["run", "-A", `${ROOT}fixtures/webmcp-server.ts`], stdout: "null", stderr: "null" }).spawn();
 }
 
+// The TEST VARIANT: byte-identical extension except the manifest pre-holds the
+// API permissions exercised by the headed flow. Shipped host access is unchanged.
+async function makeVariant() {
+  const dir = `/tmp/cap-webmcp-variant-${Date.now()}`;
+  await Deno.mkdir(dir, { recursive: true });
+  const cp = new Deno.Command("cp", { args: ["-r", EXT + "/.", dir] }).spawn();
+  await cp.status;
+  const mf = JSON.parse(await Deno.readTextFile(`${dir}/manifest.json`));
+  mf.permissions = [...new Set([...(mf.permissions ?? []), "scripting", "tabs"])];
+  mf.optional_permissions = (mf.optional_permissions ?? []).filter((permission: string) =>
+    permission !== "scripting" && permission !== "tabs"
+  );
+  await Deno.writeTextFile(`${dir}/manifest.json`, JSON.stringify(mf, null, 2) + "\n");
+  return dir;
+}
+
+function launch(profile: string, extDir: string) {
+  const args = [
+    "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
+    "--silent-debugger-extension-api", `--disable-extensions-except=${extDir}`, `--load-extension=${extDir}`,
+    "--remote-debugging-port=0", "--remote-allow-origins=*", "--window-size=1400,1200",
+    `--user-data-dir=${profile}`, "about:blank",
+  ];
+  if (!HEADED) args.unshift("--headless=new");
+  return new Deno.Command(CHROMIUM, { args, stdout: "null", stderr: "piped" }).spawn();
+}
 
 async function main() {
   // 0. Fresh build (the SW bundle must match the sources under test) + fixture.
   const build = new Deno.Command("node", { args: [`${ROOT}build.mjs`], stdout: "null", stderr: "null", cwd: ROOT }).spawn();
   const buildStatus = await build.status;
   check("build succeeded (dist matches sources)", buildStatus.success);
+
+  const configuredArtifactDir = Deno.env.get("WEBMCP_ARTIFACT_DIR")?.trim();
+  const artifactDir = (configuredArtifactDir || `${ROOT}test-artifacts`).replace(/\/$/, "");
+  await Deno.mkdir(artifactDir, { recursive: true });
+
+  const passiveDetectorFiles = [
+    `${EXT}/lib/webmcp-detection-registry.js`,
+    `${EXT}/content/webmcp-detect-main.js`,
+    `${EXT}/content/webmcp-detect-relay.js`,
+  ];
+  const passiveDetectorAvailable = (await Promise.all(passiveDetectorFiles.map((file) =>
+    Deno.stat(file).then(() => true).catch(() => false)
+  ))).every(Boolean);
+  if (!passiveDetectorAvailable) {
+    const git = async (args: string[]) => new TextDecoder().decode(
+      (await new Deno.Command("git", { args, cwd: ROOT, stdout: "piped" }).output()).stdout,
+    ).trim();
+    const commit = await git(["rev-parse", "HEAD"]);
+    const dirty = await git(["status", "--porcelain"]);
+    const manifest = {
+      testedSourceCommit: commit,
+      evidenceCommitNote: dirty
+        ? "working-tree run; worktreeDirtyFiles lists every difference from testedSourceCommit"
+        : "exact clean testedSourceCommit; evidence was written separately from source",
+      worktreeDirtyFiles: dirty ? dirty.split("\n").filter(Boolean) : [],
+      runId: `webmcp-acceptance-${Date.now()}`,
+      ts: new Date().toISOString(),
+      mode: HEADED ? "headed-manual" : "automated-variant",
+      permissionGrant: "not-run",
+      overallStatus: "NOT RUNNABLE — this base predates main's passive WebMCP detector; run after merge",
+      variantNote: "the manifest variant preserves boot-critical permissions and moves only scripting+tabs from optional to required",
+      passed: pass,
+      failed: fail,
+      checks,
+      notRun: [
+        "fresh-profile passive detection, picker discovery, enrollment, injection, and invocation require main's passive detector",
+      ],
+      evidence: { scriptParsedUrls: [], consoleEvents: [], screenshots: [] },
+    };
+    await Deno.writeTextFile(
+      `${artifactDir}/webmcp-acceptance-manifest.json`,
+      JSON.stringify(manifest, null, 2) + "\n",
+    );
+    console.log(`\nRESULT: ${pass} passed, ${fail} failed, ${manifest.notRun.length} not runnable — status: ${manifest.overallStatus}`);
+    return;
+  }
+
   const fixture = launchFixture();
   await sleep(800);
 
+  const extDir = HEADED ? EXT : await makeVariant();
   const profile = `/tmp/cap-webmcp-acc-${Date.now()}`;
   await Deno.mkdir(profile, { recursive: true });
-  const chromeArgs = [
-    "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
-    "--silent-debugger-extension-api", `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-    "--remote-allow-origins=*", "--window-size=1400,1200",
-    `--user-data-dir=${profile}`, "--headless=new", "about:blank",
-  ];
-  const { proc, wsUrl } = await launchChrome({ binary: CHROMIUM, args: chromeArgs });
+  const proc = launch(profile, extDir);
 
   // Evidence collectors.
   const scriptParsedUrls: string[] = [];
@@ -88,13 +171,18 @@ async function main() {
   // Evidence may be kept outside the source tree so a post-commit run can
   // attest an EXACT clean commit without dirtying it. The in-repo directory is
   // retained as the convenient default for local/manual runs.
-  const configuredArtifactDir = Deno.env.get("WEBMCP_ARTIFACT_DIR")?.trim();
-  const artifactDir = (configuredArtifactDir || `${ROOT}test-artifacts`).replace(/\/$/, "");
-  await Deno.mkdir(artifactDir, { recursive: true });
 
   try {
-    const port = Number(new URL(wsUrl).port);
-    const ws = new WebSocket(wsUrl);
+    let port = 0;
+    for (let i = 0; i < 80 && !port; i++) {
+      await sleep(250);
+      const reader = proc.stderr.getReader();
+      const { value, done } = await reader.read(); reader.releaseLock();
+      const m = (done ? null : new TextDecoder().decode(value))?.match(/ws:\/\/127\.0\.0\.1:(\d+)/);
+      if (m) port = Number(m[1]);
+    }
+    const version = await fetchJson(`http://127.0.0.1:${port}/json/version`);
+    const ws = new WebSocket(version.webSocketDebuggerUrl);
     await new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = rej; });
     let id = 0; const pend = new Map();
     ws.onmessage = (ev) => {
@@ -174,15 +262,8 @@ async function main() {
     check("Settings: diagnostics gate enabled", diagOn === true, diagOn);
     await send("Target.closeTarget", { targetId: optT.targetId });
 
-    // 3. Open a plain http(s) page first. Passive detection must report zero,
-    //    so its origin never enters the known-WebMCP picker registry.
-    const plainT = await send("Target.createTarget", { url: `${PLAIN_ORIGIN}/plain.html` });
-    const plainSession = (await send("Target.attachToTarget", { targetId: plainT.targetId, flatten: true })).sessionId;
-    await send("Runtime.enable", {}, plainSession);
-    await until(() => evalIn(plainSession, `document.readyState === "complete" ? true : null`), 8000);
-
-    // 4. The fixture page (Tab W) — passive detection runs before enrollment;
-    //    attach before the later full-bridge injection evidence is collected.
+    // 3. The fixture page (Tab W) — attach BEFORE any injection so
+    //    Debugger.scriptParsed + console events capture the scripts executing.
     const wT = await send("Target.createTarget", { url: `${PAGE_ORIGIN}/index.html` });
     const wsess = (await send("Target.attachToTarget", { targetId: wT.targetId, flatten: true })).sessionId;
     await send("Runtime.enable", {}, wsess);
@@ -192,7 +273,7 @@ async function main() {
     check("fixture page loaded", await evalIn(wsess, `document.getElementById("msg")?.textContent`) === "fixture loaded");
     const baselineParsed = scriptParsedUrls.length;
 
-    // 5. The hub (Tab N) — the REAL discovery UI.
+    // 4. The hub (Tab N) — the REAL discovery UI.
     const nT = await send("Target.createTarget", { url: `chrome-extension://${extId}/ntp/ntp.html` });
     const ns = (await send("Target.attachToTarget", { targetId: nT.targetId, flatten: true })).sessionId;
     await send("Runtime.enable", {}, ns);
@@ -200,9 +281,15 @@ async function main() {
     await sleep(1600);
     await send("Target.activateTarget", { targetId: nT.targetId });
 
-    // 6. Click "Discover this page" (real click).
+    // 5. Click "Discover this page" (real click). Headed mode: this requests
+    //    the `tabs` permission with a REAL prompt — the one manual step.
     const discoverClicked = await clickSelector(ns, `document.getElementById("discover-page")`);
     check("hub: clicked Discover this page via a real click", discoverClicked);
+    if (HEADED) {
+      console.log("\n=== MANUAL STEP 1 of 1: a Chrome permission prompt is showing — click ALLOW (tabs). ===\n");
+      const granted = await until(() => evalIn(sws, `chrome.permissions.contains({ permissions: ["tabs"] })`), 180000, 500);
+      check("manual macro: the tabs permission was granted via the real prompt", granted === true);
+    }
     // The tab picker must appear listing the fixture tab (exact tab identity).
     const pickerHasFixture = await until(() => evalIn(ns, `(() => {
       const dlg = document.querySelector("agent-dialog");
@@ -211,17 +298,16 @@ async function main() {
       const row = rows.find((r) => r.getAttribute("description") === ${JSON.stringify(PAGE_ORIGIN)});
       return row ? true : null;
     })()`), 8000);
-    check("hub: passive detection lists the WebMCP fixture before enrollment", pickerHasFixture === true);
-    const pickerHasPlain = await evalIn(ns, `(() => {
-      const dlg = document.querySelector("agent-dialog");
-      if (!dlg) return null;
-      return [...dlg.querySelectorAll("capability-row")]
-        .some((r) => r.getAttribute("description") === ${JSON.stringify(PLAIN_ORIGIN)});
-    })()`);
-    check("hub: a concurrently-open plain page is absent from the picker", pickerHasPlain === false, pickerHasPlain);
+    check("hub: the tab picker lists the fixture tab (explicit tab identity)", pickerHasFixture === true);
     await screenshot(ns, "webmcp-acceptance-tab-picker.png");
 
-    // 7. Pick the fixture tab (real click on the row's action).
+    // 6. Pick the fixture tab (real click on the row's action). Host access is
+    //    permanently install-granted; only the scripting capability is requested.
+    const permanentHostAccess = await evalIn(sws, `Promise.all([
+      chrome.runtime.getManifest().host_permissions?.includes("<all_urls>") === true,
+      chrome.permissions.contains({ origins: ["${PAGE_ORIGIN}/*"] }),
+    ]).then(([declared, granted]) => declared && granted)`);
+    check("host access: <all_urls> is install-granted and covers the fixture page", permanentHostAccess === true);
     const rowClicked = await clickSelector(ns, `(() => {
       const dlg = document.querySelector("agent-dialog");
       const rows = [...dlg.querySelectorAll("capability-row")];
@@ -229,8 +315,13 @@ async function main() {
       return row?.shadowRoot?.querySelector("button.run") ?? null;
     })()`);
     check("hub: picked the fixture tab in the picker via a real click", rowClicked);
+    const scriptingGranted = await until(
+      () => evalIn(sws, `chrome.permissions.contains({ permissions: ["scripting"] })`),
+      8000,
+    );
+    check("picker: scripting permission granted from the real click", scriptingGranted === true);
 
-    // 8. Enrollment + injection of the EXACT picked tab.
+    // 7. Enrollment + injection of the EXACT picked tab.
     const enrolled = await until(async () => {
       const list = await evalIn(ns, `chrome.runtime.sendMessage({ type: "agent.list" })`);
       return Array.isArray(list) && list.includes(PAGE_ORIGIN) ? list : null;
@@ -246,7 +337,7 @@ async function main() {
       Array.isArray(status?.injection?.ready) && status.injection.ready.includes(fixtureTabId),
       { ready: status?.injection?.ready, fixtureTabId });
 
-    // 9. CDP scriptParsed: BOTH packaged scripts executed in Tab W (no reload).
+    // 8. CDP scriptParsed: BOTH packaged scripts executed in Tab W (no reload).
     const parsed = await until(() => {
       const main = scriptParsedUrls.some((u) => u === `chrome-extension://${extId}/content/main-world.js`);
       const bridge = scriptParsedUrls.some((u) => u === `chrome-extension://${extId}/content/content-script.js`);
@@ -256,13 +347,13 @@ async function main() {
     check("CDP scriptParsed: content/content-script.js executed in the picked tab", parsed === true || scriptParsedUrls.some((u) => u.endsWith("/content/content-script.js")));
     check("the discovery scripts executed WITHOUT a reload (immediate injection)", scriptParsedUrls.length > baselineParsed);
 
-    // 10. Console lifecycle events from BOTH worlds.
+    // 9. Console lifecycle events from BOTH worlds.
     const sawBridgeStart = await until(() => consoleEvents.some((e) => e.includes("[WebMCP:bridge]") && e.includes("start")) ? true : null, 8000);
     check("console: [WebMCP:bridge] start lifecycle event", sawBridgeStart === true, consoleEvents.slice(0, 4));
     const sawMainDiscover = await until(() => consoleEvents.some((e) => e.includes("[WebMCP:main]") && e.includes("discover")) ? true : null, 8000);
     check("console: [WebMCP:main] discover lifecycle event", sawMainDiscover === true, consoleEvents.slice(0, 6));
 
-    // 11. Discovery landed via the real bridge → tools.upsert → directory.
+    // 10. Discovery landed via the real bridge → tools.upsert → directory.
     const toolNames = await until(async () => {
       const list = await evalIn(ns, `chrome.runtime.sendMessage({ type: "tools.list", origin: ${JSON.stringify(PAGE_ORIGIN)} })`);
       const names = Array.isArray(list) ? list.map((t: any) => t.name) : [];
@@ -391,6 +482,7 @@ async function main() {
     try { proc.kill("SIGKILL"); } catch {}
     try { fixture.kill("SIGKILL"); } catch {}
     await Deno.remove(profile, { recursive: true }).catch(() => {});
+    if (!HEADED) await Deno.remove(extDir, { recursive: true }).catch(() => {});
   }
 
   // The machine-verifiable manifest.
@@ -408,10 +500,14 @@ async function main() {
     worktreeDirtyFiles: dirty ? dirty.split("\n").filter(Boolean) : [],
     runId: `webmcp-acceptance-${Date.now()}`,
     ts: new Date().toISOString(),
-    mode: "automated-production",
-    permissionGrant: "install-manifest",
-    overallStatus: fail === 0 ? "ATTESTED" : "FAILED",
-    variantNote: "the shipped extension was driven with its install-granted scripting, tabs, and host permissions",
+    mode: HEADED ? "headed-manual" : "automated-variant",
+    permissionGrant: HEADED ? "manual-user-allow" : "test-manifest-pregranted",
+    overallStatus: HEADED
+      ? (fail === 0 ? "ATTESTED" : "FAILED")
+      : "OPEN — the OS-level permission-prompt gesture is unattested in this environment (headless auto-denies prompted optional permissions; no display/Xvfb). Run with --headed to complete the attestation.",
+    variantNote: HEADED
+      ? "the SHIPPED extension was driven"
+      : "the loaded extension is byte-identical to the shipped one EXCEPT manifest.json pre-holds scripting+tabs; shipped <all_urls> host access is unchanged",
     passed: pass,
     failed: fail,
     checks,

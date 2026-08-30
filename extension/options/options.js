@@ -15,8 +15,10 @@ import {
 } from "../shared/agent-display.js";
 import {
   CAPABILITIES,
-  capabilityStatus,
+  capabilityState,
   requestCapability,
+  revokeCapability,
+  capabilityStatus,
 } from "../lib/capabilities.js";
 import { requestProviderHostAccess } from "../lib/provider-gate.js";
 import {
@@ -465,14 +467,13 @@ export async function renderLocalFolders() {
       regrantBtn.className = "btn small primary";
       regrantBtn.textContent = "Re-grant access";
       regrantBtn.addEventListener("click", async (event) => {
-        if (!event.isTrusted && !window.allowUntrustedEventsForTesting) {
+        if (!event.isTrusted) {
           saveFlash("Re-grant requires a genuine user click.");
           return;
         }
         regrantBtn.disabled = true;
         regrantBtn.textContent = "Requesting…";
         const result = await regrantFsGrantAccess(grant.grantId, {
-          win: window,
           isTrusted: event.isTrusted,
         });
         if (result?.ok && result?.status === "granted") {
@@ -966,17 +967,15 @@ async function renderEnroll() {
       return;
     }
     const matches = [`${origin}/*`];
-    // The scripting permission + host access are GRANTED AT INSTALL (manifest
-    // permissions + host_permissions <all_urls>) — VERIFY the install grant
-    // rather than running an obsolete runtime request. Fail closed: a
-    // verification error or absence surfaces honestly.
+    // OPTIONAL + JIT model: the enroll click IS the user gesture — request
+    // the scripting permission + the site's origin here.
     let granted;
     try {
-      granted = (await chrome.permissions.contains({
+      granted = (await chrome.permissions.request({
         permissions: ["scripting"],
         origins: matches,
       })) === true;
-    } catch {
+    } catch (e) {
       saveFlash(siteAgentSetupMessage("permission-error", origin));
       return;
     }
@@ -1888,78 +1887,99 @@ async function renderBrowser() {
   });
 }
 
-// ── Permissions ──
+// ── Permissions (OPTIONAL + JIT: three honest states per capability) ──
+// OPTIONAL + JIT model (owner directive 2026-08-29, superseding the
+// 2026-08-28 install-granted model for capabilities): capability permissions
+// are requested HERE from the owner's click (a genuine user gesture — the
+// SW can never call chrome.permissions.request). THREE states, never
+// collapsed: granted / requestable (with an Enable affordance) /
+// platform-unavailable (ChromeOS-only APIs on desktop — saying "reload the
+// extension" there is a lie). Host access (<all_urls>) stays install-granted
+// and is not part of this list.
 async function renderPermissions() {
-  const status = await capabilityStatus();
   const list = $("#permission-list");
   list.replaceChildren();
-  const manifestPerms = new Set(chrome.runtime.getManifest().permissions ?? []);
-  const covered = new Set();
+  const mandatory = new Set(chrome.runtime.getManifest().permissions ?? []);
   for (const cap of CAPABILITIES) {
+    if ((cap.permissions ?? []).every((p) => mandatory.has(p))) continue;
+    const st = await capabilityState(cap.id);
     const row = document.createElement("div");
     row.className = "perm-row";
-    const granted = Boolean(status[cap.id]);
-    for (const p of cap.permissions ?? []) covered.add(p);
 
     const name = document.createElement("span");
     name.className = "perm-name";
     name.textContent = cap.label;
 
     const state = document.createElement("span");
-    const required = (cap.permissions ?? []).every((permission) => manifestPerms.has(permission));
-    state.className = "perm-state" + (granted ? " granted" : " missing");
-    state.textContent = granted
-      ? (required ? "Granted at install" : "Granted")
-      : (required ? "MISSING — reload the extension" : "Not enabled");
-
     const hint = document.createElement("span");
     hint.className = "muted";
     hint.textContent = cap.hint;
 
-    // Truth-in-UI: every permission row states the ACTIONS it gates, so a
-    // grant never leaves a silently-required invisible dependency behind
-    // (the ARTIFACT-DELETE finding).
     const gates = document.createElement("span");
     gates.className = "perm-gates";
     gates.textContent = cap.gates ?? `Gates: ${cap.label.toLowerCase()}.`;
 
-    row.append(name, state);
-    if (!required && !granted) {
+    if (st.state === "granted") {
+      state.className = "perm-state granted";
+      state.textContent = "Granted";
+      // Optional capabilities are runtime-revocable again: an honest control,
+      // with the dependent teardown handled by revokeCapability.
+      const off = document.createElement("button");
+      off.className = "btn small ghost";
+      off.textContent = "Turn off";
+      off.addEventListener("click", async () => {
+        off.disabled = true;
+        await revokeCapability(cap.id).catch(() => {});
+        renderPermissions();
+      });
+      row.append(name, state, off, hint, gates);
+    } else if (st.state === "platform-unavailable" || st.state === "partial-platform-unavailable") {
+      state.className = "perm-state unavailable";
+      state.textContent = "Not available on this platform";
+      hint.textContent = st.state === "partial-platform-unavailable"
+        ? `${cap.hint} The ${st.unavailablePermissions.join(" / ")} API exists only on ChromeOS; the rest works here.`
+        : `${cap.hint} This API exists only on ChromeOS.`;
+      row.append(name, state, hint, gates);
+    } else {
+      state.className = "perm-state missing";
+      state.textContent = "Not enabled";
+      // The JIT request affordance: this click handler IS the user gesture
+      // chrome.permissions.request requires — never route this through the SW.
       const enable = document.createElement("button");
       enable.className = "btn small";
       enable.textContent = "Enable";
       enable.addEventListener("click", async () => {
         enable.disabled = true;
-        const result = await requestCapability(cap.id).catch(() => ({ granted: false }));
-        if (result.granted) renderPermissions();
-        else {
-          enable.disabled = false;
-          enable.textContent = "Enable failed — try again";
-        }
+        const res = await requestCapability(cap.id).catch(() => ({ granted: false }));
+        if (res?.granted) renderPermissions();
+        else { enable.disabled = false; enable.textContent = "Enable failed — try again"; }
       });
-      row.appendChild(enable);
+      row.append(name, state, enable, hint, gates);
     }
-    row.append(hint, gates);
     list.appendChild(row);
   }
-  // Remaining install-granted permissions get an honest verified row too.
-  const pretty = (p) => p.replace(/[._]/g, " ").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^\w/, (c) => c.toUpperCase());
-  const rest = [...manifestPerms].filter((p) => !covered.has(p)).sort();
-  const states = await Promise.all(rest.map((p) =>
-    chrome.permissions.contains({ permissions: [p] }).catch(() => false)
-  ));
-  for (let i = 0; i < rest.length; i++) {
+  // Mandatory boot-critical permissions get an honest fixed row (they are
+  // not runtime-revocable and never appear in the optional list).
+  const mandatoryLabels = {
+    storage: "Memory & settings (core)",
+    alarms: "Scheduled tasks (core)",
+    sidePanel: "Side panel (core)",
+    offscreen: "Background execution host (internal)",
+  };
+  const manifestPerms = chrome.runtime.getManifest().permissions ?? [];
+  for (const p of manifestPerms) {
+    if (!mandatoryLabels[p]) continue;
     const row = document.createElement("div");
     row.className = "perm-row";
     const name = document.createElement("span");
     name.className = "perm-name";
-    name.textContent = pretty(rest[i]);
+    name.textContent = mandatoryLabels[p];
     const state = document.createElement("span");
-    state.className = "perm-state" + (states[i] === true ? " granted" : " missing");
-    state.textContent = states[i] === true ? "Granted at install" : "MISSING — reload the extension";
+    state.className = "perm-state granted";
+    state.textContent = "Granted at install (required)";
     const hint = document.createElement("span");
     hint.className = "muted";
-    hint.textContent = `chrome.${rest[i]} — granted at install (manifest).`;
+    hint.textContent = "Core runtime permission — the hub cannot boot without it.";
     row.append(name, state, hint);
     list.appendChild(row);
   }
@@ -2680,7 +2700,7 @@ async function renderPrompts() {
         // storage is granted at install — VERIFY (fail closed), never request.
         const has = (await chrome.permissions.contains({ permissions: ["storage"] })) === true;
         if (!has) {
-          saveFlash("Storage not granted — this customization is session-only. Storage is granted at install; reload the extension and try again.");
+          saveFlash("Storage not granted — this customization is session-only. Storage is a core permission; reinstall the extension and try again.");
         }
       } catch { /* an unverifiable grant falls through to the save */ }
     }
@@ -2713,7 +2733,7 @@ async function renderPrompts() {
         .catch(() => true);
       saveFlash(durableNow
         ? "System prompt customization saved."
-        : "Saved for THIS SESSION only — storage is granted at install; if this persists, reload the extension.");
+        : "Saved for THIS SESSION only — storage is a core permission; reinstall the extension to persist it.");
     } else {
       saveFlash(
         type === "prompt.keep" ? "Customization kept — now based on the latest built-in prompt."

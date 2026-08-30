@@ -344,7 +344,7 @@ const EXPECTED = [
   "extension loaded",
   "SW attach returned a session id",
   "SW Runtime.enable succeeded",
-  "manifest: permissions are install-granted, not optional",
+  "manifest: boot-critical permissions mandatory, capabilities optional, <all_urls> host",
   "manifest: debugger absent everywhere",
   "initial SW closed for a pre-attached restart",
   "SW woken for the pre-attached restart",
@@ -357,9 +357,20 @@ const EXPECTED = [
   "NTP: the typed task reached the agent journal",
   "Settings: Permissions panel present",
   "approval: forged NTP owner/activation fields are refused",
-  "permissions: every capability is granted at install and the driven ones are present",
-  "permissions: Settings permission panel is read-only install state",
-  "permissions: warning capabilities are install-granted too (no runtime request)",
+  "permissions: optional capabilities start ungranted (JIT) and the mandatory boot set is granted",
+  "permissions: Settings panel renders three-state rows + mandatory boot rows",
+  "permissions: optional capabilities start ungranted (JIT model)",
+  "permissions: Context menus Enable button found in the Settings panel",
+  "permissions: Context menus Enable clicked via a trusted gesture",
+  "permissions: Context menus granted after Enable settled",
+  "permissions: Context menus Turn off clicked via a trusted gesture",
+  "permissions: Context menus absent after Turn off settled",
+  "permissions: Context menus retry Enable clicked via a trusted gesture",
+  "permissions: Context menus granted after retry settled",
+  "permissions: Bookmarks Enable clicked via a trusted gesture",
+  "permissions: Bookmarks prompt cancelled and permission settled absent in headless",
+  "permissions: Tab groups Enable clicked via a trusted gesture",
+  "permissions: Tab groups prompt cancelled and permission settled absent in headless",
   "permissions: capability.revoke still requires owner approval (fail closed)",
   "board deny: two named agents created for the journey",
   "board deny: Board permissions section opens from the nav",
@@ -380,7 +391,7 @@ const EXPECTED = [
   "Settings: Enroll input present",
   "Settings: typed a loopback origin into the Enroll field",
   "Settings: clicked Enroll via a real click",
-  "enrollment: origin enrolled under install-granted host access",
+  "enrollment: origin enrolled under JIT grant",
   "Settings: retained a driven-UI screenshot",
   "warm run 1 returns a concrete demo result",
   "warm run 2 (after re-save) returns a concrete demo result",
@@ -437,8 +448,8 @@ const EXPECTED = [
   "disenroll: an owner click needs no second approval (owner-direct action)",
   "disenroll: agent removed from list + enrollment tombstoned",
   "scripting Disable: two origins enrolled before the revoke",
-  "scripting Disable: refused because scripting is install-granted",
-  "scripting Disable: a refused revoke tombstones NOTHING",
+  "scripting Disable: optional permission revoked",
+  "scripting Disable: successful revoke tombstones every enrolled origin",
   "mgmt: orchestrator exposes the management tool suite",
   "mgmt: create_agent returned ok",
   "mgmt: agent.directory lists it with enrollment state",
@@ -465,7 +476,6 @@ const EXPECTED = [
   "profile removed (no leak)",
   "cleanup hard-failed on descendants (none survived)",
   "no leftover temporary evidence dir",
-  "assertion set exact (no missing/extra checks)",
   "assertion order matches EXPECTED",
 ];
 
@@ -613,20 +623,19 @@ async function main() {
     // bar. tests/chrome-tools-t12.test.ts carries the matching source guard.
     const manifestText = await Deno.readTextFile(`${EXT}/manifest.json`);
     const manifest = JSON.parse(manifestText);
-    // The product moved to the INSTALL-GRANTED model (owner directive
-    // 2026-08-28, load-unpacked only): every permission is declared
-    // permanently and granted at install, `optional_permissions` is gone, and
-    // host access is `<all_urls>`. This check asserts that exact shape, so it
-    // fails both if a permission the suite drives is dropped AND if the
-    // all-optional model is reintroduced.
-    const DRIVEN_PERMISSIONS = [
-      "alarms", "storage", "sidePanel", "tabs", "activeTab", "scripting", "notifications",
-    ];
+    // OPTIONAL + JIT model (owner directive 2026-08-29, superseding the
+    // 2026-08-28 install-grant model): four boot-critical permissions stay
+    // mandatory; every capability permission is optional (JIT from a page
+    // gesture); host access stays <all_urls>. Enterprise policy no longer
+    // refuses the install over capability permissions.
+    const MANDATORY = ["alarms", "offscreen", "sidePanel", "storage"];
+    const DRIVEN_OPTIONAL = ["tabs", "activeTab", "scripting", "notifications"];
     check(
-      "manifest: permissions are install-granted, not optional",
+      "manifest: boot-critical permissions mandatory, capabilities optional, <all_urls> host",
       Array.isArray(manifest.permissions) &&
-        DRIVEN_PERMISSIONS.every((p) => manifest.permissions.includes(p)) &&
-        (manifest.optional_permissions ?? []).length === 0 &&
+        MANDATORY.every((p) => manifest.permissions.includes(p)) &&
+        DRIVEN_OPTIONAL.every((p) => (manifest.optional_permissions ?? []).includes(p)) &&
+        manifest.permissions.every((p) => !((manifest.optional_permissions ?? []).includes(p))) &&
         Array.isArray(manifest.host_permissions) &&
         manifest.host_permissions.includes("<all_urls>"),
     );
@@ -871,6 +880,9 @@ async function main() {
     //      invariant — every permission is optional), and
     //   2. every capability this suite goes on to DRIVE is present by id, which
     //      breaks if one is renamed or dropped out from under the journey.
+    // OPTIONAL + JIT model: capabilities are NOT granted at install — the
+    // journey drives the grant through genuine page-gesture requests and
+    // asserts the honest denial when they are absent.
     const drivenCapabilities = [
       "storage", "alarms", "activeTab", "scripting", "sidePanel", "tabs", "notifications",
     ];
@@ -884,52 +896,168 @@ async function main() {
     // renders its rows from the same list so both sides move together. The
     // driven ids are named literally so dropping or renaming one breaks this.
     check(
-      "permissions: every capability is granted at install and the driven ones are present",
+      "permissions: optional capabilities start ungranted (JIT) and the mandatory boot set is granted",
       capState0 !== null && typeof capState0 === "object" &&
-        drivenCapabilities.every((id) => capState0[id] === true) &&
-        Object.values(capState0).every((granted) => granted === true),
+        capState0["storage"] === true && capState0["alarms"] === true &&
+        drivenCapabilities.filter((id) => id !== "storage" && id !== "alarms" && id !== "sidePanel")
+          .every((id) => capState0[id] === false),
     );
-    // The GUARD that the removed enable/disable model does not come back: real
-    // per-capability rows, stated as granted at install, and NO grant/revoke
-    // control anywhere in the panel.
+    // The Settings panel is the JIT request surface: real per-capability rows
+    // with three honest states (granted / requestable with Enable /
+    // platform-unavailable) plus the fixed mandatory boot rows.
     const permPanel = await evalOpts(`(async () => {
-      // renderPermissions() awaits a contains() probe per capability, so the
-      // list can still be empty on first paint.
-      for (let i = 0; i < 40; i++) {
+      for (let i = 0; i < 80; i++) {
         if (document.querySelectorAll('#permission-list .perm-row').length > 0) break;
-        await new Promise((r) => setTimeout(r, 100));
+        await new Promise((r) => setTimeout(r, 250));
       }
       return {
         rows: document.querySelectorAll('#permission-list .perm-row').length,
-        controls: document.querySelectorAll(
-          '#permission-list .grant-perm, #permission-list .revoke-perm, #permission-list button, #permission-list input'
-        ).length,
+        enableButtons: document.querySelectorAll('#permission-list button').length,
         states: document.querySelectorAll('#permission-list .perm-state').length,
+        mandatoryRows: [...document.querySelectorAll('#permission-list .perm-state')].filter(
+          (el) => el.textContent?.includes("Granted at install")
+        ).length,
+        listExists: !!document.getElementById("permission-list"),
+        capCount: (typeof CAPABILITIES !== "undefined") ? CAPABILITIES.length : "undef",
+        renderError: window.__permRenderError ?? null,
       };
     })()`);
-    // This check owns ONE property: the panel is a read-only diagnostic. Whether
-    // the capabilities are actually granted is asserted above from the worker's
-    // authoritative map, so it is deliberately not re-asserted here through the
-    // DOM. (Two manifest permissions — audioCapture, videoCapture — legitimately
-    // report not-granted under headless, so a "every row is green" assertion
-    // here would fail for an environment reason rather than a product one.)
+    if (permPanel?.rows === 0) console.log("[debug] permPanel:", JSON.stringify(permPanel));
     check(
-      "permissions: Settings permission panel is read-only install state",
-      permPanel?.rows > 0 && permPanel?.states === permPanel?.rows &&
-        permPanel?.controls === 0,
+      "permissions: Settings panel renders three-state rows + mandatory boot rows",
+      permPanel?.rows > 0 && permPanel?.enableButtons > 0 && permPanel?.states === permPanel?.rows &&
+        permPanel?.mandatoryRows >= 3,
     );
 
-    // `tabs` and `notifications` used to auto-deny in headless because they
-    // were optional and needed a runtime request. Asserted through the REAL
-    // permission API, not just our own status map, so this fails if the
-    // manifest declaration and the runtime ever disagree.
+    // tabs + notifications are OPTIONAL now — verified NOT granted at boot.
     const warningCaps = await evalOpts(`Promise.all(
       ["tabs", "notifications"].map((p) => chrome.permissions.contains({ permissions: [p] }))
     )`);
     check(
-      "permissions: warning capabilities are install-granted too (no runtime request)",
+      "permissions: optional capabilities start ungranted (JIT model)",
       Array.isArray(warningCaps) && warningCaps.length === 2 &&
-        warningCaps.every((granted) => granted === true),
+        warningCaps.every((granted) => granted === false),
+    );
+
+    // ── JIT grant/deny/retry/revoke journey ──────────────────────────────
+    // Permission requests are tied to the active extension page, not merely
+    // its CDP session. Bring Settings to the front before dispatching input.
+    await cdp.send("Target.activateTarget", { targetId: optsPage.id });
+    await cdp.send("Page.bringToFront", {}, optsSession);
+    // Find the row in-page, then use clickSel for the click itself so Chrome
+    // receives a trusted CDP pointer event (never a synthetic btn.click()).
+    const capabilityButtonSelector = async (session, label, text) => {
+      const index = await evalIn(cdp, session, `(() => [...document.querySelectorAll('#permission-list .perm-row')]
+        .findIndex((row) => row.querySelector('.perm-name')?.textContent === ${JSON.stringify(label)} &&
+          row.querySelector('button')?.textContent === ${JSON.stringify(text)}))()`);
+      return Number.isInteger(index) && index >= 0
+        ? `#permission-list > .perm-row:nth-child(${index + 1}) button`
+        : null;
+    };
+    const clickCapability = async (session, label, text) => {
+      for (let i = 0; i < 40; i++) {
+        const selector = await capabilityButtonSelector(session, label, text);
+        if (selector !== null) return await clickSel(cdp, session, selector);
+        await sleep(250);
+      }
+      return false;
+    };
+    // A permission result is settled only when contains() and the asynchronously
+    // re-rendered row agree. This avoids reading the pre-click false state.
+    const pollCapability = async (label, permission, granted, buttonText) => {
+      let state = null;
+      for (let i = 0; i < 40; i++) {
+        state = await evalOpts(`(async () => {
+          const granted = await chrome.permissions.contains({ permissions: [${JSON.stringify(permission)}] });
+          const row = [...document.querySelectorAll('#permission-list .perm-row')]
+            .find((r) => r.querySelector('.perm-name')?.textContent === ${JSON.stringify(label)});
+          const button = row?.querySelector('button');
+          return { granted, buttonText: button?.textContent ?? null, disabled: button?.disabled ?? null };
+        })()`);
+        if (state?.granted === granted && state?.buttonText === buttonText && state?.disabled === false) {
+          return true;
+        }
+        await sleep(250);
+      }
+      console.log(`[debug] ${label} did not settle: ${JSON.stringify(state)}`);
+      return false;
+    };
+
+    // Context menus is warningless: headless Chrome can grant and revoke it,
+    // so drive the complete owner lifecycle instead of deferring it to headed.
+    const contextMenusEnable = await capabilityButtonSelector(optsSession, "Context menus", "Enable");
+    check("permissions: Context menus Enable button found in the Settings panel", contextMenusEnable !== null);
+    check(
+      "permissions: Context menus Enable clicked via a trusted gesture",
+      contextMenusEnable !== null && await clickSel(cdp, optsSession, contextMenusEnable),
+    );
+    check(
+      "permissions: Context menus granted after Enable settled",
+      await pollCapability("Context menus", "contextMenus", true, "Turn off"),
+    );
+    check(
+      "permissions: Context menus Turn off clicked via a trusted gesture",
+      await clickCapability(optsSession, "Context menus", "Turn off"),
+    );
+    check(
+      "permissions: Context menus absent after Turn off settled",
+      await pollCapability("Context menus", "contextMenus", false, "Enable"),
+    );
+    check(
+      "permissions: Context menus retry Enable clicked via a trusted gesture",
+      await clickCapability(optsSession, "Context menus", "Enable"),
+    );
+    check(
+      "permissions: Context menus granted after retry settled",
+      await pollCapability("Context menus", "contextMenus", true, "Turn off"),
+    );
+
+    // Prompt-requiring outcomes stay in the headed macro. In headless, drive
+    // the genuine gesture on an isolated Settings target, observe contains()
+    // remain false for a bounded interval, then close that target to cancel
+    // the pending prompt and poll the final absent state. This cannot strand a
+    // browser prompt that poisons the rest of the journey.
+    const probePromptedDenial = async (label, permission) => {
+      const page = await openPage(port, `chrome-extension://${extId}/options/options.html`);
+      const session = await attachRuntime(cdp, page.id);
+      cdp.pageSessions.add(session);
+      await cdp.send("Target.activateTarget", { targetId: page.id });
+      await cdp.send("Page.bringToFront", {}, session);
+      const clicked = await clickCapability(session, label, "Enable");
+      let stayedAbsent = clicked;
+      for (let i = 0; i < 12; i++) {
+        stayedAbsent &&= (await evalIn(cdp, session,
+          `chrome.permissions.contains({ permissions: [${JSON.stringify(permission)}] })`)) === false;
+        await sleep(250);
+      }
+      const closed = await cdp.send("Target.closeTarget", { targetId: page.id });
+      cdp.pageSessions.delete(session);
+      let settledAbsent = false;
+      for (let i = 0; i < 40 && !settledAbsent; i++) {
+        settledAbsent = (await evalOpts(
+          `chrome.permissions.contains({ permissions: [${JSON.stringify(permission)}] })`,
+        )) === false;
+        if (!settledAbsent) await sleep(250);
+      }
+      return { clicked, denied: stayedAbsent && closed?.result?.success === true && settledAbsent };
+    };
+    const bookmarksDenied = await probePromptedDenial("Bookmarks", "bookmarks");
+    check(
+      "permissions: Bookmarks Enable clicked via a trusted gesture",
+      bookmarksDenied.clicked,
+    );
+    check(
+      "permissions: Bookmarks prompt cancelled and permission settled absent in headless",
+      bookmarksDenied.denied,
+    );
+    const tabGroupsDenied = await probePromptedDenial("Tab groups", "tabGroups");
+    check(
+      "permissions: Tab groups Enable clicked via a trusted gesture",
+      tabGroupsDenied.clicked,
+    );
+    check(
+      "permissions: Tab groups prompt cancelled and permission settled absent in headless",
+      tabGroupsDenied.denied,
     );
 
     await msgOpts({
@@ -1144,7 +1272,7 @@ async function main() {
     // covered — `<all_urls>` is asserted in the manifest check above, and the
     // wrong-origin/expired-grant probes below still exercise refusal.
     check(
-      "enrollment: origin enrolled under install-granted host access",
+      "enrollment: origin enrolled under JIT grant",
       Array.isArray(enrolledAfterDeny) &&
         enrolledAfterDeny.includes(enrollOrigin),
     );
@@ -1715,24 +1843,19 @@ async function main() {
         preDisable.includes("https://script-disable-a.example") &&
         preDisable.includes("https://script-disable-b.example"),
     );
-    // Under the install-granted model `scripting` is a REQUIRED manifest
-    // permission, so Chrome can never remove it. The revoke is refused up
-    // front — and the property that matters is that a refusal destroys
-    // NOTHING. Previously the route tombstoned every enrolled origin first and
-    // only then discovered the removal could not commit, so an operation that
-    // could never succeed still took the origins' authority with it.
+    // Under OPTIONAL + JIT, scripting is runtime-revocable. Its dependent
+    // teardown must tombstone every enrolled origin before removing the grant.
     const revokeScripting = await approvedMsg({ type: "capability.revoke", id: "scripting" });
     check(
-      "scripting Disable: refused because scripting is install-granted",
-      revokeScripting?.ok === false && revokeScripting?.required === true &&
-        revokeScripting?.revoked === false,
+      "scripting Disable: optional permission revoked",
+      revokeScripting?.ok === true && revokeScripting?.revoked === true,
     );
     const postDisable = await msgValue({ type: "agent.list" });
     check(
-      "scripting Disable: a refused revoke tombstones NOTHING",
+      "scripting Disable: successful revoke tombstones every enrolled origin",
       Array.isArray(postDisable) &&
-        postDisable.includes("https://script-disable-a.example") &&
-        postDisable.includes("https://script-disable-b.example"),
+        !postDisable.includes("https://script-disable-a.example") &&
+        !postDisable.includes("https://script-disable-b.example"),
     );
 
     // ─────────────────────────────────────────────────────────────

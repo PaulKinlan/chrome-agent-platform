@@ -152,15 +152,15 @@ Deno.test("T8 inventory: the 9 tranche-8 tools ship in the browser toolset; read
 Deno.test("T8 permission fail-closed: every tool returns an honest Settings error without its optional permission", async () => {
   reset();
   const t = tools();
-  assertEquals((await t.list_cookies.execute({ domain: "example.com" })).error, "cookies permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
-  assertEquals((await t.list_cookie_stores.execute({})).error, "cookies permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
-  assertEquals((await t.get_cookie.execute({ url: "https://example.com/", name: "s" })).error, "cookies permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
-  assertEquals((await t.set_cookie.execute({ url: "https://example.com/", name: "s", value: "v" })).error, "cookies permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
-  assertEquals((await t.remove_cookie.execute({ url: "https://example.com/", name: "s" })).error, "cookies permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
-  assertEquals((await t.wipe_browsing_data.execute({ dataTypes: ["cache"] })).error, "browsingData permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
-  assertEquals((await t.get_content_setting.execute({ resource: "javascript", primaryPattern: "https://example.com/*" })).error, "contentSettings permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
-  assertEquals((await t.set_content_setting.execute({ resource: "javascript", primaryPattern: "https://example.com/*", setting: "block" })).error, "contentSettings permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
-  assertEquals((await t.clear_content_settings.execute({ resource: "javascript", primaryPattern: "https://example.com/*" })).error, "contentSettings permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals((await t.list_cookies.execute({ domain: "example.com" })).error, "cookies permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
+  assertEquals((await t.list_cookie_stores.execute({})).error, "cookies permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
+  assertEquals((await t.get_cookie.execute({ url: "https://example.com/", name: "s" })).error, "cookies permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
+  assertEquals((await t.set_cookie.execute({ url: "https://example.com/", name: "s", value: "v" })).error, "cookies permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
+  assertEquals((await t.remove_cookie.execute({ url: "https://example.com/", name: "s" })).error, "cookies permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
+  assertEquals((await t.wipe_browsing_data.execute({ dataTypes: ["cache"] })).error, "browsingData permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
+  assertEquals((await t.get_content_setting.execute({ resource: "javascript", primaryPattern: "https://example.com/*" })).error, "contentSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
+  assertEquals((await t.set_content_setting.execute({ resource: "javascript", primaryPattern: "https://example.com/*", setting: "block" })).error, "contentSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
+  assertEquals((await t.clear_content_settings.execute({ resource: "javascript", primaryPattern: "https://example.com/*" })).error, "contentSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
   assertEquals(chromeCalls.filter((c) => !String(c[0]).startsWith("cookies")).length, 0, "no chrome mutation reached without the permission");
 });
 
@@ -198,7 +198,10 @@ Deno.test("T8 cookie host scoping: cookie reads/writes require the EXACT-origin 
   // No host permission: honest, actionable error — and no chrome.cookies call.
   const denied = await t.get_cookie.execute({ url: "https://example.com/", name: "sid" });
   assert(denied.error.includes("host permission for https://example.com not granted"), denied.error);
-  assert(denied.error.includes("broad/all-sites access is never requested"));
+  // The host-scope denial keeps the install-grant message: <all_urls> host
+  // access is MANDATORY (never runtime-requested), so reinstall is the
+  // honest remediation — not a JIT affordance.
+  assert(denied.error.includes("broad host access is granted at install"), "the host-scope denial explains the install-grant model");
   assertEquals(chromeCalls.filter((c) => c[0] === "cookies.get").length, 0, "no cookie read without host permission");
   // A BROAD host grant (<all_urls>) is NOT consulted — only the exact origin
   // pattern counts, so it still fails closed here.

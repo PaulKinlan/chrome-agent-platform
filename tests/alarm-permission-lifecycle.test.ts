@@ -130,7 +130,7 @@ Deno.test("alarm lifecycle: unrelated permission changes are ignored", () => {
   assertEquals(h.lifecycle.status().disarmed, false);
 });
 
-Deno.test("alarm lifecycle: required alarms stay read-only while optional capabilities use the Settings request path", async () => {
+Deno.test("alarm lifecycle: alarms stay mandatory — Settings requests optional capabilities and verifies every grant", async () => {
   const optionsSource = await Deno.readTextFile(
     new URL("../extension/options/options.js", import.meta.url),
   );
@@ -140,9 +140,26 @@ Deno.test("alarm lifecycle: required alarms stay read-only while optional capabi
   const lifecycleSource = await Deno.readTextFile(
     new URL("../extension/lib/alarm-permission-lifecycle.js", import.meta.url),
   );
-  assertStringIncludes(optionsSource, "const required = (cap.permissions ?? []).every");
-  assertStringIncludes(optionsSource, "if (!required && !granted)");
-  assertStringIncludes(optionsSource, "requestCapability(cap.id)");
+  // OPTIONAL + JIT model (owner directive 2026-08-29): Settings IS the
+  // request surface — requestCapability fires from the owner's click (a
+  // genuine user gesture the SW can never provide). Alarms stay MANDATORY:
+  // the scheduler registers chrome.alarms.onAlarm at boot and scheduled runs
+  // die without it, so alarms are never runtime-requestable.
+  assertStringIncludes(
+    optionsSource,
+    "await requestCapability(cap.id)",
+    "the Permissions section requests optional capabilities from the owner's click",
+  );
+  assertStringIncludes(
+    optionsSource,
+    "await capabilityState(cap.id)",
+    "the Permissions section VERIFIES each capability (live three-state display)",
+  );
+  assertStringIncludes(
+    optionsSource,
+    "Granted at install (required)",
+    "the mandatory boot set is displayed as fixed install grants",
+  );
   // The worker-side activation route remains (harmless; the lifecycle listener
   // still owns disarm/re-arm on any permission change).
   assertStringIncludes(
