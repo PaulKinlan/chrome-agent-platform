@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.485] — 2026-08-30
+- The agent now remembers between conversations: what it saved for you in one thread is there in the next one, so asking "what is my favourite colour?" in a brand-new thread gets an answer instead of "I don't know".
+
 ## [0.2.484] — 2026-08-30
 - Five more fixes are in progress in parallel and recorded as claimed in the tracker.
 
