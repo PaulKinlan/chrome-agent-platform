@@ -977,6 +977,27 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
 }
 .changelog-items li { margin: 3px 0; }
 .changelog-items li::marker { color: var(--muted); }
+.changelog-hidden-note { font-size: var(--text-sm); margin: 2px 0 0; }
+.changelog-all {
+  margin-top: 4px;
+}
+.changelog-all summary {
+  cursor: pointer;
+  color: var(--accent, #1a73e8);
+  font-size: var(--text-sm);
+  user-select: none;
+}
+.changelog-all > div {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.changelog-full-link {
+  margin: 10px 0 0;
+  font-size: var(--text-sm);
+}
+.changelog-full-link a { color: var(--accent, #1a73e8); }
 
 /* Per-agent provider override rows (the Agents section). A responsive grid
    that WRAPS at narrow card widths (the final review's overflow finding): the

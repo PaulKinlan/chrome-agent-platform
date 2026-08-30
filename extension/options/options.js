@@ -2874,6 +2874,7 @@ export function handleSettingsHashNavigation(hash, isTraverse = false) {
   if (sectionId === "local-folders") renderLocalFolders();
   if (sectionId === "usage") renderUsage();
   if (sectionId === "skills") mountSkillsSection(document.getElementById("skills"));
+  if (sectionId === "about") renderAbout(); // lazy: fetched + rendered on first open (CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01)
 
   section.scrollIntoView({
     behavior: isTraverse ? "auto" : "smooth",
@@ -3089,52 +3090,121 @@ renderShortcuts();
 // Render the bundled CHANGELOG.md into the About section. Each `## [version]`
 // becomes a version card with its bullet list (built as DOM nodes, never
 // innerHTML, so the markdown stays inert).
-function renderChangelog(md) {
-  const host = $("#changelog");
-  if (!host) return;
-  host.replaceChildren();
+//
+// CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01: only the most recent five
+// versions whose bullets a non-engineer can read are shown up front; every
+// older or internal entry is behind a "Show all" disclosure so the About page
+// stays small and the copy stays human. Rendered lazily on first open.
+//
+// A bullet is user-facing unless it reads like an engineering log line: a
+// conventional commit prefix (merge:/chore:/fix(...):/test:/ci:/docs:), a
+// bare git SHA, or any of the project's internal vocabularies (journeys, KAT,
+// CDP, harnesses, worktrees, lanes, trackers, RED/GREEN gates, merge splices).
+export function isUserFacingEntry(text) {
+  const line = String(text).trim();
+  if (/^(merge|chore|fix\(|test|ci|docs):/i.test(line)) return false;
+  if (/\b[0-9a-f]{7,40}\b/i.test(line)) return false;
+  if (/journey|KAT|assertion|CDP|harness|worktree|lane|tracker|splice|\bRED\b|\bGREEN\b/i.test(line)) return false;
+  return true;
+}
+
+function parseChangelog(md) {
   const lines = String(md).split(/\r?\n/);
+  const versions = [];
   let current = null;
-  let list = null;
-  const commit = () => {
-    if (current && list && list.children.length) current.append(list);
-  };
   for (const raw of lines) {
     const line = raw.trimEnd();
     const h = line.match(/^##\s+\[([^\]]+)\]\s*—?\s*(.*)$/);
     if (h) {
-      commit();
-      current = document.createElement("div");
-      current.className = "changelog-entry";
-      const head = document.createElement("div");
-      head.className = "changelog-head";
-      const v = document.createElement("strong");
-      v.textContent = "v" + h[1].trim();
-      const date = document.createElement("span");
-      date.className = "muted";
-      date.textContent = h[2].trim();
-      head.append(v, date);
-      current.append(head);
-      host.append(current);
-      list = document.createElement("ul");
-      list.className = "changelog-items";
+      current = { version: h[1].trim(), date: h[2].trim(), bullets: [] };
+      versions.push(current);
       continue;
     }
     if (current && line.startsWith("- ")) {
-      if (!list) { list = document.createElement("ul"); list.className = "changelog-items"; }
-      const li = document.createElement("li");
-      li.textContent = line.slice(2).trim();
-      list.append(li);
-      continue;
+      current.bullets.push(line.slice(2).trim());
     }
   }
-  commit();
-  if (!host.children.length) {
-    host.innerHTML = `<p class="muted">No changelog yet.</p>`;
-  }
+  return versions;
 }
 
+function renderChangelog(md) {
+  const host = $("#changelog");
+  if (!host) return;
+  host.replaceChildren();
+  const versions = parseChangelog(md);
+  const buildCard = (v, bullets) => {
+    const card = document.createElement("div");
+    card.className = "changelog-entry";
+    const head = document.createElement("div");
+    head.className = "changelog-head";
+    const vEl = document.createElement("strong");
+    vEl.textContent = "v" + v.version;
+    const date = document.createElement("span");
+    date.className = "muted";
+    date.textContent = v.date;
+    head.append(vEl, date);
+    card.append(head);
+    const list = document.createElement("ul");
+    list.className = "changelog-items";
+    for (const b of bullets) {
+      const li = document.createElement("li");
+      li.textContent = b;
+      list.append(li);
+    }
+    card.append(list);
+    return card;
+  };
+  const recent = [];
+  for (const v of versions) {
+    const visible = v.bullets.filter(isUserFacingEntry);
+    if (!visible.length) continue; // an entry with nothing a user can read is skipped
+    recent.push({ v, visible, hidden: v.bullets.length - visible.length });
+    if (recent.length >= 5) break;
+  }
+  for (const r of recent) {
+    host.append(buildCard(r.v, r.visible));
+    if (r.hidden > 0) {
+      const note = document.createElement("p");
+      note.className = "muted changelog-hidden-note";
+      note.textContent = `…and ${r.hidden} internal note${r.hidden === 1 ? "" : "s"} in this release.`;
+      host.append(note);
+    }
+  }
+  if (!recent.length) {
+    host.innerHTML = `<p class="muted">No changelog yet.</p>`;
+    return;
+  }
+  // Everything else — including the internal engineering entries — behind a
+  // disclosure, built LAZILY on first open so the About page stays bounded at
+  // load (the full history stays reachable without the 2,000+ node cost).
+  const details = document.createElement("details");
+  details.className = "changelog-all";
+  const summary = document.createElement("summary");
+  summary.textContent = "Show all release notes";
+  details.append(summary);
+  details.addEventListener("toggle", () => {
+    if (!details.open || details.querySelector(".changelog-all-body")) return;
+    const all = document.createElement("div");
+    all.className = "changelog-all-body";
+    for (const v of versions) {
+      if (v.bullets.length === 0) continue;
+      all.append(buildCard(v, v.bullets));
+    }
+    details.append(all);
+  });
+  host.append(details);
+}
+
+let aboutRendered = false;
 async function renderAbout() {
+  if (aboutRendered) return;
+  aboutRendered = true;
+  // The full release notes link targets the bundled changelog (also reachable
+  // as a packaged file) so it works offline and with no network dependency.
+  try {
+    const full = document.getElementById("full-release-notes");
+    if (full) full.setAttribute("href", chrome.runtime.getURL("CHANGELOG.md"));
+  } catch { /* non-extension context */ }
   try {
     const url = chrome.runtime.getURL("CHANGELOG.md");
     const res = await fetch(url);
@@ -3146,7 +3216,6 @@ async function renderAbout() {
   }
 }
 await wireObservabilitySettings();
-await renderAbout();
 await navigationController.syncCurrent();
 
 

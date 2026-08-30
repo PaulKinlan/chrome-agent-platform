@@ -1,31 +1,34 @@
 # Changelog
 
+## [0.2.477] — 2026-08-30
+- What's new: user-facing changelog copy in About, rendered lazily
+
 ## [0.2.476] — 2026-08-30
-- Tracker: the diff view component is recorded as landed.
+- The diff view is now ready for the editing flow (side by side or unified, with added/removed counts and keyboard navigation between changes).
 
 ## [0.2.475] — 2026-08-30
 - Landed: a reusable diff view (side by side or unified, with added/removed counts and keyboard navigation between changes) is ready for the editing flow.
 
 ## [0.2.474] — 2026-08-30
-- Tracker: legible tool cards are recorded as landed.
+- The conversation now shows what a tool call returned in plain terms, without internal plumbing.
 
 ## [0.2.473] — 2026-08-30
 - Landed: tool cards in a conversation now show what the tool actually returned, in plain terms, with no internal plumbing; a permission request is still there to answer when you reopen the thread.
 
 ## [0.2.472] — 2026-08-30
-- Tracker: artifact versions are recorded as landed.
+- Every edit to an artifact keeps the previous version, and any earlier version can be restored.
 
 ## [0.2.471] — 2026-08-30
 - Landed: every edit to an artifact keeps the previous version, and any earlier version can be restored.
 
 ## [0.2.470] — 2026-08-30
-- Tracker: the memory-speed fix is recorded as landed; two more fixes claimed.
+- The hub stays fast as you use it — a run that took 2.5 seconds with 120 past tasks now takes about 0.3 seconds.
 
 ## [0.2.469] — 2026-08-30
 - Landed: the hub stays fast as you use it — a run that took 2.5 seconds with 120 past tasks now takes about 0.3 seconds.
 
 ## [0.2.468] — 2026-08-30
-- Tracker: the composer-first new tab is recorded as landed.
+- The new tab opens on the composer — first in tab order and visible on a small window — with a one-line banner and one action instead of an onboarding wall.
 
 ## [0.2.467] — 2026-08-30
 - Landed: the new tab opens on the composer — first in tab order and visible on a small window — with a one-line banner and one action instead of an onboarding wall.

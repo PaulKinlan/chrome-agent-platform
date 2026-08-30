@@ -31,4 +31,29 @@ for (let i = 0; i + 1 < entries.length; i++) {
   }
 }
 if (fail.length) { console.error("CHANGELOG ORDER/UNIQUENESS FAIL:\n" + fail.join("\n")); process.exit(1); }
+
+// CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01: the most recent versions must
+// read as user-facing copy (mirror of options.js isUserFacingEntry + the
+// changelog test). A bullet that looks like an engineering log line fails the
+// gate, so an internal note can never ship in the user-visible recent entries.
+const isUserFacingEntry = (text) => {
+  const line = String(text).trim();
+  if (/^(merge|chore|fix\(|test|ci|docs):/i.test(line)) return false;
+  if (/\b[0-9a-f]{7,40}\b/i.test(line)) return false;
+  if (/journey|KAT|assertion|CDP|harness|worktree|lane|tracker|splice|\bRED\b|\bGREEN\b/i.test(line)) return false;
+  return true;
+};
+const blocks = [...src.matchAll(/^## \[([^\]]+)\][^\n]*\n([\s\S]*?)(?=^## |\z)/gm)].slice(0, 10);
+const voiceFail = [];
+for (const m of blocks) {
+  const bullets = m[2].split(/\r?\n/).filter((l) => l.startsWith("- ")).map((l) => l.slice(2).trim());
+  for (const b of bullets) {
+    if (!isUserFacingEntry(b)) voiceFail.push(`v${m[1]}: ${b.slice(0, 80)}`);
+  }
+}
+if (voiceFail.length) {
+  console.error("CHANGELOG RECENT-ENTRIES VOICE FAIL (last ten versions must be user-facing):\n" + voiceFail.join("\n"));
+  process.exit(1);
+}
+
 console.log(`changelog identities: ${strs.length} entries, unique + descending ✓ (latest: ${strs[0]})`);

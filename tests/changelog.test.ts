@@ -41,10 +41,31 @@ Deno.test("changelog: extension/CHANGELOG.md is in exact lockstep with root CHAN
   assertEquals(rootChangelog, extChangelog, "extension/CHANGELOG.md must be byte-identical to root CHANGELOG.md");
 });
 
-Deno.test("changelog: recent entries (0.2.209+) are plain user language without internal task IDs or raw jargon", async () => {
+Deno.test("changelog: recent entries (last ten versions) are plain user language without internal task IDs, SHAs, or raw jargon", async () => {
   const changelog = await Deno.readTextFile(new URL("../CHANGELOG.md", import.meta.url));
+  // Mirror of extension/options/options.js isUserFacingEntry: a bullet a
+  // non-engineer can read. Kept in lockstep with the renderer and
+  // scripts/check-changelog.mjs (CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01).
+  const isUserFacingEntry = (text: string) => {
+    const line = String(text).trim();
+    if (/^(merge|chore|fix\(|test|ci|docs):/i.test(line)) return false;
+    if (/\b[0-9a-f]{7,40}\b/i.test(line)) return false;
+    if (/journey|KAT|assertion|CDP|harness|worktree|lane|tracker|splice|\bRED\b|\bGREEN\b/i.test(line)) return false;
+    return true;
+  };
+  const versions = [...changelog.matchAll(/^## \[([^\]]+)\][^\n]*\n([\s\S]*?)(?=^## |\z)/gm)]
+    .slice(0, 10)
+    .map((m) => ({ version: m[1], bullets: m[2].split(/\r?\n/).filter((l) => l.startsWith("- ")).map((l) => l.slice(2).trim()) }));
+  assert(versions.length >= 5, "must have at least five recent versions to check");
+  const offenders = [];
+  for (const v of versions) {
+    for (const b of v.bullets) {
+      if (!isUserFacingEntry(b)) offenders.push(`v${v.version}: ${b.slice(0, 80)}`);
+    }
+  }
+  assert(!offenders.length, `recent changelog entries must be user-facing:\n${offenders.join("\n")}`);
+  // The broad bans stay in force over the whole recent section (existing behaviour).
   const recentSection = changelog.split("## [0.2.208]")[0];
-
   assert(!recentSection.includes("CAP-FB-"), "must not contain internal task IDs (CAP-FB-...)");
   assert(!recentSection.includes("collision lattice"), "must not contain 'collision lattice' jargon");
   assert(!recentSection.includes("six-import"), "must not contain 'six-import' jargon");
