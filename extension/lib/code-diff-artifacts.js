@@ -1,3 +1,6 @@
+// RETENTION LAYER, NOT THE VIEW: this module owns sha256-addressed patch
+// identity + storage. The real line diff (hunks, counts, apply) is
+// extension/shared/diff-core.js, bundled to dist/shared/diff-core.bundle.js.
 // lib/code-diff-artifacts.js — source-only retained code-change authority.
 //
 // This module validates and retains immutable change documents and derives

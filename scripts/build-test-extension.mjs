@@ -68,6 +68,12 @@ await build({
   entryPoints: [path.join(EXT, "options/options.js")],
   outfile: path.join(dest, "dist/options.bundle.js"), // matches the production dist layout the html loads
 });
+// The diff core — kept in step with build.mjs (CAP-FB-20260830-DIFF-LIBRARY-01).
+await build({
+  ...shared,
+  entryPoints: [path.join(EXT, "shared/diff-core.js")],
+  outfile: path.join(dest, "dist/shared/diff-core.bundle.js"),
+});
 
 // Append the TEST SEAM to the COPY's service worker + scrub eval sites.
 const out = path.join(dest, "dist/background/service-worker.js");

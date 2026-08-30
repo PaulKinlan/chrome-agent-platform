@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.464] — 2026-08-30
+- Artifacts: a real line-diff engine (jsdiff) is now bundled so the extension can show exactly which lines changed between two versions of a file, with per-hunk added/removed counts.
+
 ## [0.2.463] — 2026-08-30
 - Six more fixes are in progress in parallel and recorded as claimed in the tracker.
 
