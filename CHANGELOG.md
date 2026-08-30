@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.451] — 2026-08-30
+- Landed: the agent's answer now appears word by word as it is written instead of all at once when it finishes.
+
 ## [0.2.450] — 2026-08-30
 - Tracker: the untrusted-content fence is recorded as landed.
 

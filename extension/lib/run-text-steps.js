@@ -62,5 +62,12 @@ export function createRunTextTracker() {
     endedOnNudge() {
       return hiddenLast && Boolean(substantive);
     },
+    /** Whether the NEXT step, if it turns out text-only, would be the hidden
+     *  nudge reply — decided at step START so the streaming tee can hold its
+     *  deltas back (a hidden step must never stream; a step that then makes a
+     *  tool call is not the nudge and its text still lands at step end). */
+    nextStepMayBeNudge() {
+      return lastStep != null && lastStep.hasToolCalls && lastStep.text.length > 0;
+    },
   };
 }

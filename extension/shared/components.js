@@ -3449,7 +3449,41 @@ class MessageBubble extends Component {
   _content() {
     return this.hasAttribute("content") ? (this.getAttribute("content") ?? "") : (this.textContent ?? "");
   }
+  /** Grow an agent bubble with streamed model text (CAP-FB-20260830-TRANSCRIPT-STREAMING-01).
+   *  The deltas land in a hosted <streaming-text streaming> (text nodes only —
+   *  untrusted model output never meets innerHTML mid-stream); the final
+   *  sanitised markdown render happens when `content` is set, which replaces
+   *  the streamed body in one paint. `aria-live` is deliberately NOT set on
+   *  the growing text — the completed answer is announced once through the
+   *  conversation log. Returns the accumulated streamed text. */
+  appendText(delta) {
+    if (!this._rendered) { this._rendered = true; this._render(); this._wire(); }
+    let host = this._streamEl;
+    if (!host || !host.isConnected) {
+      const body = this._root.querySelector(".body");
+      if (!body) return "";
+      body.textContent = "";
+      host = document.createElement("streaming-text");
+      host.setAttribute("streaming", "");
+      body.appendChild(host);
+      this._streamEl = host;
+      this.setAttribute("streaming", "");
+    }
+    return host.appendText(delta);
+  }
+  /** The text streamed into this bubble so far ("" when none). */
+  get streamedText() { return this._streamEl?.streamedText ?? ""; }
+  /** Reset the streamed body (a within-run retry restarts the answer). */
+  resetStream() {
+    if (this._streamEl) { this._streamEl.remove(); this._streamEl = null; }
+    const body = this._root.querySelector(".body");
+    if (body) body.textContent = "";
+  }
   _render() {
+    // A full render (a `content` change, or any observed attribute) drops the
+    // streamed body: the final text replaces it.
+    this._streamEl = null;
+    if (typeof this.removeAttribute === "function") this.removeAttribute("streaming");
     const role = this.getAttribute("role") || "agent";
     const content = this._content();
     const style = `
@@ -5590,7 +5624,27 @@ class StreamingText extends Component {
       @keyframes cap-caret { 0%,100%{opacity:1;} 50%{opacity:0;} }
       @media (prefers-reduced-motion: reduce) { :host([streaming]) .body::after { animation:none; opacity:.6; } }
     `, `<div class="body">${renderMarkdown(content)}</div>${sourceChips ? `<div class="srcs">${sourceChips}</div>` : ""}${actionBtns ? `<div class="acts">${actionBtns}</div>` : ""}`);
+    // Text appended while streaming is UNTRUSTED model output: it is written
+    // as text nodes only (never through the markdown renderer) and survives a
+    // re-render. Setting `content` ends the streamed mode.
+    if (this._streamText != null && !this.hasAttribute("content")) {
+      const body = this._root.querySelector(".body");
+      if (body) body.textContent = this._streamText;
+    }
   }
+  /** Append a streamed delta as a text node (CAP-FB-20260830-TRANSCRIPT-STREAMING-01).
+   *  Returns the accumulated streamed text. */
+  appendText(delta) {
+    const text = typeof delta === "string" ? delta : "";
+    if (this._streamText == null) this._streamText = "";
+    this._streamText += text;
+    if (!this._rendered) { this._rendered = true; this._render(); this._wire(); }
+    const body = this._root.querySelector(".body");
+    if (body && text) body.appendChild(document.createTextNode(text));
+    return this._streamText;
+  }
+  /** The text streamed so far ("" when nothing has streamed). */
+  get streamedText() { return this._streamText ?? ""; }
   _wire() {
     this._root.querySelectorAll(".act").forEach((b) =>
       b.addEventListener("click", () => this._emit("action", { index: Number(b.dataset.index) }))
