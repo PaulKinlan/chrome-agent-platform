@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.431] — 2026-08-30
+- Jobs panel: a failed board read now shows the honest error instead of an empty board
+
 ## [0.2.430] — 2026-08-30
 - Jobs panel: retain the empty/populated/settled hub screenshots from the journey
 

@@ -7557,9 +7557,20 @@ class JobsBoard extends Component {
         backendBounded("board.messages", { limit: 5 }).catch(() => null),
       ]);
       if (seq !== this._loadSeq) return; // superseded mid-flight
-      this._loadError = null;
-      this._jobs = Array.isArray(jobsRes?.jobs) ? jobsRes.jobs : [];
-      this._messages = (msgsRes?.ok && Array.isArray(msgsRes?.messages)) ? msgsRes.messages : [];
+      // A structured {ok:false} is an HONEST backend failure (board-store-error,
+      // worker timeout, …) — surface the error copy, never render it as an
+      // empty board. (The messages catch→null fallback stays tolerated: a
+      // THROWN/never-answering messages query just omits the feed.)
+      const failed = [jobsRes, msgsRes].find((r) => r && r.ok === false);
+      if (failed) {
+        this._loadError = String(failed.error ?? failed.code ?? "unavailable").slice(0, 160);
+        this._jobs = [];
+        this._messages = [];
+      } else {
+        this._loadError = null;
+        this._jobs = Array.isArray(jobsRes?.jobs) ? jobsRes.jobs : [];
+        this._messages = (msgsRes?.ok && Array.isArray(msgsRes?.messages)) ? msgsRes.messages : [];
+      }
     } catch (e) {
       if (seq !== this._loadSeq) return;
       this._loadError = String(e?.error ?? e?.message ?? e ?? "unavailable").slice(0, 160);
