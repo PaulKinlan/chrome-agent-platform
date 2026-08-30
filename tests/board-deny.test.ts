@@ -115,7 +115,7 @@ Deno.test("board routes: owner can add and remove deny rules", async () => {
     listAgents: async () => AGENTS,
     resolveCaller: () => BOARD_HUB_ID,
   });
-  const added = await routes["board.deny.add"]({ action: "claim", agentId: "critic", peerId: "writer" }, {});
+  const added = await routes["board.deny.add"]({ action: "claim", agentId: "critic", peerId: "writer" }, { principal: "owner-options" });
   assertEquals(added.ok, true);
   const listed = await routes["board.deny.list"]({}, {});
   assertEquals(listed.rules.length, 1);
@@ -137,7 +137,7 @@ Deno.test("board deny: route-level add rule → post denied via the actual route
   const posted = await routes["board.post"]({ description: "test", targetAgent: "critic" }, {});
   assertEquals(posted.ok, true);
   // Add a deny rule: critic cannot claim from writer
-  const added = await routes["board.deny.add"]({ action: "claim", agentId: "critic", peerId: "writer" }, {});
+  const added = await routes["board.deny.add"]({ action: "claim", agentId: "critic", peerId: "writer" }, { principal: "owner-options" });
   assertEquals(added.ok, true);
   // Now critic claims → denied via the deny rule
   const claim = await routes["board.claim"]({ jobId: posted.job.id }, { principal: "owner-options", executionId: "test-critic" });

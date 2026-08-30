@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.422] — 2026-08-30
+- test(board): fix deny-route tests to pass owner-options principal context
+
 ## [0.2.421] — 2026-08-30
 - fix(board): fail-closed deny-rule loading (corrupt store denies); tightened guard validation; added round-5 route-level + corrupt-store + denial-text tests
 

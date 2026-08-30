@@ -980,25 +980,6 @@ export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCa
       const rules = (await memory.getStrict(BOARD_DENY_RULES_KEY)) ?? [];
       return { ok: true, rules };
     }),
-    "board.messages": guarded(async ({ limit }) => {
-      const cap = Number.isInteger(limit) && limit > 0 ? Math.min(limit, BOARD_MAX_MESSAGES) : 50;
-      return { ok: true, messages: await board.listMessages({ limit: cap }) };
-    }),
-    // Owner-controlled deny rules (review r5 scope): the SW persists them in
-    // a reserved key; the board reads them for guard evaluation.
-    "board.deny.add": guarded(async ({ action, agentId, peerId }) => {
-      if (typeof action !== "string" || !["claim", "post"].includes(action)) {
-        return { ok: false, code: "board-deny-bad-action", error: "action must be 'claim' or 'post'" };
-      }
-      if (typeof agentId !== "string" || !agentId) return { ok: false, code: "board-deny-bad-agent", error: "agentId required" };
-      if (typeof peerId !== "string" || !peerId) return { ok: false, code: "board-deny-bad-peer", error: "peerId required" };
-      const rules = await loadDenyRules();
-      if (rules.length >= BOARD_MAX_DENY_RULES) return { ok: false, code: "board-deny-full", error: "the deny rule list is full (200 max)" };
-      const id = `deny_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
-      rules.push({ id, action, agentId, peerId });
-      await saveDenyRules(rules);
-      return { ok: true, rule: { id, action, agentId, peerId } };
-    }),
     "board.deny.remove": guarded(async ({ ruleId }) => {
       if (typeof ruleId !== "string" || !ruleId) return { ok: false, code: "board-deny-bad-id", error: "ruleId required" };
       const rules = await loadDenyRules();
