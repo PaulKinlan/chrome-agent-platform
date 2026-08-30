@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.452] — 2026-08-30
+- Turning a capability off in Settings now asks you to confirm and does the full clean-up: turning off Site Agents removes every added site's agent and its scripts, instead of only dropping the permission.
+
 ## [0.2.451] — 2026-08-30
 - The agent can no longer open or navigate to chrome://, file://, about: or data: pages, even with Browser control switched on for all sites: only http(s) destinations are accepted, and the refusal says so plainly.
 

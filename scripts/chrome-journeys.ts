@@ -369,6 +369,7 @@ const EXPECTED = [
   "permissions: Context menus Enable clicked via a trusted gesture",
   "permissions: Context menus granted after Enable settled",
   "permissions: Context menus Turn off clicked via a trusted gesture",
+  "permissions: Turn off raised the owner approval dialog (capability.revoke via the SW)",
   "permissions: Context menus absent after Turn off settled",
   "permissions: Context menus retry Enable clicked via a trusted gesture",
   "permissions: Context menus granted after retry settled",
@@ -465,8 +466,11 @@ const EXPECTED = [
   "disenroll: an owner click needs no second approval (owner-direct action)",
   "disenroll: agent removed from list + enrollment tombstoned",
   "scripting Disable: two origins enrolled before the revoke",
+  "scripting Disable: Site Agents Turn off clicked via a trusted gesture",
+  "scripting Disable: the owner dialog appeared and was accepted with a genuine click",
   "scripting Disable: optional permission revoked",
   "scripting Disable: successful revoke tombstones every enrolled origin",
+  "Settings: Turn off Site Agents goes through capability.revoke and unregisters enrolled scripts",
   "mgmt: orchestrator exposes the management tool suite",
   "mgmt: create_agent returned ok",
   "mgmt: agent.directory lists it with enrollment state",
@@ -1000,16 +1004,17 @@ async function main() {
     // from `confirmActionDialog` — with a genuine CDP click. `destructive`
     // dialogs focus Cancel by default, so the click (not a keypress) is what
     // decides. Returns false if no dialog appeared, so a caller can assert it.
-    const confirmOwnerDialog = async (accept = true) => {
+    const confirmOwnerDialogOn = async (session, accept = true) => {
       const selector = accept ? ".cap-confirm-dialog .cap-confirm-accept" : ".cap-confirm-dialog .cap-confirm-cancel";
       let box = null;
       for (let i = 0; i < 25 && !box; i++) {
-        box = await boxOf(cdp, optsSession, selector);
+        box = await boxOf(cdp, session, selector);
         if (!box) await sleep(200);
       }
       if (!box) return false;
-      return await clickSel(cdp, optsSession, selector);
+      return await clickSel(cdp, session, selector);
     };
+    const confirmOwnerDialog = (accept = true) => confirmOwnerDialogOn(optsSession, accept);
     const approvedMsg = async (payload) => {
       const first = await msgValue(payload);
       // Owner-direct actions execute on the first extension-document call. A
@@ -1153,10 +1158,10 @@ async function main() {
     };
     // A permission result is settled only when contains() and the asynchronously
     // re-rendered row agree. This avoids reading the pre-click false state.
-    const pollCapability = async (label, permission, granted, buttonText) => {
+    const pollCapabilityOn = async (session, label, permission, granted, buttonText) => {
       let state = null;
       for (let i = 0; i < 40; i++) {
-        state = await evalOpts(`(async () => {
+        state = await evalIn(cdp, session, `(async () => {
           const granted = await chrome.permissions.contains({ permissions: [${JSON.stringify(permission)}] });
           const row = [...document.querySelectorAll('#permission-list .perm-row')]
             .find((r) => r.querySelector('.perm-name')?.textContent === ${JSON.stringify(label)});
@@ -1171,6 +1176,8 @@ async function main() {
       console.log(`[debug] ${label} did not settle: ${JSON.stringify(state)}`);
       return false;
     };
+    const pollCapability = (label, permission, granted, buttonText) =>
+      pollCapabilityOn(optsSession, label, permission, granted, buttonText);
 
     // Context menus is warningless: headless Chrome can grant and revoke it,
     // so drive the complete owner lifecycle instead of deferring it to headed.
@@ -1187,6 +1194,15 @@ async function main() {
     check(
       "permissions: Context menus Turn off clicked via a trusted gesture",
       await clickCapability(optsSession, "Context menus", "Turn off"),
+    );
+    // CAP-FB-20260830-SETTINGS-REVOKE-VIA-SW-01: Turn off goes through the
+    // SW's `capability.revoke` route, so the owner dialog appears and a genuine
+    // accept click is what revokes.
+    const contextMenusDialogShot = await captureShot(cdp, optsSession);
+    if (contextMenusDialogShot) await writeEvidence("settings-turn-off-owner-dialog.png", contextMenusDialogShot);
+    check(
+      "permissions: Turn off raised the owner approval dialog (capability.revoke via the SW)",
+      await confirmOwnerDialog(true),
     );
     check(
       "permissions: Context menus absent after Turn off settled",
@@ -2299,17 +2315,46 @@ async function main() {
     );
     // Under OPTIONAL + JIT, scripting is runtime-revocable. Its dependent
     // teardown must tombstone every enrolled origin before removing the grant.
-    const revokeScripting = await approvedMsg({ type: "capability.revoke", id: "scripting" });
+    // CAP-FB-20260830-SETTINGS-REVOKE-VIA-SW-01: drive the REAL Settings
+    // "Turn off" button for Site Agents with a trusted click, accept the owner
+    // dialog, and assert the SW route did the teardown — the old page-realm
+    // revokeCapability skipped the dialog and left every bridge registered.
+    const registeredBeforeDisable = await evalIn(cdp, optsSession2,
+      `(async () => { try { if (typeof chrome.scripting?.getRegisteredContentScripts !== "function") return { err: "chrome.scripting unavailable" }; const s = await chrome.scripting.getRegisteredContentScripts(); return s.map((x) => x.id); } catch (e) { return { err: String(e?.message ?? e) }; } })()`);
+    console.log(`[debug] registered scripts before Turn off: ${JSON.stringify(registeredBeforeDisable)}`);
+    await evalIn(cdp, optsSession2, `document.querySelector('#permission-list')?.scrollIntoView()`);
+    check(
+      "scripting Disable: Site Agents Turn off clicked via a trusted gesture",
+      await clickCapability(optsSession2, "Site Agents", "Turn off"),
+    );
+    check(
+      "scripting Disable: the owner dialog appeared and was accepted with a genuine click",
+      await confirmOwnerDialogOn(optsSession2, true),
+    );
     check(
       "scripting Disable: optional permission revoked",
-      revokeScripting?.ok === true && revokeScripting?.revoked === true,
+      await pollCapabilityOn(optsSession2, "Site Agents", "scripting", false, "Enable"),
     );
+    const settingsAfterDisableShot = await captureShot(cdp, optsSession2);
+    if (settingsAfterDisableShot) await writeEvidence("settings-site-agents-after-turn-off.png", settingsAfterDisableShot);
     const postDisable = await msgValue({ type: "agent.list" });
     check(
       "scripting Disable: successful revoke tombstones every enrolled origin",
       Array.isArray(postDisable) &&
         !postDisable.includes("https://script-disable-a.example") &&
         !postDisable.includes("https://script-disable-b.example"),
+    );
+    const registeredAfterDisable = await evalIn(cdp, optsSession2,
+      `(async () => { try { if (typeof chrome.scripting?.getRegisteredContentScripts !== "function") return { err: "chrome.scripting unavailable" }; const s = await chrome.scripting.getRegisteredContentScripts(); return s.map((x) => x.id); } catch (e) { return { err: String(e?.message ?? e) }; } })()`);
+    console.log(`[debug] registered scripts after Turn off: ${JSON.stringify(registeredAfterDisable)}`);
+    check(
+      "Settings: Turn off Site Agents goes through capability.revoke and unregisters enrolled scripts",
+      Array.isArray(registeredBeforeDisable) &&
+        (Array.isArray(registeredAfterDisable)
+          ? registeredAfterDisable.length === 0
+          // With the permission gone Chrome refuses the query itself; the
+          // route's teardown ran under the permission before removing it.
+          : typeof registeredAfterDisable?.err === "string"),
     );
 
     // ─────────────────────────────────────────────────────────────

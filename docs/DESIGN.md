@@ -157,7 +157,13 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   conversation that raised it — "This agent wants to group tabs — Allow?" — and one
   click grants exactly that scope and retries the run. Deny is sticky. Revoking a
   permission confirms in place through a native dialog on the same owner-approved
-  mutation path. Cards disclose only the normalized action and a private
+  mutation path: Settings → Permissions "Turn off <capability>" sends
+  `capability.revoke` to the service worker (the single revoke authority — the
+  storage snapshot, the alarms disarm, and for Site Agents the tombstoning and
+  script unregistration of every enrolled origin) and the shared confirm dialog
+  with a genuine-gesture accept is the approval; the page never revokes a
+  permission itself. Permission REQUESTS stay in the page because only the click
+  gesture can call `chrome.permissions.request`. Cards disclose only the normalized action and a private
   install-scoped reference — never target, origin, id, payload, digest, execution id,
   or credentials. Approval ids stay in event-handler closures and never become DOM
   attributes. Approve and Deny are ordinary labelled buttons with immediate
