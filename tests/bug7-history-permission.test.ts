@@ -57,6 +57,6 @@ Deno.test("bug 7: a broken grant state denies HONESTLY — structured, pointing 
   // The structured marker: the chat UI turns this into an inline Enable
   // affordance (the JIT request fires from the page's own user gesture).
   assertEquals(result.permissionRequired?.capability, "history");
-  assertStringIncludes(result.error, "enable it from the chat when prompted", "the denial offers the in-chat affordance");
+  assertStringIncludes(result.error, "allow it in the approval card here", "the denial offers the in-chat affordance");
   assertStringIncludes(result.error, "Settings → Permissions", "the denial points at the Settings fallback");
 });

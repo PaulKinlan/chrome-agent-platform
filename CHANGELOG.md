@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.456] — 2026-08-30
+- Landed: when a browser action needs a permission you have not granted yet (opening a tab, reading a page, taking a screenshot, saving a page), the conversation now shows one Allow card that names exactly what is being asked for; Allow grants it and the action completes in the same run, Not now ends the run honestly.
+
+## [0.2.455] — 2026-08-30
+- merge origin/main (2) into cap/denial-to-grant-card
+
 ## [0.2.454] — 2026-08-30
 - Tracker: the template gallery is recorded as landed.
 

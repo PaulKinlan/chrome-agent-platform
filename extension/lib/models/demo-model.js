@@ -35,6 +35,17 @@ const AGENT_DELEGATE_MARKER = "@demo-delegate-agent";// @demo-board: the demo mo
 // so the browser KAT attests a NAMED AGENT genuinely claims + settles a board
 // job (its execution id resolves through the live run registry).
 const BOARD_MARKER = "@demo-board";
+// @demo-browser <tool> [url=<url>] [tab=<id>]: the demo model issues ONE real
+// browser tool call (open_tab / navigate_tab / read_page / capture_screenshot /
+// list_tabs) through the lazy protocol (search_tools → execute_tool). A
+// structured permission denial pauses the run on the in-context approval
+// card (CAP-FB-20260830-DENIAL-TO-GRANT-CARD-01); after the owner's Allow the
+// paused call reports "Owner approved … retry", and the model re-selects +
+// re-executes the same call once per approval (bounded). The final text is
+// the REAL outcome — a denial reads as not performed, never as success.
+const BROWSER_MARKER = "@demo-browser";
+const BROWSER_TOOLS = new Set(["open_tab", "navigate_tab", "read_page", "capture_screenshot", "list_tabs"]);
+const BROWSER_MAX_ROUNDS = 3;
 // @demo-enum-slip: the demo model reproduces the live-lane enum slip through
 // the REAL lazy protocol — search_tools(create_asset) → execute_tool with
 // type:"text/html" (refused as lazy-arguments-invalid, retryable) → execute_tool
@@ -257,6 +268,7 @@ function latestRunSlice(prompt) {
       delegateAgent: lastUser.includes(AGENT_DELEGATE_MARKER),
       createAgent: lastUser.includes(CREATE_AGENT_MARKER),
       board: lastUser.includes(BOARD_MARKER),
+      browser: lastUser.includes(BROWSER_MARKER),
       enumSlip: lastUser.includes(ENUM_SLIP_MARKER),
       runScript: lastUser.includes(RUN_SCRIPT_MARKER),
       obeyPage: lastUser.includes(OBEY_PAGE_MARKER),
@@ -511,8 +523,116 @@ const ENUM_SLIP_ARGS = Object.freeze({
   content: "<h1>enum slip</h1><p>created on the corrected retry</p>",
 });
 
-function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, enumSlip = false, runScript = false } = {}) {
+// ── @demo-browser helpers ───────────────────────────────────────────────────
+function wantsBrowser(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.browser;
+}
+
+/** Parse "<tool> [url=…] [tab=…]" after the marker from the CURRENT run's
+ * task (original case — URLs are case-sensitive). Unknown tools → null (the
+ * final text says so; nothing is called). */
+function browserSpec(prompt) {
+  const msgs = latestRunSlice(prompt)?.slice ?? [];
+  const lastUserMsg = [...msgs].reverse().find((m) => m?.role === "user" && !isAgentDoContinuation(m));
+  const text = extractText(lastUserMsg ? [lastUserMsg] : []);
+  const m = text.match(/@demo-browser\s+([a-z_]+)((?:\s+(?:url|tab)=\S+)*)/);
+  if (!m || !BROWSER_TOOLS.has(m[1])) return null;
+  const tool = m[1];
+  const url = /url=(\S+)/.exec(m[2] ?? "")?.[1];
+  const tab = /tab=(\d+)/.exec(m[2] ?? "")?.[1];
+  const args = {};
+  if ((tool === "open_tab" || tool === "navigate_tab") && url) args.url = url.slice(0, 2048);
+  if (tab && tool !== "open_tab" && tool !== "list_tabs") args.tabId = Number(tab);
+  return { tool, args };
+}
+
+/** Unwrap one tool part's output through every wrapper the run loop adds:
+ * the agent-do { modelContent } wrapper, JSON strings, and the lazy
+ * { ok, selectedTool, result } envelope (a denial rides inside `result`). */
+function browserUnwrap(output) {
+  let v = output && typeof output === "object" && "value" in output ? output.value : output;
+  for (let i = 0; i < 4; i++) {
+    if (typeof v === "string") {
+      try { v = JSON.parse(v); } catch { return v; }
+    } else if (v && typeof v === "object") {
+      if (typeof v.modelContent === "string" || (v.modelContent && typeof v.modelContent === "object")) v = v.modelContent;
+      else if (v.ok === true && "result" in v) v = v.result;
+      else return v;
+    } else return v;
+  }
+  return v;
+}
+
+function browserExecuteParts(prompt) {
+  return boardToolParts(prompt).filter((p) => p?.toolName === "execute_tool" && p?.type === "tool-result");
+}
+
+/** One more search+execute round is allowed per owner approval (the paused
+ * call reports "Owner approved … Retry <tool> now with a fresh search_tools
+ * selection"), bounded by BROWSER_MAX_ROUNDS. */
+function browserRoundsAllowed(prompt) {
+  const approvals = browserExecuteParts(prompt).filter((p) => {
+    try { return /Owner approved the requested capability/.test(JSON.stringify(p)); } catch { return false; }
+  }).length;
+  return Math.min(BROWSER_MAX_ROUNDS, 1 + approvals);
+}
+
+function browserAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" &&
+    Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && /\[demo model\] Browser tool/.test(p.text ?? "")));
+}
+
+/** Honest final text from the LAST execute result: a structured denial or
+ * error is "NOT performed"; a real result names what came back. */
+function browserFinalText(prompt) {
+  const spec = browserSpec(prompt);
+  if (!spec) return "[demo model] Browser tool request not understood — nothing was performed.";
+  const parts = browserExecuteParts(prompt);
+  if (!parts.length) return `[demo model] Browser tool ${spec.tool} was not called.`;
+  const last = parts[parts.length - 1];
+  if (last.output?.type === "error-text") {
+    return `[demo model] Browser tool ${spec.tool} was NOT performed: ${String(last.output.value ?? "error").slice(0, 200)}`;
+  }
+  const v = browserUnwrap(last.output);
+  if (typeof v === "string") {
+    return /Owner approved|denied|expired|not performed/i.test(v)
+      ? `[demo model] Browser tool ${spec.tool} was NOT performed: ${v.slice(0, 200)}`
+      : `[demo model] Browser tool ${spec.tool} succeeded: ${v.slice(0, 200)}`;
+  }
+  if (v && typeof v === "object") {
+    if (v.waitingForPermission === true || v.ok === false || typeof v.error === "string") {
+      return `[demo model] Browser tool ${spec.tool} was NOT performed: ${String(v.error ?? "denied").slice(0, 200)}`;
+    }
+    const facts = [];
+    if (typeof v.title === "string") facts.push(`title "${v.title.slice(0, 80)}"`);
+    if (typeof v.url === "string") facts.push(`url ${v.url.slice(0, 120)}`);
+    if (typeof v.tabId === "number") facts.push(`tab ${v.tabId}`);
+    if (typeof v.screenshot === "string") facts.push(`screenshot (${v.screenshot.length} chars)`);
+    if (Array.isArray(v.tabs)) facts.push(`${v.tabs.length} tab(s)`);
+    return `[demo model] Browser tool ${spec.tool} succeeded: ${facts.join(", ") || "done"}.`;
+  }
+  return `[demo model] Browser tool ${spec.tool} finished without a result.`;
+}
+
+function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, browser = false, enumSlip = false, runScript = false } = {}) {
   const step = toolResultCount(prompt);
+  if (browser) {
+    const spec = browserSpec(prompt);
+    if (!spec) return null; // honest stop: the final text reports it
+    const toolParts = boardToolParts(prompt);
+    const searches = toolParts.filter((p) => p.toolName === "search_tools").length;
+    const executes = toolParts.filter((p) => p.toolName === "execute_tool").length;
+    const rounds = browserRoundsAllowed(prompt);
+    if (executes >= rounds) return null;
+    if (searches <= executes) {
+      return { id: `search_browser_${searches}`, name: "search_tools", input: { query: spec.tool, limit: 1 } };
+    }
+    const selectionRef = latestSelectionRef(prompt);
+    if (!selectionRef) return null;
+    return { id: `execute_browser_${executes}`, name: "execute_tool", input: { selectionRef, arguments: spec.args } };
+  }
   if (enumSlip) {
     const toolParts = boardToolParts(prompt);
     const searches = toolParts.filter((p) => p.toolName === "search_tools").length;
@@ -757,6 +877,8 @@ export function createDemoModel() {
         ? lazyDemoCall(options.prompt, { runScript: true })
         : wantsBoard(options.prompt) && !boardAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { board: true })
+        : wantsBrowser(options.prompt) && !browserAlreadyFinal(options.prompt)
+        ? lazyDemoCall(options.prompt, { browser: true })
         : wantsDelegate(options.prompt)        ? lazyDemoCall(options.prompt, { delegate: true })
         : wantsCreateAgent(options.prompt) && !createAgentDone
         ? lazyDemoCall(options.prompt)
@@ -793,6 +915,14 @@ export function createDemoModel() {
       if (wantsRunScript(options.prompt)) {
         return Promise.resolve({
           content: [{ type: "text", text: runScriptFinalText(options.prompt) }],
+          finishReason: "stop",
+          usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
+          warnings: [],
+        });
+      }
+      if (wantsBrowser(options.prompt)) {
+        return Promise.resolve({
+          content: [{ type: "text", text: browserFinalText(options.prompt) }],
           finishReason: "stop",
           usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
           warnings: [],
@@ -862,6 +992,8 @@ export function createDemoModel() {
             ? lazyDemoCall(options.prompt, { runScript: true })
             : wantsBoard(options.prompt) && !boardAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { board: true })
+            : wantsBrowser(options.prompt) && !browserAlreadyFinal(options.prompt)
+            ? lazyDemoCall(options.prompt, { browser: true })
             : wantsDel            ? lazyDemoCall(options.prompt, { delegate: true })
             : wantsCreateAgent(options.prompt) && !createAgentDone
             ? lazyDemoCall(options.prompt)
@@ -1030,6 +1162,16 @@ export function createDemoModel() {
             // The board flow's final/continuation text: the claim + complete
             // tool results decide the outcome (never a neutral rewrite).
             response = boardFinalText(options.prompt);
+          }
+          else if (wantsBrowser(options.prompt)) {
+            // The browser flow's final text is the REAL outcome of the last
+            // execute; the continuation (tool history stripped) re-emits the
+            // exact prior final so the loop ends on the text-only step.
+            const prior = runSlice(options.prompt)
+              .filter((m) => m?.role === "assistant" && Array.isArray(m?.content))
+              .flatMap((m) => m.content)
+              .find((p2) => p2?.type === "text" && /\[demo model\] Browser tool/.test(p2.text ?? ""));
+            response = prior?.text ?? browserFinalText(options.prompt);
           }
           else if (wantsTools && (toolResultCount(options.prompt) >= (wantsDemoToolsX2(options.prompt) ? 12 : 6) || demoAlreadyFinal(options.prompt))) {            // STEP 4 (tools): the final summary — the reads' VALUES speak for
             // themselves (the run's tool results are the assertion target). The

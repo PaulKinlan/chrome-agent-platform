@@ -202,22 +202,22 @@ Deno.test("T9 inventory: the 16 tranche-9 tools ship in the browser toolset; rea
 Deno.test("T9 permission fail-closed: every tool returns an honest Settings error without its optional permission", async () => {
   reset();
   const t = tools();
-  assertEquals((await t.get_privacy_setting.execute({ setting: "websites.doNotTrackEnabled" })).error, "privacy permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.set_privacy_setting.execute({ setting: "websites.doNotTrackEnabled", value: true })).error, "privacy permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.get_proxy_settings.execute({})).error, "proxy permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.set_proxy_settings.execute({ mode: "direct" })).error, "proxy permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.clear_proxy_settings.execute({})).error, "proxy permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.get_font_settings.execute({})).error, "fontSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.set_font_size.execute({ pixelSize: 18 })).error, "fontSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.set_default_font.execute({ genericFamily: "standard", fontId: "Arial" })).error, "fontSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.clear_font_settings.execute({})).error, "fontSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.request_keep_awake.execute({ level: "system" })).error, "power permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.release_keep_awake.execute({})).error, "power permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.search_query.execute({ text: "hello" })).error, "search permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.tts_speak.execute({ text: "hi" })).error, "tts permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.tts_stop.execute({})).error, "tts permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.list_tts_voices.execute({})).error, "tts permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.tts_is_speaking.execute({})).error, "tts permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
+  assertEquals((await t.get_privacy_setting.execute({ setting: "websites.doNotTrackEnabled" })).error, "privacy permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.set_privacy_setting.execute({ setting: "websites.doNotTrackEnabled", value: true })).error, "privacy permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.get_proxy_settings.execute({})).error, "proxy permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.set_proxy_settings.execute({ mode: "direct" })).error, "proxy permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.clear_proxy_settings.execute({})).error, "proxy permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.get_font_settings.execute({})).error, "fontSettings permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.set_font_size.execute({ pixelSize: 18 })).error, "fontSettings permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.set_default_font.execute({ genericFamily: "standard", fontId: "Arial" })).error, "fontSettings permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.clear_font_settings.execute({})).error, "fontSettings permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.request_keep_awake.execute({ level: "system" })).error, "power permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.release_keep_awake.execute({})).error, "power permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.search_query.execute({ text: "hello" })).error, "search permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.tts_speak.execute({ text: "hi" })).error, "tts permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.tts_stop.execute({})).error, "tts permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.list_tts_voices.execute({})).error, "tts permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.tts_is_speaking.execute({})).error, "tts permission not granted — allow it in the approval card here, or in Settings → Permissions");
   // No chrome mutation/read beyond the storage grant machinery reached without permission.
   assertEquals(chromeCalls.filter((c) => !["privacy.get"].includes(c[0])).length, 0, "no chrome API reached without its permission");
 });

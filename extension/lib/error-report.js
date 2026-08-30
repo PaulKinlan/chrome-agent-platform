@@ -49,7 +49,7 @@ const ACTION = {
   [ERROR_CATEGORY.TOOL]:
     "A tool call failed — check the tool's arguments and the permissions it needs.",
   [ERROR_CATEGORY.PERMISSION]:
-    "A required permission is not granted — enable it from the chat when prompted, or in Settings → Permissions.",
+    "A required permission is not granted — allow it in the approval card in the conversation, or in Settings → Permissions.",
   [ERROR_CATEGORY.TIMEOUT]:
     "The request timed out — retry, or the provider is slow right now.",
   [ERROR_CATEGORY.ABORTED]:

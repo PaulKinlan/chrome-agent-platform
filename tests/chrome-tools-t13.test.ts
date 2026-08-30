@@ -224,16 +224,18 @@ Deno.test("T13 permission gates: no tabs permission → structured denial; no si
   granted.delete("tabs");
   for (const [name, args] of TAB_MUTATIONS) {
     const r = await tools()[name].execute(args);
-    assertEquals(r.error, "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions", name);
+    assertEquals(r.error, "tabs permission not granted — allow it in the approval card here, or in Settings → Permissions", name);
   }
-  assertEquals((await tools().get_tab_zoom.execute({ tabId: t.id })).error, "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await tools().highlight_tabs.execute({ tabIds: [t.id] })).error, "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
+  assertEquals((await tools().get_tab_zoom.execute({ tabId: t.id })).error, "tabs permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await tools().highlight_tabs.execute({ tabIds: [t.id] })).error, "tabs permission not granted — allow it in the approval card here, or in Settings → Permissions");
   granted.add("tabs");
   granted.delete("sidePanel");
   for (const name of ["get_side_panel_options", "set_side_panel_options", "set_panel_behavior"]) {
     const args = name === "set_side_panel_options" ? { path: "sidepanel/sidepanel.html" } : name === "set_panel_behavior" ? { openPanelOnActionClick: true } : {};
     const r = await tools()[name].execute(args);
-    assertEquals(r.error, "sidePanel permission not granted — enable it from the chat when prompted, or in Settings → Permissions (Side panel)", name);
+    assertEquals(r.error, "sidePanel permission not granted — allow it in the approval card here, or in Settings → Permissions", name);
+    assertEquals(r.waitingForPermission, true, name);
+    assertEquals(r.permissionRequirement?.permissions, ["sidePanel"], name);
   }
 });
 

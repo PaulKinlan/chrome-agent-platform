@@ -5887,19 +5887,22 @@ const handlers = mergeRouteMaps(
     return { ok: run?.ok ?? false, result, error: run?.error, logs: run?.logs ?? [] };
   },
 
-  // ---- capability request (install-granted: the SW VERIFIES, never asks) ----
+  // ---- capability check (the SW CANNOT request: chrome.permissions.request
+  // needs a page gesture — the in-context approval card's Allow or a Settings
+  // Enable click). Capabilities are optional + JIT (owner directive
+  // 2026-08-29); this route only reports whether one is granted right now.
+  // A caller that needs a grant gets `needsGesture:true` and the exact
+  // permission so it can render the card (CAP-FB-20260830-DENIAL-TO-GRANT-CARD-01).
   async "capability.request"({ id }) {
-    // Every capability permission is granted at install — requestCapability
-    // VERIFIES the install grant (fail closed: an unreadable state is an
-    // honest error, never reported as granted).
     const res = await requestCapability(id, { request: false });
     if (res.ok && res.granted) return { ok: true, granted: true, capability: id };
     return {
       ok: false,
       granted: false,
+      needsGesture: res.ok === true,
       capability: id,
       error: res.ok
-        ? `capability ${id} is not granted — request it from the chat when prompted, or in Settings → Permissions`
+        ? `capability ${id} is not granted — the service worker cannot request it; allow it in the approval card in the conversation, or in Settings → Permissions`
         : (res.error ?? `capability ${id} not granted`),
     };
   },

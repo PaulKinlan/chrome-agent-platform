@@ -163,3 +163,62 @@ action-click path, waiting banner) is a base this design would build on, but the
 reviewed public source does not yet contain it — the model contract still exports
 `grant_capability`/`revoke_capability`/`enroll_origin`. This document keeps that
 workstream separate and labels it truthfully as unshipped.
+
+## 5. Shipped increment (2026-08-30): every browser-tool denial is ONE Allow card
+
+`CAP-FB-20260830-DENIAL-TO-GRANT-CARD-01` — the first increment of
+`CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`. What is now true on `main`:
+
+- **One denial vocabulary.** Every denial produced by `browserToolset(false)` in
+  `extension/lib/browser-tools.js` is `{ error, waitingForPermission: true,
+  permissionRequirement: { reason, permissions[], grantOrigins[], grantGlobal } }`
+  — the only shape `normalizePermissionRequirement` (`extension/shared/conversation.js`)
+  accepts before it renders `<permission-approval-card>`. Two producers remain,
+  both structured: `permissionDeniedResult(capability, { reason })` for a missing
+  Chrome permission (`tabs`, `scripting`, `downloads`, `management`,
+  `declarativeNetRequest`, `sidePanel`, …) and `permissionDenial(error, { reason,
+  grantOrigins | grantGlobal })` for a missing browser-control grant. The legacy
+  bare `{ error, permissionRequired: { capability } }` objects and the
+  `permissionRequirement: { tool, reason, origins }` shape (capture_screenshot,
+  save_page_as_mhtml) are gone. `permissionRequired` survives ONLY as an alias
+  inside `permissionDeniedResult` because two readers still consume it
+  (`scripts/chrome-journeys.ts` lease check, `tests/bug7-history-permission.test.ts`).
+- **The card names exactly what a click grants.** `reason` is a verb phrase per
+  site ("open https://example.com in a new tab", "capture a screenshot of
+  http://127.0.0.1:1234"); `permissions` is the exact Chrome permission;
+  `grantOrigins` the exact canonical origin(s); `grantGlobal` only where the
+  tool's own semantics are browser-wide (a browsing-data wipe, proxy/font/power
+  settings, downloads, extension management, network rules, the side panel).
+  The contract test `tests/browser-tool-denial-contract.test.ts` proves every
+  listed denial satisfies the normaliser and names something concrete.
+- **The run pauses on the card, and the decision resumes it.** `agent.js`
+  `onPostToolUse` detects the structured denial (also inside the lazy
+  `execute_tool` envelope), the service worker parks the invocation for 60 s
+  (`waitForInlinePermissionDecision`) and the conversation renders the card
+  with `blocking: true`. Allow is a genuine owner gesture: `chrome.permissions.request`
+  for `permissions`, then `browser-control.set` for `grantOrigins`/`grantGlobal`,
+  then `run.resolve-inline-approval`. The paused call returns "Owner approved …
+  retry with a fresh search_tools selection" and the model re-selects. Not now
+  returns "Owner denied … do not retry" and the run ends honestly. Focus moves to
+  the card's real `<button>` when it renders (never while the owner is mid-edit in
+  a field); the conversation's `aria-live="polite"` log announces it.
+- **The service worker cannot request.** `capability.request` is an honest check
+  route now: `{ ok:false, granted:false, needsGesture:true, capability, error }` —
+  a page gesture (the card's Allow, or Settings → Enable) is the only grant path.
+- **Verified in a real loaded extension** (headless, `scripts/chrome-journeys.ts`
+  JOURNEY 4c, driven through the hub composer with the demo model's
+  `@demo-browser <tool> [url=…] [tab=…]` marker): `open_tab` without `tabs`
+  renders exactly one card naming `tabs`, Not now resumes the paused run and the
+  model reports "NOT performed"; `read_page` without `scripting` renders one card
+  and Allow grants it (silent permission) and the retried call succeeds inside
+  the same run; `capture_screenshot` with browser control revoked renders one
+  card naming the exact origin and Allow sets the grant and the retry succeeds.
+  With `tabs` pre-seeded in the profile's Preferences, `open_tab` renders the
+  origin card and Allow opens the tab (verified in a scratch harness). What
+  headless cannot show: Chrome's own warning prompt for `tabs` — that Allow half
+  is a HEADED check (`CAP-FB-20260825-HEADED-ACCEPTANCE-LANE-01`).
+- **Still open (later increments):** the three-class Read / Act / Destructive
+  vocabulary on the card and in Settings (`CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01`),
+  the Settings rewrite and revoke-via-SW (`CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`
+  steps 2–6), and the host-access posture (`CAP-FB-20260830-HOST-ACCESS-STORY-01`).
+  §1 rows 6–10 above describe the pre-increment text and are historical.
