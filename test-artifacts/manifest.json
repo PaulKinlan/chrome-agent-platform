@@ -1,11 +1,11 @@
 {
-  "testedSourceCommit": "0cfb4b09dc399d97658766e65b034b906eb0aaa1",
+  "testedSourceCommit": "c58f8300278c63a9d1b0cbaef0536bf9f6f93f91",
   "evidenceCommitNote": "committed AFTER this run — a tracked manifest cannot contain its own commit hash",
   "worktreeClean": true,
   "worktreeDirtyFiles": [],
-  "runId": "cap-1788058797098",
+  "runId": "cap-1788060411185",
   "retain": true,
-  "ts": "2026-08-30T03:00:49.189Z",
+  "ts": "2026-08-30T03:27:43.200Z",
   "evidenceDir": "/home/paulkinlan/worktrees/cap-permissions-optional/test-artifacts",
   "passed": 131,
   "failed": 0,
@@ -543,23 +543,23 @@
     },
     {
       "name": "options-driven.png",
-      "sha256": "a451f414655967c5f8a2b9e52f033178f5b2105974f5c330a4752705663cb212",
-      "bytes": 224250
+      "sha256": "aa1aa53e7c0f8d2e0a65b1b5bda1fa5f92a8d1e58db6b712eade5ffa77d19a2c",
+      "bytes": 223840
     },
     {
       "name": "approval-iframe-denied.png",
-      "sha256": "b0997e9b8790b3cf7397795f366cca8e7a88432d0d55b71cbf4254567b0d457b",
-      "bytes": 218401
+      "sha256": "0bf629968d01a052e4fffd5a15e669da53af7b903fb48b1322da4cd88a6ec2ef",
+      "bytes": 218366
     },
     {
       "name": "approval-deny-pending.png",
-      "sha256": "6e20265c2867bc91d5828cf521b6146cde255731d89b425c36f7909635c59621",
-      "bytes": 222204
+      "sha256": "48a68d37271bb63b9231880164d88f73630fcdf4a70a0c046490b0a6a7fca2bc",
+      "bytes": 221686
     },
     {
       "name": "approval-deny-resolved.png",
-      "sha256": "6e20265c2867bc91d5828cf521b6146cde255731d89b425c36f7909635c59621",
-      "bytes": 222204
+      "sha256": "48a68d37271bb63b9231880164d88f73630fcdf4a70a0c046490b0a6a7fca2bc",
+      "bytes": 221686
     }
   ]
 }
