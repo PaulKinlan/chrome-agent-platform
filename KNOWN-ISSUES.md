@@ -40,6 +40,7 @@ Umbrella: `CAP-FB-20260830-EXEC-DEMO-01`. The P0 ids, one line each; every entry
 - `CAP-FB-20260830-FRESH-PROFILE-TEMPLATE-AGENTS-01` — 22 disabled templates listed as agents in the sidebar and side panel beside "0 agents" (integrate as templates, not a cut).
 - `CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01` — templates become a first-class create flow (template gallery + Starter set); sidebar shows only agents the user made or enabled.
 - `CAP-FB-20260830-MODEL-CATALOG-CURRENT-01` (P1, demo-blocking in practice) — every gpt-5.6 call is HTTP 400 on the shipped build (adapter omits `reasoning_effort:"none"`); Test connection rejected by every current OpenAI model; 127 retired model ids in the repo.
+- `CAP-FB-20260830-GENERATED-IMAGE-STRIP-01` (P1) — an image strip of the screenshots and image assets a run produced, in the thread and on the hub; adopts `screenshot-strip`. No gallery component is deleted (owner, 2026-08-30).
 - `CAP-FB-20260830-PAGE-ACTION-TOOLS-01` — no click/type/fill/scroll tool exists; owner question Q19.
 - `CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01` — create_script + run_script is an unapproved fetch channel to any URL including loopback.
 - `CAP-FB-20260830-UNTRUSTED-CONTENT-FENCING-01` — page text reaches the model raw; no fence, no policy text, no regression probe.

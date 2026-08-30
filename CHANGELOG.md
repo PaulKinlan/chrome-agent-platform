@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.429] — 2026-08-30
+- No gallery component is deleted: each unused one is kept with a planned home, and the screenshot strip is now the planned image strip of everything a run generates, in the thread and on the hub.
+
 ## [0.2.428] — 2026-08-30
 - Every reanalysis task is now a step-by-step hand-off brief with its own tests to pass. Agent templates and the jobs board stay and get fixed (the board could never post a job from an agent). The open_side_panel tool is removed. Model ids are current everywhere, and the fault that stops every gpt-5.6 model from answering is recorded.
 
