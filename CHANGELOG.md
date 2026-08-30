@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.510] — 2026-08-30
+- changelog: user-facing line for the recent-activity work (no internal task ids)
+
 ## [0.2.509] — 2026-08-30
 - Recent activity: journey evidence — hub activity rows at 1440/1024 and the run manifest
 
@@ -13,7 +16,7 @@
 - tasks: record candidate SHA
 
 ## [0.2.505] — 2026-08-30
-- tasks: claim CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01 (hub coordinator worker)
+- Recent activity now shows what you asked the agents to do and what they finished — no more raw system or tool rows on the hub.
 
 ## [0.2.504] — 2026-08-30
 - tasks: reconcile eleven IN_REVIEW entries to DONE — candidate content verified present on origin/main, only the tracker rows had lagged
