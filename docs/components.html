@@ -247,8 +247,9 @@
         <h3 class="spec"><code class="tag">&lt;approval-card&gt;</code> — a human-in-the-loop approval</h3>
         <div class="stage column" style="max-width:440px">
           <approval-card title="Open 4 tabs into a group?" body="The agent wants to group github.com ×4 into a colour-coded tab group." approve-label="Approve" deny-label="Deny"></approval-card>
+          <approval-card id="approval-script" title="Run this script now?" body="Action: script.run" approve-label="Approve" deny-label="Deny"></approval-card>
         </div>
-        <p class="caption">the agent asks before acting; the owner Approves or Denies. Emits <code>approve</code> / <code>deny</code>.</p>
+        <p class="caption">the agent asks before acting; the owner Approves or Denies. Emits <code>approve</code> / <code>deny</code>. A script approval sets the <code>detail</code> property (<code>{ source, hosts, dynamic }</code>): the exact source renders in a scrollable, labelled <code>&lt;pre&gt;</code> (textContent), the hosts it fetches are listed, and a computed URL is called out in the danger tone.</p>
       </div>
 
       <div class="specimen">
@@ -396,6 +397,10 @@
         const el = document.querySelector(sel);
         if (el) el.textContent = "→ " + msg + "\n" + (el.textContent || "");
       };
+
+      // the script approval specimen: the source + hosts are a PROPERTY
+      const scriptCard = document.getElementById("approval-script");
+      if (scriptCard) scriptCard.detail = { source: 'const page = await fetch("https://example.com/feed");\nreturn page.text.length;', hosts: ["example.com"], dynamic: false };
 
       // theme picker → re-theme the whole page
       const themer = document.getElementById("themer");

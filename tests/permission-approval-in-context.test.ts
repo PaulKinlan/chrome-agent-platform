@@ -25,6 +25,8 @@ import { clearRunFence } from "../extension/lib/run-fence.js";
 import {
   normalizePermissionRequirement,
   approvePermissionRequirement,
+  approvalCardTitle,
+  boundScriptApprovalDetail,
 } from "../extension/shared/conversation.js";
 
 // ── chrome shim (tabGroups + grant-capable, mirroring the REAL API shapes) ──
@@ -651,3 +653,27 @@ Deno.test("P1-b conversation: a site-mention turn surfaces the denial card and r
   assertEquals(sw.mentions[1]?.id, "https://site.example", "the retry keeps the mention delegation");
 });
 
+
+// CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01: a script approval carries the
+// bounded source + fetch hosts to the card; a forged/oversized detail is
+// bounded or dropped, never rendered raw.
+Deno.test("script approval: the requirement keeps a bounded source + hosts detail and names the card in plain words", () => {
+  const out = {
+    ok: false, waitingForPermission: true,
+    permissionRequirement: { reason: "script.run: ref", approvals: [{ approvalId: "ap_1", action: "script.run", targetRef: "ref", detail: { source: "return 1", hosts: ["example.com", 7, "x".repeat(300)], dynamic: "yes" } }] },
+  };
+  const req = normalizePermissionRequirement(out);
+  assert(req, "requirement present");
+  assertEquals(req.approvals[0].detail, { source: "return 1", hosts: ["example.com"], dynamic: false });
+  assertEquals(approvalCardTitle("script.run"), "Run this script now?");
+  assertEquals(approvalCardTitle("script.create"), "Save this script the agent wrote?");
+  assertEquals(approvalCardTitle("task.schedule-script"), "Run this script on a schedule?");
+  assertEquals(approvalCardTitle("asset.delete"), "Approve asset.delete?");
+  // No detail → no detail field (the plain card).
+  const plain = normalizePermissionRequirement({ ok: false, waitingForPermission: true, permissionRequirement: { reason: "asset.delete: r", approvals: [{ approvalId: "ap_2", action: "asset.delete" }] } });
+  assertEquals("detail" in plain.approvals[0], false);
+  // Bounds: the source is capped at 64 KiB, malformed shapes are dropped.
+  assertEquals(boundScriptApprovalDetail({ source: "x".repeat(70_000), hosts: [] }).source.length, 64 * 1024);
+  assertEquals(boundScriptApprovalDetail({ hosts: ["a"] }), undefined);
+  assertEquals(boundScriptApprovalDetail("return 1"), undefined);
+});

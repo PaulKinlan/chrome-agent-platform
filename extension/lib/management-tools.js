@@ -350,9 +350,13 @@ export function managementToolset({ callRoute }) {
     // function body — `return` the result. It has NO DOM, NO extension APIs, NO
     // other origins, and NO direct network. A script can be scheduled (run it
     // on a timer via schedule_task with scriptId) or run on demand (run_script).
+    // A model-initiated create/run/schedule pays an OWNER APPROVAL card that
+    // shows the exact source + the hosts it fetches; the host-side fetch
+    // refuses private addresses and any host not on that list
+    // (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01).
     create_script: tool({
       description:
-        "Create a reusable JavaScript script (an async function body) that runs sandboxed + repeatedly without re-invoking the model. The script gets a controlled api: await fetch(url, opts) (reads an http/https page, returns {status, text}) + log(...). Return a value as the result. No DOM/extension/network access of its own.",
+        "Create a reusable JavaScript script (an async function body) that runs sandboxed + repeatedly without re-invoking the model. The script gets a controlled api: await fetch(url, opts) (reads a PUBLIC http/https page, returns {status, text}) + log(...). Return a value as the result. No DOM/extension/network access of its own. REQUIRES OWNER APPROVAL: the owner sees the full source and every host it fetches before it is saved; use plain string-literal URLs so the hosts are visible — a computed URL is flagged and only the listed hosts are ever reachable; localhost and private addresses are always refused.",
       inputSchema: z.object({
         name: z.string().max(SCRIPT_BOUNDS.maxNameLength).describe("a short, clear name for the script"),
         source: z.string().describe(`the complete JavaScript function body (max ${SCRIPT_BOUNDS.maxSourceBytes} UTF-8 bytes)`),
@@ -387,7 +391,7 @@ export function managementToolset({ callRoute }) {
     }),
     run_script: tool({
       description:
-        "Run a script NOW (sandboxed, no model re-invocation) and return its result.",
+        "Run a script NOW (sandboxed, no model re-invocation) and return its result. REQUIRES OWNER APPROVAL: the owner sees the script's source and the hosts it fetches on an approval card; the run waits for that decision.",
       inputSchema: z.object({ id: z.string(), origin: z.string().default("master") }),
       execute: ({ id, origin }) => call("script.run", { origin, id }),
     }),

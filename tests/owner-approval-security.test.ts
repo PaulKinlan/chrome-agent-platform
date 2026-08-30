@@ -3,8 +3,10 @@
 // @ts-nocheck
 import { assert, assertEquals, assertNotEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
 import {
+  DESTRUCTIVE_ACTIONS,
   MAX_PENDING_APPROVALS,
   OWNER_DIRECT_ACTIONS,
+  approvalCardDenial,
   approvalPendingCount,
   bindModelApprovalDispatcher,
   canonicalArray,
@@ -71,7 +73,10 @@ Deno.test("owner-direct scope is exactly the audited action set (no silent widen
   // edit in the agent dialog IS the approval, so named-agent.set-schedule
   // joins the audited owner-direct set; model-initiated calls keep the full
   // pending-approval flow.
-  assertEquals([...OWNER_DIRECT_ACTIONS].sort(), ["agent.delete", "asset.delete", "named-agent.delete", "named-agent.set-schedule", "recipe.delete", "task.pause", "task.resume", "task.update"].sort());
+  // SCRIPT WIDENING (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01): the
+  // owner writing/running a saved script from the hub IS the approval;
+  // a model-initiated script.create/run pays the source-disclosing card.
+  assertEquals([...OWNER_DIRECT_ACTIONS].sort(), ["agent.delete", "asset.delete", "named-agent.delete", "named-agent.set-schedule", "recipe.delete", "script.create", "script.run", "task.pause", "task.resume", "task.update"].sort());
   // Every owner-direct action passes the audit grammar; widening this set
   // requires a new permission-model review.
   for (const direct of OWNER_DIRECT_ACTIONS) {
@@ -304,4 +309,25 @@ Deno.test("diagnostic redaction is Unicode-normalized, byte-bounded, and invokes
   const u = scrubEventDetail(unicodeKey);
   assert(!u.includes("plain-secret-value"));
   assert(!u.includes("__proto__"));
+});
+
+// CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01: a model-created script, a
+// model-run script, and a model-scheduled script are approvable destructive
+// actions (the card shows the source + the hosts it fetches). The owner's own
+// Settings/hub action on the same routes is owner-direct.
+Deno.test("script.create / script.run / task.schedule-script are approvable destructive actions", () => {
+  for (const action of ["script.create", "script.run", "task.schedule-script"]) {
+    assert(DESTRUCTIVE_ACTIONS.has(action), `${action} must be in DESTRUCTIVE_ACTIONS`);
+    assertEquals(isOwnerDirectApproval({ principal: "model", executionId: "exec-1" }, action), false, action);
+  }
+  for (const action of ["script.create", "script.run"]) {
+    assertEquals(isOwnerDirectApproval({ principal: "owner-options", documentId: "doc-1" }, action), true, action);
+    assertEquals(isOwnerDirectApproval({ principal: "page", documentId: "doc-1" }, action), false, action);
+  }
+  // A card can carry the script source + fetch hosts (bounded) for these
+  // actions and for no other.
+  const withDetail = approvalCardDenial({ approvalId: "a1", action: "script.run", targetRef: "ref", detail: { source: "return 1", hosts: ["example.com"], dynamic: false } });
+  assertEquals(withDetail.permissionRequirement.approvals[0].detail, { source: "return 1", hosts: ["example.com"], dynamic: false });
+  const other = approvalCardDenial({ approvalId: "a1", action: "asset.delete", targetRef: "ref", detail: { source: "x", hosts: [], dynamic: false } });
+  assertEquals(other.permissionRequirement.approvals[0].detail, undefined);
 });

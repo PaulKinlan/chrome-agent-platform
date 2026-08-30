@@ -404,6 +404,18 @@ export function createToolCardQueue() {
  * closed to the plain error text, never an approval card for a forged shape).
  * The requirement is only ever a DESCRIPTION — approving it still takes the
  * real owner click on the card. */
+const SCRIPT_DETAIL_MAX_SOURCE = 64 * 1024;
+const SCRIPT_DETAIL_MAX_HOSTS = 64;
+/** Bound a script-approval detail for the card; malformed → undefined. */
+export function boundScriptApprovalDetail(detail) {
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return undefined;
+  if (typeof detail.source !== "string") return undefined;
+  const hosts = Array.isArray(detail.hosts)
+    ? detail.hosts.filter((h) => typeof h === "string" && h.length > 0 && h.length <= 253).slice(0, SCRIPT_DETAIL_MAX_HOSTS)
+    : [];
+  return { source: detail.source.slice(0, SCRIPT_DETAIL_MAX_SOURCE), hosts, dynamic: detail.dynamic === true };
+}
+
 export function normalizePermissionRequirement(result) {
   if (result?.waitingForPermission !== true) return null;
   const req = result?.permissionRequirement;
@@ -432,6 +444,9 @@ export function normalizePermissionRequirement(result) {
         approvalId: a.approvalId,
         action: a.action,
         ...(a.targetRef === undefined ? {} : { targetRef: a.targetRef }),
+        // A script approval carries the bounded source + fetch hosts the
+        // owner must see (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01).
+        ...(boundScriptApprovalDetail(a.detail) ? { detail: boundScriptApprovalDetail(a.detail) } : {}),
       }))
     : [];
   if (Array.isArray(req.approvals) && req.approvals.length > 0 && approvals.length === 0) return null;
@@ -449,6 +464,17 @@ export function normalizePermissionRequirement(result) {
       ? "approvals|" + approvals.map((a) => a.approvalId).sort().join(",")
       : [...permissions].sort().join(",") + "|" + (grantGlobal ? "<global>" : [...grantOrigins].sort().join(",")),
   };
+}
+
+/** The card title for an approvable action — plain words for the script
+ * actions the owner must read carefully, the action id otherwise. */
+export function approvalCardTitle(action) {
+  switch (action) {
+    case "script.create": return "Save this script the agent wrote?";
+    case "script.run": return "Run this script now?";
+    case "task.schedule-script": return "Run this script on a schedule?";
+    default: return `Approve ${action}?`;
+  }
 }
 
 /** Resolve each pending owner-approval by id through the service worker's
@@ -1267,8 +1293,11 @@ export async function runConversationTurn(container, { text, attachments = [], h
       card = document.createElement(actionApproval ? "approval-card" : "permission-approval-card");
       if (actionApproval) {
         const approval = requirement.approvals[0];
-        card.setAttribute("title", `Approve ${approval.action}?`);
+        card.setAttribute("title", approvalCardTitle(approval.action));
         card.setAttribute("body", `Action: ${approval.action}\nTarget reference: ${approval.targetRef || requirement.reason.split(": ").slice(1).join(": ")}`);
+        // The script source + hosts are a PROPERTY (rendered with textContent
+        // inside the card), never an attribute.
+        if (approval.detail) card.detail = approval.detail;
       } else {
         card.setAttribute("reason", requirement.reason);
         if (requirement.permissions.length) card.setAttribute("permissions", JSON.stringify(requirement.permissions));

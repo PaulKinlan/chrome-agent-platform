@@ -1327,7 +1327,7 @@ async function withScriptRegistrationGrant({ permission, permissionLabel, patter
 }
 
 /** The browser-control toolset, passed into the agent. */
-export function browserToolset(readOnly = false) {
+export function browserToolset(readOnly = false, { scheduleScriptGate = null } = {}) {
   // SCOPED (hook) runs are side-effect-free: untrusted browser event data must
   // never drive a browser mutation (open/navigate/close a tab) or a durable
   // schedule. When readOnly, expose only the READ tools (read_page,
@@ -1664,6 +1664,17 @@ export function browserToolset(readOnly = false) {
           await assertRunOwned();
         } catch {
           return { error: "run aborted — task not scheduled" };
+        }
+        // A scheduled SCRIPT pays the same owner approval as run_script (the
+        // card shows the source + the hosts it fetches) BEFORE the schedule is
+        // committed; with no gate bound (no run context) it fails closed
+        // (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01).
+        if (scriptId) {
+          if (typeof scheduleScriptGate !== "function") {
+            return { ok: false, error: "scheduling a saved script requires owner approval, which this run cannot request" };
+          }
+          const gate = await scheduleScriptGate(scriptId);
+          if (!gate || gate.ok !== true) return gate ?? { ok: false, error: "scheduling the script was not approved" };
         }
         // The ONE atomic scheduling path (shared with the register-task route).
         // Attribute the schedule to the run that created it: the SW stamps the

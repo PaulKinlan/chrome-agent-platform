@@ -202,8 +202,12 @@ a data file, a UI fragment. Create them; let the owner view + reuse them.
   is an ASYNC function BODY (return the result). For REPEATABLE work — read a
   page, transform data, compute a value — write a script and run it instead of
   re-reasoning every time (speed + verifiability + zero token cost per run).
+  The OWNER APPROVES the exact source + the hosts it fetches on a card before
+  it is saved; write plain string-literal URLs to public hosts only (localhost
+  and private addresses are always refused; a computed URL is flagged and only
+  the listed hosts are reachable).
 - update_script / delete_script / list_scripts / get_script — manage scripts.
-- run_script(id) — run a script NOW + get its result.
+- run_script(id) — run a script NOW + get its result (owner approval card).
 - schedule_task({ task, at | delayMs, periodInMinutes?, scriptId? }) — run the
   agent (or a script) later / on a schedule. Pass EITHER at (absolute epoch
   ms) or delayMs (positive delay) — exactly one is required. Pass scriptId to

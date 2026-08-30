@@ -190,3 +190,19 @@ Deno.test("management: every callable tool declares a description", () => {
     assert(toolset[name]?.description, `${name} must have a description`);
   }
 });
+
+// CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01 (commit B, the gate): the two
+// tools are back, and their descriptions tell the model the owner approves the
+// exact source + hosts (a description that omits this invites computed URLs
+// and private targets the gate will refuse).
+Deno.test("run_script and create_script are model-callable again and declare the owner-approval gate", async () => {
+  const { toolset, calls } = makeTools();
+  for (const name of ["run_script", "create_script"]) {
+    assert(name in toolset, `${name} is callable`);
+    assert(/OWNER APPROVAL/.test(String(toolset[name].description)), `${name} declares the approval gate`);
+  }
+  await toolset.create_script.execute({ name: "x", source: "return 1", origin: "master" });
+  assertEquals(calls[0].type, "script.create");
+  await toolset.run_script.execute({ id: "s_1", origin: "master" });
+  assertEquals(calls[1].type, "script.run");
+});
