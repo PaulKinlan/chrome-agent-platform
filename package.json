@@ -1,6 +1,6 @@
 {
   "name": "chrome-agent-platform",
-  "version": "0.2.463",
+  "version": "0.2.464",
   "private": true,
   "type": "module",
   "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
@@ -21,6 +21,7 @@
     "test:security": "bash scripts/security-suite-supervisor.sh",
     "test:a11y": "deno run -A scripts/a11y-audit.ts",
     "test:perf": "deno run -A scripts/perf-leak-trace.ts",
+    "test:perf:seeded": "deno run -A scripts/perf-seeded-scale.ts 120",
     "test:capabilities": "deno run -A scripts/capability-lifecycle.ts",
     "test:all": "node scripts/check-tasks.mjs && npm run check:vocabulary && npm test && npm run test:security && npm run test:security:injection && npm run test:chrome",
     "version:patch": "node scripts/bump-version.mjs patch",

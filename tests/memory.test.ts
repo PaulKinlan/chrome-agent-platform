@@ -7,7 +7,7 @@
 
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { createMemoryRunLogHandles } from "../extension/lib/run-log-wal-memory.js";
-import { masterMemory, saveScreenshot, listScreenshots, journalAppend, journalAppendWithReceipt, journalCompensateExecution, journalAppendOnce, journalCommitCancellation, backgroundAgentMemory, namedAgentMemory, listNamedAgentIds, listBackgroundAgentIds, durableRunMemory, migrateLegacyDurableRunMemory, forgetDurableThread } from "../extension/lib/memory.js";
+import { masterMemory, siteMemory, MemoryStoreQuotaError, usageLedgerInspector, saveScreenshot, listScreenshots, journalAppend, journalAppendWithReceipt, journalCompensateExecution, journalAppendOnce, journalCommitCancellation, backgroundAgentMemory, namedAgentMemory, listNamedAgentIds, listBackgroundAgentIds, durableRunMemory, migrateLegacyDurableRunMemory, forgetDurableThread } from "../extension/lib/memory.js";
 import { createDurableRunRegistry } from "../extension/lib/durable-runs.js";
 import { createThread, deleteThread } from "../extension/lib/threads.js";
 
@@ -42,7 +42,9 @@ class FakeFileHandle {
   async getFile() {
     const node = this.node;
     return {
-      size: (node.content ?? "").length,
+      // Real OPFS reports the file's BYTE size; the fake must agree so the
+      // usage ledger (UTF-8 bytes) and a walk of the fake agree too.
+      size: new TextEncoder().encode(node.content ?? "").byteLength,
       async text() {
         return node.content ?? "";
       },
@@ -77,12 +79,16 @@ class FakeDirHandle {
     this.node.children.delete(name);
   }
   async *entries() {
+    directoryReads++;
     for (const [name, node] of this.node.children) {
       yield [name, node.kind === "file" ? new FakeFileHandle(node) : new FakeDirHandle(node)];
     }
   }
 }
 
+// Every `entries()` enumeration on the fake — the unit the usage ledger must
+// NOT spend per write (CAP-FB-20260830-OPFS-USAGE-WALK-01).
+let directoryReads = 0;
 const root = dirNode();
 function installNavigator() {
   const fakeStorageManager = {
@@ -566,4 +572,120 @@ Deno.test("deleting a thread reclaims its durable reverse index", async () => {
   assertEquals(await forgetDurableThread("../escape"), false);
   assertEquals(await forgetDurableThread(".."), false);
   assertEquals(await forgetDurableThread(""), false);
+});
+
+// ---- CAP-FB-20260830-OPFS-USAGE-WALK-01: incremental usage accounting ----
+// A memory write used to enumerate the store directory AND walk the whole
+// memory tree (getFile() on every .json) to enforce the quotas — O(files) per
+// write, O(runs^2) over a session. The ledger replaces the walk; these tests
+// pin (a) the ledger agrees with a real walk after writes/deletes/tombstones,
+// (b) a write costs ZERO directory enumerations once the ledger is seeded, and
+// (c) the quota rejection fires at exactly the same write with the same error.
+
+async function walkBytes(dirNode_) {
+  // An independent walk of the FAKE tree (not memory.js's walker): every .json
+  // file, recursively, in UTF-8 bytes — the same unit the old globalUsage used.
+  let bytes = 0;
+  for (const [name, node] of dirNode_.children) {
+    if (node.kind === "file") { if (name.endsWith(".json")) bytes += new TextEncoder().encode(node.content ?? "").byteLength; }
+    else bytes += await walkBytes(node);
+  }
+  return bytes;
+}
+function storeNode(segments) {
+  let node = root;
+  for (const seg of segments) node = node.children.get(seg);
+  return node;
+}
+function storeWalkBytes(segments) {
+  const node = storeNode(segments);
+  let bytes = 0;
+  for (const [name, n] of node.children) {
+    if (n.kind === "file" && name.endsWith(".json") && !/^(?:__gen\.json|__tombs\.json|__epoch\.json)$/.test(name)) {
+      bytes += new TextEncoder().encode(n.content ?? "").byteLength;
+    }
+  }
+  return bytes;
+}
+
+Deno.test("usage ledger matches a full walk after N writes and M deletes (OPFS-USAGE-WALK-01)", async () => {
+  root.children.clear();
+  usageLedgerInspector.reset();
+  const stores = [
+    { mem: masterMemory(), path: ["memory", "master"] },
+    { mem: siteMemory("https://ledger-a.example"), path: ["memory", "origins", encodeURIComponent("https://ledger-a.example")] },
+    { mem: namedAgentMemory("ledger-agent"), path: ["memory", "agents", "ledger-agent"] },
+  ];
+  // 50 writes across the 3 stores (varying sizes, including non-ASCII).
+  const versions = new Map();
+  for (let i = 0; i < 50; i++) {
+    const s = stores[i % 3];
+    const v = await s.mem.set(`k${i}`, { i, pad: "é".repeat(i * 7) });
+    versions.set(i, v);
+  }
+  // 10 plain deletes (tombstone + file removal), 5 version-scoped CAS deletes.
+  for (let i = 0; i < 10; i++) await stores[i % 3].mem.delete(`k${i}`);
+  for (let i = 10; i < 15; i++) {
+    assert((await stores[i % 3].mem.compareAndDelete(`k${i}`, versions.get(i))) !== false, "CAS delete must fire");
+  }
+  // A few overwrites that shrink and grow existing keys.
+  await stores[0].mem.set("k15", 1);
+  await stores[1].mem.set("k16", { big: "x".repeat(5000) });
+  for (const s of stores) {
+    assertEquals(usageLedgerInspector.storeBytes(s.path), storeWalkBytes(s.path), `ledger must equal a walk of ${s.path.join("/")}`);
+    assertEquals(usageLedgerInspector.storeBytes(s.path), await usageLedgerInspector.walkStore(s.path), "memory.js's own walker must agree too");
+  }
+  assertEquals(usageLedgerInspector.globalBytes(), await walkBytes(root.children.get("memory")), "global ledger must equal a walk of the memory tree");
+  assertEquals(usageLedgerInspector.globalBytes(), await usageLedgerInspector.walkGlobal(), "memory.js's own global walker must agree too");
+  // clear() removes every value: the ledger follows.
+  await stores[2].mem.clear();
+  assertEquals(usageLedgerInspector.storeBytes(stores[2].path), storeWalkBytes(stores[2].path), "ledger must follow clear()");
+  assertEquals(usageLedgerInspector.globalBytes(), await walkBytes(root.children.get("memory")), "global ledger must follow clear()");
+});
+
+Deno.test("a memory write performs zero directory enumerations once the ledger is seeded (OPFS-USAGE-WALK-01)", async () => {
+  root.children.clear();
+  usageLedgerInspector.reset();
+  const mem = masterMemory();
+  await mem.set("warm", 1); // seeds the ledger (one walk per SW lifetime)
+  const before = directoryReads;
+  for (let i = 0; i < 20; i++) await mem.set(`w${i}`, { i });
+  await mem.delete("w3");
+  assertEquals(directoryReads - before, 0, "writes must not enumerate directories (the per-write tree walk is gone)");
+});
+
+Deno.test("the per-origin quota rejects at exactly the same write with the same error (OPFS-USAGE-WALK-01)", async () => {
+  root.children.clear();
+  usageLedgerInspector.reset();
+  const mem = siteMemory("https://quota.example");
+  const path = ["memory", "origins", encodeURIComponent("https://quota.example")];
+  const LIMIT = 8 * 1024 * 1024;
+  // Fill the store to LIMIT - 100 bytes of value files using 200 KiB values.
+  const chunk = 200 * 1024;
+  const envelopeOverhead = (i) => JSON.stringify({ __v: 0, __value: "" }).length + String(i).length; // approximate
+  let filled = 0;
+  let i = 0;
+  while (filled + chunk + 64 < LIMIT - 100) {
+    await mem.setTrusted(`f${i}`, "x".repeat(chunk));
+    filled = storeWalkBytes(path);
+    i++;
+  }
+  // Top up with a value that lands the store EXACTLY at LIMIT - 100.
+  const room = LIMIT - 100 - filled;
+  const probeKey = "top";
+  const envelopeBytes = (await mem.setTrusted(probeKey, "")) && storeWalkBytes(path) - filled; // bytes of an empty-string envelope
+  await mem.setTrusted(probeKey, "y".repeat(room - envelopeBytes));
+  assertEquals(storeWalkBytes(path), LIMIT - 100, "fixture: the store sits at LIMIT - 100 bytes");
+  assertEquals(usageLedgerInspector.storeBytes(path), LIMIT - 100, "the ledger sees LIMIT - 100 too");
+  void envelopeOverhead;
+  // A 200-byte write must be rejected with the unchanged quota error...
+  await assertRejects(
+    () => mem.set("over", "z".repeat(200)),
+    MemoryStoreQuotaError,
+    `store exceeds the ${LIMIT}-byte bound`,
+  );
+  // ...and a write that fits still lands (the ledger did not drift upward on the rejection).
+  await mem.set("fits", "");
+  assert(storeWalkBytes(path) <= LIMIT, "the store never exceeds the bound");
+  assertEquals(usageLedgerInspector.storeBytes(path), storeWalkBytes(path), "ledger still equals the walk after a rejection");
 });

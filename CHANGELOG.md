@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.464] — 2026-08-30
+- Tasks no longer get slower as your history grows. Saving memory used to scan every stored file on each write, so a one-sentence task that took 0.15 seconds on a fresh profile took 2.5 seconds after 120 conversations; it now takes about 0.3 seconds, with the storage limits unchanged. A new seeded performance check (`npm run test:perf:seeded`) guards this.
+
 ## [0.2.463] — 2026-08-30
 - Six more fixes are in progress in parallel and recorded as claimed in the tracker.
 
