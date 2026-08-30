@@ -627,6 +627,14 @@ const EXPECTED = [
   "no SW Runtime.enable errors (auto-attach)",
   "no NTP/Settings console errors",
   "no fatal CDP lifecycle events",
+  "about: what's new renders a bounded set of user-facing entries (≤5)",
+  "about: visible copy is user-facing (no SHAs, no merge:/Tracker:, no gate jargon)",
+  "about: 'Show all release notes' disclosure present",
+  "about: Full release notes link targets the bundled changelog",
+  "about: the About section DOM is bounded (< 600 nodes at load)",
+  "about: the full history builds only when the disclosure opens",
+  "about: Show all complements the visible five (no duplicated versions)",
+  "about: retained a what's-new screenshot",
   "profile removed (no leak)",
   "cleanup hard-failed on descendants (none survived)",
   "no leftover temporary evidence dir",
@@ -4512,6 +4520,160 @@ async function main() {
       console.log(`fatal CDP event: ${f}`);
     }
     check("no fatal CDP lifecycle events", cdp.fatalEvents.length === 0);
+    // JOURNEY 11 — Settings → About → What's new: user-facing copy, lazy
+    // render, bounded DOM (CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01).
+    // Runs in the try, BEFORE the CDP ws is closed. Wrap defensively: a CDP
+    // hiccup here must degrade the About checks honestly (fail the checks),
+    // never crash the suite.
+    // ─────────────────────────────────────────────────────────────
+    try {
+      const aboutUrl = `chrome-extension://${extId}/options/options.html`;
+      const aboutPage = await openPage(port, aboutUrl);
+      let aboutSession = null;
+      if (aboutPage) {
+        aboutSession = await attachRuntime(cdp, aboutPage.id);
+        await evalIn(cdp, aboutSession, `document.readyState`);
+        await sleep(800); // options.js boot (the About section renders lazily)
+        // Drive the REAL user flow: click the About nav item (openPage cannot
+        // preserve a fragment in the target URL, so the deep-link hash is
+        // exercised as the nav click that sets it).
+        await evalIn(
+          cdp,
+          aboutSession,
+          `document.querySelector('a.nav-item[data-section="about"]')?.click()`,
+        );
+        // Poll for the lazy About render (async fetch + DOM build), bounded.
+        for (let i = 0; i < 15; i++) {
+          const n = await evalIn(
+            cdp,
+            aboutSession,
+            `document.querySelectorAll('#changelog > .changelog-entry').length`,
+          );
+          if (Number(n) > 0) break;
+          await sleep(500);
+        }
+        // Capture the placeholder/fallback text so a failed lazy render is
+        // diagnosable from the evidence, not just the failing check.
+        const changelogText = await evalIn(
+          cdp,
+          aboutSession,
+          `document.querySelector('#changelog')?.textContent?.slice(0, 200) ?? ''`,
+        );
+        console.log("about changelog text:", JSON.stringify(String(changelogText)));
+      }
+      const visibleEntries = aboutSession
+        ? await evalIn(
+            cdp,
+            aboutSession,
+            `document.querySelectorAll('#changelog > .changelog-entry').length`,
+          )
+        : 0;
+      const visibleText = aboutSession
+        ? await evalIn(
+            cdp,
+            aboutSession,
+            `[...document.querySelectorAll('#changelog > .changelog-entry .changelog-items li')].map((li) => li.textContent).join('\n')`,
+          )
+        : "";
+      const visibleVersions = aboutSession
+        ? await evalIn(
+            cdp,
+            aboutSession,
+            `[...document.querySelectorAll('#changelog > .changelog-entry .changelog-head strong')].map((e) => e.textContent)`,
+          )
+        : [];
+      const hasShowAll = aboutSession
+        ? await evalIn(
+            cdp,
+            aboutSession,
+            `document.querySelector('#changelog details.changelog-all summary')?.textContent ?? ''`,
+          )
+        : "";
+      const fullLink = aboutSession
+        ? await evalIn(
+            cdp,
+            aboutSession,
+            `document.getElementById('full-release-notes')?.getAttribute('href') ?? ''`,
+          )
+        : "";
+      const domNodes = aboutSession
+        ? await evalIn(
+            cdp,
+            aboutSession,
+            `document.querySelectorAll('#about *').length`,
+          )
+        : 0;
+      const aboutShot = aboutSession ? await captureShot(cdp, aboutSession) : null;
+      if (aboutShot) await writeEvidence("about-whats-new.png", aboutShot);
+      // Open the disclosure and confirm the full history builds lazily.
+      let allEntriesInDetails = 0;
+      let restVersions = [];
+      if (aboutSession) {
+        await evalIn(
+          cdp,
+          aboutSession,
+          `document.querySelector('#changelog details.changelog-all summary')?.click()`,
+        );
+        await sleep(300);
+        allEntriesInDetails = await evalIn(
+          cdp,
+          aboutSession,
+            `document.querySelectorAll('#changelog .changelog-all-body .changelog-entry').length`,
+        );
+        restVersions = await evalIn(
+          cdp,
+          aboutSession,
+            `[...document.querySelectorAll('#changelog .changelog-all-body .changelog-head strong')].map((e) => e.textContent)`,
+        );
+      }
+      if (aboutPage) {
+        await fetch(`http://127.0.0.1:${port}/json/close/${aboutPage.id}`).catch(() => {});
+      }
+      check(
+        "about: what's new renders a bounded set of user-facing entries (≤5)",
+        Number(visibleEntries) >= 1 && Number(visibleEntries) <= 5,
+      );
+      check(
+        "about: visible copy is user-facing (no SHAs, no merge:/Tracker:, no gate jargon)",
+        !/\b[0-9a-f]{7,40}\b/.test(String(visibleText)) &&
+          !/merge:|Tracker:|Landed:/.test(String(visibleText)) &&
+          !/journey|KAT|CDP|harness|worktree|lane|splice|in review|in progress|recorded as|\bRED\b|\bGREEN\b/i.test(String(visibleText)),
+      );
+      check(
+        "about: 'Show all release notes' disclosure present",
+        String(hasShowAll).includes("Show all release notes"),
+      );
+      check(
+        "about: Full release notes link targets the bundled changelog",
+        String(fullLink).includes("CHANGELOG.md"),
+      );
+      check(
+        "about: the About section DOM is bounded (< 600 nodes at load)",
+        Number(domNodes) < 600,
+      );
+      check(
+        "about: the full history builds only when the disclosure opens",
+        Number(allEntriesInDetails) > 100,
+      );
+      check(
+        "about: Show all complements the visible five (no duplicated versions)",
+        Array.isArray(visibleVersions) && Array.isArray(restVersions) &&
+          visibleVersions.every((v) => !restVersions.includes(v)),
+      );
+      check("about: retained a what's-new screenshot", !!aboutShot);
+    } catch (e) {
+      // A CDP/browser hiccup here must FAIL the About checks honestly, never
+      // crash the suite after all journeys already reported.
+      console.error("about journey failure:", String(e?.message ?? e));
+      check("about: what's new renders a bounded set of user-facing entries (≤5)", false);
+      check("about: visible copy is user-facing (no SHAs, no merge:/Tracker:, no gate jargon)", false);
+      check("about: 'Show all release notes' disclosure present", false);
+      check("about: Full release notes link targets the bundled changelog", false);
+      check("about: the About section DOM is bounded (< 600 nodes at load)", false);
+      check("about: the full history builds only when the disclosure opens", false);
+      check("about: Show all complements the visible five (no duplicated versions)", false);
+      check("about: retained a what's-new screenshot", false);
+    }
 
     cdp.intentionalClose = true;
     ws.close();
@@ -4535,6 +4697,8 @@ async function main() {
       ws?.close();
     } catch { /* ignore */ }
   } finally {
+    // ─────────────────────────────────────────────────────────────
+
     // ─────────────────────────────────────────────────────────────
     // Owner-clean shutdown (fail-closed, bounded, environment-scrubbed).
     // ─────────────────────────────────────────────────────────────

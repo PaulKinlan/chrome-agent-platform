@@ -2800,6 +2800,7 @@ export function handleSettingsHashNavigation(hash, isTraverse = false) {
   if (sectionId === "local-folders") renderLocalFolders();
   if (sectionId === "usage") renderUsage();
   if (sectionId === "skills") mountSkillsSection(document.getElementById("skills"));
+  if (sectionId === "about") renderAbout(); // lazy: fetched + rendered on first open (CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01)
 
   section.scrollIntoView({
     behavior: isTraverse ? "auto" : "smooth",
@@ -3015,52 +3016,78 @@ renderShortcuts();
 // Render the bundled CHANGELOG.md into the About section. Each `## [version]`
 // becomes a version card with its bullet list (built as DOM nodes, never
 // innerHTML, so the markdown stays inert).
+//
+// CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01: only the most recent five
+// versions whose bullets a non-engineer can read are shown up front; every
+// older or internal entry is behind a "Show all" disclosure so the About page
+// stays small and the copy stays human. Rendered lazily on first open.
+// The rules live in changelog-filter.js (shared with the test and the release
+// gate) so the renderer, the unit tests and `check-changelog` cannot drift.
+import { isUserFacingEntry, partitionChangelog } from "./changelog-filter.js";
+
 function renderChangelog(md) {
   const host = $("#changelog");
   if (!host) return;
   host.replaceChildren();
-  const lines = String(md).split(/\r?\n/);
-  let current = null;
-  let list = null;
-  const commit = () => {
-    if (current && list && list.children.length) current.append(list);
-  };
-  for (const raw of lines) {
-    const line = raw.trimEnd();
-    const h = line.match(/^##\s+\[([^\]]+)\]\s*—?\s*(.*)$/);
-    if (h) {
-      commit();
-      current = document.createElement("div");
-      current.className = "changelog-entry";
-      const head = document.createElement("div");
-      head.className = "changelog-head";
-      const v = document.createElement("strong");
-      v.textContent = "v" + h[1].trim();
-      const date = document.createElement("span");
-      date.className = "muted";
-      date.textContent = h[2].trim();
-      head.append(v, date);
-      current.append(head);
-      host.append(current);
-      list = document.createElement("ul");
-      list.className = "changelog-items";
-      continue;
-    }
-    if (current && line.startsWith("- ")) {
-      if (!list) { list = document.createElement("ul"); list.className = "changelog-items"; }
+  const { recent, rest } = partitionChangelog(md);
+  const buildCard = (v, bullets) => {
+    const card = document.createElement("div");
+    card.className = "changelog-entry";
+    const head = document.createElement("div");
+    head.className = "changelog-head";
+    const vEl = document.createElement("strong");
+    vEl.textContent = "v" + v.version;
+    const date = document.createElement("span");
+    date.className = "muted";
+    date.textContent = v.date;
+    head.append(vEl, date);
+    card.append(head);
+    const list = document.createElement("ul");
+    list.className = "changelog-items";
+    for (const b of bullets) {
       const li = document.createElement("li");
-      li.textContent = line.slice(2).trim();
+      li.textContent = b;
       list.append(li);
-      continue;
     }
+    card.append(list);
+    return card;
+  };
+  for (const r of recent) {
+    host.append(buildCard(r, r.bullets));
   }
-  commit();
-  if (!host.children.length) {
+  if (!recent.length) {
     host.innerHTML = `<p class="muted">No changelog yet.</p>`;
+    return;
   }
+  // The disclosure renders ONLY the complement of the visible five — every
+  // version NOT shown up front, in full. A version that made the visible five
+  // never appears here (visible ∩ show-all = ∅). Built LAZILY on first open
+  // so the About page stays bounded at load.
+  const details = document.createElement("details");
+  details.className = "changelog-all";
+  const summary = document.createElement("summary");
+  summary.textContent = "Show all release notes";
+  details.append(summary);
+  details.addEventListener("toggle", () => {
+    if (!details.open || details.querySelector(".changelog-all-body")) return;
+    const all = document.createElement("div");
+    all.className = "changelog-all-body";
+    for (const c of rest) all.append(buildCard(c, c.bullets));
+    details.append(all);
+  });
+  host.append(details);
 }
 
+let aboutRendered = false;
 async function renderAbout() {
+  if (aboutRendered) return;
+  aboutRendered = true;
+  // The full release notes link targets the bundled changelog (also reachable
+  // as a packaged file) so it works offline and with no network dependency.
+  try {
+    const full = document.getElementById("full-release-notes");
+    if (full) full.setAttribute("href", chrome.runtime.getURL("CHANGELOG.md"));
+  } catch { /* non-extension context */ }
   try {
     const url = chrome.runtime.getURL("CHANGELOG.md");
     const res = await fetch(url);
@@ -3073,7 +3100,6 @@ async function renderAbout() {
 }
 await wireObservabilitySettings();
 await wireRunRetentionSettings();
-await renderAbout();
 await navigationController.syncCurrent();
 
 
