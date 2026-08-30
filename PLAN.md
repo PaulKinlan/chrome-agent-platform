@@ -119,9 +119,11 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
       its own shared worker hosted by the offscreen document, bootstrapped through the
       service worker. Fault + memory isolation: one crashed or leaky agent no longer
       takes the router and every other agent with it. The UI holds a live MessagePort
-      with redacted progress; background agents run with zero visible pages; a
-      SW-owned single-driver lease means only one surface drives *destructive* browser
-      commands at a time (reads like screenshots stay ungated).
+      with redacted progress; background agents run with zero visible pages.
+      (The single-driver browser-command lease that shipped with this was removed on
+      2026-08-30 — CAP-FB-20260830-BROWSER-LEASE-DEADLOCK-01 — after it deadlocked
+      the Settings toggle against runs; destructive commands are gated by the
+      browser-control grant + run fence.)
       docs/AGENT-EXECUTION-ARCHITECTURE.md + AGENT-WORKER-DURABILITY.md + AGENT-WORKER-PHASE4.md.
 - [x] **Usage/token accounting actually works (`0.2.297`)** — the OpenAI-compatible
       adapter now sends `stream_options.include_usage`, which was the root cause of

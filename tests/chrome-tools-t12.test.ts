@@ -81,6 +81,7 @@ globalThis.chrome = {
   tabs: {
     query: async () => [...tabs],
     get: async (id) => tabs.find((t) => t.id === id) ?? null,
+    create: async ({ url }) => addTab(url),
   },
   debugger: {
     attach: async (target, version) => {
@@ -405,4 +406,73 @@ Deno.test("T12 GUARD: chrome.debugger is absent from the manifest, the capabilit
   assert(!CHROME_TOOL_CAPABILITY_TABLE.some((row) => row.toolName.includes("debugger")), "no debugger row in the capability table");
   assert(!CAPABILITIES.some((c) => c.id === "debugger"), "no debugger capability offered in Settings");
   assertEquals(debuggerCalls.length, 0);
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// REMOVAL GUARD (CAP-FB-20260830-BROWSER-LEASE-DEADLOCK-01, owner decision
+// 2026-08-30). The single-driver browser-command lease was removed: it
+// deadlocked the Settings toggle against the next run (the toggle acquired a
+// 15-minute "interactive" lease nothing released) and a running agent against
+// the owner's revoke, and it authorised nothing the grant + run fence do not.
+// These guards fail loudly if a lease quietly comes back.
+// ──────────────────────────────────────────────────────────────────────────
+const LEASE_KEY = "cap:browser-command-lease";
+const LEASE_REFUSAL = "another surface is driving the browser";
+function seedForeignLease() {
+  store.set(LEASE_KEY, {
+    id: "x", surfaceId: "named:research", runId: "r",
+    expiresAt: Date.now() + 60000, acquiredAt: Date.now(),
+  });
+}
+
+Deno.test("LEASE GUARD: setting the grant from Settings writes no browser-command lease", async () => {
+  reset();
+  await setGlobalBrowserControlGrant();
+  assertEquals(store.get(LEASE_KEY), undefined, "the grant setter must not acquire a lease");
+  await setOriginBrowserControlGrant(["https://a.example"]);
+  assertEquals(store.get(LEASE_KEY), undefined, "the origin grant setter must not acquire a lease");
+});
+
+Deno.test("LEASE GUARD: revoke succeeds while a foreign surface holds a lease record", async () => {
+  reset();
+  await setGlobalBrowserControlGrant();
+  seedForeignLease();
+  const res = await revokeBrowserControlGrant();
+  assertEquals(res?.revoked, true, `revoke must succeed, got ${JSON.stringify(res)}`);
+  assertEquals(store.get("cap:browserControlGrant"), undefined, "grant removed");
+});
+
+Deno.test("LEASE GUARD: a granted destructive tool is never refused because of a foreign lease record", async () => {
+  reset();
+  await setGlobalBrowserControlGrant();
+  seedForeignLease();
+  const res = await tools().open_tab.execute({ url: "https://a.example/page" });
+  assert(!(typeof res?.error === "string" && res.error.includes(LEASE_REFUSAL)), `lease refusal must not exist: ${JSON.stringify(res)}`);
+  assertEquals(res?.ok, true, `open_tab must open under the grant, got ${JSON.stringify(res)}`);
+  assertEquals(tabs.length, 1, "a real tab was created");
+  assertEquals(store.get(LEASE_KEY)?.surfaceId, "named:research", "the tool never touches the lease key");
+});
+
+Deno.test("LEASE GUARD: the browser-command lease module and its refusal string are gone from the extension", async () => {
+  const root = new URL("../extension/", import.meta.url);
+  let moduleExists = true;
+  try { await Deno.stat(new URL("lib/browser-command-lease.js", root)); } catch { moduleExists = false; }
+  assert(!moduleExists, "extension/lib/browser-command-lease.js must not exist");
+  const offenders = [];
+  async function walk(dir) {
+    for await (const e of Deno.readDir(dir)) {
+      const url = new URL(e.name + (e.isDirectory ? "/" : ""), dir);
+      if (e.isDirectory) {
+        if (e.name.startsWith("dist") || e.name === "node_modules" || e.name === "vendor") continue;
+        await walk(url);
+      } else if (e.name.endsWith(".js")) {
+        const text = await Deno.readTextFile(url);
+        if (text.includes(LEASE_REFUSAL) || text.includes(LEASE_KEY) || text.includes("browser-command-lease")) {
+          offenders.push(url.pathname.slice(url.pathname.indexOf("/extension/")));
+        }
+      }
+    }
+  }
+  await walk(root);
+  assertEquals(offenders, [], "no extension source references the single-driver lease");
 });

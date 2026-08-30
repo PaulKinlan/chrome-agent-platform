@@ -1,4 +1,4 @@
-# Agent Worker — Phase 4 (UI ports + single-driver lease) — what landed and what stays on the SW path
+# Agent Worker — Phase 4 (UI ports; the single-driver lease, since removed) — what landed and what stays on the SW path
 
 Status: implemented (2026-08-27). This is the final phase of CAP-FB-20260826-AGENT-WORKERS-01.
 
@@ -22,29 +22,25 @@ agent-open path (guarded, no-op when the worker isn't available). This module is
 the seam — full per-surface transcript wiring is incremental and does not change
 the authority model.
 
-### 2. The single-driver browser-command lease (CAP-FB-20260826-BROWSER-SINGLE-DRIVER-01)
-`lib/browser-command-lease.js` — the SW-owned, durable (chrome.storage kv),
-expiring, single-holder lease:
-- `acquireBrowserCommandLease(kvGet, kvSet, {surfaceId, runId, ttlMs})` — exactly
-  one winner; a competitor gets `{ok:false, error:"another surface is driving the
-  browser", holder:{...}}`;
-- `releaseBrowserCommandLease` — only the current holder (leaseId match) releases;
-  idempotent on absent;
-- expiry-based release (default 15 min, hard cap 1 h) so a closed surface never
-  permanently holds the lock — no deadlock;
-- durable so a killed SW wakes with the correct holder.
-
-Gate: `agent-worker.tool` requires a live, matching `leaseId` for DESTRUCTIVE
-browser tool names (the bounded `DESTRUCTIVE_BROWSER_TOOLS` set — tab/window
-mutations, tab groups, downloads, extension enable/uninstall, network rules,
-site-data wipes). Read-only tools are NOT gated. The worker's run acquires the
-lease via `agent-worker.dispatch` (threaded into the run descriptor) and presents
-it on each destructive tool RPC.
+### 2. The single-driver browser-command lease — REMOVED (CAP-FB-20260830-BROWSER-LEASE-DEADLOCK-01)
+Phase 4 originally shipped `lib/browser-command-lease.js`, a SW-owned, durable,
+expiring single-holder lease that every destructive browser tool had to hold
+(CAP-FB-20260826-BROWSER-SINGLE-DRIVER-01). It was removed on 2026-08-30 after
+the reanalysis measured two deadlocks in a real loaded extension: the Settings
+toggle acquired a 15-minute `interactive` lease nothing released, so the next
+hub run was refused with "another surface is driving the browser"; and while an
+agent held the lease the owner could not revoke browser control at all. The
+lease never carried authority — every mutation is still authorised by the
+browser-control grant (checked and mutated atomically under the grant mutex)
+and fenced to its run — so it only ordered callers that were already allowed,
+and no safety property was lost. `agent-worker.tool` is now a principal-gated
+pass-through to the SW's real executor; there is no `agent-worker.lease` route
+and no `leaseId` in the run descriptor. `tests/chrome-tools-t12.test.ts`
+("LEASE GUARD") fails if a lease quietly returns.
 
 ### 3. The dispatch seam (`agent-worker.dispatch`)
-A validated route that ensures the worker + acquires the lease + posts the run
-descriptor (leaseId included) + releases the lease on post-failure. This is the
-seam the alarm path will call.
+A validated route that ensures the worker + posts the run descriptor. This is
+the seam the alarm path will call.
 
 ## What STAYS on the SW path (by design, forever)
 
@@ -69,4 +65,4 @@ and are the wire-ready seam.
 - The worker holds NO authority (no storage/credential/fetch; tools are SW RPC only).
 - The port is a transport, never an authority bypass.
 - Redaction holds on every progress/journal path.
-- The single-driver lease is SW-owned, durable, expiring, and no-deadlock.
+- Destructive browser tools are authorised by the grant + run fence in the SW (no lease; see §2).

@@ -48,8 +48,8 @@ isolated OPFS memory, run history, skills, and avatar.
   offscreen document and bootstrapped through the service worker. One crashed or leaky
   agent no longer takes the router and every other agent down with it. The UI holds a
   live `MessagePort` with redacted progress; background agents run with zero visible
-  pages; a service-worker-owned single-driver lease means only one surface drives
-  *destructive* browser commands at a time (reads like screenshots stay ungated).
+  pages. Destructive browser commands are authorised by the owner's browser-control
+  grant (checked atomically in the service worker) and fenced to their run.
 - **126 Chrome tools**, every `chrome.*` call audited against the Chromium IDL/JSON
   schemas — tabs and tab groups, windows, downloads, history, cookies, bookmarks,
   reading list, content settings, MHTML capture, network rules, extension management,

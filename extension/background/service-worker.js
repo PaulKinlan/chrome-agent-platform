@@ -500,11 +500,6 @@ import { z } from "zod";
 import { setRunFence, clearRunFence, runAborted } from "../lib/run-fence.js";
 import { setRunContext, clearRunContext, currentRunContext } from "../lib/run-context.js";
 import {
-  currentBrowserCommandSurface,
-  exitBrowserCommandContext,
-  releaseBrowserCommandLeaseForSurface,
-} from "../lib/browser-command-lease.js";
-import {
   acceptToolSnapshot,
   applyWebmcpLifecycle,
   applyWebmcpPageReport,
@@ -2862,16 +2857,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       }
     }
   };
-  return await (skipRunLock ? runBody() : withRunLock(runBody)).finally(async () => {
-    // P4 single-driver (CAP-FB-20260826-BROWSER-SINGLE-DRIVER-01): release the
-    // browser-command lease THIS run's surface lazily acquired (destructive
-    // tools acquire it on first use via withGrantLock) + clear the context.
-    // The surface matches the run-context stamp (agentSurfaceRef/threadId/
-    // agentRole), falling back to the id. Idempotent + never throws.
-    const surface = currentBrowserCommandSurface() || agentSurfaceRef || threadId || agentRole || (id ? String(id).slice(0, 200) : null);
-    if (surface) await releaseBrowserCommandLeaseForSurface(kvGet, kvSet, surface).catch(() => {});
-    exitBrowserCommandContext();
-  });
+  return await (skipRunLock ? runBody() : withRunLock(runBody));
 }
 
 // ---- message router ----

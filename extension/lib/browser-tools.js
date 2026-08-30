@@ -9,7 +9,6 @@ import { scheduleTask } from "./scheduler.js";
 import { canonicalOrigin } from "./memory.js";
 import { kvGet, kvRemove, kvSet } from "./kv.js";
 import { assertRunOwned } from "./run-fence.js";
-import { ensureBrowserCommandLease, currentBrowserCommandSurface } from "./browser-command-lease.js";
 import { currentRunContext } from "./run-context.js";
 import { normalizeHostPattern } from "./permission-orchestration.js";
 import { capLog } from "./cap-log.js";
@@ -37,29 +36,16 @@ const DEFAULT_GRANT_MS = 15 * 60 * 1000; // only used when an EXPLICIT expiryMs 
 // w.r.t. each other — either the mutation happens before the revoke (grant was
 // valid at mutation time) or the revoke lands first (the mutation's check sees no
 // grant and denies).
+//
+// The mutex is the WHOLE arbitration. The single-driver browser-command lease
+// that used to ride on it (CAP-FB-20260826-BROWSER-SINGLE-DRIVER-01) was
+// removed by CAP-FB-20260830-BROWSER-LEASE-DEADLOCK-01: the Settings toggle
+// acquired a lease nothing released, so the next run was refused, and a
+// running agent's lease blocked the owner's revoke. The lease only ORDERED
+// authorised callers; authority is the grant (checked here) plus the run fence.
 let grantMutex = Promise.resolve();
-function withGrantLock(fn, { destructive = true } = {}) {
-  const run = grantMutex.then(async () => {
-    // P4 single-driver (CAP-FB-20260826-BROWSER-SINGLE-DRIVER-01): the
-    // browser-command lease gate applies ONLY to DESTRUCTIVE mutations. Reads
-    // that still need the grant MUTEX (capture_screenshot) pass
-    // `{ destructive: false }` — their grant is still validated inside the
-    // lock, but the lease check (which would refuse a competing surface's read
-    // while another surface drives) is skipped. Surface identity: the worker
-    // route sets the context surface; the interactive path falls back to the
-    // run-context stamp. LAZY acquire for destructive calls only.
-    if (destructive) {
-      const ctx = currentRunContext();
-      const surface = currentBrowserCommandSurface()
-        || ctx?.agentSurfaceRef
-        || ctx?.threadId
-        || ctx?.agentRole
-        || "interactive";
-      const auth = await ensureBrowserCommandLease(kvGet, kvSet, surface);
-      if (!auth.ok) return { error: auth.error };
-    }
-    return fn();
-  }, fn);
+function withGrantLock(fn) {
+  const run = grantMutex.then(fn, fn);
   grantMutex = run.then(() => {}, () => {});
   return run;
 }
@@ -680,10 +666,7 @@ export async function captureTabScreenshot(tabId, { ownerInvoked = false } = {})
     // the SAME grant lock as the grant setters/revoke, so a re-scope/revoke can
     // never interleave with the check + capture (the round-19 blocker: capture
     // used only withTabCaptureLock and never withGrantLock, so a re-scope
-    // completed during captureVisibleTab). NON-DESTRUCTIVE: the grant is still
-    // validated inside the lock, but the single-driver lease check is skipped —
-    // a competing surface must still be able to SCREENSHOT (a read) while another
-    // surface drives the browser.
+    // completed during captureVisibleTab).
     return await withGrantLock(async () => {
       // Read the grant ONCE and validate id + scope + expiry + origin together
       // (an atomic snapshot, not separate reads). Check BEFORE activation.
@@ -814,7 +797,7 @@ export async function captureTabScreenshot(tabId, { ownerInvoked = false } = {})
             return captureRest;
           }
           return await captureActiveTab({ origin, grantIdBefore, tabId: null });
-    }, { destructive: false });
+    });
   });
 }
 

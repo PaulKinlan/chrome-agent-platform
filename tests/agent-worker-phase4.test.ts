@@ -1,13 +1,10 @@
 // @ts-nocheck
-// Phase 4 KATs: single-driver browser-command lease + the agent-worker.tool
-// lease gate + the UI port client (CAP-FB-20260826-BROWSER-SINGLE-DRIVER-01).
+// Phase 4 KATs: the agent-worker.tool bridge (CAP-FB-20260826-BROWSER-SINGLE-DRIVER-01,
+// revised by CAP-FB-20260830-BROWSER-LEASE-DEADLOCK-01: the single-driver
+// browser-command lease was removed — the bridge is a principal-gated pass-
+// through to the SW's real tool executor, which applies the grant lock and the
+// run fence itself).
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import {
-  acquireBrowserCommandLease,
-  readBrowserCommandLease,
-  releaseBrowserCommandLease,
-  withBrowserCommandLease,
-} from "../extension/lib/browser-command-lease.js";
 import { createAgentWorkerRoutes } from "../extension/background/routes/agent-worker.js";
 
 function makeKv() {
@@ -22,55 +19,8 @@ function makeKv() {
   return { store, kvGet, kvSet };
 }
 
-Deno.test("lease: exactly one surface acquires; a competitor is honestly refused", async () => {
-  const { kvGet, kvSet } = makeKv();
-  const a = await acquireBrowserCommandLease(kvGet, kvSet, { surfaceId: "ntp-1", runId: "r1" });
-  assertEquals(a.ok, true, "first acquire wins");
-  const b = await acquireBrowserCommandLease(kvGet, kvSet, { surfaceId: "ntp-2", runId: "r2" });
-  assertEquals(b.ok, false, "second acquire refused");
-  assert(/another surface/.test(b.error), "honest reason");
-  assertEquals(b.holder.surfaceId, "ntp-1");
-});
-
-Deno.test("lease: release frees the slot; wrong-holder release is refused; expiry frees", async () => {
-  const { kvGet, kvSet } = makeKv();
-  const a = await acquireBrowserCommandLease(kvGet, kvSet, { surfaceId: "s1", runId: "r1" });
-  // wrong holder cannot release
-  const wrong = await releaseBrowserCommandLease(kvGet, kvSet, "nope");
-  assertEquals(wrong.ok, false);
-  // right holder releases
-  const rel = await releaseBrowserCommandLease(kvGet, kvSet, a.lease.id);
-  assertEquals(rel.released, true);
-  const b = await acquireBrowserCommandLease(kvGet, kvSet, { surfaceId: "s2" });
-  assertEquals(b.ok, true, "slot free after release");
-  await releaseBrowserCommandLease(kvGet, kvSet, b.lease.id);
-
-  // expiry frees (a closed surface never holds forever): force the stored
-  // lease's expiresAt into the past, then a new acquire must succeed.
-  const c = await acquireBrowserCommandLease(kvGet, kvSet, { surfaceId: "s3" });
-  assertEquals(c.ok, true);
-  await kvSet({ "cap:browser-command-lease": { ...c.lease, expiresAt: Date.now() - 1000 } });
-  const d = await acquireBrowserCommandLease(kvGet, kvSet, { surfaceId: "s4" });
-  assertEquals(d.ok, true, "expired lease frees the slot");
-});
-
-Deno.test("lease: withBrowserCommandLease releases in finally even when the run throws", async () => {
-  const { kvGet, kvSet } = makeKv();
-  let threw = false;
-  try {
-    await withBrowserCommandLease(kvGet, kvSet, { surfaceId: "s1" }, () => {
-      throw new Error("boom");
-    });
-  } catch (e) {
-    threw = /boom/.test(e.message);
-  }
-  assert(threw, "run error propagates");
-  const next = await acquireBrowserCommandLease(kvGet, kvSet, { surfaceId: "s2" });
-  assertEquals(next.ok, true, "lease released despite run throw (no deadlock)");
-});
-
-Deno.test("agent-worker.tool: destructive tool requires a held lease; read-only does not", async () => {
-  const { kvGet, kvSet } = makeKv();
+Deno.test("agent-worker.tool: destructive and read-only tools both reach the executor without a lease", async () => {
+  const { store, kvGet, kvSet } = makeKv();
   const calls = [];
   const routes = createAgentWorkerRoutes({
     ensureOffscreen: async () => ({ ok: true }),
@@ -80,132 +30,29 @@ Deno.test("agent-worker.tool: destructive tool requires a held lease; read-only 
   });
   const ctx = { principal: "extension" };
 
-  // destructive WITHOUT a lease → refused (no execution)
   const d = await routes["agent-worker.tool"]({ toolName: "open_tab", args: {} }, ctx);
-  assertEquals(d.ok, false, "destructive without lease refused");
-  assertEquals(calls.length, 0, "tool not executed");
-
-  // acquire the lease, then destructive WITH the matching leaseId → allowed
-  const acq = await routes["agent-worker.lease"]({ action: "acquire", surfaceId: "ntp-1" }, ctx);
-  assertEquals(acq.ok, true);
-  const d2 = await routes["agent-worker.tool"]({ toolName: "open_tab", args: {}, leaseId: acq.lease.id }, ctx);
-  assertEquals(d2.ok, true, "destructive with matching lease allowed");
-  assertEquals(calls, ["open_tab"]);
-
-  // read-only needs no lease
+  assertEquals(d.ok, true, "destructive tool executes (the grant + fence gate lives in the executor)");
   const r = await routes["agent-worker.tool"]({ toolName: "list_tabs", args: {} }, ctx);
-  assertEquals(r.ok, true, "read-only tool un-gated");
+  assertEquals(r.ok, true, "read-only tool executes");
+  assertEquals(calls, ["open_tab", "list_tabs"]);
+  assertEquals(store.has("cap:browser-command-lease"), false, "the bridge never writes a lease");
 });
 
-Deno.test("agent-worker.lease: principal gate is first", async () => {
+Deno.test("agent-worker.tool: principal gate is first", async () => {
   const { kvGet, kvSet } = makeKv();
-  const routes = createAgentWorkerRoutes({ ensureOffscreen: async () => ({ ok: true }), kvGet, kvSet });
-  const r = await routes["agent-worker.lease"]({ action: "acquire", surfaceId: "x" }, { principal: "content-script" });
+  const calls = [];
+  const routes = createAgentWorkerRoutes({
+    ensureOffscreen: async () => ({ ok: true }), kvGet, kvSet,
+    executeTool: (name) => { calls.push(name); return { ok: true }; },
+  });
+  const r = await routes["agent-worker.tool"]({ toolName: "open_tab", args: {} }, { principal: "content-script" });
   assertEquals(r.ok, false, "non-extension principal refused");
   assertEquals(r.error, "unauthorized_principal");
+  assertEquals(calls.length, 0, "tool not executed");
 });
 
-// ──────────────────────────────────────────────────────────────────────────
-// B1 fix: the INTERACTIVE path hits the SAME lease as the worker RPC path.
-// ──────────────────────────────────────────────────────────────────────────
-Deno.test("interactive path: a destructive tool lazily acquires the lease; a competing surface is refused", async () => {
+Deno.test("agent-worker.lease: the lease route no longer exists", async () => {
   const { kvGet, kvSet } = makeKv();
-  const { ensureBrowserCommandLease } = await import("../extension/lib/browser-command-lease.js");
-
-  // Surface A drives: lazily acquires (nobody holds it yet).
-  const a = await ensureBrowserCommandLease(kvGet, kvSet, "ntp-1");
-  assertEquals(a.ok, true, "first surface becomes the driver");
-
-  // Surface B (a DIFFERENT context) tries to drive while A holds the lease.
-  const b = await ensureBrowserCommandLease(kvGet, kvSet, "ntp-2");
-  assertEquals(b.ok, false, "competing surface refused");
-  assert(/another surface/.test(b.error), "honest reason");
-
-  // Surface A (the holder, same context) can keep driving.
-  const a2 = await ensureBrowserCommandLease(kvGet, kvSet, "ntp-1");
-  assertEquals(a2.ok, true, "holder continues driving");
-});
-
-Deno.test("interactive path: lease release frees the slot for another surface", async () => {
-  const { kvGet, kvSet } = makeKv();
-  const { ensureBrowserCommandLease, releaseBrowserCommandLease } = await import("../extension/lib/browser-command-lease.js");
-
-  const a = await ensureBrowserCommandLease(kvGet, kvSet, "ntp-1");
-  assertEquals(a.ok, true);
-  const rel = await releaseBrowserCommandLease(kvGet, kvSet, a.lease.id);
-  assertEquals(rel.released, true);
-
-  const b = await ensureBrowserCommandLease(kvGet, kvSet, "ntp-2");
-  assertEquals(b.ok, true, "after release, another surface can drive");
-});
-
-// ──────────────────────────────────────────────────────────────────────────
-// B1 acceptance: a WORKER holding the lease refuses an INTERACTIVE destructive
-// command; releasing the worker's lease frees the interactive path.
-// ──────────────────────────────────────────────────────────────────────────
-Deno.test("worker holds the lease → interactive destructive command refused; release frees it", async () => {
-  const { kvGet, kvSet } = makeKv();
-  const mod = await import("../extension/lib/browser-command-lease.js");
-
-  // A background worker (sorting hat) acquires the lease via its dispatch path.
-  const worker = await mod.acquireBrowserCommandLease(kvGet, kvSet, { surfaceId: "worker:sorting-hat", runId: "r1" });
-  assertEquals(worker.ok, true, "worker acquires the lease");
-
-  // An interactive surface (ntp-1) issues a destructive command → refused.
-  const interactive = await mod.ensureBrowserCommandLease(kvGet, kvSet, "ntp-1");
-  assertEquals(interactive.ok, false, "interactive destructive command refused while worker drives");
-  assert(/another surface/.test(interactive.error), "honest reason");
-
-  // The worker's run ends → release → the interactive surface can now drive.
-  const rel = await mod.releaseBrowserCommandLease(kvGet, kvSet, worker.lease.id);
-  assertEquals(rel.released, true);
-  const interactive2 = await mod.ensureBrowserCommandLease(kvGet, kvSet, "ntp-1");
-  assertEquals(interactive2.ok, true, "interactive destructive command works after worker release");
-});
-
-// ──────────────────────────────────────────────────────────────────────────
-// B2: the lease gate is DESTRUCTIVE-ONLY — capture_screenshot (a read) is NOT
-// refused while another surface drives; close_tab (a mutation) IS.
-// ──────────────────────────────────────────────────────────────────────────
-Deno.test("B2: competing lease → close_tab refused (mutation), capture_screenshot not lease-refused (read)", async () => {
-  // Minimal chrome shim so browser-tools.js + kv.js can run.
-  const store = new Map();
-  globalThis.chrome = {
-    storage: { local: {
-      get: async (key) => { const keys = Array.isArray(key) ? key : [key]; const out = {}; for (const k of keys) if (store.has(k)) out[k] = store.get(k); return out; },
-      set: async (o) => { for (const [k, v] of Object.entries(o)) store.set(k, v); },
-      remove: async (keys) => { for (const k of (Array.isArray(keys) ? keys : [keys])) store.delete(k); },
-    } },
-    permissions: { contains: async () => true, request: async () => true, getAll: async () => ({ permissions: [], origins: [] }) },
-    tabs: {
-      get: async (id) => ({ id, url: "https://a.example/1", active: true }),
-      query: async () => [{ id: 1, url: "https://a.example/1", active: true, windowId: 1 }],
-      remove: async () => {},
-      captureVisibleTab: async () => "data:image/png;base64,AA==",
-    },
-    runtime: { getURL: (p) => "chrome-extension://x/" + p, lastError: null },
-  };
-
-  const leaseMod = await import("../extension/lib/browser-command-lease.js");
-  const { kvGet, kvSet } = await import("../extension/lib/kv.js");
-  const { browserToolset } = await import("../extension/lib/browser-tools.js");
-
-  // A background worker holds the lease.
-  const worker = await leaseMod.acquireBrowserCommandLease(kvGet, kvSet, { surfaceId: "worker:sorting-hat", runId: "r1" });
-  assertEquals(worker.ok, true);
-
-  const tools = browserToolset(false);
-
-  // MUTATION: close_tab is destructive → refused by the lease.
-  const close = await tools.close_tab.execute({ tabId: 1 });
-  assert(close?.error && /another surface/.test(close.error), `close_tab must be lease-refused, got: ${JSON.stringify(close)}`);
-
-  // READ: capture_screenshot is NON-destructive → the lease check is skipped;
-  // it proceeds to its grant validation (which returns a grant error, NOT a
-  // lease error) — proving the read was not blocked by the lease.
-  const shot = await tools.capture_screenshot.execute({});
-  assert(!(shot?.error && /another surface/.test(shot.error)),
-    `capture_screenshot must NOT be lease-refused, got: ${JSON.stringify(shot)}`);
-
-  delete globalThis.chrome;
+  const routes = createAgentWorkerRoutes({ ensureOffscreen: async () => ({ ok: true }), kvGet, kvSet });
+  assert(!("agent-worker.lease" in routes), "no lease route");
 });

@@ -1860,6 +1860,12 @@ async function renderBrowser() {
             (res?.grant?.error ?? "still granted") +
             ".",
         );
+        // The switch must show the TRUE grant state, not the click: re-read
+        // it from the service worker (CAP-FB-20260830-BROWSER-LEASE-DEADLOCK-01).
+        const live = await chrome.runtime.sendMessage({ type: "browser-control.get" })
+          .catch(() => null);
+        toggle.checked = live?.active === true;
+        $("#grant-origins").hidden = !toggle.checked;
       }
       renderPermissions();
     }

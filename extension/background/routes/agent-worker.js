@@ -18,13 +18,6 @@
 import { capLog } from "../../lib/cap-log.js";
 import { journalJson } from "../../shared/tool-tree.js";
 import { redactSecretText } from "../../lib/pure.js";
-import {
-  acquireBrowserCommandLease,
-  enterBrowserCommandContext,
-  exitBrowserCommandContext,
-  readBrowserCommandLease,
-  releaseBrowserCommandLease,
-} from "../../lib/browser-command-lease.js";
 
 const ALIVE_KEY = "cap:agent-workers:alive";
 
@@ -53,27 +46,6 @@ export async function closeAgentWorkerFor(agentId, { kvGet, kvSet } = {}) {
 }
 const WORKER_PATH = "dist/workers/agent-worker.js";
 const MAX_PREVIEW_CHARS = 240;
-
-/** The destructive browser-command tool names (P4 single-driver): these drive
- * the browser state (open/close/navigate tabs+windows, tab groups, downloads,
- * extension enable/uninstall) and therefore require the browser-command lease.
- * Read-only tools (list_*, get_*, read_page, capture_screenshot, query_*) are
- * NOT gated — the lease is about WHO may drive mutations, not who may observe. */
-const DESTRUCTIVE_BROWSER_TOOLS = new Set([
-  "open_tab", "navigate_tab", "close_tab", "move_tab", "duplicate_tab",
-  "set_tab_pinned", "reload_tab", "tab_go_back", "tab_go_forward", "set_tab_zoom",
-  "discard_tab", "highlight_tabs", "create_window", "focus_window", "close_window",
-  "move_window", "group_tabs", "update_tab_group", "ungroup_tabs", "move_tab_to_group",
-  "download_file", "pause_download", "resume_download", "cancel_download",
-  "erase_download", "open_download", "remove_download_file",
-  "set_extension_enabled", "uninstall_extension",
-  "add_network_rule", "update_network_rule", "remove_network_rule",
-  "set_content_setting", "clear_content_settings", "wipe_browsing_data",
-]);
-
-function requiresBrowserCommandLease(toolName) {
-  return DESTRUCTIVE_BROWSER_TOOLS.has(String(toolName ?? ""));
-}
 
 const log = capLog("agent-workers");
 
@@ -238,12 +210,9 @@ export function createAgentWorkerRoutes({
       return { ok: true, runId, agentId: identity };
     },
 
-    /** P4 dispatch seam: a background/foreground run KICKED through the worker
-     * with the single-driver lease held for the run's lifetime. This is the
-     * seam the alarm path (handleAlarm) will call — it ensures the worker,
-     * acquires the lease (honest refusal if another surface drives), posts the
-     * run with the leaseId threaded into the descriptor (so the worker's
-     * destructive tool RPCs present it), and returns. The FULL handleAlarm→worker
+    /** P4 dispatch seam: a background/foreground run KICKED through the worker.
+     * This is the seam the alarm path (handleAlarm) will call — it ensures the
+     * worker, posts the run descriptor, and returns. The FULL handleAlarm→worker
      * reroute is the documented next increment (runTask's fence/heartbeat/journal
      * are SW authority and decompose separately). */
     async "agent-worker.dispatch"(m, context) {
@@ -252,24 +221,14 @@ export function createAgentWorkerRoutes({
       if (!agentId) return { ok: false, error: "invalid agentId" };
       const runId = String(m?.runId ?? "").slice(0, 200);
       if (!runId) return { ok: false, error: "invalid runId" };
-      const surfaceId = String(m?.surfaceId ?? agentId).slice(0, 200);
 
       // Ensure the worker is alive (idempotent).
       const identity = await workerIdentity(agentId);
       const ensured = await this["agent-worker.ensure"]({ agentId: identity }, context);
       if (!ensured?.ok) return ensured;
 
-      // Acquire the single-driver lease for this run's lifetime.
-      const lease = await acquireBrowserCommandLease(kvGet, kvSet, {
-        surfaceId,
-        runId,
-        ttlMs: Number(m?.ttlMs) || undefined,
-      });
-      if (!lease.ok) return lease;
-
       const descriptor = {
         runId,
-        leaseId: lease.lease.id,
         task: String(m?.task ?? "").slice(0, 4000),
         system: String(m?.system ?? "").slice(0, 16000),
         modelKind: String(m?.modelKind ?? "demo").slice(0, 32),
@@ -284,21 +243,17 @@ export function createAgentWorkerRoutes({
           msg: { type: "agent-worker:run", ...descriptor },
         });
       } catch (e) {
-        await releaseBrowserCommandLease(kvGet, kvSet, lease.lease.id).catch(() => {});
         return { ok: false, error: `worker host unreachable: ${e?.message ?? e}` };
       }
       if (!posted?.ok) {
-        await releaseBrowserCommandLease(kvGet, kvSet, lease.lease.id).catch(() => {});
         return { ok: false, error: posted?.error || "worker run not posted" };
       }
-      return { ok: true, runId, agentId, leaseId: lease.lease.id };
+      return { ok: true, runId, agentId };
     },
 
     /** PHASE-2 tool bridge — the worker's RPC proxy resolves here. THIS is the
      * authority boundary: the worker cannot execute any tool itself; the SW
-     * validates + executes the real tool (grant-lock / run-fence / redaction).
-     * P4: destructive browser commands additionally require the single-driver
-     * LEASE (the caller presents a live leaseId it holds). */
+     * validates + executes the real tool (grant-lock / run-fence / redaction). */
     async "agent-worker.tool"(m, context) {
       if (!authorized(context)) return { ok: false, error: "unauthorized_principal" };
       const toolName = String(m?.toolName ?? "").slice(0, 128);
@@ -306,51 +261,11 @@ export function createAgentWorkerRoutes({
       if (typeof executeTool !== "function") {
         return { ok: false, error: "tool execution not wired in this context" };
       }
-      // P4 single-driver: destructive browser commands need a held lease.
-      let leaseSurface = null;
-      if (requiresBrowserCommandLease(toolName)) {
-        const leaseId = m?.leaseId ? String(m.leaseId).slice(0, 200) : "";
-        const live = await readBrowserCommandLease(kvGet);
-        if (!live || live.expired || live.id !== leaseId) {
-          return { ok: false, error: "browser command lease required — another surface may be driving the browser" };
-        }
-        leaseSurface = live.surfaceId;
-      }
-      // Enter the run context so the destructive tool's OWN grant-lock lease
-      // gate (browser-tools.js withGrantLock) sees THIS run as the holder.
-      enterBrowserCommandContext(leaseSurface);
       try {
         return await executeTool(toolName, m?.args ?? {}, context);
       } catch (e) {
         return { ok: false, error: String(e?.message ?? e).slice(0, 200) };
-      } finally {
-        exitBrowserCommandContext();
       }
-    },
-
-    /** P4 single-driver lease: acquire/release the browser-command session
-     * lease (the worker's run acquires it before driving the browser; the UI
-     * releases it on task end). Validated surfaces only. */
-    async "agent-worker.lease"(m, context) {
-      if (!authorized(context)) return { ok: false, error: "unauthorized_principal" };
-      const action = String(m?.action ?? "").slice(0, 16);
-      if (action === "acquire") {
-        const surfaceId = String(m?.surfaceId ?? "").slice(0, 200);
-        if (!surfaceId) return { ok: false, error: "missing surfaceId" };
-        return await acquireBrowserCommandLease(kvGet, kvSet, {
-          surfaceId,
-          runId: m?.runId ? String(m.runId).slice(0, 200) : null,
-          ttlMs: Number(m?.ttlMs) || undefined,
-        });
-      }
-      if (action === "release") {
-        return await releaseBrowserCommandLease(kvGet, kvSet, m?.leaseId ? String(m.leaseId).slice(0, 200) : "");
-      }
-      if (action === "read") {
-        const live = await readBrowserCommandLease(kvGet);
-        return { ok: true, lease: live && !live.expired ? live : null };
-      }
-      return { ok: false, error: "unknown action (acquire|release|read)" };
     },
 
     /** List the durable alive-set (which agents the SW believes should be up). */

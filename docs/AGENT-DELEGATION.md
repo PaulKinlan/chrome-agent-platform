@@ -49,10 +49,10 @@ skills".
   clears instead of restoring a stale stamp).
 - The run fence needs no save/restore: delegation-capable (named) runs are
   never fenced.
-- A child that needs a *browser-destructive* tool while the parent's run holds
-  the browser-command lease gets the honest single-driver refusal ("another
-  surface is driving the browser") — two agents never drive the browser
-  concurrently.
+- A child's *browser-destructive* tools are authorised the same way as the
+  parent's: by the browser-control grant under the grant mutex and the run
+  fence. (The single-driver lease that used to refuse a child while the parent
+  drove was removed by CAP-FB-20260830-BROWSER-LEASE-DEADLOCK-01.)
 
 ## Permissions
 

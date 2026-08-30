@@ -403,10 +403,13 @@ const EXPECTED = [
   "Settings: browser-grant checkbox present",
   "screenshot: clicked the browser-grant checkbox",
   "screenshot: granted browser control via a real checkbox click",
+  "Browser control: toggle ON in Settings leaves no lease",
+  "Browser control: a run's open_tab is not lease-refused after the Settings toggle",
   "screenshot: typed the red origin into the allowed-origins field",
   "screenshot: grant scoped to the red origin via the UI",
   "screenshot: UI-granted capture SUCCEEDS for the scoped origin",
   "screenshot: revoked via a real checkbox click",
+  "Browser control: toggle OFF succeeds while a run holds the lease",
   "screenshot: revoked → capture denied",
   "per-origin clear leaves B intact",
   "memory: version tokens are monotonic + never reused (round-27 CAS)",
@@ -1392,6 +1395,33 @@ async function main() {
       "screenshot: granted browser control via a real checkbox click",
       grantAfterClick?.active === true,
     );
+    // CAP-FB-20260830-BROWSER-LEASE-DEADLOCK-01: the single-driver lease is
+    // gone. The Settings toggle used to acquire a 15-minute "interactive"
+    // lease nothing released, and every destructive tool in the next run was
+    // told "another surface is driving the browser". The toggle must leave
+    // no lease record, and a run's open_tab (driven through the SAME executor
+    // the agent loop uses, agent-worker.tool) must never be lease-refused. In
+    // headless the `tabs` permission cannot be granted, so the only error the
+    // executor may still return is the honest permission one.
+    const leaseAfterToggle = await evalOpts(
+      `chrome.storage.local.get("cap:browser-command-lease").then((s) => s["cap:browser-command-lease"] ?? null)`,
+    );
+    check(
+      "Browser control: toggle ON in Settings leaves no lease",
+      leaseAfterToggle === null,
+    );
+    const leaseShotOn = await captureShot(cdp, optsSession);
+    if (leaseShotOn) await writeEvidence("lease-settings-after-toggle-on.png", leaseShotOn);
+    const runOpenTab = await msgValue({
+      type: "agent-worker.tool",
+      toolName: "open_tab",
+      args: { url: `${RED_ORIGIN}/` },
+    });
+    check(
+      "Browser control: a run's open_tab is not lease-refused after the Settings toggle",
+      !(typeof runOpenTab?.error === "string" && /driving the browser/.test(runOpenTab.error)) &&
+        (runOpenTab?.ok === true || runOpenTab?.permissionRequired?.capability === "tabs"),
+    );
     // Type the red origin into the allowed-origins field (a genuine text edit).
     check(
       "screenshot: typed the red origin into the allowed-origins field",
@@ -1416,12 +1446,29 @@ async function main() {
       uiGrantShot?.error === undefined && typeof uiGrantShot?.screenshot === "string" &&
         uiGrantShot.screenshot.length > 0,
     );
-    // Revoke via a genuine checkbox click (uncheck).
+    // Revoke via a genuine checkbox click (uncheck) — WHILE a foreign run
+    // "holds the lease" (a seeded record under the old lease key): the owner's
+    // revoke must always succeed and the switch must show the true state.
+    await evalOpts(
+      `chrome.storage.local.set({ "cap:browser-command-lease": { id: "journey", surfaceId: "named:research", runId: "r", expiresAt: Date.now() + 60000, acquiredAt: Date.now() } })`,
+    );
     check(
       "screenshot: revoked via a real checkbox click",
       await clickSel(cdp, optsSession, "#browser-grant"),
     );
     await sleep(400);
+    const revokeState = await msgValue({ type: "browser-control.get" });
+    const revokeUi = await evalOpts(
+      `({ flash: document.querySelector("#save-status")?.textContent ?? "", checked: document.querySelector("#browser-grant")?.checked ?? null })`,
+    );
+    check(
+      "Browser control: toggle OFF succeeds while a run holds the lease",
+      revokeState?.active === false && revokeUi?.flash === "Browser control revoked." &&
+        revokeUi?.checked === false,
+    );
+    const leaseShotOff = await captureShot(cdp, optsSession);
+    if (leaseShotOff) await writeEvidence("lease-settings-after-toggle-off.png", leaseShotOff);
+    await evalOpts(`chrome.storage.local.remove("cap:browser-command-lease")`);
     const afterUiRevoke = await msgValue({ type: "capture.tab", tabId: redTabId });
     check(
       "screenshot: revoked → capture denied",

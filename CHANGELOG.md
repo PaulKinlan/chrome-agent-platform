@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.431] — 2026-08-30
+- Browser control: turning the switch on in Settings no longer blocks the next run from opening tabs, and the switch can always be turned off — even while an agent is running. The internal "single-driver" lock that caused both problems was removed; browser actions are still gated by your Browser control grant.
+
 ## [0.2.430] — 2026-08-30
 - Six fixes are now in progress in parallel and recorded as claimed in the task tracker so no two agents work the same item.
 
