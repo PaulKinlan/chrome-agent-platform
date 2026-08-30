@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.471] — 2026-08-30
+- Landed: every edit to an artifact keeps the previous version, and any earlier version can be restored.
+
 ## [0.2.470] — 2026-08-30
 - Tracker: the memory-speed fix is recorded as landed; two more fixes claimed.
 
