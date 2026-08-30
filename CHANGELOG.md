@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.2.479] — 2026-08-30
+- docs: sync components.js mirror (frame bootstrap fix)
+
 ## [0.2.478] — 2026-08-30
-- Fix the generated-document preference bootstrap syntax error
+- docs: sync components.js mirror (frame bootstrap fix)
 
 ## [0.2.477] — 2026-08-30
 - Fix the generated-document preference bootstrap syntax error
