@@ -1,27 +1,238 @@
 {
-  "testedSourceCommit": "a38f0d43bcea77d95526424beacec460fcacc11d",
-  "evidenceCommitNote": "exact clean testedSourceCommit; evidence was written separately from source",
-  "worktreeDirtyFiles": [],
-  "runId": "webmcp-acceptance-1788061727123",
-  "ts": "2026-08-30T03:48:47.123Z",
+  "testedSourceCommit": "72bd0b1c621778dd1fc8eb1608b4f117c8e4f3a9",
+  "evidenceCommitNote": "working-tree run; worktreeDirtyFiles lists every difference from testedSourceCommit",
+  "worktreeDirtyFiles": [
+    "M test-artifacts/webmcp-acceptance-after-reload.png",
+    " M test-artifacts/webmcp-acceptance-side-effect.png",
+    " M test-artifacts/webmcp-acceptance-tab-picker.png"
+  ],
+  "runId": "webmcp-acceptance-1788063824285",
+  "ts": "2026-08-30T04:23:44.285Z",
   "mode": "automated-variant",
-  "permissionGrant": "not-run",
-  "overallStatus": "NOT RUNNABLE — this base predates main's passive WebMCP detector; run after merge",
-  "variantNote": "the manifest variant preserves boot-critical permissions and moves only scripting+tabs from optional to required",
-  "passed": 1,
-  "failed": 0,
+  "permissionGrant": "test-manifest-pregranted",
+  "overallStatus": "OPEN — the OS-level permission-prompt gesture is unattested in this environment (headless auto-denies prompted optional permissions; no display/Xvfb). Run with --headed to complete the attestation.",
+  "variantNote": "the loaded extension is byte-identical to the shipped one EXCEPT manifest.json pre-holds scripting+tabs; shipped <all_urls> host access is unchanged",
+  "passed": 11,
+  "failed": 26,
   "checks": [
     {
       "name": "build succeeded (dist matches sources)",
       "pass": true
+    },
+    {
+      "name": "extension loaded (service worker present)",
+      "pass": true
+    },
+    {
+      "name": "Settings: clicked the Diagnostics toggle via a real click",
+      "pass": true
+    },
+    {
+      "name": "Settings: diagnostics gate enabled",
+      "pass": true
+    },
+    {
+      "name": "fixture page loaded",
+      "pass": true
+    },
+    {
+      "name": "hub: clicked Discover this page via a real click",
+      "pass": true
+    },
+    {
+      "name": "hub: the tab picker lists the fixture tab (explicit tab identity)",
+      "pass": false
+    },
+    {
+      "name": "host access: <all_urls> is install-granted and covers the fixture page",
+      "pass": true
+    },
+    {
+      "name": "hub: picked the fixture tab in the picker via a real click",
+      "pass": false
+    },
+    {
+      "name": "picker: scripting permission granted from the real click",
+      "pass": true
+    },
+    {
+      "name": "the fixture origin is enrolled (real enroll-origin route)",
+      "pass": false,
+      "detail": null
+    },
+    {
+      "name": "SW-attested status: scripts injected (not merely 'served')",
+      "pass": false,
+      "detail": null
+    },
+    {
+      "name": "the EXACT picked tab was injected (injection.ready contains its tab id)",
+      "pass": false,
+      "detail": {
+        "fixtureTabId": 1439567226
+      }
+    },
+    {
+      "name": "CDP scriptParsed: content/main-world.js executed in the picked tab",
+      "pass": false,
+      "detail": []
+    },
+    {
+      "name": "CDP scriptParsed: content/content-script.js executed in the picked tab",
+      "pass": false
+    },
+    {
+      "name": "the discovery scripts executed WITHOUT a reload (immediate injection)",
+      "pass": false
+    },
+    {
+      "name": "console: [WebMCP:bridge] start lifecycle event",
+      "pass": false,
+      "detail": []
+    },
+    {
+      "name": "console: [WebMCP:main] discover lifecycle event",
+      "pass": false,
+      "detail": []
+    },
+    {
+      "name": "declared + inferred tools discovered through the production bridge",
+      "pass": false,
+      "detail": null
+    },
+    {
+      "name": "async-registered tool picked up by the re-poll (shop.coupon)",
+      "pass": false,
+      "detail": null
+    },
+    {
+      "name": "the enrollment generation is readable (agent.directory.gen)",
+      "pass": false,
+      "detail": null
+    },
+    {
+      "name": "production tools.invoke: directory → exact approved tab/document → MAIN returns the page function result",
+      "pass": false,
+      "detail": {
+        "ok": false,
+        "error": "origin http://127.0.0.1:8934 is not enrolled"
+      }
+    },
+    {
+      "name": "invoke: VISIBLE side effect occurs exactly once in the approved tab/document",
+      "pass": false,
+      "detail": {
+        "msg": "fixture loaded",
+        "calls": 0
+      }
+    },
+    {
+      "name": "invoke: the second same-origin tab is NOT invoked",
+      "pass": true
+    },
+    {
+      "name": "production tools.invoke: declared shop.total resolves via modelContext (42.5), never the colliding global (999)",
+      "pass": false,
+      "detail": {
+        "ok": false,
+        "error": "origin http://127.0.0.1:8934 is not enrolled"
+      }
+    },
+    {
+      "name": "production tools.invoke: an unknown tool is rejected at the directory",
+      "pass": true
+    },
+    {
+      "name": "production tools.invoke: an unenrolled origin is rejected",
+      "pass": true
+    },
+    {
+      "name": "bridge fencing: a generationless invoke is rejected at the relay",
+      "pass": false,
+      "detail": {
+        "err": "Could not establish connection. Receiving end does not exist."
+      }
+    },
+    {
+      "name": "bridge fencing: a source-less invoke is rejected at the relay",
+      "pass": false,
+      "detail": {
+        "err": "Could not establish connection. Receiving end does not exist."
+      }
+    },
+    {
+      "name": "re-enrollment: picked the same tab again",
+      "pass": false
+    },
+    {
+      "name": "re-enrollment advanced the generation",
+      "pass": false,
+      "detail": {
+        "gen": null,
+        "gen2": null
+      }
+    },
+    {
+      "name": "re-enrollment singleton: exactly ONE side effect per invoke (no duplicate listeners)",
+      "pass": false,
+      "detail": {
+        "greet2": null,
+        "calls2": 0
+      }
+    },
+    {
+      "name": "reload: BOTH discovery scripts re-executed via the DYNAMIC registration (scriptParsed)",
+      "pass": false,
+      "detail": [
+        "http://127.0.0.1:8934/index.html"
+      ]
+    },
+    {
+      "name": "reload: the fresh bridge startup-synced its enrollment generation (console lifecycle)",
+      "pass": false,
+      "detail": []
+    },
+    {
+      "name": "reload: invocation works WITHOUT re-enrollment (the startup-sync fix), one side effect",
+      "pass": false,
+      "detail": {
+        "greet3": null,
+        "calls3": 0
+      }
+    },
+    {
+      "name": "reload: the side effect is visible after reload",
+      "pass": false,
+      "detail": "fixture loaded"
+    },
+    {
+      "name": "navigation: invocation works after a cross-document navigation (no re-enrollment)",
+      "pass": false,
+      "detail": null
     }
   ],
-  "notRun": [
-    "fresh-profile passive detection, picker discovery, enrollment, injection, and invocation require main's passive detector"
-  ],
   "evidence": {
-    "scriptParsedUrls": [],
+    "scriptParsedUrls": [
+      "http://127.0.0.1:8934/index.html",
+      "http://127.0.0.1:8934/index.html?nav=2"
+    ],
     "consoleEvents": [],
-    "screenshots": []
+    "screenshots": [
+      {
+        "name": "webmcp-acceptance-tab-picker.png",
+        "sha256": "170268f1040934867c6d29eb25730af7561a6d9f6641ca378faa9216b8e9f673",
+        "bytes": 135069
+      },
+      {
+        "name": "webmcp-acceptance-side-effect.png",
+        "sha256": "9ae2b2a0c10f32e1c3544d623d419f4cad2b75cd0b9dda907e30eaf5ae426339",
+        "bytes": 13560
+      },
+      {
+        "name": "webmcp-acceptance-after-reload.png",
+        "sha256": "9ae2b2a0c10f32e1c3544d623d419f4cad2b75cd0b9dda907e30eaf5ae426339",
+        "bytes": 13560
+      }
+    ]
   }
 }

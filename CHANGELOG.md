@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.425] — 2026-08-30
+- merge: board deny rules lane (9fd462b8) — owner-managed post/claim policy with fail-closed unreadable-store semantics + browser-driven Settings coverage
+
+## [0.2.424] — 2026-08-30
+- Board deny: restore the capability.revoke journey assertion (merge splice had folded the board check names into its arguments)
+
+## [0.2.423] — 2026-08-30
+- Board deny: an unreadable policy store propagates (no write may follow a failed read); corrupt values stay fail-closed
+
+## [0.2.422] — 2026-08-30
+- Board deny: fix the journey's options-page refresh (re-open, not reload — navigation breaks the CDP eval context); drop diagnostics
+
+## [0.2.421] — 2026-08-30
+- Merge main (permissions-optional model) into the board deny lane
+
 ## [0.2.420] — 2026-08-30
 - merge fix: restore the permissions-optional manifest arrays (4 mandatory + 31 optional; audioCapture/videoCapture removed) — clobbered by a version-file revert during the merge
 

@@ -1578,7 +1578,7 @@ evidence every other task depends on).
 - Review: independent reviewer PASS (round 6); six rounds closed data-integrity findings (fold divergence, forgeable keys, destructive reads, eviction, admission reserve, claim churn, drain kick)
 - Gates: suite 2358/0 at merge, board KAT 22/22, build green
 - Blockers: none
-- Next: per-edge deny layer (deferred), idle-agent wake (deferred)
+- Next: idle-agent wake (deferred) — the per-edge deny layer LANDED 2026-08-30 (owner Settings UI, fail-closed guards, corrupt-store refusal)
 - Recover: revert merge `54d70a9b`
 - What it is: the async/broadcast complement to `delegate_to_agent`. A hub-level
   event-sourced board (jobs + messages logs in the master memory tier) where any
@@ -1590,13 +1590,12 @@ evidence every other task depends on).
   textContent-only). Guards are pure functions in `extension/lib/agent-board.js`
   mirroring `agent-delegation.js`; caller identity comes from the route context
   (never model args).
-- Permission model (owner decision 2026-08-29): v1 is FULLY OPEN among named
-  agents + the hub. The guard seam (canPostJob/canClaimJob taking the agents
-  registry) and the data model (targetAgent/requiredCapability fields, poster +
-  claimant identity on every event) are built so a future per-edge deny layer
-  slots in without redesign.
-- DEFERRED (planned extensions, not in this lane): per-edge board permissions
-  (the deny layer over the guard seam); automatic wake of idle agents on post
+- Permission model (owner decision 2026-08-29; deny layer landed 2026-08-30):
+  default-open among named agents + the hub, plus owner-controlled per-edge
+  DENY rules (Settings → Board permissions; owner-options principal only;
+  fail-closed on malformed rules and corrupt store; rules load fresh inside
+  each locked post/claim).
+- DEFERRED (planned extensions): automatic wake of idle agents on post
   (scheduler/alarm machinery — v1 wakes live surfaces via broadcastProgress);
   bidding/auctions; cross-device boards; A2A wire-protocol interop.
 - History:

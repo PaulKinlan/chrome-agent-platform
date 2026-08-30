@@ -372,6 +372,13 @@ const EXPECTED = [
   "permissions: Tab groups Enable clicked via a trusted gesture",
   "permissions: Tab groups prompt cancelled and permission settled absent in headless",
   "permissions: capability.revoke still requires owner approval (fail closed)",
+  "board deny: two named agents created for the journey",
+  "board deny: Board permissions section opens from the nav",
+  "board deny: the dropdowns populate from the named-agent registry",
+  "board deny: rule added via a real click on the Add control",
+  "board deny: the rule row renders and the rule persists in the store",
+  "board deny: rule removed via the row's real Remove control",
+  "board deny: the row disappears and the store is empty after Remove",
   "Settings: OpenAI provider card rendered",
   "Settings: Clear key button present for the keyed provider",
   "Settings: clicked Clear key via a real click",
@@ -1073,6 +1080,91 @@ async function main() {
       "permissions: capability.revoke still requires owner approval (fail closed)",
       revokeUnapproved?.ok === false &&
         String(revokeUnapproved?.error ?? "").toLowerCase().includes("approval"),
+    );
+
+    // ── Board permissions (deny rules) — driven through the REAL Settings UI.
+    // The functional-verification mandate: source pins cannot prove this
+    // surface works. Drive it end to end: create two named agents, open the
+    // section from the nav, wait for the dropdowns to populate from the real
+    // registry, add a rule via a genuine CDP click on Add, observe the row
+    // render + the rule persist, remove it via the row's real Remove button,
+    // observe it disappear from the DOM and the store.
+    const bdWriter = await msgOpts({ type: "named-agent.create", id: "bd-writer", name: "BD Writer", role: "board deny journey fixture" });
+    const bdCritic = await msgOpts({ type: "named-agent.create", id: "bd-critic", name: "BD Critic", role: "board deny journey fixture" });
+    check(
+      "board deny: two named agents created for the journey",
+      bdWriter?.ok === true && bdCritic?.ok === true,
+    );
+
+    // The dropdowns populate at page init — the two agents were created after
+    // the options page first loaded, so RE-OPEN the options page (the
+    // established pattern: the options page does not live-update on SW-side
+    // changes; location.reload() silently breaks the CDP eval context).
+    const bdOptsPage = await openPage(
+      port, `chrome-extension://${extId}/options/options.html`,
+    );
+    await sleep(2000);
+    optsSession = await attachRuntime(cdp, bdOptsPage.id);
+    cdp.pageSessions.add(optsSession);
+    evalOpts = (expression) => evalIn(cdp, optsSession, expression);
+
+    check(
+      "board deny: Board permissions section opens from the nav",
+      await clickSel(cdp, optsSession, '.nav-item[data-section="board-permissions"]'),
+    );
+
+    let bdDropdownsReady = false;
+    for (let i = 0; i < 20 && !bdDropdownsReady; i++) {
+      bdDropdownsReady = await evalOpts(
+        `document.querySelectorAll("#board-deny-agent option").length >= 2 && document.querySelectorAll("#board-deny-peer option").length >= 2`,
+      ).catch(() => false);
+      if (!bdDropdownsReady) await sleep(250);
+    }
+    check("board deny: the dropdowns populate from the named-agent registry", bdDropdownsReady === true);
+
+    await evalOpts(
+      `document.querySelector("#board-deny-action").value = "claim";
+       document.querySelector("#board-deny-agent").value = "bd-critic";
+       document.querySelector("#board-deny-peer").value = "bd-writer";
+       true`,
+    );
+    check(
+      "board deny: rule added via a real click on the Add control",
+      await clickSel(cdp, optsSession, "#board-deny-add-btn"),
+    );
+
+    let bdRowRendered = false;
+    for (let i = 0; i < 20 && !bdRowRendered; i++) {
+      bdRowRendered = await evalOpts(
+        `[...document.querySelectorAll("#board-deny-list .perm-row")].some((el) => el.textContent.includes("bd-critic") && el.textContent.includes("bd-writer"))`,
+      ).catch(() => false);
+      if (!bdRowRendered) await sleep(250);
+    }
+    const bdPersisted = await msgOpts({ type: "board.deny.list" });
+    check(
+      "board deny: the rule row renders and the rule persists in the store",
+      bdRowRendered === true && bdPersisted?.ok === true &&
+        bdPersisted.rules.some((r) => r.agentId === "bd-critic" && r.peerId === "bd-writer" && r.action === "claim"),
+    );
+
+    const bdShot = await captureShot(cdp, optsSession).catch(() => null);
+    if (bdShot) await writeEvidence("board-deny-added.png", bdShot);
+
+    check(
+      "board deny: rule removed via the row's real Remove control",
+      await clickSel(cdp, optsSession, '#board-deny-list .perm-row .btn.ghost'),
+    );
+    let bdRowGone = false;
+    for (let i = 0; i < 20 && !bdRowGone; i++) {
+      bdRowGone = await evalOpts(
+        `document.querySelectorAll("#board-deny-list .perm-row").length === 0`,
+      ).catch(() => false);
+      if (!bdRowGone) await sleep(250);
+    }
+    const bdAfter = await msgOpts({ type: "board.deny.list" });
+    check(
+      "board deny: the row disappears and the store is empty after Remove",
+      bdRowGone === true && bdAfter?.ok === true && bdAfter.rules.length === 0,
     );
 
     // Re-open the Settings page so renderProviders picks up the openai config
