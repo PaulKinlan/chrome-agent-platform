@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.482] — 2026-08-30
+- The What's new review fixes are recorded
+
 ## [0.2.481] — 2026-08-30
 - The What's new section keeps the last five readable changes up front and puts everything else, without duplication, behind Show all
 
