@@ -37,7 +37,9 @@ Umbrella: `CAP-FB-20260830-EXEC-DEMO-01`. The P0 ids, one line each; every entry
 - `CAP-FB-20260830-TRANSCRIPT-FULL-ANSWER-01` — the nudge summary overwrites the real answer; the persisted transcript is clipped to 240 chars.
 - `CAP-FB-20260830-SELECTION-REF-VALIDATE-FIRST-01` — one schema slip burns the single-use selectionRef and ends the run with no message.
 - `CAP-FB-20260830-KEYLESS-FIRST-RESULT-01` — no first result without a key; the demo provider replies with the size of the system prompt.
-- `CAP-FB-20260830-FRESH-PROFILE-TEMPLATE-AGENTS-01` — 22 disabled templates listed as agents in the sidebar and side panel beside "0 agents".
+- `CAP-FB-20260830-FRESH-PROFILE-TEMPLATE-AGENTS-01` — 22 disabled templates listed as agents in the sidebar and side panel beside "0 agents" (integrate as templates, not a cut).
+- `CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01` — templates become a first-class create flow (template gallery + Starter set); sidebar shows only agents the user made or enabled.
+- `CAP-FB-20260830-MODEL-CATALOG-CURRENT-01` (P1, demo-blocking in practice) — every gpt-5.6 call is HTTP 400 on the shipped build (adapter omits `reasoning_effort:"none"`); Test connection rejected by every current OpenAI model; 127 retired model ids in the repo.
 - `CAP-FB-20260830-PAGE-ACTION-TOOLS-01` — no click/type/fill/scroll tool exists; owner question Q19.
 - `CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01` — create_script + run_script is an unapproved fetch channel to any URL including loopback.
 - `CAP-FB-20260830-UNTRUSTED-CONTENT-FENCING-01` — page text reaches the model raw; no fence, no policy text, no regression probe.

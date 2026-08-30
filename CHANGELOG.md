@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.428] — 2026-08-30
+- Every reanalysis task is now a step-by-step hand-off brief with its own tests to pass. Agent templates and the jobs board stay and get fixed (the board could never post a job from an agent). The open_side_panel tool is removed. Model ids are current everywhere, and the fault that stops every gpt-5.6 model from answering is recorded.
+
 ## [0.2.427] — 2026-08-30
 - Full-project reanalysis before the exec demo: 65 new and 8 updated tracker entries, REVIEW-2026-08-30.md with the ordered queue and the five-minute demo script, recommended defaults for the open product questions, and the README now states the real host-access posture
 
