@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.490] — 2026-08-30
+- Tracker: the side-panel and cookie tool cuts are recorded as landed.
+
 ## [0.2.489] — 2026-08-30
 - Landed: a tool that could never work was removed, and the agent can no longer read your cookie values or session cookies unless you explicitly approve it.
 
