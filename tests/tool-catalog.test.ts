@@ -74,6 +74,23 @@ Deno.test("tool catalog: canonical stable identity binds source/package/tool/ver
   }
 });
 
+Deno.test("tool catalog: every descriptor has a bounded output shape and exact registry entries override the generic fallback", () => {
+  const genericOutput = JSON.parse(canonicalToolDescriptor(descriptor()).outputSchemaSummary);
+  assertEquals(genericOutput["x-cap-output-shape"], "generic-json-value");
+
+  const listAssets = canonicalToolDescriptor(descriptor({
+    sourceKind: "management",
+    packageId: "cap.management-tools",
+    toolId: "list_assets",
+    name: "list_assets",
+    dispatcherKind: "management",
+  }));
+  const exactOutput = JSON.parse(listAssets.outputSchemaSummary);
+  assertEquals(exactOutput.type, "object");
+  assertEquals(exactOutput.properties.assets.type, "array");
+  assert(new TextEncoder().encode(listAssets.outputSchemaSummary).length <= TOOL_CATALOG_BOUNDS.maxSchemaBytes);
+});
+
 Deno.test("tool catalog: hostile metadata is bounded without invoking accessors", () => {
   let getterCalls = 0;
   const hostileSchema = {};

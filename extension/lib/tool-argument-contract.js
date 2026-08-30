@@ -45,3 +45,102 @@ export function schemaWithArgumentContract(schema, sourceKind, toolId) {
     "x-cap-argument-limits": toolArgumentContract(sourceKind, toolId),
   };
 }
+
+const JSON_VALUE_OUTPUT = Object.freeze({
+  oneOf: [
+    { type: "object" }, { type: "array" }, { type: "string" },
+    { type: "number" }, { type: "boolean" }, { type: "null" },
+  ],
+  "x-cap-output-shape": "generic-json-value",
+});
+const ERROR = { type: "string" };
+const ARTIFACT = {
+  type: "object",
+  properties: {
+    id: { type: "string" }, key: { type: "string" }, type: { type: "string" },
+    name: { type: "string" }, origin: { type: "string" }, size: { type: "number" },
+    at: { type: "number" }, updatedAt: { type: "number" }, content: { type: "string" },
+  },
+};
+const ARTIFACT_RESULT = {
+  type: "object",
+  properties: {
+    ok: { type: "boolean" }, id: { type: ["string", "null"] },
+    asset: ARTIFACT, error: ERROR,
+  },
+};
+const TOOL_DESCRIPTOR_RESULT = {
+  type: "object",
+  properties: {
+    name: { type: "string" }, summary: { type: "string" },
+    schemaSummary: { type: "string" }, outputSchemaSummary: { type: "string" },
+    sourceKind: { type: "string" }, availability: { type: "string" },
+    selectionRef: { type: ["string", "null"] },
+  },
+};
+const PROVIDER_SEARCH_RESULT = {
+  type: "object",
+  properties: {
+    provider: { type: "string" }, kind: { type: "string" }, query: { type: "string" },
+    citations: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          url: { type: "string" }, title: { type: "string" },
+          citedText: { type: "string" }, provider: { type: "string" },
+        },
+      },
+    },
+    activated: { type: "string" }, alreadyActive: { type: "boolean" },
+    note: { type: "string" }, cost: { type: "object" },
+    ok: { type: "boolean" }, error: ERROR,
+  },
+};
+
+/** Exact return contracts opt in here; uncatalogued tools remain renderable via
+ * the bounded generic JSON-value contract until the follow-up audit adds them. */
+export const TOOL_OUTPUT_SCHEMA_REGISTRY = Object.freeze({
+  search_tools: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" }, catalogGeneration: { type: "string" },
+      results: { type: "array", items: TOOL_DESCRIPTOR_RESULT },
+      diagnostics: { type: "object" }, error: ERROR,
+    },
+  },
+  list_tools: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" }, counts: { type: "object" },
+      truncated: { type: "boolean" },
+      tools: { type: "object", additionalProperties: { type: "array", items: TOOL_DESCRIPTOR_RESULT } },
+      summary: { type: "string" }, error: ERROR,
+    },
+  },
+  execute_tool: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" }, selectedTool: { type: "string" },
+      result: JSON_VALUE_OUTPUT, schemaSummary: { type: "string" }, error: ERROR,
+    },
+  },
+  create_asset: ARTIFACT_RESULT,
+  update_asset: ARTIFACT_RESULT,
+  generate_ui: ARTIFACT_RESULT,
+  delete_asset: { type: "object", properties: { ok: { type: "boolean" }, error: ERROR } },
+  list_assets: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" }, assets: { type: "array", items: ARTIFACT }, error: ERROR,
+    },
+  },
+  get_asset: ARTIFACT_RESULT,
+  "provider-server/gemini/google_search": PROVIDER_SEARCH_RESULT,
+  "provider-server/anthropic/web_search": PROVIDER_SEARCH_RESULT,
+});
+
+export function toolOutputSchema(toolId, declaredSchema) {
+  if (declaredSchema && typeof declaredSchema === "object") return declaredSchema;
+  return TOOL_OUTPUT_SCHEMA_REGISTRY[toolId] ?? JSON_VALUE_OUTPUT;
+}

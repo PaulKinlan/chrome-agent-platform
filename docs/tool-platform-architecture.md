@@ -174,6 +174,13 @@ every agent run while retaining the public Settings-only shadow capture:
   `x-cap-argument-limits` contract (UTF-8 string/payload bytes, depth, nodes,
   keys, and array items). The same contract drives lazy sanitization and the
   artifact/script store ceilings, so discovery and enforcement cannot drift;
+- every catalog row also carries a bounded `outputSchemaSummary`. Exact output
+  schemas currently cover `search_tools`, `list_tools`, `execute_tool`, the
+  create/update/delete/list/get/generate-UI artifact family, and Gemini `google_search` /
+  Anthropic `web_search`; other tools use the generic JSON-value contract until
+  the follow-up return-shape audit extends the tool-id registry. `execute_tool`
+  transports the selected summary beside its result so the shared renderer can
+  remove schema metadata and boundedly decode one JSON-string layer;
 - ordinary arguments retain 16 KiB/string and 32 KiB/payload limits. Only the
   named product-owned fields (`create_asset.content`, `update_asset.content`,
   `generate_ui.html`, and script `source`) receive their backing store's larger

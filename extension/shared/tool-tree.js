@@ -6,7 +6,7 @@
 //
 // Bounds (a huge/deep payload must never hang the UI):
 //   - parse budget   — a string is only ever decoded when it clearly begins a
-//                      JSON value ({ or [) and is within PARSE_LIMIT chars
+//                      JSON value ({ or [) and is within PARSE_LIMIT bytes
 //   - depth cap      — containers at MAX_DEPTH render collapsed with a note
 //   - node cap       — the total row budget (a "… truncated" row appears)
 //   - per-container  — at most CONTAINER_CAP entries per object/array
@@ -26,7 +26,11 @@ export const TOOL_TREE_MAX_DEPTH = 6;
 export const TOOL_TREE_MAX_NODES = 200;
 export const TOOL_TREE_CONTAINER_CAP = 50;
 export const TOOL_TREE_MAX_STRING = 400;
-export const TOOL_TREE_PARSE_LIMIT = 200_000;
+export const TOOL_TREE_PARSE_LIMIT = 64 * 1024;
+
+function withinParseBudget(value) {
+  return utf8ByteLength(value) <= TOOL_TREE_PARSE_LIMIT;
+}
 
 /** Whether a string clearly begins a JSON value (a bounded decode candidate). */
 export function looksJsonish(s) {
@@ -43,6 +47,25 @@ export function looksJsonish(s) {
  * - anything else (numbers, booleans, null, plain text) passes through
  * Returns { kind: "json"|"string"|"other", value, decoded: boolean }.
  */
+export function safeParseOnce(value) {
+  if (value === null || value === undefined) return { kind: "other", value, decoded: false };
+  if (typeof value === "object") return { kind: "json", value, decoded: false };
+  if (typeof value !== "string") return { kind: "other", value, decoded: false };
+  const t = value.trim();
+  const stringLiteral = t.length >= 2 && t[0] === '"' && t[t.length - 1] === '"';
+  if ((!looksJsonish(t) && !stringLiteral) || !withinParseBudget(t)) {
+    return { kind: "string", value, decoded: false };
+  }
+  try {
+    const parsed = JSON.parse(t);
+    return typeof parsed === "object" && parsed !== null
+      ? { kind: "json", value: parsed, decoded: true }
+      : { kind: "string", value: parsed, decoded: true };
+  } catch {
+    return { kind: "string", value, decoded: false };
+  }
+}
+
 export function safeParse(value) {
   if (value === null || value === undefined) return { kind: "other", value, decoded: false };
   if (typeof value === "object") return { kind: "json", value, decoded: false };
@@ -52,7 +75,7 @@ export function safeParse(value) {
     // STRING LITERAL (a leading " with a closing " — a double-encoded tool
     // result wraps its JSON string in quotes). Always bounded by the budget.
     const stringLiteral = t.length >= 2 && t[0] === '"' && t[t.length - 1] === '"';
-    if ((looksJsonish(t) || stringLiteral) && t.length <= TOOL_TREE_PARSE_LIMIT) {
+    if ((looksJsonish(t) || stringLiteral) && withinParseBudget(t)) {
       try {
         const once = JSON.parse(t);
         // The defensive SECOND decode: only when the first decode produced a
@@ -60,7 +83,7 @@ export function safeParse(value) {
         // tool result) — never on arbitrary text.
         if (typeof once === "string") {
           const t2 = once.trim();
-          if (looksJsonish(t2) && t2.length <= TOOL_TREE_PARSE_LIMIT) {
+          if (looksJsonish(t2) && withinParseBudget(t2)) {
             try { return { kind: "json", value: JSON.parse(t2), decoded: true }; } catch { /* keep once */ }
           }
         }
@@ -258,7 +281,7 @@ export function buildTree(value, opts = {}) {
     // owner's "big unreadable JSON blob" complaint. Bounded: the string must
     // clearly begin a JSON value, fit the parse budget, and the per-tree
     // decode budget (shared across the whole tree) stops pathological nesting.
-    if (typeof v === "string" && decodeBudget.n > 0 && v.length <= TOOL_TREE_PARSE_LIMIT && looksJsonish(v)) {
+    if (typeof v === "string" && decodeBudget.n > 0 && withinParseBudget(v) && looksJsonish(v)) {
       let decoded;
       try { decoded = JSON.parse(v); } catch { decoded = undefined; }
       if (decoded !== null && typeof decoded === "object") {
@@ -294,7 +317,7 @@ export function buildTree(value, opts = {}) {
 // The CANONICAL secret-key matcher (shared with lib/pure.js — one semantic,
 // never a divergent anchored copy): any key matching it is redacted before it
 // reaches the UI/serializer or a truncation preview.
-import { SECRET_KEY_RE, redactSecretText, truncateUtf8 } from "../lib/pure.js";
+import { SECRET_KEY_RE, redactSecretText, truncateUtf8, utf8ByteLength } from "../lib/pure.js";
 const SECRET_KEY = SECRET_KEY_RE;
 
 /** The smallest maxBytes the serializer can honor (the fixed envelope + a

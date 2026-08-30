@@ -54,6 +54,7 @@ function descriptorTokens(descriptor) {
     ...(descriptor.aliases ?? []),
     descriptor.description,
     descriptor.schemaSummary,
+    descriptor.outputSchemaSummary,
     ...(descriptor.capabilities ?? []),
   ].join(" ");
   let normalized;
@@ -131,6 +132,10 @@ export function projectToolSearchResult(descriptor) {
     // serialization; do not run text redaction over JSON syntax here.
     schemaSummary: truncateUtf8(
       String(descriptor.schemaSummary ?? ""),
+      TOOL_SEARCH_BOUNDS.maxSchemaSummaryBytes,
+    ),
+    outputSchemaSummary: truncateUtf8(
+      String(descriptor.outputSchemaSummary ?? ""),
       TOOL_SEARCH_BOUNDS.maxSchemaSummaryBytes,
     ),
     sourceKind: descriptor.sourceKind,

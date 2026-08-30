@@ -8,6 +8,7 @@
 import { zodSchema } from "ai";
 import {
   schemaWithArgumentContract,
+  toolOutputSchema,
 } from "./tool-argument-contract.js";
 import {
   hasLoneSurrogates,
@@ -193,14 +194,10 @@ function providerJsonSchema(value) {
   return value;
 }
 
-export function summarizeToolSchema(value, sourceKind = "extension-builtin", toolId = "unknown") {
+function summarizeSchema(value) {
   let summary;
   try {
-    summary = canonicalJson(projectSchema(schemaWithArgumentContract(
-      providerJsonSchema(value),
-      sourceKind,
-      toolId,
-    )));
+    summary = canonicalJson(projectSchema(providerJsonSchema(value)));
   } catch (error) {
     if (error instanceof ToolCatalogValidationError) throw error;
     throw new ToolCatalogValidationError("schema-hostile");
@@ -209,6 +206,18 @@ export function summarizeToolSchema(value, sourceKind = "extension-builtin", too
     throw new ToolCatalogValidationError("schema-too-large");
   }
   return summary;
+}
+
+export function summarizeToolSchema(value, sourceKind = "extension-builtin", toolId = "unknown") {
+  return summarizeSchema(schemaWithArgumentContract(
+    providerJsonSchema(value),
+    sourceKind,
+    toolId,
+  ));
+}
+
+export function summarizeToolOutputSchema(value, toolId = "unknown") {
+  return summarizeSchema(toolOutputSchema(toolId, value));
 }
 
 function normalizeList(value, { maxItems, maxBytes, code }) {
@@ -307,6 +316,10 @@ export function canonicalToolDescriptor(input) {
     sourceKind,
     toolId,
   );
+  const outputSchemaSummary = summarizeToolOutputSchema(
+    ownData(input, "outputSchema"),
+    toolId,
+  );
   const capabilities = normalizeList(ownData(input, "capabilities"), {
     maxItems: TOOL_CATALOG_BOUNDS.maxCapabilities,
     maxBytes: TOOL_CATALOG_BOUNDS.maxCapabilityBytes,
@@ -372,6 +385,7 @@ export function canonicalToolDescriptor(input) {
     aliases,
     description,
     schemaSummary,
+    outputSchemaSummary,
     capabilities,
     dispatcherKind,
     closureGeneration,
@@ -406,6 +420,7 @@ export function canonicalToolDescriptor(input) {
     ),
     description,
     schemaSummary,
+    outputSchemaSummary,
     capabilities: Object.freeze(capabilities),
     availability,
     dispatcherKind,
@@ -573,6 +588,7 @@ function adaptAiToolMap(toolMap, context) {
       aliases: context.aliasesByTool?.[name] ?? [],
       description: ownData(aiTool, "description") ?? "",
       inputSchema: ownData(aiTool, "inputSchema") ?? {},
+      outputSchema: ownData(aiTool, "outputSchema") ?? context.outputSchemaByTool?.[name],
       capabilities: context.capabilitiesByTool?.[name] ??
         context.capabilities ?? [],
       scope: context.scope,
@@ -635,6 +651,7 @@ export function adaptWebMcpTools(tools, context) {
       aliases: [],
       description: ownData(sourceTool, "description") ?? "",
       inputSchema: ownData(sourceTool, "inputSchema") ?? {},
+      outputSchema: ownData(sourceTool, "outputSchema"),
       // Page text cannot declare host capabilities or replay safety.
       capabilities: ["webmcp.invoke"],
       scope: {
@@ -677,6 +694,7 @@ export function adaptBundledTools(rows, context = {}) {
       aliases: [],
       description: ownData(row, "description") ?? ownData(row, "displayName") ?? "",
       inputSchema: context.inputSchemaByTool?.[toolId] ?? { type: "object", additionalProperties: false },
+      outputSchema: context.outputSchemaByTool?.[toolId],
       capabilities: ownData(row, "capabilities") ?? [],
       scope: context.scope ?? { hub: true, agentId: "hub", origin: "", documentId: "" },
       sourceGeneration: context.sourceGeneration ?? `bundled:${packageDigest}`,

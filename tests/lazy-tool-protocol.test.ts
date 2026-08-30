@@ -109,6 +109,7 @@ Deno.test("lazy protocol: search is non-authorizing and execute delegates throug
   }, context);
   assertEquals(result.ok, true);
   assertEquals(result.result, { echoed: "hello" });
+  assertEquals(JSON.parse(result.schemaSummary)["x-cap-output-shape"], "generic-json-value");
   assertEquals(result.authorizes, false);
   assertEquals(result.requiresLiveAuthorization, true);
   assertEquals(result.replay.safety, "unknown");
@@ -796,12 +797,17 @@ Deno.test("lazy protocol: search and list share the selected tool's accurate lar
   assertEquals(searchSchema.allOf[0].required, ["name", "content"]);
   assertEquals(searchSchema.allOf[0].properties.key.maxLength, 64);
 
+  const outputSchema = JSON.parse(searched.results[0].outputSchemaSummary);
+  assertEquals(outputSchema.type, "object");
+  assertEquals(outputSchema.properties.asset.type, "object");
+
   const listed = await protocol.list({ source: "management" }, runContext());
   assertEquals(listed.ok, true);
-  const listedAsset = (listed as { tools: { management: Array<{ name: string; schemaSummary: string }> } })
+  const listedAsset = (listed as { tools: { management: Array<{ name: string; schemaSummary: string; outputSchemaSummary: string }> } })
     .tools.management.find((entry) => entry.name === "create_asset");
   assert(listedAsset);
   assertEquals(listedAsset.schemaSummary, searched.results[0].schemaSummary);
+  assertEquals(listedAsset.outputSchemaSummary, searched.results[0].outputSchemaSummary);
 });
 
 Deno.test("lazy protocol: production provider cutover binds only the fixed set and protected flow guidance", async () => {

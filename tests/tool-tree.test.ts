@@ -9,6 +9,7 @@ import {
   looksJsonish,
   safeJsonStringify,
   safeParse,
+  safeParseOnce,
   buildTree,
   subtreeJson,
   TOOL_TREE_MAX_DEPTH,
@@ -46,6 +47,13 @@ Deno.test("tool-tree: the DEFENSIVE SECOND decode handles a double-encoded JSON 
   assertEquals(p.decoded, true);
   const t = buildTree(p.value);
   assert(t.rows.some((r) => r.key === "a" && r.kind === "array"), "inner array present");
+});
+
+Deno.test("tool-tree: strict one-parse decoding leaves a second encoded layer as text", () => {
+  const twice = JSON.stringify(JSON.stringify({ a: 1 }));
+  const parsed = safeParseOnce(twice);
+  assertEquals(parsed.kind, "string");
+  assertEquals(parsed.value, JSON.stringify({ a: 1 }));
 });
 
 Deno.test("tool-tree: nested arrays + objects expand into a full tree", () => {
@@ -143,6 +151,14 @@ Deno.test("tool-tree: a huge JSON STRING beyond the parse budget is NOT decoded 
   const huge = "[" + "x".repeat(TOOL_TREE_PARSE_LIMIT + 1) + "]";
   const p = safeParse(huge);
   assertEquals(p.kind, "string"); // parse budget refused — no hang, no giant tree
+});
+
+Deno.test("tool-tree: the parse budget is UTF-8 bytes, not UTF-16 code units", () => {
+  const multibyte = JSON.stringify(["é".repeat(TOOL_TREE_PARSE_LIMIT / 2)]);
+  assert(multibyte.length < TOOL_TREE_PARSE_LIMIT, "fixture is under the old code-unit cap");
+  assert(new TextEncoder().encode(multibyte).length > TOOL_TREE_PARSE_LIMIT);
+  assertEquals(safeParse(multibyte).kind, "string");
+  assertEquals(safeParseOnce(multibyte).kind, "string");
 });
 
 Deno.test("tool-tree: a tool-error-shaped result renders as a tree, not a crash", () => {
