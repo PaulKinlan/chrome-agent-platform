@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.417] — 2026-08-30
+- test(board): RED deny-matrix battery — per-edge deny rules, malformed fail-closed, bounded rules, default open
+
 ## [0.2.416] — 2026-08-30
 - The composer slash menu got an overhaul: dead commands are gone (/theme, /focus, /model, /schedule), and new ones pull real Chrome context into your message — /tabs picks any open tab, /artifacts attaches a saved artifact, /bookmarks and /history search and insert links, /files attaches files from folders you've granted
 
