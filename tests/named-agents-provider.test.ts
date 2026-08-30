@@ -120,9 +120,12 @@ Deno.test("per-agent provider: getModelForAgent resolves the override, else the 
   assertEquals(byo.modelId, "demo-local");
   assert(byo.providerName.includes("openai-compatible"), "the fallback names the override provider");
 
-  // A null override → the global (demo) path (getModelForAgent falls back).
+  // A null override → the global path (getModelForAgent falls back). The
+  // global default with no provider configured is the LOCAL ASSISTANT — the
+  // marker demo model sits behind the developer flag
+  // (CAP-FB-20260830-KEYLESS-FIRST-RESULT-01; tests/demo-model-gating.test.ts).
   const viaAgent = await getModelForAgent(null);
-  assertEquals(viaAgent.modelId, "demo-local");
+  assertEquals(viaAgent.modelId, "local-assistant");
 });
 
 // ── k3 review fixes (2026-08-18) ────────────────────────────────────────────

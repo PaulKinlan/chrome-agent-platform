@@ -544,6 +544,8 @@ async function main() {
         const doc = await new Promise((r) => setTimeout(r, 300));
         return doc;
       })()`); // (the reload below re-drives the composer)
+      // the marker demo model sits behind the developer flag (CAP-FB-20260830-KEYLESS-FIRST-RESULT-01)
+      await evalIn(cdp, session, `chrome.runtime.sendMessage({ type: "kv.set", values: { "cap:developerFeatures": true } })`);
       // drive the composer with the REAL @demo-tools task (genuine input)
       const doc2 = await cdp.send("DOM.getDocument", {}, session);
       const q2 = await cdp.send("DOM.querySelector", { nodeId: (doc2 as any).result.root.nodeId, selector: "#task-input" }, session);

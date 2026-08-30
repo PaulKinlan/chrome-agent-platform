@@ -6,7 +6,7 @@ import {
   getModel,
   getModelForAgent,
   getProviderConfig,
-  resolveModelFromConfig, withEffectiveBaseURL } from "../lib/provider.js";
+  resolveModelFromConfig, withEffectiveBaseURL, developerFeaturesOn } from "../lib/provider.js";
 import {
   NotificationRegistry,
   handleNotificationClick,
@@ -1119,7 +1119,10 @@ async function ensureModel(_agentId) {
     const gen = generation;
     const cfg = await getProviderConfig();
     const credVersion = cfg.apiKey ? "k1" : "k0";
-    const cacheKey = `${cfg.provider}:${cfg.baseURL}:${cfg.model}:${credVersion}`;
+    // The developer flag decides which model the default provider is (the
+    // local assistant vs the marker demo model), so a toggle rebuilds it.
+    const devVersion = cfg.provider === "demo" ? (await developerFeaturesOn() ? ":dev1" : ":dev0") : "";
+    const cacheKey = `${cfg.provider}:${cfg.baseURL}:${cfg.model}:${credVersion}${devVersion}`;
     // Rebuild whenever the key changed OR the cached model is null OR the
     // cached model predates the current generation.
     if (

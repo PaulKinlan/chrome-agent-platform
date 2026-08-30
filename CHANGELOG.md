@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.457] — 2026-08-30
+- Landed: with no API key set up, asking the hub to group or list your tabs now really groups them and leaves a tab-list page behind, instead of replying with a placeholder.
+
 ## [0.2.456] — 2026-08-30
 - Tracker: three tool fixes are recorded as landed.
 

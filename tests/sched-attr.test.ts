@@ -340,6 +340,8 @@ class FakeDirHandle {
 Deno.test("SW fire: an owner-attributed schedule links its run into the owning thread + surfaces its logs", async () => {
   // ---- chrome stub: Map-backed storage, working alarms, captured listeners ----
   const swStore = new Map();
+  // the marker demo model sits behind the developer flag (CAP-FB-20260830-KEYLESS-FIRST-RESULT-01)
+  swStore.set("cap:developerFeatures", true);
   const alarmListeners = [];
   const alarms = new Map();
   const noopListener = { addListener: () => {} };
@@ -500,6 +502,8 @@ Deno.test("SW fire: a legacy recipe:<id> payload with NO owner still attributes 
   // (The previous test's stub replaced globalThis.chrome; here we rebuild a
   // stub with a fresh capture + re-import with a cache-bust for isolation.)
   const swStore = new Map();
+  // the marker demo model sits behind the developer flag (CAP-FB-20260830-KEYLESS-FIRST-RESULT-01)
+  swStore.set("cap:developerFeatures", true);
   const alarms = new Map();
   const noopListener = { addListener: () => {} };
   globalThis.chrome = {

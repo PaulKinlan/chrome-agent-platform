@@ -120,6 +120,8 @@ check("idle: no status row and no banner when nothing runs", idle?.rowPresent ==
 // Drive a REAL run through the REAL composer (the demo provider's
 // deterministic tool-calling mode gives ≥2 step transitions; @demo-slow opens
 // a mid-run observation window on the first step).
+// the marker demo model sits behind the developer flag (CAP-FB-20260830-KEYLESS-FIRST-RESULT-01)
+await ev(`chrome.runtime.sendMessage({ type: 'kv.set', values: { 'cap:developerFeatures': true } })`, page);
 await ev(`(() => {
   const composer = document.getElementById('composer');
   composer.dispatchEvent(new CustomEvent('send', { detail: { text: '@demo-slow @demo-tools pack the archive', attachments: [], agent: null } }));
