@@ -11,7 +11,7 @@ import { projectUnifiedAgents } from "../lib/named-agents.js";
 import { schedulePreviewText } from "../lib/schedule-preview.js";
 import { parseEnglishSchedule } from "../shared/schedule-parser.js";
 import { selectFailedRuns } from "../lib/run-retry.js";
-import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript } from "../shared/conversation.js";
+import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript, wireReplayApprovals, isProtocolTool } from "../shared/conversation.js";
 import { createRunSurfaceOwner } from "../shared/run-surface-owner.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
 import { cancelRunFromRenderedStop, projectConversationRunStatus } from "../shared/run-status.js";
@@ -83,6 +83,9 @@ ntpLog.info("new tab page evaluated");
 const statusEl = document.getElementById("status");
 const durableRunRegistry = document.getElementById("durable-run-registry");
 const threadConversation = document.getElementById("thread-conversation");
+// A reopened thread's grant cards (derived from persisted denials) grant
+// through the same path the live card takes (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 §2b).
+wireReplayApprovals(threadConversation);
 // The registry is a DEBUG overlay now (owner directive: the conversation is
 // the status surface — no visible registry panel). The toggle appears (and
 // hover-reveals the panel) only when the open surface has runs.
@@ -2096,6 +2099,7 @@ function renderAgentHistory(container, entries) {
     } else {
       const t = item.t;
       if (typeof container.appendTool !== "function") continue;
+      if (isProtocolTool(t.tool)) continue; // protocol plumbing, never a card (§9)
       const raw = t.result == null ? "" : typeof t.result === "string" ? t.result : safeJsonStringify(t.result);
       const summary = t.result == null ? "" : summarizeToolResult(t.tool, t.result);
       container.appendTool({

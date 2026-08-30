@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.464] — 2026-08-30
+- Tool-call cards now show the tool's own result — the head, the tree, the raw JSON view and the error text — never the protocol envelope around it; the tool-search plumbing no longer renders as cards (it stays in Run logs); and a permission the agent was denied reopens in the thread as the same permission card the live run showed, carrying your decision.
+
 ## [0.2.463] — 2026-08-30
 - Six more fixes are in progress in parallel and recorded as claimed in the tracker.
 
