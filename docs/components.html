@@ -420,8 +420,10 @@
         <h3 class="spec"><code class="tag">&lt;activity-explorer&gt;</code> — the browsable/searchable activity log</h3>
         <div class="stage column" style="max-width:680px">
           <activity-explorer id="activity-demo" limit="50"></activity-explorer>
+          <activity-explorer id="activity-demo-filtered" limit="50"></activity-explorer>
+          <activity-explorer id="activity-demo-empty" limit="50"></activity-explorer>
         </div>
-        <p class="caption">search by text, filter by agent (seeded demo entries — the real surface queries <code>activity.list</code> across master + named + background + site agents).</p>
+        <p class="caption">search by text, filter by agent (seeded demo entries — the real surface queries <code>activity.list</code> across master + named + background + site agents). The hub shows user-meaningful rows only (Started / Finished / Failed / Made / approvals / schedule runs); attestation and tool-protocol rows stay in Run logs. The three specimens show the populated, filtered-empty and zero states.</p>
       </div>
 
       <div class="specimen">
@@ -684,11 +686,29 @@
       const activityDemo = document.getElementById("activity-demo");
       activityDemo.entries = [
         { ts: Date.now() - 60000, source: "master", agentLabel: "hub", type: "task", task: "Summarise the latest content from paul.kinlan.me" },
-        { ts: Date.now() - 90000, source: "agent:paul", agentLabel: "Paul", type: "tool-call", tool: "list_agents", args: "{}" },
-        { ts: Date.now() - 120000, source: "agent:paul", agentLabel: "Paul", type: "tool-result", tool: "list_agents", result: "{\"modelContent\":\"{\\\"agents\\\":[{\\\"name\\\":\\\"Paul\\\",\\\"role\\\":\\\"summarises paul.kinlan.me\\\"}]}\"}" },
-        { ts: Date.now() - 180000, source: "background:recipe:auto-group-by-domain", agentLabel: "Sorting Hat", type: "tool-result", tool: "tab_group", result: "grouped 12 tabs into 3 domains" },
-        { ts: Date.now() - 300000, source: "https://paul.kinlan.me", agentLabel: "https://paul.kinlan.me", type: "screenshot", url: "https://paul.kinlan.me" },
+        { ts: Date.now() - 90000, source: "master", agentLabel: "hub", type: "result", result: "Found three new posts about WebMCP and saved them.", ok: true },
+        { ts: Date.now() - 120000, source: "agent:paul", agentLabel: "Paul", type: "result", result: "The offline page never finished loading.", ok: false },
+        { ts: Date.now() - 180000, source: "background:recipe:auto-group-by-domain", agentLabel: "Sorting Hat", type: "schedule-ran", task: "grouped 12 tabs into 3 domains" },
+        { ts: Date.now() - 300000, source: "master", agentLabel: "hub", type: "artifact", task: "Weekly digest" },
       ];
+      // The explorer specimen also shows BOTH empty states (the zero state and
+      // the filtered-empty state — the two distinct strings the component
+      // renders).
+      const activityEmpty = document.getElementById("activity-demo-empty");
+      activityEmpty.entries = [];
+      const activityFiltered = document.getElementById("activity-demo-filtered");
+      activityFiltered.entries = [
+        { ts: Date.now() - 60000, source: "master", agentLabel: "hub", type: "task", task: "Summarise the latest content from paul.kinlan.me" },
+      ];
+      // The filtered-empty state: a seeded row plus a search that matches
+      // nothing — the component renders its distinct filtered-empty string.
+      setTimeout(() => {
+        const box = activityFiltered.shadowRoot?.querySelector(".aex-search");
+        if (box && !box.value) {
+          box.value = "zzz-no-such-query";
+          box.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      }, 0);
 
       // <jobs-board> examples — seeded demo data (the real surface queries
       // board.list + board.messages).

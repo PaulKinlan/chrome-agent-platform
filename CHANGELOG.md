@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.508] — 2026-08-30
+- Recent activity: user-visible kinds, bounded one-liners, grid fix, runs-today header — plus regenerated gallery docs and lock alignment
+
+## [0.2.507] — 2026-08-30
+- Recent activity: user-visible kinds, bounded one-liners, grid fix, runs-today header — plus regenerated gallery docs and lock alignment
+
 ## [0.2.506] — 2026-08-30
 - tasks: record candidate SHA
 

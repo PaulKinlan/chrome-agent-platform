@@ -8491,11 +8491,46 @@ function shortText(v, n = 80) {
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
 
+// The USER-VISIBLE kind allowlist for the hub's Recent activity: attestation
+// rows (the durable prompt receipt) and protocol/tool rows (tool-call,
+// tool-result, screenshot, error) stay in the journal and in Run logs — they
+// are not something the owner asked to see on the hub (CAP-FB-20260830-
+// RECENT-ACTIVITY-USER-EVENTS-01).
+export const USER_VISIBLE_KINDS = new Set([
+  "task",
+  "result",
+  "artifact",
+  "approval-requested",
+  "approval-granted",
+  "approval-denied",
+  "schedule-ran",
+]);
+
+// The row-kind pill in USER words: "Started" not "task", "Failed" not
+// "result with ok:false". The class stays the raw kind so existing CSS color
+// hooks keep working; the visible text is the word.
+export function userKindLabel(e) {
+  switch (e?.type) {
+    case "task": return "Started";
+    case "result": return e?.ok === false ? "Failed" : "Finished";
+    case "artifact": return "Made";
+    case "approval-requested": return "Needs approval";
+    case "approval-granted": return "Approved";
+    case "approval-denied": return "Denied";
+    case "schedule-ran": return "Schedule ran";
+    default: return "";
+  }
+}
+
 // The readable one-liner for a journal entry.
-function activityText(e) {
+export function activityText(e) {
   switch (e?.type) {
     case "task": return e.task || "";
-    case "result": return e.result || "";
+    // A result row's one-liner is the FIRST 140 CHARS OF THE SUMMARY — never
+    // the raw model/provider dump that may sit in e.result (a multi-thousand-
+    // char reply or a {modelContent,…} envelope): the collapsed row must stay
+    // a glanceable user line (CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01).
+    case "result": return shortText(String(e.result ?? ""), 140);
     case "tool-call": {
       // The args preview in the summary line goes through safeJsonStringify —
       // which redacts secret-like KEYS before serialization — so a historical
@@ -8588,20 +8623,21 @@ class ActivityExplorer extends Component {
         .aex-entry { border-bottom:1px solid var(--border,#e3e0d9); }
         .aex-entry:last-child { border-bottom:0; }
         .aex-entry:hover { background:var(--panel,#ffffff); }
-        .aex-entry summary { list-style:none; cursor:pointer; display:grid; grid-template-columns:auto 1fr auto; gap:10px;
+        .aex-entry summary { list-style:none; cursor:pointer; display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:10px;
           align-items:baseline; padding:9px 12px; }
         .aex-entry summary::-webkit-details-marker { display:none; }
         .aex-entry summary:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:-2px; }
         .aex-agent { font-size:11.5px; font-weight:600; color:var(--accent,#0e6e63); white-space:nowrap;
           max-width:150px; overflow:hidden; text-overflow:ellipsis; }
-        .aex-main { min-width:0; }
+        .aex-main { min-width:0; min-inline-size:0; }
         .aex-kind { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
-          color:var(--muted,#635e56); margin-right:6px; }
-        .aex-kind.task { color:var(--accent,#0e6e63); }
+          color:var(--muted,#635e56); margin-right:6px; white-space:nowrap; }
+        .aex-kind.task, .aex-kind.started { color:var(--accent,#0e6e63); }
+        .aex-kind.finished { color:var(--accent,#0e6e63); }
+        .aex-kind.failed, .aex-kind.error { color:var(--danger,#b3261e); }
         .aex-kind.tool-call, .aex-kind.tool-result { color:var(--accent2,#7a5c1d); }
-        .aex-kind.error { color:var(--danger,#b3261e); }
-        .aex-text { font-size:13px; line-height:1.45; color:var(--text,#1d1b18); overflow:hidden; text-overflow:ellipsis;
-          white-space:nowrap; }
+        .aex-text { font-size:13px; line-height:1.45; color:var(--text,#1d1b18); min-inline-size:0;
+          overflow-wrap:anywhere; }
         .aex-ts { font-size:11px; color:var(--muted,#635e56); white-space:nowrap; }
         .aex-detail { margin:0; padding:0 12px 10px 12px; font-size:12px; line-height:1.5;
           color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere;
@@ -8739,13 +8775,19 @@ class ActivityExplorer extends Component {
       try {
         // BOUNDED: a worker that never answers must not leave the controls
         // dead — settle with an honest error + retry instead.
+        // The hub's Recent activity shows USER-VISIBLE kinds only; the route
+        // filters server-side AND the client re-filters (seeded gallery rows
+        // and any future caller never bypass the allowlist).
         const res = await backendBounded("activity.list", {
           agent: this.getAttribute("agent") || undefined,
           limit: Number(this.getAttribute("limit")) || 200,
+          kinds: [...USER_VISIBLE_KINDS],
         });
         if (seq !== this._loadSeq) return; // superseded mid-flight
         if (!this._seeded) {
-          this._entries = Array.isArray(res?.entries) ? res.entries : [];
+          this._entries = Array.isArray(res?.entries)
+            ? res.entries.filter((e) => USER_VISIBLE_KINDS.has(e.type))
+            : [];
           this._loadError = Array.isArray(res?.entries)
             ? null
             : (res?.error || "couldn't load the activity log");
@@ -8828,7 +8870,7 @@ class ActivityExplorer extends Component {
       main.className = "aex-main";
       const kind = document.createElement("span");
       kind.className = "aex-kind " + (e.type || "");
-      kind.textContent = e.type || "";
+      kind.textContent = userKindLabel(e) || e.type || "";
       const text = document.createElement("span");
       text.className = "aex-text";
       text.textContent = activityText(e);

@@ -178,3 +178,31 @@ Deno.test("activity.list: agent/query/window filters pass through to the merged 
   const win = await routes["activity.list"]({ since: 4 });
   assertEquals(win.entries.map((e) => e.ts), [5, 4]);
 });
+
+Deno.test("filterActivityEntries: kinds is an exact type allowlist (server-side hub filter)", () => {
+  const entries = [
+    E({ ts: 1, type: "task" }),
+    E({ ts: 2, type: "result", ok: true }),
+    E({ ts: 3, type: "prompt-attestation" }),
+    E({ ts: 4, type: "tool-call" }),
+    E({ ts: 5, type: "artifact" }),
+  ];
+  // With the hub allowlist: task/result/artifact pass; attestation + tool rows stay out.
+  const out = filterActivityEntries(entries, {
+    kinds: ["task", "result", "artifact", "approval-requested", "approval-granted", "approval-denied", "schedule-ran"],
+  });
+  assertEquals(out.map((e) => e.ts), [5, 2, 1]);
+  // No kinds param = full set (Run logs / any full-fidelity caller).
+  assertEquals(filterActivityEntries(entries, {}).length, 5);
+  // Empty kinds array = full set too (never a silent everything-hidden).
+  assertEquals(filterActivityEntries(entries, { kinds: [] }).length, 5);
+});
+
+Deno.test("activity.list: kinds passes through to the merged set", async () => {
+  const { deps } = fakeDeps();
+  const routes = createActivityRoutes(deps);
+  const user = await routes["activity.list"]({ kinds: ["task"] });
+  assertEquals(user.count, 4); // all four seeded entries are type task
+  const none = await routes["activity.list"]({ kinds: ["result"] });
+  assertEquals(none.count, 0);
+});

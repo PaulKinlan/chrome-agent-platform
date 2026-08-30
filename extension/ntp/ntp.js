@@ -1150,14 +1150,17 @@ subscribeRunRegistry(() => scheduleRunLogRefresh(), { emitCurrent: false });
 async function renderHubUsage() {
   const el = document.getElementById("hub-usage");
   if (!el) return;
-  const u = await send("usage.get").catch(() => null);
-  if (!u?.totals) {
-    el.textContent = "what the agents did";
-    return;
-  }
-  const t = u.totals;
-  const tokens = (t.inputTokens + t.outputTokens).toLocaleString();
-  el.textContent = `${t.calls} calls · ${tokens} tokens · $${t.estimatedCost.toFixed(4)}`;
+  // "N runs today" from the run registry — the count of durable runs started
+  // on the current local day. Cost/token figures live in Settings → Usage;
+  // the hub header says what happened, not what it cost (CAP-FB-20260830-
+  // RECENT-ACTIVITY-USER-EVENTS-01).
+  const res = await send("run.list").catch(() => null);
+  const runs = Array.isArray(res?.runs) ? res.runs : [];
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const todayStart = startOfToday.getTime();
+  const today = runs.filter((r) => (r?.startedAt ?? 0) >= todayStart).length;
+  el.textContent = `${today} run${today === 1 ? "" : "s"} today`;
 }
 
 // ── Tasks (the distinct task threads) ────────────────────────────────────

@@ -971,3 +971,39 @@ Deno.test("segmented-control moves value with ArrowRight/ArrowLeft and emits cha
   el._select("Diff");
   if (emitted.length !== before) throw new Error("selecting the already-current value must not emit change");
 });
+
+// ── activity-explorer user-facing rows (CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01) ──
+
+Deno.test("activity-explorer: the user-visible allowlist excludes system rows and the row words map to user language", async () => {
+  const mod = await import("../extension/shared/components.js");
+  const { USER_VISIBLE_KINDS, userKindLabel, activityText } = mod;
+  // The hub allowlist keeps task/result/artifact/approval/schedule rows…
+  for (const k of ["task", "result", "artifact", "approval-requested", "approval-granted", "approval-denied", "schedule-ran"]) {
+    if (!USER_VISIBLE_KINDS.has(k)) throw new Error(`allowlist missing ${k}`);
+  }
+  // …and hides the attestation + tool-protocol rows (they stay in Run logs).
+  for (const k of ["prompt-attestation", "tool-call", "tool-result", "screenshot", "error"]) {
+    if (USER_VISIBLE_KINDS.has(k)) throw new Error(`allowlist must not contain ${k}`);
+  }
+  // Kind pills are USER words, not protocol kind names.
+  if (userKindLabel({ type: "task" }) !== "Started") throw new Error("task should read Started");
+  if (userKindLabel({ type: "result", ok: true }) !== "Finished") throw new Error("ok result should read Finished");
+  if (userKindLabel({ type: "result", ok: false }) !== "Failed") throw new Error("!ok result should read Failed");
+  if (userKindLabel({ type: "artifact" }) !== "Made") throw new Error("artifact should read Made");
+  // A result row's one-liner is the first 140 chars of the summary — never the
+  // raw multi-thousand-char model dump (falsification: revert the 140 bound,
+  // this REDs on the length assertion).
+  const dump = "x".repeat(5000);
+  const line = activityText({ type: "result", result: dump, ok: true });
+  if (line.length > 140) throw new Error(`result one-liner must be bounded to 140 chars, got ${line.length}`);
+  if (!line.endsWith("…")) throw new Error("bounded one-liner should end with the ellipsis marker");
+  if (activityText({ type: "result", result: "short", ok: true }) !== "short") throw new Error("short results pass through unchanged");
+});
+
+Deno.test("activity-explorer: the two empty-state strings are distinct (zero vs filtered-empty)", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const explorerRegion = source.slice(source.indexOf("class ActivityExplorer"), source.indexOf("customElements.define(\"activity-explorer\""));
+  const zero = explorerRegion.includes("Nothing has happened yet.");
+  const filtered = explorerRegion.includes("No activity matches this filter.");
+  if (!zero || !filtered) throw new Error("both empty-state strings must exist in the explorer (zero + filtered-empty)");
+});

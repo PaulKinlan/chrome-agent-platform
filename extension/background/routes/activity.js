@@ -26,13 +26,17 @@ export const ACTIVITY_STORE_CAPS = Object.freeze({
  * unit tests; the semantics are the route's contract (agent = exact source,
  * query = case-insensitive substring across the readable text, since/until
  * bound by ts, limit clamped to [1, 2000], most-recent-first). */
-export function filterActivityEntries(entries, { agent, query, since, until, limit = 500 } = {}) {
+export function filterActivityEntries(entries, { agent, query, since, until, limit = 500, kinds } = {}) {
   const bound = Math.max(1, Math.min(2000, Number(limit) || 500));
   const sinceTs = since ? Number(since) : null;
   const untilTs = until ? Number(until) : null;
   const q = String(query ?? "").trim().toLowerCase();
+  const kindsSet = Array.isArray(kinds) && kinds.length > 0 ? new Set(kinds) : null;
   const matchesAgent = agent
     ? (e) => e.source === agent
+    : () => true;
+  const matchesKinds = kindsSet
+    ? (e) => kindsSet.has(e.type)
     : () => true;
   const matchesQuery = q
     ? (e) => {
@@ -48,7 +52,7 @@ export function filterActivityEntries(entries, { agent, query, since, until, lim
     (untilTs == null || (e.ts ?? 0) <= untilTs);
   return [...entries]
     .sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0))
-    .filter((e) => matchesAgent(e) && matchesQuery(e) && matchesWindow(e))
+    .filter((e) => matchesAgent(e) && matchesQuery(e) && matchesWindow(e) && matchesKinds(e))
     .slice(0, bound);
 }
 
@@ -69,7 +73,7 @@ export function createActivityRoutes({
     // and every enrolled SITE origin — into ONE searchable/browsable timeline.
     // Each entry is TAGGED with its source so the "which agent did this"
     // attribution is preserved. Read-only (the journals are already bounded).
-    async "activity.list"({ agent, query, since, until, limit = 500 } = {}) {
+    async "activity.list"({ agent, query, since, until, limit = 500, kinds } = {}) {
       const out = [];
       const push = async (store, source, agentLabel) => {
         try {
@@ -114,7 +118,7 @@ export function createActivityRoutes({
         jobs.push(push(siteMemory(origin), origin, origin));
       }
       await Promise.all(jobs);
-      const entries = filterActivityEntries(out, { agent, query, since, until, limit });
+      const entries = filterActivityEntries(out, { agent, query, since, until, limit, kinds });
       return { entries, count: entries.length, total: out.length };
     },
   });
