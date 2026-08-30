@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.454] — 2026-08-30
+- Tracker: the template gallery is recorded as landed.
+
 ## [0.2.453] — 2026-08-30
 - Landed: creating an agent now starts from a template gallery (Starter, All, Scheduled) you can browse with the keyboard; one click fills in the persona, skills and schedule.
 
