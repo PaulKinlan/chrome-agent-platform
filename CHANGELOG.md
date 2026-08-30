@@ -1,10 +1,13 @@
 # Changelog
 
+## [0.2.479] — 2026-08-30
+- The What's new section shows the last five readable changes, with everything else behind a disclosure
+
 ## [0.2.478] — 2026-08-30
-- What's new: retain the About journey evidence (212/212, attested at cd803411)
+- The What's new section now shows the last five readable changes, with everything else behind a "Show all" disclosure.
 
 ## [0.2.477] — 2026-08-30
-- What's new: user-facing changelog copy in About, rendered lazily
+- The About section now shows recent changes in plain language, rendered only when you open it.
 
 ## [0.2.476] — 2026-08-30
 - The diff view is now ready for the editing flow (side by side or unified, with added/removed counts and keyboard navigation between changes).
