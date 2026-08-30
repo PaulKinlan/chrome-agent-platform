@@ -26,6 +26,14 @@ import {
   validateDistCompleteMarker,
   writeDistCompleteMarker,
 } from "./scripts/dist-complete.mjs";
+import {
+  deltaBetween,
+  parseChangelog,
+  readLastBuiltVersion,
+  renderDelta,
+  writeLastBuiltVersion,
+  DEFAULT_BUILT_VERSION_PATH,
+} from "./scripts/changelog-delta.mjs";
 
 function parseBuildTarget(args) {
   if (!Array.isArray(args) || args.length > 1) {
@@ -53,6 +61,12 @@ const ROOT = new URL(".", import.meta.url).pathname;
 const EXT_DIR = path.join(ROOT, "extension");
 const DIST = path.join(EXT_DIR, "dist");
 const COMPLETE_MARKER = path.join(DIST, "dist.complete");
+// Owner-requested build output: the changelog delta since the LAST SUCCESSFUL
+// build. The record lives in .build/ (gitignored, invocation-local, outside
+// dist and dist-versions — never shipped, never in the indexed-source scan,
+// and it survives the dist-versions GC by design). Never fails the build:
+// every read/parse error degrades to a one-line warning.
+const BUILT_VERSION_PATH = path.join(ROOT, DEFAULT_BUILT_VERSION_PATH);
 
 // Windows: directory rename-over-existing is unreliable (EBUSY/EPERM with
 // AV/indexers). Fail CLEARLY rather than half-publish.
@@ -250,6 +264,25 @@ async function holderIsDeadWithDir(h, lockDir) {
 }
 
 try {
+  // Snapshot the previous successful build version + the current package
+  // version BEFORE the build so the delta can be printed on success.
+  // Fail-safe: unreadable/missing record or malformed changelog → warn +
+  // continue (this feature must never fail the build).
+  let previousBuiltVersion = null;
+  let currentVersion = null;
+  let currentChangelog = null;
+  try {
+    previousBuiltVersion = await readLastBuiltVersion(BUILT_VERSION_PATH);
+    const pkg = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8"));
+    currentVersion = typeof pkg?.version === "string" ? pkg.version : null;
+    currentChangelog = await readFile(
+      path.join(ROOT, "CHANGELOG.md"),
+      "utf8",
+    ).catch(() => null);
+  } catch {
+    // warn-only; the build must never fail over this feature
+  }
+
   // Staging: private, same-filesystem, fully built BEFORE any dist mutation.
   const STAGE = path.join(EXT_DIR, `.dist-stage-${process.pid}-${Date.now()}`);
   await rm(STAGE, { recursive: true, force: true });
@@ -496,6 +529,29 @@ try {
       throw new Error(`FATAL: version GC failed after publish (${e?.message ?? e}) — the live tree at ${VERSIONED} is valid, but stale versions remain under ${VERSIONS}`);
     }
     console.log(`built ${path.join("extension", "dist", "background", "service-worker.js")} + dist/options.bundle.js ATOMICALLY (serialized owner-token lock; one dist dir; removed ${occurrences} new-Function + ${zodProbes} probes; seam scan clean; dist.complete marker; rollback-fatal)`);
+    // Owner-requested build output: print the changelog delta since the last
+    // SUCCESSFUL build, then record THIS version for the next build. Both are
+    // warn-only (never fail the build over this feature) and both run only on
+    // success — a failed build never records a version.
+    try {
+      if (currentVersion) {
+        if (!previousBuiltVersion) {
+          // First build / fresh clone: one line, not the whole changelog.
+          console.log(`First build at ${currentVersion} — no previous version recorded.`);
+        } else {
+          const parsed = currentChangelog ? parseChangelog(currentChangelog) : [];
+          const delta = deltaBetween(parsed, previousBuiltVersion, currentVersion);
+          if (delta.length > 0) {
+            const rendered = renderDelta(delta);
+            console.log(`\nNew since the last build (${previousBuiltVersion} → ${currentVersion}):\n${rendered}`);
+          }
+          // previous == current → silent (nothing new to say)
+        }
+        await writeLastBuiltVersion(BUILT_VERSION_PATH, currentVersion);
+      }
+    } catch (e) {
+      console.error(`warning: changelog delta print failed (${e?.message ?? e}) — build itself is fine`);
+    }
   } finally {
     // Staging ALWAYS removed; a failure is FATAL. Also sweep stale temps from
     // crashed runs (staging, boot links, next links) at the repo root.

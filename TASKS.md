@@ -4414,3 +4414,30 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-GALLERY-BYTE-IDENTITY-GATE-01`
 - History:
   - 2026-08-30 20:48 UTC — filed from three lanes hitting the same false-red on main's own blobs.
+
+## [CAP-FB-20260830-BUILD-CHANGELOG-PRINT-01] npm run build prints the changelog delta since the previous build
+- Feedback: 2026-08-30 — owner-requested: the person building should see what's new since their last build.
+- Updated: 2026-08-30 22:05 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P2
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-build-changelog
+- Branch: cap-build-changelog
+- Base: `29c34a46`
+- Candidate: —
+- Shipping: —
+- Acceptance: `npm run build` prints the entries between the previously-built version and the current one; first build prints a one-line notice; previous == current is silent; never fails the build.
+  - Context: build.mjs publishes extension/dist atomically with a dist.complete marker; the version lives in package.json (hook-bumped per commit); CHANGELOG.md is `## [x.y.z] — title` sections newest-first with `- bullet` lines; extension/CHANGELOG.md must stay byte-identical to root.
+  - What must NOT change: the atomic publish (lock, stage, dist.complete marker, version GC), the changelog byte-identity gate, the build's fail-closed assertions.
+  - Reproduce today: `npm run build` prints only the ATOMICALLY line; nothing tells the builder what changed.
+  - Files: `build.mjs` (version probe at start + delta print + `.build/last-built-version` write after success), `scripts/changelog-delta.mjs` (new pure module: parseChangelog / deltaBetween / renderDelta / read+writeLastBuiltVersion), `tests/changelog-delta.test.ts` (new).
+  - Steps: (1) Record the previous successful build version in `.build/last-built-version` (gitignored, invocation-local, outside dist/dist-versions — survives the version GC, never shipped, never in the indexed-source scan). (2) On success, parse CHANGELOG.md and print entries with version > previous and <= current, newest last, bounded at 10 + "… N more". (3) First build → "First build at x.y.z — no previous version recorded."; previous == current → silent. (4) Warn-only on any read/parse failure (the build must never fail over this feature). (5) The record is written ONLY on a genuinely successful build (same atomicity side as the marker).
+  - Out of scope: rewriting changelog voice (CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01 owns that); the record format beyond the dotted version.
+- Review: pending
+- Gates: unit — `tests/changelog-delta.test.ts` (9 tests: numeric compare, parse, boundary semantics, bounded render, first-build/no-change paths, malformed→[]); RED = module absent. Integration — build twice with a simulated version delta (edit `.build/last-built-version`, never bump-version): first build prints the first-build line; second prints the exact delta; third is silent. Full suite — `npm run build` clean; `deno test tests/` green (2602/0 at tip); `deno run -A scripts/chrome-journeys.ts` green (212/212 at tip).
+- Blockers: —
+- Next: —
+- Recover: `git log --oneline --all --grep=CAP-FB-20260830-BUILD-CHANGELOG-PRINT-01`
+- History:
+  - 2026-08-30 21:30 UTC — filed by the hub coordinator from the owner's feature request (pre-compaction backlog item).

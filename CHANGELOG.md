@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.485] — 2026-08-30
+- npm run build prints the changelog entries since the last build
+
 ## [0.2.484] — 2026-08-30
 - Five more fixes are in progress in parallel and recorded as claimed in the tracker.
 
