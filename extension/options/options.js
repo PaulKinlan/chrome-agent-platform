@@ -17,7 +17,6 @@ import {
   CAPABILITIES,
   capabilityState,
   requestCapability,
-  revokeCapability,
   capabilityStatus,
 } from "../lib/capabilities.js";
 import { requestProviderHostAccess } from "../lib/provider-gate.js";
@@ -1964,14 +1963,41 @@ async function renderPermissions() {
     if (st.state === "granted") {
       state.className = "perm-state granted";
       state.textContent = "Granted";
-      // Optional capabilities are runtime-revocable again: an honest control,
-      // with the dependent teardown handled by revokeCapability.
+      // Optional capabilities are runtime-revocable: an honest control. The
+      // revoke goes through the service worker's `capability.revoke` route —
+      // the single authority for the dependent teardown (the owner approval
+      // dialog, storage's snapshot, alarms' disarm, and for scripting the
+      // tombstoning of every enrolled origin's dynamic content script). The
+      // page-realm revoke in lib/capabilities.js only removes the permission and left every
+      // enrolled bridge registered (CAP-FB-20260830-SETTINGS-REVOKE-VIA-SW-01).
+      // Permission REQUESTS stay in the page below: only the click gesture can
+      // call chrome.permissions.request.
       const off = document.createElement("button");
       off.className = "btn small ghost";
       off.textContent = "Turn off";
+      off.setAttribute("aria-label", `Turn off ${cap.label}`);
       off.addEventListener("click", async () => {
         off.disabled = true;
-        await revokeCapability(cap.id).catch(() => {});
+        const res = await runOwnerApprovedMutation({
+          message: { type: "capability.revoke", id: cap.id },
+          action: "capability.revoke",
+          sendMessage: (value) => chrome.runtime.sendMessage(value),
+          requestConfirmation: () => confirmActionDialog({
+            title: `Turn off ${cap.label}?`,
+            body: cap.id === "scripting"
+              ? `${cap.label} will stop for every site you added: their agents are removed and Chrome's access to those sites is released.`
+              : `${cap.label} will be turned off and the agent can no longer use it until you enable it again.`,
+            confirmLabel: "Turn off",
+            destructive: true,
+            requireGenuineGesture: true,
+            returnFocusTo: off,
+          }),
+        });
+        if (!res.ok) {
+          saveFlash(res.cancelled
+            ? `${cap.label} stays on; nothing was changed.`
+            : `Could not turn off ${cap.label}: ${res.error ?? "unknown error"}`);
+        }
         renderPermissions();
       });
       row.append(name, state, off, hint, gates);

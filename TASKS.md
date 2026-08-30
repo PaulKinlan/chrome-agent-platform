@@ -2399,15 +2399,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-NOTIFY-ICON-PATH-01] The notify tool never works: it references an icon that does not exist
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 tools lane finding 3. Asking the agent to notify you always fails with "Unable to download all specified images."
-- Updated: 2026-08-30 14:54 UTC
-- Status: OPEN
+- Updated: 2026-08-30 16:10 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P1
 - Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — CLAIMED; do not start a parallel attempt
 - Workspace: active (local path private)
 - Branch: `cap/tool-fixes-notify-url-revoke` (pushed to origin as the candidate branch; merged by the coordinator)
-- Base: `18551f28`
-- Candidate: —
+- Base: `18551f28` (merged forward onto `origin/main@5d736455`)
+- Candidate: this tracker commit (branch `cap/tool-fixes-notify-url-revoke`)
 - Shipping: —
 - Acceptance: with the notifications permission granted, `notify` returns `{ ok: true, notificationId }` and a notification is created; a unit test asserts the default icon path used by the tool exists on disk under `extension/icons/`.
   - Context: the `notify` tool (`extension/lib/browser-tools.js:2053`) builds its default icon at `:2071-2073` as `chrome.runtime.getURL("icons/icon-128.png")`. The directory `extension/icons/` contains `icon128.png`, `icon16.png`, `icon32.png`, `icon48.png` — no hyphen (and `extension/manifest.json` uses `icons/icon128.png`). `chrome.notifications.create` therefore rejects with "Unable to download all specified images." The tool's own `{ ok:true, notificationId }` return at `:2081` is otherwise correct. What must NOT change: the permission gate above it, the `assertRunOwned()` fence at `:2067`.
@@ -2415,19 +2415,20 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - Files: `extension/lib/browser-tools.js:2072` (one-token change to `"icons/icon128.png"`). Nothing else.
   - Steps: 1. Unit test first (Gates) — RED. 2. Fix the path. 3. Journey check per Gates. 4. `CHANGELOG.md` line.
   - Out of scope: notification click routing (`extension/lib/notification-action-routing.js`); scheduled-run notifications (`CAP-FB-20260830-SCHEDULED-RUN-OUTPUT-01`).
-- Review: pending
-- Gates: the falsification gates apply.
+- Review: author review 2026-08-30 — falsification gates cleared (unit RED/GREEN and live-browser RED/GREEN recorded below)
+- Gates: the falsification gates apply. RESULT: unit `tests/notify-icon-path.test.ts` RED on the unfixed tree (`FAILED | 0 passed | 1 failed`, `icons/icon-128.png` missing) → GREEN after the one-token fix (`ok | 1 passed | 0 failed`). Browser: `scripts/kat-notify-icon.ts` (launchChrome, kernel-chosen port) seeds the `notifications` grant into a fresh profile and drives the REAL `agent-worker.tool notify` route — RED on the unfixed build: `notify -> {"ok":false,"error":"Unable to download all specified images."}` plus `icons/icon-128.png` → "Failed to fetch" (2 pass, 2 fail); GREEN after the fix: `notify -> {"ok":true,"notificationId":"…"}` and the only referenced icon path fetches as `image/png` (4 pass, 0 fail). Deviation from the plan: the check lives in its own harness rather than `chrome-journeys.ts` because the journey suite asserts `notifications` is NOT granted at boot (the JIT model) and headless auto-denies the warning permission, so the journey profile cannot carry the grant.
   - Unit: new `tests/notify-icon-path.test.ts` — read `extension/lib/browser-tools.js` as text, extract every `getURL("icons/…")` argument with a regex, and for each assert `Deno.statSync(new URL("../extension/" + p, import.meta.url)).isFile` (the pattern `tests/chrome-tools-t12.test.ts:392` uses `Deno.readTextFile(new URL("../extension/manifest.json", import.meta.url))`). Falsification: run it on the current tree — RED on `icons/icon-128.png`; apply step 2 — GREEN.
   - Browser: `scripts/chrome-journeys.ts` gains `"notify: returns ok with notifications seeded"` (assert `res.ok === true && typeof res.notificationId === "string"`). Screenshot not applicable (headless has no notification surface); the route result is the evidence.
   - Full suite: `npm run build && deno test tests/ && deno run -A scripts/chrome-journeys.ts` green at the tip (baseline at `origin/main@fc2255be`: 2457 unit pass, 138/138 journeys; grows by one).
   - Constraints: none beyond the constitution; no icon changes (inline SVG rule applies to UI, not to the manifest PNGs).
 - Blockers: —
-- Next: fix the path and add the existence test
+- Next: coordinator merge
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-NOTIFY-ICON-PATH-01`
 - History:
   - 2026-08-30 11:00 UTC — measured twice with notifications granted: `notify -> {"ok":false,"error":"Unable to download all specified images."}`.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); every line reference re-verified against `origin/main@cf0da958`.
   - 2026-08-30 14:54 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/tool-fixes-notify-url-revoke` off `origin/main@18551f28`. Other agents: pick a different entry.
+  - 2026-08-30 16:10 UTC — worker resumed after a rate-limit cut-off (WIP files committed, branch merged forward onto `origin/main@5d736455`). Fixed `extension/lib/browser-tools.js` default icon path to `icons/icon128.png`. Evidence: unit RED→GREEN; `scripts/kat-notify-icon.ts` RED (exact "Unable to download all specified images." reproduced with the grant seeded) → GREEN (`ok:true` + notificationId). Status → IN_REVIEW (author review).
 
 ## [CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01] open_side_panel can never succeed when the model calls it
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 tools lane finding 4. The model is offered a tool that promises to open the side panel and it always fails, because Chrome requires a user gesture the service worker does not have. Owner decision 2026-08-30: REMOVE the tool (not the card alternative).
@@ -2493,15 +2494,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-PRIVILEGED-URL-BLOCK-01] Under a global grant the model can open and navigate to chrome:// pages
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 tools lane finding 6. With Browser control switched on, the agent can open `chrome://settings` (or any non-web scheme) in a tab.
-- Updated: 2026-08-30 14:54 UTC
-- Status: OPEN
+- Updated: 2026-08-30 17:25 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P1
 - Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — CLAIMED; do not start a parallel attempt
 - Workspace: active (local path private)
 - Branch: `cap/tool-fixes-notify-url-revoke` (pushed to origin as the candidate branch; merged by the coordinator)
-- Base: `18551f28`
-- Candidate: —
+- Base: `18551f28` (merged forward onto `origin/main@5d736455`)
+- Candidate: this tracker commit (branch `cap/tool-fixes-notify-url-revoke`, second commit after NOTIFY-ICON-PATH-01)
 - Shipping: —
 - Acceptance: every browser tool that takes a destination URL (`open_tab`, `navigate_tab`, `create_window`, and any other `url`-taking mutation) refuses `chrome:`, `chrome-extension:`, `file:`, `about:`, `javascript:`, `data:`, `blob:` and `view-source:` destinations BEFORE the grant check with the plain error `"only http(s) destinations are allowed"`; a unit test and a journey assert `open_tab { url: "chrome://settings" }` is refused under a global grant.
   - Context: `open_tab` (`extension/lib/browser-tools.js:1390`) computes `destOrigin = canonicalOrigin(url)` at `:1404-1408` inside a try/catch that only catches THROWS — but `canonicalOrigin` (`extension/lib/memory.js:261-272`) RETURNS `null` for non-http(s) schemes instead of throwing. So `destOrigin` is `null`, and `isBrowserControlGranted(null)` (`browser-tools.js:109`) passes for a global grant, so `chrome.tabs.create({ url: "chrome://settings" })` runs. The same pattern is at `navigate_tab` `:1459-1463`/`:1484` and `create_window` `:1753-1764`. Chrome itself blocks `javascript:` but not `chrome://`, `file://`, `about:` or `data:`. What must NOT change: `canonicalOrigin`'s null return (memory keying depends on it — `memory.js:264-267` explains why non-web origins must never be a storage boundary); the per-origin grant semantics.
@@ -2509,31 +2510,32 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - Files: `extension/lib/browser-tools.js` — add one helper near `permissionDenial` (`:297`): `function webDestination(url) { let u; try { u = new URL(url); } catch { return { error: "invalid url" }; } if (u.protocol !== "http:" && u.protocol !== "https:") return { error: "only http(s) destinations are allowed" }; return { ok: true, origin: u.origin }; }` and call it at `:1404`, `:1459`, `:1753` and every other `z.string().url()` destination site (`git grep -n "z.string().url()" -- extension/lib/browser-tools.js`); `extension/lib/chrome-tool-capabilities.js` if a capability string should record "destination: http(s) only". Do NOT touch `memory.js`.
   - Steps: 1. Unit test first (Gates) — RED. 2. Add `webDestination` and call it before the grant check at every destination site. 3. Journey per Gates. 4. Security suite check (Gates). 5. Docs: `docs/CONSTITUTION.md` security list gains "browser mutations accept http(s) destinations only", `CHANGELOG.md`.
   - Out of scope: the approval policy for destructive actions (`CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01`); `cap:fetch` private-address blocking (`CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01`).
-- Review: pending
-- Gates: the falsification gates apply.
+- Review: author review 2026-08-30 — falsification gates cleared (unit RED/GREEN and journey RED/GREEN recorded below)
+- Gates: the falsification gates apply. RESULT: unit `tests/chrome-tools-t12.test.ts` "destinations: open_tab/navigate_tab/create_window refuse non-http(s) URLs under a global grant" (8 schemes incl. blob:/view-source:; asserts the shim's tabs/windows never grew and the refusal carries no permission card) RED on the unguarded tree (`open_tab chrome://settings` → `error: undefined`, the tab was created) → GREEN with the guard (`20 passed | 0 failed`); a second test proves an https destination still reaches Chrome. Browser: `scripts/chrome-journeys.ts` "Privileged URL: open_tab chrome://settings is refused under a global grant" RED against the build without the guard (`FAIL`, 155/158) → GREEN at the tip (`PASS`, 162/162). Full suite at the tip: 2496 unit pass / 0 fail, 162/162 journeys. `scripts/security-suite.ts` not extended (it does not load the extension yet — SUITE-HONESTY-01); the journey is the browser gate as the entry allows.
   - Unit: extend `tests/chrome-tools-t12.test.ts` (shim + `setGlobalBrowserControlGrant` already imported) with `Deno.test("destinations: open_tab/navigate_tab/create_window refuse non-http(s) URLs under a global grant")` — for each of `chrome://settings`, `chrome-extension://abc/x.html`, `file:///etc/hosts`, `about:blank`, `data:text/html,hi`, `javascript:alert(1)` assert the result `error === "only http(s) destinations are allowed"` and that the shim's `tabs` array did not grow. Falsification: revert step 2 for `open_tab`, expect RED on `chrome://settings`; restore, GREEN.
   - Browser: `scripts/chrome-journeys.ts` gains `"Privileged URL: open_tab chrome://settings is refused under a global grant"` (`Target.getTargets` contains no `chrome://settings`). `scripts/security-suite.ts` gains `check("privileged destination: chrome:// refused before the grant check", …)` in its extension-loaded section (the suite must load the extension for this — coordinate with `CAP-FB-20260830-SUITE-HONESTY-01`; until then the journey is the browser gate). Screenshot not required (route evidence).
   - Full suite: `npm run build && deno test tests/ && deno run -A scripts/chrome-journeys.ts` green at the tip (baseline at `origin/main@fc2255be`: 2457 unit pass, 138/138 journeys; grows by one).
   - Constraints: the refusal is a plain `{ error }` (no permission card — this is not a permission problem); no new permissions.
 - Blockers: —
-- Next: add a destination-scheme guard shared by all destination-taking tools
+- Next: coordinator merge
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-PRIVILEGED-URL-BLOCK-01`
 - History:
   - 2026-08-30 11:00 UTC — measured: `open_tab {url:"chrome://settings"} -> {"ok":true, tabId}` and `Target.getTargets` shows `chrome://settings/`.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); every line reference re-verified against `origin/main@cf0da958`.
   - 2026-08-30 14:54 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/tool-fixes-notify-url-revoke` off `origin/main@18551f28`. Other agents: pick a different entry.
+  - 2026-08-30 17:25 UTC — `webDestination(url)` added beside `permissionDenial` in `extension/lib/browser-tools.js` and called as the FIRST line of `open_tab`, `navigate_tab`, `create_window` (when a url is given) and `open_side_panel` — before the `tabs`/`sidePanel` permission check as well as the grant check, so the refusal is discriminating even in headless (where `tabs` cannot be granted) and never turns into a permission card. `docs/CONSTITUTION.md` security list gains the http(s)-only rule. Bookmark/history/cookie `url` arguments are not destinations (nothing navigates) and are untouched. Status → IN_REVIEW (author review).
 
 ## [CAP-FB-20260830-SETTINGS-REVOKE-VIA-SW-01] Settings "Turn off" bypasses the service-worker revoke route
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 tools lane finding 7. Turning a capability off in Settings skips the owner dialog and the teardown, so turning off Site Agents leaves every enrolled site's bridge script registered.
-- Updated: 2026-08-30 14:54 UTC
-- Status: OPEN
+- Updated: 2026-08-30 17:35 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P1
 - Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — CLAIMED; do not start a parallel attempt
 - Workspace: active (local path private)
 - Branch: `cap/tool-fixes-notify-url-revoke` (pushed to origin as the candidate branch; merged by the coordinator)
-- Base: `18551f28`
-- Candidate: —
+- Base: `18551f28` (merged forward onto `origin/main@5d736455`)
+- Candidate: this tracker commit (branch `cap/tool-fixes-notify-url-revoke`, third commit after PRIVILEGED-URL-BLOCK-01)
 - Shipping: —
 - Acceptance: the Settings "Turn off" button sends `{ type: "capability.revoke", id }` to the service worker (owner approval dialog, storage snapshot, and for `scripting` the tombstoning of every enrolled origin's dynamic content script); the page-realm `revokeCapability` import is deleted from `extension/options/options.js`; turning off Site Agents unregisters the dynamic scripts of every enrolled origin, asserted via `chrome.scripting.getRegisteredContentScripts()`.
   - Context: `extension/options/options.js:17-21` imports `requestCapability` and `revokeCapability` from `extension/lib/capabilities.js`. The "Turn off" button at `:1929-1934` calls `revokeCapability(cap.id)` directly in the page realm; the comment at `:1925-1926` ("dependent teardown handled by revokeCapability") is false — `revokeCapability` (`capabilities.js:418-440`) only does `chrome.permissions.remove` (and refuses required capabilities with the "granted at install" string at `:427`). The declared single authority is the SW route `"capability.revoke"` (`extension/background/service-worker.js:4048-4062` and following): `requireOwnerApproval(context, "capability.revoke", …)` at `:4052`, the storage-mode lock for `storage`, and for `scripting` the enrollment tombstones. `capability.revoke` is in `DESTRUCTIVE_ACTIONS` (`extension/lib/owner-approval.js:27`). Tools lane: "Context menus" Turn off went through with no dialog, while the raw route from the same page returned "This operation requires owner approval in Settings". Permission REQUESTS legitimately stay in the page (`:1953` — `chrome.permissions.request` needs the page gesture). What must NOT change: the request path; the `OWNER_DIRECT_ACTIONS` gesture rules (`owner-approval.js:63-80`).
@@ -2541,19 +2543,20 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - Files: `extension/options/options.js` (`:20` delete the `revokeCapability` import; `:1929-1934` replace the handler body with `const res = await chrome.runtime.sendMessage({ type: "capability.revoke", id: cap.id, __ownerUI: true, documentId: … })` using the same owner-direct envelope the page already uses for other approval-gated routes — `git grep -n "__ownerUI" -- extension/options/options.js` for the pattern — then `renderPermissions()` and a `saveFlash` with `res.error` when `!res.ok`; fix the `:1925-1926` comment); `extension/background/service-worker.js:4048` (no change expected; verify the `scripting` branch unregisters scripts for every enrolled origin — `reconcileEnrolledOriginScriptsOnBoot` at `:7778` is the related helper). Do NOT touch `requestCapability` usage at `:1953`.
   - Steps: 1. Journey check first (Gates) — RED. 2. Route the button through the SW with the owner-direct envelope; delete the import. 3. Confirm the dialog appears (the `confirmActionDialog` path the route triggers) and passes `requireGenuineGesture:true`. 4. Journey per Gates. 5. Docs: `docs/DESIGN.md` Settings permissions section, `CHANGELOG.md`.
   - Out of scope: the three-state permission table redesign (`CAP-FB-20260830-SETTINGS-HOOKS-PERMISSIONS-TABLES-01`); the host-access posture (`CAP-FB-20260830-HOST-ACCESS-STORY-01`).
-- Review: pending
-- Gates: the falsification gates apply.
+- Review: author review 2026-08-30 — falsification gates cleared (unit RED/GREEN and journey RED/GREEN recorded below)
+- Gates: the falsification gates apply. RESULT: unit `tests/options-revoke-route.test.ts` (grep guard: no `revokeCapability` import/call in options.js; `type: "capability.revoke"` + `action: "capability.revoke"` present) RED on the old tree (`0 passed | 2 failed`) → GREEN (`2 passed`). Browser: journey run with options.js reverted — "permissions: Turn off raised the owner approval dialog" FAIL, "scripting Disable: the owner dialog appeared…" FAIL, "…tombstones every enrolled origin" FAIL, "Settings: Turn off Site Agents goes through capability.revoke and unregisters enrolled scripts" FAIL (158/162) → at the tip all PASS, 162/162; the probe logged two real registered bridge scripts (`cap-https%3A%2F%2Fenroll.example-main/-bridge`) before the click and the scripting API gone after (permission removed after the route's teardown). Full suite at the tip: 2496 unit pass / 0 fail, 162/162 journeys. Screenshots: `settings-turn-off-owner-dialog.png` (the owner dialog), `settings-site-agents-after-turn-off.png` (the row after).
   - Unit: new `tests/options-revoke-route.test.ts` — read `extension/options/options.js` as text and assert it does NOT import `revokeCapability` and DOES contain `type: "capability.revoke"` (a grep-guard in the style of `tests/settings-strings-audit.test.ts`). Falsification: on the current tree RED; after step 2 GREEN.
   - Browser: `scripts/chrome-journeys.ts` gains `"Settings: Turn off Site Agents goes through capability.revoke and unregisters enrolled scripts"` — enrol the fixture, click Turn off with a trusted CDP click, accept the dialog, assert `chrome.scripting.getRegisteredContentScripts()` is empty and the enrollment list is tombstoned. `scripts/security-suite.ts` gains the same assertion once it loads the extension. Screenshots: the owner dialog; the permissions row after.
   - Full suite: `npm run build && deno test tests/ && deno run -A scripts/chrome-journeys.ts` green at the tip (baseline at `origin/main@fc2255be`: 2457 unit pass, 138/138 journeys; grows by one).
   - Constraints: the dialog is the shared `confirmActionDialog` (`extension/shared/components.js:5827`) with `requireGenuineGesture:true`; the button keeps its accessible name "Turn off <capability>"; error flash via `textContent`.
 - Blockers: —
-- Next: route the button through the SW; keep permission REQUESTS in the page (they need the gesture)
+- Next: coordinator merge
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-SETTINGS-REVOKE-VIA-SW-01`
 - History:
   - 2026-08-30 11:00 UTC — measured: "Context menus" Turn off went through with no dialog while the raw route from the same page returns "This operation requires owner approval in Settings"; enrolled bridges stay registered after Site Agents is turned off.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); every line reference re-verified against `origin/main@cf0da958`.
   - 2026-08-30 14:54 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/tool-fixes-notify-url-revoke` off `origin/main@18551f28`. Other agents: pick a different entry.
+  - 2026-08-30 17:35 UTC — `extension/options/options.js`: the `revokeCapability` import is deleted; "Turn off <capability>" now runs `runOwnerApprovedMutation({ message: { type: "capability.revoke", id }, action: "capability.revoke", requestConfirmation: confirmActionDialog({ …, destructive: true, requireGenuineGesture: true }) })`, so the SW route does the teardown and a cancelled dialog leaves the capability on (flash via textContent); the button carries `aria-label="Turn off <capability>"`. ADJACENT DEFECT FIXED (required for the route to work at all): `extension/lib/owner-approved-mutation.js` matched only the bare "This operation requires owner approval." while `requireOwnerApproval` answers a Settings document with "…owner approval in Settings." (since the inline-approval change), so every Settings mutation through the helper failed before its dialog opened — the match now accepts both forms, with a new contract test in `tests/approvals-synthesis.test.ts`. The stale assertion "no capability.revoke control in Settings" in that file (written under the superseded install-granted model) is flipped into a guard that the control exists AND goes through the SW route with no page-realm revoke. Journeys: the Context-menus Turn off lifecycle now accepts the owner dialog; the scripting-Disable block drives the REAL Site Agents "Turn off" button on the Settings page instead of the raw route. `docs/DESIGN.md` approval passage updated. Status → IN_REVIEW (author review).
 
 ## [CAP-FB-20260830-PAGE-ACTION-TOOLS-01] The "control Chrome" story has no page-interaction tools
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 tools lane finding 10, product lane finding 5; open question Q19. Asking the agent to click, type, fill or scroll on a page fails outright; the only way to act inside a page is a site that ships WebMCP tools.

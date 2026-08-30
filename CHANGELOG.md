@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.455] — 2026-08-30
+- Landed: notifications from the agent work again; the agent can no longer open chrome:// or other privileged pages; turning a capability off in Settings asks you first and fully tears it down.
+
 ## [0.2.454] — 2026-08-30
 - Tracker: the template gallery is recorded as landed.
 

@@ -28,6 +28,7 @@ const store = new Map();
 const grantedPermissions = new Set(["storage", "tabs"]);
 const grantedOrigins = new Set();
 const tabs = [];
+const windowCreates = []; // records chrome.windows.create calls ("never reached" proofs)
 let nextTabId = 1;
 const attachedTabs = new Set();
 const debuggerCalls = []; // records debugger API calls ("never reached" proofs)
@@ -43,6 +44,7 @@ function reset() {
   grantedPermissions.add("tabs");
   grantedOrigins.clear();
   tabs.length = 0;
+  windowCreates.length = 0;
   nextTabId = 1;
   attachedTabs.clear();
   debuggerCalls.length = 0;
@@ -82,6 +84,19 @@ globalThis.chrome = {
     query: async () => [...tabs],
     get: async (id) => tabs.find((t) => t.id === id) ?? null,
     create: async ({ url }) => addTab(url),
+    update: async (id, { url }) => {
+      const t = tabs.find((x) => x.id === id);
+      if (!t) throw new Error(`No tab with id: ${id}.`);
+      if (url !== undefined) t.url = url;
+      return t;
+    },
+  },
+  windows: {
+    create: async ({ url } = {}) => {
+      windowCreates.push(url);
+      const t = addTab(url ?? "chrome://newtab/");
+      return { id: 100 + windowCreates.length, tabs: [t] };
+    },
   },
   debugger: {
     attach: async (target, version) => {
@@ -479,6 +494,55 @@ Deno.test("LEASE GUARD: the browser-command lease module and its refusal string 
   }
   await walk(root);
   assertEquals(offenders, [], "no extension source references the single-driver lease");
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// CAP-FB-20260830-PRIVILEGED-URL-BLOCK-01: every destination-taking browser
+// mutation refuses non-http(s) schemes BEFORE the grant check. canonicalOrigin
+// returns null (not a throw) for chrome:/file:/about:/data: URLs, and a global
+// grant authorizes a null origin — so chrome://settings used to open.
+// ──────────────────────────────────────────────────────────────────────────
+const PRIVILEGED_DESTINATIONS = [
+  "chrome://settings",
+  "chrome-extension://abcdefghijklmnopabcdefghijklmnop/x.html",
+  "file:///etc/hosts",
+  "about:blank",
+  "data:text/html,hi",
+  "javascript:alert(1)",
+  "blob:https://example.com/0000",
+  "view-source:https://example.com/",
+];
+const ONLY_WEB = "only http(s) destinations are allowed";
+
+Deno.test("destinations: open_tab/navigate_tab/create_window refuse non-http(s) URLs under a global grant", async () => {
+  reset();
+  await setGlobalBrowserControlGrant();
+  const t = tools();
+  const existing = addTab("https://example.com/");
+  for (const url of PRIVILEGED_DESTINATIONS) {
+    const opened = await t.open_tab.execute({ url });
+    assertEquals(opened?.error, ONLY_WEB, `open_tab ${url}`);
+    const navigated = await t.navigate_tab.execute({ tabId: existing.id, url });
+    assertEquals(navigated?.error, ONLY_WEB, `navigate_tab ${url}`);
+    const win = await t.create_window.execute({ url });
+    assertEquals(win?.error, ONLY_WEB, `create_window ${url}`);
+  }
+  assertEquals(tabs.length, 1, "no tab was created for a privileged destination");
+  assertEquals(tabs[0].url, "https://example.com/", "the existing tab was not navigated");
+  assertEquals(windowCreates.length, 0, "no window was created for a privileged destination");
+  // The refusal is a plain error, not a permission card.
+  const plain = await t.open_tab.execute({ url: "chrome://settings" });
+  assertEquals(plain?.waitingForPermission, undefined);
+  assertEquals(plain?.permissionRequired, undefined);
+});
+
+Deno.test("destinations: an http(s) destination still reaches Chrome under a global grant", async () => {
+  reset();
+  await setGlobalBrowserControlGrant();
+  const t = tools();
+  const opened = await t.open_tab.execute({ url: "https://example.com/page" });
+  assertEquals(opened?.ok, true);
+  assertEquals(tabs.length, 1);
 });
 
 // ── CAP-FB-20260830-UNTRUSTED-CONTENT-FENCING-01 ─────────────────────────────

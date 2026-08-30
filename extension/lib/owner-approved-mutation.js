@@ -3,7 +3,16 @@
 // approval; only an explicit owner decision can resolve it, and approval is
 // consumed by one exact retry. Ambiguous/stale approval queues fail closed.
 
-const OWNER_APPROVAL_REQUIRED = "This operation requires owner approval.";
+// The SW answers a Settings-originated destructive route with the "in
+// Settings." variant (requireOwnerApproval's non-run fallthrough) and the bare
+// sentence elsewhere; both mean "a pending approval row was just created for
+// this exact call". Matching only the bare sentence made every Settings
+// mutation through this helper fail before its dialog could open
+// (CAP-FB-20260830-SETTINGS-REVOKE-VIA-SW-01).
+const OWNER_APPROVAL_REQUIRED = /^This operation requires owner approval( in Settings)?\.$/;
+function requiresOwnerApproval(response) {
+  return typeof response?.error === "string" && OWNER_APPROVAL_REQUIRED.test(response.error);
+}
 
 function cloneMessage(message) {
   if (!message || typeof message !== "object") throw new TypeError("message is required");
@@ -57,7 +66,7 @@ export async function runOwnerApprovedMutation({
 
   const first = await safeSend(sendMessage, exactMessage);
   if (first?.ok === true) return { ok: true, response: first, retried: false };
-  if (first?.error !== OWNER_APPROVAL_REQUIRED) return { ok: false, error: first?.error ?? "mutation failed", response: first };
+  if (!requiresOwnerApproval(first)) return { ok: false, error: first?.error ?? "mutation failed", response: first };
 
   const afterResponse = await safeSend(sendMessage, { type: "management.pending-approvals" });
   const after = approvals(afterResponse);
