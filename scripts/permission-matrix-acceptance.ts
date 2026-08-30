@@ -386,7 +386,12 @@ async function main() {
   check("matrix[variant]: integrity independently re-verified (hashes recomputed, only manifest.json diverges)",
     integrity !== null && verifyError === null, verifyError);
   
-  // FAIL-CLOSED: If verification fails, throw an error to prevent proceeding
+  // FAIL-CLOSED: no attested variant, no rig. A failed build (integrity null,
+  // nothing to verify) and a failed re-verification are both refused BEFORE
+  // startRig — an unattested variant must never load into Chrome.
+  if (integrity === null) {
+    throw new Error("matrix[variant]: variant build failed — no integrity manifest, refusing to start the rig");
+  }
   if (verifyError !== null) {
     throw new Error(`Integrity verification failed: ${verifyError}`);
   }

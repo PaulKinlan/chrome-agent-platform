@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.433] — 2026-08-30
+- Refuse to start the rig when the variant build fails (no integrity manifest)
+
 ## [0.2.432] — 2026-08-30
 - Permission matrix: refresh acceptance evidence after the fail-closed fix
 
