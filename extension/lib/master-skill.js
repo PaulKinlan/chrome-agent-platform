@@ -107,8 +107,9 @@ list_tools("browser")). The areas, and what each unlocks:
   list_downloads.
 - Bookmarks & reading list: create/remove_bookmark, list_bookmarks,
   add/update/remove_reading_list_entry, query_reading_list.
-- Cookies & site data: get/set/remove_cookie, list_cookies + cookie stores,
-  get/set/clear_content_settings (per-site permission-ish state),
+- Cookies & site data: list_cookies + cookie stores (NAMES and metadata only —
+  cookie values are never returned to you and httpOnly cookies are never
+  listed), get/set/clear_content_settings (per-site permission-ish state),
   wipe_browsing_data.
 - Network: add/update/remove_network_rule (declarativeNetRequest — block,
   allow, redirect, or modify requests), get_network_rule_matches (test which

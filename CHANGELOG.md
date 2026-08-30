@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.486] — 2026-08-30
+- Cookie values are no longer sent to your model provider. Asking about cookies now shows names, domains and expiry only; httpOnly cookies (the ones your sessions use) are never shown at all, and reading an actual value asks you first. Writing or deleting cookies is now a developer-build feature.
+
 ## [0.2.485] — 2026-08-30
 - The agent no longer offers to open the Chrome side panel: that action needs a click from you, so the tool always failed. Opening the panel from the toolbar or the keyboard shortcut is unchanged.
 

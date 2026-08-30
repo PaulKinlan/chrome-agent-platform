@@ -139,7 +139,10 @@ function tools() {
 // ──────────────────────────────────────────────────────────────────────────
 Deno.test("T3/T4: browserToolset has exactly 125 tools matching BROWSER_TOOL_NAMES (T1/T2 + T8 + T13 + T5/T6 + T7 + T11 + T9 + T10 + T12 + 14)", () => {
   reset();
-  const browser = tools();
+  // BROWSER_TOOL_NAMES is the SHIPPED inventory (the developer build); the
+  // default build omits the developer-only cookie tools
+  // (CAP-FB-20260830-COOKIE-TOOLS-CUT-01).
+  const browser = browserToolset(false, { developerFeatures: true });
   assertEquals(Object.keys(browser), BROWSER_TOOL_NAMES);
   assertEquals(BROWSER_TOOL_NAMES.length, 125);
   assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.browserTools, 125);

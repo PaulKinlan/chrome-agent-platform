@@ -1542,6 +1542,14 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       // schedule_task with a scriptId pays the same source-disclosing card as
       // run_script — through the run's bound model dispatcher.
       scheduleScriptGate: (scriptId) => modelManagementDispatch("task.schedule-script", { scriptId }),
+      // get_cookie with revealValue pays an owner approval card naming the
+      // exact origin + cookie name (CAP-FB-20260830-COOKIE-TOOLS-CUT-01),
+      // through the same run-bound dispatcher.
+      cookieValueGate: (payload) => modelManagementDispatch("browser.cookie-value", payload),
+      // The cookie mutators and the cookie-value reader exist only in the
+      // developer build. Read the flag per run so a toggle takes effect on the
+      // next run; a read failure resolves false — fail closed.
+      developerFeatures: await developerFeaturesOn(),
     });
     const liveManagementTools = scoped ? {} : managementToolset({
       // Immutable build-local capture. A stale tool closure keeps its original
@@ -3039,7 +3047,9 @@ async function readShadowCatalogInputs() {
     ...memoryToolset(masterMemory(), null, null, false),
     ...delegationToolMetadata(),
   };
-  const browserTools = browserToolset(false);
+  // The shadow catalogue describes the tools the model can actually select, so
+  // it reads the same developer flag the live toolset does.
+  const browserTools = browserToolset(false, { developerFeatures: await developerFeaturesOn() });
   // Construct the REAL management metadata map. Its route closure is inert
   // because the shadow catalog never calls a tool's execute function.
   const managementTools = managementToolset({
@@ -3627,22 +3637,36 @@ const activityRoutes = createActivityRoutes({
 // interactive path uses, execute (the tool's own grant-lock / run-fence run
 // inside its execute closure), then redact secret keys defensively. The worker
 // holds no authority — every destructive op is still gated by the tool itself.
-let cachedWorkerBrowserTools = null;
-function workerBrowserTools() {
-  if (!cachedWorkerBrowserTools) cachedWorkerBrowserTools = browserToolset(false);
-  return cachedWorkerBrowserTools;
+// Two cached maps, one per developer-flag state: the flag decides which tools
+// exist, so one cache would hand a default run the developer surface (or the
+// reverse) depending on which run warmed it first.
+const cachedWorkerBrowserTools = new Map();
+function workerBrowserTools(developerFeatures) {
+  const key = developerFeatures === true;
+  if (!cachedWorkerBrowserTools.has(key)) {
+    cachedWorkerBrowserTools.set(key, browserToolset(false, { developerFeatures: key }));
+  }
+  return cachedWorkerBrowserTools.get(key);
 }
-function executeWorkerTool(toolName, args, context) {
+// The tools whose execution needs a route-bound gate closure: they cannot come
+// from the shared cache because the gate carries THIS call's context.
+const GATED_WORKER_TOOLS = new Set(["schedule_task", "get_cookie"]);
+async function executeWorkerTool(toolName, args, context) {
   const name = String(toolName ?? "").slice(0, 128);
   const a = args && typeof args === "object" ? args : {};
   const management = managementToolset({
     callRoute: (type, body) => dispatchRoute(type, body, context),
   });
-  const browser = name === "schedule_task"
-    ? browserToolset(false, { scheduleScriptGate: (scriptId) => dispatchRoute("task.schedule-script", { scriptId }, context) })[name]
-    : workerBrowserTools()[name];
+  const developerFeatures = await developerFeaturesOn();
+  const browser = GATED_WORKER_TOOLS.has(name)
+    ? browserToolset(false, {
+      scheduleScriptGate: (scriptId) => dispatchRoute("task.schedule-script", { scriptId }, context),
+      cookieValueGate: (payload) => dispatchRoute("browser.cookie-value", payload, context),
+      developerFeatures,
+    })[name]
+    : workerBrowserTools(developerFeatures)[name];
   const tool = browser ?? management[name];
-  if (!tool) return Promise.resolve({ ok: false, error: `unknown tool: ${name}` });
+  if (!tool) return { ok: false, error: `unknown tool: ${name}` };
   // Bounded per-tool call counter for the Usage panel (fire-and-forget — a
   // telemetry write must never fail or slow a tool execution).
   recordToolCall(name).catch(() => {});
@@ -5954,6 +5978,24 @@ const handlers = mergeRouteMaps(
     const gate = await scriptApprovalGate(context, "script.create", scope, sha256Hex(src), src, { name });
     if (!gate.ok) return gate;
     return await createScript(scope, { name, source });
+  },
+  // The approval leg of `get_cookie` with `revealValue` (CAP-FB-20260830-
+  // COOKIE-TOOLS-CUT-01). The browser tool calls this BEFORE it reads the
+  // cookie, so a refusal means the value was never materialised. The payload
+  // binds the exact origin + cookie name; the value itself is never part of
+  // the approval (it is the thing being protected).
+  async "browser.cookie-value"({ origin, name }, context) {
+    const cookieName = typeof name === "string" ? name : "";
+    const target = canonicalOperationTarget("cookie", { origin, name: cookieName });
+    if (!target) return { ok: false, error: "reading this cookie value is not approvable" };
+    let payload;
+    try {
+      payload = payloadFields([
+        ["origin", canonicalOrigin(origin)],
+        ["name", cookieName],
+      ]);
+    } catch { return { ok: false, error: "reading this cookie value is not approvable" }; }
+    return await requireOwnerApproval(context, "browser.cookie-value", target, payload);
   },
   async "task.schedule-script"({ scriptId }, context) {
     // The approval leg of schedule_task with a scriptId: the browser tool

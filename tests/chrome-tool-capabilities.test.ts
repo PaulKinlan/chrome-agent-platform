@@ -9,6 +9,7 @@ import {
   BROWSER_TOOL_NAMES,
   capabilitiesByTool,
   CHROME_TOOL_CAPABILITY_BOUNDS,
+  DEVELOPER_ONLY_TOOL_NAMES,
   CHROME_TOOL_CAPABILITY_TABLE,
   chromeToolCapability,
   FLAGGED_FOR_LATER_PROVIDER_CUTOVER,
@@ -48,9 +49,19 @@ function refFactory() {
 }
 
 Deno.test("chrome capability table is exact and complete for 125 browser + 41 management tools", () => {
-  const browser = browserToolset(false);
+  // The capability table describes the SHIPPED inventory, which is the
+  // developer build: the developer-only tools keep their rows because the
+  // build genuinely contains them (CAP-FB-20260830-COOKIE-TOOLS-CUT-01).
+  const browser = browserToolset(false, { developerFeatures: true });
   const management = managementToolset({ callRoute: () => { throw new Error("must not dispatch"); } });
   assertEquals(Object.keys(browser), BROWSER_TOOL_NAMES);
+  // The DEFAULT build offers exactly the inventory minus the developer-only
+  // names — never more, and never a name the table does not know.
+  assertEquals(
+    Object.keys(browserToolset(false)),
+    BROWSER_TOOL_NAMES.filter((name) => !DEVELOPER_ONLY_TOOL_NAMES.includes(name)),
+  );
+  assertEquals(DEVELOPER_ONLY_TOOL_NAMES, ["get_cookie", "set_cookie", "remove_cookie"]);
   assertEquals(MANAGEMENT_TOOL_NAMES, MANAGEMENT_CAPABILITY_TOOL_NAMES);
   assertEquals(Object.keys(management).sort(), [...MANAGEMENT_CAPABILITY_TOOL_NAMES].sort());
   assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 166);
@@ -117,8 +128,34 @@ Deno.test("management capabilities are tool-specific and never collapse to manag
   assertEquals(chromeToolCapability("run_script", "management").capabilityTokens, ["management.script.run"]);
 });
 
+Deno.test("capabilitiesByTool still fails closed: an unknown tool, or a MISSING non-developer tool, is a drift error", () => {
+  // The inventory check was relaxed to permit ONE kind of omission — the
+  // developer-only tools the default build does not offer
+  // (CAP-FB-20260830-COOKIE-TOOLS-CUT-01). Everything it caught before, it
+  // must still catch; this is the guard for that relaxation.
+  const full = browserToolset(false, { developerFeatures: true });
+  const def = browserToolset(false);
+  // The default build (developer-only names omitted) is accepted...
+  assertEquals(
+    Object.keys(capabilitiesByTool(def, "chrome-api")).length,
+    BROWSER_TOOL_NAMES.length - DEVELOPER_ONLY_TOOL_NAMES.length,
+  );
+  // ...but a tool the table has never heard of is still a hard error.
+  const withStranger = { ...full, not_a_real_tool: full.list_tabs };
+  assertEquals(assertThrows(() => capabilitiesByTool(withStranger, "chrome-api")).code, "capability_table_inventory_mismatch");
+  // ...and so is a MISSING tool that is not developer-only.
+  const withoutOrdinary = { ...full };
+  delete withoutOrdinary.list_tabs;
+  assertEquals(assertThrows(() => capabilitiesByTool(withoutOrdinary, "chrome-api")).code, "capability_table_inventory_mismatch");
+  // Management tools have no developer-only class at all: any omission fails.
+  const management = managementToolset({ callRoute: () => { throw new Error("must not dispatch"); } });
+  const shortManagement = { ...management };
+  delete shortManagement[Object.keys(management)[0]];
+  assertEquals(assertThrows(() => capabilitiesByTool(shortManagement, "management")).code, "capability_table_inventory_mismatch");
+});
+
 Deno.test("catalog descriptors consume exact canonical capabilities and capability digests", () => {
-  const browser = browserToolset(false);
+  const browser = browserToolset(false, { developerFeatures: true });
   const management = managementToolset({ callRoute: () => { throw new Error("must not dispatch"); } });
   const inputs = [
     ...adaptBrowserTools(browser, { ...context(), capabilitiesByTool: capabilitiesByTool(browser, "chrome-api") }),
@@ -136,7 +173,7 @@ Deno.test("catalog descriptors consume exact canonical capabilities and capabili
 
 Deno.test("unbound lazy browser/management records preserve source closure and validator custody without invocation", async () => {
   let routeCalls = 0;
-  const browser = browserToolset(false);
+  const browser = browserToolset(false, { developerFeatures: true });
   const management = managementToolset({ callRoute: () => { routeCalls++; throw new Error("must not dispatch"); } });
   const eager = new Map();
   for (const [name, aiTool] of Object.entries({ ...browser, ...management })) {
@@ -163,7 +200,7 @@ Deno.test("unbound lazy browser/management records preserve source closure and v
 
 Deno.test("shadow capture discloses bounded selected capability summaries and only a non-selected count", async () => {
   let routeCalls = 0;
-  const browser = browserToolset(false);
+  const browser = browserToolset(false, { developerFeatures: true });
   const management = managementToolset({ callRoute: () => { routeCalls++; throw new Error("must not dispatch"); } });
   const inputs = [
     ...adaptBrowserTools(browser, { ...context(), capabilitiesByTool: capabilitiesByTool(browser, "chrome-api") }),

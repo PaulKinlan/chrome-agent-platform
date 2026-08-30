@@ -19,6 +19,7 @@ import {
   BROWSER_TOOL_NAMES,
   CHROME_TOOL_CAPABILITY_BOUNDS,
   CHROME_TOOL_CAPABILITY_TABLE,
+  DEVELOPER_ONLY_TOOL_NAMES,
 } from "../extension/lib/chrome-tool-capabilities.js";
 import { CAPABILITIES } from "../extension/lib/capabilities.js";
 import { clearRunFence } from "../extension/lib/run-fence.js";
@@ -189,8 +190,15 @@ function tools() {
 // ──────────────────────────────────────────────────────────────────────────
 Deno.test("T12: browserToolset has exactly 125 tools matching BROWSER_TOOL_NAMES (117 + 8)", () => {
   reset();
-  const browser = tools();
+  // BROWSER_TOOL_NAMES is the SHIPPED inventory (the developer build); the
+  // default build omits the developer-only names
+  // (CAP-FB-20260830-COOKIE-TOOLS-CUT-01), asserted separately below.
+  const browser = browserToolset(false, { developerFeatures: true });
   assertEquals(Object.keys(browser), BROWSER_TOOL_NAMES);
+  assertEquals(
+    Object.keys(tools()),
+    BROWSER_TOOL_NAMES.filter((name) => !DEVELOPER_ONLY_TOOL_NAMES.includes(name)),
+  );
   assertEquals(BROWSER_TOOL_NAMES.length, 125);
   assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.browserTools, 125);
   // 159 + delegate_to_agent (G5) + 7 board tools (jobs board, 2026-08-29;

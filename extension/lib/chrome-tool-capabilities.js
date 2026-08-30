@@ -216,7 +216,7 @@ const bytes = (value) => new TextEncoder().encode(value).byteLength;
 
 function record(toolName, sourceKind, capabilityTokens, optionalPermissions,
   productGrantScopeKind, replayClass, requiresOwnerGesture, mutationClass,
-  routeFamily) {
+  routeFamily, developerOnly = false) {
   return {
     toolName,
     sourceKind,
@@ -228,6 +228,11 @@ function record(toolName, sourceKind, capabilityTokens, optionalPermissions,
     requiresOwnerGesture,
     mutationClass,
     routeFamily,
+    // DEVELOPER-ONLY (CAP-FB-20260830-COOKIE-TOOLS-CUT-01): the tool is in the
+    // catalogue and keeps its capability row, but `browserToolset()` omits it
+    // unless the developer flag is on. The name stays in BROWSER_TOOL_NAMES so
+    // the inventory counts remain honest about what the build contains.
+    developerOnly,
   };
 }
 
@@ -275,9 +280,9 @@ const rows = [
   // contentSettings (single-origin patterns only; broad/wildcard rejected).
   record("list_cookies", "chrome-api", ["chrome.cookies.list"], ["cookies"], "none", "read-only", false, "read", "browser.cookies"),
   record("list_cookie_stores", "chrome-api", ["chrome.cookies.stores.list"], ["cookies"], "none", "read-only", false, "read", "browser.cookies"),
-  record("get_cookie", "chrome-api", ["chrome.cookies.get.exact-origin"], ["cookies"], "none", "read-only", false, "read", "browser.cookies"),
-  record("set_cookie", "chrome-api", ["chrome.cookies.set.exact-origin"], ["cookies"], "destination-origin", "mutating", false, "mutating", "browser.cookies"),
-  record("remove_cookie", "chrome-api", ["chrome.cookies.remove.exact-origin"], ["cookies"], "destination-origin", "mutating", false, "mutating", "browser.cookies"),
+  record("get_cookie", "chrome-api", ["chrome.cookies.get.exact-origin"], ["cookies"], "none", "read-only", false, "read", "browser.cookies", true),
+  record("set_cookie", "chrome-api", ["chrome.cookies.set.exact-origin"], ["cookies"], "destination-origin", "mutating", false, "mutating", "browser.cookies", true),
+  record("remove_cookie", "chrome-api", ["chrome.cookies.remove.exact-origin"], ["cookies"], "destination-origin", "mutating", false, "mutating", "browser.cookies", true),
   record("wipe_browsing_data", "chrome-api", ["chrome.browsing-data.wipe.global"], ["browsingData"], "global", "mutating", false, "mutating", "browser.browsing-data"),
   record("get_content_setting", "chrome-api", ["chrome.content-settings.get"], ["contentSettings"], "none", "read-only", false, "read", "browser.content-settings"),
   record("set_content_setting", "chrome-api", ["chrome.content-settings.set.exact-origin"], ["contentSettings"], "destination-origin", "mutating", false, "mutating", "browser.content-settings"),
@@ -488,6 +493,7 @@ function validateRow(row, seen) {
   if (!REPLAY.has(row.replayClass) || row.trustedReplaySafety !== row.replayClass) throw new Error("invalid_replay_class");
   if (typeof row.requiresOwnerGesture !== "boolean" || !MUTATION.has(row.mutationClass)) throw new Error("invalid_mutation_metadata");
   if (typeof row.routeFamily !== "string" || !ROUTE.test(row.routeFamily) || bytes(row.routeFamily) > CHROME_TOOL_CAPABILITY_BOUNDS.maxRouteFamilyBytes) throw new Error("invalid_route_family");
+  if (typeof row.developerOnly !== "boolean") throw new Error("invalid_developer_only");
 }
 
 if (rows.length !== CHROME_TOOL_CAPABILITY_BOUNDS.totalTools) throw new Error("capability_table_count_mismatch");
@@ -501,6 +507,15 @@ export const CHROME_TOOL_CAPABILITY_TABLE = Object.freeze(rows.map((row) => Obje
   capabilityTokens: Object.freeze([...row.capabilityTokens].sort()),
   optionalPermissions: Object.freeze([...row.optionalPermissions].sort()),
 })));
+
+/** The tools the DEFAULT (non-developer) build does not expose to a model.
+ * The single source of truth for the omission — `browserToolset()` reads this
+ * list rather than repeating the names (CAP-FB-20260830-COOKIE-TOOLS-CUT-01).
+ * These rows stay in the capability table: the build still contains them, and
+ * a catalogue that hid them would be lying about the inventory. */
+export const DEVELOPER_ONLY_TOOL_NAMES = Object.freeze(
+  CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.developerOnly).map((row) => row.toolName),
+);
 
 const byIdentity = new Map(CHROME_TOOL_CAPABILITY_TABLE.map((row) => [`${row.sourceKind}:${row.toolName}`, row]));
 
@@ -519,8 +534,17 @@ export function chromeToolCapability(toolName, sourceKind) {
 export function capabilitiesByTool(toolMap, sourceKind) {
   if (!["chrome-api", "management"].includes(sourceKind)) throw new Error("unknown_capability_source");
   const names = Object.keys(toolMap ?? {}).sort();
-  const expected = [...(sourceKind === "chrome-api" ? BROWSER_TOOL_NAMES : MANAGEMENT_CAPABILITY_TOOL_NAMES)].sort();
-  if (names.length !== expected.length || names.some((name, index) => name !== expected[index])) {
+  const expected = new Set(sourceKind === "chrome-api" ? BROWSER_TOOL_NAMES : MANAGEMENT_CAPABILITY_TOOL_NAMES);
+  // The map must contain NO tool the table does not know — that half is
+  // absolute. The only permitted OMISSION is a developer-only tool, which the
+  // default build genuinely does not offer
+  // (CAP-FB-20260830-COOKIE-TOOLS-CUT-01); anything else missing still means
+  // the toolset and the table have drifted apart.
+  const optional = new Set(sourceKind === "chrome-api" ? DEVELOPER_ONLY_TOOL_NAMES : []);
+  const present = new Set(names);
+  const unknown = names.some((name) => !expected.has(name));
+  const missing = [...expected].filter((name) => !present.has(name));
+  if (unknown || missing.some((name) => !optional.has(name))) {
     const error = new Error("capability_table_inventory_mismatch");
     error.code = "capability_table_inventory_mismatch";
     throw error;
