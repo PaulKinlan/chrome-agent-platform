@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.506] — 2026-08-30
+- Tracker: the targeted patch_asset tool is recorded as landed.
+
 ## [0.2.505] — 2026-08-30
 - Landed: a small edit to an artifact (like changing one colour) now applies as a targeted find-and-replace instead of the model rewriting the whole file, which is faster and cheaper.
 
