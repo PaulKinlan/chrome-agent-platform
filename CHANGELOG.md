@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.474] — 2026-08-30
+- Tracker: legible tool cards are recorded as landed.
+
 ## [0.2.473] — 2026-08-30
 - Landed: tool cards in a conversation now show what the tool actually returned, in plain terms, with no internal plumbing; a permission request is still there to answer when you reopen the thread.
 
