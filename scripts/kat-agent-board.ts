@@ -67,6 +67,9 @@ try {
   // Open the REAL new-tab page.
   const { result: { targetId: pageTarget } } = await cdp("Target.createTarget", { url: `chrome-extension://${extId}/ntp/ntp.html` });
   const { result: { sessionId: page } } = await cdp("Target.attachToTarget", { targetId: pageTarget, flatten: true });
+  // A laptop-sized viewport (the headless default is 800x600, which squeezes
+  // the sidebar to ~200px and hides most of the Board box behind its scroll).
+  await cdp("Emulation.setDeviceMetricsOverride", { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false }, page);
   await sleep(1500);
 
   // The page's own message chokepoint drives the REAL SW routes.
@@ -174,7 +177,135 @@ try {
   const metaVisible = await evaluate(`[...document.querySelectorAll("#board-section .fr-meta")].map((m) => m.textContent)`, page);
   check("board rows carry visible metadata spans", Array.isArray(metaVisible) && metaVisible.length >= 1 && metaVisible.every((t) => typeof t === "string" && t.length > 0), metaVisible);
 
-  // 6. Screenshot evidence of the grouping.
+  // ── CAP-FB-20260830-AGENT-BOARD-WORKING-01 — the board works end to end ──
+  const waitFor = async (fn: () => Promise<boolean>, ms = 10000, step = 300) => {
+    const until = Date.now() + ms;
+    while (Date.now() < until) { if (await fn()) return true; await sleep(step); }
+    return await fn();
+  };
+
+  // 7. Blocked state (step 7): a job blocked by an open job renders "blocked
+  //    by 1" and the demo model claims the OPEN one, never the blocked one.
+  const blockedPost = await evaluate(sendExpr("board.post", {
+    description: "Publish the critique once the station blog draft is critiqued",
+    blockedBy: [posted?.job?.id],
+  }), page);
+  check("a blocked job posts (blockedBy the open critique job)", blockedPost?.ok === true && blockedPost?.job?.blockedBy?.length === 1, blockedPost);
+  const blockedListed = await evaluate(sendExpr("board.list", {}), page);
+  const blockedRow = blockedListed?.jobs?.find((j: any) => j.id === blockedPost?.job?.id);
+  check("board_list marks the blocked job blocked:true (blockedByOpen 1)", blockedRow?.blocked === true && blockedRow?.blockedByOpen === 1, blockedRow);
+  const blockedMetaSeen = await waitFor(async () =>
+    (await evaluate(`[...document.querySelectorAll("#board-section .fr-meta")].map((m) => m.textContent)`, page))?.includes("blocked by 1"));
+  check("a blocked job renders 'blocked by 1' in the sidebar", blockedMetaSeen === true,
+    await evaluate(`[...document.querySelectorAll("#board-section .fr-meta")].map((m) => m.textContent)`, page));
+  const run2 = await evaluate(sendExpr("named-agent.run", { id: agentId, task: "@demo-board" }), page);
+  check("the second @demo-board run settles ok", run2?.ok === true || run2?.status === "done" || run2?.done === true, run2 && Object.keys(run2).slice(0, 8));
+  const afterRun2 = await evaluate(sendExpr("board.list", {}), page);
+  const blockedAfter = afterRun2?.jobs?.find((j: any) => j.id === blockedPost?.job?.id);
+  const critiqueAfter = afterRun2?.jobs?.find((j: any) => j.id === posted?.job?.id);
+  check("the blocked job is NOT claimed by @demo-board; the open one is completed instead",
+    blockedAfter?.status === "pending" && blockedAfter?.claimantId == null && critiqueAfter?.status === "completed" && critiqueAfter?.claimantId === agentId,
+    { blocked: blockedAfter?.status, critique: critiqueAfter?.status });
+  check("settling the blocker unblocks the dependent job (blocked:false)", blockedAfter?.blocked === false && blockedAfter?.blockedByOpen === 0, blockedAfter);
+
+  // 8. Sidebar CSS (step 8): the description keeps its width — at least 24
+  //    characters of the first row's description are visible (measured with
+  //    the row's own computed font).
+  const visibleChars = await evaluate(`(() => {
+    const text = document.querySelector("#board-section .fr-row .fr-text");
+    if (!text) return -1;
+    const font = getComputedStyle(text).font;
+    const ctx = document.createElement("canvas").getContext("2d");
+    ctx.font = font;
+    const full = text.textContent ?? "";
+    let n = 0;
+    while (n < full.length && ctx.measureText(full.slice(0, n + 1)).width <= text.clientWidth) n += 1;
+    return n;
+  })()`, page);
+  check("the first sidebar row shows at least 24 characters of the description", typeof visibleChars === "number" && visibleChars >= 24, visibleChars);
+
+  // 9. A MODEL-context post (step 1) records the poster's thread, WAKES the
+  //    target (step 3), and the settled result lands in the poster's thread
+  //    (delivery) — the plain "ask the Research agent to…" path on the demo
+  //    provider, with no manual run of the target.
+  //    The poster is the HUB itself — the exact live path: the owner types
+  //    the ask into the hub composer (agent.run creates the thread), the hub
+  //    model calls board_post_job, and the result comes back to that thread.
+  const postRun = await evaluate(sendExpr("agent.run", {
+    task: '@demo-board-post target="Board Worker" desc="Find three articles about WebMCP and report back"',
+  }), page);
+  const posterThreadId = postRun?.threadId ?? null;
+  check("the hub @demo-board-post run settles ok with a thread", (postRun?.ok === true || postRun?.done === true) && typeof posterThreadId === "string", postRun && Object.keys(postRun).slice(0, 8));
+  const afterPost = await evaluate(sendExpr("board.list", {}), page);
+  const modelJob = afterPost?.jobs?.find((j: any) => typeof j.description === "string" && j.description.includes("three articles about WebMCP"));
+  check("a model-context post records the poster thread", modelJob?.posterId === "hub" && modelJob?.posterThreadId === posterThreadId, { posterId: modelJob?.posterId, posterThreadId: modelJob?.posterThreadId, expected: posterThreadId });
+  check("the model-context post targets Board Worker", modelJob?.targetAgentId === agentId, modelJob?.targetAgentId);
+  const wakeRunId = `board:${modelJob?.id}:${agentId}`;
+  const woke = await waitFor(async () => {
+    const runs = await evaluate(sendExpr("run.list", {}), page);
+    return Array.isArray(runs?.runs) && runs.runs.some((r: any) => JSON.stringify(r).includes(wakeRunId));
+  }, 10000);
+  check("posting wakes the target (a Board Worker run appears within 10 s, no manual named-agent.run)", woke === true, wakeRunId);
+  const settledViaWake = await waitFor(async () => {
+    const r = await evaluate(sendExpr("board.read", { jobId: modelJob?.id }), page);
+    return r?.job?.status === "completed";
+  }, 30000, 500);
+  const wakeJob = await evaluate(sendExpr("board.read", { jobId: modelJob?.id }), page);
+  check("the woken agent claims and completes THAT job", settledViaWake === true && wakeJob?.job?.claimantId === agentId, { status: wakeJob?.job?.status, claimant: wakeJob?.job?.claimantId });
+  const delivered = await waitFor(async () => {
+    const t = await evaluate(sendExpr("thread.get", { id: posterThreadId }), page);
+    return typeof t === "object" && t !== null && JSON.stringify(t).includes("completed by Board Worker");
+  }, 15000, 500);
+  check("the settled result lands in the poster thread", delivered === true, posterThreadId);
+
+  // 10. board_read_messages (step 4): a named agent reads the broadcast.
+  const readRun = await evaluate(sendExpr("named-agent.run", { id: agentId, task: "@demo-board-read" }), page);
+  const readText = JSON.stringify(readRun ?? {});
+  check("board_read_messages returns the broadcast to a named agent", readText.includes("Board messages:") && readText.includes("Two jobs are up"), readText.slice(0, 200));
+
+  // 11. Settled visibility (step 6): the sidebar shows finished jobs with a
+  //     result and a real button, and the final board-sidebar.png carries a
+  //     full description row, a "blocked by 1" row, a settled row and a
+  //     message row. A fresh blocked job keeps a blocked row on screen.
+  await evaluate(sendExpr("board.post", { description: "Archive the published critique", blockedBy: [blockedPost?.job?.id] }), page);
+  const finalDom = await waitFor(async () => {
+    const d = await evaluate(`(() => {
+      const s = document.getElementById("board-section");
+      return { metas: [...s.querySelectorAll(".fr-meta")].map((m) => m.textContent), settled: s.querySelectorAll("button.board-settled").length, text: s.textContent };
+    })()`, page);
+    return d?.metas?.includes("blocked by 1") && d?.settled >= 1;
+  });
+  const dom = await evaluate(`(() => {
+    const s = document.getElementById("board-section");
+    return { metas: [...s.querySelectorAll(".fr-meta")].map((m) => m.textContent), settled: s.querySelectorAll("button.board-settled").length, text: s.textContent, buttons: [...s.querySelectorAll("button.board-settled")].map((b) => b.textContent) };
+  })()`, page);
+  check("settled jobs render as buttons with the claimant's result", finalDom === true && dom?.settled >= 1 && dom.buttons.some((t: string) => t.includes("Board Worker finished")), dom);
+
+  // 12. Settings → Board permissions (step 9): the Agent select lists an agent
+  //     created AFTER the options page loaded (no reload), rule rows print
+  //     names, and the copy is one sentence.
+  const { result: { targetId: optTarget } } = await cdp("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html#board-permissions` });
+  const { result: { sessionId: opts } } = await cdp("Target.attachToTarget", { targetId: optTarget, flatten: true });
+  await cdp("Emulation.setDeviceMetricsOverride", { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false }, opts);
+  await sleep(1500);
+  const research = await evaluate(sendExpr("named-agent.create", { name: "Research", role: "You research and report back." }), page);
+  const researchId = research?.agent?.id ?? "research";
+  const optionAppeared = await waitFor(async () =>
+    (await evaluate(`(document.querySelector("#board-deny-agent")?.providers ?? []).some((p) => p.id === ${JSON.stringify(researchId)})`, opts)) === true);
+  check("Settings Board permissions lists the newly created agent in the Agent select without a reload", optionAppeared === true, researchId);
+  await evaluate(`document.querySelector("#board-deny-agent").value = ${JSON.stringify(researchId)}; document.querySelector("#board-deny-action").value = "claim"; document.querySelector("#board-deny-peer").value = "hub"; document.getElementById("board-deny-add-btn").click(); true`, opts);
+  const ruleRow = await waitFor(async () =>
+    (await evaluate(`[...document.querySelectorAll("#board-deny-list .perm-row .perm-name")].map((n) => n.textContent)`, opts))?.includes("Research cannot claim jobs from Hub"));
+  check("the rule row reads 'Research cannot claim jobs from Hub' (names, one sentence)", ruleRow === true,
+    await evaluate(`[...document.querySelectorAll("#board-deny-list .perm-row .perm-name")].map((n) => n.textContent)`, opts));
+  await evaluate(`document.getElementById("board-permissions")?.scrollIntoView(); true`, opts);
+  const settingsShot = await cdp("Page.captureScreenshot", { format: "png" }, opts);
+  await Deno.writeFile(`${OUT}/board-settings.png`, Uint8Array.from(atob(settingsShot.result.data), (c) => c.charCodeAt(0)));
+  console.log(`screenshot: ${OUT}/board-settings.png`);
+
+  // 13. Screenshot evidence of the grouping.
+  await evaluate("window.dispatchEvent(new Event('focus'))", page);
+  await sleep(500);
   const shot = await cdp("Page.captureScreenshot", { format: "png" }, page);
   await Deno.writeFile(`${OUT}/board-sidebar.png`, Uint8Array.from(atob(shot.result.data), (c) => c.charCodeAt(0)));
   console.log(`screenshot: ${OUT}/board-sidebar.png`);

@@ -7862,6 +7862,223 @@ class ActivityExplorer extends Component {
 }
 customElements.define("activity-explorer", ActivityExplorer);
 
+/* ──────────────────────────────────────────────────────────────────────────
+ * <jobs-board> — the shared jobs board (agent-to-agent work): open jobs with
+ * poster/claimant + recency, recently settled jobs with outcome and a bounded
+ * result excerpt, and the latest board messages. Queries board.list +
+ * board.messages through the runtime; the gallery seeds `jobs`/`messages`
+ * properties directly (no extension backend). refresh() re-queries NOW — the
+ * NTP calls it on board-* progress events; an in-flight request coalesces
+ * trailing refreshes and a stale response never overwrites newer data.
+ * All agent-authored content renders with textContent only.
+ * ────────────────────────────────────────────────────────────────────────── */
+class JobsBoard extends Component {
+  _render() {
+    this._root.innerHTML = `
+      <style>
+        :host { display:block; }
+        .jb { display:flex; flex-direction:column; gap:12px; }
+        .jb-group { display:flex; flex-direction:column; }
+        .jb-head { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em;
+          color:var(--muted,#635e56); padding:0 2px 4px; }
+        .jb-row { display:flex; flex-direction:column; gap:1px; padding:7px 2px;
+          border-bottom:1px solid var(--border,#e3e0d9); }
+        .jb-row:last-child { border-bottom:0; }
+        .jb-desc { font-size:13px; line-height:1.4; color:var(--text,#1d1b18);
+          overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+        .jb-meta { font-size:11.5px; color:var(--muted,#635e56); display:flex; gap:6px; align-items:baseline;
+          flex-wrap:wrap; }
+        .jb-dot { display:inline-block; width:7px; height:7px; border-radius:50%;
+          background:var(--accent,#0e6e63); flex:0 0 auto; }
+        .jb-dot.claimed { background:var(--accent2,#7a5c1d); }
+        .jb-outcome { font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+        .jb-outcome.completed { color:var(--accent,#0e6e63); }
+        .jb-outcome.failed { color:var(--danger,#b3261e); }
+        .jb-result { font-size:12px; color:var(--muted,#635e56); overflow:hidden;
+          text-overflow:ellipsis; white-space:nowrap; }
+        .jb-msg { font-size:12.5px; line-height:1.45; color:var(--text,#1d1b18); overflow:hidden;
+          display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+        .jb-empty { font-size:13px; color:var(--muted,#635e56); padding:6px 2px; line-height:1.5; }
+      </style>
+      <div class="jb">
+        <div class="jb-open" role="list" aria-label="Open jobs" aria-live="polite"></div>
+        <div class="jb-settled" role="list" aria-label="Recently settled jobs"></div>
+        <div class="jb-msgs" role="list" aria-label="Board messages"></div>
+        <div class="jb-empty" hidden></div>
+      </div>`;
+  }
+  _wire() {
+    this._openEl = this._root.querySelector(".jb-open");
+    this._settledEl = this._root.querySelector(".jb-settled");
+    this._msgsEl = this._root.querySelector(".jb-msgs");
+    this._emptyEl = this._root.querySelector(".jb-empty");
+    if (!this._seeded) this.refresh();
+    else this._paint();
+  }
+  // Gallery/demo seeding (the showcase has no extension backend).
+  set jobs(v) { this._jobs = Array.isArray(v) ? v : []; this._seeded = true; if (this._rendered) this._paint(); }
+  set messages(v) { this._messages = Array.isArray(v) ? v : []; this._seeded = true; if (this._rendered) this._paint(); }
+  /** "N open" for the panel-head hint (empty string when nothing is open). */
+  get summary() {
+    const open = (this._jobs ?? []).filter((j) => j && (j.status === "pending" || j.status === "claimed")).length;
+    return open > 0 ? `${open} open` : "";
+  }
+  refresh() {
+    if (this._seeded) return Promise.resolve(); // gallery demos own their data
+    if (this._loadInFlight) { this._trailingRefresh = true; return this._loadInFlight; }
+    const p = this._load();
+    this._loadInFlight = p;
+    const settle = () => {
+      if (this._loadInFlight === p) this._loadInFlight = null;
+      if (this._trailingRefresh) { this._trailingRefresh = false; this.refresh(); }
+    };
+    p.then(settle, settle);
+    return p;
+  }
+  async _load() {
+    const seq = (this._loadSeq = (this._loadSeq ?? 0) + 1);
+    try {
+      const [jobsRes, msgsRes] = await Promise.all([
+        backendBounded("board.list"),
+        backendBounded("board.messages", { limit: 5 }).catch(() => null),
+      ]);
+      if (seq !== this._loadSeq) return; // superseded mid-flight
+      // A structured {ok:false} is an HONEST backend failure (board-store-error,
+      // worker timeout, …) — surface the error copy, never render it as an
+      // empty board. (The messages catch→null fallback stays tolerated: a
+      // THROWN/never-answering messages query just omits the feed.)
+      const failed = [jobsRes, msgsRes].find((r) => r && r.ok === false);
+      if (failed) {
+        this._loadError = String(failed.error ?? failed.code ?? "unavailable").slice(0, 160);
+        this._jobs = [];
+        this._messages = [];
+      } else {
+        this._loadError = null;
+        this._jobs = Array.isArray(jobsRes?.jobs) ? jobsRes.jobs : [];
+        this._messages = (msgsRes?.ok && Array.isArray(msgsRes?.messages)) ? msgsRes.messages : [];
+      }
+    } catch (e) {
+      if (seq !== this._loadSeq) return;
+      this._loadError = String(e?.error ?? e?.message ?? e ?? "unavailable").slice(0, 160);
+    }
+    this._paint();
+  }
+  _paint() {
+    const jobs = this._jobs ?? [];
+    const messages = this._messages ?? [];
+    // Skip a no-op re-render (protects the live region from spam and keeps
+    // the paint cheap when a burst of board events settles identically).
+    const signature = JSON.stringify([
+      this._loadError,
+      jobs.map((j) => [j?.id, j?.status, j?.claimantId, j?.settledAt]),
+      messages.map((m) => m?.id),
+    ]);
+    if (signature === this._lastSignature) return;
+    this._lastSignature = signature;
+
+    const open = jobs.filter((j) => j && (j.status === "pending" || j.status === "claimed")).slice(0, 10);
+    const settled = jobs.filter((j) => j && (j.status === "completed" || j.status === "failed")).slice(0, 5);
+
+    this._openEl.replaceChildren();
+    this._settledEl.replaceChildren();
+    this._msgsEl.replaceChildren();
+
+    if (open.length) {
+      const head = document.createElement("div");
+      head.className = "jb-head";
+      head.textContent = "Open";
+      this._openEl.append(head);
+      for (const job of open) this._openEl.append(this._jobRow(job));
+    }
+    if (settled.length) {
+      const head = document.createElement("div");
+      head.className = "jb-head";
+      head.textContent = "Settled";
+      this._settledEl.append(head);
+      for (const job of settled) this._settledEl.append(this._settledRow(job));
+    }
+    if (messages.length) {
+      const head = document.createElement("div");
+      head.className = "jb-head";
+      head.textContent = "Messages";
+      this._msgsEl.append(head);
+      for (const m of messages.slice(0, 5)) this._msgsEl.append(this._messageRow(m));
+    }
+
+    const isEmpty = !open.length && !settled.length && !messages.length;
+    this._emptyEl.hidden = !isEmpty;
+    if (isEmpty) {
+      // An unreadable board is an HONEST error, never a false "empty".
+      this._emptyEl.textContent = this._loadError
+        ? `The board could not be read (${this._loadError}) — try reloading the page.`
+        : "No shared jobs yet — when agents hand work to each other, it shows up here.";
+    }
+  }
+  _jobRow(job) {
+    const row = document.createElement("div");
+    row.className = "jb-row";
+    row.setAttribute("role", "listitem");
+    const desc = document.createElement("span");
+    desc.className = "jb-desc";
+    desc.textContent = job.description ?? "";
+    const meta = document.createElement("span");
+    meta.className = "jb-meta";
+    const dot = document.createElement("span");
+    dot.className = "jb-dot" + (job.status === "claimed" ? " claimed" : "");
+    const state = document.createElement("span");
+    const poster = job.posterName ?? job.posterId ?? "an agent";
+    state.textContent = job.status === "claimed"
+      ? `claimed by ${job.claimantName ?? job.claimantId ?? "an agent"} · ${timeAgo(job.claimedAt)} · posted by ${poster}`
+      : `posted by ${poster} · ${timeAgo(job.createdAt)}${job.targetName ? ` · for ${job.targetName}` : ""}`;
+    meta.append(dot, state);
+    row.append(desc, meta);
+    row.title = desc.textContent;
+    return row;
+  }
+  _settledRow(job) {
+    const row = document.createElement("div");
+    row.className = "jb-row";
+    row.setAttribute("role", "listitem");
+    const desc = document.createElement("span");
+    desc.className = "jb-desc";
+    desc.textContent = job.description ?? "";
+    const meta = document.createElement("span");
+    meta.className = "jb-meta";
+    const outcome = document.createElement("span");
+    outcome.className = `jb-outcome ${job.status === "failed" ? "failed" : "completed"}`;
+    outcome.textContent = job.status === "failed" ? "Failed" : "Completed";
+    const who = document.createElement("span");
+    who.textContent = `by ${job.claimantName ?? job.claimantId ?? "an agent"} · ${timeAgo(job.settledAt)}`;
+    meta.append(outcome, who);
+    row.append(desc, meta);
+    // Bounded one-line result excerpt (never the full result — the board's own
+    // size authority already caps it, and the row shows the shape, not the dump).
+    if (typeof job.result === "string" && job.result.trim()) {
+      const result = document.createElement("span");
+      result.className = "jb-result";
+      result.textContent = _short(job.result.trim(), 120);
+      row.append(result);
+    }
+    row.title = desc.textContent;
+    return row;
+  }
+  _messageRow(m) {
+    const row = document.createElement("div");
+    row.className = "jb-row";
+    row.setAttribute("role", "listitem");
+    const text = document.createElement("span");
+    text.className = "jb-msg";
+    text.textContent = `${m.fromName ?? m.fromId ?? "someone"} → ${m.toName ?? m.toId ?? "everyone"}: ${m.body ?? ""}`;
+    const meta = document.createElement("span");
+    meta.className = "jb-meta";
+    meta.textContent = timeAgo(m.ts);
+    row.append(text, meta);
+    return row;
+  }
+}
+customElements.define("jobs-board", JobsBoard);
+
+
 /* <system-prompt-editor> — the layered system-prompt viewer + owner-override
  * editor (Settings → Advanced). ONE reusable component: the read-only built-in
  * viewer (id + version + hash), the persistent override editor (append /

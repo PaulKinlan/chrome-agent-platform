@@ -58,6 +58,7 @@ export const MANAGEMENT_TOOL_NAMES = [
   "board_send_message",
   "board_list",
   "board_read",
+  "board_read_messages",
 ];
 
 export function managementToolset({ callRoute }) {
@@ -223,7 +224,7 @@ export function managementToolset({ callRoute }) {
     // context.executionId against the live run registry (fail closed).
     delegate_to_agent: tool({
       description:
-        "Delegate a task to ANOTHER named agent and return its result. Only works inside a running named agent, and only for agents in your own 'Can delegate to' list (set by the owner). The target runs with its own persona, memory, and provider; its approvals are its own. Use list_named_agents to see who exists.",
+        "Delegate a task to ANOTHER named agent and return its result inline. Only works inside a running named agent (from the hub, use board_post_job instead — it wakes the target), and only for agents in your own 'Can delegate to' list (set by the owner). The target runs with its own persona, memory, and provider; its approvals are its own. Use list_named_agents to see who exists.",
       inputSchema: z.object({
         agent: z.string().describe("the target agent's id (slug) or exact name"),
         task: z.string().describe("the complete, self-contained brief for the target agent"),
@@ -240,7 +241,7 @@ export function managementToolset({ callRoute }) {
     // guards in lib/agent-board.js later.
     board_post_job: tool({
       description:
-        "Post a job to the shared board for ANOTHER agent to pick up asynchronously — use this when you don't need the result inline (use delegate_to_agent when you do). Any agent can claim an untargeted job; set targetAgent to aim it at one agent. blockedBy holds job ids that must complete first.",
+        "Hand work to ANOTHER named agent through the shared board. This is THE hand-off tool from the hub (delegate_to_agent only works inside a running named agent). Posting a targeted job automatically starts (wakes) the target agent, which claims the job, does the work, and completes it — the result is delivered to this thread as a message when it settles, so do not wait for it and never report the work as done yourself. Set targetAgent to aim it at one agent (its id or exact name from list_named_agents); an untargeted job is claimable by any agent on its next run. blockedBy holds job ids that must complete first.",
       inputSchema: z.object({
         description: z.string().describe("what needs doing — self-contained, bounded; reference threads/artifacts by id instead of copying content"),
         requiredCapability: z.string().optional().describe("a short capability tag (e.g. 'critique', 'screenshot review')"),
@@ -269,7 +270,7 @@ export function managementToolset({ callRoute }) {
     }),
     board_send_message: tool({
       description:
-        "Post a message to the shared board — to everyone (broadcast) or one agent. Use it for findings, questions, and coordination that isn't a job.",
+        "Post a message to the shared board — to everyone (broadcast) or one agent. Use it for findings, questions, and coordination that isn't a job. The recipient reads it with board_read_messages on its next run — a message does not start an agent (post a job for that).",
       inputSchema: z.object({
         to: z.string().optional().describe("an agent id/name, or omit for broadcast"),
         body: z.string().describe("the message"),
@@ -290,6 +291,15 @@ export function managementToolset({ callRoute }) {
       description: "Read one board job in full (description, claimant, result).",
       inputSchema: z.object({ jobId: z.string() }),
       execute: async ({ jobId }) => tagUntrusted(await call("board.read", { jobId })),
+    }),
+    board_read_messages: tool({
+      description:
+        "Read board messages addressed to you or broadcast to everyone (most recent first). Check this when you are woken for a job or asked to look at the board — notes from other agents arrive here.",
+      inputSchema: z.object({
+        limit: z.number().int().min(1).max(50).optional().describe("how many messages (default 20)"),
+        refJobId: z.string().optional().describe("only messages about this job"),
+      }),
+      execute: ({ limit, refJobId }) => call("board.messages", { limit, refJobId }),
     }),
 
     // ---- introspection ----

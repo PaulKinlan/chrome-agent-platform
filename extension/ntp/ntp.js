@@ -1074,6 +1074,23 @@ async function renderRunLog() {
   runLogExplorer = explorer;
 }
 
+// The Jobs panel (the shared agent-to-agent board): ONE <jobs-board> mounted
+// in the host; refresh() re-queries and updates the head hint. Board progress
+// events re-render it live (see subscribeProgress below).
+let jobsBoardEl = null;
+function renderJobsBoard() {
+  const host = document.getElementById("jobs-board-host");
+  if (!host) return;
+  if (!jobsBoardEl) {
+    jobsBoardEl = document.createElement("jobs-board");
+    host.replaceChildren(jobsBoardEl);
+  }
+  jobsBoardEl?.refresh?.().then(() => {
+    const hint = document.getElementById("jobs-count");
+    if (hint && jobsBoardEl) hint.textContent = jobsBoardEl.summary;
+  }).catch(() => {});
+}
+
 // LIVE Recent activity (owner bug: the section froze at page-load state — the
 // explorer loaded ONCE at mount and nothing ever re-queried, so a run that
 // happened while the NTP was open never appeared until a reload). Journal
@@ -1104,12 +1121,37 @@ function flushRunLogDirty() {
   clearTimeout(runLogRefreshTimer);
   runLogExplorer?.refresh?.().catch(() => {});
 }
-subscribeProgress((ev) => {
-  if (!ev || typeof ev !== "object") return;
-  if (["tool-call", "tool-result", "done", "error", "text"].includes(ev.type)) scheduleRunLogRefresh();
-  // Board changes re-render the sidebar section live (post/claim/settle/message).
-  if (typeof ev.type === "string" && ev.type.startsWith("board-")) refreshBoard();
-});
+// The progress PORT dies with every MV3 service-worker restart and the shared
+// dispatcher settles its listeners fail-closed (clears them) — an AMBIENT
+// page-level subscription must re-subscribe itself, or every live hub surface
+// (run log, board sidebar, Jobs panel) silently freezes until a reload.
+const subscribeAmbientProgress = () => {
+  subscribeProgress((ev) => {
+    if (!ev || typeof ev !== "object") return;
+    if (ev.type === "disconnect") {
+      subscribeAmbientProgress();
+      // Events during the disconnect window are lost — re-read the surfaces
+      // once on reconnect so nothing settled while we were deaf stays stale.
+      scheduleRunLogRefresh();
+      refreshBoard();
+      renderJobsBoard();
+      return;
+    }
+    if (["tool-call", "tool-result", "done", "error", "text"].includes(ev.type)) scheduleRunLogRefresh();
+    // Board changes re-render the sidebar section + the Jobs panel live
+    // (post/claim/settle/message).
+    if (typeof ev.type === "string" && ev.type.startsWith("board-")) { refreshBoard(); renderJobsBoard(); }
+    // A settled job's result was delivered into its poster's thread — if that
+    // thread is the one open right now, re-read it so the result bubble
+    // appears without a reopen (the delivery is committed by the claimant's
+    // run, not by any run this view is subscribed to).
+    if ((ev.type === "board-job-completed" || ev.type === "board-job-failed") && typeof ev.posterThreadId === "string"
+      && ev.posterThreadId && ev.posterThreadId === currentThreadId && currentAgentId === null && !threadView.hidden) {
+      refreshOpenThreadFromStore(ev.posterThreadId);
+    }
+  });
+};
+subscribeAmbientProgress();
 subscribeRunRegistry(() => scheduleRunLogRefresh(), { emitCurrent: false });
 
 // A small usage summary on the hub (the recent calls/tokens/cost) — reads the
@@ -1331,8 +1373,15 @@ async function refreshBoard() {
   if (owner !== boardOwner) return; // a newer render superseded this one
   section.replaceChildren();
   const open = (jobs ?? []).filter((j) => j && (j.status === "pending" || j.status === "claimed"));
+  // Settled results stay VISIBLE for a bounded window (CAP-FB-20260830-AGENT-
+  // BOARD-WORKING-01 step 6): the owner sees "Research finished: …" here
+  // instead of the job vanishing from every surface the moment it settles.
+  const settled = (jobs ?? [])
+    .filter((j) => j && (j.status === "completed" || j.status === "failed"))
+    .sort((a, b) => (b.settledAt ?? 0) - (a.settledAt ?? 0))
+    .slice(0, 3);
   const recent = (messages ?? []).slice(0, 3);
-  if (!open.length && !recent.length) {
+  if (!open.length && !recent.length && !settled.length) {
     section.hidden = true;
     return;
   }
@@ -1348,7 +1397,10 @@ async function refreshBoard() {
     dot.className = "t-dot" + (job.status === "claimed" ? " running" : "");
     const text = document.createElement("span");
     text.className = "fr-text";
-    const state = job.status === "claimed"
+    // A blocked job reads as blocked (step 7), never as an open job.
+    const state = job.blocked
+      ? `blocked by ${job.blockedByOpen ?? job.blockedBy?.length ?? 1}`
+      : job.status === "claimed"
       ? `${job.claimantName ?? job.claimantId} is on it`
       : `posted by ${job.posterName ?? job.posterId}${job.targetName ? ` for ${job.targetName}` : ""}`;
     text.textContent = job.description;
@@ -1358,6 +1410,31 @@ async function refreshBoard() {
     meta.className = "fr-meta";
     meta.textContent = state;
     row.append(dot, text, meta);
+    section.append(row);
+  }
+  for (const job of settled) {
+    // A settled row is a real <button>: it opens the poster's thread (where
+    // the result was delivered) or, for a threadless page/UI post, the
+    // read-only board view of the job.
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "fr-row board-settled";
+    const who = job.claimantName ?? job.claimantId ?? "an agent";
+    const verb = job.status === "failed" ? "failed" : "finished";
+    const text = document.createElement("span");
+    text.className = "fr-text";
+    const result = String(job.result ?? "").replace(/\s+/g, " ").trim();
+    text.textContent = `${who} ${verb}: ${result.slice(0, 80)}${result.length > 80 ? "…" : ""}`;
+    text.title = `${job.description} — ${who} ${verb}: ${result.slice(0, 400)}`;
+    const meta = document.createElement("span");
+    meta.className = "fr-meta";
+    meta.textContent = job.posterThreadId ? "open thread" : "view result";
+    row.setAttribute("aria-label", `${job.description}: ${who} ${verb}. ${job.posterThreadId ? "Open the thread that asked" : "View the result"}`);
+    row.addEventListener("click", () => {
+      if (job.posterThreadId) openThread(job.posterThreadId);
+      else showBoardResult(job);
+    });
+    row.append(text, meta);
     section.append(row);
   }
   for (const m of recent) {
@@ -1370,6 +1447,33 @@ async function refreshBoard() {
     row.append(text);
     section.append(row);
   }
+}
+
+// Read-only result view for a THREADLESS settled job (posted from a page or
+// the Settings UI, so there is no thread to open). Agent-authored text is
+// rendered with textContent only. Uses the shared <agent-dialog> primitive.
+function showBoardResult(job) {
+  const existing = document.getElementById("board-result-dialog");
+  if (existing) existing.remove();
+  const dialog = document.createElement("agent-dialog");
+  dialog.id = "board-result-dialog";
+  dialog.setAttribute("title", `Board job ${job.status === "failed" ? "failed" : "completed"}`);
+  const body = document.createElement("div");
+  body.className = "board-result-body";
+  const desc = document.createElement("p");
+  desc.className = "muted";
+  desc.textContent = job.description ?? "";
+  const who = document.createElement("p");
+  who.className = "muted";
+  who.textContent = `${job.claimantName ?? job.claimantId ?? "an agent"} · ${job.settledAt ? new Date(job.settledAt).toLocaleString() : ""}`;
+  const result = document.createElement("pre");
+  result.className = "board-result-text";
+  result.textContent = String(job.result ?? "");
+  body.append(desc, who, result);
+  dialog.append(body);
+  document.body.append(dialog);
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  dialog.show();
 }
 
 async function refreshFailedRuns() {
@@ -1765,6 +1869,17 @@ const terminalThreadProjectionLifecycle = createTerminalThreadProjectionLifecycl
   captureSurfaceOwner: () => runSurfaceOwner.current(),
   ownsSurfaceOwner: (owner) => runSurfaceOwner.owns(owner),
 });
+
+// Re-read an OPEN thread from the store and re-project it (board delivery):
+// owner-fenced like openThread so a surface switch during the read wins.
+async function refreshOpenThreadFromStore(id) {
+  const owner = runSurfaceOwner.current();
+  const res = await send("thread.get", { id }).catch(() => ({ ok: false }));
+  if (!res?.ok || !res.thread) return;
+  if (!runSurfaceOwner.owns(owner) || currentThreadId !== id || currentAgentId !== null) return;
+  renderThreadProjection(res.thread, owner);
+  projectSurfaceRunTranscript();
+}
 
 async function openThread(id) {
   // Observability: the owner's "click a task, wait 10s" path — this span is
@@ -3025,6 +3140,7 @@ renderArtifacts();
 renderFirstRunGuide();
 renderTasks();
 renderRunLog();
+renderJobsBoard();
 renderHubUsage();
 renderProviderStatus();
 

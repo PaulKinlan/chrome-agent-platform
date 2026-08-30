@@ -58,6 +58,87 @@ export const BOARD_CLAIM_HEARTBEAT_MS = 30 * 1000;
 /** The hub's board identity. The hub is the owner's master agent — always
  *  allowed to post/claim/message in v1's open model. */
 export const BOARD_HUB_ID = "hub";
+/** The wake ledger (CAP-FB-20260830-AGENT-BOARD-WORKING-01 step 3): job ids
+ *  whose target(s) were already woken — ONE wake per job, idempotent across
+ *  the post route, the explicit board.wake route and SW restarts. Reserved
+ *  like the other board keys (the `cap:board-` prefix is model-invisible). */
+export const BOARD_WAKES_KEY = "cap:board-wakes";
+export const BOARD_MAX_WAKES = 200;
+
+/**
+ * The poster-thread resolver the SW wires into the routes. The durable run
+ * registry's `list()` returns a SNAPSHOT `{ runs }` — never a bare array —
+ * and every model-side post used to die on `records.find` (board lane
+ * finding 1). Pure over the injected registry so a unit test can wire the
+ * production shape. A registry read failure PROPAGATES: the post route turns
+ * it into a structured board-store-error for model principals.
+ */
+export function posterThreadResolver(durableRuns) {
+  return async (context) => {
+    const execId = typeof context?.executionId === "string" ? context.executionId : "";
+    if (!execId) return null;
+    const snapshot = await durableRuns.list();
+    const records = Array.isArray(snapshot?.runs) ? snapshot.runs : (Array.isArray(snapshot) ? snapshot : []);
+    const record = records.find((r) => r?.executionId === execId);
+    return typeof record?.threadId === "string" && record.threadId ? record.threadId : null;
+  };
+}
+
+/**
+ * Who a freshly posted job wakes (step 3): the targeted agent, or — for an
+ * untargeted job with a capability — every named agent whose skills, role
+ * or name mention that capability. The poster is never woken by its own
+ * post; an untargeted, uncapable job wakes nobody (any agent may claim it on
+ * its next run). Pure.
+ */
+export function boardWakeTargets({ posterId, requiredCapability = null, targetAgentId = null }, agents) {
+  const registry = Array.isArray(agents) ? agents.filter((a) => a && typeof a.id === "string") : [];
+  if (typeof targetAgentId === "string" && targetAgentId) {
+    if (targetAgentId === posterId) return [];
+    return registry.some((a) => a.id === targetAgentId) ? [targetAgentId] : [];
+  }
+  const cap = typeof requiredCapability === "string" ? requiredCapability.trim().toLowerCase() : "";
+  if (!cap) return [];
+  const mentions = (value) => typeof value === "string" && value.toLowerCase().includes(cap);
+  return registry
+    .filter((a) => a.id !== posterId)
+    .filter((a) =>
+      (Array.isArray(a.skills) && a.skills.some((sk) => mentions(typeof sk === "string" ? sk : sk?.id ?? sk?.name))) ||
+      mentions(a.role) || mentions(a.name))
+    .map((a) => a.id);
+}
+
+/** The system-authored task a woken agent runs (step 3). The job id rides
+ *  in the text so the agent claims THAT job, not whatever is first. */
+export function boardWakeTask(job) {
+  const description = boardText(job?.description ?? "", 600);
+  return `A board job was posted for you (job id ${job?.id}): ${description}
+
+Claim it with board_claim_job (jobId "${job?.id}"), do the work, then report the outcome with board_complete_job — the poster receives your result in their thread. Use board_list to see its details and board_read_messages for any notes addressed to you.`;
+}
+
+/**
+ * Automatic lease heartbeat (step 11): the SW — not the model — keeps a
+ * claim alive while the claimant's run is LIVE. Pure plan over the folded
+ * jobs and the live delegation-run map (executionId -> { agentId }): every
+ * claimed job whose claimant has a live execution is heartbeated THROUGH
+ * that execution's context, so the route's caller identity stays
+ * context-derived. Jobs whose claimant has no live run are left to expire.
+ */
+export function boardHeartbeatPlan(jobs, liveRuns) {
+  const byAgent = new Map();
+  for (const [executionId, state] of liveRuns instanceof Map ? liveRuns : new Map()) {
+    const agentId = state?.agentId;
+    if (typeof agentId === "string" && agentId && !byAgent.has(agentId)) byAgent.set(agentId, executionId);
+  }
+  const plan = [];
+  for (const job of Array.isArray(jobs) ? jobs : []) {
+    if (job?.status !== "claimed" || typeof job.claimantId !== "string") continue;
+    const executionId = byAgent.get(job.claimantId);
+    if (executionId) plan.push({ jobId: job.id, executionId });
+  }
+  return plan;
+}
 
 /** Bound + credential-redact a free-text field. Returns "" for non-strings. */
 export function boardText(value, max) {
@@ -730,6 +811,16 @@ export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => 
     async listJobs({ status = null } = {}) {
       const events = await loadJobs();
       const jobs = foldJobEvents(events, now());
+      // Derived blocked state (step 7): a job whose blockedBy still names an
+      // unsettled job is VISIBLY blocked on every surface (the sidebar,
+      // board_list, the demo model) instead of reading as an open job that
+      // then refuses every claim with board-blocked.
+      const settled = new Set(jobs.filter((j) => j.status === "completed" || j.status === "failed").map((j) => j.id));
+      for (const job of jobs) {
+        const open = (Array.isArray(job.blockedBy) ? job.blockedBy : []).filter((id) => !settled.has(id));
+        job.blockedByOpen = open.length;
+        job.blocked = (job.status === "pending" || job.status === "claimed") && open.length > 0;
+      }
       return status ? jobs.filter((j) => j.status === status) : jobs;
     },
 
@@ -797,7 +888,7 @@ export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => 
  * authority seam: it maps the route CONTEXT (never model args) to the caller
  * identity (a named agent's id from the live run registry, else the hub).
  */
-export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCaller, resolvePosterThreadId, commitThread, broadcast, now, onPendingDelivery = null }) {
+export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCaller, resolvePosterThreadId, commitThread, broadcast, now, onPendingDelivery = null, wakeAgent = null }) {
   // The store owns delivery (review r2 P1-3): commitThread rides into the
   // board so settlement + pending-delivery persist together and the ACK
   // waits on the idempotent thread commit.
@@ -845,6 +936,37 @@ export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCa
     }
   };
 
+  // One wake per job (step 3): the ledger lives beside the board logs and is
+  // consulted under the same lock the post/claim paths take.
+  const loadWakes = async () => {
+    const raw = await memory.getStrict(BOARD_WAKES_KEY);
+    return Array.isArray(raw) ? raw.filter((id) => typeof id === "string") : [];
+  };
+  const wakeJob = async (job, registry) => {
+    if (typeof wakeAgent !== "function" || !job) return { woke: [] };
+    const targets = boardWakeTargets({ posterId: job.posterId, requiredCapability: job.requiredCapability, targetAgentId: job.targetAgentId }, registry);
+    if (!targets.length) return { woke: [] };
+    const claimed = await withLock(async () => {
+      const wakes = await loadWakes();
+      if (wakes.includes(job.id)) return false;
+      await memory.setTrusted(BOARD_WAKES_KEY, [...wakes, job.id].slice(-BOARD_MAX_WAKES));
+      return true;
+    });
+    if (!claimed) return { woke: [] };
+    const woke = [];
+    let wakeError = null;
+    for (const agentId of targets) {
+      try {
+        await wakeAgent({ agentId, jobId: job.id, task: boardWakeTask(job), job });
+        woke.push(agentId);
+      } catch (e) {
+        wakeError = String(e?.message ?? e).slice(0, 200);
+      }
+    }
+    if (woke.length) fire({ type: "board-job-woke", jobId: job.id, agentIds: woke });
+    return wakeError ? { woke, wakeError } : { woke };
+  };
+
   const routes = {
     "board.post": guarded(async ({ description, requiredCapability, targetAgent, blockedBy }, context) => {
       const caller = callerOf(context);
@@ -876,8 +998,23 @@ export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCa
         blockedBy,
         posterThreadId: typeof posterThreadId === "string" ? posterThreadId : null,
       });
-      if (r.ok) fire({ type: "board-job-posted", jobId: r.job.id, capability: r.job.requiredCapability ?? null, targetAgentId: r.job.targetAgentId ?? null });
-      return r;
+      if (!r.ok) return r;
+      fire({ type: "board-job-posted", jobId: r.job.id, capability: r.job.requiredCapability ?? null, targetAgentId: r.job.targetAgentId ?? null });
+      // The post is on the board regardless of the wake — a wake failure
+      // (no provider, agent busy) rides back as `wakeError`, never as a
+      // failed post.
+      const wake = await wakeJob(r.job, registry);
+      return { ...r, ...wake };
+    }),
+    // Explicit re-wake (idempotent by the ledger): the owner surface can nudge
+    // a job whose wake never happened (e.g. it was posted before a provider
+    // was configured). Never a model route — models post, they do not wake.
+    "board.wake": guarded(async ({ jobId }, context) => {
+      if (context?.principal === "model") return { ok: false, code: "board-wake-owner-only", error: "only owner surfaces can wake a job's target" };
+      const job = await board.getJob(jobId);
+      if (!job) return { ok: false, code: "board-no-job", error: "no such job" };
+      const wake = await wakeJob(job, await agents());
+      return { ok: true, job, ...wake };
     }),
     "board.claim": guarded(async ({ jobId }, context) => {
       const caller = callerOf(context);
@@ -890,7 +1027,7 @@ export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCa
       const caller = callerOf(context);
       if (caller.denial) return caller.denial;
       const r = await board.settleJob({ callerId: caller.callerId, jobId, result, outcome: "completed" });
-      if (r.settled) fire({ type: "board-job-completed", jobId, posterId: r.job.posterId, claimantId: caller.callerId });
+      if (r.settled) fire({ type: "board-job-completed", jobId, posterId: r.job.posterId, claimantId: caller.callerId, posterThreadId: r.job.posterThreadId ?? null });
       // A live settlement that creates a pending delivery kicks the drain
       // scheduler NOW (review r4 P2) — previously only SW startup or the
       // drain's own alarm ran it, so a mid-session failure stalled delivery
@@ -902,7 +1039,7 @@ export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCa
       const caller = callerOf(context);
       if (caller.denial) return caller.denial;
       const r = await board.settleJob({ callerId: caller.callerId, jobId, result, outcome: "failed" });
-      if (r.settled) fire({ type: "board-job-failed", jobId, posterId: r.job.posterId, claimantId: caller.callerId });
+      if (r.settled) fire({ type: "board-job-failed", jobId, posterId: r.job.posterId, claimantId: caller.callerId, posterThreadId: r.job.posterThreadId ?? null });
       if (r.code === "board-delivery") onPendingDelivery?.();
       return r;
     }),
@@ -913,6 +1050,25 @@ export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCa
     }),
     "board.list": guarded(async ({ status }) => {
       return { ok: true, jobs: await board.listJobs({ status: typeof status === "string" ? status : null }) };
+    }),
+    // Read-side message feed (the hub's Jobs panel + the sidebar grouping).
+    // Bounded like the store (limit clamps to [1, 50]); most-recent-first.
+    // A MODEL caller (a named agent's board_read_messages) sees the broadcast
+    // feed plus what is addressed to or from it — the caller comes from the
+    // route context, never args, and a stale context is denied rather than
+    // widened to the whole feed. Owner surfaces (no model principal) read
+    // everything. `refJobId` narrows to one job's thread of notes.
+    "board.messages": guarded(async ({ limit, refJobId }, context) => {
+      const n = Number.isFinite(limit) ? Math.max(1, Math.min(50, Math.floor(limit))) : 50;
+      let forAgentId = null;
+      if (context?.principal === "model") {
+        const caller = callerOf(context);
+        if (caller.denial) return caller.denial;
+        forAgentId = caller.callerId === BOARD_HUB_ID ? null : caller.callerId;
+      }
+      let messages = await board.listMessages({ forAgentId, limit: typeof refJobId === "string" && refJobId ? BOARD_MAX_MESSAGES : n });
+      if (typeof refJobId === "string" && refJobId) messages = messages.filter((m) => m.refJobId === refJobId).slice(0, n);
+      return { ok: true, messages };
     }),
     "board.read": guarded(async ({ jobId }) => {
       const job = await board.getJob(jobId);

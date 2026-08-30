@@ -3151,24 +3151,50 @@ await navigationController.syncCurrent();
 
 
 // ── Board deny rules (the owner controls which edges are blocked) ──────────
+// CAP-FB-20260830-AGENT-BOARD-WORKING-01 step 9: the selects are the shared
+// <provider-select> primitive (no hand-rolled native selects), they re-populate
+// on agent-registry-changed / named-agent-changed (no reload), rule rows print
+// agent NAMES, and the copy reads as one sentence.
 let boardAgents = [];
+const boardAgentName = (id) => (id === "hub" ? "Hub" : (boardAgents.find((a) => a?.id === id)?.name ?? id));
+function boardRuleSentence(rule) {
+  const verb = rule.action === "claim" ? "claim jobs from" : "post jobs targeting";
+  return `${boardAgentName(rule.agentId)} cannot ${verb} ${boardAgentName(rule.peerId)}`;
+}
 async function renderBoardDenyRules() {
   const list = document.getElementById("board-deny-list");
   if (!list) return;
-  list.replaceChildren();
   const res = await chrome.runtime.sendMessage({ type: "board.deny.list" }).catch(() => null);
-  if (!res?.ok || !Array.isArray(res.rules)) return;
+  list.replaceChildren();
+  if (!res?.ok || !Array.isArray(res.rules)) {
+    if (res?.error) {
+      const err = document.createElement("p");
+      err.className = "muted";
+      err.textContent = `Rules unavailable: ${res.error}`;
+      list.append(err);
+    }
+    return;
+  }
+  if (!res.rules.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.id = "board-deny-empty";
+    empty.textContent = "No rules — every named agent and the hub can post and claim.";
+    list.append(empty);
+    return;
+  }
   for (const rule of res.rules) {
     const row = document.createElement("div");
     row.className = "perm-row";
+    row.setAttribute("role", "listitem");
     const name = document.createElement("span");
     name.className = "perm-name";
-    name.textContent = rule.action === "claim"
-      ? `${rule.agentId} cannot claim jobs from ${rule.peerId}`
-      : `${rule.agentId} cannot post jobs targeting ${rule.peerId}`;
+    name.textContent = boardRuleSentence(rule);
     const btn = document.createElement("button");
+    btn.type = "button";
     btn.className = "btn small ghost";
     btn.textContent = "Remove";
+    btn.setAttribute("aria-label", `Remove rule: ${name.textContent}`);
     btn.addEventListener("click", async () => {
       await chrome.runtime.sendMessage({ type: "board.deny.remove", ruleId: rule.id }).catch(() => {});
       renderBoardDenyRules();
@@ -3177,46 +3203,44 @@ async function renderBoardDenyRules() {
     list.appendChild(row);
   }
 }
-async function initBoardDenyUI() {
-  const list = document.getElementById("board-deny-list");
-  if (!list) return;
-  // Populate the agent dropdowns from the real named-agent route.
-  const namedAgentRes = await chrome.runtime.sendMessage({ type: "named-agent.list" }).catch(() => null);
-  const namedAgents = namedAgentRes?.agents ?? [];
+async function populateBoardDenyAgents() {
   const agentSelect = document.getElementById("board-deny-agent");
   const peerSelect = document.getElementById("board-deny-peer");
   if (!agentSelect || !peerSelect) return;
-  agentSelect.replaceChildren();
-  peerSelect.replaceChildren();
-  for (const a of namedAgents) {
-    for (const sel of [agentSelect, peerSelect]) {
-      const opt = document.createElement("option");
-      opt.value = a.id ?? a;
-      opt.textContent = a.name ?? a.id ?? a;
-      sel.appendChild(opt);
-    }
-  }
-  const addAction = "hub";
-  for (const sel of [peerSelect]) {
-    const opt = document.createElement("option");
-    opt.value = addAction;
-    opt.textContent = "Hub";
-    sel.appendChild(opt);
-  }
-  const addBtn = document.getElementById("board-deny-add-btn");
-  if (addBtn) {
-    addBtn.addEventListener("click", async () => {
-      const action = document.getElementById("board-deny-action")?.value ?? "claim";
-      const agentId = agentSelect?.value ?? "";
-      const peerId = peerSelect?.value ?? "";
-      if (!agentId || !peerId) return;
-      const res = await chrome.runtime.sendMessage({
-        type: "board.deny.add", action, agentId, peerId,
-      }).catch(() => null);
-      if (res?.ok) renderBoardDenyRules();
-    });
-  }
+  const namedAgentRes = await chrome.runtime.sendMessage({ type: "named-agent.list" }).catch(() => null);
+  boardAgents = Array.isArray(namedAgentRes?.agents) ? namedAgentRes.agents.filter((a) => a && typeof a.id === "string") : [];
+  const options = boardAgents.map((a) => ({ id: a.id, name: a.name ?? a.id, icon: "user" }));
+  const keepAgent = agentSelect.value;
+  const keepPeer = peerSelect.value;
+  agentSelect.providers = [...options, { id: "hub", name: "Hub", icon: "terminal" }];
+  peerSelect.providers = [...options, { id: "hub", name: "Hub", icon: "terminal" }];
+  if (keepAgent) agentSelect.value = keepAgent;
+  if (keepPeer) peerSelect.value = keepPeer;
+  // Names in the rule rows come from the same registry — re-render them too.
   renderBoardDenyRules();
+}
+function initBoardDenyUI() {
+  const form = document.getElementById("board-deny-form");
+  if (!form) return;
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const action = document.getElementById("board-deny-action")?.value || "claim";
+    const agentId = document.getElementById("board-deny-agent")?.value ?? "";
+    const peerId = document.getElementById("board-deny-peer")?.value ?? "";
+    if (!agentId || !peerId) return;
+    const res = await chrome.runtime.sendMessage({ type: "board.deny.add", action, agentId, peerId }).catch(() => null);
+    if (res?.ok) renderBoardDenyRules();
+  });
+  populateBoardDenyAgents();
+  // Live registry updates: an agent created after this page loaded appears in
+  // the selects without a reload (the SW broadcasts on the progress port).
+  try {
+    const port = chrome.runtime.connect({ name: "agent-progress" });
+    port.onMessage.addListener((msg) => {
+      const type = msg?.type === "progress" ? msg.event?.type : null;
+      if (type === "agent-registry-changed" || type === "named-agent-changed") populateBoardDenyAgents();
+    });
+  } catch { /* no port — the page still populates once at load */ }
 }
 if (typeof document !== "undefined" && document.getElementById("board-deny-list")) {
   initBoardDenyUI();

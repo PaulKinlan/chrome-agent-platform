@@ -46,6 +46,15 @@ const BOARD_MARKER = "@demo-board";
 const BROWSER_MARKER = "@demo-browser";
 const BROWSER_TOOLS = new Set(["open_tab", "navigate_tab", "read_page", "capture_screenshot", "list_tabs"]);
 const BROWSER_MAX_ROUNDS = 3;
+// The board has three demo MODES (CAP-FB-20260830-AGENT-BOARD-WORKING-01):
+//   @demo-board                       — claim: board_list → claim → complete
+//   @demo-board-post target="X" desc="…" — post: board_post_job targeting X
+//   @demo-board-read                  — read: board_read_messages
+// A WAKE task ("A board job was posted for you (job id X): …", authored by the
+// SW when a job is posted) is the claim mode preferring THAT job — so the
+// post → wake → claim → complete → deliver path runs end to end on the demo
+// provider with no key.
+const BOARD_WAKE_RE = /A board job was posted for you \(job id ([A-Za-z0-9_-]+)\)/;
 // @demo-enum-slip: the demo model reproduces the live-lane enum slip through
 // the REAL lazy protocol — search_tools(create_asset) → execute_tool with
 // type:"text/html" (refused as lazy-arguments-invalid, retryable) → execute_tool
@@ -269,7 +278,7 @@ function latestRunSlice(prompt) {
       delegate: lastUser.includes(DELEGATE_MARKER) && !lastUser.includes(AGENT_DELEGATE_MARKER),
       delegateAgent: lastUser.includes(AGENT_DELEGATE_MARKER),
       createAgent: lastUser.includes(CREATE_AGENT_MARKER),
-      board: lastUser.includes(BOARD_MARKER),
+      board: lastUser.includes(BOARD_MARKER) || BOARD_WAKE_RE.test(extractText([msgs[lastIdx]])),
       browser: lastUser.includes(BROWSER_MARKER),
       enumSlip: lastUser.includes(ENUM_SLIP_MARKER),
       runScript: lastUser.includes(RUN_SCRIPT_MARKER),
@@ -410,16 +419,61 @@ function runScriptFinalText(prompt) {
 function wantsBoard(prompt) {
   return !!latestRunSlice(prompt)?.marker?.board;
 }
+function boardMode(prompt) {
+  const slice = latestRunSlice(prompt);
+  if (!slice) return "claim";
+  const text = extractText([slice.slice[0]]);
+  if (text.includes(`${BOARD_MARKER}-post`)) return "post";
+  if (text.includes(`${BOARD_MARKER}-read`)) return "read";
+  return "claim";
+}
+/** The job the wake task names (claim mode prefers it over "first open"). */
+function boardPreferredJobId(prompt) {
+  const slice = latestRunSlice(prompt);
+  if (!slice) return null;
+  return extractText([slice.slice[0]]).match(BOARD_WAKE_RE)?.[1] ?? null;
+}
+function boardPostArgs(prompt) {
+  const slice = latestRunSlice(prompt);
+  const text = slice ? extractText([slice.slice[0]]) : "";
+  const target = text.match(/target="([^"]{1,120})"/)?.[1] ?? "";
+  const desc = text.match(/desc="([^"]{1,600})"/)?.[1] ?? "[demo] a job posted via @demo-board-post";
+  return target ? { description: desc, targetAgent: target } : { description: desc };
+}
 
 /** Unwrap one tool-part output through the lazy protocol envelope
  *  ({ ok, result } — string OR object form), the agent-delegation pattern. */
 function lazyUnwrap(output) {
-  let value = output;
-  if (typeof value === "string") {
-    try { value = JSON.parse(value); } catch { /* plain text */ }
-  }
+  const parse = (v) => {
+    if (typeof v !== "string") return v;
+    try { return JSON.parse(v); } catch { return v; }
+  };
+  let value = parse(output);
+  // agent-do delivers tool results as {modelContent: "<json>"} — unwrap that
+  // layer too, or every board result reads as "no board results".
+  if (value && typeof value === "object" && "modelContent" in value && !("result" in value)) value = parse(value.modelContent);
   if (value && typeof value === "object" && "result" in value) return value.result;
   return value;
+}
+
+/** Read THROUGH the untrusted-content boundary (lib/untrusted-fence.js):
+ * board_list / board_read results are tagged untrusted, so every string leaf
+ * (job ids, statuses, descriptions) arrives fenced. A real model reads the
+ * value inside the fence and echoes THAT id; the demo model does the same.
+ * Only the board helpers unfence — the @demo-obey-page probe must still see
+ * the fence to decide refusal. */
+const FENCED_LEAF_RE = /^<<<UNTRUSTED run:[A-Za-z0-9]+>>>\n([\s\S]*)\n<<<END run:[A-Za-z0-9]+>>>$/;
+function unfenceValue(value, depth = 0) {
+  if (typeof value === "string") return value.match(FENCED_LEAF_RE)?.[1] ?? value;
+  if (depth >= 12 || !value || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((v) => unfenceValue(v, depth + 1));
+  const out = {};
+  for (const [k, v] of Object.entries(value)) out[k] = unfenceValue(v, depth + 1);
+  return out;
+}
+/** One board tool part's result, unwrapped AND unfenced. */
+function boardResultOf(part) {
+  return unfenceValue(lazyUnwrap(part.output?.value ?? part.output));
 }
 
 /** The tool parts of the CURRENT run slice (structured, not text). */
@@ -432,14 +486,26 @@ function boardToolParts(prompt) {
 
 /** The first CLAIMABLE job from the executed board_list result. */
 function boardListFirstJobId(prompt) {
+  const preferred = boardPreferredJobId(prompt);
   for (const part of boardToolParts(prompt)) {
     if (part?.type !== "tool-result") continue;
-    const value = lazyUnwrap(part.output?.value ?? part.output);
+    const value = boardResultOf(part);
     if (!value || typeof value !== "object" || !Array.isArray(value.jobs)) continue;
-    const pending = value.jobs.find((j) => j?.status === "pending") ?? value.jobs[0];
+    // Never a BLOCKED job (step 7): its claim would only be refused. A wake
+    // names its job — claim THAT one when it is open.
+    const named = preferred ? value.jobs.find((j) => j?.id === preferred && j?.status === "pending" && j?.blocked !== true) : null;
+    const pending = named ?? value.jobs.find((j) => j?.status === "pending" && j?.blocked !== true) ?? value.jobs.find((j) => j?.blocked !== true);
     if (typeof pending?.id === "string") return pending.id;
   }
   return null;
+}
+
+/** Did any executed board call come back as a structured refusal? */
+function boardDeniedSoFar(prompt) {
+  return boardToolParts(prompt)
+    .filter((p) => p?.type === "tool-result")
+    .map((p) => boardResultOf(p))
+    .some((v) => v && typeof v === "object" && (v.ok === false || (typeof v.code === "string" && !v.job && !v.jobs)));
 }
 
 function boardAlreadyFinal(prompt) {
@@ -455,14 +521,32 @@ function boardFinalText(prompt) {
   const parts = boardToolParts(prompt);
   const results = parts
     .filter((p) => p?.type === "tool-result")
-    .map((p) => lazyUnwrap(p.output?.value ?? p.output))
+    .map((p) => boardResultOf(p))
     .filter((v) => v && typeof v === "object");
+  const mode = boardMode(prompt);
+  if (mode === "post") {
+    const posted = results.find((v) => v.ok === true && v.job && typeof v.job.id === "string");
+    if (posted) return `[demo model] Board job ${posted.job.id} posted${Array.isArray(posted.woke) && posted.woke.length ? ` — woke ${posted.woke.join(", ")}` : ""}${posted.wakeError ? ` (wake failed: ${posted.wakeError})` : ""}.`;
+    const refused = results.find((v) => v.ok === false || typeof v.code === "string");
+    if (refused) return `[demo model] Board job post DENIED honestly: ${String(refused.code ?? "")} ${String(refused.error ?? "unknown")}`.slice(0, 200);
+    return "[demo model] Board job post finished without a result.";
+  }
+  if (mode === "read") {
+    const read = results.find((v) => Array.isArray(v.messages));
+    if (read) return `[demo model] Board messages: ${read.messages.length} — ${read.messages.map((m) => `${m.fromName} → ${m.toName}: ${m.body}`).join(" | ").slice(0, 300)}`;
+    const refused = results.find((v) => v.ok === false || typeof v.code === "string");
+    if (refused) return `[demo model] Board messages read DENIED honestly: ${String(refused.code ?? "")} ${String(refused.error ?? "unknown")}`.slice(0, 200);
+    return "[demo model] Board messages read finished without a result.";
+  }
   const listed = results.find((v) => Array.isArray(v.jobs));
   const claimed = results.find((v) => v.job && typeof v.job.claimantId === "string" && v.job.status === "claimed");
   const completed = results.find((v) => v.job && v.job.status === "completed");
-  const denial = results.find((v) => v.ok === false);
+  // A denial is any structured refusal — ok:false OR a bare {code,error}
+  // once the envelope is unwrapped (step 10: the model reports it, never
+  // "finished without board results").
+  const denial = results.find((v) => v.ok === false || (typeof v.code === "string" && !v.job && !v.jobs));
   if (completed) return `[demo model] Board job ${completed.job.id} claimed and completed — the result is on the board.`;
-  if (denial) return `[demo model] Board job flow DENIED/FAILED honestly: ${String(denial.error ?? denial.code ?? "unknown").slice(0, 160)}`;
+  if (denial) return `[demo model] Board job flow DENIED honestly: ${String(denial.code ?? "")} ${String(denial.error ?? "unknown")}`.slice(0, 200);
   if (claimed) return `[demo model] Board job ${claimed.job.id} claimed; completion did not settle.`;
   if (listed) return "[demo model] Board job flow: no claimable job was listed.";
   return "[demo model] Board job flow finished without board results.";
@@ -672,13 +756,19 @@ function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board =
     const toolParts = boardToolParts(prompt);
     const searches = toolParts.filter((p) => p.toolName === "search_tools").length;
     const executes = toolParts.filter((p) => p.toolName === "execute_tool").length;
-    const plan = ["board_list", "board_claim_job", "board_complete_job"];
+    const mode = boardMode(prompt);
+    const plan = mode === "post" ? ["board_post_job"] : mode === "read" ? ["board_read_messages"] : ["board_list", "board_claim_job", "board_complete_job"];
     if (searches >= plan.length && executes >= plan.length) return null;
+    // A denied/failed claim ENDS the flow (step 10): no complete call after
+    // a refusal — the final text reports the denial.
+    if (executes >= 2 && boardDeniedSoFar(prompt)) return null;
     if (searches <= executes) {
       return { id: `search_board_${searches}`, name: "search_tools", input: { query: plan[searches], limit: 1 } };
     }
     const selectionRef = latestSelectionRef(prompt);
     if (!selectionRef) return null;
+    if (mode === "post") return { id: "execute_board_post", name: "execute_tool", input: { selectionRef, arguments: boardPostArgs(prompt) } };
+    if (mode === "read") return { id: "execute_board_read", name: "execute_tool", input: { selectionRef, arguments: { limit: 10 } } };
     if (executes === 0) {
       return { id: "execute_board_list", name: "execute_tool", input: { selectionRef, arguments: {} } };
     }

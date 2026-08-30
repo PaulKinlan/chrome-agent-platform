@@ -567,7 +567,7 @@ import {
 } from "../lib/owner-approval.js";
 import { bridgeAndAuditApprovalBindings } from "../lib/approval-bridge-audit.js";
 import { journalJson } from "../shared/tool-tree.js";
-import { createAgentBoardRoutes, BOARD_HUB_ID } from "../lib/agent-board.js";
+import { createAgentBoardRoutes, BOARD_HUB_ID, posterThreadResolver, boardHeartbeatPlan } from "../lib/agent-board.js";
 import { capLog, dumpLogBuffer, clearLogBuffer, getLogVerbosity, setLogVerbosity, observeToolCall } from "../lib/cap-log.js";
 import { perfSpan, perfSummary, perfClear } from "../lib/cap-perf.js";
 
@@ -697,6 +697,9 @@ async function registerAlarm(task) {
 }
 
 async function handleAlarm(alarm) {
+  // The board's own periodic alarm carries no task payload BY DESIGN (its
+  // listener lives beside the board routes) — never a scheduler orphan.
+  if (alarm?.name === BOARD_HEARTBEAT_ALARM) return;
   const schedLog = capLog("scheduler");
   const fireSpan = perfSpan("scheduler:task_fire");
   schedLog.info("alarm fired", { task: alarm.name });
@@ -3926,24 +3929,77 @@ const boardRoutes = createAgentBoardRoutes({
     return BOARD_HUB_ID;
   },
   // The poster's thread authority (review P1-6): resolved from the durable
-  // run registry by the context's execution id — never from model args.
-  resolvePosterThreadId: async (context) => {
-    const execId = typeof context?.executionId === "string" ? context.executionId : "";
-    if (!execId) return null;
-    // A registry read failure PROPAGATES (review r3 P1-2): the route turns it
-    // into a structured board-store-error for model principals — swallowing
-    // it here would silently orphan the settlement delivery.
-    const records = await durableRuns.list();
-    const record = records.find((r) => r?.executionId === execId);
-    return typeof record?.threadId === "string" && record.threadId ? record.threadId : null;
-  },
+  // run registry by the context's execution id — never from model args. The
+  // registry's list() returns a SNAPSHOT `{ runs }` (CAP-FB-20260830-AGENT-
+  // BOARD-WORKING-01 step 1: the bare-array read here broke every model-side
+  // post with "records.find is not a function"). A registry read failure
+  // PROPAGATES (review r3 P1-2): the route turns it into a structured
+  // board-store-error for model principals.
+  resolvePosterThreadId: posterThreadResolver(durableRuns),
+  // Wake (step 3): a targeted post starts the target agent's run through the
+  // SAME named-agent path an @mention takes (withNamedAgentsLock inside, the
+  // run-lock queues it behind the poster's live run — never a bypass).
+  wakeAgent: wakeBoardAgent,
   commitThread: commitThreadTerminal,
-  broadcast: broadcastProgress,
+  // A claim arms the heartbeat alarm (below); every event still broadcasts.
+  broadcast: (event) => {
+    if (event?.type === "board-job-claimed") armBoardHeartbeat();
+    broadcastProgress(event);
+  },
   // Live kick (review r5 P2): the routes invoke this whenever a settlement
   // creates a pending delivery — reset the backoff and drain NOW.
   onPendingDelivery: () => {
     void kickBoardDrain();
   },
+});
+
+// Wake the target of a freshly posted board job (step 3). The run is started
+// FIRE-AND-FORGET: the poster's own run holds the run-lock while its
+// board_post_job tool call is in flight, so awaiting the woken run here would
+// deadlock — the woken run queues on the run mutex and starts the moment the
+// poster's run settles. It appears in the Tasks list like any named-agent run
+// (runId board:<jobId>:<agentId>). Refuses unknown agents; other failures
+// propagate to the route, which reports them as `wakeError` on the post.
+async function wakeBoardAgent({ agentId, jobId, task }) {
+  const agent = await getNamedAgent(agentId);
+  if (!agent) throw new Error(`no agent ${agentId}`);
+  const runId = `board:${jobId}:${slugifyAgentId(agentId)}`;
+  const run = runNamedAgentTask({ id: agentId, task, attachments: [], runId });
+  run.then((result) => {
+    if (result && result.ok === false) swLog.warn("board wake run failed", { agentId, jobId, error: String(result.error ?? "").slice(0, 200) });
+  }, (err) => swLog.warn("board wake run threw", { agentId, jobId, error: String(err?.message ?? err).slice(0, 200) }));
+}
+
+// Automatic lease heartbeat (step 11): while a claimant's run is LIVE the SW
+// extends its claim every BOARD_CLAIM_HEARTBEAT_MS through the claimant's own
+// execution context — the model never has to remember, and a run longer than
+// the 5 min lease no longer loses its job mid-work. Jobs whose claimant has
+// no live run are left to expire (the reclaim path stays as unit-tested).
+const BOARD_HEARTBEAT_ALARM = "board-heartbeat";
+// The alarm is armed by a claim and disarms itself once no job is claimed —
+// an idle board never wakes the service worker.
+function armBoardHeartbeat() {
+  try { chrome.alarms.create(BOARD_HEARTBEAT_ALARM, { periodInMinutes: 0.5 }); } catch { /* alarms unavailable */ }
+}
+async function boardHeartbeatTick() {
+  const listed = await boardRoutes.routes["board.list"]({ status: "claimed" }, {});
+  const claimed = listed?.jobs ?? [];
+  if (claimed.length === 0) {
+    try { await chrome.alarms.clear(BOARD_HEARTBEAT_ALARM); } catch { /* best effort */ }
+    return;
+  }
+  const plan = boardHeartbeatPlan(claimed, activeDelegationRuns);
+  swLog.info("board heartbeat tick", { claimed: claimed.length, liveRuns: activeDelegationRuns.size, planned: plan.length });
+  for (const { jobId, executionId } of plan) {
+    const r = await boardRoutes.routes["board.heartbeat"]({ jobId }, { principal: "model", executionId });
+    if (r?.ok === false) swLog.warn("board heartbeat refused", { jobId, code: r.code ?? null });
+  }
+}
+// Boot: arm once so a claim made before a restart is still heartbeated while
+// its run resumes; the first tick disarms if nothing is claimed.
+armBoardHeartbeat();
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === BOARD_HEARTBEAT_ALARM) boardHeartbeatTick().catch((e) => swLog.warn("board heartbeat tick failed", { error: String(e?.message ?? e) }));
 });
 
 // Startup drain (review r2 P1-3) + bounded backoff retry (review r3 P2):
@@ -5055,7 +5111,17 @@ const handlers = mergeRouteMaps(
   async "named-agent.delegate"({ agent: targetRef, task, context: briefContext = "" }, routeContext) {
     const callerExecutionId = typeof routeContext?.executionId === "string" ? routeContext.executionId : "";
     if (!callerExecutionId || !activeDelegationRuns.has(callerExecutionId)) {
-      return { ok: false, code: "delegation-context", error: "delegation is only available inside a running named agent" };
+      // A LIVE hub run gets an actionable refusal (step 5b): the hub's hand-off
+      // tool is board_post_job, which wakes the target — not a dead end that
+      // leaves the model cycling two failing tools.
+      const hubLive = !!callerExecutionId && activeExecutions.has(callerExecutionId);
+      return {
+        ok: false,
+        code: "delegation-context",
+        error: hubLive
+          ? "delegate_to_agent only works inside a running named agent — from the hub, hand work off with board_post_job (targetAgent: the agent's id or name); the target is started automatically and its result is delivered to this thread when it completes"
+          : "delegation is only available inside a running named agent",
+      };
     }
     // P1-c: serialize delegations PER CALLER — agent-do executes same-step
     // tool calls concurrently, and each child saves/restores the singleton run

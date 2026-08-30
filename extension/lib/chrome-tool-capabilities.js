@@ -6,8 +6,8 @@
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
   browserTools: 126,
-  managementTools: 40,
-  totalTools: 166,
+  managementTools: 41,
+  totalTools: 167,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -185,6 +185,7 @@ export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
   "board_send_message",
   "board_list",
   "board_read",
+  "board_read_messages",
 ]);
 
 export const FLAGGED_FOR_LATER_PROVIDER_CUTOVER = Object.freeze([
@@ -461,6 +462,7 @@ const rows = [
   record("board_send_message", "management", ["management.board.message"], [], "none", "mutating", false, "mutating", "management.board"),
   record("board_list", "management", ["management.board.list"], [], "none", "read-only", false, "read", "management.board"),
   record("board_read", "management", ["management.board.read"], [], "none", "read-only", false, "read", "management.board"),
+  record("board_read_messages", "management", ["management.board.messages"], [], "none", "read-only", false, "read", "management.board"),
   // Tranche-12 Chrome API coverage:
   // browser-wide global grant), user scripts + dynamic content scripts
   // (single-origin matches; destination-origin grant coverage; host

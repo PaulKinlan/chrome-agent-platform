@@ -113,7 +113,7 @@ const REGISTRY_READ_TOOLS = new Set([
   "get_named_agent", "list_named_agents", "list_hooks", "list_scripts", "get_script", "list_skills", "list_tools",
   "schedules_list",
   // The shared jobs board (2026-08-29): reads.
-  "board_list", "board_read",
+  "board_list", "board_read", "board_read_messages",
 ]);
 // Key-bound writes (replaying writes the same value under the same key — the
 // last-write-wins effect is identical) or idempotent-by-identity creations.

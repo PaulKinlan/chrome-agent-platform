@@ -386,6 +386,16 @@ const EXPECTED = [
   "NTP: the typed task reached the agent journal",
   "Lazy protocol: a first-call enum slip is recoverable in one run",
   "Lazy protocol: the enum-slip run rendered the refused call, the retry and the answer",
+  "jobs panel: renders the empty state on a fresh board",
+  "jobs panel: retained the empty-state screenshot",
+  "jobs panel: two jobs + a message posted via the real routes",
+  "jobs panel: open jobs render with poster + recency (live, no reload)",
+  "jobs panel: the message feed renders the broadcast",
+  "jobs panel: the open-count hint reflects the board",
+  "jobs panel: retained the populated-state screenshot",
+  "jobs panel: a real named agent claimed + completed a job",
+  "jobs panel: the settled group renders the outcome + result excerpt (live, no reload)",
+  "jobs panel: retained the settled-state screenshot",
   "Settings: Permissions panel present",
   "approval: forged NTP owner/activation fields are refused",
   "permissions: optional capabilities start ungranted (JIT) and the mandatory boot set is granted",
@@ -1132,6 +1142,125 @@ async function main() {
     if (slipShot) await writeEvidence("lazy-enum-slip-recovered.png", slipShot);
     await cdp.send("Target.closeTarget", { targetId: slipPage.id }).catch(() => {});
     cdp.pageSessions.delete(slipSession);
+    // JOURNEY 1b — the Jobs panel: the shared agent-to-agent board is a
+    // VISIBLE hub surface (owner report 2026-08-30: "no visible jobs board").
+    // Empty state first (fresh profile), then seeded through the REAL
+    // board.* routes from the page, then a REAL named agent claims +
+    // completes a job through the lazy tool protocol (@demo-board) and the
+    // panel re-renders live from the board progress events — no reload.
+    // JOURNEY 1's Run click opened the thread view — go Back (real click)
+    // so the Jobs panel is actually ON SCREEN for the screenshots.
+    // ─────────────────────────────────────────────────────────────
+    await clickSel(cdp, ntpSession, "#thread-back");
+    await sleep(1200);
+    const jobsPanel = async () =>
+      await evalIn(cdp, ntpSession, `(() => {
+        const el = document.querySelector("#jobs-board-host jobs-board");
+        if (!el || !el.shadowRoot) return null;
+        const q = (sel) => el.shadowRoot.querySelector(sel);
+        return {
+          text: el.shadowRoot.textContent,
+          empty: q(".jb-empty")?.textContent ?? null,
+          emptyHidden: q(".jb-empty")?.hidden ?? null,
+          openRows: el.shadowRoot.querySelectorAll(".jb-open .jb-row").length,
+          settledRows: el.shadowRoot.querySelectorAll(".jb-settled .jb-row").length,
+          msgRows: el.shadowRoot.querySelectorAll(".jb-msgs .jb-row").length,
+          hint: document.getElementById("jobs-count")?.textContent ?? null,
+        };
+      })()`);
+    // The mount-time refresh is async — give it a beat, then read the state.
+    let jp = null;
+    for (let i = 0; i < 20; i++) {
+      jp = await jobsPanel();
+      if (jp && (jp.openRows + jp.settledRows + jp.msgRows > 0 || (jp.emptyHidden === false && jp.empty))) break;
+      await sleep(250);
+    }
+    check(
+      "jobs panel: renders the empty state on a fresh board",
+      jp !== null && jp.emptyHidden === false &&
+        typeof jp.empty === "string" && jp.empty.includes("No shared jobs yet"),
+    );
+    const jobsEmptyShot = await captureShot(cdp, ntpSession);
+    if (jobsEmptyShot) await writeEvidence("ntp-jobs-empty.png", jobsEmptyShot);
+    check(
+      "jobs panel: retained the empty-state screenshot",
+      jobsEmptyShot !== null && jobsEmptyShot.length > 200,
+    );
+
+    // Seed through the REAL routes from the page (hub principal): two open
+    // jobs + one broadcast message.
+    const jpJob1 = await msgValue({ type: "board.post", description: "Critique the journey draft — tighten the intro" });
+    const jpJob2 = await msgValue({ type: "board.post", description: "Find three comparable tools and summarise pricing" });
+    const jpMsg = await msgValue({ type: "board.message", to: "broadcast", body: "Two jobs are up for the journey" });
+    check(
+      "jobs panel: two jobs + a message posted via the real routes",
+      jpJob1?.ok === true && jpJob2?.ok === true && jpMsg?.ok === true,
+    );
+
+    // The panel re-renders LIVE from the board-* progress events (no reload).
+    for (let i = 0; i < 20; i++) {
+      jp = await jobsPanel();
+      if (jp && jp.openRows === 2 && jp.msgRows === 1) break;
+      await sleep(250);
+    }
+    check(
+      "jobs panel: open jobs render with poster + recency (live, no reload)",
+      jp !== null && jp.openRows === 2 &&
+        jp.text.includes("Critique the journey draft") &&
+        jp.text.includes("Find three comparable tools") &&
+        jp.text.includes("posted by Hub"),
+    );
+    check(
+      "jobs panel: the message feed renders the broadcast",
+      jp !== null && jp.msgRows === 1 && jp.text.includes("Two jobs are up for the journey"),
+    );
+    check(
+      "jobs panel: the open-count hint reflects the board",
+      jp !== null && jp.hint === "2 open",
+    );
+    const jobsPopulatedShot = await captureShot(cdp, ntpSession);
+    if (jobsPopulatedShot) await writeEvidence("ntp-jobs-populated.png", jobsPopulatedShot);
+    check(
+      "jobs panel: retained the populated-state screenshot",
+      jobsPopulatedShot !== null && jobsPopulatedShot.length > 200,
+    );
+
+    // A REAL named agent claims + completes the first claimable job through
+    // the lazy tool protocol (@demo-board), identity from the run registry.
+    const jpAgent = await msgValue({ type: "named-agent.create", name: "Jobs Journey Worker", role: "You claim and complete board jobs." });
+    const jpAgentId = jpAgent?.agent?.id ?? null;
+    const jpRun = jpAgentId
+      ? await msgValue({ type: "named-agent.run", id: jpAgentId, task: "@demo-board" })
+      : null;
+    const jpSettled = await msgValue({ type: "board.list" });
+    const jpCompleted = (jpSettled?.jobs ?? []).find((j: { status?: string }) => j?.status === "completed");
+    check(
+      "jobs panel: a real named agent claimed + completed a job",
+      jpAgentId !== null && (jpRun?.ok === true || jpRun?.status === "done" || jpRun?.done === true) &&
+        jpCompleted?.claimantId === jpAgentId &&
+        typeof jpCompleted?.result === "string" && jpCompleted.result.length > 0,
+    );
+
+    // Live again: the settled group shows outcome + bounded result excerpt,
+    // and the open count drops — all WITHOUT a reload.
+    for (let i = 0; i < 20; i++) {
+      jp = await jobsPanel();
+      if (jp && jp.settledRows === 1) break;
+      await sleep(250);
+    }
+    check(
+      "jobs panel: the settled group renders the outcome + result excerpt (live, no reload)",
+      jp !== null && jp.settledRows === 1 && jp.openRows === 1 &&
+        jp.text.includes("Completed") &&
+        jp.text.includes("claimed and completed via @demo-board") &&
+        jp.hint === "1 open",
+    );
+    const jobsSettledShot = await captureShot(cdp, ntpSession);
+    if (jobsSettledShot) await writeEvidence("ntp-jobs-settled.png", jobsSettledShot);
+    check(
+      "jobs panel: retained the settled-state screenshot",
+      jobsSettledShot !== null && jobsSettledShot.length > 200,
+    );
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 2 — capability onboarding + provider Update/Clear key.
@@ -1506,8 +1635,10 @@ async function main() {
 
     let bdDropdownsReady = false;
     for (let i = 0; i < 20 && !bdDropdownsReady; i++) {
+      // The selects are the shared <provider-select> component (its options
+      // live in shadow DOM) — read the populated `providers` property.
       bdDropdownsReady = await evalOpts(
-        `document.querySelectorAll("#board-deny-agent option").length >= 2 && document.querySelectorAll("#board-deny-peer option").length >= 2`,
+        `(document.querySelector("#board-deny-agent")?.providers?.length ?? 0) >= 2 && (document.querySelector("#board-deny-peer")?.providers?.length ?? 0) >= 2`,
       ).catch(() => false);
       if (!bdDropdownsReady) await sleep(250);
     }
@@ -1527,7 +1658,7 @@ async function main() {
     let bdRowRendered = false;
     for (let i = 0; i < 20 && !bdRowRendered; i++) {
       bdRowRendered = await evalOpts(
-        `[...document.querySelectorAll("#board-deny-list .perm-row")].some((el) => el.textContent.includes("bd-critic") && el.textContent.includes("bd-writer"))`,
+        `[...document.querySelectorAll("#board-deny-list .perm-row .perm-name")].some((el) => el.textContent === "BD Critic cannot claim jobs from BD Writer")`,
       ).catch(() => false);
       if (!bdRowRendered) await sleep(250);
     }

@@ -165,23 +165,14 @@
 
       <section id="board-permissions" class="panel">
         <h2>Board permissions</h2>
-        <p class="muted">Control which agents can post or claim jobs on the shared board. By default all named agents can interact. Adding a rule blocks a specific edge.</p>
-        <div id="board-deny-list" aria-live="polite"></div>
-        <div class="board-deny-add" style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:end">
-          <label style="display:flex;flex-direction:column;gap:2px"><span class="muted">Action</span>
-            <select id="board-deny-action" style="min-width:100px"><option value="claim">claim jobs from</option><option value="post">post jobs targeting</option></select>
-          </label>
-          <label style="display:flex;flex-direction:column;gap:2px"><span class="muted">Agent</span>
-            <select id="board-deny-agent" style="min-width:140px"></select>
-          </label>
-          <label style="display:flex;flex-direction:column;gap:2px"><span class="muted">Cannot</span>
-            <span class="muted" id="board-deny-peer-label" style="padding:4px 0">peer</span>
-          </label>
-          <label style="display:flex;flex-direction:column;gap:2px"><span class="muted">Peer</span>
-            <select id="board-deny-peer" style="min-width:140px"></select>
-          </label>
-          <button id="board-deny-add-btn" class="btn small">Add rule</button>
-        </div>
+        <p class="muted">Every named agent and the hub can post and claim jobs on the shared board. A rule blocks one specific edge.</p>
+        <div id="board-deny-list" role="list" aria-live="polite" aria-label="Board deny rules"></div>
+        <form class="board-deny-add" id="board-deny-form" aria-label="Add a board rule">
+          <provider-select id="board-deny-agent" label="Agent" placeholder="Choose an agent"></provider-select>
+          <provider-select id="board-deny-action" label="Cannot" placeholder="Choose what is blocked" providers='[{"id":"claim","name":"claim jobs from"},{"id":"post","name":"post jobs targeting"}]'></provider-select>
+          <provider-select id="board-deny-peer" label="Peer" placeholder="Choose a peer"></provider-select>
+          <button id="board-deny-add-btn" class="btn small" type="submit">Add rule</button>
+        </form>
       </section>
 
       <section id="browser" class="panel">

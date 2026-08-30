@@ -38,13 +38,16 @@ import {
   BOARD_MAX_SETTLED_JOBS,
   BOARD_MAX_TOMBSTONES,
   BOARD_MESSAGES_KEY,
+  boardHeartbeatPlan,
   boardText,
+  boardWakeTargets,
   canClaimJob,
   canPostJob,
   createAgentBoard,
   createAgentBoardRoutes,
   foldJobEvents,
   foldMessageEvents,
+  posterThreadResolver,
   pruneJobEvents,
 } from "../extension/lib/agent-board.js";
 import { INFLIGHT_HEARTBEAT_MS, INFLIGHT_LEASE_MS } from "../extension/lib/scheduler.js";
@@ -362,6 +365,38 @@ Deno.test("board routes: caller identity comes from the route CONTEXT, never mod
   assertEquals(broadcasts.some((e) => e.type === "board-job-claimed"), true);
 });
 
+Deno.test("board routes: board.messages exposes the read-side feed (bounded, most-recent-first)", async () => {
+  // Distinct injected timestamps: two posts in the same millisecond must
+  // still order most-recent-first by the fold's ts sort.
+  let tick = 1000;
+  const { routes } = createAgentBoardRoutes({
+    memory: mockMemory(),
+    withLock: (fn) => fn(),
+    listAgents: async () => AGENTS,
+    resolveCaller: () => null,
+    broadcast: () => {},
+    now: () => ++tick,
+  });
+  // An empty board reads as an empty feed (never an error, never undefined).
+  const empty = await routes["board.messages"]({}, {});
+  assertEquals(empty.ok, true);
+  assertEquals(empty.messages, []);
+  // Two real posts land most-recent-first.
+  await routes["board.message"]({ to: "broadcast", body: "first message" }, { agentId: "writer" });
+  await routes["board.message"]({ to: "critic", body: "second message" }, { agentId: "writer" });
+  const listed = await routes["board.messages"]({}, {});
+  assertEquals(listed.ok, true);
+  assertEquals(listed.messages.length, 2);
+  assertEquals(listed.messages[0].body, "second message");
+  assertEquals(listed.messages[1].body, "first message");
+  assertEquals(listed.messages[0].toName, "The Critic");
+  // The limit clamps (the owner surface asks for a handful, never the log).
+  const one = await routes["board.messages"]({ limit: 1 }, {});
+  assertEquals(one.messages.length, 1);
+  const clamped = await routes["board.messages"]({ limit: 1000 }, {});
+  assertEquals(clamped.messages.length <= 50, true);
+});
+
 // ── (5) tool wiring ─────────────────────────────────────────────────────────
 Deno.test("board tools: the model-facing tools forward args to the right routes through callRoute", async () => {
   const calls = [];
@@ -381,7 +416,7 @@ Deno.test("board tools: the model-facing tools forward args to the right routes 
 });
 
 Deno.test("board tools: registered in the tool names + capability inventory", () => {
-  for (const name of ["board_post_job", "board_claim_job", "board_complete_job", "board_send_message", "board_list", "board_read"]) {
+  for (const name of ["board_post_job", "board_claim_job", "board_complete_job", "board_send_message", "board_list", "board_read", "board_read_messages"]) {
     assertEquals(MANAGEMENT_TOOL_NAMES.includes(name), true, `${name} missing from MANAGEMENT_TOOL_NAMES`);
     assertEquals(MANAGEMENT_CAPABILITY_TOOL_NAMES.includes(name), true, `${name} missing from the capability inventory`);
   }
@@ -1068,4 +1103,162 @@ Deno.test("capabilities: no duplicate capability IDs", async () => {
   const { CAPABILITIES } = await import("../extension/lib/capabilities.js");
   const ids = CAPABILITIES.map((c) => c.id);
   assertEquals(new Set(ids).size, ids.length, `duplicate capability IDs: ${ids.join(", ")}`);
+});
+
+// ── CAP-FB-20260830-AGENT-BOARD-WORKING-01 — the board works end to end ─────
+
+// (step 1) The SW resolver reads the durable registry SNAPSHOT — `list()`
+// returns `{ runs }`, not an array. Every model-side post used to die here
+// with "records.find is not a function" (board lane finding 1).
+Deno.test("board routes: the production resolver reads durableRuns.list().runs", async () => {
+  const durableRuns = { list: async () => ({ runs: [{ executionId: "exec-writer", threadId: "thread-9" }, { executionId: "exec-other", threadId: "thread-x" }] }) };
+  const resolve = posterThreadResolver(durableRuns);
+  assertEquals(await resolve({ executionId: "exec-writer" }), "thread-9");
+  assertEquals(await resolve({ executionId: "exec-unknown" }), null);
+  assertEquals(await resolve({}), null);
+  const { routes } = createAgentBoardRoutes({
+    memory: mockMemory(),
+    withLock: (fn) => fn(),
+    listAgents: async () => AGENTS,
+    resolveCaller: (context) => (context?.executionId === "exec-writer" ? "writer" : null),
+    resolvePosterThreadId: resolve,
+  });
+  const posted = await routes["board.post"]({ description: "a model-context post" }, { principal: "model", executionId: "exec-writer" });
+  assertEquals(posted.ok, true, JSON.stringify(posted));
+  assertEquals(posted.job.posterThreadId, "thread-9");
+});
+
+Deno.test("board wiring: the SW uses posterThreadResolver, wakeBoardAgent and the heartbeat plan", async () => {
+  const swSrc = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const wiring = swSrc.match(/const boardRoutes = createAgentBoardRoutes\(\{([\s\S]*?)\n\}\);/)?.[1] ?? "";
+  assert(wiring.includes("resolvePosterThreadId: posterThreadResolver(durableRuns)"), "the SW must resolve the poster thread through the shared helper");
+  assert(wiring.includes("wakeAgent: wakeBoardAgent"), "the SW must pass the wake hook");
+  assert(swSrc.includes("boardHeartbeatPlan("), "the SW must heartbeat live claimants automatically");
+  assert(!wiring.includes("records.find("), "the array-shaped read must not come back");
+});
+
+// (step 7) A blocked job is VISIBLY blocked: listJobs derives `blocked` from
+// its unsettled blockers so every surface (sidebar, board_list, demo model)
+// can tell it from an open one.
+Deno.test("board store: listJobs marks unsettled blockedBy as blocked", async () => {
+  const board = createAgentBoard({ memory: mockMemory() });
+  const parent = await board.postJob({ callerId: "writer", agents: AGENTS, description: "parent" });
+  const child = await board.postJob({ callerId: "writer", agents: AGENTS, description: "child", blockedBy: [parent.job.id] });
+  let jobs = await board.listJobs();
+  assertEquals(jobs.find((j) => j.id === child.job.id).blocked, true);
+  assertEquals(jobs.find((j) => j.id === child.job.id).blockedByOpen, 1);
+  assertEquals(jobs.find((j) => j.id === parent.job.id).blocked, false);
+  await board.claimJob({ callerId: "researcher", agents: AGENTS, jobId: parent.job.id });
+  await board.settleJob({ callerId: "researcher", jobId: parent.job.id, result: "done" });
+  jobs = await board.listJobs();
+  assertEquals(jobs.find((j) => j.id === child.job.id).blocked, false);
+  assertEquals(jobs.find((j) => j.id === child.job.id).blockedByOpen, 0);
+});
+
+// (step 4) Agents can READ the board: board_read_messages forwards to
+// board.messages, and the route filters a model caller to broadcast + its
+// own addressed messages (the caller comes from the context, never args).
+Deno.test("board tools: board_read_messages forwards to board.messages with the caller filter", async () => {
+  const calls = [];
+  const tools = managementToolset({ callRoute: (type, args) => { calls.push([type, args]); return { ok: true, messages: [] }; } });
+  await tools.board_read_messages.execute({ limit: 5, refJobId: "job_1" });
+  assertEquals(calls[0], ["board.messages", { limit: 5, refJobId: "job_1" }]);
+  assertStringIncludes(tools.board_send_message.description, "board_read_messages");
+  const { routes } = createAgentBoardRoutes({
+    memory: mockMemory(),
+    withLock: (fn) => fn(),
+    listAgents: async () => AGENTS,
+    resolveCaller: (context) => ({ "exec-writer": "writer", "exec-critic": "critic", "exec-researcher": "researcher" })[context?.executionId] ?? null,
+  });
+  await routes["board.message"]({ to: "broadcast", body: "to all" }, { principal: "model", executionId: "exec-writer" });
+  await routes["board.message"]({ to: "critic", body: "for the critic", refJobId: "job_1" }, { principal: "model", executionId: "exec-writer" });
+  await routes["board.message"]({ to: "researcher", body: "for the researcher" }, { principal: "model", executionId: "exec-writer" });
+  const critic = await routes["board.messages"]({}, { principal: "model", executionId: "exec-critic" });
+  assertEquals(critic.ok, true);
+  assertEquals(critic.messages.map((m) => m.body).sort(), ["for the critic", "to all"]);
+  const byJob = await routes["board.messages"]({ refJobId: "job_1" }, { principal: "model", executionId: "exec-critic" });
+  assertEquals(byJob.messages.map((m) => m.body), ["for the critic"]);
+  // The owner surface (no model principal) reads the whole feed.
+  const owner = await routes["board.messages"]({}, {});
+  assertEquals(owner.messages.length, 3);
+  // A stale model context is denied, never widened to the whole feed.
+  const stale = await routes["board.messages"]({}, { principal: "model", executionId: "exec-gone" });
+  assertEquals(stale.ok, false);
+  assertEquals(stale.code, "board-context-stale");
+});
+
+// (step 3) Posting WAKES the target: exactly one run for the target agent,
+// none for the poster, idempotent per job, and the wake carries the job.
+Deno.test("board wake: a targeted post starts exactly one run for the target and none for the poster", async () => {
+  const woken = [];
+  const memory = mockMemory();
+  const { routes } = createAgentBoardRoutes({
+    memory,
+    withLock: (fn) => fn(),
+    listAgents: async () => AGENTS,
+    resolveCaller: (context) => context?.agentId ?? null,
+    wakeAgent: async ({ agentId, jobId, task }) => { woken.push({ agentId, jobId, task }); },
+  });
+  const posted = await routes["board.post"]({ description: "find three articles about WebMCP", targetAgent: "Researcher" }, { agentId: "writer" });
+  assertEquals(posted.ok, true);
+  assertEquals(posted.woke, ["researcher"]);
+  assertEquals(woken.length, 1);
+  assertEquals(woken[0].agentId, "researcher");
+  assertEquals(woken[0].jobId, posted.job.id);
+  assertStringIncludes(woken[0].task, "find three articles about WebMCP");
+  assertStringIncludes(woken[0].task, posted.job.id);
+  assertStringIncludes(woken[0].task, "board_claim_job");
+  // A job targeted at its own poster is refused by the store; an untargeted
+  // job with no capability wakes nobody; a capability wakes matching agents
+  // (never the poster).
+  const open = await routes["board.post"]({ description: "anyone" }, { agentId: "writer" });
+  assertEquals(open.ok, true);
+  assertEquals(open.woke, []);
+  assertEquals(woken.length, 1);
+  const skilled = await routes["board.post"]({ description: "critique this", requiredCapability: "critique" }, { agentId: "critic" });
+  assertEquals(skilled.ok, true);
+  assertEquals(skilled.woke, []); // no other agent advertises "critique"
+  // The pure selector: skills/role/name match the capability; the poster never.
+  const agents = [
+    { id: "critic", name: "The Critic", skills: ["critique"] },
+    { id: "writer", name: "Blog Writer", role: "writes and critiques drafts" },
+    { id: "researcher", name: "Researcher" },
+  ];
+  assertEquals(boardWakeTargets({ posterId: "critic", requiredCapability: "critique", targetAgentId: null }, agents), ["writer"]);
+  assertEquals(boardWakeTargets({ posterId: "writer", requiredCapability: "critique", targetAgentId: null }, agents), ["critic"]);
+  assertEquals(boardWakeTargets({ posterId: "writer", targetAgentId: "researcher" }, agents), ["researcher"]);
+  assertEquals(boardWakeTargets({ posterId: "writer", targetAgentId: "writer" }, agents), []);
+  // Idempotent: a second wake for the same job is a no-op even across routes.
+  const again = await routes["board.wake"]({ jobId: posted.job.id }, {});
+  assertEquals(again.ok, true);
+  assertEquals(again.woke, []);
+  assertEquals(woken.length, 1);
+  // A wake failure never fails the post (the job is on the board regardless).
+  const { routes: failing } = createAgentBoardRoutes({
+    memory: mockMemory(),
+    withLock: (fn) => fn(),
+    listAgents: async () => AGENTS,
+    resolveCaller: (context) => context?.agentId ?? null,
+    wakeAgent: async () => { throw new Error("no provider"); },
+  });
+  const r = await failing["board.post"]({ description: "x", targetAgent: "researcher" }, { agentId: "writer" });
+  assertEquals(r.ok, true);
+  assertEquals(r.woke, []);
+  assertEquals(typeof r.wakeError, "string");
+});
+
+// (step 11) The SW heartbeats a claim automatically while the claimant's run
+// is live — the model never has to remember. The plan is pure: claimed jobs
+// whose claimant has a live execution are heartbeated through that execution.
+Deno.test("board heartbeat: claimed jobs with a live claimant run are heartbeated, others are not", () => {
+  const jobs = [
+    { id: "j1", status: "claimed", claimantId: "critic" },
+    { id: "j2", status: "claimed", claimantId: "writer" },
+    { id: "j3", status: "pending", claimantId: null },
+    { id: "j4", status: "completed", claimantId: "critic" },
+  ];
+  const live = new Map([["exec-critic", { agentId: "critic" }], ["exec-researcher", { agentId: "researcher" }]]);
+  assertEquals(boardHeartbeatPlan(jobs, live), [{ jobId: "j1", executionId: "exec-critic" }]);
+  assertEquals(boardHeartbeatPlan([], live), []);
+  assertEquals(boardHeartbeatPlan(jobs, new Map()), []);
 });

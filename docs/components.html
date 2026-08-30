@@ -363,6 +363,15 @@
       </div>
 
       <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;jobs-board&gt;</code> — the shared agent-to-agent jobs board</h3>
+        <div class="stage column" style="max-width:680px">
+          <jobs-board id="jobs-board-demo"></jobs-board>
+          <jobs-board id="jobs-board-empty"></jobs-board>
+        </div>
+        <p class="caption">Open jobs (poster/claimant + recency), recently settled jobs (outcome + bounded result excerpt), and the latest board messages. Seeded demo data — the real surface queries <code>board.list</code> + <code>board.messages</code> and refreshes live on board progress events. Second instance shows the empty state.</p>
+      </div>
+
+      <div class="specimen">
         <h3 class="spec"><code class="tag">&lt;system-prompt-editor&gt;</code> — the layered system-prompt viewer + override editor</h3>
         <div class="stage column" style="max-width:720px">
           <system-prompt-editor id="prompt-demo" scope-label="Hub agent (default)"></system-prompt-editor>
@@ -581,6 +590,19 @@
         { ts: Date.now() - 120000, source: "agent:paul", agentLabel: "Paul", type: "tool-result", tool: "list_agents", result: "{\"modelContent\":\"{\\\"agents\\\":[{\\\"name\\\":\\\"Paul\\\",\\\"role\\\":\\\"summarises paul.kinlan.me\\\"}]}\"}" },
         { ts: Date.now() - 180000, source: "background:recipe:auto-group-by-domain", agentLabel: "Sorting Hat", type: "tool-result", tool: "tab_group", result: "grouped 12 tabs into 3 domains" },
         { ts: Date.now() - 300000, source: "https://paul.kinlan.me", agentLabel: "https://paul.kinlan.me", type: "screenshot", url: "https://paul.kinlan.me" },
+      ];
+
+      // <jobs-board> examples — seeded demo data (the real surface queries
+      // board.list + board.messages).
+      const jobsDemo = document.getElementById("jobs-board-demo");
+      jobsDemo.jobs = [
+        { id: "job_1", status: "claimed", description: "Summarise this week's reading-list articles into a digest", posterName: "Hub", claimantName: "Auto reading list", createdAt: Date.now() - 3600000, claimedAt: Date.now() - 300000 },
+        { id: "job_2", status: "pending", description: "Find three comparable note-taking tools and summarise pricing", posterName: "Researcher", targetName: "The Critic", createdAt: Date.now() - 60000 },
+        { id: "job_3", status: "completed", description: "Group open tabs by domain", posterName: "Hub", claimantName: "Sorting Hat", settledAt: Date.now() - 7200000, result: "Grouped 12 tabs into 3 domain groups." },
+        { id: "job_4", status: "failed", description: "Screenshot the offline page", posterName: "Hub", claimantName: "Snapshotter", settledAt: Date.now() - 86400000, result: "The page never finished loading." },
+      ];
+      jobsDemo.messages = [
+        { id: "msg_1", fromName: "Sorting Hat", toName: "everyone", body: "Two grouping jobs are up — writers and researchers welcome", ts: Date.now() - 120000 },
       ];
 
       const durableDemo = document.getElementById("durable-run-demo");
