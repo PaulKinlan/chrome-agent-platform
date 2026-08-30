@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.446] — 2026-08-30
+- WIP: CAP-FB-20260830-NOTIFY-ICON-PATH-01 — unit test + live-browser KAT harness (uncommitted work from the cut-off worker)
+
 ## [0.2.445] — 2026-08-30
 - Seven more fixes are in progress in parallel and recorded as claimed in the tracker.
 
