@@ -5784,9 +5784,10 @@ customElements.define("agent-dialog", AgentDialog);
  * max-width:90vw keep it theme/RTL/narrow-safe; destructive dialogs name the
  * exact object in the caller-provided body and focus Cancel by default.
  *
- * `requireGenuineGesture` additionally refuses to resolve true unless the click
- * is `isTrusted` AND `navigator.userActivation.isActive` — a script-driven
- * click can still DISMISS the dialog, but can never mint an approval. This was
+ * `requireGenuineGesture` (DEFAULT true since CAP-FB-20260830-UNTRUSTED-CONTENT-
+ * FENCING-01) refuses to resolve true unless the click is `isTrusted` AND
+ * `navigator.userActivation.isActive` — a script-driven click can still
+ * DISMISS the dialog, but can never mint an approval. This was
  * the one property that justified a hand-rolled copy in options.js for the
  * per-agent provider mutation; it belongs in the shared vocabulary instead
  * (CAP-FB-20260827-DIALOG-CONSOLIDATION-01), so any future approval gets it by
@@ -5824,7 +5825,14 @@ function mountConfirmDialogStyle(doc) {
   (doc.head ?? doc.documentElement).append(style);
   confirmDialogStyleMounted = true;
 }
-export function confirmActionDialog({ title = "Confirm", body = "", confirmLabel = "Confirm", destructive = false, note = "", requireGenuineGesture = false, returnFocusTo = null } = {}) {
+// `requireGenuineGesture` DEFAULTS TO TRUE (CAP-FB-20260830-UNTRUSTED-CONTENT-
+// FENCING-01): a scripted `.click()` — from injected page content, a hostile
+// extension page script, or a model-driven surface — can dismiss a confirm but
+// never mint an approval. A real click or Enter on the focused button is a
+// genuine gesture (isTrusted + a live user activation), so keyboard users are
+// unaffected. Pass `requireGenuineGesture: false` ONLY for a confirm whose
+// acceptance has no side effect worth protecting.
+export function confirmActionDialog({ title = "Confirm", body = "", confirmLabel = "Confirm", destructive = false, note = "", requireGenuineGesture = true, returnFocusTo = null } = {}) {
   return new Promise((resolve) => {
     mountConfirmDialogStyle(document);
     const dialog = document.createElement("dialog");

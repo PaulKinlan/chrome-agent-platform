@@ -97,6 +97,7 @@ import {
 import { kvGet, kvSet, storageAvailable } from "./kv.js";
 import { buildSkillsPrompt } from "./skills.js";
 import { RUNTIME_CONTEXT_PLACEHOLDER } from "./runtime-context.js";
+import { isUntrustedToken, renderUntrustedPolicy, UNTRUSTED_POLICY_PLACEHOLDER } from "./untrusted-fence.js";
 import { renderRuntimePolicy } from "./runtime-policy.js";
 
 /* ── The protected constraints (immutable, non-editable, FINAL layer) ──────
@@ -740,6 +741,25 @@ export function composeSystemPrompt({
       text: isPlaceholder
         ? RUNTIME_CONTEXT_PLACEHOLDER
         : String(runtimeContext.text ?? RUNTIME_CONTEXT_PLACEHOLDER),
+    });
+    // 5.6 untrusted-content-policy — PROTECTED + DYNAMIC
+    // (CAP-FB-20260830-UNTRUSTED-CONTENT-FENCING-01): names the per-assembly
+    // boundary token the lazy projection wraps every untrusted tool result in
+    // (lib/untrusted-fence.js) and states that fenced text is data, never an
+    // instruction. Dynamic so attestation compares it by TEMPLATE receipt (the
+    // token legitimately differs per run); protected so no owner text, role or
+    // skill can edit it; placed with the runtime layer so it exists exactly
+    // when the run context does (preview and run carry the same layer set).
+    const token = isPlaceholder ? null : runtimeContext.untrustedToken;
+    layers.push({
+      id: "untrusted-content-policy",
+      label: "Untrusted content policy",
+      source: "protected",
+      editable: false,
+      protected: true,
+      dynamic: true,
+      templateText: UNTRUSTED_POLICY_PLACEHOLDER,
+      text: isUntrustedToken(token) ? renderUntrustedPolicy(token) : UNTRUSTED_POLICY_PLACEHOLDER,
     });
   }
 

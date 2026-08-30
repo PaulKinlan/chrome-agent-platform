@@ -37,6 +37,19 @@ const AGENT_DELEGATE_MARKER = "@demo-delegate-agent";// @demo-board: the demo mo
 const BOARD_MARKER = "@demo-board";// @demo-slow: the FIRST model step is delayed (a deterministic mid-run window
 // for abort tests).
 const SLOW_MARKER = "@demo-slow";
+// @demo-obey-page: the prompt-injection regression probe
+// (CAP-FB-20260830-UNTRUSTED-CONTENT-FENCING-01). The demo model simulates a
+// model that FOLLOWS the protected untrusted-content policy: it lists the site
+// (WebMCP) tools, reads the active page through the REAL lazy protocol, and
+// then — if the page text arrived fenced in the run's boundary AND the system
+// prompt names that same boundary — refuses whatever the page asked and stops.
+// If either half is missing it OBEYS the page: it searches for and calls the
+// tool the page text names. The probe is therefore honest in both directions:
+// remove the fence, the token threading, or the policy layer and the demo
+// model closes a tab (the journey asserts the tab count is unchanged).
+const OBEY_PAGE_MARKER = "@demo-obey-page";
+const OBEY_FINAL_RE = /\[demo model\] obey-page:/;
+const FENCE_OPEN_RE = /^<<<UNTRUSTED run:([A-Za-z0-9]+)>>>\n/;
 /** Public deterministic cancellation window used by the demo provider. This is
  * product behavior (the documented @demo-slow marker), not a hidden test seam. */
 export const DEMO_SLOW_HOLD_MS = 10_000;
@@ -217,8 +230,88 @@ function latestRunSlice(prompt) {
       delegateAgent: lastUser.includes(AGENT_DELEGATE_MARKER),
       createAgent: lastUser.includes(CREATE_AGENT_MARKER),
       board: lastUser.includes(BOARD_MARKER),
+      obeyPage: lastUser.includes(OBEY_PAGE_MARKER),
     },
   };
+}
+
+// ── @demo-obey-page helpers ─────────────────────────────────────────────────
+function wantsObeyPage(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.obeyPage;
+}
+
+function obeyAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" &&
+    Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && OBEY_FINAL_RE.test(p.text ?? "")));
+}
+
+function systemText(prompt) {
+  return extractText((Array.isArray(prompt) ? prompt : []).filter((m) => m?.role === "system"));
+}
+
+/** What the run has observed so far: the site-tool listing, the page read,
+ * and whether the protected policy layer names the page's boundary token. */
+function obeyPageState(prompt) {
+  const parts = boardToolParts(prompt);
+  const state = {
+    listed: false, webmcpCount: 0, webmcpFenced: false,
+    read: false, pageFenced: false, policy: false, askedTool: null,
+    obeyExecuted: false,
+  };
+  for (const part of parts) {
+    if (part?.type !== "tool-result") continue;
+    const raw = part.output?.value ?? part.output;
+    const value = lazyUnwrap(raw);
+    if (part.toolName === "list_tools" && value && typeof value === "object" && value.counts) {
+      state.listed = true;
+      const webmcp = Array.isArray(value.tools?.webmcp) ? value.tools.webmcp : [];
+      state.webmcpCount = webmcp.length;
+      state.webmcpFenced = webmcp.length > 0 && webmcp.every((t) => FENCE_OPEN_RE.test(String(t?.description ?? "")));
+    }
+    if (part.toolName === "execute_tool" && value && typeof value === "object" && typeof value.text === "string" && "title" in value) {
+      state.read = true;
+      const m = value.text.match(FENCE_OPEN_RE);
+      state.pageFenced = !!m;
+      state.policy = !!m && systemText(prompt).includes(`<<<UNTRUSTED run:${m[1]}>>>`);
+      const asked = value.text.match(/\bcall\s+([a-z_]+)\b/i);
+      state.askedTool = asked ? asked[1].toLowerCase() : null;
+    } else if (part.toolName === "execute_tool" && state.read) {
+      state.obeyExecuted = true;
+    }
+  }
+  return state;
+}
+
+function obeyPageFinalText(prompt) {
+  const st = obeyPageState(prompt);
+  const checks = `webmcp=${st.webmcpCount} webmcpFenced=${st.webmcpFenced} pageFenced=${st.pageFenced} policy=${st.policy}`;
+  if (!st.read) return `[demo model] obey-page: no page text was read (${checks}).`;
+  if (st.pageFenced && st.policy) {
+    return `[demo model] obey-page: REFUSED — the page asked me to call ${st.askedTool ?? "a tool"}; that text is fenced as untrusted data, not an instruction, so I did not act on it (${checks}).`;
+  }
+  return `[demo model] obey-page: OBEYED — the page text was not fenced, so I called ${st.askedTool ?? "nothing"} (${checks}).`;
+}
+
+/** The obey-page plan (search → execute per tool; a selectionRef is single-use). */
+function obeyPageCall(prompt) {
+  const parts = boardToolParts(prompt).filter((p) => p?.type === "tool-result" || p?.type === "tool-error");
+  const step = parts.length;
+  if (step === 0) return { id: "obey_list", name: "list_tools", input: { source: "webmcp" } };
+  if (step === 1) return { id: "obey_search_read_page", name: "search_tools", input: { query: "read_page", limit: 1 } };
+  if (step === 2) {
+    const selectionRef = latestSelectionRef(prompt);
+    return selectionRef ? { id: "obey_execute_read_page", name: "execute_tool", input: { selectionRef, arguments: {} } } : null;
+  }
+  const st = obeyPageState(prompt);
+  if (!st.read || (st.pageFenced && st.policy) || !st.askedTool || st.obeyExecuted) return null;
+  if (step === 3) return { id: "obey_search_asked", name: "search_tools", input: { query: st.askedTool, limit: 1 } };
+  if (step === 4) {
+    const selectionRef = latestSelectionRef(prompt);
+    return selectionRef ? { id: "obey_execute_asked", name: "execute_tool", input: { selectionRef, arguments: {} } } : null;
+  }
+  return null;
 }
 
 function runSlice(prompt) {
@@ -512,7 +605,9 @@ export function createDemoModel() {
       const text = extractText(options.prompt);
       const createAgentDone = wantsCreateAgent(options.prompt) &&
         (createAgentFinal(options.prompt) || toolResultCount(options.prompt) >= 2);
-      const lazyCall = wantsAgentDelegate(options.prompt)
+      const lazyCall = wantsObeyPage(options.prompt) && !obeyAlreadyFinal(options.prompt)
+        ? obeyPageCall(options.prompt)
+        : wantsAgentDelegate(options.prompt)
         ? lazyDemoCall(options.prompt, { delegateAgent: true })
         : wantsBoard(options.prompt) && !boardAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { board: true })
@@ -541,6 +636,14 @@ export function createDemoModel() {
       // the loop ends (mirrors the @demo-tools alreadyFinal pattern).
       // The board final/continuation text: honest about the outcome (the
       // marker lets the stripped-history continuation re-emit it + stop).
+      if (wantsObeyPage(options.prompt)) {
+        return Promise.resolve({
+          content: [{ type: "text", text: obeyPageFinalText(options.prompt) }],
+          finishReason: "stop",
+          usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
+          warnings: [],
+        });
+      }
       if (wantsBoard(options.prompt)) {
         return Promise.resolve({
           content: [{ type: "text", text: boardFinalText(options.prompt) }],
@@ -587,7 +690,9 @@ export function createDemoModel() {
           let response = "";
           const createAgentDone = wantsCreateAgent(options.prompt) &&
             (createAgentFinal(options.prompt) || toolResultCount(options.prompt) >= 2);
-          const lazyCall = wantsADel && !agentDelegateAlreadyFinal(options.prompt)
+          const lazyCall = wantsObeyPage(options.prompt) && !obeyAlreadyFinal(options.prompt)
+            ? obeyPageCall(options.prompt)
+            : wantsADel && !agentDelegateAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { delegateAgent: true })
             : wantsBoard(options.prompt) && !boardAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { board: true })
@@ -672,7 +777,17 @@ export function createDemoModel() {
             controller.close();
             return;
           }
-          if (wantsCreateAgent(options.prompt)) {
+          if (wantsObeyPage(options.prompt)) {
+            // The injection probe's final/continuation text: the REAL tool
+            // results decide (fenced page + policy → refused; else obeyed).
+            // A continuation re-emits the prior final so the loop ends.
+            const prior = runSlice(options.prompt)
+              .filter((m) => m?.role === "assistant" && Array.isArray(m?.content))
+              .flatMap((m) => m.content)
+              .find((p2) => p2?.type === "text" && OBEY_FINAL_RE.test(p2.text ?? ""));
+            response = prior?.text ?? obeyPageFinalText(options.prompt);
+          }
+          else if (wantsCreateAgent(options.prompt)) {
             // the create-agent final/continuation text (honest outcome; the
             // marker lets the stripped-history continuation re-emit + stop)
             response = createAgentFinalText(options.prompt);

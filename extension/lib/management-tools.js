@@ -13,6 +13,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { ASSET_BOUNDS, ASSET_TYPES } from "./artifacts.js";
+import { tagUntrusted } from "./untrusted-fence.js";
 import { SCRIPT_BOUNDS } from "./scripts.js";
 
 /** The fixed management tool names (for the orchestrator introspection route). */
@@ -281,12 +282,14 @@ export function managementToolset({ callRoute }) {
       inputSchema: z.object({
         status: z.enum(["pending", "claimed", "completed", "failed"]).optional().describe("filter by status; omit for all"),
       }),
-      execute: ({ status }) => call("board.list", { status }),
+      // Board jobs are written by OTHER agents (and, through them, by pages):
+      // tagged untrusted so the lazy projection fences them (lib/untrusted-fence.js).
+      execute: async ({ status }) => tagUntrusted(await call("board.list", { status })),
     }),
     board_read: tool({
       description: "Read one board job in full (description, claimant, result).",
       inputSchema: z.object({ jobId: z.string() }),
-      execute: ({ jobId }) => call("board.read", { jobId }),
+      execute: async ({ jobId }) => tagUntrusted(await call("board.read", { jobId })),
     }),
 
     // ---- introspection ----

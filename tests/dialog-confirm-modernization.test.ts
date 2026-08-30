@@ -60,7 +60,12 @@ class FakeNode {
     e.preventDefault ??= () => { e.defaultPrevented = true; };
     for (const f of this.listeners[t] ?? []) f(e);
   }
-  click() { this.dispatch("click", { target: this }); }
+  // A REAL user click: trusted + under a live user activation (the shared
+  // confirm refuses to mint an approval from a scripted click by default —
+  // CAP-FB-20260830-UNTRUSTED-CONTENT-FENCING-01). `scriptedClick` is the
+  // untrusted `.click()` a page/model script would issue.
+  click() { this.dispatch("click", { target: this, isTrusted: true }); }
+  scriptedClick() { this.dispatch("click", { target: this, isTrusted: false }); }
   remove() {
     if (this.parent) {
       const i = this.parent.children.indexOf(this);
@@ -83,6 +88,8 @@ const FakeDoc = {
   },
 };
 globalThis.document = FakeDoc;
+// A live user activation (what a real click/Enter produces in the browser).
+Object.defineProperty(globalThis.navigator, "userActivation", { value: { isActive: true }, configurable: true });
 
 const { confirmActionDialog } = await import("../extension/shared/components.js");
 
@@ -170,6 +177,22 @@ Deno.test("confirmActionDialog: the shared style mounts exactly once across dial
   assertStringIncludes(styles[0].textContent, ".cap-confirm-dialog::backdrop");
   d1.accept.click(); d2.cancel.click();
   await d1.p; await d2.p;
+});
+
+Deno.test("confirmActionDialog: a SCRIPTED click never approves by default (requireGenuineGesture defaults to true)", async () => {
+  const d = openDialog({ title: "Close 5 tabs?", body: "Close every open tab?", confirmLabel: "Close tabs", destructive: true });
+  d.accept.scriptedClick();
+  await tick();
+  assertEquals(d.settled(), null, "an untrusted click must not resolve the promise");
+  assertEquals(d.dialog.open, true, "the dialog stays open for a real decision");
+  d.cancel.click();
+  await d.p;
+  assertEquals(d.settled(), false);
+  // The explicit opt-out still exists for side-effect-free confirms.
+  const plain = openDialog({ title: "t", body: "b", requireGenuineGesture: false });
+  plain.accept.scriptedClick();
+  await plain.p;
+  assertEquals(plain.settled(), true);
 });
 
 // ── B. Inventory completeness: zero legacy modal calls in shipped extension JS ──

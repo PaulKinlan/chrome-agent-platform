@@ -29,6 +29,19 @@ alarms) and acts on untrusted page content + model output. Threat vectors:
 - **Untrusted content → model → action** — page text can influence a model that
   can act. Prompt-injection: model output must not directly trigger destructive
   actions without the grant.
+- **Untrusted content is fenced** (`CAP-FB-20260830-UNTRUSTED-CONTENT-FENCING-01`,
+  `extension/lib/untrusted-fence.js`) — every untrusted tool result (`read_page`
+  text, WebMCP tool descriptions + results, board jobs, fetched bodies via the
+  `tagUntrusted` hook) reaches the model ONLY inside a labelled block bounded by
+  a random per-assembly token, and a protected, dynamic system-prompt layer
+  names that token and states that fenced text is data, never an instruction.
+  A tool never has to remember to wrap its own output: it tags its result
+  `untrusted: true` and the lazy projection fences it. Page content is still
+  rendered in cards with `textContent`. The passive WebMCP detector transports
+  a tool COUNT only; descriptions reach the model only after the owner enrols
+  the origin, and then fenced. `confirmActionDialog` refuses a scripted click by
+  default (`requireGenuineGesture: true`). The journey suite's `injection:`
+  checks assert all three, with the demo model scripted to obey the page.
 - **MV3 CSP** — no `eval`/`new Function` in the bundle (verified: 0 sites).
   (Exemption: the agent-script host `sandbox/script-sandbox.js` runs in the
   manifest `sandbox` page — an opaque origin with no chrome.* access — and uses

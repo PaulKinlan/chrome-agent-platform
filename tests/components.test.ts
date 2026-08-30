@@ -119,7 +119,8 @@ Deno.test("durable run registry: confirmation is terminal, context-bound, and re
     append(...kids) { for (const k of kids) { k.parent = this; this.children.push(k); } }
     addEventListener(t, f) { (this.listeners[t] ??= []).push(f); }
     dispatch(t, e = {}) { e.target ??= this; e.preventDefault ??= () => {}; for (const f of this.listeners[t] ?? []) f(e); }
-    click() { this.dispatch("click", { target: this }); }
+    // A REAL (trusted) click — the shared confirm refuses scripted approvals by default.
+    click() { this.dispatch("click", { target: this, isTrusted: true }); }
     remove() { if (this.parent) { const i = this.parent.children.indexOf(this); if (i >= 0) this.parent.children.splice(i, 1); this.parent = null; } }
     focus() {}
     showModal() { this.open = true; }
@@ -132,6 +133,7 @@ Deno.test("durable run registry: confirmation is terminal, context-bound, and re
   };
   const prevDoc = globalThis.document;
   globalThis.document = fakeDoc;
+  Object.defineProperty(globalThis.navigator, "userActivation", { value: { isActive: true }, configurable: true });
   try {
     const run = { taskPreview: "Publish report" };
     const denied = element._confirmCancel(run);

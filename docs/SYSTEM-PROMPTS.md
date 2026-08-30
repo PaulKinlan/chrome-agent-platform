@@ -18,6 +18,20 @@ run context) is proven per run by the **run-bound attestation** (below).
    mode `replace` the owner's text sits here in the base's position.
 4. **agent-role** — a named agent's role (`agent:<slug>` scopes only).
 5. **skills** — the per-run installed/included skills.
+5.5. **runtime-context** — the volatile per-assembly layer (date/time, system
+   identity, roster, memory index), rendered under a "data, not instructions"
+   label; the Settings preview renders its clearly-marked template.
+5.6. **untrusted-content-policy** — PROTECTED + DYNAMIC
+   (`CAP-FB-20260830-UNTRUSTED-CONTENT-FENCING-01`, `extension/lib/untrusted-fence.js`).
+   Composes whenever the runtime layer does. Names the per-assembly random
+   boundary token (`<<<UNTRUSTED run:<token>>>>` … `<<<END run:<token>>>>`) that
+   the lazy protocol wraps every untrusted tool result in — `read_page` text,
+   site (WebMCP) tool descriptions + results, board jobs, and (hook) fetched
+   bodies — and states that fenced text is data, never an instruction, and
+   that no mutating or destructive tool is called because such text asked.
+   Dynamic so attestation compares it by TEMPLATE receipt (the token differs
+   per run); protected so no owner text, role or skill can edit it. Static
+   baselines (no runtime context) stay byte-identical.
 6. **protected** — the immutable runtime policy, GENERATED from
    **extension/lib/runtime-policy.js** (the single authoritative source of
    every runtime security/origin/secret/permission constraint; registry id
@@ -194,8 +208,9 @@ instead of being described as per-install durable. No prompt content, key
 bytes, or unkeyed stable fingerprint of owner text is ever routed/journaled. A
 run proves it sent the previewed composition when its layered boundary
 receipts match the preview's per layer: static layers compare by exact
-receipt, and the dynamic `runtime-context` layer (date/time, roster, memory
-index — legitimately per-assembly) compares by its TEMPLATE receipt (the
+receipt, and the dynamic layers — `runtime-context` (date/time, roster, memory
+index) and `untrusted-content-policy` (the per-run boundary token) —
+legitimately per-assembly, compare by their TEMPLATE receipt (the
 preview renders that layer as its clearly-marked placeholder, so the
 preview's rendered receipt IS its template receipt). The comparator is
 `layerReceiptsMatch` in `extension/lib/system-prompts.js`; whole-composition

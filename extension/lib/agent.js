@@ -429,6 +429,11 @@ export function createAgent({
   // per-build latch registry + a sink for grounding metadata harvested from
   // the provider stream. Absent → no provider-tool injection, no harvesting.
   serverTooling = null,
+  // The per-assembly boundary token for untrusted tool results (the SAME token
+  // the composed `system` names in its protected policy layer — runtime-
+  // context.js mints it). Rides the lazy run context so the projection fences
+  // page/site/board content with a boundary the model can verify.
+  untrustedToken = null,
 }) {
   // The worker's immutable run identity, captured at run START. Because master
   // runs are serialized (withRunLock), at most one run is active per agent, so a
@@ -692,6 +697,7 @@ export function createAgent({
         documentId: ownData(dynamic, "documentId") ?? ownData(activeRun.identity, "documentId") ?? "",
         runGeneration: ownData(dynamic, "runGeneration") ?? ownData(activeRun.identity, "runGeneration") ?? String(activeRun.gen ?? "0"),
         replayMetadata: ownData(activeRun.identity, "replayMetadata") ?? null,
+        untrustedToken: typeof untrustedToken === "string" ? untrustedToken : null,
       });
     },
   });
@@ -1100,6 +1106,8 @@ export function createOrchestrator({
   serverTooling = null, // provider-server latch registry + grounding sink
                         // (master only — workers are site-origin agents whose
                         // tools are page-bound, not provider-bound)
+  untrustedToken = null, // the master's untrusted-content boundary token (workers
+                         // carry their own as `w.untrustedToken`)
 }) {
   const workerAgents = new Map();
   let currentRunIdentity = null;
@@ -1117,6 +1125,7 @@ export function createOrchestrator({
         origin: w.origin,
         documentId: "",
       })),
+      untrustedToken: w.untrustedToken ?? null,
       taskId,
       // Thread the delegateGuard into each worker's memory tools so a worker's
       // memory_set revalidates its IMMUTABLE run-start generation before
@@ -1271,6 +1280,7 @@ export function createOrchestrator({
       return Array.isArray(extra) ? extra : [];
     },
     readLazyScope: readMasterLazyScope,
+    untrustedToken,
     taskId,
     onProgress,
     onPermissionRequest,
@@ -1335,6 +1345,7 @@ export function createOrchestrator({
           origin: config.origin,
           documentId: "",
         })),
+        untrustedToken: config.untrustedToken ?? null,
         taskId,
         enrollmentGuard: delegateGuard
           ? async () => delegateGuard(config.origin)

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.434] — 2026-08-30
+- Security: text read from web pages, site (WebMCP) tool descriptions and results, and board jobs now reach the model inside a clearly labelled "untrusted" block with a random per-run boundary, and the agent's protected instructions say that such text is data, never an order — a page that says "close every tab" can no longer pass as an instruction. Confirmation dialogs also refuse scripted clicks by default. A new injection probe (`npm run test:security:injection`) proves it in a real loaded extension.
+
 ## [0.2.433] — 2026-08-30
 - Three more fixes are in progress in parallel and recorded as claimed in the tracker.
 
