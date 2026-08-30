@@ -10,6 +10,7 @@ import { tool } from "ai";
 import { z } from "zod";
 import { recordUsage } from "./usage.js";
 import { createRunTextTracker } from "./run-text-steps.js";
+import { createTextDeltaCoalescer } from "./text-delta-coalescer.js";
 import { grepAgentMemory } from "./named-agents.js";
 import { assertRunOwned } from "./run-fence.js";
 import { MODEL_PRICING } from "./model-prices.js";
@@ -611,6 +612,48 @@ export function createAgent({
     return value;
   };
 
+  // TEXT STREAMING (CAP-FB-20260830-TRANSCRIPT-STREAMING-01): every doStream
+  // is tee'd a second time and its text-delta parts are forwarded to the
+  // progress callback as bounded `text-delta` events (coalesced ~50 ms / 8 KiB,
+  // the first delta at once) so the transcript grows while the model is still
+  // answering. Attributed to the step that onStepStart announced; a step the
+  // run-text tracker flags as the likely hidden nudge reply is NOT streamed
+  // (its text lands — or is hidden — at step end exactly as before). The
+  // durable log never sees a delta: only the step's final `text` event is
+  // persisted. Each attempt's first flush carries `start:true` so a
+  // within-run retry restarts the bubble instead of appending to a failed
+  // attempt's partial text.
+  let streamStep = -1;
+  let streamHold = false;
+  let streamDrain = Promise.resolve();
+  const teeTextDeltas = (value) => {
+    if (streamHold || !value || typeof value !== "object" || !(value.stream instanceof ReadableStream)) return value;
+    const step = streamStep;
+    let first = true;
+    const coalescer = createTextDeltaCoalescer((delta) => {
+      const ev = { type: "text-delta", delta, step, ...(first ? { start: true } : {}) };
+      first = false;
+      try { progressCb?.(ev); } catch { /* a progress failure never breaks the stream */ }
+    });
+    let consumed;
+    let observed;
+    try { [consumed, observed] = value.stream.tee(); } catch { return value; }
+    streamDrain = (async () => {
+      const reader = observed.getReader();
+      try {
+        for (;;) {
+          const { done, value: part } = await reader.read();
+          if (done) break;
+          if (part && part.type === "text-delta" && typeof part.delta === "string") coalescer.push(part.delta);
+        }
+      } catch { /* the consumed branch reports the failure */ } finally {
+        try { reader.releaseLock(); } catch { /* ignore */ }
+        coalescer.flush();
+      }
+    })();
+    return { ...value, stream: consumed };
+  };
+
   const boundModel = new Proxy(model.model, {
     get(target, prop, receiver) {
       const pushAttempt = () => ({ id: crypto.randomUUID(), occurredAt: new Date().toISOString(), ordinal: ++attemptOrdinal });
@@ -667,7 +710,7 @@ export function createAgent({
             span.end("ok");
             lastProviderError = null;
             modelLog.debug(`attempt ${entry.ordinal} response`, method);
-            return harvestGrounding(value, runIdForLatch);
+            return teeTextDeltas(harvestGrounding(value, runIdForLatch));
           },
           (err) => {
             drop();
@@ -820,6 +863,9 @@ export function createAgent({
         stepSpans.set(e.step, span);
         if (runStartedAt == null) runStartedAt = Date.now();
         if (!(e.step > 0)) runText = createRunTextTracker();
+        streamStep = e.step;
+        streamHold = runText.nextStepMayBeNudge();
+        streamDrain = Promise.resolve();
         agentDoLog.debug(`step ${e.step}/${e.totalSteps ?? "?"} start`, { tokensSoFar: e.tokensSoFar ?? 0, costSoFar: e.costSoFar ?? 0 });
         try { progressCb?.({ type: "thinking", step: e.step, totalSteps: e.totalSteps, tokensSoFar: e.tokensSoFar, costSoFar: e.costSoFar }); } catch { /* ignore */ }
       },
@@ -831,6 +877,9 @@ export function createAgent({
         // The nudge reply (a text-only step right after a tool step that already
         // answered) is emitted HIDDEN: the surfaces never render it, the SW never
         // persists it, and it is never the run's result.
+        // Every forwarded delta precedes its step's text event: wait (bounded)
+        // for the observed stream branch to drain before emitting the text.
+        await Promise.race([streamDrain, new Promise((r) => setTimeout(r, 250))]);
         const classified = runText.step({ step: e.step, hasToolCalls: e.hasToolCalls === true, text: e.text });
         if (classified.hidden) agentDoLog.debug(`step ${e.step} is the continuation reply — hidden`);
         try {

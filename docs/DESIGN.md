@@ -118,7 +118,19 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   interim row identical to the terminal is replaced, never doubled), and the
   reply to agent-do's "Continue working on the task…" nudge is hidden — never a
   bubble, never persisted, never the run's result — so the answer the owner
-  watched arrive is the answer the reopened thread shows, at full length. Thread storage remains
+  watched arrive is the answer the reopened thread shows, at full length. That
+  answer STREAMS: the model wrapper tees every provider stream and forwards its
+  text deltas as bounded `text-delta` progress events (the first delta at once,
+  the rest coalesced per ~50 ms / 8 KiB), and the conversation grows ONE interim
+  agent bubble per step — `message-bubble.appendText()` hosts a
+  `<streaming-text streaming>` whose deltas are text nodes only (untrusted model
+  output never meets innerHTML mid-stream; a blinking caret marks the growing
+  body, reduced-motion aware), the live-status row reads "Writing the answer…"
+  from the first visible token, and the step's final `text` (or the run's
+  `done`) replaces the streamed body with the sanitised markdown render in one
+  paint, byte-identical to a non-streamed render. The hidden nudge reply never
+  streams; the durable log never sees a delta; a within-run provider retry
+  restarts the bubble rather than appending to a failed attempt. Thread storage remains
   the Tasks list authority: thread-bound durable run revisions only signal a
   fresh `thread.list` replacement, never supply or duplicate row data. A failed
   list read preserves the current rows and leaves its run revision unacknowledged

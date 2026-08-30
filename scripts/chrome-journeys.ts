@@ -26,6 +26,7 @@ const PGREP = "/usr/bin/pgrep";
 const RM = "/bin/rm";
 const GIT = "/usr/bin/git";
 
+import { DEMO_STREAM_ANSWER } from "../extension/lib/models/demo-model.js";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -408,6 +409,8 @@ const EXPECTED = [
   "Provider error: SW console recorded the real HTTP 401 from the fixture provider",
   "Provider error: a rejected key renders the 401 bubble with a Settings link",
   "Provider error: preflight refusal reaches a terminal Failed row within 5 s",
+  "Streaming: the assistant bubble grows across at least 5 distinct lengths",
+  "Streaming: the final bubble equals the non-streamed render",
   "real red tab resolved (active tab id)",
   "screenshot: denied after revoke (secondary probe)",
   "screenshot: capture SUCCEEDS for the granted origin",
@@ -1686,6 +1689,99 @@ async function main() {
         (pre.errors ?? []).some((e) => /endpoint/i.test(e.text)),
     );
     await msgOpts({ type: "provider.set", config: { provider: "demo", apiKey: "", baseURL: "", model: "" } });
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 3d — CAP-FB-20260830-TRANSCRIPT-STREAMING-01: the assistant
+    // bubble GROWS while the model streams (the demo model's @demo-stream
+    // answer is paced one 24-char chunk / 30 ms), the growing text is plain
+    // text nodes, no long task runs while it streams, and the final bubble is
+    // byte-identical to a non-streamed render of the same answer.
+    // ─────────────────────────────────────────────────────────────
+    // The long-task observer is armed BEFORE the run is driven (unbuffered:
+    // only tasks during this run count, never the page's own load).
+    const STREAM_ARM = `(() => {
+      window.__capLongTasks = [];
+      try { new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__capLongTasks.push(Math.round(e.duration)); }).observe({ type: 'longtask', buffered: false }); } catch {}
+      return true;
+    })()`;
+    // While streaming, the growing text lives in the hosted <streaming-text>'s
+    // shadow body (text nodes only); after the final render it is the
+    // bubble's own markdown body.
+    const STREAM_STATE = `(() => {
+      const conv = document.getElementById('thread-conversation');
+      const bubbles = conv ? [...conv.querySelectorAll('message-bubble[role="agent"]')] : [];
+      const last = bubbles.at(-1);
+      const sr = last ? (last.shadowRoot ?? last) : null;
+      const body = sr ? sr.querySelector('.body') : null;
+      const host = body ? body.querySelector('streaming-text') : null;
+      const status = conv ? [...conv.querySelectorAll('conversation-run-status')].map((x) => ({ state: x.getAttribute('state'), activity: x.getAttribute('activity') })) : [];
+      const hostBody = host ? (host.shadowRoot ?? host).querySelector('.body') : null;
+      const innerHtmlOnlyText = hostBody ? [...hostBody.childNodes].every((n) => n.nodeType === 3) : null;
+      const len = hostBody ? hostBody.textContent.length : (body ? body.textContent.length : 0);
+      return JSON.stringify({ bubbles: bubbles.length, len, streaming: last ? last.hasAttribute('streaming') : false, textNodesOnly: innerHtmlOnlyText, status, longTasks: (window.__capLongTasks ?? []).slice() });
+    })()`;
+    await evalIn(cdp, ntpSession, STREAM_ARM).catch(() => null);
+    await driveHubTask("@demo-stream tell me about the platform");
+    const streamSamples = [];
+    let midStreamShot = null;
+    {
+      const t0 = Date.now();
+      while (Date.now() - t0 < 25000) {
+        let st = null;
+        try { st = JSON.parse(await evalIn(cdp, ntpSession, STREAM_STATE) ?? "null"); } catch { st = null; }
+        if (st) {
+          streamSamples.push({ t: Date.now() - t0, ...st });
+          if (!midStreamShot && st.streaming && st.len > 0 && st.len < DEMO_STREAM_ANSWER.length) {
+            try { midStreamShot = await captureShot(cdp, ntpSession); } catch { midStreamShot = null; }
+            if (midStreamShot) await writeEvidence("streaming-mid.png", midStreamShot);
+          }
+          // Settled: the final render replaced the streamed body (no caret)
+          // and no live-status row is still running.
+          const settled = !st.streaming && st.len >= DEMO_STREAM_ANSWER.length &&
+            !(st.status ?? []).some((r) => r.state === "running" || r.state === "queued" || r.state === "retrying");
+          if (settled || (st.status ?? []).some((r) => r.state === "failed" || r.state === "cancelled")) break;
+        }
+        await sleep(250);
+      }
+    }
+    const streamFinalShot = await captureShot(cdp, ntpSession);
+    if (streamFinalShot) await writeEvidence("streaming-final.png", streamFinalShot);
+    const distinctLens = new Set(streamSamples.map((s) => s.len).filter((n) => n > 0));
+    const sawStreamingAttr = streamSamples.some((s) => s.streaming && s.len > 0);
+    const textNodesOnly = streamSamples.filter((s) => s.streaming && s.textNodesOnly != null).every((s) => s.textNodesOnly === true);
+    const sawWriting = streamSamples.some((s) => (s.status ?? []).some((r) => r.activity === "Writing the answer…"));
+    const lastSample = streamSamples.at(-1) ?? {};
+    const worstLongTask = Math.max(0, ...(lastSample.longTasks ?? []));
+    const firstVisibleMs = streamSamples.find((s) => s.len > 0)?.t ?? null;
+    console.log(`streaming journey: samples=${streamSamples.length} firstVisibleMs=${firstVisibleMs} distinctLens=${[...distinctLens].join(",")} streamingAttrSeen=${sawStreamingAttr} textNodesOnly=${textNodesOnly} writingLabel=${sawWriting} longTasksMs=${JSON.stringify(lastSample.longTasks ?? [])} final=${JSON.stringify({ bubbles: lastSample.bubbles, len: lastSample.len, streaming: lastSample.streaming, status: lastSample.status })}`);
+    check(
+      "Streaming: the assistant bubble grows across at least 5 distinct lengths",
+      distinctLens.size >= 5 && sawStreamingAttr && textNodesOnly && sawWriting &&
+        lastSample.bubbles === 1 && lastSample.streaming === false &&
+        lastSample.len === DEMO_STREAM_ANSWER.length &&
+        !(lastSample.status ?? []).some((r) => r.state !== "completed") &&
+        worstLongTask <= 50,
+    );
+    const STREAM_FINAL_COMPARE = `(() => {
+      const conv = document.getElementById('thread-conversation');
+      const last = [...conv.querySelectorAll('message-bubble[role="agent"]')].at(-1);
+      const streamedHtml = last.shadowRoot.innerHTML;
+      const streamedText = last.shadowRoot.querySelector('.body').textContent;
+      const fresh = document.createElement('message-bubble');
+      fresh.setAttribute('role', 'agent');
+      fresh.setAttribute('content', last.getAttribute('content') ?? '');
+      fresh.hidden = true;
+      document.body.appendChild(fresh);
+      const freshHtml = fresh.shadowRoot.innerHTML;
+      fresh.remove();
+      return JSON.stringify({ equal: streamedHtml === freshHtml, streamedText, contentAttr: last.getAttribute('content') });
+    })()`;
+    let streamCompare = null;
+    try { streamCompare = JSON.parse(await evalIn(cdp, ntpSession, STREAM_FINAL_COMPARE) ?? "null"); } catch { streamCompare = null; }
+    check(
+      "Streaming: the final bubble equals the non-streamed render",
+      streamCompare?.equal === true && streamCompare?.contentAttr === DEMO_STREAM_ANSWER && streamCompare?.streamedText === DEMO_STREAM_ANSWER,
+    );
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 4 — screenshot matrix. Owner grant/scope/revoke is driven via the

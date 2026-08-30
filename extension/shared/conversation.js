@@ -156,6 +156,50 @@ export function appendBubble(container, role, text, attachments, ts) {
   return b;
 }
 
+// Streamed assistant text (CAP-FB-20260830-TRANSCRIPT-STREAMING-01): the
+// `text-delta` progress events grow ONE interim agent bubble per step (the same
+// row the step's final `text` event / the run's `done` then replace with the
+// sanitised markdown render — never a second bubble). Deltas are appended as
+// text nodes only. A delta with `start:true` after text already streamed for
+// the step is a within-run retry: the bubble restarts.
+export function createStreamProjector(container) {
+  let bubble = null;
+  let step = null;
+  return {
+    /** Append a delta; returns true when this was the first visible text of a step. */
+    onDelta(ev) {
+      const delta = typeof ev?.delta === "string" ? ev.delta : "";
+      if (!delta) return false;
+      const evStep = Number.isInteger(ev.step) ? ev.step : 0;
+      let first = false;
+      if (!bubble || !bubble.isConnected || step !== evStep) {
+        bubble = appendBubble(container, "agent", "");
+        step = evStep;
+        first = true;
+      } else if (ev.start === true) {
+        bubble.resetStream?.();
+      }
+      if (typeof bubble.appendText === "function") bubble.appendText(delta);
+      else bubble.setAttribute("content", (bubble.getAttribute("content") ?? "") + delta);
+      return first;
+    },
+    /** Replace the streamed body with the final text; returns the bubble, or
+     *  null when no bubble streamed for that step (the caller appends). */
+    finalize(evStep, text) {
+      const s = Number.isInteger(evStep) ? evStep : null;
+      if (!bubble || !bubble.isConnected || (s != null && step !== s)) return null;
+      const b = bubble;
+      bubble = null;
+      step = null;
+      if (typeof text === "string" && text) b.setAttribute("content", text);
+      else if (text === "") b.remove();
+      else b.removeAttribute("streaming"); // keep what streamed (an aborted run)
+      return b;
+    },
+    get active() { return Boolean(bubble && bubble.isConnected); },
+  };
+}
+
 /** Render a persisted journal as a conversation (reopening shows the history). */
 export function renderJournal(container, journal) {
   const rows = Array.isArray(journal) ? journal : [];
@@ -210,6 +254,7 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
   const c = container;
   if (!c || !executionId) return () => {};
   const toolCards = createToolCardQueue();
+  const streamer = createStreamProjector(c);
   let unsub = () => {};
   let unsubscribed = false;
   const terminal = createRunTerminal({
@@ -271,15 +316,20 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
         }
         break;
       }
+      case "text-delta":
+        if (streamer.onDelta(ev)) onStatus?.({ state: "running", activity: "Writing the answer…" });
+        break;
       case "text":
-        if (ev.text && ev.hasToolCalls) appendBubble(c, "agent", ev.text);
+        if (ev.hidden === true) { streamer.finalize(ev.step, ""); break; }
+        if (ev.text && ev.hasToolCalls && !streamer.finalize(ev.step, ev.text)) appendBubble(c, "agent", ev.text);
         break;
       case "done":
         terminal.onPortDone(ev.aborted === true);
-        // The agent view has no other live source for the conclusion — append
-        // the streamed text on a NON-aborted settle (an aborted run reports no
-        // successful answer).
-        if (ev.aborted !== true && ev.text) appendBubble(c, "agent", ev.text);
+        // The agent view has no other live source for the conclusion — the
+        // streamed bubble takes the final text on a NON-aborted settle (an
+        // aborted run reports no successful answer), else it is appended.
+        if (ev.aborted === true) streamer.finalize(null, undefined);
+        else if (ev.text && !streamer.finalize(null, ev.text)) appendBubble(c, "agent", ev.text);
         break;
       case "error":
         terminal.onPortError();
@@ -1365,6 +1415,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
   // wider-goal review's finding that a single `lastTool` left A's card running
   // and created a duplicate completed card when calls interleave).
   const toolCards = createToolCardQueue();
+  const streamer = createStreamProjector(c);
   // The live `text` progress event already projects the assistant's final
   // words when tool calls ran; the completion handler would otherwise append
   // the IDENTICAL res.result as a second terminal bubble (the late-settled
@@ -1485,9 +1536,15 @@ export async function runConversationTurn(container, { text, attachments = [], h
         maybeRenderApproval(ev.result);
         break;
       }
+      case "text-delta":
+        // The first visible token replaces "Thinking…" in the live-status row;
+        // later deltas only grow the bubble (no per-delta announcement).
+        if (streamer.onDelta(ev)) status({ state: attempt > 1 ? "retrying" : "running", activity: "Writing the answer…" });
+        break;
       case "text":
-        if (ev.text && ev.hasToolCalls) {
-          appendBubble(c, "agent", ev.text);
+        if (ev.hidden === true) { streamer.finalize(ev.step, ""); break; }
+        if (ev.text && (ev.hasToolCalls || streamer.active)) {
+          if (!streamer.finalize(ev.step, ev.text)) appendBubble(c, "agent", ev.text);
           streamedAgentText = ev.text;
         }
         break;
@@ -1496,6 +1553,12 @@ export async function runConversationTurn(container, { text, attachments = [], h
         // queue once; a later response is a no-op. An ABORTED run must never
         // report a successful "done" status.
         terminal.onPortDone(ev.aborted === true);
+        // A bubble still streaming at settle takes the run's final text (the
+        // claim-checked result) in place; an aborted run keeps what streamed.
+        if (streamer.active) {
+          if (ev.aborted === true) streamer.finalize(null, undefined);
+          else if (ev.text) { streamer.finalize(null, ev.text); streamedAgentText = ev.text; }
+        }
         if (ev.aborted === true) {
           status({ state: "cancelled", message: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted" });
         }

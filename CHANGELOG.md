@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.449] — 2026-08-30
+- Answers now appear word by word as the model writes them, instead of a blank "Thinking…" until the whole reply is finished. The growing bubble is the same one the thread keeps, and the live row reads "Writing the answer…" from the first word.
+
 ## [0.2.448] — 2026-08-30
 - Tracker: the honest provider-error messages are recorded as landed.
 
