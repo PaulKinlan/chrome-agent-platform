@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.423] — 2026-08-30
+- Board deny: an unreadable policy store propagates (no write may follow a failed read); corrupt values stay fail-closed
+
 ## [0.2.422] — 2026-08-30
 - Board deny: fix the journey's options-page refresh (re-open, not reload — navigation breaks the CDP eval context); drop diagnostics
 

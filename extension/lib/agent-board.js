@@ -480,14 +480,11 @@ export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => 
    *  wrong shape (the guards then deny all, fail closed). Absent key →
    *  { rules: [], corrupt: false } (the correct default-open state). */
   async function loadDenyRules() {
-    let raw;
-    try {
-      raw = await memory.getStrict(BOARD_DENY_RULES_KEY);
-    } catch {
-      // getStrict THROWS on read/corruption failure by contract — an
-      // unreadable policy authority fails CLOSED, never default-open.
-      return { rules: null, corrupt: true };
-    }
+    // getStrict THROWS on read/corruption failure by contract — propagate:
+    // an unreadable policy authority is exceptional (the route layer's
+    // guarded() turns it into a structured board-store-error), and no write
+    // may follow a failed read. Only a VALUE problem is "corrupt" here.
+    const raw = await memory.getStrict(BOARD_DENY_RULES_KEY);
     if (raw == null) return { rules: [], corrupt: false };
     if (!Array.isArray(raw)) return { rules: null, corrupt: true };
     // Validate each rule's shape — anything malformed means the store is
