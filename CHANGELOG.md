@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.439] — 2026-08-30
+- A failed manifest-shape gate now refuses the rig, not just records it
+
 ## [0.2.438] — 2026-08-30
 - Permission matrix: refresh the attestation at the honest-evidence candidate
 

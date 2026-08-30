@@ -373,8 +373,13 @@ async function main() {
   const integrity = build2Out.code === 0
     ? JSON.parse(await Deno.readTextFile(`${variantDir}/VARIANT-INTEGRITY.json`))
     : null;
+  // Every gate below is BOTH an honest evidence record AND a refusal: a false
+  // predicate must never merely note failure and continue to startRig.
+  const manifestMatchesSource = integrity !== null
+    && integrity.differsFromSource?.length === 1
+    && integrity.differsFromSource[0] === "manifest.json";
   check("matrix[variant]: byte-identical except manifest.json (integrity manifest)",
-    integrity !== null && integrity.differsFromSource?.length === 1 && integrity.differsFromSource[0] === "manifest.json");
+    manifestMatchesSource);
   // Never TRUST the builder's attestation: recompute every recorded hash (and
   // the source divergence) against the tree on disk before Chrome loads it.
   // verificationRan is part of the evidence: the check may only claim PASS
@@ -387,15 +392,20 @@ async function main() {
       .then(() => null)
       .catch((e) => String(e));
   }
+  const verificationClean = verificationRan && verifyError === null;
   check("matrix[variant]: integrity independently re-verified (hashes recomputed, only manifest.json diverges)",
-    verificationRan && verifyError === null, verifyError ?? (verificationRan ? null : "verification did not run: no integrity manifest"));
+    verificationClean, verifyError ?? (verificationRan ? null : "verification did not run: no integrity manifest"));
   
-  // FAIL-CLOSED: no attested variant, no rig. A failed build (integrity null,
-  // nothing to verify), a falsy parsed record, and a failed re-verification
-  // are all refused BEFORE startRig — an unattested variant must never load
-  // into Chrome.
+  // FAIL-CLOSED: no attested variant, no rig. Each refusal matches a gate
+  // above — a failed build (no manifest at all), a recorded source divergence
+  // that is not exactly manifest.json, and a failed (or never-run)
+  // re-verification all refuse BEFORE startRig. An unattested variant must
+  // never load into Chrome.
   if (!integrity) {
     throw new Error("matrix[variant]: variant build failed — no integrity manifest, refusing to start the rig");
+  }
+  if (!manifestMatchesSource) {
+    throw new Error("matrix[variant]: recorded source divergence is not exactly manifest.json — refusing to start the rig");
   }
   if (verifyError !== null) {
     throw new Error(`Integrity verification failed: ${verifyError}`);
