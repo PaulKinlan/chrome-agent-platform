@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.486] — 2026-08-30
+- tasks: SETTINGS-WHATS-NEW-COPY-01 — r3 review accepted the code; refresh candidate SHA and close the entry
+
 ## [0.2.485] — 2026-08-30
 - The What's new section in Settings is complete
 
