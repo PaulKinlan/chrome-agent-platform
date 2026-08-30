@@ -290,7 +290,7 @@ export async function openDir(segments) {
   for (const seg of segments) {
     dir = await dir.getDirectoryHandle(seg, { create: true });
   }
-  return dir;
+  return tagDir(dir, segments);
 }
 
 /** The slug the background-agent memory path uses for a schedule/agent id
@@ -323,16 +323,10 @@ export async function purgeStoreDir(segments) {
   if (!Array.isArray(segments) || segments.length === 0) {
     throw new Error("purgeStoreDir: refusing to remove the storage root");
   }
-  let dir = await rootDir();
-  for (const seg of segments.slice(0, -1)) {
-    try {
-      dir = await dir.getDirectoryHandle(seg);
-    } catch {
-      return { ok: true, absent: true };
-    }
-  }
+  const dir = await openDirOptional(segments.slice(0, -1));
+  if (!dir) return { ok: true, absent: true };
   try {
-    await dir.removeEntry(segments[segments.length - 1], { recursive: true });
+    await removeTracked(dir, segments[segments.length - 1], { recursive: true });
     return { ok: true };
   } catch (e) {
     if (e?.name === "NotFoundError") return { ok: true, absent: true };
@@ -406,7 +400,7 @@ export async function purgeJournals(target = null) {
 }
 
 async function rootDir() {
-  return await navigator.storage.getDirectory();
+  return tagDir(await navigator.storage.getDirectory(), []);
 }
 
 async function readJson(dir, name) {
@@ -441,8 +435,10 @@ async function readJsonStrict(dir, name, { allowAbsent = false } = {}) {
 async function writeJson(dir, name, value) {
   const fh = await dir.getFileHandle(name, { create: true });
   const w = await fh.createWritable();
-  await w.write(JSON.stringify(value));
+  const text = JSON.stringify(value);
+  await w.write(text);
   await w.close();
+  ledgerRecord(dir, name, utf8Bytes(text));
 }
 
 // ---- DURABLE VERSION TOKENS (the round-27 CAS blocker) ----
@@ -507,8 +503,10 @@ function isNotFound(e) {
 async function writeEntry(dir, name, value, version) {
   const fh = await dir.getFileHandle(name, { create: true });
   const w = await fh.createWritable();
-  await w.write(JSON.stringify({ __v: version, __value: value }));
+  const text = JSON.stringify({ __v: version, __value: value });
+  await w.write(text);
   await w.close();
+  ledgerRecord(dir, name, utf8Bytes(text));
 }
 
 /** Open a directory WITHOUT creating missing segments; returns null when the
@@ -525,46 +523,215 @@ async function openDirOptional(segments) {
       return null;
     }
   }
+  return tagDir(dir, segments);
+}
+
+// ---- USAGE LEDGER (CAP-FB-20260830-OPFS-USAGE-WALK-01) ----
+// The aggregate quotas used to be enforced by enumerating the store directory
+// AND walking the whole memory tree (getFile() on every .json) on EVERY write.
+// Each run creates ~11 files, so the cost was O(files) per write and O(runs^2)
+// over a session: agent.run went 0.15 s → 2.6 s by 120 threads. The ledger is
+// an in-memory index of every .json file's byte size under `memory/`, keyed by
+// directory path, seeded by ONE walk per service-worker lifetime and kept
+// exact by the write/remove primitives in this module (every OPFS mutation
+// under `memory/` goes through writeJson/writeEntry/removeTracked — the other
+// OPFS writers use their own roots, and the run WAL is not a .json file).
+//
+// Correctness fallbacks keep the quota semantics identical to the walk:
+//   - a quota check that FAILS against the ledger reseeds from a fresh walk
+//     and re-checks (a stale-high ledger can never wrongly reject);
+//   - a mutation through an untagged handle, a negative total, or a swapped
+//     storage root invalidates the ledger (reseed on next use).
+// Nothing new is persisted: the ledger lives only in the SW's memory.
+const dirKeys = new WeakMap(); // directory handle → "seg/seg/…" path key
+function tagDir(dir, segments) {
+  if (dir && typeof dir === "object") dirKeys.set(dir, segments.join("/"));
   return dir;
 }
-
-/** Enumerate a store's existing .json keys + total serialized bytes (bounded
- * by the per-origin key cap). Used to enforce aggregate quotas on every write. */
-async function storeUsage(dir) {
-  let keys = 0;
-  let bytes = 0;
-  for await (const [name, handle] of dir.entries()) {
-    if (!name.endsWith(".json") || INTERNAL_FILE_RE.test(name)) continue;
-    keys++;
-    try {
-      const f = await handle.getFile();
-      bytes += f.size;
-    } catch { /* unreadable — count the key, skip the size */ }
-  }
-  return { keys, bytes };
+const ledger = {
+  seeded: false,
+  seeding: null, // the in-flight seed promise (concurrent checks share it)
+  storage: null, // navigator.storage identity the ledger was seeded against
+  dirs: new Map(), // dirKey → { files: Map<name, bytes>, bytes, storeBytes }
+  global: 0,
+  walks: 0, // full walks performed (observability + tests)
+};
+const MEMORY_PREFIX = `${ROOT}/`;
+function underMemory(key) {
+  return key === ROOT || key.startsWith(MEMORY_PREFIX);
 }
-
-/** Total bytes across ALL per-site stores + master (the global budget). */
-async function globalUsage() {
-  let bytes = 0;
+function ledgerDir(key, create) {
+  let d = ledger.dirs.get(key);
+  if (!d && create) {
+    d = { files: new Map(), bytes: 0, storeBytes: 0 };
+    ledger.dirs.set(key, d);
+  }
+  return d;
+}
+function ledgerInvalidate() {
+  ledger.seeded = false;
+  ledger.dirs = new Map();
+  ledger.global = 0;
+}
+function ledgerApply(key, name, size) {
+  // size === null removes; otherwise sets. Only .json files are accounted
+  // (the walk only ever counted .json files).
+  if (!name.endsWith(".json")) return;
+  const d = ledgerDir(key, size !== null);
+  if (!d) return;
+  const prev = d.files.get(name) ?? 0;
+  const next = size ?? 0;
+  const delta = next - prev;
+  if (size === null) d.files.delete(name); else d.files.set(name, next);
+  d.bytes += delta;
+  if (!INTERNAL_FILE_RE.test(name)) d.storeBytes += delta;
+  ledger.global += delta;
+  if (d.bytes < 0 || d.storeBytes < 0 || ledger.global < 0) ledgerInvalidate();
+}
+/** Record a just-written .json file's size against its directory. */
+function ledgerRecord(dir, name, size) {
+  const key = dirKeys.get(dir);
+  if (key === undefined) { ledgerInvalidate(); return; }
+  if (!underMemory(key)) return;
+  ledgerApply(key, name, size);
+}
+/** Forget a removed entry: a file in `dir`, or (recursive) the subtree under it. */
+function ledgerForget(dir, name) {
+  const key = dirKeys.get(dir);
+  if (key === undefined) { ledgerInvalidate(); return; }
+  const sub = key ? `${key}/${name}` : name;
+  if (!underMemory(key) && !underMemory(sub)) return;
+  ledgerApply(key, name, null);
+  for (const k of [...ledger.dirs.keys()]) {
+    if (k === sub || k.startsWith(`${sub}/`)) {
+      const d = ledger.dirs.get(k);
+      ledger.global -= d.bytes;
+      ledger.dirs.delete(k);
+    }
+  }
+  if (ledger.global < 0) ledgerInvalidate();
+}
+/** `dir.removeEntry(name, opts)` + ledger bookkeeping. The bookkeeping runs
+ * whether or not the removal throws (an absent entry is absent either way). */
+async function removeTracked(dir, name, opts) {
+  try {
+    await dir.removeEntry(name, opts);
+  } finally {
+    ledgerForget(dir, name);
+  }
+}
+/** THE walker: every .json file under `memory/`, recursively, with its byte
+ * size — the seeder for the ledger and the reference the tests compare it to.
+ * Returns Map<dirKey, Map<name, bytes>>. */
+async function walkMemoryTree() {
+  const out = new Map();
   const root = await rootDir();
   try {
     const memDir = await root.getDirectoryHandle(ROOT);
-    async function walk(dir) {
+    async function walk(dir, key) {
+      const files = new Map();
+      out.set(key, files);
       for await (const [name, handle] of dir.entries()) {
         if (handle.kind === "file" && name.endsWith(".json")) {
           try {
-            bytes += (await handle.getFile()).size;
-          } catch { /* skip */ }
+            files.set(name, (await handle.getFile()).size);
+          } catch { /* unreadable — count the key, skip the size */ }
         } else if (handle.kind === "directory") {
-          await walk(handle);
+          await walk(handle, `${key}/${name}`);
         }
       }
     }
-    await walk(memDir);
+    await walk(memDir, ROOT);
   } catch { /* memory tree absent — 0 bytes */ }
+  ledger.walks++;
+  return out;
+}
+/** Seed (or reseed) the ledger from one full walk. Concurrent callers share
+ * the in-flight walk; mutations that land during the walk apply to the same
+ * live maps, so the result is exact for the tree as it stands at the end. */
+function ledgerSeed() {
+  if (ledger.seeding) return ledger.seeding;
+  ledger.seeding = (async () => {
+    ledger.dirs = new Map();
+    ledger.global = 0;
+    ledger.storage = navigator.storage;
+    const tree = await walkMemoryTree();
+    for (const [key, files] of tree) {
+      const d = ledgerDir(key, true);
+      for (const [name, size] of files) {
+        if (!d.files.has(name)) ledgerApply(key, name, size);
+      }
+    }
+    ledger.seeded = true;
+  })().finally(() => { ledger.seeding = null; });
+  return ledger.seeding;
+}
+async function ledgerEnsure() {
+  if (ledger.seeded && ledger.storage === navigator.storage) return;
+  await ledgerSeed();
+}
+/** A store's live-value bytes (every non-internal .json in the directory —
+ * the unit the per-origin quota is measured in). */
+function ledgerStoreBytes(dir) {
+  const key = dirKeys.get(dir);
+  return key === undefined ? 0 : (ledger.dirs.get(key)?.storeBytes ?? 0);
+}
+function ledgerFileBytes(dir, name) {
+  const key = dirKeys.get(dir);
+  return key === undefined ? 0 : (ledger.dirs.get(key)?.files.get(name) ?? 0);
+}
+
+/** A store's non-internal .json bytes from a FRESH walk (the reference). */
+async function storeUsage(segments) {
+  const files = (await walkMemoryTree()).get(segments.join("/")) ?? new Map();
+  let bytes = 0;
+  for (const [name, size] of files) if (!INTERNAL_FILE_RE.test(name)) bytes += size;
   return bytes;
 }
+
+/** Total bytes across ALL per-site stores + master (the global budget) from a
+ * FRESH walk. Runtime quota checks read the ledger; this is the reseed/test path. */
+async function globalUsage() {
+  let bytes = 0;
+  for (const files of (await walkMemoryTree()).values()) for (const size of files.values()) bytes += size;
+  return bytes;
+}
+
+/** The quota gate shared by setValue and saveScreenshot: the store bound
+ * (`storeDir` null skips it) and the global bound, evaluated against the
+ * ledger; a failure reseeds from a fresh walk and re-evaluates so the
+ * decision is exactly the walk's decision. `grow` is the non-negative growth. */
+async function assertQuota(storeDir, grow) {
+  await ledgerEnsure();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const storeOver = storeDir && ledgerStoreBytes(storeDir) + grow > MAX_BYTES_PER_ORIGIN;
+    const globalOver = ledger.global + grow > MAX_BYTES_GLOBAL;
+    if (!storeOver && !globalOver) return;
+    if (attempt === 0) { await ledgerSeed(); continue; }
+    if (storeOver) {
+      throw new MemoryStoreQuotaError(
+        "bytes",
+        `store exceeds the ${MAX_BYTES_PER_ORIGIN}-byte bound`,
+      );
+    }
+    throw new MemoryStoreQuotaError(
+      "global",
+      `global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`,
+    );
+  }
+}
+
+/** Ledger inspection (tests + the seeded perf gate) — a read/reseed surface, never a product API. */
+export const usageLedgerInspector = {
+  reset: ledgerInvalidate,
+  seed: ledgerSeed,
+  isSeeded: () => ledger.seeded,
+  walks: () => ledger.walks,
+  storeBytes: (segments) => ledger.dirs.get(segments.join("/"))?.storeBytes ?? 0,
+  globalBytes: () => ledger.global,
+  walkStore: storeUsage,
+  walkGlobal: globalUsage,
+};
 
 /** The shared write path: bounds + reserved-key protection + aggregate quotas.
  * `trusted` bypasses the reserved-key protection (internal authority writes)
@@ -621,35 +788,20 @@ async function setValueInner(path, key, value, { isMaster, trusted = false }) {
     );
   }
   const dir = await openDir(path);
-  const usage = await storeUsage(dir);
-  // Read the OLD value's ACTUAL file bytes (not a re-stringify) so the delta is
-  // measured in the same unit (UTF-8 file bytes) as storeUsage/globalUsage. Also
-  // read the OLD version (from the envelope) so the new write's version is
-  // monotonic — a per-key version token that is NEVER reused (the round-27 CAS
-  // blocker: value equality is not identity; the version is).
-  let oldBytes = 0;
-  try {
-    const fh = await dir.getFileHandle(`${key}.json`);
-    oldBytes = (await fh.getFile()).size;
-  } catch { /* absent → new key (or a deleted key with a tombstone) */ }
+  await ledgerEnsure();
+  // The OLD value's file bytes come from the ledger (the same unit — UTF-8
+  // file bytes — the walk measured in) so the delta needs no extra handle I/O.
+  // The OLD version is read from the envelope by issueVersion's authority so
+  // the new write's version is monotonic — a per-key version token that is
+  // NEVER reused (the round-27 CAS blocker: value equality is not identity).
+  const oldBytes = ledgerFileBytes(dir, `${key}.json`);
   // Aggregate quotas: a store may not grow past MAX_BYTES_PER_ORIGIN bytes
   // (and the global tree past MAX_BYTES_GLOBAL).
   // The delta is positive for BOTH new keys AND replacements that grow — a
   // replacement that enlarges an existing value must also be budgeted (the
   // round-16 finding: the global limit was only checked for new keys).
   const delta = newBytes - oldBytes;
-  if (usage.bytes + Math.max(0, delta) > MAX_BYTES_PER_ORIGIN) {
-    throw new MemoryStoreQuotaError(
-      "bytes",
-      `store exceeds the ${MAX_BYTES_PER_ORIGIN}-byte bound`,
-    );
-  }
-  if ((await globalUsage()) + Math.max(0, delta) > MAX_BYTES_GLOBAL) {
-    throw new MemoryStoreQuotaError(
-      "global",
-      `global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`,
-    );
-  }
+  await assertQuota(dir, Math.max(0, delta));
   // Issue the DURABLE generation and write the ENVELOPE. The returned version
   // is the write's durable identity token — callers capture it and pass it to
   // the version-scoped compareAndDelete/compareAndRestore so compensation
@@ -711,7 +863,7 @@ async function compareAndSet(path, key, expectedVersion, nextValue, { isMaster }
       await writeTombs(targetDir, tombs);
       if (dir) {
         try {
-          await dir.removeEntry(`${key}.json`);
+          await removeTracked(dir, `${key}.json`);
         } catch { /* the reads honor the tombstone */ }
       }
       return deletedGen;
@@ -857,7 +1009,7 @@ function memoryStoreAt(path, { isMaster, origin }) {
         tombs.map.set(key, deletedGen);
         await writeTombs(dir, tombs);
         try {
-          await dir.removeEntry(`${key}.json`);
+          await removeTracked(dir, `${key}.json`);
         } catch { /* reads honor the tombstone */ }
       });
     },
@@ -878,7 +1030,7 @@ function memoryStoreAt(path, { isMaster, origin }) {
             if (!INTERNAL_KEY_RE.test(key)) removedKeys.push(key);
           }
           try {
-            await dir.removeEntry(name, { recursive: true });
+            await removeTracked(dir, name, { recursive: true });
           } catch { /* absent */ }
         }
         // Every removed logical value gets a tombstone. Legacy `.version`
@@ -1022,7 +1174,7 @@ export async function removeDurableRunLog(executionId) {
   const dir = await openDirOptional([ROOT, DURABLE_ROOT, "executions", encodeURIComponent(id)]);
   if (!dir) return false;
   try {
-    await dir.removeEntry(RUN_LOG_FILE);
+    await removeTracked(dir, RUN_LOG_FILE);
     return true;
   } catch {
     return false; // already gone
@@ -1038,7 +1190,7 @@ export async function forgetDurableThread(threadId) {
   const root = await openDirOptional([ROOT, DURABLE_ROOT, "threads"]);
   if (!root) return false;
   try {
-    await root.removeEntry(encodeURIComponent(String(threadId)), { recursive: true });
+    await removeTracked(root, encodeURIComponent(String(threadId)), { recursive: true });
     return true;
   } catch {
     return false; // already gone
@@ -1170,7 +1322,7 @@ export function durableRunMemory() {
     },
     async clear() {
       const parent = await openDir([ROOT]);
-      try { await parent.removeEntry(DURABLE_ROOT, { recursive: true }); } catch { /* absent */ }
+      try { await removeTracked(parent, DURABLE_ROOT, { recursive: true }); } catch { /* absent */ }
     },
   };
 }
@@ -1545,7 +1697,10 @@ export async function saveScreenshot(mem, { url, dataURL }) {
     // Screenshots are LARGE media — charge the new blob against the GLOBAL quota
     // BEFORE writing (five 4 MiB blobs are 20 MiB and must count toward the
     // 64 MiB budget, the round-18 screenshot-quota finding).
-    if ((await globalUsage()) + bytes > MAX_BYTES_GLOBAL) {
+    try {
+      await assertQuota(null, bytes);
+    } catch (e) {
+      if (!(e instanceof MemoryStoreQuotaError)) throw e;
       throw new Error(`global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`);
     }
     try {
@@ -1570,7 +1725,7 @@ export async function saveScreenshot(mem, { url, dataURL }) {
       for (const s of index) {
         if (!kept.has(s.id)) {
           try {
-            await dir.removeEntry(`${s.id}.json`);
+            await removeTracked(dir, `${s.id}.json`);
           } catch { /* absent */ }
         }
       }
@@ -1578,7 +1733,7 @@ export async function saveScreenshot(mem, { url, dataURL }) {
     } catch (e) {
       // Compensate: a failed index commit must not leave an orphaned blob.
       try {
-        await dir.removeEntry(`${id}.json`);
+        await removeTracked(dir, `${id}.json`);
       } catch { /* absent */ }
       throw e;
     }
