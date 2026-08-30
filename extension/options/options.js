@@ -435,14 +435,13 @@ export async function renderLocalFolders() {
       regrantBtn.className = "btn small primary";
       regrantBtn.textContent = "Re-grant access";
       regrantBtn.addEventListener("click", async (event) => {
-        if (!event.isTrusted && !window.allowUntrustedEventsForTesting) {
+        if (!event.isTrusted) {
           saveFlash("Re-grant requires a genuine user click.");
           return;
         }
         regrantBtn.disabled = true;
         regrantBtn.textContent = "Requesting…";
         const result = await regrantFsGrantAccess(grant.grantId, {
-          win: window,
           isTrusted: event.isTrusted,
         });
         if (result?.ok && result?.status === "granted") {

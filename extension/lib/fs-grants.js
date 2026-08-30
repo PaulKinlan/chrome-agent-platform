@@ -276,16 +276,15 @@ export function serializeFsGrantSummary(grant, liveStatus = null) {
  * MUST be called from an owner gesture in a visible page context.
  * @param {string} grantId
  * @param {{
- *   win?: any,
  *   isTrusted?: boolean,
  *   customIdb?: any
  * }} [options]
  */
 export async function regrantFsGrantAccess(
   grantId,
-  { win = (typeof window !== "undefined" ? window : null), isTrusted = true, customIdb = null } = {},
+  { isTrusted = true, customIdb = null } = {},
 ) {
-  if (!isTrusted && !win?.allowUntrustedEventsForTesting) {
+  if (!isTrusted) {
     return { ok: false, error: "owner_gesture_required", message: "Re-grant requires a genuine user click." };
   }
   const grant = await getFsGrant(grantId, { customIdb });
@@ -944,7 +943,7 @@ export function wireLocalFolderPickers({
   if (dirBtn && !dirBtn._pickerWired) {
     dirBtn._pickerWired = true;
     dirBtn.addEventListener("click", async (event) => {
-      if (!event?.isTrusted && !win.allowUntrustedEventsForTesting) {
+      if (!event?.isTrusted) {
         onFlash("Folder picker requires a genuine user click.");
         return;
       }
@@ -972,7 +971,7 @@ export function wireLocalFolderPickers({
   if (fileBtn && !fileBtn._pickerWired) {
     fileBtn._pickerWired = true;
     fileBtn.addEventListener("click", async (event) => {
-      if (!event?.isTrusted && !win.allowUntrustedEventsForTesting) {
+      if (!event?.isTrusted) {
         onFlash("File picker requires a genuine user click.");
         return;
       }

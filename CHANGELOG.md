@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.416] — 2026-08-30
+- Remove untrusted event test bypass
+
 ## [0.2.415] — 2026-08-30
 - Use plain language for the restored browser journey
 

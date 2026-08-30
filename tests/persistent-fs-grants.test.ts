@@ -252,7 +252,6 @@ Deno.test("wireLocalFolderPickers: handles directory picking with chosen mode an
   };
 
   const fakeWin: any = {
-    allowUntrustedEventsForTesting: true,
     document: {
       getElementById: (id: string) => {
         if (id === "fs-add-directory-btn") return dirBtn;
@@ -294,7 +293,6 @@ Deno.test("wireLocalFolderPickers: cleanly ignores AbortError on user cancel", a
     },
   };
   const fakeWin: any = {
-    allowUntrustedEventsForTesting: true,
     document: {
       getElementById: (id: string) => {
         if (id === "fs-add-directory-btn") return dirBtn;
@@ -334,7 +332,6 @@ Deno.test("wireLocalFolderPickers: handles file picking with chosen mode and sav
   };
 
   const fakeWin: any = {
-    allowUntrustedEventsForTesting: true,
     document: {
       getElementById: (id: string) => {
         if (id === "fs-add-directory-btn") return dirBtn;
@@ -378,7 +375,6 @@ Deno.test("wireLocalFolderPickers: untrusted click event is rejected without use
   };
 
   const fakeWin: any = {
-    allowUntrustedEventsForTesting: false,
     document: {
       getElementById: (id: string) => {
         if (id === "fs-add-directory-btn") return dirBtn;
@@ -542,8 +538,7 @@ Deno.test("regrantFsGrantAccess: requires owner gesture (untrusted click rejecte
     name: "gesture-test",
   });
 
-  const fakeWin: any = { allowUntrustedEventsForTesting: false };
-  const res = await regrantFsGrantAccess("fsg_gesture_test", { win: fakeWin, isTrusted: false });
+  const res = await regrantFsGrantAccess("fsg_gesture_test", { isTrusted: false });
   assertEquals(res.ok, false);
   assertEquals(res.error, "owner_gesture_required");
 });
