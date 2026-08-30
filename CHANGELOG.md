@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.484] — 2026-08-30
+- Five more fixes are in progress in parallel and recorded as claimed in the tracker.
+
 ## [0.2.483] — 2026-08-30
 - Two smaller follow-up issues found during the parallel work are now written down as tasks.
 
