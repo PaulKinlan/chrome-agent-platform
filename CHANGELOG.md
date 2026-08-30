@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.448] — 2026-08-30
+- Tracker: the honest provider-error messages are recorded as landed.
+
 ## [0.2.447] — 2026-08-30
 - Choosing OpenAI, Anthropic or Gemini without typing a base URL now works everywhere, including the pre-run status check.
 
