@@ -107,6 +107,13 @@ nav {
   margin-inline-start: 0.5rem;
   padding: 0 0.3rem;
   border-radius: 0.3rem;
+  /* CAP-FB-20260830-FOCUS-ORDER-VISIBILITY-01: 17x20 px hit area was under the
+     24px minimum — enlarge the box while keeping the visual glyph compact. */
+  min-inline-size: 24px;
+  min-block-size: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   opacity: 0;
   transition: opacity 0.15s ease;
 }

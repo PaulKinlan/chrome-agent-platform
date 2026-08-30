@@ -8650,7 +8650,10 @@ class ActivityExplorer extends Component {
         .aex-plain-head { display:flex; align-items:baseline; gap:8px; padding:6px 10px 0; }
         .aex-plain-label { font-size:12px; font-weight:600; color:var(--ink,#1d1b18); }
         .aex-plain-copy, .aex-plain-more { margin-left:auto; font:inherit; font-size:11px; color:var(--muted,#635e56);
-          background:transparent; border:1px solid var(--border,#e3e0d9); border-radius:5px; padding:1px 7px; cursor:pointer; }
+          background:transparent; border:1px solid var(--border,#e3e0d9); border-radius:5px; padding:1px 7px; cursor:pointer;
+          /* CAP-FB-20260830-FOCUS-ORDER-VISIBILITY-01: 39x21 was under the 24px
+             minimum target — keep the compact look, grow the hit box. */
+          min-block-size:24px; min-inline-size:24px; display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box; }
         .aex-plain-copy:hover, .aex-plain-more:hover { color:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); }
         .aex-plain-copy:focus-visible, .aex-plain-more:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:0; }
         .aex-plain .aex-detail { padding:4px 10px 8px; }
