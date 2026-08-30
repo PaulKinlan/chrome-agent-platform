@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.429] — 2026-08-30
+- Jobs panel journey: return to the hub before the panel screenshots (the task journey leaves the thread view open)
+
 ## [0.2.428] — 2026-08-30
 - Jobs panel: tolerate unupgraded elements in the unit-test DOM (optional refresh call, the activity-explorer pattern)
 

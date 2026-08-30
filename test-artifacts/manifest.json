@@ -1,13 +1,13 @@
 {
-  "testedSourceCommit": "c58f8300278c63a9d1b0cbaef0536bf9f6f93f91",
+  "testedSourceCommit": "973767c3a0437c357a54da8092e7e258a7cce62a",
   "evidenceCommitNote": "committed AFTER this run — a tracked manifest cannot contain its own commit hash",
   "worktreeClean": true,
   "worktreeDirtyFiles": [],
-  "runId": "cap-1788060411185",
+  "runId": "cap-1788077053518",
   "retain": true,
-  "ts": "2026-08-30T03:27:43.200Z",
-  "evidenceDir": "/home/paulkinlan/worktrees/cap-permissions-optional/test-artifacts",
-  "passed": 131,
+  "ts": "2026-08-30T08:05:12.436Z",
+  "evidenceDir": "/home/paulkinlan/worktrees/cap-jobs-board-ui/test-artifacts",
+  "passed": 148,
   "failed": 0,
   "checks": [
     {
@@ -68,6 +68,46 @@
     },
     {
       "name": "NTP: the typed task reached the agent journal",
+      "pass": true
+    },
+    {
+      "name": "jobs panel: renders the empty state on a fresh board",
+      "pass": true
+    },
+    {
+      "name": "jobs panel: retained the empty-state screenshot",
+      "pass": true
+    },
+    {
+      "name": "jobs panel: two jobs + a message posted via the real routes",
+      "pass": true
+    },
+    {
+      "name": "jobs panel: open jobs render with poster + recency (live, no reload)",
+      "pass": true
+    },
+    {
+      "name": "jobs panel: the message feed renders the broadcast",
+      "pass": true
+    },
+    {
+      "name": "jobs panel: the open-count hint reflects the board",
+      "pass": true
+    },
+    {
+      "name": "jobs panel: retained the populated-state screenshot",
+      "pass": true
+    },
+    {
+      "name": "jobs panel: a real named agent claimed + completed a job",
+      "pass": true
+    },
+    {
+      "name": "jobs panel: the settled group renders the outcome + result excerpt (live, no reload)",
+      "pass": true
+    },
+    {
+      "name": "jobs panel: retained the settled-state screenshot",
       "pass": true
     },
     {
@@ -136,6 +176,34 @@
     },
     {
       "name": "permissions: capability.revoke still requires owner approval (fail closed)",
+      "pass": true
+    },
+    {
+      "name": "board deny: two named agents created for the journey",
+      "pass": true
+    },
+    {
+      "name": "board deny: Board permissions section opens from the nav",
+      "pass": true
+    },
+    {
+      "name": "board deny: the dropdowns populate from the named-agent registry",
+      "pass": true
+    },
+    {
+      "name": "board deny: rule added via a real click on the Add control",
+      "pass": true
+    },
+    {
+      "name": "board deny: the rule row renders and the rule persists in the store",
+      "pass": true
+    },
+    {
+      "name": "board deny: rule removed via the row's real Remove control",
+      "pass": true
+    },
+    {
+      "name": "board deny: the row disappears and the store is empty after Remove",
       "pass": true
     },
     {
@@ -538,28 +606,48 @@
   "files": [
     {
       "name": "ntp-driven.png",
-      "sha256": "573ddc47383dec7a903aeba5a7da4b36ed1e48542255225ac89157beb130745e",
-      "bytes": 58258
+      "sha256": "ee6824f17a72a9aa1a6880d8d383a5a2417f469187c827bf4c1777ba1fb5bd5a",
+      "bytes": 140505
+    },
+    {
+      "name": "ntp-jobs-empty.png",
+      "sha256": "ee6824f17a72a9aa1a6880d8d383a5a2417f469187c827bf4c1777ba1fb5bd5a",
+      "bytes": 140505
+    },
+    {
+      "name": "ntp-jobs-populated.png",
+      "sha256": "d7078894568c297a1361cd284c732077d489c5fd1167281a7f5d86bb44b04e5b",
+      "bytes": 146580
+    },
+    {
+      "name": "ntp-jobs-settled.png",
+      "sha256": "9e621f2501aa6e22e9b573473bcd426d4f771a5c456c5b8626c59703d609ecc4",
+      "bytes": 144579
+    },
+    {
+      "name": "board-deny-added.png",
+      "sha256": "824b6b01c070f7e202c721509e1c727b0286a560cf726dcb31311f8943009324",
+      "bytes": 274372
     },
     {
       "name": "options-driven.png",
-      "sha256": "aa1aa53e7c0f8d2e0a65b1b5bda1fa5f92a8d1e58db6b712eade5ffa77d19a2c",
-      "bytes": 223840
+      "sha256": "c68d89b9e31d475983f0ff1fcd8766d9eb2a0484827e7c1abf95c66feb15f0b5",
+      "bytes": 258514
     },
     {
       "name": "approval-iframe-denied.png",
-      "sha256": "0bf629968d01a052e4fffd5a15e669da53af7b903fb48b1322da4cd88a6ec2ef",
-      "bytes": 218366
+      "sha256": "f1445ddaaeefa50363544696eb5c1bf2a7813360670ca033147fc49187f05731",
+      "bytes": 221686
     },
     {
       "name": "approval-deny-pending.png",
-      "sha256": "48a68d37271bb63b9231880164d88f73630fcdf4a70a0c046490b0a6a7fca2bc",
-      "bytes": 221686
+      "sha256": "604ad7171604e6b7c65a1fd5670849dcc21c0aaf129184d2a2a874a62ceb08cf",
+      "bytes": 234778
     },
     {
       "name": "approval-deny-resolved.png",
-      "sha256": "48a68d37271bb63b9231880164d88f73630fcdf4a70a0c046490b0a6a7fca2bc",
-      "bytes": 221686
+      "sha256": "604ad7171604e6b7c65a1fd5670849dcc21c0aaf129184d2a2a874a62ceb08cf",
+      "bytes": 234778
     }
   ]
 }

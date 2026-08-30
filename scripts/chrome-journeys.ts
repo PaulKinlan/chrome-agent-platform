@@ -771,7 +771,11 @@ async function main() {
     // board.* routes from the page, then a REAL named agent claims +
     // completes a job through the lazy tool protocol (@demo-board) and the
     // panel re-renders live from the board progress events — no reload.
+    // JOURNEY 1's Run click opened the thread view — go Back (real click)
+    // so the Jobs panel is actually ON SCREEN for the screenshots.
     // ─────────────────────────────────────────────────────────────
+    await clickSel(cdp, ntpSession, "#thread-back");
+    await sleep(1200);
     const jobsPanel = async () =>
       await evalIn(cdp, ntpSession, `(() => {
         const el = document.querySelector("#jobs-board-host jobs-board");
