@@ -291,6 +291,20 @@
         <div id="memory-explorer" class="memory-explorer"></div>
         <div id="origin-list" class="origin-list"></div>
 
+        <div class="retention-zone" id="run-retention" style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border,#e3e0d9);">
+          <h3 style="margin: 0 0 6px;">Run logs</h3>
+          <p class="muted" style="margin: 0 0 12px; font-size: 13px;">
+            Every run keeps its record and its answer. Its step-by-step tool detail is kept in full for the newest runs and folded into a one-line summary for older ones, so storage stays bounded.
+          </p>
+          <div class="toggle-field">
+            <switch-toggle id="run-retention-keep-all" label="Keep every run log"></switch-toggle>
+            <div class="toggle-text">
+              <span class="toggle-name">Keep every run log</span>
+              <span class="muted" id="run-retention-bound">Off: full detail for the newest 10 runs per task and the newest 500 runs overall (up to 32 MiB); older runs keep a summary line.</span>
+            </div>
+          </div>
+        </div>
+
         <div class="maintenance-zone" style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border,#e3e0d9);">
           <h3 style="margin: 0 0 6px;">Agent data maintenance</h3>
           <p class="muted" style="margin: 0 0 12px; font-size: 13px;">

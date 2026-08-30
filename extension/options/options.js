@@ -82,6 +82,39 @@ async function wireObservabilitySettings() {
   });
 }
 
+// ── Run-log retention (CAP-FB-20260830-RUN-LOG-COMPACTION-01) ──────────
+// The policy lives in chrome.storage.local["cap:runRetention"]; the durable-run
+// registry reads it at every terminal commit and `run.list` reports it. The
+// toggle is the explicit "keep everything" opt-in; off = the bounded defaults.
+const RUN_RETENTION_KEY = "cap:runRetention";
+function describeRetentionBound(policy) {
+  if (!policy || policy.mode === "retain-all") {
+    return "On: every run keeps its full step-by-step detail until you clear it. Storage grows with use.";
+  }
+  const mib = Math.round((policy.globalBytes ?? 32 * 1024 * 1024) / (1024 * 1024));
+  return `Off: full detail for the newest ${policy.perThread ?? 10} runs per task and the newest ${policy.globalExecutions ?? 500} runs overall (up to ${mib} MiB); older runs keep a summary line.`;
+}
+async function wireRunRetentionSettings() {
+  const toggle = document.getElementById("run-retention-keep-all");
+  const bound = document.getElementById("run-retention-bound");
+  if (!toggle || !bound) return;
+  let policy = null;
+  try {
+    const snapshot = await chrome.runtime.sendMessage({ type: "run.list" });
+    policy = snapshot?.retentionPolicy ?? null;
+  } catch { policy = null; }
+  toggle.checked = policy?.mode === "retain-all";
+  bound.textContent = describeRetentionBound(policy);
+  toggle.addEventListener("toggle", async (event) => {
+    const keepAll = event.detail?.checked === true;
+    await chrome.storage.local.set({ [RUN_RETENTION_KEY]: { mode: keepAll ? "retain-all" : "bounded" } });
+    let next = null;
+    try { next = (await chrome.runtime.sendMessage({ type: "run.list" }))?.retentionPolicy ?? null; } catch { next = null; }
+    bound.textContent = describeRetentionBound(next ?? { mode: keepAll ? "retain-all" : "bounded" });
+    saveFlash(keepAll ? "Every run log is kept in full." : "Older run logs are folded into a summary line.");
+  });
+}
+
 // ── Provider presets (the user picks one; OpenAI-compatible endpoints) ──
 // NOTE: the "demo" + "prompt-api" providers are deliberately NOT in this
 // picker (Paul 2026-08-17). The Chrome Prompt API (Gemini nano) is only for
@@ -3146,6 +3179,7 @@ async function renderAbout() {
   }
 }
 await wireObservabilitySettings();
+await wireRunRetentionSettings();
 await renderAbout();
 await navigationController.syncCurrent();
 

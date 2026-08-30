@@ -25,6 +25,7 @@ import {
   appendRecords as walAppend,
   readAll as walReadAll,
   readRecent as walReadRecent,
+  rewrite as walRewrite,
 } from "./run-log-wal.js";
 import {
   durableExecutionDirSegments,
@@ -45,14 +46,69 @@ const LOG_READ_CONCURRENCY = 32;
 const MAX_PREVIEW_CHARS = 240;
 const MAX_RESUME_ATTEMPTS = 3;
 
-export const RUN_RETENTION_POLICY = Object.freeze({
-  schemaVersion: 1,
-  policyVersion: "run-retention-v1",
-  mode: "retain-all",
-  automaticCompaction: false,
-  automaticEviction: false,
-  explicitClearOnly: true,
+// ── run-log retention (CAP-FB-20260830-RUN-LOG-COMPACTION-01) ────────────
+// Retention is BOUNDED by default and the bound is visible: the newest
+// `perThread` executions of a thread keep their full log; older ones — and,
+// oldest-first, anything beyond the global caps — are COMPACTED to one honest
+// summary row (`type:"compacted"`, carrying the terminal status/summary and
+// how many rows it replaced). The execution RECORD is never deleted and the
+// thread body (user turns + terminal answers) is untouched: what compaction
+// drops is the replayable tool-card detail of old runs. "Keep every run log"
+// (mode `retain-all`) is the explicit opt-in in Settings → Data & memory and is
+// stored under `chrome.storage.local[cap:runRetention]`.
+//
+// `policyVersion` is the STAMP on every record/row (a schema marker, distinct
+// from the mode); v1 rows stay readable — the stamp only tells a reader which
+// generation wrote the row.
+export const RUN_RETENTION_SETTING_KEY = "cap:runRetention";
+const RETENTION_POLICY_VERSION = "run-retention-v2";
+const KNOWN_RETENTION_VERSIONS = new Set(["run-retention-v1", RETENTION_POLICY_VERSION]);
+const RETENTION_DEFAULTS = Object.freeze({
+  mode: "bounded",
+  perThread: 10,
+  globalExecutions: 500,
+  globalBytes: 32 * 1024 * 1024,
 });
+
+/** Normalise a raw `cap:runRetention` value (or null) to the policy object
+ *  `run.list` reports: unknown/invalid input yields the bounded defaults. */
+export function normalizeRetentionPolicy(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const mode = src.mode === "retain-all" ? "retain-all" : "bounded";
+  const bound = (value, fallback) => {
+    const n = Number(value);
+    return Number.isInteger(n) && n >= 1 ? n : fallback;
+  };
+  return Object.freeze({
+    schemaVersion: 1,
+    policyVersion: RETENTION_POLICY_VERSION,
+    mode,
+    perThread: bound(src.perThread, RETENTION_DEFAULTS.perThread),
+    globalExecutions: bound(src.globalExecutions, RETENTION_DEFAULTS.globalExecutions),
+    globalBytes: bound(src.globalBytes, RETENTION_DEFAULTS.globalBytes),
+    automaticCompaction: mode === "bounded",
+    // Compaction is not eviction: no execution is ever removed by policy.
+    automaticEviction: false,
+    explicitClearOnly: true,
+  });
+}
+
+/** The default policy (the bounded defaults; what `run.list` reports until
+ *  the owner opts into "keep every run log"). */
+export const RUN_RETENTION_POLICY = normalizeRetentionPolicy(null);
+
+/** Read the owner's setting from chrome.storage.local; null when unavailable
+ *  (tests inject their own through `retentionSetting`). */
+async function defaultRetentionSetting() {
+  try {
+    const storage = globalThis.chrome?.storage?.local;
+    if (!storage?.get) return null;
+    const got = await storage.get(RUN_RETENTION_SETTING_KEY);
+    return got?.[RUN_RETENTION_SETTING_KEY] ?? null;
+  } catch {
+    return null;
+  }
+}
 
 export const DURABLE_RUN_POLICY = Object.freeze({
   schemaVersion: 1,
@@ -73,10 +129,21 @@ function normalizeRetention(record) {
       retentionMigration: { from: "legacy-unversioned", to: RUN_RETENTION_POLICY.policyVersion },
     };
   }
-  if (version !== RUN_RETENTION_POLICY.policyVersion) {
-    throw new Error(`unknown durable run retention policy: ${version}`);
+  if (version === RUN_RETENTION_POLICY.policyVersion) return record;
+  if (KNOWN_RETENTION_VERSIONS.has(version)) {
+    // v1 → v2: the record shape is unchanged; only the stamp moves.
+    return {
+      ...record,
+      retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
+      retentionMigration: { from: version, to: RUN_RETENTION_POLICY.policyVersion },
+    };
   }
-  return record;
+  throw new Error(`unknown durable run retention policy: ${version}`);
+}
+
+/** A row/chunk stamp this reader understands. */
+function knownRetentionVersion(version) {
+  return KNOWN_RETENTION_VERSIONS.has(version);
 }
 
 function bounded(value, max = MAX_PREVIEW_CHARS) {
@@ -150,7 +217,7 @@ async function mapBounded(items, limit, fn) {
 }
 
 export function createDurableRunRegistry({
-  store = durableRunMemory(),
+  store: rawStore = durableRunMemory(),
   // The run log's OPFS handle, injectable for the same reason `store` is: a
   // test that supplies its own store must be able to supply its own log, or the
   // registry reaches past its injected dependencies straight to real storage.
@@ -164,8 +231,34 @@ export function createDurableRunRegistry({
   commitThread = commitThreadTerminal,
   replaceCancellationThread = commitThreadCancellation,
   compensateJournal = journalCompensateExecution,
+  // The owner's run-log retention setting (see RUN_RETENTION_SETTING_KEY);
+  // injectable so the unit suite never reaches chrome.storage.
+  retentionSetting = defaultRetentionSetting,
   injectFailure = null,
 } = {}) {
+  // ── the record cache (CAP-FB-20260830-RUN-LOG-COMPACTION-01) ──────────
+  // Every execution record lives in its OWN OPFS directory, so `list()` and the
+  // thread view's execution scan cost a directory open + tombstone read + file
+  // read PER EXECUTION: measured 152 ms for `run.list` and 148 ms for
+  // `thread.get` at 120 seeded threads, growing linearly. This registry is the
+  // single writer of those records, so a record read once is valid until this
+  // registry writes or deletes it — which is exactly what the store wrapper
+  // below tracks: every mutation of a `run:` key through `store` drops the
+  // cached entry, and `writeRecord` refreshes it after a successful CAS. A new
+  // registry (a service-worker restart) starts cold and re-reads from OPFS.
+  const recordCache = new Map(); // executionId → normalized record
+  const isRecordKey = (key) => typeof key === "string" && key.startsWith(RUN_PREFIX);
+  const dropCached = (key) => { if (isRecordKey(key)) recordCache.delete(key.slice(RUN_PREFIX.length)); };
+  const MUTATORS = new Set(["set", "setTrusted", "compareAndDelete", "compareAndRestore", "delete"]);
+  const store = new Proxy(rawStore, {
+    get(target, name) {
+      const value = target[name];
+      if (typeof value !== "function") return value;
+      if (MUTATORS.has(name)) return (key, ...rest) => { dropCached(key); return value.call(target, key, ...rest); };
+      if (name === "clear") return async (...args) => { recordCache.clear(); return await value.apply(target, args); };
+      return (...args) => value.apply(target, args);
+    },
+  });
   const active = new Set();
   // Writers in the CANCEL flow remain projected as live until the run reaches
   // terminal: cancel() removes the execution from `active` at authority time
@@ -325,20 +418,26 @@ export function createDurableRunRegistry({
     } else {
       await store.setTrusted(key, next);
     }
+    recordCache.set(record.executionId, next);
     emit(next);
     return next;
   }
 
   async function readRecord(executionId, { persistMigration = true } = {}) {
+    const cached = recordCache.get(executionId);
+    if (cached) return cached;
     const key = `${RUN_PREFIX}${executionId}`;
     const raw = await store.get(key);
     if (!raw) return null;
     const normalized = normalizeRetention(raw);
-    if (persistMigration && raw.retentionPolicyVersion == null) {
+    if (raw.retentionPolicyVersion !== RUN_RETENTION_POLICY.policyVersion) {
+      if (!persistMigration) return normalized; // not cached: the store still holds the old stamp
       const version = await store.getVersion(key);
       const swapped = await store.compareAndRestore(key, version, normalized);
       if (!swapped) return await readRecord(executionId, { persistMigration: false });
     }
+    if (recordCache.size >= 4096) recordCache.clear(); // bounded, like the other memos
+    recordCache.set(executionId, normalized);
     return normalized;
   }
 
@@ -366,13 +465,13 @@ export function createDurableRunRegistry({
 
   async function readJsonPayload(executionId, ref) {
     const manifest = await store.get(`${ref}:manifest`);
-    if (!manifest || manifest.executionId !== executionId || manifest.retentionPolicyVersion !== RUN_RETENTION_POLICY.policyVersion) {
+    if (!manifest || manifest.executionId !== executionId || !knownRetentionVersion(manifest.retentionPolicyVersion)) {
       throw new Error("invalid retained run payload");
     }
     let json = "";
     for (let index = 0; index < manifest.chunkCount; index += 1) {
       const chunk = await store.get(`${ref}:${String(index).padStart(6, "0")}`);
-      if (!chunk || chunk.executionId !== executionId || chunk.retentionPolicyVersion !== RUN_RETENTION_POLICY.policyVersion) {
+      if (!chunk || chunk.executionId !== executionId || !knownRetentionVersion(chunk.retentionPolicyVersion)) {
         throw new Error("incomplete retained run payload");
       }
       json += chunk.data;
@@ -500,6 +599,14 @@ export function createDurableRunRegistry({
       logHandles.set(executionId, handle);
     }
     return handle;
+  }
+
+  /** The current size of an execution's log file (0 when it has none). */
+  async function logBytesFor(executionId) {
+    await flushExecution(executionId);
+    const handle = await logHandleFor(executionId, { create: false });
+    if (!handle) return 0;
+    try { return (await handle.getFile()).size; } catch { return 0; }
   }
 
   async function appendRegistryRow(executionId, row) {
@@ -674,7 +781,7 @@ export function createDurableRunRegistry({
         before: typeof before === "number" ? before : null,
       });
       for (const row of page.records) {
-        if (row?.retentionPolicyVersion !== RUN_RETENTION_POLICY.policyVersion) {
+        if (!knownRetentionVersion(row?.retentionPolicyVersion)) {
           throw new Error(`unknown durable run log retention policy: ${row?.retentionPolicyVersion}`);
         }
       }
@@ -709,24 +816,37 @@ export function createDurableRunRegistry({
     await store.setTrusted(key, list.slice(-THREAD_RUNS_MAX));
   }
 
+  // Threads whose legacy-migration scan already ran in this worker's lifetime
+  // (bounded: cleared when it grows past the thread index cap).
+  const scannedThreads = new Set();
+
   async function listThreadExecutions(threadId) {
     if (!threadId) return [];
     return locked(async () => {
       const key = `${THREAD_RUNS_PREFIX}${threadId}`;
-      let ids = (await store.get(key)) ?? [];
-      ids = Array.isArray(ids) ? ids.filter(validExecutionId) : [];
-      // Self-migration: a thread with no (or partial) index falls back to a
-      // registry scan by record.threadId, then persists the union.
-      const scanned = [];
-      for (const executionId of await indexIds()) {
-        if (ids.includes(executionId)) continue;
-        const record = await readRecord(executionId);
-        if (record?.threadId === threadId) scanned.push(executionId);
-      }
-      if (scanned.length) {
-        const union = [...ids, ...scanned].slice(-THREAD_RUNS_MAX);
-        await store.setTrusted(key, union);
-        ids = union;
+      const stored = await store.get(key);
+      let ids = Array.isArray(stored) ? stored.filter(validExecutionId) : [];
+      // Self-migration: a thread with NO index (admitted before the index
+      // existed) falls back to a one-time registry scan by record.threadId,
+      // then persists the result. This used to run on EVERY open — a read of
+      // every execution in the registry per thread.get, which is what made
+      // opening a task scale with the profile (RUN-LOG-COMPACTION-01). A thread
+      // with an index is authoritative: admission links the execution before
+      // the run is accepted.
+      if (stored == null && !scannedThreads.has(threadId)) {
+        const scanned = [];
+        for (const executionId of await indexIds()) {
+          if (ids.includes(executionId)) continue;
+          const record = await readRecord(executionId);
+          if (record?.threadId === threadId) scanned.push(executionId);
+        }
+        if (scannedThreads.size > THREAD_RUNS_MAX) scannedThreads.clear();
+        scannedThreads.add(threadId);
+        if (scanned.length) {
+          const union = [...ids, ...scanned].slice(-THREAD_RUNS_MAX);
+          await store.setTrusted(key, union);
+          ids = union;
+        }
       }
       // Order chronologically by the run's start (admission order is append
       // order, but the migration scan appends registry order — sort by the
@@ -772,13 +892,13 @@ export function createDurableRunRegistry({
     const ref = record?.resumeRequestRef;
     if (!ref) return null;
     const manifest = await store.get(`${ref}:manifest`);
-    if (!manifest || manifest.retentionPolicyVersion !== RUN_RETENTION_POLICY.policyVersion) {
+    if (!manifest || !knownRetentionVersion(manifest.retentionPolicyVersion)) {
       throw new Error("invalid or unknown resume-request policy");
     }
     let json = "";
     for (let index = 0; index < manifest.chunkCount; index += 1) {
       const chunk = await store.get(`${ref}:${String(index).padStart(6, "0")}`);
-      if (!chunk || chunk.executionId !== record.executionId || chunk.retentionPolicyVersion !== RUN_RETENTION_POLICY.policyVersion) {
+      if (!chunk || chunk.executionId !== record.executionId || !knownRetentionVersion(chunk.retentionPolicyVersion)) {
         throw new Error("incomplete durable resume request");
       }
       json += chunk.data;
@@ -1115,6 +1235,10 @@ export function createDurableRunRegistry({
         phase: terminalPhase,
         heartbeatAt: now(),
         terminal: outbox.terminal,
+        // Retention bookkeeping: the log's size once the terminal row below
+        // lands (one file stat; the terminal row is estimated from its
+        // payload). Read by the global byte cap without opening any file.
+        logBytes: await logBytesFor(executionId) + JSON.stringify(outbox.terminal ?? null).length + 160,
       }, record.revision);
       if (!terminal) throw new Error("terminal registry CAS failed");
       record = terminal;
@@ -1142,7 +1266,108 @@ export function createDurableRunRegistry({
     await boundary(cancelling ? "after-cancel-outbox-ack" : "after-outbox-ack", executionId);
     await store.delete(outboxKey);
     await boundary(cancelling ? "after-cancel-outbox-removal" : "after-outbox-removal", executionId);
+    // Retention runs from the terminal commit of a NEW execution — never from
+    // a timer — and only after this execution is durably terminal, so a crash
+    // here leaves at most an uncompacted log the next terminal commit revisits.
+    await enforceRetention(record.threadId).catch(() => { /* bookkeeping never fails a run */ });
     return publicRecord(record);
+  }
+
+  // ── retention: compaction, never eviction ───────────────────────────────
+  async function activeRetentionPolicy() {
+    let raw = null;
+    try { raw = await retentionSetting(); } catch { raw = null; }
+    return normalizeRetentionPolicy(raw);
+  }
+
+  /** Compact one TERMINAL execution's log to a single honest summary row. The
+   *  record survives (with `logCompacted`), the WAL format is unchanged, and
+   *  the terminal payload reference (the full answer) is carried over. */
+  async function compactExecution(executionId) {
+    const record = await readRecord(executionId);
+    if (!record || !TERMINAL_PHASES.has(record.phase)) return { ok: false, reason: "not terminal" };
+    if (record.logCompacted) return { ok: true, idempotent: true };
+    await flushExecution(executionId);
+    await migrateExecutionLog(executionId);
+    const handle = await logHandleFor(executionId, { create: false });
+    if (!handle) return { ok: false, reason: "no log" };
+    const rows = await walReadAll(handle);
+    if (rows.length === 1 && rows[0]?.type === "compacted") return { ok: true, idempotent: true };
+    const terminalRow = [...rows].reverse().find((r) => r?.type === "terminal" || r?.type === "cancelled") ?? null;
+    const terminal = terminalRow?.terminal ?? record.terminal ?? null;
+    const status = record.phase === "cancelled" || terminal?.cancelled ? "cancelled" : terminal?.ok === true ? "ok" : "failed";
+    const at = terminalRow?.at ?? terminal?.at ?? now();
+    const bytesBefore = (await handle.getFile()).size;
+    const summaryRow = {
+      schemaVersion: 1,
+      retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
+      executionId,
+      at,
+      type: "compacted",
+      status,
+      summary: bounded(terminal?.summary ?? terminal?.reason ?? terminal?.result ?? ""),
+      rowsDropped: rows.length,
+      compactedAt: now(),
+      ...(terminal ? { terminal } : {}),
+      ...(terminalRow?.payloadRef ? { payloadRef: terminalRow.payloadRef } : {}),
+    };
+    const written = await walRewrite(handle, [summaryRow]);
+    seenKeys.delete(executionId);
+    const updated = await writeRecord({
+      ...record,
+      logBytes: written.bytes,
+      logCompacted: { at: summaryRow.compactedAt, rowsDropped: rows.length, bytesBefore, bytesAfter: written.bytes },
+    }, record.revision);
+    return { ok: true, rowsDropped: rows.length, bytesBefore, bytesAfter: written.bytes, recorded: !!updated };
+  }
+
+  /** Apply the bounded policy: newest `perThread` per thread stay full, then
+   *  the global count and byte caps, oldest-first. Reads ONLY the registry's
+   *  own index rows and (cached) records — never an OPFS walk. */
+  async function enforceRetention(threadId) {
+    const policy = await activeRetentionPolicy();
+    if (policy.mode !== "bounded") return { compacted: [] };
+    const compacted = [];
+    const newestFirst = (a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0) || b.executionId.localeCompare(a.executionId);
+    const terminalFull = (records) => records.filter((r) => r && TERMINAL_PHASES.has(r.phase) && !r.logCompacted);
+    const compactAll = async (records) => {
+      for (const r of records) {
+        const result = await compactExecution(r.executionId);
+        if (result?.ok && !result.idempotent) compacted.push(r.executionId);
+      }
+    };
+    // (1) per thread
+    if (threadId) {
+      const ids = (await store.get(`${THREAD_RUNS_PREFIX}${threadId}`)) ?? [];
+      const records = [];
+      for (const id of Array.isArray(ids) ? ids.filter(validExecutionId) : []) records.push(await readRecord(id));
+      const terminal = records.filter((r) => r && TERMINAL_PHASES.has(r.phase)).sort(newestFirst);
+      await compactAll(terminalFull(terminal.slice(policy.perThread)));
+    }
+    // (2) global count, (3) global bytes — both oldest-first
+    const all = [];
+    for (const id of await indexIds()) all.push(await readRecord(id));
+    const terminalAll = all.filter((r) => r && TERMINAL_PHASES.has(r.phase)).sort(newestFirst);
+    await compactAll(terminalFull(terminalAll.slice(policy.globalExecutions)));
+    let bytes = 0;
+    const full = [];
+    for (const r of terminalAll) {
+      const fresh = await readRecord(r.executionId);
+      if (!fresh || fresh.logCompacted) continue;
+      bytes += Number.isFinite(fresh.logBytes) ? fresh.logBytes : 0;
+      full.push(fresh);
+    }
+    while (bytes > policy.globalBytes && full.length) {
+      const oldest = full.pop();
+      const result = await compactExecution(oldest.executionId);
+      if (result?.ok && !result.idempotent) {
+        compacted.push(oldest.executionId);
+        bytes -= Math.max(0, (Number.isFinite(oldest.logBytes) ? oldest.logBytes : 0) - (result.bytesAfter ?? 0));
+      } else {
+        bytes -= Number.isFinite(oldest.logBytes) ? oldest.logBytes : 0;
+      }
+    }
+    return { compacted };
   }
 
   function cancellationOutbox(record) {
@@ -1665,7 +1890,7 @@ export function createDurableRunRegistry({
         const record = await readRecord(executionId);
         if (record) runs.push(publicRecord(record));
       }
-      return { bootId, policy: DURABLE_RUN_POLICY, retentionPolicy: RUN_RETENTION_POLICY, runs };
+      return { bootId, policy: DURABLE_RUN_POLICY, retentionPolicy: await activeRetentionPolicy(), runs };
     });
   }
 
@@ -1911,6 +2136,18 @@ export function createDurableRunRegistry({
     appendLog,
     listLogs,
     listThreadExecutions,
+    compactExecution: (executionId) => locked(() => compactExecution(executionId)),
+    // Drop every in-memory memo of durable state. The record cache is only
+    // sound because this registry is the SINGLE writer of `run:` keys — a
+    // factory reset wipes OPFS out from under it WITHOUT restarting the
+    // worker, so the reset route calls this and the registry goes cold, the
+    // way a fresh worker starts.
+    forgetCachedState() {
+      recordCache.clear();
+      seenKeys.clear();
+      logHandles.clear();
+      scannedThreads.clear();
+    },
     recover,
     list,
     activeByJournalTarget,

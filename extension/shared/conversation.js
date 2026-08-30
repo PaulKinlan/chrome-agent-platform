@@ -1079,6 +1079,22 @@ export function toolRowsFromRunLog(executionId, logs) {
   });
 }
 
+/** The derived marker for a run whose log was compacted to its summary row. */
+function compactedMarker(executionId, logs) {
+  const row = (Array.isArray(logs) ? logs : []).find((r) => r && r.type === "compacted");
+  if (!row) return null;
+  const dropped = Number.isFinite(row.rowsDropped) ? row.rowsDropped : 0;
+  const status = row.status === "ok" ? "completed" : row.status === "cancelled" ? "was cancelled" : "failed";
+  return {
+    role: "system",
+    content: `Run log compacted: this run ${status}; ${dropped} log ${dropped === 1 ? "row" : "rows"} of tool detail were folded into its summary to bound storage (Settings → Data & memory).`,
+    ts: typeof row.compactedAt === "number" ? row.compactedAt : (typeof row.at === "number" ? row.at : Date.now()),
+    derived: true,
+    compacted: true,
+    executionId,
+  };
+}
+
 /** Merge a thread's persisted turn markers (user/terminal rows — the small
  * authoritative state the thread body still owns) with the tool rows derived
  * from the per-execution durable run logs.
@@ -1124,7 +1140,12 @@ export function projectThreadWithRunLogs(thread, executions = []) {
       // render the same call twice.
       const cards = toolRowsFromRunLog(e.executionId, e.logs)
         .filter((card) => !card.toolCallId || !bodyToolCallIds.has(card.toolCallId));
-      cardsByExec.set(e.executionId, cards);
+      // A COMPACTED log (CAP-FB-20260830-RUN-LOG-COMPACTION-01) is one honest
+      // summary row in place of the run's tool detail: render it as a
+      // read-only marker where the cards would have been, so the thread says
+      // what happened to them instead of silently showing nothing.
+      const compacted = compactedMarker(e.executionId, e.logs);
+      cardsByExec.set(e.executionId, compacted ? [compacted, ...cards] : cards);
     }
     const terminalPhase = e.phase === "terminal" || e.phase === "cancelled";
     if (terminalPhase && e.terminal && !terminalExecs.has(e.executionId)) {
