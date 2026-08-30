@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.488] — 2026-08-30
+- Tracker: cross-thread memory recall is recorded as landed.
+
 ## [0.2.487] — 2026-08-30
 - Landed: something the agent saved to memory in one conversation can now be recalled in a new one - it sees a short list of what it remembers before it answers.
 
