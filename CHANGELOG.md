@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.498] — 2026-08-30
+- merge: Agent dialog scroll lane (d60686f2) — the create/edit dialog body scrolls, Advanced and skills are reachable, and the journey proves the saved skill identity
+
 ## [0.2.497] — 2026-08-30
 - Housekeeping: parallel work streams reconciled.
 
