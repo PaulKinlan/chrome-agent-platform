@@ -56,6 +56,23 @@
 
 ## [0.2.427] — 2026-08-30
 - Full-project reanalysis before the exec demo: 65 new and 8 updated tracker entries, REVIEW-2026-08-30.md with the ordered queue and the five-minute demo script, recommended defaults for the open product questions, and the README now states the real host-access posture
+## [0.2.432] — 2026-08-30
+- Jobs panel: sync the component gallery with the error-state fix
+
+## [0.2.431] — 2026-08-30
+- Jobs panel: a failed board read now shows the honest error instead of an empty board
+
+## [0.2.430] — 2026-08-30
+- Jobs panel: retain the empty/populated/settled hub screenshots from the journey
+
+## [0.2.429] — 2026-08-30
+- Jobs panel journey: return to the hub before the panel screenshots (the task journey leaves the thread view open)
+
+## [0.2.428] — 2026-08-30
+- Jobs panel: tolerate unupgraded elements in the unit-test DOM (optional refresh call, the activity-explorer pattern)
+
+## [0.2.427] — 2026-08-30
+- Jobs panel on the hub: the shared agent board is visible — open, settled, and messages, live across worker restarts
 
 ## [0.2.426] — 2026-08-30
 - merge: WebMCP acceptance green lane (0c9783c8) — detector registration restored, JIT scripting at discover, fresh-profile picker proof

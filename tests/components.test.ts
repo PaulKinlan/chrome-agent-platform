@@ -730,3 +730,41 @@ Deno.test("task-row: pause and retry are DISTINCT controls — exactly one dispa
   if (source.includes('class="retry psep"')) throw new Error("the pause button still carries the retry class");
   if (!source.includes('class="psep"')) throw new Error("the pause button lost its own class");
 });
+
+Deno.test("jobs-board: a structured {ok:false} route response renders the error state, never the empty board", async () => {
+  // The backend routes report failures as structured {ok:false, code, error}
+  // envelopes (never thrown). Regression: _load() treated those as an empty
+  // board. The cache-busted import re-evaluates the module with a scripted
+  // chrome.runtime so RUNTIME_SEND serves the failure envelope.
+  globalThis.chrome = {
+    runtime: {
+      sendMessage: (msg, cb) => cb({ ok: false, code: "board-store-error", error: "the board store could not be read" }),
+    },
+  };
+  try {
+    const mod = await import("../extension/shared/components.js?jobs-board-error-test");
+    void mod;
+    const Klass = registry.get("jobs-board");
+    const element = new Klass();
+    // _paint() touches four group elements + the empty slot; stub them (the
+    // stub harness never runs connectedCallback, so _wire() never ran).
+    const groups = { replaceChildren() {}, append() {} };
+    element._openEl = groups;
+    element._settledEl = groups;
+    element._msgsEl = groups;
+    element._emptyEl = { hidden: true, textContent: "" };
+    await element._load();
+    if (!element._loadError || !element._loadError.includes("board store could not be read")) {
+      throw new Error(`the structured failure did not reach the error state: ${JSON.stringify(element._loadError)}`);
+    }
+    if (element._emptyEl.hidden !== false) throw new Error("the error copy stayed hidden");
+    if (!element._emptyEl.textContent.includes("could not be read")) {
+      throw new Error(`the honest error copy was not rendered: ${JSON.stringify(element._emptyEl.textContent)}`);
+    }
+    if (element._emptyEl.textContent.includes("No shared jobs yet")) {
+      throw new Error("a failed read rendered as the empty board — the regression is back");
+    }
+  } finally {
+    delete globalThis.chrome;
+  }
+});

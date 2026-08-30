@@ -362,6 +362,38 @@ Deno.test("board routes: caller identity comes from the route CONTEXT, never mod
   assertEquals(broadcasts.some((e) => e.type === "board-job-claimed"), true);
 });
 
+Deno.test("board routes: board.messages exposes the read-side feed (bounded, most-recent-first)", async () => {
+  // Distinct injected timestamps: two posts in the same millisecond must
+  // still order most-recent-first by the fold's ts sort.
+  let tick = 1000;
+  const { routes } = createAgentBoardRoutes({
+    memory: mockMemory(),
+    withLock: (fn) => fn(),
+    listAgents: async () => AGENTS,
+    resolveCaller: () => null,
+    broadcast: () => {},
+    now: () => ++tick,
+  });
+  // An empty board reads as an empty feed (never an error, never undefined).
+  const empty = await routes["board.messages"]({}, {});
+  assertEquals(empty.ok, true);
+  assertEquals(empty.messages, []);
+  // Two real posts land most-recent-first.
+  await routes["board.message"]({ to: "broadcast", body: "first message" }, { agentId: "writer" });
+  await routes["board.message"]({ to: "critic", body: "second message" }, { agentId: "writer" });
+  const listed = await routes["board.messages"]({}, {});
+  assertEquals(listed.ok, true);
+  assertEquals(listed.messages.length, 2);
+  assertEquals(listed.messages[0].body, "second message");
+  assertEquals(listed.messages[1].body, "first message");
+  assertEquals(listed.messages[0].toName, "The Critic");
+  // The limit clamps (the owner surface asks for a handful, never the log).
+  const one = await routes["board.messages"]({ limit: 1 }, {});
+  assertEquals(one.messages.length, 1);
+  const clamped = await routes["board.messages"]({ limit: 1000 }, {});
+  assertEquals(clamped.messages.length <= 50, true);
+});
+
 // ── (5) tool wiring ─────────────────────────────────────────────────────────
 Deno.test("board tools: the model-facing tools forward args to the right routes through callRoute", async () => {
   const calls = [];

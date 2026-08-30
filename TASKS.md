@@ -206,6 +206,10 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P0 | IN_REVIEW | [`CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01`](#cap-fb-20260829-tool-argument-robustness-01-tool-call-argument-robustness-and-schema-accuracy) | Tool-call argument robustness and schema accuracy |
 | P0 | IN_REVIEW | [`CAP-FB-20260829-URGENT-UI-REPAIR-01`](#cap-fb-20260829-urgent-ui-repair-01-restore-agents-and-create-dialog-visual-quality) | Restore Agents and create-dialog visual quality |
 | P0 | IN_REVIEW | [`CAP-FB-20260830-WEBMCP-ACCEPTANCE-GREEN-01`](#cap-fb-20260830-webmcp-acceptance-green-01-restore-passive-webmcp-discovery-acceptance) | Restore passive WebMCP discovery acceptance |
+| P1 | DONE | [`CAP-FB-20260829-AGENT-BOARD-01`](#cap-fb-20260829-agent-board-01-the-shared-jobs-board-agents-post-and-claim-work) | The shared jobs board — agents post and claim work |
+| P1 | IN_REVIEW | [`CAP-FB-20260830-JOBS-BOARD-VISIBLE-01`](#cap-fb-20260830-jobs-board-visible-01-the-jobs-board-has-no-visible-hub-surface) | The jobs board has no visible hub surface |
+| P1 | IN_REVIEW | [`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`](#cap-fb-20260829-create-dialog-declutter-01-create-agent-dialog-is-cluttered-and-its-scheduletheme-controls-are-inconsistent) | Create-agent dialog is cluttered and its schedule/theme controls are inconsistent |
+| P1 | IN_REVIEW | [`CAP-FB-20260829-OWNER-OBSERVABILITY-01`](#cap-fb-20260829-owner-observability-01-owner-grade-console-and-run-logs) | Owner-grade console and run logs |
 | P0 | OPEN | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
 | P0 | OPEN | [`CAP-FB-20260827-HUB-FIRST-RUN-01`](#cap-fb-20260827-hub-first-run-01-the-first-screen-is-an-onboarding-wall-not-a-command-center) | The first screen is an onboarding wall, not a command center |
 | P0 | OPEN | [`CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01`](#cap-fb-20260827-tool-call-legibility-01-tool-call-cards-show-shape-not-answers) | Tool-call cards show shape, not answers |
@@ -4307,3 +4311,23 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - History:
   - 2026-08-30 16:00 UTC — opened from the owner's review of the reanalysis ("we wanted an image strip of things that get generated"); adopts `screenshot-strip`, which the gallery census had marked for deletion.
 
+## [CAP-FB-20260830-JOBS-BOARD-VISIBLE-01] The jobs board has no visible hub surface
+- Feedback: 2026-08-30 — owner report: "I was using the version last night and I saw no visible jobs board."
+- Updated: 2026-08-30 08:35 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P1
+- Owner: implementation worker
+- Workspace: active (local path private)
+- Branch: `cap-jobs-board-ui`
+- Base: `fc2255be`
+- Candidate: this tracker commit
+- Shipping: —
+- Acceptance: a Jobs section renders on the hub — open jobs with poster/claimant and recency, recently settled jobs with outcome and a bounded result excerpt, recent board messages, honest empty and read-error states; the panel refreshes live on board progress events INCLUDING across service-worker restarts; browser-driven journey checks with empty/populated/settled screenshots are green; the previously-red sidebar message-feed checks pass.
+- Review: pending independent review
+- Gates: developer build clean; route unit test falsified (RED without the route, GREEN with it); journey panel checks falsified (RED with the panel mount removed, GREEN restored); full suite + Chrome journey suite green on the final commit; kat-agent-board 22/22 green (was 20 pass / 2 fail on the base — the missing read route)
+- Blockers: —
+- Next: independent review, then coordinator merge
+- Recover: `git show cap-jobs-board-ui -- extension/lib/agent-board.js extension/shared/components.js extension/ntp/ntp.html extension/ntp/ntp.js`
+- History:
+  - 2026-08-30 08:35 UTC — lane created from fc2255be. Findings: the hub had only the sidebar's hidden-when-empty mini grouping, and its `board.messages` read route never existed (the message feed could never render — the kat was silently red on main). Added the bounded `board.messages` route, the `<jobs-board>` component (Open/Settled/Messages groups, textContent-only, gallery-seeded), the hub Jobs panel with a live open-count hint, and an ambient progress-port resubscribe — the shared dispatcher clears listeners fail-closed on every MV3 worker restart, which had silently frozen the run log and board surfaces after any restart until reload.

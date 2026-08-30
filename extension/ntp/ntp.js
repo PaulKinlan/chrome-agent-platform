@@ -1072,6 +1072,23 @@ async function renderRunLog() {
   runLogExplorer = explorer;
 }
 
+// The Jobs panel (the shared agent-to-agent board): ONE <jobs-board> mounted
+// in the host; refresh() re-queries and updates the head hint. Board progress
+// events re-render it live (see subscribeProgress below).
+let jobsBoardEl = null;
+function renderJobsBoard() {
+  const host = document.getElementById("jobs-board-host");
+  if (!host) return;
+  if (!jobsBoardEl) {
+    jobsBoardEl = document.createElement("jobs-board");
+    host.replaceChildren(jobsBoardEl);
+  }
+  jobsBoardEl?.refresh?.().then(() => {
+    const hint = document.getElementById("jobs-count");
+    if (hint && jobsBoardEl) hint.textContent = jobsBoardEl.summary;
+  }).catch(() => {});
+}
+
 // LIVE Recent activity (owner bug: the section froze at page-load state — the
 // explorer loaded ONCE at mount and nothing ever re-queried, so a run that
 // happened while the NTP was open never appeared until a reload). Journal
@@ -1102,12 +1119,29 @@ function flushRunLogDirty() {
   clearTimeout(runLogRefreshTimer);
   runLogExplorer?.refresh?.().catch(() => {});
 }
-subscribeProgress((ev) => {
-  if (!ev || typeof ev !== "object") return;
-  if (["tool-call", "tool-result", "done", "error", "text"].includes(ev.type)) scheduleRunLogRefresh();
-  // Board changes re-render the sidebar section live (post/claim/settle/message).
-  if (typeof ev.type === "string" && ev.type.startsWith("board-")) refreshBoard();
-});
+// The progress PORT dies with every MV3 service-worker restart and the shared
+// dispatcher settles its listeners fail-closed (clears them) — an AMBIENT
+// page-level subscription must re-subscribe itself, or every live hub surface
+// (run log, board sidebar, Jobs panel) silently freezes until a reload.
+const subscribeAmbientProgress = () => {
+  subscribeProgress((ev) => {
+    if (!ev || typeof ev !== "object") return;
+    if (ev.type === "disconnect") {
+      subscribeAmbientProgress();
+      // Events during the disconnect window are lost — re-read the surfaces
+      // once on reconnect so nothing settled while we were deaf stays stale.
+      scheduleRunLogRefresh();
+      refreshBoard();
+      renderJobsBoard();
+      return;
+    }
+    if (["tool-call", "tool-result", "done", "error", "text"].includes(ev.type)) scheduleRunLogRefresh();
+    // Board changes re-render the sidebar section + the Jobs panel live
+    // (post/claim/settle/message).
+    if (typeof ev.type === "string" && ev.type.startsWith("board-")) { refreshBoard(); renderJobsBoard(); }
+  });
+};
+subscribeAmbientProgress();
 subscribeRunRegistry(() => scheduleRunLogRefresh(), { emitCurrent: false });
 
 // A small usage summary on the hub (the recent calls/tokens/cost) — reads the
@@ -2992,6 +3026,7 @@ renderArtifacts();
 renderFirstRunGuide();
 renderTasks();
 renderRunLog();
+renderJobsBoard();
 renderHubUsage();
 renderProviderStatus();
 
