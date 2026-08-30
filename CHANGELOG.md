@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.475] — 2026-08-30
+- Landed: a reusable diff view (side by side or unified, with added/removed counts and keyboard navigation between changes) is ready for the editing flow.
+
 ## [0.2.474] — 2026-08-30
 - Tracker: legible tool cards are recorded as landed.
 

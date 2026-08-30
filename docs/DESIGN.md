@@ -236,6 +236,24 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   reopens grantable. Run-bound action approvals (script.run et al.) are never
   replayed as cards — their ids died with the run.
 
+## Artifact diff (`<artifact-diff>`)
+- One element in `extension/shared/components.js` renders what changed between
+  two versions of an artifact: a `+n -m · k changes` header, `unified` (default)
+  or `split` rows, and `n`/`]` · `p`/`[` hunk navigation that moves focus to the
+  hunk section and announces "Change N of M" through a polite live region
+  (`role="region"` on the body, `aria-keyshortcuts` on the buttons). Split
+  collapses back to unified under 720px of container width.
+- Colour is carried by the row tint (`color-mix` of `--success` / `--danger`
+  at 12% into `--panel`) and a `+`/`-` marker drawn from `data-kind`, never by
+  the ink: counts, markers and lines stay in `--text` so both schemes hold AA.
+  The accent marks only the current hunk (a hairline ring) and focus.
+- Every line is untrusted model output: rows are DOM-built and set with
+  `textContent` after bidi/control neutralisation (the diff core's
+  `truncateDiffLine`); the only markup mount is the static header. Rendering
+  stops at `max-lines` (2,000) with an honest "Showing X of Y changed lines"
+  note and a `truncated` event. The diff itself comes from the bundled diff
+  core (jsdiff); the element only renders it.
+
 ## Generated artifact boundary
 Interactive HTML previews use three distinct layers: the privileged extension
 surface, a stable manifest-declared opaque sandbox host, and one disposable

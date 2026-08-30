@@ -294,7 +294,18 @@ try {
         "node:child_process": shimNode, fs: shimNode, path: shimNode, child_process: shimNode,
       },
     });
-    await build({ ...shared, entryPoints: [path.join(EXT_DIR, "options/options.js")], outfile: OPT });
+    // components.js imports the diff core by its DIST path (so the unbundled
+    // extension pages resolve it at runtime); when esbuild bundles the options
+    // page it must inline the SOURCE wrapper instead, so a clean checkout
+    // builds without a stale/absent dist and the bundle never depends on
+    // build order (CAP-FB-20260830-ARTIFACT-DIFF-COMPONENT-01).
+    const diffCoreFromSource = {
+      name: "cap-diff-core-from-source",
+      setup(b) {
+        b.onResolve({ filter: /dist\/shared\/diff-core\.bundle\.js$/ }, () => ({ path: path.join(EXT_DIR, "shared/diff-core.js") }));
+      },
+    };
+    await build({ ...shared, entryPoints: [path.join(EXT_DIR, "options/options.js")], outfile: OPT, plugins: [diffCoreFromSource] });
     // The diff core (CAP-FB-20260830-DIFF-LIBRARY-01): jsdiff lives in
     // node_modules, so the ONE wrapper module is bundled and every page /
     // component / the SW imports this single build by relative path.
