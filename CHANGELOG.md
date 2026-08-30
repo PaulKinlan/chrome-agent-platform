@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.478] — 2026-08-30
+- A resumed task keeps its skills and conversation history
+
 ## [0.2.477] — 2026-08-30
 - Resuming a task restores the tools it used, its skills, and its prompt
 

@@ -2300,6 +2300,10 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       scheduled: !!scheduled,
       attachments: structuredClone(Array.isArray(attachments) ? attachments : []),
       history: structuredClone(Array.isArray(history) ? history : []),
+      // Continuation fidelity (CAP slice): journaled skills must survive a
+      // durable resume exactly like history — a paused/interrupted named or
+      // background agent run re-applies them when it restarts.
+      journaledSkillIds: structuredClone(Array.isArray(journaledSkillIds) && journaledSkillIds.length > 0 ? journaledSkillIds : []),
       scoped: !!scoped,
       route: resumeRoute,
       routeArgs: structuredClone(resumeRouteArgs ?? {}),
@@ -6244,6 +6248,10 @@ const handlers = mergeRouteMaps(
       } else if (["named-agent.run", "background-agent.run"].includes(request.route)) {
         result = await handlers[request.route]({
           ...(request.routeArgs ?? {}), task: request.task, attachments: request.attachments ?? [],
+          // Continuation fidelity (CAP slice): a durable resume re-applies the
+          // same prior turns + journaled skills the fresh dispatch carried.
+          history: Array.isArray(request.history) ? request.history : [],
+          journaledSkillIds: Array.isArray(request.journaledSkillIds) && request.journaledSkillIds.length > 0 ? request.journaledSkillIds : null,
           _executionId: executionId, _permissionResume: true, _resumeToken: resumed.token, _allowProviderChange: run.phase === "paused-provider-change",
         }, context);
       } else {
@@ -7584,6 +7592,10 @@ async function resumeInterruptedRuns() {
           ...(request.routeArgs ?? {}),
           task: request.task,
           attachments: request.attachments ?? [],
+          // Continuation fidelity (CAP slice): an interrupted named/background
+          // agent run resumes with the same prior turns + journaled skills.
+          history: Array.isArray(request.history) ? request.history : [],
+          journaledSkillIds: Array.isArray(request.journaledSkillIds) && request.journaledSkillIds.length > 0 ? request.journaledSkillIds : null,
           _executionId: run.executionId,
           _permissionResume: true,
           _resumeToken: claimed.token,
