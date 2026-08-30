@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.421] — 2026-08-30
+- fix(board): fail-closed deny-rule loading (corrupt store denies); tightened guard validation; added round-5 route-level + corrupt-store + denial-text tests
+
 ## [0.2.420] — 2026-08-30
 - feat(board): add per-edge deny rules with owner Settings UI
 

@@ -84,8 +84,11 @@ export function canPostJob({ callerId, agents, targetAgentId = null, denyRules =
   if (Array.isArray(denyRules) && denyRules.length > 0) {
     for (const rule of denyRules) {
       if (!rule || typeof rule !== "object") return { ok: false, code: "board-deny-post", error: "malformed deny rule" };
-      if (!rule || typeof rule !== "object" || typeof rule.action !== "string" || typeof rule.agentId !== "string" || typeof rule.peerId !== "string") {
-        return { ok: false, code: "board-deny-post", error: "malformed deny rule — failing closed" };
+      if (rule.action !== "post" && rule.action !== "claim") {
+        return { ok: false, code: "board-deny-post", error: `unknown deny action: ${rule.action}` };
+      }
+      if (typeof rule.agentId !== "string" || !rule.agentId || typeof rule.peerId !== "string" || !rule.peerId) {
+        return { ok: false, code: "board-deny-post", error: "deny rule has empty agent or peer ID" };
       }
       if (rule.action === "post" && rule.agentId === callerId && rule.peerId === targetAgentId) {
         return { ok: false, code: "board-deny-post", error: `you are not allowed to post jobs targeting ${rule.peerId}` };
@@ -115,8 +118,11 @@ export function canClaimJob({ callerId, agents, job, settledJobs = [], denyRules
   if (Array.isArray(denyRules) && denyRules.length > 0) {
     for (const rule of denyRules) {
       if (!rule || typeof rule !== "object") return { ok: false, code: "board-deny-claim", error: "malformed deny rule" };
-      if (!rule || typeof rule !== "object" || typeof rule.action !== "string" || typeof rule.agentId !== "string" || typeof rule.peerId !== "string") {
-        return { ok: false, code: "board-deny-claim", error: "malformed deny rule — failing closed" };
+      if (rule.action !== "claim" && rule.action !== "post") {
+        return { ok: false, code: "board-deny-claim", error: `unknown deny action: ${rule.action}` };
+      }
+      if (typeof rule.agentId !== "string" || !rule.agentId || typeof rule.peerId !== "string" || !rule.peerId) {
+        return { ok: false, code: "board-deny-claim", error: "deny rule has empty agent or peer ID" };
       }
       if (rule.action === "claim" && rule.agentId === callerId && rule.peerId === job.posterId) {
         return { ok: false, code: "board-deny-claim", error: `you are not allowed to claim jobs from ${rule.peerId}` };
@@ -469,22 +475,30 @@ export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => 
    *  which is "no rules = fully open"). The fail-closed deny behaviour is
    *  for INDIVIDUAL MALFORMED RULES within a valid array, not for the whole
    *  store being corrupt. */
+  /** Load the owner's deny rules from the reserved key. Returns
+   *  { rules, corrupt } where corrupt=true means the stored value is the
+   *  wrong shape (the guards then deny all, fail closed). Absent key →
+   *  { rules: [], corrupt: false } (the correct default-open state). */
   async function loadDenyRules() {
+    let raw;
     try {
-      const raw = await memory.getStrict(BOARD_DENY_RULES_KEY);
-      if (!Array.isArray(raw)) return [];
-      if (raw.length > BOARD_MAX_DENY_RULES) return [];
-      for (const r of raw) {
-        if (!r || typeof r !== "object") return [];
-        if (r.action !== "claim" && r.action !== "post") return [];
-        if (typeof r.agentId !== "string" || !r.agentId) return [];
-        if (typeof r.peerId !== "string" || !r.peerId) return [];
-        if (typeof r.id !== "string" || !r.id) return [];
-      }
-      return raw;
+      raw = await memory.getStrict(BOARD_DENY_RULES_KEY);
     } catch {
-      return [];
+      raw = undefined;
     }
+    if (raw == null) return { rules: [], corrupt: false };
+    if (!Array.isArray(raw)) return { rules: null, corrupt: true };
+    // Validate each rule's shape — anything malformed means the store is
+    // unreliable, so fail closed (deny all).
+    for (const r of raw) {
+      if (!r || typeof r !== "object") return { rules: null, corrupt: true };
+      if (r.action !== "claim" && r.action !== "post") return { rules: null, corrupt: true };
+      if (typeof r.agentId !== "string" || !r.agentId) return { rules: null, corrupt: true };
+      if (typeof r.peerId !== "string" || !r.peerId) return { rules: null, corrupt: true };
+      if (typeof r.id !== "string" || !r.id) return { rules: null, corrupt: true };
+    }
+    if (raw.length > BOARD_MAX_DENY_RULES) return { rules: null, corrupt: true };
+    return { rules: raw, corrupt: false };
   }
   async function saveDenyRules(rules) {
     await memory.setTrusted(BOARD_DENY_RULES_KEY, rules);
@@ -539,7 +553,10 @@ export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => 
         if (targetAgentRef && !target) {
           return { ok: false, code: "board-unknown-target", error: "the target agent does not exist — use list_named_agents" };
         }
-        const denyRules = await loadDenyRules();
+        const { rules: denyRules, corrupt: denyCorrupt } = await loadDenyRules();
+        if (denyCorrupt) {
+          return { ok: false, code: "board-store-error", error: "deny rule store is corrupt — failing closed" };
+        }
         const guard = canPostJob({ callerId, agents, targetAgentId: target?.id ?? null, denyRules });
         if (!guard.ok) return guard;
         const text = boardText(description, BOARD_MAX_DESCRIPTION);
@@ -608,7 +625,10 @@ export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => 
         const jobs = foldJobEvents(events, now());
         const job = jobs.find((j) => j.id === jobId) ?? null;
         if (!job) return { ok: false, code: "board-no-job", error: "no such job" };
-        const denyRules = await loadDenyRules();
+        const { rules: denyRules, corrupt: denyCorrupt } = await loadDenyRules();
+        if (denyCorrupt) {
+          return { ok: false, code: "board-store-error", error: "deny rule store is corrupt — failing closed" };
+        }
         const guard = canClaimJob({ callerId, agents, job, settledJobs: jobs, denyRules });
         if (!guard.ok) return guard;
         const claimantName = callerId === BOARD_HUB_ID ? "Hub" : (agents.find((a) => a && a.id === callerId)?.name ?? callerId);
