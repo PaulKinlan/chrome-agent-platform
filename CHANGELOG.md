@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.503] — 2026-08-30
+- tasks: SKILLS-UNCAPPED-01 candidate + r1 re-gate history
+
 ## [0.2.502] — 2026-08-30
 - Merge remote-tracking branch 'origin/main' into cap-skills-uncapped
 
