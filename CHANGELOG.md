@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.417] — 2026-08-30
+- Correct the headed permissions acceptance
+
 ## [0.2.416] — 2026-08-30
 - Remove untrusted event test bypass
 
