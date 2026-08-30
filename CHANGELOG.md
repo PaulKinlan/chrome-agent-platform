@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.420] — 2026-08-30
+- merge fix: restore the permissions-optional manifest arrays (4 mandatory + 31 optional; audioCapture/videoCapture removed) — clobbered by a version-file revert during the merge
+
 ## [0.2.419] — 2026-08-30
 - merge: permissions-optional lane (475a25dd) — 4 mandatory boot permissions, 31 optional capabilities with JIT grant from genuine owner gestures (Settings three-state panel, in-chat Enable affordance); audioCapture/videoCapture removed (packaged-apps-only); the approvals journey drives the real grant/revoke/retry lifecycle with trusted clicks
 
