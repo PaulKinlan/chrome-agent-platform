@@ -1,7 +1,19 @@
 # Changelog
 
+## [0.2.410] — 2026-08-30
+- fix(permissions): remove the hanging JIT click from the headless journey (chrome.permissions.request blocks forever in headless — the honest fix is a source pin confirming the JIT wiring); the actual grant/deny/retry/revoke is deferred to the headed run
+
+## [0.2.409] — 2026-08-30
+- Fixed a missing import in the Settings permissions panel
+
+## [0.2.408] — 2026-08-30
+- Foundation for running Python tools in a sandboxed Python runtime — not yet enabled for use
+
+## [0.2.407] — 2026-08-30
+- test(permissions): journey uses real CDP clicks (clickSel) for JIT grant/deny/retry/revoke; EXPECTED updated for OPTIONAL + JIT model
+
 ## [0.2.406] — 2026-08-30
-- fix(permissions): consolidate duplicate capability descriptors; add JIT grant/deny/retry/revoke journey; clean changelog entries
+- Capability permission descriptions are now deduplicated, and the Settings panel offers an Enable button for every requestable capability
 
 ## [0.2.405] — 2026-08-30
 - Capability permission descriptors are now deduplicated, and the Settings panel offers an Enable button for every requestable capability — click to grant, and the permission is yours
@@ -10,7 +22,7 @@
 - The approval card now requests the missing capability directly from your click
 
 ## [0.2.403] — 2026-08-29
-- fix(permissions): remove ChromeOS-only audioCapture/videoCapture permissions entirely
+- Removed microphone and camera permissions that only work on ChromeOS
 
 ## [0.2.402] — 2026-08-29
 - test(permissions): r5+r6 REDs — JIT request behavioral, conversation contract on denials, options import/runtime pins

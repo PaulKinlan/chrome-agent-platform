@@ -363,6 +363,18 @@ export async function requestCapability(id) {
  *   requestable          — not granted, but grantable on this platform (JIT)
  *   platform-unavailable — never grantable here (ChromeOS-only API absent)
  */
+/**
+ * Whether a manifest-listed capability permission is AVAILABLE on this
+ * platform. audioCapture/videoCapture are ChromeOS-only (their rows were
+ * removed from CAPABILITIES entirely), but the check is kept for future
+ * platform-gated permissions.
+ */
+export function isPermissionPlatformAvailable(permission) {
+  if (permission === "audioCapture") return typeof chrome.audioCapture !== "undefined";
+  if (permission === "videoCapture") return typeof chrome.videoCapture !== "undefined";
+  return true;
+}
+
 export async function capabilityState(id) {
   const cap = CAPABILITIES.find((c) => c.id === id);
   if (!cap) return { id, state: "unknown" };
