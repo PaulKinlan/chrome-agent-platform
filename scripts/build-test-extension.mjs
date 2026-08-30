@@ -63,10 +63,25 @@ await build({
     "node:child_process": shimNode, fs: shimNode, path: shimNode, child_process: shimNode,
   },
 });
+// Same resolver as build.mjs: components.js names the diff core by its dist
+// path; the bundled options page inlines the source wrapper instead.
+const diffCoreFromSource = {
+  name: "cap-diff-core-from-source",
+  setup(b) {
+    b.onResolve({ filter: /dist\/shared\/diff-core\.bundle\.js$/ }, () => ({ path: path.join(EXT, "shared/diff-core.js") }));
+  },
+};
 await build({
   ...shared,
   entryPoints: [path.join(EXT, "options/options.js")],
   outfile: path.join(dest, "dist/options.bundle.js"), // matches the production dist layout the html loads
+  plugins: [diffCoreFromSource],
+});
+// The diff core — kept in step with build.mjs (CAP-FB-20260830-DIFF-LIBRARY-01).
+await build({
+  ...shared,
+  entryPoints: [path.join(EXT, "shared/diff-core.js")],
+  outfile: path.join(dest, "dist/shared/diff-core.bundle.js"),
 });
 
 // Append the TEST SEAM to the COPY's service worker + scrub eval sites.

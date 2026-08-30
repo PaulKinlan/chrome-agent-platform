@@ -43,6 +43,7 @@ globalThis.matchMedia = () => ({ matches: false });
 
 const COMPONENTS = [
   "first-run-guide",
+  "example-chips",
   "run-task-button",
   "mic-button",
   "attach-button",
@@ -55,6 +56,7 @@ const COMPONENTS = [
   "tool-directory-card",
   "artifact-card",
   "artifact-inspector",
+  "artifact-diff",
   "artifact-quick-drawer",
   "code-block",
   "message-bubble",
@@ -769,4 +771,100 @@ Deno.test("jobs-board: a structured {ok:false} route response renders the error 
   } finally {
     delete globalThis.chrome;
   }
+});
+
+// ── <artifact-diff> (CAP-FB-20260830-ARTIFACT-DIFF-COMPONENT-01) ────────────
+// The diff lines are UNTRUSTED (model output): every row is DOM-built and its
+// text set with textContent. The grep guard slices the class out of the source
+// and proves it never touches innerHTML / template-interpolates a row.
+const ARTIFACT_DIFF_SRC = new URL("../extension/shared/components.js", import.meta.url);
+async function artifactDiffSlice(): Promise<string> {
+  const src = await Deno.readTextFile(ARTIFACT_DIFF_SRC);
+  const start = src.indexOf("class ArtifactDiff extends Component");
+  const end = src.indexOf('customElements.define("artifact-diff"');
+  if (start < 0 || end < 0 || end < start) throw new Error("ArtifactDiff class not found in components.js");
+  return src.slice(start, end);
+}
+
+Deno.test("artifact-diff never assigns innerHTML from a diff line", async () => {
+  const slice = await artifactDiffSlice();
+  // No innerHTML/outerHTML/insertAdjacentHTML anywhere in the class — the ONE
+  // markup mount goes through mountTemplate (static header markup only).
+  const html = slice.match(/innerHTML|outerHTML|insertAdjacentHTML/g) ?? [];
+  if (html.length !== 0) throw new Error(`ArtifactDiff must not use ${html.join(", ")}`);
+  const mounts = slice.match(/mountTemplate\(/g) ?? [];
+  if (mounts.length !== 1) throw new Error(`expected exactly one mountTemplate call, found ${mounts.length}`);
+  // Row markup is never template-literal interpolated: the row/text/pair
+  // classes appear only as DOM API arguments, never inside an HTML attribute.
+  if (/class="(?:[^"]*\s)?(ln|tx|pair|hunk)(?:\s[^"]*)?"/.test(slice)) {
+    throw new Error("diff rows must be built with the DOM API (createElement + textContent), never HTML strings");
+  }
+  if (!/\.textContent\s*=/.test(slice)) throw new Error("row text must be assigned with textContent");
+});
+
+Deno.test("artifact-diff header reports +10 -2 and 2 changes for the bakery fixtures", async () => {
+  const mod = await import("../extension/shared/components.js");
+  const v1 = await Deno.readTextFile(new URL("./fixtures/crumb-v1.html", import.meta.url));
+  const v2 = await Deno.readTextFile(new URL("./fixtures/crumb-v2.html", import.meta.url));
+  const model = mod.buildArtifactDiffModel(v1, v2, { context: 3, maxLines: 2000 });
+  if (model.added !== 10 || model.removed !== 2) throw new Error(`expected +10 -2, got +${model.added} -${model.removed}`);
+  if (model.hunks.length !== 2) throw new Error(`expected 2 hunks, got ${model.hunks.length}`);
+  if (model.summary !== "+10 -2 · 2 changes") throw new Error(`unexpected summary: ${model.summary}`);
+  if (model.regionLabel !== "Diff, 10 additions, 2 deletions, 2 changes") throw new Error(`unexpected region label: ${model.regionLabel}`);
+  if (model.truncated !== false) throw new Error("the bakery diff is under the line bound");
+  // Identical inputs → no changes, honestly worded.
+  const same = mod.buildArtifactDiffModel(v1, v1, {});
+  if (same.hunks.length !== 0 || same.summary !== "No changes") throw new Error(`identical inputs: ${same.summary}`);
+  // The 2,000-line bound: a 5,000-line rewrite is cut with a truthful note.
+  const big1 = Array.from({ length: 5000 }, (_, i) => `line ${i}`).join("\n");
+  const big2 = Array.from({ length: 5000 }, (_, i) => `LINE ${i}`).join("\n");
+  const bounded = mod.buildArtifactDiffModel(big1, big2, { context: 3, maxLines: 2000 });
+  if (bounded.truncated !== true) throw new Error("a 10,000-changed-line diff must hit the 2,000-line bound");
+  const shown = bounded.hunks.reduce((n: number, h: any) => n + h.rows.length, 0);
+  if (shown !== 2000) throw new Error(`the bound must render exactly maxLines rows, rendered ${shown}`);
+  if (!/^Showing 2,000 of 10,000 changed lines/.test(bounded.truncationNote)) throw new Error(`unexpected note: ${bounded.truncationNote}`);
+  // Hostile lines are neutralised before they reach a row.
+  const hostile = mod.buildArtifactDiffModel("a\n", "a\n\u202eevil\u0007\n", {});
+  const row = hostile.hunks[0].rows.find((r: any) => r.kind === "add");
+  if (!row || row.text.includes("\u202e") || row.text.includes("\u0007")) throw new Error("bidi/control characters must be neutralised");
+});
+
+Deno.test("artifact-diff: navigate next twice then prev announces 'Change 2 of 2'", async () => {
+  await import("../extension/shared/components.js");
+  const ArtifactDiffClass = globalThis.customElements.get("artifact-diff");
+  if (!ArtifactDiffClass) throw new Error("artifact-diff must be registered");
+  const mkEl = () => {
+    const el: any = { attrs: {}, textContent: "", focused: 0, scrolled: [] as unknown[] };
+    el.setAttribute = (n: string, v: string) => { el.attrs[n] = v; };
+    el.removeAttribute = (n: string) => { delete el.attrs[n]; };
+    el.hasAttribute = (n: string) => n in el.attrs;
+    el.focus = () => { el.focused++; };
+    el.scrollIntoView = (o: unknown) => { el.scrolled.push(o); };
+    return el;
+  };
+  const hunks = [mkEl(), mkEl()];
+  const status = mkEl();
+  const prev = mkEl();
+  const next = mkEl();
+  const emitted: any[] = [];
+  const el = Object.create(ArtifactDiffClass.prototype);
+  el._root = {
+    querySelector: (sel: string) => sel === ".status" ? status : sel === '[data-act="prev"]' ? prev : sel === '[data-act="next"]' ? next : null,
+    querySelectorAll: (sel: string) => sel === ".hunk" ? hunks : [],
+  };
+  el._emit = (type: string, detail: unknown) => emitted.push({ type, detail });
+  el._hunkCount = 2;
+  el._index = -1;
+  el._go(1);
+  el._go(1);
+  el._go(1); // clamps at the last change
+  el._go(-1);
+  if (status.textContent !== "Change 1 of 2") throw new Error(`expected 'Change 1 of 2' after next,next,(clamped),prev — got '${status.textContent}'`);
+  el._go(1);
+  if (status.textContent !== "Change 2 of 2") throw new Error(`expected 'Change 2 of 2', got '${status.textContent}'`);
+  if (hunks[1].focused < 1) throw new Error("navigation must move focus to the hunk section");
+  if (hunks[1].scrolled.length < 1 || hunks[1].scrolled[0]?.block !== "nearest") throw new Error("navigation must scrollIntoView({block:'nearest'})");
+  const nav = emitted.filter((e) => e.type === "navigate");
+  if (nav.length !== 4) throw new Error(`expected 4 navigate events (clamped step emits none), got ${nav.length}`);
+  if (nav.at(-1).detail.index !== 1 || nav.at(-1).detail.total !== 2) throw new Error(`bad navigate detail: ${JSON.stringify(nav.at(-1))}`);
 });

@@ -401,6 +401,61 @@ async function main() {
       consoleButtons.openAfterCopyAll === true &&
       consoleButtons.openAfterClear === true, consoleButtons);
 
+    // <artifact-diff> — the bakery diff renders in BOTH modes with a real width,
+    // the header carries the counts, and the keyboard walk (] ] [) lands focus
+    // on a hunk section with the live region saying "Change 2 of 2".
+    const adiff = await evl(s.sessionId, `(async()=>{
+      const d = document.getElementById('artifact-diff-demo');
+      const btn = document.getElementById('artifact-diff-mode');
+      if (!d?.shadowRoot || !btn) return { found:false };
+      const wait = () => new Promise(r => setTimeout(r, 80));
+      const info = () => {
+        const sr = d.shadowRoot;
+        const r = d.getBoundingClientRect();
+        return {
+          width: r.width, height: r.height,
+          mode: sr.querySelector('.body')?.dataset.mode,
+          counts: [...(sr.querySelector('.counts')?.children ?? [])].map(c => c.textContent.trim()).join(' '),
+          changes: sr.querySelector('.changes')?.textContent.trim(),
+          hunks: sr.querySelectorAll('.hunk').length,
+          unifiedRows: sr.querySelectorAll('.ln').length,
+          pairRows: sr.querySelectorAll('.pair').length,
+          region: sr.querySelector('.body')?.getAttribute('aria-label'),
+          rawHtml: [...sr.querySelectorAll('.tx')].some(t => t.children.length > 0),
+        };
+      };
+      const unified = info();
+      btn.click(); await wait();
+      const split = info();
+      btn.click(); await wait();
+      const back = info();
+      return { found:true, unified, split, back };
+    })()`);
+    check("artifact-diff specimen renders unified with width > 200px + the +10 -2 header", adiff.found && adiff.unified.width > 200 && adiff.unified.mode === "unified" && adiff.unified.counts === "+10 -2" && adiff.unified.changes === "2 changes" && adiff.unified.hunks === 2 && adiff.unified.unifiedRows > 0, adiff);
+    check("artifact-diff specimen renders split with width > 200px (paired rows)", adiff.found && adiff.split.width > 200 && adiff.split.mode === "split" && adiff.split.pairRows > 0 && adiff.split.unifiedRows === 0 && adiff.split.hunks === 2, adiff);
+    check("artifact-diff region is labelled with the counts + rows carry no child markup", adiff.found && adiff.unified.region === "Diff, 10 additions, 2 deletions, 2 changes" && adiff.unified.rawHtml === false && adiff.back.mode === "unified", adiff);
+
+    // Keyboard walk with REAL key events: focus the first hunk (the Tab stop),
+    // press ] twice (clamps at 2) and [ once, then ] again → "Change 2 of 2".
+    await evl(s.sessionId, `document.getElementById('artifact-diff-demo').shadowRoot.querySelector('.hunk').focus()`);
+    const key = async (k: string, code: number) => {
+      await send("Input.dispatchKeyEvent", { type: "keyDown", key: k, code: k === "]" ? "BracketRight" : "BracketLeft", windowsVirtualKeyCode: code, nativeVirtualKeyCode: code, text: k }, s.sessionId);
+      await send("Input.dispatchKeyEvent", { type: "keyUp", key: k, code: k === "]" ? "BracketRight" : "BracketLeft", windowsVirtualKeyCode: code, nativeVirtualKeyCode: code }, s.sessionId);
+      await sleep(60);
+    };
+    await key("]", 221); await key("]", 221); await key("[", 219); await key("]", 221);
+    const walk = await evl(s.sessionId, `(()=>{
+      const d = document.getElementById('artifact-diff-demo');
+      const deep = (() => { let a = document.activeElement; while (a?.shadowRoot?.activeElement) a = a.shadowRoot.activeElement; return a; })();
+      return {
+        activeIsHunk: !!deep && deep.classList.contains('hunk') && deep.getRootNode() === d.shadowRoot,
+        activeIndex: deep?.dataset?.index,
+        current: d.shadowRoot.querySelector('.hunk[data-current]')?.dataset.index,
+        status: d.shadowRoot.querySelector('.status')?.textContent,
+      };
+    })()`);
+    check("artifact-diff keyboard walk ] ] [ ] focuses the hunk + announces 'Change 2 of 2'", walk.activeIsHunk === true && walk.activeIndex === "1" && walk.current === "1" && walk.status === "Change 2 of 2", walk);
+
     // The BeautifulUI-inspired primitives render their shadow content (not
     // empty/blank) + expose the key affordances.
     const bui = await evl(s.sessionId, `(()=>{

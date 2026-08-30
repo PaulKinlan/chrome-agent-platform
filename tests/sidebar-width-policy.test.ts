@@ -85,21 +85,20 @@ Deno.test("ntp surface: the overlay layout is policy-sanctioned at narrow width 
   assert(overlayBlock.includes(".side-scrim"));
 });
 
-Deno.test("first-run CTA: the gate is visible, described, and never a dead end", () => {
+Deno.test("first-run banner: one real action, no aria-disabled gate, dismiss last", () => {
   const components = readFileSync(
     new URL("../extension/shared/components.js", import.meta.url),
     "utf8",
   );
-  // The CTA is no longer hard-disabled; it carries the gate accessibly.
-  assert(components.includes('class="primary seed-task" type="button"${canSeed ? "" : \' aria-disabled="true" aria-describedby="seed-status"\'}'));
-  assert(!components.includes('seed-task" type="button"${canSeed ? "" : " disabled"}'));
-  // The status line names what is missing and is announced (role=status).
-  assertStringIncludes(components, 'id="seed-status" role="status"');
-  assertStringIncludes(components, "Configure a provider first — then reload if the storage grant still needs restoring");
-  assertStringIncludes(components, "Configure a provider to unlock the starter task.");
-  assertStringIncludes(components, "Storage is missing — reload the extension before starting. If it is still missing, reinstall the extension.");
-  // A gated click routes to the unblock path instead of doing nothing.
-  assertStringIncludes(components, 'this._root.querySelector(".open-settings")?.focus();');
-  // focusNextAction honours the aria-disabled gate (no :disabled anymore).
-  assertStringIncludes(components, "'.seed-task:not([aria-disabled=\"true\"])'");
+  const guideStart = components.indexOf("class FirstRunGuide extends Component");
+  const guideEnd = components.indexOf('customElements.define("first-run-guide"', guideStart);
+  const guide = components.slice(guideStart, guideEnd);
+  // The single action is a plain enabled button (no gate to describe).
+  assertStringIncludes(guide, '<button class="primary connect-model" type="button">Connect a model</button>');
+  assert(!guide.includes("aria-disabled"), "no gated CTA remains in the banner");
+  assert(!guide.includes("seed-status"), "no gate status line remains in the banner");
+  // The dismiss control comes AFTER the action in the template (tab order).
+  assert(guide.indexOf('class="dismiss"') > guide.indexOf('class="primary connect-model"'));
+  // focusNextAction lands on the one action.
+  assertStringIncludes(guide, 'this._root.querySelector(".connect-model")?.focus();');
 });

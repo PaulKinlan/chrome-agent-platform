@@ -217,6 +217,61 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   or markup), lists the sites it fetches, and calls out a computed URL in the
   danger tone ("unknown hosts — only the listed sites will be reachable"). The
   title is plain words ("Run this script now?"), not the action id.
+- **Tool cards show the tool's own answer, never the transport** (`0.2.464`,
+  CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 §9/§10). Every real call travels through
+  the lazy protocol — `search_tools` finds a tool, `execute_tool` runs it, and the
+  result arrives as `{modelContent:"{ok, selectedTool, result, schemaSummary,
+  selectionRef, …}"}`. None of that vocabulary is the owner's business, so ONE
+  unwrap (`unwrapToolPayload` in `components.js`, `lazyInnerResult` in
+  `conversation.js`) runs before anything renders: the card is headed by the tool
+  that ran (a still-running `execute_tool` reads "tool call", never the protocol
+  name), the head's summary and the tree are computed from the selected tool's own
+  result, the raw JSON view shows that same unwrapped value, an error block shows
+  the tool's own error string, and a truncated envelope that cannot parse is not
+  painted at all (the headline already carries the words). `search_tools` /
+  `list_tools` calls are protocol, not work: they stay in the durable run log and
+  render no card — live (a queue sentinel keeps the FIFO pairing honest) or on
+  reopen (`protocol:true` rows are skipped by the projection). The journey suite's
+  leakage probe walks every shadow root of a completed thread, with every card and
+  raw view opened, and fails on any of `modelContent`, `catalogGeneration`,
+  `stableId`, `schemaSummary`, `search_tools`, `execute_tool`.
+- **A persisted denial reopens as the grant card, not prose** (§2b, the reopened-
+  thread half of CAP-FB-20260830-DENIAL-TO-GRANT-CARD-01). The run log keeps the
+  tool's structured denial; `toolRowsFromRunLog` derives ONE `approval` row per
+  distinct requirement right after the denied call, `projectThreadMessages` keeps
+  it with its turn, and `<agent-conversation>` renders the same
+  `<permission-approval-card>` the live run showed. The card grants nothing itself:
+  Allow bubbles an `approval-decision` event to the surface that owns the
+  service-worker channel (`wireReplayApprovals` in the hub), which takes the exact
+  live path — `chrome.permissions.request` on the click, then the scoped
+  `browser-control.set` — and resumes the run if it is still paused on that
+  requirement. A settled run cannot continue, and the card says so honestly:
+  "Approved. Ask again and the agent can use it." Not now marks it declined.
+  The owner's RECORDED decision is the replayed card's state (`agent.js` puts the
+  requirement and the decision on the `tool-result` event; the run log keeps
+  them): approved reopens as granted, declined stays declined — deny is sticky,
+  so a re-projection can never resurrect a pending Allow for a question already
+  answered — expired says so, and only a denial that never paused the run
+  reopens grantable. Run-bound action approvals (script.run et al.) are never
+  replayed as cards — their ids died with the run.
+
+## Artifact diff (`<artifact-diff>`)
+- One element in `extension/shared/components.js` renders what changed between
+  two versions of an artifact: a `+n -m · k changes` header, `unified` (default)
+  or `split` rows, and `n`/`]` · `p`/`[` hunk navigation that moves focus to the
+  hunk section and announces "Change N of M" through a polite live region
+  (`role="region"` on the body, `aria-keyshortcuts` on the buttons). Split
+  collapses back to unified under 720px of container width.
+- Colour is carried by the row tint (`color-mix` of `--success` / `--danger`
+  at 12% into `--panel`) and a `+`/`-` marker drawn from `data-kind`, never by
+  the ink: counts, markers and lines stay in `--text` so both schemes hold AA.
+  The accent marks only the current hunk (a hairline ring) and focus.
+- Every line is untrusted model output: rows are DOM-built and set with
+  `textContent` after bidi/control neutralisation (the diff core's
+  `truncateDiffLine`); the only markup mount is the static header. Rendering
+  stops at `max-lines` (2,000) with an honest "Showing X of Y changed lines"
+  note and a `truncated` event. The diff itself comes from the bundled diff
+  core (jsdiff); the element only renders it.
 
 ## Generated artifact boundary
 Interactive HTML previews use three distinct layers: the privileged extension
@@ -342,6 +397,26 @@ a test seam for the journey suite and is reachable only under the developer
 flag (`cap:developerFeatures === true`); no bracketed model tag ever renders on
 a default build. Tab titles and URLs in the artifact are page-controlled text
 and are escaped before they reach the artifact HTML.
+
+## First run (the first screen is a command center)
+
+A fresh profile opens on the composer, not on onboarding
+(CAP-FB-20260827-HUB-FIRST-RUN-01). The hub's `<main>` precedes the sidebar in
+the DOM (`.side { order: -1 }` keeps it painted on the left), and inside it the
+composer comes first, so Tab #1 lands in the task input and the composer is
+fully visible at 1024x700. Above it, `<first-run-guide>` is a slim banner — one
+sentence and ONE action ("Connect a model" → Settings → Providers) with the
+dismiss control last in the tab order — shown only while no provider is
+connected and no artifact exists; with a provider it renders nothing. Browser
+control is asked for in context by the approval card at the moment a task needs
+it, never up front. Under the composer, `<example-chips>` offers three example
+tasks; a chip prefills the composer and focuses it — it never runs anything.
+The Agents / Jobs / Recent artifacts / Recent activity sections are `hidden`
+until their store has ever had data (`cap:hub-seen:<section>`, page-local,
+cleared by a factory reset), so a fresh profile never stacks empty states; once
+a store has been used its honest empty copy returns. The activity explorer's
+zero state ("Nothing has happened yet.") and its filtered-empty state ("No
+activity matches this filter.") are different sentences.
 
 ## Motion
 150–250ms state transitions only; `prefers-reduced-motion` respected. No

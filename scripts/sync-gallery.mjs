@@ -31,6 +31,11 @@ const FILES = [
   ["extension/lib/tool-summary.js", "docs/tool-summary.js"],
   // Attachment classification/encoding used by the composer's /files flow.
   ["extension/lib/attachments.js", "docs/attachments.js"],
+  // The bundled diff core (jsdiff via extension/shared/diff-core.js). The
+  // source here is BUILD OUTPUT, so `npm run build` must run first; when the
+  // bundle is absent the entry is reported and skipped rather than failing
+  // a source-only checkout.
+  ["extension/dist/shared/diff-core.bundle.js", "docs/diff-core.bundle.js"],
 ];
 
 export async function syncGallery({ check = false } = {}) {
@@ -38,7 +43,16 @@ export async function syncGallery({ check = false } = {}) {
   for (const [src, dst] of FILES) {
     const srcUrl = new URL(`../${src}`, import.meta.url);
     const dstUrl = new URL(`../${dst}`, import.meta.url);
-    let expected = await readFile(srcUrl);
+    let expected;
+    try {
+      expected = await readFile(srcUrl);
+    } catch (error) {
+      if (error?.code === "ENOENT" && src.startsWith("extension/dist/")) {
+        console.warn(`skip ${dst}: ${src} is build output and is not present — run \`npm run build\` first`);
+        continue;
+      }
+      throw error;
+    }
     // The gallery sits one directory shallower than extension/shared/, so the
     // tool-tree import must resolve to the synced docs copy. Apply the same
     // deterministic transform in write and check modes so drift checks compare
@@ -50,6 +64,14 @@ export async function syncGallery({ check = false } = {}) {
       expected = Buffer.from(expected.toString("utf8").replace('../lib/tool-summary.js', './tool-summary.js'));
       expected = Buffer.from(expected.toString("utf8").replace('../lib/attachments.js', './attachments.js'));
       expected = Buffer.from(expected.toString("utf8").replace('../lib/pure.js', './pure.js'));
+      // <artifact-diff> imports the diff core by its dist path; the gallery
+      // copy of the bundle sits beside components.js.
+      expected = Buffer.from(expected.toString("utf8").replace('../dist/shared/diff-core.bundle.js', './diff-core.bundle.js'));
+    }
+    if (dst === "docs/diff-core.bundle.js") {
+      // Developer builds append a sourceMappingURL; the gallery copy carries no
+      // map, so strip it so store + developer builds sync to identical bytes.
+      expected = Buffer.from(expected.toString("utf8").replace(/\n\/\/# sourceMappingURL=\S+\n?$/, "\n"));
     }
     if (dst === "docs/tool-summary.js") {
       expected = Buffer.from(expected.toString("utf8").replace('../lib/pure.js', './pure.js'));

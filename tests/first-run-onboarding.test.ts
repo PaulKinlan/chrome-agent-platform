@@ -175,7 +175,7 @@ Deno.test("first run: shared setup components use native labelled controls and r
     const marker of [
       'customElements.define("first-run-guide"',
       'type="button" aria-label="Dismiss first-run setup"',
-      'class="primary seed-task" type="button"',
+      'class="primary connect-model" type="button"',
       'role="alert"',
       "focusNextAction()",
       ":focus-visible",
@@ -303,35 +303,26 @@ Deno.test("first run: browser control consent state reflects granted, declined, 
   assertEquals(declined.canSeedTask, true); // product remains fully usable in reduced capability mode
 });
 
-Deno.test("first run: component template contains truthful browser control consent copy and Settings revisit link", async () => {
+Deno.test("first run: the guide asks for ONE thing (a model); browser control is asked for in context, not up front", async () => {
   const source = await Deno.readTextFile(
     new URL("../extension/shared/components.js", import.meta.url),
   );
-  const ntpSource = await Deno.readTextFile(
-    new URL("../extension/ntp/ntp.js", import.meta.url),
+  const conversation = await Deno.readTextFile(
+    new URL("../extension/shared/conversation.js", import.meta.url),
   );
+  const guideStart = source.indexOf("class FirstRunGuide extends Component");
+  const guideEnd = source.indexOf('customElements.define("first-run-guide"', guideStart);
+  assert(guideStart >= 0 && guideEnd > guideStart);
+  const guide = source.slice(guideStart, guideEnd);
+  // CAP-FB-20260827-HUB-FIRST-RUN-01: the up-front consent pair is gone from
+  // the first screen — the in-chat approval card owns that moment.
+  for (const gone of ["grant-browser", "decline-browser", "seed-task", "create-example-agent", "Browser control (optional)"]) {
+    assert(!guide.includes(gone), `the first-run guide must not carry "${gone}" any more`);
+  }
+  assert(guide.includes('class="primary connect-model"'), "the one action connects a model");
+  assert(guide.includes("Connect a model"), "the action names what it does");
   assert(
-    source.includes("Browser control (optional)"),
-    "guide must label browser control as optional",
-  );
-  assert(
-    source.includes("You can change this choice any time in Settings → Browser control."),
-    "guide must state that choice is revisitable in Settings",
-  );
-  assert(
-    source.includes("inspect tab URLs and titles (reading page content requires separate per-origin site enrollment)"),
-    "guide must truthfully explain what browser control means and that page content needs site enrollment",
-  );
-  assert(
-    source.includes("grant-browser"),
-    "guide must provide grant button",
-  );
-  assert(
-    source.includes("decline-browser"),
-    "guide must provide decline button",
-  );
-  assert(
-    ntpSource.includes("requestBrowserControlFromOwnerClick"),
-    "ntp.js must wire the tested requestBrowserControlFromOwnerClick gesture helper",
+    conversation.includes("approvePermissionRequirement"),
+    "the in-context approval card path (conversation.js) still owns browser-control consent",
   );
 });

@@ -269,6 +269,41 @@ async function evalIn(cdp, session, expression) {
   return r?.result?.result?.value;
 }
 
+/** EVERY piece of text the thread can show the owner — light DOM AND every
+ * shadow root, including collapsed <details> bodies and the raw JSON views the
+ * owner can toggle. CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 §10: the lazy
+ * protocol's transport vocabulary must appear NOWHERE in it. Script/style/
+ * template text is not owner-visible and is skipped. */
+const THREAD_TEXT = (rootSel: string) => `(() => {
+  const root = document.querySelector(${JSON.stringify(rootSel)}) ?? document.body;
+  const out = [];
+  const walk = (node) => {
+    if (node.nodeType === 3) { out.push(node.data); return; }
+    if (node.nodeType !== 1 && node.nodeType !== 11) return;
+    if (node.nodeType === 1) {
+      if (node.tagName === 'SCRIPT' || node.tagName === 'STYLE' || node.tagName === 'TEMPLATE') return;
+      if (node.shadowRoot) walk(node.shadowRoot);
+    }
+    for (const c of node.childNodes) walk(c);
+  };
+  walk(root);
+  return out.join(' ').replace(/\\s+/g, ' ');
+})()`;
+/** Open every tool card and every raw JSON view, so a probe reads what an
+ * owner who clicks through can read. */
+const OPEN_ALL_CARDS = `(() => {
+  const conv = document.getElementById('thread-conversation') ?? document.querySelector('agent-conversation');
+  for (const b of conv?.querySelectorAll('message-bubble[role="tool"]') ?? []) {
+    const root = b.shadowRoot ?? b;
+    for (const d of root.querySelectorAll('details')) d.open = true;
+    for (const btn of root.querySelectorAll('.tt-raw-toggle')) if (btn.getAttribute('aria-pressed') !== 'true') btn.click();
+  }
+  return true;
+})()`;
+/** The transport strings that must never be owner-visible text. */
+const LAZY_LEAK_STRINGS = ["modelContent", "catalogGeneration", "stableId", "schemaSummary", "search_tools", "execute_tool"];
+const lazyLeaks = (text: string) => LAZY_LEAK_STRINGS.filter((s) => String(text ?? "").includes(s));
+
 /** The center point of an element, scrolled into view (coordinate discovery only). */
 async function boxOf(cdp, session, selector) {
   const v = await evalIn(
@@ -371,6 +406,10 @@ const EXPECTED = [
   "initial SW boot observed via pre-attached restart",
   "developer flag: the marker demo model is enabled for the suite",
   "fresh profile: the four agent surfaces agree (0)",
+  "fresh hub: Tab #1 focuses the composer",
+  "fresh hub: the first-run banner offers exactly one action",
+  "fresh hub at 1024x700: the composer is fully within the viewport",
+  "fresh hub: no empty-state copy is rendered",
   "after enabling one recipe the four agent surfaces agree (1)",
   "after disabling that recipe the four agent surfaces agree (0) again",
   "create dialog: the template gallery is the first step (blank + 21 templates + scheduled recipes; Starter shows 7; no template select)",
@@ -446,11 +485,14 @@ const EXPECTED = [
   "keyless: the first run answers in plain language — never '[demo model] Task received'",
   "keyless: without the tabs permission the answer says so honestly",
   "keyless: the persisted thread carries the plain answer, not the demo literal",
+  "keyless: no lazy-protocol text leaks into the live thread (modelContent/catalogGeneration/stableId/schemaSummary/search_tools/execute_tool)",
+  "keyless: reopening the thread renders the in-context grant card, not error prose",
   "keyless: developer flag back on for the marker journeys",
   "warm run 1 returns a concrete demo result",
   "warm run 2 (after re-save) returns a concrete demo result",
   "Transcript: 'list my open tabs' survives a reload at full length",
   "Transcript: no nudge summary bubble after a text-ending step",
+  "Transcript: no lazy-protocol text leaks into the reopened thread (modelContent/catalogGeneration/stableId/schemaSummary/search_tools/execute_tool)",
   "Provider error: SW console recorded the real HTTP 401 from the fixture provider",
   "Provider error: a rejected key renders the 401 bubble with a Settings link",
   "Provider error: preflight refusal reaches a terminal Failed row within 5 s",
@@ -543,6 +585,9 @@ const EXPECTED = [
   "approval: install-scoped opaque reference survives a worker restart",
   "approval: post-restart deny leaves the exact asset unchanged",
   "mgmt: update_asset patched the asset",
+  "artifact versions: two rows with distinct sha256 after the edit turn",
+  "artifact versions: version-get returns v1's exact body",
+  "artifact versions: restore of v1 is a new head whose body equals v1 byte-for-byte",
   "mgmt: delete_asset removed it",
   "mgmt: asset gone after delete",
   "cap:fetch: loopback refused from a sandboxed script",
@@ -873,6 +918,54 @@ async function main() {
         /^No agents yet\./.test(surfaces0.settingsText) &&
         surfaces0.sidepanelRows === 0 && /No agents yet/.test(surfaces0.sidepanelEmpty),
     );
+
+    // ─────────────────────────────────────────────────────────────
+    // CAP-FB-20260827-HUB-FIRST-RUN-01 — on a FRESH profile the composer is
+    // the first thing: first in the DOM and the tab order, above the fold at
+    // 1024x700, with a one-action banner above it and no stacked empty states.
+    const focusedInHub = () => evalIn(cdp, ntpSession, `(() => {
+      const a = document.activeElement; const el = a?.shadowRoot?.activeElement ?? a;
+      return { tag: el?.tagName ?? null, id: el?.id ?? null, inComposer: !!(el?.closest && el.closest('#composer')) };
+    })()`);
+    await evalIn(cdp, ntpSession, `document.activeElement?.blur?.(); window.scrollTo(0, 0); true`);
+    await pressTab(cdp, ntpSession); // ONE genuine Tab key from a neutral start
+    const tab1 = await focusedInHub();
+    console.log("fresh hub Tab #1:", JSON.stringify(tab1));
+    check("fresh hub: Tab #1 focuses the composer", tab1?.inComposer === true && tab1?.id === "task-input");
+    await evalIn(cdp, ntpSession, `document.activeElement?.blur?.(); true`);
+    const bannerButtons = await evalIn(cdp, ntpSession, `(() => {
+      const g = document.getElementById('first-run-guide');
+      if (!g || g.hidden) return null;
+      return [...g.shadowRoot.querySelectorAll('button')].map((b) => b.getAttribute('aria-label') || b.textContent.trim());
+    })()`);
+    console.log("fresh hub banner buttons:", JSON.stringify(bannerButtons));
+    check(
+      "fresh hub: the first-run banner offers exactly one action",
+      Array.isArray(bannerButtons) && bannerButtons.length === 2 &&
+        bannerButtons[0] === "Connect a model" && bannerButtons[1] === "Dismiss first-run setup",
+    );
+    const hubAt = async (width, height, name) => {
+      await cdp.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false }, ntpSession);
+      await sleep(400);
+      const rect = await evalIn(cdp, ntpSession, `(() => { const r = document.getElementById('composer')?.getBoundingClientRect(); return r ? { top: r.top, bottom: r.bottom, vh: innerHeight } : null; })()`);
+      const shot = await captureShot(cdp, ntpSession);
+      if (shot) await writeEvidence(name, shot);
+      return rect;
+    };
+    const rect1440 = await hubAt(1440, 900, "hub-fresh-1440-after.png");
+    const rect1024 = await hubAt(1024, 700, "hub-fresh-1024-after.png");
+    await cdp.send("Emulation.clearDeviceMetricsOverride", {}, ntpSession);
+    console.log("fresh hub composer rects:", JSON.stringify({ rect1440, rect1024 }));
+    check(
+      "fresh hub at 1024x700: the composer is fully within the viewport",
+      rect1024 !== null && rect1024.top >= 0 && rect1024.bottom <= 700,
+    );
+    const hubText = await evalIn(cdp, ntpSession, `document.body.innerText`);
+    const emptyCopy = ["No activity matches", "No artifacts yet", "No Site Agents yet", "Discovery has not run yet", "Nothing has happened yet"]
+      .filter((s) => String(hubText ?? "").includes(s));
+    console.log("fresh hub empty copy:", JSON.stringify(emptyCopy));
+    check("fresh hub: no empty-state copy is rendered", typeof hubText === "string" && emptyCopy.length === 0);
+
     // Enable ONE recipe. Headless Chrome auto-denies chrome.permissions.request,
     // so background-agent.set fails closed here (by design); seed the enabled
     // state the way the scheduler persists it — the SW's own cap:scheduledTasks
@@ -1954,6 +2047,62 @@ async function main() {
       "keyless: the persisted thread carries the plain answer, not the demo literal",
       keylessStoredText.length > 0 && !/\[demo model\]|Task received/u.test(keylessStoredText),
     );
+    // §10 on the LIVE path: this thread carries a real permission DENIAL
+    // (the error-card route the tools lane saw leak the envelope twice). The
+    // live card's error block, tree and raw view must show the tool's own
+    // words, never the transport.
+    await evalIn(cdp, ntpSession, OPEN_ALL_CARDS);
+    await sleep(300);
+    const keylessLiveText = String((await evalIn(cdp, ntpSession, THREAD_TEXT("#thread-conversation"))) ?? "");
+    const keylessLiveLeaks = lazyLeaks(keylessLiveText);
+    const keylessLiveShot = await captureShot(cdp, ntpSession);
+    if (keylessLiveShot) await writeEvidence("tool-cards-no-leak-live-denial.png", keylessLiveShot);
+    console.log(`keyless live leak probe: leaks=${JSON.stringify(keylessLiveLeaks)} textLen=${keylessLiveText.length}`);
+    check(
+      "keyless: no lazy-protocol text leaks into the live thread (modelContent/catalogGeneration/stableId/schemaSummary/search_tools/execute_tool)",
+      keylessLiveText.length > 0 && keylessLiveLeaks.length === 0,
+    );
+    // §2b, the persisted half (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01): the
+    // denial is a durable run-log row, so REOPENING the thread must render the
+    // same in-context grant card the live run showed, carrying the owner's
+    // recorded decision — not the denial as error prose.
+    const keylessReopen = await cdp.send("Target.createTarget", {
+      url: `chrome-extension://${extId}/ntp/ntp.html#thread=${encodeURIComponent(String(keylessThread?.id ?? ""))}`,
+    });
+    const keylessReopenId = keylessReopen?.result?.targetId;
+    await sleep(3000);
+    const keylessReopenSession = await attachRuntime(cdp, keylessReopenId);
+    cdp.pageSessions.add(keylessReopenSession);
+    let keylessReopened: { cards?: number; permissions?: string | null; state?: string | null; allowIsButton?: boolean } = {};
+    for (let i = 0; i < 20; i++) {
+      try {
+        keylessReopened = JSON.parse(await evalIn(cdp, keylessReopenSession, `(() => {
+          const conv = document.getElementById('thread-conversation');
+          const cards = [...(conv?.querySelectorAll('permission-approval-card') ?? [])];
+          const last = cards[cards.length - 1] ?? null;
+          return JSON.stringify({
+            cards: cards.length,
+            permissions: last?.getAttribute('permissions') ?? null,
+            state: last?.getAttribute('state') ?? null,
+            allowIsButton: last?.shadowRoot?.querySelector('.allow')?.tagName === 'BUTTON',
+          });
+        })()`) ?? "{}");
+      } catch { keylessReopened = {}; }
+      if ((keylessReopened.cards ?? 0) > 0) break;
+      await sleep(400);
+    }
+    const keylessReopenShot = await captureShot(cdp, keylessReopenSession).catch(() => null);
+    if (keylessReopenShot) await writeEvidence("grant-card-reopened-thread.png", keylessReopenShot);
+    await cdp.send("Target.closeTarget", { targetId: keylessReopenId }).catch(() => {});
+    cdp.pageSessions.delete(keylessReopenSession);
+    console.log(`keyless reopen: ${JSON.stringify(keylessReopened)}`);
+    // The owner clicked Not now on this requirement during the run, so the
+    // reopened card carries that decision (deny is sticky — never a fresh
+    // Allow for a question already answered).
+    check(
+      "keyless: reopening the thread renders the in-context grant card, not error prose",
+      keylessReopened.cards === 1 && /"tabs"/.test(keylessReopened.permissions ?? "") && keylessReopened.state === "denied",
+    );
     check("keyless: developer flag back on for the marker journeys", (await developerFlag(true))?.ok === true);
 
     // ─────────────────────────────────────────────────────────────
@@ -2031,6 +2180,33 @@ async function main() {
     check(
       "Transcript: no nudge summary bubble after a text-ending step",
       persistedAfter.assistant.length === 1 && agentBubblesAfter.length === 1 && !nudgeSeen,
+    );
+    // §10 LEAKAGE PROBE (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01): the
+    // reopened @demo-tools thread ran the REAL lazy protocol (search_tools →
+    // execute_tool → memory_set/memory_get). None of the transport vocabulary
+    // may reach the owner as text — in a card head, a tree row, a raw JSON
+    // view or an error block. Every card must also be a tool that did WORK:
+    // the protocol's search cards are not rendered at all.
+    const leakTarget = await cdp.send("Target.createTarget", { url: threadUrl });
+    const leakTargetId = leakTarget?.result?.targetId;
+    await sleep(3000);
+    const leakSession = await attachRuntime(cdp, leakTargetId);
+    cdp.pageSessions.add(leakSession);
+    await evalIn(cdp, leakSession, OPEN_ALL_CARDS);
+    await sleep(300);
+    const leakText = String((await evalIn(cdp, leakSession, THREAD_TEXT("#thread-conversation"))) ?? "");
+    const leakCards = (await evalIn(cdp, leakSession, `[...document.querySelectorAll('message-bubble[role="tool"]')].map((b) => b.getAttribute('tool-name'))`)) ?? [];
+    const leakShot = await captureShot(cdp, leakSession).catch(() => null);
+    if (leakShot) await writeEvidence("tool-cards-no-leak-reopened.png", leakShot);
+    await cdp.send("Target.closeTarget", { targetId: leakTargetId }).catch(() => {});
+    cdp.pageSessions.delete(leakSession);
+    const leaked = lazyLeaks(leakText);
+    console.log(`transcript leak probe: cards=${JSON.stringify(leakCards)} leaks=${JSON.stringify(leaked)} textLen=${leakText.length}`);
+    check(
+      "Transcript: no lazy-protocol text leaks into the reopened thread (modelContent/catalogGeneration/stableId/schemaSummary/search_tools/execute_tool)",
+      leakText.length > 0 && leaked.length === 0 &&
+        Array.isArray(leakCards) && leakCards.length >= 3 &&
+        !leakCards.some((n) => n === "search_tools" || n === "list_tools" || n === "execute_tool"),
     );
     // JOURNEY 3c — provider error truth (CAP-FB-20260830-PROVIDER-ERROR-TRUTH-01).
     // A provider HTTP failure must be reported by its real status, never as
@@ -2298,8 +2474,8 @@ async function main() {
       }
       console.log(`thread-view journey: update approved via real click = ${approved}`);
     }
-    const editTurn = await settledThread(30000);
-    console.log(`thread-view journey (turn 1): ${JSON.stringify(editTurn).slice(0, 700)}`);
+    const threadEditTurn = await settledThread(30000);
+    console.log(`thread-view journey (turn 1): ${JSON.stringify(threadEditTurn).slice(0, 700)}`);
     {
       // Hygiene for the approval journey that follows: an approved
       // model-originated asset.update leaves its owner-approval row pending
@@ -2317,7 +2493,7 @@ async function main() {
     if (tvShot1) await writeEvidence("thread-view-1440-turn1.png", tvShot1);
     check(
       "Thread view: update card is titled with the artifact name",
-      Array.isArray(editTurn?.heads) && editTurn.heads.length >= 2 && editTurn.heads.every((h) => h === "crumb.html"),
+      Array.isArray(threadEditTurn?.heads) && threadEditTurn.heads.length >= 2 && threadEditTurn.heads.every((h) => h === "crumb.html"),
     );
     // Turn 2 — the edit turn through the THREAD composer; sample the banner
     // 300 ms after the send, then wait for the settle.
@@ -3477,6 +3653,35 @@ async function main() {
     check(
       "mgmt: update_asset patched the asset",
       assetUpdate?.ok === true && assetUpdate.asset?.name === "final page",
+    );
+    // Immutable versions (CAP-FB-20260830-ARTIFACT-VERSIONS-01): the edit turn
+    // leaves the previous body retrievable, and a restore is a NEW head
+    // version whose body equals the old one byte-for-byte.
+    const editTurn = await approvedMsg({
+      type: "asset.update", origin: "master", id: assetId, content: "<h1>hello</h1>\n<p>edited</p>",
+    });
+    const versionsAfterEdit = await msgValue({ type: "asset.versions", origin: "master", id: assetId });
+    const shas = (versionsAfterEdit?.versions ?? []).map((v) => v?.sha256);
+    check(
+      "artifact versions: two rows with distinct sha256 after the edit turn",
+      editTurn?.ok === true && versionsAfterEdit?.ok === true &&
+        shas.length >= 2 && new Set(shas.slice(-2)).size === 2 &&
+        (versionsAfterEdit.versions ?? []).every((v) => /^[0-9a-f]{64}$/.test(String(v?.sha256)) && !("content" in v)),
+    );
+    const firstVersion = await msgValue({ type: "asset.version-get", origin: "master", id: assetId, n: 1 });
+    check(
+      "artifact versions: version-get returns v1's exact body",
+      firstVersion?.ok === true && firstVersion.content === "<h1>hello</h1>" && firstVersion.sha256 === shas[0],
+    );
+    const restored = await approvedMsg({ type: "asset.restore", origin: "master", id: assetId, n: 1 });
+    const afterRestore = await msgValue({ type: "asset.get", origin: "master", id: assetId });
+    const versionsAfterRestore = await msgValue({ type: "asset.versions", origin: "master", id: assetId });
+    check(
+      "artifact versions: restore of v1 is a new head whose body equals v1 byte-for-byte",
+      restored?.ok === true && restored.version === (versionsAfterEdit?.head ?? 0) + 1 &&
+        afterRestore?.asset?.content === "<h1>hello</h1>" &&
+        versionsAfterRestore?.head === restored.version &&
+        (versionsAfterRestore.versions ?? []).at(-1)?.sha256 === shas[0],
     );
     const assetDel = await approvedMsg({ type: "asset.delete", origin: "master", id: assetId });
     check("mgmt: delete_asset removed it", assetDel?.ok === true);

@@ -22,11 +22,19 @@
       <h2 class="section">Atomic components</h2>
 
       <div class="specimen">
-        <h3 class="spec"><code class="tag">&lt;first-run-guide&gt;</code> — path to first artifact</h3>
+        <h3 class="spec"><code class="tag">&lt;first-run-guide&gt;</code> — the first-run banner</h3>
         <div class="stage column" style="max-width:760px">
-          <first-run-guide storage-ready provider-ready></first-run-guide>
+          <first-run-guide storage-ready></first-run-guide>
         </div>
-        <p class="caption">A dismissible three-step path from provider setup to a user-reviewed starter task. It never requests permission or runs the task itself.</p>
+        <p class="caption">One sentence, one action. Shown above the hub composer only while no model is connected; with <code>provider-ready</code> it renders nothing. The dismiss control is last in the tab order. It never requests a permission itself.</p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;example-chips&gt;</code> — example tasks under the composer</h3>
+        <div class="stage column" style="max-width:760px">
+          <example-chips label="Try one of these" chips="Group my tabs by topic|Summarise this page|Watch this price"></example-chips>
+        </div>
+        <p class="caption">A chip emits <code>pick</code> with its text; the host prefills the composer and focuses it. A chip never runs anything.</p>
       </div>
 
       <div class="specimen">
@@ -136,6 +144,19 @@
         <p class="caption">
           <button id="demo-preview" type="button">Set a live HTML preview on the first card</button>
         </p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;artifact-diff&gt;</code> — what changed between two versions of an artifact</h3>
+        <div class="stage column" style="max-width:820px">
+          <artifact-diff id="artifact-diff-demo" mode="unified" context="3" before-label="crumb.html v1" after-label="crumb.html v2"></artifact-diff>
+        </div>
+        <p class="caption">
+          <button id="artifact-diff-mode" type="button" aria-pressed="false">Split view</button>
+          unified · split (collapses back to unified under 720px of container width). <code>+n -m · k changes</code> in the header; <kbd>n</kbd>/<kbd>]</kbd> next change, <kbd>p</kbd>/<kbd>[</kbd> previous, focus moves to the hunk and a polite live region says "Change N of M". Every line is untrusted model output: rows are DOM-built with <code>textContent</code> after bidi/control neutralisation. Rendering stops at <code>max-lines</code> (2,000) with an honest note. Emits <code>navigate</code> and <code>truncated</code>.
+        </p>
+        <script type="application/json" id="artifact-diff-before">"<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Crumb Bakery</title>\n<style>\n  body { font-family: system-ui, sans-serif; margin: 0; }\n  header { background: #f4e4c1; color: #3b2a14; padding: 2rem; }\n  h1 { margin: 0; }\n  main { padding: 2rem; }\n</style>\n</head>\n<body>\n<header>\n  <h1>Crumb</h1>\n  <p>Sourdough, baked before dawn.</p>\n</header>\n<main>\n  <h2>What we bake</h2>\n  <ul>\n    <li>Country loaf</li>\n    <li>Seeded rye</li>\n    <li>Morning buns</li>\n  </ul>\n</main>\n</body>\n</html>\n"</script>
+        <script type="application/json" id="artifact-diff-after">"<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Crumb Bakery</title>\n<style>\n  body { font-family: system-ui, sans-serif; margin: 0; }\n  header { background: #2b1d0e; color: #f8efe0; padding: 2rem; }\n  header p { color: #d9c7a5; }\n  h1 { margin: 0; letter-spacing: 0.02em; }\n  main { padding: 2rem; }\n</style>\n</head>\n<body>\n<header>\n  <h1>Crumb</h1>\n  <p>Sourdough, baked before dawn.</p>\n</header>\n<main>\n  <h2>What we bake</h2>\n  <ul>\n    <li>Country loaf</li>\n    <li>Seeded rye</li>\n    <li>Morning buns</li>\n  </ul>\n  <section id=\"hours\">\n    <h2>Opening hours</h2>\n    <dl>\n      <dt>Tue\u2013Fri</dt><dd>7:00\u201314:00</dd>\n      <dt>Sat</dt><dd>8:00\u201313:00</dd>\n    </dl>\n  </section>\n</main>\n</body>\n</html>\n"</script>
       </div>
 
       <div class="specimen">
@@ -541,6 +562,25 @@
         c.addEventListener("reuse", () => log("#hub-log", `artifact reuse: ${c.getAttribute("name")}`));
         c.addEventListener("delete", () => log("#hub-log", `artifact delete: ${c.getAttribute("name")}`));
       });
+
+      // <artifact-diff> example — the two bakery fixture bodies (tests/fixtures/
+      // crumb-v1.html / crumb-v2.html) as JSON blocks; the toggle flips the mode.
+      const artifactDiffDemo = document.getElementById("artifact-diff-demo");
+      if (artifactDiffDemo) {
+        const readJson = (id) => { try { return JSON.parse(document.getElementById(id)?.textContent || '""'); } catch { return ""; } };
+        artifactDiffDemo.language = "html";
+        artifactDiffDemo.before = readJson("artifact-diff-before");
+        artifactDiffDemo.after = readJson("artifact-diff-after");
+        artifactDiffDemo.addEventListener("navigate", (e) => log("#hub-log", `artifact-diff: change ${e.detail.index + 1} of ${e.detail.total}`));
+        artifactDiffDemo.addEventListener("truncated", (e) => log("#hub-log", `artifact-diff: truncated at ${e.detail.lines} of ${e.detail.total} lines`));
+        const modeBtn = document.getElementById("artifact-diff-mode");
+        modeBtn?.addEventListener("click", () => {
+          const split = artifactDiffDemo.getAttribute("mode") !== "split";
+          artifactDiffDemo.setAttribute("mode", split ? "split" : "unified");
+          modeBtn.setAttribute("aria-pressed", String(split));
+          modeBtn.textContent = split ? "Unified view" : "Split view";
+        });
+      }
 
       // <agent-conversation> example — a realistic full turn (user + thinking
       // trace + tool cards + a system response with code / inline code / list).

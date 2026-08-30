@@ -930,9 +930,20 @@ export function createAgent({
         if (queue.length) toolSpans.set(toolKey, queue);
         else toolSpans.delete(toolKey);
         const tspan = observed.span;
+        // The selected tool's name, read BEFORE the denial rewrite below
+        // replaces the envelope text (after it, the name is unrecoverable and
+        // the card would be headed "tool call").
+        const selectedBeforeRewrite = selectedToolFromResult(e.result);
         const permissionDenial = permissionDenialFromToolResult(e.result);
+        // The STRUCTURED requirement survives on the progress event (the run
+        // log persists it) even though the model-facing modelContent is
+        // rewritten below — a reopened thread derives its grant card from it
+        // (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 §2b).
+        const permissionRequirement = permissionDenial?.permissionRequirement ?? null;
+        let permissionDecision = null;
         if (permissionDenial && typeof onPermissionRequest === "function") {
           const decision = await onPermissionRequest(permissionDenial);
+          permissionDecision = decision;
           // agent-do records this same normalized object after the awaited hook.
           // Tell the model exactly what happened: deny/timeout is terminal for
           // this action; approve requires a fresh lazy selection because the
@@ -967,11 +978,12 @@ export function createAgent({
           progressCb?.({
             type: "tool-result",
             toolName: e.toolName,
-            selectedTool: selectedToolFromResult(e.result),
+            selectedTool: selectedToolFromResult(e.result) ?? selectedBeforeRewrite,
             step: e.step,
             durationMs: e.durationMs,
             result: summarizeToolResult(e.result),
             ok: toolOk,
+            ...(permissionRequirement ? { permissionRequirement, permissionDecision } : {}),
           });
         } catch { /* ignore */ }
       },

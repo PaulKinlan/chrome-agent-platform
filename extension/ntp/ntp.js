@@ -11,7 +11,7 @@ import { projectUnifiedAgents } from "../lib/named-agents.js";
 import { schedulePreviewText } from "../lib/schedule-preview.js";
 import { parseEnglishSchedule } from "../shared/schedule-parser.js";
 import { selectFailedRuns } from "../lib/run-retry.js";
-import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript } from "../shared/conversation.js";
+import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript, wireReplayApprovals, isProtocolTool } from "../shared/conversation.js";
 import { createRunSurfaceOwner } from "../shared/run-surface-owner.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
 import { cancelRunFromRenderedStop, projectConversationRunStatus } from "../shared/run-status.js";
@@ -36,12 +36,7 @@ import {
   recordAuthoritativeThreadProjection,
 } from "../shared/thread-projection-authority.js";
 import { createViewFocusController } from "../lib/view-focus.js";
-import {
-  FIRST_RUN_TASK_PROMPT,
-  firstRunExampleAgent,
-  loadFirstRunGuideState,
-  requestBrowserControlFromOwnerClick,
-} from "../lib/first-run-onboarding.js";
+import { loadFirstRunGuideState } from "../lib/first-run-onboarding.js";
 import {
   createRouteUpdateRunner,
   focusExplicitRouteTarget,
@@ -83,6 +78,9 @@ ntpLog.info("new tab page evaluated");
 const statusEl = document.getElementById("status");
 const durableRunRegistry = document.getElementById("durable-run-registry");
 const threadConversation = document.getElementById("thread-conversation");
+// A reopened thread's grant cards (derived from persisted denials) grant
+// through the same path the live card takes (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 §2b).
+wireReplayApprovals(threadConversation);
 // The registry is a DEBUG overlay now (owner directive: the conversation is
 // the status surface — no visible registry panel). The toggle appears (and
 // hover-reveals the panel) only when the open surface has runs.
@@ -299,10 +297,14 @@ function shortOrigin(o) {
 }
 
 // ── first-run path ────────────────────────────────────────────────────────
-// The guide is progress, not a permission authority. It remains visible until
-// the owner creates the first artifact (or dismisses it), and every optional
-// grant still happens on a native Settings click.
+// The first-run BANNER (CAP-FB-20260827-HUB-FIRST-RUN-01) asks for ONE thing —
+// a model — and only while no provider is connected and no artifact exists (or
+// until the owner dismisses it). Browser control is asked for in context by the
+// approval card at the moment a task needs it (conversation.js
+// approvePermissionRequirement), never up front. The banner is never a
+// permission authority: the grant happens on a native Settings click.
 const firstRunGuide = document.getElementById("first-run-guide");
+const exampleChips = document.getElementById("example-chips");
 let returningFromFirstRunSettings = false;
 const FIRST_RUN_DISMISSED_KEY = "cap:first-run-guide-dismissed";
 const FIRST_RUN_BROWSER_CHOICE_KEY = "cap:first-run-browser-choice";
@@ -338,13 +340,6 @@ function firstRunBrowserChoice() {
   catch { return "unselected"; }
 }
 
-function setFirstRunBrowserChoice(choice) {
-  try {
-    sessionStorage.setItem(FIRST_RUN_BROWSER_CHOICE_KEY, choice);
-    localStorage.setItem(FIRST_RUN_BROWSER_CHOICE_KEY, choice);
-  } catch {}
-}
-
 async function renderFirstRunGuide() {
   if (!firstRunGuide) return;
   const state = await loadFirstRunGuideState({
@@ -367,7 +362,8 @@ async function renderFirstRunGuide() {
     readBrowserChoice: () => firstRunBrowserChoice(),
     dismissed: firstRunDismissed(),
   });
-  firstRunGuide.hidden = !state.show;
+  // With a provider connected there is nothing left to ask for.
+  firstRunGuide.hidden = !state.show || state.providerReady;
   firstRunGuide.toggleAttribute("storage-ready", state.storageGranted);
   firstRunGuide.toggleAttribute("provider-ready", state.providerReady);
   firstRunGuide.toggleAttribute("browser-ready", state.browserControlGranted);
@@ -378,52 +374,41 @@ firstRunGuide?.addEventListener("open-settings", (event) => {
   returningFromFirstRunSettings = true;
   openView("options/options.html#providers", "Provider settings", event.detail?.sourceEvent?.currentTarget ?? firstRunGuide);
 });
-firstRunGuide?.addEventListener("seed-task", () => {
-  composer.value = FIRST_RUN_TASK_PROMPT;
+// Example chips (CAP-FB-20260827-HUB-FIRST-RUN-01): a chip puts its text in
+// the composer and focuses it for review — it NEVER runs the task.
+exampleChips?.addEventListener("pick", (event) => {
+  const text = String(event.detail?.text ?? "");
+  if (!text) return;
+  composer.value = text;
   composer.focus();
-  setStatus("Starter task ready — review it, then choose Run task.");
-});
-firstRunGuide?.addEventListener("create-example-agent", async (event) => {
-  const example = firstRunExampleAgent(event.detail?.id);
-  if (!example) return;
-  const res = await send("named-agent.create", {
-    id: example.id, name: example.name, role: example.role,
-  }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
-  if (res?.ok) {
-    setStatus(`Created the "${example.name}" agent.`);
-  } else {
-    setStatus(`Couldn't create the example agent${res?.error ? `: ${res.error}` : ""}.`, false);
-  }
 });
 firstRunGuide?.addEventListener("dismiss-guide", () => {
   try { localStorage.setItem(FIRST_RUN_DISMISSED_KEY, "1"); } catch { /* page-local preference unavailable */ }
   firstRunGuide.hidden = true;
   composer.focus();
 });
-firstRunGuide?.addEventListener("request-browser-control", async (event) => {
-  const sourceEvent = event.detail?.sourceEvent;
-  try {
-    const outcome = await requestBrowserControlFromOwnerClick({
-      event: sourceEvent,
-      userActivation: navigator.userActivation,
-      permissionsApi: chrome.permissions,
-    });
-    if (outcome.granted) {
-      setFirstRunBrowserChoice("granted");
-      await send("browser-control.set", { granted: true }).catch(() => {});
-    } else {
-      setFirstRunBrowserChoice("declined");
-    }
-  } catch {
-    setFirstRunBrowserChoice("declined");
+// ── hub sections: no empty copy for a store that has never had data ───────
+// A fresh profile renders the composer, the chips and the banner — nothing
+// else. Each section appears once its store has EVER had data (remembered
+// page-locally, cleared by a factory reset) and then keeps its honest empty
+// copy when the data goes away again.
+const HUB_SEEN_PREFIX = "cap:hub-seen:";
+const hubFacets = new Map();
+function noteHubData(section, facet, hasData) {
+  let facets = hubFacets.get(section);
+  if (!facets) hubFacets.set(section, (facets = new Map()));
+  facets.set(facet, hasData === true);
+  const any = [...facets.values()].some(Boolean);
+  if (any) {
+    try { localStorage.setItem(HUB_SEEN_PREFIX + section, "1"); } catch { /* page-local preference unavailable */ }
   }
-  await renderFirstRunGuide();
-});
-firstRunGuide?.addEventListener("decline-browser-control", async () => {
-  setFirstRunBrowserChoice("declined");
-  await send("browser-control.set", { granted: false }).catch(() => {});
-  await renderFirstRunGuide();
-});
+  let seen = any;
+  if (!seen) {
+    try { seen = localStorage.getItem(HUB_SEEN_PREFIX + section) === "1"; } catch { seen = false; }
+  }
+  const el = document.getElementById(`${section}-section`);
+  if (el) el.hidden = !seen;
+}
 
 const runRouteUpdate = createRouteUpdateRunner();
 
@@ -501,6 +486,7 @@ async function renderSiteAgents() {
   } else if (!agents.length) {
     el.innerHTML = `<div class="empty">No Site Agents yet. Find tools from an open tab to add one.</div>`;
   }
+  noteHubData("agents", "site", agents.length > 0 || unenrolledTabs.length > 0);
 
   refreshAgentCount();
 }
@@ -735,6 +721,7 @@ async function renderNamedAgents() {
     agents,
     backgroundAgentsForDisplay(background, { activeOnly: true }),
   );
+  noteHubData("agents", "named", active.length > 0);
   if (el) {
     el.replaceChildren();
     if (!active.length) {
@@ -922,6 +909,7 @@ async function renderArtifacts() {
   if (!el) return;
   const res = await send("asset.list", { origin: "master" }).catch(() => ({ assets: [] }));
   const assets = Array.isArray(res.assets) ? res.assets : [];
+  noteHubData("artifacts", "master", assets.length > 0);
   el.replaceChildren();
   if (!assets.length) {
     el.innerHTML = `<div class="empty">No artifacts yet. Ask an agent to make something.</div>`;
@@ -1070,6 +1058,7 @@ async function renderRunLog() {
   if (!el) return;
   const explorer = document.createElement("activity-explorer");
   explorer.setAttribute("limit", "100");
+  explorer.addEventListener("entries-change", (ev) => noteHubData("activity", "log", (ev.detail?.count ?? 0) > 0));
   el.replaceChildren(explorer);
   runLogExplorer = explorer;
 }
@@ -1083,6 +1072,7 @@ function renderJobsBoard() {
   if (!host) return;
   if (!jobsBoardEl) {
     jobsBoardEl = document.createElement("jobs-board");
+    jobsBoardEl.addEventListener("jobs-change", (ev) => noteHubData("jobs", "board", (ev.detail?.count ?? 0) > 0));
     host.replaceChildren(jobsBoardEl);
   }
   jobsBoardEl?.refresh?.().then(() => {
@@ -2134,6 +2124,7 @@ function renderAgentHistory(container, entries) {
     } else {
       const t = item.t;
       if (typeof container.appendTool !== "function") continue;
+      if (isProtocolTool(t.tool)) continue; // protocol plumbing, never a card (§9)
       const raw = t.result == null ? "" : typeof t.result === "string" ? t.result : safeJsonStringify(t.result);
       const summary = t.result == null ? "" : summarizeToolResult(t.tool, t.result);
       container.appendTool({

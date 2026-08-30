@@ -1088,6 +1088,7 @@
         "npm:acorn@^8.18.0",
         "npm:agent-do@0.7",
         "npm:ai@^7.0.66",
+        "npm:diff@9",
         "npm:esbuild@0.25",
         "npm:fake-indexeddb@^6.2.5",
         "npm:zod@^3.24.0"

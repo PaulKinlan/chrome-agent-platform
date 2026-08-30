@@ -338,6 +338,8 @@ execution. Those belong to a separately reviewed Gate 2 successor.
 
 ## Source-only retained code-diff artifacts
 
+The diff CORE is `extension/shared/diff-core.js` (the `diff` package, jsdiff 9, BSD-3-Clause; the only importer of `"diff"`), bundled by esbuild to `extension/dist/shared/diff-core.bundle.js` and mirrored into the gallery as `docs/diff-core.bundle.js`; it exposes `diffLines`, `structuredPatch`, `applyPatch`, `createTwoFilesPatch`, `parsePatch`, `formatPatch` and `lineDiffSummary` (line diff -> hunks with counts). `extension/lib/code-diff-artifacts.js` below is the RETENTION layer (sha256 patch identity + storage), not the diff.
+
 `CAP-FB-20260822-CODE-DIFF-ARTIFACTS-01` adds an unreachable first slice for
 retaining tool-produced changes without granting workspace mutation:
 
