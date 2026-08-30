@@ -479,6 +479,7 @@ const EXPECTED = [
   "enrollment: origin enrolled under JIT grant",
   "Settings: retained a driven-UI screenshot",
   "keyless: developer flag off for the fresh-profile run",
+  "Cookies: the cookie value reader and the cookie writers are absent from the default build",
   "keyless: typed 'group my tabs by topic' into the hub composer",
   "keyless: clicked Run task",
   "keyless: the first run pauses on ONE Allow card naming tabs (never a bare error)",
@@ -489,6 +490,7 @@ const EXPECTED = [
   "keyless: no lazy-protocol text leaks into the live thread (modelContent/catalogGeneration/stableId/schemaSummary/search_tools/execute_tool)",
   "keyless: reopening the thread renders the in-context grant card, not error prose",
   "keyless: developer flag back on for the marker journeys",
+  "Cookies: the developer build exposes them again, and no cookie value ever reaches the model",
   "warm run 1 returns a concrete demo result",
   "warm run 2 (after re-save) returns a concrete demo result",
   "Transcript: 'list my open tabs' survives a reload at full length",
@@ -516,6 +518,7 @@ const EXPECTED = [
   "Browser control: toggle ON in Settings leaves no lease",
   "Browser control: a run's open_tab is not lease-refused after the Settings toggle",
   "Privileged URL: open_tab chrome://settings is refused under a global grant",
+  "Side panel: open_side_panel is absent from the model toolset",
   "screenshot: typed the red origin into the allowed-origins field",
   "screenshot: grant scoped to the red origin via the UI",
   "screenshot: UI-granted capture SUCCEEDS for the scoped origin",
@@ -2002,6 +2005,25 @@ async function main() {
     // evaluate timed out), so the card is ALWAYS settled before moving on.
     // ─────────────────────────────────────────────────────────────
     check("keyless: developer flag off for the fresh-profile run", (await developerFlag(false))?.ok === true);
+    // CAP-FB-20260830-COOKIE-TOOLS-CUT-01: with the developer flag OFF (the
+    // shape a real install runs in) the model executor cannot resolve the
+    // cookie value reader or either cookie writer at all — "list cookies for
+    // github.com" can no longer be turned into a session-cookie read. The
+    // metadata-only listing stays, because names and expiry are not credentials.
+    const cookieCutDefault = {};
+    for (const toolName of ["get_cookie", "set_cookie", "remove_cookie", "list_cookies"]) {
+      cookieCutDefault[toolName] = await msgValue({
+        type: "agent-worker.tool",
+        toolName,
+        args: toolName === "list_cookies" ? { domain: "127.0.0.1" } : { url: `${RED_ORIGIN}/`, name: "sid", value: "v" },
+      });
+    }
+    check(
+      "Cookies: the cookie value reader and the cookie writers are absent from the default build",
+      ["get_cookie", "set_cookie", "remove_cookie"].every((n) =>
+        cookieCutDefault[n]?.ok === false && cookieCutDefault[n]?.error === `unknown tool: ${n}`
+      ) && cookieCutDefault.list_cookies?.error !== "unknown tool: list_cookies",
+    );
     await msgValue({ type: "provider.set", config: { provider: "demo", apiKey: "" } });
     const keylessBefore = await msgValue({ type: "thread.list" });
     const keylessThreadsBefore = new Set((keylessBefore?.threads ?? []).map((t) => t?.id));
@@ -2141,6 +2163,25 @@ async function main() {
       keylessReopened.cards === 1 && /"tabs"/.test(keylessReopened.permissions ?? "") && keylessReopened.state === "denied",
     );
     check("keyless: developer flag back on for the marker journeys", (await developerFlag(true))?.ok === true);
+    // The developer build gets the three tools back — and even there a cookie
+    // result never carries a value: `list_cookies` is metadata-only and
+    // `get_cookie` withholds the value until the owner approves it, so no
+    // outcome of either tool can put a `"value"` key in the model's context.
+    const cookieDev = {};
+    for (const toolName of ["get_cookie", "list_cookies"]) {
+      cookieDev[toolName] = await msgValue({
+        type: "agent-worker.tool",
+        toolName,
+        args: toolName === "list_cookies" ? { domain: "127.0.0.1" } : { url: `${RED_ORIGIN}/`, name: "sid" },
+      });
+    }
+    const cookieDevJson = JSON.stringify(cookieDev);
+    check(
+      "Cookies: the developer build exposes them again, and no cookie value ever reaches the model",
+      cookieDev.get_cookie?.error !== "unknown tool: get_cookie" &&
+        cookieDev.list_cookies?.error !== "unknown tool: list_cookies" &&
+        !/"value"/.test(cookieDevJson),
+    );
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 3 — warm provider invalidation with CONCRETE assertions.
@@ -2748,6 +2789,30 @@ async function main() {
       privilegedOpen?.ok !== true &&
         privilegedOpen?.error === "only http(s) destinations are allowed" &&
         privilegedTargets.length === 0,
+    );
+    // CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01: `open_side_panel` is REMOVED.
+    // chrome.sidePanel.open() needs a user gesture the service worker does not
+    // have, so every model call returned a gesture error while the description
+    // promised the panel would open. Driven through the SAME executor the agent
+    // loop uses, the name must now resolve to nothing at all — while the side
+    // panel tools that need no gesture stay reachable (the panel surface itself
+    // is untouched; only the model's fake door is gone).
+    const cutSidePanel = await msgValue({
+      type: "agent-worker.tool",
+      toolName: "open_side_panel",
+      args: { url: `${RED_ORIGIN}/` },
+    });
+    const keptSidePanel = await msgValue({
+      type: "agent-worker.tool",
+      toolName: "get_side_panel_options",
+      args: {},
+    });
+    check(
+      "Side panel: open_side_panel is absent from the model toolset",
+      cutSidePanel?.ok === false &&
+        cutSidePanel?.error === "unknown tool: open_side_panel" &&
+        keptSidePanel !== undefined &&
+        keptSidePanel?.error !== "unknown tool: get_side_panel_options",
     );
     // Type the red origin into the allowed-origins field (a genuine text edit).
     check(

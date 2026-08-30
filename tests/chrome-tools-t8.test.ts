@@ -130,7 +130,12 @@ globalThis.chrome = {
   ),
 };
 
-const tools = () => browserToolset(false);
+// The tranche-8 behaviour tests drive the DEVELOPER toolset: get_cookie /
+// set_cookie / remove_cookie are developer-only since
+// CAP-FB-20260830-COOKIE-TOOLS-CUT-01, and their permission, host-scoping and
+// grant discipline still has to be proven. The guard test at the bottom of
+// this file asserts they are absent from the DEFAULT toolset.
+const tools = () => browserToolset(false, { developerFeatures: true });
 
 Deno.test("T8 inventory: the 9 tranche-8 tools ship in the browser toolset; reads join the readOnly subset", () => {
   const all = Object.keys(tools());
@@ -140,7 +145,9 @@ Deno.test("T8 inventory: the 9 tranche-8 tools ship in the browser toolset; read
   ]) {
     assert(all.includes(name), `${name} shipped`);
   }
-  const scoped = Object.keys(browserToolset(true));
+  // The scoped subset is checked against the DEVELOPER build for the same
+  // reason `tools()` is: get_cookie only exists there now.
+  const scoped = Object.keys(browserToolset(true, { developerFeatures: true }));
   for (const name of ["list_cookies", "list_cookie_stores", "get_cookie", "get_content_setting"]) {
     assert(scoped.includes(name), `${name} is read-only — exposed to scoped runs`);
   }
@@ -213,7 +220,12 @@ Deno.test("T8 cookie host scoping: cookie reads/writes require the EXACT-origin 
   grantedOrigins.add("https://example.com/*");
   const ok = await t.get_cookie.execute({ url: "https://example.com/", name: "sid" });
   assertEquals(ok.found, true);
-  assertEquals(ok.cookie.value, "abc");
+  assertEquals(ok.cookie.name, "sid");
+  // The value is NOT part of a successful read (CAP-FB-20260830-COOKIE-TOOLS-
+  // CUT-01). This assertion used to read `assertEquals(ok.cookie.value, "abc")`
+  // — it was asserting the leak.
+  assert(!("value" in ok.cookie), JSON.stringify(ok));
+  assertEquals(ok.valueRedacted, true);
 });
 
 Deno.test("T8 grant discipline: site-scoped cookie writes need the origin grant; set+remove ride the grant lock", async () => {
@@ -340,4 +352,116 @@ Deno.test("T8 bounded outputs: list_cookies truncates to maxResults with an hone
   assertEquals(res.truncated, true);
   const stores = await t.list_cookie_stores.execute({});
   assertEquals(stores.stores, [{ id: "0", tabIds: [1, 2] }]);
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// CAP-FB-20260830-COOKIE-TOOLS-CUT-01 — cookie VALUES never reach the model.
+//
+// A tool result becomes the content of the next request to the model provider.
+// `list_cookies` used to map `value: c.value` for up to 100 cookies and
+// `get_cookie` returned the whole cookie including `value` and `httpOnly`, so
+// "list cookies for github.com" put the owner's live session cookies in the
+// thread AND in the next provider request. Combined with the model-driven
+// fetch channel that is session theft on a single prompt injection.
+//
+// The posture now: the readers return metadata only (never `value`), an
+// httpOnly cookie is never returned at all, and the three tools that can read
+// a value or write a cookie are absent from the default toolset — they exist
+// only in the developer build.
+// ──────────────────────────────────────────────────────────────────────────
+const devTools = () => browserToolset(false, { developerFeatures: true });
+
+Deno.test("cookies: list_cookies and get_cookie never return value or httpOnly cookies without approval", async () => {
+  reset();
+  grantedPermissions.add("cookies");
+  grantedOrigins.add("https://example.com/*");
+  cookieJar.push({ name: "prefs", value: "theme=dark", domain: "example.com", path: "/", url: "https://example.com/", httpOnly: false, secure: true });
+  cookieJar.push({ name: "sid", value: "SUPER-SECRET-SESSION", domain: "example.com", path: "/", url: "https://example.com/", httpOnly: true, secure: true });
+
+  const listed = await devTools().list_cookies.execute({ domain: "example.com" });
+  const listedJson = JSON.stringify(listed);
+  assertEquals(listed.cookies.length, 1, `only the non-httpOnly cookie is listed: ${listedJson}`);
+  assertEquals(listed.cookies[0].name, "prefs");
+  assert(!("value" in listed.cookies[0]), `no value key in a listed cookie: ${listedJson}`);
+  assert(!listedJson.includes("theme=dark"), "no cookie value text anywhere in the result");
+  assert(!listedJson.includes("SUPER-SECRET-SESSION"), "the httpOnly session value never appears");
+  assertEquals(listed.httpOnlyHidden, 1, "the count of withheld httpOnly cookies is reported honestly");
+  // The metadata the model legitimately needs is still there.
+  assertEquals(listed.cookies[0].domain, "example.com");
+  assertEquals(listed.cookies[0].secure, true);
+
+  const got = await devTools().get_cookie.execute({ url: "https://example.com/", name: "prefs" });
+  const gotJson = JSON.stringify(got);
+  assertEquals(got.found, true);
+  assert(!("value" in got.cookie), `no value key in the read cookie: ${gotJson}`);
+  assert(!gotJson.includes("theme=dark"), "no cookie value text in the get_cookie result");
+
+  // An httpOnly cookie is never returned, not even as metadata under `cookie`.
+  const secret = await devTools().get_cookie.execute({ url: "https://example.com/", name: "sid" });
+  const secretJson = JSON.stringify(secret);
+  assertEquals(secret.found, false, `httpOnly cookies are never returned: ${secretJson}`);
+  assertEquals(secret.httpOnlyWithheld, true);
+  assert(!secretJson.includes("SUPER-SECRET-SESSION"), "the httpOnly value never crosses to the model");
+});
+
+Deno.test("cookies: get_cookie revealValue requests owner approval and fails closed with no gate", async () => {
+  reset();
+  grantedPermissions.add("cookies");
+  grantedOrigins.add("https://example.com/*");
+  cookieJar.push({ name: "prefs", value: "theme=dark", domain: "example.com", path: "/", url: "https://example.com/", httpOnly: false });
+
+  // No gate bound (no run context): fail CLOSED, and no value is returned.
+  const ungated = await devTools().get_cookie.execute({ url: "https://example.com/", name: "prefs", revealValue: true });
+  assertEquals(ungated.ok, false);
+  assert(/owner approval/i.test(String(ungated.error)), ungated.error);
+  assert(!JSON.stringify(ungated).includes("theme=dark"));
+
+  // The owner DENIES: the gate's refusal is returned verbatim, still no value.
+  const denials = [];
+  const denied = await browserToolset(false, {
+    developerFeatures: true,
+    cookieValueGate: (payload) => {
+      denials.push(payload);
+      return Promise.resolve({ ok: false, waitingForPermission: true });
+    },
+  }).get_cookie.execute({ url: "https://example.com/", name: "prefs", revealValue: true });
+  assertEquals(denied.ok, false);
+  assertEquals(denials, [{ origin: "https://example.com", name: "prefs" }], "the gate is asked about the EXACT origin + cookie name");
+  assert(!JSON.stringify(denied).includes("theme=dark"));
+
+  // The owner APPROVES: only now does the value cross.
+  const approved = await browserToolset(false, {
+    developerFeatures: true,
+    cookieValueGate: () => Promise.resolve({ ok: true }),
+  }).get_cookie.execute({ url: "https://example.com/", name: "prefs", revealValue: true });
+  assertEquals(approved.found, true);
+  assertEquals(approved.cookie.value, "theme=dark");
+  assertEquals(approved.valueApproved, true);
+
+  // An httpOnly cookie is NOT revealable — approval does not unlock it.
+  cookieJar.push({ name: "sid", value: "SUPER-SECRET-SESSION", domain: "example.com", path: "/", url: "https://example.com/", httpOnly: true });
+  const httpOnly = await browserToolset(false, {
+    developerFeatures: true,
+    cookieValueGate: () => Promise.resolve({ ok: true }),
+  }).get_cookie.execute({ url: "https://example.com/", name: "sid", revealValue: true });
+  assertEquals(httpOnly.found, false);
+  assert(!JSON.stringify(httpOnly).includes("SUPER-SECRET-SESSION"));
+});
+
+Deno.test("GUARD: get_cookie/set_cookie/remove_cookie are absent from the default (non-developer) toolset", () => {
+  reset();
+  const def = browserToolset(false);
+  const scoped = browserToolset(true);
+  const dev = devTools();
+  for (const name of ["get_cookie", "set_cookie", "remove_cookie"]) {
+    assert(!(name in def), `${name} must NOT be in the default toolset`);
+    assert(!(name in scoped), `${name} must NOT be exposed to scoped runs`);
+    assert(name in dev, `${name} stays available in the developer build`);
+  }
+  // The metadata-only readers stay in the default product: they are the honest
+  // half of the cookie story and they never carry a value.
+  for (const name of ["list_cookies", "list_cookie_stores"]) {
+    assert(name in def, `${name} stays in the default toolset`);
+    assert(name in browserToolset(true), `${name} stays available to scoped runs`);
+  }
 });

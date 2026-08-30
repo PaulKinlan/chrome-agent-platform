@@ -157,6 +157,9 @@ const BASELINE_ROUTES = [
   "task.resume",
   "task.update",
   // The approval leg of schedule_task with a scriptId (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01).
+  // The owner-approval leg of get_cookie revealValue
+  // (CAP-FB-20260830-COOKIE-TOOLS-CUT-01).
+  "browser.cookie-value",
   "task.schedule-script",
   "schedules.list",
   "recipe.list",

@@ -19,6 +19,7 @@ import {
   BROWSER_TOOL_NAMES,
   CHROME_TOOL_CAPABILITY_BOUNDS,
   CHROME_TOOL_CAPABILITY_TABLE,
+  DEVELOPER_ONLY_TOOL_NAMES,
 } from "../extension/lib/chrome-tool-capabilities.js";
 import { CAPABILITIES } from "../extension/lib/capabilities.js";
 import { clearRunFence } from "../extension/lib/run-fence.js";
@@ -187,14 +188,23 @@ function tools() {
 // Registry parity: the 8 T12 tools are appended AND the counts are honest.
 // (The 4 chrome.debugger CDP tools were removed 2026-08-27 — see the guard below.)
 // ──────────────────────────────────────────────────────────────────────────
-Deno.test("T12: browserToolset has exactly 126 tools matching BROWSER_TOOL_NAMES (118 + 8)", () => {
+Deno.test("T12: browserToolset has exactly 125 tools matching BROWSER_TOOL_NAMES (117 + 8)", () => {
   reset();
-  const browser = tools();
+  // BROWSER_TOOL_NAMES is the SHIPPED inventory (the developer build); the
+  // default build omits the developer-only names
+  // (CAP-FB-20260830-COOKIE-TOOLS-CUT-01), asserted separately below.
+  const browser = browserToolset(false, { developerFeatures: true });
   assertEquals(Object.keys(browser), BROWSER_TOOL_NAMES);
-  assertEquals(BROWSER_TOOL_NAMES.length, 126);
-  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.browserTools, 126);
-  // 159 + delegate_to_agent (G5) + 7 board tools (jobs board, 2026-08-29; board_read_messages 2026-08-30) = 167.
-  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.totalTools, 167);
+  assertEquals(
+    Object.keys(tools()),
+    BROWSER_TOOL_NAMES.filter((name) => !DEVELOPER_ONLY_TOOL_NAMES.includes(name)),
+  );
+  assertEquals(BROWSER_TOOL_NAMES.length, 125);
+  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.browserTools, 125);
+  // 159 + delegate_to_agent (G5) + 7 board tools (jobs board, 2026-08-29;
+  // board_read_messages 2026-08-30) − open_side_panel (removed 2026-08-30,
+  // CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01) = 166.
+  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.totalTools, 166);
   for (const name of [
     "register_user_script", "update_user_script", "unregister_user_script", "list_user_scripts",
     "register_content_script", "update_content_script", "unregister_content_script", "list_content_scripts",
@@ -553,4 +563,39 @@ Deno.test("fence: read_page result carries untrusted === true (page text is data
   assertEquals(r.untrusted, true, `read_page must tag its result untrusted: ${JSON.stringify(r)}`);
   assertEquals(r.title, "Quarterly planning notes");
   assert(typeof r.text === "string" && r.text.includes("close_tab"), "the page text is still returned in full (the fence is applied by the lazy projection)");
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// REMOVAL GUARD (2026-08-30, owner decision — CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01).
+// `open_side_panel` was removed: `chrome.sidePanel.open()` requires a user
+// gesture and the tool runs in the service worker with none, so every model
+// call returned "side panel could not open: sidePanel.open() may only be
+// called in response to a user gesture." while the description promised the
+// panel would open. Offering a tool that can never succeed is worse than not
+// offering it. The owner's own side-panel paths (the action click, the
+// keyboard command) are untouched, and the `sidePanel` capability row stays in
+// Settings. This guard fails loudly if the tool is re-added by a tranche.
+// ──────────────────────────────────────────────────────────────────────────
+Deno.test("GUARD: open_side_panel is absent from the toolset and the capability table", () => {
+  reset();
+  const browser = tools();
+  const scoped = browserToolset(true);
+  assert(!("open_side_panel" in browser), "open_side_panel must NOT be in the toolset");
+  assert(!("open_side_panel" in scoped), "open_side_panel must NOT be exposed to scoped runs");
+  assert(!BROWSER_TOOL_NAMES.includes("open_side_panel"), "open_side_panel must NOT be in BROWSER_TOOL_NAMES");
+  assert(
+    !CHROME_TOOL_CAPABILITY_TABLE.some((row) => row.toolName === "open_side_panel"),
+    "no open_side_panel row in the capability table",
+  );
+  assert(
+    !CHROME_TOOL_CAPABILITY_TABLE.some((row) => row.capabilityTokens.includes("chrome.side-panel.open")),
+    "no tool claims chrome.side-panel.open — the gesture-only API is not reachable from a model call",
+  );
+  // The owner's side-panel surface itself is NOT removed: the capability the
+  // owner grants in Settings stays exactly where it was, and the metadata tools
+  // that only READ or CONFIGURE the panel are untouched.
+  assert(CAPABILITIES.some((c) => c.id === "sidePanel"), "the sidePanel capability row stays in Settings");
+  for (const kept of ["get_side_panel_options", "set_side_panel_options", "set_panel_behavior"]) {
+    assert(kept in browser, `${kept} stays — it does not need a gesture`);
+  }
 });
