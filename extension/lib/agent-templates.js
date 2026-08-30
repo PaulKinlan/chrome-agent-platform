@@ -708,3 +708,32 @@ export function templatePrefill(template) {
     schedule: template.schedule ? { ...template.schedule } : null,
   };
 }
+
+/**
+ * A background recipe rendered as a template card — a PURE projection over the
+ * recipe record (CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01), never a copy
+ * of its data. Choosing the card pre-fills the create form through the same
+ * `templatePrefill` path as a curated template: the recipe's description is
+ * "what it does" and its prompt becomes the recurring task, so "Create agent"
+ * produces ONE scheduled named agent through `named-agent.create({schedule})`.
+ * On-demand recipes are skills, not scheduled templates → null.
+ */
+export function recipeAsTemplate(recipe) {
+  if (!recipe || typeof recipe !== "object" || !recipe.id) return null;
+  if (recipe.mode !== "background") return null;
+  const minutes = Number(recipe.schedule?.periodInMinutes);
+  return {
+    id: String(recipe.id),
+    name: String(recipe.name ?? recipe.id),
+    description: String(recipe.description ?? ""),
+    role: String(recipe.description ?? ""),
+    skills: [],
+    firstTask: "",
+    mode: "background",
+    schedule: Number.isFinite(minutes) && minutes > 0
+      ? { periodInMinutes: minutes, prompt: String(recipe.prompt ?? "") }
+      : null,
+    source: "recipe",
+    icon: typeof recipe.icon === "string" ? recipe.icon : "",
+  };
+}

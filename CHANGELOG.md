@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.446] — 2026-08-30
+- WIP: CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01 — card states + gallery component + tests (inherited, uncommitted at rate-limit cutoff)
+
 ## [0.2.445] — 2026-08-30
 - Seven more fixes are in progress in parallel and recorded as claimed in the tracker.
 

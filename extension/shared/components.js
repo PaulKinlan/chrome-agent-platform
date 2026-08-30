@@ -1870,34 +1870,95 @@ customElements.define("site-agent-card", SiteAgentCard);
 
 /* <agent-template-card> — one reusable, bounded template choice. The template
  * record is assigned through the property (large persona text never crosses an
- * HTML attribute); the component emits `use` with the canonical template id. */
+ * HTML attribute); the component emits `use` with the canonical template id.
+ *
+ * States (CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01):
+ *   starter   — the curated pill ("Starter").
+ *   selected  — the card the form currently reflects: the accent ring and the
+ *               Use button pressed (`aria-pressed="true"`, label "Selected").
+ *   blank     — the "Custom agent" start-from-scratch card (no skills row).
+ * The whole card activates the Use button (click, Enter, Space); the native
+ * button stays the ONE focusable and carries the accessible name, so a grid of
+ * cards is one tab stop per card and `tabbable` lets a gallery rove it.
+ * Skill chips show the registry's display names when `skillNames` (a Map or
+ * object id → name) is set, and fall back to the id otherwise. */
 class AgentTemplateCard extends Component {
-  static get observedAttributes() { return ["starter"]; }
+  static get observedAttributes() { return ["starter", "selected", "blank"]; }
   constructor() {
     super();
     this._template = {};
+    this._skillNames = null;
+    this._tabbable = true;
   }
   set template(value) {
     this._template = value && typeof value === "object" ? value : {};
     if (this._rendered) { this._render(); this._wire(); }
   }
   get template() { return this._template; }
+  set skillNames(value) {
+    this._skillNames = value instanceof Map
+      ? value
+      : value && typeof value === "object"
+      ? new Map(Object.entries(value))
+      : null;
+    if (this._rendered) { this._render(); this._wire(); }
+  }
+  get skillNames() { return this._skillNames; }
+  /** Roving tabindex support: the Use button is the single tab stop. */
+  set tabbable(value) {
+    this._tabbable = value !== false;
+    const btn = this._root?.querySelector(".use");
+    if (btn) btn.tabIndex = this._tabbable ? 0 : -1;
+  }
+  get tabbable() { return this._tabbable; }
+  focus() { this._root?.querySelector(".use")?.focus(); }
+  get selected() { return this.hasAttribute("selected"); }
+  set selected(value) { this.toggleAttribute("selected", value === true); }
+  attributeChangedCallback(name, oldValue, newValue) {
+    // A state change re-renders the shadow tree; keep keyboard focus on the
+    // Use button across it (selecting a card with Enter must not drop focus).
+    const hadFocus = this._root?.activeElement?.classList?.contains("use") === true;
+    super.attributeChangedCallback(name, oldValue, newValue);
+    if (hadFocus) this.focus();
+  }
+  _skillName(id) {
+    const name = this._skillNames?.get(id);
+    return typeof name === "string" && name ? name : id.replace(/[-_]+/g, " ");
+  }
   _render() {
     const template = this._template;
-    const name = String(template.name || "Unnamed template");
-    const persona = String(template.description || "").trim() || "No persona summary provided.";
-    const skills = Array.isArray(template.skills) ? template.skills.map(String) : [];
+    const blank = this.hasAttribute("blank");
+    const selected = this.hasAttribute("selected");
+    const starter = !blank && this.hasAttribute("starter");
+    const name = blank ? String(template.name || "Custom agent") : String(template.name || "Unnamed template");
+    const persona = blank
+      ? String(template.description || "Start from scratch: describe what it does and pick its skills yourself.")
+      : (String(template.description || "").trim() || "No persona summary provided.");
+    const skills = !blank && Array.isArray(template.skills) ? template.skills.map(String) : [];
     const shownSkills = skills.slice(0, 3);
     const overflow = skills.length - shownSkills.length;
-    const starter = this.hasAttribute("starter");
+    const minutes = Number(template.schedule?.periodInMinutes);
+    const cadence = !blank && template.mode === "background" && Number.isFinite(minutes) && minutes > 0
+      ? `every ${minutes} min`
+      : "";
     const titleId = `template-title-${Math.random().toString(36).slice(2)}`;
     const personaId = `${titleId}-persona`;
+    const chips = shownSkills.length || cadence
+      ? `<div class="skills" aria-label="${escapeHtml(skills.length ? `Skills: ${skills.map((id) => this._skillName(id)).join(", ")}` : `Runs ${cadence}`)}">
+        ${cadence ? `<span class="cadence">${ICONS.clock ?? ""}${escapeHtml(cadence)}</span>` : ""}
+        ${shownSkills.map((skill) => `<span class="skill" title="${escapeHtml(this._skillName(skill))}">${escapeHtml(this._skillName(skill))}</span>`).join("")}
+        ${overflow > 0 ? `<span class="overflow" aria-label="${overflow} more skills">+${overflow}</span>` : ""}
+      </div>`
+      : `<div class="skills skills-empty" aria-hidden="true"></div>`;
     mountTemplate(this, `
       :host { display:block; min-inline-size:0; }
       article { display:grid; grid-template-rows:auto minmax(2.8em,auto) auto auto; gap:10px;
         box-sizing:border-box; block-size:100%; min-block-size:154px; min-inline-size:0; padding:14px; border:1px solid var(--border,#e3e0d9);
-        border-radius:var(--radius-md,12px); background:var(--panel,#fff); color:var(--text,#1d1b18); }
-      :host([starter]) article { border-color:var(--accent,#0e6e63); }
+        border-radius:var(--radius-md,12px); background:var(--panel,#fff); color:var(--text,#1d1b18); cursor:pointer;
+        transition:border-color 150ms ease-out, box-shadow 150ms ease-out; }
+      article:hover { border-color:var(--muted,#635e56); }
+      :host([selected]) article { border-color:var(--accent,#0e6e63); box-shadow:inset 0 0 0 1px var(--accent,#0e6e63); }
+      :host([blank]) article { background:var(--panel-2,#efede8); }
       header { display:flex; align-items:flex-start; gap:8px; min-inline-size:0; }
       .name { margin:0; flex:1; min-inline-size:0; font-size:var(--text-base,14px); line-height:1.35;
         font-weight:700; overflow-wrap:anywhere; }
@@ -1905,34 +1966,223 @@ class AgentTemplateCard extends Component {
         border-radius:999px; color:var(--accent,#0e6e63); font-size:10px; font-weight:700; line-height:1.4; }
       .persona { display:-webkit-box; margin:0; color:var(--muted,#635e56); font-size:var(--text-xs,12px);
         line-height:1.4; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; overflow-wrap:anywhere; }
-      .skills { display:flex; flex-wrap:wrap; align-items:center; gap:5px; min-inline-size:0; }
-      .skill, .overflow { display:inline-flex; max-inline-size:100%; padding:2px 7px; border-radius:999px;
+      .skills { display:flex; flex-wrap:wrap; align-items:center; gap:5px; min-inline-size:0; min-block-size:1.5em; }
+      .skill, .overflow, .cadence { display:inline-flex; align-items:center; gap:4px; max-inline-size:100%; padding:2px 7px; border-radius:999px;
         background:var(--panel-2,#efede8); color:var(--muted,#635e56); font-size:10px; line-height:1.5;
         white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .cadence { background:transparent; border:1px solid var(--border,#e3e0d9); font-variant-numeric:tabular-nums; }
+      .cadence svg { inline-size:12px; block-size:12px; }
       .overflow { border:1px solid var(--border,#e3e0d9); background:transparent; font-weight:700; }
-      .use { justify-self:start; min-block-size:36px; padding:0 14px; border:0; border-radius:var(--radius-sm,6px);
-        background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); cursor:pointer; font:600 var(--text-sm,13px)/1 inherit; }
+      .use { display:inline-flex; align-items:center; gap:6px; justify-self:start; min-block-size:36px; padding:0 14px; border:0; border-radius:var(--radius-sm,6px);
+        background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); cursor:pointer; font:600 var(--text-sm,13px)/1 inherit;
+        transition:background-color 150ms ease-out; }
       .use:hover { background:var(--accent-hover,#0a5c53); }
+      .use[aria-pressed="true"] { background:transparent; color:var(--accent,#0e6e63); box-shadow:inset 0 0 0 1px var(--accent,#0e6e63); }
+      .use svg { inline-size:14px; block-size:14px; }
       .use:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
-      @media (forced-colors:active) { article, .starter, .overflow, .use { border:1px solid CanvasText; } }
+      @media (prefers-reduced-motion:reduce) { article, .use { transition:none; } }
+      @media (forced-colors:active) { article, .starter, .overflow, .cadence, .use { border:1px solid CanvasText; }
+        :host([selected]) article { border-width:2px; } .use[aria-pressed="true"] { border:2px solid Highlight; } }
     `, `<article aria-labelledby="${titleId}" aria-describedby="${personaId}">
       <header><h3 class="name" id="${titleId}">${escapeHtml(name)}</h3>${starter ? '<span class="starter">Starter</span>' : ""}</header>
       <p class="persona" id="${personaId}">${escapeHtml(persona)}</p>
-      <div class="skills" aria-label="Skills: ${escapeHtml(skills.join(", "))}">
-        ${shownSkills.map((skill) => `<span class="skill" title="${escapeHtml(skill)}">${escapeHtml(skill.replace(/[-_]+/g, " "))}</span>`).join("")}
-        ${overflow > 0 ? `<span class="overflow" aria-label="${overflow} more skills">+${overflow}</span>` : ""}
-      </div>
-      <button class="use" type="button" aria-label="Use ${escapeHtml(name)} template">Use</button>
+      ${chips}
+      <button class="use" type="button" aria-pressed="${selected ? "true" : "false"}" tabindex="${this._tabbable ? 0 : -1}" aria-label="${escapeHtml(blank ? `Use ${name}` : `Use ${name} template`)}">${selected ? `${ICONS.check ?? ""}Selected` : "Use"}</button>
     </article>`);
   }
   _wire() {
-    this._root.querySelector(".use")?.addEventListener("click", () => {
+    const article = this._root.querySelector("article");
+    const use = this._root.querySelector(".use");
+    const activate = () => {
       const template = this._template;
-      if (template?.id) this._emit("use", { id: template.id });
+      this._emit("use", { id: this.hasAttribute("blank") ? "" : String(template?.id ?? ""), template });
+    };
+    use?.addEventListener("click", (e) => { e.stopPropagation(); activate(); });
+    // Whole-card activation: a click anywhere on the card is the Use button's
+    // click (the button keeps the accessible name and the focus ring).
+    article?.addEventListener("click", (e) => {
+      if (e.target === use || use?.contains(e.target)) return;
+      use?.focus();
+      activate();
     });
   }
 }
 customElements.define("agent-template-card", AgentTemplateCard);
+
+/* <agent-template-gallery blank filter="starter" filters="starter,all,scheduled" selected="">
+ * The template catalogue as a grid of <agent-template-card>s with a segmented
+ * filter (Starter / All / Scheduled). One component for the create dialog and
+ * Settings, so both surfaces offer the same catalogue the same way.
+ *   templates   — property: template records (`starter: true` marks the pill;
+ *                 `mode: "background"` puts a template under Scheduled).
+ *   skillNames  — property: Map/object of skill id → display name (chips).
+ *   blank       — attribute: prepend the "Custom agent" card (id "").
+ *   selected    — property/attribute: the id the form currently reflects.
+ *   filters     — attribute: the filters to offer; a single filter hides the row.
+ * Keyboard: the grid is ONE tab stop (roving tabindex across the cards' Use
+ * buttons; arrows, Home and End move; Enter/Space activate). Emits `use`
+ * ({id, template}) and `filter-change` ({filter}). */
+class AgentTemplateGallery extends Component {
+  static get observedAttributes() { return ["filter", "filters", "blank", "selected"]; }
+  constructor() {
+    super();
+    this._templates = [];
+    this._skillNames = null;
+  }
+  set templates(value) {
+    this._templates = Array.isArray(value) ? value.filter((t) => t && typeof t === "object" && t.id) : [];
+    if (this._rendered) { this._render(); this._wire(); }
+  }
+  get templates() { return this._templates; }
+  set skillNames(value) {
+    this._skillNames = value;
+    if (this._rendered) { this._render(); this._wire(); }
+  }
+  get skillNames() { return this._skillNames; }
+  get filter() {
+    const f = String(this.getAttribute("filter") || "").toLowerCase();
+    const allowed = this.filters;
+    return allowed.includes(f) ? f : allowed[0];
+  }
+  set filter(value) { this.setAttribute("filter", String(value)); }
+  get filters() {
+    const raw = String(this.getAttribute("filters") || "starter,all,scheduled")
+      .split(",").map((s) => s.trim().toLowerCase()).filter((s) => ["starter", "all", "scheduled"].includes(s));
+    return raw.length ? raw : ["all"];
+  }
+  get selected() { return this.hasAttribute("selected") ? String(this.getAttribute("selected")) : null; }
+  set selected(value) {
+    if (value == null) { this.removeAttribute("selected"); return; }
+    const id = String(value);
+    if (this.getAttribute("selected") === id) return;
+    // Update the cards in place — a full re-render would drop keyboard focus.
+    this._suppressRender = true;
+    this.setAttribute("selected", id);
+    this._suppressRender = false;
+    this._applySelection();
+  }
+  attributeChangedCallback(name, oldValue, newValue) {
+    if (this._suppressRender) return;
+    const focusedFilter = this._root?.activeElement?.dataset?.filter;
+    super.attributeChangedCallback(name, oldValue, newValue);
+    if (focusedFilter) this._root.querySelector(`.filter[data-filter="${focusedFilter}"]`)?.focus();
+  }
+  focus() {
+    const cards = this._cards();
+    (cards.find((c) => c.tabbable) ?? cards[0])?.focus();
+  }
+  _cards() { return [...(this._root?.querySelectorAll("agent-template-card") ?? [])]; }
+  _matches(t, filter) {
+    if (filter === "starter") return t.starter === true;
+    if (filter === "scheduled") return t.mode === "background";
+    return true;
+  }
+  _count(filter) { return this._templates.filter((t) => this._matches(t, filter)).length; }
+  _applySelection() {
+    const selected = this.selected;
+    const cards = this._cards();
+    let tabStop = null;
+    for (const card of cards) {
+      const id = card.hasAttribute("blank") ? "" : String(card.template?.id ?? "");
+      const on = selected != null && id === selected;
+      card.selected = on;
+      if (on) tabStop = card;
+    }
+    const stop = tabStop ?? cards[0] ?? null;
+    for (const card of cards) card.tabbable = card === stop;
+  }
+  _render() {
+    const filters = this.filters;
+    const filter = this.filter;
+    const labels = { starter: "Starter", all: "All", scheduled: "Scheduled" };
+    const showFilters = filters.length > 1;
+    const rows = this._templates.filter((t) => this._matches(t, filter));
+    const blank = this.hasAttribute("blank");
+    mountTemplate(this, `
+      :host { display:block; min-inline-size:0; }
+      .filters { display:inline-flex; gap:0; margin-block-end:12px; border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,6px); padding:2px; background:var(--panel-2,#efede8); }
+      .filter { display:inline-flex; align-items:center; gap:6px; min-block-size:30px; padding:0 12px; border:0; border-radius:4px; background:transparent;
+        color:var(--muted,#635e56); cursor:pointer; font:600 var(--text-sm,13px)/1 inherit; transition:background-color 150ms ease-out, color 150ms ease-out; }
+      .filter[aria-pressed="true"] { background:var(--panel,#fff); color:var(--text,#1d1b18); box-shadow:0 1px 2px rgba(0,0,0,.08); }
+      .filter:hover { color:var(--text,#1d1b18); }
+      .filter:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
+      .count { font-weight:500; font-variant-numeric:tabular-nums; color:var(--muted,#635e56); }
+      .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:10px; min-inline-size:0; }
+      .empty { margin:0; padding:20px 0; color:var(--muted,#635e56); font-size:var(--text-sm,13px); text-align:center; }
+      @media (prefers-reduced-motion:reduce) { .filter { transition:none; } }
+      @media (forced-colors:active) { .filters { border:1px solid CanvasText; } .filter[aria-pressed="true"] { border:2px solid Highlight; } }
+    `, `${showFilters ? `<div class="filters" role="group" aria-label="Show templates">
+        ${filters.map((f) => `<button type="button" class="filter" data-filter="${f}" aria-pressed="${f === filter ? "true" : "false"}">${labels[f]} <span class="count">${this._count(f)}</span></button>`).join("")}
+      </div>` : ""}
+      <div class="grid" role="group" aria-label="Templates"></div>
+      ${!rows.length && !blank ? `<p class="empty">No templates match.</p>` : ""}`);
+    const grid = this._root.querySelector(".grid");
+    if (blank) {
+      const card = document.createElement("agent-template-card");
+      card.setAttribute("blank", "");
+      card.template = { id: "", name: "Custom agent" };
+      grid.append(card);
+    }
+    for (const t of rows) {
+      const card = document.createElement("agent-template-card");
+      if (t.starter === true) card.setAttribute("starter", "");
+      card.template = t;
+      if (this._skillNames) card.skillNames = this._skillNames;
+      grid.append(card);
+    }
+    this._applySelection();
+  }
+  _wire() {
+    for (const btn of this._root.querySelectorAll(".filter")) {
+      btn.addEventListener("click", () => {
+        const f = btn.dataset.filter;
+        if (f === this.filter) return;
+        this.filter = f;
+        this._emit("filter-change", { filter: f });
+      });
+    }
+    const grid = this._root.querySelector(".grid");
+    grid?.addEventListener("use", (e) => {
+      e.stopPropagation();
+      const id = String(e.detail?.id ?? "");
+      this.selected = id;
+      this._emit("use", { id, template: e.detail?.template ?? null });
+    });
+    // Roving tabindex across the cards (one tab stop for the grid).
+    grid?.addEventListener("keydown", (e) => {
+      const cards = this._cards();
+      if (!cards.length) return;
+      const current = cards.findIndex((c) => c.contains(e.target) || c === e.target);
+      if (current < 0) return;
+      const columns = this._columns(cards);
+      let next = -1;
+      switch (e.key) {
+        case "ArrowRight": next = Math.min(cards.length - 1, current + 1); break;
+        case "ArrowLeft": next = Math.max(0, current - 1); break;
+        case "ArrowDown": next = Math.min(cards.length - 1, current + columns); break;
+        case "ArrowUp": next = Math.max(0, current - columns); break;
+        case "Home": next = 0; break;
+        case "End": next = cards.length - 1; break;
+        default: return;
+      }
+      e.preventDefault();
+      if (next === current) return;
+      for (const card of cards) card.tabbable = false;
+      cards[next].tabbable = true;
+      cards[next].focus();
+    });
+  }
+  _columns(cards) {
+    const top = cards[0]?.getBoundingClientRect().top;
+    let n = 0;
+    for (const card of cards) {
+      if (Math.abs(card.getBoundingClientRect().top - top) < 1) n++;
+      else break;
+    }
+    return Math.max(1, n);
+  }
+}
+customElements.define("agent-template-gallery", AgentTemplateGallery);
 
 /* <tool-directory-card> — one production-registry function in semantic order:
  * name → bounded registry description/schema metadata → per-function states.
