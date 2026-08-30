@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.426] — 2026-08-30
+- merge: WebMCP acceptance green lane (0c9783c8) — detector registration restored, JIT scripting at discover, fresh-profile picker proof
+
 ## [0.2.425] — 2026-08-30
 - merge: board deny rules lane (9fd462b8) — owner-managed post/claim policy with fail-closed unreadable-store semantics + browser-driven Settings coverage
 

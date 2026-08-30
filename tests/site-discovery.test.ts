@@ -143,6 +143,27 @@ Deno.test("site discovery WIRING (source pins): boot recovery and proactive disc
     ntp.includes("proactive-discovery-banner"),
     "NTP must render proactive discovery banner for unenrolled tabs",
   );
+  // Fresh-profile JIT (review P1): the discover gesture requests the optional
+  // scripting permission BEFORE the first listing is retried — the picker can
+  // only render once the SW can reattest tabs — and denial surfaces as honest
+  // copy, never as a silently empty picker.
+  assert(
+    ntp.includes("listing?.needScripting"),
+    "NTP must handle the SW's needScripting refusal from the discover gesture",
+  );
+  const gestureBlock = ntp.slice(
+    ntp.indexOf("listing?.needScripting"),
+    ntp.indexOf("listing?.needTabs"),
+  );
+  const requestAt = gestureBlock.indexOf('chrome.permissions.request({ permissions: ["scripting"] })');
+  const retryAt = gestureBlock.indexOf('send("agent.discoverable-tabs")');
+  const denyAt = gestureBlock.indexOf('siteAgentSetupMessage("scripting-denied")');
+  assert(requestAt > 0 && retryAt > requestAt, "the gesture requests scripting JIT, then retries the listing");
+  assert(denyAt > requestAt && denyAt < retryAt, "denial surfaces the scripting-denied copy before any retry");
+  assert(
+    sw.includes("needScripting: true"),
+    "the SW must refuse discoverable-tabs honestly when scripting is ungranted",
+  );
   // Invariant 3: Options page renders discovered open tabs for one-click enrollment
   assert(
     options.includes("renderDiscoveredOpenTabs()"),

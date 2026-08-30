@@ -3107,6 +3107,23 @@ async function armDetectionProbe(tabId, documentId) {
   }
 }
 
+// A JIT scripting grant (the hub's Discover gesture, or a Settings Enable)
+// must re-arm the passive detectors in ALREADY-OPEN pages: their relays
+// bootstrapped a nonce, but the MAIN-world arm needs chrome.scripting, which
+// was absent when the page loaded. Without this, a fresh profile's first
+// Discover click could never see the page it was looking at (arm only runs at
+// document_start). Messaging a tab without the relay simply rejects (caught).
+chrome.permissions?.onAdded?.addListener((granted) => {
+  if (!granted?.permissions?.includes("scripting")) return;
+  (async () => {
+    const openTabs = await chrome.tabs.query({}).catch(() => []);
+    for (const t of openTabs ?? []) {
+      if (t?.id == null) continue;
+      chrome.tabs.sendMessage(t.id, { type: "webmcp.detect.rearm" }).catch(() => {});
+    }
+  })().catch(() => {});
+});
+
 async function issueBridgeNonce(tabId, documentId, diagnostics) {
   let nonce = bridgeNonceMemory.get(documentId) ?? null;
   if (!nonce) {
@@ -5030,10 +5047,26 @@ const handlers = mergeRouteMaps(
   // extension's OWN NTP tab while the user is clicking in the hub — so the
   // flow enrolled the NTP, not the page the user meant). The hub renders this
   // list as an explicit picker and threads the CHOSEN tab's id + origin through
-  // enrollment. Tab URLs/titles are visible only with the OPTIONAL `tabs`
-  // permission; without it we report `needTabs` honestly so the hub requests
-  // it on the user's click.
+  // enrollment. Tab URLs/titles come from the install-granted `<all_urls>`
+  // host access (the optional `tabs` permission is NOT required). What the
+  // per-tab reattestation below does need is the OPTIONAL `scripting`
+  // permission; without it we refuse with `needScripting` so the hub can
+  // request it from the user's discover gesture.
   async "agent.discoverable-tabs"() {
+    // The per-tab reattestation below uses chrome.scripting — an OPTIONAL
+    // permission. Without it no tab can be bound to its detected document, so
+    // every detected tab would be silently dropped and the picker would never
+    // open (the fresh-profile deadlock: the hub used to request scripting only
+    // AFTER a row pick that could never render). Report the need honestly, and
+    // FIRST: scripting carries no install warning, so the hub's JIT request
+    // from the discover gesture settles without a prompt, leaving only the
+    // warned-permission preconditions to surface as honest copy.
+    const hasScripting = await chrome.permissions
+      .contains({ permissions: ["scripting"] })
+      .catch(() => false);
+    if (!hasScripting) {
+      return { ok: false, needScripting: true, error: "scripting permission needed to verify detected pages" };
+    }
     let tabs = null;
     try {
       tabs = await chrome.tabs.query({});
@@ -5062,9 +5095,15 @@ const handlers = mergeRouteMaps(
       // another same-origin tab/document cannot borrow this page's detection.
       const detected = known.get(origin);
       if (!detected) continue;
-      const frame = await chrome.webNavigation.getFrame({ tabId: t.id, frameId: 0 }).catch(() => null);
+      // InjectionResult carries Chrome's current top-level documentId without
+      // requiring the unrelated optional webNavigation permission.
+      const currentDocument = (await chrome.scripting.executeScript({
+        target: { tabId: t.id, frameIds: [0] },
+        world: "ISOLATED",
+        func: () => true,
+      }).catch(() => []))[0];
       const document = detected.documents.find((item) =>
-        item.tabId === t.id && item.documentId === frame?.documentId
+        item.tabId === t.id && item.documentId === currentDocument?.documentId
       );
       if (!document) continue;
       const toolCount = document.toolCount;

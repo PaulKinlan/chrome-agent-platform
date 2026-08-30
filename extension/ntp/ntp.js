@@ -588,10 +588,40 @@ async function renderWebmcpHubStatus() {
 // picked tab still shows that origin before acting on it.
 async function discoverActivePage() {
   let listing = await send("agent.discoverable-tabs").catch(() => ({ ok: false }));
+  if (listing?.needScripting) {
+    // The discover click IS the trusted user gesture — request the optional
+    // scripting permission JIT here. The SW needs it to reattest detected tabs
+    // (exact tab+document binding) before the picker can list anything; asking
+    // only after a row pick deadlocked fresh profiles behind a picker that
+    // could never open. Denial surfaces honestly, never as an empty picker.
+    let granted = false;
+    try {
+      granted = (await chrome.permissions.request({ permissions: ["scripting"] })) === true;
+    } catch {
+      granted = false;
+    }
+    if (!granted) {
+      setStatus(siteAgentSetupMessage("scripting-denied"), false);
+      return;
+    }
+    listing = await send("agent.discoverable-tabs").catch(() => ({ ok: false }));
+    // A just-landed JIT grant re-arms the passive detectors in already-open
+    // pages (their first arm predated the grant); give the first snapshots a
+    // short bounded window before concluding there is nothing to find.
+    if (listing?.ok && Array.isArray(listing.tabs) && listing.tabs.length === 0) {
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 500));
+        listing = await send("agent.discoverable-tabs").catch(() => ({ ok: false }));
+        if (!listing?.ok || !Array.isArray(listing.tabs) || listing.tabs.length > 0) break;
+      }
+    }
+  }
   if (listing?.needTabs) {
-    // `tabs` is granted at install — VERIFY (fail closed). A needTabs response
-    // post-install-grant means a broken/revoked install; verify + report
-    // honestly instead of running an obsolete runtime request.
+    // `tabs` is NOT required for discovery (tab URLs/titles come from
+    // install-granted `<all_urls>` host access) — a needTabs response is a
+    // broken-install signal; verify + report honestly instead of running an
+    // obsolete runtime request.
     const granted = await chrome.permissions
       .contains({ permissions: ["tabs"] })
       .catch(() => false);

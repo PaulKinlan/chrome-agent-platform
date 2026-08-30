@@ -28,29 +28,37 @@
 //   9. screenshots + a machine-verifiable manifest (test-artifacts/ by
 //      default, or WEBMCP_ARTIFACT_DIR for exact-clean-commit external evidence).
 //
-// THE PERMISSION GESTURE. Headless Chromium auto-denies prompted optional
-// permissions (probed 2026-08-18: real click + --enable-automation both deny),
-// and this environment has no display/Xvfb, so the OS-level "Allow" click
-// cannot be automated here. Two modes:
+// THE PERMISSION GESTURE. `scripting` and `tabs` are OPTIONAL on the shipped
+// manifest, but the discovery flow needs NO permission prompt at all (probed
+// 2026-08-30):
+//   - scripting carries NO install warning once <all_urls> host access is
+//     install-granted, so chrome.permissions.request({permissions:["scripting"]})
+//     settles silently — even headless — when issued from a real user gesture.
+//     The hub's "Discover this page" click requests it JIT before listing, and
+//     the SW's permissions.onAdded nudge re-arms the passive detectors in
+//     already-open pages (their first arm predated the grant).
+//   - tabs is WARNED, but the picker doesn't need it: install-granted
+//     <all_urls> already exposes tab URLs/titles to chrome.tabs.query.
+//
+// Two modes:
 //
 //   deno run -A scripts/webmcp-acceptance.ts            # automated, status OPEN
-//   deno run -A scripts/webmcp-acceptance.ts --headed   # the executable MANUAL MACRO
+//   deno run -A scripts/webmcp-acceptance.ts --headed   # full SHIPPED-bytes attestation
 //
-// Automated mode loads a TEST VARIANT of the extension that is byte-identical
-// to the shipped one EXCEPT the manifest pre-holds scripting+tabs. Shipped
-// <all_urls> host access remains unchanged (recorded in the manifest as
-// permissionGrant:"test-manifest-pregranted"); the overall status stays OPEN
-// because the real permission-prompt gesture is unattested.
+// Automated mode FIRST drives a FRESH PROFILE on the SHIPPED manifest: ONE real
+// Discover click must settle the JIT scripting grant, re-arm the already-open
+// fixture tab's detector, and open the picker listing it — the fresh-profile
+// deadlock (review P1) can never return without failing this run. It then loads
+// a TEST VARIANT (byte-identical EXCEPT the manifest pre-holds scripting+tabs)
+// for the deep discovery/injection/invocation checks; shipped <all_urls> host
+// access is unchanged (permissionGrant:"test-manifest-pregranted"). Status
+// stays OPEN because the deep path is attested on variant bytes.
 //
-// --headed mode loads the SHIPPED extension in a headed browser, drives the
-// real UI to the permission prompt, then PAUSES and prints the exact manual
-// step ("click Allow on the Chrome permission prompt") — the one human action
-// — and continues every assertion automatically once the grant lands
-// (permissionGrant:"manual-user-allow"). See docs/WEBMCP-ACCEPTANCE.md.
+// --headed mode drives the SHIPPED extension end-to-end with NO manual step —
+// the JIT grant is silent, so enrollment + invocation are asserted on shipped
+// bytes (permissionGrant:"jit-silent-no-prompt"; status ATTESTED on success).
+// See docs/WEBMCP-ACCEPTANCE.md.
 //
-// This permissions branch predates main's passive WebMCP detector. On that
-// base the fresh-profile picker is circular and cannot run honestly, so the
-// harness emits NOT RUNNABLE evidence instead of claiming those steps passed.
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
 const CHROMIUM = "/usr/bin/chromium";
@@ -159,15 +167,138 @@ async function main() {
   const fixture = launchFixture();
   await sleep(800);
 
+  // Evidence collectors.
+  const scriptParsedUrls: string[] = [];
+  const consoleEvents: string[] = [];
+  const screenshots: { name: string; sha256: string; bytes: number }[] = [];
+
+  // 0.5 FRESH PROFILE on the SHIPPED manifest (no variant pregrants) — the
+  // review-P1 proof. ONE real Discover click carries the whole chain: the JIT
+  // scripting request settles granted (warningless, no prompt — even
+  // headless), the SW's permissions.onAdded nudge re-arms the already-open
+  // fixture tab's passive detector (its first arm predated the grant), and
+  // the picker opens listing that tab. `tabs` is not required (install-granted
+  // <all_urls> already exposes tab URLs/titles). This block carries its own
+  // minimal plumbing so the proven variant flow below is untouched.
+  if (!HEADED) {
+    const freshProfile = `/tmp/cap-webmcp-fresh-${Date.now()}`;
+    await Deno.mkdir(freshProfile, { recursive: true });
+    const freshProc = launch(freshProfile, EXT);
+    try {
+      let freshPort = 0;
+      for (let i = 0; i < 80 && !freshPort; i++) {
+        await sleep(250);
+        const reader = freshProc.stderr.getReader();
+        const { value, done } = await reader.read(); reader.releaseLock();
+        const m = (done ? null : new TextDecoder().decode(value))?.match(/ws:\/\/127\.0\.0\.1:(\d+)/);
+        if (m) freshPort = Number(m[1]);
+      }
+      const fVersion = await fetchJson(`http://127.0.0.1:${freshPort}/json/version`);
+      const fws = new WebSocket(fVersion.webSocketDebuggerUrl);
+      await new Promise<void>((res, rej) => { fws.onopen = () => res(); fws.onerror = rej; });
+      let fid = 0; const fpend = new Map();
+      fws.onmessage = (ev) => {
+        const m = JSON.parse(ev.data);
+        if (m.id && fpend.has(m.id)) {
+          const p = fpend.get(m.id); fpend.delete(m.id);
+          m.error ? p.rej(new Error(m.error.message)) : p.res(m.result);
+        }
+      };
+      const fsend = (method: string, params: any, sessionId?: string) => new Promise<any>((res, rej) => {
+        const mid = ++fid; fpend.set(mid, { res, rej });
+        fws.send(JSON.stringify({ id: mid, method, params, sessionId }));
+      });
+      const feval = async (sess: string, e: string) => {
+        const r = await fsend("Runtime.evaluate", { expression: e, returnByValue: true, awaitPromise: true }, sess);
+        if (r?.exceptionDetails) return { __exception: r.exceptionDetails.exception?.description ?? r.exceptionDetails.text };
+        return r?.result?.value;
+      };
+      const funtil = async (fn: () => any, ms: number, step = 300) => {
+        const deadline = Date.now() + ms;
+        while (Date.now() < deadline) {
+          const v = await fn();
+          if (v) return v;
+          await sleep(step);
+        }
+        return null;
+      };
+      let fsw: any = null;
+      for (let i = 0; i < 60 && !fsw; i++) {
+        const ts = await fetchJson(`http://127.0.0.1:${freshPort}/json/list`);
+        fsw = ts.find((t: any) => t.type === "service_worker");
+        if (!fsw) await sleep(200);
+      }
+      check("fresh profile (shipped manifest): extension loaded", !!fsw);
+      const fExtId = fsw.url.split("/")[2];
+      const fsws = (await fsend("Target.attachToTarget", { targetId: fsw.id, flatten: true })).sessionId;
+      await fsend("Runtime.enable", {}, fsws);
+
+      const freshPerms = await feval(fsws, `Promise.all([
+        chrome.permissions.contains({ permissions: ["scripting"] }),
+        chrome.permissions.contains({ permissions: ["tabs"] }),
+      ])`);
+      check("fresh profile (shipped manifest): scripting + tabs start ungranted",
+        Array.isArray(freshPerms) && freshPerms[0] === false && freshPerms[1] === false, freshPerms);
+
+      // The fixture tab: passive detection needs no optional permission (the
+      // detectors are statically registered content scripts).
+      await fsend("Target.createTarget", { url: `${PAGE_ORIGIN}/index.html` });
+      await sleep(1500);
+
+      // The hub: the REAL Discover click on a fresh profile.
+      const fNT = await fsend("Target.createTarget", { url: `chrome-extension://${fExtId}/ntp/ntp.html` });
+      const fns = (await fsend("Target.attachToTarget", { targetId: fNT.targetId, flatten: true })).sessionId;
+      await fsend("Runtime.enable", {}, fns);
+      await fsend("Page.enable", {}, fns);
+      await sleep(1600);
+      await fsend("Target.activateTarget", { targetId: fNT.targetId });
+      const fBox = await feval(fns, `(() => { const el = document.getElementById("discover-page"); if (!el) return null; el.scrollIntoView({block:"center"}); const r = el.getBoundingClientRect(); return {x:r.x+r.width/2, y:r.y+r.height/2}; })()`);
+      if (fBox && typeof fBox.x === "number") {
+        await fsend("Input.dispatchMouseEvent", { type: "mousePressed", x: fBox.x, y: fBox.y, button: "left", buttons: 1, clickCount: 1 }, fns);
+        await fsend("Input.dispatchMouseEvent", { type: "mouseReleased", x: fBox.x, y: fBox.y, button: "left", buttons: 0, clickCount: 1 }, fns);
+      }
+      check("fresh profile: clicked Discover this page via a real click", !!(fBox && typeof fBox.x === "number"));
+
+      const jitGranted = await funtil(
+        () => feval(fsws, `chrome.permissions.contains({ permissions: ["scripting"] })`),
+        10000,
+      );
+      check("fresh profile: the discover gesture issued the JIT scripting request and it settled granted (warningless, no prompt)",
+        jitGranted === true);
+
+      // The picker-open proof the review demanded: the SAME first Discover
+      // click carries the whole fresh-profile chain — JIT scripting grant →
+      // the SW's permissions.onAdded nudge re-arms the already-open fixture
+      // tab's detector → its first snapshot lands → the hub's bounded poll
+      // lists it → the picker opens with the fixture row. No variant
+      // pregrant, no prompt, no Settings detour. The deadline covers the
+      // grant + re-arm + first snapshot + the hub's own 5s poll.
+      const pickerRow = await funtil(() => feval(fns, `(() => {
+        const dlg = document.querySelector("agent-dialog");
+        if (!dlg) return null;
+        const rows = [...dlg.querySelectorAll("capability-row")];
+        return rows.some((r) => r.getAttribute("description") === ${JSON.stringify(PAGE_ORIGIN)}) ? true : null;
+      })()`), 15000);
+      check("fresh profile (SHIPPED manifest, no pregrants): the picker opens from the discover gesture listing the fixture tab",
+        pickerRow === true);
+      const fShot = await fsend("Page.captureScreenshot", { format: "png" }, fns).catch(() => null);
+      if (fShot?.data) {
+        const bytes = Uint8Array.from(atob(fShot.data), (c: string) => c.charCodeAt(0));
+        await Deno.writeFile(`${artifactDir}/webmcp-acceptance-fresh-profile.png`, bytes);
+        screenshots.push({ name: "webmcp-acceptance-fresh-profile.png", sha256: await sha256Hex(bytes), bytes: bytes.length });
+      }
+      fws.close();
+    } finally {
+      try { freshProc.kill("SIGKILL"); } catch { /* already dead */ }
+      await Deno.remove(freshProfile, { recursive: true }).catch(() => {});
+    }
+  }
+
   const extDir = HEADED ? EXT : await makeVariant();
   const profile = `/tmp/cap-webmcp-acc-${Date.now()}`;
   await Deno.mkdir(profile, { recursive: true });
   const proc = launch(profile, extDir);
 
-  // Evidence collectors.
-  const scriptParsedUrls: string[] = [];
-  const consoleEvents: string[] = [];
-  const screenshots: { name: string; sha256: string; bytes: number }[] = [];
   // Evidence may be kept outside the source tree so a post-commit run can
   // attest an EXACT clean commit without dirtying it. The in-repo directory is
   // retained as the convenient default for local/manual runs.
@@ -281,14 +412,20 @@ async function main() {
     await sleep(1600);
     await send("Target.activateTarget", { targetId: nT.targetId });
 
-    // 5. Click "Discover this page" (real click). Headed mode: this requests
-    //    the `tabs` permission with a REAL prompt — the one manual step.
+    // 5. Click "Discover this page" (real click). Headed mode runs the SHIPPED
+    //    manifest on a fresh profile: the gesture issues the JIT scripting
+    //    request itself, which settles granted WITHOUT any prompt (scripting
+    //    is warningless once <all_urls> is install-granted — probed
+    //    2026-08-30), and the already-open fixture tab's detector is re-armed
+    //    via the SW's permissions.onAdded nudge. No manual step remains.
     const discoverClicked = await clickSelector(ns, `document.getElementById("discover-page")`);
     check("hub: clicked Discover this page via a real click", discoverClicked);
     if (HEADED) {
-      console.log("\n=== MANUAL STEP 1 of 1: a Chrome permission prompt is showing — click ALLOW (tabs). ===\n");
-      const granted = await until(() => evalIn(sws, `chrome.permissions.contains({ permissions: ["tabs"] })`), 180000, 500);
-      check("manual macro: the tabs permission was granted via the real prompt", granted === true);
+      const jitGranted = await until(
+        () => evalIn(sws, `chrome.permissions.contains({ permissions: ["scripting"] })`),
+        15000,
+      );
+      check("hub: the discover gesture settled the JIT scripting grant silently (no prompt)", jitGranted === true);
     }
     // The tab picker must appear listing the fixture tab (exact tab identity).
     const pickerHasFixture = await until(() => evalIn(ns, `(() => {
@@ -297,7 +434,7 @@ async function main() {
       const rows = [...dlg.querySelectorAll("capability-row")];
       const row = rows.find((r) => r.getAttribute("description") === ${JSON.stringify(PAGE_ORIGIN)});
       return row ? true : null;
-    })()`), 8000);
+    })()`), HEADED ? 20000 : 8000);
     check("hub: the tab picker lists the fixture tab (explicit tab identity)", pickerHasFixture === true);
     await screenshot(ns, "webmcp-acceptance-tab-picker.png");
 
@@ -501,10 +638,10 @@ async function main() {
     runId: `webmcp-acceptance-${Date.now()}`,
     ts: new Date().toISOString(),
     mode: HEADED ? "headed-manual" : "automated-variant",
-    permissionGrant: HEADED ? "manual-user-allow" : "test-manifest-pregranted",
+    permissionGrant: HEADED ? "jit-silent-no-prompt" : "test-manifest-pregranted (deep checks); shipped fresh-profile JIT (picker proof)",
     overallStatus: HEADED
       ? (fail === 0 ? "ATTESTED" : "FAILED")
-      : "OPEN — the OS-level permission-prompt gesture is unattested in this environment (headless auto-denies prompted optional permissions; no display/Xvfb). Run with --headed to complete the attestation.",
+      : "OPEN — the shipped-manifest fresh-profile picker path is attested headless; the deep discovery/injection/invocation path runs on the pregranted variant. Run with --headed to attest every step on shipped bytes.",
     variantNote: HEADED
       ? "the SHIPPED extension was driven"
       : "the loaded extension is byte-identical to the shipped one EXCEPT manifest.json pre-holds scripting+tabs; shipped <all_urls> host access is unchanged",

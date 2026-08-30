@@ -95,6 +95,11 @@ Deno.test("agent.discoverable-tabs ROUTE: only passively detected WebMCP origins
     { id: 2, url: "https://same.example/plain", title: "Plain", active: false, lastAccessed: 200 },
   ];
   const frameDocuments = new Map([[1, "doc-1"], [2, "doc-2"]]);
+  // Optional-permission state the route consults before reattestation.
+  const grantedPermissions = new Set(["scripting"]);
+  let executeScriptCalls = 0;
+  const permissionsOnAdded = [];
+  const tabMessages = [];
   globalThis.chrome = {
     runtime: {
       id: "test-extension-id",
@@ -122,22 +127,32 @@ Deno.test("agent.discoverable-tabs ROUTE: only passively detected WebMCP origins
       },
       session: { get: async () => ({}), set: async () => {} },
     },
-    permissions: { contains: async () => true, onAdded: noopListener, onRemoved: noopListener },
+    permissions: {
+      contains: async ({ permissions = [] } = {}) =>
+        permissions.every((p) => grantedPermissions.has(p)),
+      onAdded: { addListener: (fn) => permissionsOnAdded.push(fn) },
+      onRemoved: noopListener,
+    },
     alarms: { onAlarm: noopListener, create: () => {}, clear: async () => true, get: async () => null },
     tabs: {
       onCreated: noopListener, onActivated: noopListener, onUpdated: noopListener, onRemoved: noopListener,
       onAttached: noopListener, onZoomChange: noopListener,
       query: async () => structuredClone(openTabs),
       get: async (id) => structuredClone(openTabs.find((tab) => tab.id === id)),
-      sendMessage: async () => {}, create: async () => ({ id: 1 }), update: async () => ({}), remove: async () => {},
+      sendMessage: async (id, message) => { tabMessages.push([id, message]); },
+      create: async () => ({ id: 1 }), update: async () => ({}), remove: async () => {},
     },
     windows: { onCreated: noopListener, onRemoved: noopListener, onFocusChanged: noopListener },
-    scripting: { executeScript: async () => [], getRegisteredContentScripts: async () => [], registerContentScripts: async () => {} },
+    scripting: {
+      executeScript: async ({ target }) => {
+        executeScriptCalls++;
+        return [{ documentId: frameDocuments.get(target.tabId), frameId: 0, result: true }];
+      },
+      getRegisteredContentScripts: async () => [],
+      registerContentScripts: async () => {},
+    },
     offscreen: { closeDocument: async () => {}, getContexts: async () => [] },
     contextMenus: { onClicked: noopListener },
-    webNavigation: {
-      getFrame: async ({ tabId }) => ({ documentId: frameDocuments.get(tabId) }),
-    },
     notifications: {},
   };
   await import("../extension/background/service-worker.js");
@@ -212,4 +227,42 @@ Deno.test("agent.discoverable-tabs ROUTE: only passively detected WebMCP origins
   );
   picker = await dispatch({ type: "agent.discoverable-tabs" });
   assertEquals(picker.tabs?.length, 0, "a zero snapshot keeps the stale capability removed");
+
+  // Fresh-profile JIT precondition: without the optional `scripting`
+  // permission the route must refuse HONESTLY (needScripting) instead of
+  // silently dropping every detected tab behind a failed reattestation — the
+  // deadlock where the picker could never open.
+  openTabs[0].url = "https://same.example/tools";
+  frameDocuments.set(1, "doc-1");
+  await dispatch(
+    { type: "webmcp.detected", origin: "https://same.example", url: "https://same.example/tools", toolCount: 2 },
+    contentSender(1, "https://same.example/tools"),
+  );
+  grantedPermissions.delete("scripting");
+  const callsBefore = executeScriptCalls;
+  const refused = await dispatch({ type: "agent.discoverable-tabs" });
+  assertEquals(refused?.ok, false, "no scripting grant → the route refuses");
+  assertEquals(refused?.needScripting, true, "the refusal names the missing capability");
+  assertEquals(executeScriptCalls, callsBefore, "no reattestation runs without the scripting grant");
+
+  // The gesture-time grant (hub requests scripting JIT) unblocks the listing.
+  grantedPermissions.add("scripting");
+  picker = await dispatch({ type: "agent.discoverable-tabs" });
+  assertEquals(picker?.tabs?.length, 1, "granting scripting restores the detected tab's picker row");
+  assertEquals(picker.tabs?.[0]?.id, 1);
+
+  // The JIT grant must RE-ARM the passive detectors in already-open pages:
+  // their relays bootstrapped a nonce, but the MAIN-world arm needs
+  // chrome.scripting, which was absent at page load. The SW listens for the
+  // scripting grant and nudges every open tab to retry — otherwise pages open
+  // before the grant stay invisible to the picker until a reload.
+  assert(permissionsOnAdded.length > 0, "the SW listens for permission grants");
+  tabMessages.length = 0;
+  for (const fn of permissionsOnAdded) fn({ permissions: ["bookmarks"] });
+  await new Promise((r) => setTimeout(r, 50));
+  assertEquals(tabMessages.length, 0, "an unrelated grant triggers no detector re-arm");
+  for (const fn of permissionsOnAdded) fn({ permissions: ["scripting"] });
+  await new Promise((r) => setTimeout(r, 50));
+  const rearmTabs = tabMessages.filter(([, m]) => m?.type === "webmcp.detect.rearm").map(([id]) => id);
+  assertEquals(rearmTabs.sort(), [1, 2], "a scripting grant nudges every open tab to re-arm its detector");
 });

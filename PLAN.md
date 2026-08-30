@@ -250,14 +250,14 @@ spreadsheet toolkit, tabular diff, abuse gates, the Gate-2 Worker host. Resumes 
 demo. **P3.** Dead components, recipes→skills rename, hub agent rows onto the shared picker.
 
 ### Known open defect classes
-- **WebMCP discovery — passive registry candidate in review.** The owner rejected the
-  temporary all-web-tabs picker: `CAP-FB-20260829-WEBMCP-PASSIVE-DETECTION-01` adds
-  detection-only MAIN + isolated scripts on every http(s) page, persists a 100-origin /
-  24-hour LRU registry, and makes every `agent.discoverable-tabs` caller require a recent
-  positive capability report. Zero-tool snapshots remove entries. The production-path
-  journey is **36/36 pass**: a WebMCP fixture enters the picker before enrollment while a
-  concurrently-open plain page remains absent, then the existing exact-tab authenticated
-  enrollment and invocation path is exercised through reload and navigation.
+- **WebMCP discovery — passive registry acceptance candidate in review.** The owner rejected
+  the temporary all-web-tabs picker: detection-only MAIN + isolated scripts run on every
+  http(s) page, persist a 100-origin / 24-hour LRU registry, and make every
+  `agent.discoverable-tabs` caller require a recent positive capability report for the
+  current browser-attested tab/document. Zero-tool snapshots remove entries. The repaired
+  production-path journey is **37/37 pass**: a WebMCP fixture enters the picker before
+  enrollment, then the existing exact-tab authenticated enrollment and invocation path is
+  exercised through reload and navigation.
 - **Worktree hygiene** — 71 registered worktrees, and `/tmp` is RAM-backed at 92% inode
   use. Run `node scripts/worktree-audit.mjs` before any cleanup decision; nothing is
   removed until its HEAD is reachable from `origin/main` or a `rescue/*` tag.
