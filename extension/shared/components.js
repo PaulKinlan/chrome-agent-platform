@@ -362,7 +362,10 @@ export function preferenceBootstrapScript(nonce) {
   return `<script data-cap-bootstrap>${[
     "(function(){var nonce=" + n + ";",
     "function apply(p){if(!p)return;",
-    "if(p.locale){try{document.documentElement.setAttribute('lang',p.locale);}catch(e){}}",
+    // Closes BOTH the if and apply() — the message listener + ready post
+    // below must sit at IIFE level, not inside apply (a dangling open brace
+    // made every generated frame throw SyntaxError: Unexpected token ')').
+    "if(p.locale){try{document.documentElement.setAttribute('lang',p.locale);}catch(e){}}}",
     "window.addEventListener('message',function(e){if(e.source!==window.parent)return;",
     "var d=e.data;if(d&&d.type==='cap:preference'&&d.nonce===nonce)apply(d.preference);});",
     "try{window.parent.postMessage({type:'cap:preference-ready',nonce:nonce},'*');}catch(e){}",
@@ -474,6 +477,11 @@ export function wireHtmlFramePreference(container, { nonce, theme, locale } = {}
     const d = e.data;
     if (d && d.type === FRAME_PREFERENCE_READY && d.nonce === n && e.source === iframe.contentWindow) {
       done = true;
+      // Observability for the frame-bootstrap gate (CAP-FB-20260830-GENERATED-UI-
+      // BOOTSTRAP-SYNTAX-01): the frame only announces readiness when its injected
+      // bootstrap script parsed, so this attribute proves the preference channel
+      // is live end to end (the journey asserts it).
+      try { container?.setAttribute?.("data-cap-preference", "ready"); } catch { /* best-effort */ }
       post();
     }
   };

@@ -590,6 +590,7 @@ const EXPECTED = [
   "mgmt: create_asset succeeded (hub asset)",
   "mgmt: list_assets lists the asset (no content)",
   "mgmt: get_asset round-trips content",
+  "frame-guards: generated frame announces cap:preference-ready (bootstrap parses)",
   "approval: primary NTP Settings iframe can deny an exact request",
   "approval: deny row is singular and capability material absent from the payload",
   "approval: NTP cannot programmatically resolve an owner approval",
@@ -3700,6 +3701,40 @@ async function main() {
       "mgmt: get_asset round-trips content",
       assetGet?.ok === true && assetGet.asset?.content === "<h1>hello</h1>",
     );
+
+    // CAP-FB-20260830-GENERATED-UI-BOOTSTRAP-SYNTAX-01 — the generated-document
+    // preference bootstrap must PARSE and the frame must announce readiness:
+    // open the html asset via the hub's artifact quick-drawer (openArtifactDialog
+    // is module scope — the drawer's artifact-open event is the public seam) and
+    // assert the wrapper gains data-cap-preference="ready". That attribute is
+    // set ONLY on a genuine cap:preference-ready from the generated document
+    // (inner frame → sandbox host relay → NTP wireHtmlFramePreference), so it
+    // is an end-to-end proof that the injected bootstrap parsed and ran — the
+    // exact regression this task fixes (before: SyntaxError, no ready post, no
+    // attribute). The locale-application half (apply() setting
+    // document.documentElement.lang) is asserted behaviourally in
+    // tests/frame-guards.test.ts — the srcdoc DOM is intentionally opaque to
+    // every parent realm (double sandbox), so a browser read of the nested
+    // document is not possible by design.
+    await evalIn(cdp, ntpSession, `(() => {
+      const drawer = document.getElementById("artifact-quick-drawer");
+      if (!drawer) return false;
+      drawer.dispatchEvent(new CustomEvent("artifact-open", { detail: { artifact: { id: ${JSON.stringify(assetId)}, origin: "master", name: "generated page" } } }));
+      return true;
+    })()`);
+    let readyAttr = null;
+    for (let i = 0; i < 30 && readyAttr !== "ready"; i++) {
+      readyAttr = await evalIn(cdp, ntpSession, `(() => {
+        const wrap = document.querySelector(".frame[data-cap-preference]");
+        return wrap?.getAttribute?.("data-cap-preference") ?? null;
+      })()`);
+      if (readyAttr !== "ready") await sleep(200);
+    }
+    check(
+      "frame-guards: generated frame announces cap:preference-ready (bootstrap parses)",
+      readyAttr === "ready",
+    );
+    await evalIn(cdp, ntpSession, `document.querySelector("agent-dialog")?.close?.()`);
 
     // The PRIMARY Settings entry is the NTP's embedded options iframe. Drive
     // its navigation and Deny button with genuine CDP clicks (Runtime.evaluate

@@ -1,67 +1,10 @@
 # Changelog
 
-## [0.2.497] — 2026-08-30
-- Housekeeping: parallel work streams reconciled.
-
-## [0.2.496] — 2026-08-30
-- Tracker: model-visible screenshots are recorded as landed.
-
-## [0.2.495] — 2026-08-30
-- Landed: when the agent takes a screenshot, a vision-capable model now receives the real image instead of truncated text, the picture shows in the tool card, and every capture is saved to the screenshots store.
-
-## [0.2.494] — 2026-08-30
-- Two more editing-flow fixes are in progress in parallel and recorded as claimed.
-
-## [0.2.493] — 2026-08-30
-- Housekeeping: parallel work streams reconciled.
-
-## [0.2.492] — 2026-08-30
-- Tracker: the honesty backstop for browser actions is recorded as landed.
-
-## [0.2.491] — 2026-08-30
-- Landed: if the agent says it opened a tab, saved something, took a screenshot or handed a job off but no tool actually did it, the conversation now corrects that instead of showing the false claim.
-
-## [0.2.490] — 2026-08-30
-- Tracker: the side-panel and cookie tool cuts are recorded as landed.
-
-## [0.2.489] — 2026-08-30
-- Landed: a tool that could never work was removed, and the agent can no longer read your cookie values or session cookies unless you explicitly approve it.
-
-## [0.2.488] — 2026-08-30
-- Tracker: cross-thread memory recall is recorded as landed.
-
-## [0.2.487] — 2026-08-30
-- Landed: something the agent saved to memory in one conversation can now be recalled in a new one - it sees a short list of what it remembers before it answers.
-
-## [0.2.486] — 2026-08-30
-- Permission matrix: Turn off now confirms through the owner-approval dialog (cross-lane fix for the Settings revoke route)
-
-## [0.2.485] — 2026-08-30
-- merge: Permission matrix lane (46a2d3a6) — every variant-integrity gate both records and refuses before startRig; headless permission-state matrix attested 25/0
-
-## [0.2.484] — 2026-08-30
-- Five more fixes are in progress in parallel and recorded as claimed in the tracker.
-
-## [0.2.483] — 2026-08-30
-- Two smaller follow-up issues found during the parallel work are now written down as tasks.
-
-## [0.2.482] — 2026-08-30
-- Tracker: bounded run-log retention is recorded as landed.
-
-## [0.2.481] — 2026-08-30
-- Landed: opening a thread and listing runs stay fast no matter how many past runs you have - old run logs are folded into a compact summary instead of growing without limit, and nothing you can see is deleted.
-
-## [0.2.480] — 2026-08-30
-- Housekeeping: two parallel work streams reconciled.
-
-## [0.2.479] — 2026-08-30
-- Tracker: the thread run-state view is recorded as landed.
-
 ## [0.2.478] — 2026-08-30
-- Tracker: the thread view work records its verification runs, and a stale internal check that disagreed with the component gallery sync is written up.
+- Fix the generated-document preference bootstrap syntax error
 
 ## [0.2.477] — 2026-08-30
-- The thread view: the conversation is now as tall as its content with the composer docked at the bottom of the window, assistant replies carry the agent's avatar, name and the time, a "Working — …" row says what the agent is doing while it runs, new replies scroll into view unless you have scrolled up to read, and a page the agent builds is titled with the page's own name.
+- Fix the generated-document preference bootstrap syntax error
 
 ## [0.2.476] — 2026-08-30
 - Tracker: the diff view component is recorded as landed.

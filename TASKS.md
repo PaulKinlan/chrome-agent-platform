@@ -3478,11 +3478,11 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-GENERATED-UI-BOOTSTRAP-SYNTAX-01] The generated-document preference bootstrap is a JavaScript syntax error
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 editing lane, finding 5. Every generated page the agent renders throws `SyntaxError: Unexpected token ')'` in its sandbox frame, so the documented theme/locale projection into generated UI has never worked.
-- Updated: 2026-08-30 20:15 UTC
+- Updated: 2026-08-30 21:35 UTC
 - Status: IN_REVIEW
 - Resume: worker run 0c918cf7 (flash) — the fix, the unit gate and the journey assertion were dispatched with the full spec
 - Priority: P2
-- Owner: hub coordinator (journal session)
+- Owner: worker (cap-genui-bootstrap)
 - Workspace: /home/paulkinlan/worktrees/cap-genui-bootstrap
 - Branch: cap-genui-bootstrap
 - Base: `abae5d2b`
@@ -3506,6 +3506,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - History:
   - 2026-08-30 11:00 UTC — measured: every `about:srcdoc` context throws `SyntaxError: Unexpected token ')'` (14 occurrences in one run); the documented theme/locale projection has never run.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); the fragment list re-read at `components.js:355-366` and the missing brace confirmed.
+  - 2026-08-30 21:35 UTC — IN_REVIEW (candidate on `cap-genui-bootstrap` off `abae5d2b`): locale fragment closed with `…catch(e){}}}` so the listener + ready post sit at IIFE level; `wireHtmlFramePreference` marks the wrapper `data-cap-preference="ready"` on a genuine ready message. Falsification: unit parse test RED on the old string (`SyntaxError: Unexpected token ')'`, 1/4 passed) → GREEN 4/4 after; journey check RED on the stashed fix (205/206) → GREEN 206/206 with it. Full gates: build clean, unit 2584/0, chrome journeys 206/206. `tests/frame-guards.test.ts` parses the shipped fragments via `Function("n", "return […]")` (no eval of shipped code — test-side only) + a shim behavioural test that apply() sets `documentElement.lang` and the nonce gate holds.
 
 ## [CAP-FB-20260830-ARTIFACT-QUICK-FIXES-01] Small artifact defects: New tab opens twice, an empty id masks the real error
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 editing lane, findings 9 and 13. One click on "New tab" opens two viewer tabs; an agent that forgets the artifact id is told "requires owner approval" and retries the same call twelve times.
