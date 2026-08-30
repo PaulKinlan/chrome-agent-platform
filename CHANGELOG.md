@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.470] — 2026-08-30
+- Tracker: the memory-speed fix is recorded as landed; two more fixes claimed.
+
 ## [0.2.469] — 2026-08-30
 - Landed: the hub stays fast as you use it — a run that took 2.5 seconds with 120 past tasks now takes about 0.3 seconds.
 
