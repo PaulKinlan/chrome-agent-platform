@@ -6622,9 +6622,8 @@ const handlers = mergeRouteMaps(
         ok: false,
         origin: canonical,
         retryable: true,
-        error:
-          unreg.error ??
-          "OPFS clear failed",
+        error: unreg.error ??
+          (cleared ? "site teardown incomplete" : "OPFS clear failed"),
         scriptsRemoved,
         permissionRemoved,
         hostPermissionPermanent,

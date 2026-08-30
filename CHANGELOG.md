@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.412] — 2026-08-30
+- Deleting a site agent no longer reports failure when the host permission is permanent
+
 ## [0.2.411] — 2026-08-30
 - fix(CAP-FB-20260829-APPROVAL-JOURNEY-REGRESSION-01): restore owner-direct journeys
 
