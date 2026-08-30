@@ -28,6 +28,8 @@ import { redactSecretText } from "./pure.js";
 import { resolveTargetAgent } from "./agent-delegation.js";
 
 export const BOARD_JOBS_KEY = "cap:board-jobs";
+export const BOARD_DENY_RULES_KEY = "cap:board-deny-rules";
+export const BOARD_MAX_DENY_RULES = 200;
 export const BOARD_MESSAGES_KEY = "cap:board-messages";
 
 // Bounds (every value is also pinned by tests/agent-board.test.ts).
@@ -71,12 +73,24 @@ function newJobId() {
  * registry so the deferred per-edge permission layer slots in here.
  * Returns { ok: true } or { ok: false, code, error }.
  */
-export function canPostJob({ callerId, agents, targetAgentId = null }) {
+export function canPostJob({ callerId, agents, targetAgentId = null, denyRules = [] }) {
   if (callerId !== BOARD_HUB_ID && !agents.some((a) => a && a.id === callerId)) {
     return { ok: false, code: "board-unknown-poster", error: "only the hub or a named agent can post to the board" };
   }
   if (targetAgentId && !agents.some((a) => a && a.id === targetAgentId)) {
     return { ok: false, code: "board-unknown-target", error: "the target agent does not exist" };
+  }
+  // Per-edge deny rules (review r5 P1): fail closed on malformed rules.
+  if (Array.isArray(denyRules) && denyRules.length > 0) {
+    for (const rule of denyRules) {
+      if (!rule || typeof rule !== "object") return { ok: false, code: "board-deny-post", error: "malformed deny rule" };
+      if (!rule || typeof rule !== "object" || typeof rule.action !== "string" || typeof rule.agentId !== "string" || typeof rule.peerId !== "string") {
+        return { ok: false, code: "board-deny-post", error: "malformed deny rule — failing closed" };
+      }
+      if (rule.action === "post" && rule.agentId === callerId && rule.peerId === targetAgentId) {
+        return { ok: false, code: "board-deny-post", error: `you are not allowed to post jobs targeting ${rule.peerId}` };
+      }
+    }
   }
   return { ok: true };
 }
@@ -90,12 +104,24 @@ export function canPostJob({ callerId, agents, targetAgentId = null }) {
  *  - a targeted job is claimable only by its target;
  *  - every blockedBy job must be completed.
  */
-export function canClaimJob({ callerId, agents, job, settledJobs = [] }) {
+export function canClaimJob({ callerId, agents, job, settledJobs = [], denyRules = [] }) {
   if (!job || typeof job !== "object") {
     return { ok: false, code: "board-no-job", error: "no such job" };
   }
   if (callerId !== BOARD_HUB_ID && !agents.some((a) => a && a.id === callerId)) {
     return { ok: false, code: "board-unknown-claimant", error: "only the hub or a named agent can claim board jobs" };
+  }
+  // Per-edge deny rules (review r5 P1): fail closed on malformed rules.
+  if (Array.isArray(denyRules) && denyRules.length > 0) {
+    for (const rule of denyRules) {
+      if (!rule || typeof rule !== "object") return { ok: false, code: "board-deny-claim", error: "malformed deny rule" };
+      if (!rule || typeof rule !== "object" || typeof rule.action !== "string" || typeof rule.agentId !== "string" || typeof rule.peerId !== "string") {
+        return { ok: false, code: "board-deny-claim", error: "malformed deny rule — failing closed" };
+      }
+      if (rule.action === "claim" && rule.agentId === callerId && rule.peerId === job.posterId) {
+        return { ok: false, code: "board-deny-claim", error: `you are not allowed to claim jobs from ${rule.peerId}` };
+      }
+    }
   }
   if (job.status === "claimed") {
     return { ok: false, code: "board-already-claimed", error: `already claimed by ${job.claimantName ?? job.claimantId}` };
@@ -416,7 +442,7 @@ export function pruneJobEvents(events, now = Date.now()) {
  * (masterMemory()). Deps are injected so the KATs drive the exact production
  * logic with an in-memory stand-in.
  */
-export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => Date.now(), commitThread = null }) {
+export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => Date.now(), commitThread = null, denyRules = [] }) {
   // The board logs are RESERVED authority keys (memory.js MASTER_RESERVED_KEYS
   // + the internal/hidden namespace): the model's memory_set/memory_get can
   // never forge or read them, so the store uses the TRUSTED paths exclusively
@@ -484,7 +510,7 @@ export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => 
         if (targetAgentRef && !target) {
           return { ok: false, code: "board-unknown-target", error: "the target agent does not exist — use list_named_agents" };
         }
-        const guard = canPostJob({ callerId, agents, targetAgentId: target?.id ?? null });
+        const guard = canPostJob({ callerId, agents, targetAgentId: target?.id ?? null, denyRules });
         if (!guard.ok) return guard;
         const text = boardText(description, BOARD_MAX_DESCRIPTION);
         if (!text) return { ok: false, code: "board-empty", error: "the job needs a description" };
@@ -552,7 +578,7 @@ export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => 
         const jobs = foldJobEvents(events, now());
         const job = jobs.find((j) => j.id === jobId) ?? null;
         if (!job) return { ok: false, code: "board-no-job", error: "no such job" };
-        const guard = canClaimJob({ callerId, agents, job, settledJobs: jobs });
+        const guard = canClaimJob({ callerId, agents, job, settledJobs: jobs, denyRules });
         if (!guard.ok) return guard;
         const claimantName = callerId === BOARD_HUB_ID ? "Hub" : (agents.find((a) => a && a.id === callerId)?.name ?? callerId);
         events.push({
@@ -721,11 +747,16 @@ export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => 
  * authority seam: it maps the route CONTEXT (never model args) to the caller
  * identity (a named agent's id from the live run registry, else the hub).
  */
-export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCaller, resolvePosterThreadId, commitThread, broadcast, now, onPendingDelivery = null }) {
+export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCaller, resolvePosterThreadId, commitThread, broadcast, now, onPendingDelivery = null, denyRules = [] }) {
   // The store owns delivery (review r2 P1-3): commitThread rides into the
   // board so settlement + pending-delivery persist together and the ACK
   // waits on the idempotent thread commit.
-  const board = createAgentBoard({ memory, withLock, now, commitThread });
+  const board = createAgentBoard({ memory, withLock, now, commitThread, denyRules });
+  const loadDenyRules = async () => {
+    const events = await memory.getStrict(BOARD_DENY_RULES_KEY);
+    return Array.isArray(events) ? events : [];
+  };
+  const saveDenyRules = (rules) => memory.setTrusted(BOARD_DENY_RULES_KEY, rules);
   const agents = () => listAgents().catch(() => []);
   // Caller identity comes from the route CONTEXT (never model args) and fails
   // CLOSED: a MODEL principal whose execution id resolves to nothing is a
@@ -833,6 +864,32 @@ export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCa
     "board.messages": guarded(async ({ limit }) => {
       const cap = Number.isInteger(limit) && limit > 0 ? Math.min(limit, BOARD_MAX_MESSAGES) : 50;
       return { ok: true, messages: await board.listMessages({ limit: cap }) };
+    }),
+    // Owner-controlled deny rules (review r5 scope): the SW persists them in
+    // a reserved key; the board reads them for guard evaluation.
+    "board.deny.add": guarded(async ({ action, agentId, peerId }) => {
+      if (typeof action !== "string" || !["claim", "post"].includes(action)) {
+        return { ok: false, code: "board-deny-bad-action", error: "action must be 'claim' or 'post'" };
+      }
+      if (typeof agentId !== "string" || !agentId) return { ok: false, code: "board-deny-bad-agent", error: "agentId required" };
+      if (typeof peerId !== "string" || !peerId) return { ok: false, code: "board-deny-bad-peer", error: "peerId required" };
+      const rules = await loadDenyRules();
+      if (rules.length >= BOARD_MAX_DENY_RULES) return { ok: false, code: "board-deny-full", error: "the deny rule list is full (200 max)" };
+      const id = `deny_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+      rules.push({ id, action, agentId, peerId });
+      await saveDenyRules(rules);
+      return { ok: true, rule: { id, action, agentId, peerId } };
+    }),
+    "board.deny.remove": guarded(async ({ ruleId }) => {
+      if (typeof ruleId !== "string" || !ruleId) return { ok: false, code: "board-deny-bad-id", error: "ruleId required" };
+      const rules = await loadDenyRules();
+      const filtered = rules.filter((r) => r.id !== ruleId);
+      if (filtered.length === rules.length) return { ok: false, code: "board-deny-not-found", error: "no such rule" };
+      await saveDenyRules(filtered);
+      return { ok: true, removed: ruleId };
+    }),
+    "board.deny.list": guarded(async () => {
+      return { ok: true, rules: await loadDenyRules() };
     }),
   };
 

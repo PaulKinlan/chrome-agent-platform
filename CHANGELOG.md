@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.418] — 2026-08-30
+- feat(board): add Board permissions section to Settings + nav item
+
 ## [0.2.417] — 2026-08-30
 - test(board): RED deny-matrix battery — per-edge deny rules, malformed fail-closed, bounded rules, default open
 

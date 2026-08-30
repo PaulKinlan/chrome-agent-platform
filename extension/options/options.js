@@ -3061,3 +3061,79 @@ await wireObservabilitySettings();
 await renderAbout();
 await navigationController.syncCurrent();
 
+
+// ── Board deny rules (the owner controls which edges are blocked) ──────────
+let boardAgents = [];
+async function renderBoardDenyRules() {
+  const list = document.getElementById("board-deny-list");
+  if (!list) return;
+  list.replaceChildren();
+  const res = await chrome.runtime.sendMessage({ type: "board.deny.list" }).catch(() => null);
+  if (!res?.ok || !Array.isArray(res.rules)) return;
+  for (const rule of res.rules) {
+    const row = document.createElement("div");
+    row.className = "perm-row";
+    const name = document.createElement("span");
+    name.className = "perm-name";
+    name.textContent = rule.action === "claim"
+      ? `${rule.agentId} cannot claim jobs from ${rule.peerId}`
+      : `${rule.agentId} cannot post jobs targeting ${rule.peerId}`;
+    const btn = document.createElement("button");
+    btn.className = "btn small ghost";
+    btn.textContent = "Remove";
+    btn.addEventListener("click", async () => {
+      await chrome.runtime.sendMessage({ type: "board.deny.remove", ruleId: rule.id }).catch(() => {});
+      renderBoardDenyRules();
+    });
+    row.append(name, btn);
+    list.appendChild(row);
+  }
+}
+async function initBoardDenyUI() {
+  const list = document.getElementById("board-deny-list");
+  if (!list) return;
+  // Populate the agent dropdowns.
+  const agents = await chrome.runtime.sendMessage({ type: "board.list" }).then(
+    (r) => (r?.jobs ? [] : []), // not needed — we use the named agents list
+  ).catch(() => []);
+  const namedAgents = await chrome.runtime.sendMessage({ type: "named-agents.list" }).then(
+    (r) => (Array.isArray(r) ? r : []),
+  ).catch(() => []);
+  const agentSelect = document.getElementById("board-deny-agent");
+  const peerSelect = document.getElementById("board-deny-peer");
+  if (!agentSelect || !peerSelect) return;
+  agentSelect.replaceChildren();
+  peerSelect.replaceChildren();
+  for (const a of namedAgents) {
+    for (const sel of [agentSelect, peerSelect]) {
+      const opt = document.createElement("option");
+      opt.value = a.id ?? a;
+      opt.textContent = a.name ?? a.id ?? a;
+      sel.appendChild(opt);
+    }
+  }
+  const addAction = "hub";
+  for (const sel of [peerSelect]) {
+    const opt = document.createElement("option");
+    opt.value = addAction;
+    opt.textContent = "Hub";
+    sel.appendChild(opt);
+  }
+  const addBtn = document.getElementById("board-deny-add-btn");
+  if (addBtn) {
+    addBtn.addEventListener("click", async () => {
+      const action = document.getElementById("board-deny-action")?.value ?? "claim";
+      const agentId = agentSelect?.value ?? "";
+      const peerId = peerSelect?.value ?? "";
+      if (!agentId || !peerId) return;
+      const res = await chrome.runtime.sendMessage({
+        type: "board.deny.add", action, agentId, peerId,
+      }).catch(() => null);
+      if (res?.ok) renderBoardDenyRules();
+    });
+  }
+  renderBoardDenyRules();
+}
+if (typeof document !== "undefined" && document.getElementById("board-deny-list")) {
+  initBoardDenyUI();
+}

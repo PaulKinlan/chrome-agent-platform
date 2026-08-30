@@ -1,3 +1,4 @@
+// @ts-nocheck
 // tests/board-deny.test.ts — per-edge deny rules for the shared jobs board
 // (owner-controlled: "agent A may not claim jobs from agent B" / "agent A may
 // not post jobs targeting agent B"). Fail-closed: a malformed rule denies.
