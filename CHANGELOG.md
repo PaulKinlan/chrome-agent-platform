@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.477] — 2026-08-30
+- tasks: claim GENERATED-UI-BOOTSTRAP-SYNTAX-01, ARTIFACT-QUICK-FIXES-01, SETTINGS-WHATS-NEW-COPY-01 (hub coordinator workers dispatched)
+
 ## [0.2.476] — 2026-08-30
 - Tracker: the diff view component is recorded as landed.
 
