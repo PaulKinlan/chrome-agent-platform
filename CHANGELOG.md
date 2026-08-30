@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.500] — 2026-08-30
+- Housekeeping: parallel work streams reconciled.
+
 ## [0.2.499] — 2026-08-30
 - Tracker: the viewer Source/Diff tabs are recorded as landed.
 
