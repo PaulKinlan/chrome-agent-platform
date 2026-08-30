@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.479] — 2026-08-30
+- Tracker: the thread run-state view is recorded as landed.
+
 ## [0.2.478] — 2026-08-30
 - Tracker: the thread view work records its verification runs, and a stale internal check that disagreed with the component gallery sync is written up.
 
