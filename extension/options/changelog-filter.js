@@ -59,9 +59,10 @@ export function parseChangelog(md) {
  * each carrying ONLY its user-facing bullets (plus how many internal bullets it
  * hides).
  *
- * rest (the Show-all complement): every bullet that was NOT shown up front —
- * the internal bullets of the recent versions, and ALL bullets of every other
- * version. No bullet appears in both sides (true complement, no duplication).
+ * rest (the Show-all complement): EXACTLY the entries that were NOT shown up
+ * front — a version that made the visible five never reappears here, even for
+ * bullets the filter hid. Non-shown versions carry their FULL unfiltered text.
+ * Invariant: visible set ∩ show-all set = ∅ (no version appears in both).
  */
 export function partitionChangelog(md, { limit = 5 } = {}) {
   const versions = parseChangelog(md);
@@ -70,10 +71,8 @@ export function partitionChangelog(md, { limit = 5 } = {}) {
   for (const v of versions) {
     if (v.bullets.length === 0) continue;
     const visible = v.bullets.filter(isUserFacingEntry);
-    const hidden = v.bullets.filter((b) => !isUserFacingEntry(b));
     if (visible.length > 0 && recent.length < limit) {
-      recent.push({ version: v.version, date: v.date, bullets: visible, hidden: hidden.length });
-      if (hidden.length) rest.push({ version: v.version, date: v.date, bullets: hidden });
+      recent.push({ version: v.version, date: v.date, bullets: visible });
     } else {
       rest.push({ version: v.version, date: v.date, bullets: v.bullets });
     }

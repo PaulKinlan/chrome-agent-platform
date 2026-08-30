@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.2.483] — 2026-08-30
+- The What's new full list now shows every other change exactly once, without repeating the latest five
+
 ## [0.2.482] — 2026-08-30
-- The What's new review fixes are recorded
+- The What's new section no longer repeats the same change in two places: the five latest changes appear once, and the full history is a separate, complete list.
 
 ## [0.2.481] — 2026-08-30
 - The What's new section keeps the last five readable changes up front and puts everything else, without duplication, behind Show all

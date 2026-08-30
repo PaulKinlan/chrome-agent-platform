@@ -3128,20 +3128,15 @@ function renderChangelog(md) {
   };
   for (const r of recent) {
     host.append(buildCard(r, r.bullets));
-    if (r.hidden > 0) {
-      const note = document.createElement("p");
-      note.className = "muted changelog-hidden-note";
-      note.textContent = `…and ${r.hidden} internal note${r.hidden === 1 ? "" : "s"} in this release.`;
-      host.append(note);
-    }
   }
   if (!recent.length) {
     host.innerHTML = `<p class="muted">No changelog yet.</p>`;
     return;
   }
-  // The disclosure renders ONLY the complement of the visible five — the
-  // internal bullets of those releases and every other release in full. It is
-  // built LAZILY on first open so the About page stays bounded at load.
+  // The disclosure renders ONLY the complement of the visible five — every
+  // version NOT shown up front, in full. A version that made the visible five
+  // never appears here (visible ∩ show-all = ∅). Built LAZILY on first open
+  // so the About page stays bounded at load.
   const details = document.createElement("details");
   details.className = "changelog-all";
   const summary = document.createElement("summary");

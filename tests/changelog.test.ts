@@ -123,28 +123,29 @@ const FIXTURE = `# Changelog
 - A sixth readable change (beyond the five visible).
 `;
 
-Deno.test("changelog filter: partitionChangelog keeps the newest five readable entries and puts the REST in the complement", () => {
+Deno.test("changelog filter: partitionChangelog keeps the newest five readable entries and puts EVERY OTHER entry in the complement", () => {
   const { recent, rest } = partitionChangelog(FIXTURE);
   assertEquals(recent.length, 5, "exactly five recent entries");
   // The five visible versions, newest first: 0.2.4, 0.2.3, 0.2.1, 0.2.0, 0.1.9
   // (0.2.2 is skipped — its only bullet is internal).
   assertEquals(recent.map((r) => r.version), ["0.2.4", "0.2.3", "0.2.1", "0.2.0", "0.1.9"]);
-  // The newest release's internal bullet goes into the complement, not the visible list.
   assert(recent.every((r) => r.bullets.every(isUserFacingEntry)), "visible bullets are all user-facing");
+  // Pinned invariant: visible set ∩ show-all set = ∅ (by VERSION — a shown
+  // version never reappears in the complement, even for its hidden bullets).
+  const recentVersions = new Set(recent.map((r) => r.version));
+  assert(rest.every((r) => !recentVersions.has(r.version)), "no version appears in both visible and show-all");
+  // The complement holds EXACTLY the versions not shown up front, in full.
   const restVersions = rest.map((r) => r.version);
   assert(restVersions.includes("0.2.2"), "the all-internal version is in the complement");
   assert(restVersions.includes("0.1.8"), "versions beyond the five visible are in the complement");
-  assert(restVersions.includes("0.2.4"), "the newest release's internal bullets are in the complement");
-  // Complement carries every bullet that was not shown up front — and nothing else.
-  const restBullets = rest.flatMap((r) => r.bullets);
-  const visibleBullets = recent.flatMap((r) => r.bullets);
-  const allBullets = parseChangelog(FIXTURE).flatMap((v) => v.bullets);
-  assertEquals([...visibleBullets, ...restBullets].sort(), [...allBullets].sort(),
-    "visible + complement = every bullet exactly once (no duplication, no loss)");
-  // No bullet appears in both sides.
-  for (const b of visibleBullets) {
-    assert(!restBullets.includes(b), `no duplication of visible bullet: ${b}`);
-  }
+  assert(!restVersions.includes("0.2.4"), "a version shown up front never reappears (even its internal bullet)");
+  // Every version with bullets is in exactly one side.
+  const allVersions = parseChangelog(FIXTURE).map((v) => v.version);
+  assertEquals([...recentVersions, ...restVersions].sort(), [...allVersions].sort(),
+    "every version is in exactly one side (visible or show-all)");
+  // Rest entries carry their FULL unfiltered text.
+  const rest02 = rest.find((r) => r.version === "0.2.2");
+  assertEquals(rest02?.bullets, ["merge: an internal merge line."], "non-shown versions show full unfiltered bullets");
 });
 
 Deno.test("changelog: recent entries (last ten versions) are plain user language via the exported filter", async () => {
