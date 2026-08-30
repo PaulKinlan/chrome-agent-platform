@@ -47,6 +47,10 @@
 // step ("click Allow on the Chrome permission prompt") — the one human action
 // — and continues every assertion automatically once the grant lands
 // (permissionGrant:"manual-user-allow"). See docs/WEBMCP-ACCEPTANCE.md.
+//
+// This permissions branch predates main's passive WebMCP detector. On that
+// base the fresh-profile picker is circular and cannot run honestly, so the
+// harness emits NOT RUNNABLE evidence instead of claiming those steps passed.
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
 const CHROMIUM = "/usr/bin/chromium";
@@ -105,6 +109,53 @@ async function main() {
   const build = new Deno.Command("node", { args: [`${ROOT}build.mjs`], stdout: "null", stderr: "null", cwd: ROOT }).spawn();
   const buildStatus = await build.status;
   check("build succeeded (dist matches sources)", buildStatus.success);
+
+  const configuredArtifactDir = Deno.env.get("WEBMCP_ARTIFACT_DIR")?.trim();
+  const artifactDir = (configuredArtifactDir || `${ROOT}test-artifacts`).replace(/\/$/, "");
+  await Deno.mkdir(artifactDir, { recursive: true });
+
+  const passiveDetectorFiles = [
+    `${EXT}/lib/webmcp-detection-registry.js`,
+    `${EXT}/content/webmcp-detect-main.js`,
+    `${EXT}/content/webmcp-detect-relay.js`,
+  ];
+  const passiveDetectorAvailable = (await Promise.all(passiveDetectorFiles.map((file) =>
+    Deno.stat(file).then(() => true).catch(() => false)
+  ))).every(Boolean);
+  if (!passiveDetectorAvailable) {
+    const git = async (args: string[]) => new TextDecoder().decode(
+      (await new Deno.Command("git", { args, cwd: ROOT, stdout: "piped" }).output()).stdout,
+    ).trim();
+    const commit = await git(["rev-parse", "HEAD"]);
+    const dirty = await git(["status", "--porcelain"]);
+    const manifest = {
+      testedSourceCommit: commit,
+      evidenceCommitNote: dirty
+        ? "working-tree run; worktreeDirtyFiles lists every difference from testedSourceCommit"
+        : "exact clean testedSourceCommit; evidence was written separately from source",
+      worktreeDirtyFiles: dirty ? dirty.split("\n").filter(Boolean) : [],
+      runId: `webmcp-acceptance-${Date.now()}`,
+      ts: new Date().toISOString(),
+      mode: HEADED ? "headed-manual" : "automated-variant",
+      permissionGrant: "not-run",
+      overallStatus: "NOT RUNNABLE — this base predates main's passive WebMCP detector; run after merge",
+      variantNote: "the manifest variant preserves boot-critical permissions and moves only scripting+tabs from optional to required",
+      passed: pass,
+      failed: fail,
+      checks,
+      notRun: [
+        "fresh-profile passive detection, picker discovery, enrollment, injection, and invocation require main's passive detector",
+      ],
+      evidence: { scriptParsedUrls: [], consoleEvents: [], screenshots: [] },
+    };
+    await Deno.writeTextFile(
+      `${artifactDir}/webmcp-acceptance-manifest.json`,
+      JSON.stringify(manifest, null, 2) + "\n",
+    );
+    console.log(`\nRESULT: ${pass} passed, ${fail} failed, ${manifest.notRun.length} not runnable — status: ${manifest.overallStatus}`);
+    return;
+  }
+
   const fixture = launchFixture();
   await sleep(800);
 
@@ -120,9 +171,6 @@ async function main() {
   // Evidence may be kept outside the source tree so a post-commit run can
   // attest an EXACT clean commit without dirtying it. The in-repo directory is
   // retained as the convenient default for local/manual runs.
-  const configuredArtifactDir = Deno.env.get("WEBMCP_ARTIFACT_DIR")?.trim();
-  const artifactDir = (configuredArtifactDir || `${ROOT}test-artifacts`).replace(/\/$/, "");
-  await Deno.mkdir(artifactDir, { recursive: true });
 
   try {
     let port = 0;

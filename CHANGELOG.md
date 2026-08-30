@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.422] — 2026-08-30
+- Mark WebMCP discovery pending the merged detector
+
 ## [0.2.421] — 2026-08-30
 - Preserve required permissions in WebMCP acceptance
 

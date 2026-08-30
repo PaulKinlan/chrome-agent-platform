@@ -57,11 +57,23 @@ WEBMCP_ARTIFACT_DIR=/tmp/webmcp-evidence-$(git rev-parse --short HEAD) \
 Writing outside the repository keeps the post-commit worktree clean, allowing
 the manifest's `testedSourceCommit` + empty `worktreeDirtyFiles` to identify the
 exact tested bytes. Loads a **test variant** of the extension that is byte-identical to the shipped
-one EXCEPT `manifest.json` pre-holds `scripting` + `tabs`; the shipped
-`<all_urls>` host access is unchanged. Every check runs for real; the manifest
-records `permissionGrant: "test-manifest-pregranted"` and `overallStatus: OPEN`
-— the tabs permission-prompt gesture itself remains unattested until a headed
-run completes the single manual step above.
+one EXCEPT `manifest.json` pre-holds `scripting` + `tabs`: it unions them into
+the required list, preserves every boot-critical permission, and removes their
+optional declarations so nothing is duplicated. The shipped `<all_urls>` host
+access is unchanged. Every check runs for real; the manifest records
+`permissionGrant: "test-manifest-pregranted"` and `overallStatus: OPEN` — the
+tabs permission-prompt gesture itself remains unattested until a headed run
+completes the single manual step above.
+
+### Pre-detector branch bases
+
+Fresh-profile discovery depends on main's passive WebMCP detector and its
+HMAC-authenticated, document-scoped detection registry. This permissions branch
+predates those product files, so its picker cannot discover an unenrolled page
+without becoming circular. On such a base the harness writes `NOT RUNNABLE`
+evidence with the dependent steps listed in `notRun`; it never records a false
+green run. The complete automated acceptance is a required post-merge gate on
+the merged tree.
 
 ## Trust boundary
 
