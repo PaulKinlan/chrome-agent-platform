@@ -415,7 +415,9 @@ const EXPECTED = [
   "create dialog: the template gallery is the first step (blank + 21 templates + scheduled recipes; Starter shows 7; no template select)",
   "create dialog: Enter on the Research Analyst card fills Name, presses the card and checks its skills",
   "create dialog: Advanced+Skills expand and the config body scrolls with them (min-height hardening)",
+  "create dialog: a REAL skill checkbox click checks it (unchecked → checked)",
   "create dialog: Create agent from the card yields ONE named agent whose role is the template persona",
+  "create dialog: the saved agent's skill ids CONTAIN the exactly-toggled skill id",
   "create dialog: a Scheduled card creates one scheduled agent that the sidebar and Settings both list",
   "create dialog: the journey's created agents are removed again (fresh profile restored)",
   "NTP: task input present",
@@ -1128,6 +1130,61 @@ async function main() {
 
     const galleryShot = await captureShot(cdp, ntpSession);
     if (galleryShot) await writeEvidence("templates-gallery.png", galleryShot);
+    // REVISE r1 P1 (reviewer): prove a REAL skill checkbox toggle persists its
+    // EXACT id on the saved agent — the earlier count-only check could pass on
+    // template pre-checks alone. Pick the first UNCHECKED skill (so the toggle
+    // is an observable change), real-click it, and record its skill id from the
+    // same skill.list the dialog renders from (checkbox DOM order == catalog
+    // order), then assert the saved agent's skills contain that exact id.
+    const skillCatalog = await msgValue({ type: "skill.list" });
+    const togglePick = await evalIn(cdp, ntpSession, `(() => {
+      const host = [...document.querySelectorAll('agent-dialog')].find((h) => h.shadowRoot?.querySelector('dialog')?.open);
+      const boxes = host ? [...host.querySelectorAll('.skills-list input[type=checkbox]')] : [];
+      const idx = boxes.findIndex((b) => !b.checked);
+      if (idx < 0) return { ok: false, reason: 'no unchecked skill checkbox', n: boxes.length };
+      const b = boxes[idx];
+      const r = b.getBoundingClientRect();
+      const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+      // The click is only safe as a CDP mouse event when the point genuinely
+      // resolves to the checkbox (or its label row). Arithmetic viewport
+      // checks are unreliable here (the eval context reports a tall
+      // innerHeight); an off-viewport CDP click would land on the native
+      // dialog backdrop and light-dismiss the dialog. Otherwise drive the REAL
+      // checkbox through its own change handler via el.click().
+      const at = document.elementFromPoint(cx, cy);
+      const clickable = at === b || at === b.closest('label');
+      return { ok: true, idx, x: cx, y: cy, checkedBefore: b.checked, clickable, n: boxes.length };
+    })()`);
+    let toggledSkillId = null;
+    if (togglePick?.ok) {
+      // Real CDP mouse click when the checkbox is genuinely on-screen; the
+      // deep rows of the 180px skills list sit below the viewport in a tall
+      // dialog (template gallery + fields + Advanced header above), so for
+      // those the REAL checkbox is driven through its own change handler via
+      // el.click() — same listener, same Map update, same persistence path.
+      if (togglePick.clickable) {
+        await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: togglePick.x, y: togglePick.y, button: "left", buttons: 1, clickCount: 1 }, ntpSession);
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: togglePick.x, y: togglePick.y, button: "left", buttons: 0, clickCount: 1 }, ntpSession);
+      } else {
+        await evalIn(cdp, ntpSession, `(() => { const host = [...document.querySelectorAll('agent-dialog')].find((h) => h.shadowRoot?.querySelector('dialog')?.open); const boxes = host ? [...host.querySelectorAll('.skills-list input[type=checkbox]')] : []; boxes[${togglePick.idx}]?.click(); return true; })()`);
+      }
+      await sleep(150);
+      const cat = skillCatalog?.skills ?? [];
+      toggledSkillId = cat[togglePick.idx]?.id ?? cat[togglePick.idx]?.name ?? null;
+    }
+    console.log("create dialog toggle pick:", JSON.stringify(togglePick));
+    const toggledState = await evalIn(cdp, ntpSession, `(() => {
+      const hosts = [...document.querySelectorAll('agent-dialog')];
+      const openHost = hosts.find((h) => h.shadowRoot?.querySelector('dialog')?.open);
+      const boxes = openHost ? [...openHost.querySelectorAll('.skills-list input[type=checkbox]')] : [];
+      const b = boxes[${togglePick?.ok ? togglePick.idx : -1}];
+      return { checkedAfter: b?.checked === true, openHosts: hosts.filter((h) => h.shadowRoot?.querySelector('dialog')?.open).length, boxes: boxes.length };
+    })()`);
+    console.log("create dialog toggled state:", JSON.stringify(toggledState));
+    check(
+      "create dialog: a REAL skill checkbox click checks it (unchecked → checked)",
+      togglePick?.ok === true && toggledState?.checkedAfter === true && typeof toggledSkillId === "string" && toggledSkillId.length > 0,
+    );
     const createBtnPoint = await evalIn(cdp, ntpSession, `(() => { const b = [...document.querySelectorAll('agent-dialog button')].find((x) => x.textContent.trim() === 'Create agent'); if (!b) return null; b.scrollIntoView({ block: 'center' }); const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
     if (createBtnPoint) {
       await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: createBtnPoint.x, y: createBtnPoint.y, button: "left", buttons: 1, clickCount: 1 }, ntpSession);
@@ -1140,10 +1197,15 @@ async function main() {
       if (!createdFromCard) await sleep(200);
     }
     const namedCount1 = ((await msgValue({ type: "named-agent.list" }))?.agents ?? []).length;
-    console.log("createdFromCard from card:", JSON.stringify({ id: createdFromCard?.id, role: String(createdFromCard?.role ?? "").slice(0, 40), skills: (createdFromCard?.skills ?? []).length, namedCount1 }));
+    const savedSkillIds = (createdFromCard?.skills ?? []).map((s) => (s && typeof s === "object" ? s?.id : s));
+    console.log("createdFromCard from card:", JSON.stringify({ id: createdFromCard?.id, role: String(createdFromCard?.role ?? "").slice(0, 40), skills: savedSkillIds, namedCount1 }));
     check(
       "create dialog: Create agent from the card yields ONE named agent whose role is the template persona",
       createdFromCard !== null && namedCount1 === 1 && /^# Research Analyst Persona/.test(String(createdFromCard?.role ?? "")) && (createdFromCard?.skills ?? []).length >= 3,
+    );
+    check(
+      "create dialog: the saved agent's skill ids CONTAIN the exactly-toggled skill id",
+      typeof toggledSkillId === "string" && savedSkillIds.includes(toggledSkillId),
     );
     // A Scheduled card: the recipe becomes ONE scheduled named agent through
     // the same create path (the schedule text "every N minutes" is prefilled).

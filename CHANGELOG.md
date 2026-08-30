@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.482] — 2026-08-30
+- Agent dialog journey: prove the saved skill identity, not just the footer
+
 ## [0.2.481] — 2026-08-30
 - Agent dialog: make the config body scroll with Advanced and Skills expanded
 

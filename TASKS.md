@@ -4147,8 +4147,8 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-AGENT-DIALOG-SCROLL-01] The agent create/edit dialog cannot scroll: expanded Advanced clips the skills section and the footer, so the owner cannot add skills or reach the footer controls
 - Feedback: 2026-08-30 — owner report (Telegram): "I can expand the advanced panel, but I can't then scroll inside it, which means I can't really add any skills or do anything else"; a second report: "when I create an agent, I can no longer add any skills or anything else to it".
-- Updated: 2026-08-30 21:50 UTC
-- Status: DONE
+- Updated: 2026-08-30 22:30 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P1
 - Owner: hub coordinator (journal session)
@@ -4163,6 +4163,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
     - 2026-08-30 20:10 UTC — owner reports both symptoms; hub coordinator confirmed the dialog structure and the missing min-height at the tip (computed `minHeight: auto`), and measured honest baselines in headless Chrome (wheel over the expanded dialog scrolls 0→800+ even unfixed — the container `overflow:hidden` masks the defect; the REAL breakage surfaces as bottom-edge content hidden under the sticky footer and as light-dismiss dialog-close on mis-clicks near the edge).
     - 2026-08-30 21:30 UTC — worker (this lane) applied `minHeight = "0"` to `scrollBody`, re-built, and drove the REAL create dialog in headless Chrome (1280x800): Advanced + Skills expand, wheel scroll moves scrollTop 0→853 with everything expanded, footer always visible, computed `minHeight` now `0px`; toggled the first skill checkbox in the real dialog, filled the name "Scroll Probe Agent", real-clicked Create agent → `named-agent.list` returns the agent with `skills: [tab-hygiene]` persisted. Edit dialog opened via the real Edit button for a created agent: title "Edit …", Advanced expands, `minHeight: 0px`, footer visible (content fits — `scrollHeight == clientHeight == 455` at this profile, nothing to scroll).
     - 2026-08-30 21:50 UTC — DONE: new permanent journey check "create dialog: Advanced+Skills expand and the config body scrolls with them (min-height hardening)" added to `scripts/chrome-journeys.ts`. Gates on the tip: `npm run build` clean; `deno test tests/` 2587/0; `chrome-journeys.ts` 210/210. Screenshots: `test-artifacts/agent-dialog-scroll-unfixed-baseline.png`, `agent-dialog-scroll-green-create.png`, `agent-dialog-scroll-green-edit.png`.
+    - 2026-08-30 22:30 UTC — review r1 P1 fixed: journey asserts exact saved skill id. The reviewer (sol) found the persistence check toggled no REAL skill checkbox and asserted only a count; reworked `scripts/chrome-journeys.ts` to real-click the first UNCHECKED skill in the live dialog, record its id from `skill.list` (checkbox DOM order == catalog order), then assert the saved `named-agent.list` record's skill ids CONTAIN that exact id (new check "create dialog: the saved agent's skill ids CONTAIN the exactly-toggled skill id"). Falsification: toggle removed → the exact-id check RED; restored → GREEN.
 - Review: pending
 - Gates: full suite green at the tip; the new journey check is the permanent regression gate (fails if the body can no longer scroll with Advanced+Skills expanded).
 
