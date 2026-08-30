@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.484] — 2026-08-30
+- The What's new section work is done
+
 ## [0.2.483] — 2026-08-30
 - The What's new full list now shows every other change exactly once, without repeating the latest five
 
