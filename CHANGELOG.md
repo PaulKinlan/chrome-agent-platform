@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.419] — 2026-08-30
+- fix(permissions): add board-permissions to SETTINGS_SECTIONS + OPTIONS_PRODUCT_HASHES
+
 ## [0.2.418] — 2026-08-30
 - feat(board): add Board permissions section to Settings + nav item
 
