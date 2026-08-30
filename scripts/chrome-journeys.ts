@@ -405,6 +405,9 @@ const EXPECTED = [
   "warm run 2 (after re-save) returns a concrete demo result",
   "Transcript: 'list my open tabs' survives a reload at full length",
   "Transcript: no nudge summary bubble after a text-ending step",
+  "Provider error: SW console recorded the real HTTP 401 from the fixture provider",
+  "Provider error: a rejected key renders the 401 bubble with a Settings link",
+  "Provider error: preflight refusal reaches a terminal Failed row within 5 s",
   "real red tab resolved (active tab id)",
   "screenshot: denied after revoke (secondary probe)",
   "screenshot: capture SUCCEEDS for the granted origin",
@@ -545,6 +548,15 @@ async function main() {
       return new Response(
         `<html><body style="margin:0;background:#ff0000;width:400px;height:300px"></body></html>`,
         { headers: { "content-type": "text/html" } },
+      );
+    }
+    if (u.pathname.endsWith("/chat/completions")) {
+      // An OpenAI-shaped 401 for the provider-error-truth journey: the body
+      // echoes a key-shaped token exactly the way OpenAI does, so the journey
+      // also proves the bubble never carries it.
+      return new Response(
+        JSON.stringify({ error: { type: "authentication_error", code: "invalid_api_key", message: "Incorrect API key provided: sk-journey-invalid-0000. You can find your API key at the provider dashboard." } }),
+        { status: 401, headers: { "content-type": "application/json" } },
       );
     }
     return new Response(`<html><body>fixture ${u.pathname}</body></html>`, {
@@ -1578,6 +1590,102 @@ async function main() {
       "Transcript: no nudge summary bubble after a text-ending step",
       persistedAfter.assistant.length === 1 && agentBubblesAfter.length === 1 && !nudgeSeen,
     );
+    // JOURNEY 3c — provider error truth (CAP-FB-20260830-PROVIDER-ERROR-TRUTH-01).
+    // A provider HTTP failure must be reported by its real status, never as
+    // "returned no content"; a preflight refusal must be a terminal Failed row.
+    // Driven through the REAL hub composer against the local 401 fixture.
+    // ─────────────────────────────────────────────────────────────
+    // Bubbles and the live-status row are LIGHT-DOM children of the thread
+    // conversation; only the bubble's own markup (.msg / .err-fix) is in its
+    // shadow root. A whole-document shadow scan here is far too slow on a
+    // suite-warmed NTP (it hit the 15 s evaluate timeout).
+    const THREAD_ERROR_STATE = `(() => {
+      const conv = document.getElementById('thread-conversation');
+      if (!conv) return JSON.stringify({ errors: [], status: [] });
+      const errors = [...conv.querySelectorAll('message-bubble[role="error"]')].map(b => { const sr = b.shadowRoot ?? b; const fix = sr.querySelector('.err-fix'); return { text: (sr.querySelector('.msg')?.textContent ?? '').replace(/\\s+/g, ' ').trim().slice(0, 600), fix: fix ? fix.textContent.trim() : null }; });
+      const status = [...conv.querySelectorAll('conversation-run-status')].map(x => ({ state: x.getAttribute('state'), action: x.getAttribute('action-label'), text: [...(x.shadowRoot ?? x).childNodes].filter(n => n.nodeName !== 'STYLE').map(n => n.textContent ?? '').join(' ').replace(/\\s+/g, ' ').trim().slice(0, 300) }));
+      return JSON.stringify({ errors, status });
+    })()`;
+    const driveHubTask = async (text) => {
+      // The NTP is a background tab after the Settings journey; a background
+      // target neither paints nor screenshots, so bring it to the front first.
+      await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});
+      await cdp.send("Page.bringToFront", {}, ntpSession).catch(() => {});
+      await clickSel(cdp, ntpSession, "#home").catch(() => false);
+      await sleep(600);
+      await typeInto(cdp, ntpSession, "#task-input", text);
+      await clickSel(cdp, ntpSession, "#run-task");
+    };
+    const pollThreadError = async (deadlineMs, done) => {
+      const t0 = Date.now();
+      let last = { errors: [], status: [] };
+      while (Date.now() - t0 < deadlineMs) {
+        try { last = JSON.parse(await evalIn(cdp, ntpSession, THREAD_ERROR_STATE) ?? "{}"); } catch { /* re-poll */ }
+        if (done(last)) break;
+        await sleep(250);
+      }
+      return { ...last, elapsedMs: Date.now() - t0 };
+    };
+    // provider.set is Settings-sender-only (requireSettingsSender) — msgOpts.
+    await msgOpts({
+      type: "provider.set",
+      config: { provider: "openai", baseURL: `${RED_ORIGIN}/v1`, apiKey: "sk-journey-invalid-0000", model: "model-one" },
+    });
+    const swErrorsBefore = cdp.swErrors().length;
+    await driveHubTask("provider truth: bad key");
+    const bad = await pollThreadError(15000, (st) => st.errors?.length > 0);
+    const badShot = await captureShot(cdp, ntpSession);
+    if (badShot) await writeEvidence("provider-401-bubble.png", badShot);
+    // The adapter logs the real status ONCE (console.error "[provider] HTTP 401 …").
+    // That line is the evidence this journey exists to preserve. A deliberately
+    // failed provider call also produces two SW console errors that are the
+    // AI SDK's own (the diagnostics-scrubbed error object it logs, and the
+    // unhandled AI_NoOutputGeneratedError from its stream flush — the very
+    // collapse this journey guards against). Assert the 401 line, then take
+    // exactly that expected set out of the no-SW-errors gate so the gate keeps
+    // guarding everything else.
+    const swErrorsNow = cdp.swErrors().slice(swErrorsBefore);
+    const provider401 = swErrorsNow.filter((e) => /\[provider\] HTTP 401/.test(String(e.detail ?? "")));
+    check(
+      "Provider error: SW console recorded the real HTTP 401 from the fixture provider",
+      provider401.length >= 1 && provider401.every((e) => !/sk-[A-Za-z0-9]/.test(String(e.detail ?? ""))),
+    );
+    const EXPECTED_SW_NOISE = /\[provider\] HTTP 401|^AI_NoOutputGeneratedError: No output generated|^<redacted:structured>$/;
+    for (const e of swErrorsNow) {
+      if (!EXPECTED_SW_NOISE.test(String(e.detail ?? "").trim())) continue;
+      const i = cdp.consoleErrors.indexOf(e);
+      if (i >= 0) cdp.consoleErrors.splice(i, 1);
+    }
+    console.log(`provider-error journey (401): ${JSON.stringify(bad).slice(0, 900)}`);
+    const badText = (bad.errors ?? []).map((e) => e.text).join(" | ");
+    check(
+      "Provider error: a rejected key renders the 401 bubble with a Settings link",
+      /rejected the API key \(401\)/.test(badText) &&
+        !/returned no content/i.test(badText) &&
+        !/sk-[A-Za-z0-9]/.test(badText) &&
+        (bad.errors ?? []).some((e) => e.fix === "Fix in Settings"),
+    );
+    // Preflight variant: a network provider with no endpoint is refused before
+    // any dispatch — it must land as a terminal Failed row with the Settings
+    // action within 5 s, not sit in "Waiting for permission".
+    await msgOpts({
+      type: "provider.set",
+      config: { provider: "openai", baseURL: "", apiKey: "sk-journey-invalid-0000", model: "model-one" },
+    });
+    await driveHubTask("provider truth: no endpoint");
+    const pre = await pollThreadError(5000, (st) => (st.status ?? []).some((r) => r.state === "failed"));
+    const preShot = await captureShot(cdp, ntpSession);
+    if (preShot) await writeEvidence("provider-preflight-failed.png", preShot);
+    console.log(`provider-error journey (preflight): ${JSON.stringify(pre).slice(0, 900)}`);
+    const failedRow = (pre.status ?? []).find((r) => r.state === "failed");
+    check(
+      "Provider error: preflight refusal reaches a terminal Failed row within 5 s",
+      Boolean(failedRow) && pre.elapsedMs <= 5000 &&
+        failedRow.action === "Fix in Settings" &&
+        !(pre.status ?? []).some((r) => r.state === "waiting-for-permission") &&
+        (pre.errors ?? []).some((e) => /endpoint/i.test(e.text)),
+    );
+    await msgOpts({ type: "provider.set", config: { provider: "demo", apiKey: "", baseURL: "", model: "" } });
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 4 — screenshot matrix. Owner grant/scope/revoke is driven via the

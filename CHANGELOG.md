@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.446] — 2026-08-30
+- Landed: when a run fails because the API key was rejected, the provider is rate-limiting, or the model id is wrong, the message now says exactly that and offers Fix in Settings, instead of blaming an overloaded model.
+
 ## [0.2.445] — 2026-08-30
 - Seven more fixes are in progress in parallel and recorded as claimed in the tracker.
 
