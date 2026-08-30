@@ -193,6 +193,7 @@ import {
 import {
   commitThreadTerminal,
   continueThread,
+  appendThreadMessage,
   createThread,
   deleteThread,
   generateThreadName,
@@ -2409,6 +2410,16 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         delegationState.step = Math.max(delegationState.step, event.step);      }
       try { onProgress?.(event); } catch { /* broadcast must not break telemetry */ }
       const type = event?.type;
+      // Every substantive per-step answer is persisted IN ORDER as an interim
+      // assistant row of this execution (executionId + step); the terminal
+      // commit then appends (or replaces an identical last interim row) rather
+      // than replacing the answer — and the hidden reply to agent-do's
+      // continuation nudge is never persisted
+      // (CAP-FB-20260830-TRANSCRIPT-FULL-ANSWER-01).
+      if (type === "text" && event?.persist === true && event?.hidden !== true && threadId && typeof event.text === "string" && event.text.trim()) {
+        appendThreadMessage(threadId, { role: "assistant", content: event.text, executionId, step: Number.isInteger(event.step) ? event.step : 0 })
+          .catch((error) => pushDiagnostic("error", `[thread] interim text persist failed: ${String(error?.message ?? error).slice(0, 160)}`));
+      }
       if (type === "tool-call") {
         // ATOMIC PRE-TOOL RECORD: persist the call identity + the normalized
         // safety + the stable per-tool-call index BEFORE any external effect

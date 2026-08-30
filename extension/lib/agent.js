@@ -9,6 +9,7 @@ import { createAgent as agentDoCreateAgent } from "agent-do";
 import { tool } from "ai";
 import { z } from "zod";
 import { recordUsage } from "./usage.js";
+import { createRunTextTracker } from "./run-text-steps.js";
 import { grepAgentMemory } from "./named-agents.js";
 import { assertRunOwned } from "./run-fence.js";
 import { MODEL_PRICING } from "./model-prices.js";
@@ -727,6 +728,12 @@ export function createAgent({
   // THIS run — the runtime backstop against unsupported mutation claims in
   // the final reply (the prompt clause alone is model-compliance-dependent).
   const okToolNames = new Set();
+  // Which per-step text is the ANSWER (CAP-FB-20260830-TRANSCRIPT-FULL-ANSWER-01):
+  // agent-do nudges the model after any tool step ("Continue working on the
+  // task…"); the nudge reply is hidden and the substantive answer becomes the
+  // run result. Runs are serialized (runQueue), so one tracker per agent is
+  // safe; it is re-created at every step-0 start.
+  let runText = createRunTextTracker();
   const makeAgent = (sysPrompt) => {
     stepSpans = new Map();
     toolSpans = new Map();
@@ -773,6 +780,7 @@ export function createAgent({
         const span = perfSpan(`agent-do:step:${e.step}`, { ns: "agent-do" });
         stepSpans.set(e.step, span);
         if (runStartedAt == null) runStartedAt = Date.now();
+        if (!(e.step > 0)) runText = createRunTextTracker();
         agentDoLog.debug(`step ${e.step}/${e.totalSteps ?? "?"} start`, { tokensSoFar: e.tokensSoFar ?? 0, costSoFar: e.costSoFar ?? 0 });
         try { progressCb?.({ type: "thinking", step: e.step, totalSteps: e.totalSteps, tokensSoFar: e.tokensSoFar, costSoFar: e.costSoFar }); } catch { /* ignore */ }
       },
@@ -781,7 +789,21 @@ export function createAgent({
         stepSpans.delete(e.step);
         const dur = span ? span.end("ok") : 0;
         agentDoLog.debug(`step ${e.step} complete in ${dur.toFixed(1)}ms`, { hasToolCalls: e.hasToolCalls === true });
-        try { progressCb?.({ type: "text", text: e.text, step: e.step, hasToolCalls: e.hasToolCalls }); } catch { /* ignore */ }
+        // The nudge reply (a text-only step right after a tool step that already
+        // answered) is emitted HIDDEN: the surfaces never render it, the SW never
+        // persists it, and it is never the run's result.
+        const classified = runText.step({ step: e.step, hasToolCalls: e.hasToolCalls === true, text: e.text });
+        if (classified.hidden) agentDoLog.debug(`step ${e.step} is the continuation reply — hidden`);
+        try {
+          progressCb?.({
+            type: "text",
+            text: e.text,
+            step: e.step,
+            hasToolCalls: e.hasToolCalls,
+            ...(classified.hidden ? { hidden: true, nudgeReply: true } : {}),
+            ...(classified.persist ? { persist: true } : {}),
+          });
+        } catch { /* ignore */ }
       },
       onPreToolUse: async (e) => {
         // The pre-tool progress callback is AWAITED: the SW persists the atomic
@@ -866,6 +888,9 @@ export function createAgent({
           // Runtime honesty backstop: a final text that CLAIMS a mutation with
           // no successful matching tool call gets a visible correction — the
           // owner is never misled by a non-compliant model.
+          // The result under check is the SUBSTANTIVE text (never the hidden
+          // nudge reply) — see run-text-steps.js.
+          e = { ...e, result: runText.finalText(e.result) };
           const checked = correctUnsupportedMutationClaims(e.result, okToolNames);
           if (checked.corrections.length > 0) agentDoLog.warn(`mutation-claim correction appended (${checked.corrections.length})`);
           progressCb?.({ type: "done", text: checked.text, totalSteps: e.totalSteps, aborted: e.aborted });
@@ -990,7 +1015,10 @@ export function createAgent({
         // back a fabricated claim in run 2 (the set is allocated once per
         // createAgent, so it is cleared here at every run start).
         okToolNames.clear();
-        const result = await runAgent.run(task, context, history);
+        const loopResult = await runAgent.run(task, context, history);
+        // The run's answer is the SUBSTANTIVE text, never the hidden reply to
+        // agent-do's continuation nudge (the transcript-full-answer finding).
+        const result = typeof loopResult === "string" ? runText.finalText(loopResult) : loopResult;
         // Post-run generation revalidation: a re-enroll DURING the model loop
         // must discard the result rather than return it to the caller under a
         // stale enrollment (the round-24 finding — the provider path had no

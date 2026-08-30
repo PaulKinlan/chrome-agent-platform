@@ -19,7 +19,8 @@ function terminalMessages(messages) {
     if (
       !validIdentity(message?.executionId) ||
       !["assistant", "error"].includes(message?.role) ||
-      typeof message?.content !== "string"
+      typeof message?.content !== "string" ||
+      Number.isInteger(message?.step) // an interim per-step row is not the terminal
     ) continue;
     byExecution.set(
       message.executionId,

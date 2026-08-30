@@ -120,7 +120,10 @@ export async function buildThreadRunView(thread, deps) {
   for (const missing of missingTerminals) {
     const terminal = missing.terminal;
     const role = terminal?.ok === true ? "assistant" : "error";
-    const content = terminal?.summary ?? terminal?.result ?? terminal?.reason ?? (role === "assistant" ? "" : "run failed");
+    // The full result wins over the 240-char summary preview: the back-fill
+    // COMMITS this string as the thread's terminal message, so a preview here
+    // would clip the answer permanently (CAP-FB-20260830-TRANSCRIPT-FULL-ANSWER-01).
+    const content = terminal?.result ?? terminal?.summary ?? terminal?.reason ?? (role === "assistant" ? "" : "run failed");
     const derivedMarker = {
       role,
       content: String(content ?? ""),

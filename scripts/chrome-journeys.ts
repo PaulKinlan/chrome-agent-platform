@@ -403,6 +403,8 @@ const EXPECTED = [
   "Settings: retained a driven-UI screenshot",
   "warm run 1 returns a concrete demo result",
   "warm run 2 (after re-save) returns a concrete demo result",
+  "Transcript: 'list my open tabs' survives a reload at full length",
+  "Transcript: no nudge summary bubble after a text-ending step",
   "real red tab resolved (active tab id)",
   "screenshot: denied after revoke (secondary probe)",
   "screenshot: capture SUCCEEDS for the granted origin",
@@ -1513,6 +1515,69 @@ async function main() {
     await msgValue({ type: "provider.set", config: { provider: "demo", apiKey: "" } });
     const warmRun2 = await msgValue({ type: "agent.run", task: "ping two" });
     check("warm run 2 (after re-save) returns a concrete demo result", concrete(warmRun2));
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 3b — CAP-FB-20260830-TRANSCRIPT-FULL-ANSWER-01: the answer a
+    // tool step ended in is the thread's persisted message at FULL length,
+    // and the reply to agent-do's "Continue working on the task…" nudge (the
+    // demo model answers it with a distinct "Task complete" line, exactly as
+    // real models do) is never a bubble — live or after a reload.
+    // ─────────────────────────────────────────────────────────────
+    const DEMO_ANSWER = "[demo model] Tool calls executed in sequence: memory_set wrote the shopping list, then memory_get read it back twice.";
+    const DEMO_NUDGE_REPLY = "[demo model] Task complete";
+    const transcriptRun = await msgValue({ type: "agent.run", task: "@demo-tools list my open tabs" });
+    const transcriptThreadId = transcriptRun?.threadId ?? null;
+    const readThreadTexts = async () => {
+      const got = transcriptThreadId ? await msgValue({ type: "thread.get", id: transcriptThreadId }) : null;
+      const messages = Array.isArray(got?.thread?.messages) ? got.thread.messages : [];
+      return {
+        count: messages.length,
+        assistant: messages.filter((m) => m?.role === "assistant").map((m) => String(m?.content ?? "")),
+      };
+    };
+    const BUBBLES = `(() => {
+      const roots = [document, ...[...document.querySelectorAll('*')].flatMap((e) => e.shadowRoot ? [e.shadowRoot, ...[...e.shadowRoot.querySelectorAll('*')].flatMap((x) => x.shadowRoot ? [x.shadowRoot] : [])] : [])];
+      return roots.flatMap((r) => [...r.querySelectorAll('message-bubble')]).map((b) => ({ role: b.getAttribute('role'), text: ((b.shadowRoot ?? b).querySelector('.body, .msg') ?? b).textContent.replace(/\\s+/g, ' ').trim() }));
+    })()`;
+    // The thread is opened in a FRESH hub document each time (the established
+    // re-open pattern — location.reload()/Page.navigate on a driven session
+    // breaks the CDP eval context); the second open IS the reload from the
+    // persistence standpoint: a new document projecting thread.get.
+    // (/json/new drops a URL fragment, so the thread document is created
+    // through Target.createTarget, which keeps the #omnibox=thread: route.)
+    const threadUrl = `chrome-extension://${extId}/ntp/ntp.html#omnibox=thread:${encodeURIComponent(String(transcriptThreadId))}`;
+    const openThreadDoc = async (evidenceName) => {
+      const created = await cdp.send("Target.createTarget", { url: threadUrl });
+      const targetId = created?.result?.targetId;
+      await sleep(3000);
+      const session = await attachRuntime(cdp, targetId);
+      cdp.pageSessions.add(session);
+      const bubbles = (await evalIn(cdp, session, BUBBLES)) ?? [];
+      let shot = null;
+      try { shot = await captureShot(cdp, session); } catch { shot = null; /* evidence only — the assertions below are the gate */ }
+      if (shot) await writeEvidence(evidenceName, shot);
+      await cdp.send("Target.closeTarget", { targetId });
+      return Array.isArray(bubbles) ? bubbles : [];
+    };
+    const persistedBefore = await readThreadTexts();
+    const bubblesBefore = await openThreadDoc("transcript-before-reload.png");
+    const persistedAfter = await readThreadTexts();
+    const bubblesAfter = await openThreadDoc("transcript-after-reload.png");
+    const agentBubblesAfter = (Array.isArray(bubblesAfter) ? bubblesAfter : []).filter((b) => b?.role === "agent");
+    check(
+      "Transcript: 'list my open tabs' survives a reload at full length",
+      transcriptRun?.ok === true && transcriptRun?.result === DEMO_ANSWER &&
+        persistedBefore.assistant[0] === DEMO_ANSWER &&
+        persistedAfter.assistant[0] === DEMO_ANSWER &&
+        persistedAfter.count === persistedBefore.count && persistedAfter.count > 0 &&
+        agentBubblesAfter.length > 0 && agentBubblesAfter[0].text === DEMO_ANSWER,
+    );
+    const nudgeSeen = [...persistedBefore.assistant, ...persistedAfter.assistant].some((t) => t.includes(DEMO_NUDGE_REPLY)) ||
+      [...bubblesBefore, ...agentBubblesAfter].some((b) => String(b?.text ?? "").includes(DEMO_NUDGE_REPLY));
+    check(
+      "Transcript: no nudge summary bubble after a text-ending step",
+      persistedAfter.assistant.length === 1 && agentBubblesAfter.length === 1 && !nudgeSeen,
+    );
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 4 — screenshot matrix. Owner grant/scope/revoke is driven via the

@@ -138,8 +138,11 @@ retained authority for unrelated runs from crowding owner memory
 The actual write order is:
 
 1. Persist the full terminal body under `run-payload:<executionId>:terminal:*`.
-2. Write `run-outbox:<executionId>` with the payload reference, terminal summary,
-   journal row, and optional thread projection.
+2. Write `run-outbox:<executionId>` with the payload reference, the terminal
+   (`summary`: a 240-character preview for lists; `result`: the full answer
+   bounded to 16 KB — the thread back-fill in `thread-run-view.js` commits
+   `result`, never the preview), the journal row, and the optional thread
+   projection.
 3. Move a still-`running` record to `settling` with revision CAS.
 4. Append the terminal journal row once by `executionId`, or replace it with the
    cancellation row when a cancellation tombstone won.

@@ -255,3 +255,36 @@ Deno.test("deleteThread removes the index row AND the body atomically (item 17)"
   // Deleting an absent id is a clean false (never a throw).
   assertEquals(await deleteThread("nope"), false);
 });
+
+// ── CAP-FB-20260830-TRANSCRIPT-FULL-ANSWER-01 ────────────────────────────────
+Deno.test("intermediate assistant text is persisted in order and the terminal is appended, not replaced", async () => {
+  const t = await createThread("list my open tabs");
+  const exec = "exec-interim-1";
+  await appendThreadMessage(t.id, { role: "assistant", content: "Let me look at your tabs.", executionId: exec, step: 0 });
+  await appendThreadMessage(t.id, { role: "assistant", content: "Here are your open tabs: A, B, C", executionId: exec, step: 1 });
+  // The terminal commit (a DIFFERENT text) lands AFTER the interim rows, and
+  // must not be short-circuited by an interim row carrying the same executionId.
+  await commitThreadTerminal(t.id, exec, { role: "assistant", content: "Done — I listed your tabs." });
+  const thread = await getThread(t.id);
+  assertEquals(thread.messages.map((m) => [m.role, m.content]), [
+    ["user", "list my open tabs"],
+    ["assistant", "Let me look at your tabs."],
+    ["assistant", "Here are your open tabs: A, B, C"],
+    ["assistant", "Done — I listed your tabs."],
+  ]);
+  assertEquals(thread.messages[1].step, 0);
+  assertEquals(thread.messages[2].step, 1);
+  assertEquals(thread.messages[3].step, undefined, "the terminal row carries no step");
+  assertEquals(thread.status, "done");
+});
+
+Deno.test("a terminal equal to the last interim text replaces that interim row (no duplicate bubble)", async () => {
+  const t = await createThread("list my open tabs");
+  const exec = "exec-interim-2";
+  await appendThreadMessage(t.id, { role: "assistant", content: "Here are your open tabs: A, B, C", executionId: exec, step: 0 });
+  await commitThreadTerminal(t.id, exec, { role: "assistant", content: "Here are your open tabs: A, B, C" });
+  const thread = await getThread(t.id);
+  assertEquals(thread.messages.map((m) => m.content), ["list my open tabs", "Here are your open tabs: A, B, C"]);
+  assertEquals(thread.messages[1].executionId, exec);
+  assertEquals(thread.messages[1].step, undefined, "the surviving row is the terminal");
+});
