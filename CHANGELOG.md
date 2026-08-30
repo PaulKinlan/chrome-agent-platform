@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.471] — 2026-08-30
+- New: a reusable diff view that shows what changed between two versions of an artifact — added and removed lines with a +n -m summary, unified or side-by-side, keyboard jumps between changes with a screen-reader announcement, and both colour schemes checked for readable contrast. Not yet shown in the product; the edit-approval card and the artifact viewer pick it up next.
+
 ## [0.2.470] — 2026-08-30
 - Tracker: the memory-speed fix is recorded as landed; two more fixes claimed.
 
