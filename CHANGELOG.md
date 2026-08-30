@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.504] — 2026-08-30
+- Skills: never emit a skill_read marker for a body the store cannot serve
+
 ## [0.2.503] — 2026-08-30
 - tasks: SKILLS-UNCAPPED-01 candidate + r1 re-gate history
 

@@ -409,7 +409,22 @@ async function getCustomRecipes() {
 // unavailable the legacy row is returned untouched (its inline body still
 // composes) — the migration is never destructive.
 const skillFileStore = { writeSkillFiles, removeSkillFiles };
-const loadAllImported = () => loadAllImportedSkills(masterMemory(), skillFileStore);
+// Warn ONCE per failing id (the migration failure is a real surfaced signal,
+// not a silent degradation — the composed inline body keeps the skill usable,
+// but skill_read cannot serve it until storage recovers).
+const warnedMigration = new Set();
+const loadAllImported = async () => {
+  const rows = await loadAllImportedSkills(masterMemory(), skillFileStore);
+  for (const r of rows) {
+    if (r?.migrationFailed === true && !warnedMigration.has(r.id)) {
+      warnedMigration.add(r.id);
+      swLog.warn(
+        `imported skill "${r.id}" body migration to OPFS failed — composing its inline body; skill_read cannot serve it until storage recovers`,
+      );
+    }
+  }
+  return rows;
+};
 
 async function resolveRecipe(id) {
   const builtIn = getRecipe(id);

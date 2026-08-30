@@ -835,7 +835,14 @@ function renderBoundarySkills(skills, untrustedToken = null) {
     // not in the row); the marker rule must use it, never an empty body.
     const bodyBytes = Number.isInteger(s?.promptBytes) ? s.promptBytes : body.length;
     const isImported = s?.source === "imported" || (s?.files && typeof s.files === "object");
-    if (isImported && bodyBytes > PROMPT_SKILL_BODY_BUDGET) {
+    // The marker may ONLY be emitted when the body is genuinely retrievable
+    // from the body store: `promptBytes` is an INTEGER only when the body was
+    // written to OPFS (a fresh install or a successful legacy migration). A
+    // legacy row whose migration FAILED keeps `promptBytes` undefined and its
+    // inline body in `prompt` — composing a skill_read marker there would be a
+    // dead loader (the body was never stored), so the full inline body is
+    // composed instead (the pre-OPFS behavior).
+    if (isImported && Number.isInteger(s?.promptBytes) && bodyBytes > PROMPT_SKILL_BODY_BUDGET) {
       const marker = (
         `- ${name}: ${desc} (large skill: ${bodyBytes} bytes — the body is NOT composed; ` +
         `call skill_read with skill:"${s?.id ?? ""}" to load SKILL.md or a file on demand)`

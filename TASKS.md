@@ -4430,10 +4430,11 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Workspace: /home/paulkinlan/worktrees/cap-skills-uncapped
 - Branch: cap-skills-uncapped
 - Base: 88eb33e1
-- Candidate: `eea48149` (merge-forward onto origin/main @89c07824; r1 review fixes in a0c14457; post-commit hook bump)
+- Candidate: `53a5bd46` (r2 fix on top of 55d8e50d; post-commit hook bump)
 - History:
   - 2026-08-30 23:05 UTC — first candidate 8e937a09 (import uncap, multi-file, progressive disclosure, skill_read). Gates: unit 2606/0, journeys 213/213.
   - 2026-08-31 (review r1, sol) — REVISE, 4 P1s + 1 P2: (P1) imported skill prompt content/marker was UNFENCED — now wrapped in the run's untrusted boundary (renderBoundarySkills fence, token threaded via appendSkillsLayer from agent.js; owner-authored stays unfenced; placeholder token when absent); (P1) skill_read pagination counted UTF-16 units but documented bytes — now UTF-8 byte slices with decode-with-replacement (emoji/CJK boundary test); (P1) supporting-file budget rejections in the multi-file walk were SWALLOWED — the walk now re-throws per-file/total-budget errors (transient API failures stay best-effort); (P1) legacy pre-OPFS imported rows lost their inline body — loadImportedSkill/loadAllImportedSkills migrate inline bodies into the OPFS store on read (idempotent, never destructive); (P1) TASKS.md history + candidate; (P2) docs/SYSTEM-PROMPTS.md documents progressive disclosure + the owner-authored exception.
+  - 2026-08-31 (review r2, sol) — REVISE, ONE blocker: on legacy-migration failure a large inline body still composed a skill_read marker, but the body was never stored — a dead loader. Fixed: the marker may only be emitted when the body is genuinely store-backed (integer `promptBytes` — fresh install or successful migration); a migration-failed legacy row keeps `promptBytes` undefined and composes its FULL inline body (pre-OPFS behavior). `loadImportedSkill` now returns `migrationFailed: true` on store failure and the SW warns once per failing id (capLog). Falsification: the r2 test FAILED against the pre-fix renderBoundarySkills (marker emitted) → GREEN after. Re-gate: build clean; `deno test --allow-all tests/` 2675/0; `chrome-journeys.ts` 234/234. New SHAs: fix commit + hook bump (see Candidate).
 - Acceptance: (1) A >64KiB skill imports through the real Settings → Skills UI and installs with its full body — RED before (the old cap threw), GREEN after. (2) Multi-file skills: the GitHub walk collects every file within budget (SKILL.md + scripts/ + references/), persisted; unit-proven with a stubbed GitHub API. (3) Progressive disclosure: a large imported skill's body is NOT composed into the system prompt — the composition emits a skill_read marker; small bodies compose as before. (4) skill_read tool: bounded 16KiB reads with honest pagination (truncated/nextOffset/totalBytes), path-confined, results fenced untrusted; works mid-run through the REAL lazy protocol (@demo-skill-read: search → execute → body excerpt). (5) Physical budgets only: 2MiB per file, 8MiB per import, 16KiB per read, 8KiB prompt-composition budget — every one is a real storage/context bound, none arbitrary; rejection is honest (reject, never truncate).
 - Root cause: `extension/lib/skill-import.js` capped every fetched skill at 64KiB (`MAX_SKILL_BYTES`) and dropped the multi-file map at install. The memory store's 256KiB per-value bound (a real physical limit) forced bodies out of memory values entirely: bodies now live as real OPFS files (`extension/lib/skill-files.js`, cap-skills/<id>/<path>, injectable root for tests) and memory keeps a metadata-only index row.
 - Evidence:
@@ -4443,20 +4444,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - Gates (verbatim tails in the worker report): `npm run build` clean; `deno test --allow-all tests/` 2606/0 (baseline 2580 + 26 new); `chrome-journeys.ts` 213/213.
 - Security invariants: fetch stays http(s)-only; skill file paths are validated at the tool boundary AND the OPFS store (no `..`, no absolute, no backslash/NUL); skill_read results carry the `untrusted: true` tag so the lazy projection wraps bodies in the run's untrusted boundary (verified in the live run output: `<<<UNTRUSTED run:...>>>` around the body); the protected runtime policy stays structurally last.
 - Residual: importing a GitHub REPO ROOT (no SKILL.md at root) discovers the first nested SKILL.md under the walked dirs — a repo-root import may land on a sub-skill (pre-existing discovery behavior, unchanged); an imported HTML 404 page can be accepted as a "SKILL.md" via the raw fallback (pre-existing, the same artifact the old cap rejected — a markdown-content guard is a possible follow-up); the #skills deep link does not mount the panel handlers on direct load (pre-existing; nav click works).
-- Recover: `git log --oneline --all --grep=CAP-FB-20260830-SKILLS-UNCAPPED-01`
-## [CAP-FB-20260830-MASTER-JOURNAL-APPEND-01] The master journal is rewritten whole on every run
-- Feedback: 2026-08-30 — reanalysis follow-up: RUN-LOG-COMPACTION-01 fixed thread.get/run.list (148/152 ms → <10 ms at 120 threads) but the seeded perf gate's remaining soft warning is `agent.run` growth (first-ten p50 118 ms → last-ten 290 ms at 120 threads, ~800 ms at 500). The cause is the master journal, not the durable-run registry.
-- Updated: 2026-08-30 20:48 UTC
-- Status: OPEN
-- Resume: —
-- Priority: P2
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `3037acf5`
-- Candidate: —
-- Shipping: —
-- Acceptance: `agent.run` p50 at 120 seeded threads stays within 1.5x of the first-ten-runs p50 (the `GROWTH_SOFT` check in `scripts/perf-seeded-scale.ts` becomes a hard PASS), and the same at 500 runs.
+- Recover: `git log --oneline --all --grep=CAP-FB-20260830-SKILLS-UNCAPPED-01`becomes a hard PASS), and the same at 500 runs.
   - Context: every run snapshots the master journal, re-bounds it (`boundJournal` re-serialises up to 500 rows / 200 KiB) and rewrites the whole `journal` value, plus a per-run `keys()` enumeration on the master store. Owner is the journal store in `extension/lib/memory.js` (the append/bound path). RUN-LOG-COMPACTION-01's History names this exact residual and left the `GROWTH_SOFT` flag set with a comment pointing here.
   - Reproduce today: `npm run test:perf:seeded` — the only non-PASS line is "agent.run at 120 threads within 1.5x of the first ten runs", first10 ~118 ms vs last10 ~290 ms.
   - Files: `extension/lib/memory.js` (journal append + `boundJournal`); `scripts/perf-seeded-scale.ts` (flip `GROWTH_SOFT` to a hard gate once met).

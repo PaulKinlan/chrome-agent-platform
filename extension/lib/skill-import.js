@@ -354,8 +354,12 @@ export async function loadImportedSkill(memory, row, fileStore = null) {
     migrated.totalBytes = totalBytes;
   } catch {
     // Body store unavailable / budget exceeded — keep the LEGACY row intact
-    // (inline body preserved) so nothing disappears; composition falls back.
-    return { ...row };
+    // (inline body preserved) so nothing disappears, and FLAG the failure so
+    // the caller can warn. The flag also tells the prompt composer that the
+    // body is NOT store-backed: skill_read cannot serve it, so a skill_read
+    // marker would be a dead loader — the full inline body composes instead
+    // (renderBoundarySkills keys the marker on integer promptBytes only).
+    return { ...row, migrationFailed: true };
   }
   // Persist the migrated metadata row so future reads skip the migration.
   const list = (await memory.get("importedSkills")) ?? [];

@@ -290,6 +290,7 @@ Deno.test("loadImportedSkill keeps a legacy row INTACT when the file store is un
   const out = await loadImportedSkill(mem, legacy, breakingStore);
   assertEquals(out.prompt, "---\nname: Old Skill\n---\n\nLegacy instructions", "inline body survives");
   assertEquals(out.promptBytes, undefined);
+  assertEquals(out.migrationFailed, true, "the failure is FLAGGED so the caller can warn and the prompt composer can avoid a dead skill_read marker");
 });
 
 Deno.test("loadAllImportedSkills migrates every legacy row; fresh rows pass through untouched", async () => {

@@ -232,3 +232,37 @@ Deno.test("imported skill with NO body still fences its metadata line", () => {
   assertStringIncludes(out, "no body");
   assertStringIncludes(out, "<<<UNTRUSTED run:tok123>>>");
 });
+
+// ── r2 blocker: a migration-failed legacy body must NEVER become a dead ────
+// skill_read marker — the full inline body composes (pre-OPFS behavior) when
+// the body is not store-backed, and skill_read reports the miss honestly.
+Deno.test("LARGE legacy imported body (migration failed) composes IN FULL — no dead skill_read marker", () => {
+  // promptBytes is undefined (the body was never written to OPFS — migration
+  // failed); the body itself is large (> 8KiB) and lives inline in `prompt`.
+  const big = bigBody(); // ~20KiB
+  const out = appendSkillsLayer("", [
+    { id: "legacy-big", name: "Legacy Big", description: "pre-OPFS import", prompt: big, source: "imported", migrationFailed: true },
+  ], undefined, "tok123");
+  // the FULL body is composed (fenced as imported content), NOT a marker
+  assertStringIncludes(out, big.slice(0, 80), "the inline body composes verbatim");
+  assert(!out.includes("skill_read"), "no dead loader — the body was never stored");
+  assert(!out.includes("large skill:"), "no marker line");
+  // and it is fenced (imported content is untrusted) with the run's token
+  assertStringIncludes(out, "<<<UNTRUSTED run:tok123>>>");
+});
+
+Deno.test("skill_read reports the store miss honestly for a migration-failed legacy skill", async () => {
+  const body = bigBody();
+  // the row is store-BACKED (promptBytes integer) but the read fails — the
+  // honest miss path (a migration-failed row keeps promptBytes undefined and
+  // composes inline; this variant proves the read boundary never fabricates)
+  const store = {
+    list: async () => [{ id: "legacy-big", name: "Legacy Big", prompt: "", promptBytes: body.length, source: "imported" }],
+    read: async () => { throw new Error("NotFoundError"); },
+  };
+  const { skill_read } = skillReadToolset(store);
+  const r = await skill_read.execute({ skill: "legacy-big" });
+  assertEquals(r.ok, false, "a missing store body is a miss, never a fabricated read");
+  assertStringIncludes(r.error, "has no file");
+  assertEquals(r.untrusted, true);
+});
