@@ -1,13 +1,13 @@
 {
-  "testedSourceCommit": "7a7d22115310ce711a74e82c1c5f2516e603231c",
+  "testedSourceCommit": "cd803411749d59b311de2a5b8cd9b2977b2d4a14",
   "evidenceCommitNote": "committed AFTER this run — a tracked manifest cannot contain its own commit hash",
   "worktreeClean": true,
   "worktreeDirtyFiles": [],
-  "runId": "cap-1788077232064",
+  "runId": "cap-1788124219616",
   "retain": true,
-  "ts": "2026-08-30T08:08:13.131Z",
-  "evidenceDir": "/home/paulkinlan/worktrees/cap-jobs-board-ui/test-artifacts",
-  "passed": 148,
+  "ts": "2026-08-30T21:13:12.891Z",
+  "evidenceDir": "/home/paulkinlan/worktrees/cap-whatsnew-copy/test-artifacts",
+  "passed": 212,
   "failed": 0,
   "checks": [
     {
@@ -47,6 +47,58 @@
       "pass": true
     },
     {
+      "name": "developer flag: the marker demo model is enabled for the suite",
+      "pass": true
+    },
+    {
+      "name": "fresh profile: the four agent surfaces agree (0)",
+      "pass": true
+    },
+    {
+      "name": "fresh hub: Tab #1 focuses the composer",
+      "pass": true
+    },
+    {
+      "name": "fresh hub: the first-run banner offers exactly one action",
+      "pass": true
+    },
+    {
+      "name": "fresh hub at 1024x700: the composer is fully within the viewport",
+      "pass": true
+    },
+    {
+      "name": "fresh hub: no empty-state copy is rendered",
+      "pass": true
+    },
+    {
+      "name": "after enabling one recipe the four agent surfaces agree (1)",
+      "pass": true
+    },
+    {
+      "name": "after disabling that recipe the four agent surfaces agree (0) again",
+      "pass": true
+    },
+    {
+      "name": "create dialog: the template gallery is the first step (blank + 21 templates + scheduled recipes; Starter shows 7; no template select)",
+      "pass": true
+    },
+    {
+      "name": "create dialog: Enter on the Research Analyst card fills Name, presses the card and checks its skills",
+      "pass": true
+    },
+    {
+      "name": "create dialog: Create agent from the card yields ONE named agent whose role is the template persona",
+      "pass": true
+    },
+    {
+      "name": "create dialog: a Scheduled card creates one scheduled agent that the sidebar and Settings both list",
+      "pass": true
+    },
+    {
+      "name": "create dialog: the journey's created agents are removed again (fresh profile restored)",
+      "pass": true
+    },
+    {
       "name": "NTP: task input present",
       "pass": true
     },
@@ -68,6 +120,14 @@
     },
     {
       "name": "NTP: the typed task reached the agent journal",
+      "pass": true
+    },
+    {
+      "name": "Lazy protocol: a first-call enum slip is recoverable in one run",
+      "pass": true
+    },
+    {
+      "name": "Lazy protocol: the enum-slip run rendered the refused call, the retry and the answer",
       "pass": true
     },
     {
@@ -147,6 +207,10 @@
       "pass": true
     },
     {
+      "name": "permissions: Turn off raised the owner approval dialog (capability.revoke via the SW)",
+      "pass": true
+    },
+    {
       "name": "permissions: Context menus absent after Turn off settled",
       "pass": true
     },
@@ -211,6 +275,14 @@
       "pass": true
     },
     {
+      "name": "Settings: OpenAI picker: first suggestion is the catalogue default and no suggestion ends in -Nk",
+      "pass": true
+    },
+    {
+      "name": "Settings: OpenAI picker: opened list shows gpt-5.6-luna first under a Recommended header",
+      "pass": true
+    },
+    {
       "name": "Settings: Clear key button present for the keyed provider",
       "pass": true
     },
@@ -232,6 +304,10 @@
     },
     {
       "name": "Settings: demo + prompt-api absent from the provider picker",
+      "pass": true
+    },
+    {
+      "name": "Settings: empty model + valid key resolves to the default (provider.status usingDefaultModel:true, modelId gpt-5.6-luna)",
       "pass": true
     },
     {
@@ -263,11 +339,87 @@
       "pass": true
     },
     {
+      "name": "keyless: developer flag off for the fresh-profile run",
+      "pass": true
+    },
+    {
+      "name": "keyless: typed 'group my tabs by topic' into the hub composer",
+      "pass": true
+    },
+    {
+      "name": "keyless: clicked Run task",
+      "pass": true
+    },
+    {
+      "name": "keyless: the first run pauses on ONE Allow card naming tabs (never a bare error)",
+      "pass": true
+    },
+    {
+      "name": "keyless: clicked Not now on the card via a real click",
+      "pass": true
+    },
+    {
+      "name": "keyless: the first run answers in plain language — never '[demo model] Task received'",
+      "pass": true
+    },
+    {
+      "name": "keyless: without the tabs permission the answer says so honestly",
+      "pass": true
+    },
+    {
+      "name": "keyless: the persisted thread carries the plain answer, not the demo literal",
+      "pass": true
+    },
+    {
+      "name": "keyless: no lazy-protocol text leaks into the live thread (modelContent/catalogGeneration/stableId/schemaSummary/search_tools/execute_tool)",
+      "pass": true
+    },
+    {
+      "name": "keyless: reopening the thread renders the in-context grant card, not error prose",
+      "pass": true
+    },
+    {
+      "name": "keyless: developer flag back on for the marker journeys",
+      "pass": true
+    },
+    {
       "name": "warm run 1 returns a concrete demo result",
       "pass": true
     },
     {
       "name": "warm run 2 (after re-save) returns a concrete demo result",
+      "pass": true
+    },
+    {
+      "name": "Transcript: 'list my open tabs' survives a reload at full length",
+      "pass": true
+    },
+    {
+      "name": "Transcript: no nudge summary bubble after a text-ending step",
+      "pass": true
+    },
+    {
+      "name": "Transcript: no lazy-protocol text leaks into the reopened thread (modelContent/catalogGeneration/stableId/schemaSummary/search_tools/execute_tool)",
+      "pass": true
+    },
+    {
+      "name": "Provider error: SW console recorded the real HTTP 401 from the fixture provider",
+      "pass": true
+    },
+    {
+      "name": "Provider error: a rejected key renders the 401 bubble with a Settings link",
+      "pass": true
+    },
+    {
+      "name": "Provider error: preflight refusal reaches a terminal Failed row within 5 s",
+      "pass": true
+    },
+    {
+      "name": "Streaming: the assistant bubble grows across at least 5 distinct lengths",
+      "pass": true
+    },
+    {
+      "name": "Streaming: the final bubble equals the non-streamed render",
       "pass": true
     },
     {
@@ -303,6 +455,18 @@
       "pass": true
     },
     {
+      "name": "Browser control: toggle ON in Settings leaves no lease",
+      "pass": true
+    },
+    {
+      "name": "Browser control: a run's open_tab is not lease-refused after the Settings toggle",
+      "pass": true
+    },
+    {
+      "name": "Privileged URL: open_tab chrome://settings is refused under a global grant",
+      "pass": true
+    },
+    {
       "name": "screenshot: typed the red origin into the allowed-origins field",
       "pass": true
     },
@@ -319,7 +483,35 @@
       "pass": true
     },
     {
+      "name": "Browser control: toggle OFF succeeds while a run holds the lease",
+      "pass": true
+    },
+    {
       "name": "screenshot: revoked → capture denied",
+      "pass": true
+    },
+    {
+      "name": "Permission card: open_tab denial renders one approval card",
+      "pass": true
+    },
+    {
+      "name": "Permission card: Not now declines open_tab and the run reports it honestly",
+      "pass": true
+    },
+    {
+      "name": "Permission card: read_page denial renders one approval card",
+      "pass": true
+    },
+    {
+      "name": "Permission card: Allow grants scripting and the retried read_page succeeds",
+      "pass": true
+    },
+    {
+      "name": "Permission card: capture_screenshot denial renders one approval card",
+      "pass": true
+    },
+    {
+      "name": "Permission card: Allow grants browser control and the retried capture_screenshot succeeds",
       "pass": true
     },
     {
@@ -483,11 +675,23 @@
       "pass": true
     },
     {
+      "name": "scripting Disable: Site Agents Turn off clicked via a trusted gesture",
+      "pass": true
+    },
+    {
+      "name": "scripting Disable: the owner dialog appeared and was accepted with a genuine click",
+      "pass": true
+    },
+    {
       "name": "scripting Disable: optional permission revoked",
       "pass": true
     },
     {
       "name": "scripting Disable: successful revoke tombstones every enrolled origin",
+      "pass": true
+    },
+    {
+      "name": "Settings: Turn off Site Agents goes through capability.revoke and unregisters enrolled scripts",
       "pass": true
     },
     {
@@ -551,11 +755,35 @@
       "pass": true
     },
     {
+      "name": "artifact versions: two rows with distinct sha256 after the edit turn",
+      "pass": true
+    },
+    {
+      "name": "artifact versions: version-get returns v1's exact body",
+      "pass": true
+    },
+    {
+      "name": "artifact versions: restore of v1 is a new head whose body equals v1 byte-for-byte",
+      "pass": true
+    },
+    {
       "name": "mgmt: delete_asset removed it",
       "pass": true
     },
     {
       "name": "mgmt: asset gone after delete",
+      "pass": true
+    },
+    {
+      "name": "cap:fetch: loopback refused from a sandboxed script",
+      "pass": true
+    },
+    {
+      "name": "Scripts: run_script from the model shows the approval card with the source",
+      "pass": true
+    },
+    {
+      "name": "Scripts: the approved run executes only after Allow",
       "pass": true
     },
     {
@@ -583,6 +811,34 @@
       "pass": true
     },
     {
+      "name": "about: what's new renders a bounded set of user-facing entries (≤5)",
+      "pass": true
+    },
+    {
+      "name": "about: visible copy is user-facing (no SHAs, no merge:/Tracker:, no gate jargon)",
+      "pass": true
+    },
+    {
+      "name": "about: 'Show all release notes' disclosure present",
+      "pass": true
+    },
+    {
+      "name": "about: Full release notes link targets the bundled changelog",
+      "pass": true
+    },
+    {
+      "name": "about: the About section DOM is bounded (< 600 nodes at load)",
+      "pass": true
+    },
+    {
+      "name": "about: the full history builds only when the disclosure opens",
+      "pass": true
+    },
+    {
+      "name": "about: retained a what's-new screenshot",
+      "pass": true
+    },
+    {
       "name": "profile removed (no leak)",
       "pass": true
     },
@@ -605,49 +861,189 @@
   ],
   "files": [
     {
+      "name": "fresh-profile-sidebar.png",
+      "sha256": "2c0949db17dd90dca7b38c77ae89a0145741695fa061066b974d047b72b69e24",
+      "bytes": 55558
+    },
+    {
+      "name": "hub-fresh-1440-after.png",
+      "sha256": "53393a315a665d54642ec9936d52f21bab8252692389960086664a28d5bf131a",
+      "bytes": 46185
+    },
+    {
+      "name": "hub-fresh-1024-after.png",
+      "sha256": "58235d0f62ef9ed12501718cf750d5efea5edf5bae8823ecf98f8c292faba664",
+      "bytes": 43122
+    },
+    {
+      "name": "one-recipe-enabled-sidebar.png",
+      "sha256": "8c15647fbedf7091fdb4f59f32a865fddc26388ee8f07a373e5f52c2ff5b0b73",
+      "bytes": 84427
+    },
+    {
+      "name": "templates-gallery.png",
+      "sha256": "36cc7fade7f2cfa5e44779ec4718b8dea0f939ce74093e3b2d0e93cb30a005a0",
+      "bytes": 144127
+    },
+    {
+      "name": "templates-created.png",
+      "sha256": "0c041ac663a3653eb3033f89db311c73a76c9926deb70d43fa41a81a026995fc",
+      "bytes": 101209
+    },
+    {
       "name": "ntp-driven.png",
-      "sha256": "ee6824f17a72a9aa1a6880d8d383a5a2417f469187c827bf4c1777ba1fb5bd5a",
-      "bytes": 140505
+      "sha256": "c0a7d405170020f10e9f3c6fb2b419a9d8a4082c50fdabe6f034aaec95d811bc",
+      "bytes": 72655
+    },
+    {
+      "name": "lazy-enum-slip-recovered.png",
+      "sha256": "73466c4595b9a2214030e8211d9f90df9a0fce025347a2b52b9677f3ccd050a1",
+      "bytes": 93003
     },
     {
       "name": "ntp-jobs-empty.png",
-      "sha256": "341c155a574464823646d3f2cd11049020f8bad4b7c9993caba272453902fd96",
-      "bytes": 249920
+      "sha256": "906a93480b4d7f70424963f193f569d3d1057c6baf49e72904d7fdccf69683c1",
+      "bytes": 153206
     },
     {
       "name": "ntp-jobs-populated.png",
-      "sha256": "e655482955c57f6faa36e61b6c374c87e5d8a84d853372d9235c5e8431593773",
-      "bytes": 268237
+      "sha256": "f9a527a32c137a5929332ffad0407ad640de11ae63141d58ef31ad0e0674ed1a",
+      "bytes": 183643
     },
     {
       "name": "ntp-jobs-settled.png",
-      "sha256": "19fd48caedffd8f5668c2fa0d73c14dd4d12ed4e299ec47f9c31afa1f9cf802a",
-      "bytes": 271339
+      "sha256": "f64e4fdbc1329406f7d27230443c16d4b7a3f8797bc6b245c58c28bdfc4e3e18",
+      "bytes": 187731
+    },
+    {
+      "name": "settings-turn-off-owner-dialog.png",
+      "sha256": "94840ea98fb47f4ac137129274f3ea1d6836debec8edf236ed5e0af594c61be9",
+      "bytes": 292965
     },
     {
       "name": "board-deny-added.png",
-      "sha256": "824b6b01c070f7e202c721509e1c727b0286a560cf726dcb31311f8943009324",
-      "bytes": 274372
+      "sha256": "e53bc50e612b822ea7741e090a7a739e31a580a7044ae210754d1365de04701f",
+      "bytes": 272800
+    },
+    {
+      "name": "settings-openai-picker-after.png",
+      "sha256": "d52d18ec14b074f202495971000c1e78e3dc70fffabdb069c99c6ea56e35fbf0",
+      "bytes": 230911
     },
     {
       "name": "options-driven.png",
-      "sha256": "88deae37dd129dfb4077cfc4d616590ccace97ac3c42a4e1817bdbc6b76d9a1e",
-      "bytes": 258532
+      "sha256": "d384c4a9eb846dd82de47ae0731a051e90af9e5674dbb7f92214119769b6a692",
+      "bytes": 252215
+    },
+    {
+      "name": "keyless-first-result-card.png",
+      "sha256": "d9634dd79896ef0d58395700e7d5ab3200531eb7be9ff3d17f0aa08b64d4575d",
+      "bytes": 100391
+    },
+    {
+      "name": "keyless-first-result-no-permission.png",
+      "sha256": "ed7bfb47bfd6f2ec521d2b40ca26cd86bedbe0fadb48f25343590ba4a567881f",
+      "bytes": 111878
+    },
+    {
+      "name": "tool-cards-no-leak-live-denial.png",
+      "sha256": "ed7bfb47bfd6f2ec521d2b40ca26cd86bedbe0fadb48f25343590ba4a567881f",
+      "bytes": 111878
+    },
+    {
+      "name": "grant-card-reopened-thread.png",
+      "sha256": "52e4c7241dea5c9da90beb33bd6eabff9219eea9e8c497bc412f96dd008c6ee6",
+      "bytes": 110776
+    },
+    {
+      "name": "transcript-before-reload.png",
+      "sha256": "ef827803c20e06dcf8578e7d9e25ae2f2f607b79d47bef7a970215383b1a628f",
+      "bytes": 124946
+    },
+    {
+      "name": "transcript-after-reload.png",
+      "sha256": "ef827803c20e06dcf8578e7d9e25ae2f2f607b79d47bef7a970215383b1a628f",
+      "bytes": 124946
+    },
+    {
+      "name": "tool-cards-no-leak-reopened.png",
+      "sha256": "8447656234ac6819b9e640fff77b3f54b8c103cc7b1c00a587d0a747688ec5f9",
+      "bytes": 153307
+    },
+    {
+      "name": "provider-401-bubble.png",
+      "sha256": "ae131556bcd8fcf65fc7bd4f09c2c4212dc44f13ab127a6cadf377134c310836",
+      "bytes": 134446
+    },
+    {
+      "name": "provider-preflight-failed.png",
+      "sha256": "b3079d1f1248ead104b0dccfacc194876af95dcb3a71fddc667cff9a2cd1672e",
+      "bytes": 122998
+    },
+    {
+      "name": "streaming-mid.png",
+      "sha256": "c802770c733aaead2ca7ba62fb83d277c677659f831d1f88159da20a19b650dc",
+      "bytes": 119248
+    },
+    {
+      "name": "streaming-final.png",
+      "sha256": "3515f1f27d0916a3021f6ca539726d8d808339cb8e92ea838d193a30ed7af529",
+      "bytes": 276751
+    },
+    {
+      "name": "lease-settings-after-toggle-on.png",
+      "sha256": "ccdbe0dd06f982a427c15ac8e3998e522fbb3c7f3c39ec1474570b4044bf48d3",
+      "bytes": 271339
+    },
+    {
+      "name": "lease-settings-after-toggle-off.png",
+      "sha256": "adf4c6a46bd8181a44d3ac9fe644e549a379303c63960da30d1e9b2d08b2877e",
+      "bytes": 287389
+    },
+    {
+      "name": "permission-card-open-tab.png",
+      "sha256": "764535638805c4f416b55d86c2727f409dcc10e3962963289c830d0fc498ee2a",
+      "bytes": 308256
+    },
+    {
+      "name": "permission-card-read-page-allowed.png",
+      "sha256": "199ade6612f28402a77cf509cf064a74b9119c57efaa006c0cf39e5fefda0f9f",
+      "bytes": 224303
+    },
+    {
+      "name": "permission-card-capture-allowed.png",
+      "sha256": "f2a7b11b9a78033c3c6feef2221fa37ed5d304e257bb52e80e6e18b8089ee085",
+      "bytes": 264306
+    },
+    {
+      "name": "settings-site-agents-after-turn-off.png",
+      "sha256": "f3d74c0805484a71981958459aac5574605c3cac298648d72ed2a57ef48417ce",
+      "bytes": 384561
     },
     {
       "name": "approval-iframe-denied.png",
-      "sha256": "8549e6dfff9814c69139f412b4a3f1f345639266de426d3421235af20c5ac99e",
-      "bytes": 221688
+      "sha256": "fc151f25267773c4bb22ee1e00960d6f27e67391c8d505b52980f863e4a9d5f8",
+      "bytes": 220389
     },
     {
       "name": "approval-deny-pending.png",
-      "sha256": "16fb875e25ed2a6d39f4f372f97daa32cc748d219657326c7a973ef7b1548cd5",
-      "bytes": 234776
+      "sha256": "dcc0d317b249948425d586cb1b9263f3e5e90bfccc814cf5a85dacc93008cb6d",
+      "bytes": 246954
     },
     {
       "name": "approval-deny-resolved.png",
-      "sha256": "16fb875e25ed2a6d39f4f372f97daa32cc748d219657326c7a973ef7b1548cd5",
-      "bytes": 234776
+      "sha256": "989e2edb66f193b3600b4ecc45f8933495e43e80391fdbeff230479d9a5d6211",
+      "bytes": 248946
+    },
+    {
+      "name": "script-approval-card.png",
+      "sha256": "e5357f401653973f070e596fcc8b07f3c522b932fe949c04e80ed9ada5afbd3a",
+      "bytes": 154868
+    },
+    {
+      "name": "about-whats-new.png",
+      "sha256": "412345ffa56f71af4ee26c9ad49cba58f38659945b8326625b261e35ce2ca8bc",
+      "bytes": 198980
     }
   ]
 }

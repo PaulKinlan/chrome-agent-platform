@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.478] — 2026-08-30
+- What's new: retain the About journey evidence (212/212, attested at cd803411)
+
 ## [0.2.477] — 2026-08-30
 - What's new: user-facing changelog copy in About, rendered lazily
 
