@@ -387,9 +387,10 @@ async function main() {
     integrity !== null && verifyError === null, verifyError);
   
   // FAIL-CLOSED: no attested variant, no rig. A failed build (integrity null,
-  // nothing to verify) and a failed re-verification are both refused BEFORE
-  // startRig — an unattested variant must never load into Chrome.
-  if (integrity === null) {
+  // nothing to verify), a falsy parsed record, and a failed re-verification
+  // are all refused BEFORE startRig — an unattested variant must never load
+  // into Chrome.
+  if (!integrity) {
     throw new Error("matrix[variant]: variant build failed — no integrity manifest, refusing to start the rig");
   }
   if (verifyError !== null) {

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.435] — 2026-08-30
+- Refuse falsy integrity records, not just missing ones
+
 ## [0.2.434] — 2026-08-30
 - Permission matrix: refresh the attestation at the fail-closed candidate
 
