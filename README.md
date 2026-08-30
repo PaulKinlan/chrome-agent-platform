@@ -82,9 +82,15 @@ isolated OPFS memory, run history, skills, and avatar.
 
 ## Security model
 
-- **All permissions are optional** (the manifest `permissions` is empty). Each feature
-  requests its permission on a user gesture, at the moment of need — never silently.
-- No broad `<all_urls>` in `permissions`; screenshots via `captureVisibleTab`/`activeTab`.
+- **Four permissions are required at install** (`alarms`, `offscreen`, `sidePanel`,
+  `storage`); every other capability permission (`tabs`, `scripting`, `bookmarks`, … — 31 in
+  all) is optional and requested on a user gesture at the moment of need — never silently.
+- **Host access is install-granted:** the manifest declares `host_permissions: ["<all_urls>"]`
+  and two content scripts on every http(s) page, so the extension can notice when a site
+  offers WebMCP tools; it acts on a site only after you allow it. Whether this stays
+  install-granted or moves to optional host access is an open owner decision
+  (`CAP-FB-20260830-HOST-ACCESS-STORY-01`, Q18 in `docs/OPEN-QUESTIONS.md`). Screenshots go
+  via `captureVisibleTab`/`activeTab`.
 - **No `debugger`.** It was re-declared as an optional permission at `0.2.286` for the
   CDP power tools and **removed again on 2026-08-27** (owner decision): it carries
   Chrome's all-sites permission warning and a persistent "started debugging this

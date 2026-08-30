@@ -25,6 +25,25 @@ The journey suite was red at 26/127 from `0.2.313` until `0.2.320`. It aborted o
 driving a Settings section deleted two weeks earlier, and that single throw took 100 checks
 with it. Fixed under `CAP-FB-20260827-MAIN-GATES-RED-02`.
 
+## Reanalysis 2026-08-30
+
+Full-project reanalysis of `origin/main@fc2255be` — seven lanes, real loaded extension,
+four real providers. Rationale and the ordered queue: [`REVIEW-2026-08-30.md`](REVIEW-2026-08-30.md).
+Umbrella: `CAP-FB-20260830-EXEC-DEMO-01`. The P0 ids, one line each; every entry is in `TASKS.md`.
+
+- `CAP-FB-20260830-EXEC-DEMO-01` — the five-minute demo recorded end to end on a fresh profile.
+- `CAP-FB-20260830-BROWSER-LEASE-DEADLOCK-01` — the Settings toggle leaks a 15-minute lease; runs and revoke deadlock on it.
+- `CAP-FB-20260830-DENIAL-TO-GRANT-CARD-01` — browser-tool denials use a shape the conversation drops, so no Allow card ever appears.
+- `CAP-FB-20260830-TRANSCRIPT-FULL-ANSWER-01` — the nudge summary overwrites the real answer; the persisted transcript is clipped to 240 chars.
+- `CAP-FB-20260830-SELECTION-REF-VALIDATE-FIRST-01` — one schema slip burns the single-use selectionRef and ends the run with no message.
+- `CAP-FB-20260830-KEYLESS-FIRST-RESULT-01` — no first result without a key; the demo provider replies with the size of the system prompt.
+- `CAP-FB-20260830-FRESH-PROFILE-TEMPLATE-AGENTS-01` — 22 disabled templates listed as agents in the sidebar and side panel beside "0 agents".
+- `CAP-FB-20260830-PAGE-ACTION-TOOLS-01` — no click/type/fill/scroll tool exists; owner question Q19.
+- `CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01` — create_script + run_script is an unapproved fetch channel to any URL including loopback.
+- `CAP-FB-20260830-UNTRUSTED-CONTENT-FENCING-01` — page text reaches the model raw; no fence, no policy text, no regression probe.
+- `CAP-FB-20260827-HUB-FIRST-RUN-01` — composer is tab stop 41 and below the fold at 1024x700 (updated).
+- `CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01` — real runs leak `modelContent`/`catalogGeneration` and render protocol cards (updated).
+
 ## Open findings
 
 Current findings all have live entries in `TASKS.md`. Everything else previously listed here is done.

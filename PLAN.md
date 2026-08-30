@@ -192,6 +192,17 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
       dual-GPL `self_cell` sit in core files. The exact patch recipe is recorded; no
       fabricated binary.
 
+## 2026-08-30 reanalysis — the queue before the exec demo
+
+A seven-lane, real-browser reanalysis of `origin/main@fc2255be` is in
+[REVIEW-2026-08-30.md](REVIEW-2026-08-30.md). Baseline healthy (2457 unit, 138/138 journeys,
+42/42 WebMCP acceptance, hub FCP 15-55 ms, four real providers driven); the demo fails today
+on tool gating, on the transcript dropping the real answer, and on the first screen. The
+umbrella is `CAP-FB-20260830-EXEC-DEMO-01`; section 5 of the review is the dependency-ordered
+queue and supersedes the P0 ordering below, which is kept for history. Three owner decisions
+gate the path — Q18 host access, Q19 page actions, Q12 default model — with recommended
+defaults in [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md).
+
 ## In flight / next (the ordered queue)
 
 - [ ] **macOS dictation diagnostics** (`CAP-FB-20260829-MIC-DEAD-MACOS-01`) —

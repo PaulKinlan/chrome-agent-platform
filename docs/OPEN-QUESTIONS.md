@@ -17,12 +17,12 @@ Resolved answers are recorded here (Paul confirmed each over the course of the b
 
 ## Open
 
-11. **Extension name/distribution** — "Chrome Agent Platform" is a placeholder; the final public name and channel remain undecided. Archive freshness and reproducibility are no longer part of this decision: production ZIPs use an exact tracked-plus-generated inventory, a deterministic commit/source/output-bound `dist.complete`, and atomic fresh replacement.
-12. **The model for the hub** — Gemini Nano is weak for tool-calling; which provider should be the recommended default for the best experience?
-13. **Owner-selected Wasm distribution policy** — may a Chrome Web Store build execute genuinely local owner-selected Wasm without violating remotely hosted code policy? Until written policy resolves this, Store mode is bundled-reviewed-executables only; owner-selected packages remain an unpacked/enterprise/developer lane. The credential-free `--target=store` marker-v2/CSP/package/static scan proves only the checked archive boundary and does not answer this policy question.
-14. **Co-do licence/provenance reconciliation** — Co-do's root is Apache-2.0 while package and generated manifest metadata declare MIT. Which source/licence/SBOM/reproducibility authority must each candidate binary satisfy? No Co-do binary may be copied before this is resolved.
-15. **Semantic index engine** — deterministic exact/alias/lexical retrieval ships first. Embedding model, dimensions, quality thresholds, storage engine (SQLite versus IndexedDB), device tiers, and telemetry policy remain decisions under the existing `CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01`; the task must not be duplicated.
-16. **Grouped tabular artifact promotion** — before any route can retain up to one MiB across digest-keyed chunks, choose either an atomic/reservable grouped keyed promotion with safe refcount/orphan collection or an explicitly lower single-body cap. The source candidate does neither silently: it remains unreachable, writes the manifest last, surfaces capacity/orphan receipts and never auto-deletes a possibly referenced chunk.
+11. **Extension name/distribution** — "Chrome Agent Platform" is a placeholder; the final public name and channel remain undecided. Archive freshness and reproducibility are no longer part of this decision: production ZIPs use an exact tracked-plus-generated inventory, a deterministic commit/source/output-bound `dist.complete`, and atomic fresh replacement. **Recommended default (reanalysis 2026-08-30; still OPEN):** pick a product name before the deck — "Chrome Agent Platform" reads as an internal codename; unpacked/developer channel for the demo; the Store later behind `CAP-FB-20260825-WEBSTORE-RELEASE-01`.
+12. **The model for the hub** — Gemini Nano is weak for tool-calling; which provider should be the recommended default for the best experience? **Recommended default (reanalysis 2026-08-30, measured on four providers; still OPEN):** Gemini 2.5 Flash as the recommended preset for this audience — cheapest, follows the operating manual for `create_asset`/`memory_set`, honest about images, native adapter clean — with OpenAI gpt-4.1 as the documented alternative (it ignored the platform tools for "make"/"remember" tasks twice; see `CAP-FB-20260830-MODEL-TOOL-ADHERENCE-01`). Grok 4.3 works but is ~2x slower per call. A Gemini Nano hybrid for on-device text steps is `CAP-FB-20260830-ON-DEVICE-PATH-01`. Blocks `CAP-FB-20260830-PROVIDER-DEFAULT-AND-KEY-FLOW-01`.
+13. **Owner-selected Wasm distribution policy** — may a Chrome Web Store build execute genuinely local owner-selected Wasm without violating remotely hosted code policy? Until written policy resolves this, Store mode is bundled-reviewed-executables only; owner-selected packages remain an unpacked/enterprise/developer lane. The credential-free `--target=store` marker-v2/CSP/package/static scan proves only the checked archive boundary and does not answer this policy question. **Recommended default (reanalysis 2026-08-30; still OPEN):** Store = bundled-reviewed executables only (the current posture); owner-selected Wasm stays a developer lane. Not demo-relevant; park until after the demo.
+14. **Co-do licence/provenance reconciliation** — Co-do's root is Apache-2.0 while package and generated manifest metadata declare MIT. Which source/licence/SBOM/reproducibility authority must each candidate binary satisfy? No Co-do binary may be copied before this is resolved. **Recommended default (reanalysis 2026-08-30; still OPEN):** do not copy any Co-do binary; keep the in-repo builds; park until after the demo.
+15. **Semantic index engine** — deterministic exact/alias/lexical retrieval ships first. Embedding model, dimensions, quality thresholds, storage engine (SQLite versus IndexedDB), device tiers, and telemetry policy remain decisions under the existing `CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01`; the task must not be duplicated. **Recommended default (reanalysis 2026-08-30; still OPEN):** defer entirely — the lazy provider with lexical search is sufficient at ~160 capabilities; the demo build hides the lane (`CAP-FB-20260830-EXEC-BUILD-FLAG-01`).
+16. **Grouped tabular artifact promotion** — before any route can retain up to one MiB across digest-keyed chunks, choose either an atomic/reservable grouped keyed promotion with safe refcount/orphan collection or an explicitly lower single-body cap. The source candidate does neither silently: it remains unreachable, writes the manifest last, surfaces capacity/orphan receipts and never auto-deletes a possibly referenced chunk. **Recommended default (reanalysis 2026-08-30; still OPEN):** the explicitly lower single-body cap (256 KB, already the artifact limit); defer chunked promotion.
 
 17. **`debugger` permission posture** — **RESOLVED (Paul, 2026-08-27): remove it for
     now; the permission and the tools can come back later.** `0.2.286` had re-declared
@@ -38,3 +38,35 @@ Resolved answers are recorded here (Paul confirmed each over the course of the b
     make any return a deliberate act. When it does return, it should land behind a
     separate developer-only surface rather than the default product.
 
+18. **Host-access posture** — `extension/manifest.json` declares `host_permissions: ["<all_urls>"]`
+    plus two content scripts on every http(s) page at `document_start` (install-granted, since
+    `0.2.419`), while the README and several comments still describe an all-optional model. The
+    install prompt reads "Read and change all your data on all websites" — the first question a
+    Chrome reviewer will ask. Either (a) keep install-granted host access and passive WebMCP
+    detection and describe it truthfully everywhere, or (b) move `<all_urls>` to
+    `optional_host_permissions`, keep the detector on `activeTab` plus JIT origin grants, and
+    lose passive discovery. **Recommended default (reanalysis 2026-08-30; OPEN, needed before
+    the demo):** (a) — the WebMCP thesis depends on noticing when a site offers tools, and the
+    honest sentence is "this extension can read every page in order to notice when a site
+    offers tools; it acts only after you allow it". Blocks `CAP-FB-20260830-HOST-ACCESS-STORY-01`;
+    shapes `WEBSTORE-RELEASE-01` and `CAP-FB-20260830-PRIVACY-STATEMENT-01`.
+
+19. **Are page actions in scope?** — There is no click, type, fill, scroll or find-element tool;
+    the only way to act inside a page is a site that ships WebMCP tools. Every comparator leads
+    with "it fills the form". Either add a minimal grant-gated page-action family on
+    `chrome.scripting` (find by accessible name, click, type, select, scroll, wait) behind the
+    untrusted-content fence and the activity ledger, or decide the product is WebMCP-only for
+    page interaction and say so on the slide. **Recommended default (reanalysis 2026-08-30;
+    OPEN, needed before the demo script is final):** add the minimal family — it is the largest
+    missing piece of the thesis and the Chrome-native permission model is the differentiator
+    against screenshot-and-click agents. Blocks `CAP-FB-20260830-PAGE-ACTION-TOOLS-01` and, through
+    it, `CAP-FB-20260830-SIDE-PANEL-COMPANION-01`.
+
+20. **"Browser control" first, or "coworker" first?** — The product carries two thesis
+    statements: sites-as-sub-agents via WebMCP (unique, working, hidden) and a coworking
+    environment for knowledge workers (`PRODUCT.md`; aspirational, missing page actions and a
+    companion). The hub is a third thing — an agent-management dashboard. The answer orders the
+    post-demo queue in `REVIEW-2026-08-30.md` section 5. **Recommended default (reanalysis
+    2026-08-30; still OPEN):** lead the demo with browser control plus WebMCP (what works today),
+    and build toward the coworker shape in this order: the activity ledger with undo, the
+    companion side panel, the plan strip, scheduled-run reports on the timeline.

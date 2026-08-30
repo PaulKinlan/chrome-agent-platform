@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.427] — 2026-08-30
+- Full-project reanalysis before the exec demo: 65 new and 8 updated tracker entries, REVIEW-2026-08-30.md with the ordered queue and the five-minute demo script, recommended defaults for the open product questions, and the README now states the real host-access posture
+
 ## [0.2.426] — 2026-08-30
 - merge: WebMCP acceptance green lane (0c9783c8) — detector registration restored, JIT scripting at discover, fresh-profile picker proof
 

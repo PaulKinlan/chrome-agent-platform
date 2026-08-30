@@ -153,22 +153,29 @@ an exception. These rules make that safe:
   browser is reachable, so wait for it with `waitForServiceWorker()` rather than
   relying on how long a handshake happens to take.
 
-## The current review (2026-08-21) — read before picking up work
+## The current review (2026-08-30) — read before picking up work
 
-[`REVIEW-2026-08-21.md`](REVIEW-2026-08-21.md) is an independent architectural review of
-exact `origin/main@300bea1`, executed rather than read from trackers. It confirms the
-baseline healthy (build clean, 632 unit pass, 126/126 Chrome journeys, 62 ms hub render)
-and identifies why delivery stalled. **Section 6 is an ordered work queue.** Every finding
-carries a `CAP-FB-*` ID that exists in [`TASKS.md`](TASKS.md) with full acceptance criteria
-and gates; defects also appear in [`KNOWN-ISSUES.md`](KNOWN-ISSUES.md).
+[`REVIEW-2026-08-30.md`](REVIEW-2026-08-30.md) is the full-project reanalysis of exact
+`origin/main@fc2255be`, executed by seven lanes in a real loaded extension rather than read
+from trackers. It confirms the baseline healthy (build clean, 2457 unit pass, 138/138 Chrome
+journeys, 42/42 WebMCP acceptance, hub FCP 15-55 ms, four real providers driven) and finds
+that the exec demo fails today on tool gating, on what the transcript keeps, and on the
+first screen — not on the tools, the models or the security boundaries. **Section 5 is the
+dependency-ordered work queue** (before the demo / the coworker thesis / hygiene) and
+**section 6 is the five-minute demo script with its ranked blockers.** Every finding carries
+a `CAP-FB-*` ID that exists in [`TASKS.md`](TASKS.md) with full acceptance criteria, gates
+and blockers; `CAP-FB-20260830-EXEC-DEMO-01` is the umbrella. The P0 ids are listed in
+[`KNOWN-ISSUES.md`](KNOWN-ISSUES.md). Three owner decisions gate the demo path (Q18 host
+access, Q19 page actions, Q12 default model) and carry recommended defaults in
+[`docs/OPEN-QUESTIONS.md`](docs/OPEN-QUESTIONS.md).
 
 Take work by following the atomic-ownership procedure in `TASKS.md`, never from the review
-alone. Two behaviours the review calls out specifically:
+alone. The earlier [`REVIEW-2026-08-21.md`](REVIEW-2026-08-21.md) (the delivery diagnosis)
+is kept as history; its two behavioural rules still apply:
 
-- **Put the `CAP-FB-*` ID in the commit subject.** Only 2 of 430 commits do today, which is
-  why every `Recover:` command in the tracker fails to find its own work.
+- **Put the `CAP-FB-*` ID in the commit subject**, so every `Recover:` command in the
+  tracker can find its own work.
 - **Never create a `-vN+1` attempt with no commit in `-vN`.** Stop and escalate instead.
-  Seventeen worktrees currently hold zero work; ten share one versioned prep name.
 
 ## Repository-local task recovery (2026-08-19)
 
