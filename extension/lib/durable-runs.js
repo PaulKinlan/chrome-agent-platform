@@ -1533,6 +1533,11 @@ export function createDurableRunRegistry({
             at,
             retainedPayloadRef,
             summary: bounded(payload?.summary ?? result),
+            // The FULL (16 KB-bounded) answer rides beside the 240-char preview
+            // so a thread back-fill never has to commit the preview as content
+            // (CAP-FB-20260830-TRANSCRIPT-FULL-ANSWER-01). `summary` stays a
+            // preview for lists.
+            result,
             ...(payload?.aborted === true ? { aborted: true } : {}),
           },
           journalEntry: {

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.431] — 2026-08-30
+- The answer you watched arrive is the answer the reopened task shows, at full length: a step's real reply is no longer replaced by a "task complete" summary, every substantive reply of a run is kept in order, and a recovered task never clips its answer to a 240-character preview.
+
 ## [0.2.430] — 2026-08-30
 - Six fixes are now in progress in parallel and recorded as claimed in the task tracker so no two agents work the same item.
 

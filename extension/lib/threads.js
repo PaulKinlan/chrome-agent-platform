@@ -259,6 +259,11 @@ export async function appendThreadMessage(id, message) {
   thread.messages = Array.isArray(thread.messages) ? thread.messages : [];
   const att = sanitizeAttachments(message?.attachments);
   const isTool = Boolean(message?.toolName);
+  // An INTERIM assistant row: one step's text of a still-running execution
+  // (CAP-FB-20260830-TRANSCRIPT-FULL-ANSWER-01). It carries the executionId
+  // AND a step index; the terminal row of the same execution carries no step,
+  // which is how the two are told apart everywhere (commit, projection).
+  const isInterim = !isTool && role === "assistant" && Boolean(message?.executionId) && Number.isInteger(message?.step);
   // TOOL rows pass through their structured fields (toolName/toolStatus/args/
   // result/ok/duration + the pairing callId) so a reopened thread can replay
   // them as ONE terminal card per call — the thread is not just text. The tool
@@ -285,6 +290,7 @@ export async function appendThreadMessage(id, message) {
         ...(message?.executionId ? { executionId: String(message.executionId) } : {}),
       }
       : {}),
+    ...(isInterim ? { executionId: String(message.executionId), step: message.step } : {}),
   };
   // DEFECT A (the ordering): a tool row for an execution whose terminal
   // assistant/error row is ALREADY committed (the durable outbox commits the
@@ -306,7 +312,9 @@ export async function appendThreadMessage(id, message) {
   // Tool-card replay may happen after the durable terminal outbox has already
   // committed the assistant/error row. A non-terminal tool append must never
   // regress that authoritative terminal status back to "running".
-  thread.status = role === "assistant"
+  thread.status = isInterim
+    ? (["done", "error"].includes(thread.status) ? thread.status : "running")
+    : role === "assistant"
     ? "done"
     : role === "error"
       ? "error"
@@ -387,10 +395,17 @@ export async function commitThreadTerminal(id, executionId, terminal) {
     const thread = (await mem.get(`thread:${id}`)) ?? null;
     if (!thread) return null;
     thread.messages = Array.isArray(thread.messages) ? thread.messages : [];
-    const existing = thread.messages.find((message) => message?.executionId === executionId);
+    // Interim (per-step) assistant rows share the executionId but carry a
+    // step index; only a step-less assistant/error row is the terminal.
+    const isTerminalRow = (message) => message?.executionId === executionId && !Number.isInteger(message?.step);
+    const existing = thread.messages.find(isTerminalRow);
     if (!existing) {
       const role = terminal?.role === "assistant" ? "assistant" : "error";
       const content = boundText(terminal?.content ?? (role === "error" ? "run failed" : ""));
+      // The answer appears ONCE: an interim row whose text equals the terminal
+      // (the step that already answered) is replaced by the terminal row.
+      thread.messages = thread.messages.filter((message) =>
+        !(message?.executionId === executionId && Number.isInteger(message?.step) && message.role === "assistant" && message.content === content));
       // Provider-server grounding rows (render-only): citations are bounded
       // {url,title,startIndex,endIndex} records; serverToolEvents are the
       // executed provider-side queries ("🔎 Searched: …" cards). NEVER routed
@@ -432,7 +447,7 @@ export async function commitThreadTerminal(id, executionId, terminal) {
     // A repeated executionId always derives status/detail from the first
     // committed message. Even a conflicting replay payload cannot change the
     // winning terminal outcome; retries only repair a possibly-missed index.
-    const committed = existing ?? thread.messages.find((message) => message?.executionId === executionId);
+    const committed = existing ?? thread.messages.find(isTerminalRow);
     const committedTerminal = committed?.role === "assistant"
       ? { role: "assistant", content: committed.content, status: "done" }
       : {

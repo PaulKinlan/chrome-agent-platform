@@ -892,7 +892,9 @@ export function projectThreadWithRunLogs(thread, executions = []) {
       if (m.executionId) bodyToolExecs.add(m.executionId);
       if (m.toolCallId) bodyToolCallIds.add(m.toolCallId);
     }
-    if ((m.role === "assistant" || m.role === "error") && m.executionId) terminalExecs.add(m.executionId);
+    // An interim (per-step) assistant row carries a step index; only the
+    // step-less assistant/error row is the execution's terminal marker.
+    if ((m.role === "assistant" || m.role === "error") && m.executionId && !Number.isInteger(m.step)) terminalExecs.add(m.executionId);
   }
 
   const cardsByExec = new Map();
@@ -914,7 +916,8 @@ export function projectThreadWithRunLogs(thread, executions = []) {
     }
   }
 
-  // Walk the body; before each terminal marker, splice its execution's cards.
+  // Walk the body; before each execution's FIRST text row (an interim
+  // per-step row or the terminal marker), splice its execution's cards.
   const out = [];
   const placed = new Set();
   for (const m of body) {

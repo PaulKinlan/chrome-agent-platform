@@ -1551,3 +1551,22 @@ Deno.test("WAL buffer: a failed flush rejects every caller whose row it carried"
   // caller must learn its write failed.
   assertEquals(results.map((r) => r.status), ["rejected", "rejected"]);
 });
+
+// ── CAP-FB-20260830-TRANSCRIPT-FULL-ANSWER-01 ────────────────────────────────
+Deno.test("terminal: the outbox carries result (16 KB) beside the 240-char summary", async () => {
+  const store = new FakeStore();
+  const { registry, thread } = harness(store);
+  const id = "exec_terminal_full_result";
+  await registry.start({
+    executionId: id, kind: "task", taskPreview: "t", journalTarget: "master", threadId: "thread-full-answer",
+    resumeRequest: { id: "t", task: "t", route: "runTask", routeArgs: {}, idempotencyKey: id },
+  });
+  const full = "x".repeat(1000);
+  await registry.settle(id, { ok: true, result: full, logicalId: "t" });
+  const run = (await registry.list()).runs.find((r) => r.executionId === id);
+  assert(run?.terminal, "the settled record carries a terminal");
+  assertEquals(run.terminal.result?.length, 1000, "terminal.result is the full (16 KB-bounded) answer");
+  assert(run.terminal.summary.length <= 240, "terminal.summary stays a preview for lists");
+  // The thread commit still receives the FULL result (the normal path).
+  assertEquals(thread.find((row) => row.executionId === id)?.content?.length, 1000);
+});

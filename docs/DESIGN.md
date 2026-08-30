@@ -111,7 +111,14 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   symmetric gutters while expanded, and gutter-free scrollable lists in the
   collapsed rail so task dots, agent avatars, and + actions share one center.
   Task and agent rows share padding/radius/hover tokens; the task delete action
-  is centered on the row and remains keyboard-focusable. Thread storage remains
+  is centered on the row and remains keyboard-focusable. A run's transcript keeps
+  every substantive per-step answer in order: a step that ran tools and ended in
+  text is persisted as an interim assistant row of that execution (executionId +
+  step) the moment it streams, the terminal row is appended afterwards (an
+  interim row identical to the terminal is replaced, never doubled), and the
+  reply to agent-do's "Continue working on the task…" nudge is hidden — never a
+  bubble, never persisted, never the run's result — so the answer the owner
+  watched arrive is the answer the reopened thread shows, at full length. Thread storage remains
   the Tasks list authority: thread-bound durable run revisions only signal a
   fresh `thread.list` replacement, never supply or duplicate row data. A failed
   list read preserves the current rows and leaves its run revision unacknowledged

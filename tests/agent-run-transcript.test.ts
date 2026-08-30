@@ -120,3 +120,49 @@ Deno.test("latestRunForSurface orders by updatedAt, NOT the per-run revision cou
   ];
   assertEquals(latestRunForSurface(runs, { agentId: "a1", agentKind: "named" })?.executionId, "new", "the newer run wins despite the lower revision");
 });
+
+// ── CAP-FB-20260830-TRANSCRIPT-FULL-ANSWER-01 ────────────────────────────────
+Deno.test("thread back-fill prefers terminal.result over summary", async () => {
+  const { buildThreadRunView } = await import("../extension/lib/thread-run-view.js");
+  const full = "y".repeat(1000);
+  const committed = [];
+  const thread = { id: "t-backfill", status: "running", messages: [{ role: "user", content: "list my open tabs", ts: 1 }] };
+  const view = await buildThreadRunView(thread, {
+    listThreadExecutions: async () => [{
+      executionId: "exec-bf", at: 2,
+      record: { phase: "terminal", terminal: { ok: true, at: 3, summary: `${full.slice(0, 239)}…`, result: full } },
+    }],
+    listLogs: async () => [],
+    commitTerminal: async (_threadId, executionId, terminal) => { committed.push({ executionId, ...terminal }); return thread; },
+    recordFailure: () => {},
+  });
+  assertEquals(committed.length, 1, "the missing terminal is back-filled once");
+  assertEquals(committed[0].content.length, 1000, "the committed content is the full result, never the 240-char preview");
+  const marker = view.messages.find((m) => m.role === "assistant" && m.executionId === "exec-bf");
+  assertEquals(marker?.content.length, 1000, "the rendered marker is the full result too");
+});
+
+Deno.test("nudge reply: a text-only step right after a text-ending tool step is hidden and the substantive answer wins", async () => {
+  const { createRunTextTracker } = await import("../extension/lib/run-text-steps.js");
+  const tracker = createRunTextTracker();
+  // step 0: tools ran and the model answered in the same step
+  const s0 = tracker.step({ step: 0, hasToolCalls: true, text: "Here are your open tabs: A, B, C" });
+  assertEquals(s0.hidden, false);
+  assertEquals(s0.persist, true, "a substantive tool-step answer is persisted as an intermediate message");
+  // step 1: agent-do's "Continue working on the task…" reply
+  const s1 = tracker.step({ step: 1, hasToolCalls: false, text: "Here's a summary of what I've done: listed the tabs. No more steps." });
+  assertEquals(s1.hidden, true, "the nudge reply is hidden");
+  assertEquals(s1.persist, false, "the nudge reply is never persisted");
+  assertEquals(tracker.finalText("Here's a summary of what I've done: listed the tabs. No more steps."), "Here are your open tabs: A, B, C");
+  // A plain answer with no tools at all is the answer (never hidden).
+  const t2 = createRunTextTracker();
+  const p = t2.step({ step: 0, hasToolCalls: false, text: "Hello!" });
+  assertEquals(p.hidden, false);
+  assertEquals(t2.finalText("Hello!"), "Hello!");
+  // A tool step with NO text followed by a text-only step: that text is the real answer.
+  const t3 = createRunTextTracker();
+  t3.step({ step: 0, hasToolCalls: true, text: "" });
+  const a = t3.step({ step: 1, hasToolCalls: false, text: "The tabs are A and B." });
+  assertEquals(a.hidden, false);
+  assertEquals(t3.finalText("The tabs are A and B."), "The tabs are A and B.");
+});

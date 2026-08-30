@@ -744,7 +744,13 @@ export function createDemoModel() {
             // themselves (the run's tool results are the assertion target). The
             // continuation step (tool history stripped) re-emits the same
             // summary, so the loop ends on the text-only step.
-            response = "[demo model] Tool calls executed in sequence: memory_set wrote the shopping list, then memory_get read it back twice.";
+            // The reply to agent-do's continuation nudge is DISTINCT from the
+            // answer — exactly what a real model does ("Task complete…") — so
+            // the transcript journey can prove the nudge reply never replaces
+            // the answer (CAP-FB-20260830-TRANSCRIPT-FULL-ANSWER-01).
+            response = demoAlreadyFinal(options.prompt)
+              ? "[demo model] Task complete — nothing more to do."
+              : "[demo model] Tool calls executed in sequence: memory_set wrote the shopping list, then memory_get read it back twice.";
           } else {
             response = `[demo model] Task received (${text.length} chars). Configure a real provider in Settings ` +
               `to get real completions. This demo response proves the agent loop runs end-to-end.`;
