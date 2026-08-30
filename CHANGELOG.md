@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.495] — 2026-08-30
+- The agent can now edit part of an artifact by replacing just the text that changes, instead of resending the whole document — small edits are cheaper and faster, and an edit that would be ambiguous or that targets a version that has since changed is refused instead of applied.
+
 ## [0.2.494] — 2026-08-30
 - Two more editing-flow fixes are in progress in parallel and recorded as claimed.
 

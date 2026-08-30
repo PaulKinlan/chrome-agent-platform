@@ -253,6 +253,8 @@ import {
   listAssetVersions,
   migrateSiteAssetsToLibrary,
   normalizeModelAssetKey,
+  patchAsset,
+  resolveAssetPatch,
   restoreAssetVersion,
   updateAsset,
 } from "../lib/artifacts.js";
@@ -5932,6 +5934,57 @@ const handlers = mergeRouteMaps(
       return { ok: false, error: "update_asset needs an existing id (use list_assets)" };
     }
     return res;
+  },
+  // A SEARCH/REPLACE edit — the cheap alternative to `asset.update` resending
+  // the whole body (CAP-FB-20260830-PATCH-ASSET-TOOL-01). The edits resolve to a
+  // new body HERE so the owner's approval card diffs the exact resolved content
+  // (the SAME staging as asset.update, action "asset.update" — the same class of
+  // mutation), and a bad patch (no/ambiguous match, stale version) is refused
+  // BEFORE the gate rather than surfacing as a pointless approval demand.
+  async "asset.patch"({ origin, id, edits, expectVersion }, context) {
+    const scope = origin ?? "master";
+    if (typeof id !== "string" || !id) {
+      return { ok: false, error: "patch_asset needs an existing id (use list_assets)" };
+    }
+    const exists = await getAsset(scope, id);
+    if (!exists.ok) {
+      return { ok: false, error: "patch_asset needs an existing id (use list_assets)" };
+    }
+    // expectVersion is a stale-edit guard the model can set: refuse (no card,
+    // no mutation) if the head has moved since it last saw the body.
+    if (expectVersion !== undefined && expectVersion !== null) {
+      const versions = await listAssetVersions(scope, id);
+      const head = versions.ok ? versions.head : 0;
+      if (expectVersion !== head) return { ok: false, error: "version_conflict", version: head };
+    }
+    // Resolve the new body BEFORE the gate (fail closed on a bad patch), so the
+    // approval binds and previews the exact content that will be written.
+    const oldBody = typeof exists.asset?.content === "string" ? exists.asset.content : "";
+    const resolved = resolveAssetPatch(oldBody, edits);
+    if (!resolved.ok) return resolved;
+    if (resolved.content === oldBody) return { ok: false, error: "the edits made no change" };
+    const target = canonicalOperationTarget("asset", { origin: scope, id });
+    let payload;
+    try {
+      payload = payloadFields([
+        ["origin", scope === "master" ? "master" : canonicalOrigin(scope)],
+        ["id", id], ["content", resolved.content],
+      ]);
+    } catch { return { ok: false, error: "asset patch payload is not approvable" }; }
+    const gate = await requireOwnerApproval(context, "asset.update", target, payload);
+    if (!gate.ok) return gate;
+    // Authoritative apply under the lock: patchAsset re-resolves against the
+    // current body (fails closed if it drifted during approval) and shares the
+    // WAL/version staging with every other edit.
+    const res = await patchAsset(scope, id, edits, {
+      expectVersion, by: ownerPrincipal(context) ? "owner" : "model",
+    });
+    if (!res.ok && res.error === "asset not found") {
+      return { ok: false, error: "patch_asset needs an existing id (use list_assets)" };
+    }
+    return res.ok
+      ? { ok: true, id, asset: assetIdentity(res.asset, res.version), version: res.version, added: res.added, removed: res.removed }
+      : res;
   },
   // ---- immutable artifact versions (CAP-FB-20260830-ARTIFACT-VERSIONS-01) ----
   // Every create/update appends a version row; the rows never carry a body

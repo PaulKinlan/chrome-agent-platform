@@ -26,6 +26,7 @@ export const MANAGEMENT_TOOL_NAMES = [
   "disenroll_origin",
   "create_asset",
   "update_asset",
+  "patch_asset",
   "delete_asset",
   "list_assets",
   "get_asset",
@@ -140,6 +141,22 @@ export function managementToolset({ callRoute }) {
           name: args.name,
           content: args.content,
         }),
+    }),
+    patch_asset: tool({
+      description:
+        "Edit part of an artifact by exact text replacement — the cheap way to change a small piece. Each `search` must match exactly once (set all:true to replace every occurrence); a search that is not found or is ambiguous is refused without changing anything. Prefer this over update_asset for small edits — you send only the changed text, not the whole document. Pass expectVersion (the version you last read) to refuse the edit if the artifact changed underneath you.",
+      inputSchema: z.object({
+        origin: z.string().default("master").describe("'master' or an https origin"),
+        id: z.string().min(1).describe("the artifact id (from list_assets)"),
+        edits: z.array(z.object({
+          search: z.string().min(1).describe("exact text to find (must occur once unless all:true)"),
+          replace: z.string().describe("text to put in its place (may be empty to delete)"),
+          all: z.boolean().optional().describe("replace EVERY occurrence instead of requiring a unique match"),
+        })).min(1).max(20).describe("the edits, applied in order"),
+        expectVersion: z.number().int().optional().describe("the version you last saw; the edit is refused if the head has moved"),
+      }),
+      execute: ({ origin, id, edits, expectVersion }) =>
+        call("asset.patch", { origin, id, edits, expectVersion }),
     }),
     delete_asset: tool({
       description: "Delete an artifact.",

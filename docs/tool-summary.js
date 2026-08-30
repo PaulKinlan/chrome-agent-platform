@@ -300,6 +300,7 @@ export function describeToolCall(name, args) {
       return nm ? `Creating artifact “${nm}”` : "Creating an artifact";
     }
     case "update_asset": return "Updating an artifact";
+    case "patch_asset": return "Editing an artifact";
     case "get_asset": return "Reading an artifact";
     case "list_assets": return "Listing artifacts";
     case "generate_ui": return "Generating UI";

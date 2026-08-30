@@ -897,7 +897,7 @@ export function pairToolJournal(entries) {
  *
  * Returns null for anything that is not an artifact-producing result, so it is
  * safe to call on every tool result. */
-const ARTIFACT_TOOLS = new Set(["create_asset", "update_asset", "generate_ui"]);
+const ARTIFACT_TOOLS = new Set(["create_asset", "update_asset", "patch_asset", "generate_ui"]);
 
 /** THE LAZY PROTOCOL ENVELOPE (CAP-FB-20260828-TOOL-RESULT-ENVELOPE-01).
  *
