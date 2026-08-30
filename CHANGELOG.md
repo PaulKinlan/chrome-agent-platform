@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.509] — 2026-08-30
+- Recent activity: journey evidence — hub activity rows at 1440/1024 and the run manifest
+
 ## [0.2.508] — 2026-08-30
 - Recent activity: user-visible kinds, bounded one-liners, grid fix, runs-today header — plus regenerated gallery docs and lock alignment
 
