@@ -71,6 +71,7 @@ and `scripts/check-tasks-baseline.json` must only ever shrink.
 - Next: one concrete next action
 - Recover: repository-relative Git commands or —
 - History:
+  - 2026-08-31 01:30 UTC — implemented: USER_VISIBLE_KINDS allowlist applied in the explorer `_load` AND server-side via a new `kinds` param on `activity.list` (attestation/tool rows stay in the journal and Run logs); row pills in user words (Started/Finished/Failed/Made/approvals/schedule); result one-liners bounded to 140 chars (never the raw dump); summary grid `auto minmax(0,1fr) auto` with `min-inline-size:0; overflow-wrap:anywhere` on the text cell; header reads "N runs today" from `run.list` (no $/tokens/calls). Falsification: reverting the kinds filter REDs two route tests; the 140-char bound REDs the components test. Evidence: `hub-activity-two-rows-1440.png`, `hub-activity-two-rows-1024.png`.
   - YYYY-MM-DD HH:MM UTC — material event and evidence
 ```
 
@@ -234,7 +235,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | OPEN | [`CAP-FB-20260830-ONE-SHELL-01`](#cap-fb-20260830-one-shell-01-three-surfaces-three-shells-one-content-width-one-title-no-duplicate-chrome) | Three surfaces, three shells: one content width, one title, no duplicate chrome |
 | P1 | OPEN | [`CAP-FB-20260830-PLAN-STRIP-CHECKPOINTS-01`](#cap-fb-20260830-plan-strip-checkpoints-01-a-running-multi-step-task-shows-a-plan-strip-with-the-current-step-and-resumes-from-the-durable-registry-after-an-interruption) | A running multi-step task shows a plan strip with the current step, and resumes from the durable registry after an interruption |
 | P1 | OPEN | [`CAP-FB-20260830-PROVIDER-DEFAULT-AND-KEY-FLOW-01`](#cap-fb-20260830-provider-default-and-key-flow-01-a-recommended-default-provider-and-a-four-click-key-flow) | A recommended default provider and a four-click key flow |
-| P1 | OPEN | [`CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01`](#cap-fb-20260830-recent-activity-user-events-01-recent-activity-shows-system-events-and-overflows-into-the-timestamp-column) | Recent activity shows system events and overflows into the timestamp column |
+| P1 | IN_REVIEW | [`CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01`](#cap-fb-20260830-recent-activity-user-events-01-recent-activity-shows-system-events-and-overflows-into-the-timestamp-column) | Recent activity shows system events and overflows into the timestamp column |
 | P1 | OPEN | [`CAP-FB-20260830-SCHEDULED-RUN-OUTPUT-01`](#cap-fb-20260830-scheduled-run-output-01-a-scheduled-agent-runs-but-leaves-nothing-the-owner-can-see-on-the-hub) | A scheduled agent runs but leaves nothing the owner can see on the hub |
 | P1 | OPEN | [`CAP-FB-20260830-SETTINGS-HOOKS-PERMISSIONS-TABLES-01`](#cap-fb-20260830-settings-hooks-permissions-tables-01-hooks-is-50-identical-cards-with-red-deny-buttons-permissions-is-19-identical-cards) | Hooks is 50+ identical cards with red Deny buttons; Permissions is 19 identical cards |
 | P1 | OPEN | [`CAP-FB-20260830-SIDE-PANEL-COMPANION-01`](#cap-fb-20260830-side-panel-companion-01-the-side-panel-becomes-a-companion-pinned-to-the-current-tab-instead-of-a-webmcp-status-surface) | The side panel becomes a companion pinned to the current tab instead of a WebMCP status surface |
@@ -3464,16 +3465,16 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01] The agent cannot read or write a local file; fs-grant.write-file is dead code
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 editing lane, task T8 and finding 4. The owner can grant a folder in Settings and attach a file to the composer, but the agent has no tool to read a file and none to change one; the write route exists with zero callers.
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-31 01:30 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — candidate built; unit 2679/0, journeys 234/234, check:gallery clean
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `fc2255be`
-- Candidate: —
-- Shipping: —
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-recent-activity-user
+- Branch: cap-recent-activity-user
+- Base: origin/main 7037b6e6
+- Candidate: <tip after commit>
+- Shipping: pending review
 - Acceptance: Two model tools, `read_local_file` and `write_local_file`, work over an existing folder grant; a write shows the same diff approval card as an artifact edit with the on-disk bytes as "before", changes the file only after Approve, and leaves the bytes byte-identical on Deny; paths outside the grant, binary files and writes over the size bound fail closed with a readable error. Alternatively, if local-file editing is declared off the demo path, the unreachable `fs-grant.write-file` route is removed — one of the two, recorded in History.
   - Context: folder grants are `extension/lib/fs-grants.js` (`saveFsGrant` 119, `getFsGrant` 170, `listFsGrantEntries` 329, `searchFsGrantFiles` 425, `readFsGrantFile` 537, `writeFsGrantFile` 657; bounds `MAX_FS_TEXT_DECODE_BYTES` 2 MiB at 26, `MAX_FS_WRITE_BYTES` 5 MiB at 27, `MAX_FS_PATH_DEPTH` 16, `cleanRelativePath` 41). SW routes `fs-grant.list|get|remove|list-entries|search|read-file|write-file|scan` (`service-worker.js:4605-4700`) each refuse any principal other than `owner-options`/`extension` (e.g. read-file 4668-4678, write-file 4680-4690). No tool in `management-tools.js`, `browser-tools.js`, `master-skill.js` references an `fs-grant` route; the only callers are Settings (`options.js` read/list), the composer `/files` command (`shared/composer-commands.js:108-135`, search + attach) and the composer attach path. `fs-grant.write-file` has zero callers. The directory picker cannot be automated headless; `scripts/kat-local-files.ts` (header lines 1-14) seeds a persisted OPFS `FileSystemDirectoryHandle` as the post-picker fixture and knows the file `composer-local-file-known.txt` (line 22). What must NOT change: the principal gate on the routes for page senders (the model tools call the routes from the SW with `principal:"model"` context and go through the approval path; a page can never reach them); the size bounds.
   - Reproduce today: (1) `grep -rn "fs-grant" extension/lib/management-tools.js extension/lib/browser-tools.js extension/lib/master-skill.js` → nothing; (2) `grep -rn "write-file" extension --include=*.js | grep -v dist` → only the route definition; (3) run `deno run -A scripts/kat-local-files.ts` to see the fixture grant + `/files` attach flow work, then ask the demo agent to "fix the typo in composer-local-file-known.txt" → no tool exists.
@@ -3591,16 +3592,16 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-SETTINGS-HOOKS-PERMISSIONS-TABLES-01] Hooks is 50+ identical cards with red Deny buttons; Permissions is 19 identical cards
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 ui lane, finding 6. Two Settings sections are walls of identical rows where the dominant colour is danger red and every row shouts the same teal Enable.
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-31 01:30 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — candidate built; unit 2679/0, journeys 234/234, check:gallery clean
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `fc2255be`
-- Candidate: —
-- Shipping: —
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-recent-activity-user
+- Branch: cap-recent-activity-user
+- Base: origin/main 7037b6e6
+- Candidate: <tip after commit>
+- Shipping: pending review
 - Acceptance: Hooks is a compact table (event · Chrome API · state) with a per-row `<switch-toggle>` and one "Deny all" action, Permissions is a grouped list (Browsing · Content · System) of `<capability-row>`s with a ghost "Turn on" and the "Gates: …" detail behind a disclosure; neither section exceeds 900 px on a fresh profile, at most one red control is visible per viewport, and every row uses the shared components.
   - Context: `extension/options/options.html` sections `#permissions` (207-212, `<div id="permission-list">`) and `#hooks` (230-235, `<div id="hook-list">`). `extension/options/options.js` `renderPermissions` (1899-1985) builds a hand-rolled `div.perm-row` per capability with a `gates` line (`Gates: …`, ~1907) and a filled `btn small` "Enable" (~1936-1944); `renderHooks` (1989-2040) builds the SAME `perm-row` per hook with a `btn small danger` "Deny" button (2012-2020) that calls `hooks.deny`. Shared components that already exist: `<capability-row>` (`components.js:2135`, grid `28px 1fr auto` at 2067 — icon | name+description | action) and `<switch-toggle>` (1790, the direct enable/disable switch the gallery documents for permission rows at `docs/components.html:83`). `docs/DESIGN.md:26` makes danger `#b3261e` a semantic token and the impeccable craft floor bans same-size icon+heading+text card walls as page structure. Measured: hooks 2,818 px tall, permissions 2,182 px. What must NOT change: `hooks.deny` / `hooks.status` / capability request routes and their fail-closed semantics; the permission request must still happen on the user gesture (`chrome.permissions.request` from the page).
   - Reproduce today: (1) build; `launchChrome()`; open `options.html#hooks` and `#permissions` on a fresh profile; (2) measure `section.getBoundingClientRect().height` → 2,818 / 2,182; (3) count `.btn.danger` visible in the viewport → many.
@@ -3622,16 +3623,16 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01] Recent activity shows system events and overflows into the timestamp column
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 ui lane finding 4, product lane finding 19. Extends CAP-FB-20260828-HUB-AS-TIMELINE-01 (this is the short-term fix on the existing explorer). Two questions to the agent produce six rows including "PROMPT-ATTESTATION" and a raw "RESULT [demo model] Task received (19582 chars)…" that runs under the time column.
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-31 01:30 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — candidate built; unit 2679/0, journeys 234/234, check:gallery clean
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `fc2255be`
-- Candidate: —
-- Shipping: —
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-recent-activity-user
+- Branch: cap-recent-activity-user
+- Base: origin/main 7037b6e6
+- Candidate: <tip after commit>
+- Shipping: pending review
 - Acceptance: Two demo turns produce two activity rows; attestation rows and raw provider result dumps never appear on the hub (they stay in Run logs); no row text overlaps the time column at 1440 or 1024; the zero state says "Nothing has happened yet" and the filtered-empty state "No activity matches this filter"; the hub header no longer shows `$0.0000`/tokens and agrees with itself across renders.
   - Context: `<activity-explorer>` is `extension/shared/components.js:7151-7477`; it loads `activity.list` (7323) which merges every memory store's `journal` array (`extension/background/routes/activity.js:72-110`) and renders each entry with `.aex-kind` = `e.type` (7403-7405) inside a `summary` grid `auto 1fr auto` (7172). Entry types come from the SW journal writes: `prompt-attestation` (`service-worker.js:2555`), `task` (2584, 6971) and `result` (`durable-runs.js:1457, 1539` and the SW result append). The empty text is `"No activity matches."` regardless of filter (7382). The header is `renderHubUsage` in `extension/ntp/ntp.js:1115-1125` → `${t.calls} calls · ${tokens} tokens · $${t.estimatedCost.toFixed(4)}` from `usage.get`; it disagreed between renders ("0 calls · 0 tokens" vs "2 calls · 80 tokens") because it is rendered once at load and again on a timer elsewhere. What must NOT change: the journal contents (attestation rows are the durable prompt receipt — hide, do not delete); the per-store caps in `activity.js`; Run logs.
   - Reproduce today: (1) build; `launchChrome()`; hub; send two demo tasks; (2) the explorer shows TASK, PROMPT-ATTESTATION, RESULT, TASK, PROMPT-ATTESTATION, RESULT; (3) measure the RESULT row's text `getBoundingClientRect().right` vs the time cell's `left` → overlap; (4) clear the agent filter → "No activity matches." on an empty profile.
@@ -3653,16 +3654,16 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-FOCUS-ORDER-VISIBILITY-01] Body dead-stop in the tab walk, invisible focus on hint links, unlabeled Settings controls
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 ui lane, findings 7 and 24. A keyboard user tabbing through the hub lands on nothing (and the page scrolls) after the activity filter, cannot see focus on the hint links, and five Settings fields have no accessible name.
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-31 01:30 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — candidate built; unit 2679/0, journeys 234/234, check:gallery clean
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `fc2255be`
-- Candidate: —
-- Shipping: —
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-recent-activity-user
+- Branch: cap-recent-activity-user
+- Base: origin/main 7037b6e6
+- Candidate: <tip after commit>
+- Shipping: pending review
 - Acceptance: A 60-Tab walk from hub load never lands on `body`; every `:focus-visible` element in the hub has a visible outline or box-shadow; no interactive hub element is under 24 px on either axis; the first-run guide's dismiss control comes after its actions in tab order; every Settings field has a `<label for>` and `deno run -A scripts/a11y-audit.ts` reports 17/17.
   - Context: the body stop: after `activity-explorer > select.aex-agent` the next Tab lands on `body` ("BODY-STOP scrollTop=483"). Candidates in `extension/ntp/ntp.html`: `#thread-sidebar` (821) and `#side-agents` (829) carry `tabindex="0"`, and `<agent-conversation id="thread-conversation" … tabindex="0">` (954) sits inside the hidden thread view — a focusable element inside a `hidden`/`display:none` ancestor is skipped, but one inside a `visibility`/off-screen container is not; bisect with `document.activeElement` after each Tab. Focus ring: `.panel-subhead .hint-link:hover, .panel-subhead .hint-link:focus-visible { text-decoration: underline; outline: none; }` (`ntp.html:646-649`) removes the ring; `a#bg-configure` and `a#discover-page` are 52x18 / 74x18 px. Small targets: four 39x21 `.aex-plain-copy` buttons in the explorer (`components.js` ~7228), twelve 16x19 `section-anchor` copy-link buttons in Settings. First-run guide: `<first-run-guide>` (`components.js` 685-788) renders its dismiss X before the five actions. Settings labels: `options.html` uses `<span class="field-label">` (97, 144, 243, 265) instead of `<label for>`, and `#board-deny-agent` (175) has no label; `scripts/a11y-audit.ts` check "settings: no unlabeled interactive controls" (253) reports `["select:", "input:", "input:", "textarea:", "textarea:"]`. The shared ring is `outline: 2px solid var(--accent); outline-offset: 2px` (every component's `:focus-visible` rule, e.g. `components.js:2225`). What must NOT change: `role="log"` + `aria-live` on the conversation; the `+` menu's focus management (it is the reference implementation).
   - Reproduce today: (1) build; `launchChrome()`; hub on a fresh profile; (2) send `Input.dispatchKeyEvent` Tab 60 times, logging `document.activeElement.tagName` and `scrollTop` each time → a `BODY` entry with a scroll jump; (3) focus `#bg-configure` via keyboard, read `getComputedStyle(el).outlineStyle` → `none`; (4) `deno run -A scripts/a11y-audit.ts` → 15/17 with the five unlabeled controls.
@@ -3684,16 +3685,16 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-ONE-SHELL-01] Three surfaces, three shells: one content width, one title, no duplicate chrome
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 ui lane, finding 10. Extends CAP-FB-20260828-DEAD-SURFACES-01 and CAP-FB-20260828-VIEW-FRAME-COLLAPSE-01. Artifacts, Directory and Settings each sit at a different left edge inside the hub, the embedded Artifacts view shows its name twice, and two unreachable pages (chat, memory explorer) still ship with their own shells.
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-31 01:30 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — candidate built; unit 2679/0, journeys 234/234, check:gallery clean
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `fc2255be`
-- Candidate: —
-- Shipping: —
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-recent-activity-user
+- Branch: cap-recent-activity-user
+- Base: origin/main 7037b6e6
+- Candidate: <tip after commit>
+- Shipping: pending review
 - Acceptance: `extension/chat/` and `extension/memory/` are deleted with no remaining reference; Artifacts, Directory, Skills and Settings share one `--content-max` / `--content-gutter` token pair so their content starts at the same left edge at 1440 and 1024 (measured); no embedded view shows its name twice.
   - Context: measured gutters: Artifacts 224 px, Directory 272 px, memory explorer 294 px; the embedded Artifacts view shows the frame bar "← Back | Artifacts" (`extension/ntp/ntp.html:926` `<span class="view-title" id="view-title">`) plus an `<h1>Artifacts</h1>` twenty pixels below; Settings shows a second brand header inside the frame. `chat/chat.html` and `memory/explorer.html` are referenced by no js/html/manifest (DEAD-SURFACES-01 confirmed it); `memory/explorer.js` also carries one of the four `escapeHtml` copies (line 75; ESCAPEHTML-SINGLE-SOURCE-01). Tokens live in `extension/shared/theme.css` (`--panel-2` 19, `--accent` 44; no content-width token exists today). The views are loaded in an iframe by `openView` in `extension/ntp/ntp.js` (grep `openView(`), which VIEW-FRAME-COLLAPSE-01 will replace; this entry is the bridge that makes them consistent now. What must NOT change: the hub's own layout; the views' functionality; `check:vocabulary`'s retired-file list (`scripts/check-vocabulary.mjs` RETIRED_FILES — add the two deleted pages so they cannot return).
   - Reproduce today: (1) build; `launchChrome()`; open the hub → Artifacts, Directory, Settings in turn; (2) for each, read the first content element's `getBoundingClientRect().left` inside the view frame → three different numbers; (3) in the Artifacts view, count `h1`/`.view-title` elements naming "Artifacts" → 2; (4) `grep -rn "chat/chat.html\|memory/explorer.html" extension --include=*.js --include=*.html --include=*.json` → only self-references.
@@ -3715,16 +3716,16 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-SLASH-PALETTE-COMBOBOX-01] The slash palette is not an accessible combobox
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 ui lane, finding 8. Typing `/` or `@` opens a visible list and ArrowDown highlights an item, but a screen reader hears nothing: the textarea announces no popup, no expanded state and no active option.
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-31 01:30 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — candidate built; unit 2679/0, journeys 234/234, check:gallery clean
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `fc2255be`
-- Candidate: —
-- Shipping: —
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-recent-activity-user
+- Branch: cap-recent-activity-user
+- Base: origin/main 7037b6e6
+- Candidate: <tip after commit>
+- Shipping: pending review
 - Acceptance: While a `/` or `@` palette is open the composer textarea carries `role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls=<listbox id> aria-activedescendant=<highlighted option id>`, option ids are stable across re-renders, the highlighted option is announced, and the a11y audit asserts it for both triggers (RED on today's tree).
   - Context: the composer is `<agent-composer>` (`extension/shared/components.js:4157-5198`). Its textarea (4196-4197) has only `aria-label` + `aria-describedby`; the popup is `<div class="popup" id="popup-${uid}" role="listbox" aria-label="Agent and resource mentions" hidden>` (4198). `_showPopup(items, token)` (4996-5010) unhides it; `_renderPopupItems` (5012-5037) builds `<div class="item" role="option" id="cmp-${uid}-opt-${i}" data-active aria-selected>` — so option ids already exist and are stable per index; `_setSelectionIndex` (5040-5046) re-renders on ArrowDown/Up; `_hidePopup` (~5139-5145). Commands come from `extension/shared/composer-commands.js` (`/agent`, `/files` at 42-45, 108-135, etc.). Measured: textarea `role=null`, `aria-expanded=null`, `aria-activedescendant=null` with the listbox open and `/agent` visually highlighted. The `+` menu (`AttachButton`, 1551-1717: `role="menu"`, `aria-haspopup`, `aria-expanded` toggled at 1586, arrow keys, Escape returns focus) is the in-repo reference for correct ARIA. The separate `/agent:` picker is the shared `<agent-picker>` (`role="listbox"` at 6069, options at 6127) opened by `_openSlashAgentPicker` (4914) — it needs the same textarea attributes while open. What must NOT change: the keyboard behaviour (ArrowUp/Down/Home/End/Enter/Escape), the `+` menu.
   - Reproduce today: (1) build; `launchChrome()`; hub; focus the composer; type `/`; press ArrowDown; (2) read `textarea.getAttribute("role"|"aria-expanded"|"aria-activedescendant")` → null/null/null; the popup's `[data-active="true"]` exists; (3) same with `@`.
@@ -3746,16 +3747,16 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-HUB-CHROME-POLISH-01] Hub chrome: Settings styled as the primary button, agent id as title, a zero-width directory card, developer icons in the header
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 ui lane, findings 9, 11, 15 and 19. On every screen the sidebar's Settings button is the only filled teal button (it reads as "selected"), an agent opened by URL is titled by its slug, a directory card can collapse to one character per line, and the hub header carries an amber "ready" dot plus shield and terminal popovers.
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-31 01:30 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — candidate built; unit 2679/0, journeys 234/234, check:gallery clean
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `fc2255be`
-- Candidate: —
-- Shipping: —
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-recent-activity-user
+- Branch: cap-recent-activity-user
+- Base: origin/main 7037b6e6
+- Candidate: <tip after commit>
+- Shipping: pending review
 - Acceptance: On the idle hub no footer button is filled and the open view's footer entry carries `aria-current="page"`; `#agent=named:writer` reloads to the title "Writer"; `<tool-directory-card>` never renders at zero width and the gallery smoke fails on any zero-width specimen; the header has no status text, no dot and at most one icon button when idle, with a status pill only while not ready.
   - Context: (1) `extension/ntp/ntp.html:844` `<button class="btn foot-btn" id="open-settings">` while Directory/Artifacts use `class="btn ghost foot-btn"` (838-841); `.btn` is the filled primary style and `.foot-btn` (491) only lays out; `docs/DESIGN.md:23-24` — accent "for primary actions, current selection, and state indicators only". (2) `extension/ntp/ntp.js:1926` `threadTitle.textContent = name || id || "Agent"` inside the agent-view opener; `applyCurrentHashRoute` (3366) reaches it with `name` undefined on a hash entry, so the header reads "writer" while the sidebar row (which passes the name) reads "Writer"; the background-agent path has the same shape at 1862. (3) `ToolDirectoryCard` (`components.js:1955-2032`) styles `:host { display:block; min-inline-size:0; container-type:inline-size; }` (1976) — a block child of a column flex parent with `container-type: inline-size` and no explicit inline size resolves to 0 px wide; measured in the gallery: 0 px wide, 3,599 px tall; unverified in the product (no enrolled site on a fresh profile) but the same CSS ships to `directory/directory.html`. (4) `ntp.html:864-867`: `<span class="status" id="status" role="status">` ("ready" with an amber dot — amber is the DESIGN "attention" colour), `<security-shield>` and `<error-console>` (defined at `components.js:7002` / `6942`; their popovers are `div.panel` with `aria-label` but no `role`); the console is a developer affordance on the home screen. What must NOT change: the keyboard reachability of Settings; the shield's role in surfacing security events (it moves, it is not deleted); the `status` element's `role="status"` semantics for the running/needs-approval states.
   - Reproduce today: (1) build; `launchChrome()`; hub; screenshot → Settings solid teal; (2) navigate to `#agent=named:writer` (after creating a named agent "Writer") and reload → header "writer"; (3) open `docs/components.html` (gallery smoke serves it) and measure the `tool-directory-card` specimen → width 0; (4) idle hub header → amber dot + "ready" + two icon buttons.

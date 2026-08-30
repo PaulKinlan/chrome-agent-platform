@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.505] — 2026-08-30
+- tasks: claim CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01 (hub coordinator worker)
+
 ## [0.2.504] — 2026-08-30
 - tasks: reconcile eleven IN_REVIEW entries to DONE — candidate content verified present on origin/main, only the tracker rows had lagged
 
