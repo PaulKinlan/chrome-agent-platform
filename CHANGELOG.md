@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.428] — 2026-08-30
+- Jobs panel: tolerate unupgraded elements in the unit-test DOM (optional refresh call, the activity-explorer pattern)
+
 ## [0.2.427] — 2026-08-30
 - Jobs panel on the hub: the shared agent board is visible — open, settled, and messages, live across worker restarts
 

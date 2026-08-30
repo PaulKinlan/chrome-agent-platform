@@ -1082,7 +1082,7 @@ function renderJobsBoard() {
     jobsBoardEl = document.createElement("jobs-board");
     host.replaceChildren(jobsBoardEl);
   }
-  jobsBoardEl.refresh().then(() => {
+  jobsBoardEl?.refresh?.().then(() => {
     const hint = document.getElementById("jobs-count");
     if (hint && jobsBoardEl) hint.textContent = jobsBoardEl.summary;
   }).catch(() => {});
