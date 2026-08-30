@@ -24,7 +24,15 @@ import {
   payloadDigest,
   resolvePendingApproval,
   waitForApprovalDecision,
+  boundStagedApprovalDetail,
+  getStagedApprovalDetail,
+  mayReadApprovalDetail,
+  stageApprovalDetail,
 } from "../extension/lib/owner-approval.js";
+// The BUILT diff bundle (jsdiff): the consumers never resolve the bare "diff"
+// specifier from source, so the test computes the reference counts through the
+// same build the extension ships (run `npm run build` first).
+import { structuredPatch } from "../extension/dist/shared/diff-core.bundle.js";
 import { isExactOptionsSender, SETTINGS_SECTIONS } from "../extension/lib/pure.js";
 import { scrubEventDetail } from "../extension/lib/diagnostics.js";
 
@@ -333,4 +341,114 @@ Deno.test("script.create / script.run / task.schedule-script are approvable dest
   assertEquals(withDetail.permissionRequirement.approvals[0].detail, { source: "return 1", hosts: ["example.com"], dynamic: false });
   const other = approvalCardDenial({ approvalId: "a1", action: "asset.delete", targetRef: "ref", detail: { source: "x", hosts: [], dynamic: false } });
   assertEquals(other.permissionRequirement.approvals[0].detail, undefined);
+});
+
+// CAP-FB-20260830-EDIT-APPROVAL-SHOWS-DIFF-01: a model-initiated asset.update /
+// script.update stages the PRIVATE edit detail (current + proposed body) so the
+// owner surface can render the diff on the approval card. The record is gated to
+// the owner surfaces only, never enters the model-facing envelope, and is
+// evicted with its approval row.
+const EDIT_V1 = [
+  "<!doctype html>", "<html>", "  <body>", "    <h1>Crumb</h1>",
+  "    <p>Fresh sourdough, baked daily.</p>", "  </body>", "</html>",
+].join("\n");
+const EDIT_V2 = [
+  "<!doctype html>", "<html>", "  <body>", "    <h1>Crumb Bakery</h1>",
+  "    <p>Fresh sourdough and pastries, baked daily.</p>",
+  "    <h2>Opening hours</h2>", "    <p>Mon to Sat, 7am to 3pm.</p>", "  </body>", "</html>",
+].join("\n");
+const editTarget = canonicalOperationTarget("asset", { origin: "master", id: "a_1" });
+const editDigest = "a".repeat(64);
+
+Deno.test("approval.detail is refused for the model principal and for page senders", () => {
+  // Only the owner surfaces (the conversation's extension document, or Settings)
+  // may read the staged diff bodies.
+  assertEquals(mayReadApprovalDetail("extension"), true);
+  assertEquals(mayReadApprovalDetail("owner-options"), true);
+  // The model principal and any page / content-script sender are refused.
+  assertEquals(mayReadApprovalDetail("model"), false);
+  assertEquals(mayReadApprovalDetail("page"), false);
+  assertEquals(mayReadApprovalDetail("content-script"), false);
+  assertEquals(mayReadApprovalDetail(undefined), false);
+  assertEquals(mayReadApprovalDetail(""), false);
+});
+
+Deno.test("the staged detail is evicted when the approval resolves or expires", async () => {
+  const store = createApprovalStore();
+  const detail = { kind: "asset.update", name: "crumb.html", oldContent: EDIT_V1, newContent: EDIT_V2, added: 4, removed: 2 };
+
+  // Staging fails closed without a pending row.
+  assertEquals(stageApprovalDetail(store, "ap_none", detail).ok, false);
+
+  // Deny evicts.
+  const denied = createPendingApproval(store, "run-deny", "asset.update", editTarget, editDigest);
+  assert(denied.ok);
+  assertEquals(stageApprovalDetail(store, denied.approvalId, detail).ok, true);
+  assert(getStagedApprovalDetail(store, denied.approvalId) !== null);
+  resolvePendingApproval(store, denied.approvalId, false);
+  assertEquals(getStagedApprovalDetail(store, denied.approvalId), null);
+
+  // Approve then consume evicts (the row lingers between approve and consume).
+  const approved = createPendingApproval(store, "run-approve", "asset.update", editTarget, editDigest);
+  assert(approved.ok);
+  stageApprovalDetail(store, approved.approvalId, detail);
+  resolvePendingApproval(store, approved.approvalId, true);
+  assert(getStagedApprovalDetail(store, approved.approvalId) !== null);
+  assertEquals(consumeApproved(store, "run-approve", "asset.update", editTarget, editDigest).ok, true);
+  assertEquals(getStagedApprovalDetail(store, approved.approvalId), null);
+
+  // TTL expiry evicts (sweep on the next read).
+  const expiring = createPendingApproval(store, "run-expire", "asset.update", editTarget, editDigest, 5);
+  assert(expiring.ok);
+  stageApprovalDetail(store, expiring.approvalId, detail);
+  assert(getStagedApprovalDetail(store, expiring.approvalId) !== null);
+  await new Promise((r) => setTimeout(r, 25));
+  assertEquals(getStagedApprovalDetail(store, expiring.approvalId), null);
+});
+
+Deno.test("staged added/removed equals structuredPatch of the two bodies", () => {
+  const store = createApprovalStore();
+  const pending = createPendingApproval(store, "run-diff", "asset.update", editTarget, editDigest);
+  assert(pending.ok);
+  // The reference counts from the shipped diff core.
+  const patch = structuredPatch("crumb.html", "crumb.html", EDIT_V1, EDIT_V2, undefined, undefined, { context: 3 });
+  let added = 0;
+  let removed = 0;
+  for (const hunk of patch.hunks) {
+    for (const line of hunk.lines) {
+      if (line[0] === "+") added++;
+      else if (line[0] === "-") removed++;
+    }
+  }
+  assert(added > 0 && removed > 0, "the fixture edit must add and remove lines");
+  assertEquals(stageApprovalDetail(store, pending.approvalId, {
+    kind: "asset.update", name: "crumb.html", oldContent: EDIT_V1, newContent: EDIT_V2, added, removed,
+  }).ok, true);
+  const staged = getStagedApprovalDetail(store, pending.approvalId);
+  assert(staged);
+  assertEquals(staged.added, added);
+  assertEquals(staged.removed, removed);
+  // The stored bodies are exactly the ones the counts describe (the card diffs
+  // these, so the title's +n -m can never disagree with the rendered hunks).
+  assertEquals(staged.oldContent, EDIT_V1);
+  assertEquals(staged.newContent, EDIT_V2);
+  assertEquals(staged.oldLabel, "crumb.html (current)");
+  assertEquals(staged.newLabel, "crumb.html (proposed)");
+});
+
+Deno.test("boundStagedApprovalDetail drops a malformed or model-forbidden record and never leaks it to the model envelope", () => {
+  // Unknown kind, missing name → dropped (the card falls back to the opaque form).
+  assertEquals(boundStagedApprovalDetail({ kind: "asset.delete", name: "x", oldContent: "a", newContent: "b" }), null);
+  assertEquals(boundStagedApprovalDetail({ kind: "asset.update", name: "", oldContent: "a", newContent: "b" }), null);
+  assertEquals(boundStagedApprovalDetail(null), null);
+  assertEquals(boundStagedApprovalDetail("nope"), null);
+  // Negative / non-integer counts are floored to 0, bodies coerced to strings.
+  const bounded = boundStagedApprovalDetail({ kind: "asset.update", name: "n", oldContent: "a", newContent: "b", added: -3, removed: 1.5 });
+  assertEquals(bounded?.added, 0);
+  assertEquals(bounded?.removed, 0);
+  // The model-facing envelope (approvalCardDenial) never carries the staged
+  // bodies for an edit action — the current body is not necessarily model-authored.
+  const envelope = approvalCardDenial({ approvalId: "a1", action: "asset.update", targetRef: "ref", detail: { source: EDIT_V1, hosts: [], dynamic: false } });
+  assertEquals(envelope.permissionRequirement.approvals[0].detail, undefined);
+  assert(!JSON.stringify(envelope).includes("Opening hours"));
 });

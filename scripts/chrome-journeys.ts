@@ -507,6 +507,8 @@ const EXPECTED = [
   "Streaming: the assistant bubble grows across at least 5 distinct lengths",
   "Streaming: the final bubble equals the non-streamed render",
   "Claim check: a failed delegate renders one correction and one final bubble",
+  "Thread view: edit approval card names the artifact and shows +n -m",
+  "Thread view: edit approval card renders the diff with a '+' Opening hours line before the decision",
   "Thread view: update card is titled with the artifact name",
   "Thread view: run banner visible 300 ms after send",
   "Thread view: no empty panel space below a two-turn thread at 1440x900",
@@ -2737,12 +2739,41 @@ async function main() {
     // asset.update is an owner-approved action: the run pauses on the
     // in-context approval card. Approve it with a GENUINE click (the same
     // real-input path the Scripts journey uses) so the edit actually lands.
+    // The card that pauses the run must SHOW THE DIFF before the owner decides
+    // (CAP-FB-20260830-EDIT-APPROVAL-SHOWS-DIFF-01): the artifact NAME + a
+    // +n -m title and the line diff (current vs proposed) rendered by
+    // <artifact-diff>, so the owner is not asked to approve an opaque hash.
+    const APPROVAL_DIFF_PROBE = `(() => {
+      const card = [...document.querySelectorAll('#thread-conversation approval-card')].find((x) => (x.getAttribute('state') || 'pending') === 'pending');
+      if (!card) return JSON.stringify(null);
+      const sr = card.shadowRoot;
+      const title = sr ? (sr.querySelector('.title')?.textContent ?? '') : '';
+      const body = sr ? (sr.querySelector('.body')?.textContent ?? '') : '';
+      const diff = card.querySelector('artifact-diff');
+      const dr = diff ? diff.shadowRoot : null;
+      const addRows = dr ? [...dr.querySelectorAll('.tx[data-kind="add"]')].map((n) => n.textContent) : [];
+      const delRows = dr ? [...dr.querySelectorAll('.tx[data-kind="del"]')].map((n) => n.textContent) : [];
+      const counts = dr ? { add: dr.querySelector('.counts .add')?.textContent ?? '', del: dr.querySelector('.counts .del')?.textContent ?? '' } : null;
+      return JSON.stringify({ title, body, hasDiff: !!diff, addRows, delRows, counts });
+    })()`;
+    let editApprovalProbe = null;
     {
       const t0 = Date.now();
       let approved = false;
       while (Date.now() - t0 < 20000 && !approved) {
         const pending = await evalIn(cdp, ntpSession, `(() => { const c = [...document.querySelectorAll('#thread-conversation approval-card')].find((x) => (x.getAttribute('state') || 'pending') === 'pending'); return c ? true : false; })()`).catch(() => false);
         if (pending === true) {
+          // Wait for the diff region to render on the card (the bodies are
+          // fetched from the SW's principal-gated approval.detail route).
+          const dt0 = Date.now();
+          while (Date.now() - dt0 < 6000) {
+            editApprovalProbe = JSON.parse((await evalIn(cdp, ntpSession, APPROVAL_DIFF_PROBE).catch(() => "null")) ?? "null");
+            if (editApprovalProbe && editApprovalProbe.hasDiff && editApprovalProbe.addRows.length > 0) break;
+            await sleep(200);
+          }
+          console.log(`thread-view journey: edit approval card = ${JSON.stringify(editApprovalProbe)?.slice(0, 400)}`);
+          const diffShot = await captureShot(cdp, ntpSession);
+          if (diffShot) await writeEvidence("thread-edit-approval-diff.png", diffShot);
           approved = await clickShadow(cdp, ntpSession, "#thread-conversation approval-card", ".approve");
           break;
         }
@@ -2752,6 +2783,15 @@ async function main() {
       }
       console.log(`thread-view journey: update approved via real click = ${approved}`);
     }
+    check(
+      "Thread view: edit approval card names the artifact and shows +n -m",
+      !!editApprovalProbe && /Update crumb\.html\? \(\+\d+ -\d+\)/.test(String(editApprovalProbe.title)),
+    );
+    check(
+      "Thread view: edit approval card renders the diff with a '+' Opening hours line before the decision",
+      !!editApprovalProbe && editApprovalProbe.hasDiff === true &&
+        Array.isArray(editApprovalProbe.addRows) && editApprovalProbe.addRows.some((t) => /Opening hours/.test(String(t))),
+    );
     const threadEditTurn = await settledThread(30000);
     console.log(`thread-view journey (turn 1): ${JSON.stringify(threadEditTurn).slice(0, 700)}`);
     {

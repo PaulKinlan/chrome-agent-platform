@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.503] — 2026-08-30
+- When the agent asks to edit one of your artifacts, the approval card now shows the change itself — the artifact's name, a +added -removed summary, and the line-by-line diff between the current and proposed versions — so you can see exactly what you are approving before you decide, instead of an opaque reference.
+
 ## [0.2.502] — 2026-08-30
 - The last visible-editing fixes are in progress in parallel and recorded as claimed.
 

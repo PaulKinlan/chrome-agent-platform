@@ -566,7 +566,11 @@ import {
   payloadDigest,
   resolvePendingApproval,
   waitForApprovalDecision,
+  stageApprovalDetail,
+  getStagedApprovalDetail,
+  mayReadApprovalDetail,
 } from "../lib/owner-approval.js";
+import { lineDiffSummary } from "../shared/diff-core.js";
 import { bridgeAndAuditApprovalBindings } from "../lib/approval-bridge-audit.js";
 import { journalJson } from "../shared/tool-tree.js";
 import { createAgentBoardRoutes, BOARD_HUB_ID, posterThreadResolver, boardHeartbeatPlan } from "../lib/agent-board.js";
@@ -3354,7 +3358,13 @@ function approvalExecutionId(context) {
 // (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01). It never enters the digest
 // (the payload binds the source digest + hosts) and is bounded by
 // approvalCardDenial before it leaves the worker.
-async function requireOwnerApproval(context, action, target, payload, detail = undefined) {
+// `stagedDetail` (optional, edit actions only): { kind, name, oldContent,
+// newContent, added, removed } staged in the approval store keyed by the
+// pending approvalId, for the OWNER surface to render the diff on the card
+// (EDIT-APPROVAL-SHOWS-DIFF-01). Unlike `detail`, it is NEVER placed in the
+// model-facing envelope — the current stored body is not necessarily model-
+// authored, so it stays behind the `approval.detail` principal gate.
+async function requireOwnerApproval(context, action, target, payload, detail = undefined, stagedDetail = undefined) {
   const executionId = approvalExecutionId(context);
   if (!executionId || !target) return { ok: false, error: "This operation requires owner approval." };
   // Owner-DIRECT actions: the owner's own click in an extension UI document IS
@@ -3384,6 +3394,12 @@ async function requireOwnerApproval(context, action, target, payload, detail = u
   const row = ownerApprovalStore.approvals.get(pending.approvalId);
   if (row) row.targetRef = targetRef;
   if (!pending.deduped) securityApprovalEvent("requested", action, targetRef);
+  // Stage the private diff detail for the owner's card (model path only — the
+  // owner-direct / Settings paths never publish an in-context card). Best
+  // effort: a failure here only falls the card back to its opaque form.
+  if (stagedDetail && context?.principal === "model") {
+    stageApprovalDetail(ownerApprovalStore, pending.approvalId, stagedDetail);
+  }
 
   // A model-originated mutation stays inside THIS tool invocation. Publish its
   // bounded request on the run's own progress channel, then await the exact
@@ -5863,6 +5879,19 @@ const handlers = mergeRouteMaps(
     }
     return result;
   },
+  // The PRIVATE edit detail (the current + proposed bodies) the owner surface
+  // renders as a diff on the approval card (EDIT-APPROVAL-SHOWS-DIFF-01). Gated
+  // to the owner surfaces only — the model and any page/content-script sender
+  // are refused, so the staged bodies never cross to a model-controlled or web
+  // principal. The record is evicted with its approval row (resolve/expire).
+  async "approval.detail"({ approvalId }, context) {
+    if (!mayReadApprovalDetail(context?.principal)) {
+      return { ok: false, error: "approval detail is available only to the owner surface" };
+    }
+    const detail = getStagedApprovalDetail(ownerApprovalStore, String(approvalId ?? ""));
+    if (!detail) return { ok: false, error: "no staged detail for this approval" };
+    return { ok: true, detail };
+  },
 
   // ---- artifacts (asset) management (the hub agent's create_asset / etc.) ----
   // NOTE: the asset TYPE field is named `assetType` here (not `type`) because the
@@ -5918,7 +5947,21 @@ const handlers = mergeRouteMaps(
         ["id", id], ["type", assetType], ["name", name], ["content", content],
       ]);
     } catch { return { ok: false, error: "asset update payload is not approvable" }; }
-    const gate = await requireOwnerApproval(context, "asset.update", target, payload);
+    // Stage the diff the owner approves: the current stored body vs the
+    // proposed body, named by the artifact (EDIT-APPROVAL-SHOWS-DIFF-01). The
+    // +n -m is computed here with the SAME diff core the card renders, so the
+    // title's counts can never disagree with the hunks. Content-only updates
+    // still name the artifact; a name/type-only update carries no new body.
+    const assetName = typeof exists.asset?.name === "string" && exists.asset.name ? exists.asset.name : (typeof name === "string" && name ? name : id);
+    const oldContent = typeof exists.asset?.content === "string" ? exists.asset.content : "";
+    const newContent = typeof content === "string" ? content : oldContent;
+    const editSummary = lineDiffSummary(oldContent, newContent);
+    const stagedDetail = {
+      kind: "asset.update", name: assetName, oldContent, newContent,
+      added: editSummary.added, removed: editSummary.removed,
+      oldLabel: `${assetName} (current)`, newLabel: `${assetName} (proposed)`,
+    };
+    const gate = await requireOwnerApproval(context, "asset.update", target, payload, undefined, stagedDetail);
     if (!gate.ok) return gate;
     const patch = {};
     if (assetType !== undefined) patch.type = assetType;
@@ -6030,7 +6073,19 @@ const handlers = mergeRouteMaps(
         ["id", id], ["name", name], ["source", source],
       ]);
     } catch { return { ok: false, error: "script update payload is not approvable" }; }
-    const gate = await requireOwnerApproval(context, "script.update", target, payload);
+    // Same card as asset.update: the owner sees the source diff before deciding.
+    const existingScript = await getScript(scope, id).catch(() => null);
+    const scriptName = typeof existingScript?.script?.name === "string" && existingScript.script.name
+      ? existingScript.script.name : (typeof name === "string" && name ? name : id);
+    const oldSource = typeof existingScript?.script?.source === "string" ? existingScript.script.source : "";
+    const newSource = typeof source === "string" ? source : oldSource;
+    const scriptSummary = lineDiffSummary(oldSource, newSource);
+    const stagedScriptDetail = {
+      kind: "script.update", name: scriptName, oldContent: oldSource, newContent: newSource,
+      added: scriptSummary.added, removed: scriptSummary.removed,
+      oldLabel: `${scriptName} (current)`, newLabel: `${scriptName} (proposed)`,
+    };
+    const gate = await requireOwnerApproval(context, "script.update", target, payload, undefined, stagedScriptDetail);
     if (!gate.ok) return gate;
     const patch = {};
     if (name !== undefined) patch.name = name;
