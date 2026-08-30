@@ -122,8 +122,11 @@ and idempotent; owner keys are never selected or evicted.
 Source: `extension/lib/durable-runs.js:17-45,207-368`;
 `extension/lib/memory.js:610-834`; `extension/lib/threads.js:282-405`.
 Large-request and full-terminal retention are covered by
-`tests/durable-runs.test.ts:881-917`; retain-all policy and restart retention by
-`tests/durable-runs.test.ts:593-606,919-952`.
+`tests/durable-runs.test.ts:881-917`; the resolved policy and restart retention by
+`tests/durable-runs.test.ts`, and bounded compaction by its `retention:` tests
+(the 11th execution of a thread, retain-all, the global cap, and the setting
+fallback) plus `tests/thread-log-redesign.test.ts` KAT 10 (a compacted run
+reopens honestly).
 
 Retention is **bounded by default and never evicts** (CAP-FB-20260830-RUN-LOG-
 COMPACTION-01). `RUN_RETENTION_POLICY` (stamp `run-retention-v2`; v1-stamped
@@ -150,7 +153,10 @@ it is the single writer of `run:` keys, every mutation through its store drops
 the cached entry, and a service-worker restart starts cold. That is what made
 `run.list` and `thread.get` stop scaling with the profile (152 ms → single-digit
 ms at 120 seeded threads); the thread view's legacy self-migration scan now runs
-only for a thread with no reverse index at all.
+only for a thread with no reverse index at all. Because the cache assumes that
+single writer, `system.factoryReset` — which wipes OPFS without restarting the
+worker — calls `durableRuns.forgetCachedState()` so the registry goes cold
+rather than answering about runs that no longer exist.
 
 ## Settlement order
 

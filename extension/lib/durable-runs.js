@@ -2137,6 +2137,17 @@ export function createDurableRunRegistry({
     listLogs,
     listThreadExecutions,
     compactExecution: (executionId) => locked(() => compactExecution(executionId)),
+    // Drop every in-memory memo of durable state. The record cache is only
+    // sound because this registry is the SINGLE writer of `run:` keys — a
+    // factory reset wipes OPFS out from under it WITHOUT restarting the
+    // worker, so the reset route calls this and the registry goes cold, the
+    // way a fresh worker starts.
+    forgetCachedState() {
+      recordCache.clear();
+      seenKeys.clear();
+      logHandles.clear();
+      scannedThreads.clear();
+    },
     recover,
     list,
     activeByJournalTarget,

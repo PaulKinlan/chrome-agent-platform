@@ -5305,6 +5305,10 @@ const handlers = mergeRouteMaps(
     }
     try {
       const result = await executeFactoryReset();
+      // The reset wipes OPFS without restarting this worker, so the durable-run
+      // registry's in-memory record cache would still describe runs that no
+      // longer exist. Go cold (CAP-FB-20260830-RUN-LOG-COMPACTION-01).
+      durableRuns.forgetCachedState?.();
       await invalidateOrchestrator();
       return { ok: true, ...result };
     } catch (err) {

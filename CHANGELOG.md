@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.477] — 2026-08-30
+- Run logs no longer grow forever. Every run keeps its record and its answer; the step-by-step tool detail is kept in full for your newest runs and folded into a one-line summary for older ones. Settings → Data & memory shows the bound and has a "Keep every run log" switch if you want everything kept. Opening a task is also much faster on a busy profile.
+
 ## [0.2.476] — 2026-08-30
 - Tracker: the diff view component is recorded as landed.
 

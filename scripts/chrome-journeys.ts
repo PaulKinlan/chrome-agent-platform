@@ -3044,9 +3044,15 @@ async function main() {
       "Settings: the run-log retention toggle reports the bounded default (off)",
       retentionRow?.checked === false && retentionRow?.switchState === "false",
     );
-    await evalOpts(`(() => { location.hash = '#data'; document.querySelector('#run-retention')?.scrollIntoView({ block: 'center' }); return true; })()`);
+    // By this point in the run the NTP is the ACTIVE tab, and
+    // Page.captureScreenshot never returns for a backgrounded one (it hung the
+    // whole suite). Activate the options target first, then drive the real nav
+    // item so Data & memory is genuinely the visible section.
+    await cdp.send("Target.activateTarget", { targetId: optsPageReload.id }).catch(() => {});
+    await clickSel(cdp, optsSession, '.nav-item[data-section="data"]');
+    await evalOpts(`(() => { document.querySelector('#run-retention')?.scrollIntoView({ block: 'center' }); return true; })()`);
     await sleep(400);
-    const retentionShot = await captureShot(cdp, optsSession);
+    const retentionShot = await captureShot(cdp, optsSession).catch(() => null);
     if (retentionShot) await writeEvidence("settings-data-retention.png", retentionShot);
     check("Settings: retained the run-log retention screenshot", retentionShot !== null && retentionShot.length > 200);
     check(

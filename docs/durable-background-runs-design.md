@@ -101,7 +101,8 @@ run:<executionId> = { executionId, clientCorrelationId, threadId?,
   taskPreview (bounded, redacted),
   phase: running|settling|resume-dispatching|paused-interruption|paused-permission|paused-provider-change|paused-side-effect-uncertain|cancel-requested|cancelled|terminal,
   revision (monotonic, see §2.5), startedAt, heartbeatAt, progressCount,
-  resumeAttemptCount (bounded), resumeState?, retentionPolicyVersion: "run-retention-v1", cancellation?, pause?,
+  resumeAttemptCount (bounded), resumeState?, retentionPolicyVersion: "run-retention-v2", cancellation?, pause?,
+  logBytes?, logCompacted?: { at, rowsDropped, bytesBefore, bytesAfter },
   terminal?: { ok, at, summary } }
 ```
 

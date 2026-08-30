@@ -1682,3 +1682,21 @@ Deno.test("retention: an unknown setting falls back to the bounded defaults and 
   assertEquals(snapshot.retentionPolicy.mode, "bounded");
   assertEquals(snapshot.retentionPolicy.globalBytes, 32 * 1024 * 1024);
 });
+
+Deno.test("retention: a wipe under a live registry is survivable — forgetCachedState drops the record cache", async () => {
+  // The record cache is sound only because this registry is the SINGLE writer
+  // of `run:` keys. A factory reset wipes OPFS WITHOUT restarting the worker,
+  // so the registry must be able to go cold on demand — otherwise it keeps
+  // answering about runs that no longer exist.
+  const store = new FakeStore();
+  const { registry } = harness(store);
+  const [id] = await seedThread(registry, "thread-wipe", 1, { prefix: "exec_wipe" });
+  // Warm the cache through a real public read.
+  assertEquals((await registry.getRetryRequest(id)).error, "run did not fail");
+  // Wipe the durable state behind the registry's back, exactly as the reset does.
+  for (const key of await store.keys()) await store.delete(key);
+  registry.forgetCachedState();
+  const after = await registry.getRetryRequest(id);
+  assertEquals(after.error, "unknown execution", "no phantom record survives the wipe");
+  assertEquals((await registry.list()).runs.length, 0, "the wiped registry lists nothing");
+});
