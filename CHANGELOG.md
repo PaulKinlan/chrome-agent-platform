@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.464] — 2026-08-30
+- Tracker: stray merge markers removed from the task list, with a test that keeps them out.
+
 ## [0.2.463] — 2026-08-30
 - Six more fixes are in progress in parallel and recorded as claimed in the tracker.
 
