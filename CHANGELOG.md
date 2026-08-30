@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.472] — 2026-08-30
+- Tracker: artifact versions are recorded as landed.
+
 ## [0.2.471] — 2026-08-30
 - Landed: every edit to an artifact keeps the previous version, and any earlier version can be restored.
 
