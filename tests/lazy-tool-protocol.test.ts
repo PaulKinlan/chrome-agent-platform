@@ -404,6 +404,9 @@ Deno.test("lazy protocol: Zod validation is applied before the existing dispatch
       error: "lazy-arguments-invalid",
       reason: "parse-rejected",
       detail: "value must be string; received number",
+      // the ref is handed back un-consumed (SELECTION-REF-VALIDATE-FIRST-01)
+      selectionRef: ref,
+      retryable: true,
     },
   );
   assertEquals(calls, 0);
@@ -845,3 +848,112 @@ Deno.test("lazy protocol: top-k and aggregate selection responses stay bounded",
   assert(searched.results.length <= 12);
   assert(JSON.stringify(searched).length <= 32 * 1024);
 });
+
+// CAP-FB-20260830-SELECTION-REF-VALIDATE-FIRST-01 — an argument-validation
+// failure must NOT consume the single-use selectionRef: the model repairs its
+// arguments and retries with the SAME ref (the operating manual forbids a
+// second search). A SUCCESSFUL execution still consumes it (replay refused).
+function enumRecords(execute: (args: Record<string, unknown>) => unknown) {
+  const tools = {
+    create_thing: tool({
+      description: "Create a thing. type: \"html\" | \"text\"",
+      inputSchema: z.object({
+        type: z.enum(["html", "text"]),
+        name: z.string().max(64),
+      }),
+      execute,
+    }),
+  };
+  return executableBuiltinToolRecords(tools, adapterContext());
+}
+
+Deno.test("selection: invalid arguments do not consume the ref; the corrected retry succeeds", async () => {
+  let calls = 0;
+  const records = enumRecords((args) => {
+    calls++;
+    return { created: args.type };
+  });
+  const protocol = new LazyToolProtocol({
+    readSources: () => records,
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+  });
+  const context = runContext();
+  const searched = await protocol.search({ query: "create_thing", limit: 1 }, context);
+  assertEquals(searched.ok, true);
+  const ref = searched.results[0].selectionRef;
+  assertMatch(ref, /^sel_[a-f0-9]{36}$/);
+
+  // 1. The MIME-type slip the live lane observed (Gemini sent "text/html").
+  const slip = await protocol.execute({
+    selectionRef: ref,
+    arguments: { type: "text/html", name: "bakery" },
+  }, context) as Record<string, unknown>;
+  assertEquals(slip.ok, false);
+  assertEquals(slip.error, "lazy-arguments-invalid");
+  assertEquals(slip.reason, "parse-rejected");
+  assertStringIncludes(String(slip.detail), "html");
+  assertEquals(slip.retryable, true, "the error tells the model it may retry");
+  assertEquals(slip.selectionRef, ref, "the error hands the SAME ref back");
+  assertEquals(calls, 0, "invalid arguments never dispatch");
+  assert(
+    utf8Bytes(JSON.stringify(slip)) <= 1024,
+    "the retryable error stays within maxErrorBytes",
+  );
+
+  // 2. A shape slip (sanitizer-rejected, not Zod) is equally non-consuming.
+  const shape = await protocol.execute({
+    selectionRef: ref,
+    arguments: [1, 2, 3],
+  }, context) as Record<string, unknown>;
+  assertEquals(shape.ok, false);
+  assertEquals(shape.error, "lazy-arguments-invalid");
+  assertEquals(shape.retryable, true);
+  assertEquals(shape.selectionRef, ref);
+  assertEquals(calls, 0);
+
+  // 3. The corrected retry with the SAME ref succeeds.
+  const fixed = await protocol.execute({
+    selectionRef: ref,
+    arguments: { type: "html", name: "bakery" },
+  }, context) as Record<string, unknown>;
+  assertEquals(fixed.ok, true, `corrected retry must succeed, got ${JSON.stringify(fixed)}`);
+  assertEquals(fixed.result, { created: "html" });
+  assertEquals(calls, 1);
+
+  // 4. A successful execution still consumes the ref: replay stays refused,
+  //    and the replay error is NOT marked retryable.
+  const replay = await protocol.execute({
+    selectionRef: ref,
+    arguments: { type: "html", name: "bakery" },
+  }, context) as Record<string, unknown>;
+  assertEquals(replay, { ok: false, error: "selection-replayed" });
+  assertEquals(calls, 1, "a consumed ref cannot dispatch twice");
+});
+
+Deno.test("selection: a validation failure after expiry does not resurrect the ref", async () => {
+  let now = 1_000;
+  const records = enumRecords(() => ({ ok: true }));
+  const protocol = new LazyToolProtocol({
+    readSources: () => records,
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory(), clock: () => now }),
+  });
+  const context = runContext();
+  const searched = await protocol.search({ query: "create_thing", limit: 1 }, context);
+  const ref = searched.results[0].selectionRef;
+  const slip = await protocol.execute({
+    selectionRef: ref,
+    arguments: { type: "text/html", name: "x" },
+  }, context) as Record<string, unknown>;
+  assertEquals(slip.retryable, true);
+  now += 10 * 60 * 1000; // past maxTtlMs
+  const late = await protocol.execute({
+    selectionRef: ref,
+    arguments: { type: "html", name: "x" },
+  }, context) as Record<string, unknown>;
+  assertEquals(late.ok, false);
+  assertEquals(late.error, "selection-missing-or-expired");
+});
+
+function utf8Bytes(text: string) {
+  return new TextEncoder().encode(text).length;
+}

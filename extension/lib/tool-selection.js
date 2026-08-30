@@ -279,6 +279,7 @@ export class ToolSelectionAuthority {
     return Object.freeze({
       ...resolved,
       claim: Object.freeze({
+        selectionRef,
         stableId: record.stableId,
         sourceGeneration: record.sourceGeneration,
         packageIdentity: record.packageIdentity,
@@ -286,6 +287,45 @@ export class ToolSelectionAuthority {
         expiresAt: record.expiresAt,
       }),
     });
+  }
+
+  /** Hand a claimed reference back when the claim never reached dispatch
+   * (argument validation failed — CAP-FB-20260830-SELECTION-REF-VALIDATE-FIRST-01).
+   * The model repairs its arguments and retries with the SAME ref; the
+   * operating manual forbids a second search. Restores the identical record
+   * exactly once, never after expiry, never for a ref that was not claimed
+   * from this authority. Returns true when the ref is live again. */
+  release(claimInput) {
+    const now = this.#clock();
+    this.#purge(now);
+    const claim = claimInput && typeof claimInput === "object" ? claimInput : {};
+    const selectionRef = safeFence(ownData(claim, "selectionRef"));
+    const expiresAt = Number(ownData(claim, "expiresAt"));
+    if (!/^sel_[a-f0-9]{36}$/u.test(selectionRef)) return false;
+    if (!(expiresAt > now)) return false;
+    if (this.#records.has(selectionRef)) return false;
+    // Only a ref this authority consumed with this exact expiry comes back.
+    if (this.#consumed.get(selectionRef) !== expiresAt) return false;
+    const context = scopeContext(ownData(claim, "context"));
+    const stableId = ownData(claim, "stableId");
+    const sourceGeneration = ownData(claim, "sourceGeneration");
+    if (typeof stableId !== "string" || typeof sourceGeneration !== "string") {
+      return false;
+    }
+    this.#consumed.delete(selectionRef);
+    this.#records.set(
+      selectionRef,
+      Object.freeze({
+        selectionRef,
+        stableId,
+        sourceGeneration,
+        packageIdentity: ownData(claim, "packageIdentity"),
+        context,
+        issuedAt: now,
+        expiresAt,
+      }),
+    );
+    return true;
   }
 
   revalidateClaim(claimInput, contextInput, catalog) {

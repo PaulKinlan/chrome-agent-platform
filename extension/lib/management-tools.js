@@ -110,7 +110,7 @@ export function managementToolset({ callRoute }) {
     // ---- artifacts ----
     create_asset: tool({
       description:
-        "Create an artifact (a thing you make for the owner). Use origin 'master' for a hub-level artifact, or an origin for a site-specific one. type: html|text|json|image|data. Pass the SAME key on every run that should produce the SAME artifact: a key that already exists finds and updates that exact artifact instead of creating a duplicate.",
+        "Create an artifact (a thing you make for the owner). Use origin 'master' for a hub-level artifact, or an origin for a site-specific one. type: \"html\" | \"text\" | \"json\" | \"image\" | \"data\" (exactly one of these literals — never a MIME type). Pass the SAME key on every run that should produce the SAME artifact: a key that already exists finds and updates that exact artifact instead of creating a duplicate.",
       inputSchema: z.object({
         origin: z.string().default("master").describe("'master' or an https origin"),
         type: z.enum([...ASSET_TYPES]).default("text"),
@@ -122,7 +122,7 @@ export function managementToolset({ callRoute }) {
         call("asset.create", { origin, assetType: type, key, name, content }),
     }),
     update_asset: tool({
-      description: "Update an artifact's name/type/content.",
+      description: "Update an artifact's name/type/content. type: \"html\" | \"text\" | \"json\" | \"image\" | \"data\" (exactly one of these literals — never a MIME type).",
       inputSchema: z.object({
         origin: z.string().default("master"),
         id: z.string(),

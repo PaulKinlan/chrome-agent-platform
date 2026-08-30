@@ -201,3 +201,37 @@ Deno.test("tool selection: stale/missing catalog and malformed fences fail close
     "missing-selection-fence",
   );
 });
+
+// CAP-FB-20260830-SELECTION-REF-VALIDATE-FIRST-01 — release() hands a claimed
+// ref back when the claim never dispatched (argument validation failed).
+Deno.test("tool selection: release restores a claimed ref exactly once, never after expiry or dispatch", () => {
+  let now = 1000;
+  const { catalog, search } = fixture();
+  const authority = new ToolSelectionAuthority({ newRef: refFactory(), clock: () => now });
+  const issued = authority.issue(search, context(catalog), catalog);
+  const selectionRef = issued.results[0].selectionRef;
+
+  const claimed = authority.claim(selectionRef, context(catalog), catalog);
+  assertEquals(claimed.ok, true);
+  assertEquals(claimed.claim.selectionRef, selectionRef);
+  assertEquals(authority.resolve(selectionRef, context(catalog), catalog).error, "selection-replayed");
+
+  // Release restores the identical record: resolve + claim work again.
+  assertEquals(authority.release(claimed.claim), true);
+  const resolved = authority.resolve(selectionRef, context(catalog), catalog);
+  assertEquals(resolved.ok, true);
+  assertEquals(resolved.expiresAt, claimed.expiresAt);
+  // A second release of the same claim is a no-op (never a duplicate record).
+  assertEquals(authority.release(claimed.claim), false);
+  assertEquals(authority.diagnostics?.() ?? null, authority.diagnostics?.() ?? null);
+
+  const reclaimed = authority.claim(selectionRef, context(catalog), catalog);
+  assertEquals(reclaimed.ok, true);
+  // Forged/foreign claims restore nothing.
+  assertEquals(authority.release({ ...reclaimed.claim, selectionRef: "sel_" + "f".repeat(36) }), false);
+  assertEquals(authority.release(null), false);
+  // Past expiry the release is refused and the ref stays dead.
+  now += TOOL_SELECTION_BOUNDS.maxTtlMs + 1;
+  assertEquals(authority.release(reclaimed.claim), false);
+  assertEquals(authority.resolve(selectionRef, context(catalog), catalog).ok, false);
+});

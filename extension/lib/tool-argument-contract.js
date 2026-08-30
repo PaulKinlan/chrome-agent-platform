@@ -123,6 +123,9 @@ export const TOOL_OUTPUT_SCHEMA_REGISTRY = Object.freeze({
     properties: {
       ok: { type: "boolean" }, selectedTool: { type: "string" },
       result: JSON_VALUE_OUTPUT, schemaSummary: { type: "string" }, error: ERROR,
+      // lazy-arguments-invalid hands the un-consumed ref back: retry with it
+      // (CAP-FB-20260830-SELECTION-REF-VALIDATE-FIRST-01).
+      retryable: { type: "boolean" }, selectionRef: { type: "string" },
     },
   },
   create_asset: ARTIFACT_RESULT,

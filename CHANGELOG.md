@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.434] — 2026-08-30
+- Landed: when the model sends a wrong tool argument it now gets a clear, retryable error and its corrected retry succeeds, instead of the whole action being lost.
+
 ## [0.2.433] — 2026-08-30
 - Three more fixes are in progress in parallel and recorded as claimed in the tracker.
 

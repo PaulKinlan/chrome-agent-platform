@@ -169,7 +169,13 @@ every agent run while retaining the public Settings-only shadow capture:
 - execute atomically claims only a returned reference, rejects malformed,
   invented, expired, restarted, cross-scope, concurrent, or replayed references,
   and re-resolves every immutable and live authority fence before validation,
-  before dispatch, and after dispatch;
+  before dispatch, and after dispatch. A claim that fails ARGUMENT validation
+  (sanitizer or Zod) never reaches dispatch, so it is released: the
+  `lazy-arguments-invalid` error carries the same `selectionRef` and
+  `retryable: true`, and the model's corrected call on that ref succeeds
+  (CAP-FB-20260830-SELECTION-REF-VALIDATE-FIRST-01). A SUCCESSFUL execution
+  still consumes the ref; a concurrent or later reuse stays
+  `selection-replayed`;
 - list and search share each tool's provider JSON Schema plus an
   `x-cap-argument-limits` contract (UTF-8 string/payload bytes, depth, nodes,
   keys, and array items). The same contract drives lazy sanitization and the
