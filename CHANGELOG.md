@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.497] — 2026-08-30
+- Housekeeping: parallel work streams reconciled.
+
 ## [0.2.496] — 2026-08-30
 - Tracker: model-visible screenshots are recorded as landed.
 

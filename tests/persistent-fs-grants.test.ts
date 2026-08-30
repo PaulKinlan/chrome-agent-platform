@@ -988,8 +988,15 @@ Deno.test("options.js: wires renderLocalFolders and renders empty state or grant
     "options.js must invoke regrantFsGrantAccess",
   );
   assert(
-    optionsJs.includes("fs-file-viewer"),
-    "options.js must render non-blocking inline file viewer",
+    optionsJs.includes("mountGrantBrowser"),
+    "options.js must mount the folder-tree browser drawer (lib/folder-browser.js)",
+  );
+  const browserJs = await Deno.readTextFile(
+    new URL("../extension/lib/folder-browser.js", import.meta.url),
+  );
+  assert(
+    browserJs.includes("fs-file-viewer"),
+    "lib/folder-browser.js must render the non-blocking inline file viewer",
   );
   assertEquals(
     optionsJs.includes("prompt("),
