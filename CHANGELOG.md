@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.440] — 2026-08-30
+- Permission matrix: refresh the attestation at the full fail-closed candidate
+
 ## [0.2.439] — 2026-08-30
 - A failed manifest-shape gate now refuses the rig, not just records it
 
