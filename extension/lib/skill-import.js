@@ -212,8 +212,11 @@ async function fetchGitHubSkill(url) {
   }
 
   // Re-walk the SKILL.md's own directory tree to collect every sibling file
-  // (scripts/, references/, …). Best-effort: if the walk hits a rate limit or
-  // fails mid-way, the SKILL.md body alone is still a valid skill.
+  // (scripts/, references/, …). BUDGET rejections (a file or the total past
+  // the physical import budgets) FAIL the import loudly — a partial skill is
+  // a broken skill, and an honest error is never silent. Only transient API
+  // failures (a rate limit / missing dir mid-walk) stay best-effort: the
+  // SKILL.md body alone is still a valid skill then.
   const total = makeTotalBudget(`${owner}/${repo}`);
   files["SKILL.md"] = skillContent;
   total.add(new TextEncoder().encode(skillContent).byteLength);
@@ -241,7 +244,14 @@ async function fetchGitHubSkill(url) {
       }
     };
     await walk(skillParent);
-  } catch { /* multi-file walk is best-effort */ }
+  } catch (e) {
+    // Physical-budget violations (per-file / total) are REAL failures — the
+    // importer must not silently drop the offending file(s). Transient API
+    // errors (rate limit mid-walk, missing dir) keep the SKILL.md-only fallback.
+    const msg = String(e?.message ?? "");
+    if (msg.includes("per-file budget") || msg.includes("total budget")) throw e;
+    /* transient — best-effort */
+  }
 
   const { meta } = parseFrontmatter(skillContent);
   return {
@@ -308,4 +318,59 @@ export async function removeImportedSkill(memory, id, fileStore = null) {
   await memory.set("importedSkills", next);
   await store.removeSkillFiles(id).catch(() => null);
   return { ok: true };
+}
+
+// Legacy imported-skill migration (CAP-FB-20260830-SKILLS-UNCAPPED-01):
+// records imported BEFORE the OPFS body store kept the SKILL.md body inline
+// (`prompt`) with no files map / OPFS files and no `promptBytes`. On read,
+// migrate the inline body into the OPFS store and enrich the index row so no
+// existing skill's body disappears after the storage change. Idempotent:
+// fresh rows carry `promptBytes`, so a re-read skips the write. If the body
+// store is unavailable the legacy row is returned untouched (its inline body
+// still composes) — the migration is never destructive.
+/**
+ * @param {object} memory the master memory store (index rows)
+ * @param {object} row one imported-skill index row
+ * @param {object=} fileStore { writeSkillFiles(id, files), … } — defaults to
+ *   lib/skill-files.js (OPFS); tests inject an in-memory fake
+ * @returns {Promise<object>} the migrated (or untouched) row
+ */
+export async function loadImportedSkill(memory, row, fileStore = null) {
+  if (!row || typeof row !== "object") return row;
+  if (Number.isInteger(row.promptBytes)) return row; // fresh / already migrated
+  const body = typeof row.prompt === "string" ? row.prompt : "";
+  const files = row.files && typeof row.files === "object" ? row.files : {};
+  if (!files["SKILL.md"] && body) files["SKILL.md"] = body;
+  const migrated = {
+    ...row,
+    prompt: "",
+    promptBytes: new TextEncoder().encode(body).byteLength,
+  };
+  delete migrated.files; // index rows are metadata-only (bodies live in OPFS)
+  const store = fileStore ?? (await import("./skill-files.js"));
+  try {
+    const { fileCount, totalBytes } = await store.writeSkillFiles(row.id, files);
+    migrated.fileCount = fileCount;
+    migrated.totalBytes = totalBytes;
+  } catch {
+    // Body store unavailable / budget exceeded — keep the LEGACY row intact
+    // (inline body preserved) so nothing disappears; composition falls back.
+    return { ...row };
+  }
+  // Persist the migrated metadata row so future reads skip the migration.
+  const list = (await memory.get("importedSkills")) ?? [];
+  const idx = list.findIndex((s) => s.id === row.id);
+  if (idx >= 0) {
+    list[idx] = migrated;
+    await memory.set("importedSkills", list);
+  }
+  return migrated;
+}
+
+/** Load + migrate every imported-skill index row (read paths use this). */
+export async function loadAllImportedSkills(memory, fileStore = null) {
+  const imported = (await memory.get("importedSkills")) ?? [];
+  const out = [];
+  for (const r of imported) out.push(await loadImportedSkill(memory, r, fileStore));
+  return out;
 }

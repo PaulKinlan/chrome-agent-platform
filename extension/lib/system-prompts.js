@@ -97,7 +97,7 @@ import {
 import { kvGet, kvSet, storageAvailable } from "./kv.js";
 import { buildSkillsPrompt } from "./skills.js";
 import { RUNTIME_CONTEXT_PLACEHOLDER } from "./runtime-context.js";
-import { isUntrustedToken, renderUntrustedPolicy, UNTRUSTED_POLICY_PLACEHOLDER } from "./untrusted-fence.js";
+import { isUntrustedToken, renderUntrustedPolicy, UNTRUSTED_POLICY_PLACEHOLDER, fenceUntrustedText, UNTRUSTED_TOKEN_PLACEHOLDER } from "./untrusted-fence.js";
 import { renderRuntimePolicy } from "./runtime-policy.js";
 
 /* ── The protected constraints (immutable, non-editable, FINAL layer) ──────
@@ -809,9 +809,24 @@ export function baselineSystemPrompt(baseId, registry = PROMPT_REGISTRY) {
  * (> PROMPT_SKILL_BODY_BUDGET bytes, i.e. one that would blow the context
  * window if composed verbatim) instead composes a marker naming the
  * on-demand loader (skill_read) — the model reads what it needs mid-run,
- * never paying the whole body per call (CAP-FB-20260830-SKILLS-UNCAPPED-01). */
+ * never paying the whole body per call (CAP-FB-20260830-SKILLS-UNCAPPED-01).
+ *
+ * IMPORTED (remote) skills are UNTRUSTED content: their composed body and
+ * their marker/metadata are wrapped in the run's untrusted boundary
+ * (lib/untrusted-fence.js) exactly like other remote content — the protected
+ * untrusted-content-policy layer tells the model the fenced text is data,
+ * never an instruction. Owner-authored content (built-in and custom recipes)
+ * stays unfenced per the established trust model: the owner explicitly
+ * created or attached it, and the protected-last invariant still keeps the
+ * runtime policy structurally final.
+ *
+ * @param {Array} skills skill/recipe records
+ * @param {string|null} untrustedToken the run's untrusted boundary token
+ *   (null/absent → the placeholder, matching the Settings preview path) */
 export const PROMPT_SKILL_BODY_BUDGET = 8 * 1024; // 8KiB — compose small bodies, defer large ones
-function renderBoundarySkills(skills) {
+function renderBoundarySkills(skills, untrustedToken = null) {
+  const token = isUntrustedToken(untrustedToken) ? untrustedToken : UNTRUSTED_TOKEN_PLACEHOLDER;
+  const fence = (text) => fenceUntrustedText(text, token);
   const blocks = (skills ?? []).map((s) => {
     const name = String(s?.name ?? "unknown");
     const desc = String(s?.description ?? "");
@@ -821,13 +836,15 @@ function renderBoundarySkills(skills) {
     const bodyBytes = Number.isInteger(s?.promptBytes) ? s.promptBytes : body.length;
     const isImported = s?.source === "imported" || (s?.files && typeof s.files === "object");
     if (isImported && bodyBytes > PROMPT_SKILL_BODY_BUDGET) {
-      return (
+      const marker = (
         `- ${name}: ${desc} (large skill: ${bodyBytes} bytes — the body is NOT composed; ` +
         `call skill_read with skill:"${s?.id ?? ""}" to load SKILL.md or a file on demand)`
       );
+      return fence(marker);
     }
-    if (!body.trim()) return `- ${name}: ${desc}`;
-    return `## Skill: ${name}\n${body}`;
+    if (!body.trim()) return isImported ? fence(`- ${name}: ${desc}`) : `- ${name}: ${desc}`;
+    const composed = `## Skill: ${name}\n${body}`;
+    return isImported ? fence(composed) : composed;
   });
   if (!blocks.length) return "";
   return `## Available skills\n${blocks.join("\n\n")}`;
@@ -844,9 +861,9 @@ function renderBoundarySkills(skills) {
  * the immutable runtime policy, so no owner text, role, site-origin skill,
  * or foreign prompt can override it with a later instruction.
  */
-export function appendSkillsLayer(systemText, skills, registry = PROMPT_REGISTRY) {
+export function appendSkillsLayer(systemText, skills, registry = PROMPT_REGISTRY, untrustedToken = null) {
   const sys = String(systemText ?? "");
-  const skillsText = renderBoundarySkills(skills).trim();
+  const skillsText = renderBoundarySkills(skills, untrustedToken).trim();
   const constraints = registryEntry(CONSTRAINTS_ID, registry);
   const protectedText = constraints ? String(constraints.content ?? "") : "";
   let out = sys;

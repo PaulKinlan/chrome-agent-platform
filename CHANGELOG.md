@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.482] — 2026-08-30
+- Skills: review fixes — fence imported prompts, byte pagination, loud budget errors, legacy migration
+
 ## [0.2.481] — 2026-08-30
 - Skills: no arbitrary size cap; large and multi-file skills are first-class
 

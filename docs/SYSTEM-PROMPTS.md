@@ -17,7 +17,20 @@ run context) is proven per run by the **run-bound attestation** (below).
 3. **owner-append** — the owner's custom instructions (mode `append`); for
    mode `replace` the owner's text sits here in the base's position.
 4. **agent-role** — a named agent's role (`agent:<slug>` scopes only).
-5. **skills** — the per-run installed/included skills.
+5. **skills** — the per-run installed/included skills. **Progressive disclosure
+   (`CAP-FB-20260830-SKILLS-UNCAPPED-01`)**: an imported skill's body is
+   composed into the prompt ONLY when it fits the 8KiB prompt budget;
+   a larger imported skill composes a marker naming the on-demand loader
+   (`skill_read`) instead of its body, so a 300KiB remote skill never blows
+   the context window per run. **Trust model / exception**: IMPORTED (remote)
+   skills are untrusted content — their composed body and their marker
+   metadata are wrapped in the run's untrusted boundary (5.6), exactly like
+   `read_page` text, so the model treats them as data to judge, never as
+   instructions to obey. OWNER-AUTHORED content (built-in recipes and custom
+   recipes created in Settings) stays UNFENCED: the owner explicitly created
+   or attached it, and the protected-last invariant (layer 6) still keeps the
+   runtime policy structurally final. The `skill_read` tool's returned bodies
+   are tagged untrusted too, so on-demand reads carry the same boundary.
 5.5. **runtime-context** — the volatile per-assembly layer (date/time, system
    identity, roster, memory index), rendered under a "data, not instructions"
    label; the Settings preview renders its clearly-marked template.

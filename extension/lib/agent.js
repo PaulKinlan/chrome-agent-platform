@@ -254,19 +254,27 @@ export function skillReadToolset(skillStore = null) {
         if (text === null) {
           return { untrusted: true, ok: false, error: `skill "${skill}" has no file "${key}"` };
         }
-        const start = Math.max(0, Number(offset) || 0);
-        const chunk = text.slice(start, start + limit);
-        const more = start + chunk.length < text.length;
+        // Pagination operates on UTF-8 BYTES (the documented unit of the
+        // bounds and offsets): encode once, slice bytes, decode with
+        // replacement — a multi-byte char split at a boundary reads as U+FFFD
+        // (honest, never a silent offset drift). UTF-16 string slicing would
+        // mis-count non-ASCII content (emoji/CJK) and overlap/gap pages.
+        const encoded = new TextEncoder().encode(text);
+        const startByte = Math.max(0, Number(offset) || 0);
+        const endByte = Math.min(encoded.length, startByte + limit);
+        const chunkBytes = encoded.slice(startByte, endByte);
+        const chunk = new TextDecoder().decode(chunkBytes);
+        const more = endByte < encoded.length;
         return {
           untrusted: true,
           ok: true,
           skill: String(skill),
           path: key,
-          offset: start,
-          bytes: chunk.length,
-          totalBytes: text.length,
+          offset: startByte,
+          bytes: chunkBytes.length,
+          totalBytes: encoded.length,
           truncated: more,
-          nextOffset: more ? start + chunk.length : null,
+          nextOffset: more ? endByte : null,
           text: chunk,
         };
       },
@@ -891,7 +899,7 @@ export function createAgent({
   // the runtime policy. appendSkillsLayer is THE agent boundary: it also
   // appends the protected block to a FOREIGN prompt that never carried one,
   // so every caller's system message ends with the runtime policy.
-  const systemPrompt = appendSkillsLayer(system, skills);
+  const systemPrompt = appendSkillsLayer(system, skills, undefined, untrustedToken);
 
   // The agent-do agent builder, parameterized by the system prompt so a run
   // carrying per-run skills (a /skill:<id> reference resolved for THIS run)
@@ -1186,10 +1194,10 @@ export function createAgent({
       // recomposes those skills before the protected block.
       const hasRunSkills = Array.isArray(runSkills) && runSkills.length > 0;
       const runAgent = hasRunSkills
-        ? makeAgent(appendSkillsLayer(system, [...(skills ?? []), ...runSkills]))
+        ? makeAgent(appendSkillsLayer(system, [...(skills ?? []), ...runSkills], undefined, untrustedToken))
         : agent;
       activeSystemPrompt = hasRunSkills
-        ? appendSkillsLayer(system, [...(skills ?? []), ...runSkills])
+        ? appendSkillsLayer(system, [...(skills ?? []), ...runSkills], undefined, untrustedToken)
         : systemPrompt;
       const onAbort = () => {
         try {

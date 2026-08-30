@@ -88,6 +88,38 @@ Deno.test("skill_read fails honestly: unknown skill, unknown file, leading-slash
   assertStringIncludes(leading.error, "not safe");
 });
 
+Deno.test("skill_read pagination operates on UTF-8 BYTES (emoji/CJK across a boundary)", async () => {
+  // 6000 CJK chars (3 bytes each = 18000) — the 16KiB read boundary falls
+  // INSIDE the CJK run, so a multi-byte char splits at the page edge.
+  const cjk = "\u4e2d".repeat(6000); // 18000 bytes
+  const body = cjk + "\u{1F600}" + "tail-\u00e9\u00e9"; // +4 + 9 bytes = 18013
+  const store = { list: async () => [{ id: "cjk", name: "CJK", prompt: "", promptBytes: 18013, source: "imported" }], read: async () => body };
+  const { skill_read } = skillReadToolset(store);
+  const r1 = await skill_read.execute({ skill: "cjk" });
+  assertEquals(r1.ok, true);
+  assertEquals(r1.totalBytes, 18013, "totalBytes is UTF-8 bytes");
+  assertEquals(r1.bytes, 16 * 1024, "one read is exactly the byte limit");
+  assertEquals(r1.truncated, true);
+  // page 2 resumes at the BYTE offset — no gap, no overlap, no corruption
+  const r2 = await skill_read.execute({ skill: "cjk", offset: r1.nextOffset });
+  assertEquals(r2.ok, true);
+  assertEquals(r2.offset, 16 * 1024);
+  assertEquals(r2.totalBytes, 18013);
+  assertEquals(r2.truncated, false);
+  assertEquals(r2.bytes, 18013 - 16 * 1024);
+  const recombined = r1.text + r2.text;
+  // the reassembled text keeps the offset math byte-exact: the ONE split
+  // multi-byte char decodes as exactly three U+FFFD (decode-with-replacement:
+  // its leading byte ends page 1, its two continuation bytes start page 2),
+  // everything else survives byte-for-byte
+  const replacements = (recombined.match(/\uFFFD/gu) ?? []).length;
+  assertEquals(replacements, 3, "exactly the split char degrades");
+  assertEquals(recombined.replace(/\uFFFD/gu, ""), body.slice(0, 5461) + body.slice(5462), "offset math stays byte-exact");
+  // the tail emoji survives intact when NOT split
+  assertStringIncludes(r2.text, "\u{1F600}");
+  assertStringIncludes(r2.text, "tail-\u00e9\u00e9");
+});
+
 Deno.test("skill_read store failure is honest (ok:false), never a throw", async () => {
   const { skill_read } = skillReadToolset(async () => { throw new Error("store gone"); });
   const r = await skill_read.execute({ skill: "x" });
@@ -131,7 +163,7 @@ Deno.test("skill_read works against the {list, read} store shape (index rows + O
 
 // ── progressive disclosure (renderBoundarySkills) ──────────────────────────
 
-Deno.test("renderBoundarySkills composes a small imported body fully", () => {
+Deno.test("renderBoundarySkills composes a small imported body fully (untrusted-fenced)", () => {
   const out = appendSkillsLayer("", [
     { id: "small", name: "Small", description: "d", prompt: "do the thing", source: "imported", files: { "SKILL.md": "do the thing" } },
   ]);
@@ -160,4 +192,43 @@ Deno.test("renderBoundarySkills still composes large NON-imported (owner-authore
   ]);
   assertStringIncludes(out, body.slice(0, 80), "owner-authored content keeps full composition (no dangling loader)");
   assert(!out.includes("skill_read"));
+});
+
+// ── untrusted fencing of IMPORTED skills (review P1) ───────────────────────
+// Imported (remote) skill content is UNTRUSTED: its composed body and its
+// marker/metadata must carry the run's untrusted boundary, exactly like other
+// remote content. Owner-authored content stays unfenced (the trust model).
+const FENCE_RE = /<<<UNTRUSTED run:([A-Za-z0-9]+)>>>[\s\S]*?<<<END run:\1>>>/gu;
+
+Deno.test("imported skill content is untrusted-FENCED; owner-authored is not (fence wrapper)", () => {
+  const out = appendSkillsLayer("", [
+    { id: "small-imp", name: "Small Imp", description: "d", prompt: "remote instructions", source: "imported" },
+    { id: "large-imp", name: "Large Imp", description: "l", prompt: "", promptBytes: 99999, source: "imported" },
+    { id: "own", name: "Own", description: "o", prompt: "owner instructions", source: "custom" },
+  ], undefined, "abc123token");
+  const fenced = [...out.matchAll(FENCE_RE)].map((m) => m[0]);
+  assert(fenced.length === 2, `exactly the two imported blocks are fenced (got ${fenced.length})`);
+  // the imported small body is wrapped + names the token
+  assert(fenced.some((b) => b.includes("remote instructions") && b.includes("<<<UNTRUSTED run:abc123token>>>")));
+  // the imported large marker is wrapped too
+  assert(fenced.some((b) => b.includes("Large Imp") && b.includes("skill_read")));
+  // the owner-authored body is NOT inside any fence
+  assert(!fenced.some((b) => b.includes("owner instructions")), "owner content must not be fenced");
+  assert(out.includes("## Skill: Own\nowner instructions"), "owner body composes plain");
+});
+
+Deno.test("imported fence falls back to the placeholder token when absent (preview path)", () => {
+  const out = appendSkillsLayer("", [
+    { id: "imp", name: "Imp", description: "d", prompt: "body", source: "imported" },
+  ]);
+  assertStringIncludes(out, "<<<UNTRUSTED run:<run-token>>>");
+  assertStringIncludes(out, "<<<END run:<run-token>>>");
+});
+
+Deno.test("imported skill with NO body still fences its metadata line", () => {
+  const out = appendSkillsLayer("", [
+    { id: "empty-imp", name: "Empty Imp", description: "no body", prompt: "", source: "imported" },
+  ], undefined, "tok123");
+  assertStringIncludes(out, "no body");
+  assertStringIncludes(out, "<<<UNTRUSTED run:tok123>>>");
 });

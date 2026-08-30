@@ -11,6 +11,8 @@ import {
   slugifySkillId,
   installImportedSkill,
   fetchSkillFromUrl,
+  loadImportedSkill,
+  loadAllImportedSkills,
 } from "../extension/lib/skill-import.js";
 
 function fakeMemory() {
@@ -192,4 +194,113 @@ Deno.test("fetchSkillFromUrl walks a GitHub skill tree and collects every file w
   } finally {
     globalThis.fetch = priorFetch;
   }
+});
+
+// ── review P1: a supporting-file BUDGET rejection must FAIL the import ─────
+// (the walk previously swallowed budget errors and silently returned a
+// partial skill — honest errors, never silent)
+Deno.test("fetchSkillFromUrl FAILS loudly when a supporting file busts the total import budget", async () => {
+  const big = "x".repeat(1843200); // 1.8MiB < 2MiB per-file, but 5 files = 9MiB > 8MiB total
+  const files = ["a.bin", "b.bin", "c.bin", "d.bin", "e.bin"];
+  const tree = {
+    "": [{ type: "dir", name: "skills", path: "skills" }],
+    "skills": [
+      { type: "file", name: "SKILL.md", path: "skills/SKILL.md", download_url: "https://raw.githubusercontent.com/o/r/main/skills/SKILL.md" },
+      ...files.map((n) => ({ type: "file", name: n, path: `skills/${n}`, download_url: `https://raw.githubusercontent.com/o/r/main/skills/${n}` })),
+    ],
+  };
+  const bodies = { "skills/SKILL.md": "---\nname: Budget Bust\n---\n\n# Instructions\n" };
+  for (const n of files) bodies[`skills/${n}`] = big;
+  const priorFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      const gh = u.match(/api\.github\.com\/repos\/([^/]+)\/([^/]+)\/contents\/(.*)\?ref=([^&]+)/);
+      if (gh) {
+        const p = decodeURIComponent(gh[3]).replace(/\/$/, "");
+        return new Response(JSON.stringify(tree[p] ?? []), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      const dl = u.match(/^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/);
+      if (dl) {
+        const p = decodeURIComponent(dl[4]);
+        return new Response(bodies[p] ?? "", { status: bodies[p] ? 200 : 404 });
+      }
+      return new Response("", { status: 500 });
+    };
+    let threw = null;
+    try {
+      await fetchSkillFromUrl("https://github.com/cloudflare/skills/tree/main/skills");
+    } catch (e) {
+      threw = String(e?.message ?? e);
+    }
+    assert(threw !== null, "the import must REJECT, not silently drop the oversized files");
+    assertStringIncludes(threw, "total budget");
+  } finally {
+    globalThis.fetch = priorFetch;
+  }
+});
+
+// ── review P1: legacy imported rows (inline body, pre-OPFS) migrate on read ─
+Deno.test("loadImportedSkill migrates a legacy inline body into the file store (never lost)", async () => {
+  const mem = fakeMemory();
+  const fs = fakeSkillFiles();
+  const legacy = {
+    id: "old-skill",
+    name: "Old Skill",
+    description: "pre-OPFS import",
+    source: "imported",
+    mode: "on-demand",
+    category: "imported",
+    prompt: "---\nname: Old Skill\n---\n\nLegacy instructions", // inline body, NO promptBytes
+    requiredCapabilities: [],
+    importedAt: 1,
+  };
+  await mem.set("importedSkills", [legacy]);
+  const migrated = await loadImportedSkill(mem, legacy, fs);
+  // enriched + metadata-only row
+  assert(Number.isInteger(migrated.promptBytes) && migrated.promptBytes > 0);
+  assertEquals(migrated.prompt, "");
+  assertEquals(migrated.fileCount, 1);
+  // body landed in the file store
+  assertEquals(fs._files.get("old-skill")["SKILL.md"], "---\nname: Old Skill\n---\n\nLegacy instructions");
+  // the index row was persisted as migrated (future reads skip the write)
+  const stored = (await mem.get("importedSkills"))[0];
+  assertEquals(stored.prompt, "");
+  assert(Number.isInteger(stored.promptBytes));
+});
+
+Deno.test("loadImportedSkill keeps a legacy row INTACT when the file store is unavailable (never destructive)", async () => {
+  const mem = fakeMemory();
+  const legacy = {
+    id: "old-skill",
+    name: "Old Skill",
+    description: "d",
+    source: "imported",
+    mode: "on-demand",
+    category: "imported",
+    prompt: "---\nname: Old Skill\n---\n\nLegacy instructions",
+    requiredCapabilities: [],
+    importedAt: 1,
+  };
+  await mem.set("importedSkills", [legacy]);
+  const breakingStore = {
+    async writeSkillFiles() { throw new Error("OPFS unavailable"); },
+    async removeSkillFiles() {},
+  };
+  const out = await loadImportedSkill(mem, legacy, breakingStore);
+  assertEquals(out.prompt, "---\nname: Old Skill\n---\n\nLegacy instructions", "inline body survives");
+  assertEquals(out.promptBytes, undefined);
+});
+
+Deno.test("loadAllImportedSkills migrates every legacy row; fresh rows pass through untouched", async () => {
+  const mem = fakeMemory();
+  const fs = fakeSkillFiles();
+  const fresh = { id: "new-skill", name: "New", prompt: "", promptBytes: 5, source: "imported", mode: "on-demand", category: "imported", fileCount: 1, totalBytes: 5, requiredCapabilities: [], importedAt: 2 };
+  const legacy = { id: "old-skill", name: "Old", source: "imported", mode: "on-demand", category: "imported", prompt: "legacy body", requiredCapabilities: [], importedAt: 1 };
+  await mem.set("importedSkills", [fresh, legacy]);
+  const out = await loadAllImportedSkills(mem, fs);
+  const byId = Object.fromEntries(out.map((s) => [s.id, s]));
+  assertEquals(byId["new-skill"].promptBytes, 5, "fresh row untouched");
+  assert(Number.isInteger(byId["old-skill"].promptBytes), "legacy row migrated");
+  assertEquals(fs._files.get("old-skill")["SKILL.md"], "legacy body");
 });

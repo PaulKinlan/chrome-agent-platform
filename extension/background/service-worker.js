@@ -277,7 +277,7 @@ import {
   setOriginBrowserControlGrant,
 } from "../lib/browser-tools.js";
 import { getRecipe, RECIPES, backgroundRecipes, intentOf, agentSkillIds, mergeRunSkills } from "../lib/recipes.js";
-import { fetchSkillFromUrl, installImportedSkill, removeImportedSkill } from "../lib/skill-import.js";
+import { fetchSkillFromUrl, installImportedSkill, removeImportedSkill, loadAllImportedSkills } from "../lib/skill-import.js";
 import { readSkillFile, writeSkillFiles, removeSkillFiles } from "../lib/skill-files.js";
 import { durableRuns, sweepOrphanAgentData } from "../lib/durable-runs.js";
 import { replaySafetyForTool } from "../lib/tool-replay-safety.js";
@@ -400,26 +400,43 @@ async function getCustomRecipes() {
   const v = await masterMemory().get("customRecipes");
   return Array.isArray(v) ? v : [];
 }
+
+// Legacy imported-skill migration (CAP-FB-20260830-SKILLS-UNCAPPED-01):
+// records imported BEFORE the OPFS body store kept the SKILL.md body inline
+// (`prompt`) with no files map / OPFS files and no `promptBytes`. On read,
+// migrate the inline body into the OPFS store and enrich the index row so no
+// existing skill's body disappears after the storage change. Idempotent:
+// fresh rows carry `promptBytes`, so a re-read skips the write. If OPFS is
+// unavailable the legacy row is returned untouched (its inline body still
+// composes) — the migration is never destructive.
+const skillFileStore = { writeSkillFiles, removeSkillFiles };
+const loadAllImported = () => loadAllImportedSkills(masterMemory(), skillFileStore);
+
 async function resolveRecipe(id) {
   const builtIn = getRecipe(id);
   if (builtIn) return builtIn;
   const custom = await getCustomRecipes();
   const fromCustom = custom.find((r) => r.id === id);
   if (fromCustom) return fromCustom;
-  const imported = (await masterMemory().get("importedSkills")) ?? [];
+  const imported = await loadAllImported();
   const row = imported.find((s) => s.id === id);
   if (!row) return null;
   // Index rows carry metadata only (bodies live in OPFS). A SMALL body is
   // read back and composed into the system prompt like before; a LARGE body
   // stays out of the prompt (the skill_read marker rule handles it —
-  // renderBoundarySkills keys on promptBytes, never an empty body).
-  if ((row.promptBytes ?? 0) <= PROMPT_SKILL_BODY_BUDGET && row.promptBytes > 0) {
+  // renderBoundarySkills keys on promptBytes, never an empty body). A legacy
+  // row whose migration failed keeps its inline body (never lost).
+  if (Number.isInteger(row.promptBytes) && row.promptBytes > 0 && row.promptBytes <= PROMPT_SKILL_BODY_BUDGET) {
     try {
       const body = await readSkillFile(row.id, "SKILL.md");
       return { ...row, prompt: body };
     } catch {
       return { ...row, prompt: "" };
     }
+  }
+  if (!Number.isInteger(row.promptBytes)) {
+    // legacy inline body (migration failed) — serve it so it never vanishes
+    return { ...row };
   }
   return { ...row, prompt: "" };
 }
@@ -1586,7 +1603,7 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       // CAP-FB-20260830-SKILLS-UNCAPPED-01). Index rows live in memory, the
       // bodies in OPFS — the tool gets both halves.
       skillStore: {
-        list: async () => (await masterMemory().get("importedSkills")) ?? [],
+        list: async () => loadAllImported(),
         read: async (id, path) => readSkillFile(id, path),
       },
       // SCOPED (hook) runs: the read-only browser set (no open/navigate/close/schedule)
@@ -6342,13 +6359,13 @@ const handlers = mergeRouteMaps(
     // Decorate each recipe with its intent so the hub can group the unified
     // capability list (on-demand + background) by what the user is trying to do.
     // Imported skills are included too (they are first-class skills).
-    const imported = (await masterMemory().get("importedSkills")) ?? [];
+    const imported = await loadAllImported();
     return {
       recipes: [...RECIPES, ...imported].map((r) => ({ ...r, intent: intentOf(r) })),
     };
   },
   async "skill.list"() {
-    const imported = (await masterMemory().get("importedSkills")) ?? [];
+    const imported = await loadAllImported();
     return { skills: [...RECIPES, ...imported].map((r) => ({ ...r, intent: intentOf(r) })) };
   },
   async "skill.import"(m) {
