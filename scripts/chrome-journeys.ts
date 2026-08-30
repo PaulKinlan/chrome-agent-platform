@@ -1670,7 +1670,7 @@ async function main() {
     // action within 5 s, not sit in "Waiting for permission".
     await msgOpts({
       type: "provider.set",
-      config: { provider: "openai", baseURL: "", apiKey: "sk-journey-invalid-0000", model: "model-one" },
+      config: { provider: "openai-compatible", baseURL: "", apiKey: "sk-journey-invalid-0000", model: "model-one" },
     });
     await driveHubTask("provider truth: no endpoint");
     const pre = await pollThreadError(5000, (st) => (st.status ?? []).some((r) => r.state === "failed"));

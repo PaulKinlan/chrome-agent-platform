@@ -6,8 +6,7 @@ import {
   getModel,
   getModelForAgent,
   getProviderConfig,
-  resolveModelFromConfig,
-} from "../lib/provider.js";
+  resolveModelFromConfig, withEffectiveBaseURL } from "../lib/provider.js";
 import {
   NotificationRegistry,
   handleNotificationClick,
@@ -2230,7 +2229,7 @@ function providerResumeIdentity(config) {
     schemaVersion: 1,
     provider: String(config?.provider ?? config?.id ?? ""),
     model: String(config?.model ?? ""),
-    requestedScope: providerOriginPattern(config) ?? null,
+    requestedScope: providerOriginPattern(withEffectiveBaseURL(config)) ?? null,
     local: isLocalProvider(config),
   };
 }

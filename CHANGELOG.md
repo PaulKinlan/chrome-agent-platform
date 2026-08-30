@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.447] — 2026-08-30
+- Choosing OpenAI, Anthropic or Gemini without typing a base URL now works everywhere, including the pre-run status check.
+
 ## [0.2.446] — 2026-08-30
 - Landed: when a run fails because the API key was rejected, the provider is rate-limiting, or the model id is wrong, the message now says exactly that and offers Fix in Settings, instead of blaming an overloaded model.
 

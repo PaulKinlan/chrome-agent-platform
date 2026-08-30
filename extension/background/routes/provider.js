@@ -14,6 +14,7 @@ import {
 } from "../../lib/provider-gate.js";
 import { testProvider } from "../../lib/provider-test.js";
 import { defaultModelFor } from "../../lib/model-catalog.js";
+import { withEffectiveBaseURL } from "../../lib/provider.js";
 import { safeProviderError } from "../../lib/pure.js";
 import { requireSettingsSender } from "./auth.js";
 
@@ -52,7 +53,7 @@ export function createProviderRoutes({ invalidateAgent = () => {} } = {}) {
       return {
         provider: String(cfg.provider ?? "").slice(0, 80),
         local: isLocalProvider(cfg),
-        origin: providerOriginPattern(cfg),
+        origin: providerOriginPattern(withEffectiveBaseURL(cfg)),
       };
     },
 
@@ -65,7 +66,7 @@ export function createProviderRoutes({ invalidateAgent = () => {} } = {}) {
       // A network provider with no valid https:// origin cannot run — the
       // run-time preflight refuses it — so the hub strip must be red BEFORE the
       // run, not only after (CAP-FB-20260830-PROVIDER-ERROR-TRUTH-01).
-      if (!isLocalProvider(cfg) && !providerOriginPattern(cfg)) {
+      if (!isLocalProvider(cfg) && !providerOriginPattern(withEffectiveBaseURL(cfg))) {
         return {
           provider: cfg.provider ?? "",
           ok: false,
