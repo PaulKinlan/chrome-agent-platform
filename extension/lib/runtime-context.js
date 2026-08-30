@@ -24,6 +24,7 @@
 // PII-exclusion).
 
 import { redactSecretText, truncateUtf8, utf8ByteLength } from "./pure.js";
+import { mintUntrustedToken } from "./untrusted-fence.js";
 
 /** The preview/template body: the Settings preview and the preview attestation
  * render the layer structure with this clearly-marked placeholder; a run's
@@ -178,5 +179,10 @@ export async function gatherRuntimeContext({
   return {
     text: formatRuntimeContext({ scope, agentLabel, now, extensionVersion, platform, roster, memoryIndex }),
     template: RUNTIME_CONTEXT_PLACEHOLDER,
+    // The per-assembly boundary token for untrusted tool results
+    // (lib/untrusted-fence.js): named by the protected policy layer this
+    // context composes into, and threaded into the agent's lazy run context so
+    // the projection wraps page/site/board content in the SAME boundary.
+    untrustedToken: mintUntrustedToken(),
   };
 }

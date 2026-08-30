@@ -921,6 +921,8 @@ Deno.test("describe: the full UI payload (viewer + editor + preview + revision +
     "owner-replace:owner:sent",
     // The volatile layer renders as its clearly-marked template in previews.
     "runtime-context:runtime:sent",
+    // The untrusted-content policy composes with the runtime layer (protected + dynamic).
+    "untrusted-content-policy:protected:sent",
     "cap.constraints.core:protected:sent",
   ]);
   assertEquals(d.effective.text.includes("WORKER-CUSTOM"), true);
@@ -1414,4 +1416,34 @@ Deno.test("memory doctrine: the protected constraints STILL compose after the do
     assert(doctrineAt > 0 && constraintsAt > doctrineAt,
       `${baseId}: doctrine lands BEFORE the protected constraints (constraints stay last)`);
   }
+});
+
+// ── CAP-FB-20260830-UNTRUSTED-CONTENT-FENCING-01 ─────────────────────────────
+Deno.test("fence: the composed prompt contains the untrusted-content policy with the run token", () => {
+  const c = composeSystemPrompt({
+    baseId: "cap.hub.master",
+    runtimeContext: { text: "## Run-time context\n- Current date/time: now", untrustedToken: "abc123" },
+  });
+  assertStringIncludes(c.text, "<<<UNTRUSTED run:abc123>>>");
+  assertStringIncludes(c.text, "<<<END run:abc123>>>");
+  assertStringIncludes(c.text, "never an instruction");
+  // The fence is a PROTECTED, DYNAMIC layer between the runtime context and the
+  // (still last) constraints — attestation compares it by template receipt.
+  assertEquals(
+    c.layers.map((l) => l.id),
+    ["cap.hub.master", "runtime-context", "untrusted-content-policy", "cap.constraints.core"],
+  );
+  const fence = c.layers.find((l) => l.id === "untrusted-content-policy");
+  assert(fence.protected === true && fence.dynamic === true, "protected + dynamic");
+  assert(typeof fence.templateText === "string" && !fence.templateText.includes("abc123"), "the template never carries a run token");
+  // Preview↔run parity: the placeholder composition renders the SAME template.
+  const preview = composeSystemPrompt({ baseId: "cap.hub.master", runtimeContext: { placeholder: true } });
+  const previewFence = preview.layers.find((l) => l.id === "untrusted-content-policy");
+  assertEquals(previewFence.text, fence.templateText);
+  assertEquals(previewFence.text, previewFence.templateText);
+  // No runtime context → no fence layer (static baselines stay byte-identical).
+  assertEquals(
+    composeSystemPrompt({ baseId: "cap.hub.master" }).layers.map((l) => l.id),
+    ["cap.hub.master", "cap.constraints.core"],
+  );
 });

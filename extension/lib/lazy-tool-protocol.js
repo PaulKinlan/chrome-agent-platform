@@ -32,6 +32,12 @@ import {
   LAZY_PROTOCOL_TOOL_WIRE,
 } from "./lazy-tool-wire.js";
 import {
+  fenceUntrustedText,
+  fenceUntrustedValue,
+  isUntrustedToken,
+  mintUntrustedToken,
+} from "./untrusted-fence.js";
+import {
   executeBundledWasiJob,
   previewSpecFor,
   validatePreviewInput,
@@ -323,7 +329,22 @@ export function sanitizeLazyToolArguments(value, descriptor) {
   return projected;
 }
 
-function projectResult(value) {
+/** Is this result untrusted content — page/site/board data, never an
+ * instruction? Either the tool tagged it (`untrusted: true`, e.g. read_page,
+ * board reads, cap:fetch) or it came from a site-origin (WebMCP) tool, whose
+ * output is page-controlled by construction. */
+function isUntrustedResult(value, descriptor) {
+  if (ownData(value, "untrusted") === true) return true;
+  return String(ownData(descriptor, "sourceKind") ?? "").startsWith("webmcp");
+}
+
+/** Project a raw dispatch result for the model: bound, redact, and — for
+ * untrusted content — wrap every string leaf in the run's boundary
+ * (lib/untrusted-fence.js, CAP-FB-20260830-UNTRUSTED-CONTENT-FENCING-01).
+ * The fence is applied AFTER truncation + redaction and BEFORE the byte bound
+ * so an over-bound untrusted result degrades fenced, never raw. */
+function projectResult(value, { untrusted = false, token = null } = {}) {
+  const fence = (projected) => untrusted ? fenceUntrustedValue(projected, token) : projected;
   try {
     const projected = projectData(value, {
       maxNodes: LAZY_TOOL_PROTOCOL_BOUNDS.maxResultNodes,
@@ -333,16 +354,16 @@ function projectResult(value) {
       maxStringBytes: LAZY_TOOL_PROTOCOL_BOUNDS.maxStringBytes,
       truncateStrings: true,
     }, { nodes: 0 });
-    const redacted = redactResultStrings(projected);
+    const redacted = fence(redactResultStrings(projected));
     if (
       utf8ByteLength(JSON.stringify(redacted)) >
         LAZY_TOOL_PROTOCOL_BOUNDS.maxResultBytes
     ) {
-      return degradeResult(value, "result exceeded the lazy protocol output bound");
+      return fence(degradeResult(value, "result exceeded the lazy protocol output bound"));
     }
     return redacted;
   } catch {
-    return degradeResult(value, "result was not safely serializable in full");
+    return fence(degradeResult(value, "result was not safely serializable in full"));
   }
 }
 
@@ -563,6 +584,11 @@ async function authorizeRecord(record, args, context, descriptor, phase) {
 export class LazyToolProtocol {
   #readSources;
   #selections;
+  // The fallback boundary token for a run context that carries none (a caller
+  // that never threaded runtime-context's token). Untrusted content is STILL
+  // fenced — the model just cannot cross-check the token against its policy
+  // layer. Per instance, random, never a fixed string a page could forge.
+  #fallbackToken = mintUntrustedToken();
 
   constructor({ readSources, selectionAuthority } = {}) {
     if (typeof readSources !== "function") {
@@ -570,6 +596,20 @@ export class LazyToolProtocol {
     }
     this.#readSources = readSources;
     this.#selections = selectionAuthority ?? new ToolSelectionAuthority();
+  }
+
+  #untrustedToken(context) {
+    const token = ownData(context, "untrustedToken");
+    return isUntrustedToken(token) ? token : this.#fallbackToken;
+  }
+
+  /** Site-origin (WebMCP) tool descriptions are page-authored: fence them in
+   * every listing the model sees (search summaries + list descriptions). */
+  #fenceWebMcpListing(entry, context, field) {
+    if (!String(ownData(entry, "sourceKind") ?? "").startsWith("webmcp")) return entry;
+    const text = ownData(entry, field);
+    if (typeof text !== "string" || !text.length) return entry;
+    return Object.freeze({ ...entry, [field]: fenceUntrustedText(text, this.#untrustedToken(context)) });
   }
 
   async search(request = {}, context = {}) {
@@ -585,12 +625,17 @@ export class LazyToolProtocol {
     const search = searchToolIndex(snapshot.index, ownData(request, "query"), {
       limit: ownData(request, "limit"),
     });
-    return this.#selections.issue(
+    const issued = this.#selections.issue(
       search,
       sourceContext(context, snapshot.catalog.generation),
       snapshot.catalog,
       { ttlMs: ownData(request, "ttlMs") },
     );
+    if (!issued?.ok || !Array.isArray(issued.results)) return issued;
+    return Object.freeze({
+      ...issued,
+      results: Object.freeze(issued.results.map((entry) => this.#fenceWebMcpListing(entry, context, "summary"))),
+    });
   }
 
   async list(request = {}, context = {}) {
@@ -641,7 +686,7 @@ export class LazyToolProtocol {
       }
 
       const itemDesc = truncateUtf8(String(desc.description ?? ""), maxDescBytes);
-      const entry = {
+      const entry = this.#fenceWebMcpListing({
         name: String(desc.name ?? ""),
         description: itemDesc,
         capabilities: Array.isArray(desc.capabilities) ? desc.capabilities.slice(0, 8) : [],
@@ -649,7 +694,7 @@ export class LazyToolProtocol {
         sourceKind: desc.sourceKind ?? "extension-builtin",
         schemaSummary: truncateUtf8(String(desc.schemaSummary ?? ""), 4096),
         outputSchemaSummary: truncateUtf8(String(desc.outputSchemaSummary ?? ""), 4096),
-      };
+      }, context, "description");
 
       const entryBytes = utf8ByteLength(JSON.stringify(entry));
       if (currentEstimatedBytes + entryBytes > MAX_RESULT_BYTES) {
@@ -847,7 +892,10 @@ export class LazyToolProtocol {
     return Object.freeze({
       ok: true,
       selectedTool: afterResolved.descriptor.name,
-      result: projectResult(rawResult),
+      result: projectResult(rawResult, {
+        untrusted: isUntrustedResult(rawResult, afterResolved.descriptor),
+        token: this.#untrustedToken(context),
+      }),
       // Renderer-only metadata: the UI consumes this bounded selected-tool
       // contract and does not display it as part of the result tree.
       schemaSummary: afterResolved.descriptor.outputSchemaSummary,

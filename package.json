@@ -1,6 +1,6 @@
 {
   "name": "chrome-agent-platform",
-  "version": "0.2.448",
+  "version": "0.2.449",
   "private": true,
   "type": "module",
   "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
@@ -22,7 +22,7 @@
     "test:a11y": "deno run -A scripts/a11y-audit.ts",
     "test:perf": "deno run -A scripts/perf-leak-trace.ts",
     "test:capabilities": "deno run -A scripts/capability-lifecycle.ts",
-    "test:all": "node scripts/check-tasks.mjs && npm run check:vocabulary && npm test && npm run test:security && npm run test:chrome",
+    "test:all": "node scripts/check-tasks.mjs && npm run check:vocabulary && npm test && npm run test:security && npm run test:security:injection && npm run test:chrome",
     "version:patch": "node scripts/bump-version.mjs patch",
     "version:minor": "node scripts/bump-version.mjs minor",
     "version:major": "node scripts/bump-version.mjs major",
@@ -38,7 +38,8 @@
     "check:changelog-order": "node scripts/check-changelog.mjs",
     "check:tasks": "node scripts/check-tasks.mjs",
     "test:data-clear": "deno run -A scripts/data-memory-clear.ts",
-    "test:role-preview": "deno run -A scripts/agent-role-preview.ts"
+    "test:role-preview": "deno run -A scripts/agent-role-preview.ts",
+    "test:security:injection": "deno run -A scripts/security-injection.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.45",

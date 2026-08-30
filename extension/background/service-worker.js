@@ -1472,6 +1472,8 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
         // attestation hash covers exactly what the model receives — no
         // double-append in the agent core.
         system: workerText.text,
+        // The boundary token the worker's policy layer names (lib/untrusted-fence.js).
+        untrustedToken: workerRuntimeContext.untrustedToken ?? null,
         skills: [],
         // WebMCP directories/navigation/approval are read for every lazy
         // search/execute fence; no build-time snapshot reaches the provider.
@@ -1550,6 +1552,10 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       iterationGuard,
       // The composed effective prompt for this run's scope (see above).
       masterSystem: masterComposed.text,
+      // The boundary token that prompt's untrusted-content policy layer names:
+      // the lazy projection fences page/site/board results with it
+      // (lib/untrusted-fence.js, CAP-FB-20260830-UNTRUSTED-CONTENT-FENCING-01).
+      untrustedToken: runtimeContext.untrustedToken ?? null,
       // SCOPED (hook) runs: the read-only browser set (no open/navigate/close/schedule)
       // + read-only memory — untrusted browser event data must never drive a
       // browser mutation, a durable schedule, or a memory write (the wider-goal
@@ -4051,6 +4057,9 @@ const handlers = mergeRouteMaps(
       // Response bodies are one-shot streams: cache the single read before
       // bounding it (arrayBuffer() followed by text() throws in Chrome).
       const text = await res.text();
+      // Fetched bodies are untrusted web content: wrap this return in
+      // `tagUntrusted(...)` (lib/untrusted-fence.js) when this route is next
+      // touched (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01 owns the route).
       return { ok: true, status: res.status, url: res.url, text: text.slice(0, MAX) };
     } catch (e) {
       return { ok: false, error: `fetch failed: ${e?.message ?? e}` };

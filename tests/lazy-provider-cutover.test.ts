@@ -1,6 +1,6 @@
 // tests/lazy-provider-cutover.test.ts — live provider cutover + constant context.
 // @ts-nocheck
-import { assert, assertEquals, assertGreater } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertGreater, assertMatch } from "jsr:@std/assert@1";
 import { generateText, tool } from "ai";
 import { z } from "zod";
 import {
@@ -399,7 +399,11 @@ Deno.test("lazy provider cutover: declared/inferred same-name refs cannot cross 
   for (const selected of searched.results) {
     const result = await protocol.execute({ selectionRef: selected.selectionRef, arguments: {} }, run);
     assertEquals(result.ok, true);
-    assertEquals(result.result.source, selected.sourceKind.replace("webmcp-", ""));
+    // A site-origin (WebMCP) result is page-controlled, so its strings arrive
+    // fenced in the run's untrusted boundary (lib/untrusted-fence.js).
+    const fenced = result.result.source;
+    assertMatch(fenced, /^<<<UNTRUSTED run:[A-Za-z0-9]+>>>\n[\s\S]*\n<<<END run:[A-Za-z0-9]+>>>$/);
+    assertEquals(fenced.split("\n")[1], selected.sourceKind.replace("webmcp-", ""));
   }
   assertEquals(new Set(calls), new Set(["declared", "inferred"]));
 });

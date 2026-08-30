@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.449] — 2026-08-30
+- Landed: text the agent reads from a web page or a site's tools is now clearly marked as untrusted data before the model sees it, so instructions hidden in a page are treated as content, not commands.
+
 ## [0.2.448] — 2026-08-30
 - Tracker: the honest provider-error messages are recorded as landed.
 

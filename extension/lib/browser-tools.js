@@ -823,7 +823,12 @@ export async function readPage(tabId) {
         text: (document.body?.innerText ?? "").slice(0, 20000),
       }),
     });
-    return results?.[0]?.result ?? { error: "no result" };
+    const page = results?.[0]?.result;
+    if (!page || typeof page !== "object") return { error: "no result" };
+    // Page text is DATA from the web, never an instruction: the tag makes the
+    // lazy projection wrap every string in the run's untrusted boundary
+    // (lib/untrusted-fence.js, CAP-FB-20260830-UNTRUSTED-CONTENT-FENCING-01).
+    return { untrusted: true, ...page };
   } catch (e) {
     return { error: String(e?.message ?? e) };
   }
