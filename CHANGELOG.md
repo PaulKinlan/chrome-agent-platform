@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.503] — 2026-08-30
+- merge: Context fidelity lane (6c4c907f) — durable resumes re-apply thread history and journaled skills
+
 ## [0.2.502] — 2026-08-30
 - merge: Build changelog lane (c6a32115) — npm run build prints the changelog delta since the previous build
 
