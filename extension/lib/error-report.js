@@ -20,6 +20,7 @@ export const ERROR_CATEGORY = {
   RATE_LIMIT: "provider-rate-limit",
   SERVER: "provider-server",
   MODEL_CONFIG: "model-config",
+  PROVIDER_CONFIG: "provider-config",
   NO_OUTPUT: "model-no-output",
   TOOL: "tool-failure",
   PERMISSION: "permission",
@@ -34,13 +35,15 @@ const ACTION = {
   [ERROR_CATEGORY.HOST_PERMISSION]:
     'Grant network access in Settings — click "Use" or "Test connection" on the provider (the extension needs host permission for the provider URL).',
   [ERROR_CATEGORY.AUTH]:
-    "Check the API key in Settings — it is missing, invalid, or revoked.",
+    "Check the API key in Settings → Providers — it is missing, invalid, or revoked.",
   [ERROR_CATEGORY.RATE_LIMIT]:
     "The provider is rate-limiting you — wait a moment and retry (or check your plan's limits).",
   [ERROR_CATEGORY.SERVER]:
     "The provider's servers are having an issue — retry in a moment.",
   [ERROR_CATEGORY.MODEL_CONFIG]:
     "Check the model id in Settings — it may not exist for this provider.",
+  [ERROR_CATEGORY.PROVIDER_CONFIG]:
+    "Set the provider endpoint in Settings → Providers (choose a preset or enter a valid https:// base URL), then run the task again.",
   [ERROR_CATEGORY.NO_OUTPUT]:
     "The model returned no content (possibly overloaded, or the prompt/tool loop stopped early) — retry, or try a different model.",
   [ERROR_CATEGORY.TOOL]:
@@ -96,6 +99,68 @@ function parseResponseBody(body) {
   return String(body).slice(0, 300);
 }
 
+/** Human provider names for error copy — never the base URL. Mirrors the
+ * ids in PROVIDER_CHOICES (extension/lib/provider.js) without importing the
+ * adapters into this pure module. */
+const PROVIDER_LABEL = {
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  gemini: "Google Gemini",
+  deepseek: "DeepSeek",
+  "openai-compatible": "the provider",
+  ollama: "Ollama",
+  lmstudio: "LM Studio",
+  "prompt-api": "the Prompt API",
+  demo: "the demo provider",
+};
+/** Mask bare credential SHAPES a provider echoes into its error text
+ * ("Incorrect API key provided: sk-proj-…"). safeProviderError masks keyword-
+ * adjacent and known secrets; this is the additional pass for a key that
+ * stands alone after a phrase. Exported so the model wrapper applies it before
+ * the message is ever stored. */
+export function maskCredentialShapes(text) {
+  return String(text ?? "").replace(
+    /\b(?:sk|rk|pk|xai|gsk|ghp|gho|xox[a-z]?|AIza|sk-ant|sk-proj)[-_][A-Za-z0-9_*.-]{6,}/g,
+    "[REDACTED]",
+  );
+}
+
+function providerLabel(id) {
+  const key = String(id ?? "").toLowerCase();
+  return PROVIDER_LABEL[key] ?? (key ? key : "the provider");
+}
+
+/** Normalise a recorded provider HTTP failure ({ status, provider, message })
+ * into a describeError result. Returns null when the hint is absent or is not
+ * an HTTP failure (2xx / no status) — the caller then falls through to the
+ * ordinary classification. */
+function describeProviderHint(hint, ctx, raw, detailParts) {
+  const status = Number(hint?.status ?? hint?.statusCode ?? NaN);
+  if (!Number.isFinite(status) || status < 400) return null;
+  const who = providerLabel(hint?.provider || ctx?.provider);
+  const msg = maskCredentialShapes(parseResponseBody(hint?.message ?? hint?.body ?? "")).slice(0, 300);
+  const tail = msg ? ` — ${msg}` : "";
+  const parts = [...detailParts, `provider status: ${status}`];
+  if (status === 401 || status === 403) {
+    return build(ERROR_CATEGORY.AUTH, `${who} rejected the API key (${status})${tail}`,
+      ACTION[ERROR_CATEGORY.AUTH], raw, parts);
+  }
+  if (status === 429) {
+    return build(ERROR_CATEGORY.RATE_LIMIT, `${who} is rate-limiting this key (429)${tail}`,
+      ACTION[ERROR_CATEGORY.RATE_LIMIT], raw, parts);
+  }
+  if (status === 400 || status === 404 || status === 422) {
+    return build(ERROR_CATEGORY.MODEL_CONFIG, `${who} rejected the request (${status})${tail}`,
+      ACTION[ERROR_CATEGORY.MODEL_CONFIG], raw, parts);
+  }
+  if (status >= 500) {
+    return build(ERROR_CATEGORY.SERVER, `${who} returned a server error (${status})${tail}`,
+      ACTION[ERROR_CATEGORY.SERVER], raw, parts);
+  }
+  return build(ERROR_CATEGORY.SERVER, `${who} returned ${status}${tail}`,
+    ACTION[ERROR_CATEGORY.SERVER], raw, parts);
+}
+
 /** The AI SDK markers (vercel.ai.error.*). */
 function isAiSdkError(e) {
   if (!e || typeof e !== "object") return false;
@@ -113,6 +178,13 @@ function isAiSdkError(e) {
  * - action: what the user should DO.
  * - message: a single-line summary for the console + thread preview.
  * - detail: the full context (status, body, url, model) for the expandable view.
+ *
+ * `context.providerError` ({ status, provider, message }) is the LAST provider
+ * HTTP failure the model wrapper recorded for this run. The AI SDK replaces a
+ * failed stream with AI_NoOutputGeneratedError (no status on it), so without
+ * this hint a 401/429/400 reads as "returned no content" (CAP-FB-20260830-
+ * PROVIDER-ERROR-TRUTH-01). The hint wins whenever the error object itself
+ * carries no status and is not an abort.
  */
 export function describeError(error, context = {}) {
   const e = error;
@@ -144,6 +216,14 @@ export function describeError(error, context = {}) {
       raw,
       detailParts,
     );
+  }
+
+  // 0a. The recorded provider HTTP failure behind an SDK wrapper error. Only
+  //     when the error itself carries no status (an APICallError is classified
+  //     from its own fields below) and is not a cancellation.
+  if (ctx.providerError && e?.statusCode == null && !/abort|cancel/i.test(raw)) {
+    const hinted = describeProviderHint(ctx.providerError, ctx, raw, detailParts);
+    if (hinted) return hinted;
   }
 
   // 0. The provider RUN GATE refusal (ProviderUnavailableError) — the

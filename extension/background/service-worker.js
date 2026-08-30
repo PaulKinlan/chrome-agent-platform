@@ -6,8 +6,7 @@ import {
   getModel,
   getModelForAgent,
   getProviderConfig,
-  resolveModelFromConfig,
-} from "../lib/provider.js";
+  resolveModelFromConfig, withEffectiveBaseURL } from "../lib/provider.js";
 import {
   NotificationRegistry,
   handleNotificationClick,
@@ -128,6 +127,7 @@ import {
   isAbortShape,
   memoryToolset,
   RunAbortedError,
+  takeLastProviderError,
 } from "../lib/agent.js";
 import { clearUsage, getServerToolUsage, getUsage, recordServerToolUsage, recordToolCall, recordUsage } from "../lib/usage.js";
 import { createWebmcpAuthorizationGuard } from "../lib/webmcp-authority.js";
@@ -2229,7 +2229,7 @@ function providerResumeIdentity(config) {
     schemaVersion: 1,
     provider: String(config?.provider ?? config?.id ?? ""),
     model: String(config?.model ?? ""),
-    requestedScope: providerOriginPattern(config) ?? null,
+    requestedScope: providerOriginPattern(withEffectiveBaseURL(config)) ?? null,
     local: isLocalProvider(config),
   };
 }
@@ -2825,7 +2825,12 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         }
         return durableQuotaResponse(error, executionId);
       }
-      const desc = describeError(error);
+      // The last provider HTTP failure (401/429/400) recorded by the model
+      // wrapper — carried on the error so the outer route catch reports the
+      // same truth (CAP-FB-20260830-PROVIDER-ERROR-TRUTH-01).
+      const providerError = error?.providerError ?? takeLastProviderError();
+      if (providerError) { try { error.providerError = providerError; } catch { /* immutable error */ } }
+      const desc = describeError(error, { providerError });
       const terminal = await durableRuns.settle(executionId, {
         ok: false,
         error: desc.message,
@@ -3699,7 +3704,7 @@ async function runNamedAgentTask({ id, task, attachments, runId, threadId = null
     // UNWRAP the AI SDK wrapper + say what to do (not a raw "No output").
     let cfg = null;
     try { cfg = await getProviderConfig(); } catch { cfg = null; }
-    const desc = describeError(e, { provider: cfg?.id ?? cfg?.name ?? "", model: cfg?.model ?? "" });
+    const desc = describeError(e, { provider: cfg?.provider ?? cfg?.id ?? cfg?.name ?? "", model: cfg?.model ?? "", providerError: e?.providerError ?? takeLastProviderError() });
     return { ok: false, error: desc.message, errorCategory: desc.category, errorReason: desc.reason, errorAction: desc.action, errorDetail: desc.detail };
   }
 }
@@ -4586,9 +4591,10 @@ const handlers = mergeRouteMaps(
       let cfg = null;
       try { cfg = await getProviderConfig(); } catch { cfg = null; }
       const desc = describeError(e, {
-        provider: cfg?.id ?? cfg?.name ?? "",
+        provider: cfg?.provider ?? cfg?.id ?? cfg?.name ?? "",
         model: cfg?.model ?? "",
         tool: lastTool ?? undefined,
+        providerError: e?.providerError ?? takeLastProviderError(),
       });
       result = {
         ok: false,
@@ -6528,7 +6534,7 @@ const handlers = mergeRouteMaps(
     } catch (e) {
       let cfg = null;
       try { cfg = await getProviderConfig(); } catch { cfg = null; }
-      const desc = describeError(e, { provider: cfg?.id ?? cfg?.name ?? "", model: cfg?.model ?? "" });
+      const desc = describeError(e, { provider: cfg?.provider ?? cfg?.id ?? cfg?.name ?? "", model: cfg?.model ?? "", providerError: e?.providerError ?? takeLastProviderError() });
       return { ok: false, error: desc.message, errorCategory: desc.category, errorReason: desc.reason, errorAction: desc.action, errorDetail: desc.detail };
     }
   },

@@ -14,6 +14,7 @@ import {
 } from "../../lib/provider-gate.js";
 import { testProvider } from "../../lib/provider-test.js";
 import { defaultModelFor } from "../../lib/model-catalog.js";
+import { withEffectiveBaseURL } from "../../lib/provider.js";
 import { safeProviderError } from "../../lib/pure.js";
 import { requireSettingsSender } from "./auth.js";
 
@@ -52,7 +53,7 @@ export function createProviderRoutes({ invalidateAgent = () => {} } = {}) {
       return {
         provider: String(cfg.provider ?? "").slice(0, 80),
         local: isLocalProvider(cfg),
-        origin: providerOriginPattern(cfg),
+        origin: providerOriginPattern(withEffectiveBaseURL(cfg)),
       };
     },
 
@@ -62,6 +63,16 @@ export function createProviderRoutes({ invalidateAgent = () => {} } = {}) {
       // user isn't surprised by a failure after running. Redacted: only the id,
       // a boolean, and a human reason (never the key / base URL / model).
       const cfg = await getProviderConfig();
+      // A network provider with no valid https:// origin cannot run — the
+      // run-time preflight refuses it — so the hub strip must be red BEFORE the
+      // run, not only after (CAP-FB-20260830-PROVIDER-ERROR-TRUTH-01).
+      if (!isLocalProvider(cfg) && !providerOriginPattern(withEffectiveBaseURL(cfg))) {
+        return {
+          provider: cfg.provider ?? "",
+          ok: false,
+          reason: "the provider endpoint is not configured — set it in Settings → Providers",
+        };
+      }
       const gate = await providerRunGate(cfg);
       // An empty model id runs the catalogue default — say so (the default is
       // a public catalogue id, not user data), so the hub and the journeys can
