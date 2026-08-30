@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.430] — 2026-08-30
+- Six fixes are now in progress in parallel and recorded as claimed in the task tracker so no two agents work the same item.
+
 ## [0.2.429] — 2026-08-30
 - No gallery component is deleted: each unused one is kept with a planned home, and the screenshot strip is now the planned image strip of everything a run generates, in the thread and on the hub.
 
