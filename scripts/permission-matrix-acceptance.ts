@@ -385,6 +385,11 @@ async function main() {
   }
   check("matrix[variant]: integrity independently re-verified (hashes recomputed, only manifest.json diverges)",
     integrity !== null && verifyError === null, verifyError);
+  
+  // FAIL-CLOSED: If verification fails, throw an error to prevent proceeding
+  if (verifyError !== null) {
+    throw new Error(`Integrity verification failed: ${verifyError}`);
+  }
 
   const profileB = `/tmp/cap-perm-matrix-b-${Date.now()}`;
   const { rig: rigB } = await startRig(profileB, variantDir);
