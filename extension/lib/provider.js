@@ -134,12 +134,28 @@ export async function setProviderConfig(partial) {
  * baseURL + apiKey + model). A complete config is self-contained — it never
  * mixes one provider's endpoint with another's credential. Returns
  * { model, modelId, providerName }. */
+/** The base URL a config will actually run against: the stored one, or the
+ * preset's when the stored one is empty. A preset provider saved without a
+ * base URL is a complete config (CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01);
+ * only a BYO endpoint with no URL is genuinely unconfigured. */
+export function effectiveBaseURL(cfg) {
+  const stored = String(cfg?.baseURL ?? "").trim();
+  if (stored) return stored;
+  return PROVIDER_CHOICES.find((p) => p.id === cfg?.provider)?.baseURL ?? "";
+}
+
+/** The same config with its effective base URL filled in — for every origin
+ * derivation (status, permission summary, resume identity), never for storage. */
+export function withEffectiveBaseURL(cfg) {
+  const baseURL = effectiveBaseURL(cfg);
+  return baseURL === String(cfg?.baseURL ?? "") ? cfg : { ...cfg, baseURL };
+}
+
 export async function resolveModelFromConfig(cfg) {
   const id = cfg.provider;
 
   if (OPENAI_COMPATIBLE_IDS.has(id)) {
-    const baseURL = cfg.baseURL ||
-      (PROVIDER_CHOICES.find((p) => p.id === id)?.baseURL ?? "");
+    const baseURL = effectiveBaseURL(cfg);
     const apiKey = cfg.apiKey ?? "";
     // An EMPTY model id resolves to the provider's catalogue default (the
     // recommended, verified-callable id) instead of silently running the demo
