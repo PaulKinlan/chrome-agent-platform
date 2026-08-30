@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.465] — 2026-08-30
+- Landed: the groundwork for showing what changed in an edited page — a real diff engine is now bundled and tested.
+
 ## [0.2.464] — 2026-08-30
 - Tracker: stray merge markers removed from the task list, with a test that keeps them out.
 

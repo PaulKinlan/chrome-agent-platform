@@ -103,7 +103,7 @@ const shippedJs = await walkJs("extension");
 // dependency bundles (esbuild inlines the zod/vite source there) — never in
 // shipped source files.
 const violations = await scanShippedJs(shippedJs, {
-  generatedBundles: new Set([path.join(ROOT, "extension", "dist", "background", "service-worker.js"), path.join(ROOT, "extension", "dist", "options.bundle.js")]),
+  generatedBundles: new Set([path.join(ROOT, "extension", "dist", "background", "service-worker.js"), path.join(ROOT, "extension", "dist", "options.bundle.js"), path.join(ROOT, "extension", "dist", "shared", "diff-core.bundle.js")]),
   // NOTE: the execution-host exemption is NOT caller-supplied — the scanner
   // owns the fixed canonical path + the exact allowed call shape.
   allowedDynamicEvaluatorFiles: new Set([
@@ -295,6 +295,12 @@ try {
       },
     });
     await build({ ...shared, entryPoints: [path.join(EXT_DIR, "options/options.js")], outfile: OPT });
+    // The diff core (CAP-FB-20260830-DIFF-LIBRARY-01): jsdiff lives in
+    // node_modules, so the ONE wrapper module is bundled and every page /
+    // component / the SW imports this single build by relative path.
+    const DIFF_CORE = path.join(STAGE, "shared/diff-core.bundle.js");
+    await mkdir(path.dirname(DIFF_CORE), { recursive: true });
+    await build({ ...shared, entryPoints: [path.join(EXT_DIR, "shared/diff-core.js")], outfile: DIFF_CORE });
     // PHASE-2 agent worker bundle: the per-agent shared worker runs the
     // agent-do loop (lib/agent-loop.js → agent-do + ai) — those live in
     // node_modules, so the worker MUST be bundled (native ESM can't resolve
@@ -323,7 +329,7 @@ try {
     // store-target policy forbids as a dynamic source evaluator).
     let occurrences = 0;
     let zodProbes = 0;
-    for (const scrubPath of [SW, WORKER]) {
+    for (const scrubPath of [SW, WORKER, DIFF_CORE]) {
       let bundle = await readFile(scrubPath, "utf8");
       if (bundle.includes("key-sentinel") || bundle.includes("__CAP_TEST_SEAM")) {
         throw new Error("production bundle unexpectedly contains test-seam markers — refusing to publish");
@@ -342,7 +348,7 @@ try {
     const prevMode = async (rel) => {
       try { const st = await stat(path.join(DIST, rel)); return st.mode & 0o777; } catch { return null; }
     };
-    for (const rel of ["background/service-worker.js", "options.bundle.js"]) {
+    for (const rel of ["background/service-worker.js", "options.bundle.js", "shared/diff-core.bundle.js"]) {
       const mode = await prevMode(rel);
       if (mode != null) await chmod(path.join(STAGE, rel), mode); // mode failure = publish failure (fatal)
     }
