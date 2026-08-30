@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.481] — 2026-08-30
+- Agent dialog: make the config body scroll with Advanced and Skills expanded
+
 ## [0.2.480] — 2026-08-30
 - Housekeeping: two parallel work streams reconciled.
 

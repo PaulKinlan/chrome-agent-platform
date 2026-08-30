@@ -414,6 +414,7 @@ const EXPECTED = [
   "after disabling that recipe the four agent surfaces agree (0) again",
   "create dialog: the template gallery is the first step (blank + 21 templates + scheduled recipes; Starter shows 7; no template select)",
   "create dialog: Enter on the Research Analyst card fills Name, presses the card and checks its skills",
+  "create dialog: Advanced+Skills expand and the config body scrolls with them (min-height hardening)",
   "create dialog: Create agent from the card yields ONE named agent whose role is the template persona",
   "create dialog: a Scheduled card creates one scheduled agent that the sidebar and Settings both list",
   "create dialog: the journey's created agents are removed again (fresh profile restored)",
@@ -1080,6 +1081,51 @@ async function main() {
       g1.name === "Research Analyst" && g1.selectedId === "research-analyst" && g1.selectedPressed === "true" &&
         g1.checked >= 3 && g1.activeIsUse,
     );
+
+    // CAP-FB-20260830-AGENT-DIALOG-SCROLL-01 — the config body must scroll
+    // once Advanced and Skills are expanded (min-height:0 hardening on
+    // .agent-config-scroll). The previous failure mode: min-height:auto made
+    // the body grow to content height inside the bounded container
+    // (overflow:hidden), clipping the skills section and the footer.
+    await evalIn(cdp, ntpSession, `document.querySelector('.agent-config-advanced summary')?.click(); document.querySelector('.skills-collapse summary')?.click(); true`);
+    await sleep(250);
+    const scrollProbe = await evalIn(cdp, ntpSession, `(() => {
+      const el = document.querySelector('.agent-config-scroll');
+      const adv = document.querySelector('.agent-config-advanced');
+      const sk = document.querySelector('.skills-collapse');
+      if (!el || !adv || !sk) return { ready: false };
+      if (!adv.open || !sk.open) return { ready: false, advOpen: adv.open, skOpen: sk.open };
+      const r = el.getBoundingClientRect();
+      const before = el.scrollTop;
+      return {
+        ready: true,
+        minHeight: getComputedStyle(el).minHeight,
+        overflowY: getComputedStyle(el).overflowY,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+        scrollTopBefore: before,
+        wheelX: r.x + r.width / 2,
+        wheelY: r.y + r.height / 2,
+        footerVisible: (() => { const f = document.querySelector('.agent-config-footer')?.getBoundingClientRect(); return f ? f.top > 0 && f.bottom <= innerHeight && f.top < f.bottom : null; })(),
+      };
+    })()`);
+    if (scrollProbe?.ready) {
+      for (let i = 0; i < 5; i++) {
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: scrollProbe.wheelX, y: scrollProbe.wheelY, deltaX: 0, deltaY: 400 }, ntpSession);
+        await sleep(100);
+      }
+      scrollProbe.scrollTopAfterWheel = await evalIn(cdp, ntpSession, `document.querySelector('.agent-config-scroll')?.scrollTop ?? null`);
+    }
+    console.log("create dialog scroll probe:", JSON.stringify(scrollProbe));
+    check(
+      "create dialog: Advanced+Skills expand and the config body scrolls with them (min-height hardening)",
+      scrollProbe?.ready === true &&
+        scrollProbe.minHeight === "0px" && scrollProbe.overflowY === "auto" &&
+        scrollProbe.scrollHeight > scrollProbe.clientHeight &&
+        (scrollProbe.scrollTopAfterWheel ?? 0) > (scrollProbe.scrollTopBefore ?? 0) &&
+        scrollProbe.footerVisible === true,
+    );
+
     const galleryShot = await captureShot(cdp, ntpSession);
     if (galleryShot) await writeEvidence("templates-gallery.png", galleryShot);
     const createBtnPoint = await evalIn(cdp, ntpSession, `(() => { const b = [...document.querySelectorAll('agent-dialog button')].find((x) => x.textContent.trim() === 'Create agent'); if (!b) return null; b.scrollIntoView({ block: 'center' }); const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
