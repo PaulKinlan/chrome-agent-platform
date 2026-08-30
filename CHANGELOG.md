@@ -1,7 +1,22 @@
 # Changelog
 
+## [0.2.476] — 2026-08-30
+- Tracker: the diff view component is recorded as landed.
+
+## [0.2.475] — 2026-08-30
+- Landed: a reusable diff view (side by side or unified, with added/removed counts and keyboard navigation between changes) is ready for the editing flow.
+
+## [0.2.474] — 2026-08-30
+- Tracker: legible tool cards are recorded as landed.
+
+## [0.2.473] — 2026-08-30
+- Landed: tool cards in a conversation now show what the tool actually returned, in plain terms, with no internal plumbing; a permission request is still there to answer when you reopen the thread.
+
+## [0.2.472] — 2026-08-30
+- Tracker: artifact versions are recorded as landed.
+
 ## [0.2.471] — 2026-08-30
-- WIP: CAP-FB-20260830-RUN-LOG-COMPACTION-01 inherited uncommitted work (resumed after worker cutoff)
+- Landed: every edit to an artifact keeps the previous version, and any earlier version can be restored.
 
 ## [0.2.470] — 2026-08-30
 - Tracker: the memory-speed fix is recorded as landed; two more fixes claimed.

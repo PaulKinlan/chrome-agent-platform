@@ -121,6 +121,44 @@ export async function loadDurableRunLogs(executionId) {
   return await send("run.logs", { executionId });
 }
 
+/** Wire a conversation surface's REPLAYED grant cards (the `approval` rows a
+ * reopened thread derives from persisted denials — CAP-FB-20260827-TOOL-CALL-
+ * LEGIBILITY-01 §2b). The card's Allow is the owner's gesture: request the
+ * exact permissions, set the exact browser-control grant (the same path the
+ * live card takes — approvePermissionRequirement), then resume the run if it
+ * is still paused on that requirement; a settled run cannot continue, and the
+ * card says so instead of pretending. Every failure is shown on the card.
+ * Returns an unsubscribe function. */
+export function wireReplayApprovals(container) {
+  const c = container;
+  if (!c || typeof c.addEventListener !== "function") return () => {};
+  const handler = async (ev) => {
+    const d = ev?.detail;
+    if (!d || !d.requirement || !d.card) return;
+    const card = d.card;
+    if (d.approve !== true) {
+      card.setAttribute?.("state", "denied");
+      return;
+    }
+    const outcome = await approvePermissionRequirement(d.requirement)
+      .catch((e) => ({ ok: false, errors: [String(e?.message ?? e)] }));
+    if (!outcome?.ok) {
+      card.setAttribute?.("state", "error");
+      card.setAttribute?.("detail", (outcome?.errors ?? []).join("; ") || "the approval could not be completed");
+      return;
+    }
+    let resumed = false;
+    if (typeof d.executionId === "string" && d.executionId) {
+      const res = await resumePermissionPausedRun(d.executionId, { ownerConfirmed: true }).catch(() => null);
+      resumed = res?.ok === true;
+    }
+    card.setAttribute?.("detail", resumed ? "Approved — continuing…" : "Approved. Ask again and the agent can use it.");
+    card.setAttribute?.("state", "granted");
+  };
+  c.addEventListener("approval-decision", handler);
+  return () => { try { c.removeEventListener("approval-decision", handler); } catch { /* detached */ } };
+}
+
 // ── conversation history (the persistent thread) ───────────────────────────
 // The master journal stores `task` + `result` entries in order. Map them to the
 // ConversationMessage[] shape agent-do accepts (user/assistant turns) so a
@@ -282,23 +320,32 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
         // selectionRef that means nothing to a reader — unwrap now so the card
         // never shows protocol plumbing, even briefly.
         const callEff = effectiveToolCall(ev.toolName, ev.toolArgs, null);
-        const card = typeof c.appendTool === "function"
-          ? c.appendTool({ name: callEff.name, args: callEff.args, status: "running" })
-          : appendBubble(c, "tool", `→ ${ev.toolName}`);
+        // A protocol call renders no card (§9) — a sentinel keeps the FIFO
+        // pairing honest so its result never spawns an orphan card either.
+        const card = isProtocolTool(ev.toolName)
+          ? { protocol: true }
+          : typeof c.appendTool === "function"
+            ? c.appendTool({ name: callEff.name, args: callEff.args, status: "running" })
+            : appendBubble(c, "tool", `→ ${ev.toolName}`);
         toolCards.push(ev.toolName, card);
         break;
       }
       case "tool-result": {
         const card = toolCards.take(ev.toolName);
-        const raw = safeToolResult(ev.result);
-        const summary = ev.result != null ? summarizeToolResult(ev.toolName, ev.result) : "";
+        if (card?.protocol === true || (!card && isProtocolTool(ev.toolName))) break;
+        // The card shows the SELECTED tool's own result — summary and raw —
+        // never the lazy envelope around it (§9/§10).
+        const inner = lazyInnerResult(ev.result);
+        const shown = inner !== undefined ? inner : ev.result;
+        const resEff = effectiveToolCall(ev.toolName, ev.toolArgs, ev.result);
+        const raw = safeToolResult(shown);
+        const summary = shown != null ? summarizeToolResult(resEff.name, shown) : "";
         const status = isToolErrorEvent(ev) ? "error" : "success";
         if (card) {
           // The result names the tool that actually ran; correct the header
           // from `execute_tool` to that name now it is known. The event's own
           // `selectedTool` (emitted by the runtime) is authoritative — the
           // summarized result text no longer carries the envelope.
-          const resEff = effectiveToolCall(ev.toolName, ev.toolArgs, ev.result);
           const corrected = (typeof ev.selectedTool === "string" && ev.selectedTool) ||
             (resEff.lazy && resEff.name !== ev.toolName ? resEff.name : "");
           if ((ev.toolName === "execute_tool" || ev.toolName === "search_tools") && corrected && corrected !== ev.toolName) {
@@ -388,6 +435,8 @@ export function friendlyActivityLabel(toolName, args) {
   const parts = String(toolName || "tool").split("_");
   const verb = parts.length > 1 ? parts.join(" ") : toolName;
   switch (toolName) {
+    case "search_tools": case "list_tools": return "choosing a tool";
+    case "execute_tool": return "running a tool";
     case "create_named_agent": return name ? `creating agent ${name}` : "creating an agent";
     case "update_named_agent": return name ? `updating agent ${name}` : "updating an agent";
     case "delete_named_agent": return name ? `deleting agent ${name}` : "deleting an agent";
@@ -765,6 +814,9 @@ export function pairToolJournal(entries) {
       })(),
       result: result?.result ?? null,
       ok: result?.ok ?? null,
+      // The structured denial persisted on the result row (§2b), when any.
+      permissionRequirement: result?.permissionRequirement ?? null,
+      permissionDecision: result?.permissionDecision ?? null,
       ts,
       duplicate: byCall.get(id)?.duplicate === true,
     });
@@ -848,6 +900,38 @@ export function effectiveToolCall(toolName, args, result) {
   return { name: selected ?? name, args: inner, lazy: true };
 }
 
+/** THE PROTOCOL CALLS (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 §9).
+ * `search_tools` / `list_tools` are how the model finds a tool, not work the
+ * owner asked for. They stay in the durable run log (the debugger surface) and
+ * are never rendered as transcript cards. */
+export const PROTOCOL_TOOLS = new Set(["search_tools", "list_tools"]);
+export function isProtocolTool(name) { return PROTOCOL_TOOLS.has(String(name ?? "")); }
+
+/** The selected tool's OWN result from a lazy `execute_tool` envelope
+ * ({ok, selectedTool, result|error, schemaSummary, selectionRef, …}), or
+ * undefined when the value is not a lazy envelope — so the caller renders the
+ * tool's answer (or its own error) and never the transport around it. */
+export function lazyInnerResult(result) {
+  const outer = unwrapLazyEnvelope(result);
+  if (outer && typeof outer === "object" && !Array.isArray(outer) && typeof outer.selectedTool === "string" && outer.selectedTool) {
+    if (outer.result !== undefined) return unwrapLazyEnvelope(outer.result);
+    if (typeof outer.error === "string") return { ok: false, error: outer.error };
+  }
+  return undefined;
+}
+
+/** The permission requirement a persisted tool result carries, if it is a
+ * structured denial (`waitingForPermission` + `permissionRequirement`) — at
+ * the tool's own layer or the envelope's. Only PERMISSION/GRANT requirements
+ * are replayable (they can be granted at any time); run-bound action
+ * approvals (script.run et al.) are not, so they yield null here. */
+export function approvalRequirementFromToolResult(result) {
+  const inner = lazyInnerResult(result);
+  const req = normalizePermissionRequirement(inner) ?? normalizePermissionRequirement(unwrapLazyEnvelope(result));
+  if (!req || req.approvals.length) return null;
+  return req;
+}
+
 export function artifactFromToolResult(toolName, result) {
   const outer = unwrapLazyEnvelope(result);
   // Under the lazy protocol the invoked tool is named in the payload, not in
@@ -903,8 +987,11 @@ export function toolRowsFromRunLog(executionId, logs) {
       // pairToolJournal prefers it over the envelope unwrap, and without this
       // mapping the replay could never recover it from a summarized result.
       selectedTool: typeof r.selectedTool === "string" && r.selectedTool ? r.selectedTool : null,
+      permissionRequirement: r.permissionRequirement && typeof r.permissionRequirement === "object" ? r.permissionRequirement : null,
+      permissionDecision: typeof r.permissionDecision === "string" ? r.permissionDecision : null,
       ts: typeof r.at === "number" ? r.at : null,
     }));
+  const seenApprovals = new Set();
   return pairToolJournal(rows).flatMap((p) => {
     // Show the tool that RAN, not the lazy protocol's envelope.
     const eff = effectiveToolCall(p.tool, p.args, p.result);
@@ -920,19 +1007,58 @@ export function toolRowsFromRunLog(executionId, logs) {
       executionId,
       ts: p.ts ?? null,
       derived: true, // a VIEW row — not persisted in the thread body
+      // Protocol plumbing stays in the log; the renderer skips the card (§9).
+      ...(isProtocolTool(eff.name) ? { protocol: true } : {}),
     };
+    const out = [toolRow];
+    // A PERSISTED permission denial reopens as the same in-context grant card
+    // the live run showed (§2b) — one per distinct requirement — so the owner
+    // can grant from the transcript instead of reading the denial as prose.
+    // The requirement lives on the row itself when the run paused on it (the
+    // model-facing result was rewritten to prose); the envelope is the
+    // fallback for a tool that denied without pausing.
+    const requirement = (p.permissionRequirement
+      ? normalizePermissionRequirement({ waitingForPermission: true, permissionRequirement: p.permissionRequirement })
+      : null) ?? approvalRequirementFromToolResult(p.result);
+    if (requirement && !requirement.approvals.length && !seenApprovals.has(requirement.key)) {
+      seenApprovals.add(requirement.key);
+      // The owner's recorded decision is the card's state — approved reopens
+      // granted, declined stays declined (deny is sticky: a re-projection must
+      // never resurrect a pending Allow the owner already answered), expired
+      // says so. Only a denial that never paused the run (no decision on the
+      // row) reopens grantable.
+      const decision = p.permissionDecision;
+      const replayState = decision === "approved"
+        ? { state: "granted", detail: "Approved during the run." }
+        : decision === "denied"
+          ? { state: "denied" }
+          : decision === "expired"
+            ? { state: "expired", detail: "The request expired. The action was not performed." }
+            : {};
+      out.push({
+        role: "approval",
+        requirement,
+        toolCallId: p.callId ?? null,
+        executionId,
+        ts: p.ts ?? null,
+        derived: true,
+        ...replayState,
+      });
+    }
     // The artifact this call produced renders straight after it, so reopening
     // a thread shows the deliverable in the context that created it.
     const artifact = p.status === "error" ? null : artifactFromToolResult(p.tool, p.result);
-    if (!artifact) return [toolRow];
-    return [toolRow, {
-      role: "artifact",
-      artifact,
-      toolCallId: p.callId ?? null,
-      executionId,
-      ts: p.ts ?? null,
-      derived: true,
-    }];
+    if (artifact) {
+      out.push({
+        role: "artifact",
+        artifact,
+        toolCallId: p.callId ?? null,
+        executionId,
+        ts: p.ts ?? null,
+        derived: true,
+      });
+    }
+    return out;
   });
 }
 
@@ -1069,8 +1195,10 @@ export function projectThreadMessages(thread) {
   const messages = Array.isArray(thread?.messages) ? thread.messages : [];
   if (!messages.length) return [];
 
-  // Pair raw tool rows into unified tool cards (one card per callId)
-  const rawTools = messages.filter((m) => m && m.role === "tool");
+  // Pair raw tool rows into unified tool cards (one card per callId). The
+  // protocol's own calls (search_tools/list_tools) are dropped here — they
+  // are plumbing, never a card (§9); the durable run log still lists them.
+  const rawTools = messages.filter((m) => m && m.role === "tool" && m.protocol !== true && !isProtocolTool(m.toolName));
   const pairedTools = pairToolJournal(
     rawTools.map((m) => ({
       type: m.toolStatus === "running" ? "tool-call" : "tool-result",
@@ -1104,14 +1232,15 @@ export function projectThreadMessages(thread) {
   });
 
   const emittedTools = new Set();
+  const seenApprovalKeys = new Set();
   const turns = [];
-  let currentTurn = { user: null, systems: [], tools: [], terminals: [], execId: null };
+  let currentTurn = { user: null, systems: [], tools: [], approvals: [], terminals: [], execId: null };
 
   const flushTurn = () => {
-    if (currentTurn.user || currentTurn.systems.length || currentTurn.tools.length || currentTurn.terminals.length) {
+    if (currentTurn.user || currentTurn.systems.length || currentTurn.tools.length || currentTurn.approvals.length || currentTurn.terminals.length) {
       turns.push(currentTurn);
     }
-    currentTurn = { user: null, systems: [], tools: [], terminals: [], execId: null };
+    currentTurn = { user: null, systems: [], tools: [], approvals: [], terminals: [], execId: null };
   };
 
   for (const m of messages) {
@@ -1149,7 +1278,26 @@ export function projectThreadMessages(thread) {
         executionId: m.executionId ?? null,
       });
       if (m.executionId && !currentTurn.execId) currentTurn.execId = m.executionId;
+    } else if (role === "approval") {
+      // The derived grant card for a persisted denial (§2b): one per distinct
+      // requirement across the thread, rendered with its turn's tool cards.
+      const req = m.requirement;
+      const key = typeof req?.key === "string" && req.key ? req.key : null;
+      if (req && typeof req === "object" && (!key || !seenApprovalKeys.has(key))) {
+        if (key) seenApprovalKeys.add(key);
+        currentTurn.approvals.push({
+          role: "approval",
+          requirement: req,
+          executionId: m.executionId ?? null,
+          toolCallId: m.toolCallId ?? null,
+          ts: m.ts ?? null,
+          ...(typeof m.state === "string" && m.state ? { state: m.state } : {}),
+          ...(typeof m.detail === "string" && m.detail ? { detail: m.detail } : {}),
+        });
+        if (m.executionId && !currentTurn.execId) currentTurn.execId = m.executionId;
+      }
     } else if (role === "tool") {
+      if (m.protocol === true || isProtocolTool(m.toolName)) continue;
       const callId = m.toolCallId;
       const idx = toolCards.findIndex((tc, i) =>
         !emittedTools.has(i) && (
@@ -1196,6 +1344,10 @@ export function projectThreadMessages(thread) {
     if (turn.tools.length) {
       turn.tools.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
       output.push(...turn.tools);
+    }
+    if (turn.approvals.length) {
+      turn.approvals.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+      output.push(...turn.approvals);
     }
     if (turn.terminals.length) {
       turn.terminals.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
@@ -1501,9 +1653,13 @@ export async function runConversationTurn(container, { text, attachments = [], h
         // Unwrap the lazy envelope immediately (the selectionRef plumbing is
         // never shown); the header corrects to the real tool at result time.
         const callEff = effectiveToolCall(ev.toolName, ev.toolArgs, null);
-        const card = typeof c.appendTool === "function"
-          ? c.appendTool({ name: callEff.name, args: callEff.args, status: "running" })
-          : appendBubble(c, "tool", `→ ${ev.toolName}`);
+        // A protocol call renders no card (§9) — a sentinel keeps the FIFO
+        // pairing honest so its result never spawns an orphan card either.
+        const card = isProtocolTool(ev.toolName)
+          ? { protocol: true }
+          : typeof c.appendTool === "function"
+            ? c.appendTool({ name: callEff.name, args: callEff.args, status: "running" })
+            : appendBubble(c, "tool", `→ ${ev.toolName}`);
         toolCards.push(ev.toolName, card);
         break;
       }
@@ -1530,8 +1686,14 @@ export async function runConversationTurn(container, { text, attachments = [], h
         // parallel same-name calls in order); mark it done on success, error on
         // a FAILED result (the SW tags `ok:false` — never a blanket success).
         const card = toolCards.take(ev.toolName);
-        const raw = safeToolResult(ev.result);
-        const summary = ev.result != null ? summarizeToolResult(ev.toolName, ev.result) : "";
+        if (card?.protocol === true || (!card && isProtocolTool(ev.toolName))) break;
+        // The card shows the SELECTED tool's own result — summary and raw —
+        // never the lazy envelope around it (§9/§10).
+        const inner = lazyInnerResult(ev.result);
+        const shown = inner !== undefined ? inner : ev.result;
+        const resEff = effectiveToolCall(ev.toolName, ev.toolArgs, ev.result);
+        const raw = safeToolResult(shown);
+        const summary = shown != null ? summarizeToolResult(resEff.name, shown) : "";
         const err = isToolErrorEvent(ev);
         const status = err ? "error" : "success";
         if (card) {
@@ -1539,7 +1701,6 @@ export async function runConversationTurn(container, { text, attachments = [], h
           // correct the header + unwrap the arguments now the real tool is
           // known (the event's selectedTool is authoritative; the result
           // envelope's is the fallback).
-          const resEff = effectiveToolCall(ev.toolName, ev.toolArgs, ev.result);
           const corrected = (typeof ev.selectedTool === "string" && ev.selectedTool) ||
             (resEff.lazy && resEff.name !== ev.toolName ? resEff.name : "");
           if ((ev.toolName === "execute_tool" || ev.toolName === "search_tools") && corrected && corrected !== ev.toolName) {

@@ -76,7 +76,10 @@ Deno.test("owner-direct scope is exactly the audited action set (no silent widen
   // SCRIPT WIDENING (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01): the
   // owner writing/running a saved script from the hub IS the approval;
   // a model-initiated script.create/run pays the source-disclosing card.
-  assertEquals([...OWNER_DIRECT_ACTIONS].sort(), ["agent.delete", "asset.delete", "named-agent.delete", "named-agent.set-schedule", "recipe.delete", "script.create", "script.run", "task.pause", "task.resume", "task.update"].sort());
+  // VERSION RESTORE WIDENING (CAP-FB-20260830-ARTIFACT-VERSIONS-01): the
+  // owner's own Restore click in the artifact viewer IS the approval (the
+  // asset.delete precedent); a model-initiated asset.restore pays the card.
+  assertEquals([...OWNER_DIRECT_ACTIONS].sort(), ["agent.delete", "asset.delete", "asset.restore", "named-agent.delete", "named-agent.set-schedule", "recipe.delete", "script.create", "script.run", "task.pause", "task.resume", "task.update"].sort());
   // Every owner-direct action passes the audit grammar; widening this set
   // requires a new permission-model review.
   for (const direct of OWNER_DIRECT_ACTIONS) {

@@ -247,10 +247,13 @@ import {
   createOrUpdateAssetKeyed,
   deleteAsset,
   getAsset,
+  getAssetVersion,
   listAssets,
   listAllAssets,
+  listAssetVersions,
   migrateSiteAssetsToLibrary,
   normalizeModelAssetKey,
+  restoreAssetVersion,
   updateAsset,
 } from "../lib/artifacts.js";
 import {
@@ -2488,7 +2491,21 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         // An unmatched result gets a UNIQUE id (never a repeated ":1" that
         // would collapse multiple orphan results into one card).
         const callId = q.shift() ?? `${taskId}:${runInstance}:${event.toolName ?? "tool"}:orphan:${orphanN}`;
-        const log = { type: "tool-result", id: taskId, executionId, run: runInstance, callId, tool: event.toolName ?? "tool", result, ok: event.ok ?? null, ...(typeof event.selectedTool === "string" && event.selectedTool ? { selectedTool: event.selectedTool } : {}) };
+        // A structured permission denial keeps its requirement on the row
+        // (bounded: the same shape normalizePermissionRequirement accepts) so
+        // a reopened thread can render the grant card, not prose (§2b).
+        const permissionReq = event.permissionRequirement && typeof event.permissionRequirement === "object" && !Array.isArray(event.permissionRequirement)
+          ? {
+            permissionRequirement: {
+              reason: String(event.permissionRequirement.reason ?? "").slice(0, 240),
+              permissions: (Array.isArray(event.permissionRequirement.permissions) ? event.permissionRequirement.permissions : []).filter((x) => typeof x === "string").slice(0, 8),
+              grantOrigins: (Array.isArray(event.permissionRequirement.grantOrigins) ? event.permissionRequirement.grantOrigins : []).filter((x) => typeof x === "string").slice(0, 50),
+              grantGlobal: event.permissionRequirement.grantGlobal === true,
+            },
+            permissionDecision: typeof event.permissionDecision === "string" ? event.permissionDecision.slice(0, 16) : null,
+          }
+          : {};
+        const log = { type: "tool-result", id: taskId, executionId, run: runInstance, callId, tool: event.toolName ?? "tool", result, ok: event.ok ?? null, ...(typeof event.selectedTool === "string" && event.selectedTool ? { selectedTool: event.selectedTool } : {}), ...permissionReq };
         journalAppend(mem, log).catch(() => {});
         durableRuns.appendLog(executionId, log, `tool-result:${callId}`).catch(() => {});
         durableRuns.heartbeat(executionId, { progressed: true }).catch(() => {
@@ -3511,7 +3528,11 @@ function namedBoundMutationPayload(request, existing) {
  *  the bulk. Deliberately omits `content` — the caller supplied it, the UI
  *  fetches it on demand, and echoing it back is what pushed create results past
  *  the lazy protocol's result bound and erased them entirely. */
-function assetIdentity(asset) {
+function ownerPrincipal(context) {
+  return context?.principal === "extension" || context?.principal === "owner-options";
+}
+
+function assetIdentity(asset, version = undefined) {
   if (!asset || typeof asset !== "object") return null;
   return {
     id: asset.id,
@@ -3521,6 +3542,7 @@ function assetIdentity(asset) {
     size: asset.size,
     createdAt: asset.createdAt,
     updatedAt: asset.updatedAt,
+    ...(Number.isSafeInteger(version) ? { version } : {}),
   };
 }
 
@@ -5859,7 +5881,39 @@ const handlers = mergeRouteMaps(
     if (assetType !== undefined) patch.type = assetType;
     if (name !== undefined) patch.name = name;
     if (content !== undefined) patch.content = content;
-    return await updateAsset(scope, id, patch);
+    // Who made this version: the owner's own click in an extension document
+    // (the hand edit in the viewer), else the model (behind the card above).
+    return await updateAsset(scope, id, patch, { by: ownerPrincipal(context) ? "owner" : "model" });
+  },
+  // ---- immutable artifact versions (CAP-FB-20260830-ARTIFACT-VERSIONS-01) ----
+  // Every create/update appends a version row; the rows never carry a body
+  // (`asset.version-get` returns one body on request). A restore is a NEW
+  // head version through the same compensated update: owner-direct from an
+  // extension document, an approval card for the model.
+  async "asset.versions"({ origin, id }) {
+    return await listAssetVersions(origin ?? "master", id);
+  },
+  async "asset.version-get"({ origin, id, n }) {
+    return await getAssetVersion(origin ?? "master", id, Number(n));
+  },
+  async "asset.restore"({ origin, id, n }, context) {
+    const scope = origin ?? "master";
+    const version = Number(n);
+    if (!Number.isSafeInteger(version) || version < 1) return { ok: false, error: "asset.restore needs a version number" };
+    const target = canonicalOperationTarget("asset", { origin: scope, id });
+    let payload;
+    try {
+      payload = payloadFields([
+        ["origin", scope === "master" ? "master" : canonicalOrigin(scope)],
+        ["id", id], ["n", version],
+      ]);
+    } catch { return { ok: false, error: "asset restore payload is not approvable" }; }
+    const gate = await requireOwnerApproval(context, "asset.restore", target, payload);
+    if (!gate.ok) return gate;
+    const res = await restoreAssetVersion(scope, id, version, { by: ownerPrincipal(context) ? "owner" : "model" });
+    return res?.ok
+      ? { ok: true, id, asset: assetIdentity(res.asset, res.version), version: res.version, restoredFrom: version }
+      : res;
   },
   async "asset.delete"({ origin, id }, context) {
     const scope = origin ?? "master";

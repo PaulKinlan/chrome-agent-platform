@@ -122,6 +122,10 @@ const BASELINE_ROUTES = [
   "asset.delete",
   "asset.list",
   "asset.get",
+  // Immutable artifact versions (CAP-FB-20260830-ARTIFACT-VERSIONS-01).
+  "asset.versions",
+  "asset.version-get",
+  "asset.restore",
   "script.create",
   "script.update",
   "script.delete",

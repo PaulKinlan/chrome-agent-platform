@@ -62,6 +62,9 @@ export async function syncGallery({ check = false } = {}) {
       expected = Buffer.from(expected.toString("utf8").replace('../lib/tool-summary.js', './tool-summary.js'));
       expected = Buffer.from(expected.toString("utf8").replace('../lib/attachments.js', './attachments.js'));
       expected = Buffer.from(expected.toString("utf8").replace('../lib/pure.js', './pure.js'));
+      // <artifact-diff> imports the diff core by its dist path; the gallery
+      // copy of the bundle sits beside components.js.
+      expected = Buffer.from(expected.toString("utf8").replace('../dist/shared/diff-core.bundle.js', './diff-core.bundle.js'));
     }
     if (dst === "docs/diff-core.bundle.js") {
       // Developer builds append a sourceMappingURL; the gallery copy carries no

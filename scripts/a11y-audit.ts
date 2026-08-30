@@ -160,7 +160,20 @@ const ANALYZE = `
   // 3. CONTRAST — the text color vs the effective background (walk up for the
   // first non-transparent background). WCAG AA: 4.5:1 normal, 3:1 large(>=24px
   // or >=18.66px bold).
+  // Computed colours are not always rgb(): color-mix() resolves to oklab()/
+  // color() in Chrome. Resolve every non-rgb string through a 1×1 canvas so
+  // the ratio is measured on the real painted colour, never on the raw
+  // oklab coordinates read as if they were 0–255 channels.
+  const canvasCtx = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
   const parse = (c) => {
+    if (!c) return null;
+    if (!/^rgb/.test(c) && canvasCtx) {
+      canvasCtx.clearRect(0, 0, 1, 1);
+      canvasCtx.fillStyle = "#000"; canvasCtx.fillStyle = c;
+      canvasCtx.fillRect(0, 0, 1, 1);
+      const px = canvasCtx.getImageData(0, 0, 1, 1).data;
+      return [px[0], px[1], px[2]];
+    }
     const m = c.match(/[\\d.]+/g);
     if (!m) return null;
     return m.slice(0, 3).map(Number);
@@ -223,9 +236,43 @@ async function analyze(cdp: Cdp, sessionId: string, surface: string) {
   return { surface, ...r };
 }
 
+// A scoped variant of the same analysis: walk only the subtree under SEL (the
+// component gallery specimen), so the specimen's controls + contrast are
+// audited on their own in both colour schemes.
+function analyzeIn(selector: string): string {
+  return ANALYZE
+    .replace("const out = {", `const __root = document.querySelector(${JSON.stringify(selector)}) || document;\n  const out = {`)
+    .replace(/walk\(document, /g, "walk(__root, ")
+    // The page-level contrast pass samples interactive elements; inside a
+    // specimen every element with direct text is sampled (the diff rows, the
+    // line numbers, the hunk headers), including those inside shadow roots.
+    .replace("walk(__root, textEls);", "(function w(r){ for (const el of r.querySelectorAll('*')) { textEls.push(el); if (el.shadowRoot) w(el.shadowRoot); } })(__root);");
+}
+
+// A tiny static server for docs/ (the gallery's ES modules need HTTP).
+function serveDocs(): Promise<{ url: string; close: () => Promise<void> }> {
+  const DOCS = `${ROOT}docs`;
+  return new Promise((resolve) => {
+    const ac = new AbortController();
+    const server = Deno.serve(
+      { port: 0, signal: ac.signal, onListen: ({ port }) => resolve({ url: `http://127.0.0.1:${port}`, close: async () => { ac.abort(); await server.shutdown(); } }) },
+      async (req) => {
+        let p = decodeURIComponent(new URL(req.url).pathname);
+        if (p === "/") p = "/components.html";
+        try {
+          const body = await Deno.readFile(`${DOCS}${p}`);
+          const type = p.endsWith(".js") ? "text/javascript" : p.endsWith(".css") ? "text/css" : p.endsWith(".html") ? "text/html" : "application/octet-stream";
+          return new Response(body, { headers: { "content-type": `${type}; charset=utf-8` } });
+        } catch { return new Response("not found", { status: 404 }); }
+      },
+    );
+  });
+}
+
 async function main() {
   const { proc, cdp, port } = await launch();
   (cdp as any).port = port;
+  const docs = await serveDocs();
   try {
     const id = await extId(cdp);
 
@@ -261,8 +308,26 @@ async function main() {
     const capRows = await cdp.evl(page.sessionId,
       `document.querySelectorAll('#permission-list [class*=perm], #permission-list .perm-row, #permission-list > *').length`);
     check("settings: the permission list renders the capability rows", Number(capRows) >= 6, capRows);
+
+    // ── the component gallery: the <artifact-diff> specimen, both schemes ──
+    // (CAP-FB-20260830-ARTIFACT-DIFF-COMPONENT-01) zero unlabeled controls and
+    // zero AA contrast failures inside the specimen under light AND dark.
+    page = await openPage(cdp, `${docs.url}/components.html`);
+    const specimen = ".specimen:has(#artifact-diff-demo)";
+    for (const scheme of ["light", "dark"]) {
+      await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: scheme }] }, page.sessionId);
+      // Split mode renders the paired rows; audit both modes per scheme.
+      for (const mode of ["unified", "split"]) {
+        await cdp.evl(page.sessionId, `document.getElementById("artifact-diff-demo")?.setAttribute("mode", ${JSON.stringify(mode)})`);
+        await sleep(150);
+        const g = await cdp.evl(page.sessionId, analyzeIn(specimen));
+        check(`gallery artifact-diff (${scheme}, ${mode}): no unlabeled interactive controls`, (g?.unlabeled || []).length === 0, g?.unlabeled);
+        check(`gallery artifact-diff (${scheme}, ${mode}): contrast — no AA failures (${g?.contrastChecked ?? 0} checked)`, (g?.contrastFails || []).length === 0 && (g?.contrastChecked ?? 0) > 0, g?.contrastFails ?? g);
+      }
+    }
   } finally {
     try { proc.kill("SIGKILL"); } catch { /* dead */ }
+    await docs.close();
   }
 
   console.log(`\nRESULT: ${pass} passed, ${fail} failed`);

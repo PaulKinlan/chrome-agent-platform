@@ -22,6 +22,9 @@ import {
   shouldApplyRegistrySnapshot,
 } from "./agent-registry.js";
 import { parseMentionToken, parseSlashCommand } from "./command-parser.js";
+// The bundled diff core (jsdiff via ./diff-core.js → dist; the gallery sync
+// rewrites this to ./diff-core.bundle.js). Only <artifact-diff> uses it.
+import { lineDiffSummary } from "./diff-core.bundle.js";
 import {
   COMMAND_NAMESPACES as ALL_COMMAND_NAMESPACES,
   loadComposerCommandItems,
@@ -2553,6 +2556,336 @@ class ArtifactInspector extends Component {
 customElements.define("artifact-inspector", ArtifactInspector);
 
 /* ──────────────────────────────────────────────────────────────────────────
+ * <artifact-diff mode="unified|split" context="3" max-lines="2000">
+ * A line diff of two strings (CAP-FB-20260830-ARTIFACT-DIFF-COMPONENT-01).
+ * Properties: `before` / `after` (the two bodies), `beforeLabel` /
+ * `afterLabel`, `language` (informational; no highlighter here). The diff
+ * itself comes from the bundled diff core (jsdiff) — this element only
+ * renders it. Every diff line is UNTRUSTED model output: rows are DOM-built
+ * and their text is set with textContent after neutralise + truncate; the one
+ * markup mount is the static header. Keyboard: n / ] next change, p / [
+ * previous; focus moves to the hunk and a polite live region says
+ * "Change N of M". Events: `navigate` {index,total}, `truncated` {lines,total}.
+ * Rendering is bounded to `max-lines` rows with an honest final note.
+ * ────────────────────────────────────────────────────────────────────────── */
+const ARTIFACT_DIFF_DEFAULT_MAX_LINES = 2000;
+const ARTIFACT_DIFF_DEFAULT_CONTEXT = 3;
+
+function pluralize(n, one, many) {
+  return `${n.toLocaleString()} ${n === 1 ? one : many}`;
+}
+
+/**
+ * The pure render model for <artifact-diff>: the diff core's hunks, bounded to
+ * `maxLines` rows, plus the exact header/label strings the element shows.
+ * Exported so the numbers can be tested without a DOM.
+ */
+export function buildArtifactDiffModel(before, after, { context = ARTIFACT_DIFF_DEFAULT_CONTEXT, maxLines = ARTIFACT_DIFF_DEFAULT_MAX_LINES, beforeLabel = "", afterLabel = "" } = {}) {
+  const ctx = Number.isFinite(Number(context)) ? Math.max(0, Math.floor(Number(context))) : ARTIFACT_DIFF_DEFAULT_CONTEXT;
+  const cap = Number.isFinite(Number(maxLines)) ? Math.max(1, Math.floor(Number(maxLines))) : ARTIFACT_DIFF_DEFAULT_MAX_LINES;
+  const summary = lineDiffSummary(before, after, { context: ctx, oldName: beforeLabel, newName: afterLabel });
+  const totalChanged = summary.added + summary.removed;
+  let rendered = 0;
+  let renderedChanged = 0;
+  let truncated = false;
+  const hunks = [];
+  for (const hunk of summary.hunks) {
+    if (rendered >= cap) { truncated = true; break; }
+    const room = cap - rendered;
+    const rows = hunk.rows.length > room ? hunk.rows.slice(0, room) : hunk.rows;
+    if (rows.length < hunk.rows.length) truncated = true;
+    rendered += rows.length;
+    for (const row of rows) if (row.kind !== "context") renderedChanged++;
+    hunks.push({ ...hunk, rows });
+  }
+  const changes = summary.hunks.length;
+  const summaryText = changes === 0
+    ? "No changes"
+    : `+${summary.added.toLocaleString()} -${summary.removed.toLocaleString()} · ${pluralize(changes, "change", "changes")}`;
+  const regionLabel = changes === 0
+    ? "Diff, no changes"
+    : `Diff, ${pluralize(summary.added, "addition", "additions")}, ${pluralize(summary.removed, "deletion", "deletions")}, ${pluralize(changes, "change", "changes")}`;
+  const truncationNote = truncated
+    ? `Showing ${renderedChanged.toLocaleString()} of ${totalChanged.toLocaleString()} changed lines — open the artifact to see everything`
+    : "";
+  return {
+    added: summary.added,
+    removed: summary.removed,
+    changes,
+    hunks,
+    summary: summaryText,
+    regionLabel,
+    truncated,
+    truncationNote,
+    renderedLines: rendered,
+    totalLines: summary.hunks.reduce((n, h) => n + h.rows.length, 0),
+  };
+}
+
+class ArtifactDiff extends Component {
+  static get observedAttributes() {
+    return ["mode", "context", "max-lines", "before-label", "after-label"];
+  }
+  constructor() {
+    super();
+    this._before = "";
+    this._after = "";
+    this._language = "text";
+    this._index = -1;
+    this._hunkCount = 0;
+  }
+  set before(v) { this._before = String(v ?? ""); this._rerender(); }
+  get before() { return this._before; }
+  set after(v) { this._after = String(v ?? ""); this._rerender(); }
+  get after() { return this._after; }
+  set beforeLabel(v) { if (v == null || v === "") this.removeAttribute("before-label"); else this.setAttribute("before-label", String(v)); }
+  get beforeLabel() { return this.getAttribute("before-label") || ""; }
+  set afterLabel(v) { if (v == null || v === "") this.removeAttribute("after-label"); else this.setAttribute("after-label", String(v)); }
+  get afterLabel() { return this.getAttribute("after-label") || ""; }
+  set language(v) { this._language = /^(html|css|js|json|md|text)$/.test(String(v)) ? String(v) : "text"; }
+  get language() { return this._language; }
+  get mode() { return this.getAttribute("mode") === "split" ? "split" : "unified"; }
+  set mode(v) { this.setAttribute("mode", v === "split" ? "split" : "unified"); }
+  /** The current change (0-based) and the number of changes. */
+  get currentChange() { return { index: this._index, total: this._hunkCount }; }
+  _rerender() {
+    if (this._rendered) { this._render(); this._wire(); }
+  }
+  _render() {
+    const mode = this.mode;
+    const model = buildArtifactDiffModel(this._before, this._after, {
+      context: this.getAttribute("context") ?? ARTIFACT_DIFF_DEFAULT_CONTEXT,
+      maxLines: this.getAttribute("max-lines") ?? ARTIFACT_DIFF_DEFAULT_MAX_LINES,
+      beforeLabel: this.beforeLabel,
+      afterLabel: this.afterLabel,
+    });
+    this._model = model;
+    this._hunkCount = model.hunks.length;
+    this._index = -1;
+    const noNav = model.hunks.length < 2;
+    mountTemplate(this, `
+      :host { display:block; container-type:inline-size; inline-size:100%; min-inline-size:0;
+        --ad-add-bg: color-mix(in oklab, var(--success,#1a7f37) 12%, var(--panel,#fff));
+        --ad-del-bg: color-mix(in oklab, var(--danger,#b3261e) 12%, var(--panel,#fff));
+        --ad-add-no: color-mix(in oklab, var(--success,#1a7f37) 22%, var(--panel,#fff));
+        --ad-del-no: color-mix(in oklab, var(--danger,#b3261e) 22%, var(--panel,#fff)); }
+      .frame { border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-md,12px); background:var(--panel,#fff);
+        color:var(--text,#1d1b18); overflow:hidden; }
+      .head { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:8px 12px;
+        border-block-end:1px solid var(--border,#e3e0d9); background:var(--panel-2,#efede8);
+        font-size:var(--text-xs,12px); font-variant-numeric:tabular-nums; }
+      .counts { display:inline-flex; gap:8px; font-family:var(--mono,ui-monospace,SFMono-Regular,Menlo,monospace); font-weight:600; }
+      /* Counts and markers stay in --text ink: the semantic hues sit under
+         AA at 12px on the paper palette, so colour is carried by the row tint
+         and the +/- marker, never by the ink alone. */
+      .changes { color:var(--muted,#635e56); }
+      .labels { display:inline-flex; gap:8px; min-inline-size:0; color:var(--muted,#635e56); overflow:hidden; }
+      .labels span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .labels span + span::before { content:"→"; margin-inline-end:8px; }
+      .labels:empty { display:none; }
+      .nav { margin-inline-start:auto; display:inline-flex; gap:4px; }
+      .nav button { inline-size:28px; block-size:28px; display:inline-flex; align-items:center; justify-content:center;
+        border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,6px); background:var(--panel,#fff);
+        color:var(--text,#1d1b18); cursor:pointer; padding:0; }
+      .nav button svg { inline-size:16px; block-size:16px; }
+      .nav button[data-act="prev"] svg { transform:rotate(-90deg); }
+      .nav button[data-act="next"] svg { transform:rotate(90deg); }
+      .nav button:hover:not(:disabled) { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
+      .nav button:disabled { opacity:.45; cursor:default; }
+      .nav button:focus-visible, .hunk:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:-2px; }
+      .body { max-block-size:var(--artifact-diff-max-block-size, 60vh); overflow:auto; overscroll-behavior:contain;
+        font:12.5px/1.6 var(--mono,ui-monospace,SFMono-Regular,Menlo,monospace); font-variant-numeric:tabular-nums; }
+      .body::selection, .body *::selection { background:color-mix(in oklab, var(--accent,#0e6e63) 24%, transparent); }
+      .hunk { display:block; border-block-end:1px solid var(--border,#e3e0d9); }
+      .hunk:last-of-type { border-block-end:0; }
+      .hunk[data-current] { box-shadow:inset 0 0 0 1px var(--accent,#0e6e63); }
+      .hh { padding:2px 12px; color:var(--muted,#635e56); background:var(--panel-2,#efede8); font-size:11.5px; user-select:none; }
+      .ln, .pair { display:grid; align-items:stretch; min-inline-size:0; }
+      .ln { grid-template-columns:4ch 4ch minmax(0,1fr); }
+      .pair { grid-template-columns:4ch minmax(0,1fr) 4ch minmax(0,1fr); }
+      .no { padding:0 6px; text-align:end; color:var(--muted,#635e56); user-select:none; background:var(--panel-2,#efede8); }
+      .tx { padding:0 12px 0 0; white-space:pre-wrap; overflow-wrap:anywhere; min-inline-size:0; position:relative;
+        padding-inline-start:22px; }
+      .tx::before { position:absolute; inset-inline-start:8px; content:" "; color:var(--muted,#635e56); user-select:none; }
+      [data-kind="add"].tx { background:var(--ad-add-bg); }
+      [data-kind="add"].tx::before { content:"+"; color:var(--text,#1d1b18); }
+      [data-kind="del"].tx { background:var(--ad-del-bg); }
+      [data-kind="del"].tx::before { content:"-"; color:var(--text,#1d1b18); }
+      [data-kind="add"].no { background:var(--ad-add-no); color:var(--text,#1d1b18); }
+      [data-kind="del"].no { background:var(--ad-del-no); color:var(--text,#1d1b18); }
+      [data-kind="empty"] { background:var(--panel-2,#efede8); }
+      .pair .l.tx { border-inline-end:1px solid var(--border,#e3e0d9); }
+      .more, .none { padding:10px 12px; color:var(--muted,#635e56); font:var(--text-xs,12px)/1.5 system-ui,sans-serif; }
+      .status { position:absolute; inline-size:1px; block-size:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; margin:0; }
+      @container (max-width: 720px) {
+        .pair { grid-template-columns:4ch minmax(0,1fr); }
+        .pair [data-kind="empty"], .pair .r[data-kind="ctx"] { display:none; }
+        .pair .l.tx { border-inline-end:0; }
+      }
+      @media (prefers-reduced-motion: no-preference) {
+        .nav button { transition:border-color 150ms ease-out, color 150ms ease-out; }
+      }
+    `, `<div class="frame">
+      <div class="head">
+        <span class="counts"><span class="add"></span><span class="del"></span></span>
+        <span class="changes"></span>
+        <span class="labels"></span>
+        <span class="nav">
+          <button type="button" data-act="prev" aria-label="Previous change" aria-keyshortcuts="[" title="Previous change ([ or p)"${noNav ? " disabled" : ""}>${ICONS.chevron}</button>
+          <button type="button" data-act="next" aria-label="Next change" aria-keyshortcuts="]" title="Next change (] or n)"${noNav ? " disabled" : ""}>${ICONS.chevron}</button>
+        </span>
+      </div>
+      <div class="body" role="region" data-mode="${mode}"></div>
+      <p class="status" role="status" aria-live="polite" aria-atomic="true"></p>
+    </div>`);
+    const root = this._root;
+    const changesEl = root.querySelector(".changes");
+    if (model.changes === 0) {
+      changesEl.textContent = model.summary;
+    } else {
+      root.querySelector(".counts .add").textContent = `+${model.added.toLocaleString()}`;
+      root.querySelector(".counts .del").textContent = `-${model.removed.toLocaleString()}`;
+      changesEl.textContent = pluralize(model.changes, "change", "changes");
+    }
+    const labels = root.querySelector(".labels");
+    for (const label of [this.beforeLabel, this.afterLabel]) {
+      if (!label) continue;
+      const span = document.createElement("span");
+      span.textContent = label;
+      labels.appendChild(span);
+    }
+    const body = root.querySelector(".body");
+    body.setAttribute("aria-label", model.regionLabel);
+    body.dataset.language = this._language;
+    if (model.hunks.length === 0) {
+      const none = document.createElement("p");
+      none.className = "none";
+      none.textContent = "The two versions are identical.";
+      body.appendChild(none);
+    }
+    model.hunks.forEach((hunk, i) => {
+      const section = document.createElement("section");
+      section.className = "hunk";
+      section.tabIndex = 0;
+      section.setAttribute("aria-label", `Change ${i + 1} of ${model.hunks.length}`);
+      section.dataset.index = String(i);
+      const header = document.createElement("div");
+      header.className = "hh";
+      header.textContent = `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`;
+      section.appendChild(header);
+      if (mode === "split") this._buildSplitRows(section, hunk);
+      else this._buildUnifiedRows(section, hunk);
+      body.appendChild(section);
+    });
+    if (model.truncated) {
+      const more = document.createElement("p");
+      more.className = "more";
+      more.setAttribute("role", "note");
+      more.textContent = model.truncationNote;
+      body.appendChild(more);
+    }
+  }
+  _cell(className, kind, text) {
+    const cell = document.createElement("span");
+    cell.className = className;
+    cell.dataset.kind = kind;
+    cell.textContent = text;
+    return cell;
+  }
+  _buildUnifiedRows(section, hunk) {
+    let oldNo = hunk.oldStart;
+    let newNo = hunk.newStart;
+    for (const row of hunk.rows) {
+      const kind = row.kind === "add" ? "add" : row.kind === "remove" ? "del" : "ctx";
+      const line = document.createElement("div");
+      line.className = "ln";
+      line.dataset.kind = kind;
+      line.appendChild(this._cell("no old", kind, kind === "add" ? "" : String(oldNo++)));
+      line.appendChild(this._cell("no new", kind, kind === "del" ? "" : String(newNo++)));
+      line.appendChild(this._cell("tx", kind, row.text));
+      section.appendChild(line);
+    }
+  }
+  _buildSplitRows(section, hunk) {
+    let oldNo = hunk.oldStart;
+    let newNo = hunk.newStart;
+    const rows = hunk.rows;
+    let i = 0;
+    const pair = (left, right) => {
+      const line = document.createElement("div");
+      line.className = "pair";
+      const lk = left ? "del" : "empty";
+      const rk = right ? "add" : "empty";
+      line.appendChild(this._cell("no l", lk, left ? String(oldNo++) : ""));
+      line.appendChild(this._cell("tx l", lk, left ? left.text : ""));
+      line.appendChild(this._cell("no r", rk, right ? String(newNo++) : ""));
+      line.appendChild(this._cell("tx r", rk, right ? right.text : ""));
+      section.appendChild(line);
+    };
+    while (i < rows.length) {
+      const row = rows[i];
+      if (row.kind === "context") {
+        const line = document.createElement("div");
+        line.className = "pair";
+        line.appendChild(this._cell("no l", "ctx", String(oldNo++)));
+        line.appendChild(this._cell("tx l", "ctx", row.text));
+        line.appendChild(this._cell("no r", "ctx", String(newNo++)));
+        line.appendChild(this._cell("tx r", "ctx", row.text));
+        section.appendChild(line);
+        i++;
+        continue;
+      }
+      const dels = [];
+      const adds = [];
+      while (i < rows.length && rows[i].kind === "remove") dels.push(rows[i++]);
+      while (i < rows.length && rows[i].kind === "add") adds.push(rows[i++]);
+      const n = Math.max(dels.length, adds.length);
+      for (let k = 0; k < n; k++) pair(dels[k] ?? null, adds[k] ?? null);
+    }
+  }
+  _wire() {
+    const root = this._root;
+    root.querySelector('[data-act="prev"]')?.addEventListener("click", () => this._go(-1));
+    root.querySelector('[data-act="next"]')?.addEventListener("click", () => this._go(1));
+    // The shadow root survives re-renders, so the key handler binds once.
+    if (!this._keysBound) {
+      this._keysBound = true;
+      root.addEventListener("keydown", (e) => {
+        if (e.altKey || e.ctrlKey || e.metaKey) return;
+        if (e.key === "n" || e.key === "]") { e.preventDefault(); this._go(1); }
+        else if (e.key === "p" || e.key === "[") { e.preventDefault(); this._go(-1); }
+      });
+      root.addEventListener("focusin", (e) => {
+        const hunk = e.target?.closest?.(".hunk");
+        if (hunk && hunk.dataset.index != null) this._mark(Number(hunk.dataset.index));
+      });
+    }
+    const model = this._model;
+    if (model?.truncated) this._emit("truncated", { lines: model.renderedLines, total: model.totalLines });
+  }
+  _mark(index) {
+    const hunks = this._root.querySelectorAll(".hunk");
+    hunks.forEach((h, i) => { if (i === index) h.setAttribute("data-current", ""); else h.removeAttribute("data-current"); });
+    this._index = index;
+  }
+  /** Move to the next (+1) / previous (-1) change; clamps at the ends. */
+  _go(delta) {
+    const total = this._hunkCount;
+    if (total === 0) return;
+    const next = Math.min(total - 1, Math.max(0, (this._index < 0 ? (delta > 0 ? -1 : total) : this._index) + delta));
+    if (next === this._index) return;
+    this._mark(next);
+    const hunk = this._root.querySelectorAll(".hunk")[next];
+    hunk?.focus?.({ preventScroll: true });
+    hunk?.scrollIntoView?.({ block: "nearest", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+    const status = this._root.querySelector(".status");
+    if (status) status.textContent = `Change ${next + 1} of ${total}`;
+    this._emit("navigate", { index: next, total });
+  }
+}
+customElements.define("artifact-diff", ArtifactDiff);
+
+/* ──────────────────────────────────────────────────────────────────────────
  * <artifact-quick-drawer> — bounded recent/search/filter access to artifact
  * metadata. The component never reads artifact bodies: hosts own Open/Reuse
  * authority and receive metadata-only events. Dynamic artifact values are
@@ -3126,19 +3459,78 @@ function schemaAwareToolPayload(value) {
   return shown;
 }
 
+/** Renderer-only metadata the lazy protocol stamps on every `execute_tool`
+ *  envelope, and the catalogue keys of a `search_tools` result. Transport, not
+ *  the tool's answer — never a tree row, never a raw-view line
+ *  (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 §9/§10). */
+const LAZY_ENVELOPE_META = new Set([
+  "schemaSummary", "selectionRef", "authorizes", "requiresLiveAuthorization", "replay",
+  "selectedTool", "catalogGeneration", "stableId",
+]);
+
+/** Unwrap EVERY transport layer around a tool payload, bounded, so what is
+ *  left is the SELECTED TOOL'S OWN result (or its own error): agent-do's
+ *  {modelContent,userSummary} wrapper — whose value is usually a JSON string of
+ *  the next layer — then the lazy protocol's {ok, selectedTool, result}
+ *  envelope. Anything that is not an envelope passes straight through, so the
+ *  direct-dispatch path is unaffected. Returns { value, selectedTool }.
+ *  Pure; never throws. */
+export function unwrapToolPayload(value) {
+  let v = value;
+  let selectedTool = null;
+  for (let hop = 0; hop < 6; hop++) {
+    if (typeof v === "string") {
+      const parsed = safeParseOnce(v);
+      // A JSON string literal decodes ONCE to its text and stops there: the
+      // second encoding layer stays text (the bounded-decode contract).
+      if (parsed.kind === "string" && parsed.decoded) { v = parsed.value; break; }
+      if (parsed.kind !== "json") break;
+      v = parsed.value;
+      continue;
+    }
+    if (!v || typeof v !== "object" || Array.isArray(v)) break;
+    if (v.userSummary != null) { v = v.userSummary; continue; }
+    if (v.modelContent != null) { v = v.modelContent; continue; }
+    if (typeof v.selectedTool === "string" && v.selectedTool) {
+      selectedTool = v.selectedTool;
+      // The declared output schema may decode one JSON-string layer of the
+      // inner result; it is consumed here and never shown.
+      const shaped = schemaAwareToolPayload(v);
+      if (shaped.result !== undefined) { v = shaped.result; continue; }
+      if (typeof shaped.error === "string") { v = { ok: false, error: shaped.error }; break; }
+      const rest = {};
+      for (const [k, field] of Object.entries(shaped)) if (!LAZY_ENVELOPE_META.has(k)) rest[k] = field;
+      v = rest;
+      break;
+    }
+    break;
+  }
+  return { value: v, selectedTool };
+}
+
+/** Does a string look like a transport envelope that failed to parse (the
+ *  live path once stored a TRUNCATED summary of the envelope in tool-result)?
+ *  Such text is never shown: the headline already carries the tool's words. */
+function looksLikeBrokenEnvelope(text) {
+  const t = String(text ?? "").trimStart();
+  if (!t.startsWith("{")) return false;
+  return /"(modelContent|userSummary|selectedTool|schemaSummary|selectionRef|catalogGeneration|stableId)"/.test(t);
+}
+
 /** Remove the parts of a tool payload the card already communicates, so the tree
  *  shows the ANSWER rather than the envelope around it. `ok` is the status chip;
- *  `summary`/`error` are the collapsed headline. Returns undefined when nothing
- *  substantive is left, so the block is skipped entirely rather than rendering
- *  an empty tree. */
+ *  `summary`/`error` are the collapsed headline; the lazy protocol's transport
+ *  layers and metadata are unwrapped/dropped first. Returns undefined when
+ *  nothing substantive is left, so the block is skipped entirely rather than
+ *  rendering an empty tree. */
 function stripToolEnvelope(value, status) {
-  value = schemaAwareToolPayload(value);
+  value = unwrapToolPayload(value).value;
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const drop = new Set(["ok", "summary", "error"]);
   const kept = {};
   let keptCount = 0;
   for (const [k, v] of Object.entries(value)) {
-    if (drop.has(k)) continue;
+    if (drop.has(k) || LAZY_ENVELOPE_META.has(k)) continue;
     kept[k] = v;
     keptCount += 1;
   }
@@ -3147,7 +3539,7 @@ function stripToolEnvelope(value, status) {
   // at most one bounded JSON-string layer too, covering modelContent wrappers
   // without turning prose, malformed JSON, or oversized strings into a tree.
   const keys = Object.keys(kept);
-  if (keys.length === 1) {
+  if (keys.length === 1 && keys[0] === "result") {
     const only = kept[keys[0]];
     if (only && typeof only === "object") return only;
     if (typeof only === "string") {
@@ -3167,6 +3559,10 @@ export function toolHeadline(status, result, detail) {
     if (typeof v === "string") {
       const t = v.trim();
       if (!t.startsWith("{") && !t.startsWith("[")) return t;
+      // A truncated envelope is transport, never a headline (§10).
+      if (looksLikeBrokenEnvelope(t)) {
+        try { JSON.parse(t); } catch { return ""; }
+      }
       try {
         const o = JSON.parse(t);
         if (o && typeof o === "object" && !Array.isArray(o)) {
@@ -3518,10 +3914,28 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
 
   const summary = document.createElement("summary");
   summary.className = "tool-head";
+  // THE CARD IS HEADED BY THE TOOL THAT RAN (§9). Under the lazy protocol the
+  // call arrives as `execute_tool` and the invoked tool is named inside the
+  // payload; the live path corrects the attribute once the result lands, but
+  // a replayed or still-running card must never read "execute_tool" either.
+  const lazyName = name === "execute_tool" || name === "search_tools"
+    ? (unwrapToolPayload(result).selectedTool || unwrapToolPayload(detail).selectedTool || null)
+    : null;
+  const shownName = lazyName || (name === "execute_tool" ? "tool call" : (name || "tool"));
   const nameEl = document.createElement("span");
   nameEl.className = "tool-name";
-  nameEl.textContent = name || "tool";
+  nameEl.textContent = shownName;
   summary.appendChild(nameEl);
+  // `execute_tool`'s own arguments nest the invoked tool's arguments under
+  // `arguments` beside a selectionRef that means nothing to a reader.
+  const shownArgs = (() => {
+    const parsed = args != null && args !== "" ? safeParseOnce(args) : null;
+    if (parsed && parsed.kind === "json" && parsed.value && typeof parsed.value === "object" && !Array.isArray(parsed.value) &&
+        parsed.value.arguments !== undefined && "selectionRef" in parsed.value) {
+      return parsed.value.arguments;
+    }
+    return args;
+  })();
 
   // THE COLLAPSED CARD MUST ANSWER "what happened" WITHOUT A CLICK
   // (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01). It used to show only the tool
@@ -3545,8 +3959,8 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
   // argument interpolation, never a broken card.
   let what = "";
   try {
-    const parsedArgs = args != null && args !== "" ? safeParseOnce(args) : null;
-    what = describeToolCall(name, parsedArgs && parsedArgs.kind === "json" ? parsedArgs.value : args);
+    const parsedArgs = shownArgs != null && shownArgs !== "" ? safeParseOnce(shownArgs) : null;
+    what = describeToolCall(lazyName || name, parsedArgs && parsedArgs.kind === "json" ? parsedArgs.value : shownArgs);
   } catch { what = ""; }
   if (what) {
     const whatEl = document.createElement("span");
@@ -3586,19 +4000,31 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
       // vertical space in a transcript.
       const shown = stripToolEnvelope(parsed.value, status);
       if (shown === undefined) return;
+      if (typeof shown === "string") {
+        // The envelope held plain text: show it as text, not a one-leaf tree.
+        if (looksLikeBrokenEnvelope(shown)) return;
+        const div = document.createElement("div");
+        div.className = `tool-plain tool-plain-${label}`;
+        div.textContent = shown;
+        body.appendChild(div);
+        return;
+      }
       const tree = buildTree(shown);
       if (tree.rows.length >= 1) {
         body.appendChild(buildToolTreeBlock(label, shown, tree.rows, tree.maxNodes, expandedState));
         return;
       }
     }
+    // A transport envelope that did not parse (a truncated copy) is never
+    // painted: the headline already carries the tool's own words (§10).
+    if (looksLikeBrokenEnvelope(parsed.value ?? raw)) return;
     const div = document.createElement("div");
     div.className = `tool-plain tool-plain-${label}`;
     div.textContent = String(parsed.value ?? raw ?? "");
     body.appendChild(div);
   };
 
-  addBlock("inputs", args);
+  addBlock("inputs", shownArgs);
 
   const resultParsed = result != null && result !== "" ? safeParseOnce(result) : null;
   const detailParsed = detail != null && detail !== "" ? safeParseOnce(detail) : null;
@@ -3609,16 +4035,16 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
     // an error result still rendered `ok false` and repeated its own message as
     // tree rows under the headline that already said it.
     const shownResult = stripToolEnvelope(resultParsed.value, status);
-    const tree = shownResult === undefined ? { rows: [], maxNodes: 0 } : buildTree(shownResult);
+    const tree = shownResult === undefined || typeof shownResult === "string" ? { rows: [], maxNodes: 0 } : buildTree(shownResult);
     if (tree.rows.length >= 1) {
       body.appendChild(buildToolTreeBlock("result", shownResult, tree.rows, tree.maxNodes, expandedState));
     } else if (shownResult === undefined) {
       // Everything the payload carried is already in the head. Render nothing
       // rather than an empty block.
-    } else {
+    } else if (!looksLikeBrokenEnvelope(typeof shownResult === "string" ? shownResult : (resultParsed.value ?? result))) {
       const div = document.createElement("div");
       div.className = "tool-plain tool-plain-result";
-      div.textContent = String(resultParsed.value ?? result ?? "");
+      div.textContent = typeof shownResult === "string" ? shownResult : String(resultParsed.value ?? result ?? "");
       body.appendChild(div);
     }
     if (detail != null && detail !== "" && detail !== result) {
@@ -3628,13 +4054,13 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
     // The live event path stores the raw lazy envelope in detail, so consume
     // its selected output schema exactly as the direct/replay branch does.
     const shownDetail = stripToolEnvelope(detailParsed.value, status);
-    const tree = shownDetail === undefined ? { rows: [], maxNodes: 0 } : buildTree(shownDetail);
+    const tree = shownDetail === undefined || typeof shownDetail === "string" ? { rows: [], maxNodes: 0 } : buildTree(shownDetail);
     if (tree.rows.length >= 1) {
       body.appendChild(buildToolTreeBlock("result", shownDetail, tree.rows, tree.maxNodes, expandedState));
-    } else if (shownDetail !== undefined) {
+    } else if (shownDetail !== undefined && !looksLikeBrokenEnvelope(shownDetail)) {
       const div = document.createElement("div");
       div.className = "tool-plain tool-plain-result";
-      div.textContent = String(detailParsed.value ?? detail ?? "");
+      div.textContent = typeof shownDetail === "string" ? shownDetail : String(detailParsed.value ?? detail ?? "");
       body.appendChild(div);
     }
   } else {
@@ -3768,7 +4194,7 @@ class MessageBubble extends Component {
       .tool .tool-head { display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid var(--border,#e3e0d9); background:var(--panel-2,#efede8); }
       .tool:not([open]) .tool-head { border-bottom:0; }
       .tool .tool-body { display:flex; flex-direction:column; }
-      .tool .tool-name { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12.5px; font-weight:600; color:var(--ink,#1d1b18); }
+      .tool .tool-name { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12.5px; font-weight:600; color:var(--ink,#1d1b18); white-space:nowrap; }
       /* the collapsed row's human line (what the tool is DOING, not just its id) */
       .tool .tool-what { font-size:12.5px; color:var(--muted,#635e56); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1 1 auto; }
       .tool .tool-status { margin-left:auto; display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:1px 8px; border-radius:999px; }
@@ -4269,7 +4695,48 @@ class AgentConversation extends Component {
       "tool-duration": durationMs != null ? String(durationMs) : null,
     });
   }
-  clear() { this._clearLiveStatusRow(); this.replaceChildren(); this._lastTs = null; }
+  /** The IN-CONTEXT grant card for a PERSISTED permission denial
+   *  (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 §2b, the reopened-thread half of
+   *  CAP-FB-20260830-DENIAL-TO-GRANT-CARD-01). The live run renders the same
+   *  <permission-approval-card>; here it is derived from the durable run log,
+   *  so the owner can still grant from the transcript. ONE card per distinct
+   *  requirement (`requirement.key`). This element grants NOTHING: Allow/Not
+   *  now bubble up as an `approval-decision` event carrying the requirement,
+   *  the card and the owner's real click, and the surface that owns the
+   *  service-worker channel performs the grant. */
+  appendApproval(m = {}) {
+    const req = m.requirement;
+    if (!req || typeof req !== "object" || Array.isArray(req)) return null;
+    const key = typeof req.key === "string" && req.key
+      ? req.key
+      : JSON.stringify([req.permissions ?? [], req.grantOrigins ?? [], req.grantGlobal === true]);
+    if (!this._approvalKeys) this._approvalKeys = new Map();
+    if (this._approvalKeys.has(key)) return this._approvalKeys.get(key);
+    const card = document.createElement("permission-approval-card");
+    card.setAttribute("reason", String(req.reason ?? "perform this action").slice(0, 240));
+    if (Array.isArray(req.permissions) && req.permissions.length) card.setAttribute("permissions", JSON.stringify(req.permissions.slice(0, 8)));
+    if (Array.isArray(req.grantOrigins) && req.grantOrigins.length) card.setAttribute("origins", JSON.stringify(req.grantOrigins.slice(0, 50)));
+    if (req.grantGlobal === true) card.setAttribute("global", "true");
+    if (typeof m.state === "string" && m.state) card.setAttribute("state", m.state);
+    if (typeof m.detail === "string" && m.detail) card.setAttribute("detail", m.detail);
+    const emit = (approve, ev) => this.dispatchEvent(new CustomEvent("approval-decision", {
+      bubbles: true,
+      detail: {
+        approve,
+        requirement: req,
+        executionId: m.executionId ?? null,
+        toolCallId: m.toolCallId ?? null,
+        card,
+        sourceEvent: ev?.detail?.sourceEvent ?? null,
+      },
+    }));
+    card.addEventListener("approve", (ev) => emit(true, ev));
+    card.addEventListener("deny", (ev) => emit(false, ev));
+    if (typeof m.ts === "number") this._maybeTsGap(m.ts);
+    this._approvalKeys.set(key, card);
+    return this.appendTranscript(card);
+  }
+  clear() { this._clearLiveStatusRow(); this.replaceChildren(); this._lastTs = null; this._approvalKeys = new Map(); }
 
   /* ── the inline live-status row (owner 2026-08-28) ──────────────────────
    * ONE live-status surface per conversation, rendered as the LAST child and
@@ -4337,6 +4804,7 @@ class AgentConversation extends Component {
     const liveRow = this._liveStatusRow;
     this.replaceChildren();
     this._lastTs = null;
+    this._approvalKeys = new Map();
     const list = Array.isArray(messages) ? messages : [];
     if (!list.length) {
       const p = document.createElement("p");
@@ -4357,8 +4825,11 @@ class AgentConversation extends Component {
           }
           case "system": this.appendSystem(m.content, ts); break;
           case "thinking": this.appendThinking(m.content, m); break;
-          case "tool": this.appendTool(m); break;
+          // A protocol call (search_tools/list_tools) is plumbing, not work:
+          // it stays in the run log and renders no card (§9).
+          case "tool": if (m.protocol !== true) this.appendTool(m); break;
           case "artifact": this.appendArtifact(m); break;
+          case "approval": this.appendApproval(m); break;
           case "error": this.appendError(m.content, { reason: m.reason ?? null, action: m.action ?? null, category: m.category ?? null }); break;
           default: this.appendAgent(m.content, ts); break;
         }
@@ -5614,7 +6085,7 @@ class PermissionApprovalCard extends Component {
       needs.push(`<li>Browser control of ${origins.length === 1 ? "this site" : "these sites"}: ${shown}${origins.length > 6 ? ` and ${origins.length - 6} more` : ""}</li>`);
     }
     const stateText = state === "granted"
-      ? "Approved — continuing…"
+      ? (detail || "Approved — continuing…")
       : state === "denied"
         ? "Declined. The action was not performed."
         : state === "expired"

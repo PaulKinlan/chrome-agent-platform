@@ -10,7 +10,10 @@ import {
   createAsset,
   deleteAsset,
   getAsset,
+  getAssetVersion,
+  listAssetVersions,
   listAssets,
+  restoreAssetVersion,
   updateAsset,
 } from "../extension/lib/artifacts.js";
 
@@ -514,4 +517,171 @@ Deno.test("tx-reject4: transient index I/O is NOT healed as corruption and lastG
   const body = (await getAsset("master", r.asset.id)).asset;
   assertEquals(row.name, "new", "the healthy updated row is never overwritten by a stale mirror");
   assertEquals(body.name, "new", "the body matches the committed update");
+});
+
+// ---- immutable per-artifact versions (CAP-FB-20260830-ARTIFACT-VERSIONS-01) ----
+function rawValue(name) {
+  const raw = rawKey(name);
+  if (raw == null || raw === "") return null;
+  try { const p = JSON.parse(raw); return p && typeof p === "object" && "__value" in p ? p.__value : p; } catch { return null; }
+}
+function versionRowsFor(id) {
+  const dir = masterDir();
+  if (!dir) return [];
+  return [...dir.children.keys()].filter((n) => n.startsWith(`asset-version:${id}:`) && n.endsWith(".json")).sort();
+}
+function blobCount() {
+  const dir = masterDir();
+  if (!dir) return 0;
+  return [...dir.children.keys()].filter((n) => n.startsWith("asset-blob:") && n.endsWith(".json")).length;
+}
+
+Deno.test("versions: update appends version n+1 and a content-addressed blob; an unchanged re-save adds a row but no blob", async () => {
+  resetStore();
+  const r = await createAsset("master", { type: "html", name: "crumb.html", content: "<h1>v1</h1>" });
+  assert(r.ok, "create succeeds");
+  const id = r.asset.id;
+  assertEquals(r.version, 1, "a create is version 1");
+  const v1 = await listAssetVersions("master", id);
+  assert(v1.ok && v1.head === 1 && v1.versions.length === 1 && v1.truncated === false, "one version after create");
+  const up = await updateAsset("master", id, { content: "<h1>v2</h1>" });
+  assert(up.ok && up.version === 2, "the update is version 2");
+  const v2 = await listAssetVersions("master", id);
+  assertEquals(v2.versions.map((v) => v.n), [1, 2], "two rows after the edit");
+  assert(v2.versions[0].sha256 !== v2.versions[1].sha256, "distinct sha256 for distinct bodies");
+  assert(v2.versions.every((v) => /^[0-9a-f]{64}$/.test(v.sha256) && typeof v.size === "number" && typeof v.at === "number" && v.by === "model"), "rows carry n/at/size/sha256/by");
+  assert(v2.versions.every((v) => !("content" in v)), "version rows never carry the body");
+  assertEquals(blobCount(), 2, "two distinct blobs");
+  // An unchanged re-save: a new row, the SAME sha, no new blob (content-addressed).
+  const same = await updateAsset("master", id, { content: "<h1>v2</h1>" });
+  assert(same.ok && same.version === 3, "the re-save is version 3");
+  const v3 = await listAssetVersions("master", id);
+  assertEquals(v3.versions.length, 3);
+  assertEquals(v3.versions[2].sha256, v3.versions[1].sha256, "the re-save shares v2's sha");
+  assertEquals(blobCount(), 2, "no new blob for an unchanged body");
+  assertEquals(rawValue(`asset-blob-ref:${v3.versions[1].sha256}`), 2, "the shared blob is refcounted");
+  // Every version's body is retrievable.
+  const g1 = await getAssetVersion("master", id, 1);
+  assert(g1.ok && g1.content === "<h1>v1</h1>" && g1.sha256 === v1.versions[0].sha256, "v1 body + sha readable");
+  const g2 = await getAssetVersion("master", id, 2);
+  assert(g2.ok && g2.content === "<h1>v2</h1>", "v2 body readable");
+  const row = (await listAssets("master")).assets.find((x) => x.id === id);
+  assertEquals(row.version, 3, "the index row carries the head pointer");
+  assert(!("content" in row), "the index row never carries a body");
+});
+
+Deno.test("versions: restore of v1 makes v3 equal to v1 byte-for-byte", async () => {
+  resetStore();
+  const body1 = "<!doctype html>\n<h1>Crumb</h1>\n<p>ünïcode — v1 \u{1F35E}</p>\n";
+  const r = await createAsset("master", { type: "html", name: "crumb.html", content: body1 });
+  const id = r.asset.id;
+  const up = await updateAsset("master", id, { content: body1.replace("v1", "v2") + "<p>more</p>" });
+  assert(up.ok && up.version === 2);
+  const restored = await restoreAssetVersion("master", id, 1, { by: "owner" });
+  assert(restored.ok, `restore succeeds: ${restored.error ?? ""}`);
+  assertEquals(restored.version, 3, "the restore is a NEW head version, never a rewind");
+  assert(!("content" in (restored.asset ?? {})) || restored.asset.content === undefined, "no body echo");
+  const got = await getAsset("master", id);
+  assertEquals(got.asset.content, body1, "the current body equals v1 byte-for-byte");
+  const list = await listAssetVersions("master", id);
+  assertEquals(list.versions.map((v) => v.n), [1, 2, 3]);
+  assertEquals(list.versions[2].sha256, list.versions[0].sha256, "v3 is content-identical to v1");
+  assertEquals(list.versions[2].by, "owner", "the restore records who did it");
+  assertEquals(blobCount(), 2, "the restore reuses v1's blob");
+  const bad = await restoreAssetVersion("master", id, 9, { by: "owner" });
+  assert(bad.ok === false, "an unknown version fails closed");
+});
+
+Deno.test("versions: a WAL interrupted between the version write and the body write is compensated: no orphan version row, refcount consistent", async () => {
+  resetStore();
+  const r = await createAsset("master", { type: "text", name: "t", content: "v1" });
+  const id = r.asset.id;
+  assertEquals(versionRowsFor(id).length, 1);
+  // The body write fails AFTER the version row + blob were staged.
+  globalThis.__failWritableNth = new Map([[`asset:${id}.json`, 1]]);
+  let threw = null;
+  let res = null;
+  try { res = await updateAsset("master", id, { content: "v2-never-lands" }); } catch (e) { threw = e; }
+  globalThis.__failWritableNth = new Map();
+  assert(threw != null || res?.ok === false, "the interrupted update does not report success");
+  // The next operation runs recovery; afterwards nothing staged survives.
+  const after = await createAsset("master", { type: "text", name: "after", content: "x" });
+  assert(after.ok, "the next operation recovers");
+  assertEquals(versionRowsFor(id), [`asset-version:${id}:1.json`], "no orphan version row");
+  const list = await listAssetVersions("master", id);
+  assertEquals(list.head, 1, "the head pointer is unchanged");
+  const { sha256Hex } = await import("../extension/lib/pure.js");
+  assertEquals(rawValue(`asset-blob-ref:${sha256Hex("v2-never-lands")}`), null, "the staged blob's refcount is released");
+  assertEquals(rawValue(`asset-blob:${sha256Hex("v2-never-lands")}`), null, "the staged blob is released");
+  assertEquals(rawValue(`asset-blob-ref:${sha256Hex("v1")}`), 1, "the live blob's refcount is intact");
+  assertEquals((await getAsset("master", id)).asset.content, "v1", "the old body survives");
+  // A simulated crash with a durable prepared intent (the recovery path proper).
+  const { masterMemory } = await import("../extension/lib/memory.js");
+  const m = masterMemory();
+  const idx = await m.getStrict("assets");
+  const row = idx.find((x) => x.id === id);
+  const sha = sha256Hex("crashed");
+  await m.setTrusted(`asset-blob:${sha}`, "crashed");
+  await m.setTrusted(`asset-blob-ref:${sha}`, 1);
+  await m.setTrusted(`asset-version:${id}:2`, { n: 2, at: 1, size: 7, sha256: sha, by: "model" });
+  await m.setTrusted("__tx", {
+    op: "update", id, oldBody: (await m.getStrict(`asset:${id}`)), oldBodyGen: await m.getVersion(`asset:${id}`),
+    oldRow: row, newRow: { ...row, version: 2 }, idxGen: await m.getVersion("assets"),
+    newVersion: 2, blobSha: sha, blobIsNew: true, blobSize: 7, state: "prepared",
+  });
+  const c2 = await createAsset("master", { type: "text", name: "after2", content: "y" });
+  assert(c2.ok, "recovery resolves the crashed intent");
+  assertEquals(versionRowsFor(id), [`asset-version:${id}:1.json`], "the crashed version row is removed by recovery");
+  assertEquals(rawValue(`asset-blob:${sha}`), null, "the crashed blob is released by recovery");
+  assertEquals((await listAssetVersions("master", id)).head, 1);
+});
+
+Deno.test("versions: the 21st version evicts the oldest and sets versionsTruncated", async () => {
+  resetStore();
+  const r = await createAsset("master", { type: "text", name: "t", content: "body 1" });
+  const id = r.asset.id;
+  for (let i = 2; i <= 20; i++) {
+    const up = await updateAsset("master", id, { content: `body ${i}` });
+    assert(up.ok && up.version === i, `version ${i}`);
+  }
+  let list = await listAssetVersions("master", id);
+  assertEquals(list.versions.length, ASSET_BOUNDS.maxVersionsPerAsset, "20 kept");
+  assertEquals(list.truncated, false);
+  const up21 = await updateAsset("master", id, { content: "body 21" });
+  assert(up21.ok && up21.version === 21);
+  list = await listAssetVersions("master", id);
+  assertEquals(list.versions.length, 20, "still 20 kept");
+  assertEquals(list.versions[0].n, 2, "the oldest was evicted");
+  assertEquals(list.truncated, true, "the truncation is visible on the head");
+  assertEquals(rawValue(`asset-version:${id}:1`), null, "v1's row is gone");
+  const { sha256Hex } = await import("../extension/lib/pure.js");
+  assertEquals(rawValue(`asset-blob:${sha256Hex("body 1")}`), null, "v1's blob is released");
+  assertEquals(blobCount(), 20, "exactly the live blobs remain");
+  const g = await getAssetVersion("master", id, 1);
+  assert(g.ok === false, "an evicted version is not retrievable");
+  const row = (await listAssets("master")).assets.find((x) => x.id === id);
+  assertEquals(row.versionsTruncated, true, "the index row records the truncation");
+});
+
+Deno.test("versions: delete releases every version row + blob; the version keys are model-unwritable", async () => {
+  resetStore();
+  const r = await createAsset("master", { type: "text", name: "t", content: "a" });
+  const id = r.asset.id;
+  await updateAsset("master", id, { content: "b" });
+  await updateAsset("master", id, { content: "a" });
+  assertEquals(versionRowsFor(id).length, 3);
+  assertEquals(blobCount(), 2);
+  const del = await deleteAsset("master", id);
+  assert(del.ok);
+  assertEquals(versionRowsFor(id).length, 0, "no version rows survive a delete");
+  assertEquals(blobCount(), 0, "no blobs survive a delete");
+  assertEquals(rawValue("asset-version-bytes"), 0, "the byte accounting returns to zero");
+  const { masterMemory } = await import("../extension/lib/memory.js");
+  const m = masterMemory();
+  for (const k of ["asset-version:x:1", "asset-blob:abc", "asset-blob-ref:abc", "asset-version-bytes"]) {
+    let threw = false;
+    try { await m.set(k, 1); } catch { threw = true; }
+    assert(threw, `${k} is reserved from the model`);
+  }
+  assert(!(await m.keys()).some((k) => k.startsWith("asset-")), "version keys are hidden from enumeration");
 });

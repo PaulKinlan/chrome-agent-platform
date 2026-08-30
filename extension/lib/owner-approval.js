@@ -24,6 +24,9 @@ export const DESTRUCTIVE_ACTIONS = new Set([
   "agent.delete",
   "agent.update",
   "asset.delete",
+  // A model-initiated restore of an earlier version rewrites the head
+  // (CAP-FB-20260830-ARTIFACT-VERSIONS-01): the same card as an update.
+  "asset.restore",
   "asset.update",
   "capability.revoke",
   "hooks.subscribe",
@@ -70,6 +73,8 @@ export class CanonicalPayloadError extends Error {
 // principals with a non-empty browser-supplied documentId.
 export const OWNER_DIRECT_ACTIONS = new Set([
   "asset.delete",
+  // The owner's own Restore click in the viewer IS the approval.
+  "asset.restore",
   "agent.delete",
   "named-agent.delete",
   // The owner's own schedule edit in the agent dialog IS the approval (same
