@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.423] — 2026-08-30
+- Board deny rules: single owner-restricted route set (duplicate keys removed), corrupt policy store fails closed and is never overwritten, route-level tests with real callers and exact denial codes
+
 ## [0.2.422] — 2026-08-30
 - test(board): fix deny-route tests to pass owner-options principal context
 
