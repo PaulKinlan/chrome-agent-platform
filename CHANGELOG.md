@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.499] — 2026-08-30
+- Tracker: the viewer Source/Diff tabs are recorded as landed.
+
 ## [0.2.498] — 2026-08-30
 - Landed: opening an artifact now lets you switch between the rendered preview, the highlighted source, and a diff between any two versions with a restore button.
 
