@@ -5898,6 +5898,19 @@ const handlers = mergeRouteMaps(
   },
   async "asset.update"({ origin, id, assetType, name, content }, context) {
     const scope = origin ?? "master";
+    // CAP-FB-20260830-ARTIFACT-QUICK-FIXES-01 (b): an empty/unknown id must
+    // not surface as an approval demand (the approval gate can never name a
+    // target the store can address, and the model retries the same impossible
+    // call twelve times). Reject it BEFORE the gate with the readable
+    // sentence; after the gate, map the store's "asset not found" (a
+    // delete-race) to the same sentence.
+    if (typeof id !== "string" || !id) {
+      return { ok: false, error: "update_asset needs an existing id (use list_assets)" };
+    }
+    const exists = await getAsset(scope, id);
+    if (!exists.ok) {
+      return { ok: false, error: "update_asset needs an existing id (use list_assets)" };
+    }
     const target = canonicalOperationTarget("asset", { origin: scope, id });
     let payload;
     try {
@@ -5914,7 +5927,11 @@ const handlers = mergeRouteMaps(
     if (content !== undefined) patch.content = content;
     // Who made this version: the owner's own click in an extension document
     // (the hand edit in the viewer), else the model (behind the card above).
-    return await updateAsset(scope, id, patch, { by: ownerPrincipal(context) ? "owner" : "model" });
+    const res = await updateAsset(scope, id, patch, { by: ownerPrincipal(context) ? "owner" : "model" });
+    if (!res.ok && res.error === "asset not found") {
+      return { ok: false, error: "update_asset needs an existing id (use list_assets)" };
+    }
+    return res;
   },
   // ---- immutable artifact versions (CAP-FB-20260830-ARTIFACT-VERSIONS-01) ----
   // Every create/update appends a version row; the rows never carry a body

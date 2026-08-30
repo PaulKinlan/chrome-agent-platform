@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.493] — 2026-08-30
+- Housekeeping: parallel work streams reconciled.
+
 ## [0.2.492] — 2026-08-30
 - Tracker: the honesty backstop for browser actions is recorded as landed.
 
