@@ -57,6 +57,7 @@ const COMPONENTS = [
   "artifact-card",
   "artifact-inspector",
   "artifact-diff",
+  "segmented-control",
   "artifact-quick-drawer",
   "code-block",
   "message-bubble",
@@ -867,4 +868,106 @@ Deno.test("artifact-diff: navigate next twice then prev announces 'Change 2 of 2
   const nav = emitted.filter((e) => e.type === "navigate");
   if (nav.length !== 4) throw new Error(`expected 4 navigate events (clamped step emits none), got ${nav.length}`);
   if (nav.at(-1).detail.index !== 1 || nav.at(-1).detail.total !== 2) throw new Error(`bad navigate detail: ${JSON.stringify(nav.at(-1))}`);
+});
+
+// ── CAP-FB-20260830-ARTIFACT-VIEWER-SOURCE-DIFF-01 ──────────────────────────
+// The bounded source highlighter and the <segmented-control> tablist that the
+// artifact viewer mounts for Preview | Source | Diff.
+
+Deno.test("tokenizeSource classifies js keywords/strings/comments and preserves exact text", async () => {
+  const mod = await import("../extension/shared/components.js");
+  const src = 'const x = "hi"; // note\nfunction f(){ return 42; }';
+  const toks = mod.tokenizeSource(src, "js");
+  // Loss-free: the concatenation of every token equals the input exactly.
+  if (toks.map((t: any) => t.text).join("") !== src) {
+    throw new Error("tokenizeSource must be loss-free (token texts must rejoin to the input)");
+  }
+  const cls = (needle: string) => toks.find((t: any) => t.text === needle)?.cls;
+  if (cls("const") !== "kw") throw new Error("`const` must be a keyword token");
+  if (cls("function") !== "kw") throw new Error("`function` must be a keyword token");
+  if (cls('"hi"') !== "str") throw new Error("a double-quoted string must be a string token");
+  if (cls("42") !== "num") throw new Error("a number literal must be a number token");
+  if (!toks.some((t: any) => t.cls === "com" && t.text.includes("note"))) {
+    throw new Error("a // line comment must be a comment token");
+  }
+  // A keyword embedded in an identifier is NOT highlighted.
+  const idToks = mod.tokenizeSource("myconstant + constable", "js");
+  if (idToks.some((t: any) => t.cls === "kw")) throw new Error("keywords inside identifiers must not tokenize");
+  // Plain text stays plain.
+  const plain = mod.tokenizeSource("just words here", "text");
+  if (plain.some((t: any) => t.cls)) throw new Error("plain text must carry no token classes");
+});
+
+Deno.test("highlightSource builds spans with textContent only (no innerHTML)", async () => {
+  const mod = await import("../extension/shared/components.js");
+  // Behavioural: build against a recording fake document — every non-plain
+  // token is a <span class="tok-…"> whose text is set via textContent, every
+  // plain run is a text node, and the fragment's combined text is loss-free.
+  const nodes: any[] = [];
+  const fakeDoc = {
+    createDocumentFragment() {
+      const kids: any[] = [];
+      return { _kids: kids, appendChild(n: any) { kids.push(n); return n; } };
+    },
+    createElement(tag: string) {
+      const el: any = { tag, className: "", _text: "" };
+      Object.defineProperty(el, "textContent", { get() { return el._text; }, set(v) { el._text = String(v); } });
+      // A trap: any attempt to use innerHTML on a created node fails the test.
+      Object.defineProperty(el, "innerHTML", { set() { throw new Error("highlightSource must never set innerHTML"); } });
+      nodes.push(el);
+      return el;
+    },
+    createTextNode(t: string) { const n = { nodeText: String(t) }; nodes.push(n); return n; },
+  };
+  const src = 'const n = 1; // x';
+  const frag = mod.highlightSource(src, "js", fakeDoc);
+  const kids = frag._kids as any[];
+  const combined = kids.map((k) => (k.tag ? k._text : k.nodeText)).join("");
+  if (combined !== src) throw new Error("highlightSource output must be loss-free");
+  const spans = kids.filter((k) => k.tag === "span");
+  if (spans.length === 0) throw new Error("highlightSource must build at least one <span> for a keyword source");
+  if (!spans.every((s) => /^tok-/.test(s.className))) throw new Error("every highlight span must carry a tok-* class");
+  if (spans.some((s) => s.tag !== "span")) throw new Error("highlight tokens must be span elements");
+  // Static guard: the highlighter/tokenizer source never reaches for innerHTML.
+  const file = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const hStart = file.indexOf("export function highlightSource");
+  const tStart = file.indexOf("export function tokenizeSource");
+  const from = Math.min(hStart, tStart);
+  const seg = file.slice(from, file.indexOf("\nclass ", from) < 0 ? from + 6000 : file.indexOf("\nclass ", from));
+  if (/innerHTML|outerHTML|insertAdjacentHTML/.test(seg)) {
+    throw new Error("the tokenizer/highlighter must not use innerHTML/outerHTML/insertAdjacentHTML");
+  }
+});
+
+Deno.test("segmented-control moves value with ArrowRight/ArrowLeft and emits change", async () => {
+  await import("../extension/shared/components.js");
+  const Klass = globalThis.customElements.get("segmented-control");
+  if (!Klass) throw new Error("segmented-control must be registered");
+  const el: any = Object.create(Klass.prototype);
+  el._value = "Preview";
+  el._items = () => ["Preview", "Source", "Diff"];
+  el._sync = () => {};
+  el._focusSelected = () => {};
+  const emitted: any[] = [];
+  el._emit = (type: string, detail: any) => emitted.push({ type, detail });
+  const key = (k: string) => el._onKey({ key: k, preventDefault() {} });
+  key("ArrowRight");
+  if (el.value !== "Source") throw new Error(`ArrowRight from Preview must select Source, got ${el.value}`);
+  key("ArrowRight");
+  if (el.value !== "Diff") throw new Error(`ArrowRight from Source must select Diff, got ${el.value}`);
+  key("ArrowRight"); // wraps
+  if (el.value !== "Preview") throw new Error(`ArrowRight from Diff must wrap to Preview, got ${el.value}`);
+  key("ArrowLeft"); // wraps back
+  if (el.value !== "Diff") throw new Error(`ArrowLeft from Preview must wrap to Diff, got ${el.value}`);
+  key("Home");
+  if (el.value !== "Preview") throw new Error(`Home must select the first tab, got ${el.value}`);
+  key("End");
+  if (el.value !== "Diff") throw new Error(`End must select the last tab, got ${el.value}`);
+  const changes = emitted.filter((e) => e.type === "change");
+  if (changes.length !== 6) throw new Error(`expected 6 change events, got ${changes.length}`);
+  if (changes.at(-1).detail.value !== "Diff") throw new Error(`last change detail must be Diff, got ${JSON.stringify(changes.at(-1))}`);
+  // No spurious change when the value does not move.
+  const before = emitted.length;
+  el._select("Diff");
+  if (emitted.length !== before) throw new Error("selecting the already-current value must not emit change");
 });

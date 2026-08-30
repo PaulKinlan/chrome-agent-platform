@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.495] — 2026-08-30
+- Opening an artifact now offers Preview, Source and Diff tabs: Source shows the exact content with syntax highlighting, and Diff compares any two saved versions side by side with a one-click Restore of an earlier version.
+
 ## [0.2.494] — 2026-08-30
 - Two more editing-flow fixes are in progress in parallel and recorded as claimed.
 

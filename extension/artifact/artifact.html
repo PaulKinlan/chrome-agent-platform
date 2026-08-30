@@ -12,24 +12,45 @@
       body { margin: 0; padding: 0; background: var(--bg, #f7f6f3); min-height: 100vh; display: flex; flex-direction: column; }
       .wrap { max-width: 1400px; width: 100%; height: 100vh; margin: 0 auto; padding: 16px 24px; display: flex; flex-direction: column; box-sizing: border-box; }
       .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex: 0 0 auto; }
-      .head-left { display: flex; align-items: center; gap: 12px; }
-      .head h1 { font-size: 18px; font-weight: 650; margin: 0; color: var(--text, #1d1b18); }
+      .head-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
+      .head-mid { display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+      .head-right { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+      .head h1 { font-size: 18px; font-weight: 650; margin: 0; color: var(--text, #1d1b18); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 42ch; }
       .meta { font-size: 12px; color: var(--muted, #635e56); }
       .back { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px;
         border: 1px solid var(--border, #e3e0d9); border-radius: var(--radius-sm, 6px); background: transparent;
         color: var(--text, #1d1b18); cursor: pointer; font: inherit; }
       .back:hover { border-color: var(--accent, #0e6e63); color: var(--accent, #0e6e63); }
+      .back:focus-visible { outline: 2px solid var(--accent, #0e6e63); outline-offset: 2px; }
       .btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px;
         border: 1px solid var(--border, #e3e0d9); border-radius: var(--radius-sm, 6px); background: var(--panel, #fff);
         color: var(--text, #1d1b18); cursor: pointer; font: inherit; font-size: 13px; }
       .btn:hover { border-color: var(--accent, #0e6e63); }
+      .btn:focus-visible { outline: 2px solid var(--accent, #0e6e63); outline-offset: 2px; }
+      .btn:disabled { opacity: .5; cursor: default; }
+      #modes[hidden] { display: none; }
       #out { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+      .panel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+      .panel[hidden] { display: none; }
       .frame { flex: 1 1 auto; display: flex; flex-direction: column; height: 100%; min-height: 0; border: 1px solid var(--border, #e3e0d9); border-radius: var(--radius-md, 10px);
         overflow: hidden; background: #fff; box-shadow: var(--shadow-1, 0 1px 2px rgba(29,27,24,.05)); }
       .frame .html-frame, .frame iframe { width: 100%; height: 100%; flex: 1 1 auto; border: 0; display: block; }
       .error { color: var(--danger, #b3261e); font-size: 14px; padding: 12px 0; }
       pre.artifact-pre { flex: 1 1 auto; margin: 0; padding: 16px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; background: var(--panel, #fff); border: 1px solid var(--border, #e3e0d9); border-radius: var(--radius-md, 10px); overflow: auto; white-space: pre-wrap; }
       img.artifact-img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; margin: auto; }
+      /* Source panel: the inspector scrolls internally. */
+      #panel-source { overflow: auto; }
+      /* Diff panel */
+      .diff-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; flex: 0 0 auto; }
+      .field { display: flex; flex-direction: column; gap: 4px; }
+      .field label { font-size: 12px; color: var(--muted, #635e56); }
+      .field select { min-height: 34px; padding: 4px 10px; font: inherit; font-size: 13px; color: var(--text, #1d1b18);
+        background: var(--panel, #fff); border: 1px solid var(--border, #e3e0d9); border-radius: var(--radius-sm, 6px); }
+      .field select:focus-visible { outline: 2px solid var(--accent, #0e6e63); outline-offset: 2px; }
+      .diff-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+      #panel-diff artifact-diff { flex: 1 1 auto; min-height: 0; overflow: auto; --artifact-diff-max-block-size: none; }
+      .diff-status { font-size: 12px; color: var(--muted, #635e56); min-height: 1.3em; margin: 6px 0 0; }
+      .diff-empty { font-size: 13px; color: var(--muted, #635e56); padding: 12px 0; }
     </style>
   </head>
   <body>
@@ -41,6 +62,9 @@
             <h1 id="name">Artifact</h1>
             <div class="meta" id="meta"></div>
           </div>
+        </div>
+        <div class="head-mid">
+          <segmented-control id="modes" items="Preview,Source,Diff" value="Preview" label="Artifact view" hidden></segmented-control>
         </div>
         <div class="head-right">
           <button class="btn" id="copy-content" type="button" disabled>Copy content</button>
