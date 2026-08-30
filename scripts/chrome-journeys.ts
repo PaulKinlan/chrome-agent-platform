@@ -599,6 +599,9 @@ const EXPECTED = [
   "artifact versions: restore of v1 is a new head whose body equals v1 byte-for-byte",
   "mgmt: delete_asset removed it",
   "mgmt: asset gone after delete",
+  "artifacts: update_asset with an empty id says use list_assets",
+  "artifacts: update_asset with an unknown id says use list_assets",
+  "artifacts: one New tab click opens exactly one viewer target",
   "cap:fetch: loopback refused from a sandboxed script",
   "Scripts: run_script from the model shows the approval card with the source",
   "Scripts: the approved run executes only after Allow",
@@ -3854,6 +3857,63 @@ async function main() {
       "mgmt: asset gone after delete",
       Array.isArray(assetAfter?.assets) &&
         !assetAfter.assets.some((a) => a.id === assetId),
+    );
+    // ─────────────────────────────────────────────────────────────
+    // ARTIFACT-QUICK-FIXES-01 (b): an empty/unknown asset id must answer with
+    // the readable sentence, never a misleading "requires owner approval" (the
+    // model would retry the same impossible call a dozen times).
+    // ─────────────────────────────────────────────────────────────
+    const emptyIdUpdate = await msgValue({ type: "asset.update", origin: "master", id: "", content: "x" });
+    check(
+      "artifacts: update_asset with an empty id says use list_assets",
+      emptyIdUpdate?.ok === false &&
+        String(emptyIdUpdate?.error ?? "") === "update_asset needs an existing id (use list_assets)" &&
+        !/owner approval/i.test(String(emptyIdUpdate?.error ?? "")),
+    );
+    const unknownIdUpdate = await msgValue({ type: "asset.update", origin: "master", id: "a_never_created", content: "x" });
+    check(
+      "artifacts: update_asset with an unknown id says use list_assets",
+      unknownIdUpdate?.ok === false &&
+        String(unknownIdUpdate?.error ?? "") === "update_asset needs an existing id (use list_assets)" &&
+        !/owner approval/i.test(String(unknownIdUpdate?.error ?? "")),
+    );
+    // (a) ONE genuine click on a gallery card's New tab opens exactly ONE
+    //     viewer target. Drives the real page + a real CDP click.
+    const galleryAsset = await msgValue({
+      type: "asset.create", origin: "master", assetType: "html",
+      name: "gallery double-open guard", content: "<h1>guard</h1>",
+    });
+    const viewerTargets = async () => {
+      const t = await cdp.send("Target.getTargets");
+      return (t?.result?.targetInfos ?? []).filter((ti) => ti.url.includes("artifact/artifact.html")).length;
+    };
+    const galleryBefore = await viewerTargets();
+    let galleryOk = false;
+    if (galleryAsset?.ok === true) {
+      const galTarget = await openPage(port, `chrome-extension://${extId}/artifacts/index.html`);
+      await sleep(2200);
+      const galSession = await attachRuntime(cdp, galTarget.id);
+      const tabBox = await evalIn(cdp, galSession, `(() => {
+        const card = document.querySelector("artifact-card");
+        const el = card?.shadowRoot?.querySelector('[data-act="open-tab"]');
+        if (!el) return null;
+        el.scrollIntoView({ block: "center", inline: "center" });
+        const r = el.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      })()`);
+      if (tabBox && typeof tabBox.x === "number") {
+        await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: tabBox.x, y: tabBox.y, button: "left", buttons: 1, clickCount: 1 }, galSession);
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: tabBox.x, y: tabBox.y, button: "left", buttons: 0, clickCount: 1 }, galSession);
+      }
+      await sleep(2200);
+      const galleryAfter = await viewerTargets();
+      galleryOk = galleryAfter - galleryBefore === 1;
+      const galShot = await captureShot(cdp, galSession);
+      if (galShot) await writeEvidence("artifact-newtab-single.png", galShot);
+    }
+    check(
+      "artifacts: one New tab click opens exactly one viewer target",
+      galleryAsset?.ok === true && galleryOk,
     );
     // ─────────────────────────────────────────────────────────────
     // Scripts gate (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01).

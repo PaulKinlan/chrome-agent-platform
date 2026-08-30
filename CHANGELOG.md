@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.491] — 2026-08-30
+- asset.update: re-land the empty/unknown-id guard and its test (dropped by a later cross-lane merge) — rejects 'update_asset needs an existing id (use list_assets)' before the approval gate
+
 ## [0.2.490] — 2026-08-30
 - Tracker: the side-panel and cookie tool cuts are recorded as landed.
 

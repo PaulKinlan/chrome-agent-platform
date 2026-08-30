@@ -177,6 +177,20 @@ Deno.test("deleteAsset removes the index entry + the asset body", async () => {
   assert(!list.assets.some((a) => a.id === id), "index must drop the deleted asset");
 });
 
+Deno.test("updateAsset with an unknown/empty id fails with a store error (CAP-FB-20260830-ARTIFACT-QUICK-FIXES-01)", async () => {
+  // The route layer maps these to the readable "use list_assets" sentence; the
+  // lib seam must FAIL with the store error, never a success or an approval.
+  const missing = await updateAsset("master", "a_never_created", { name: "x" });
+  assert(!missing.ok, "unknown-id update must fail");
+  assertEquals(missing.error, "asset not found");
+  const empty = await updateAsset("master", "", { name: "x" });
+  assert(!empty.ok, "empty-id update must fail");
+  assert(
+    String(empty.error ?? "").includes("needs an id") || String(empty.error ?? "").includes("use list_assets"),
+    `empty-id error should name the missing id: ${empty.error}`,
+  );
+});
+
 Deno.test("createAsset rejects bad types, empty names, oversized content", async () => {
   assert(ASSET_TYPES.has("html"), "ASSET_TYPES must include html");
   const badType = await createAsset("master", { type: "exe", name: "a", content: "b" });
