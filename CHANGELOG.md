@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.414] — 2026-08-30
+- Refresh the permissions journey screenshot
+
 ## [0.2.413] — 2026-08-30
 - Finish the optional permissions browser journey
 
