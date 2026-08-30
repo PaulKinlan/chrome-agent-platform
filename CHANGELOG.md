@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.486] — 2026-08-30
+- tasks: record the build-changelog candidate sha
+
 ## [0.2.485] — 2026-08-30
 - npm run build prints the changelog entries since the last build
 
