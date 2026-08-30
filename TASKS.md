@@ -3427,14 +3427,14 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-GENERATED-UI-BOOTSTRAP-SYNTAX-01] The generated-document preference bootstrap is a JavaScript syntax error
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 editing lane, finding 5. Every generated page the agent renders throws `SyntaxError: Unexpected token ')'` in its sandbox frame, so the documented theme/locale projection into generated UI has never worked.
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-30 20:15 UTC
+- Status: IN_REVIEW
+- Resume: worker run 0c918cf7 (flash) — the fix, the unit gate and the journey assertion were dispatched with the full spec
 - Priority: P2
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `fc2255be`
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-genui-bootstrap
+- Branch: cap-genui-bootstrap
+- Base: `abae5d2b`
 - Candidate: —
 - Shipping: —
 - Acceptance: The injected preference bootstrap parses; a rendered frame posts `cap:preference-ready` and its `documentElement.lang` equals the owner's locale; a unit test parses both injected scripts and is RED on today's string.
@@ -3458,14 +3458,14 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-ARTIFACT-QUICK-FIXES-01] Small artifact defects: New tab opens twice, an empty id masks the real error
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 editing lane, findings 9 and 13. One click on "New tab" opens two viewer tabs; an agent that forgets the artifact id is told "requires owner approval" and retries the same call twelve times.
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-30 20:15 UTC
+- Status: IN_REVIEW
+- Resume: worker run 1c55b4c9 (flash) — the idempotent _wire/WeakSet fix, the asset.update guard and both falsification gates were dispatched with the full spec
 - Priority: P2
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `fc2255be`
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-artifact-quickfixes
+- Branch: cap-artifact-quickfixes
+- Base: `abae5d2b`
 - Candidate: —
 - Shipping: —
 - Acceptance: One New tab click yields exactly one `artifact/artifact.html` target, and `asset.update` with an empty or unknown id returns "update_asset needs an existing id (use list_assets)" before the approval gate; both assertions are RED on the current tree.
@@ -3489,14 +3489,14 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01] Settings → About → What's new renders raw engineering commit subjects to the user
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 ui lane, finding 3. The About page shows lines like "merge: WebMCP acceptance green lane (0c9783c8) — detector registration restored, JIT scripting at discover, fresh-profile picker proof" to the person using the product.
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-30 20:15 UTC
+- Status: IN_REVIEW
+- Resume: worker run 29369d5c (flash) — the isUserFacingEntry filter, lazy About, widened changelog check and the entry rewrite were dispatched with the full spec
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `fc2255be`
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-whatsnew-copy
+- Branch: cap-whatsnew-copy
+- Base: `abae5d2b`
 - Candidate: —
 - Shipping: —
 - Acceptance: About shows only the last five changelog entries a non-engineer can read plus a "Full release notes" link, rendered when About is opened rather than at load, and the changelog check rejects engineering subjects in recent entries (RED against today's `CHANGELOG.md` until the recent entries are rewritten).
