@@ -3484,15 +3484,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-GENERATED-UI-BOOTSTRAP-SYNTAX-01] The generated-document preference bootstrap is a JavaScript syntax error
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 editing lane, finding 5. Every generated page the agent renders throws `SyntaxError: Unexpected token ')'` in its sandbox frame, so the documented theme/locale projection into generated UI has never worked.
-- Updated: 2026-08-30 20:15 UTC
+- Updated: 2026-08-30 21:35 UTC
 - Status: IN_REVIEW
 - Resume: worker run 0c918cf7 (flash) — the fix, the unit gate and the journey assertion were dispatched with the full spec
 - Priority: P2
-- Owner: hub coordinator (journal session)
+- Owner: worker (cap-genui-bootstrap)
 - Workspace: /home/paulkinlan/worktrees/cap-genui-bootstrap
 - Branch: cap-genui-bootstrap
-- Base: `abae5d2b`
-- Candidate: —
+- Base: `b0b962b0` (rebased onto the new origin/main tip; was `abae5d2b`)
+- Candidate: `cd894024` + r3 delivery-ordering fix (wireHtmlFramePreference) committed on the same lane
 - Shipping: —
 - Acceptance: The injected preference bootstrap parses; a rendered frame posts `cap:preference-ready` and its `documentElement.lang` equals the owner's locale; a unit test parses both injected scripts and is RED on today's string.
   - Context: `preferenceBootstrapScript(nonce)` at `extension/shared/components.js:355-366` joins these fragments: `"(function(){var nonce=…;"`, `"function apply(p){if(!p)return;"`, `"if(p.locale){try{…}catch(e){}}"`, `"window.addEventListener('message',…apply(d.preference);});"`, `"try{window.parent.postMessage({type:'cap:preference-ready',…},'*');}catch(e){}"`, `"})();"`. The `if(p.locale){…}` closes only the `if`; `function apply(p){` is never closed, so the listener and the ready post sit inside `apply`, and the final `})();` closes `apply` and then hits `)` with no open expression. Consequences: the frame never announces readiness, `wireHtmlFramePreference` only fires on `load`, `apply()` never runs. The navigation guard script (301-330) parses fine. `injectFrameGuards` (372) prepends this script into every generated document (thread frames, viewer, library card, dialog). Measured: 14 `SyntaxError: Unexpected token ')'` in one run across every `about:srcdoc` context. What must NOT change: the nonce-matched one-way message contract with `sandbox/artifact-preview.js`; the CSP.
@@ -3512,6 +3512,9 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - History:
   - 2026-08-30 11:00 UTC — measured: every `about:srcdoc` context throws `SyntaxError: Unexpected token ')'` (14 occurrences in one run); the documented theme/locale projection has never run.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); the fragment list re-read at `components.js:355-366` and the missing brace confirmed.
+  - 2026-08-30 21:35 UTC — IN_REVIEW (candidate on `cap-genui-bootstrap` off `abae5d2b`): locale fragment closed with `…catch(e){}}}` so the listener + ready post sit at IIFE level; `wireHtmlFramePreference` marks the wrapper `data-cap-preference="ready"` on a genuine ready message. Falsification: unit parse test RED on the old string (`SyntaxError: Unexpected token ')'`, 1/4 passed) → GREEN 4/4 after; journey check RED on the stashed fix (205/206) → GREEN 206/206 with it. Full gates: build clean, unit 2584/0, chrome journeys 206/206. `tests/frame-guards.test.ts` parses the shipped fragments via `Function("n", "return […]")` (no eval of shipped code — test-side only) + a shim behavioural test that apply() sets `documentElement.lang` and the nonce gate holds.
+  - 2026-08-30 22:40 UTC — r3 review REVISE (sol): P1 — `wireHtmlFramePreference` set `done=true` before `post()`, so the genuine-ready handler delivered nothing (the ready attribute fired but the preference payload never reached the frame; the load/timeout fallbacks fire earlier while the sandbox host is inactive and are dropped). Fixed: the ready handler sets `done` and delivers in one step (`if (!done) { done = true; post(); }`), the guard lives at the call sites (fallbacks check `!done` but never set it), so the first genuine ready sends exactly one payload and a second ready/later load is suppressed. New falsification unit test: on genuine ready the preference is posted into the frame exactly once with the right nonce+payload, no re-delivery on repeat ready or the load fallback (RED on the r3 code 4/5, GREEN 5/5 after). Rebased onto `b0b962b0`; gates re-run at the new tip.
+  - 2026-08-30 23:10 UTC — cross-lane disturbance: an external coordinator merge rebased this lane mid-review; the lane was reconciled (TASKS.md conflict resolved to THIS entry's state, version files → theirs, rebase completed as cd894024 + 0ecb6dfe on b0b962b0). r3 delivery-ordering fix committed separately on top.
 
 ## [CAP-FB-20260830-ARTIFACT-QUICK-FIXES-01] Small artifact defects: New tab opens twice, an empty id masks the real error
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 editing lane, findings 9 and 13. One click on "New tab" opens two viewer tabs; an agent that forgets the artifact id is told "requires owner approval" and retries the same call twelve times.
@@ -4486,3 +4489,33 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-GALLERY-BYTE-IDENTITY-GATE-01`
 - History:
   - 2026-08-30 20:48 UTC — filed from three lanes hitting the same false-red on main's own blobs.
+
+## [CAP-FB-20260830-BUILD-CHANGELOG-PRINT-01] npm run build prints the changelog delta since the previous build
+- Feedback: 2026-08-30 — owner-requested: the person building should see what's new since their last build.
+- Updated: 2026-08-30 22:10 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P2
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-build-changelog
+- Branch: cap-build-changelog
+- Base: `29c34a46`
+- Candidate: `51811c13` (r2 review-fix round)
+- Shipping: —
+- Acceptance: `npm run build` prints the entries between the previously-built version and the current one; first build prints a one-line notice; previous == current is silent; never fails the build.
+  - Context: build.mjs publishes extension/dist atomically with a dist.complete marker; the version lives in package.json (hook-bumped per commit); CHANGELOG.md is `## [x.y.z] — title` sections newest-first with `- bullet` lines; extension/CHANGELOG.md must stay byte-identical to root.
+  - What must NOT change: the atomic publish (lock, stage, dist.complete marker, version GC), the changelog byte-identity gate, the build's fail-closed assertions.
+  - Reproduce today: `npm run build` prints only the ATOMICALLY line; nothing tells the builder what changed.
+  - Files: `build.mjs` (version probe at start + delta print + `.build/last-built-version` write after success), `scripts/changelog-delta.mjs` (new pure module: parseChangelog / deltaBetween / renderDelta / read+writeLastBuiltVersion), `tests/changelog-delta.test.ts` (new).
+  - Steps: (1) Record the previous successful build version in `.build/last-built-version` (gitignored, invocation-local, outside dist/dist-versions — survives the version GC, never shipped, never in the indexed-source scan). (2) On success, parse CHANGELOG.md and print entries with version > previous and <= current, newest last, bounded at 10 + "… N more". (3) First build → "First build at x.y.z — no previous version recorded."; previous == current → silent. (4) Warn-only on any read/parse failure (the build must never fail over this feature). (5) The record is written ONLY on a genuinely successful build (same atomicity side as the marker).
+  - Out of scope: rewriting changelog voice (CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01 owns that); the record format beyond the dotted version.
+- Review: pending
+- Gates: unit — `tests/changelog-delta.test.ts` (9 tests: numeric compare, parse, boundary semantics, bounded render, first-build/no-change paths, malformed→[]); RED = module absent. Integration — build twice with a simulated version delta (edit `.build/last-built-version`, never bump-version): first build prints the first-build line; second prints the exact delta; third is silent. Full suite — `npm run build` clean; `deno test tests/` green (2602/0 at tip); `deno run -A scripts/chrome-journeys.ts` green (212/212 at tip).
+- Blockers: —
+- Next: —
+- Recover: `git log --oneline --all --grep=CAP-FB-20260830-BUILD-CHANGELOG-PRINT-01`
+- History:
+  - 2026-08-30 21:30 UTC — filed by the hub coordinator from the owner's feature request (pre-compaction backlog item).
+  - 2026-08-30 22:30 UTC — candidate `d66e2f13`; independent review REVISE: 3 P1s + 1 P2. Fixed in the worktree: (P1) renderDelta now truly prints newest-LAST (oldest→newest, newest as the final line) with an "N older entr(ies)" note, order pinned by a new test; (P1) the last-built version record moved to AFTER the final fatal step (staging cleanup + lock release) guarded by the exported `shouldRecordBuild({buildSucceeded, exitCode})` pure seam — a build that dies in a finalizer never records success; (P1) parseChangelog/deltaBetween/renderDelta skip null/malformed entries instead of throwing (guarded with `raw == null` / object-type checks); (P2) CHANGELOG read failures now print a one-line warn-and-continue instead of failing silently. RED→GREEN proven per P1 test by reintroducing each bug (newest-first order, missing exit-code guard, unguarded entry access) → the pinning tests FAIL, then PASS on restore. Gates at the new candidate: build clean (first-build + delta + silent cases all live-proven), unit 2606/0, chrome journeys 212/212.
+  - 2026-08-30 23:05 UTC — independent review r2 REVISE: 3 P1s + 2 P2s. Fixed in the worktree: (P1) the "N older entries" note now prints FIRST (then oldest→newest) — the exact final rendering is pinned by the bounded test; (P1) `shouldRecordBuild` is STRICT: requires a finite number exitCode AND === 0 AND buildSucceeded true (NaN/undefined/string/non-zero never authorize), with 10 case assertions; (P1) renderDelta skips junk entries entirely (string-version gate) and filters non-string bullets, so no parse/render path throws on adversarial input; (P2) `readChangelogOrNull` pure seam — read failure warns exactly one line and returns null, success warns nothing (both paths tested); (P2) the outer build probe catch now warns too instead of failing silent. RED→GREEN proven per P1 by reintroducing each bug (note-after-entries, lax numeric guard, missing version gate) → the pinning tests FAIL, then PASS on restore. Gates at the new candidate: build clean (live delta 0.2.484→0.2.488, note first, newest last, recorded 0.2.488), unit 2607/0, chrome journeys 212/212.
+  - 2026-08-30 23:35 UTC — independent review r3 REVISE: 2 blockers. Fixed in the worktree: (1) the exact FINAL RENDERING is now pinned as complete strings — the bounded test asserts the full rendered output (note first + exact entry order + exact lines) and the full case asserts all four entries byte-for-byte, so any rendering change (even a 4→2-space indent) fails; (2) renderDelta now uses the SAME `isValidVersion` gate as deltaBetween — invalid string versions ("abc", "not-a-version", "1.2", "v1.2.3", "") are dropped, never rendered, with a dedicated test (junk-only input renders "", mixed input renders only the valid entry). RED→GREEN proven per blocker by reintroducing each bug (string-type filter for versions, 2-space bullet indent) → the pinning tests FAIL, then PASS on restore. Gates at the new candidate: build clean (live delta 0.2.484→0.2.490, note first, newest last, recorded 0.2.490), unit 2608/0, chrome journeys 212/212.

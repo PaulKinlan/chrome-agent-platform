@@ -362,7 +362,10 @@ export function preferenceBootstrapScript(nonce) {
   return `<script data-cap-bootstrap>${[
     "(function(){var nonce=" + n + ";",
     "function apply(p){if(!p)return;",
-    "if(p.locale){try{document.documentElement.setAttribute('lang',p.locale);}catch(e){}}",
+    // Closes BOTH the if and apply() — the message listener + ready post
+    // below must sit at IIFE level, not inside apply (a dangling open brace
+    // made every generated frame throw SyntaxError: Unexpected token ')').
+    "if(p.locale){try{document.documentElement.setAttribute('lang',p.locale);}catch(e){}}}",
     "window.addEventListener('message',function(e){if(e.source!==window.parent)return;",
     "var d=e.data;if(d&&d.type==='cap:preference'&&d.nonce===nonce)apply(d.preference);});",
     "try{window.parent.postMessage({type:'cap:preference-ready',nonce:nonce},'*');}catch(e){}",
@@ -465,23 +468,38 @@ export function wireHtmlFramePreference(container, { nonce, theme, locale } = {}
   const n = nonce ?? (container?.closest?.(".html-frame")?.dataset?.frameNonce) ?? (iframe.closest?.(".html-frame")?.dataset?.frameNonce) ?? "";
   if (!n) return () => {};
   const pref = { ...(typeof theme === "string" && theme ? { theme } : {}), ...(typeof locale === "string" && locale ? { locale } : {}) };
+  // `done` guards RE-delivery, never the first delivery (r3 review P1): the
+  // load/timeout fallbacks below fire while the sandbox host is still inactive
+  // and their messages are dropped, so the genuine-ready message is the only
+  // reliable delivery point. The guard lives at the CALL SITES (not inside
+  // post()): the ready handler sets done and delivers in one step, so the
+  // first genuine ready always sends exactly one payload; a second ready or a
+  // later load/timeout is suppressed. The fallbacks must never set done —
+  // their early messages are dropped by the inactive host, and setting done
+  // there would suppress the ready delivery (the original bug, one step later).
   let done = false;
   const post = () => {
-    if (done) return;
     try { iframe.contentWindow?.postMessage({ type: FRAME_PREFERENCE_TYPE, nonce: n, preference: pref }, "*"); } catch { /* frame may not be ready */ }
   };
   const onMsg = (e) => {
     const d = e.data;
     if (d && d.type === FRAME_PREFERENCE_READY && d.nonce === n && e.source === iframe.contentWindow) {
-      done = true;
-      post();
+      // Observability for the frame-bootstrap gate (CAP-FB-20260830-GENERATED-UI-
+      // BOOTSTRAP-SYNTAX-01): the frame only announces readiness when its injected
+      // bootstrap script parsed, so this attribute proves the preference channel
+      // is live end to end (the journey asserts it).
+      try { container?.setAttribute?.("data-cap-preference", "ready"); } catch { /* best-effort */ }
+      if (!done) {
+        done = true;
+        post();
+      }
     }
   };
-  const onLoad = () => { post(); };
+  const onLoad = () => { if (!done) post(); };
   window.addEventListener("message", onMsg);
   iframe.addEventListener("load", onLoad);
   // The frame may already be loaded (srcdoc resolves fast) — try once now.
-  setTimeout(post, 0);
+  setTimeout(() => { if (!done) post(); }, 0);
   return () => {
     window.removeEventListener("message", onMsg);
     iframe.removeEventListener("load", onLoad);

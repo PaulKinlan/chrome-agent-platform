@@ -1787,6 +1787,18 @@ export function createDurableRunRegistry({
                 ...(Array.isArray(payload?.serverToolEvents) && payload.serverToolEvents.length > 0
                   ? { serverToolEvents: payload.serverToolEvents.slice(0, 16) }
                   : {}),
+                // Continuation fidelity (CAP slice): the compact tool summary,
+                // resolved skill ids, and composed-prompt hash ride the
+                // terminal row (bounded in threads.js at commit time).
+                ...(Array.isArray(payload?.toolCalls) && payload.toolCalls.length > 0
+                  ? { toolCalls: payload.toolCalls }
+                  : {}),
+                ...(Array.isArray(payload?.skills) && payload.skills.length > 0
+                  ? { skills: payload.skills }
+                  : {}),
+                ...(typeof payload?.promptHash === "string" && payload.promptHash
+                  ? { promptHash: payload.promptHash }
+                  : {}),
               }
               : {
                 role: "error",

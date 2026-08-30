@@ -2256,7 +2256,7 @@ function providerResumeIdentity(config) {
   };
 }
 
-async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSkills = [], agentSurfaceRef = null, providerServerAgentId = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, preallocatedExecutionId = null, admissionFence = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null, onExecutionStarted = null }) {
+async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSkills = [], agentSurfaceRef = null, providerServerAgentId = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, preallocatedExecutionId = null, admissionFence = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null, onExecutionStarted = null, journaledSkillIds = null }) {
   // skipRunLock is ONLY for the delegation child path (agent.delegate): the
   // child builds a FRESH orchestrator (its own memory + abort controller via
   // the memoryOverride/promptScope/executionId path below), so the shared-
@@ -2307,6 +2307,10 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       scheduled: !!scheduled,
       attachments: structuredClone(Array.isArray(attachments) ? attachments : []),
       history: structuredClone(Array.isArray(history) ? history : []),
+      // Continuation fidelity (CAP slice): journaled skills must survive a
+      // durable resume exactly like history — a paused/interrupted named or
+      // background agent run re-applies them when it restarts.
+      journaledSkillIds: structuredClone(Array.isArray(journaledSkillIds) && journaledSkillIds.length > 0 ? journaledSkillIds : []),
       scoped: !!scoped,
       route: resumeRoute,
       routeArgs: structuredClone(resumeRouteArgs ?? {}),
@@ -2498,6 +2502,10 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         // An unmatched result gets a UNIQUE id (never a repeated ":1" that
         // would collapse multiple orphan results into one card).
         const callId = q.shift() ?? `${taskId}:${runInstance}:${event.toolName ?? "tool"}:orphan:${orphanN}`;
+        // Continuation fidelity: the compact tool summary (name + ok only —
+        // never args or result bodies) rides the settle payload -> terminal
+        // thread row so a resumed run knows which tools ran.
+        accumulateToolCall(event.selectedTool ?? event.toolName, event.ok);
         // A structured permission denial keeps its requirement on the row
         // (bounded: the same shape normalizePermissionRequirement accepts) so
         // a reopened thread can render the grant card, not prose (§2b).
@@ -2547,6 +2555,21 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     let taskJournalReceipt = null;
     let taskJournalGuard = null;
     let taskJournalAttempted = false;
+    // Continuation fidelity (CAP slice): the per-run compact tool summary and
+    // the composed-prompt hash, accumulated from the progress/attestation
+    // streams and carried into the settle payload -> the terminal thread row,
+    // so a resumed run knows which tools ran and which prompt was composed.
+    // Bounded: at most 16 {name, ok} entries, names <= 64 chars; the hash is
+    // the first 16 hex chars of the composed system prompt's SHA-256.
+    const runToolCalls = [];
+    let runPromptHash = null;
+    let runSkillIds = []; // assigned after the skill merge; empty when the run fails before it
+    const accumulateToolCall = (name, ok) => {
+      const toolName = String(name ?? "").slice(0, 64);
+      if (!toolName) return;
+      runToolCalls.push({ name: toolName, ok: ok === true });
+      if (runToolCalls.length > 16) runToolCalls.shift();
+    };
     // Declared at run scope so the finally can restore the parent's stamped
     // context after a delegation child settles (see the setRunContext site).
     let savedRunContext = null;
@@ -2593,6 +2616,10 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       const attestKeyState = await attestationKeyState();
       orch.setAttestation?.((att) => {
         const boundLayers = boundaryLayersFor(orch?.promptInfo, att.agentId);
+        // Continuation fidelity: capture the composed-prompt hash (first 16
+        // hex chars of the composed system prompt's SHA-256) so the terminal
+        // thread row records WHICH prompt composition this run used.
+        if (typeof att?.composedDigest === "string" && att.composedDigest) runPromptHash = att.composedDigest.slice(0, 16);
         const bound = {
           runId: executionId, // the immutable per-attempt execution id
           taskId, // the LOGICAL id (task/schedule/thread) — kept separate
@@ -2686,7 +2713,24 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // as trailing context after the protected layer. The agent's SAVED
       // skills (from its record — template picks, owner edits) compose first,
       // deduped against any /skill:<id> references in the task text.
-      const runSkills = mergeRunSkills(agentSkills, await resolveSkillRefs(task));
+      // Continuation fidelity (CAP slice): journaledSkillIds (the union of
+      // every skill referenced by this thread's earlier terminal rows) re-applies
+      // those skills on resume — a continuation that does not re-mention
+      // /skill:x still runs with it. Deleted skills resolve to nothing and are
+      // silently skipped (resolveRecipe returns null).
+      let runSkills = mergeRunSkills(agentSkills, await resolveSkillRefs(task));
+      if (Array.isArray(journaledSkillIds) && journaledSkillIds.length > 0) {
+        const journaled = [];
+        for (const skillId of journaledSkillIds) {
+          const recipe = await resolveRecipe(skillId);
+          if (recipe) journaled.push(recipe);
+        }
+        runSkills = mergeRunSkills(agentSkills, journaled, await resolveSkillRefs(task));
+      }
+      // The resolved skill IDs journal onto the terminal thread row so a LATER
+      // continuation re-applies them (the same union the caller of a fresh
+      // continuation reads from the thread).
+      runSkillIds = runSkills.map((r) => r?.id).filter((x) => typeof x === "string" && x).slice(0, 24);
       // agent-do's run(task, context, history) -> result text; context is a STRING.
       // `history` carries the prior conversation turns (the unified surface: a
       // follow-up / nudge is a new turn in the SAME persistent thread, so the
@@ -2784,6 +2828,12 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
             serverToolLatches: serverLatchCount,
           }
           : {}),
+        // Continuation fidelity (CAP slice): the compact tool summary, the
+        // resolved skill ids, and the composed-prompt hash ride the settle
+        // payload -> the terminal thread row (bounded on both sides).
+        ...(runToolCalls.length > 0 ? { toolCalls: runToolCalls } : {}),
+        ...(runSkillIds.length > 0 ? { skills: runSkillIds } : {}),
+        ...(runPromptHash ? { promptHash: runPromptHash } : {}),
       });      if (terminal?.phase === "cancelled") {
         return { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "aborted", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId };
       }
@@ -2874,6 +2924,11 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         errorReason: desc.reason,
         errorAction: desc.action,
         logicalId: taskId,
+        // Continuation fidelity: the partial tool summary still rides the
+        // terminal row so a resumed run knows what ran before the failure.
+        ...(runToolCalls.length > 0 ? { toolCalls: runToolCalls } : {}),
+        ...(runSkillIds.length > 0 ? { skills: runSkillIds } : {}),
+        ...(runPromptHash ? { promptHash: runPromptHash } : {}),
       }).catch(() => null);
       if (terminal?.phase === "cancelled") {
         return { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "aborted", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId };
@@ -3682,7 +3737,7 @@ async function executeWorkerTool(toolName, args, context) {
 // child through the SAME path (own OPFS sandbox, own provider override, own
 // prompt scope) — delegation adds only the delegation context, the budget cap,
 // skipRunLock, and never forwards approvalBinding.
-async function runNamedAgentTask({ id, task, attachments, runId, threadId = null, _executionId = null, _preallocatedExecutionId = null, _admissionFence = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null, onExecutionStarted = null }) {
+async function runNamedAgentTask({ id, task, attachments, runId, threadId = null, _executionId = null, _preallocatedExecutionId = null, _admissionFence = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null, onExecutionStarted = null, history = null, journaledSkillIds = null }) {
   // The agent runs the task with its OWN OPFS sandbox (namedAgentMemory — its
   // memory + history), so its runs read/write its own tier, never the
   // master's or a site's.
@@ -3731,6 +3786,11 @@ async function runNamedAgentTask({ id, task, attachments, runId, threadId = null
       // by executionId via the durable outbox) — the result returns to the
       // task, never stranded in the agent's own journal only.
       threadId: threadId ?? null,
+      // Continuation fidelity (CAP slice): an @mention from a hub thread
+      // carries that thread's prior turns + journaled skills so the delegated
+      // agent sees the conversation it is being asked to continue.
+      history: Array.isArray(history) ? history : [],
+      journaledSkillIds: Array.isArray(journaledSkillIds) && journaledSkillIds.length > 0 ? journaledSkillIds : null,
       // The agent's OWN system-prompt scope (agent:<slug>) — a per-agent
       // override composes over the hub base (inheriting the hub override when
       // the agent has none), and its role rides as the agent-role layer.
@@ -4586,6 +4646,9 @@ const handlers = mergeRouteMaps(
     // concurrency finding).
     let threadId = null;
     let threadHistory = m.history ?? [];
+    // Continuation fidelity: the union of every skill this thread's terminal
+    // rows journaled (only exists when the run continues an EXISTING thread).
+    let threadJournaledSkills = null;
     if (m.threadId) {
       // LOUD failure (log-redesign): a failed continueThread must NEVER be
       // swallowed — proceeding would silently drop the owner's "try again"
@@ -4603,6 +4666,7 @@ const handlers = mergeRouteMaps(
       }
       threadId = cont.thread.id;
       threadHistory = cont.history;
+      threadJournaledSkills = cont?.skills ?? null;
     } else {
       const thread = await createThread(m.task, m.attachments).catch((e) => {
         pushDiagnostic("error", `[thread] createThread failed: ${String(e?.message ?? e).slice(0, 200)}`);
@@ -4650,6 +4714,11 @@ const handlers = mergeRouteMaps(
           attachments: bounded,
           runId: m.runId ?? null,
           threadId,
+          // Continuation fidelity (CAP slice): an @mention continues the
+          // thread it was sent from — pass the prior turns + journaled skills
+          // so the delegated agent sees the conversation context.
+          history: threadHistory,
+          journaledSkillIds: threadJournaledSkills,
           // The approved-schedule-mutation bridge must ride @mention dispatches
           // exactly as it rides the non-mention path — an @mentioned agent
           // whose schedule mutation was approved by the owner starts its retry
@@ -4678,6 +4747,10 @@ const handlers = mergeRouteMaps(
         // follow-up message is a new turn in the same thread, so the agent sees
         // the task/result history that came before.
         history: threadHistory,
+        // Continuation fidelity (CAP slice): the union of every skill this
+        // thread's earlier terminal rows journaled — re-applied on resume so a
+        // continuation that does not re-mention /skill:x still runs with it.
+        journaledSkillIds: threadJournaledSkills,
       });
       }
       // A run that failed BEFORE durable admission (unknown agent,
@@ -5142,8 +5215,8 @@ const handlers = mergeRouteMaps(
     }
     return { ok: true, refined };
   },
-  async "named-agent.run"({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false, approvalBinding = null }) {
-    return await runNamedAgentTask({ id, task, attachments, runId, threadId, _executionId, _permissionResume, _resumeToken, _allowProviderChange, approvalBinding });  },
+  async "named-agent.run"({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false, approvalBinding = null, history = null, journaledSkillIds = null }) {
+    return await runNamedAgentTask({ id, task, attachments, runId, threadId, _executionId, _permissionResume, _resumeToken, _allowProviderChange, approvalBinding, history, journaledSkillIds });  },
 
   // Agent→agent delegation (G5, owner directive 2026-08-28: "agents invocable
   // as skills"). The CALLER identity comes from the route CONTEXT — the
@@ -6240,6 +6313,10 @@ const handlers = mergeRouteMaps(
       } else if (["named-agent.run", "background-agent.run"].includes(request.route)) {
         result = await handlers[request.route]({
           ...(request.routeArgs ?? {}), task: request.task, attachments: request.attachments ?? [],
+          // Continuation fidelity (CAP slice): a durable resume re-applies the
+          // same prior turns + journaled skills the fresh dispatch carried.
+          history: Array.isArray(request.history) ? request.history : [],
+          journaledSkillIds: Array.isArray(request.journaledSkillIds) && request.journaledSkillIds.length > 0 ? request.journaledSkillIds : null,
           _executionId: executionId, _permissionResume: true, _resumeToken: resumed.token, _allowProviderChange: run.phase === "paused-provider-change",
         }, context);
       } else {
@@ -6700,7 +6777,7 @@ const handlers = mergeRouteMaps(
     const entries = Array.isArray(journal) ? journal.slice(-200).reverse() : [];
     return { entries, count: entries.length };
   },
-  async "background-agent.run"({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false, approvalBinding = null }) {
+  async "background-agent.run"({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false, approvalBinding = null, history = null, journaledSkillIds = null }) {
     const recipe = await resolveRecipe(id);
     if (!recipe) return { ok: false, error: `no background agent ${id}` };
     const mem = backgroundAgentMemory(`recipe:${recipe.id}`);
@@ -6726,6 +6803,10 @@ const handlers = mergeRouteMaps(
         // @mention tasks: the terminal commits into the hub thread (see
         // named-agent.run) — the result returns to the task.
         threadId: threadId ?? null,
+        // Continuation fidelity (CAP slice): an @mention from a hub thread
+        // carries that thread's prior turns + journaled skills.
+        history: Array.isArray(history) ? history : [],
+        journaledSkillIds: Array.isArray(journaledSkillIds) && journaledSkillIds.length > 0 ? journaledSkillIds : null,
         onProgress: (event) => {
           broadcastProgress({ ...event, runId: runTag, agentId: `background:${recipe.id}` });
         },
@@ -7576,6 +7657,10 @@ async function resumeInterruptedRuns() {
           ...(request.routeArgs ?? {}),
           task: request.task,
           attachments: request.attachments ?? [],
+          // Continuation fidelity (CAP slice): an interrupted named/background
+          // agent run resumes with the same prior turns + journaled skills.
+          history: Array.isArray(request.history) ? request.history : [],
+          journaledSkillIds: Array.isArray(request.journaledSkillIds) && request.journaledSkillIds.length > 0 ? request.journaledSkillIds : null,
           _executionId: run.executionId,
           _permissionResume: true,
           _resumeToken: claimed.token,

@@ -26,6 +26,16 @@ import {
   validateDistCompleteMarker,
   writeDistCompleteMarker,
 } from "./scripts/dist-complete.mjs";
+import {
+  deltaBetween,
+  parseChangelog,
+  readChangelogOrNull,
+  readLastBuiltVersion,
+  renderDelta,
+  shouldRecordBuild,
+  writeLastBuiltVersion,
+  DEFAULT_BUILT_VERSION_PATH,
+} from "./scripts/changelog-delta.mjs";
 
 function parseBuildTarget(args) {
   if (!Array.isArray(args) || args.length > 1) {
@@ -53,6 +63,12 @@ const ROOT = new URL(".", import.meta.url).pathname;
 const EXT_DIR = path.join(ROOT, "extension");
 const DIST = path.join(EXT_DIR, "dist");
 const COMPLETE_MARKER = path.join(DIST, "dist.complete");
+// Owner-requested build output: the changelog delta since the LAST SUCCESSFUL
+// build. The record lives in .build/ (gitignored, invocation-local, outside
+// dist and dist-versions — never shipped, never in the indexed-source scan,
+// and it survives the dist-versions GC by design). Never fails the build:
+// every read/parse error degrades to a one-line warning.
+const BUILT_VERSION_PATH = path.join(ROOT, DEFAULT_BUILT_VERSION_PATH);
 
 // Windows: directory rename-over-existing is unreliable (EBUSY/EPERM with
 // AV/indexers). Fail CLEARLY rather than half-publish.
@@ -249,7 +265,35 @@ async function holderIsDeadWithDir(h, lockDir) {
   }
 }
 
+// Module-scope state for the owner-requested build changelog delta: the
+// version probe runs inside the try below, but the record write happens AFTER
+// the outer finally (the final fatal step), so the variables are hoisted here.
+let previousBuiltVersion = null;
+let currentVersion = null;
+let currentChangelog = null;
+// Set true only after the dist.complete marker validated + the publish
+// completed; the version record runs AFTER every fatal finalizer (see
+// shouldRecordBuild) so a late death never records a success.
+let buildSucceeded = false;
+
 try {
+  // Snapshot the previous successful build version + the current package
+  // version BEFORE the build so the delta can be printed on success.
+  // Fail-safe: unreadable/missing record or malformed changelog → warn +
+  // continue (this feature must never fail the build).
+  try {
+    previousBuiltVersion = await readLastBuiltVersion(BUILT_VERSION_PATH);
+    const pkg = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8"));
+    currentVersion = typeof pkg?.version === "string" ? pkg.version : null;
+    currentChangelog = await readChangelogOrNull({
+      read: () => readFile(path.join(ROOT, "CHANGELOG.md"), "utf8"),
+      warn: (msg) => console.error(msg),
+    });
+  } catch (e) {
+    // warn-only; the build must never fail over this feature
+    console.error(`warning: build changelog probe failed (${e?.message ?? e}) — skipping the build changelog delta`);
+  }
+
   // Staging: private, same-filesystem, fully built BEFORE any dist mutation.
   const STAGE = path.join(EXT_DIR, `.dist-stage-${process.pid}-${Date.now()}`);
   await rm(STAGE, { recursive: true, force: true });
@@ -496,6 +540,12 @@ try {
       throw new Error(`FATAL: version GC failed after publish (${e?.message ?? e}) — the live tree at ${VERSIONED} is valid, but stale versions remain under ${VERSIONS}`);
     }
     console.log(`built ${path.join("extension", "dist", "background", "service-worker.js")} + dist/options.bundle.js ATOMICALLY (serialized owner-token lock; one dist dir; removed ${occurrences} new-Function + ${zodProbes} probes; seam scan clean; dist.complete marker; rollback-fatal)`);
+    // The dist is published and the marker validated — the build is a genuine
+    // success from here. The changelog-delta print + version record are NOT
+    // done here: they run AFTER the final fatal step (staging cleanup + lock
+    // release) below, so a build that dies in a finalizer never records a
+    // version (see shouldRecordBuild).
+    buildSucceeded = true;
   } finally {
     // Staging ALWAYS removed; a failure is FATAL. Also sweep stale temps from
     // crashed runs (staging, boot links, next links) at the repo root.
@@ -526,5 +576,32 @@ try {
       console.error(`FATAL: lock release verification failed (${e?.message ?? e}) — ${LOCK_DIR} remains`);
       process.exitCode = 1;
     }
+  }
+}
+
+// Owner-requested build output: print the changelog delta since the last
+// SUCCESSFUL build, then record THIS version for the next build. This runs
+// after the FINAL fatal step (staging cleanup + lock release above): a build
+// that died in a finalizer never records a version, so the next build's delta
+// is always honest. Warn-only — this feature never fails the build.
+if (shouldRecordBuild({ buildSucceeded, exitCode: process.exitCode ?? 0 })) {
+  try {
+    if (currentVersion) {
+      if (!previousBuiltVersion) {
+        // First build / fresh clone: one line, not the whole changelog.
+        console.log(`First build at ${currentVersion} — no previous version recorded.`);
+      } else {
+        const parsed = currentChangelog ? parseChangelog(currentChangelog) : [];
+        const delta = deltaBetween(parsed, previousBuiltVersion, currentVersion);
+        if (delta.length > 0) {
+          const rendered = renderDelta(delta);
+          console.log(`\nNew since the last build (${previousBuiltVersion} → ${currentVersion}):\n${rendered}`);
+        }
+        // previous == current → silent (nothing new to say)
+      }
+      await writeLastBuiltVersion(BUILT_VERSION_PATH, currentVersion);
+    }
+  } catch (e) {
+    console.error(`warning: changelog delta print failed (${e?.message ?? e}) — build itself is fine`);
   }
 }

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.503] — 2026-08-30
+- merge: land three approved lanes lost to cross-merges — build changelog delta, context-fidelity durable resumes, generated-UI bootstrap ready delivery
+
 ## [0.2.502] — 2026-08-30
 - The last visible-editing fixes are in progress in parallel and recorded as claimed.
 

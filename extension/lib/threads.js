@@ -27,6 +27,58 @@ const MAX_MESSAGES = 500; // per-thread message cap
 const MAX_MESSAGE_CHARS = 16 * 1024; // per-message text cap
 const MAX_THREAD_BYTES = 200 * 1024; // per-thread serialized budget
 const MAX_NAME_CHARS = 80;
+// Continuation-fidelity bounds: the journaled per-run tool summary and skill
+// list are deliberately TINY (names + ok only — never args, results, or page
+// content) so a long conversation cannot grow the store unbounded and the
+// model on resume sees which tools ran without re-inflating result bodies.
+const MAX_TERMINAL_TOOL_CALLS = 16;
+const MAX_TERMINAL_TOOL_NAME = 64;
+const MAX_TERMINAL_SKILLS = 24;
+const MAX_PROMPT_HASH = 16;
+
+/** Bound a run's tool-call summary: {name, ok} entries, newest kept, name
+ * truncated. Pure — testable without OPFS. */
+export function boundToolCalls(toolCalls) {
+  const src = Array.isArray(toolCalls) ? toolCalls : [];
+  const out = [];
+  for (let i = src.length - 1; i >= 0 && out.length < MAX_TERMINAL_TOOL_CALLS; i--) {
+    const tc = src[i];
+    const name = String(tc?.name ?? "").slice(0, MAX_TERMINAL_TOOL_NAME);
+    if (!name) continue;
+    out.unshift({ name, ok: tc?.ok === true });
+  }
+  return out;
+}
+
+/** Bound a run's journaled skill id list (deduped, newest kept). Pure. */
+export function boundSkillIds(skills) {
+  const src = Array.isArray(skills) ? skills : [];
+  const out = [];
+  const seen = new Set();
+  for (let i = src.length - 1; i >= 0 && out.length < MAX_TERMINAL_SKILLS; i--) {
+    const id = String(src[i] ?? "").slice(0, 64);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.unshift(id);
+  }
+  return out;
+}
+
+/** Bound a prompt-composition hash to its short stable form. Pure. */
+export function boundPromptHash(hash) {
+  const s = String(hash ?? "");
+  return s.length > MAX_PROMPT_HASH ? s.slice(0, MAX_PROMPT_HASH) : s;
+}
+
+/** The compact tool summary rendered into the assistant turn the model sees
+ * on continuation: `[tools: name(ok), name(failed)]` — names + outcome only,
+ * never args/results. Empty toolCalls render no prefix. Pure. */
+export function toolCallsPrefix(toolCalls) {
+  const calls = boundToolCalls(toolCalls);
+  if (calls.length === 0) return "";
+  const parts = calls.map((c) => `${c.name}(${c.ok ? "ok" : "failed"})`);
+  return `[tools: ${parts.join(", ")}]`;
+}
 
 function newThreadId() {
   return `t_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -433,6 +485,19 @@ export async function commitThreadTerminal(id, executionId, terminal) {
         ts: Date.now(),
         ...(citations && citations.length > 0 ? { citations } : {}),
         ...(serverToolEvents && serverToolEvents.length > 0 ? { serverToolEvents } : {}),
+        // Continuation fidelity (CAP slice): the compact per-run tool summary,
+        // the resolved skill ids, and the composed-prompt hash ride the
+        // terminal row so a resumed run knows which tools ran, which skills
+        // were active, and which prompt was composed. NEVER args/results.
+        ...(role === "assistant" && Array.isArray(terminal?.toolCalls)
+          ? { toolCalls: boundToolCalls(terminal.toolCalls) }
+          : {}),
+        ...(role === "assistant" && Array.isArray(terminal?.skills)
+          ? { skills: boundSkillIds(terminal.skills) }
+          : {}),
+        ...(role === "assistant" && typeof terminal?.promptHash === "string" && terminal.promptHash
+          ? { promptHash: boundPromptHash(terminal.promptHash) }
+          : {}),
         ...(role === "error"
           ? {
             tool: terminal?.tool ?? undefined,
@@ -504,6 +569,10 @@ export async function continueThread(id, task, attachments) {
     const thread = (await mem.get(`thread:${id}`)) ?? null;
     if (!thread) return { thread: null, history: [] };
     const history = historyFromThread(thread);
+    // Continuation fidelity: the union of every journaled skill id across the
+    // thread's terminal rows, so a resumed run re-applies skills that earlier
+    // turns referenced even when this new message does not re-mention them.
+    const skills = threadJournaledSkills(thread);
     thread.messages = Array.isArray(thread.messages) ? thread.messages : [];
     const att = sanitizeAttachments(attachments);
     thread.messages.push({
@@ -525,7 +594,7 @@ export async function continueThread(id, task, attachments) {
       row.count = thread.messages.length;
       await writeIndex(index);
     }
-    return { thread, history };
+    return { thread, history, skills };
   });
 }
 
@@ -607,9 +676,27 @@ export function historyFromThread(thread) {
   const out = [];
   for (const m of (thread?.messages ?? [])) {
     if (m?.role === "user" && m.content) out.push({ role: "user", content: m.content });
-    else if (m?.role === "assistant" && m.content) out.push({ role: "assistant", content: m.content });
+    else if (m?.role === "assistant" && m.content) {
+      // Continuation fidelity: the assistant turn the model sees carries the
+      // compact tool summary (`[tools: name(ok), name(failed)]`) so a resumed
+      // run knows which tools ran — the full tool rows stay render-only.
+      const prefix = toolCallsPrefix(m.toolCalls);
+      out.push({ role: "assistant", content: prefix ? `${prefix}\n${m.content}` : m.content });
+    }
   }
   return out;
+}
+
+/** The union of every journaled skill id across a thread's terminal rows —
+ * what a continuation must re-apply so a skill referenced in an earlier turn
+ * survives into a resumed run even when the new message does not re-mention
+ * it. Bounded + deduped. */
+export function threadJournaledSkills(thread) {
+  return boundSkillIds(
+    (thread?.messages ?? [])
+      .filter((m) => m?.role === "assistant" && Array.isArray(m?.skills))
+      .flatMap((m) => m.skills),
+  );
 }
 
 /**
