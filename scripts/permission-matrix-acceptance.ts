@@ -20,8 +20,9 @@
 //     extension whose manifest moves the permission into `permissions` —
 //     granted AT INSTALL, no prompt, no display (verified 2026-08-30: a
 //     variant holding `history` answers contains({permissions:["history"]})
-//     === true headless). Settings shows the granted state, Turn off works
-//     (revoke is promptless), and the grant is API-functional.
+//     === true headless). Settings shows the granted state, Turn off goes
+//     through the owner-approval dialog (confirmed by a trusted gesture), and
+//     the grant is API-functional.
 //
 // The two surfaces that REMAIN genuinely un-automatable — asserted nowhere
 // here and claimed nowhere in the docs as covered:
@@ -149,6 +150,16 @@ async function capabilityButtonSelector(cdp: Cdp, session: string, label: string
 async function clickCapability(cdp: Cdp, session: string, label: string, text: string) {
   const selector = await capabilityButtonSelector(cdp, session, label, text);
   return selector !== null && await clickSel(cdp, session, selector);
+}
+
+// Since Turn off routes through the service worker's owner-approved mutation,
+// a Turn off click opens the in-page owner-approval dialog; the revoke only
+// executes when the dialog's confirm button receives a REAL (trusted) gesture.
+async function confirmOwnerDialog(cdp: Cdp, session: string) {
+  const appeared = await until(async () =>
+    (await evalIn(cdp, session, `Boolean(document.querySelector('.cap-confirm-dialog .cap-confirm-accept'))`)) === true ? true : null, 5000);
+  if (appeared !== true) return false;
+  return await clickSel(cdp, session, ".cap-confirm-dialog .cap-confirm-accept");
 }
 
 async function captureShot(cdp: Cdp, session: string) {
@@ -342,10 +353,12 @@ async function main() {
     if (shot1) await writeEvidence("permission-matrix-contextmenus-granted.png", shot1);
     check("matrix[contextMenus]: Turn off clicked via a trusted gesture",
       await clickCapability(rigA.cdp, optsA, "Context menus", "Turn off"));
+    check("matrix[contextMenus]: the owner-approval dialog appears and is confirmed by a trusted gesture",
+      await confirmOwnerDialog(rigA.cdp, optsA));
     const cmRevoked = await until(async () =>
       (await containsPerm(rigA.cdp, optsA, "contextMenus")) === false &&
         (await rowState(rigA.cdp, optsA, "Context menus"))?.button?.text === "Enable" ? true : null, 10000);
-    check("matrix[contextMenus]: Turn off settles absent (revoke is promptless) and the row is requestable again", cmRevoked === true);
+    check("matrix[contextMenus]: owner-confirmed Turn off settles absent and the row is requestable again", cmRevoked === true);
     check("matrix[contextMenus]: retry Enable clicked via a trusted gesture",
       await clickCapability(rigA.cdp, optsA, "Context menus", "Enable"));
     const cmRetry = await until(async () =>
