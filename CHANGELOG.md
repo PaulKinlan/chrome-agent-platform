@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.2.485] — 2026-08-30
+- The What's new section in Settings is complete
+
 ## [0.2.484] — 2026-08-30
-- The What's new section work is done
+- The What's new section in Settings is complete: it shows the five latest changes at a glance and a separate full history that never repeats them.
 
 ## [0.2.483] — 2026-08-30
 - The What's new full list now shows every other change exactly once, without repeating the latest five
