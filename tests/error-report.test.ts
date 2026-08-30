@@ -115,3 +115,67 @@ Deno.test("error-report: errorDetail returns the same structured shape", () => {
   assertStringIncludes(d.reason.toLowerCase(), "model not found");
   assertStringIncludes(d.detail, "model: gemini-9.9-flash");
 });
+
+// CAP-FB-20260830-PROVIDER-ERROR-TRUTH-01 — the AI SDK collapses a provider
+// HTTP failure into AI_NoOutputGeneratedError (no status on the object). The
+// model wrapper records the last provider error and passes it as a hint; the
+// hint must win over the "returned no content" regex.
+Deno.test("error-report: a 401 behind AI_NoOutputGeneratedError maps to AUTH with the Settings action", () => {
+  const e = Object.assign(new Error("No output generated. Check the stream for errors."), {
+    name: "AI_NoOutputGeneratedError",
+  });
+  const d = describeError(e, {
+    provider: "openai",
+    model: "gpt-5.6-sol",
+    providerError: { status: 401, provider: "openai", message: "Incorrect API key provided: sk-proj-abc123DEF456" },
+  });
+  assertEquals(d.category, ERROR_CATEGORY.AUTH);
+  assertStringIncludes(d.reason, "rejected the API key (401)");
+  assertStringIncludes(d.reason, "OpenAI");
+  assertStringIncludes(d.action, "Settings");
+  assert(!/returned no content/i.test(d.reason + " " + d.action + " " + d.message));
+  for (const text of [d.reason, d.action, d.message, d.detail]) {
+    assert(!/sk-[A-Za-z0-9]/.test(text), `secret leaked: ${text}`);
+  }
+});
+
+Deno.test("error-report: a 429 behind AI_NoOutputGeneratedError maps to RATE_LIMIT", () => {
+  const e = Object.assign(new Error("No output generated. Check the stream for errors."), {
+    name: "AI_NoOutputGeneratedError",
+  });
+  const d = describeError(e, {
+    provider: "openai-compatible",
+    providerError: { status: 429, provider: "openai-compatible", message: "Insufficient balance or no resource package" },
+  });
+  assertEquals(d.category, ERROR_CATEGORY.RATE_LIMIT);
+  assertStringIncludes(d.reason, "(429)");
+  assertStringIncludes(d.reason.toLowerCase(), "insufficient balance");
+  assert(!/returned no content/i.test(d.reason));
+});
+
+Deno.test("error-report: a 400 behind AI_NoOutputGeneratedError maps to MODEL_CONFIG with the provider message", () => {
+  const e = Object.assign(new Error("No output generated. Check the stream for errors."), {
+    name: "AI_NoOutputGeneratedError",
+  });
+  const d = describeError(e, {
+    provider: "openai",
+    model: "gpt-5.6-sol",
+    providerError: { status: 400, provider: "openai", message: "Function tools with reasoning_effort are not supported for gpt-5.6-sol" },
+  });
+  assertEquals(d.category, ERROR_CATEGORY.MODEL_CONFIG);
+  assertStringIncludes(d.reason, "(400)");
+  assertStringIncludes(d.reason, "reasoning_effort");
+  assert(!/returned no content/i.test(d.reason));
+});
+
+Deno.test("error-report: an empty HTTP 200 stream (no providerError) still says returned no content", () => {
+  const e = Object.assign(new Error("No output generated. Check the stream for errors."), {
+    name: "AI_NoOutputGeneratedError",
+  });
+  const d = describeError(e, { provider: "openai", model: "gpt-5.6-sol" });
+  assertEquals(d.category, ERROR_CATEGORY.NO_OUTPUT);
+  assertStringIncludes(d.reason, "returned no content");
+  // And a hint with a 2xx status is not a provider failure — ignored.
+  const d2 = describeError(e, { model: "gpt-5.6-sol", providerError: { status: 200, message: "" } });
+  assertEquals(d2.category, ERROR_CATEGORY.NO_OUTPUT);
+});

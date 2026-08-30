@@ -3690,7 +3690,7 @@ class MessageBubble extends Component {
       const reason = this.getAttribute("error-reason") || content;
       const action = this.getAttribute("error-action") || "";
       const category = this.getAttribute("error-category") || "";
-      const fixable = /host-permission|provider-auth|model-config|network/i.test(category);
+      const fixable = /host-permission|provider-auth|provider-config|model-config|network/i.test(category);
       markup = `<div class="msg error"><div class="body">
         <p class="err-reason">${escapeHtml(reason)}</p>
         ${action ? `<p class="err-action">${escapeHtml(action)}</p>` : ""}
