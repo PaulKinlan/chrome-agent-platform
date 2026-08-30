@@ -160,6 +160,27 @@
       </div>
 
       <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;segmented-control&gt;</code> — a quiet tablist for switching views</h3>
+        <div class="stage row">
+          <segmented-control id="segmented-demo" items="Preview,Source,Diff" value="Preview" label="Artifact view"></segmented-control>
+        </div>
+        <p class="caption">
+          <span id="segmented-demo-value">Preview</span> selected. <code>role="tablist"</code> with <code>role="tab"</code> buttons and roving tabindex; <kbd>←</kbd>/<kbd>→</kbd> (and <kbd>↑</kbd>/<kbd>↓</kbd>) move and select with wrap, <kbd>Home</kbd>/<kbd>End</kbd> jump to the ends. Emits <code>change {value}</code> (never on a no-op re-select). Labels enter via <code>textContent</code>. The artifact viewer mounts one for Preview | Source | Diff.
+        </p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;artifact-inspector&gt;</code> — the exact, bounded, highlighted source</h3>
+        <div class="stage column" style="max-width:820px">
+          <artifact-inspector id="inspector-demo"></artifact-inspector>
+        </div>
+        <p class="caption">
+          Read-only inspection: the exact body set with <code>textContent</code>, bounded to 64&nbsp;KiB, with a dependency-free tokenizer (<code>highlightSource</code>) that colours html/css/js/json into <code>tok-*</code> spans built with the DOM API — no highlight.js, no <code>new Function</code>. "Copy exact content" copies the complete artifact; an HTML artifact also offers a sandboxed "Preview / Play".
+        </p>
+        <script type="application/json" id="inspector-demo-content">"<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <title>Crumb Bakery</title>\n  <style>\n    body { font-family: system-ui, sans-serif; margin: 0; }\n    header { background: #f4e4c1; padding: 2rem; }\n  </style>\n</head>\n<body>\n  <h1>Crumb</h1>\n  <p>Sourdough, baked before dawn.</p>\n</body>\n</html>\n"</script>
+      </div>
+
+      <div class="specimen">
         <h3 class="spec"><code class="tag">&lt;artifact-quick-drawer&gt;</code> — bounded recent/search access</h3>
         <div class="stage row">
           <artifact-quick-drawer label="Quick access artifacts"
@@ -588,6 +609,23 @@
           modeBtn.setAttribute("aria-pressed", String(split));
           modeBtn.textContent = split ? "Unified view" : "Split view";
         });
+      }
+
+      // <segmented-control> example — reflect the selected value in the caption.
+      const segmentedDemo = document.getElementById("segmented-demo");
+      const segmentedValue = document.getElementById("segmented-demo-value");
+      segmentedDemo?.addEventListener("change", (e) => {
+        if (segmentedValue) segmentedValue.textContent = e.detail.value;
+        log("#hub-log", `segmented-control: ${e.detail.value}`);
+      });
+
+      // <artifact-inspector> example — the exact, highlighted HTML source.
+      const inspectorDemo = document.getElementById("inspector-demo");
+      if (inspectorDemo) {
+        let body = "";
+        try { body = JSON.parse(document.getElementById("inspector-demo-content")?.textContent || '""'); } catch { body = ""; }
+        inspectorDemo.asset = { type: "html", name: "crumb.html", origin: "master", content: body };
+        inspectorDemo.language = "html";
       }
 
       // <agent-conversation> example — a realistic full turn (user + thinking

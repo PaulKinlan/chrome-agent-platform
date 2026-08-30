@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.498] — 2026-08-30
+- Landed: opening an artifact now lets you switch between the rendered preview, the highlighted source, and a diff between any two versions with a restore button.
+
 ## [0.2.497] — 2026-08-30
 - Housekeeping: parallel work streams reconciled.
 

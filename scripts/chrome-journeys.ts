@@ -600,6 +600,9 @@ const EXPECTED = [
   "artifact versions: two rows with distinct sha256 after the edit turn",
   "artifact versions: version-get returns v1's exact body",
   "artifact versions: restore of v1 is a new head whose body equals v1 byte-for-byte",
+  "viewer: Preview|Source|Diff tablist renders with exactly one selected tab",
+  "viewer: ArrowRight selects Source and the panel shows highlighted, exact source",
+  "viewer: Diff tab shows version pickers and a real diff between two versions",
   "mgmt: delete_asset removed it",
   "mgmt: asset gone after delete",
   "artifacts: update_asset with an empty id says use list_assets",
@@ -3954,6 +3957,84 @@ async function main() {
         versionsAfterRestore?.head === restored.version &&
         (versionsAfterRestore.versions ?? []).at(-1)?.sha256 === shas[0],
     );
+    // ─────────────────────────────────────────────────────────────
+    // ARTIFACT-VIEWER-SOURCE-DIFF-01: the artifact viewer offers a keyboard-
+    // reachable Preview | Source | Diff control. Source shows the exact,
+    // syntax-highlighted body; Diff renders the change between two immutable
+    // versions with a version picker + Restore. The seeded `assetId` above now
+    // carries several versions, so the Diff panel has real history to render.
+    // ─────────────────────────────────────────────────────────────
+    {
+      const viewerUrl = `chrome-extension://${extId}/artifact/artifact.html?id=${assetId}&origin=master`;
+      const vTarget = await openPage(port, viewerUrl);
+      await sleep(1600);
+      const vSession = await attachRuntime(cdp, vTarget.id);
+      let tabsInfo = null;
+      for (let i = 0; i < 20 && !tabsInfo?.count; i++) {
+        tabsInfo = await evalIn(cdp, vSession, `(() => {
+          const sc = document.getElementById('modes');
+          if (!sc || sc.hidden) return { count: 0 };
+          const tabs = [...(sc.shadowRoot?.querySelectorAll('[role="tab"]') ?? [])];
+          const selected = tabs.filter((t) => t.getAttribute('aria-selected') === 'true');
+          return { count: tabs.length, labels: tabs.map((t) => t.textContent), selected: selected.map((t) => t.textContent), tablist: !!sc.shadowRoot?.querySelector('[role="tablist"]') };
+        })()`);
+        if (!tabsInfo?.count) await sleep(300);
+      }
+      check(
+        "viewer: Preview|Source|Diff tablist renders with exactly one selected tab",
+        tabsInfo?.count === 3 && tabsInfo.tablist === true &&
+          JSON.stringify(tabsInfo.labels) === JSON.stringify(["Preview", "Source", "Diff"]) &&
+          tabsInfo.selected.length === 1 && tabsInfo.selected[0] === "Preview",
+      );
+      // Keyboard reachability: focus the selected tab, then ArrowRight → Source.
+      await evalIn(cdp, vSession, `(() => { const sc = document.getElementById('modes'); sc.shadowRoot.querySelector('[role="tab"][aria-selected="true"]')?.focus(); return true; })()`);
+      const arrowRight = async () => {
+        await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39, nativeVirtualKeyCode: 39 }, vSession);
+        await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39, nativeVirtualKeyCode: 39 }, vSession);
+      };
+      await arrowRight();
+      await sleep(500);
+      const sourceState = await evalIn(cdp, vSession, `(() => {
+        const sc = document.getElementById('modes');
+        const panel = document.getElementById('panel-source');
+        const insp = panel?.querySelector('artifact-inspector');
+        const spans = insp?.shadowRoot?.querySelectorAll('code [class^="tok-"]') ?? [];
+        const codeText = insp?.shadowRoot?.querySelector('code')?.textContent ?? "";
+        return { value: sc.value, visible: !!panel && !panel.hidden, tokenSpans: spans.length, bodyLen: codeText.length };
+      })()`);
+      check(
+        "viewer: ArrowRight selects Source and the panel shows highlighted, exact source",
+        sourceState?.value === "Source" && sourceState.visible === true &&
+          sourceState.tokenSpans > 0 && sourceState.bodyLen > 0,
+      );
+      const srcShot = await captureShot(cdp, vSession);
+      if (srcShot) await writeEvidence("viewer-source-highlighted.png", srcShot);
+      // Diff: ArrowRight again → Diff; the version pickers populate and the diff
+      // renders a real header between the two selected versions.
+      await arrowRight();
+      await sleep(900);
+      const diffState = await evalIn(cdp, vSession, `(() => {
+        const sc = document.getElementById('modes');
+        const panel = document.getElementById('panel-diff');
+        const base = document.getElementById('diff-base');
+        const compare = document.getElementById('diff-compare');
+        const ad = document.getElementById('artifact-diff');
+        const add = ad?.shadowRoot?.querySelector('.counts .add')?.textContent ?? "";
+        const del = ad?.shadowRoot?.querySelector('.counts .del')?.textContent ?? "";
+        const restore = document.getElementById('diff-restore');
+        return { value: sc.value, visible: !!panel && !panel.hidden, baseOpts: base?.options?.length ?? 0, compareOpts: compare?.options?.length ?? 0, add, del, restore: restore?.textContent ?? "" };
+      })()`);
+      check(
+        "viewer: Diff tab shows version pickers and a real diff between two versions",
+        diffState?.value === "Diff" && diffState.visible === true &&
+          diffState.baseOpts >= 2 && diffState.compareOpts >= 2 &&
+          /^\+\d+$/.test(String(diffState.add).trim()) && /^-\d+$/.test(String(diffState.del).trim()) &&
+          /^Restore v\d+$/.test(String(diffState.restore).trim()),
+      );
+      const diffShot = await captureShot(cdp, vSession);
+      if (diffShot) await writeEvidence("viewer-diff-versions.png", diffShot);
+      await cdp.send("Target.closeTarget", { targetId: vTarget.id });
+    }
     const assetDel = await approvedMsg({ type: "asset.delete", origin: "master", id: assetId });
     check("mgmt: delete_asset removed it", assetDel?.ok === true);
     const assetAfter = await msgValue({ type: "asset.list", origin: "master" });
