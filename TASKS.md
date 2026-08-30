@@ -2292,15 +2292,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-CLAIM-CHECK-BROWSER-TOOLS-01] Extend the mutation claim check to browser, memory, screenshot and delegate tools
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 tools lane finding 9 (parts b and c); live lane finding 4. The agent can say "I opened the tab" or "I have saved that" when the tool failed or was never called, and nothing corrects it.
-- Updated: 2026-08-30 20:49 UTC
-- Status: OPEN
+- Updated: 2026-08-30 23:40 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P1
 - Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — CLAIMED; do not start a parallel attempt
 - Workspace: active (local path private)
 - Branch: `cap/claim-check-browser-tools` (pushed to origin as the candidate branch; merged by the coordinator)
-- Base: `2104d872`
-- Candidate: —
+- Base: `29c34a46`
+- Candidate: this tracker commit
 - Shipping: —
 - Acceptance: a final reply claiming to have opened/navigated/closed a tab, saved to memory, taken a screenshot, downloaded a file or delegated a task, with no matching successful tool call in the turn, gets the same visible correction line the agent-create claims get today; the same final text is rendered once per turn, not once per step.
   - Context: `extension/lib/mutation-claim-check.js` is the runtime honesty backstop. Its `CLAIMS` table (`:15-40`) has four kinds — `create`, `update`, `delete`, `schedule` — all about named agents. `correctUnsupportedMutationClaims(text, successfulTools)` is applied in `extension/lib/agent.js:866-872` (on the `done` progress event) and `:1015-1019` (on the returned result), with `okToolNames` being the REAL tool names after the lazy-envelope unwrap. Tools lane: one demo run rendered seven identical "[demo model] Delegation succeeded. Worker response: …" bubbles for a `delegate_task` card that said `error`. Live lane: gpt-4.1 replied "I have saved that your favourite colour is green" with zero tool calls. The repeated bubble comes from `agent.js:784` emitting `{ type: "text", text, hasToolCalls }` on every step and `extension/shared/conversation.js:1441-1445` appending a bubble whenever `hasToolCalls` is true. What must NOT change: the negation/first-person guard in `isSelfClaim` (below `:60`), the pure-module rule (no DOM, no imports).
@@ -2308,19 +2308,25 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - Files: `extension/lib/mutation-claim-check.js` (`CLAIMS` `:15-40` — add kinds `open-tab` {`open_tab`, `create_window`}, `navigate` {`navigate_tab`}, `close-tab` {`close_tab`, `close_window`}, `memory` {`memory_set`}, `screenshot` {`capture_screenshot`}, `download` {`download_file`}, `delegate` {`delegate_task`, `delegate_to_agent`}); `extension/lib/agent.js:784` and `extension/shared/conversation.js:1441-1445` (dedupe: skip appending when `ev.text` equals the previously streamed text for the same run). Do NOT touch the lazy envelope unwrap in `extension/shared/components.js:236-257`.
   - Steps: 1. Unit tests first (Gates) — RED. 2. Add the seven claim kinds with regexes in the style of `:18-20` (first-person past tense: "opened|navigated|closed|saved|remembered|took a screenshot|captured|downloaded|delegated"), each with a `claim` string ("opened a tab", "saved to memory", …). 3. Dedupe the per-step text bubble at `conversation.js:1441` (compare against `streamedAgentText`, already tracked at `:1444`). 4. Journey per Gates. 5. Docs: `docs/DESIGN.md` honesty section, `CHANGELOG.md`.
   - Out of scope: first-classing the tools so the model calls them (`CAP-FB-20260830-MODEL-TOOL-ADHERENCE-01`, which depends on this); the `modelContent` envelope leak in cards (`CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01`).
-- Review: pending
-- Gates: the falsification gates apply.
+- Review: author review 2026-08-30 — falsification gates cleared (RED/GREEN recorded; the reported behaviour reproduced before the change and not after, driven in a loaded extension).
+- Gates: build clean; 2605 unit pass (0 fail); 213/213 Chrome journeys (was 212 + the new claim-check journey).
   - Unit: extend `tests/mutation-claim-check.test.ts` (imports `correctUnsupportedMutationClaims` at `:7`). For each new kind add `Deno.test("claim-check: '<sentence>' with no <tool> call is corrected")` (e.g. "I opened example.com in a new tab." with `[]` → one correction containing "opened a tab") and the backed counterpart (`["open_tab"]` → zero corrections). Include the live-lane sentence "I have saved that your favourite colour is green" → corrected unless `memory_set` succeeded. Falsification: revert step 2 for the `memory` kind only, expect RED on that test; restore, GREEN.
   - Browser: `scripts/chrome-journeys.ts` gains `"Claim check: a failed delegate renders one correction and one final bubble"` — run `@demo-delegate-agent nosuchagent`, assert exactly one agent bubble whose text contains the correction marker and no duplicate bubbles. Screenshot: the thread.
   - Full suite: `npm run build && deno test tests/ && deno run -A scripts/chrome-journeys.ts` green at the tip (baseline at `origin/main@fc2255be`: 2457 unit pass, 138/138 journeys; grows by one).
   - Constraints: the correction is appended as text (`textContent`), never HTML; the module stays pure.
 - Blockers: —
-- Next: add the tab/memory/screenshot/delegate claim patterns and the outcome lookup
+- Next: coordinator merge
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-CLAIM-CHECK-BROWSER-TOOLS-01`
 - History:
   - 2026-08-30 11:00 UTC — measured: one demo run rendered seven identical "Delegation succeeded. Worker response: ..." bubbles for a tool whose card said error, plus an orphaned running card. Live lane: gpt-4.1 said "I have saved that your favourite colour is green" with zero tool calls and nothing in memory.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); every line reference re-verified against `origin/main@cf0da958`.
   - 2026-08-30 20:49 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/claim-check-browser-tools` off `origin/main@2104d872`. Other agents: pick a different entry.
+  - 2026-08-30 23:40 UTC — IMPLEMENTED on `cap/claim-check-browser-tools` off `origin/main@29c34a46` (the tip had moved past the recorded base; no conflicting files). Seven claim kinds added to `CLAIMS` — open-tab {`open_tab`,`create_window`}, navigate {`navigate_tab`}, close-tab {`close_tab`,`close_window`}, memory {`memory_set`}, screenshot {`capture_screenshot`}, download {`download_file`}, delegate {`delegate_task`,`delegate_to_agent`} — first-person/terse-report shapes only, so `isSelfClaim`'s negation, third-party and subordinate-clause guards are untouched (passive object-subject shapes are deliberately NOT matched: widening the guard would correct "Chrome downloaded the file"). The module stays pure. The surface now paints one bubble per distinct final text and folds the claim-checked result INTO the bubble already rendered (`isClaimCorrectionOf` in `conversation.js`, both the task surface and `renderRunTranscript`).
+    Reproduce (baseline, `origin/main@29c34a46`): `correctUnsupportedMutationClaims("I opened example.com in a new tab for you.", [])` → `corrections: []`; same for the navigate/close/memory/screenshot/download/delegate sentences.
+    Unit RED→GREEN: the ten new tests FAILED first (`FAILED | 25 passed | 10 failed`), GREEN after the implementation (`ok | 36 passed | 0 failed`). Targeted falsification: removing ONLY the `memory` kind turns exactly the two memory tests RED (`FAILED | 33 passed | 2 failed`); restored → GREEN. Removing the correction-marker check in `isClaimCorrectionOf` turns exactly its test RED; restored → GREEN.
+    Browser (fix proven to fix, real loaded extension, kernel-assigned debug port): `@demo-delegate nosuchagent` — every `delegate_task` card reads `error` while the demo model's final text says "Delegation succeeded". BEFORE the surface fix: TWELVE identical agent bubbles. AFTER: exactly ONE agent bubble carrying the claim and, inside it, "⚠️ Correction: I claimed I delegated the task, but no successful tool call did that in this turn — no such change was made." New journey "Claim check: a failed delegate renders one correction and one final bubble" asserts one bubble, one correction, all-`error` delegate cards, and a settled run; screenshot retained.
+    Gates at the tip: `npm run build` clean, `deno test -A tests/` → 2605 pass / 0 fail, `deno run -A scripts/chrome-journeys.ts` → 213/213.
+    Adjacent defects found, NOT fixed here (reported to the coordinator): (a) the demo model reads a lazy envelope `{ok:true, result:{error:…}}` as a delegation SUCCESS, which is why it lies at all; (b) one failed hub delegation retries the same `delegate_task` twelve times.
 
 ## [CAP-FB-20260830-TRANSCRIPT-STREAMING-01] Nothing streams — the transcript is blank until the whole step completes
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 perf lane finding 3, live lane finding 5 (measured on four real providers). The user watches "Thinking…" for 7-25 s and then a wall of text appears in one paint.

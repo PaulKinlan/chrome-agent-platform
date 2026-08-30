@@ -5,7 +5,7 @@
 
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { correctUnsupportedMutationClaims } from "../extension/lib/mutation-claim-check.js";
-import { toolRowsFromRunLog } from "../extension/shared/conversation.js";
+import { isClaimCorrectionOf, toolRowsFromRunLog } from "../extension/shared/conversation.js";
 
 Deno.test("claim-check: a fabricated create claim with NO tool call is detected and corrected", () => {
   const { text, corrections } = correctUnsupportedMutationClaims(
@@ -221,6 +221,134 @@ Deno.test("claim-check: by-reflexive resumes first-person", () => {
   const out = correctUnsupportedMutationClaims(text, []);
   assertEquals(out.corrections.length, 1);
   assertStringIncludes(out.corrections[0], "deleted the agent");
+});
+
+// ── Browser / memory / screenshot / download / delegate claims ──────────────
+// CAP-FB-20260830-CLAIM-CHECK-BROWSER-TOOLS-01: the four agent-mutation kinds
+// were the only ones checked, so "I opened the tab" / "I have saved that" /
+// "Delegation succeeded" sailed through with ZERO successful tool calls.
+
+Deno.test("claim-check: 'I opened example.com in a new tab.' with no open_tab call is corrected", () => {
+  const { corrections } = correctUnsupportedMutationClaims("I opened example.com in a new tab for you.", []);
+  assertEquals(corrections.length, 1);
+  assertStringIncludes(corrections[0], "opened a tab");
+});
+
+Deno.test("claim-check: an open-tab claim BACKED by open_tab is not flagged", () => {
+  assertEquals(correctUnsupportedMutationClaims("I opened example.com in a new tab for you.", ["open_tab"]).corrections.length, 0);
+  assertEquals(correctUnsupportedMutationClaims("I've opened a new window.", ["create_window"]).corrections.length, 0);
+  // The WRONG kind of success does not back it.
+  assertEquals(correctUnsupportedMutationClaims("I opened a new tab.", ["close_tab"]).corrections.length, 1);
+});
+
+Deno.test("claim-check: 'I navigated to example.com.' with no navigate_tab call is corrected", () => {
+  const { corrections } = correctUnsupportedMutationClaims("I navigated to example.com.", []);
+  assertEquals(corrections.length, 1);
+  assertStringIncludes(corrections[0], "navigated the tab");
+  assertEquals(correctUnsupportedMutationClaims("I navigated to example.com.", ["navigate_tab"]).corrections.length, 0);
+});
+
+Deno.test("claim-check: 'I closed the tab.' with no close_tab call is corrected", () => {
+  const { corrections } = correctUnsupportedMutationClaims("I closed the tab.", []);
+  assertEquals(corrections.length, 1);
+  assertStringIncludes(corrections[0], "closed the tab");
+  assertEquals(correctUnsupportedMutationClaims("I closed the tab.", ["close_tab"]).corrections.length, 0);
+  assertEquals(correctUnsupportedMutationClaims("I closed the window.", ["close_window"]).corrections.length, 0);
+});
+
+Deno.test("claim-check: the live-lane memory lie is corrected unless memory_set succeeded", () => {
+  // gpt-4.1, 2026-08-30 live lane: this exact reply with ZERO tool calls.
+  const sentence = "I have saved that your favourite colour is green";
+  const { corrections } = correctUnsupportedMutationClaims(sentence, []);
+  assertEquals(corrections.length, 1);
+  assertStringIncludes(corrections[0], "saved to memory");
+  assertEquals(correctUnsupportedMutationClaims(sentence, ["memory_set"]).corrections.length, 0);
+  // The read-only memory tools do NOT back a save claim.
+  assertEquals(correctUnsupportedMutationClaims(sentence, ["memory_get", "memory_search"]).corrections.length, 1);
+});
+
+Deno.test("claim-check: other memory phrasings are caught", () => {
+  for (const t of [
+    "I've saved this to memory.",
+    "I stored that in memory for next time.",
+    "I remembered your preference.",
+    "Saved that for you.",
+  ]) {
+    assertEquals(correctUnsupportedMutationClaims(t, []).corrections.length, 1, `missed memory claim: ${t}`);
+    assertEquals(correctUnsupportedMutationClaims(t, ["memory_set"]).corrections.length, 0, `false correction when backed: ${t}`);
+  }
+});
+
+Deno.test("claim-check: 'I took a screenshot' with no capture_screenshot call is corrected", () => {
+  const { corrections } = correctUnsupportedMutationClaims("I took a screenshot of the page.", []);
+  assertEquals(corrections.length, 1);
+  assertStringIncludes(corrections[0], "took a screenshot");
+  assertEquals(correctUnsupportedMutationClaims("I took a screenshot of the page.", ["capture_screenshot"]).corrections.length, 0);
+  assertEquals(correctUnsupportedMutationClaims("I've captured a screenshot for you.", []).corrections.length, 1);
+});
+
+Deno.test("claim-check: 'I downloaded the file' with no download_file call is corrected", () => {
+  const { corrections } = correctUnsupportedMutationClaims("I downloaded the file to your Downloads folder.", []);
+  assertEquals(corrections.length, 1);
+  assertStringIncludes(corrections[0], "downloaded a file");
+  assertEquals(correctUnsupportedMutationClaims("I downloaded the file.", ["download_file"]).corrections.length, 0);
+});
+
+Deno.test("claim-check: a delegation claim with no successful delegate call is corrected", () => {
+  // The tools lane rendered "[demo model] Delegation succeeded. Worker
+  // response: …" for a delegate_task card that said `error`.
+  const demo = "[demo model] Delegation succeeded. Worker response: hello";
+  const { corrections } = correctUnsupportedMutationClaims(demo, []);
+  assertEquals(corrections.length, 1);
+  assertStringIncludes(corrections[0], "delegated the task");
+  assertEquals(correctUnsupportedMutationClaims(demo, ["delegate_task"]).corrections.length, 0);
+  assertEquals(correctUnsupportedMutationClaims("I delegated the task to the research agent.", []).corrections.length, 1);
+  assertEquals(correctUnsupportedMutationClaims("I delegated the task to the research agent.", ["delegate_to_agent"]).corrections.length, 0);
+  // The demo model's honest failure text is NOT a success claim.
+  assertEquals(
+    correctUnsupportedMutationClaims("[demo model] Delegation FAILED — the delegated worker was aborted mid-run.", []).corrections.length,
+    0,
+  );
+});
+
+Deno.test("claim-check: the new kinds keep the negation and third-party guards", () => {
+  for (const t of [
+    "I haven't opened the tab yet — the permission was denied.",
+    "I did not close the tab.",
+    "I couldn't save that to memory — the tool failed.",
+    "I have not taken a screenshot.",
+    "Chrome downloaded the file on its own.",
+    "The user opened a new tab.",
+    "I confirmed that the extension navigated to example.com.",
+    "To open a tab, ask me and I'll run the tool.",
+    "I can save that to memory if you want.",
+  ]) {
+    const { text, corrections } = correctUnsupportedMutationClaims(t, []);
+    assertEquals(corrections.length, 0, `false correction on: ${t}`);
+    assertEquals(text, t);
+  }
+});
+
+Deno.test("claim-check: the corrected result is recognized as the SAME reply, corrected", () => {
+  const reply = "[demo model] Delegation succeeded. Worker response: {}";
+  const corrected = correctUnsupportedMutationClaims(reply, []).text;
+  // The surface updates the bubble already painted instead of appending a
+  // second copy of the answer.
+  assert(isClaimCorrectionOf(corrected, reply));
+  // A genuinely different final answer is NOT an in-place correction.
+  assertEquals(isClaimCorrectionOf("A completely different answer.", reply), false);
+  // Longer text that merely extends the reply without a correction is not one.
+  assertEquals(isClaimCorrectionOf(`${reply} And here is some more prose.`, reply), false);
+  assertEquals(isClaimCorrectionOf(corrected, ""), false);
+  assertEquals(isClaimCorrectionOf(reply, reply), false);
+});
+
+Deno.test("claim-check: several unbacked browser claims in one reply each get a correction", () => {
+  const { corrections } = correctUnsupportedMutationClaims(
+    "I opened a new tab. I navigated to example.com. I took a screenshot.",
+    [],
+  );
+  assertEquals(corrections.length, 3);
 });
 
 // ── Run-level: the correction must reach the AUTHORITATIVE returned result ──

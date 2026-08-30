@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.485] — 2026-08-30
+- When the agent says it opened a tab, saved something to memory, took a screenshot, downloaded a file or handed work to another agent, and no tool actually did it, the reply now says so plainly instead of leaving you with a false report — and the answer is shown once, not repeated for every step.
+
 ## [0.2.484] — 2026-08-30
 - Five more fixes are in progress in parallel and recorded as claimed in the tracker.
 

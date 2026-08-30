@@ -38,6 +38,67 @@ const CLAIMS = [
     re: /\b(?:i(?:'ve|’ve| have)?\s+(?:just\s+)?)?scheduled\s+(?:the\s+|your\s+|a\s+)?(?:agent|task)\b|\b(?:agent|task)\s+(?:has been|is now|was)\s+scheduled\b/i,
     claim: "scheduled it",
   },
+  // ── Browser / memory / capture / delegation claims ───────────────────────
+  // The four kinds above only cover NAMED AGENTS. The same lie is told about
+  // the browser ("I opened the tab"), memory ("I have saved that your
+  // favourite colour is green" — gpt-4.1, zero tool calls) and delegation
+  // ("Delegation succeeded" over a delegate_task card that said `error`).
+  // These follow the same shape: first-person past tense (with the terse
+  // subjectless action report the guard already recognizes), anchored on the
+  // object so ordinary prose does not trip them. Passive object-subject shapes
+  // are deliberately NOT matched here — the self-claim guard treats a
+  // determiner-led subject as third party, and widening it would correct
+  // sentences about what the browser or the user did.
+  {
+    kind: "open-tab",
+    tools: new Set(["open_tab", "create_window"]),
+    // "I opened <url> in a new tab" / "I've opened a new window" / "Opened the tab"
+    re: /\b(?:i(?:'ve|’ve| have)?\s+(?:just\s+)?)?opened\s+(?:[\w'’.:/-]+\s+){0,6}?(?:a\s+|an\s+|the\s+|your\s+|another\s+)?(?:new\s+)?(?:tab|window)\b/i,
+    claim: "opened a tab",
+  },
+  {
+    kind: "navigate",
+    tools: new Set(["navigate_tab"]),
+    // "I navigated to …" / "I've navigated the tab to …" / "Navigated to …"
+    re: /\b(?:i(?:'ve|’ve| have)?\s+(?:just\s+)?)?navigated\s+(?:(?:the|your|that|this)\s+(?:tab|page|window)\s+)?to\b/i,
+    claim: "navigated the tab",
+  },
+  {
+    kind: "close-tab",
+    tools: new Set(["close_tab", "close_window"]),
+    re: /\b(?:i(?:'ve|’ve| have)?\s+(?:just\s+)?)?closed\s+(?:[\w'’.:/-]+\s+){0,4}?(?:a\s+|an\s+|the\s+|your\s+|that\s+|this\s+)?(?:tab|window)\b/i,
+    claim: "closed the tab",
+  },
+  {
+    kind: "memory",
+    tools: new Set(["memory_set"]),
+    // Anchored on a demonstrative/possessive object or an explicit "to
+    // memory" — "I saved you some time" and "I saved the file" are not
+    // memory writes and must not be corrected as such.
+    re: /\b(?:i(?:'ve|’ve| have)?\s+(?:just\s+)?)?(?:saved|stored|remembered|memorised|memorized)\s+(?:that|this|your)\b|\b(?:i(?:'ve|’ve| have)?\s+(?:just\s+)?)?(?:saved|stored|noted|written)\s+(?:[\w'’-]+\s+){0,6}?(?:to|in)\s+(?:my\s+|your\s+|the\s+)?memory\b/i,
+    claim: "saved to memory",
+  },
+  {
+    kind: "screenshot",
+    tools: new Set(["capture_screenshot"]),
+    re: /\b(?:i(?:'ve|’ve| have)?\s+(?:just\s+)?)?(?:took|taken|captured|grabbed)\s+(?:a\s+|an\s+|the\s+|your\s+)?(?:full[\s-]?page\s+|visible\s+)?screenshot\b/i,
+    claim: "took a screenshot",
+  },
+  {
+    kind: "download",
+    tools: new Set(["download_file"]),
+    re: /\b(?:i(?:'ve|’ve| have)?\s+(?:just\s+)?)?downloaded\s+(?:it\b|them\b|(?:a|an|the|your|that|this|both)\b)/i,
+    claim: "downloaded a file",
+  },
+  {
+    kind: "delegate",
+    tools: new Set(["delegate_task", "delegate_to_agent"]),
+    // "I delegated the task to …" plus the runtime's own success sentence
+    // ("Delegation succeeded"), which is the exact text that appeared over a
+    // failed delegate card.
+    re: /\b(?:i(?:'ve|’ve| have)?\s+(?:just\s+)?)?delegated\s+(?:it\b|(?:a|an|the|your|that|this)\b)|\bdelegation\s+(?:succeeded|was\s+successful|completed\s+successfully)\b/i,
+    claim: "delegated the task",
+  },
 ];
 
 /**
