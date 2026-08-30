@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.422] — 2026-08-30
+- Find site tools: fix the fresh-profile deadlock — the Discover click now requests the scripting permission itself (it settles silently, no prompt), and the service worker re-arms page tool detectors already open when the grant lands, so the picker opens on first use
+
 ## [0.2.421] — 2026-08-30
 - Fix passive WebMCP discovery acceptance
 

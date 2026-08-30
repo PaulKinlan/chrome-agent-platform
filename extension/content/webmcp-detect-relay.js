@@ -67,4 +67,15 @@
     if (!nonce) bootstrap();
     else if (!armed) arm();
   }, delay);
+
+  // The arm needs chrome.scripting — an OPTIONAL permission the owner grants
+  // JIT from the hub's Discover gesture. When that grant lands the SW nudges
+  // every open tab to retry: bootstrap if the nonce never arrived, arm if it
+  // did. Without this, pages open before the grant stay undetectable until a
+  // reload, and the fresh-profile picker could never list them.
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type !== "webmcp.detect.rearm") return;
+    if (!nonce) bootstrap();
+    else if (!armed) arm();
+  });
 })();

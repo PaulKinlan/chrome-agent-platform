@@ -25,6 +25,8 @@ export function siteAgentSetupMessage(state, origin = "") {
   switch (state) {
     case "tabs-denied":
       return "The tabs permission is optional — enable it in Settings → Permissions if the tab list is hidden and try again.";
+    case "scripting-denied":
+      return "Finding site tools needs the scripting permission to verify open pages — allow it when prompted, then try again.";
     case "list-failed":
       return "Open tabs aren't available right now. Try again.";
     case "no-tabs":

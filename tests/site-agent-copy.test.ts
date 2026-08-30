@@ -41,6 +41,16 @@ Deno.test("site-agent copy: error setup states explain recovery without leaking 
   assertNotMatch(failed, INTERNAL_CHATTER);
 });
 
+Deno.test("site-agent copy: scripting-denied surfaces the JIT ask honestly (never a silent empty picker)", () => {
+  const denied = siteAgentSetupMessage("scripting-denied");
+  assertMatch(denied, /scripting permission/i);
+  assertMatch(denied, /try again/i);
+  assertNotMatch(denied, INTERNAL_CHATTER);
+  // It must not collapse into the generic failure copy — the user is told
+  // exactly what to allow.
+  assert(denied !== siteAgentSetupMessage("failed"));
+});
+
 Deno.test("site-agent copy: empty states distinguish no tabs, no Site Agent, and no tools", () => {
   const noTabs = siteAgentSetupMessage("no-tabs");
   assertMatch(noTabs, /open a page that exposes site tools/i);

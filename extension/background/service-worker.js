@@ -3107,6 +3107,23 @@ async function armDetectionProbe(tabId, documentId) {
   }
 }
 
+// A JIT scripting grant (the hub's Discover gesture, or a Settings Enable)
+// must re-arm the passive detectors in ALREADY-OPEN pages: their relays
+// bootstrapped a nonce, but the MAIN-world arm needs chrome.scripting, which
+// was absent when the page loaded. Without this, a fresh profile's first
+// Discover click could never see the page it was looking at (arm only runs at
+// document_start). Messaging a tab without the relay simply rejects (caught).
+chrome.permissions?.onAdded?.addListener((granted) => {
+  if (!granted?.permissions?.includes("scripting")) return;
+  (async () => {
+    const openTabs = await chrome.tabs.query({}).catch(() => []);
+    for (const t of openTabs ?? []) {
+      if (t?.id == null) continue;
+      chrome.tabs.sendMessage(t.id, { type: "webmcp.detect.rearm" }).catch(() => {});
+    }
+  })().catch(() => {});
+});
+
 async function issueBridgeNonce(tabId, documentId, diagnostics) {
   let nonce = bridgeNonceMemory.get(documentId) ?? null;
   if (!nonce) {
@@ -5034,6 +5051,20 @@ const handlers = mergeRouteMaps(
   // permission; without it we report `needTabs` honestly so the hub requests
   // it on the user's click.
   async "agent.discoverable-tabs"() {
+    // The per-tab reattestation below uses chrome.scripting — an OPTIONAL
+    // permission. Without it no tab can be bound to its detected document, so
+    // every detected tab would be silently dropped and the picker would never
+    // open (the fresh-profile deadlock: the hub used to request scripting only
+    // AFTER a row pick that could never render). Report the need honestly, and
+    // FIRST: scripting carries no install warning, so the hub's JIT request
+    // from the discover gesture settles without a prompt, leaving only the
+    // warned-permission preconditions to surface as honest copy.
+    const hasScripting = await chrome.permissions
+      .contains({ permissions: ["scripting"] })
+      .catch(() => false);
+    if (!hasScripting) {
+      return { ok: false, needScripting: true, error: "scripting permission needed to verify detected pages" };
+    }
     let tabs = null;
     try {
       tabs = await chrome.tabs.query({});

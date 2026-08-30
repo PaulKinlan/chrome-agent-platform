@@ -53,6 +53,7 @@ Deno.test("passive detector rejects forged snapshots and relays the genuine prob
   evaluate(mainSource, mainWindow);
   evaluate(relaySource, relayWindow, {
     runtime: {
+      onMessage: { addListener: () => {} },
       async sendMessage(message) {
         if (message.type === "webmcp.detect.bootstrap") {
           return { ok: true, nonce: "detector-test-nonce-0123456789" };
@@ -73,4 +74,66 @@ Deno.test("passive detector rejects forged snapshots and relays the genuine prob
   await new Promise((resolve) => setTimeout(resolve, 20));
   assertEquals(detections.length, 1, "nonce-less page forgery must not update the registry");
   assertEquals(detections[0].toolCount, 1, "the authenticated MAIN probe is relayed");
+});
+
+Deno.test("passive detector relay re-arms on the SW's post-grant nudge", async () => {
+  // The arm needs chrome.scripting — absent on a fresh profile until the JIT
+  // grant. The relay must retry when the SW broadcasts webmcp.detect.rearm
+  // after the grant lands; without it, pages open before the grant stay
+  // invisible to the picker until a reload.
+  const runtimeMessages = [];
+  let armAttempts = 0;
+  let armSucceeds = false;
+  const relayWindow = {
+    addEventListener() {},
+    postMessage() {},
+  };
+  const onMessageListeners = [];
+  const chromeStub = {
+    runtime: {
+      onMessage: { addListener: (fn) => onMessageListeners.push(fn) },
+      async sendMessage(message) {
+        runtimeMessages.push(message.type);
+        if (message.type === "webmcp.detect.bootstrap") {
+          return { ok: true, nonce: "detector-test-nonce-0123456789" };
+        }
+        if (message.type === "webmcp.detect.arm") {
+          armAttempts++;
+          return armSucceeds ? { ok: true } : { ok: false, error: "scripting not granted" };
+        }
+        return { ok: false };
+      },
+    },
+  };
+  new Function(
+    "window", "document", "navigator", "location", "chrome", "setTimeout", "globalThis",
+    relaySource,
+  )(
+    relayWindow,
+    { addEventListener() {} },
+    {},
+    { origin: "https://tools.example", href: "https://tools.example/tools" },
+    chromeStub,
+    () => 0,
+    relayWindow,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assertEquals(armAttempts, 1, "the initial arm attempt runs at bootstrap");
+  assertEquals(onMessageListeners.length, 1, "the relay listens for the SW's re-arm nudge");
+
+  // Unrelated messages do not retry the arm.
+  for (const fn of onMessageListeners) fn({ type: "webmcp.unrelated" });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assertEquals(armAttempts, 1, "unrelated messages trigger no re-arm");
+
+  // The SW's nudge retries the arm — and with the JIT grant landed it succeeds.
+  armSucceeds = true;
+  for (const fn of onMessageListeners) fn({ type: "webmcp.detect.rearm" });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assertEquals(armAttempts, 2, "the re-arm nudge retries the arm exactly once");
+
+  // Once armed, further nudges are no-ops (no repeated MAIN-world injection).
+  for (const fn of onMessageListeners) fn({ type: "webmcp.detect.rearm" });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assertEquals(armAttempts, 2, "an already-armed relay ignores further nudges");
 });
