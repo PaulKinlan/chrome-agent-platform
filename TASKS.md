@@ -191,7 +191,8 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | OPEN | [`CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01`](#cap-fb-20260823-extended-tool-families-01-extended-unixsystem-tool-family-admissions) | Extended Unix/system tool family admissions |
 | P1 | OPEN | [`CAP-FB-20260823-PYODIDE-PYTHON-01`](#cap-fb-20260823-pyodide-python-01-python-in-the-browser-via-pyodide) | Python in the browser via Pyodide |
 | P1 | OPEN | [`CAP-FB-20260825-DATA-EXPORT-IMPORT-01`](#cap-fb-20260825-data-export-import-01-owner-export-and-import-of-all-agent-data) | Owner export and import of all agent data |
-| P1 | OPEN | [`CAP-FB-20260825-HEADED-ACCEPTANCE-LANE-01`](#cap-fb-20260825-headed-acceptance-lane-01-a-headed-browser-acceptance-lane) | A headed-browser acceptance lane |
+| P1 | IN_REVIEW | [`CAP-FB-20260825-HEADED-ACCEPTANCE-LANE-01`](#cap-fb-20260825-headed-acceptance-lane-01-a-headed-browser-acceptance-lane) | A headed-browser acceptance lane (superseded by the permission-state matrix; manual extras only) |
+| P1 | IN_REVIEW | [`CAP-FB-20260830-PERMISSION-MATRIX-01`](#cap-fb-20260830-permission-matrix-01-permission-state-matrix-acceptance-headless) | Permission-state matrix acceptance (headless) |
 | P1 | OPEN | [`CAP-FB-20260825-OWNER-DECISION-QUEUE-01`](#cap-fb-20260825-owner-decision-queue-01-product-decisions-blocking-tracked-work) | Product decisions blocking tracked work |
 | P1 | OPEN | [`CAP-FB-20260825-SITE-AGENT-SHOWCASE-01`](#cap-fb-20260825-site-agent-showcase-01-make-sites-as-sub-agents-demonstrable-in-under-a-minute) | Make sites-as-sub-agents demonstrable in under a minute |
 | P1 | OPEN | [`CAP-FB-20260825-UI-INTEGRATION-RED-01`](#cap-fb-20260825-ui-integration-red-01-scriptsui-integrationts-is-red-and-never-finishes) | scripts/ui-integration.ts is red and never finishes |
@@ -1050,8 +1051,8 @@ evidence every other task depends on).
 
 ## [CAP-FB-20260825-HEADED-ACCEPTANCE-LANE-01] A headed-browser acceptance lane
 - Feedback: 2026-08-25 — three separate residuals in `KNOWN-ISSUES.md` all reduce to the same missing capability: there is no headed run, so anything requiring a real operating-system permission prompt cannot be proven
-- Updated: 2026-08-25 09:40 UTC
-- Status: OPEN
+- Updated: 2026-08-30 — SUPERSEDED by `CAP-FB-20260830-PERMISSION-MATRIX-01` (owner directive: no headed dependency). The permission-lifecycle and grant/deny coverage moved headless; `scripts/headed-acceptance.ts` remains as an OPTIONAL manual-evidence extra (action-icon click gesture + headed enrollment eyeball pass) and its stale tabs-prompt step was removed.
+- Status: IN_REVIEW (via the permission-matrix lane; residual manual items: Chrome's own prompt bubble, the action-icon click, showDirectoryPicker)
 - Resume: —
 - Priority: P1
 - Owner: unassigned
@@ -1878,3 +1879,21 @@ evidence every other task depends on).
   - 2026-08-30 04:44 UTC — diagnosis against the harness-built variant: neither detector appeared in `manifest.content_scripts`, no dynamic detector was registered, the MAIN bootstrap hook was undefined, and `cap:knownWebmcpOrigins` was empty despite the fixture exposing four callable names. After restoring static HTTP(S) MAIN/ISOLATED probes, CDP showed both scripts, the HMAC bootstrap returned a nonce and the SW registry held the fixture's `(tabId, documentId)` snapshot. The picker remained empty because `webNavigation` is optional and unavailable in the two-permission variant; current-document reattestation now reads Chrome's `documentId` from a scripting `InjectionResult`, preserving the exact-document gate without another permission.
   - 2026-08-30 04:44 UTC — focused falsification was 2 pass / 2 fail with the product fix removed and 4/4 green restored. The real loaded-extension acceptance then completed 37/37 green, including picker admission, exact-tab invocation, visible side effects, fencing negatives, re-enrollment, reload and navigation.
   - 2026-08-30 04:49 UTC — final-commit gates passed: developer build clean; 2440 unit tests, security suite and 131 Chrome journeys green; WebMCP production-path acceptance 37/37 green. Author review found no blocker: static probes transport only an authenticated count, the exact `(tabId, documentId)` registry gate remains intact, no permission was broadened, and reattestation injects one bounded isolated no-op only into origins already present in the bounded passive registry.
+
+## [CAP-FB-20260830-PERMISSION-MATRIX-01] Permission-state matrix acceptance (headless)
+- Feedback: 2026-08-30 — owner ruled there is no headed-browser dependency; "do a better solution" than waiting on a human clicker
+- Updated: 2026-08-30
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P1
+- Owner: worker (permission-matrix lane)
+- Workspace: /home/paulkinlan/worktrees/cap-permission-matrix
+- Branch: cap-permission-matrix
+- Base: origin/main fc2255be
+- Candidate: this branch
+- Shipping: —
+- Acceptance: `scripts/permission-variant.mjs` (generic byte-identical variant builder + VARIANT-INTEGRITY.json, fail-closed refusals); `scripts/permission-matrix-acceptance.ts` (headless matrix: warningless JIT lifecycle via trusted CDP clicks; warned pending → cancel → settled-absent → retry-affordance deny path; variant pre-held grant-at-install + API-functional history + honest panel); docs/PERMISSION-MATRIX.md naming the three honest exclusions (Chrome's own prompt bubble, the action-icon click, showDirectoryPicker); `scripts/headed-acceptance.ts` demoted to an optional manual-evidence extra (stale tabs-prompt step removed); journey gains the fresh-page retry-affordance check; suite + journeys green
+- Review: independent review — the matrix must assert real browser behavior, and the variant mechanism must not masquerade as the shipped manifest
+- Gates: build; full suite; chrome-journeys; permission-matrix-acceptance — all green, with falsification runs (broken builder fails the unit tests; variant grant-state checks read the opposite value on the shipped manifest)
+- History:
+  - 2026-08-30 — mechanism verified empirically before implementation: a variant holding `history` in manifest permissions answers `chrome.permissions.contains({permissions:["history"]}) === true` under --headless=new; warned requests pend headless and cancel on page close; warningless permissions auto-grant from a trusted CDP click. Bonus finding: `captureVisibleTab` with install-granted host access works headless (real PNG) — the "headed-only screenshot success" claim was stale (already journey-covered).

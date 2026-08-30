@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.428] — 2026-08-30
+- Permission acceptance runs headless: variant builder + state matrix replace the headed-only lifecycle gate
+
 ## [0.2.426] — 2026-08-30
 - merge: WebMCP acceptance green lane (0c9783c8) — detector registration restored, JIT scripting at discover, fresh-profile picker proof
 

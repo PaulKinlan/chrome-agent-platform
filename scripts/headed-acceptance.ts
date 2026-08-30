@@ -1,22 +1,25 @@
-// scripts/headed-acceptance.ts — the HEADED acceptance journey (production path).
+// scripts/headed-acceptance.ts — OPTIONAL manual-evidence extra (headed).
 //
-// CAP-FB-20260825-HEADED-ACCEPTANCE-LANE-01. Consolidates the three residuals
-// that headless CANNOT prove into ONE repeatable macro:
-//   (a) a prompted Settings capability grant → Turn off → retry lifecycle,
-//   (b) the screenshot SUCCESS path (headless auto-denies arbitrary-tab
-//       capture; only a real action click grants the transient activeTab),
-//   (c) the full enrollment lifecycle as one journey — enroll, discover,
-//       invoke, clean up, retry — through the REAL extension UI (real CDP
-//       clicks; the same #enroll-origin / #enroll-btn / #discover-page /
-//       picker / .disenroll-origin selectors the headless suite drives),
-//   (d) the WebMCP OS permission prompt for tabs at "Discover this page";
-//       install-granted <all_urls> host access is asserted separately.
+// SUPERSEDED 2026-08-30 as the canonical acceptance path: the owner ruled
+// there is no headed-browser dependency. The permission-state behaviors this
+// macro used to gate on a human (Settings capability grant → Turn off →
+// retry lifecycle; prompted grant/deny) now run HEADLESS in the
+// permission-state matrix (scripts/permission-matrix-acceptance.ts +
+// scripts/permission-variant.mjs; docs/PERMISSION-MATRIX.md). The capture
+// success path is journey-covered headless ("screenshot: capture SUCCEEDS
+// for the granted origin").
 //
-// It drives production code only (the shipped extension, no manifest variant,
-// no injected main-world source) — the round-28 block was acceptance that
-// bypassed the implementation.
+// What remains here, as an OPTIONAL extra for manual evidence only:
+//   (a) the owner-invoked screenshot gesture — clicking the extension ACTION
+//       icon (transient activeTab; no CDP mechanism synthesizes a toolbar
+//       click), and
+//   (b) the enrollment lifecycle as one headed journey (enroll, discover,
+//       invoke, clean up, retry) through the REAL extension UI — redundant
+//       with the headless suites, retained as eyeball evidence.
+// Chrome's own native permission prompt bubble is Chrome's code, not ours,
+// and is asserted nowhere.
 //
-// RUN (headed only — it REFUSES to run without a real display; exit 2):
+// RUN (optional; REFUSES without a display, exit 2):
 //   HEADED_EVIDENCE_DIR=$HOME/cap-evidence/headed-acceptance-$(date +%s) \
 //     deno run -A scripts/headed-acceptance.ts --headed
 //
@@ -101,9 +104,9 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const displayEnv: Record<string, string> = { PATH: Deno.env.get("PATH") ?? "/usr/bin:/bin" };
 async function preflight() {
   if (!HEADED) {
-    console.error("REFUSED: this script runs HEADED ONLY (a human clicks real OS permission prompts).\n" +
-      "The headless suites (chrome-journeys, webmcp-acceptance automated mode) already assert fail-closed denial.\n" +
-      "Run with --headed on a machine with an unlocked graphical session.");
+    console.error("REFUSED: this script is the OPTIONAL headed manual-evidence extra (a human clicks the action icon).\n" +
+      "The canonical permission acceptance is headless: deno run -A scripts/permission-matrix-acceptance.ts\n" +
+      "(docs/PERMISSION-MATRIX.md). Run with --headed only for manual evidence on a machine with a display.");
     Deno.exit(2);
   }
   const wayland = Deno.env.get("WAYLAND_DISPLAY") ?? "wayland-1";
@@ -390,37 +393,6 @@ async function main() {
     await cdp.send("Page.enable", {}, ns);
     const msgNs = (msg: unknown) => evalIn(cdp, ns, `chrome.runtime.sendMessage(${JSON.stringify(msg)})`);
 
-    // ── STEP K — PROMPTED SETTINGS CAPABILITY LIFECYCLE. ────────────────
-    const tabGroupsReady = await until(async () =>
-      (await capabilityButtonSelector(cdp, opts, "Tab groups", "Enable")) ?? null, 12000);
-    check("Settings capability: Tab groups Enable button present", tabGroupsReady !== null);
-    const tabGroupsClicked = await clickCapability(cdp, opts, "Tab groups", "Enable");
-    check("Settings capability: clicked Tab groups Enable via a real click", tabGroupsClicked);
-    const tabGroupsGranted = tabGroupsClicked && await manual(1, 4,
-      "a Chrome permission prompt is showing for Tab groups — click ALLOW.",
-      async () => (await evalIn(cdp, opts, `chrome.permissions.contains({ permissions: ["tabGroups"] })`)) === true);
-    check("Settings capability: OS prompt granted Tab groups", tabGroupsGranted, "manual-user-click");
-    const turnOffReady = await until(async () =>
-      (await capabilityButtonSelector(cdp, opts, "Tab groups", "Turn off")) ?? null, 12000);
-    check("Settings capability: Tab groups Turn off button present", turnOffReady !== null);
-    check(
-      "Settings capability: clicked Tab groups Turn off via a real click",
-      await clickCapability(cdp, opts, "Tab groups", "Turn off"),
-    );
-    const tabGroupsAbsent = await until(async () => {
-      const absent = (await evalIn(cdp, opts, `chrome.permissions.contains({ permissions: ["tabGroups"] })`)) === false;
-      const enable = await capabilityButtonSelector(cdp, opts, "Tab groups", "Enable");
-      return absent && enable !== null ? true : null;
-    }, 12000);
-    check("Settings capability: Tab groups absent after Turn off settled", tabGroupsAbsent === true);
-    const tabGroupsRetryClicked = await clickCapability(cdp, opts, "Tab groups", "Enable");
-    check("Settings capability: clicked Tab groups Enable again via a real click", tabGroupsRetryClicked);
-    const tabGroupsRetryGranted = tabGroupsRetryClicked && await manual(2, 4,
-      "the Tab groups permission prompt is showing again — click ALLOW to verify retry.",
-      async () => (await evalIn(cdp, opts, `chrome.permissions.contains({ permissions: ["tabGroups"] })`)) === true);
-    check("Settings capability: retry OS prompt granted Tab groups", tabGroupsRetryGranted, "manual-user-click");
-    await grimShot("settings-capability-retry");
-
     // Fixture page (attach BEFORE any injection so main-world scriptParsed events are honest).
     const fT = await cdp.send("Target.createTarget", { url: `${PAGE_ORIGIN}/index.html` });
     const wsess = (await cdp.send("Target.attachToTarget", { targetId: fT.result!.targetId, flatten: true })).result!.sessionId as string;
@@ -452,7 +424,7 @@ async function main() {
     await sleep(500);
     const journalBefore = await msgNs({ type: "memory.get", origin: "master", key: "journal" }).catch(() => null);
     const shotsBefore = Array.isArray(journalBefore) ? journalBefore.filter((e: any) => e?.type === "screenshot").length : 0;
-    const actionShot = await manual(3, 4,
+    const actionShot = await manual(1, 1,
       "click the extension ACTION icon (puzzle → Chrome Agent Platform) while viewing the 127.0.0.1 fixture page — this is the transient owner-invoked screenshot gesture.",
       async () => {
         const j = await msgNs({ type: "memory.get", origin: "master", key: "journal" }).catch(() => null);
@@ -469,12 +441,15 @@ async function main() {
     const shot = await captureShot(cdp, wsess);
     if (shot) await writeEvidence("fixture-page-cdp.png", shot);
 
-    // ── STEP D — DISCOVER (WebMCP OS prompt: tabs). ──
+    // ── STEP D — DISCOVER (no OS prompt exists in this flow since
+    // 2026-08-30: the Discover click requests `scripting` JIT, which is
+    // WARNINGLESS and settles silently; `tabs` was never needed — the picker
+    // lists tabs through install-granted <all_urls> host access). ──
     check("hub: clicked Discover this page via a real click", await clickSel(cdp, ns, "#discover-page"));
-    const tabsGranted = await manual(4, 4,
-      "a Chrome permission prompt is showing — click ALLOW (tabs).",
-      async () => (await evalIn(cdp, sws, `chrome.permissions.contains({ permissions: ["tabs"] })`)) === true);
-    check("webmcp prompt: the tabs permission was granted via the real OS prompt", tabsGranted, "manual-user-click");
+    const scriptingGranted = await until(async () =>
+      (await evalIn(cdp, sws, `chrome.permissions.contains({ permissions: ["scripting"] })`)) === true ? true : null,
+      30000);
+    check("webmcp: the JIT scripting grant settled silently (no prompt — asserted, not assumed)", scriptingGranted === true);
     const pickerHasFixture = await until(() => evalIn(cdp, ns, `(() => {
       const dlg = document.querySelector("agent-dialog");
       if (!dlg) return null;
