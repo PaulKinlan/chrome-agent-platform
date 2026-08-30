@@ -1,5 +1,5 @@
 {
-  "overallStatus": "ATTESTED",
+  "overallStatus": "OPEN",
   "permissionGrant": "matrix: jit-auto-grant (warningless) + variant-install-grant (warned) + headless-cancel (deny path)",
   "headed": false,
   "honestExclusions": [
@@ -7,7 +7,7 @@
     "the extension action-icon click (transient activeTab; no CDP mechanism)",
     "showDirectoryPicker (native OS dialog; manual smoke)"
   ],
-  "testedSourceCommit": "c70af62c1b431ecd9a9e3ff8ebcd066e896988cf",
+  "testedSourceCommit": "eacb298e61fd8f2724f78ae4113534bfc867f2c0",
   "steps": [
     {
       "step": "build succeeded (dist matches sources)",
@@ -23,23 +23,23 @@
     },
     {
       "step": "matrix[contextMenus]: warningless permission auto-granted; the row shows Granted",
-      "pass": true
+      "pass": false
     },
     {
       "step": "matrix[contextMenus]: Turn off clicked via a trusted gesture",
-      "pass": true
+      "pass": false
     },
     {
       "step": "matrix[contextMenus]: Turn off settles absent (revoke is promptless) and the row is requestable again",
-      "pass": true
+      "pass": false
     },
     {
       "step": "matrix[contextMenus]: retry Enable clicked via a trusted gesture",
-      "pass": true
+      "pass": false
     },
     {
       "step": "matrix[contextMenus]: retry re-grants (the full turn-off/retry lifecycle, headless)",
-      "pass": true
+      "pass": false
     },
     {
       "step": "matrix-shipped[tabGroups]: the row starts requestable (Not enabled + Enable affordance)",
@@ -52,6 +52,17 @@
     {
       "step": "matrix-shipped[tabGroups]: no silent grant — the warned request never resolves without a prompt gesture",
       "pass": true
+    },
+    {
+      "step": "matrix-shipped[tabGroups]: the original row remains PENDING (disabled, no failure/retry state) while the request is outstanding",
+      "pass": false,
+      "detail": {
+        "state": "Not enabled",
+        "button": {
+          "text": "Enable failed — try again",
+          "disabled": false
+        }
+      }
     },
     {
       "step": "matrix-shipped[tabGroups]: cancel settles absent and the retry affordance (Enable) is intact on a fresh Settings page",
@@ -70,6 +81,17 @@
       "pass": true
     },
     {
+      "step": "matrix-shipped[bookmarks]: the original row remains PENDING (disabled, no failure/retry state) while the request is outstanding",
+      "pass": false,
+      "detail": {
+        "state": "Not enabled",
+        "button": {
+          "text": "Enable failed — try again",
+          "disabled": false
+        }
+      }
+    },
+    {
       "step": "matrix-shipped[bookmarks]: cancel settles absent and the retry affordance (Enable) is intact on a fresh Settings page",
       "pass": true
     },
@@ -79,6 +101,10 @@
     },
     {
       "step": "matrix[variant]: byte-identical except manifest.json (integrity manifest)",
+      "pass": true
+    },
+    {
+      "step": "matrix[variant]: integrity independently re-verified (hashes recomputed, only manifest.json diverges)",
       "pass": true
     },
     {

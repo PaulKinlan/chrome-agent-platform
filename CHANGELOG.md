@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.429] — 2026-08-30
+- Permission matrix: refuse ancestor-of-source variant outputs, prove warned requests stay pending on the original row, and re-verify variant integrity before Chrome loads it
+
 ## [0.2.428] — 2026-08-30
 - Permission acceptance runs headless: variant builder + state matrix replace the headed-only lifecycle gate
 

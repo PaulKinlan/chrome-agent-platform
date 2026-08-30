@@ -46,6 +46,7 @@
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
+const { verifyVariantIntegrity } = await import("./permission-variant.mjs");
 const CHROMIUM = "/usr/bin/chromium";
 const HEADED = Deno.args.includes("--headed");
 const EVIDENCE_DIR = Deno.env.get("PERMISSION_MATRIX_ARTIFACT_DIR") ?? `${ROOT}test-artifacts`;
@@ -282,6 +283,16 @@ async function probeWarnedLifecycle(rig: Rig, label: string, permission: string,
     if (!silentlyGranted) await sleep(250);
   }
   check(`${phase}[${permission}]: no silent grant — the warned request never resolves without a prompt gesture`, !silentlyGranted);
+  // The ORIGINAL row must still be in its pending state while the request is
+  // outstanding: button disabled, Enable label intact, no failure/retry state
+  // ("Enable failed — try again", re-enabled — options.js). An instant
+  // rejection would pass the no-silent-grant check above but fails here.
+  const pendingRow = await rowState(rig.cdp, probe, label);
+  check(`${phase}[${permission}]: the original row remains PENDING (disabled, no failure/retry state) while the request is outstanding`,
+    pendingRow?.state === "Not enabled" &&
+      pendingRow?.button?.disabled === true &&
+      pendingRow?.button?.text === "Enable",
+    pendingRow);
   // Cancel: closing the requesting page cancels the pending request (the
   // journey-established mechanism — this never strands a browser prompt).
   const targets = await (await fetch(`http://127.0.0.1:${rig.port}/json/list`)).json();
@@ -364,6 +375,16 @@ async function main() {
     : null;
   check("matrix[variant]: byte-identical except manifest.json (integrity manifest)",
     integrity !== null && integrity.differsFromSource?.length === 1 && integrity.differsFromSource[0] === "manifest.json");
+  // Never TRUST the builder's attestation: recompute every recorded hash (and
+  // the source divergence) against the tree on disk before Chrome loads it.
+  let verifyError = null;
+  if (integrity) {
+    verifyError = await verifyVariantIntegrity({ dir: variantDir, srcDir: EXT })
+      .then(() => null)
+      .catch((e) => String(e));
+  }
+  check("matrix[variant]: integrity independently re-verified (hashes recomputed, only manifest.json diverges)",
+    integrity !== null && verifyError === null, verifyError);
 
   const profileB = `/tmp/cap-perm-matrix-b-${Date.now()}`;
   const { rig: rigB } = await startRig(profileB, variantDir);

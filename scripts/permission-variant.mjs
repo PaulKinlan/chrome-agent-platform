@@ -30,7 +30,7 @@
 
 import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
@@ -63,8 +63,13 @@ export async function buildVariant({ srcDir, outDir, permissions }) {
   if (!Array.isArray(permissions) || permissions.length === 0) {
     throw new Error("buildVariant: permissions must be a non-empty array");
   }
-  if (out === src || out.startsWith(src + "/")) {
+  if (out === src || out.startsWith(src + sep)) {
     throw new Error("buildVariant: outDir must not be the source tree or inside it");
+  }
+  if (src.startsWith(out + sep)) {
+    // The build rm -rf's `out` before copying — an ANCESTOR outDir would
+    // delete the source tree first. Refuse.
+    throw new Error("buildVariant: outDir must not be an ancestor of the source tree (the build would delete the source)");
   }
 
   const sourceManifest = JSON.parse(await readFile(join(src, "manifest.json"), "utf8"));
@@ -116,6 +121,58 @@ export async function buildVariant({ srcDir, outDir, permissions }) {
   const integrityPath = join(out, "VARIANT-INTEGRITY.json");
   await writeFile(integrityPath, JSON.stringify(integrity, null, 2) + "\n");
   return { dir: out, integrityPath, fileCount: integrity.fileCount };
+}
+
+/**
+ * Independently re-verify a built variant BEFORE it is loaded into Chrome:
+ * recompute every file's sha256 and compare against the recorded hashes, and
+ * (when srcDir is given) recompute the source tree to confirm only
+ * manifest.json differs. VARIANT-INTEGRITY.json is the one explicit metadata
+ * addition (it is written after the tree is hashed, so it is not in `files`).
+ * Fail-closed: any mismatch throws.
+ * @param {{ dir: string, srcDir?: string }} opts
+ */
+export async function verifyVariantIntegrity({ dir, srcDir }) {
+  const out = resolve(dir);
+  const integrityPath = join(out, "VARIANT-INTEGRITY.json");
+  let integrity;
+  try {
+    integrity = JSON.parse(await readFile(integrityPath, "utf8"));
+  } catch {
+    throw new Error("verifyVariantIntegrity: no readable VARIANT-INTEGRITY.json — never load an unattested variant");
+  }
+  if (integrity.kind !== "permission-variant-integrity" || typeof integrity.files !== "object" || integrity.files === null) {
+    throw new Error("verifyVariantIntegrity: integrity file is not a permission-variant-integrity record");
+  }
+  const actual = await treeHashes(out);
+  const problems = [];
+  for (const [rel, hash] of Object.entries(actual)) {
+    if (rel === "VARIANT-INTEGRITY.json") continue; // the one metadata addition
+    if (integrity.files[rel] !== hash) problems.push(`${rel}: hash mismatch vs recorded`);
+  }
+  for (const rel of Object.keys(integrity.files)) {
+    if (!(rel in actual)) problems.push(`${rel}: recorded but missing from the tree`);
+  }
+  if (srcDir) {
+    const src = resolve(srcDir);
+    const sourceFiles = await treeHashes(src);
+    const differs = [];
+    for (const [rel, hash] of Object.entries(actual)) {
+      if (rel === "VARIANT-INTEGRITY.json") continue;
+      if (sourceFiles[rel] !== hash) differs.push(rel);
+    }
+    for (const rel of Object.keys(sourceFiles)) {
+      if (!(rel in actual)) differs.push(`${rel} (missing from variant)`);
+    }
+    differs.sort();
+    if (JSON.stringify(differs) !== JSON.stringify(["manifest.json"])) {
+      problems.push(`source divergence is not exactly [manifest.json]: ${differs.join(", ")}`);
+    }
+  }
+  if (problems.length > 0) {
+    throw new Error(`verifyVariantIntegrity: FAILED — ${problems.join("; ")}`);
+  }
+  return { ok: true, fileCount: Object.keys(actual).length - 1 };
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
