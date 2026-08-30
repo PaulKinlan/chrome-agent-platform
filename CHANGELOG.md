@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.468] — 2026-08-30
+- Tracker: the composer-first new tab is recorded as landed.
+
 ## [0.2.467] — 2026-08-30
 - Landed: the new tab opens on the composer — first in tab order and visible on a small window — with a one-line banner and one action instead of an onboarding wall.
 
