@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.437] — 2026-08-30
+- The verification check may only pass when verification actually ran
+
 ## [0.2.436] — 2026-08-30
 - Permission matrix: refresh the attestation at the falsy-record candidate
 

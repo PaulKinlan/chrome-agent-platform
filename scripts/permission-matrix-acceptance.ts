@@ -377,14 +377,18 @@ async function main() {
     integrity !== null && integrity.differsFromSource?.length === 1 && integrity.differsFromSource[0] === "manifest.json");
   // Never TRUST the builder's attestation: recompute every recorded hash (and
   // the source divergence) against the tree on disk before Chrome loads it.
+  // verificationRan is part of the evidence: the check may only claim PASS
+  // when verification actually EXECUTED (integrity present) AND found nothing.
   let verifyError = null;
+  let verificationRan = false;
   if (integrity) {
+    verificationRan = true;
     verifyError = await verifyVariantIntegrity({ dir: variantDir, srcDir: EXT })
       .then(() => null)
       .catch((e) => String(e));
   }
   check("matrix[variant]: integrity independently re-verified (hashes recomputed, only manifest.json diverges)",
-    integrity !== null && verifyError === null, verifyError);
+    verificationRan && verifyError === null, verifyError ?? (verificationRan ? null : "verification did not run: no integrity manifest"));
   
   // FAIL-CLOSED: no attested variant, no rig. A failed build (integrity null,
   // nothing to verify), a falsy parsed record, and a failed re-verification
