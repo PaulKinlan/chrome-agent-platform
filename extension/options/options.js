@@ -35,7 +35,7 @@ import {
 
 let currentUsageRange = "7d"; // hoisted above renderUsage — no TDZ on section open
 import { bindProviderSetDefault } from "../lib/provider-options-save.js";
-import { modelsForVendor } from "../lib/model-prices.js";
+import { defaultModelFor, fetchLiveModels, suggestedModelsFor } from "../lib/model-catalog.js";
 import {
   providerSelectionPresentation,
   renderInternalProviderStatus,
@@ -99,7 +99,7 @@ const PROVIDERS = [
     needsKey: true,
     needsModel: true,
     onDevice: false,
-    models: modelsForVendor("openai"),
+    models: suggestedModelsFor("openai"),
   },
   {
     id: "anthropic",
@@ -109,7 +109,7 @@ const PROVIDERS = [
     needsKey: true,
     needsModel: true,
     onDevice: false,
-    models: modelsForVendor("anthropic"),
+    models: suggestedModelsFor("anthropic"),
   },
   {
     id: "gemini",
@@ -119,7 +119,7 @@ const PROVIDERS = [
     needsKey: true,
     needsModel: true,
     onDevice: false,
-    models: modelsForVendor("gemini"),
+    models: suggestedModelsFor("gemini"),
   },
   {
     id: "deepseek",
@@ -129,7 +129,7 @@ const PROVIDERS = [
     needsKey: true,
     needsModel: true,
     onDevice: false,
-    models: modelsForVendor("deepseek"),
+    models: suggestedModelsFor("deepseek"),
   },
   {
     id: "openai-compatible",
@@ -680,11 +680,40 @@ export async function renderLocalFolders() {
 
 // ── Providers ──
 // The model field is the SHARED <model-picker> combobox (searchable, driven by
-// the same modelsForVendor catalogue everywhere) so the main Providers section
-// and the per-agent overrides behave identically. Providers without a vendor
-// catalogue (Ollama, OpenAI-compatible) run it in free-custom mode.
+// the bundled model catalogue — lib/model-catalog.js, the ONE place a model id
+// is written down for the user) so the main Providers section and the
+// per-agent overrides behave identically. The catalogue's suggested ids are the
+// "Recommended" head; once a key is entered the provider's LIVE /models list is
+// merged below them. Providers without a catalogue (Ollama, LM Studio,
+// OpenAI-compatible) run it in free-custom mode.
 function providerCatalogue(p) {
   return Array.isArray(p.models) ? p.models : [];
+}
+
+// The provider's live model list, merged under the catalogue suggestions. The
+// picker is UPDATED IN PLACE (never re-created) and an empty/failed fetch
+// leaves the suggestions as they are — fetchLiveModels never throws.
+const liveModelsInFlight = new WeakMap();
+async function refreshLiveModels(card, p) {
+  const picker = card.querySelector("model-picker");
+  if (!picker) return;
+  const apiKey = card.querySelector(".api-key")?.value ?? "";
+  const baseURL = card.querySelector(".base-url")?.value || p.baseURL;
+  if (!baseURL || (p.needsKey && !apiKey)) return;
+  const token = Symbol("live-models");
+  liveModelsInFlight.set(card, token);
+  picker.setAttribute("loading", "");
+  try {
+    const live = await fetchLiveModels(p.id, { baseURL, apiKey });
+    if (liveModelsInFlight.get(card) !== token) return; // a newer refresh won
+    const suggested = providerCatalogue(p);
+    const merged = [...suggested, ...live.filter((id) => !suggested.includes(id))];
+    if (merged.length !== picker.models.length || merged.some((id, i) => picker.models[i] !== id)) {
+      picker.models = merged;
+    }
+  } finally {
+    if (liveModelsInFlight.get(card) === token) picker.removeAttribute("loading");
+  }
 }
 
 // Providers side-tabs: the SELECTED tab is view state (which editor is open);
@@ -692,19 +721,23 @@ function providerCatalogue(p) {
 let selectedProviderId = null;
 
 function modelFieldHtml(p, cfg) {
-  const current = cfg.provider === p.id ? (cfg.model || "") : "";
+  // An EMPTY stored model pre-fills the catalogue default (the recommended,
+  // verified-callable id) so the user never saves a blank that would run the
+  // demo model (CAP-FB-20260830-MODEL-CATALOG-CURRENT-01).
+  const current = (cfg.provider === p.id ? (cfg.model || "") : "") || defaultModelFor(p.id);
   const models = providerCatalogue(p);
   const ph = models.length ? "Search or type a model id…" : (p.id === "ollama" ? "e.g. llama3.1" : "model id");
   // The component is SELF-LABELED (its shadow .field carries the label) — no
   // outer wrapper, or two "Model" captions stack (k3 MEDIUM-2).
-  return `<model-picker class="model" data-provider="${escapeAttr(p.id)}" placeholder="${escapeAttr(ph)}" models="${escapeAttr(JSON.stringify(models))}" value="${escapeAttr(current)}" label="Model"></model-picker>`;
+  return `<model-picker class="model" data-provider="${escapeAttr(p.id)}" placeholder="${escapeAttr(ph)}" models="${escapeAttr(JSON.stringify(models))}" recommended="${escapeAttr(JSON.stringify(models))}" value="${escapeAttr(current)}" label="Model"></model-picker>`;
 }
 
-// The effective model: the shared component's committed value (fall back to a
-// legacy .model input during transition).
+// The effective model: the shared component's committed value, or the
+// provider's catalogue default when the field is empty (fall back to a legacy
+// .model input during transition).
 function effectiveModel(card) {
   const picker = card.querySelector("model-picker");
-  if (picker) return picker.value ?? "";
+  if (picker) return (picker.value ?? "") || defaultModelFor(card?.dataset?.provider ?? picker.dataset?.provider ?? "");
   const select = card.querySelector(".model-select");
   if (select) {
     return select.value === "__custom__"
@@ -856,6 +889,10 @@ async function renderProviders(restoreFocus = false) {
       <div class="test-status" role="status" hidden></div>
     `;
     const credentialInput = card.querySelector(".api-key");
+    // A committed key (change = blur/Enter) fetches the provider's live model
+    // list and merges it below the catalogue suggestions. Failure is silent by
+    // design (the suggestions stand; Test connection reports the real error).
+    credentialInput?.addEventListener("change", () => { refreshLiveModels(card, p); });
     // The synchronous durability guard MUST run before the replacement save
     // path starts either the host request or provider.set. Once allowed, the
     // existing owner click coordinates the host-access check and provider
@@ -907,6 +944,9 @@ async function renderProviders(restoreFocus = false) {
       testStatus.textContent = res?.ok
         ? `Connected — ${res.detail ?? "ok"} (${res.latencyMs}ms)`
         : `Failed — ${res?.error ?? "unknown error"}`;
+      // The host permission was just granted on this gesture — the live list
+      // can load now even if the key was pasted before the grant.
+      if (res?.ok) refreshLiveModels(card, p);
     });
     // (the card lives in its hidden-by-default tabpanel — appended above)
   }

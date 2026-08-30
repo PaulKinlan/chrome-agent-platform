@@ -6,6 +6,8 @@
 //
 // REFRESH: node scripts/refresh-model-prices.mjs
 // An unknown model falls back to agent-do 0-cost estimate (best-effort).
+import { isPricingTierId, isRetiredModelId } from "./model-catalog.js";
+
 export const MODEL_PRICING = {
   "amazon-nova-lite": { input: 0.06, output: 0.24 },
   "amazon-nova-micro": { input: 0.035, output: 0.14 },
@@ -274,6 +276,13 @@ export function modelsForVendor(vendor) {
   if (!prefixes) return [];
   return Object.keys(MODEL_PRICING)
     .filter((id) => prefixes.some((p) => id.startsWith(p)))
+    // The price table is a copy of llm-prices.com, so it carries every RETIRED
+    // family ever priced and context-tier pseudo-ids (`gpt-5.6-terra-272k`) that
+    // no provider serves (404) — and the tier rows sort FIRST because the sort
+    // prefers the fuller id. Neither may reach a user (the 2026-08-30 models
+    // lane, CAP-FB-20260830-MODEL-CATALOG-CURRENT-01). The rows stay in
+    // MODEL_PRICING for pricing old usage.
+    .filter((id) => !isPricingTierId(id) && !isRetiredModelId(id))
     // On-device ids (the Prompt API's gemini-nano family) are NOT cloud models
     // — they never resolve through the OpenAI-compatible endpoint, so the
     // pickers must not offer them (the k3 review's catalogue finding).

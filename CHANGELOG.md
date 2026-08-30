@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.431] — 2026-08-30
+- Settings now suggests only current models: OpenAI pre-fills gpt-5.6-luna, Gemini gemini-3.7-flash and Anthropic claude-sonnet-5, the pricing-tier and retired ids are gone from the picker, your provider's own model list appears under "More models" once a key is entered, and Test connection and the hub use the same request shape so a green test means the run works (gpt-5.6 models no longer fail on the first call).
+
 ## [0.2.430] — 2026-08-30
 - Six fixes are now in progress in parallel and recorded as claimed in the task tracker so no two agents work the same item.
 

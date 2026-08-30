@@ -29,6 +29,7 @@ import {
   isPromptApiAvailable,
 } from "./models/prompt-api-model.js";
 import { createDemoModel } from "./models/demo-model.js";
+import { defaultModelFor } from "./model-catalog.js";
 import { kvGet, kvSet } from "./kv.js";
 
 const DEFAULTS = {
@@ -140,7 +141,13 @@ export async function resolveModelFromConfig(cfg) {
     const baseURL = cfg.baseURL ||
       (PROVIDER_CHOICES.find((p) => p.id === id)?.baseURL ?? "");
     const apiKey = cfg.apiKey ?? "";
-    const model = cfg.model ?? "";
+    // An EMPTY model id resolves to the provider's catalogue default (the
+    // recommended, verified-callable id) instead of silently running the demo
+    // model — providers without a catalogue (BYO endpoint, Ollama, LM Studio)
+    // still need an explicit id (CAP-FB-20260830-MODEL-CATALOG-CURRENT-01).
+    const explicitModel = String(cfg.model ?? "").trim();
+    const model = explicitModel || defaultModelFor(id);
+    const usingDefaultModel = !explicitModel && Boolean(model);
     const needsKey = PROVIDER_CHOICES.find((p) => p.id === id)?.needsKey ??
       true;
     // Ollama needs no key; the others do. A model id is always required.
@@ -167,6 +174,7 @@ export async function resolveModelFromConfig(cfg) {
         modelId: canonicalModel,
         providerName: id,
         providerLane: "gemini-native",
+        usingDefaultModel,
       };
     }
     // NATIVE ANTHROPIC LANE: Anthropic's OpenAI-compatible endpoint does not
@@ -182,10 +190,11 @@ export async function resolveModelFromConfig(cfg) {
         modelId: model,
         providerName: id,
         providerLane: "anthropic-native",
+        usingDefaultModel,
       };
     }
     const m = createOpenAICompatibleModel({ baseURL, apiKey, model });
-    return { model: m, modelId: model, providerName: id, providerLane: "openai-compatible" };
+    return { model: m, modelId: model, providerName: id, providerLane: "openai-compatible", usingDefaultModel };
   }
 
   if (id === "prompt-api") {

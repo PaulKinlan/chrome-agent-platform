@@ -31,7 +31,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const WANT_REAL = Deno.env.get("CAP_LIVE_PROVIDER") === "anthropic";
 const KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
 if (WANT_REAL && !KEY) { console.error("CAP_LIVE_PROVIDER=anthropic needs ANTHROPIC_API_KEY"); Deno.exit(1); }
-const MODEL = Deno.env.get("CAP_LIVE_MODEL") ?? "claude-sonnet-4-5-20250929";
+const MODEL = Deno.env.get("CAP_LIVE_MODEL") ?? "claude-sonnet-5";
 const PROMPT = Deno.args.join(" ") || "List my open tabs, then tell me what is open.";
 
 await Deno.mkdir(SHOTS, { recursive: true });

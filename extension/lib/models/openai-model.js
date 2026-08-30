@@ -62,6 +62,49 @@ export function makeLoggingFetch(knownSecrets = []) {
   };
 }
 
+/** True for OpenAI's own endpoint (api.openai.com), where the gpt-5.x request
+ * rules below apply. A BYO/proxy/other-vendor base URL is never OpenAI. */
+export function isOpenAIEndpoint(baseURL) {
+  try {
+    return new URL(String(baseURL ?? "")).hostname === "api.openai.com";
+  } catch {
+    return false;
+  }
+}
+
+/** Whether a request to `baseURL` for `model` must carry
+ * `reasoning_effort: "none"`: OpenAI's /chat/completions refuses function tools
+ * on every gpt-5.x unless the effort is "none" (HTTP 400 "Function tools with
+ * reasoning_effort are not supported … set reasoning_effort to 'none'" — every
+ * gpt-5.6 hub call failed on the first step, 2026-08-30 models lane). "none" is
+ * accepted by gpt-5.5 and gpt-5.4-mini too (probe: 200), so it is applied to
+ * the whole gpt-5 family. Grok/Z.ai/Ollama/BYO do not know the field, so a
+ * non-OpenAI base URL never gets it. */
+export function needsReasoningEffortNone(baseURL, model) {
+  return isOpenAIEndpoint(baseURL) && /^gpt-5/i.test(String(model ?? ""));
+}
+
+// The request-shape rule lives in the ADAPTER (not the logging fetch): the
+// SDK forwards `providerOptions.<providerName>.reasoningEffort` into the wire
+// body as `reasoning_effort`, so a transformParams middleware sets it unless a
+// caller already chose an effort explicitly.
+function openaiReasoningEffortMiddleware(providerName) {
+  return {
+    middlewareVersion: "v2",
+    transformParams: async ({ params }) => {
+      const prev = params.providerOptions?.[providerName] ?? {};
+      if (prev.reasoningEffort != null) return params;
+      return {
+        ...params,
+        providerOptions: {
+          ...(params.providerOptions ?? {}),
+          [providerName]: { ...prev, reasoningEffort: "none" },
+        },
+      };
+    },
+  };
+}
+
 // The Gemini OpenAI-compatible endpoint rejects a model name with the wrong
 // format (spaces/casing) with HTTP 400 "unexpected model name format".
 // normaliseModelId handles that ("Gemini 3.7 Flash" → "gemini-3.7-flash").
@@ -73,10 +116,11 @@ export function createOpenAICompatibleModel(config) {
     throw new Error("OpenAI-compatible provider requires baseURL and model");
   }
   const resolvedModel = normaliseModelId(model, baseURL);
+  const providerName = "configured";
   const openai = createOpenAICompatible({
     baseURL,
     apiKey: apiKey ?? "",
-    name: "configured",
+    name: providerName,
     // Ask the provider to include token usage in the streaming response. The
     // AI SDK only forwards `stream_options: { include_usage: true }` when this
     // is set (dist: "only include stream_options when in strict compatibility
@@ -99,6 +143,9 @@ export function createOpenAICompatibleModel(config) {
   return wrapLanguageModel({
     model: provider,
     middleware: [
+      ...(needsReasoningEffortNone(baseURL, resolvedModel)
+        ? [openaiReasoningEffortMiddleware(providerName)]
+        : []),
       thoughtSignatureMiddleware(),
       toolCallFinishMiddleware(),
     ],

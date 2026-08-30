@@ -97,16 +97,28 @@ Deno.test("per-agent provider: set + clear round-trips, and list/get are redacte
 });
 
 Deno.test("per-agent provider: getModelForAgent resolves the override, else the global", async () => {
-  // An override with a missing model id falls back to the demo (no network at
-  // resolution time) — the providerName still names the override.
+  // An override with a missing model id resolves to the provider's CATALOGUE
+  // default (CAP-FB-20260830-MODEL-CATALOG-CURRENT-01) — never silently the
+  // demo model when a recommended id exists.
   const resolved = await resolveModelFromConfig({
     provider: "deepseek",
     baseURL: "https://api.deepseek.com/v1",
     apiKey: "sk-x",
     model: "",
   });
-  assertEquals(resolved.modelId, "demo-local"); // missing model → demo fallback
-  assert(resolved.providerName.includes("deepseek"), "the fallback names the override provider");
+  assertEquals(resolved.modelId, "deepseek-v4-flash");
+  assertEquals(resolved.usingDefaultModel, true);
+  assert(resolved.providerName.includes("deepseek"), "the resolution names the override provider");
+  // A provider WITHOUT a catalogue (BYO endpoint) still needs an explicit id —
+  // the demo fallback remains, and the providerName still names the override.
+  const byo = await resolveModelFromConfig({
+    provider: "openai-compatible",
+    baseURL: "https://byo.example/v1",
+    apiKey: "sk-x",
+    model: "",
+  });
+  assertEquals(byo.modelId, "demo-local");
+  assert(byo.providerName.includes("openai-compatible"), "the fallback names the override provider");
 
   // A null override → the global (demo) path (getModelForAgent falls back).
   const viaAgent = await getModelForAgent(null);
