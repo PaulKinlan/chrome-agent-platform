@@ -239,7 +239,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | OPEN | [`CAP-FB-20260830-SCHEDULED-RUN-OUTPUT-01`](#cap-fb-20260830-scheduled-run-output-01-a-scheduled-agent-runs-but-leaves-nothing-the-owner-can-see-on-the-hub) | A scheduled agent runs but leaves nothing the owner can see on the hub |
 | P1 | OPEN | [`CAP-FB-20260830-SCREENSHOT-TO-MODEL-01`](#cap-fb-20260830-screenshot-to-model-01-capturescreenshot-succeeds-but-the-model-cannot-see-the-image-and-the-owner-cannot-find-it) | capture_screenshot succeeds but the model cannot see the image and the owner cannot find it |
 | P1 | OPEN | [`CAP-FB-20260830-SETTINGS-HOOKS-PERMISSIONS-TABLES-01`](#cap-fb-20260830-settings-hooks-permissions-tables-01-hooks-is-50-identical-cards-with-red-deny-buttons-permissions-is-19-identical-cards) | Hooks is 50+ identical cards with red Deny buttons; Permissions is 19 identical cards |
-| P1 | OPEN | [`CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01`](#cap-fb-20260830-settings-whats-new-copy-01-settings--about--whats-new-renders-raw-engineering-commit-subjects-to-the-user) | Settings → About → What's new renders raw engineering commit subjects to the user |
+| P1 | IN_REVIEW | [`CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01`](#cap-fb-20260830-settings-whats-new-copy-01-settings--about--whats-new-renders-raw-engineering-commit-subjects-to-the-user) | Settings → About → What's new renders raw engineering commit subjects to the user |
 | P1 | OPEN | [`CAP-FB-20260830-SIDE-PANEL-COMPANION-01`](#cap-fb-20260830-side-panel-companion-01-the-side-panel-becomes-a-companion-pinned-to-the-current-tab-instead-of-a-webmcp-status-surface) | The side panel becomes a companion pinned to the current tab instead of a WebMCP status surface |
 | P1 | OPEN | [`CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01`](#cap-fb-20260830-side-panel-tool-cut-01-opensidepanel-can-never-succeed-when-the-model-calls-it) | open_side_panel can never succeed when the model calls it |
 | P1 | OPEN | [`CAP-FB-20260830-SLASH-PALETTE-COMBOBOX-01`](#cap-fb-20260830-slash-palette-combobox-01-the-slash-palette-is-not-an-accessible-combobox) | The slash palette is not an accessible combobox |
@@ -3483,14 +3483,14 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 ## [CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01] Settings → About → What's new renders raw engineering commit subjects to the user
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 ui lane, finding 3. The About page shows lines like "merge: WebMCP acceptance green lane (0c9783c8) — detector registration restored, JIT scripting at discover, fresh-profile picker proof" to the person using the product.
 - Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `fc2255be`
-- Candidate: —
+- Owner: journal coordinator (worker 71d86e5f branch)
+- Workspace: /home/paulkinlan/worktrees/cap-whatsnew-copy
+- Branch: cap-whatsnew-copy
+- Base: `abae5d2b`
+- Candidate: `86065e2a` (source) + `9375d74a` (evidence)
 - Shipping: —
 - Acceptance: About shows only the last five changelog entries a non-engineer can read plus a "Full release notes" link, rendered when About is opened rather than at load, and the changelog check rejects engineering subjects in recent entries (RED against today's `CHANGELOG.md` until the recent entries are rewritten).
   - Context: `extension/options/options.js` `renderAbout` (3069-3079) fetches the bundled `CHANGELOG.md` at load (`await renderAbout()` at 3081) and `renderChangelog(md)` (3024) builds a card per `## [version]` with every bullet — 2,059 DOM nodes for the About section alone, and it grows each release. `CHANGELOG.md` recent entries (lines 6-13): "merge: WebMCP acceptance green lane (0c9783c8) — …", "merge: board deny rules lane (9fd462b8) — …", "Board deny: restore the capability.revoke journey assertion (merge splice had folded the board check names into its arguments)". `tests/changelog.test.ts` (lines 48-51) rejects `CAP-FB-` ids and three jargon phrases in the recent section but not SHAs, "merge:", "journey assertion" or "CDP". `scripts/check-changelog.mjs` checks version order/uniqueness and package.json parity only; `scripts/sync-changelog.mjs` (`npm run check:changelog`) keeps `extension/CHANGELOG.md` byte-identical to the root. What must NOT change: the root/extension changelog byte-identity test (line 41); the version-order gate; the `CAP-FB-` ban.
@@ -3508,7 +3508,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: add the filter in `options.js` and the lazy render (immediate), then widen the check with the rewritten recent entries.
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01`
 - History:
-  - 2026-08-30 11:00 UTC — measured: the page shows "v0.2.426 — merge: WebMCP acceptance green lane (0c9783c8) — detector registration restored, JIT scripting at discover, fresh-profile picker proof" and similar; the test rejects CAP-FB ids but SHAs and "merge:" pass. The About section alone is 2,059 DOM nodes because the whole 72 KB changelog renders at load.
+  - 2026-08-30 22:30 UTC — IN_REVIEW by the journal coordinator: `isUserFacingEntry` filter in options.js (rejects merge:/chore:/fix(...):/test:/ci:/docs: prefixes, bare SHAs, and journey/KAT/assertion/CDP/harness/worktree/lane/tracker/splice/RED/GREEN vocabulary); `renderChangelog` shows the first five versions whose bullets survive the filter (zero-surviving entries skipped) with a lazy "Show all release notes" disclosure (built on first open, so About is 58 DOM nodes at load) and a "Full release notes" link via `chrome.runtime.getURL`; `renderAbout` moved to the section-activation handler (renders on first open, `aboutRendered` flag); tests/changelog.test.ts + scripts/check-changelog.mjs widened (RED on the pre-fix changelog: 5 Tracker lines in the last ten versions; GREEN after the rewrite); last ~10 entries rewritten in user voice (root + extension copies byte-identical); docs/CHANGELOG-STYLE.md added. Gates at candidate `86065e2a`: build clean, unit 2580/0, chrome journeys 212/212 (7 new About checks), `check:changelog` and `check:changelog-order` green. Retained evidence committed at `9375d74a` (manifest attests cd803411, 212/0, about-whats-new.png 1400x2256).
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); `renderAbout` 3069-3081, the test's recent-section bans (48-51) and `CHANGELOG.md:6-13` re-verified.
 
 ## [CAP-FB-20260830-SETTINGS-HOOKS-PERMISSIONS-TABLES-01] Hooks is 50+ identical cards with red Deny buttons; Permissions is 19 identical cards

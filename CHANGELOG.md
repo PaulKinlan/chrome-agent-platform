@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.480] — 2026-08-30
+- The What's new section change is now in review
+
 ## [0.2.479] — 2026-08-30
 - The What's new section shows the last five readable changes, with everything else behind a disclosure
 
