@@ -1,9 +1,11 @@
 {
-  "testedSourceCommit": "85acc6d4eb5130289d41bbe03294130d3256083a",
-  "evidenceCommitNote": "exact clean testedSourceCommit; evidence was written separately from source when WEBMCP_ARTIFACT_DIR was set",
-  "worktreeDirtyFiles": [],
-  "runId": "webmcp-acceptance-1788069635157",
-  "ts": "2026-08-30T06:00:35.157Z",
+  "testedSourceCommit": "8c687a6cb2dce8fa97a24c1fe4448b24399fa49d",
+  "evidenceCommitNote": "working-tree run; worktreeDirtyFiles lists every difference from testedSourceCommit",
+  "worktreeDirtyFiles": [
+    "M test-artifacts/webmcp-acceptance-tab-picker.png"
+  ],
+  "runId": "webmcp-acceptance-1788069997990",
+  "ts": "2026-08-30T06:06:37.991Z",
   "mode": "automated-variant",
   "permissionGrant": "test-manifest-pregranted (deep checks); shipped fresh-profile JIT (picker proof)",
   "overallStatus": "OPEN — the shipped-manifest fresh-profile picker path is attested headless; the deep discovery/injection/invocation path runs on the pregranted variant. Run with --headed to attest every step on shipped bytes.",
@@ -182,20 +184,20 @@
   ],
   "evidence": {
     "scriptParsedUrls": [
-      "chrome-extension://imifmlklmjnhhopplimnkncpagngphpc/content/webmcp-detect-main.js",
-      "chrome-extension://imifmlklmjnhhopplimnkncpagngphpc/content/webmcp-detect-relay.js",
-      "chrome-extension://imifmlklmjnhhopplimnkncpagngphpc/content/bridge-auth.js",
-      "chrome-extension://imifmlklmjnhhopplimnkncpagngphpc/content/main-world.js",
+      "chrome-extension://oglkpgcgaehgmkbkjiifckkmdfkonhhb/content/webmcp-detect-main.js",
+      "chrome-extension://oglkpgcgaehgmkbkjiifckkmdfkonhhb/content/webmcp-detect-relay.js",
+      "chrome-extension://oglkpgcgaehgmkbkjiifckkmdfkonhhb/content/bridge-auth.js",
+      "chrome-extension://oglkpgcgaehgmkbkjiifckkmdfkonhhb/content/main-world.js",
       "http://127.0.0.1:8934/index.html",
-      "chrome-extension://imifmlklmjnhhopplimnkncpagngphpc/content/bridge-auth.js",
-      "chrome-extension://imifmlklmjnhhopplimnkncpagngphpc/content/content-script.js",
-      "chrome-extension://imifmlklmjnhhopplimnkncpagngphpc/content/webmcp-detect-main.js",
-      "chrome-extension://imifmlklmjnhhopplimnkncpagngphpc/content/webmcp-detect-relay.js",
-      "chrome-extension://imifmlklmjnhhopplimnkncpagngphpc/content/bridge-auth.js",
-      "chrome-extension://imifmlklmjnhhopplimnkncpagngphpc/content/main-world.js",
+      "chrome-extension://oglkpgcgaehgmkbkjiifckkmdfkonhhb/content/bridge-auth.js",
+      "chrome-extension://oglkpgcgaehgmkbkjiifckkmdfkonhhb/content/content-script.js",
+      "chrome-extension://oglkpgcgaehgmkbkjiifckkmdfkonhhb/content/webmcp-detect-main.js",
+      "chrome-extension://oglkpgcgaehgmkbkjiifckkmdfkonhhb/content/webmcp-detect-relay.js",
+      "chrome-extension://oglkpgcgaehgmkbkjiifckkmdfkonhhb/content/bridge-auth.js",
+      "chrome-extension://oglkpgcgaehgmkbkjiifckkmdfkonhhb/content/main-world.js",
       "http://127.0.0.1:8934/index.html?nav=2",
-      "chrome-extension://imifmlklmjnhhopplimnkncpagngphpc/content/bridge-auth.js",
-      "chrome-extension://imifmlklmjnhhopplimnkncpagngphpc/content/content-script.js"
+      "chrome-extension://oglkpgcgaehgmkbkjiifckkmdfkonhhb/content/bridge-auth.js",
+      "chrome-extension://oglkpgcgaehgmkbkjiifckkmdfkonhhb/content/content-script.js"
     ],
     "consoleEvents": [
       "[WebMCP:main] start {\"origin\":\"http://127.0.0.1:8934\",\"role\":\"main-world\"}",
@@ -237,7 +239,7 @@
       },
       {
         "name": "webmcp-acceptance-tab-picker.png",
-        "sha256": "23236ab05b2d770636ac94fdb010ad61c6fb581332cc4bbe4ccd9d7b1e291176",
+        "sha256": "38e198a17a144a0b368ac4dd3f29619554a9c7aa4f871a03706fed341f1c36f4",
         "bytes": 128768
       },
       {

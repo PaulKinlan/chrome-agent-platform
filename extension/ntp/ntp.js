@@ -618,9 +618,10 @@ async function discoverActivePage() {
     }
   }
   if (listing?.needTabs) {
-    // `tabs` is granted at install — VERIFY (fail closed). A needTabs response
-    // post-install-grant means a broken/revoked install; verify + report
-    // honestly instead of running an obsolete runtime request.
+    // `tabs` is NOT required for discovery (tab URLs/titles come from
+    // install-granted `<all_urls>` host access) — a needTabs response is a
+    // broken-install signal; verify + report honestly instead of running an
+    // obsolete runtime request.
     const granted = await chrome.permissions
       .contains({ permissions: ["tabs"] })
       .catch(() => false);

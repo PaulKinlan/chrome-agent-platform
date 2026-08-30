@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.424] — 2026-08-30
+- Find site tools: correct stale permission comments (tabs was never needed; scripting JIT is silent)
+
 ## [0.2.423] — 2026-08-30
 - Find site tools: refresh the acceptance evidence (fresh-profile picker proof)
 

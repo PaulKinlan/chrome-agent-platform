@@ -5047,9 +5047,11 @@ const handlers = mergeRouteMaps(
   // extension's OWN NTP tab while the user is clicking in the hub — so the
   // flow enrolled the NTP, not the page the user meant). The hub renders this
   // list as an explicit picker and threads the CHOSEN tab's id + origin through
-  // enrollment. Tab URLs/titles are visible only with the OPTIONAL `tabs`
-  // permission; without it we report `needTabs` honestly so the hub requests
-  // it on the user's click.
+  // enrollment. Tab URLs/titles come from the install-granted `<all_urls>`
+  // host access (the optional `tabs` permission is NOT required). What the
+  // per-tab reattestation below does need is the OPTIONAL `scripting`
+  // permission; without it we refuse with `needScripting` so the hub can
+  // request it from the user's discover gesture.
   async "agent.discoverable-tabs"() {
     // The per-tab reattestation below uses chrome.scripting — an OPTIONAL
     // permission. Without it no tab can be bound to its detected document, so

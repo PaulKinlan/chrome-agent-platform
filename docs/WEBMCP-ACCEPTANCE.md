@@ -59,7 +59,7 @@ for `content/main-world.js` + `content/content-script.js`, console lifecycle
 events, discovery before/after reload + navigation, the invoked side effect,
 the declared-vs-global collision, the negative rejections, the singleton, and
 screenshots. The run writes a machine-verifiable
-`webmcp-acceptance-manifest.json` (`permissionGrant: "manual-user-allow"`,
+`webmcp-acceptance-manifest.json` (`permissionGrant: "jit-silent-no-prompt"`,
 `overallStatus: "ATTESTED"` only when every check passes) to `test-artifacts/`
 by default or to `WEBMCP_ARTIFACT_DIR` when set.
 
