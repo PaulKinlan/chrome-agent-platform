@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.444] — 2026-08-30
+- A test that left thousands of tiny temporary repositories behind now cleans up after itself.
+
 ## [0.2.443] — 2026-08-30
 - Tracker: the full-answer transcript fix is recorded as landed.
 
