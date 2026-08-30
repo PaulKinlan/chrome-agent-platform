@@ -72,10 +72,12 @@ Deno.test("catalogue: the vendors the pickers use are non-empty + newest-first",
   assertEquals(modelsForVendor("openai-compatible").length, 0);
 });
 
-Deno.test("catalogue: ordering really is newest-first (3.x before 2.x for gemini)", () => {
+Deno.test("catalogue: ordering really is newest-first (3.7 before 3.1 for gemini) and retired 2.x is gone", () => {
   const models = modelsForVendor("gemini");
-  const firstGen3 = models.findIndex((m) => /^gemini-3/.test(m));
-  const firstGen2 = models.findIndex((m) => /^gemini-2/.test(m));
-  assertEquals(firstGen3 >= 0 && firstGen2 >= 0, true, "expected both 3.x and 2.x gemini models");
-  assertEquals(firstGen3 < firstGen2, true, "3.x must sort before 2.x");
+  const first37 = models.findIndex((m) => /^gemini-3\.7/.test(m));
+  const first31 = models.findIndex((m) => /^gemini-3\.1/.test(m));
+  assertEquals(first37 >= 0 && first31 >= 0, true, "expected both 3.7 and 3.1 gemini models");
+  assertEquals(first37 < first31, true, "3.7 must sort before 3.1");
+  // The retired generation never reaches a picker (CAP-FB-20260830-MODEL-CATALOG-CURRENT-01).
+  assertEquals(models.findIndex((m) => /^gemini-[12]/.test(m)), -1, "no 1.x/2.x gemini id in the picker view");
 });

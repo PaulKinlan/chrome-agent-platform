@@ -6391,10 +6391,13 @@ customElements.define("provider-select", ProviderSelect);
  * role=listbox + aria-activedescendant; full keyboard (arrows/Enter/Escape/Tab);
  * an unknown typed id commits as a CUSTOM value (first-class path, not an
  * error); empty catalogue (Ollama / OpenAI-compatible) = free-text mode.
- * Attributes: label, placeholder, value, disabled, loading, models (JSON).
+ * Attributes: label, placeholder, value, disabled, loading, models (JSON),
+ * recommended (JSON — the catalogue head, rendered under a "Recommended"
+ * group header; the remaining models go under "More models"). Group headers
+ * are role=presentation, so arrow navigation skips them.
  * Fires `change` {value}. Getters: value, isCustom, open. */
 class ModelPicker extends Component {
-  static get observedAttributes() { return ["label", "placeholder", "value", "disabled", "loading", "models"]; }
+  static get observedAttributes() { return ["label", "placeholder", "value", "disabled", "loading", "models", "recommended"]; }
   attributeChangedCallback(name, oldValue, newValue) {
     // SELF-INFLICTED value changes (a commit from typing/keyboard/option click)
     // must NOT re-render — a re-render destroys the focused input mid-keyboard
@@ -6433,6 +6436,8 @@ class ModelPicker extends Component {
   }
   get models() { return parseJSONAttr(this.getAttribute("models"), []); }
   set models(list) { this.setAttribute("models", JSON.stringify(Array.isArray(list) ? list : [])); }
+  get recommended() { return parseJSONAttr(this.getAttribute("recommended"), []); }
+  set recommended(list) { this.setAttribute("recommended", JSON.stringify(Array.isArray(list) ? list : [])); }
   get isCustom() {
     const models = this.models;
     return this._committed !== "" && !models.includes(this._committed);
@@ -6480,6 +6485,8 @@ class ModelPicker extends Component {
       }
       .opt:hover { background: color-mix(in oklab, var(--accent, #0e6e63) 8%, transparent); }
       .opt[aria-selected="true"] { background: color-mix(in oklab, var(--accent, #0e6e63) 14%, transparent); font-weight: 600; }
+      .group { padding: 6px 10px 2px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted, #635e56); }
+      .group + .group, .opt + .group { margin-top: 4px; border-top: 1px solid var(--border, #e3e0d9); padding-top: 8px; }
       .empty { padding: 8px 10px; font-size: 12px; color: var(--muted, #635e56); }
       .custom-hint { font-size: 12px; color: var(--secondary, #b45309); }
       .loading-hint { font-size: 12px; color: var(--muted, #635e56); }
@@ -6583,15 +6590,54 @@ class ModelPicker extends Component {
   }
   _renderList(query) {
     if (!this._listbox) return;
-    const visible = filterModels(this.models, query);
+    const matched = filterModels(this.models, query);
+    // The catalogue head ("Recommended") first, then everything else ("More
+    // models" — the provider's live list). Ids can come from a provider's
+    // /models response, so every row is built with textContent, never markup.
+    const rec = new Set(this.recommended);
+    const head = rec.size ? matched.filter((m) => rec.has(m)) : [];
+    const rest = rec.size ? matched.filter((m) => !rec.has(m)) : matched;
+    const visible = [...head, ...rest];
     this._visibleOptions = visible;
     this._activeIndex = -1;
     this._input.removeAttribute("aria-activedescendant");
-    this._listbox.innerHTML = visible.length
-      ? visible.map((m, i) => `<button type="button" class="opt" role="option" id="${this._listId}-opt-${i}" aria-selected="false" data-value="${escapeHtml(m)}">${escapeHtml(m)}</button>`).join("")
-      : `<div class="empty">No matches — Enter keeps “${escapeHtml(String(query ?? "").slice(0, 40))}” as a custom id.</div>`;
-    this._listbox.querySelectorAll("[role='option']").forEach((o) =>
-      o.addEventListener("click", () => { this._commit(o.dataset.value); this._setOpen(false); this._input.focus(); }));
+    this._listbox.replaceChildren();
+    const doc = this._listbox.ownerDocument ?? document;
+    const groupHeader = (text) => {
+      const g = doc.createElement("div");
+      g.className = "group";
+      g.setAttribute("role", "presentation");
+      g.textContent = text;
+      return g;
+    };
+    const option = (m, i) => {
+      const b = doc.createElement("button");
+      b.type = "button";
+      b.className = "opt";
+      b.setAttribute("role", "option");
+      b.id = `${this._listId}-opt-${i}`;
+      b.setAttribute("aria-selected", "false");
+      b.dataset.value = m;
+      b.textContent = m;
+      b.addEventListener("click", () => { this._commit(m); this._setOpen(false); this._input.focus(); });
+      return b;
+    };
+    if (!visible.length) {
+      const empty = doc.createElement("div");
+      empty.className = "empty";
+      empty.textContent = `No matches — Enter keeps “${String(query ?? "").slice(0, 40)}” as a custom id.`;
+      this._listbox.appendChild(empty);
+    } else {
+      let i = 0;
+      if (head.length) {
+        this._listbox.appendChild(groupHeader("Recommended"));
+        for (const m of head) this._listbox.appendChild(option(m, i++));
+      }
+      if (rest.length) {
+        if (head.length) this._listbox.appendChild(groupHeader("More models"));
+        for (const m of rest) this._listbox.appendChild(option(m, i++));
+      }
+    }
     this._position();
   }
   _applyOpen() {

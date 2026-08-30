@@ -321,7 +321,8 @@
         <h3 class="spec"><code class="tag">&lt;model-picker&gt;</code> — the searchable model combobox</h3>
         <div class="stage column" style="max-width:420px">
           <model-picker id="model-demo" label="Model id" placeholder="Search or type a model id…"
-            models='["gemini-3.7-flash","gemini-3.7-pro","gemini-2.5-flash","gemini-2.5-pro","gpt-5.6-sol","gpt-5.6-terra","claude-opus-5","claude-fable-5","deepseek-v4-pro","deepseek-v4-flash"]'
+            models='["gemini-3.7-flash","gemini-3.6-flash","gemini-3.1-pro-preview","gemini-flash-latest","gpt-5.6-luna","gpt-5.6-terra","gpt-5.6-sol","claude-sonnet-5","claude-opus-5","claude-fable-5","deepseek-v4-pro","deepseek-v4-flash"]'
+            recommended='["gemini-3.7-flash","gemini-3.6-flash","gemini-3.1-pro-preview","gemini-flash-latest"]'
             value="gemini-3.7-flash"></model-picker>
         </div>
         <p class="caption">the SAME maintained catalogue the Providers section uses (modelsForVendor → llm-prices, newest-first). ARIA combobox: type to filter, arrows + Enter, Escape reverts; an unknown typed id commits as a custom value. Empty catalogue = free-text mode (Ollama / OpenAI-compatible).</p>

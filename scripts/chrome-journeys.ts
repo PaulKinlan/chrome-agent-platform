@@ -385,12 +385,15 @@ const EXPECTED = [
   "board deny: rule removed via the row's real Remove control",
   "board deny: the row disappears and the store is empty after Remove",
   "Settings: OpenAI provider card rendered",
+  "Settings: OpenAI picker: first suggestion is the catalogue default and no suggestion ends in -Nk",
+  "Settings: OpenAI picker: opened list shows gpt-5.6-luna first under a Recommended header",
   "Settings: Clear key button present for the keyed provider",
   "Settings: clicked Clear key via a real click",
   "Settings: Clear key removed only the key (endpoint/model preserved)",
   "Settings: clicked Update via a real click",
   "Settings: Update preserved endpoint/model + empty key",
   "Settings: demo + prompt-api absent from the provider picker",
+  "Settings: empty model + valid key resolves to the default (provider.status usingDefaultModel:true, modelId gpt-5.6-luna)",
   "Settings: provider restored to demo",
   "Settings: demo still resolvable via the SW (testing only)",
   "Settings: Enroll input present",
@@ -1356,6 +1359,39 @@ async function main() {
       if (!openaiCard) await sleep(250);
     }
     check("Settings: OpenAI provider card rendered", openaiCard !== null);
+    // CAP-FB-20260830-MODEL-CATALOG-CURRENT-01: the picker is fed by the bundled
+    // catalogue (lib/model-catalog.js), never by the price table — so the
+    // first suggestion is the verified default and no pricing pseudo-id
+    // (`gpt-5.6-terra-272k`, which OpenAI 404s) can reach the user.
+    const pickerModels = await evalOpts(
+      `JSON.parse(document.querySelector('.provider-card[data-provider="openai"] model-picker')?.getAttribute("models") ?? "[]")`,
+    ).catch(() => []);
+    check(
+      "Settings: OpenAI picker: first suggestion is the catalogue default and no suggestion ends in -Nk",
+      Array.isArray(pickerModels) && pickerModels[0] === "gpt-5.6-luna" &&
+        pickerModels.length > 0 && pickerModels.every((m) => !/-\d+k$/.test(String(m))),
+    );
+    // Open the combobox through its own drive hook and read the rendered rows:
+    // the "Recommended" header is role=presentation (skipped by arrow keys) and
+    // the first role=option is the default.
+    const pickerOpen = await evalOpts(`(() => {
+      const p = document.querySelector('.provider-card[data-provider="openai"] model-picker');
+      if (!p) return null;
+      p._renderList(""); p._setOpen(true);
+      const root = p.shadowRoot;
+      const rows = [...root.querySelectorAll('.listbox > *')].map((el) => ({ role: el.getAttribute('role'), text: el.textContent.trim() }));
+      return { rows, expanded: root.querySelector('[role=combobox]')?.getAttribute('aria-expanded') };
+    })()`).catch(() => null);
+    const pickerShot = await captureShot(cdp, optsSession).catch(() => null);
+    if (pickerShot) await writeEvidence("settings-openai-picker-after.png", pickerShot);
+    await evalOpts(`document.querySelector('.provider-card[data-provider="openai"] model-picker')?._setOpen(false); true`).catch(() => {});
+    check(
+      "Settings: OpenAI picker: opened list shows gpt-5.6-luna first under a Recommended header",
+      pickerOpen?.expanded === "true" &&
+        pickerOpen?.rows?.[0]?.role === "presentation" && pickerOpen?.rows?.[0]?.text === "Recommended" &&
+        pickerOpen?.rows?.[1]?.role === "option" && pickerOpen?.rows?.[1]?.text === "gpt-5.6-luna" &&
+        pickerOpen.rows.every((r) => !/-\d+k$/.test(r.text)),
+    );
     check(
       "Settings: Clear key button present for the keyed provider",
       (await boxOf(
@@ -1396,6 +1432,17 @@ async function main() {
     check(
       "Settings: demo + prompt-api absent from the provider picker",
       (await evalIn(cdp, optsSession, `document.querySelectorAll('.provider-card[data-provider="demo"], .provider-card[data-provider="prompt-api"]').length`)) === 0,
+    );
+    // CAP-FB-20260830-MODEL-CATALOG-CURRENT-01: an EMPTY model with a key no
+    // longer runs the demo model — provider.status reports the catalogue
+    // default the run will use (a public catalogue id, not user data).
+    await msgOpts({ type: "provider.set", config: { provider: "openai", apiKey: "placeholder-key", baseURL: "", model: "" } });
+    await sleep(300);
+    const defaultStatus = await msgOpts({ type: "provider.status" });
+    check(
+      "Settings: empty model + valid key resolves to the default (provider.status usingDefaultModel:true, modelId gpt-5.6-luna)",
+      defaultStatus?.provider === "openai" && defaultStatus?.usingDefaultModel === true &&
+        defaultStatus?.defaultModelId === "gpt-5.6-luna",
     );
     await msgOpts({ type: "provider.set", config: { provider: "demo", apiKey: "", baseURL: "", model: "" } });
     await sleep(300);

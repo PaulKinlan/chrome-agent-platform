@@ -14,6 +14,7 @@
 // serialized (the same discipline as the enrollment registry).
 
 import { kvGet, kvSet } from "./kv.js";
+import { GEMINI_IMAGE_MODEL } from "./model-catalog.js";
 import { namedAgentMemory, purgeStoreDir } from "./memory.js";
 import { deleteAgentPromptOverride } from "./system-prompts.js";
 import { normalizeCanDelegateTo } from "./agent-delegation.js";
@@ -890,7 +891,7 @@ export async function generateAgentAvatar({ name, role, apiKey }) {
     `. Minimal geometric mascot, friendly but not childish, petrol-teal (#0e6e63) on a warm paper (#f7f6f3) circular badge. No text, no letters, no gradients. Simple + bold, reads at 32px.`;
   try {
     const url =
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${encodeURIComponent(apiKey)}`;
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_IMAGE_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`;
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

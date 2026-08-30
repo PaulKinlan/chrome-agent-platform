@@ -69,11 +69,11 @@ const day = 24 * 60 * 60 * 1000;
 const iso = (ms: number) => new Date(ms).toISOString();
 const seedRows = [] as any[];
 for (const [off, agent, provider, model, inp, outp, cost] of [
-  [0, "hub", "openai", "gpt-4.1-mini", 5200, 1400, 0.012],
-  [0.2 * day, "agent-sites", "anthropic", "claude-3.5-haiku", 2100, 900, 0.006],
-  [1 * day, "hub", "openai", "gpt-4.1-mini", 4400, 1100, 0.01],
-  [2 * day, "agent-sites", "google", "gemini-2.0-flash", 1500, 700, 0.001],
-  [3 * day, "hub", "openai", "gpt-4.1-mini", 3600, 980, 0.009],
+  [0, "hub", "openai", "gpt-5.4-mini", 5200, 1400, 0.012],
+  [0.2 * day, "agent-sites", "anthropic", "claude-sonnet-5", 2100, 900, 0.006],
+  [1 * day, "hub", "openai", "gpt-5.4-mini", 4400, 1100, 0.01],
+  [2 * day, "agent-sites", "google", "gemini-3.7-flash", 1500, 700, 0.001],
+  [3 * day, "hub", "openai", "gpt-5.4-mini", 3600, 980, 0.009],
 ] as any[]) {
   seedRows.push({ id: `seed-${off}-${model}`, timestamp: iso(now - off), agentId: agent, taskId: "kat",
     provider, model, inputTokens: inp, outputTokens: outp, totalTokens: inp + outp, estimatedCost: cost });
@@ -117,7 +117,7 @@ const models = await evaluate(`(() => {
   const rows = [...document.querySelectorAll("#usage-chart-models .usage-share-row")];
   return { count: rows.length, labels: rows.map((r) => r.querySelector(".usage-share-label")?.textContent) };
 })()`);
-check("per-model share bars render (gpt-4.1-mini leads)", models.count >= 2 && models.labels[0] === "gpt-4.1-mini", models);
+check("per-model share bars render (gpt-5.4-mini leads)", models.count >= 2 && models.labels[0] === "gpt-5.4-mini", models);
 
 const agents = await evaluate(`document.querySelectorAll("#usage-chart-agents .usage-share-row").length`);
 check("per-agent share bars render", agents >= 2, agents);

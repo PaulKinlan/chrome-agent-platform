@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.438] — 2026-08-30
+- Landed: the model picker now recommends current models (gpt-5.6-luna, gemini-3.7-flash, claude-sonnet-5), the newest OpenAI models work again from the hub and from Test connection, and a check stops retired model names from creeping back in.
+
 ## [0.2.437] — 2026-08-30
 - Tracker: the fresh-profile agent list fix is recorded as landed.
 

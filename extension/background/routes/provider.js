@@ -13,6 +13,7 @@ import {
   providerRunGate,
 } from "../../lib/provider-gate.js";
 import { testProvider } from "../../lib/provider-test.js";
+import { defaultModelFor } from "../../lib/model-catalog.js";
 import { safeProviderError } from "../../lib/pure.js";
 import { requireSettingsSender } from "./auth.js";
 
@@ -62,10 +63,16 @@ export function createProviderRoutes({ invalidateAgent = () => {} } = {}) {
       // a boolean, and a human reason (never the key / base URL / model).
       const cfg = await getProviderConfig();
       const gate = await providerRunGate(cfg);
+      // An empty model id runs the catalogue default — say so (the default is
+      // a public catalogue id, not user data), so the hub and the journeys can
+      // see that the run will NOT fall back to the demo model.
+      const usingDefaultModel = !String(cfg.model ?? "").trim() && Boolean(defaultModelFor(cfg.provider));
       return {
         provider: cfg.provider ?? "",
         ok: gate.ok,
         reason: gate.ok ? "" : gate.reason,
+        usingDefaultModel,
+        defaultModelId: usingDefaultModel ? defaultModelFor(cfg.provider) : "",
       };
     },
 

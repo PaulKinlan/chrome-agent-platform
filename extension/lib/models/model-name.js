@@ -4,7 +4,7 @@
 // format (spaces/casing) with HTTP 400 "unexpected model name format". Normalise
 // a user-entered model id ("Gemini 3.7 Flash" → "gemini-3.7-flash") so both the
 // dropdown AND a hand-typed model work. Non-Gemini providers are left untouched
-// (their model ids are not all lowercase/hyphenated — e.g. "gpt-4o", "claude-3.5").
+// (their model ids are not all lowercase/hyphenated — e.g. "GPT-5.6-Luna", "Claude Sonnet 5").
 
 export function normaliseModelId(model, baseURL) {
   if (!model || typeof model !== "string") return model;

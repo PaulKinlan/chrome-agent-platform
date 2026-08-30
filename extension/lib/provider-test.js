@@ -16,6 +16,7 @@ import {
   isPromptApiAvailable,
 } from "./models/prompt-api-model.js";
 import { safeProviderError } from "./pure.js";
+import { isOpenAIEndpoint } from "./models/openai-model.js";
 
 // OpenAI-compatible providers (every cloud provider advertised goes through the
 // same adapter + endpoint).
@@ -36,6 +37,27 @@ export function errorKindForStatus(status) {
   if (status === 429) return "rate-limit";
   if (status >= 500) return "server";
   return "http";
+}
+
+/**
+ * The probe body. ONE request shape with the hub (CAP-FB-20260830-MODEL-CATALOG-
+ * CURRENT-01): every current OpenAI model rejects `max_tokens` (HTTP 400
+ * unsupported_parameter — use `max_completion_tokens`), and OpenAI's gpt-5.x
+ * refuses function tools unless `reasoning_effort` is "none", which the hub's
+ * adapter now sends — so the probe sends it too, and a green Test predicts a
+ * working run. Other endpoints (Gemini compat, Grok, Z.ai, Ollama) accept the
+ * token cap and do not know the reasoning field, so it is OpenAI-only.
+ * Exported PURE so the shape is unit-tested without a fetch.
+ */
+export function buildProbeBody({ baseURL, model } = {}) {
+  const body = {
+    model: String(model ?? ""),
+    messages: [{ role: "user", content: "Reply with the single word: ok" }],
+    max_completion_tokens: 8,
+    stream: false,
+  };
+  if (isOpenAIEndpoint(baseURL) && /^gpt-5/i.test(body.model)) body.reasoning_effort = "none";
+  return body;
 }
 
 /**
@@ -127,12 +149,7 @@ export async function testProvider(p, fields = {}) {
         "Content-Type": "application/json",
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
       },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: "Reply with the single word: ok" }],
-        max_tokens: 8,
-        stream: false,
-      }),
+      body: JSON.stringify(buildProbeBody({ baseURL, model })),
       signal: controller.signal,
     });
     clearTimeout(timer);
