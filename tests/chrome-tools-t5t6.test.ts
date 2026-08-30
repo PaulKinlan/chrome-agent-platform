@@ -171,7 +171,10 @@ Deno.test("T6: save_page_as_mhtml rides the screenshot consent chain + hard byte
   // No exact host permission → waitingForPermission with the permissionRequirement payload.
   const wait = await tools().save_page_as_mhtml.execute({ tabId: 7 });
   assert(wait.waitingForPermission === true);
-  assertEquals(wait.permissionRequirement.origins, ["https://example.com/*"]);
+  // The requirement is the card-shaped one (CAP-FB-20260830-DENIAL-TO-GRANT-CARD-01):
+  // exact canonical origin under grantOrigins, no Chrome permission needed.
+  assertEquals(wait.permissionRequirement.grantOrigins, ["https://example.com"]);
+  assertEquals(wait.permissionRequirement.permissions, []);
   // Host permission but NO product grant → honest grant error, no capture.
   grantedOrigins.add("https://example.com/*");
   const noGrant = await tools().save_page_as_mhtml.execute({ tabId: 7 });

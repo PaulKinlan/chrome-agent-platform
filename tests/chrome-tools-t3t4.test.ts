@@ -341,7 +341,7 @@ Deno.test("T4 list_downloads: bounded + permission-gated; read-only exposure", a
 
   granted.delete("downloads");
   const denied = await tools().list_downloads.execute({});
-  assertEquals(denied.error, "downloads permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
+  assertEquals(denied.error, "downloads permission not granted — allow it in the approval card here, or in Settings → Permissions");
 });
 
 // ──────────────────────────────────────────────────────────────────────────

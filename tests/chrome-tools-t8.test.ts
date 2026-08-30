@@ -152,15 +152,15 @@ Deno.test("T8 inventory: the 9 tranche-8 tools ship in the browser toolset; read
 Deno.test("T8 permission fail-closed: every tool returns an honest Settings error without its optional permission", async () => {
   reset();
   const t = tools();
-  assertEquals((await t.list_cookies.execute({ domain: "example.com" })).error, "cookies permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.list_cookie_stores.execute({})).error, "cookies permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.get_cookie.execute({ url: "https://example.com/", name: "s" })).error, "cookies permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.set_cookie.execute({ url: "https://example.com/", name: "s", value: "v" })).error, "cookies permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.remove_cookie.execute({ url: "https://example.com/", name: "s" })).error, "cookies permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.wipe_browsing_data.execute({ dataTypes: ["cache"] })).error, "browsingData permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.get_content_setting.execute({ resource: "javascript", primaryPattern: "https://example.com/*" })).error, "contentSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.set_content_setting.execute({ resource: "javascript", primaryPattern: "https://example.com/*", setting: "block" })).error, "contentSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
-  assertEquals((await t.clear_content_settings.execute({ resource: "javascript", primaryPattern: "https://example.com/*" })).error, "contentSettings permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
+  assertEquals((await t.list_cookies.execute({ domain: "example.com" })).error, "cookies permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.list_cookie_stores.execute({})).error, "cookies permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.get_cookie.execute({ url: "https://example.com/", name: "s" })).error, "cookies permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.set_cookie.execute({ url: "https://example.com/", name: "s", value: "v" })).error, "cookies permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.remove_cookie.execute({ url: "https://example.com/", name: "s" })).error, "cookies permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.wipe_browsing_data.execute({ dataTypes: ["cache"] })).error, "browsingData permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.get_content_setting.execute({ resource: "javascript", primaryPattern: "https://example.com/*" })).error, "contentSettings permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.set_content_setting.execute({ resource: "javascript", primaryPattern: "https://example.com/*", setting: "block" })).error, "contentSettings permission not granted — allow it in the approval card here, or in Settings → Permissions");
+  assertEquals((await t.clear_content_settings.execute({ resource: "javascript", primaryPattern: "https://example.com/*" })).error, "contentSettings permission not granted — allow it in the approval card here, or in Settings → Permissions");
   assertEquals(chromeCalls.filter((c) => !String(c[0]).startsWith("cookies")).length, 0, "no chrome mutation reached without the permission");
 });
 

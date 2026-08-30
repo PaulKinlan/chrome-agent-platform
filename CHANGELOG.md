@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.459] — 2026-08-30
+- Landed: when the agent needs a permission it does not have, the conversation now shows one Allow card naming exactly what is needed, and allowing it lets the action go ahead.
+
 ## [0.2.458] — 2026-08-30
 - Tracker: the keyless first result is recorded as landed.
 

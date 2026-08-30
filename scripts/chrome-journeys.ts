@@ -292,6 +292,25 @@ async function clickSel(cdp, session, selector) {
   return true;
 }
 
+/** A GENUINE mouse click on an element INSIDE an open shadow root (the
+ * approval card's Allow / Not now buttons live in the component's shadow
+ * tree, out of document.querySelector's reach). Same real CDP input. */
+async function clickShadow(cdp, session, hostSelector, innerSelector) {
+  const b = await evalIn(
+    cdp,
+    session,
+    `(() => { const host = [...document.querySelectorAll(${JSON.stringify(hostSelector)})].pop(); const el = host?.shadowRoot?.querySelector(${JSON.stringify(innerSelector)}); if (!el) return null; el.scrollIntoView({ block: "center", inline: "center" }); const r = el.getBoundingClientRect(); return { x: r.x + r.width/2, y: r.y + r.height/2 }; })()`,
+  );
+  if (!b || typeof b.x !== "number") return false;
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mousePressed", x: b.x, y: b.y, button: "left", buttons: 1, clickCount: 1,
+  }, session);
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased", x: b.x, y: b.y, button: "left", buttons: 0, clickCount: 1,
+  }, session);
+  return true;
+}
+
 /** GENUINE keyboard typing (real CDP char events, not Runtime.evaluate). */
 async function typeText(cdp, session, text) {
   for (const ch of text) {
@@ -412,6 +431,8 @@ const EXPECTED = [
   "keyless: developer flag off for the fresh-profile run",
   "keyless: typed 'group my tabs by topic' into the hub composer",
   "keyless: clicked Run task",
+  "keyless: the first run pauses on ONE Allow card naming tabs (never a bare error)",
+  "keyless: clicked Not now on the card via a real click",
   "keyless: the first run answers in plain language — never '[demo model] Task received'",
   "keyless: without the tabs permission the answer says so honestly",
   "keyless: the persisted thread carries the plain answer, not the demo literal",
@@ -442,6 +463,12 @@ const EXPECTED = [
   "screenshot: revoked via a real checkbox click",
   "Browser control: toggle OFF succeeds while a run holds the lease",
   "screenshot: revoked → capture denied",
+  "Permission card: open_tab denial renders one approval card",
+  "Permission card: Not now declines open_tab and the run reports it honestly",
+  "Permission card: read_page denial renders one approval card",
+  "Permission card: Allow grants scripting and the retried read_page succeeds",
+  "Permission card: capture_screenshot denial renders one approval card",
+  "Permission card: Allow grants browser control and the retried capture_screenshot succeeds",
   "per-origin clear leaves B intact",
   "memory: version tokens are monotonic + never reused (round-27 CAS)",
   "attachment count cap (12 → 4 over-count dropped, journal records 8)",
@@ -1691,16 +1718,23 @@ async function main() {
     check("Settings: retained a driven-UI screenshot", optsShot !== null && optsShot.length > 200);
 
     // ─────────────────────────────────────────────────────────────
-    // JOURNEY 2k — CAP-FB-20260830-KEYLESS-FIRST-RESULT-01: a fresh profile
-    // with NO provider configured (the developer flag OFF, provider "demo" =
-    // the default) gets a real answer from the local assistant through the
-    // REAL hub composer, and the demo provider's plumbing proof ("[demo model]
-    // Task received (N chars)") is unreachable. Headless Chrome cannot grant
-    // the optional `tabs` permission (the prompt never resolves), so here the
-    // first keyless run ends in the HONEST no-permission paragraph; the full
-    // path — real tab groups + the tab-list artifact — is driven by
+    // JOURNEY 2k — CAP-FB-20260830-KEYLESS-FIRST-RESULT-01 ×
+    // CAP-FB-20260830-DENIAL-TO-GRANT-CARD-01: a fresh profile with NO
+    // provider configured (the developer flag OFF, provider "demo" = the
+    // default) gets a real answer from the local assistant through the REAL
+    // hub composer, and the demo provider's plumbing proof ("[demo model]
+    // Task received (N chars)") is unreachable. Both lanes' contracts hold
+    // in ONE run: without `tabs` the first list_tabs denial is ONE Allow
+    // card in the conversation and the run PAUSES (grant-card contract);
+    // headless Chrome cannot grant a warning permission (Chrome's prompt
+    // never resolves), so the owner's answer here is Not now — a trusted
+    // click on the card's real button — after which the assistant ends in
+    // the HONEST no-permission paragraph (keyless contract). The Allow half
+    // — real tab groups + the tab-list artifact — is driven by
     // scripts/keyless-first-result.ts, which seeds the two permissions the
-    // owner's Allow clicks would grant.
+    // owner's Allow clicks would grant. Leaving the run paused here is what
+    // hung the suite (the next agent.run queued behind it until the CDP
+    // evaluate timed out), so the card is ALWAYS settled before moving on.
     // ─────────────────────────────────────────────────────────────
     check("keyless: developer flag off for the fresh-profile run", (await developerFlag(false))?.ok === true);
     await msgValue({ type: "provider.set", config: { provider: "demo", apiKey: "" } });
@@ -1712,18 +1746,55 @@ async function main() {
     await sleep(600);
     check("keyless: typed 'group my tabs by topic' into the hub composer", await typeInto(cdp, ntpSession, "#task-input", "group my tabs by topic"));
     check("keyless: clicked Run task", await clickSel(cdp, ntpSession, "#run-task"));
+    const KEYLESS_CARD_SEL = "#thread-conversation permission-approval-card";
     const KEYLESS_BUBBLES = `(() => {
       const conv = document.getElementById('thread-conversation');
-      if (!conv) return JSON.stringify({ agent: [], cards: 0, status: [] });
+      if (!conv) return JSON.stringify({ agent: [], cards: 0, pending: 0, status: [] });
       const agent = [...conv.querySelectorAll('message-bubble[role="agent"]')].map((b) => ((b.shadowRoot ?? b).querySelector('.msg, .body') ?? b).textContent.replace(/\\s+/g, ' ').trim());
       const status = [...conv.querySelectorAll('conversation-run-status')].map((x) => x.getAttribute('state'));
-      return JSON.stringify({ agent, cards: conv.querySelectorAll('approval-card').length, status });
+      const cards = [...conv.querySelectorAll('permission-approval-card')];
+      const pendingCards = cards.filter((c) => c.getAttribute('state') === null);
+      const last = cards[cards.length - 1] ?? null;
+      return JSON.stringify({
+        agent, status, cards: cards.length, pending: pendingCards.length,
+        card: last ? { state: last.getAttribute('state'), permissions: last.getAttribute('permissions'), denyIsButton: last.shadowRoot?.querySelector('.deny')?.tagName === 'BUTTON' } : null,
+      });
     })()`;
-    let keyless = { agent: [], cards: 0, status: [] };
+    type KeylessView = { agent?: string[]; status?: string[]; cards?: number; pending?: number; card?: { state: string | null; permissions: string | null; denyIsButton: boolean } | null };
+    const keylessRead = async (): Promise<KeylessView> => {
+      try { return JSON.parse(await evalIn(cdp, ntpSession, KEYLESS_BUBBLES) ?? "{}"); } catch { return {}; }
+    };
+    // (1) the grant-card contract: the run pauses on ONE pending card naming
+    // `tabs` — never a bare error bubble, never the demo literal.
+    let keyless: KeylessView = {};
+    const keylessCardT0 = Date.now();
+    while (Date.now() - keylessCardT0 < 60000) {
+      keyless = await keylessRead();
+      if ((keyless.pending ?? 0) > 0) break;
+      if ((keyless.agent ?? []).length > 0 && !(keyless.status ?? []).some((st) => st === "working" || st === "queued")) break;
+      await sleep(250);
+    }
+    await sleep(400); // the focus move is a rAF after the append
+    keyless = await keylessRead();
+    const keylessCardShot = await captureShot(cdp, ntpSession);
+    if (keylessCardShot) await writeEvidence("keyless-first-result-card.png", keylessCardShot);
+    console.log(`keyless card: ${JSON.stringify(keyless).slice(0, 600)}`);
+    check(
+      "keyless: the first run pauses on ONE Allow card naming tabs (never a bare error)",
+      keyless.pending === 1 && keyless.card?.state === null && /"tabs"/.test(keyless.card?.permissions ?? "") &&
+        keyless.card?.denyIsButton === true &&
+        (keyless.status ?? []).includes("waiting-for-permission") &&
+        !/\[demo model\]|Task received/u.test((keyless.agent ?? []).join(" | ")),
+    );
+    // (2) the owner's answer: Not now on the card's REAL button. Settling the
+    // card is unconditional — a run left paused here blocks every run after it.
+    check("keyless: clicked Not now on the card via a real click", await clickShadow(cdp, ntpSession, KEYLESS_CARD_SEL, ".deny"));
+    // (3) the keyless contract: the resumed run ends in the honest paragraph.
     const keylessT0 = Date.now();
     while (Date.now() - keylessT0 < 30000) {
-      try { keyless = JSON.parse(await evalIn(cdp, ntpSession, KEYLESS_BUBBLES) ?? "{}"); } catch { /* re-poll */ }
-      if ((keyless.agent ?? []).length > 0 && !(keyless.status ?? []).some((st) => st === "working" || st === "queued")) break;
+      keyless = await keylessRead();
+      if ((keyless.agent ?? []).length > 0 && (keyless.pending ?? 0) === 0 &&
+        !(keyless.status ?? []).some((st) => st === "working" || st === "queued" || st === "waiting-for-permission")) break;
       await sleep(250);
     }
     const keylessShot = await captureShot(cdp, ntpSession);
@@ -2210,6 +2281,186 @@ async function main() {
       "screenshot: revoked → capture denied",
       afterUiRevoke?.error !== undefined || afterUiRevoke?.ok === false,
     );
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 4c — EVERY browser-tool denial becomes ONE approval card in
+    // the conversation (CAP-FB-20260830-DENIAL-TO-GRANT-CARD-01). Driven
+    // through the REAL hub composer + the demo model's `@demo-browser`
+    // marker (one real lazy-protocol tool call per run). State here: `tabs`
+    // ungranted (a warning permission headless cannot grant), `scripting`
+    // ungranted (silent — grantable), browser control revoked.
+    //   open_tab   → a card naming `tabs`; Not now resumes the paused run and
+    //                the model reports "NOT performed". The Allow half for a
+    //                warning permission is a HEADED check (Chrome's prompt).
+    //   read_page  → a card naming `scripting`; Allow (a trusted click on the
+    //                card's real <button>) grants it and the retried call
+    //                succeeds inside the SAME run.
+    //   capture_screenshot → a card naming the red origin; Allow sets the
+    //                exact-origin browser-control grant and the retry succeeds.
+    // ─────────────────────────────────────────────────────────────
+    const CARD_SEL = "#thread-conversation permission-approval-card";
+    const cardCount = () => evalIn(cdp, ntpSession, `document.querySelectorAll(${JSON.stringify(CARD_SEL)}).length`);
+    // "One card" is asserted on PENDING cards (no state attribute yet): once a
+    // run settles the thread re-projects its transcript from the durable log
+    // and the previous card is replaced by a decision row, so a raw count
+    // taken between runs drifts by one.
+    const pendingCount = () => evalIn(cdp, ntpSession, `[...document.querySelectorAll(${JSON.stringify(CARD_SEL)})].filter((c) => c.getAttribute("state") === null).length`);
+    const dbg = (label, obj) => console.log(`[debug] ${label} ${JSON.stringify(obj)}`);
+    const lastCard = () => evalIn(cdp, ntpSession, `(() => {
+      const c = [...document.querySelectorAll(${JSON.stringify(CARD_SEL)})].pop();
+      if (!c) return null;
+      return {
+        state: c.getAttribute("state"), permissions: c.getAttribute("permissions"),
+        origins: c.getAttribute("origins"), global: c.getAttribute("global"),
+        reason: c.getAttribute("reason"), detail: c.getAttribute("detail"),
+        allowIsButton: c.shadowRoot?.querySelector(".allow")?.tagName === "BUTTON",
+        focused: document.activeElement === c,
+      };
+    })()`);
+    // The transcript's bubbles render inside shadow roots: read the text
+    // through them (host.textContent is empty for a shadow-rendered bubble).
+    const threadText = () => evalIn(cdp, ntpSession, `(() => {
+      const deep = (node) => {
+        let out = "";
+        if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+        if (node.nodeType === Node.ELEMENT_NODE && (node.tagName === "STYLE" || node.tagName === "SCRIPT")) return "";
+        if (node.shadowRoot) out += deep(node.shadowRoot);
+        for (const child of node.childNodes) out += deep(child);
+        return out;
+      };
+      const root = document.getElementById("thread-conversation");
+      return root ? deep(root) : "";
+    })()`);
+    const waitFor = async (fn, ms = 20000) => {
+      const until = Date.now() + ms;
+      while (Date.now() < until) {
+        if (await fn()) return true;
+        await sleep(250);
+      }
+      return false;
+    };
+    // Genuine input needs the NTP to be the ACTIVE tab (the red tab was
+    // activated for the capture probes above, and the tools below activate it
+    // again): bring the NTP forward before typing. JOURNEY 1 opened a task
+    // thread, so the visible composer is the THREAD one (#thread-composer —
+    // the hub composer sits under the thread overlay); a send there continues
+    // that thread, exactly as the owner's follow-up would.
+    const sendTask = async (task) => {
+      await cdp.send("Target.activateTarget", { targetId: ntpPage.id });
+      await cdp.send("Page.bringToFront", {}, ntpSession);
+      await sleep(300);
+      if (!(await typeInto(cdp, ntpSession, "#thread-composer #task-input", task))) return false;
+      const typed = await evalIn(cdp, ntpSession, `document.querySelector('#thread-composer #task-input')?.value ?? null`);
+      if (typed !== task) console.log(`[debug] sendTask typed=${JSON.stringify(typed)}`);
+      return await clickSel(cdp, ntpSession, "#thread-composer #run-task");
+    };
+    // Once the decision settles and the run finishes, the thread re-projects
+    // its transcript from the durable log (the decision row "[tool] DENIED by
+    // owner" / the retried result replaces the live card), so "one card" is
+    // asserted WHILE the run is paused, and the settled state through the
+    // card's state OR its projected outcome text.
+    const settled = async (state) => {
+      const c = await lastCard();
+      return c === null || c?.state === state;
+    };
+    // Screenshots of the NTP need it to be the ACTIVE tab (a background tab's
+    // Page.captureScreenshot hangs in headless); the tools below activate the
+    // red tab, so bring the NTP forward before each shot.
+    const ntpShotNow = async (name) => {
+      await cdp.send("Target.activateTarget", { targetId: ntpPage.id });
+      await sleep(300);
+      const png = await captureShot(cdp, ntpSession);
+      if (png) await writeEvidence(name, png);
+    };
+
+    // (1) open_tab without `tabs` → exactly ONE card naming tabs.
+    await waitFor(async () => (await pendingCount()) === 0);
+    const sentOpenTab = await sendTask(`@demo-browser open_tab url=${RED_URL}`);
+    if (!sentOpenTab) console.log("[debug] sendTask(open_tab) could not type/click");
+    await waitFor(async () => (await pendingCount()) > 0, 60000);
+    await sleep(400); // the focus move is a rAF after the append
+    const openTabCard = await lastCard();
+    const openTabPending = await pendingCount();
+    await ntpShotNow("permission-card-open-tab.png");
+    dbg("open_tab card", { openTabPending, openTabCard });
+    check(
+      "Permission card: open_tab denial renders one approval card",
+      openTabPending === 1 && openTabCard?.state === null &&
+        /"tabs"/.test(openTabCard?.permissions ?? "") && openTabCard?.allowIsButton === true &&
+        openTabCard?.focused === true,
+    );
+    // Not now (a trusted click on the card's real button) resumes the paused
+    // run with a denial; the model must report the tool as NOT performed.
+    await clickShadow(cdp, ntpSession, CARD_SEL, ".deny");
+    const openTabDenied = await waitFor(async () =>
+      (await settled("denied")) &&
+      /Browser tool open_tab was NOT performed: Owner denied/.test(await threadText()));
+    dbg("open_tab denied", { openTabDenied, pending: await pendingCount() });
+    check(
+      "Permission card: Not now declines open_tab and the run reports it honestly",
+      openTabDenied && (await pendingCount()) === 0,
+    );
+
+    // (2) read_page without `scripting` → ONE card naming scripting; Allow
+    // grants it (silent permission: headless grants it) and the retried
+    // read_page succeeds in the same run.
+    await waitFor(async () => (await pendingCount()) === 0);
+    // Earlier journeys (site agents, page-text fencing) may have granted the
+    // silent `scripting` permission; this step needs it ABSENT so the denial
+    // is real. Revoking from an extension page needs no gesture.
+    const scriptingBefore = await evalIn(cdp, ntpSession, `chrome.permissions.remove({ permissions: ["scripting"] }).then(() => chrome.permissions.contains({ permissions: ["scripting"] }))`);
+    dbg("read_page scripting granted before send", scriptingBefore);
+    await sendTask(`@demo-browser read_page tab=${redTabId}`);
+    const readPageT0 = Date.now();
+    await waitFor(async () => (await pendingCount()) > 0, 60000);
+    dbg("read_page card appeared after ms", Date.now() - readPageT0);
+    const readPageCard = await lastCard();
+    const readPagePending = await pendingCount();
+    dbg("read_page card", { readPagePending, readPageCard });
+    check(
+      "Permission card: read_page denial renders one approval card",
+      readPagePending === 1 && readPageCard?.state === null &&
+        /"scripting"/.test(readPageCard?.permissions ?? ""),
+    );
+    await clickShadow(cdp, ntpSession, CARD_SEL, ".allow");
+    const readPageOk = await waitFor(async () =>
+      (await settled("granted")) &&
+      /Browser tool read_page succeeded: title/.test(await threadText()));
+    const scriptingGranted = await evalIn(cdp, ntpSession, `chrome.permissions.contains({ permissions: ["scripting"] })`);
+    await ntpShotNow("permission-card-read-page-allowed.png");
+    dbg("read_page allowed", { readPageOk, scriptingGranted, pending: await pendingCount() });
+    check(
+      "Permission card: Allow grants scripting and the retried read_page succeeds",
+      readPageOk && scriptingGranted === true && (await pendingCount()) === 0,
+    );
+
+    // (3) capture_screenshot with browser control revoked → ONE card naming
+    // the red origin; Allow sets the exact-origin grant and the retry succeeds.
+    await waitFor(async () => (await pendingCount()) === 0);
+    await sendTask(`@demo-browser capture_screenshot tab=${redTabId}`);
+    await waitFor(async () => (await pendingCount()) > 0, 60000);
+    const captureCard = await lastCard();
+    const capturePending = await pendingCount();
+    dbg("capture card", { capturePending, captureCard });
+    check(
+      "Permission card: capture_screenshot denial renders one approval card",
+      capturePending === 1 && captureCard?.state === null &&
+        (captureCard?.origins ?? "").includes(RED_ORIGIN) && captureCard?.permissions === null,
+    );
+    await clickShadow(cdp, ntpSession, CARD_SEL, ".allow");
+    const captureOk = await waitFor(async () =>
+      (await settled("granted")) &&
+      /Browser tool capture_screenshot succeeded: .*screenshot \(\d+ chars\)/.test(await threadText()));
+    const grantAfterCard = await msgValue({ type: "browser-control.get" });
+    await ntpShotNow("permission-card-capture-allowed.png");
+    dbg("capture allowed", { captureOk, grantAfterCard, pending: await pendingCount(), tail: (await threadText()).slice(-300) });
+    check(
+      "Permission card: Allow grants browser control and the retried capture_screenshot succeeds",
+      captureOk && grantAfterCard?.scope === "origins" && Array.isArray(grantAfterCard?.origins) &&
+        grantAfterCard.origins.includes(RED_ORIGIN) && (await pendingCount()) === 0,
+    );
+    // Restore the pre-journey state (browser control revoked) for what follows.
+    await msgValue({ type: "browser-control.set", granted: false });
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 5 — OPFS per-origin A/B clear.

@@ -390,11 +390,14 @@ const PERMISSION_FOR_CAPABILITY = new Map([
 export function permissionDeniedResult(capability, { reason = `enable ${capability} for this action`, permissions = null } = {}) {
   const perm = permissions ?? [PERMISSION_FOR_CAPABILITY.get(capability) ?? capability];
   return {
-    error: `${capability} permission not granted — enable it from the chat when prompted, or in Settings → Permissions`,
+    error: `${capability} permission not granted — allow it in the approval card here, or in Settings → Permissions`,
+    // Legacy alias: scripts/chrome-journeys.ts and tests/bug7-history-
+    // permission.test.ts still read `permissionRequired.capability`
+    // (CAP-FB-20260830-DENIAL-TO-GRANT-CARD-01 kept it for those readers).
     permissionRequired: { capability },
     waitingForPermission: true,
     permissionRequirement: {
-      reason: `enable ${capability} for this action`,
+      reason: String(reason ?? `enable ${capability} for this action`).slice(0, 240),
       permissions: [...perm],
     },
   };
@@ -410,11 +413,7 @@ export function permissionDeniedResult(capability, { reason = `enable ${capabili
  * the await (an abort mid-mutation never reports a committed effect). */
 async function mutateWindowWithGrant(windowId, verb, mutate) {
   if (!(await hasTabsPermission())) {
-    return {
-      error:
-        "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "tabs" },
-    };
+    return permissionDeniedResult("tabs", { reason: `${verb} a browser window` });
   }
   return await withGrantLock(async () => {
     const win = await chrome.windows.get(windowId, { populate: true }).catch(() => null);
@@ -434,10 +433,10 @@ async function mutateWindowWithGrant(windowId, verb, mutate) {
       ? await isBrowserControlGranted(undefined)
       : (await Promise.all(origins.map((o) => isBrowserControlGranted(o)))).every(Boolean);
     if (!covered) {
-      return {
-        error:
-          "browser control not granted for every tab origin in this window — the owner can approve it in the approval card here, or in Settings → Browser control",
-      };
+      return permissionDenial(
+        "browser control not granted for every tab origin in this window — the owner can approve it in the approval card here, or in Settings → Browser control",
+        { reason: origins.length ? `${verb} a window with tabs on ${origins.join(", ")}` : `${verb} a window with no site tabs (this needs the all-sites browser-control grant)`, grantOrigins: origins, grantGlobal: origins.length === 0 },
+      );
     }
     try {
       await assertRunOwned();
@@ -672,15 +671,14 @@ export async function captureTabScreenshot(tabId, { ownerInvoked = false } = {})
       ? true
       : await chrome.permissions.contains({ origins: [originPattern] }).catch(() => false);
     if (!hasExactHost) {
-      return {
-        error: `screenshot is waiting for permission to ${originPattern}`,
-        waitingForPermission: true,
-        permissionRequirement: {
-          tool: "capture_screenshot",
-          reason: "Capture the selected tab",
-          origins: [originPattern],
-        },
-      };
+      // Site access for the exact origin is missing (host access is normally
+      // install-granted). The card names the site; approving it sets the
+      // exact-origin browser-control grant — host access itself is only ever
+      // (re)granted from Settings, and the error text says so.
+      return permissionDenial(
+        `screenshot is waiting for site access to ${originPattern} — grant it in Settings → Permissions`,
+        { reason: `capture a screenshot of ${origin} (site access to ${originPattern} is missing)`, permissions: [], grantOrigins: [origin] },
+      );
     }
 
     // The WHOLE capture (grant check + activation + capture + post-check) holds
@@ -696,10 +694,10 @@ export async function captureTabScreenshot(tabId, { ownerInvoked = false } = {})
         origin,
       );
       if (!grantIdBefore) {
-        return {
-          error:
-            "browser control not granted for this tab's origin — the owner can approve it in the approval card here, or in Settings → Browser control",
-        };
+        return permissionDenial(
+          "browser control not granted for this tab's origin — the owner can approve it in the approval card here, or in Settings → Browser control",
+          { reason: `capture a screenshot of ${origin}`, grantOrigins: [origin] },
+        );
       }
 
           // Activate the requested tab (if any) so it is the active tab — capture
@@ -826,11 +824,7 @@ export async function captureTabScreenshot(tabId, { ownerInvoked = false } = {})
 export async function readPage(tabId) {
   try {
     if (!(await hasScriptingPermission())) {
-      return {
-        error:
-          "scripting permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "scripting" },
-      };
+      return permissionDeniedResult("scripting", { reason: "read the page's title, URL and visible text" });
     }
     const target = tabId
       ? { tabId }
@@ -864,7 +858,7 @@ export async function readPage(tabId) {
 async function withTabIdsGrant(tabIds, verb, mutate) {
   if (!(await hasTabsPermission())) {
     return permissionDenial(
-      "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+      "tabs permission not granted — allow it in the approval card here, or in Settings → Permissions",
       {
         reason: `${verb === "grouped" ? "group" : verb === "ungrouped" ? "ungroup" : verb === "moved" ? "move" : "control"} your tabs`,
         permissions: ["tabs"],
@@ -932,7 +926,7 @@ async function withTabIdsGrant(tabIds, verb, mutate) {
 async function withTabGroupGrant(groupId, verb, mutate) {
   if (!(await hasTabsPermission())) {
     return permissionDenial(
-      "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+      "tabs permission not granted — allow it in the approval card here, or in Settings → Permissions",
       { reason: `${verb} a tab group`, permissions: ["tabs"] },
     );
   }
@@ -1000,18 +994,14 @@ async function withTabGroupGrant(groupId, verb, mutate) {
  * authorize a downloads mutation. */
 async function withDownloadsGrant(verb, mutate) {
   if (!(await hasPermission("downloads"))) {
-    return {
-      error:
-        "downloads permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "downloads" },
-    };
+    return permissionDeniedResult("downloads", { reason: `${verb} downloads` });
   }
   return await withGrantLock(async () => {
     if (!(await isBrowserControlGranted(undefined))) {
-      return {
-        error:
-          "browser control not granted for downloads — the owner can approve it in the approval card here, or in Settings → Browser control",
-      };
+      return permissionDenial(
+        "browser control not granted for downloads — the owner can approve it in the approval card here, or in Settings → Browser control",
+        { reason: `${verb} downloads (browser-wide — this needs the all-sites browser-control grant)`, grantGlobal: true },
+      );
     }
     try {
       await assertRunOwned();
@@ -1093,18 +1083,14 @@ function selfExtensionId() {
  * per-origin grant never authorizes them). Mirrors withDownloadsGrant. */
 async function withManagementGrant(verb, mutate) {
   if (!(await hasManagementPermission())) {
-    return {
-      error:
-        "management permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "management" },
-    };
+    return permissionDeniedResult("management", { reason: `${verb} an extension` });
   }
   return await withGrantLock(async () => {
     if (!(await isBrowserControlGranted(undefined))) {
-      return {
-        error:
-          "browser control not granted for extension management — the owner can approve it in the approval card here, or in Settings → Browser control",
-      };
+      return permissionDenial(
+        "browser control not granted for extension management — the owner can approve it in the approval card here, or in Settings → Browser control",
+        { reason: `${verb} an extension (browser-wide — this needs the all-sites browser-control grant)`, grantGlobal: true },
+      );
     }
     try {
       await assertRunOwned();
@@ -1141,18 +1127,14 @@ const DNR_RESOURCE_TYPES = [
  * (same discipline as downloads). Reads never use this. */
 async function withNetworkRulesGrant(verb, mutate) {
   if (!(await hasPermission("declarativeNetRequest"))) {
-    return {
-      error:
-        "declarativeNetRequest permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "declarativeNetRequest" },
-    };
+    return permissionDeniedResult("declarativeNetRequest", { reason: `${verb} network rules` });
   }
   return await withGrantLock(async () => {
     if (!(await isBrowserControlGranted(undefined))) {
-      return {
-        error:
-          "browser control not granted for network rules — the owner can approve it in the approval card here, or in Settings → Browser control (global grant required: rules apply browser-wide)",
-      };
+      return permissionDenial(
+        "browser control not granted for network rules — the owner can approve it in the approval card here, or in Settings → Browser control (global grant required: rules apply browser-wide)",
+        { reason: `${verb} network rules (browser-wide — this needs the all-sites browser-control grant)`, grantGlobal: true },
+      );
     }
     try {
       await assertRunOwned();
@@ -1310,7 +1292,7 @@ async function t12OriginsCovered(origins) {
 async function withScriptRegistrationGrant({ permission, permissionLabel, patterns, origins }, verb, mutate) {
   if (!(await hasPermission(permission))) {
     return {
-      error: `${permission} permission not granted — enable it from the chat when prompted, or in Settings → Permissions`,
+      error: `${permission} permission not granted — allow it in the approval card here, or in Settings → Permissions`,
     };
   }
   try {
@@ -1327,10 +1309,10 @@ async function withScriptRegistrationGrant({ permission, permissionLabel, patter
   }
   return await withGrantLock(async () => {
     if (!(await t12OriginsCovered(origins))) {
-      return {
-        error:
-          "browser control not granted for every matches origin here — the owner can approve it in the approval card here, or in Settings → Browser control",
-      };
+      return permissionDenial(
+        "browser control not granted for every matches origin here — the owner can approve it in the approval card here, or in Settings → Browser control",
+        { reason: `run a script on ${origins.join(", ")}`, grantOrigins: origins },
+      );
     }
     try {
       await assertRunOwned();
@@ -1368,10 +1350,7 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         const dest = webDestination(url);
         if (dest.error) return { error: dest.error };
         if (!(await hasSidePanelPermission())) {
-          return {
-            error:
-              "sidePanel permission not granted — enable it from the chat when prompted, or in Settings → Permissions (Side panel)",
-          };
+          return permissionDeniedResult("sidePanel", { reason: `open ${url} in the side panel` });
         }
         // Get the active tab so the panel is bound to it (chrome.sidePanel is
         // per-tab). The panel reads the target URL on load (sidepanel.getTarget).
@@ -1409,11 +1388,7 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         const dest = webDestination(url);
         if (dest.error) return { error: dest.error };
         if (!(await hasTabsPermission())) {
-          return {
-            error:
-              "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "tabs" },
-          };
+          return permissionDeniedResult("tabs", { reason: `open ${url} in a new tab` });
         }
         // Check the DESTINATION origin against the grant (a per-origin grant
         // only authorizes its own origins; a global grant authorizes all).
@@ -1428,10 +1403,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         // round-17 check-then-act blocker).
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(destOrigin))) {
-            return {
-              error:
-                "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
-            };
+            return permissionDenial(
+              "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
+              { reason: `open ${destOrigin} in a new tab`, grantOrigins: [destOrigin] },
+            );
           }
           try {
             await assertRunOwned();
@@ -1468,11 +1443,7 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         const dest = webDestination(url);
         if (dest.error) return { error: dest.error };
         if (!(await hasTabsPermission())) {
-          return {
-            error:
-              "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "tabs" },
-          };
+          return permissionDeniedResult("tabs", { reason: `navigate a tab to ${url}` });
         }
         // Check the DESTINATION origin (not just the current tab's origin): an
         // approved origin must not be navigated to an unapproved one.
@@ -1502,16 +1473,16 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
             })()
             : undefined;
           if (!(await isBrowserControlGranted(destOrigin))) {
-            return {
-              error:
-                "browser control not granted for the destination origin — the owner can approve it in the approval card here, or in Settings → Browser control",
-            };
+            return permissionDenial(
+              "browser control not granted for the destination origin — the owner can approve it in the approval card here, or in Settings → Browser control",
+              { reason: `navigate a tab to ${destOrigin}`, grantOrigins: [destOrigin] },
+            );
           }
           if (!(await isBrowserControlGranted(srcOrigin))) {
-            return {
-              error:
-                "browser control not granted for the source tab's origin — the owner can approve it in the approval card here, or in Settings → Browser control",
-            };
+            return permissionDenial(
+              "browser control not granted for the source tab's origin — the owner can approve it in the approval card here, or in Settings → Browser control",
+              { reason: srcOrigin ? `navigate away from ${srcOrigin}` : "navigate a tab that has no single site (this needs the all-sites browser-control grant)", grantOrigins: srcOrigin ? [srcOrigin] : [], grantGlobal: !srcOrigin },
+            );
           }
           try {
             await assertRunOwned();
@@ -1579,11 +1550,7 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasTabsPermission())) {
-          return {
-            error:
-              "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "tabs" },
-          };
+          return permissionDeniedResult("tabs", { reason: "list your open tabs" });
         }
         const tabs = await chrome.tabs.query({});
         return {
@@ -1597,11 +1564,7 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
       inputSchema: z.object({ tabId: z.number() }),
       execute: async ({ tabId }) => {
         if (!(await hasTabsPermission())) {
-          return {
-            error:
-              "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "tabs" },
-          };
+          return permissionDeniedResult("tabs", { reason: "close a tab" });
         }
         // Check the grant + perform the mutation under the SAME grant lock (a
         // revoke can no longer interleave with the checked tabs.remove).
@@ -1620,10 +1583,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
             })()
             : undefined;
           if (!(await isBrowserControlGranted(origin))) {
-            return {
-              error:
-                "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
-            };
+            return permissionDenial(
+              "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
+              { reason: origin ? `close a tab on ${origin}` : "close a tab that has no single site (this needs the all-sites browser-control grant)", grantOrigins: origin ? [origin] : [], grantGlobal: !origin },
+            );
           }
           try {
             await assertRunOwned();
@@ -1780,11 +1743,7 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
           if (dest.error) return { error: dest.error };
         }
         if (!(await hasTabsPermission())) {
-          return {
-            error:
-              "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "tabs" },
-          };
+          return permissionDeniedResult("tabs", { reason: `open a new window${url ? ` on ${url}` : ""}` });
         }
         let destOrigin;
         if (url !== undefined) {
@@ -1798,10 +1757,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
           // No URL ⇒ the window opens Chrome's NTP — an origin-less mutation
           // scope that ONLY a global grant authorizes (undefined origin).
           if (!(await isBrowserControlGranted(destOrigin))) {
-            return {
-              error:
-                "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
-            };
+            return permissionDenial(
+              "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
+              { reason: destOrigin ? `open a new window on ${destOrigin}` : "open a new window on the new-tab page (this needs the all-sites browser-control grant)", grantOrigins: destOrigin ? [destOrigin] : [], grantGlobal: !destOrigin },
+            );
           }
           try {
             await assertRunOwned();
@@ -2337,10 +2296,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(origin))) {
-            return {
-              error:
-                "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
-            };
+            return permissionDenial(
+              "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
+              { reason: `set a cookie on ${origin}`, grantOrigins: [origin] },
+            );
           }
           try {
             await assertRunOwned();
@@ -2383,10 +2342,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(origin))) {
-            return {
-              error:
-                "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
-            };
+            return permissionDenial(
+              "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
+              { reason: `remove a cookie on ${origin}`, grantOrigins: [origin] },
+            );
           }
           try {
             await assertRunOwned();
@@ -2435,10 +2394,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
           // Browser-wide scope: ONLY a global grant authorizes a wipe
           // (undefined origin never matches an origin-scoped grant).
           if (!(await isBrowserControlGranted(undefined))) {
-            return {
-              error:
-                "browser control not granted globally — a browsing-data wipe is browser-wide and needs the global grant (an origin-scoped grant is refused)",
-            };
+            return permissionDenial(
+              "browser control not granted globally — a browsing-data wipe is browser-wide and needs the global grant (an origin-scoped grant is refused)",
+              { reason: "wipe browsing data (browser-wide — this needs the all-sites browser-control grant)", grantGlobal: true },
+            );
           }
           try {
             await assertRunOwned();
@@ -2511,10 +2470,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         const origin = canonicalOrigin(pattern.value);
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(origin))) {
-            return {
-              error:
-                "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
-            };
+            return permissionDenial(
+              "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
+              { reason: `change a content setting for ${origin}`, grantOrigins: [origin] },
+            );
           }
           try {
             await assertRunOwned();
@@ -2556,10 +2515,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         const defaultSetting = T8_CONTENT_SETTING_DEFAULTS[resource];
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(origin))) {
-            return {
-              error:
-                "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
-            };
+            return permissionDenial(
+              "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
+              { reason: `clear a content setting for ${origin}`, grantOrigins: [origin] },
+            );
           }
           try {
             await assertRunOwned();
@@ -2594,7 +2553,7 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
       execute: async ({ windowId }) => {
         if (!(await hasPermission("tabGroups"))) {
           return permissionDenial(
-            "tab groups permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+            "tab groups permission not granted — allow it in the approval card here, or in Settings → Permissions",
             { reason: "list your tab groups", permissions: ["tabGroups"] },
           );
         }
@@ -2623,7 +2582,7 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
       execute: async ({ tabIds, title, color }) => {
         if (!(await hasPermission("tabGroups"))) {
           return permissionDenial(
-            "tab groups permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+            "tab groups permission not granted — allow it in the approval card here, or in Settings → Permissions",
             { reason: "group your tabs", permissions: ["tabGroups", "tabs"] },
           );
         }
@@ -2657,7 +2616,7 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
       execute: async ({ groupId, title, color, collapsed }) => {
         if (!(await hasPermission("tabGroups"))) {
           return permissionDenial(
-            "tab groups permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+            "tab groups permission not granted — allow it in the approval card here, or in Settings → Permissions",
             { reason: "update a tab group", permissions: ["tabGroups", "tabs"] },
           );
         }
@@ -2688,7 +2647,7 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
       execute: async ({ tabIds }) => {
         if (!(await hasPermission("tabGroups"))) {
           return permissionDenial(
-            "tab groups permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+            "tab groups permission not granted — allow it in the approval card here, or in Settings → Permissions",
             { reason: "ungroup your tabs", permissions: ["tabGroups", "tabs"] },
           );
         }
@@ -2712,7 +2671,7 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
       execute: async ({ tabIds, groupId }) => {
         if (!(await hasPermission("tabGroups"))) {
           return permissionDenial(
-            "tab groups permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
+            "tab groups permission not granted — allow it in the approval card here, or in Settings → Permissions",
             { reason: "move tabs into a group", permissions: ["tabGroups", "tabs"] },
           );
         }
@@ -3060,10 +3019,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
             ? await isBrowserControlGranted(undefined)
             : true;
           if (!namedCovered || !originlessCovered) {
-            return {
-              error:
-                "browser control not granted for every highlighted tab's origin — the owner can approve it in the approval card here, or in Settings → Browser control",
-            };
+            return permissionDenial(
+              "browser control not granted for every highlighted tab's origin — the owner can approve it in the approval card here, or in Settings → Browser control",
+              { reason: hasOriginless ? "highlight tabs (one has no single site — this needs the all-sites browser-control grant)" : `highlight tabs on ${[...origins].join(", ")}`, grantOrigins: hasOriginless ? [] : [...origins], grantGlobal: hasOriginless },
+            );
           }
           try {
             await assertRunOwned();
@@ -3131,7 +3090,7 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
       inputSchema: z.object({ tabId: z.number().int().optional() }),
       execute: async ({ tabId }) => {
         if (!(await hasSidePanelPermission())) {
-          return { error: "sidePanel permission not granted — enable it from the chat when prompted, or in Settings → Permissions (Side panel)" };
+          return permissionDeniedResult("sidePanel", { reason: "read the side panel options" });
         }
         try {
           const opts = await chrome.sidePanel.getOptions(tabId !== undefined ? { tabId } : {});
@@ -3158,7 +3117,7 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
       }),
       execute: async ({ path, enabled, tabId }) => {
         if (!(await hasSidePanelPermission())) {
-          return { error: "sidePanel permission not granted — enable it from the chat when prompted, or in Settings → Permissions (Side panel)" };
+          return permissionDeniedResult("sidePanel", { reason: "change the side panel options" });
         }
         // Confinement proof against the runtime root: getURL must resolve the
         // path INSIDE the extension's own URL root (a hostile path must never
@@ -3182,10 +3141,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
           // Browser-level surface (which bundled page the panel loads) — only
           // a GLOBAL grant authorizes it (undefined origin).
           if (!(await isBrowserControlGranted(undefined))) {
-            return {
-              error:
-                "browser control not granted (global) — the owner can approve it in the approval card here, or in Settings → Browser control",
-            };
+            return permissionDenial(
+              "browser control not granted (global) — the owner can approve it in the approval card here, or in Settings → Browser control",
+              { reason: "change which page the side panel shows (browser-wide — this needs the all-sites browser-control grant)", grantGlobal: true },
+            );
           }
           try {
             await assertRunOwned();
@@ -3215,14 +3174,14 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
       inputSchema: z.object({ openPanelOnActionClick: z.boolean() }),
       execute: async ({ openPanelOnActionClick }) => {
         if (!(await hasSidePanelPermission())) {
-          return { error: "sidePanel permission not granted — enable it from the chat when prompted, or in Settings → Permissions (Side panel)" };
+          return permissionDeniedResult("sidePanel", { reason: "change the side panel behavior" });
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
-            return {
-              error:
-                "browser control not granted (global) — the owner can approve it in the approval card here, or in Settings → Browser control",
-            };
+            return permissionDenial(
+              "browser control not granted (global) — the owner can approve it in the approval card here, or in Settings → Browser control",
+              { reason: "change the side panel behavior (browser-wide — this needs the all-sites browser-control grant)", grantGlobal: true },
+            );
           }
           try {
             await assertRunOwned();
@@ -3506,22 +3465,18 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         const originPattern = `${origin}/*`;
         const hasExactHost = await chrome.permissions.contains({ origins: [originPattern] }).catch(() => false);
         if (!hasExactHost) {
-          return {
-            error: `page capture is waiting for permission to ${originPattern}`,
-            waitingForPermission: true,
-            permissionRequirement: {
-              tool: "save_page_as_mhtml",
-              reason: "Save the selected tab as MHTML",
-              origins: [originPattern],
-            },
-          };
+          return permissionDenial(
+            `page capture is waiting for site access to ${originPattern} — grant it in Settings → Permissions`,
+            { reason: `save ${origin} as MHTML (site access to ${originPattern} is missing)`, permissions: [], grantOrigins: [origin] },
+          );
         }
         return await withGrantLock(async () => {
           const grantId = validateGrantFor((await kvGet(GRANT_KEY))[GRANT_KEY], origin);
           if (!grantId) {
-            return {
-              error: "browser control not granted for this tab's origin — the owner can approve it in the approval card here, or in Settings → Browser control",
-            };
+            return permissionDenial(
+              "browser control not granted for this tab's origin — the owner can approve it in the approval card here, or in Settings → Browser control",
+              { reason: `save ${origin} as MHTML`, grantOrigins: [origin] },
+            );
           }
           // Round-20 navigation race (review B1): re-read the target identity
           // INSIDE the grant lock, IMMEDIATELY before the capture — a
@@ -3667,10 +3622,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
             ? await isBrowserControlGranted(undefined)
             : (await Promise.all([...originSet].map((o) => isBrowserControlGranted(o)))).every(Boolean);
           if (!covered) {
-            return {
-              error:
-                "browser control not granted for the restored origin(s) — the owner can approve it in the approval card here, or in Settings → Browser control",
-            };
+            return permissionDenial(
+              "browser control not granted for the restored origin(s) — the owner can approve it in the approval card here, or in Settings → Browser control",
+              { reason: `restore a session on ${[...originSet].join(", ")}`, grantOrigins: [...originSet] },
+            );
           }
           try {
             await assertRunOwned();
@@ -3780,10 +3735,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         if (!origin) return { error: "only http/https URLs can be added to history" };
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(origin))) {
-            return {
-              error:
-                "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
-            };
+            return permissionDenial(
+              "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
+              { reason: `add a history entry for ${origin}`, grantOrigins: [origin] },
+            );
           }
           try {
             await assertRunOwned();
@@ -3812,10 +3767,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         if (!origin) return { error: "only http/https URLs can be deleted from history" };
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(origin))) {
-            return {
-              error:
-                "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
-            };
+            return permissionDenial(
+              "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
+              { reason: `delete history for ${origin}`, grantOrigins: [origin] },
+            );
           }
           try {
             await assertRunOwned();
@@ -4140,10 +4095,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         if (!chromeSetting) return { error: `privacy setting unavailable: ${setting}` };
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
-            return {
-              error:
-                "browser control not granted globally — a privacy change is browser-wide and needs the global grant (an origin-scoped grant is refused)",
-            };
+            return permissionDenial(
+              "browser control not granted globally — a privacy change is browser-wide and needs the global grant (an origin-scoped grant is refused)",
+              { reason: "change a privacy setting (browser-wide — this needs the all-sites browser-control grant)", grantGlobal: true },
+            );
           }
           try {
             await assertRunOwned();
@@ -4245,10 +4200,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
-            return {
-              error:
-                "browser control not granted globally — proxy changes are browser-wide traffic control and need the global grant (an origin-scoped grant is refused)",
-            };
+            return permissionDenial(
+              "browser control not granted globally — proxy changes are browser-wide traffic control and need the global grant (an origin-scoped grant is refused)",
+              { reason: "change the proxy settings (browser-wide — this needs the all-sites browser-control grant)", grantGlobal: true },
+            );
           }
           try {
             await assertRunOwned();
@@ -4279,10 +4234,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
-            return {
-              error:
-                "browser control not granted globally — proxy changes are browser-wide traffic control and need the global grant (an origin-scoped grant is refused)",
-            };
+            return permissionDenial(
+              "browser control not granted globally — proxy changes are browser-wide traffic control and need the global grant (an origin-scoped grant is refused)",
+              { reason: "change the proxy settings (browser-wide — this needs the all-sites browser-control grant)", grantGlobal: true },
+            );
           }
           try {
             await assertRunOwned();
@@ -4340,10 +4295,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
-            return {
-              error:
-                "browser control not granted globally — a font change is browser-wide and needs the global grant (an origin-scoped grant is refused)",
-            };
+            return permissionDenial(
+              "browser control not granted globally — a font change is browser-wide and needs the global grant (an origin-scoped grant is refused)",
+              { reason: "change a font setting (browser-wide — this needs the all-sites browser-control grant)", grantGlobal: true },
+            );
           }
           try {
             await assertRunOwned();
@@ -4377,10 +4332,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
-            return {
-              error:
-                "browser control not granted globally — a font change is browser-wide and needs the global grant (an origin-scoped grant is refused)",
-            };
+            return permissionDenial(
+              "browser control not granted globally — a font change is browser-wide and needs the global grant (an origin-scoped grant is refused)",
+              { reason: "change a font setting (browser-wide — this needs the all-sites browser-control grant)", grantGlobal: true },
+            );
           }
           try {
             await assertRunOwned();
@@ -4411,10 +4366,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
-            return {
-              error:
-                "browser control not granted globally — a font change is browser-wide and needs the global grant (an origin-scoped grant is refused)",
-            };
+            return permissionDenial(
+              "browser control not granted globally — a font change is browser-wide and needs the global grant (an origin-scoped grant is refused)",
+              { reason: "change a font setting (browser-wide — this needs the all-sites browser-control grant)", grantGlobal: true },
+            );
           }
           try {
             await assertRunOwned();
@@ -4448,10 +4403,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
-            return {
-              error:
-                "browser control not granted globally — a power change is browser-wide and needs the global grant (an origin-scoped grant is refused)",
-            };
+            return permissionDenial(
+              "browser control not granted globally — a power change is browser-wide and needs the global grant (an origin-scoped grant is refused)",
+              { reason: "change the power setting (browser-wide — this needs the all-sites browser-control grant)", grantGlobal: true },
+            );
           }
           try {
             await assertRunOwned();
@@ -4483,10 +4438,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
-            return {
-              error:
-                "browser control not granted globally — a power change is browser-wide and needs the global grant (an origin-scoped grant is refused)",
-            };
+            return permissionDenial(
+              "browser control not granted globally — a power change is browser-wide and needs the global grant (an origin-scoped grant is refused)",
+              { reason: "change the power setting (browser-wide — this needs the all-sites browser-control grant)", grantGlobal: true },
+            );
           }
           try {
             await assertRunOwned();
@@ -4519,10 +4474,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
-            return {
-              error:
-                "browser control not granted globally — a search is browser-wide and needs the global grant (an origin-scoped grant is refused)",
-            };
+            return permissionDenial(
+              "browser control not granted globally — a search is browser-wide and needs the global grant (an origin-scoped grant is refused)",
+              { reason: "run a browser search (browser-wide — this needs the all-sites browser-control grant)", grantGlobal: true },
+            );
           }
           try {
             await assertRunOwned();
@@ -4564,10 +4519,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         if (volume !== undefined) options.volume = volume;
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
-            return {
-              error:
-                "browser control not granted globally — speech is browser-wide and needs the global grant (an origin-scoped grant is refused)",
-            };
+            return permissionDenial(
+              "browser control not granted globally — speech is browser-wide and needs the global grant (an origin-scoped grant is refused)",
+              { reason: "use text-to-speech (browser-wide — this needs the all-sites browser-control grant)", grantGlobal: true },
+            );
           }
           try {
             await assertRunOwned();
@@ -4598,10 +4553,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
-            return {
-              error:
-                "browser control not granted globally — speech is browser-wide and needs the global grant (an origin-scoped grant is refused)",
-            };
+            return permissionDenial(
+              "browser control not granted globally — speech is browser-wide and needs the global grant (an origin-scoped grant is refused)",
+              { reason: "use text-to-speech (browser-wide — this needs the all-sites browser-control grant)", grantGlobal: true },
+            );
           }
           try {
             await assertRunOwned();
@@ -5017,10 +4972,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
             }
           }
           if (!(await t12OriginsCovered(origins))) {
-            return {
-              error:
-                "browser control not granted for every matches origin here — the owner can approve it in the approval card here, or in Settings → Browser control",
-            };
+            return permissionDenial(
+              "browser control not granted for every matches origin here — the owner can approve it in the approval card here, or in Settings → Browser control",
+              { reason: `run a script on ${origins.join(", ")}`, grantOrigins: origins },
+            );
           }
           try {
             await assertRunOwned();
@@ -5158,10 +5113,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
             }
           }
           if (!(await t12OriginsCovered(origins))) {
-            return {
-              error:
-                "browser control not granted for every matches origin here — the owner can approve it in the approval card here, or in Settings → Browser control",
-            };
+            return permissionDenial(
+              "browser control not granted for every matches origin here — the owner can approve it in the approval card here, or in Settings → Browser control",
+              { reason: `run a script on ${origins.join(", ")}`, grantOrigins: origins },
+            );
           }
           try {
             await assertRunOwned();
@@ -5319,11 +5274,7 @@ function t13OriginClass(tab) {
 
 async function t13MutateTabWithGrant(tabId, verb, mutate) {
   if (!(await hasTabsPermission())) {
-    return {
-      error:
-        "tabs permission not granted — enable it from the chat when prompted, or in Settings → Permissions",
-          permissionRequired: { capability: "tabs" },
-    };
+    return permissionDeniedResult("tabs", { reason: "control a tab" });
   }
   return await withGrantLock(async () => {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
@@ -5332,10 +5283,10 @@ async function t13MutateTabWithGrant(tabId, verb, mutate) {
     // null (origin-less) reaches isBrowserControlGranted(undefined-equivalent):
     // a global grant authorizes it, an origins grant never does.
     if (!(await isBrowserControlGranted(origin))) {
-      return {
-        error:
-          "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
-      };
+      return permissionDenial(
+        "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
+        { reason: origin ? `control a tab on ${origin}` : "control a tab that has no single site (this needs the all-sites browser-control grant)", grantOrigins: origin ? [origin] : [], grantGlobal: !origin },
+      );
     }
     try {
       await assertRunOwned();

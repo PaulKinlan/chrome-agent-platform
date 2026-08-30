@@ -1382,6 +1382,18 @@ export async function runConversationTurn(container, { text, attachments = [], h
         c.append(card);
         if (typeof c.scrollTop === "number") c.scrollTop = c.scrollHeight;
       }
+      // The run is paused on this decision: move keyboard focus to the card's
+      // Allow button (a real <button>; the conversation's aria-live region
+      // announces the card). Never steal focus from a field the owner is
+      // mid-edit in (CAP-FB-20260830-DENIAL-TO-GRANT-CARD-01).
+      const active = document.activeElement;
+      const midEdit = active && (active.tagName === "TEXTAREA" || active.tagName === "INPUT") &&
+        typeof active.value === "string" && active.value.length > 0;
+      if (!midEdit) {
+        const focusAllow = () => card.shadowRoot?.querySelector?.("button")?.focus?.();
+        if (typeof requestAnimationFrame === "function") requestAnimationFrame(focusAllow);
+        else focusAllow();
+      }
     }
     const entry = { requirement, status: "pending", card, blocking, requestId };
     pendingApprovals.set(requirement.key, entry);

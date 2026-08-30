@@ -21,9 +21,22 @@
 // Every decision is derived from the CURRENT run slice of the prompt (the tool
 // history since the last real user turn) — the model holds no state, so
 // concurrent runs and consecutive runs can never bleed into each other (the
-// same discipline as demo-model.js). A permission denial is handled the way
-// the agent loop asks: "Owner approved … retry with a fresh search_tools
-// selection" → one bounded retry; "denied"/"expired" → an honest paragraph.
+// same discipline as demo-model.js).
+//
+// Permission denials (CAP-FB-20260830-DENIAL-TO-GRANT-CARD-01 contract): a
+// browser tool that lacks its permission returns { waitingForPermission:true,
+// permissionRequirement } — the agent loop PAUSES the run on that result,
+// the conversation renders ONE Allow card, and the loop only consults this
+// model again once the owner has decided, rewriting the tool result's
+// modelContent to one of three sentences:
+//   "Owner approved … retry with a fresh search_tools selection" → one
+//     bounded retry (a fresh search_tools + execute_tool for the same tool);
+//   "Owner denied …" / "Approval expired …"                        → the
+//     honest no-permission paragraph, never a retry.
+// If this model is ever consulted while a result still carries the pending
+// shape (or the legacy { error, permissionRequired } alias some tools keep
+// for older readers), it answers with the same honest paragraph — it never
+// claims the tool ran and never loops on a permission it cannot obtain.
 
 export const LOCAL_ASSISTANT_MODEL_ID = "local-assistant";
 
@@ -171,11 +184,13 @@ function toolView(prompt, tool) {
         ? "denied"
         : /Approval expired/u.test(text)
         ? "expired"
+        // the structured card shape ({ waitingForPermission, permissionRequirement })
+        // — the loop normally settles it before this model sees it; if it is
+        // still pending here the answer is the honest paragraph
         : result?.value?.result?.waitingForPermission === true || result?.value?.waitingForPermission === true
         ? "pending"
-        // the legacy denial shape some tools still return ({ error,
-        // permissionRequired }) — no card yet (CAP-FB-20260830-DENIAL-TO-GRANT-
-        // CARD-01 owns that), so it reads as a pending permission
+        // the legacy denial alias ({ error, permissionRequired }) kept on
+        // Chrome-permission denials for older readers — same honest answer
         : result?.value?.result?.permissionRequired || result?.value?.permissionRequired
         ? "pending"
         : null;
