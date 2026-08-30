@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.435] — 2026-08-30
+- Tracker: the retryable tool-argument fix is recorded as landed.
+
 ## [0.2.434] — 2026-08-30
 - Landed: when the model sends a wrong tool argument it now gets a clear, retryable error and its corrected retry succeeds, instead of the whole action being lost.
 
