@@ -506,6 +506,9 @@ const EXPECTED = [
   "orchestrator: multi-agent ON + delegation tools present",
   "orchestrator: worker fanned out (workerCount >= 1)",
   "worker delegated task ran (worker result journaled)",
+  "Settings: Data & memory shows the run-log retention row",
+  "Settings: the run-log retention toggle reports the bounded default (off)",
+  "Settings: retained the run-log retention screenshot",
   "Settings: multi-agent toggle present",
   "Settings: clicked the multi-agent toggle OFF",
   "Settings: multi-agent setting persisted OFF",
@@ -2901,6 +2904,27 @@ async function main() {
     );
     // Toggle OFF via a genuine checkbox click → delegation tools disappear + the
     // rebuild generation advances (the observable fan-out boundary).
+    // Data & memory → the run-log retention row (CAP-FB-20260830-RUN-LOG-COMPACTION-01):
+    // the bound is visible and the "keep everything" opt-in is off by default.
+    const retentionRow = await evalOpts(
+      `(() => { const z = document.querySelector('#run-retention'); const t = document.querySelector('#run-retention-keep-all');
+        const b = document.querySelector('#run-retention-bound');
+        return z && t && b ? { name: z.querySelector('h3')?.textContent ?? '', bound: b.textContent, checked: t.hasAttribute('checked'),
+          switchState: t.shadowRoot?.querySelector('[role=switch]')?.getAttribute('aria-checked') ?? null } : null; })()`,
+    );
+    check(
+      "Settings: Data & memory shows the run-log retention row",
+      retentionRow !== null && /Run logs/.test(retentionRow.name) && /newest 10 runs per task/.test(retentionRow.bound) && /500 runs overall/.test(retentionRow.bound) && /32 MiB/.test(retentionRow.bound),
+    );
+    check(
+      "Settings: the run-log retention toggle reports the bounded default (off)",
+      retentionRow?.checked === false && retentionRow?.switchState === "false",
+    );
+    await evalOpts(`(() => { location.hash = '#data'; document.querySelector('#run-retention')?.scrollIntoView({ block: 'center' }); return true; })()`);
+    await sleep(400);
+    const retentionShot = await captureShot(cdp, optsSession);
+    if (retentionShot) await writeEvidence("settings-data-retention.png", retentionShot);
+    check("Settings: retained the run-log retention screenshot", retentionShot !== null && retentionShot.length > 200);
     check(
       "Settings: multi-agent toggle present",
       (await boxOf(cdp, optsSession, "#multi-agent")) !== null,

@@ -65,13 +65,16 @@ class FakeStore {
   async keys() { return [...this.values.keys()].sort(); }
 }
 
-function harness(store, { bootId = "boot-a", failAt = null } = {}) {
+function harness(store, { bootId = "boot-a", failAt = null, retention = null } = {}) {
   const journal = [];
   const thread = [];
   let failed = false;
   const registry = createDurableRunRegistry({
     store,
     logHandleFor: (store.__logHandles ??= createMemoryRunLogHandles()),
+    // The owner's retention setting (`cap:runRetention`), injected so a test
+    // never reaches chrome.storage. null = the bounded defaults.
+    ...(retention ? { retentionSetting: async () => retention } : {}),
     bootId,
     now: (() => { let n = 1_000; return () => ++n; })(),
     resolveJournalStore: async () => ({ journal }),
@@ -656,7 +659,7 @@ Deno.test("durable runs: execution identity grammar rejects prototype/path adver
   }
 });
 
-Deno.test("durable runs: resolved policy is versioned retain-all with terminal owner cancellation", async () => {
+Deno.test("durable runs: resolved policy is versioned bounded-by-default (compaction, never eviction) with terminal owner cancellation", async () => {
   const store = new FakeStore();
   const { registry } = harness(store);
   await begin(registry);
@@ -664,9 +667,14 @@ Deno.test("durable runs: resolved policy is versioned retain-all with terminal o
   assertEquals(snapshot.policy, DURABLE_RUN_POLICY);
   assertEquals(snapshot.retentionPolicy, RUN_RETENTION_POLICY);
   assertEquals(snapshot.runs[0].policy.cancellation, "explicit-owner-terminal-new-run-required");
-  assertEquals(snapshot.runs[0].retentionPolicyVersion, "run-retention-v1");
-  assertEquals(snapshot.retentionPolicy.mode, "retain-all");
-  assertEquals(snapshot.retentionPolicy.automaticCompaction, false);
+  assertEquals(snapshot.runs[0].retentionPolicyVersion, "run-retention-v2");
+  // CAP-FB-20260830-RUN-LOG-COMPACTION-01: bounded by default, visible, and
+  // compaction is not eviction — no execution is ever removed by policy.
+  assertEquals(snapshot.retentionPolicy.mode, "bounded");
+  assertEquals(snapshot.retentionPolicy.perThread, 10);
+  assertEquals(snapshot.retentionPolicy.globalExecutions, 500);
+  assertEquals(snapshot.retentionPolicy.globalBytes, 32 * 1024 * 1024);
+  assertEquals(snapshot.retentionPolicy.automaticCompaction, true);
   assertEquals(snapshot.retentionPolicy.automaticEviction, false);
   assertEquals(snapshot.retentionPolicy.explicitClearOnly, true);
 });
@@ -946,11 +954,14 @@ Deno.test("durable runs: final prepared resume crash and pre-existing attempt ce
   record.resumeAttemptCount = 3;
   record.pause = { kind: "interruption", visible: true, automaticRetry: true };
   await ceilingStore.setTrusted(`run:${executionId}`, record);
-  const refused = await ceiling.registry.resumeAfterInterruption(executionId);
+  // The record was edited on disk behind the live registry: a fresh worker
+  // reads it (the registry caches its own records for its lifetime).
+  const ceilingWorker = harness(ceilingStore, { bootId: "boot-ceiling" });
+  const refused = await ceilingWorker.registry.resumeAfterInterruption(executionId);
   assertEquals(refused.error, "resume_attempt_limit_reached");
   assertEquals(refused.run.phase, "terminal");
-  assertEquals(ceiling.journal.filter((row) => row.type === "result").length, 1);
-  assertEquals(ceiling.thread.filter((row) => row.executionId === executionId).length, 1);
+  assertEquals(ceilingWorker.journal.filter((row) => row.type === "result").length, 1);
+  assertEquals(ceilingWorker.thread.filter((row) => row.executionId === executionId).length, 1);
 });
 
 Deno.test("durable runs: interruption after tool progress pauses side-effect-uncertain instead of blind replay", async () => {
@@ -1028,19 +1039,36 @@ Deno.test("durable runs: retain-all logs survive restart; legacy metadata migrat
   const restarted = harness(store, { bootId: "boot-b" });
   assertEquals((await restarted.registry.listLogs(executionId)).length, 3); // accepted + two rows
 
+  // A record edited on disk behind a live registry models a PREVIOUS worker
+  // generation's state, so each variant below is read by a fresh worker (the
+  // registry is the single writer of its records and caches them for its
+  // lifetime — CAP-FB-20260830-RUN-LOG-COMPACTION-01).
   const legacy = await store.get(`run:${executionId}`);
   delete legacy.retentionPolicyVersion;
   delete legacy.retentionMigration;
   await store.setTrusted(`run:${executionId}`, legacy);
-  const migrated = (await restarted.registry.list()).runs[0];
-  assertEquals(migrated.retentionPolicyVersion, "run-retention-v1");
+  const afterLegacy = harness(store, { bootId: "boot-c" });
+  const migrated = (await afterLegacy.registry.list()).runs[0];
+  assertEquals(migrated.retentionPolicyVersion, "run-retention-v2");
   assertEquals(migrated.retentionMigration.from, "legacy-unversioned");
-  assertEquals((await restarted.registry.listLogs(executionId)).length, 3);
+  assertEquals((await afterLegacy.registry.listLogs(executionId)).length, 3);
+
+  // v1-stamped records (every profile before compaction landed) migrate to
+  // the v2 stamp; v1-stamped LOG ROWS stay readable as they are.
+  const v1 = await store.get(`run:${executionId}`);
+  v1.retentionPolicyVersion = "run-retention-v1";
+  delete v1.retentionMigration;
+  await store.setTrusted(`run:${executionId}`, v1);
+  const afterV1 = harness(store, { bootId: "boot-d" });
+  const fromV1 = (await afterV1.registry.list()).runs[0];
+  assertEquals(fromV1.retentionPolicyVersion, "run-retention-v2");
+  assertEquals(fromV1.retentionMigration, { from: "run-retention-v1", to: "run-retention-v2" });
+  assertEquals((await afterV1.registry.listLogs(executionId)).length, 3);
 
   const unknown = await store.get(`run:${executionId}`);
   unknown.retentionPolicyVersion = "run-retention-v999";
   await store.setTrusted(`run:${executionId}`, unknown);
-  await assertRejects(() => restarted.registry.list(), Error, "unknown durable run retention policy");
+  await assertRejects(() => harness(store, { bootId: "boot-e" }).registry.list(), Error, "unknown durable run retention policy");
 });
 
 Deno.test("durable runs: retain-all does not truncate or evict beyond the former 200-record cap", async () => {
@@ -1569,4 +1597,88 @@ Deno.test("terminal: the outbox carries result (16 KB) beside the 240-char summa
   assert(run.terminal.summary.length <= 240, "terminal.summary stays a preview for lists");
   // The thread commit still receives the FULL result (the normal path).
   assertEquals(thread.find((row) => row.executionId === id)?.content?.length, 1000);
+});
+
+// ── CAP-FB-20260830-RUN-LOG-COMPACTION-01 ────────────────────────────────────
+// Bounded retention: full logs for the newest `perThread` executions of a
+// thread; older ones are COMPACTED (never deleted) to one honest summary row.
+async function seedThread(registry, threadId, count, { prefix = "exec_compact" } = {}) {
+  const ids = [];
+  for (let i = 1; i <= count; i += 1) {
+    const id = `${prefix}_${String(i).padStart(3, "0")}`;
+    await registry.start({
+      executionId: id, kind: "task", taskPreview: `t${i}`, journalTarget: "master", threadId,
+      resumeRequest: { id: `t${i}`, task: `t${i}`, route: "runTask", routeArgs: {}, idempotencyKey: id },
+    });
+    await registry.appendLog(id, { type: "tool-call", tool: "echo", callId: `c${i}` }, `${id}-call`);
+    await registry.appendLog(id, { type: "tool-result", callId: `c${i}`, result: "ok", ok: true }, `${id}-result`);
+    await registry.settle(id, { ok: true, result: `answer ${i}`, logicalId: `t${i}`, summary: `answer ${i}` });
+    ids.push(id);
+  }
+  return ids;
+}
+
+Deno.test("retention: bounded retention compacts the 11th execution of a thread to one summary row", async () => {
+  const store = new FakeStore();
+  const { registry } = harness(store, { retention: { mode: "bounded", perThread: 10 } });
+  const ids = await seedThread(registry, "thread-compact", 11);
+  const oldest = await registry.listLogs(ids[0]);
+  assertEquals(oldest.length, 1, "the oldest execution's log is exactly one row");
+  assertEquals(oldest[0].type, "compacted");
+  assertEquals(oldest[0].status, "ok");
+  assertEquals(oldest[0].summary, "answer 1");
+  assertEquals(oldest[0].rowsDropped, 4, "accepted + tool-call + tool-result + terminal were folded into the summary");
+  for (const id of ids.slice(1)) {
+    const rows = await registry.listLogs(id);
+    assertEquals(rows.length, 4, `${id} keeps its full log`);
+    assert(!rows.some((r) => r.type === "compacted"), `${id} is not compacted`);
+  }
+  // The execution RECORD is never deleted: the run is still listed, terminal,
+  // and says it was compacted.
+  const snapshot = await registry.list();
+  const run = snapshot.runs.find((r) => r.executionId === ids[0]);
+  assert(run, "the compacted execution is still in the registry");
+  assertEquals(run.phase, "terminal");
+  assertEquals(run.logCompacted?.rowsDropped, 4);
+  assertEquals(snapshot.runs.length, 11);
+  assertEquals(snapshot.retentionPolicy.mode, "bounded");
+  assertEquals(snapshot.retentionPolicy.perThread, 10);
+  // The thread view still lists every execution (retain-all history; the
+  // compaction is of the LOG, not of the run).
+  assertEquals((await registry.listThreadExecutions("thread-compact")).length, 11);
+});
+
+Deno.test("retention: retain-all keeps every row", async () => {
+  const store = new FakeStore();
+  const { registry } = harness(store, { retention: { mode: "retain-all" } });
+  const ids = await seedThread(registry, "thread-keep", 11, { prefix: "exec_keep" });
+  for (const id of ids) {
+    const rows = await registry.listLogs(id);
+    assertEquals(rows.length, 4, `${id} keeps its full log under retain-all`);
+  }
+  const snapshot = await registry.list();
+  assertEquals(snapshot.retentionPolicy.mode, "retain-all");
+  assertEquals(snapshot.retentionPolicy.automaticCompaction, false);
+  assert(snapshot.runs.every((r) => !r.logCompacted));
+});
+
+Deno.test("retention: the global execution cap compacts oldest-first across threads", async () => {
+  const store = new FakeStore();
+  const { registry } = harness(store, { retention: { mode: "bounded", perThread: 10, globalExecutions: 3 } });
+  const ids = [];
+  for (let t = 1; t <= 5; t += 1) ids.push(...await seedThread(registry, `thread-g${t}`, 1, { prefix: `exec_global_${t}` }));
+  // 5 executions, cap 3: the two oldest are compacted, the newest three intact.
+  assertEquals((await registry.listLogs(ids[0])).map((r) => r.type), ["compacted"]);
+  assertEquals((await registry.listLogs(ids[1])).map((r) => r.type), ["compacted"]);
+  for (const id of ids.slice(2)) assertEquals((await registry.listLogs(id)).length, 4, `${id} intact`);
+});
+
+Deno.test("retention: an unknown setting falls back to the bounded defaults and run.list reports them", async () => {
+  const store = new FakeStore();
+  const { registry } = harness(store, { retention: { mode: "whatever", perThread: -4 } });
+  await begin(registry);
+  const snapshot = await registry.list();
+  assertEquals(snapshot.retentionPolicy, RUN_RETENTION_POLICY);
+  assertEquals(snapshot.retentionPolicy.mode, "bounded");
+  assertEquals(snapshot.retentionPolicy.globalBytes, 32 * 1024 * 1024);
 });

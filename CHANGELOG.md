@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.471] — 2026-08-30
+- WIP: CAP-FB-20260830-RUN-LOG-COMPACTION-01 inherited uncommitted work (resumed after worker cutoff)
+
 ## [0.2.470] — 2026-08-30
 - Tracker: the memory-speed fix is recorded as landed; two more fixes claimed.
 

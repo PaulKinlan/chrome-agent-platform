@@ -204,11 +204,17 @@ On SW startup, in this exact order:
    outcome recorded, while recovery still finishes cancellation. Repeated cancel is idempotent. Neither automatic
    recovery nor `run.resume` may restart that execution ID; only a new explicit
    run request creates a new ID.
-2. **Retain all logs for now**: `run-retention-v1` is `retain-all`, with
-   `automaticCompaction:false`, `automaticEviction:false`, and
-   `explicitClearOnly:true`. Every run/log row binds that version. Legacy
-   unversioned records migrate non-destructively; unknown future versions fail
-   closed. Any future storage policy requires an explicit versioned migration.
+2. **Retain every run; bound the log detail** (superseded 2026-08-30 by
+   CAP-FB-20260830-RUN-LOG-COMPACTION-01 — the explicit versioned migration this
+   item required): `run-retention-v2` is `bounded` by default — the newest 10
+   executions per thread and the newest 500 overall (32 MiB) keep their full
+   log, older logs are compacted to one honest summary row — with
+   `automaticEviction:false` and `explicitClearOnly:true` unchanged: no
+   execution record is ever removed by policy. "Keep every run log"
+   (`retain-all`) is the explicit opt-in in Settings. Every run/log row binds
+   its stamp; v1 rows stay readable, v1 records migrate on read, legacy
+   unversioned records migrate non-destructively, and unknown future versions
+   fail closed. See docs/DURABLE-RUN-ARCHITECTURE.md.
 3. **Interruption recovery is bounded and fail-safe**: UI/view/tab teardown does
    not own execution. Before any tool progress, worker/browser interruption may
    automatically prepare a tokenized same-ID dispatch. It becomes `running` only
