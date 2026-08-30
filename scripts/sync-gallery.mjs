@@ -20,6 +20,7 @@ const FILES = [
   ["extension/shared/agent-candidates.js", "docs/agent-candidates.js"],
   ["extension/shared/agent-registry.js", "docs/agent-registry.js"],
   ["extension/shared/command-parser.js", "docs/command-parser.js"],
+  ["extension/shared/composer-commands.js", "docs/composer-commands.js"],
   ["extension/shared/run-status.js", "docs/run-status.js"],
   ["extension/shared/tool-tree.js", "docs/tool-tree.js"],
   // The canonical secret matcher (tool-tree.js imports it — the gallery must resolve it).

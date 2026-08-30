@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.416] — 2026-08-30
+- The composer slash menu got an overhaul: dead commands are gone (/theme, /focus, /model, /schedule), and new ones pull real Chrome context into your message — /tabs picks any open tab, /artifacts attaches a saved artifact, /bookmarks and /history search and insert links, /files attaches files from folders you've granted
+
+## [0.2.415] — 2026-08-30
+- Add browser context commands to the composer
+
 ## [0.2.414] — 2026-08-30
 - Much better debugging: every tool call is logged with its arguments, result, and duration; there's a Settings switch for full detail in local logs (exports stay protected); and every run now has a View log showing its complete tool-call timeline
 

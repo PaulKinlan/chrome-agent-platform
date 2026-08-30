@@ -35,7 +35,7 @@ Deno.test("settings cleanliness: API-key persistence still fails closed when ins
   assert(guard >= 0 && persist > guard, "the synchronous durability guard stays before provider persistence");
 });
 
-Deno.test("settings cleanliness: real owner controls and install-grant diagnostics remain", () => {
+Deno.test("settings cleanliness: real owner controls and honest permission states remain", () => {
   for (const marker of [
     'id="browser-grant"',
     'id="fs-add-directory-btn"',
@@ -43,5 +43,7 @@ Deno.test("settings cleanliness: real owner controls and install-grant diagnosti
     'id="hook-list"',
   ]) assertStringIncludes(html, marker);
   assertStringIncludes(options, "async function renderPermissions()");
-  assertStringIncludes(options, 'state.textContent = granted ? "Granted at install" : "MISSING — reload the extension"');
+  assertStringIncludes(options, 'required ? "MISSING — reload the extension" : "Not enabled"');
+  assertStringIncludes(options, "if (!required && !granted)");
+  assertStringIncludes(options, "requestCapability(cap.id)");
 });

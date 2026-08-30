@@ -120,11 +120,10 @@ Deno.test("provider options: listed providers remain selected and clear the inte
   assertEquals(target, { hidden: true, textContent: "" });
 });
 
-Deno.test("provider options source: global and per-agent renderers consume the shared no-migration state", async () => {
+Deno.test("provider options source: global and per-agent settings renderers consume the shared no-migration state", async () => {
   const html = await Deno.readTextFile("extension/options/options.html");
   const js = await Deno.readTextFile("extension/options/options.js");
   const css = await Deno.readTextFile("extension/options/options.css");
-  const components = await Deno.readTextFile("extension/shared/components.js");
 
   assert(
     !html.includes("The on-device Prompt API"),
@@ -141,5 +140,4 @@ Deno.test("provider options source: global and per-agent renderers consume the s
   assertStringIncludes(js, "hiddenLegacyUnchanged");
   assertStringIncludes(js, "setAgentProvider.disabled = hiddenLegacyUnchanged");
   assertStringIncludes(css, ".agent-provider-internal-status");
-  assertStringIncludes(components, 'RUNTIME_SEND("provider.models")');
 });

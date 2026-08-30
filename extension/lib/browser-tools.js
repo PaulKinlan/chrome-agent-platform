@@ -1951,7 +1951,7 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ title, url, parentId }) => {
         if (!(await hasPermission("bookmarks"))) {
-          return { error: "bookmarks permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "bookmarks permission not granted — Enable Bookmarks in Settings" };
         }
         try {
           await assertRunOwned();
@@ -1975,7 +1975,7 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ query, parentId, maxResults = 50 }) => {
         if (!(await hasPermission("bookmarks"))) {
-          return { error: "bookmarks permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "bookmarks permission not granted — Enable Bookmarks in Settings" };
         }
         let items = [];
         if (query) {
@@ -2004,7 +2004,7 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ id }) => {
         if (!(await hasPermission("bookmarks"))) {
-          return { error: "bookmarks permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "bookmarks permission not granted — Enable Bookmarks in Settings" };
         }
         try {
           await assertRunOwned();
@@ -3656,7 +3656,7 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ text = "", startTime, endTime, maxResults = 50 }) => {
         if (!(await hasPermission("history"))) {
-          return { error: "history permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "history permission not granted — Enable History in Settings" };
         }
         const query = { text, maxResults: Math.min(maxResults, 200) };
         if (startTime !== undefined) query.startTime = startTime;
@@ -3683,7 +3683,7 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ url, maxResults = 50 }) => {
         if (!(await hasPermission("history"))) {
-          return { error: "history permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "history permission not granted — Enable History in Settings" };
         }
         const visits = await chrome.history.getVisits({ url });
         const list = Array.isArray(visits) ? visits : [];
@@ -3703,7 +3703,7 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({ url: z.string().url().max(2048) }),
       execute: async ({ url }) => {
         if (!(await hasPermission("history"))) {
-          return { error: "history permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "history permission not granted — Enable History in Settings" };
         }
         const origin = canonicalOrigin(url);
         if (!origin) return { error: "only http/https URLs can be added to history" };
@@ -3735,7 +3735,7 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({ url: z.string().url().max(2048) }),
       execute: async ({ url }) => {
         if (!(await hasPermission("history"))) {
-          return { error: "history permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "history permission not granted — Enable History in Settings" };
         }
         const origin = canonicalOrigin(url);
         if (!origin) return { error: "only http/https URLs can be deleted from history" };
@@ -3770,7 +3770,7 @@ export function browserToolset(readOnly = false) {
       }).refine((v) => v.endTime > v.startTime, "endTime must be after startTime"),
       execute: async ({ startTime, endTime }) => {
         if (!(await hasPermission("history"))) {
-          return { error: "history permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "history permission not granted — Enable History in Settings" };
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {
@@ -3800,7 +3800,7 @@ export function browserToolset(readOnly = false) {
           return { error: "refusing to clear ALL history without an explicit confirm:true" };
         }
         if (!(await hasPermission("history"))) {
-          return { error: "history permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension" };
+          return { error: "history permission not granted — Enable History in Settings" };
         }
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(undefined))) {

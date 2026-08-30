@@ -39,6 +39,10 @@ one line each here:
 - **Artifact viewer as a tiny unclickable box** — `0.2.318`: fills the window, opens in a
   full tab.
 - **Theme switcher** — removed (`0.2.301`); it only ever worked on Settings.
+- **Composer command audit** — removed obsolete `/theme`, unclear `/focus`, and
+  inert/redundant `/model` and `/schedule` entries; `/tabs`, `/agent`,
+  `/artifacts`, `/bookmarks`, and `/history` now open their live searchable
+  pickers and insert agent-readable context.
 
 ## Open
 

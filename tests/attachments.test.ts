@@ -3,8 +3,9 @@
 // persisted + rendered in the conversation.
 // @ts-nocheck — the attachment shapes are intentionally dynamic.
 
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
+  attachmentContext,
   buildMultimodalTask,
   isTextLikeAttachment,
   MAX_LOCAL_TEXT_BYTES,
@@ -22,6 +23,20 @@ Deno.test("local file attachments: text detection and UTF-8 data URLs are bounde
   const url = textToDataUrl("héllo", "text/plain");
   assert(url.startsWith("data:text/plain;charset=utf-8;base64,"));
   assertEquals(new TextDecoder().decode(Uint8Array.from(atob(url.split(",")[1]), (c) => c.charCodeAt(0))), "héllo");
+Deno.test("attachmentContext preserves UTF-8 text in agent-facing context", () => {
+  const text = "Report body ✓";
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  const context = attachmentContext([{
+    name: "report.txt",
+    type: "text/plain",
+    size: bytes.length,
+    kind: "file",
+    dataURL: `data:text/plain;base64,${btoa(binary)}`,
+  }]);
+  assertStringIncludes(context, text);
+  assert(!context.includes("â"), "UTF-8 bytes must not be treated as Latin-1");
 });
 
 Deno.test("buildMultimodalTask: no image attachments → the plain task string", () => {

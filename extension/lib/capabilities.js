@@ -1,11 +1,10 @@
 // lib/capabilities.js — the OPTIONAL-permission capability gate.
 //
-// Every API permission is optional (Paul's hard requirement). This module is the
-// single authority for (a) which permission backs which capability and (b)
-// requesting/checking permissions. The Settings page renders a capability panel
-// from CAPABILITIES and each Enable button calls `requestCapability` from a REAL
-// user gesture. The service worker NEVER requests a permission itself (no user
-// gesture — Chrome rejects it with "must be called during a user gesture").
+// This module is the single authority for (a) which permission backs which
+// capability and (b) requesting/checking permissions. The Settings page renders
+// a capability panel from CAPABILITIES and each Enable button calls
+// `requestCapability` from a REAL user gesture. The service worker NEVER requests
+// a permission itself (no user gesture — Chrome rejects it).
 //
 // The extension degrades gracefully when a capability is absent: the SW guards
 // chrome.* access, and each feature reports "permission not granted" rather than
@@ -19,6 +18,20 @@ import { exactOriginPattern } from "./permission-orchestration.js";
 // artifact deletion itself needs NO permission; it lives in the extension's
 // own OPFS space).
 export const CAPABILITIES = [
+  {
+    id: "bookmarks",
+    permissions: ["bookmarks"],
+    label: "Bookmarks",
+    hint: "Read and organize bookmarks. Without it, bookmark commands and tools stay unavailable.",
+    gates: "Gates: /bookmarks and bookmark list/create/remove tools.",
+  },
+  {
+    id: "history",
+    permissions: ["history"],
+    label: "History",
+    hint: "Search browsing history. Without it, history commands and tools stay unavailable.",
+    gates: "Gates: /history and browsing-history tools.",
+  },
   {
     id: "storage",
     permissions: ["storage"],
@@ -179,27 +192,23 @@ export async function capabilityStatus() {
  * never silently swallowed: a rejection or a false result is surfaced so the
  * UI can report it honestly.
  */
-export async function requestCapability(id) {
+export async function requestCapability(id, { request = true } = {}) {
   const cap = CAPABILITIES.find((c) => c.id === id);
   if (!cap) return { ok: false, error: `unknown capability ${id}` };
   try {
-    // HOST-PERMISSION SIMPLIFICATION (owner directive 2026-08-28: this
-    // extension is load-unpacked only and will never ship to the store): every
-    // capability permission is GRANTED AT INSTALL (manifest `permissions`).
-    // There is no runtime request left to make — confirm absence honestly and
-    // report the grant. The in-context owner approval for MUTATIONS is a
-    // separate policy layer and is unaffected.
-    const granted = await chrome.permissions.contains({
-      permissions: cap.permissions,
-    });
-    // NOTE: no .catch(() => true) — a contains() failure must surface as an
-    // honest error (the outer catch), NEVER as granted (fail closed).
-    if (!granted) {
-      // Install-granted permissions can never be absent; this is a lie-guard,
-      // not a request path.
-      return { ok: false, granted: false, capability: id, error: "capability not granted at install" };
+    const query = { permissions: cap.permissions };
+    if (!request) {
+      const granted = await chrome.permissions.contains(query);
+      return granted
+        ? { ok: true, granted: true, capability: id }
+        : { ok: false, granted: false, capability: id, error: "permission not granted" };
     }
-    return { ok: true, granted: true, capability: id };
+    // This must be the first asynchronous call from the Settings click: moving
+    // a contains() preflight ahead of it loses Chrome's user activation.
+    const granted = await chrome.permissions.request(query);
+    return granted
+      ? { ok: true, granted: true, capability: id }
+      : { ok: false, granted: false, capability: id, error: "permission request declined" };
   } catch (e) {
     return { ok: false, error: String(e?.message ?? e), capability: id };
   }
