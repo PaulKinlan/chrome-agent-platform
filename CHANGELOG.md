@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.492] — 2026-08-30
+- Tracker: the honesty backstop for browser actions is recorded as landed.
+
 ## [0.2.491] — 2026-08-30
 - Landed: if the agent says it opened a tab, saved something, took a screenshot or handed a job off but no tool actually did it, the conversation now corrects that instead of showing the false claim.
 
