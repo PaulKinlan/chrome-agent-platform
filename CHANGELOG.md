@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.418] — 2026-08-30
+- Refresh the permissions journey evidence
+
 ## [0.2.417] — 2026-08-30
 - Correct the headed permissions acceptance
 
