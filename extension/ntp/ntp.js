@@ -726,14 +726,15 @@ async function renderNamedAgents() {
   ]);
   const agents = Array.isArray(namedRes.agents) ? namedRes.agents : [];
   const background = backgroundAgentsForDisplay(bgRes.agents);
-  // The hub list keeps its established active-only view. The task sidebar is a
-  // display surface, not a callability filter, so it receives every scheduled
-  // agent below — including stopped ones the owner may want to inspect.
+  // ONE projection for every agent surface (CAP-FB-20260830-FRESH-PROFILE-
+  // TEMPLATE-AGENTS-01): created named agents plus ENABLED background agents.
+  // A disabled recipe is a template, not an agent — it stays reachable through
+  // the create dialog / Settings' "Configure" picker, never as an agent row.
+  // The hub panel, the sidebar, the side panel and Settings all agree on it.
   const active = projectUnifiedAgents(
     agents,
     backgroundAgentsForDisplay(background, { activeOnly: true }),
   );
-  const navigation = projectUnifiedAgents(agents, background);
   if (el) {
     el.replaceChildren();
     if (!active.length) {
@@ -820,7 +821,7 @@ async function renderNamedAgents() {
       }
     }
   }
-  renderSidebarAgents(navigation);
+  renderSidebarAgents(active);
   refreshAgentCount(active);
 }
 

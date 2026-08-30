@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.436] — 2026-08-30
+- Landed: a fresh profile no longer lists 22 switched-off templates as agents; the sidebar, hub panel, side panel and Settings now agree on the same list, and templates stay one click away in the create dialog.
+
 ## [0.2.435] — 2026-08-30
 - Tracker: the retryable tool-argument fix is recorded as landed.
 
