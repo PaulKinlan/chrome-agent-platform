@@ -132,12 +132,13 @@ Deno.test("agent.discoverable-tabs ROUTE: only passively detected WebMCP origins
       sendMessage: async () => {}, create: async () => ({ id: 1 }), update: async () => ({}), remove: async () => {},
     },
     windows: { onCreated: noopListener, onRemoved: noopListener, onFocusChanged: noopListener },
-    scripting: { executeScript: async () => [], getRegisteredContentScripts: async () => [], registerContentScripts: async () => {} },
+    scripting: {
+      executeScript: async ({ target }) => [{ documentId: frameDocuments.get(target.tabId), frameId: 0, result: true }],
+      getRegisteredContentScripts: async () => [],
+      registerContentScripts: async () => {},
+    },
     offscreen: { closeDocument: async () => {}, getContexts: async () => [] },
     contextMenus: { onClicked: noopListener },
-    webNavigation: {
-      getFrame: async ({ tabId }) => ({ documentId: frameDocuments.get(tabId) }),
-    },
     notifications: {},
   };
   await import("../extension/background/service-worker.js");

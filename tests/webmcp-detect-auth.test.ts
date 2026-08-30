@@ -6,6 +6,26 @@ const auth = globalThis.CapBridgeAuth;
 const mainSource = await Deno.readTextFile(new URL("../extension/content/webmcp-detect-main.js", import.meta.url));
 const relaySource = await Deno.readTextFile(new URL("../extension/content/webmcp-detect-relay.js", import.meta.url));
 
+Deno.test("passive detector is statically loaded into top-level HTTP pages", async () => {
+  const manifest = JSON.parse(await Deno.readTextFile(new URL("../extension/manifest.json", import.meta.url)));
+  assertEquals(manifest.content_scripts, [
+    {
+      matches: ["http://*/*", "https://*/*"],
+      js: ["content/webmcp-detect-main.js"],
+      run_at: "document_start",
+      world: "MAIN",
+      all_frames: false,
+    },
+    {
+      matches: ["http://*/*", "https://*/*"],
+      js: ["content/webmcp-detect-relay.js"],
+      run_at: "document_start",
+      world: "ISOLATED",
+      all_frames: false,
+    },
+  ]);
+});
+
 Deno.test("passive detector rejects forged snapshots and relays the genuine probe", async () => {
   const listeners = [];
   const detections = [];

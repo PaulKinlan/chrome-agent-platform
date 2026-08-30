@@ -5062,9 +5062,15 @@ const handlers = mergeRouteMaps(
       // another same-origin tab/document cannot borrow this page's detection.
       const detected = known.get(origin);
       if (!detected) continue;
-      const frame = await chrome.webNavigation.getFrame({ tabId: t.id, frameId: 0 }).catch(() => null);
+      // InjectionResult carries Chrome's current top-level documentId without
+      // requiring the unrelated optional webNavigation permission.
+      const currentDocument = (await chrome.scripting.executeScript({
+        target: { tabId: t.id, frameIds: [0] },
+        world: "ISOLATED",
+        func: () => true,
+      }).catch(() => []))[0];
       const document = detected.documents.find((item) =>
-        item.tabId === t.id && item.documentId === frame?.documentId
+        item.tabId === t.id && item.documentId === currentDocument?.documentId
       );
       if (!document) continue;
       const toolCount = document.toolCount;

@@ -1,6 +1,10 @@
 # Changelog
 
+## [0.2.421] — 2026-08-30
+- Fix passive WebMCP discovery acceptance
+
 ## [0.2.420] — 2026-08-30
+- WebMCP pages are passively detected before enrollment again, so Find site tools lists genuine tool pages while keeping ordinary tabs hidden.
 - merge fix: restore the permissions-optional manifest arrays (4 mandatory + 31 optional; audioCapture/videoCapture removed) — clobbered by a version-file revert during the merge
 
 ## [0.2.419] — 2026-08-30

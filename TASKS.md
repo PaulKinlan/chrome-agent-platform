@@ -1855,3 +1855,27 @@ evidence every other task depends on).
   - 2026-08-29 22:12 UTC — implementation candidate prepared: the brand is a semantic Home button, deep-to-deep navigation replaces the current entry, direct deep links seed a hub root, and focused coverage pins root reset plus navigation order
   - 2026-08-29 22:12 UTC — owner expanded the same navigation lane: + from a task/agent must be a real Home destination, not Back. The shared `goHome` path now replace-navigates before closing the surface and focusing the fresh composer; settings Home, delete/invalid-surface recovery, artifact reuse and skill-use paths use the same destination semantics
   - 2026-08-29 22:28 UTC — author review PASS: the changed assertion failed against the unmodified controller and passed on the candidate; focused 29/29, full suite 2389/0, developer build rc=0. A loaded extension was driven with genuine CDP clicks: brand returned task → hub with Home focused; + returned a live task → hub with the fresh task input focused; browser Back did not restore the task. Three screenshots retained privately
+
+
+## [CAP-FB-20260830-WEBMCP-ACCEPTANCE-GREEN-01] Restore passive WebMCP discovery acceptance
+- Feedback: 2026-08-30 — automated production-path WebMCP acceptance was 11/37 because the fixture never entered the passively detected tab picker
+- Updated: 2026-08-30 04:44 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: implementation worker
+- Workspace: active (local path private)
+- Branch: `cap-webmcp-acceptance-green`
+- Base: `72bd0b1c`
+- Candidate: this tracker commit
+- Shipping: —
+- Acceptance: `scripts/webmcp-acceptance.ts` is 37/37 green headless from a fresh profile; the fixture is admitted only after authenticated passive detection; exact tab/document enrollment, invocation, reload and navigation checks remain green; full suite and build pass on the final commit
+- Review: author review 2026-08-30 PASS (security/privacy, permission, document-identity, performance and test falsification); independent acceptance review required and pending
+- Gates: baseline loaded-extension journey 11/37 RED; detector CDP/SW diagnosis recorded; changed focused tests observed 2/4 RED without the product fix and 4/4 GREEN with it; final-commit `npm run test:all` passed (2440 unit, security PASS, 131 Chrome journeys); developer build clean; loaded-extension WebMCP acceptance 37/37 GREEN
+- Blockers: —
+- Next: independent acceptance review, then coordinator merge
+- Recover: `git show cap-webmcp-acceptance-green -- extension/manifest.json extension/background/service-worker.js tests/webmcp-detect-auth.test.ts tests/discoverable-tabs-tools.test.ts`
+- History:
+  - 2026-08-30 04:44 UTC — diagnosis against the harness-built variant: neither detector appeared in `manifest.content_scripts`, no dynamic detector was registered, the MAIN bootstrap hook was undefined, and `cap:knownWebmcpOrigins` was empty despite the fixture exposing four callable names. After restoring static HTTP(S) MAIN/ISOLATED probes, CDP showed both scripts, the HMAC bootstrap returned a nonce and the SW registry held the fixture's `(tabId, documentId)` snapshot. The picker remained empty because `webNavigation` is optional and unavailable in the two-permission variant; current-document reattestation now reads Chrome's `documentId` from a scripting `InjectionResult`, preserving the exact-document gate without another permission.
+  - 2026-08-30 04:44 UTC — focused falsification was 2 pass / 2 fail with the product fix removed and 4/4 green restored. The real loaded-extension acceptance then completed 37/37 green, including picker admission, exact-tab invocation, visible side effects, fencing negatives, re-enrollment, reload and navigation.
+  - 2026-08-30 04:49 UTC — final-commit gates passed: developer build clean; 2440 unit tests, security suite and 131 Chrome journeys green; WebMCP production-path acceptance 37/37 green. Author review found no blocker: static probes transport only an authenticated count, the exact `(tabId, documentId)` registry gate remains intact, no permission was broadened, and reattestation injects one bounded isolated no-op only into origins already present in the bounded passive registry.

@@ -1,10 +1,11 @@
 # WebMCP discovery — headed acceptance (the executable manual macro)
 
 The production-path acceptance is `scripts/webmcp-acceptance.ts`. It drives the
-REAL loaded-MV3 path: the hub "Discover this page" → the tab picker → the exact
-picked tab, the real permission request, dynamic registration + current-tab
-injection of both packaged discovery scripts, CDP `Debugger.scriptParsed`
-evidence, `[WebMCP]` console lifecycle events, and extension-only
+REAL loaded-MV3 path: static detection-only MAIN + isolated scripts passively
+attest HTTP(S) pages before enrollment; the hub "Discover this page" → the tab
+picker → the exact picked tab; the real permission request; dynamic registration
++ current-tab injection of both packaged discovery scripts; CDP
+`Debugger.scriptParsed` evidence; `[WebMCP]` console lifecycle events; and extension-only
 `tools.invoke` → production `invokeSiteTool` → exact approved tab/document →
 isolated → MAIN invocation with a visible page side effect, plus the
 re-enrollment singleton and reload + cross-document navigation re-sync.
@@ -59,8 +60,10 @@ the manifest's `testedSourceCommit` + empty `worktreeDirtyFiles` to identify the
 exact tested bytes. Loads a **test variant** of the extension that is byte-identical to the shipped
 one EXCEPT `manifest.json` pre-holds `scripting` + `tabs`: it unions them into
 the required list, preserves every boot-critical permission, and removes their
-optional declarations so nothing is duplicated. The shipped `<all_urls>` host
-access is unchanged. Every check runs for real; the manifest records
+optional declarations so nothing is duplicated. `scripting` also lets the picker
+read Chrome's current top-level `documentId` from an isolated no-op
+`InjectionResult`; this preserves document-scoped reattestation without adding a
+`webNavigation` grant. The shipped `<all_urls>` host access is unchanged. Every check runs for real; the manifest records
 `permissionGrant: "test-manifest-pregranted"` and `overallStatus: OPEN` — the
 tabs permission-prompt gesture itself remains unattested until a headed run
 completes the single manual step above.
