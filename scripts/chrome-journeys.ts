@@ -452,6 +452,7 @@ const EXPECTED = [
   "permissions: Bookmarks prompt cancelled and permission settled absent in headless",
   "permissions: Tab groups Enable clicked via a trusted gesture",
   "permissions: Tab groups prompt cancelled and permission settled absent in headless",
+  "permissions: retry affordance intact for cancelled warned permissions (fresh Settings page)",
   "permissions: capability.revoke still requires owner approval (fail closed)",
   "board deny: two named agents created for the journey",
   "board deny: Board permissions section opens from the nav",
@@ -1678,6 +1679,37 @@ async function main() {
     check(
       "permissions: Tab groups prompt cancelled and permission settled absent in headless",
       tabGroupsDenied.denied,
+    );
+
+    // The retry affordance after cancelled prompts (the old headed macro's
+    // STEP K denial half — covered headless since the permission-matrix lane):
+    // a FRESH Settings page shows both warned rows requestable with a working
+    // Enable button. (Re-open the page rather than reload: navigation breaks
+    // the CDP eval context.)
+    const afterDenyPage = await openPage(port, `chrome-extension://${extId}/options/options.html`);
+    const afterDenySession = await attachRuntime(cdp, afterDenyPage.id);
+    cdp.pageSessions.add(afterDenySession);
+    let retryAffordance = false;
+    for (let i = 0; i < 25 && !retryAffordance; i++) {
+      const rows = await evalIn(cdp, afterDenySession, `(() => {
+        const named = (label) => [...document.querySelectorAll('#permission-list .perm-row')]
+          .find((r) => r.querySelector('.perm-name')?.textContent === label);
+        const state = (label) => {
+          const row = named(label);
+          const btn = row?.querySelector('button');
+          return row ? { state: row.querySelector('.perm-state')?.textContent, button: btn?.textContent, disabled: btn?.disabled } : null;
+        };
+        return { bookmarks: state("Bookmarks"), tabGroups: state("Tab groups") };
+      })()`).catch(() => null);
+      retryAffordance = rows?.bookmarks?.state === "Not enabled" && rows?.bookmarks?.button === "Enable" &&
+        rows?.bookmarks?.disabled === false &&
+        rows?.tabGroups?.state === "Not enabled" && rows?.tabGroups?.button === "Enable" &&
+        rows?.tabGroups?.disabled === false;
+      if (!retryAffordance) await sleep(400);
+    }
+    check(
+      "permissions: retry affordance intact for cancelled warned permissions (fresh Settings page)",
+      retryAffordance === true,
     );
 
     await msgOpts({

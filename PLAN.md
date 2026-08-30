@@ -263,7 +263,7 @@ Also P0: `CAP-FB-20260827-MAIN-GATES-RED-02` (fixed and shipped; author review w
 review); dialog consolidation (five implementations, three hand-rolled outside the component
 system); Settings sectioning (12,837 px, 8.8 screens, all twelve panels rendered at once);
 permission-remediation UX; semantic tool search; Store release path; owner export/import;
-the headed acceptance lane; `scripts/ui-integration.ts` red; the UI flash/relayout.
+the permission-state matrix acceptance lane (supersedes the headed lane); `scripts/ui-integration.ts` red; the UI flash/relayout.
 
 **P2.** The whole Wasm tool platform lane — runtime probe, owner install, bundled tranche,
 spreadsheet toolkit, tabular diff, abuse gates, the Gate-2 Worker host. Resumes after the

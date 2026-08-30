@@ -1,0 +1,113 @@
+{
+  "overallStatus": "ATTESTED",
+  "permissionGrant": "matrix: jit-auto-grant (warningless) + variant-install-grant (warned) + headless-cancel (deny path)",
+  "headed": false,
+  "honestExclusions": [
+    "Chrome's native permission prompt bubble (Chrome's own UI; not product code)",
+    "the extension action-icon click (transient activeTab; no CDP mechanism)",
+    "showDirectoryPicker (native OS dialog; manual smoke)"
+  ],
+  "testedSourceCommit": "3b0f3a5afafd8b572c64f9474fe5fa19267a1b2f",
+  "steps": [
+    {
+      "step": "build succeeded (dist matches sources)",
+      "pass": true
+    },
+    {
+      "step": "matrix[contextMenus]: starts requestable (JIT model, fresh profile)",
+      "pass": true
+    },
+    {
+      "step": "matrix[contextMenus]: Enable clicked via a trusted gesture",
+      "pass": true
+    },
+    {
+      "step": "matrix[contextMenus]: warningless permission auto-granted; the row shows Granted",
+      "pass": true
+    },
+    {
+      "step": "matrix[contextMenus]: Turn off clicked via a trusted gesture",
+      "pass": true
+    },
+    {
+      "step": "matrix[contextMenus]: Turn off settles absent (revoke is promptless) and the row is requestable again",
+      "pass": true
+    },
+    {
+      "step": "matrix[contextMenus]: retry Enable clicked via a trusted gesture",
+      "pass": true
+    },
+    {
+      "step": "matrix[contextMenus]: retry re-grants (the full turn-off/retry lifecycle, headless)",
+      "pass": true
+    },
+    {
+      "step": "matrix-shipped[tabGroups]: the row starts requestable (Not enabled + Enable affordance)",
+      "pass": true
+    },
+    {
+      "step": "matrix-shipped[tabGroups]: Enable clicked via a real (trusted) CDP gesture",
+      "pass": true
+    },
+    {
+      "step": "matrix-shipped[tabGroups]: no silent grant — the warned request never resolves without a prompt gesture",
+      "pass": true
+    },
+    {
+      "step": "matrix-shipped[tabGroups]: the original row remains PENDING (disabled, no failure/retry state) while the request is outstanding",
+      "pass": true
+    },
+    {
+      "step": "matrix-shipped[tabGroups]: cancel settles absent and the retry affordance (Enable) is intact on a fresh Settings page",
+      "pass": true
+    },
+    {
+      "step": "matrix-shipped[bookmarks]: the row starts requestable (Not enabled + Enable affordance)",
+      "pass": true
+    },
+    {
+      "step": "matrix-shipped[bookmarks]: Enable clicked via a real (trusted) CDP gesture",
+      "pass": true
+    },
+    {
+      "step": "matrix-shipped[bookmarks]: no silent grant — the warned request never resolves without a prompt gesture",
+      "pass": true
+    },
+    {
+      "step": "matrix-shipped[bookmarks]: the original row remains PENDING (disabled, no failure/retry state) while the request is outstanding",
+      "pass": true
+    },
+    {
+      "step": "matrix-shipped[bookmarks]: cancel settles absent and the retry affordance (Enable) is intact on a fresh Settings page",
+      "pass": true
+    },
+    {
+      "step": "matrix[variant]: permission-variant build succeeded (tabGroups + history pre-held)",
+      "pass": true
+    },
+    {
+      "step": "matrix[variant]: byte-identical except manifest.json (integrity manifest)",
+      "pass": true
+    },
+    {
+      "step": "matrix[variant]: integrity independently re-verified (hashes recomputed, only manifest.json diverges)",
+      "pass": true
+    },
+    {
+      "step": "matrix-variant[tabGroups]: granted AT INSTALL (no prompt, no gesture)",
+      "pass": true
+    },
+    {
+      "step": "matrix-variant[history]: granted at install",
+      "pass": true
+    },
+    {
+      "step": "matrix-variant[history]: the grant is API-functional (chrome.history.search resolves)",
+      "pass": true
+    },
+    {
+      "step": "matrix-variant: install-granted capabilities render NO optional row (no bogus Turn off Chrome would refuse)",
+      "pass": true
+    }
+  ]
+}

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.485] — 2026-08-30
+- merge: Permission matrix lane (46a2d3a6) — every variant-integrity gate both records and refuses before startRig; headless permission-state matrix attested 25/0
+
 ## [0.2.484] — 2026-08-30
 - Five more fixes are in progress in parallel and recorded as claimed in the tracker.
 

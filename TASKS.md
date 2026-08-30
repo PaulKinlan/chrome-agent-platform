@@ -284,6 +284,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P3 | OPEN | [`CAP-FB-20260830-CODE-HEALTH-01`](#cap-fb-20260830-code-health-01-route-raw-console-calls-through-cap-log-annotate-the-41-bare-catches) | Route raw console calls through cap-log; annotate the 41 bare catches |
 | P3 | OPEN | [`CAP-FB-20260830-ICONOGRAPHY-GAPS-01`](#cap-fb-20260830-iconography-gaps-01-skills-without-icons-menus-without-icons-38-uppercase-kickers-in-the-gallery) | Skills without icons, menus without icons, 38 uppercase kickers in the gallery |
 | P3 | OPEN | [`CAP-FB-20260830-PRIVACY-STATEMENT-01`](#cap-fb-20260830-privacy-statement-01-one-screen-that-says-what-the-extension-sends-and-stores-and-a-factory-reset-journey) | One screen that says what the extension sends and stores, and a factory-reset journey |
+| P1 | DONE | [`CAP-FB-20260830-PERMISSION-MATRIX-01`](#cap-fb-20260830-permission-matrix-01-permission-state-matrix-acceptance-headless) | Permission-state matrix acceptance (headless) |
 
 **The demo path is the only P0 lane (owner decision, 2026-08-27; reaffirmed by the 2026-08-30 reanalysis).** There are 19 P0 entries. `CAP-FB-20260830-EXEC-DEMO-01` is the umbrella for the five-minute exec demo and lists its blockers; the new P0s from the reanalysis are the tool-gating pair (`BROWSER-LEASE-DEADLOCK-01`, `DENIAL-TO-GRANT-CARD-01`), the first screen (`KEYLESS-FIRST-RESULT-01`, `FRESH-PROFILE-TEMPLATE-AGENTS-01`), the transcript (`TRANSCRIPT-FULL-ANSWER-01`, `SELECTION-REF-VALIDATE-FIRST-01`), the two security items a leadership audience will probe (`RUN-SCRIPT-FETCH-APPROVAL-01`, `UNTRUSTED-CONTENT-FENCING-01`) and the page-action decision (`PAGE-ACTION-TOOLS-01`). The Wasm lane stays at P2 until after the demo. `REVIEW-2026-08-30.md` section 5 is the dependency-ordered queue.
 
@@ -2030,6 +2031,25 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - 2026-08-29 22:12 UTC — owner expanded the same navigation lane: + from a task/agent must be a real Home destination, not Back. The shared `goHome` path now replace-navigates before closing the surface and focusing the fresh composer; settings Home, delete/invalid-surface recovery, artifact reuse and skill-use paths use the same destination semantics
   - 2026-08-29 22:28 UTC — author review PASS: the changed assertion failed against the unmodified controller and passed on the candidate; focused 29/29, full suite 2389/0, developer build rc=0. A loaded extension was driven with genuine CDP clicks: brand returned task → hub with Home focused; + returned a live task → hub with the fresh task input focused; browser Back did not restore the task. Three screenshots retained privately
 
+
+## [CAP-FB-20260830-PERMISSION-MATRIX-01] Permission-state matrix acceptance (headless)
+- Feedback: 2026-08-30 — owner ruled there is no headed-browser dependency; "do a better solution" than waiting on a human clicker
+- Updated: 2026-08-30
+- Status: DONE
+- Resume: —
+- Priority: P1
+- Owner: worker (permission-matrix lane)
+- Workspace: /home/paulkinlan/worktrees/cap-permission-matrix
+- Branch: cap-permission-matrix
+- Base: origin/main fc2255be
+- Candidate: this branch
+- Shipping: —
+- Acceptance: `scripts/permission-variant.mjs` (generic byte-identical variant builder + VARIANT-INTEGRITY.json, fail-closed refusals); `scripts/permission-matrix-acceptance.ts` (headless matrix: warningless JIT lifecycle via trusted CDP clicks; warned pending → cancel → settled-absent → retry-affordance deny path; variant pre-held grant-at-install + API-functional history + honest panel); docs/PERMISSION-MATRIX.md naming the three honest exclusions (Chrome's own prompt bubble, the action-icon click, showDirectoryPicker); `scripts/headed-acceptance.ts` demoted to an optional manual-evidence extra (stale tabs-prompt step removed); journey gains the fresh-page retry-affordance check; suite + journeys green
+- Review: independent review — the matrix must assert real browser behavior, and the variant mechanism must not masquerade as the shipped manifest
+- Gates: build; full suite; chrome-journeys; permission-matrix-acceptance — all green, with falsification runs (broken builder fails the unit tests; variant grant-state checks read the opposite value on the shipped manifest)
+- History:
+  - 2026-08-30 22:20 UTC — DONE: merged forward by the hub coordinator off r7 review PASS (46a2d3a6; rounds r3-r7 each found one fail-closed/evidence finding on the same seam — every gate predicate now both records and refuses before startRig). Coordinator gates on the merged tip recorded in History after the gate run.
+  - 2026-08-30 — mechanism verified empirically before implementation: a variant holding `history` in manifest permissions answers `chrome.permissions.contains({permissions:["history"]}) === true` under --headless=new; warned requests pend headless and cancel on page close; warningless permissions auto-grant from a trusted CDP click. Bonus finding: `captureVisibleTab` with install-granted host access works headless (real PNG) — the "headed-only screenshot success" claim was stale (already journey-covered).
 
 ## [CAP-FB-20260830-WEBMCP-ACCEPTANCE-GREEN-01] Restore passive WebMCP discovery acceptance
 - Feedback: 2026-08-30 — automated production-path WebMCP acceptance was 11/37 because the fixture never entered the passively detected tab picker
