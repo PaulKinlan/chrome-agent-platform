@@ -86,13 +86,9 @@ try {
   await Deno.writeTextFile(`${OUT}/notify-result.json`, JSON.stringify(out, null, 2));
   check("notify: returns ok with notifications seeded", out?.ok === true && typeof out?.notificationId === "string", out);
 
-  // Headless Chrome has no notification surface, so notifications.create does
-  // NOT download the icon there and the call above succeeds even with a wrong
-  // path (observed: the pre-fix build also returned ok here). The discriminating
-  // browser check is therefore the resource itself: every packaged icon path
-  // the BUILT service worker hands to getURL must be fetchable from the
-  // extension origin — a missing file is the "Unable to download all specified
-  // images." failure a headed Chrome reports.
+  // Belt and braces: every packaged icon path the BUILT service worker hands
+  // to getURL must also be fetchable from the extension origin — a missing
+  // file is exactly the "Unable to download all specified images." failure.
   const bundle = await Deno.readTextFile(`${EXT}/dist/background/service-worker.js`);
   const iconPaths = [...new Set([...bundle.matchAll(/getURL\(\s*["'](icons\/[^"']+)["']\s*\)/g)].map((m) => m[1]))];
   const fetched = await evalIn(`Promise.all(${JSON.stringify(iconPaths)}.map(async (p) => {

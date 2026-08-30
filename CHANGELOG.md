@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.450] — 2026-08-30
+- Asking the agent to notify you works again: the notification icon pointed at a file that does not ship, so every notification failed with "Unable to download all specified images."
+
 ## [0.2.449] — 2026-08-30
 - Merge remote-tracking branch 'origin/main' into cap/tool-fixes-notify-url-revoke
 

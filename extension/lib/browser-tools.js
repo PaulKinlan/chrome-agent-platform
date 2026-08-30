@@ -2063,7 +2063,7 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
           return { error: "run aborted — notification not sent" };
         }
         const defaultIcon = typeof chrome !== "undefined" && chrome.runtime?.getURL
-          ? chrome.runtime.getURL("icons/icon-128.png")
+          ? chrome.runtime.getURL("icons/icon128.png")
           : "";
         const notificationId = await chrome.notifications.create({
           type: "basic",

@@ -2401,15 +2401,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-NOTIFY-ICON-PATH-01] The notify tool never works: it references an icon that does not exist
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 tools lane finding 3. Asking the agent to notify you always fails with "Unable to download all specified images."
-- Updated: 2026-08-30 14:54 UTC
-- Status: OPEN
+- Updated: 2026-08-30 16:10 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P1
 - Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — CLAIMED; do not start a parallel attempt
 - Workspace: active (local path private)
 - Branch: `cap/tool-fixes-notify-url-revoke` (pushed to origin as the candidate branch; merged by the coordinator)
-- Base: `18551f28`
-- Candidate: —
+- Base: `18551f28` (merged forward onto `origin/main@5d736455`)
+- Candidate: this tracker commit (branch `cap/tool-fixes-notify-url-revoke`)
 - Shipping: —
 - Acceptance: with the notifications permission granted, `notify` returns `{ ok: true, notificationId }` and a notification is created; a unit test asserts the default icon path used by the tool exists on disk under `extension/icons/`.
   - Context: the `notify` tool (`extension/lib/browser-tools.js:2053`) builds its default icon at `:2071-2073` as `chrome.runtime.getURL("icons/icon-128.png")`. The directory `extension/icons/` contains `icon128.png`, `icon16.png`, `icon32.png`, `icon48.png` — no hyphen (and `extension/manifest.json` uses `icons/icon128.png`). `chrome.notifications.create` therefore rejects with "Unable to download all specified images." The tool's own `{ ok:true, notificationId }` return at `:2081` is otherwise correct. What must NOT change: the permission gate above it, the `assertRunOwned()` fence at `:2067`.
@@ -2417,19 +2417,20 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - Files: `extension/lib/browser-tools.js:2072` (one-token change to `"icons/icon128.png"`). Nothing else.
   - Steps: 1. Unit test first (Gates) — RED. 2. Fix the path. 3. Journey check per Gates. 4. `CHANGELOG.md` line.
   - Out of scope: notification click routing (`extension/lib/notification-action-routing.js`); scheduled-run notifications (`CAP-FB-20260830-SCHEDULED-RUN-OUTPUT-01`).
-- Review: pending
-- Gates: the falsification gates apply.
+- Review: author review 2026-08-30 — falsification gates cleared (unit RED/GREEN and live-browser RED/GREEN recorded below)
+- Gates: the falsification gates apply. RESULT: unit `tests/notify-icon-path.test.ts` RED on the unfixed tree (`FAILED | 0 passed | 1 failed`, `icons/icon-128.png` missing) → GREEN after the one-token fix (`ok | 1 passed | 0 failed`). Browser: `scripts/kat-notify-icon.ts` (launchChrome, kernel-chosen port) seeds the `notifications` grant into a fresh profile and drives the REAL `agent-worker.tool notify` route — RED on the unfixed build: `notify -> {"ok":false,"error":"Unable to download all specified images."}` plus `icons/icon-128.png` → "Failed to fetch" (2 pass, 2 fail); GREEN after the fix: `notify -> {"ok":true,"notificationId":"…"}` and the only referenced icon path fetches as `image/png` (4 pass, 0 fail). Deviation from the plan: the check lives in its own harness rather than `chrome-journeys.ts` because the journey suite asserts `notifications` is NOT granted at boot (the JIT model) and headless auto-denies the warning permission, so the journey profile cannot carry the grant.
   - Unit: new `tests/notify-icon-path.test.ts` — read `extension/lib/browser-tools.js` as text, extract every `getURL("icons/…")` argument with a regex, and for each assert `Deno.statSync(new URL("../extension/" + p, import.meta.url)).isFile` (the pattern `tests/chrome-tools-t12.test.ts:392` uses `Deno.readTextFile(new URL("../extension/manifest.json", import.meta.url))`). Falsification: run it on the current tree — RED on `icons/icon-128.png`; apply step 2 — GREEN.
   - Browser: `scripts/chrome-journeys.ts` gains `"notify: returns ok with notifications seeded"` (assert `res.ok === true && typeof res.notificationId === "string"`). Screenshot not applicable (headless has no notification surface); the route result is the evidence.
   - Full suite: `npm run build && deno test tests/ && deno run -A scripts/chrome-journeys.ts` green at the tip (baseline at `origin/main@fc2255be`: 2457 unit pass, 138/138 journeys; grows by one).
   - Constraints: none beyond the constitution; no icon changes (inline SVG rule applies to UI, not to the manifest PNGs).
 - Blockers: —
-- Next: fix the path and add the existence test
+- Next: coordinator merge
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-NOTIFY-ICON-PATH-01`
 - History:
   - 2026-08-30 11:00 UTC — measured twice with notifications granted: `notify -> {"ok":false,"error":"Unable to download all specified images."}`.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); every line reference re-verified against `origin/main@cf0da958`.
   - 2026-08-30 14:54 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/tool-fixes-notify-url-revoke` off `origin/main@18551f28`. Other agents: pick a different entry.
+  - 2026-08-30 16:10 UTC — worker resumed after a rate-limit cut-off (WIP files committed, branch merged forward onto `origin/main@5d736455`). Fixed `extension/lib/browser-tools.js` default icon path to `icons/icon128.png`. Evidence: unit RED→GREEN; `scripts/kat-notify-icon.ts` RED (exact "Unable to download all specified images." reproduced with the grant seeded) → GREEN (`ok:true` + notificationId). Status → IN_REVIEW (author review).
 
 ## [CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01] open_side_panel can never succeed when the model calls it
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 tools lane finding 4. The model is offered a tool that promises to open the side panel and it always fails, because Chrome requires a user gesture the service worker does not have. Owner decision 2026-08-30: REMOVE the tool (not the card alternative).
