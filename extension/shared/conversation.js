@@ -1155,15 +1155,30 @@ export async function runConversationTurn(container, { text, attachments = [], h
       }
     }
   } catch (e) {
+    // A preflight refusal is TERMINAL for this turn, not a pause: nothing will
+    // resume it, so it must read as a failed run with the Settings recovery
+    // action — never sit in "Waiting for permission" (CAP-FB-20260830-
+    // PROVIDER-ERROR-TRUTH-01). An invalid/missing endpoint is a provider
+    // configuration problem, not a host-permission one.
+    const detail = String(e?.message ?? e ?? "unknown");
+    const configProblem = /origin is invalid/i.test(detail);
     const err = {
       ok: false,
-      waitingForPermission: true,
-      error: `provider permission preflight failed closed: ${e?.message ?? e}`,
-      errorCategory: "host-permission",
+      failed: true,
+      error: configProblem
+        ? "the provider endpoint is not configured — the run did not start"
+        : `provider permission preflight failed closed: ${detail}`,
+      errorCategory: configProblem ? "provider-config" : "host-permission",
+      errorReason: configProblem
+        ? "the configured provider has no valid https:// endpoint"
+        : detail,
+      errorAction: configProblem
+        ? "Set the provider endpoint in Settings → Providers (choose a preset or enter a valid base URL), then run the task again."
+        : "grant the exact provider origin in Settings, then run this task again",
     };
     if (stale()) return { ok: false, superseded: true, error: "the surface was replaced before the run started" };
-    status({ state: "waiting-for-permission", message: err.error, errorCategory: err.errorCategory });
-    if (typeof c.appendError === "function") c.appendError(err.error, { category: err.errorCategory });
+    status({ state: "failed", message: err.errorReason, errorReason: err.errorReason, errorAction: err.errorAction, errorCategory: err.errorCategory });
+    if (typeof c.appendError === "function") c.appendError(err.error, { reason: err.errorReason, action: err.errorAction, category: err.errorCategory });
     else appendBubble(c, "error", err.error);
     return err;
   }

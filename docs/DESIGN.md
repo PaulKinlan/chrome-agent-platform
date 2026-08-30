@@ -228,6 +228,34 @@ never enter provider context. Disabled bundled rows remain discoverable metadata
 without a reference or execution affordance. This protected contract follows
 owner-authored prompt text, so customization cannot replace it.
 
+## Run error copy (the truth contract)
+
+A failed run says what actually happened and what to do, in that order — the
+underlying cause in danger ink, the action in plain ink, and a "Fix in Settings"
+button whenever Settings can resolve it. The copy is produced by ONE authority
+(`extension/lib/error-report.js`, `describeError`) and rendered with
+`textContent` only. A provider HTTP failure is classified by its real status —
+the model wrapper records the last provider status before the AI SDK collapses
+the stream into `AI_NoOutputGeneratedError` — so "returned no content" is
+reserved for a genuinely empty HTTP 200 stream.
+
+| Category | Reason (danger) | Action (plain) | Fix in Settings |
+|---|---|---|---|
+| `provider-auth` (401/403) | `<Provider> rejected the API key (401) — <provider message>` | Check the API key in Settings → Providers — it is missing, invalid, or revoked. | yes |
+| `provider-rate-limit` (429) | `<Provider> is rate-limiting this key (429) — <provider message>` | The provider is rate-limiting you — wait a moment and retry. | no |
+| `model-config` (400/404/422) | `<Provider> rejected the request (400) — <provider message>` | Check the model id in Settings — it may not exist for this provider. | yes |
+| `provider-server` (5xx) | `<Provider> returned a server error (503)` | The provider's servers are having an issue — retry in a moment. | no |
+| `provider-config` (preflight) | the configured provider has no valid https:// endpoint | Set the provider endpoint in Settings → Providers, then run the task again. | yes |
+| `host-permission` | network access to `<origin>` is not granted | Grant network access in Settings. | yes |
+| `model-no-output` (empty 200) | the model (`<id>`) returned no content | Retry, or try a different model. | no |
+
+`<Provider>` is the human name for the configured provider id (OpenAI, Anthropic,
+Google Gemini, DeepSeek, "the provider" for a custom endpoint) — never the base
+URL. Provider messages pass through the secret-safe choke point and an extra
+credential-shape mask (`sk-…`, `AIza…`, …) before they reach any surface. A
+preflight refusal (no endpoint) is a terminal `failed` status row with the
+Settings action, never a "Waiting for permission" state.
+
 ## Motion
 150–250ms state transitions only; `prefers-reduced-motion` respected. No
 page-load choreography, no decorative glow.

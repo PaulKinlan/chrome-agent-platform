@@ -529,7 +529,7 @@ Deno.test("durable runs: service-worker integrates both runTask and direct agent
   assert(runTaskEarly.includes("return admissionFailure"), "run-task early quota settles a structured response");
   assert(!runTaskEarly.includes("rollbackUnprogressedQuota"), "run-task never rolls back a start that established no readable authority");
   const quotaCatchStart = runTask.indexOf("if (isNativeQuotaExceededError(error))");
-  const ordinaryCatchStart = runTask.indexOf("const desc = describeError(error)", quotaCatchStart);
+  const ordinaryCatchStart = runTask.indexOf("const desc = describeError(error, { providerError })", quotaCatchStart);
   const quotaCatch = runTask.slice(quotaCatchStart, ordinaryCatchStart);
   assert(quotaCatchStart >= 0 && ordinaryCatchStart > quotaCatchStart, "runTask has a native quota branch before ordinary settlement");
   assert(quotaCatch.includes("rollbackUnprogressedQuota"), "established native quota invokes durable compensation");

@@ -13,9 +13,10 @@ import { grepAgentMemory } from "./named-agents.js";
 import { assertRunOwned } from "./run-fence.js";
 import { MODEL_PRICING } from "./model-prices.js";
 import { appendSkillsLayer, baselineSystemPrompt } from "./system-prompts.js";
-import { sha256Hex, utf8ByteLength } from "./pure.js";
+import { sha256Hex, utf8ByteLength, safeProviderError } from "./pure.js";
 import { capLog } from "./cap-log.js";
 import { perfSpan } from "./cap-perf.js";
+import { maskCredentialShapes } from "./error-report.js";
 import { isToolResultFailure } from "./tool-summary.js";
 import { correctUnsupportedMutationClaims } from "./mutation-claim-check.js";
 import {
@@ -33,6 +34,41 @@ import {
 } from "./lazy-tool-protocol.js";
 
 const modelLog = capLog("model");
+
+// CAP-FB-20260830-PROVIDER-ERROR-TRUTH-01: the LAST provider HTTP failure seen
+// by the model wrapper. The AI SDK turns a rejected doStream into an empty
+// stream and then throws AI_NoOutputGeneratedError (no status on it), so the
+// run's catch site would otherwise report a 401/429/400 as "returned no
+// content". The wrapper records the status + a secret-safe message here; a
+// successful attempt clears it; the run's catch takes it via
+// takeLastProviderError() and passes it to describeError as `providerError`.
+// Never the key, the URL, or the request body.
+let lastProviderError = null;
+function recordProviderError(err, method) {
+  const status = Number(err?.statusCode ?? err?.status ?? err?.cause?.statusCode ?? NaN);
+  if (!Number.isFinite(status) || status < 400) return;
+  let message = "";
+  const body = err?.responseBody ?? err?.data?.responseBody ?? "";
+  if (typeof body === "string" && body) {
+    try {
+      const j = JSON.parse(body);
+      message = String(j?.error?.message || j?.message || j?.error?.code || j?.code || "");
+    } catch { message = body.slice(0, 300); }
+  }
+  if (!message) message = String(err?.message ?? "");
+  lastProviderError = {
+    status,
+    message: maskCredentialShapes(safeProviderError(message)).slice(0, 300),
+    method: String(method ?? ""),
+    at: Date.now(),
+  };
+}
+/** Return and clear the last recorded provider HTTP failure (or null). */
+export function takeLastProviderError() {
+  const e = lastProviderError;
+  lastProviderError = null;
+  return e;
+}
 /** agent-do lifecycle logger (CAP-FB-20260826-AGENT-DO-LIFECYCLE-LOG-01): the
  * full run lifecycle is visible in the logs at the VERBOSE level (debug
  * builds default verbose; store builds default off — the cap-log gate owns
@@ -618,6 +654,7 @@ export function createAgent({
           // failed and will never emit usage.
           drop();
           span.end("throw");
+          recordProviderError(err, method);
           modelLog.warn(`attempt ${entry.ordinal} threw`, err?.message ?? err);
           throw err;
         }
@@ -627,12 +664,14 @@ export function createAgent({
         return Promise.resolve(result).then(
           (value) => {
             span.end("ok");
+            lastProviderError = null;
             modelLog.debug(`attempt ${entry.ordinal} response`, method);
             return harvestGrounding(value, runIdForLatch);
           },
           (err) => {
             drop();
             span.end("error");
+            recordProviderError(err, method);
             modelLog.warn(`attempt ${entry.ordinal} failed`, err?.message ?? err);
             throw err;
           },

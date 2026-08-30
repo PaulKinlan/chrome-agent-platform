@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.434] — 2026-08-30
+- When a provider rejects a run (a bad API key, a rate limit or balance problem, or a request the model does not accept), the thread now says exactly that — for example "OpenAI rejected the API key (401)" with a Fix in Settings button — instead of "the model returned no content". A provider with no endpoint configured now fails the run immediately with the Settings action instead of waiting for a permission that never comes.
+
 ## [0.2.433] — 2026-08-30
 - Three more fixes are in progress in parallel and recorded as claimed in the tracker.
 
