@@ -112,12 +112,13 @@ delegate to per-site sub-agents. Be concise; prefer actions over prose.
 
 ${PLATFORM_ENVIRONMENT_GROUNDING}
 
-For REPEATABLE work, write a script (create_script) and run it (run_script) or
-schedule it (schedule_task with scriptId) instead of re-reasoning every time — a
-script runs the same JavaScript without re-invoking the model (speed, security,
-verifiability). A script is an ASYNC function body; it runs SANDBOXED with a
-CONTROLLED api: await fetch(url, opts) (reads an http/https page, returns
-{status, text}) and log(...). No DOM, no extension APIs, no network of its own.
+Saved scripts (repeatable JavaScript the owner keeps in the hub) can be listed,
+read, updated, and scheduled (schedule_task with scriptId) — a script runs the
+same JavaScript without re-invoking the model. A script is an ASYNC function
+body; it runs SANDBOXED with a CONTROLLED api: await fetch(url, opts) (reads an
+http/https page, returns {status, text}) and log(...). No DOM, no extension
+APIs, no network of its own. Writing a new script or running one on demand is
+an owner action in the hub, not a tool you can call.
 return the result.
 
 Your memory is ORIGIN-SCOPED and self-organizing. Keep an \`index\` key (a compact

@@ -40,12 +40,14 @@ export const MANAGEMENT_TOOL_NAMES = [
   "subscribe_hook",
   "unsubscribe_hook",
   "generate_ui",
-  "create_script",
+  // create_script + run_script are CUT from the model toolset until owner
+  // approval gates them (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01): a
+  // model-written script fetches any http(s) URL through cap:fetch with no
+  // approval — an exfiltration + SSRF channel. The script routes stay.
   "update_script",
   "delete_script",
   "list_scripts",
   "get_script",
-  "run_script",
   "schedules_list",
   "schedules_pause",
   "schedules_resume",
@@ -349,17 +351,8 @@ export function managementToolset({ callRoute }) {
     // on its behalf, http/https only, size-bounded) and `log(...)`. It is an ASYNC
     // function body — `return` the result. It has NO DOM, NO extension APIs, NO
     // other origins, and NO direct network. A script can be scheduled (run it
-    // on a timer via schedule_task with scriptId) or run on demand (run_script).
-    create_script: tool({
-      description:
-        "Create a reusable JavaScript script (an async function body) that runs sandboxed + repeatedly without re-invoking the model. The script gets a controlled api: await fetch(url, opts) (reads an http/https page, returns {status, text}) + log(...). Return a value as the result. No DOM/extension/network access of its own.",
-      inputSchema: z.object({
-        name: z.string().max(SCRIPT_BOUNDS.maxNameLength).describe("a short, clear name for the script"),
-        source: z.string().describe(`the complete JavaScript function body (max ${SCRIPT_BOUNDS.maxSourceBytes} UTF-8 bytes)`),
-        origin: z.string().default("master").describe("'master' (hub-level script)"),
-      }),
-      execute: ({ name, source, origin }) => call("script.create", { origin, name, source }),
-    }),
+    // on a timer via schedule_task with scriptId). The model-facing create + run
+    // tools are cut until the owner-approval gate lands (see MANAGEMENT_TOOL_NAMES).
     update_script: tool({
       description: "Update a script's name/source.",
       inputSchema: z.object({
@@ -384,12 +377,6 @@ export function managementToolset({ callRoute }) {
       description: "Read one script (name + source + last-run status).",
       inputSchema: z.object({ id: z.string(), origin: z.string().default("master") }),
       execute: ({ id, origin }) => call("script.get", { origin, id }),
-    }),
-    run_script: tool({
-      description:
-        "Run a script NOW (sandboxed, no model re-invocation) and return its result.",
-      inputSchema: z.object({ id: z.string(), origin: z.string().default("master") }),
-      execute: ({ id, origin }) => call("script.run", { origin, id }),
     }),
 
     // ---- schedules (per-agent alarm visibility + control) ----

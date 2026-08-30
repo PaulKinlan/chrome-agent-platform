@@ -190,3 +190,30 @@ Deno.test("management: every callable tool declares a description", () => {
     assert(toolset[name]?.description, `${name} must have a description`);
   }
 });
+
+// CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01 (commit A, the cut): a script
+// the model writes can fetch any http(s) URL through the host-side cap:fetch
+// bridge with no owner approval — an exfiltration + SSRF channel. Until the
+// gate lands (commit B: DESTRUCTIVE_ACTIONS + the approval card + the fetch
+// policy), the two tools that open that channel are absent from the model
+// toolset. Deleted again in commit B, where the gate's own tests take over.
+Deno.test("GUARD: run_script and create_script are absent from the model toolset until gated", async () => {
+  const { toolset } = makeTools();
+  for (const name of ["run_script", "create_script"]) {
+    assert(!(name in toolset), `${name} must not be model-callable until owner approval gates it`);
+    assert(!MANAGEMENT_TOOL_NAMES.includes(name), `${name} must not be in the introspection catalog`);
+  }
+  // The read/manage tools stay: the owner can still inspect + edit scripts
+  // through the model, and the script routes themselves are unchanged.
+  for (const name of ["update_script", "delete_script", "list_scripts", "get_script"]) {
+    assert(name in toolset, `${name} stays callable`);
+  }
+  // The prompt surfaces must not teach the model a tool it cannot call.
+  const standalone = (name) => new RegExp(`\\b${name}\\b`);
+  for (const file of ["extension/lib/master-skill.js", "extension/lib/system-prompts.js"]) {
+    const text = await Deno.readTextFile(file);
+    for (const name of ["run_script", "create_script"]) {
+      assert(!standalone(name).test(text), `${file} must not mention ${name} while it is cut`);
+    }
+  }
+});

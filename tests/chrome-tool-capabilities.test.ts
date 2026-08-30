@@ -47,19 +47,19 @@ function refFactory() {
   return () => `sel_${(++value).toString(16).padStart(36, "0")}`;
 }
 
-Deno.test("chrome capability table is exact and complete for 126 browser + 40 management tools", () => {
+Deno.test("chrome capability table is exact and complete for 126 browser + 38 management tools", () => {
   const browser = browserToolset(false);
   const management = managementToolset({ callRoute: () => { throw new Error("must not dispatch"); } });
   assertEquals(Object.keys(browser), BROWSER_TOOL_NAMES);
   assertEquals(MANAGEMENT_TOOL_NAMES, MANAGEMENT_CAPABILITY_TOOL_NAMES);
   assertEquals(Object.keys(management).sort(), [...MANAGEMENT_CAPABILITY_TOOL_NAMES].sort());
-  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 166);
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 164);
   assertEquals(CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "chrome-api").length, 126);
-  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "management").length, 40);
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "management").length, 38);
   assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS, {
     browserTools: 126,
-    managementTools: 40,
-    totalTools: 166,
+    managementTools: 38,
+    totalTools: 164,
     maxCapabilityTokens: 4,
     maxCapabilityTokenBytes: 96,
     maxPermissions: 8,
@@ -114,7 +114,7 @@ Deno.test("management capabilities are tool-specific and never collapse to manag
   assert(!primary.includes("management.route"));
   assertEquals(chromeToolCapability("get_asset", "management").capabilityTokens, ["management.asset.get"]);
   assertEquals(chromeToolCapability("delete_asset", "management").capabilityTokens, ["management.asset.delete"]);
-  assertEquals(chromeToolCapability("run_script", "management").capabilityTokens, ["management.script.run"]);
+  assertEquals(chromeToolCapability("update_script", "management").capabilityTokens, ["management.script.update"]);
 });
 
 Deno.test("catalog descriptors consume exact canonical capabilities and capability digests", () => {
@@ -125,7 +125,7 @@ Deno.test("catalog descriptors consume exact canonical capabilities and capabili
     ...adaptManagementTools(management, { ...context(), capabilitiesByTool: capabilitiesByTool(management, "management") }),
   ];
   const catalog = buildToolCatalog(inputs);
-  assertEquals(catalog.descriptors.length, 166);
+  assertEquals(catalog.descriptors.length, 164);
   for (const descriptor of catalog.descriptors) {
     const row = chromeToolCapability(descriptor.name, descriptor.sourceKind);
     assertEquals(descriptor.capabilities, row.capabilityTokens);
@@ -145,7 +145,7 @@ Deno.test("unbound lazy browser/management records preserve source closure and v
   const browserRecords = executableBrowserToolRecords(browser, { ...context(), capabilitiesByTool: capabilitiesByTool(browser, "chrome-api") });
   const managementRecords = executableManagementToolRecords(management, { ...context(), capabilitiesByTool: capabilitiesByTool(management, "management") });
   assertEquals(browserRecords.length, 126);
-  assertEquals(managementRecords.length, 40);
+  assertEquals(managementRecords.length, 38);
   for (const record of [...browserRecords, ...managementRecords]) {
     const name = record.descriptorInput.toolId;
     const sourceMap = record.descriptorInput.sourceKind === "chrome-api" ? browser : management;
@@ -188,7 +188,7 @@ Deno.test("shadow capture discloses bounded selected capability summaries and on
   assertEquals(capture.canExecute, false);
   assertEquals(capture.canGrant, false);
   assertEquals(capture.selectedCount, capture.selectedDescriptors.length);
-  assertEquals(capture.nonSelectedCount, 166 - capture.selectedCount);
+  assertEquals(capture.nonSelectedCount, 164 - capture.selectedCount);
   assertEquals(capture.omittedNonSelected, true);
   assert(capture.selectedCount > 0 && capture.selectedCount <= 2);
   for (const selected of capture.selectedDescriptors) {
@@ -222,12 +222,12 @@ Deno.test("selected capability summary is bounded for non-Chrome catalog sources
   assertEquals(summary.replayClass, "unknown");
 });
 
-Deno.test("unsafe-for-cutover list remains policy metadata and does not filter the 166-record catalog", () => {
-  for (const name of ["run_script", "schedule_task", "set_agent_provider", "capture_screenshot", "open_side_panel"]) {
+Deno.test("unsafe-for-cutover list remains policy metadata and does not filter the 164-record catalog", () => {
+  for (const name of ["schedule_task", "set_agent_provider", "capture_screenshot", "open_side_panel"]) {
     assert(FLAGGED_FOR_LATER_PROVIDER_CUTOVER.includes(name));
   }
-  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 166);
-  assertEquals(new Set(CHROME_TOOL_CAPABILITY_TABLE.map((row) => row.toolName)).size, 166);
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 164);
+  assertEquals(new Set(CHROME_TOOL_CAPABILITY_TABLE.map((row) => row.toolName)).size, 164);
 });
 
 Deno.test("Tranche 2 tools: permission-gated execution fails closed when permission is missing", async () => {

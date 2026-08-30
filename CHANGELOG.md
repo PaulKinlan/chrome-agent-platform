@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.431] — 2026-08-30
+- Scripts: the assistant can no longer write or run a saved script on its own — those two actions now belong to you in the hub until the approval card that shows the script and the sites it reaches lands (next release). Listing, reading, editing, deleting and scheduling saved scripts are unchanged.
+
 ## [0.2.430] — 2026-08-30
 - Six fixes are now in progress in parallel and recorded as claimed in the task tracker so no two agents work the same item.
 
