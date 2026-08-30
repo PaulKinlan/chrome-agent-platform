@@ -4430,7 +4430,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Workspace: /home/paulkinlan/worktrees/cap-skills-uncapped
 - Branch: cap-skills-uncapped
 - Base: 88eb33e1
-- Candidate: `53a5bd46` (r2 fix on top of 55d8e50d; post-commit hook bump)
+- Candidate: `bb6e2711` (r2 fix on top of 55d8e50d; post-commit hook bump)
 - History:
   - 2026-08-30 23:05 UTC — first candidate 8e937a09 (import uncap, multi-file, progressive disclosure, skill_read). Gates: unit 2606/0, journeys 213/213.
   - 2026-08-31 (review r1, sol) — REVISE, 4 P1s + 1 P2: (P1) imported skill prompt content/marker was UNFENCED — now wrapped in the run's untrusted boundary (renderBoundarySkills fence, token threaded via appendSkillsLayer from agent.js; owner-authored stays unfenced; placeholder token when absent); (P1) skill_read pagination counted UTF-16 units but documented bytes — now UTF-8 byte slices with decode-with-replacement (emoji/CJK boundary test); (P1) supporting-file budget rejections in the multi-file walk were SWALLOWED — the walk now re-throws per-file/total-budget errors (transient API failures stay best-effort); (P1) legacy pre-OPFS imported rows lost their inline body — loadImportedSkill/loadAllImportedSkills migrate inline bodies into the OPFS store on read (idempotent, never destructive); (P1) TASKS.md history + candidate; (P2) docs/SYSTEM-PROMPTS.md documents progressive disclosure + the owner-authored exception.

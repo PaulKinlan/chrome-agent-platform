@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.505] — 2026-08-30
+- tasks: SKILLS-UNCAPPED-01 r2 candidate SHA (bb6e2711)
+
 ## [0.2.504] — 2026-08-30
 - Skills: never emit a skill_read marker for a body the store cannot serve
 
