@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.495] — 2026-08-30
+- Landed: when the agent takes a screenshot, a vision-capable model now receives the real image instead of truncated text, the picture shows in the tool card, and every capture is saved to the screenshots store.
+
 ## [0.2.494] — 2026-08-30
 - Two more editing-flow fixes are in progress in parallel and recorded as claimed.
 

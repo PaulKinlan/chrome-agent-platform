@@ -96,7 +96,6 @@ import {
   migrateLegacyDurableRunMemory,
   backgroundAgentMemory,
   namedAgentMemory,
-  saveScreenshot,
   siteMemory,
 } from "../lib/memory.js";
 import {
@@ -8019,20 +8018,18 @@ chrome.action?.onClicked?.addListener(async (tab) => {
     // Chrome's action click is the qualifying owner invocation — transient
     // activeTab authority for THIS tab (the model/tool path never gets it).
     const shot = await captureTabScreenshot(tab?.id, { ownerInvoked: true });
-    if (shot?.screenshot) {
-      const mem = masterMemory();
-      // Store the screenshot as a DEDICATED OPFS file (bounded + evict-oldest),
-      // never as an inline base64 value that overflows the 256 KiB memory bound
-      // (the round-17 blocker: one base64 PNG (~300 KiB) exceeded the cap).
-      const saved = await saveScreenshot(mem, {
-        url: shot.url,
-        dataURL: shot.screenshot,
-      });
+    if (shot?.screenshotId) {
+      // The capture ITSELF persists now — a DEDICATED OPFS file (bounded +
+      // evict-oldest), never an inline base64 value that would overflow the
+      // 256 KiB memory bound (the round-17 blocker). Both this owner path and
+      // the model's tool path go through the same helper, so a model capture
+      // is listed too (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01); saving here as
+      // well would store the same PNG twice and evict a real one.
       // Journal the REAL saved screenshot id (not an unrelated generated id) so
       // the owner can retrieve the exact stored blob (the round-19 finding).
-      await journalAppend(mem, {
+      await journalAppend(masterMemory(), {
         type: "screenshot",
-        id: saved?.id ?? `shot:${Date.now()}`,
+        id: shot.screenshotId,
         url: shot.url,
       });
     }

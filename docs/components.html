@@ -208,6 +208,14 @@
         <p class="caption">empty state; pass a JSON array of <code>{url,label}</code> to populate. Emits <code>open</code>.</p>
       </div>
 
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;screenshot-thumb&gt;</code> — one saved capture</h3>
+        <div class="stage column">
+          <screenshot-thumb src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGAAAABACAYAAAAS+f5cAAAAO0lEQVR42u3OMQEAAAgDoC251a3gLxlQMHMjKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKekTWr8QIBGaFCcAAAAASUVORK5CYII=" label="example.com" size="96x64"></screenshot-thumb>
+        </div>
+        <p class="caption">the tool card's screenshot. In the extension it resolves the PNG from the screenshots store by <code>shot-id</code> and revokes its blob URL on disconnect; <code>src</code> short-circuits that for this specimen. The <code>alt</code> names the page, never just "screenshot".</p>
+      </div>
+
       <div class="card">
         <h3 class="spec"><code class="tag">&lt;error-console&gt;</code> — the terminal-like error log</h3>
         <div class="stage row">

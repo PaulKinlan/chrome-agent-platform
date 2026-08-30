@@ -6,7 +6,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { scheduleTask } from "./scheduler.js";
-import { canonicalOrigin } from "./memory.js";
+import { canonicalOrigin, masterMemory, saveScreenshot } from "./memory.js";
 import { kvGet, kvRemove, kvSet } from "./kv.js";
 import { assertRunOwned } from "./run-fence.js";
 import { currentRunContext } from "./run-context.js";
@@ -514,6 +514,81 @@ function validateGrantFor(grant, origin) {
   return grant.id;
 }
 
+/** The base64 payload of a `data:<mediaType>;base64,<payload>` URL, or null.
+ * Pure — no decoding, no rendering. */
+function dataUrlParts(dataUrl) {
+  const match = /^data:([a-z]+\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]*)$/i.exec(
+    String(dataUrl ?? ""),
+  );
+  return match ? { mediaType: match[1].toLowerCase(), base64: match[2] } : null;
+}
+
+/** The decoded byte length of a base64 payload, without decoding it. */
+function base64ByteLength(base64) {
+  const text = String(base64 ?? "");
+  if (!text) return 0;
+  const padding = text.endsWith("==") ? 2 : text.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor(text.length / 4) * 3 - padding);
+}
+
+/** Read a PNG's pixel dimensions straight out of its IHDR chunk — the FIRST
+ * 33 bytes of the file — so a screenshot can report `width`/`height` without
+ * decoding or rendering the image (a service worker has no canvas, and
+ * `createImageBitmap` on a multi-megabyte PNG is not free). Returns null for
+ * anything that is not a base64 PNG with a well-formed signature + IHDR.
+ * Exported for the unit gate. */
+export function pngPixelSize(dataUrl) {
+  const parts = dataUrlParts(dataUrl);
+  if (!parts || parts.mediaType !== "image/png") return null;
+  // 33 bytes = 8 signature + 4 length + 4 "IHDR" + 8 width/height + …
+  // 44 base64 characters decode to exactly 33 bytes.
+  const head = parts.base64.slice(0, 44);
+  if (head.length < 44) return null;
+  let bytes;
+  try {
+    const binary = atob(head);
+    bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  } catch {
+    return null;
+  }
+  if (bytes.length < 24) return null;
+  const SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  for (let i = 0; i < SIGNATURE.length; i++) {
+    if (bytes[i] !== SIGNATURE[i]) return null;
+  }
+  if (String.fromCharCode(bytes[12], bytes[13], bytes[14], bytes[15]) !== "IHDR") {
+    return null;
+  }
+  const read32 = (at) =>
+    (bytes[at] << 24 | bytes[at + 1] << 16 | bytes[at + 2] << 8 | bytes[at + 3]) >>> 0;
+  const width = read32(16);
+  const height = read32(20);
+  if (!width || !height) return null;
+  return { width, height };
+}
+
+/** Persist a captured PNG to the master screenshots store (a dedicated OPFS
+ * file with an evict-oldest index — never an inline memory value, which the
+ * 256 KiB per-value bound would refuse). EVERY capture persists, the model's
+ * as well as the owner's: before this, only the action click stored anything,
+ * so `screenshots.list` was empty after an agent took a screenshot and the
+ * owner had no way to open the image
+ * (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01).
+ *
+ * Persistence is BEST-EFFORT and never fails the capture: a full quota or an
+ * unavailable store must not turn a successful screenshot into an error. The
+ * id is simply absent, and the caller says so honestly. */
+async function persistScreenshot({ url, dataURL }) {
+  try {
+    const saved = await saveScreenshot(masterMemory(), { url, dataURL });
+    return typeof saved?.id === "string" ? saved.id : null;
+  } catch (e) {
+    toolDispatchLog.warn("screenshot not persisted", e?.message ?? e);
+    return null;
+  }
+}
+
 /** The POST-activation capture body (active-tab resolution + capture + post-
  * checks), extracted so the `if (tabId)` path can wrap it in a prior-tab restore
  * on ANY later failure (round-23 finding 7: a failed capture must never leave
@@ -597,9 +672,22 @@ async function captureActiveTab({ origin, grantIdBefore, tabId }) {
   // abort/ownership loss during the captureVisibleTab await must discard the
   // bytes rather than return them (the round-18 fence coverage finding).
   await assertRunOwned();
+  // The bytes are KEPT (the owner can open them; a vision model is shown them
+  // as a real image part) but they never travel as model-facing JSON: the lazy
+  // protocol lifts `screenshot` out of the result into its attachment side
+  // channel, so what the model reads is the id + the dimensions
+  // (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01).
+  const screenshotId = await persistScreenshot({ url: nowTab.url, dataURL: dataUrl });
+  const size = pngPixelSize(dataUrl);
   return {
-    screenshot: dataUrl,
+    ok: true,
+    screenshotId,
     url: nowTab.url, // the SOURCE page, so the UI re-opens the page (not the data URL)
+    width: size?.width ?? null,
+    height: size?.height ?? null,
+    bytes: base64ByteLength(dataUrlParts(dataUrl)?.base64),
+    ...(screenshotId ? {} : { persisted: false }),
+    screenshot: dataUrl,
   };
 }
 

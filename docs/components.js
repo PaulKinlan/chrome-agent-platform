@@ -3509,6 +3509,74 @@ export function unwrapToolPayload(value) {
   return { value: v, selectedTool };
 }
 
+/** The saved screenshot a tool result points at, or null. The PNG itself is
+ *  never in the payload — the protocol lifts it into an image part for the
+ *  model and the store keeps the file — so the card renders it from the id
+ *  (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01). */
+export function screenshotFromToolPayload(payload) {
+  if (payload == null || payload === "") return null;
+  // The id can sit at any of several transport depths — agent-do's
+  // {modelContent,userSummary} wrapper (whose userSummary is prose, so the
+  // ordinary unwrap walks PAST the object), the lazy envelope's `result`, or a
+  // bare direct result. So look for it, bounded: at most 400 nodes, 7 levels,
+  // one JSON-string decode per string, and only strings that mention the field
+  // are decoded at all.
+  let budget = 400;
+  const seen = new Set();
+  const visit = (value, depth) => {
+    if (value == null || depth > 7 || budget-- <= 0) return null;
+    if (typeof value === "string") {
+      if (!value.includes("screenshotId")) return null;
+      const parsed = safeParseOnce(value);
+      return parsed.kind === "json" ? visit(parsed.value, depth + 1) : null;
+    }
+    if (typeof value !== "object" || seen.has(value)) return null;
+    seen.add(value);
+    const id = Object.getOwnPropertyDescriptor(value, "screenshotId")?.value;
+    if (typeof id === "string" && id) {
+      const width = Number(value.width);
+      const height = Number(value.height);
+      return {
+        id,
+        label: typeof value.url === "string" ? value.url : "",
+        size: Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
+          ? `${width}×${height}`
+          : "",
+      };
+    }
+    for (const child of Object.values(value)) {
+      const hit = visit(child, depth + 1);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  try {
+    const found = visit(payload, 0);
+    if (found) return found;
+  } catch { /* fall through to the text read */ }
+  // THE LIVE PAYLOAD IS OFTEN NOT PARSEABLE. The progress event that fills this
+  // card (and that the run log persists) bounds the result with a mid-string
+  // slice at 300 characters, so any envelope larger than that arrives as a
+  // truncated JSON fragment — the id is right there in the text and no parser
+  // will ever reach it. Read it out of the text instead, from a pattern the
+  // product itself minted: `shot_<digits>_<base36>`. Bounded (8 KiB scanned,
+  // fixed-width captures), read-only, and used for nothing but the id of a file
+  // this extension wrote (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01).
+  const text = typeof payload === "string" ? payload.slice(0, 8192) : "";
+  const id = /\\?"screenshotId\\?"\s*:\s*\\?"(shot_[A-Za-z0-9_]{1,64})/.exec(text)?.[1];
+  if (!id) return null;
+  const num = (field) =>
+    Number(new RegExp(`\\\\?"${field}\\\\?"\\s*:\\s*(\\d{1,6})`).exec(text)?.[1] ?? NaN);
+  const width = num("width");
+  const height = num("height");
+  const url = /\\?"url\\?"\s*:\s*\\?"(https?:[^"\\]{1,300})/.exec(text)?.[1] ?? "";
+  return {
+    id,
+    label: url,
+    size: width > 0 && height > 0 ? `${width}×${height}` : "",
+  };
+}
+
 /** Does a string look like a transport envelope that failed to parse (the
  *  live path once stored a TRUNCATED summary of the envelope in tool-result)?
  *  Such text is never shown: the headline already carries the tool's words. */
@@ -4024,6 +4092,19 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
     div.textContent = String(parsed.value ?? raw ?? "");
     body.appendChild(div);
   };
+
+  // A CAPTURE SHOWS THE PICTURE. The bytes went to the model as an image part
+  // and to the screenshots store as a file; the card resolves the file by id so
+  // the owner sees exactly what the agent saw
+  // (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01).
+  const shot = screenshotFromToolPayload(result) ?? screenshotFromToolPayload(detail);
+  if (shot) {
+    const thumb = document.createElement("screenshot-thumb");
+    thumb.setAttribute("shot-id", shot.id);
+    if (shot.label) thumb.setAttribute("label", shot.label);
+    if (shot.size) thumb.setAttribute("size", shot.size);
+    body.appendChild(thumb);
+  }
 
   addBlock("inputs", shownArgs);
 
@@ -5012,6 +5093,95 @@ class ScreenshotStrip extends Component {
   }
 }
 customElements.define("screenshot-strip", ScreenshotStrip);
+
+/* <screenshot-thumb shot-id="shot_…" label="Example Domain" size="1280×720">
+ * ONE saved screenshot, resolved from the screenshots store by its id.
+ *
+ * A capture the agent took used to be invisible: the bytes went into the model
+ * message and nowhere else, so there was nothing for the owner to look at
+ * (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01). The tool card mounts this, and the
+ * PNG the model saw is the PNG on screen.
+ *
+ * The blob URL is revoked on disconnect and before every re-resolve, so a long
+ * transcript never holds a megabyte per scrolled-past card. `src` short-
+ * circuits the store lookup — that is how the gallery shows a specimen with no
+ * extension backend. */
+class ScreenshotThumb extends Component {
+  static get observedAttributes() { return ["shot-id", "label", "size", "src"]; }
+  _render() {
+    const label = this.getAttribute("label") || "";
+    const size = this.getAttribute("size") || "";
+    // The alt text NAMES what the picture is of. "Screenshot" alone tells a
+    // screen-reader user nothing they could not guess from the tool name.
+    // NOT `loading="lazy"`: a tool card is a collapsed <details>, so a lazy
+    // image inside it is never in a viewport and never decodes — the card
+    // would hold an <img> that stays 0x0 until the owner expands it. The source
+    // is a local blob URL, so there is nothing to defer anyway.
+    const alt = label ? `Screenshot of ${label}` : "Screenshot of the captured page";
+    mountTemplate(this, `
+      :host { display:block; margin:8px 0; }
+      figure { display:inline-flex; flex-direction:column; gap:4px; max-width:100%; margin:0; }
+      img { display:block; width:auto; height:auto; max-width:240px; max-height:160px;
+        border:1px solid var(--border,#e3e0d9); border-radius:8px; background:var(--bg,#f7f6f3); }
+      figcaption { font-size:11px; color:var(--muted,#635e56); overflow-wrap:anywhere; }
+      figure.pending img { min-width:96px; min-height:64px; }
+    `, `<figure class="shot-thumb pending">
+      <img alt="${escapeHtml(alt)}" decoding="async">
+      ${size || label ? `<figcaption>${escapeHtml([label, size].filter(Boolean).join(" · "))}</figcaption>` : ""}
+    </figure>`);
+  }
+  _wire() {
+    this._resolve();
+  }
+  _releaseObjectUrl() {
+    if (this._objectUrl) {
+      try { URL.revokeObjectURL(this._objectUrl); } catch { /* already gone */ }
+      this._objectUrl = null;
+    }
+  }
+  async _resolve() {
+    this._releaseObjectUrl();
+    const img = this._root.querySelector("img");
+    if (!img) return;
+    const direct = this.getAttribute("src");
+    const dataURL = direct || await this._fetchDataURL();
+    if (!dataURL || !this.isConnected) return;
+    const objectUrl = dataUrlToObjectURL(dataURL);
+    // A browser that refuses the decode still gets the picture — the data URL
+    // itself is a valid source, it just is not revocable.
+    this._objectUrl = objectUrl;
+    img.src = objectUrl || dataURL;
+    this._root.querySelector(".shot-thumb")?.classList.remove("pending");
+  }
+  async _fetchDataURL() {
+    const id = this.getAttribute("shot-id");
+    if (!id || !RUNTIME_SEND) return "";
+    const res = await RUNTIME_SEND("screenshots.get", { id });
+    return typeof res?.dataURL === "string" ? res.dataURL : "";
+  }
+  disconnectedCallback() {
+    this._releaseObjectUrl();
+    super.disconnectedCallback();
+  }
+}
+customElements.define("screenshot-thumb", ScreenshotThumb);
+
+/** Decode a base64 data URL into a revocable object URL WITHOUT fetch() — an
+ * extension page's connect-src does not cover `data:`, and a multi-megabyte
+ * PNG should not be re-parsed by the network stack anyway. Returns "" when the
+ * string is not a base64 data URL or the decode fails. */
+export function dataUrlToObjectURL(dataURL) {
+  const match = /^data:([a-z]+\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/i.exec(String(dataURL ?? ""));
+  if (!match || typeof URL?.createObjectURL !== "function") return "";
+  try {
+    const binary = atob(match[2]);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return URL.createObjectURL(new Blob([bytes], { type: match[1].toLowerCase() }));
+  } catch {
+    return "";
+  }
+}
 
 /* ──────────────────────────────────────────────────────────────────────────
  * Composite components
