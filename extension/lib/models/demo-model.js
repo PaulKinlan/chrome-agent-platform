@@ -73,7 +73,20 @@ const RUN_SCRIPT_MARKER = "@demo-run-script";
 // execute_tool(update <that id>) → honest final text. The thread view's
 // update card must be titled with the artifact's name, not "Generated UI"
 // (CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01).
-const EDIT_ARTIFACT_MARKER = "@demo-edit-artifact";// @demo-slow: the FIRST model step is delayed (a deterministic mid-run window
+const EDIT_ARTIFACT_MARKER = "@demo-edit-artifact";
+// @demo-remember <key>=<value>: ONE real memory_set through the lazy protocol
+// (search_tools → execute_tool). The write half of the recall journey
+// (CAP-FB-20260830-MEMORY-RECALL-NEW-THREAD-01).
+const REMEMBER_MARKER = "@demo-remember";
+// @demo-recall <key>: NO tool call at all — the model answers from what its OWN
+// system prompt carries. A passing recall check therefore proves the
+// runtime-context memory digest reached the wire in a NEW thread, which is
+// exactly what the live lane found missing (the model saved a colour, then
+// said it did not know it one thread later).
+const RECALL_MARKER = "@demo-recall";
+const RECALL_FINAL_RE = /\[demo model\] recall:/;
+const REMEMBER_FINAL_RE = /\[demo model\] remembered /;
+// @demo-slow: the FIRST model step is delayed (a deterministic mid-run window
 // for abort tests).
 const SLOW_MARKER = "@demo-slow";
 // @demo-obey-page: the prompt-injection regression probe
@@ -291,8 +304,99 @@ function latestRunSlice(prompt) {
       editArtifact: lastUser.includes(EDIT_ARTIFACT_MARKER),
       runScript: lastUser.includes(RUN_SCRIPT_MARKER),
       obeyPage: lastUser.includes(OBEY_PAGE_MARKER),
+      remember: lastUser.includes(REMEMBER_MARKER),
+      recall: lastUser.includes(RECALL_MARKER),
     },
   };
+}
+
+// ── @demo-remember / @demo-recall helpers ───────────────────────────────────
+// (CAP-FB-20260830-MEMORY-RECALL-NEW-THREAD-01)
+
+/** The CURRENT run's original task text (case preserved — memory keys are). */
+function latestUserText(prompt) {
+  const first = runSlice(prompt).find((m) => m?.role === "user");
+  return extractText(first ? [first] : []);
+}
+
+function wantsRemember(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.remember;
+}
+
+function wantsRecall(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.recall;
+}
+
+/** `@demo-remember <key>=<value>` — bounded parse with a documented default. */
+function rememberSpec(prompt) {
+  const m = latestUserText(prompt).match(
+    new RegExp(REMEMBER_MARKER + "\\s+([A-Za-z0-9_.:-]{1,60})=([^\\s]{1,120})"),
+  );
+  return m ? { key: m[1], value: m[2] } : { key: "owner-favourite-colour", value: "green" };
+}
+
+/** `@demo-recall <key>` — which key the answer must come from. */
+function recallKey(prompt) {
+  const m = latestUserText(prompt).match(
+    new RegExp(RECALL_MARKER + "\\s+([A-Za-z0-9_.:-]{1,60})"),
+  );
+  return m ? m[1] : "owner-favourite-colour";
+}
+
+/** Read ONE key out of the runtime-context memory digest in the system prompt.
+ * Returns null when the digest does not carry it — the model then says so,
+ * honestly, exactly as it did before this layer existed. */
+function digestValue(prompt, key) {
+  const sys = systemText(prompt);
+  const at = sys.indexOf("### What you remember");
+  if (at < 0) return null;
+  const lines = sys.slice(at).split("\n").slice(1);
+  for (const line of lines) {
+    if (/^#{1,6}\s/.test(line)) break; // the next heading ends the block
+    const m = line.match(/^- ([^:]+): ([\s\S]*)$/);
+    if (m && m[1].trim() === key) return m[2].trim();
+  }
+  return null;
+}
+
+function rememberAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" &&
+    Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && REMEMBER_FINAL_RE.test(p.text ?? "")));
+}
+
+/** Honest about the WRITE: the memory_set result decides. */
+function rememberFinalText(prompt) {
+  const { key, value } = rememberSpec(prompt);
+  const parts = runSlice(prompt)
+    .filter((m) => m?.role === "tool")
+    .flatMap((m) => (Array.isArray(m.content) ? m.content : []));
+  const last = parts[parts.length - 1];
+  const raw = last?.output?.value ?? last?.output ?? last?.result ?? null;
+  const text = typeof raw === "string" ? raw : JSON.stringify(raw ?? "");
+  const failed = last?.type === "tool-error" || last?.output?.type === "error-text" ||
+    (/error/i.test(text) && !/"ok"\s*:\s*true/.test(text));
+  return failed
+    ? `[demo model] could not remember ${key}: ${text.slice(0, 160)}`
+    : `[demo model] remembered ${key} = ${value}.`;
+}
+
+/** The recall answer: what the PROMPT carried, never what the store holds — a
+ * digest that never reached the wire must read as "I do not know". */
+function recallFinalText(prompt) {
+  const key = recallKey(prompt);
+  const value = digestValue(prompt, key);
+  return value === null
+    ? `[demo model] recall: I do not know ${key} — nothing in my prompt carries it.`
+    : `[demo model] recall: ${key} is ${value}`;
+}
+
+function recallAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" &&
+    Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && RECALL_FINAL_RE.test(p.text ?? "")));
 }
 
 // ── @demo-obey-page helpers ─────────────────────────────────────────────────
@@ -766,8 +870,24 @@ function browserFinalText(prompt) {
   return `[demo model] Browser tool ${spec.tool} finished without a result.`;
 }
 
-function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, browser = false, enumSlip = false, runScript = false, editArtifact = false } = {}) {
+function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, browser = false, enumSlip = false, runScript = false, editArtifact = false, remember = false } = {}) {
   const step = toolResultCount(prompt);
+  if (remember) {
+    // ONE key, through the REAL lazy protocol: search_tools(memory_set) →
+    // execute_tool. Nothing else, so the recall thread reads a store the
+    // journey wrote exactly one row into.
+    const toolParts = boardToolParts(prompt);
+    const searches = toolParts.filter((p) => p.toolName === "search_tools").length;
+    const executes = toolParts.filter((p) => p.toolName === "execute_tool").length;
+    if (executes >= 1) return null;
+    if (searches <= executes) {
+      return { id: "search_remember", name: "search_tools", input: { query: "memory_set", limit: 1 } };
+    }
+    const selectionRef = latestSelectionRef(prompt);
+    if (!selectionRef) return null;
+    const { key, value } = rememberSpec(prompt);
+    return { id: "execute_remember", name: "execute_tool", input: { selectionRef, arguments: { key, value } } };
+  }
   if (editArtifact) {
     // search(create_asset) → execute create → search(update_asset) → execute
     // update on the created id → final text (two real edits of one artifact).
@@ -1087,6 +1207,8 @@ export function createDemoModel() {
         (createAgentFinal(options.prompt) || toolResultCount(options.prompt) >= 2);
       const lazyCall = wantsObeyPage(options.prompt) && !obeyAlreadyFinal(options.prompt)
         ? obeyPageCall(options.prompt)
+        : wantsRemember(options.prompt) && !rememberAlreadyFinal(options.prompt)
+        ? lazyDemoCall(options.prompt, { remember: true })
         : wantsAgentDelegate(options.prompt) && !agentDelegateAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { delegateAgent: true })
         : wantsEnumSlip(options.prompt) && !enumSlipAlreadyFinal(options.prompt)
@@ -1124,6 +1246,32 @@ export function createDemoModel() {
       // the loop ends (mirrors the @demo-tools alreadyFinal pattern).
       // The board final/continuation text: honest about the outcome (the
       // marker lets the stripped-history continuation re-emit it + stop).
+      // CAP-FB-20260830-MEMORY-RECALL-NEW-THREAD-01: the write's honest outcome,
+      // and the recall answer read from THIS prompt's memory digest.
+      if (wantsRemember(options.prompt)) {
+        const prior = runSlice(options.prompt)
+          .filter((m) => m?.role === "assistant" && Array.isArray(m?.content))
+          .flatMap((m) => m.content)
+          .find((p2) => p2?.type === "text" && REMEMBER_FINAL_RE.test(p2.text ?? ""));
+        return Promise.resolve({
+          content: [{ type: "text", text: prior?.text ?? rememberFinalText(options.prompt) }],
+          finishReason: "stop",
+          usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
+          warnings: [],
+        });
+      }
+      if (wantsRecall(options.prompt)) {
+        const prior = runSlice(options.prompt)
+          .filter((m) => m?.role === "assistant" && Array.isArray(m?.content))
+          .flatMap((m) => m.content)
+          .find((p2) => p2?.type === "text" && RECALL_FINAL_RE.test(p2.text ?? ""));
+        return Promise.resolve({
+          content: [{ type: "text", text: prior?.text ?? recallFinalText(options.prompt) }],
+          finishReason: "stop",
+          usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
+          warnings: [],
+        });
+      }
       if (wantsEditArtifact(options.prompt)) {
         return Promise.resolve({
           content: [{ type: "text", text: editArtifactFinalText(options.prompt) }],
@@ -1224,6 +1372,8 @@ export function createDemoModel() {
             (createAgentFinal(options.prompt) || toolResultCount(options.prompt) >= 2);
           const lazyCall = wantsObeyPage(options.prompt) && !obeyAlreadyFinal(options.prompt)
             ? obeyPageCall(options.prompt)
+            : wantsRemember(options.prompt) && !rememberAlreadyFinal(options.prompt)
+            ? lazyDemoCall(options.prompt, { remember: true })
             : wantsADel && !agentDelegateAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { delegateAgent: true })
             : wantsEnumSlip(options.prompt) && !enumSlipAlreadyFinal(options.prompt)
@@ -1317,7 +1467,19 @@ export function createDemoModel() {
             controller.close();
             return;
           }
-          if (wantsObeyPage(options.prompt)) {
+          if (wantsRemember(options.prompt) || wantsRecall(options.prompt)) {
+            // CAP-FB-20260830-MEMORY-RECALL-NEW-THREAD-01: the write's honest
+            // outcome / the recall answer read from THIS prompt's digest. A
+            // continuation re-emits the exact prior final so the loop ends.
+            const re = wantsRemember(options.prompt) ? REMEMBER_FINAL_RE : RECALL_FINAL_RE;
+            const prior = runSlice(options.prompt)
+              .filter((m) => m?.role === "assistant" && Array.isArray(m?.content))
+              .flatMap((m) => m.content)
+              .find((p2) => p2?.type === "text" && re.test(p2.text ?? ""));
+            response = prior?.text ??
+              (wantsRemember(options.prompt) ? rememberFinalText(options.prompt) : recallFinalText(options.prompt));
+          }
+          else if (wantsObeyPage(options.prompt)) {
             // The injection probe's final/continuation text: the REAL tool
             // results decide (fenced page + policy → refused; else obeyed).
             // A continuation re-emits the prior final so the loop ends.

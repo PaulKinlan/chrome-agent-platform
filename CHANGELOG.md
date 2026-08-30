@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.487] — 2026-08-30
+- Landed: something the agent saved to memory in one conversation can now be recalled in a new one - it sees a short list of what it remembers before it answers.
+
 ## [0.2.486] — 2026-08-30
 - Permission matrix: Turn off now confirms through the owner-approval dialog (cross-lane fix for the Settings revoke route)
 

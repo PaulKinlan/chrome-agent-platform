@@ -494,6 +494,8 @@ const EXPECTED = [
   "Transcript: 'list my open tabs' survives a reload at full length",
   "Transcript: no nudge summary bubble after a text-ending step",
   "Transcript: no lazy-protocol text leaks into the reopened thread (modelContent/catalogGeneration/stableId/schemaSummary/search_tools/execute_tool)",
+  "Memory recall: a new thread's prompt carries the digest of a key written earlier",
+  "Memory recall: a new thread answers 'green' from the digest, never 'I do not know'",
   "Provider error: SW console recorded the real HTTP 401 from the fixture provider",
   "Provider error: a rejected key renders the 401 bubble with a Settings link",
   "Provider error: preflight refusal reaches a terminal Failed row within 5 s",
@@ -2242,6 +2244,41 @@ async function main() {
       leakText.length > 0 && leaked.length === 0 &&
         Array.isArray(leakCards) && leakCards.length >= 3 &&
         !leakCards.some((n) => n === "search_tools" || n === "list_tools" || n === "execute_tool"),
+    );
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 3b-memory — CAP-FB-20260830-MEMORY-RECALL-NEW-THREAD-01: memory
+    // is not write-only. What the model saved in ONE thread reaches the NEXT
+    // thread's system prompt as the runtime-context memory digest, so a fresh
+    // thread answers from it instead of "I do not know".
+    // The demo model's @demo-recall marker issues NO tool call: its answer can
+    // only come from the digest its own prompt carried, so a passing check is
+    // evidence about the WIRE, not about the store.
+    // ─────────────────────────────────────────────────────────────
+    // The @demo-tools run above wrote the key `demo` through the real lazy
+    // protocol; this NEW thread must see it without touching a memory tool.
+    const digestRun = await msgValue({ type: "agent.run", task: "@demo-recall demo" });
+    const digestText = String(digestRun?.result ?? "");
+    console.log(`memory digest recall: ${digestText.slice(0, 200)}`);
+    check(
+      "Memory recall: a new thread's prompt carries the digest of a key written earlier",
+      digestRun?.ok === true &&
+        String(digestRun?.threadId ?? "") !== String(transcriptThreadId ?? "") &&
+        /recall: demo is /.test(digestText) && digestText.includes("Espresso machine"),
+    );
+    // The reported failure, end to end: save a colour in one thread, ask for it
+    // in a new one.
+    const rememberRun = await msgValue({ type: "agent.run", task: "@demo-remember owner-favourite-colour=green" });
+    const overviewAfterWrite = await msgValue({ type: "memory.overview" });
+    const wroteColour = JSON.stringify(overviewAfterWrite ?? {}).includes("owner-favourite-colour");
+    const recallRun = await msgValue({ type: "agent.run", task: "@demo-recall owner-favourite-colour" });
+    const recallText = String(recallRun?.result ?? "");
+    console.log(`memory colour recall: wrote=${wroteColour} answer=${recallText.slice(0, 200)}`);
+    check(
+      "Memory recall: a new thread answers 'green' from the digest, never 'I do not know'",
+      rememberRun?.ok === true && wroteColour === true && recallRun?.ok === true &&
+        String(recallRun?.threadId ?? "") !== String(rememberRun?.threadId ?? "") &&
+        /recall: owner-favourite-colour is green/.test(recallText) &&
+        !/I do not know/.test(recallText),
     );
     // JOURNEY 3c — provider error truth (CAP-FB-20260830-PROVIDER-ERROR-TRUTH-01).
     // A provider HTTP failure must be reported by its real status, never as
