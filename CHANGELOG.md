@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.460] — 2026-08-30
+- Tracker: the one-Allow-card behaviour is recorded as landed.
+
 ## [0.2.459] — 2026-08-30
 - Landed: when the agent needs a permission it does not have, the conversation now shows one Allow card naming exactly what is needed, and allowing it lets the action go ahead.
 
