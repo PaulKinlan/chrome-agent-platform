@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.480] — 2026-08-30
+- Deliver the frame preference on genuine ready, exactly once
+
 ## [0.2.479] — 2026-08-30
 - docs: sync components.js mirror (frame bootstrap fix)
 
