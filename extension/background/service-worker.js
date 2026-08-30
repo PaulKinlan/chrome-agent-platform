@@ -2491,7 +2491,21 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         // An unmatched result gets a UNIQUE id (never a repeated ":1" that
         // would collapse multiple orphan results into one card).
         const callId = q.shift() ?? `${taskId}:${runInstance}:${event.toolName ?? "tool"}:orphan:${orphanN}`;
-        const log = { type: "tool-result", id: taskId, executionId, run: runInstance, callId, tool: event.toolName ?? "tool", result, ok: event.ok ?? null, ...(typeof event.selectedTool === "string" && event.selectedTool ? { selectedTool: event.selectedTool } : {}) };
+        // A structured permission denial keeps its requirement on the row
+        // (bounded: the same shape normalizePermissionRequirement accepts) so
+        // a reopened thread can render the grant card, not prose (§2b).
+        const permissionReq = event.permissionRequirement && typeof event.permissionRequirement === "object" && !Array.isArray(event.permissionRequirement)
+          ? {
+            permissionRequirement: {
+              reason: String(event.permissionRequirement.reason ?? "").slice(0, 240),
+              permissions: (Array.isArray(event.permissionRequirement.permissions) ? event.permissionRequirement.permissions : []).filter((x) => typeof x === "string").slice(0, 8),
+              grantOrigins: (Array.isArray(event.permissionRequirement.grantOrigins) ? event.permissionRequirement.grantOrigins : []).filter((x) => typeof x === "string").slice(0, 50),
+              grantGlobal: event.permissionRequirement.grantGlobal === true,
+            },
+            permissionDecision: typeof event.permissionDecision === "string" ? event.permissionDecision.slice(0, 16) : null,
+          }
+          : {};
+        const log = { type: "tool-result", id: taskId, executionId, run: runInstance, callId, tool: event.toolName ?? "tool", result, ok: event.ok ?? null, ...(typeof event.selectedTool === "string" && event.selectedTool ? { selectedTool: event.selectedTool } : {}), ...permissionReq };
         journalAppend(mem, log).catch(() => {});
         durableRuns.appendLog(executionId, log, `tool-result:${callId}`).catch(() => {});
         durableRuns.heartbeat(executionId, { progressed: true }).catch(() => {

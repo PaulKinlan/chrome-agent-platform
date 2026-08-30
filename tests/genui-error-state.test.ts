@@ -224,8 +224,12 @@ Deno.test("genui-error: the LIVE tool-result path wires summary+detail so the er
     assertEquals(calls.length, 1, "the result resolves the running card");
     const attrs = calls[0].attrs;
     assertEquals(attrs["tool-status"], "error", "a failed call resolves as the error status");
-    assertEquals(attrs["tool-result"], "done", "the summary the real code stores is the bare 'done'");
-    assertEquals(attrs["tool-detail"], OWNER_RESULT, "the raw envelope lands in the detail attribute");
+    // CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 §9: the summary and the detail
+    // are computed from the SELECTED tool's own result — the denial in words,
+    // never the bare "done" of the envelope's ok:true, never the envelope.
+    assertEquals(attrs["tool-result"], "failed: This operation requires owner approval in Settings.", "the summary is the tool's own denial");
+    assert(!String(attrs["tool-detail"] ?? "").includes("modelContent"), "the detail attribute never carries the envelope");
+    assert(String(attrs["tool-detail"] ?? "").includes("This operation requires owner approval in Settings."), "the detail is the tool's own result");
     // The rendered card headlines the denial, not the summary.
     assertEquals(
       toolHeadline(attrs["tool-status"], attrs["tool-result"], attrs["tool-detail"]),

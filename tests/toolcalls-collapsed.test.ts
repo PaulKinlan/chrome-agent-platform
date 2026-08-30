@@ -150,12 +150,17 @@ Deno.test("toolcalls-collapsed: a normal double-wrapped result stays text", asyn
 });
 
 Deno.test("toolcalls-collapsed: a second modelContent encoding layer stays text", async () => {
+  // The bound holds — the second encoding layer is NOT decoded into a tree —
+  // and (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 §10) the transport key
+  // `modelContent` is never a visible row: the once-decoded string is the
+  // content, shown as plain text.
   const buildToolCardDom = await loadBuildToolCardDom();
   const result = JSON.stringify({ modelContent: JSON.stringify(JSON.stringify({ a: 1 })) });
   const card = buildToolCardDom({ name: "wrapped", status: "done", args: null, result, detail: null, duration: null, expandedState: new Map() });
   const body = card.children[1];
-  assert(descendants(body).some((c) => c.className === "tt-key" && c.textContent === "modelContent"));
-  assert(descendants(body).some((c) => c.className === "tt-val tt-val-string"), "the second encoded layer remains a string leaf");
+  assert(!descendants(body).some((c) => c.className === "tt-key" && c.textContent === "modelContent"), "the envelope key is transport, never a row");
+  const plain = body.children.find((c) => c.className === "tool-plain tool-plain-result");
+  assertEquals(plain?.textContent, JSON.stringify({ a: 1 }), "the second encoded layer remains text");
   assert(!descendants(body).some((c) => c.className === "tt-key" && c.textContent === "a"));
 });
 
@@ -169,8 +174,12 @@ Deno.test("toolcalls-collapsed: a second schema-wrapped result encoding layer st
   });
   const card = buildToolCardDom({ name: "execute_tool", status: "done", args: null, result: "done", detail, duration: null, expandedState: new Map() });
   const body = card.children[1];
-  assert(descendants(body).some((c) => c.className === "tt-key" && c.textContent === "result"));
-  assert(descendants(body).some((c) => c.className === "tt-val tt-val-string"));
+  // The envelope's `result` wrapper is unwrapped (§9) — the selected tool's
+  // once-decoded string is the content, as plain text; the second layer is
+  // never decoded into a tree.
+  assert(!descendants(body).some((c) => c.className === "tt-key" && (c.textContent === "result" || c.textContent === "selectedTool")), "envelope keys are never rows");
+  const plain = body.children.find((c) => c.className === "tool-plain tool-plain-result");
+  assertEquals(plain?.textContent, JSON.stringify({ a: 1 }), "the second encoded layer remains text");
   assert(!descendants(body).some((c) => c.className === "tt-key" && c.textContent === "a"));
 });
 
