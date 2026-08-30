@@ -929,6 +929,36 @@ async function renderArtifacts() {
 }
 
 // ── the artifact expand dialog (item 53) ────────────────────────────────
+// "View diff" from an edited artifact's thread card: the two version bodies
+// from the versions store, rendered in the shared <artifact-diff> inside an
+// <agent-dialog>. Reads from the store, never the tool-result text.
+async function openArtifactDiffDialog(id, origin, name, fromVersion, toVersion) {
+  const [before, after] = await Promise.all([
+    send("asset.version-get", { origin: origin ?? "master", id, n: fromVersion }).catch(() => ({ ok: false })),
+    send("asset.version-get", { origin: origin ?? "master", id, n: toVersion }).catch(() => ({ ok: false })),
+  ]);
+  if (!before?.ok || !after?.ok) { setStatus("Those versions are no longer available", false); return false; }
+  const dialog = document.createElement("agent-dialog");
+  dialog.setAttribute("title", `Changes to ${name ?? "artifact"}`);
+  const body = document.createElement("div");
+  body.style.minWidth = "min(92vw, 980px)";
+  body.style.width = "100%";
+  const diff = document.createElement("artifact-diff");
+  diff.setAttribute("mode", "unified");
+  diff.setAttribute("before-label", `v${fromVersion}`);
+  diff.setAttribute("after-label", `v${toVersion}`);
+  // The language drives nothing but the label today; html is the common case.
+  diff.language = "html";
+  diff.before = String(before.content ?? "");
+  diff.after = String(after.content ?? "");
+  body.appendChild(diff);
+  dialog.append(body);
+  document.body.append(dialog);
+  dialog.show();
+  dialog.addEventListener("close", () => dialog.remove());
+  return true;
+}
+
 // Clicking a recent artifact opens it in an <agent-dialog> — the full live
 // render (an html artifact in the sandboxed double-iframe, an image inline, or
 // the text), without navigating away from the hub.
@@ -1720,6 +1750,14 @@ if (threadConversation) {
     );
     if (chrome.tabs?.create) chrome.tabs.create({ url });
     else window.open(url, "_blank", "noopener");
+  });
+  // "View diff" under an edited artifact opens the version-to-version change in
+  // an <agent-dialog> with the shared <artifact-diff> component — the bodies
+  // come from the versions store (never the tool text).
+  threadConversation.addEventListener("view-diff", (e) => {
+    const { id, origin, name, fromVersion, toVersion } = e.detail ?? {};
+    if (!id || !Number.isSafeInteger(fromVersion) || !Number.isSafeInteger(toVersion)) return;
+    openArtifactDiffDialog(id, origin ?? "master", name, fromVersion, toVersion);
   });
 }
 const editAgentBtn = document.getElementById("edit-agent");

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.503] — 2026-08-30
+- When an agent creates or edits an artifact, the thread now shows the artifact itself — a card that previews the page from your library, titled with its name, with an "Updated … (+n −m) / View diff" control on an edit — instead of a blank frame. It's there while the run streams and again when you reopen the thread.
+
 ## [0.2.502] — 2026-08-30
 - The last visible-editing fixes are in progress in parallel and recorded as claimed.
 

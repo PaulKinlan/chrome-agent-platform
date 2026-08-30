@@ -4673,10 +4673,19 @@ class MessageBubble extends Component {
         if (genHtml == null && isHtmlDocument(cand)) genHtml = cand;
       };
 
-      if (name === "generate_ui" || name === "create_asset" || name === "update_asset") {
+      if (name === "generate_ui") {
+        // generate_ui's HTML IS its result — it is not stored as an asset, so
+        // the inline frame is the only place it renders.
         if (args != null) checkCandidate(args);
         if (genHtml == null && result != null) checkCandidate(result);
         if (genHtml == null && detail != null) checkCandidate(detail);
+      } else if (name === "create_asset" || name === "update_asset") {
+        // CAP-FB-20260830-THREAD-ARTIFACT-CARD-01: NEVER mount a frame for an
+        // asset tool. The attribute strings are display-bounded (they end in an
+        // ellipsis mid-document), so the frame painted a blank cream rectangle.
+        // The real page renders in the <artifact-card> that follows this card,
+        // whose preview is loaded FROM THE STORE (appendArtifact). Leave
+        // genHtml null so this falls through to the structured tool card.
       } else {
         if (result != null) checkCandidate(result);
         if (genHtml == null && detail != null) checkCandidate(detail);
@@ -4999,6 +5008,19 @@ class AgentConversation extends Component {
       /* An artifact is a deliverable, not a chat line: it gets its own block on
          the 8px grid rather than being squeezed into the bubble column. */
       agent-conversation .msg-artifact { margin:var(--space-2,8px) 0; max-width:min(560px, 100%); }
+      /* The edit affordance under an updated artifact: what changed, and a way
+         to see it. Quiet by default — one accent, actions only (PRODUCT.md). */
+      agent-conversation .artifact-change { display:flex; align-items:center; gap:var(--space-2,8px);
+        margin:var(--space-1,4px) 0 0; font-size:var(--text-xs,12px); color:var(--muted,#635e56); }
+      agent-conversation .artifact-change .change-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      agent-conversation .artifact-change .delta { font-variant-numeric:tabular-nums; }
+      agent-conversation .artifact-change .delta .add { color:var(--success,#1f7a4d); }
+      agent-conversation .artifact-change .delta .del { color:var(--danger,#b3261e); }
+      agent-conversation .artifact-change .view-diff { flex:0 0 auto; font:inherit; font-size:var(--text-xs,12px);
+        padding:2px 8px; border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,6px);
+        background:transparent; color:var(--text,#1d1b18); cursor:pointer; }
+      agent-conversation .artifact-change .view-diff:hover { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
+      agent-conversation .artifact-change .view-diff:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
       /* The ONE live run-status surface: an inline row pinned (sticky) at the
          bottom of the conversation viewport while a run is live — always
          visible, part of the conversation flow (owner 2026-08-28: the label
@@ -5125,21 +5147,104 @@ class AgentConversation extends Component {
     const a = m.artifact ?? m;
     if (!a || typeof a !== "object" || !a.id) return null;
     if (typeof m.ts === "number") this._maybeTsGap(m.ts);
+    const origin = String(a.origin ?? "master");
+    const id = String(a.id);
+    // An update_asset card's descriptor can arrive thin ("Untitled") because the
+    // bounded result dropped the asset object — resolve the name from the id→name
+    // registry the create card populated, and let the store fetch below fill the
+    // rest. The store is the source of truth; the descriptor is a hint.
+    const descName = typeof a.name === "string" && a.name && a.name !== "Untitled" ? a.name : null;
+    const name = descName ?? this.artifactName(id) ?? "Untitled";
     const wrap = document.createElement("div");
     wrap.className = "msg-artifact";
     const card = document.createElement("artifact-card");
-    card.setAttribute("id", String(a.id));
-    card.setAttribute("name", String(a.name ?? "Untitled"));
+    card.setAttribute("id", id);
+    card.setAttribute("name", name);
     card.setAttribute("type", String(a.type ?? "data"));
     card.setAttribute("size", String(a.size ?? 0));
-    card.setAttribute("origin", String(a.origin ?? "master"));
+    card.setAttribute("origin", origin);
     if (a.at != null) card.setAttribute("time", String(a.at));
     // Only what the thread actually handles.
     card.setAttribute("actions", "open-tab reuse");
     wrap.appendChild(card);
-    this.rememberArtifact(String(a.id), typeof a.name === "string" ? a.name : "");
+    // THE PREVIEW COMES FROM THE STORE, never from the tool-result text
+    // (CAP-FB-20260830-THREAD-ARTIFACT-CARD-01 / the TOOL-RESULT-ENVELOPE rule):
+    // the args string is display-bounded and paints a blank frame. Same read
+    // the library does (artifacts/index.js) so both surfaces show the page.
+    this._loadArtifactPreview(card, origin, id);
+    // An UPDATE (version > 1) says what changed and offers the diff. A fresh
+    // create has no prior version to compare.
+    const version = Number.isSafeInteger(a.version) ? a.version : null;
+    if ((a.updated === true || (version != null && version > 1)) && version != null && version > 1) {
+      wrap.appendChild(this._artifactChangeRow(origin, id, name, version));
+    }
+    this.rememberArtifact(id, typeof a.name === "string" ? a.name : "");
     this.appendTranscript(wrap);
     return card;
+  }
+  /** Load an artifact-card's live preview AND authoritative name/type/size from
+   *  the asset store — the store is the source of truth, the tool result only a
+   *  hint (a bounded update result carries no name/type at all). Bounded and
+   *  best-effort: a slow or absent worker leaves the card's type placeholder. */
+  _loadArtifactPreview(card, origin, id) {
+    if (!RUNTIME_SEND) return;
+    RUNTIME_SEND("asset.get", { origin, id }).then((full) => {
+      if (!full?.ok || !full.asset || !card.isConnected) return;
+      const asset = full.asset;
+      // Type first (the card picks the preview surface from it), then name/size,
+      // then the preview content — one set of attribute writes, one re-render.
+      if (typeof asset.type === "string" && asset.type) card.setAttribute("type", asset.type);
+      if (typeof asset.name === "string" && asset.name) {
+        card.setAttribute("name", asset.name);
+        this.rememberArtifact(id, asset.name);
+      }
+      if (Number.isFinite(asset.size)) card.setAttribute("size", String(asset.size));
+      card.preview = typeof asset.content === "string" ? asset.content : "";
+    }).catch(() => { /* the placeholder stays — no blank frame */ });
+  }
+  /** The "Updated <name> (+n −m) [View diff]" row under an edited artifact.
+   *  The delta is computed from the versions store (never the tool text); the
+   *  button emits `view-diff` with the version range for the host to open. */
+  _artifactChangeRow(origin, id, name, toVersion) {
+    const row = document.createElement("div");
+    row.className = "artifact-change";
+    const label = document.createElement("span");
+    label.className = "change-label";
+    label.textContent = `Updated ${name} `;
+    const delta = document.createElement("span");
+    delta.className = "delta";
+    label.appendChild(delta);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "view-diff";
+    btn.textContent = "View diff";
+    btn.setAttribute("aria-label", `View what changed in ${name}`);
+    const fromVersion = toVersion - 1;
+    btn.addEventListener("click", () => this._emit("view-diff", { id, origin, name, fromVersion, toVersion }));
+    row.append(label, btn);
+    // Fill "+n −m" from the two version bodies; keep it silent on failure so
+    // the row still offers the diff.
+    if (RUNTIME_SEND) {
+      Promise.all([
+        RUNTIME_SEND("asset.version-get", { origin, id, n: fromVersion }),
+        RUNTIME_SEND("asset.version-get", { origin, id, n: toVersion }),
+      ]).then(([before, after]) => {
+        if (!row.isConnected) return;
+        const b = before?.ok ? String(before.content ?? "") : null;
+        const c = after?.ok ? String(after.content ?? "") : null;
+        if (b == null || c == null) return;
+        const { added, removed } = lineDiffSummary(b, c);
+        delta.replaceChildren();
+        const add = document.createElement("span");
+        add.className = "add";
+        add.textContent = `+${added}`;
+        const del = document.createElement("span");
+        del.className = "del";
+        del.textContent = `−${removed}`;
+        delta.append("(", add, " ", del, ")");
+      }).catch(() => { /* no delta — the View diff button is still there */ });
+    }
+    return row;
   }
 
   appendTool(m = {}) {
