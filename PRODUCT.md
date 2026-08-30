@@ -79,6 +79,13 @@ that are empty on a fresh profile). This file says the job is "start a task, see
 what's happening, and drill in" — and the composer, which is the whole first half of
 that sentence, is the second element on the page and visually weaker than the card
 above it.
+*(First screen fixed, CAP-FB-20260827-HUB-FIRST-RUN-01, 2026-08-30: the composer is
+the first element in the DOM and the tab order and sits above the fold at 1024x700;
+the onboarding card is a one-sentence banner with ONE action — "Connect a model" —
+shown only while no provider is connected; three example chips sit under the
+composer; a section renders only once its store has ever had data, so a fresh
+profile shows the composer, the chips and the banner and nothing else. The
+dashboard-to-timeline collapse is still CAP-FB-20260828-HUB-AS-TIMELINE-01.)*
 
 ## The direction
 

@@ -43,6 +43,7 @@ globalThis.matchMedia = () => ({ matches: false });
 
 const COMPONENTS = [
   "first-run-guide",
+  "example-chips",
   "run-task-button",
   "mic-button",
   "attach-button",

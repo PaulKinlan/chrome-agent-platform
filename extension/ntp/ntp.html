@@ -35,6 +35,9 @@
       pointer-events: none;
     }
     .side {
+      /* Painted first, focused second: the main landmark precedes the sidebar in the DOM
+         (CAP-FB-20260827-HUB-FIRST-RUN-01); flex order keeps it on the left. */
+      order: -1;
       inline-size: 240px;
       flex: 0 0 240px;
       min-inline-size: 0;
@@ -542,7 +545,18 @@
       width: 100%;
       margin: 0 auto;
       padding: 32px 24px 48px;
+      /* A single-column grid so CSS `order` can restore the visual stack
+         (header, first-run banner, composer, example chips, sections) while the
+         DOM keeps the composer first for focus + reading order. Sections keep
+         their own block margins; the grid has no row gap of its own. */
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      align-items: start;
     }
+    .main-wrap > header { order: -3; }
+    .main-wrap > first-run-guide { order: -2; }
+    .main-wrap > agent-composer { order: -1; }
+    .main-wrap > section[hidden] { display: none; }
     /* Wide form factor: the hub uses the available width instead of leaving
        ~700px of dead margins at 1440×900 (UX-AUDIT-2026-08-28 UX-010). The
        composer/first-run stay full-width; the Agents / Recent artifacts /
@@ -550,14 +564,13 @@
        panels' own measures, so nothing stretches unreadably. */
     @media (min-width: 1100px) {
       .main-wrap {
-        display: grid;
         grid-template-columns: 1fr 1fr;
         column-gap: 24px;
-        align-items: start;
       }
       .main-wrap > header,
       .main-wrap > first-run-guide,
-      .main-wrap > agent-composer {
+      .main-wrap > agent-composer,
+      .main-wrap > example-chips {
         grid-column: 1 / -1;
       }
     }
@@ -657,7 +670,11 @@
     }
     .panel-subhead .hint-link:hover, .panel-subhead .hint-link:focus-visible {
       text-decoration: underline;
-      outline: none;
+    }
+    .panel-subhead .hint-link:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+      border-radius: 4px;
     }
     .panel-body { padding: 4px 0; }
     /* Shared row treatment: the WebMCP discovery status line IS a .panel-body
@@ -819,6 +836,92 @@
     </style>
   </head>
   <body>
+    <!-- CAP-FB-20260827-HUB-FIRST-RUN-01: the main landmark comes FIRST in the DOM so the
+         composer is the first focusable element (Tab #1) and the first thing
+         assistive tech reads. The sidebar is still painted on the left through
+         `.side { order: -1 }` (flex order changes paint, never focus order).
+         The edge nub + overlays stay AFTER the sidebar (their `#side ~` sibling
+         selectors depend on it). -->
+    <main class="content">
+      <div class="main-wrap">
+        <!-- UX-007: the design has no visible page title; the h1 stays for the
+             a11y tree (visually-hidden utility in theme.css). -->
+        <h1 class="visually-hidden">Agent Hub</h1>
+
+        <!-- DOM order = focus order: the composer first (the point of the
+             product), then the example chips, then the first-run banner, then
+             the header's status controls. The visual stack (header, banner,
+             composer, chips) is restored with CSS `order` on the grid. -->
+        <agent-composer id="composer" placeholder="Ask anything, or @mention an agent…" send-label="Run task"></agent-composer>
+        <example-chips id="example-chips" label="Try one of these" chips="Group my tabs by topic|Summarise this page|Watch this price"></example-chips>
+        <first-run-guide id="first-run-guide" hidden></first-run-guide>
+        <header class="top">
+          <div class="top-actions">
+            <span class="status" id="status" role="status" aria-live="polite" hidden></span>
+            <button type="button" class="provider-status" id="provider-status" hidden title="Open Settings to fix the provider"></button>
+            <security-shield count="0" label="Security + permissions"></security-shield>
+            <error-console count="0" label="Console (errors + warnings)"></error-console>
+          </div>
+        </header>
+
+        <!-- Agents: one heading, two groupings — your own agents and Site Agents
+             (enrolled origins). CAP-FB-20260828-NOUN-DISCIPLINE-01: the noun
+             "Agents" names this section ONCE. The section takes its accessible
+             name from the same h2 (aria-labelledby, never a duplicated
+             aria-label), and the inner group row says "Yours" rather than
+             repeating "Agents" one level below the heading that already said it. -->
+        <section id="agents-section" aria-labelledby="agents-panel-title" hidden>
+          <div class="panel">
+            <div class="panel-head">
+              <h2 class="t" id="agents-panel-title">Agents</h2>
+              <span class="hint" id="agent-count"></span>
+            </div>
+            <div class="panel-subhead"><span>Yours</span><a href="#" class="hint-link" id="bg-configure">Configure</a></div>
+            <div class="panel-body" id="named-agents"></div>
+            <div class="panel-subhead"><span>Site Agents</span><a href="#" class="hint-link" id="discover-page">Find site tools</a></div>
+            <div class="panel-body" id="site-agents"></div>
+            <div class="panel-body webmcp-hub-status muted hub-row" id="webmcp-hub-status" aria-live="polite"></div>
+          </div>
+        </section>
+
+        <!-- Jobs: the shared agent-to-agent work board — what agents posted
+             for each other, who claimed it, and how it settled. -->
+        <section id="jobs-section" aria-labelledby="jobs-title" hidden>
+          <div class="panel">
+            <div class="panel-head">
+              <h2 class="t" id="jobs-title">Jobs</h2>
+              <span class="hint" id="jobs-count"></span>
+            </div>
+            <div class="panel-body" id="jobs-board-host"></div>
+          </div>
+        </section>
+
+        <!-- Recent artifacts: what the agents have made. -->
+        <section id="artifacts-section" aria-labelledby="recent-artifacts-title" hidden>
+          <div class="panel">
+            <div class="panel-head">
+              <h2 class="t" id="recent-artifacts-title">Recent artifacts</h2>
+              <a href="#" class="hint-link" id="browse-artifacts">Browse all</a>
+            </div>
+            <div class="panel-body" id="artifacts"></div>
+          </div>
+        </section>
+
+        <!-- Recent activity: the agent run log (what the agents DID — their
+             tasks, tool calls, and results, so a background agent's work is
+             visible even without a live UI). -->
+        <section id="activity-section" aria-labelledby="recent-activity-title" hidden>
+          <div class="panel">
+            <div class="panel-head">
+              <h2 class="t" id="recent-activity-title">Recent activity</h2>
+              <span class="hint" id="hub-usage">what the agents did</span>
+            </div>
+            <div class="panel-body runlog" id="run-log"></div>
+          </div>
+        </section>
+      </div>
+    </main>
+
     <aside class="side" id="side" aria-label="Sidebar">
       <div class="brand-row">
         <button class="brand" id="home" type="button" aria-label="Home" title="Home"><span>Chrome <span class="brand-accent">Agent</span> Platform</span></button>
@@ -866,80 +969,6 @@
       <span class="nub"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg></span>
     </button>
 
-    <main class="content">
-      <div class="main-wrap">
-        <!-- UX-007: the design has no visible page title; the h1 stays for the
-             a11y tree (visually-hidden utility in theme.css). -->
-        <h1 class="visually-hidden">Agent Hub</h1>
-        <header class="top">
-          <div class="top-actions">
-            <span class="status" id="status" role="status" aria-live="polite" hidden></span>
-            <button type="button" class="provider-status" id="provider-status" hidden title="Open Settings to fix the provider"></button>
-            <security-shield count="0" label="Security + permissions"></security-shield>
-            <error-console count="0" label="Console (errors + warnings)"></error-console>
-          </div>
-        </header>
-
-        <first-run-guide id="first-run-guide" hidden></first-run-guide>
-        <agent-composer id="composer" placeholder="Ask anything, or @mention an agent…" send-label="Run task"></agent-composer>
-
-        <!-- Agents: one heading, two groupings — your own agents and Site Agents
-             (enrolled origins). CAP-FB-20260828-NOUN-DISCIPLINE-01: the noun
-             "Agents" names this section ONCE. The section takes its accessible
-             name from the same h2 (aria-labelledby, never a duplicated
-             aria-label), and the inner group row says "Yours" rather than
-             repeating "Agents" one level below the heading that already said it. -->
-        <section aria-labelledby="agents-panel-title">
-          <div class="panel">
-            <div class="panel-head">
-              <h2 class="t" id="agents-panel-title">Agents</h2>
-              <span class="hint" id="agent-count"></span>
-            </div>
-            <div class="panel-subhead"><span>Yours</span><a href="#" class="hint-link" id="bg-configure">Configure</a></div>
-            <div class="panel-body" id="named-agents"></div>
-            <div class="panel-subhead"><span>Site Agents</span><a href="#" class="hint-link" id="discover-page">Find site tools</a></div>
-            <div class="panel-body" id="site-agents"></div>
-            <div class="panel-body webmcp-hub-status muted hub-row" id="webmcp-hub-status" aria-live="polite"></div>
-          </div>
-        </section>
-
-        <!-- Jobs: the shared agent-to-agent work board — what agents posted
-             for each other, who claimed it, and how it settled. -->
-        <section aria-labelledby="jobs-title">
-          <div class="panel">
-            <div class="panel-head">
-              <h2 class="t" id="jobs-title">Jobs</h2>
-              <span class="hint" id="jobs-count"></span>
-            </div>
-            <div class="panel-body" id="jobs-board-host"></div>
-          </div>
-        </section>
-
-        <!-- Recent artifacts: what the agents have made. -->
-        <section aria-labelledby="recent-artifacts-title">
-          <div class="panel">
-            <div class="panel-head">
-              <h2 class="t" id="recent-artifacts-title">Recent artifacts</h2>
-              <a href="#" class="hint-link" id="browse-artifacts">Browse all</a>
-            </div>
-            <div class="panel-body" id="artifacts"></div>
-          </div>
-        </section>
-
-        <!-- Recent activity: the agent run log (what the agents DID — their
-             tasks, tool calls, and results, so a background agent's work is
-             visible even without a live UI). -->
-        <section aria-labelledby="recent-activity-title">
-          <div class="panel">
-            <div class="panel-head">
-              <h2 class="t" id="recent-activity-title">Recent activity</h2>
-              <span class="hint" id="hub-usage">what the agents did</span>
-            </div>
-            <div class="panel-body runlog" id="run-log"></div>
-          </div>
-        </section>
-      </div>
-    </main>
 
     <div id="view" class="view-overlay" hidden>
       <div class="view-head">

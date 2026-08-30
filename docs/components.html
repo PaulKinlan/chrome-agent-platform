@@ -22,11 +22,19 @@
       <h2 class="section">Atomic components</h2>
 
       <div class="specimen">
-        <h3 class="spec"><code class="tag">&lt;first-run-guide&gt;</code> — path to first artifact</h3>
+        <h3 class="spec"><code class="tag">&lt;first-run-guide&gt;</code> — the first-run banner</h3>
         <div class="stage column" style="max-width:760px">
-          <first-run-guide storage-ready provider-ready></first-run-guide>
+          <first-run-guide storage-ready></first-run-guide>
         </div>
-        <p class="caption">A dismissible three-step path from provider setup to a user-reviewed starter task. It never requests permission or runs the task itself.</p>
+        <p class="caption">One sentence, one action. Shown above the hub composer only while no model is connected; with <code>provider-ready</code> it renders nothing. The dismiss control is last in the tab order. It never requests a permission itself.</p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;example-chips&gt;</code> — example tasks under the composer</h3>
+        <div class="stage column" style="max-width:760px">
+          <example-chips label="Try one of these" chips="Group my tabs by topic|Summarise this page|Watch this price"></example-chips>
+        </div>
+        <p class="caption">A chip emits <code>pick</code> with its text; the host prefills the composer and focuses it. A chip never runs anything.</p>
       </div>
 
       <div class="specimen">

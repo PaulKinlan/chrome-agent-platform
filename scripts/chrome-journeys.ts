@@ -371,6 +371,10 @@ const EXPECTED = [
   "initial SW boot observed via pre-attached restart",
   "developer flag: the marker demo model is enabled for the suite",
   "fresh profile: the four agent surfaces agree (0)",
+  "fresh hub: Tab #1 focuses the composer",
+  "fresh hub: the first-run banner offers exactly one action",
+  "fresh hub at 1024x700: the composer is fully within the viewport",
+  "fresh hub: no empty-state copy is rendered",
   "after enabling one recipe the four agent surfaces agree (1)",
   "after disabling that recipe the four agent surfaces agree (0) again",
   "create dialog: the template gallery is the first step (blank + 21 templates + scheduled recipes; Starter shows 7; no template select)",
@@ -869,6 +873,54 @@ async function main() {
         /^No agents yet\./.test(surfaces0.settingsText) &&
         surfaces0.sidepanelRows === 0 && /No agents yet/.test(surfaces0.sidepanelEmpty),
     );
+
+    // ─────────────────────────────────────────────────────────────
+    // CAP-FB-20260827-HUB-FIRST-RUN-01 — on a FRESH profile the composer is
+    // the first thing: first in the DOM and the tab order, above the fold at
+    // 1024x700, with a one-action banner above it and no stacked empty states.
+    const focusedInHub = () => evalIn(cdp, ntpSession, `(() => {
+      const a = document.activeElement; const el = a?.shadowRoot?.activeElement ?? a;
+      return { tag: el?.tagName ?? null, id: el?.id ?? null, inComposer: !!(el?.closest && el.closest('#composer')) };
+    })()`);
+    await evalIn(cdp, ntpSession, `document.activeElement?.blur?.(); window.scrollTo(0, 0); true`);
+    await pressTab(cdp, ntpSession); // ONE genuine Tab key from a neutral start
+    const tab1 = await focusedInHub();
+    console.log("fresh hub Tab #1:", JSON.stringify(tab1));
+    check("fresh hub: Tab #1 focuses the composer", tab1?.inComposer === true && tab1?.id === "task-input");
+    await evalIn(cdp, ntpSession, `document.activeElement?.blur?.(); true`);
+    const bannerButtons = await evalIn(cdp, ntpSession, `(() => {
+      const g = document.getElementById('first-run-guide');
+      if (!g || g.hidden) return null;
+      return [...g.shadowRoot.querySelectorAll('button')].map((b) => b.getAttribute('aria-label') || b.textContent.trim());
+    })()`);
+    console.log("fresh hub banner buttons:", JSON.stringify(bannerButtons));
+    check(
+      "fresh hub: the first-run banner offers exactly one action",
+      Array.isArray(bannerButtons) && bannerButtons.length === 2 &&
+        bannerButtons[0] === "Connect a model" && bannerButtons[1] === "Dismiss first-run setup",
+    );
+    const hubAt = async (width, height, name) => {
+      await cdp.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false }, ntpSession);
+      await sleep(400);
+      const rect = await evalIn(cdp, ntpSession, `(() => { const r = document.getElementById('composer')?.getBoundingClientRect(); return r ? { top: r.top, bottom: r.bottom, vh: innerHeight } : null; })()`);
+      const shot = await captureShot(cdp, ntpSession);
+      if (shot) await writeEvidence(name, shot);
+      return rect;
+    };
+    const rect1440 = await hubAt(1440, 900, "hub-fresh-1440-after.png");
+    const rect1024 = await hubAt(1024, 700, "hub-fresh-1024-after.png");
+    await cdp.send("Emulation.clearDeviceMetricsOverride", {}, ntpSession);
+    console.log("fresh hub composer rects:", JSON.stringify({ rect1440, rect1024 }));
+    check(
+      "fresh hub at 1024x700: the composer is fully within the viewport",
+      rect1024 !== null && rect1024.top >= 0 && rect1024.bottom <= 700,
+    );
+    const hubText = await evalIn(cdp, ntpSession, `document.body.innerText`);
+    const emptyCopy = ["No activity matches", "No artifacts yet", "No Site Agents yet", "Discovery has not run yet", "Nothing has happened yet"]
+      .filter((s) => String(hubText ?? "").includes(s));
+    console.log("fresh hub empty copy:", JSON.stringify(emptyCopy));
+    check("fresh hub: no empty-state copy is rendered", typeof hubText === "string" && emptyCopy.length === 0);
+
     // Enable ONE recipe. Headless Chrome auto-denies chrome.permissions.request,
     // so background-agent.set fails closed here (by design); seed the enabled
     // state the way the scheduler persists it — the SW's own cap:scheduledTasks
