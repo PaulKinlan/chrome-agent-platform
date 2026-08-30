@@ -1432,8 +1432,10 @@ async function main() {
 
     let bdDropdownsReady = false;
     for (let i = 0; i < 20 && !bdDropdownsReady; i++) {
+      // The selects are the shared <provider-select> component (its options
+      // live in shadow DOM) — read the populated `providers` property.
       bdDropdownsReady = await evalOpts(
-        `document.querySelectorAll("#board-deny-agent option").length >= 2 && document.querySelectorAll("#board-deny-peer option").length >= 2`,
+        `(document.querySelector("#board-deny-agent")?.providers?.length ?? 0) >= 2 && (document.querySelector("#board-deny-peer")?.providers?.length ?? 0) >= 2`,
       ).catch(() => false);
       if (!bdDropdownsReady) await sleep(250);
     }
@@ -1453,7 +1455,7 @@ async function main() {
     let bdRowRendered = false;
     for (let i = 0; i < 20 && !bdRowRendered; i++) {
       bdRowRendered = await evalOpts(
-        `[...document.querySelectorAll("#board-deny-list .perm-row")].some((el) => el.textContent.includes("bd-critic") && el.textContent.includes("bd-writer"))`,
+        `[...document.querySelectorAll("#board-deny-list .perm-row .perm-name")].some((el) => el.textContent === "BD Critic cannot claim jobs from BD Writer")`,
       ).catch(() => false);
       if (!bdRowRendered) await sleep(250);
     }

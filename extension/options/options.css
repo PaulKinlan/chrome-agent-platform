@@ -1321,3 +1321,9 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   color: var(--muted);
 }
 #skills .skills-list .empty { color: var(--muted); font-size: var(--text-sm); padding: 14px; }
+
+/* Board permissions (Settings): the add-rule row is three shared
+   <provider-select>s + the submit button, wrapping on narrow widths. */
+.board-deny-add { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; align-items: end; }
+.board-deny-add provider-select { flex: 1 1 160px; min-width: 0; }
+.board-deny-add .btn { flex: 0 0 auto; }

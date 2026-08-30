@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.449] — 2026-08-30
+- CAP-FB-20260830-AGENT-BOARD-WORKING-01: the jobs board works end to end — asking the hub to hand work to an agent posts a job, wakes that agent, and delivers its result back into the thread; agents can read board messages, blocked jobs say so, settled results stay visible, Settings board rules use the shared selects and update live, claims are heartbeated automatically
+
 ## [0.2.448] — 2026-08-30
 - Tracker: the honest provider-error messages are recorded as landed.
 
@@ -50,37 +53,26 @@
 
 ## [0.2.432] — 2026-08-30
 - Landed: the browser-control switch no longer blocks the next run, and browser control can always be turned off.
-
-## [0.2.431] — 2026-08-30
-- Browser control: turning the switch on in Settings no longer blocks the next run from opening tabs, and the switch can always be turned off — even while an agent is running. The internal "single-driver" lock that caused both problems was removed; browser actions are still gated by your Browser control grant.
-
-## [0.2.430] — 2026-08-30
-- Six fixes are now in progress in parallel and recorded as claimed in the task tracker so no two agents work the same item.
-
-## [0.2.429] — 2026-08-30
-- No gallery component is deleted: each unused one is kept with a planned home, and the screenshot strip is now the planned image strip of everything a run generates, in the thread and on the hub.
-
-## [0.2.428] — 2026-08-30
-- Every reanalysis task is now a step-by-step hand-off brief with its own tests to pass. Agent templates and the jobs board stay and get fixed (the board could never post a job from an agent). The open_side_panel tool is removed. Model ids are current everywhere, and the fault that stops every gpt-5.6 model from answering is recorded.
-
-## [0.2.427] — 2026-08-30
-- Full-project reanalysis before the exec demo: 65 new and 8 updated tracker entries, REVIEW-2026-08-30.md with the ordered queue and the five-minute demo script, recommended defaults for the open product questions, and the README now states the real host-access posture
-## [0.2.432] — 2026-08-30
 - Jobs panel: sync the component gallery with the error-state fix
 
 ## [0.2.431] — 2026-08-30
+- Browser control: turning the switch on in Settings no longer blocks the next run from opening tabs, and the switch can always be turned off — even while an agent is running. The internal "single-driver" lock that caused both problems was removed; browser actions are still gated by your Browser control grant.
 - Jobs panel: a failed board read now shows the honest error instead of an empty board
 
 ## [0.2.430] — 2026-08-30
+- Six fixes are now in progress in parallel and recorded as claimed in the task tracker so no two agents work the same item.
 - Jobs panel: retain the empty/populated/settled hub screenshots from the journey
 
 ## [0.2.429] — 2026-08-30
+- No gallery component is deleted: each unused one is kept with a planned home, and the screenshot strip is now the planned image strip of everything a run generates, in the thread and on the hub.
 - Jobs panel journey: return to the hub before the panel screenshots (the task journey leaves the thread view open)
 
 ## [0.2.428] — 2026-08-30
+- Every reanalysis task is now a step-by-step hand-off brief with its own tests to pass. Agent templates and the jobs board stay and get fixed (the board could never post a job from an agent). The open_side_panel tool is removed. Model ids are current everywhere, and the fault that stops every gpt-5.6 model from answering is recorded.
 - Jobs panel: tolerate unupgraded elements in the unit-test DOM (optional refresh call, the activity-explorer pattern)
 
 ## [0.2.427] — 2026-08-30
+- Full-project reanalysis before the exec demo: 65 new and 8 updated tracker entries, REVIEW-2026-08-30.md with the ordered queue and the five-minute demo script, recommended defaults for the open product questions, and the README now states the real host-access posture
 - Jobs panel on the hub: the shared agent board is visible — open, settled, and messages, live across worker restarts
 
 ## [0.2.426] — 2026-08-30

@@ -399,8 +399,20 @@
        either). Content-sized up to a third of the sidebar; long boards scroll
        inside the box. */
     #board-section { flex: 0 1 auto; max-height: 34%; overflow-y: auto; }
-    /* Visible poster/claimant/status metadata on board rows (never title-only). */
-    #board-section .fr-meta { flex: 0 0 auto; font-size: var(--text-xs); color: var(--muted); white-space: nowrap; }
+    /* Visible poster/claimant/status metadata on board rows (never title-only).
+       The DESCRIPTION keeps the width: it truncates last, the meta first
+       (before this the meta was nowrap + flex:0 0 auto and the description
+       collapsed to "Fin…"). */
+    #board-section .fr-row { flex-wrap: wrap; row-gap: 0; }
+    #board-section .fr-text { flex: 1 1 auto; min-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* The state wraps under the description when it does not fit beside it —
+       so "blocked by 1" / "Research is on it" is always readable in full. */
+    #board-section .fr-meta { flex: 0 1 auto; max-width: 100%; min-width: 0; font-size: var(--text-xs); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    /* A settled row is a real button (opens the poster thread / the result). */
+    #board-section button.board-settled { width: 100%; text-align: left; font: inherit; color: inherit; background: transparent; border: 0; cursor: pointer; border-radius: var(--radius-sm, 6px); }
+    #board-section button.board-settled:hover { background: var(--hover, rgba(0,0,0,.04)); }
+    #board-section button.board-settled:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .board-result-text { white-space: pre-wrap; word-break: break-word; max-height: 50vh; overflow: auto; font: inherit; margin: 0; }
     .failed-runs .fr-label {
       display: flex;
       align-items: center;
