@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.452] — 2026-08-30
+- Tracker: streaming answers are recorded as landed.
+
 ## [0.2.451] — 2026-08-30
 - Landed: the agent's answer now appears word by word as it is written instead of all at once when it finishes.
 
