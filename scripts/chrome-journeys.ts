@@ -503,6 +503,7 @@ const EXPECTED = [
   "Provider error: preflight refusal reaches a terminal Failed row within 5 s",
   "Streaming: the assistant bubble grows across at least 5 distinct lengths",
   "Streaming: the final bubble equals the non-streamed render",
+  "Claim check: a failed delegate renders one correction and one final bubble",
   "Thread view: update card is titled with the artifact name",
   "Thread view: run banner visible 300 ms after send",
   "Thread view: no empty panel space below a two-turn thread at 1440x900",
@@ -2510,6 +2511,54 @@ async function main() {
     check(
       "Streaming: the final bubble equals the non-streamed render",
       streamCompare?.equal === true && streamCompare?.contentAttr === DEMO_STREAM_ANSWER && streamCompare?.streamedText === DEMO_STREAM_ANSWER,
+    );
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 3d2 — CAP-FB-20260830-CLAIM-CHECK-BROWSER-TOOLS-01: delegating to
+    // an agent that does not exist FAILS (every delegate_task card reads
+    // `error`), but the model's final text still says "Delegation succeeded".
+    // The runtime honesty backstop appends the visible correction, and the
+    // turn's final text is painted EXACTLY ONCE — the reported baseline
+    // rendered the identical bubble once per continuation step (twelve here).
+    // ─────────────────────────────────────────────────────────────
+    const CLAIM_CHECK_STATE = `(() => {
+      const conv = document.getElementById('thread-conversation');
+      if (!conv) return JSON.stringify(null);
+      const bubbles = [...conv.querySelectorAll('message-bubble[role="agent"]')]
+        .map((b) => (((b.shadowRoot ?? b).querySelector('.body')) ?? b).textContent.replace(/\\s+/g, ' ').trim())
+        .filter((t) => t.length > 0);
+      const status = [...conv.querySelectorAll('conversation-run-status')].map((x) => x.getAttribute('state'));
+      const tools = [...conv.querySelectorAll('message-bubble[role="tool"]')]
+        .map((b) => b.getAttribute('tool-name') + ':' + b.getAttribute('tool-status'));
+      return JSON.stringify({ bubbles, status, tools });
+    })()`;
+    await driveHubTask("@demo-delegate nosuchagent");
+    let claimState = null;
+    {
+      const t0 = Date.now();
+      while (Date.now() - t0 < 30000) {
+        try { claimState = JSON.parse(await evalIn(cdp, ntpSession, CLAIM_CHECK_STATE) ?? "null"); } catch { claimState = null; }
+        if (claimState && claimState.bubbles.length > 0 &&
+          !(claimState.status ?? []).some((s) => ["queued", "running", "retrying"].includes(s))) break;
+        await sleep(250);
+      }
+      // The authoritative run response (the claim-checked result) lands after
+      // the live status row settles.
+      await sleep(800);
+      try { claimState = JSON.parse(await evalIn(cdp, ntpSession, CLAIM_CHECK_STATE) ?? "null"); } catch { /* keep the last poll */ }
+    }
+    const claimShot = await captureShot(cdp, ntpSession);
+    if (claimShot) await writeEvidence("claim-check-delegate.png", claimShot);
+    const claimBubbles = claimState?.bubbles ?? [];
+    console.log(`claim-check journey: ${JSON.stringify(claimState).slice(0, 1200)}`);
+    check(
+      "Claim check: a failed delegate renders one correction and one final bubble",
+      claimBubbles.length === 1 &&
+        claimBubbles[0].includes("Delegation succeeded") &&
+        claimBubbles.filter((t) => t.includes("Correction: I claimed I delegated the task")).length === 1 &&
+        (claimState?.tools ?? []).length > 0 &&
+        (claimState?.tools ?? []).every((t) => t === "delegate_task:error") &&
+        !(claimState?.status ?? []).some((s) => ["queued", "running", "retrying"].includes(s)),
     );
 
     // ─────────────────────────────────────────────────────────────

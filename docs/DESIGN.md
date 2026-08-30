@@ -254,6 +254,27 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   answered — expired says so, and only a denial that never paused the run
   reopens grantable. Run-bound action approvals (script.run et al.) are never
   replayed as cards — their ids died with the run.
+- **A reply that claims an action it never performed is corrected in place**
+  (`extension/lib/mutation-claim-check.js`, applied in `agent.js` on both the
+  `done` progress event and the authoritative returned result). The prompt's
+  honesty clause is an instruction a model can ignore — gpt-4.1 answered "I have
+  saved that your favourite colour is green" with zero tool calls, and the demo
+  model reported "Delegation succeeded" over a `delegate_task` card that read
+  `error`. So the turn's final text is checked, at runtime, against the set of
+  mutating tools that ACTUALLY succeeded in that turn (real tool names, after
+  the lazy-envelope unwrap). Eleven claim kinds are covered: creating, updating,
+  deleting and scheduling a named agent; opening, navigating and closing a tab
+  or window; saving to memory; taking a screenshot; downloading a file; and
+  delegating a task. An unbacked claim gets a visible line appended as TEXT —
+  "⚠️ Correction: I claimed I …, but no successful tool call did that in this
+  turn — no such change was made." The module is pure (no DOM, no imports) and
+  the self-claim guard is deliberately narrow: a negation ("I haven't opened
+  it"), a third-party subject ("Chrome downloaded the file") and a subordinate
+  clause are not claims. The correction lands IN the reply's own bubble rather
+  than beside it, and the turn's final text is painted exactly ONCE — a
+  continuation step that re-emits the same text settles the streaming row but
+  never appends a duplicate (the reported baseline showed the identical bubble
+  twelve times for one delegation).
 
 ## Artifact diff (`<artifact-diff>`)
 - One element in `extension/shared/components.js` renders what changed between
