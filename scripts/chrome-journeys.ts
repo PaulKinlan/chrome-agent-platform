@@ -513,6 +513,7 @@ const EXPECTED = [
   "Browser control: toggle ON in Settings leaves no lease",
   "Browser control: a run's open_tab is not lease-refused after the Settings toggle",
   "Privileged URL: open_tab chrome://settings is refused under a global grant",
+  "Side panel: open_side_panel is absent from the model toolset",
   "screenshot: typed the red origin into the allowed-origins field",
   "screenshot: grant scoped to the red origin via the UI",
   "screenshot: UI-granted capture SUCCEEDS for the scoped origin",
@@ -2679,6 +2680,30 @@ async function main() {
       privilegedOpen?.ok !== true &&
         privilegedOpen?.error === "only http(s) destinations are allowed" &&
         privilegedTargets.length === 0,
+    );
+    // CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01: `open_side_panel` is REMOVED.
+    // chrome.sidePanel.open() needs a user gesture the service worker does not
+    // have, so every model call returned a gesture error while the description
+    // promised the panel would open. Driven through the SAME executor the agent
+    // loop uses, the name must now resolve to nothing at all — while the side
+    // panel tools that need no gesture stay reachable (the panel surface itself
+    // is untouched; only the model's fake door is gone).
+    const cutSidePanel = await msgValue({
+      type: "agent-worker.tool",
+      toolName: "open_side_panel",
+      args: { url: `${RED_ORIGIN}/` },
+    });
+    const keptSidePanel = await msgValue({
+      type: "agent-worker.tool",
+      toolName: "get_side_panel_options",
+      args: {},
+    });
+    check(
+      "Side panel: open_side_panel is absent from the model toolset",
+      cutSidePanel?.ok === false &&
+        cutSidePanel?.error === "unknown tool: open_side_panel" &&
+        keptSidePanel !== undefined &&
+        keptSidePanel?.error !== "unknown tool: get_side_panel_options",
     );
     // Type the red origin into the allowed-origins field (a genuine text edit).
     check(

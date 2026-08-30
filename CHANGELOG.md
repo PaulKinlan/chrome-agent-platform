@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.485] — 2026-08-30
+- The agent no longer offers to open the Chrome side panel: that action needs a click from you, so the tool always failed. Opening the panel from the toolbar or the keyboard shortcut is unchanged.
+
 ## [0.2.484] — 2026-08-30
 - Five more fixes are in progress in parallel and recorded as claimed in the tracker.
 

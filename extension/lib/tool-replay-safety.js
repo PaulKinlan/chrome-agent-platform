@@ -168,7 +168,7 @@ export function replaySafetyForTool(toolName) {
 // from "page-owned unknown". Everything else is unknown.
 const BUILT_IN_TOOLS = new Set([
   "read_page", "capture_screenshot", "list_tabs", "recent_browser_events",
-  "close_tab", "navigate_tab", "open_tab", "open_side_panel", "schedule_task",
+  "close_tab", "navigate_tab", "open_tab", "schedule_task",
   // Tranche-1 Chrome API coverage (reads are classified above; ALL are built-ins):
   "list_windows", "get_action_state", "list_commands",
   "create_window", "focus_window", "close_window", "move_window", "set_action_state",

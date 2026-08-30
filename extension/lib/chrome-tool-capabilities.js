@@ -5,9 +5,9 @@
 // dispatcher, validator, provider binding, or execution allowlist.
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
-  browserTools: 126,
+  browserTools: 125,
   managementTools: 41,
-  totalTools: 167,
+  totalTools: 166,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -16,7 +16,6 @@ export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
 });
 
 export const BROWSER_TOOL_NAMES = Object.freeze([
-  "open_side_panel",
   "open_tab",
   "navigate_tab",
   "read_page",
@@ -189,7 +188,6 @@ export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
 ]);
 
 export const FLAGGED_FOR_LATER_PROVIDER_CUTOVER = Object.freeze([
-  "open_side_panel",
   "capture_screenshot",
   "schedule_task",
   "run_script",
@@ -234,7 +232,6 @@ function record(toolName, sourceKind, capabilityTokens, optionalPermissions,
 }
 
 const rows = [
-  record("open_side_panel", "chrome-api", ["chrome.side-panel.open"], ["sidePanel"], "owner-gesture-activeTab", "mutating", true, "mutating", "browser.side-panel"),
   record("open_tab", "chrome-api", ["chrome.tabs.open.destination-origin"], ["tabs"], "destination-origin", "mutating", false, "mutating", "browser.tabs"),
   record("navigate_tab", "chrome-api", ["chrome.tabs.navigate.destination-origin"], ["tabs"], "destination-origin", "mutating", false, "mutating", "browser.tabs"),
   record("read_page", "chrome-api", ["chrome.host.exact-origin", "chrome.page.read"], ["activeTab", "scripting", "tabs"], "none", "read-only", false, "read", "browser.page"),

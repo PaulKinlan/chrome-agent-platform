@@ -5710,8 +5710,11 @@ const handlers = mergeRouteMaps(
   },
 
   // ---- side-panel driven-page surface ----
-  // The agent's open_side_panel tool stores a target URL; the side panel reads it
-  // here on load and then discovers the origin's enrolled WebMCP tools. These are
+  // An owner-driven entry point may store a target URL; the side panel reads it
+  // here on load and then discovers the origin's enrolled WebMCP tools. (The
+  // agent-facing `open_side_panel` tool was removed 2026-08-30 —
+  // CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01 — because chrome.sidePanel.open()
+  // needs a user gesture the service worker does not have.) These are
   // the panel's live status/control read of the driven page (the actual page
   // driving happens in the real tab via the content-script bridge).
   async "sidepanel.getTarget"() {

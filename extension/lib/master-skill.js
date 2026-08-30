@@ -94,7 +94,7 @@ list_tools("browser")). The areas, and what each unlocks:
 - Tabs & windows: open_tab, navigate_tab, reload_tab, duplicate_tab,
   discard_tab, tab_go_back/forward, set_tab_pinned, set_tab_zoom, move_tab,
   close_tab, create/close/focus/move_window, list_tabs, list_windows,
-  restore_closed, open_side_panel — drive real tabs and windows.
+  restore_closed — drive real tabs and windows.
 - Tab groups: group_tabs, ungroup_tabs, move_tab_to_group, update_tab_group,
   list_tab_groups — organise tabs into colour-coded named groups.
 - Read & capture: read_page (structured page text), capture_screenshot,

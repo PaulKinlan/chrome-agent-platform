@@ -295,7 +295,7 @@ function permissionDenial(error, { reason, permissions = [], grantOrigins = [], 
 
 // ── CAP-FB-20260830-PRIVILEGED-URL-BLOCK-01: destination scheme guard ──
 /** Every browser mutation that takes a DESTINATION url (open_tab, navigate_tab,
- * create_window, open_side_panel) runs this BEFORE any permission or grant
+ * create_window) runs this BEFORE any permission or grant
  * check. `canonicalOrigin` RETURNS null for non-web schemes (memory keying
  * must never treat chrome:/file:/about: as a storage boundary), and a global
  * browser-control grant authorizes a null origin — so without this guard the
@@ -1340,44 +1340,15 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
   // never drive a browser mutation (open/navigate/close a tab) or a durable
   // schedule. When readOnly, expose only the READ tools (read_page,
   // capture_screenshot, list_tabs, recent_browser_events).
+  // REMOVED 2026-08-30 (CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01, owner decision):
+  // `open_side_panel`. `chrome.sidePanel.open()` requires a user gesture and
+  // this toolset runs in the service worker with none, so every model call
+  // failed with "sidePanel.open() may only be called in response to a user
+  // gesture" while the tool description promised the panel would open. The
+  // owner's own paths into the panel (the action click, the keyboard command)
+  // are unaffected, and the `sidePanel` capability stays grantable in Settings.
+  // The removal guard lives in tests/chrome-tools-t12.test.ts.
   const all = {
-    open_side_panel: tool({
-      description:
-        "Open the Chrome side panel and load a page in it so you can watch and act on that page (its WebMCP tools are discovered via the content bridge). Requires the sidePanel permission.",
-      inputSchema: z.object({ url: z.string().url() }),
-      execute: async ({ url }) => {
-        // Scheme guard FIRST (see webDestination): the panel loads a web page.
-        const dest = webDestination(url);
-        if (dest.error) return { error: dest.error };
-        if (!(await hasSidePanelPermission())) {
-          return permissionDeniedResult("sidePanel", { reason: `open ${url} in the side panel` });
-        }
-        // Get the active tab so the panel is bound to it (chrome.sidePanel is
-        // per-tab). The panel reads the target URL on load (sidepanel.getTarget).
-        const active = (
-          await chrome.tabs.query({ active: true, currentWindow: true })
-        )[0];
-        if (!active?.id) return { error: "no active tab to bind the side panel" };
-        try {
-          await assertRunOwned();
-        } catch {
-          return { error: "run aborted — side panel not opened" };
-        }
-        // Store the target URL for the panel to load, then open the panel.
-        await kvSet({ "cap:sidepanelTarget": url });
-        try {
-          await chrome.sidePanel.setOptions({
-            tabId: active.id,
-            path: "sidepanel/sidepanel.html",
-            enabled: true,
-          });
-          await chrome.sidePanel.open({ tabId: active.id });
-        } catch (e) {
-          return { error: `side panel could not open: ${e?.message ?? e}` };
-        }
-        return { ok: true, url };
-      },
-    }),
     open_tab: tool({
       description:
         "Open a URL in a new browser tab. Requires browser-control permission (scoped + expiring).",

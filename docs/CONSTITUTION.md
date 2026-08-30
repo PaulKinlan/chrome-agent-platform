@@ -27,8 +27,7 @@ alarms) and acts on untrusted page content + model output. Threat vectors:
   explicit, scoped user grant (per-task or per-origin, not a permanent global).
   Read/list are ungated.
 - **Browser mutations accept http(s) destinations only** — every tool that takes
-  a destination URL (`open_tab`, `navigate_tab`, `create_window`,
-  `open_side_panel`) refuses `chrome:`, `chrome-extension:`, `file:`, `about:`,
+  a destination URL (`open_tab`, `navigate_tab`, `create_window`) refuses `chrome:`, `chrome-extension:`, `file:`, `about:`,
   `javascript:`, `data:`, `blob:` and `view-source:` BEFORE any permission or
   grant check, with the plain error "only http(s) destinations are allowed"
   (`webDestination` in `extension/lib/browser-tools.js`). A global grant never
