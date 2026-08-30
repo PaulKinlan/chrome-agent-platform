@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.450] — 2026-08-30
+- Tracker: the untrusted-content fence is recorded as landed.
+
 ## [0.2.449] — 2026-08-30
 - Landed: text the agent reads from a web page or a site's tools is now clearly marked as untrusted data before the model sees it, so instructions hidden in a page are treated as content, not commands.
 
