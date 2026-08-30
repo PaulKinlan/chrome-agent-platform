@@ -65,22 +65,30 @@ Deno.test("renderDelta: newest LAST is implemented (oldest first, newest final l
   assertEquals(entryLines.map((l) => l.slice(2, 9)), ["0.2.479", "0.2.480", "0.2.483", "0.2.484"]);
 });
 
-Deno.test("renderDelta: bounded keeps the NEWEST entries, note FIRST then oldest→newest (exact rendering)", () => {
+Deno.test("renderDelta: bounded keeps the NEWEST entries, note FIRST then oldest→newest (exact full-string rendering)", () => {
   const parsed = parseChangelog(SAMPLE);
   const delta = deltaBetween(parsed, null, "0.2.484");
-  const rendered = renderDelta(delta, 2);
-  const lines = rendered.split("\n");
-  // Exact rendering contract: the older-cut note is the FIRST line, then the
-  // newest `limit` entries print oldest→newest.
-  assert(lines[0].startsWith("… 2 older entr"), `note must be first, got: ${lines[0]}`);
-  const entryLines = lines.filter((l) => l.startsWith("- 0.2."));
-  assertEquals(entryLines.map((l) => l.slice(2, 9)), ["0.2.483", "0.2.484"]);
-  // Full rendering with everything fitting: no note at all, all four ascending.
-  const full = renderDelta(delta).split("\n");
-  assert(!full[0].startsWith("… older"), `no note when everything fits, got: ${full[0]}`);
+  // EXACT final rendering for the bounded case: note first, then the newest
+  // `limit` entries oldest→newest, each entry its head + indented bullets.
   assertEquals(
-    full.filter((l) => l.startsWith("- 0.2.")).map((l) => l.slice(2, 9)),
-    ["0.2.479", "0.2.480", "0.2.483", "0.2.484"],
+    renderDelta(delta, 2),
+    "… 2 older entries — see CHANGELOG.md\n" +
+      "- 0.2.483 — 2026-08-30\n" +
+      "    Two smaller follow-up issues found during the parallel work are now written down as tasks.\n" +
+      "- 0.2.484 — 2026-08-30\n" +
+      "    Five more fixes are in progress in parallel and recorded as claimed in the tracker.",
+  );
+  // EXACT final rendering for the full case: no note, all four ascending.
+  assertEquals(
+    renderDelta(delta),
+    "- 0.2.479 — 2026-08-30\n" +
+      "    Tracker: the thread run-state view is recorded as landed.\n" +
+      "- 0.2.480 — 2026-08-30\n" +
+      "    Housekeeping: two parallel work streams reconciled.\n" +
+      "- 0.2.483 — 2026-08-30\n" +
+      "    Two smaller follow-up issues found during the parallel work are now written down as tasks.\n" +
+      "- 0.2.484 — 2026-08-30\n" +
+      "    Five more fixes are in progress in parallel and recorded as claimed in the tracker.",
   );
 });
 
@@ -126,6 +134,30 @@ Deno.test("deltaBetween/renderDelta: malformed null entries and junk bullets nev
   // No-throw smoke for degenerate single entries.
   assertEquals(renderDelta([{ version: "0.2.999" }]), "- 0.2.999 —");
   assertEquals(renderDelta([{ bullets: [1, 2] }]), ""); // no version/title → empty head skipped by filter
+});
+
+Deno.test("renderDelta: invalid string versions are SKIPPED, never rendered (r3 blocker 2)", () => {
+  // Invalid string versions must be dropped exactly like deltaBetween drops
+  // them — they must never appear in the rendered output.
+  const junkVersions = [
+    { version: "abc", title: "bad", bullets: [] },
+    { version: "not-a-version", title: "bad", bullets: [] },
+    { version: "1.2", title: "too short", bullets: [] },
+    { version: "v1.2.3", title: "prefixed", bullets: [] },
+    { version: "", title: "empty", bullets: [] },
+  ];
+  const rendered = renderDelta(junkVersions, 10);
+  assertEquals(rendered, ""); // ALL junk dropped → nothing to render
+  // Mixed valid + junk: only the valid entry renders.
+  const mixed = [
+    { version: "abc", title: "bad" },
+    { version: "0.2.500", title: "good", bullets: ["real"] },
+    { version: "1.2", title: "short" },
+  ];
+  assertEquals(
+    renderDelta(mixed, 10),
+    "- 0.2.500 — good\n    real",
+  );
 });
 
 Deno.test("parseChangelog: null lines and non-string fragments never throw", () => {

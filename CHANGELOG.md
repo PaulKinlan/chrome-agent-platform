@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.491] — 2026-08-30
+- Skip invalid string versions in renderDelta and pin the exact rendered output
+
 ## [0.2.490] — 2026-08-30
 - tasks: record the r2 review-fix candidate sha
 

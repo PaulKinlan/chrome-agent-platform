@@ -91,11 +91,12 @@ export function deltaBetween(parsed, previousVersion, currentVersion) {
  */
 export function renderDelta(entries, limit = DEFAULT_DELTA_LIMIT) {
   if (!Array.isArray(entries) || entries.length === 0) return "";
-  // Skip junk entries entirely (consistent with deltaBetween's version gate):
-  // only objects with a string version render; everything else is dropped so
-  // no parse/render path ever throws on malformed input.
+  // Skip junk entries entirely (consistently with deltaBetween's version
+  // gate): only objects whose version passes isValidVersion render; invalid
+  // string versions ("abc", "not-a-version"), non-strings, nulls and
+  // non-objects are dropped so no parse/render path throws or prints junk.
   const clean = entries.filter(
-    (e) => e && typeof e === "object" && typeof e.version === "string",
+    (e) => e && typeof e === "object" && isValidVersion(e.version),
   );
   const total = clean.length;
   if (total === 0) return "";
