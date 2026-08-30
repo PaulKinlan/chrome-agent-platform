@@ -48,7 +48,8 @@ export function parseChangelog(md) {
   const lines = String(md ?? "").split(/\r?\n/u);
   let current = null;
   for (const raw of lines) {
-    const line = raw.trimEnd();
+    if (raw == null) continue; // never throw on malformed/null lines
+    const line = String(raw).trimEnd();
     const header = line.match(/^##\s*\[([0-9]+\.[0-9]+\.[0-9]+)\]\s*(?:—|-)?\s*(.*)$/u);
     if (header) {
       current = { version: header[1], title: header[2].trim(), bullets: [] };
@@ -69,7 +70,7 @@ export function parseChangelog(md) {
 export function deltaBetween(parsed, previousVersion, currentVersion) {
   const out = [];
   for (const entry of parsed) {
-    if (!isValidVersion(entry.version)) continue;
+    if (!entry || typeof entry !== "object" || !isValidVersion(entry.version)) continue;
     const c = compareVersions(entry.version, currentVersion);
     if (c > 0) continue; // newer than current (future/unknown)
     if (previousVersion && isValidVersion(previousVersion)) {
@@ -82,13 +83,20 @@ export function deltaBetween(parsed, previousVersion, currentVersion) {
 
 /**
  * Render the delta as printable lines, newest LAST (a build reads top-down,
- * so the most recent change is what you just built). Bounded: the newest
- * `limit` entries in full, then a "… N more" note.
+ * so the most recent change is what you just built — it lands at the bottom).
+ * The input arrives newest-first (deltaBetween file order); this reverses to
+ * oldest→newest so the newest entry is the FINAL line. Bounded: the newest
+ * `limit` entries print in full, older ones collapse into a "… N older
+ * entr(ies)" note.
  */
 export function renderDelta(entries, limit = DEFAULT_DELTA_LIMIT) {
   if (!Array.isArray(entries) || entries.length === 0) return "";
-  const total = entries.length;
-  const shown = entries.slice(0, limit);
+  const clean = entries.filter((e) => e && typeof e === "object");
+  const total = clean.length;
+  if (total === 0) return "";
+  // Input is newest-first; slice the NEWEST `limit`, then reverse so the
+  // oldest of the shown set prints first and the newest prints LAST.
+  const shown = clean.slice(0, limit).reverse();
   const lines = [];
   for (const entry of shown) {
     const head = `- ${entry.version} — ${entry.title}`.trim();
@@ -100,10 +108,21 @@ export function renderDelta(entries, limit = DEFAULT_DELTA_LIMIT) {
       lines.push(`    … ${entry.bullets.length - 8} more bullet(s)`);
     }
   }
-  if (total > limit) {
-    lines.push(`… ${total - limit} more entr${total - limit === 1 ? "y" : "ies"} — see CHANGELOG.md`);
+  const older = total - shown.length;
+  if (older > 0) {
+    lines.push(`… ${older} older entr${older === 1 ? "y" : "ies"} — see CHANGELOG.md`);
   }
   return lines.join("\n");
+}
+
+/**
+ * Pure decision seam for the build record: the version may only be recorded
+ * after EVERY fatal step (staging cleanup + lock release) completed without
+ * setting a non-zero exit code. Exported so the unit tests pin the
+ * "no record on late fatal failure" rule without invoking a real build.
+ */
+export function shouldRecordBuild({ buildSucceeded = false, exitCode = 0 } = {}) {
+  return buildSucceeded === true && (Number(exitCode) || 0) === 0;
 }
 
 /** Read the recorded previous build version; null when absent/unreadable. */
