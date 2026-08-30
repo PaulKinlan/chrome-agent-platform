@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.419] — 2026-08-30
+- Correct the WebMCP permissions acceptance
+
 ## [0.2.418] — 2026-08-30
 - Refresh the permissions journey evidence
 

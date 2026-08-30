@@ -28,7 +28,7 @@
 //   9. screenshots + a machine-verifiable manifest (test-artifacts/ by
 //      default, or WEBMCP_ARTIFACT_DIR for exact-clean-commit external evidence).
 //
-// THE PERMISSION GESTURE. Headless Chromium auto-denies optional HOST
+// THE PERMISSION GESTURE. Headless Chromium auto-denies prompted optional
 // permissions (probed 2026-08-18: real click + --enable-automation both deny),
 // and this environment has no display/Xvfb, so the OS-level "Allow" click
 // cannot be automated here. Two modes:
@@ -37,8 +37,8 @@
 //   deno run -A scripts/webmcp-acceptance.ts --headed   # the executable MANUAL MACRO
 //
 // Automated mode loads a TEST VARIANT of the extension that is byte-identical
-// to the shipped one EXCEPT the manifest pre-holds scripting+tabs+the fixture
-// host permission (recorded in the manifest as
+// to the shipped one EXCEPT the manifest pre-holds scripting+tabs. Shipped
+// <all_urls> host access remains unchanged (recorded in the manifest as
 // permissionGrant:"test-manifest-pregranted"); the overall status stays OPEN
 // because the real permission-prompt gesture is unattested.
 //
@@ -74,7 +74,7 @@ function launchFixture() {
 }
 
 // The TEST VARIANT: byte-identical extension except the manifest pre-holds the
-// permissions the headed flow requests via the real prompt.
+// API permissions exercised by the headed flow. Shipped host access is unchanged.
 async function makeVariant() {
   const dir = `/tmp/cap-webmcp-variant-${Date.now()}`;
   await Deno.mkdir(dir, { recursive: true });
@@ -82,7 +82,6 @@ async function makeVariant() {
   await cp.status;
   const mf = JSON.parse(await Deno.readTextFile(`${dir}/manifest.json`));
   mf.permissions = ["scripting", "tabs"];
-  mf.host_permissions = [`${PAGE_ORIGIN}/*`];
   await Deno.writeTextFile(`${dir}/manifest.json`, JSON.stringify(mf, null, 2) + "\n");
   return dir;
 }
@@ -236,7 +235,7 @@ async function main() {
     const discoverClicked = await clickSelector(ns, `document.getElementById("discover-page")`);
     check("hub: clicked Discover this page via a real click", discoverClicked);
     if (HEADED) {
-      console.log("\n=== MANUAL STEP 1 of 2: a Chrome permission prompt is showing — click ALLOW (tabs). ===\n");
+      console.log("\n=== MANUAL STEP 1 of 1: a Chrome permission prompt is showing — click ALLOW (tabs). ===\n");
       const granted = await until(() => evalIn(sws, `chrome.permissions.contains({ permissions: ["tabs"] })`), 180000, 500);
       check("manual macro: the tabs permission was granted via the real prompt", granted === true);
     }
@@ -251,8 +250,13 @@ async function main() {
     check("hub: the tab picker lists the fixture tab (explicit tab identity)", pickerHasFixture === true);
     await screenshot(ns, "webmcp-acceptance-tab-picker.png");
 
-    // 6. Pick the fixture tab (real click on the row's action) — this requests
-    //    the origin host permission (headed: the second manual prompt).
+    // 6. Pick the fixture tab (real click on the row's action). Host access is
+    //    permanently install-granted; only the scripting capability is requested.
+    const permanentHostAccess = await evalIn(sws, `Promise.all([
+      chrome.runtime.getManifest().host_permissions?.includes("<all_urls>") === true,
+      chrome.permissions.contains({ origins: ["${PAGE_ORIGIN}/*"] }),
+    ]).then(([declared, granted]) => declared && granted)`);
+    check("host access: <all_urls> is install-granted and covers the fixture page", permanentHostAccess === true);
     const rowClicked = await clickSelector(ns, `(() => {
       const dlg = document.querySelector("agent-dialog");
       const rows = [...dlg.querySelectorAll("capability-row")];
@@ -260,11 +264,11 @@ async function main() {
       return row?.shadowRoot?.querySelector("button.run") ?? null;
     })()`);
     check("hub: picked the fixture tab in the picker via a real click", rowClicked);
-    if (HEADED) {
-      console.log("\n=== MANUAL STEP 2 of 2: a Chrome permission prompt is showing — click ALLOW (host access for 127.0.0.1). ===\n");
-      const granted = await until(() => evalIn(sws, `chrome.permissions.contains({ origins: ["${PAGE_ORIGIN}/*"] })`), 180000, 500);
-      check("manual macro: the host permission was granted via the real prompt", granted === true);
-    }
+    const scriptingGranted = await until(
+      () => evalIn(sws, `chrome.permissions.contains({ permissions: ["scripting"] })`),
+      8000,
+    );
+    check("picker: scripting permission granted from the real click", scriptingGranted === true);
 
     // 7. Enrollment + injection of the EXACT picked tab.
     const enrolled = await until(async () => {
@@ -449,10 +453,10 @@ async function main() {
     permissionGrant: HEADED ? "manual-user-allow" : "test-manifest-pregranted",
     overallStatus: HEADED
       ? (fail === 0 ? "ATTESTED" : "FAILED")
-      : "OPEN — the OS-level permission-prompt gesture is unattested in this environment (headless auto-denies optional host permissions; no display/Xvfb). Run with --headed to complete the attestation.",
+      : "OPEN — the OS-level permission-prompt gesture is unattested in this environment (headless auto-denies prompted optional permissions; no display/Xvfb). Run with --headed to complete the attestation.",
     variantNote: HEADED
       ? "the SHIPPED extension was driven"
-      : "the loaded extension is byte-identical to the shipped one EXCEPT manifest.json pre-holds scripting+tabs+the fixture host permission (the headed flow's real prompt grants exactly these)",
+      : "the loaded extension is byte-identical to the shipped one EXCEPT manifest.json pre-holds scripting+tabs; shipped <all_urls> host access is unchanged",
     passed: pass,
     failed: fail,
     checks,

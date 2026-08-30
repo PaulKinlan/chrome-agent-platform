@@ -11,11 +11,12 @@ re-enrollment singleton and reload + cross-document navigation re-sync.
 
 ## Why a manual step exists
 
-Headless Chromium **auto-denies optional host permissions** (probed
-2026-08-18: a real Input click on Enroll and `--enable-automation` both return
+Headless Chromium **auto-denies prompted optional permissions** (probed
+2026-08-18: a real Input click and `--enable-automation` both return
 `granted: false`), and CI here has no display/Xvfb. The OS-level "Allow" click
-on Chrome's permission bubble is browser chrome — not automatable via CDP.
-Everything before and after that one gesture is fully automated.
+on Chrome's tabs permission bubble is browser chrome — not automatable via CDP.
+The shipped manifest permanently grants `<all_urls>` host access, so no host
+prompt exists. Everything before and after the tabs gesture is fully automated.
 
 ## Running the macro (headed)
 
@@ -26,14 +27,16 @@ Prerequisite: a machine with a display (`$DISPLAY` set) and Chromium at
 deno run -A scripts/webmcp-acceptance.ts --headed
 ```
 
-The script drives the real UI and pauses twice, printing each step:
+The script drives the real UI and pauses once:
 
-1. **MANUAL STEP 1 of 2** — after the real click on "Discover this page",
+1. **MANUAL STEP 1 of 1** — after the real click on "Discover this page",
    Chrome shows the **tabs** permission prompt. Click **Allow**.
    (The script polls `chrome.permissions.contains` until the grant lands.)
-2. **MANUAL STEP 2 of 2** — after picking the fixture tab in the picker,
-   Chrome shows the **host permission** prompt for `http://127.0.0.1:8934`.
-   Click **Allow**.
+
+Before the fixture tab is picked, the script separately asserts that the
+manifest's install-granted `<all_urls>` access covers the fixture origin. The
+picker's real click requests the optional scripting capability without making
+an impossible host-prompt claim.
 
 Every other assertion runs unattended: exact-tab injection, scriptParsed URLs
 for `content/main-world.js` + `content/content-script.js`, console lifecycle
@@ -54,11 +57,11 @@ WEBMCP_ARTIFACT_DIR=/tmp/webmcp-evidence-$(git rev-parse --short HEAD) \
 Writing outside the repository keeps the post-commit worktree clean, allowing
 the manifest's `testedSourceCommit` + empty `worktreeDirtyFiles` to identify the
 exact tested bytes. Loads a **test variant** of the extension that is byte-identical to the shipped
-one EXCEPT `manifest.json` pre-holds `scripting` + `tabs` + the fixture host
-permission (exactly the set the headed flow's prompts grant). Every check runs
-for real; the manifest records `permissionGrant: "test-manifest-pregranted"`
-and `overallStatus: OPEN` — the permission-prompt gesture itself remains
-unattested until a headed run completes the two manual steps above.
+one EXCEPT `manifest.json` pre-holds `scripting` + `tabs`; the shipped
+`<all_urls>` host access is unchanged. Every check runs for real; the manifest
+records `permissionGrant: "test-manifest-pregranted"` and `overallStatus: OPEN`
+— the tabs permission-prompt gesture itself remains unattested until a headed
+run completes the single manual step above.
 
 ## Trust boundary
 
