@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.478] — 2026-08-30
+- Tracker: the thread view work records its verification runs, and a stale internal check that disagreed with the component gallery sync is written up.
+
 ## [0.2.477] — 2026-08-30
 - The thread view: the conversation is now as tall as its content with the composer docked at the bottom of the window, assistant replies carry the agent's avatar, name and the time, a "Working — …" row says what the agent is doing while it runs, new replies scroll into view unless you have scrolled up to read, and a page the agent builds is titled with the page's own name.
 
