@@ -23,6 +23,8 @@ Deno.test("local file attachments: text detection and UTF-8 data URLs are bounde
   const url = textToDataUrl("héllo", "text/plain");
   assert(url.startsWith("data:text/plain;charset=utf-8;base64,"));
   assertEquals(new TextDecoder().decode(Uint8Array.from(atob(url.split(",")[1]), (c) => c.charCodeAt(0))), "héllo");
+});
+
 Deno.test("attachmentContext preserves UTF-8 text in agent-facing context", () => {
   const text = "Report body ✓";
   const bytes = new TextEncoder().encode(text);

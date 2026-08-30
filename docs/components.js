@@ -34,13 +34,13 @@ import { safeParseOnce, buildTree, subtreeJson, safeJsonStringify } from "./tool
 // SW write path): activity journals may predate write-path redaction, so the
 // explorer redacts again at render AND the tree/copy paths only ever see the
 // redacted value.
-import { redactSecrets } from "../lib/pure.js";
-import { describeToolCall, redactToolResult } from "../lib/tool-summary.js";
+import { redactSecrets } from "./pure.js";
+import { describeToolCall, redactToolResult } from "./tool-summary.js";
 import {
   isTextLikeAttachment,
   MAX_LOCAL_TEXT_BYTES,
   textToDataUrl,
-} from "../lib/attachments.js";
+} from "./attachments.js";
 
 const ARIA_HIDDEN = "aria-hidden";
 const TRUE = ""; // boolean-attribute present marker

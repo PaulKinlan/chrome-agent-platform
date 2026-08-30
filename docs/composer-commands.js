@@ -39,6 +39,13 @@ export const COMMAND_NAMESPACES = Object.freeze([
     direct: true,
   },
   {
+    id: "files",
+    label: "files",
+    description: "attach a file from a granted folder",
+    kind: "files",
+    localFiles: true,
+  },
+  {
     id: "remember",
     label: "remember",
     description: "write something to memory",
@@ -98,6 +105,42 @@ export async function loadComposerCommandItems(
     }
     case "agent":
       return [];
+    case "files": {
+      const res = runtimeSend
+        ? await runtimeSend("fs-grant.search", { query: arg, limit: 50 }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }))
+        : { ok: false, error: "extension runtime unavailable" };
+      const rows = [];
+      for (const issue of (res.permissionIssues || [])) {
+        rows.push({
+          id: `files-settings:${issue.grantId}`,
+          label: clean(issue.name || "Granted folder", 256),
+          description: issue.status === "prompt" ? "needs access again — open Settings" : "access denied — forget and add again in Settings",
+          recovery: issue.status === "prompt"
+            ? `Open Settings → Local folders and choose Re-grant access for ${issue.name}.`
+            : `Open Settings → Local folders, forget ${issue.name}, then add it again.`,
+          kind: "files-action",
+        });
+      }
+      for (const file of (res.files || [])) {
+        rows.push({
+          id: `files:${file.grantId}:${file.relativePath}`,
+          label: clean(file.name, 256),
+          description: clean(`${file.folderName} / ${file.relativePath}`, 512),
+          kind: "local-file",
+          ...file,
+        });
+      }
+      if (!rows.length) {
+        rows.push({
+          id: "files-settings",
+          label: res.ok === false ? "Local files unavailable" : "No matching files",
+          description: res.ok === false ? `${clean(res.error || "search failed")} — open Settings` : "Grant a folder or change the search — Settings → Local folders",
+          recovery: "Open Settings → Local folders and choose Add folder.",
+          kind: "files-action",
+        });
+      }
+      return rows.slice(0, 50);
+    }
     case "tabs": {
       const tabs = await chromeApi?.tabs?.query?.({}) ?? [];
       return tabs
