@@ -914,6 +914,12 @@ export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCa
     "board.list": guarded(async ({ status }) => {
       return { ok: true, jobs: await board.listJobs({ status: typeof status === "string" ? status : null }) };
     }),
+    // Read-side message feed (the hub's Jobs panel + the sidebar grouping).
+    // Bounded like the store (limit clamps to [1, 50]); most-recent-first.
+    "board.messages": guarded(async ({ limit }) => {
+      const n = Number.isFinite(limit) ? Math.max(1, Math.min(50, Math.floor(limit))) : 50;
+      return { ok: true, messages: await board.listMessages({ limit: n }) };
+    }),
     "board.read": guarded(async ({ jobId }) => {
       const job = await board.getJob(jobId);
       return job ? { ok: true, job } : { ok: false, error: "no such job" };

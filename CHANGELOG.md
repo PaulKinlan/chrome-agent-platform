@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.427] — 2026-08-30
+- Jobs panel on the hub: the shared agent board is visible — open, settled, and messages, live across worker restarts
+
 ## [0.2.426] — 2026-08-30
 - merge: WebMCP acceptance green lane (0c9783c8) — detector registration restored, JIT scripting at discover, fresh-profile picker proof
 
