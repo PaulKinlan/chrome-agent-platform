@@ -4425,7 +4425,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Workspace: /home/paulkinlan/worktrees/cap-build-changelog
 - Branch: cap-build-changelog
 - Base: `29c34a46`
-- Candidate: `d66e2f13`
+- Candidate: `ca2a87d1` (review-fix round)
 - Shipping: —
 - Acceptance: `npm run build` prints the entries between the previously-built version and the current one; first build prints a one-line notice; previous == current is silent; never fails the build.
   - Context: build.mjs publishes extension/dist atomically with a dist.complete marker; the version lives in package.json (hook-bumped per commit); CHANGELOG.md is `## [x.y.z] — title` sections newest-first with `- bullet` lines; extension/CHANGELOG.md must stay byte-identical to root.

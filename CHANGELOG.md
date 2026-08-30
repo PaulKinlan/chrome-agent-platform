@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.488] — 2026-08-30
+- tasks: record the review-fix candidate sha
+
 ## [0.2.487] — 2026-08-30
 - Fix review findings: newest-last delta, record after final fatal step, null-entry guards, changelog read warning
 
