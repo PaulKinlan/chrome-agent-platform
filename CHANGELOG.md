@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.422] — 2026-08-30
+- Board deny: fix the journey's options-page refresh (re-open, not reload — navigation breaks the CDP eval context); drop diagnostics
+
 ## [0.2.421] — 2026-08-30
 - Merge main (permissions-optional model) into the board deny lane
 

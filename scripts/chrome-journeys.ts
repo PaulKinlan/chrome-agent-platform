@@ -1104,10 +1104,16 @@ async function main() {
     );
 
     // The dropdowns populate at page init — the two agents were created after
-    // the options page first loaded, so reload it (the product pattern: the
-    // options page does not live-update on SW-side changes).
-    await evalOpts("location.reload(); true");
+    // the options page first loaded, so RE-OPEN the options page (the
+    // established pattern: the options page does not live-update on SW-side
+    // changes; location.reload() silently breaks the CDP eval context).
+    const bdOptsPage = await openPage(
+      port, `chrome-extension://${extId}/options/options.html`,
+    );
     await sleep(2000);
+    optsSession = await attachRuntime(cdp, bdOptsPage.id);
+    cdp.pageSessions.add(optsSession);
+    evalOpts = (expression) => evalIn(cdp, optsSession, expression);
 
     check(
       "board deny: Board permissions section opens from the nav",
