@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.502] — 2026-08-30
+- merge: Build changelog lane (c6a32115) — npm run build prints the changelog delta since the previous build
+
 ## [0.2.501] — 2026-08-30
 - Housekeeping: a task entry was completed to the required shape so the tracker check passes.
 
