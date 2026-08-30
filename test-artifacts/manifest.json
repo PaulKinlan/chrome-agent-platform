@@ -1,11 +1,11 @@
 {
-  "testedSourceCommit": "973767c3a0437c357a54da8092e7e258a7cce62a",
+  "testedSourceCommit": "7a7d22115310ce711a74e82c1c5f2516e603231c",
   "evidenceCommitNote": "committed AFTER this run — a tracked manifest cannot contain its own commit hash",
   "worktreeClean": true,
   "worktreeDirtyFiles": [],
-  "runId": "cap-1788077053518",
+  "runId": "cap-1788077232064",
   "retain": true,
-  "ts": "2026-08-30T08:05:12.436Z",
+  "ts": "2026-08-30T08:08:13.131Z",
   "evidenceDir": "/home/paulkinlan/worktrees/cap-jobs-board-ui/test-artifacts",
   "passed": 148,
   "failed": 0,
@@ -611,18 +611,18 @@
     },
     {
       "name": "ntp-jobs-empty.png",
-      "sha256": "ee6824f17a72a9aa1a6880d8d383a5a2417f469187c827bf4c1777ba1fb5bd5a",
-      "bytes": 140505
+      "sha256": "341c155a574464823646d3f2cd11049020f8bad4b7c9993caba272453902fd96",
+      "bytes": 249920
     },
     {
       "name": "ntp-jobs-populated.png",
-      "sha256": "d7078894568c297a1361cd284c732077d489c5fd1167281a7f5d86bb44b04e5b",
-      "bytes": 146580
+      "sha256": "e655482955c57f6faa36e61b6c374c87e5d8a84d853372d9235c5e8431593773",
+      "bytes": 268237
     },
     {
       "name": "ntp-jobs-settled.png",
-      "sha256": "9e621f2501aa6e22e9b573473bcd426d4f771a5c456c5b8626c59703d609ecc4",
-      "bytes": 144579
+      "sha256": "19fd48caedffd8f5668c2fa0d73c14dd4d12ed4e299ec47f9c31afa1f9cf802a",
+      "bytes": 271339
     },
     {
       "name": "board-deny-added.png",
@@ -631,23 +631,23 @@
     },
     {
       "name": "options-driven.png",
-      "sha256": "c68d89b9e31d475983f0ff1fcd8766d9eb2a0484827e7c1abf95c66feb15f0b5",
-      "bytes": 258514
+      "sha256": "88deae37dd129dfb4077cfc4d616590ccace97ac3c42a4e1817bdbc6b76d9a1e",
+      "bytes": 258532
     },
     {
       "name": "approval-iframe-denied.png",
-      "sha256": "f1445ddaaeefa50363544696eb5c1bf2a7813360670ca033147fc49187f05731",
-      "bytes": 221686
+      "sha256": "8549e6dfff9814c69139f412b4a3f1f345639266de426d3421235af20c5ac99e",
+      "bytes": 221688
     },
     {
       "name": "approval-deny-pending.png",
-      "sha256": "604ad7171604e6b7c65a1fd5670849dcc21c0aaf129184d2a2a874a62ceb08cf",
-      "bytes": 234778
+      "sha256": "16fb875e25ed2a6d39f4f372f97daa32cc748d219657326c7a973ef7b1548cd5",
+      "bytes": 234776
     },
     {
       "name": "approval-deny-resolved.png",
-      "sha256": "604ad7171604e6b7c65a1fd5670849dcc21c0aaf129184d2a2a874a62ceb08cf",
-      "bytes": 234778
+      "sha256": "16fb875e25ed2a6d39f4f372f97daa32cc748d219657326c7a973ef7b1548cd5",
+      "bytes": 234776
     }
   ]
 }

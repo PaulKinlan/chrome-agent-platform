@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.430] — 2026-08-30
+- Jobs panel: retain the empty/populated/settled hub screenshots from the journey
+
 ## [0.2.429] — 2026-08-30
 - Jobs panel journey: return to the hub before the panel screenshots (the task journey leaves the thread view open)
 
