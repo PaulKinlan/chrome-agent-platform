@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.445] — 2026-08-30
+- Seven more fixes are in progress in parallel and recorded as claimed in the tracker.
+
 ## [0.2.444] — 2026-08-30
 - A test that left thousands of tiny temporary repositories behind now cleans up after itself.
 
