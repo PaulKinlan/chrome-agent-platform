@@ -1078,13 +1078,6 @@ async function main() {
     const revokeUnapproved = await msgOpts({ type: "capability.revoke", id: "storage" });
     check(
       "permissions: capability.revoke still requires owner approval (fail closed)",
-  "board deny: two named agents created for the journey",
-  "board deny: Board permissions section opens from the nav",
-  "board deny: the dropdowns populate from the named-agent registry",
-  "board deny: rule added via a real click on the Add control",
-  "board deny: the rule row renders and the rule persists in the store",
-  "board deny: rule removed via the row's real Remove control",
-  "board deny: the row disappears and the store is empty after Remove",
       revokeUnapproved?.ok === false &&
         String(revokeUnapproved?.error ?? "").toLowerCase().includes("approval"),
     );

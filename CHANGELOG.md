@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.424] — 2026-08-30
+- Board deny: restore the capability.revoke journey assertion (merge splice had folded the board check names into its arguments)
+
 ## [0.2.423] — 2026-08-30
 - Board deny: an unreadable policy store propagates (no write may follow a failed read); corrupt values stay fail-closed
 
