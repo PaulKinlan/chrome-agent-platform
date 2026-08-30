@@ -7,7 +7,7 @@
     "the extension action-icon click (transient activeTab; no CDP mechanism)",
     "showDirectoryPicker (native OS dialog; manual smoke)"
   ],
-  "testedSourceCommit": "7cdf2e4653ad7a4d6fc032f7d36347fec07a6abc",
+  "testedSourceCommit": "721f4cae2f11c831467607645191ba8001b1a45f",
   "steps": [
     {
       "step": "build succeeded (dist matches sources)",

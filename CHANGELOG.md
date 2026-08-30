@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.432] — 2026-08-30
+- Permission matrix: refresh acceptance evidence after the fail-closed fix
+
 ## [0.2.431] — 2026-08-30
 - Fail closed when variant integrity verification fails
 
