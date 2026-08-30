@@ -53,7 +53,7 @@ export function normalizeConversationRunStatus(input) {
 // fix in Settings (provider auth, model config, host permission, network).
 // ONE authority shared by the NTP thread surface and the sidepanel — the
 // sidepanel dropping this logic was review P1-b (2026-08-28).
-const RECOVERABLE_CATEGORY = /host-permission|provider-auth|model-config|network/i;
+const RECOVERABLE_CATEGORY = /host-permission|provider-auth|provider-config|model-config|network/i;
 
 export function runStatusActionLabel(input) {
   const raw = typeof input?.state === "string" ? input.state.trim().toLowerCase() : "";
