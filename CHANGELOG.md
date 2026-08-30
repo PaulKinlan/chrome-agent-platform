@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.441] — 2026-08-30
+- Tracker: the script-approval fix is recorded as landed.
+
 ## [0.2.440] — 2026-08-30
 - Landed: a script the agent wants to run now shows you its code and the sites it will contact before it runs, and scripts can no longer reach local or private addresses.
 
