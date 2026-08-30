@@ -759,7 +759,19 @@ function browserFinalText(prompt) {
     if (typeof v.title === "string") facts.push(`title "${v.title.slice(0, 80)}"`);
     if (typeof v.url === "string") facts.push(`url ${v.url.slice(0, 120)}`);
     if (typeof v.tabId === "number") facts.push(`tab ${v.tabId}`);
-    if (typeof v.screenshot === "string") facts.push(`screenshot (${v.screenshot.length} chars)`);
+    // A capture reports the SAVED IMAGE, not a base64 blob: the PNG travels as
+    // an image content part and as an OPFS file, and the JSON the model reads
+    // names the id and the pixel size
+    // (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01). The `screenshot` branch stays
+    // for the DIRECT dispatch path, which returns the raw tool result rather
+    // than the projected one.
+    if (typeof v.screenshotId === "string") {
+      facts.push(
+        `screenshot ${v.screenshotId}${
+          Number(v.width) > 0 && Number(v.height) > 0 ? ` (${v.width}x${v.height})` : ""
+        }`,
+      );
+    } else if (typeof v.screenshot === "string") facts.push(`screenshot (${v.screenshot.length} chars)`);
     if (Array.isArray(v.tabs)) facts.push(`${v.tabs.length} tab(s)`);
     return `[demo model] Browser tool ${spec.tool} succeeded: ${facts.join(", ") || "done"}.`;
   }

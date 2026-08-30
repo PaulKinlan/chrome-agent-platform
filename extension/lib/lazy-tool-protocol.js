@@ -338,6 +338,83 @@ function isUntrustedResult(value, descriptor) {
   return String(ownData(descriptor, "sourceKind") ?? "").startsWith("webmcp");
 }
 
+/* ── the binary side channel (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01) ────────
+ *
+ * A screenshot is PNG bytes, and bytes are not JSON. Before this, the capture
+ * tool returned `screenshot: "data:image/png;base64,…"` inside its result and
+ * the projection below did the only thing it could with a 300 KiB string: cut
+ * it at the 16 KiB string bound and hand the model a base64 fragment as TEXT.
+ * The 2026-08-30 live lane measured the consequence on the wire — 16,867
+ * characters of truncated base64; one model invented a description of it, the
+ * other correctly said it cannot see images.
+ *
+ * So image bytes leave the JSON entirely. `projectResultWithAttachments` lifts
+ * any top-level `data:image/*;base64,` field OUT of the result — the model
+ * JSON keeps the id, the URL and the dimensions — and returns it beside the
+ * projection as an attachment. The provider toolset re-attaches it as a real
+ * image content part on lanes whose transport carries one. Nothing is
+ * truncated: an attachment is either carried whole or not carried at all. */
+const IMAGE_ATTACHMENT_FIELD = "screenshot";
+const MAX_IMAGE_ATTACHMENT_BYTES = 4 * 1024 * 1024; // the screenshot store's own bound
+const IMAGE_DATA_URL_RE = /^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/i;
+
+/** Lift the image bytes out of a raw dispatch result. Returns the result with
+ * the image field REMOVED (never truncated) plus the attachments it carried.
+ * Reads only own data properties — a hostile accessor is never invoked. */
+function liftImageAttachments(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { value, attachments: [] };
+  }
+  const dataUrl = ownData(value, IMAGE_ATTACHMENT_FIELD);
+  if (typeof dataUrl !== "string") return { value, attachments: [] };
+  const match = IMAGE_DATA_URL_RE.exec(dataUrl);
+  if (!match) return { value, attachments: [] };
+  const [, mediaType, data] = match;
+  const stripped = {};
+  for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(value))) {
+    if (key === IMAGE_ATTACHMENT_FIELD) continue;
+    if (!("value" in descriptor)) continue;
+    stripped[key] = descriptor.value;
+  }
+  // Over the store's own bound the bytes are dropped rather than clipped: half
+  // an image is worse than none, because the model would describe the half.
+  if (utf8ByteLength(dataUrl) > MAX_IMAGE_ATTACHMENT_BYTES) {
+    return { value: { ...stripped, imageOmitted: "image exceeded the attachment bound" }, attachments: [] };
+  }
+  const screenshotId = ownData(value, "screenshotId");
+  return {
+    value: stripped,
+    attachments: [Object.freeze({
+      type: "image",
+      mediaType: mediaType.toLowerCase(),
+      data,
+      screenshotId: typeof screenshotId === "string" ? screenshotId : null,
+    })],
+  };
+}
+
+const EMPTY_ATTACHMENTS = Object.freeze([]);
+/** How many executions' image parts stay live at once. */
+const MAX_LIVE_ATTACHMENT_ENTRIES = 4;
+
+/** `projectResult` plus the lifted image attachments (see above).
+ *
+ * UNTRUSTED results are never lifted. An image part is content the model LOOKS
+ * AT, and a site-origin (WebMCP) tool that returned
+ * `screenshot: "data:image/png;base64,…"` would otherwise get a picture of its
+ * own choosing — instructions rendered as pixels — into the conversation,
+ * straight past the text fence that exists to stop exactly that. Page data
+ * stays text, bounded and fenced, as it was. */
+function projectResultWithAttachments(value, options) {
+  const lifted = options?.untrusted === true
+    ? { value, attachments: EMPTY_ATTACHMENTS }
+    : liftImageAttachments(value);
+  return {
+    result: projectResult(lifted.value, options),
+    attachments: Object.freeze(lifted.attachments),
+  };
+}
+
 /** Project a raw dispatch result for the model: bound, redact, and — for
  * untrusted content — wrap every string leaf in the run's boundary
  * (lib/untrusted-fence.js, CAP-FB-20260830-UNTRUSTED-CONTENT-FENCING-01).
@@ -589,6 +666,10 @@ export class LazyToolProtocol {
   // fenced — the model just cannot cross-check the token against its policy
   // layer. Per instance, random, never a fixed string a page could forge.
   #fallbackToken = mintUntrustedToken();
+  // The binary side channel: selectionRef -> the image parts lifted out of that
+  // execution's result. Bounded to the last few calls so a run that screenshots
+  // repeatedly can never hold more than a few megabytes of PNG in the worker.
+  #attachments = new Map();
 
   constructor({ readSources, selectionAuthority } = {}) {
     if (typeof readSources !== "function") {
@@ -601,6 +682,23 @@ export class LazyToolProtocol {
   #untrustedToken(context) {
     const token = ownData(context, "untrustedToken");
     return isUntrustedToken(token) ? token : this.#fallbackToken;
+  }
+
+  /** Record one execution's lifted image parts, oldest evicted first. */
+  #rememberAttachments(selectionRef, attachments) {
+    if (!attachments?.length || typeof selectionRef !== "string") return;
+    this.#attachments.set(selectionRef, attachments);
+    while (this.#attachments.size > MAX_LIVE_ATTACHMENT_ENTRIES) {
+      const oldest = this.#attachments.keys().next().value;
+      this.#attachments.delete(oldest);
+    }
+  }
+
+  /** The image parts belonging to one completed execution — the side channel
+   * the provider toolset re-attaches as a real image content part. Never part
+   * of the model-facing JSON. Returns a (possibly empty) frozen array. */
+  attachmentsFor(selectionRef) {
+    return this.#attachments.get(selectionRef) ?? EMPTY_ATTACHMENTS;
   }
 
   /** Site-origin (WebMCP) tool descriptions are page-authored: fence them in
@@ -889,13 +987,18 @@ export class LazyToolProtocol {
         ),
       });
     }
+    // The image bytes are lifted OUT of the model JSON here and remembered for
+    // the provider toolset to re-attach as a real image content part
+    // (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01).
+    const projected = projectResultWithAttachments(rawResult, {
+      untrusted: isUntrustedResult(rawResult, afterResolved.descriptor),
+      token: this.#untrustedToken(context),
+    });
+    this.#rememberAttachments(selectionRef, projected.attachments);
     return Object.freeze({
       ok: true,
       selectedTool: afterResolved.descriptor.name,
-      result: projectResult(rawResult, {
-        untrusted: isUntrustedResult(rawResult, afterResolved.descriptor),
-        token: this.#untrustedToken(context),
-      }),
+      result: projected.result,
       // Renderer-only metadata: the UI consumes this bounded selected-tool
       // contract and does not display it as part of the result tree.
       schemaSummary: afterResolved.descriptor.outputSchemaSummary,
@@ -1147,15 +1250,39 @@ export function executableBundledToolRecords(rows, context = {}) {
   });
 }
 
+/**
+ * @param {{
+ *   readSources?: any,
+ *   contextReader?: any,
+ *   selectionAuthority?: any,
+ *   acceptsImageToolResults?: boolean | (() => boolean),
+ * }} [options]
+ */
 export function createLazyProviderToolset({
   readSources,
   contextReader,
   selectionAuthority,
+  // Does THIS run's transport carry a real image part in a tool result? Only a
+  // lane that does gets one; the OpenAI-compatible chat transport, for one,
+  // JSON-stringifies a `content` output, which would put the base64 straight
+  // back into the text this change exists to keep it out of
+  // (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01). Read per call — a per-agent
+  // provider override can change the answer mid-session.
+  acceptsImageToolResults = false,
 } = {}) {
   const protocol = new LazyToolProtocol({ readSources, selectionAuthority });
   if (typeof contextReader !== "function") {
     throw new TypeError("lazy provider needs a run context reader");
   }
+  const imageToolResultsAllowed = () => {
+    try {
+      return typeof acceptsImageToolResults === "function"
+        ? acceptsImageToolResults() === true
+        : acceptsImageToolResults === true;
+    } catch {
+      return false;
+    }
+  };
   const readContext = async () => {
     let context;
     try {
@@ -1205,6 +1332,28 @@ export function createLazyProviderToolset({
         return context
           ? await protocol.execute(request, context)
           : fixedError("lazy-run-context-unavailable");
+      },
+      // THE IMAGE PATH. A tool that captured pixels (capture_screenshot) put
+      // its PNG in the protocol's side channel, not in the JSON above. Here it
+      // becomes a real image content part beside the (image-free) envelope
+      // text, so a vision model actually SEES the page instead of reading a
+      // truncated base64 fragment (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01).
+      toModelOutput: ({ output }) => {
+        const parts = imageToolResultsAllowed()
+          ? protocol.attachmentsFor(ownData(output, "selectionRef"))
+          : EMPTY_ATTACHMENTS;
+        if (!parts.length) return { type: "json", value: output ?? null };
+        return {
+          type: "content",
+          value: [
+            { type: "text", text: JSON.stringify(output) },
+            ...parts.map((part) => ({
+              type: "file",
+              mediaType: part.mediaType,
+              data: { type: "data", data: part.data },
+            })),
+          ],
+        };
       },
     }),
   });

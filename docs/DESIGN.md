@@ -255,6 +255,26 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   reopens grantable. Run-bound action approvals (script.run et al.) are never
   replayed as cards — their ids died with the run.
 
+## Screenshots (`<screenshot-thumb>`, `<screenshot-strip>`)
+A screenshot is pixels, and pixels are not JSON. Every capture — the agent's as
+well as the owner's — is written to the screenshots store as its own OPFS file
+(bounded, evict-oldest) and the tool answers with the id, the source URL, the
+PNG's real pixel size and its byte count. The bytes themselves never enter the
+model-facing result: the lazy protocol lifts the data URL out of the projection
+into an attachment side channel, and a provider lane whose transport carries an
+image part receives the PNG as a real image content part beside the (image-free)
+envelope. A lane that would only stringify it receives the envelope alone, which
+is honest and small — a base64 fragment cut at the 16 KiB string bound is not
+something a model can read, and both a hallucinated description and "I cannot
+see images" were measured coming back from one.
+- `<screenshot-thumb shot-id label size>` is one saved capture, resolved from
+  the store by id and painted in the tool card so the owner sees exactly what
+  the agent saw. Its `alt` names the page ("Screenshot of example.com"), never
+  just "screenshot". The decoded blob URL is revoked on disconnect and before
+  every re-resolve, so a long transcript never holds a megabyte per card. `src`
+  short-circuits the lookup for the component gallery.
+- `<screenshot-strip shots>` remains the multi-shot history row.
+
 ## Artifact diff (`<artifact-diff>`)
 - One element in `extension/shared/components.js` renders what changed between
   two versions of an artifact: a `+n -m · k changes` header, `unified` (default)

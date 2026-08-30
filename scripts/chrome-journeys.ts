@@ -525,6 +525,8 @@ const EXPECTED = [
   "Permission card: Allow grants scripting and the retried read_page succeeds",
   "Permission card: capture_screenshot denial renders one approval card",
   "Permission card: Allow grants browser control and the retried capture_screenshot succeeds",
+  "Screenshot: model capture is persisted and listed",
+  "Screenshot: tool card shows a thumbnail",
   "per-origin clear leaves B intact",
   "memory: version tokens are monotonic + never reused (round-27 CAS)",
   "attachment count cap (12 → 4 over-count dropped, journal records 8)",
@@ -2901,7 +2903,7 @@ async function main() {
     await clickShadow(cdp, ntpSession, CARD_SEL, ".allow");
     const captureOk = await waitFor(async () =>
       (await settled("granted")) &&
-      /Browser tool capture_screenshot succeeded: .*screenshot \(\d+ chars\)/.test(await threadText()));
+      /Browser tool capture_screenshot succeeded: .*screenshot shot_[a-z0-9_]+/.test(await threadText()));
     const grantAfterCard = await msgValue({ type: "browser-control.get" });
     await ntpShotNow("permission-card-capture-allowed.png");
     dbg("capture allowed", { captureOk, grantAfterCard, pending: await pendingCount(), tail: (await threadText()).slice(-300) });
@@ -2910,6 +2912,59 @@ async function main() {
       captureOk && grantAfterCard?.scope === "origins" && Array.isArray(grantAfterCard?.origins) &&
         grantAfterCard.origins.includes(RED_ORIGIN) && (await pendingCount()) === 0,
     );
+
+    // CAP-FB-20260830-SCREENSHOT-TO-MODEL-01 — the capture the MODEL just took
+    // is a real saved image, not a base64 string in a message: the store holds
+    // the exact id the model was told about, and the tool card paints it.
+    const modelShotId = (/screenshot (shot_[a-z0-9_]+)/.exec(await threadText()) ?? [])[1] ?? "";
+    const shotIndex = await msgValue({ type: "screenshots.list" });
+    dbg("screenshots after the model capture", { modelShotId, index: shotIndex?.screenshots });
+    check(
+      "Screenshot: model capture is persisted and listed",
+      modelShotId !== "" && Array.isArray(shotIndex?.screenshots) &&
+        shotIndex.screenshots.some((s: { id?: string }) => s?.id === modelShotId),
+    );
+    // The card lives inside message-bubble's shadow root, and the thumbnail
+    // inside its own — so the probe walks shadow roots rather than pretending
+    // the transcript is one flat tree.
+    const thumbState = () =>
+      evalIn(cdp, ntpSession, `(() => {
+        const imgs = [];
+        const walk = (root, depth) => {
+          if (!root || depth > 8) return;
+          root.querySelectorAll("screenshot-thumb").forEach((t) => {
+            const img = t.shadowRoot?.querySelector("img") ?? t.querySelector("img");
+            if (img) imgs.push(img);
+          });
+          root.querySelectorAll("*").forEach((el) => { if (el.shadowRoot) walk(el.shadowRoot, depth + 1); });
+        };
+        walk(document.querySelector("#thread-conversation") ?? document.body, 0);
+        const img = imgs[imgs.length - 1];
+        return img ? { count: imgs.length, alt: img.alt, natural: img.naturalWidth, scheme: String(img.getAttribute("src") ?? "").split(":")[0] } : null;
+      })()`);
+    await waitFor(async () => ((await thumbState())?.natural ?? 0) > 0, 20000);
+    const thumb = await thumbState();
+    // Open the capture's card for the retained evidence: a tool card is
+    // collapsed by default, and a screenshot of a closed card proves nothing.
+    await evalIn(cdp, ntpSession, `(() => {
+      const open = (root, depth) => {
+        if (!root || depth > 8) return;
+        root.querySelectorAll("details.tool").forEach((d) => {
+          if (d.querySelector("screenshot-thumb")) d.open = true;
+        });
+        root.querySelectorAll("*").forEach((el) => { if (el.shadowRoot) open(el.shadowRoot, depth + 1); });
+      };
+      open(document.querySelector("#thread-conversation") ?? document.body, 0);
+      document.querySelector("#thread-conversation")?.scrollTo?.(0, 1e6);
+    })()`);
+    await sleep(400);
+    await ntpShotNow("screenshot-tool-card-thumbnail.png");
+    dbg("tool-card thumbnail", thumb);
+    check(
+      "Screenshot: tool card shows a thumbnail",
+      thumb !== null && thumb.natural > 0 && /^Screenshot of /.test(String(thumb.alt ?? "")),
+    );
+
     // Restore the pre-journey state (browser control revoked) for what follows.
     await msgValue({ type: "browser-control.set", granted: false });
 

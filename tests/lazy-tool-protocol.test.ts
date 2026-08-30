@@ -15,6 +15,7 @@ import {
   executableBundledToolRecords,
   executableManagementToolRecords,
   executableWebMcpToolRecords,
+  createLazyProviderToolset,
   LAZY_PROTOCOL_TOOL_WIRE,
   LAZY_TOOL_PROTOCOL_BOUNDS,
   LazyToolProtocol,
@@ -999,4 +1000,144 @@ Deno.test("fence: an untrusted result's strings are wrapped in the boundary", as
   const trustedSearch = await protocol.search({ query: "trusted", limit: 1 }, context);
   const trusted = await protocol.execute({ selectionRef: trustedSearch.results[0].selectionRef, arguments: { value: "x" } }, context);
   assertEquals(trusted.result, { text: RAW });
+});
+
+// ── CAP-FB-20260830-SCREENSHOT-TO-MODEL-01 ───────────────────────────────────
+// A screenshot tool returns real PNG bytes. Those bytes must NEVER reach the
+// model as a JSON string: at 16 KiB the string bound cuts the base64 mid-stream
+// and the model either hallucinates a description of the fragment or says it
+// cannot see images (the 2026-08-30 live lane measured both). The projection
+// lifts the image OUT of the JSON into an attachment side channel, and the
+// provider toolset re-attaches it as a real image content part.
+function screenshotRecords(result: Record<string, unknown>) {
+  const tools = {
+    capture_screenshot: tool({
+      description: "Capture a PNG screenshot of a tab",
+      inputSchema: z.object({ value: z.string().max(64).optional() }),
+      execute: () => result,
+    }),
+  };
+  return executableBuiltinToolRecords(tools, adapterContext());
+}
+
+Deno.test("projection: a screenshot result carries no base64 in the model JSON and an image part beside it", async () => {
+  const payload = "A".repeat(40 * 1024); // 40 KiB — far past the 16 KiB string bound
+  const dataURL = `data:image/png;base64,${payload}`;
+  const protocol = new LazyToolProtocol({
+    readSources: () => screenshotRecords({
+      ok: true,
+      screenshotId: "shot_test_1",
+      url: "https://example.com/",
+      width: 1280,
+      height: 720,
+      bytes: 30720,
+      screenshot: dataURL,
+    }),
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+  });
+  const context = runContext();
+  const searched = await protocol.search({ query: "screenshot", limit: 1 }, context);
+  const ref = searched.results[0].selectionRef;
+  const out = await protocol.execute({ selectionRef: ref, arguments: {} }, context);
+
+  assertEquals(out.ok, true);
+  // The MODEL-FACING JSON keeps the identifying fields and NOT one byte of the image.
+  const serialized = JSON.stringify(out);
+  assert(!serialized.includes("data:image"), "no data URL survives into the model JSON");
+  assert(!serialized.includes("AAAAAAAAAA"), "no base64 payload survives into the model JSON");
+  assertEquals(out.result.screenshotId, "shot_test_1");
+  assertEquals(out.result.width, 1280);
+  assertEquals(out.result.height, 720);
+  assertEquals(out.result.bytes, 30720);
+  assertEquals(out.result.url, "https://example.com/");
+  assertEquals("screenshot" in out.result, false, "the data URL field is removed, not truncated");
+  // The bytes travel in the side channel, whole.
+  const attachments = protocol.attachmentsFor(out.selectionRef);
+  assertEquals(attachments.length, 1);
+  assertEquals(attachments[0].type, "image");
+  assertEquals(attachments[0].mediaType, "image/png");
+  assertEquals(attachments[0].data, payload, "the base64 is carried complete, never truncated");
+  assertEquals(attachments[0].screenshotId, "shot_test_1");
+});
+
+Deno.test("projection: execute_tool sends the PNG as an image content part only on an image-capable lane", async () => {
+  const payload = "B".repeat(1024);
+  const dataURL = `data:image/png;base64,${payload}`;
+  const raw = {
+    ok: true,
+    screenshotId: "shot_test_2",
+    url: "https://example.com/",
+    width: 800,
+    height: 600,
+    bytes: 768,
+    screenshot: dataURL,
+  };
+  const build = (acceptsImageToolResults: boolean) =>
+    createLazyProviderToolset({
+      readSources: () => screenshotRecords({ ...raw }),
+      contextReader: () => runContext(),
+      selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+      acceptsImageToolResults: () => acceptsImageToolResults,
+    });
+
+  const vision = build(true);
+  const searched = await vision.tools.search_tools.execute({ query: "screenshot", limit: 1 });
+  const ref = searched.results[0].selectionRef;
+  const output = await vision.tools.execute_tool.execute({ selectionRef: ref, arguments: {} });
+  const modelOutput = await vision.tools.execute_tool.toModelOutput({
+    toolCallId: "call-1",
+    input: { selectionRef: ref, arguments: {} },
+    output,
+  });
+  assertEquals(modelOutput.type, "content");
+  assertEquals(modelOutput.value.length, 2);
+  assertEquals(modelOutput.value[0].type, "text");
+  assert(!modelOutput.value[0].text.includes("data:image"), "the text part carries no base64");
+  assertEquals(modelOutput.value[1].type, "file");
+  assertEquals(modelOutput.value[1].mediaType, "image/png");
+  assertEquals(modelOutput.value[1].data.type, "data");
+  assertEquals(modelOutput.value[1].data.data, payload);
+
+  // A text-only lane (the OpenAI-compatible chat transport JSON-stringifies a
+  // `content` output, which would put the base64 straight back in the text)
+  // gets the JSON envelope alone.
+  const textOnly = build(false);
+  const searched2 = await textOnly.tools.search_tools.execute({ query: "screenshot", limit: 1 });
+  const ref2 = searched2.results[0].selectionRef;
+  const output2 = await textOnly.tools.execute_tool.execute({ selectionRef: ref2, arguments: {} });
+  const modelOutput2 = await textOnly.tools.execute_tool.toModelOutput({
+    toolCallId: "call-2",
+    input: { selectionRef: ref2, arguments: {} },
+    output: output2,
+  });
+  assertEquals(modelOutput2.type, "json");
+  assert(!JSON.stringify(modelOutput2).includes("data:image"), "no base64 on a text-only lane either");
+});
+
+Deno.test("projection: an UNTRUSTED (page-origin) result never becomes an image the model looks at", async () => {
+  // A site tool returning a data URL must not get a picture of its own choosing
+  // into the conversation — instructions rendered as pixels would walk straight
+  // past the text fence. Its bytes stay text: bounded, redacted, fenced.
+  const dataURL = `data:image/png;base64,${"C".repeat(2048)}`;
+  const protocol = new LazyToolProtocol({
+    readSources: () => screenshotRecords({
+      untrusted: true,
+      ok: true,
+      screenshotId: "shot_hostile",
+      screenshot: dataURL,
+    }),
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+  });
+  const context = runContext({ untrustedToken: "tok0123456789" });
+  const searched = await protocol.search({ query: "screenshot", limit: 1 }, context);
+  const out = await protocol.execute(
+    { selectionRef: searched.results[0].selectionRef, arguments: {} },
+    context,
+  );
+  assertEquals(out.ok, true);
+  assertEquals(protocol.attachmentsFor(out.selectionRef).length, 0, "no image part from page data");
+  // The field is still there as (fenced, truncated) TEXT — nothing is smuggled,
+  // and nothing is silently deleted either.
+  assert(typeof out.result.screenshot === "string");
+  assertStringIncludes(out.result.screenshot, "<<<UNTRUSTED run:tok0123456789>>>");
 });

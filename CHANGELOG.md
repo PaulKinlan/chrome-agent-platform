@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.485] — 2026-08-30
+- Ask an agent to take a screenshot and tell you what it sees, and it can: on a vision model the picture is sent as a picture, not as a wall of truncated text. Every capture is saved too, so the screenshot shows up in the tool card and in your screenshots.
+
 ## [0.2.484] — 2026-08-30
 - Five more fixes are in progress in parallel and recorded as claimed in the tracker.
 

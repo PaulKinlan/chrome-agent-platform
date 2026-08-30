@@ -52,6 +52,7 @@ export const PROVIDER_CHOICES = [
     needsKey: true,
     baseURL: "https://api.openai.com/v1",
     needsModel: true,
+    vision: true,
   },
   {
     id: "anthropic",
@@ -59,6 +60,7 @@ export const PROVIDER_CHOICES = [
     needsKey: true,
     baseURL: "https://api.anthropic.com/v1",
     needsModel: true,
+    vision: true,
   },
   {
     id: "gemini",
@@ -66,6 +68,7 @@ export const PROVIDER_CHOICES = [
     needsKey: true,
     baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
     needsModel: true,
+    vision: true,
   },
   {
     id: "deepseek",
@@ -107,6 +110,25 @@ export const PROVIDER_CHOICES = [
     needsModel: false,
   },
 ];
+
+/** The resolved provider LANES whose tool-result transport carries a real
+ * image content part, so a screenshot can be SHOWN to the model instead of
+ * described to it (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01).
+ *
+ * The OpenAI-compatible chat transport is deliberately absent: it collapses a
+ * `content` tool output with `JSON.stringify`, which would put the whole base64
+ * PNG straight back into the message text — the exact failure this change
+ * exists to remove. A model on that lane gets the JSON envelope (the id, the
+ * URL, the dimensions) and nothing else. */
+const IMAGE_TOOL_RESULT_LANES = new Set(["gemini-native", "anthropic-native"]);
+
+/** Can this RESOLVED model be shown an image in a tool result? Both halves must
+ * hold: the provider's models can see images at all (the `vision` flag above),
+ * and the lane it resolved on transports an image part. */
+export function acceptsImageToolResults(resolved) {
+  if (!IMAGE_TOOL_RESULT_LANES.has(String(resolved?.providerLane ?? ""))) return false;
+  return PROVIDER_CHOICES.find((p) => p.id === resolved?.providerName)?.vision === true;
+}
 
 /** Every provider id that resolves through the OpenAI-compatible adapter. */
 const OPENAI_COMPATIBLE_IDS = new Set([
