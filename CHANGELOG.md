@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.451] — 2026-08-30
+- The agent can no longer open or navigate to chrome://, file://, about: or data: pages, even with Browser control switched on for all sites: only http(s) destinations are accepted, and the refusal says so plainly.
+
 ## [0.2.450] — 2026-08-30
 - Asking the agent to notify you works again: the notification icon pointed at a file that does not ship, so every notification failed with "Unable to download all specified images."
 

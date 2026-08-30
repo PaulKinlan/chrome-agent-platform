@@ -418,6 +418,7 @@ const EXPECTED = [
   "screenshot: granted browser control via a real checkbox click",
   "Browser control: toggle ON in Settings leaves no lease",
   "Browser control: a run's open_tab is not lease-refused after the Settings toggle",
+  "Privileged URL: open_tab chrome://settings is refused under a global grant",
   "screenshot: typed the red origin into the allowed-origins field",
   "screenshot: grant scoped to the red origin via the UI",
   "screenshot: UI-granted capture SUCCEEDS for the scoped origin",
@@ -1809,6 +1810,25 @@ async function main() {
       "Browser control: a run's open_tab is not lease-refused after the Settings toggle",
       !(typeof runOpenTab?.error === "string" && /driving the browser/.test(runOpenTab.error)) &&
         (runOpenTab?.ok === true || runOpenTab?.permissionRequired?.capability === "tabs"),
+    );
+    // CAP-FB-20260830-PRIVILEGED-URL-BLOCK-01: under the GLOBAL grant just
+    // toggled on, a privileged destination is refused BEFORE the permission
+    // and grant checks (so this discriminates even in headless, where `tabs`
+    // cannot be granted), and no chrome://settings target ever appears.
+    const privilegedOpen = await msgValue({
+      type: "agent-worker.tool",
+      toolName: "open_tab",
+      args: { url: "chrome://settings" },
+    });
+    const targetsAfterPrivileged = await cdp.send("Target.getTargets");
+    const privilegedTargets = (targetsAfterPrivileged?.result?.targetInfos ?? []).filter((t) =>
+      /^chrome:\/\/settings/.test(String(t.url ?? ""))
+    );
+    check(
+      "Privileged URL: open_tab chrome://settings is refused under a global grant",
+      privilegedOpen?.ok !== true &&
+        privilegedOpen?.error === "only http(s) destinations are allowed" &&
+        privilegedTargets.length === 0,
     );
     // Type the red origin into the allowed-origins field (a genuine text edit).
     check(

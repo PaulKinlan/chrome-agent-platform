@@ -2496,15 +2496,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-PRIVILEGED-URL-BLOCK-01] Under a global grant the model can open and navigate to chrome:// pages
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 tools lane finding 6. With Browser control switched on, the agent can open `chrome://settings` (or any non-web scheme) in a tab.
-- Updated: 2026-08-30 14:54 UTC
-- Status: OPEN
+- Updated: 2026-08-30 17:25 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P1
 - Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — CLAIMED; do not start a parallel attempt
 - Workspace: active (local path private)
 - Branch: `cap/tool-fixes-notify-url-revoke` (pushed to origin as the candidate branch; merged by the coordinator)
-- Base: `18551f28`
-- Candidate: —
+- Base: `18551f28` (merged forward onto `origin/main@5d736455`)
+- Candidate: this tracker commit (branch `cap/tool-fixes-notify-url-revoke`, second commit after NOTIFY-ICON-PATH-01)
 - Shipping: —
 - Acceptance: every browser tool that takes a destination URL (`open_tab`, `navigate_tab`, `create_window`, and any other `url`-taking mutation) refuses `chrome:`, `chrome-extension:`, `file:`, `about:`, `javascript:`, `data:`, `blob:` and `view-source:` destinations BEFORE the grant check with the plain error `"only http(s) destinations are allowed"`; a unit test and a journey assert `open_tab { url: "chrome://settings" }` is refused under a global grant.
   - Context: `open_tab` (`extension/lib/browser-tools.js:1390`) computes `destOrigin = canonicalOrigin(url)` at `:1404-1408` inside a try/catch that only catches THROWS — but `canonicalOrigin` (`extension/lib/memory.js:261-272`) RETURNS `null` for non-http(s) schemes instead of throwing. So `destOrigin` is `null`, and `isBrowserControlGranted(null)` (`browser-tools.js:109`) passes for a global grant, so `chrome.tabs.create({ url: "chrome://settings" })` runs. The same pattern is at `navigate_tab` `:1459-1463`/`:1484` and `create_window` `:1753-1764`. Chrome itself blocks `javascript:` but not `chrome://`, `file://`, `about:` or `data:`. What must NOT change: `canonicalOrigin`'s null return (memory keying depends on it — `memory.js:264-267` explains why non-web origins must never be a storage boundary); the per-origin grant semantics.
@@ -2512,19 +2512,20 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - Files: `extension/lib/browser-tools.js` — add one helper near `permissionDenial` (`:297`): `function webDestination(url) { let u; try { u = new URL(url); } catch { return { error: "invalid url" }; } if (u.protocol !== "http:" && u.protocol !== "https:") return { error: "only http(s) destinations are allowed" }; return { ok: true, origin: u.origin }; }` and call it at `:1404`, `:1459`, `:1753` and every other `z.string().url()` destination site (`git grep -n "z.string().url()" -- extension/lib/browser-tools.js`); `extension/lib/chrome-tool-capabilities.js` if a capability string should record "destination: http(s) only". Do NOT touch `memory.js`.
   - Steps: 1. Unit test first (Gates) — RED. 2. Add `webDestination` and call it before the grant check at every destination site. 3. Journey per Gates. 4. Security suite check (Gates). 5. Docs: `docs/CONSTITUTION.md` security list gains "browser mutations accept http(s) destinations only", `CHANGELOG.md`.
   - Out of scope: the approval policy for destructive actions (`CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01`); `cap:fetch` private-address blocking (`CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01`).
-- Review: pending
-- Gates: the falsification gates apply.
+- Review: author review 2026-08-30 — falsification gates cleared (unit RED/GREEN and journey RED/GREEN recorded below)
+- Gates: the falsification gates apply. RESULT: unit `tests/chrome-tools-t12.test.ts` "destinations: open_tab/navigate_tab/create_window refuse non-http(s) URLs under a global grant" (8 schemes incl. blob:/view-source:; asserts the shim's tabs/windows never grew and the refusal carries no permission card) RED on the unguarded tree (`open_tab chrome://settings` → `error: undefined`, the tab was created) → GREEN with the guard (`20 passed | 0 failed`); a second test proves an https destination still reaches Chrome. Browser: `scripts/chrome-journeys.ts` "Privileged URL: open_tab chrome://settings is refused under a global grant" RED against the build without the guard (`FAIL`, 155/158) → GREEN at the tip (`PASS`, 162/162). Full suite at the tip: 2496 unit pass / 0 fail, 162/162 journeys. `scripts/security-suite.ts` not extended (it does not load the extension yet — SUITE-HONESTY-01); the journey is the browser gate as the entry allows.
   - Unit: extend `tests/chrome-tools-t12.test.ts` (shim + `setGlobalBrowserControlGrant` already imported) with `Deno.test("destinations: open_tab/navigate_tab/create_window refuse non-http(s) URLs under a global grant")` — for each of `chrome://settings`, `chrome-extension://abc/x.html`, `file:///etc/hosts`, `about:blank`, `data:text/html,hi`, `javascript:alert(1)` assert the result `error === "only http(s) destinations are allowed"` and that the shim's `tabs` array did not grow. Falsification: revert step 2 for `open_tab`, expect RED on `chrome://settings`; restore, GREEN.
   - Browser: `scripts/chrome-journeys.ts` gains `"Privileged URL: open_tab chrome://settings is refused under a global grant"` (`Target.getTargets` contains no `chrome://settings`). `scripts/security-suite.ts` gains `check("privileged destination: chrome:// refused before the grant check", …)` in its extension-loaded section (the suite must load the extension for this — coordinate with `CAP-FB-20260830-SUITE-HONESTY-01`; until then the journey is the browser gate). Screenshot not required (route evidence).
   - Full suite: `npm run build && deno test tests/ && deno run -A scripts/chrome-journeys.ts` green at the tip (baseline at `origin/main@fc2255be`: 2457 unit pass, 138/138 journeys; grows by one).
   - Constraints: the refusal is a plain `{ error }` (no permission card — this is not a permission problem); no new permissions.
 - Blockers: —
-- Next: add a destination-scheme guard shared by all destination-taking tools
+- Next: coordinator merge
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-PRIVILEGED-URL-BLOCK-01`
 - History:
   - 2026-08-30 11:00 UTC — measured: `open_tab {url:"chrome://settings"} -> {"ok":true, tabId}` and `Target.getTargets` shows `chrome://settings/`.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); every line reference re-verified against `origin/main@cf0da958`.
   - 2026-08-30 14:54 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/tool-fixes-notify-url-revoke` off `origin/main@18551f28`. Other agents: pick a different entry.
+  - 2026-08-30 17:25 UTC — `webDestination(url)` added beside `permissionDenial` in `extension/lib/browser-tools.js` and called as the FIRST line of `open_tab`, `navigate_tab`, `create_window` (when a url is given) and `open_side_panel` — before the `tabs`/`sidePanel` permission check as well as the grant check, so the refusal is discriminating even in headless (where `tabs` cannot be granted) and never turns into a permission card. `docs/CONSTITUTION.md` security list gains the http(s)-only rule. Bookmark/history/cookie `url` arguments are not destinations (nothing navigates) and are untouched. Status → IN_REVIEW (author review).
 
 ## [CAP-FB-20260830-SETTINGS-REVOKE-VIA-SW-01] Settings "Turn off" bypasses the service-worker revoke route
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 tools lane finding 7. Turning a capability off in Settings skips the owner dialog and the teardown, so turning off Site Agents leaves every enrolled site's bridge script registered.

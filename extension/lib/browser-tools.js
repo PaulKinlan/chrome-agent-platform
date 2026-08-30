@@ -293,6 +293,27 @@ function permissionDenial(error, { reason, permissions = [], grantOrigins = [], 
   };
 }
 
+// ── CAP-FB-20260830-PRIVILEGED-URL-BLOCK-01: destination scheme guard ──
+/** Every browser mutation that takes a DESTINATION url (open_tab, navigate_tab,
+ * create_window, open_side_panel) runs this BEFORE any permission or grant
+ * check. `canonicalOrigin` RETURNS null for non-web schemes (memory keying
+ * must never treat chrome:/file:/about: as a storage boundary), and a global
+ * browser-control grant authorizes a null origin — so without this guard the
+ * model could open chrome://settings, file:///etc/hosts or a data: page under
+ * "all sites". Only http(s) is ever a legitimate agent destination; everything
+ * else is a plain refusal (not a permission problem, so no approval card). */
+const ONLY_WEB_DESTINATIONS = "only http(s) destinations are allowed";
+function webDestination(url) {
+  let u;
+  try {
+    u = new URL(String(url));
+  } catch {
+    return { error: "invalid url" };
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return { error: ONLY_WEB_DESTINATIONS };
+  return { ok: true, origin: u.origin };
+}
+
 // ── T8 site-data control helpers (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01) ──
 /** Whether the EXACT origin's host permission is granted (cookies need host
  * access for the target site). Only an exact `<origin>/*` pattern is ever
@@ -1338,6 +1359,9 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         "Open the Chrome side panel and load a page in it so you can watch and act on that page (its WebMCP tools are discovered via the content bridge). Requires the sidePanel permission.",
       inputSchema: z.object({ url: z.string().url() }),
       execute: async ({ url }) => {
+        // Scheme guard FIRST (see webDestination): the panel loads a web page.
+        const dest = webDestination(url);
+        if (dest.error) return { error: dest.error };
         if (!(await hasSidePanelPermission())) {
           return {
             error:
@@ -1375,6 +1399,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         "Open a URL in a new browser tab. Requires browser-control permission (scoped + expiring).",
       inputSchema: z.object({ url: z.string().url() }),
       execute: async ({ url }) => {
+        // Scheme guard FIRST: a chrome:/file:/about:/data: destination can
+        // never be authorized, so it is refused before any permission check.
+        const dest = webDestination(url);
+        if (dest.error) return { error: dest.error };
         if (!(await hasTabsPermission())) {
           return {
             error:
@@ -1430,6 +1458,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         url: z.string().url(),
       }),
       execute: async ({ tabId, url }) => {
+        // Scheme guard FIRST (see webDestination): never navigate a tab to a
+        // privileged or non-web scheme, whatever the grant says.
+        const dest = webDestination(url);
+        if (dest.error) return { error: dest.error };
         if (!(await hasTabsPermission())) {
           return {
             error:
@@ -1737,6 +1769,11 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         height: z.number().int().min(100).max(10000).optional(),
       }),
       execute: async ({ url, focused, left, top, width, height }) => {
+        // Scheme guard FIRST when a destination is given (see webDestination).
+        if (url !== undefined) {
+          const dest = webDestination(url);
+          if (dest.error) return { error: dest.error };
+        }
         if (!(await hasTabsPermission())) {
           return {
             error:
