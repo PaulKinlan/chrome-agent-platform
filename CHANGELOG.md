@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.502] — 2026-08-30
+- The last visible-editing fixes are in progress in parallel and recorded as claimed.
+
 ## [0.2.501] — 2026-08-30
 - Housekeeping: a task entry was completed to the required shape so the tracker check passes.
 
