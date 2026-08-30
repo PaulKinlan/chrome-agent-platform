@@ -81,7 +81,10 @@ async function makeVariant() {
   const cp = new Deno.Command("cp", { args: ["-r", EXT + "/.", dir] }).spawn();
   await cp.status;
   const mf = JSON.parse(await Deno.readTextFile(`${dir}/manifest.json`));
-  mf.permissions = ["scripting", "tabs"];
+  mf.permissions = [...new Set([...(mf.permissions ?? []), "scripting", "tabs"])];
+  mf.optional_permissions = (mf.optional_permissions ?? []).filter((permission: string) =>
+    permission !== "scripting" && permission !== "tabs"
+  );
   await Deno.writeTextFile(`${dir}/manifest.json`, JSON.stringify(mf, null, 2) + "\n");
   return dir;
 }
