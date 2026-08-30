@@ -239,6 +239,22 @@ export function createStreamProjector(container) {
   };
 }
 
+// The visible marker the runtime honesty backstop prepends to every appended
+// correction (extension/lib/mutation-claim-check.js). It is compared as TEXT
+// only — the correction is rendered by the bubble, never as markup.
+const CLAIM_CORRECTION_MARKER = "⚠️ Correction:";
+
+/**
+ * Whether `final` is exactly `rendered` with one or more claim corrections
+ * appended — i.e. the same turn's reply, corrected. Used to update the already
+ * rendered bubble in place rather than painting the answer a second time.
+ */
+export function isClaimCorrectionOf(final, rendered) {
+  if (typeof final !== "string" || typeof rendered !== "string" || !rendered) return false;
+  if (final.length <= rendered.length || !final.startsWith(rendered)) return false;
+  return final.slice(rendered.length).includes(CLAIM_CORRECTION_MARKER);
+}
+
 /** Render a persisted journal as a conversation (reopening shows the history). */
 export function renderJournal(container, journal) {
   const rows = Array.isArray(journal) ? journal : [];
@@ -294,6 +310,9 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
   if (!c || !executionId) return () => {};
   const toolCards = createToolCardQueue();
   const streamer = createStreamProjector(c);
+  // Same one-bubble-per-distinct-final-text rule as the task surface.
+  let lastAgentText = null;
+  let lastAgentBubble = null;
   let unsub = () => {};
   let unsubscribed = false;
   const terminal = createRunTerminal({
@@ -376,15 +395,29 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
         break;
       case "text":
         if (ev.hidden === true) { streamer.finalize(ev.step, ""); break; }
-        if (ev.text && ev.hasToolCalls && !streamer.finalize(ev.step, ev.text)) appendBubble(c, "agent", ev.text);
+        if (ev.text && ev.hasToolCalls) {
+          const repeat = ev.text === lastAgentText;
+          const settled = streamer.finalize(ev.step, ev.text);
+          if (settled) lastAgentBubble = settled;
+          else if (!repeat) lastAgentBubble = appendBubble(c, "agent", ev.text);
+          lastAgentText = ev.text;
+        }
         break;
       case "done":
         terminal.onPortDone(ev.aborted === true);
         // The agent view has no other live source for the conclusion — the
         // streamed bubble takes the final text on a NON-aborted settle (an
-        // aborted run reports no successful answer), else it is appended.
+        // aborted run reports no successful answer), else it is appended. A
+        // final text that only adds the honesty correction updates the bubble
+        // already rendered rather than repeating the answer.
         if (ev.aborted === true) streamer.finalize(null, undefined);
-        else if (ev.text && !streamer.finalize(null, ev.text)) appendBubble(c, "agent", ev.text);
+        else if (ev.text) {
+          const settled = streamer.finalize(null, ev.text);
+          if (settled) lastAgentBubble = settled;
+          else if (lastAgentBubble?.isConnected && isClaimCorrectionOf(ev.text, lastAgentText)) lastAgentBubble.setAttribute("content", ev.text);
+          else if (ev.text !== lastAgentText) lastAgentBubble = appendBubble(c, "agent", ev.text);
+          lastAgentText = ev.text;
+        }
         break;
       case "error":
         terminal.onPortError();
@@ -1079,6 +1112,22 @@ export function toolRowsFromRunLog(executionId, logs) {
   });
 }
 
+/** The derived marker for a run whose log was compacted to its summary row. */
+function compactedMarker(executionId, logs) {
+  const row = (Array.isArray(logs) ? logs : []).find((r) => r && r.type === "compacted");
+  if (!row) return null;
+  const dropped = Number.isFinite(row.rowsDropped) ? row.rowsDropped : 0;
+  const status = row.status === "ok" ? "completed" : row.status === "cancelled" ? "was cancelled" : "failed";
+  return {
+    role: "system",
+    content: `Run log compacted: this run ${status}; ${dropped} log ${dropped === 1 ? "row" : "rows"} of tool detail were folded into its summary to bound storage (Settings → Data & memory).`,
+    ts: typeof row.compactedAt === "number" ? row.compactedAt : (typeof row.at === "number" ? row.at : Date.now()),
+    derived: true,
+    compacted: true,
+    executionId,
+  };
+}
+
 /** Merge a thread's persisted turn markers (user/terminal rows — the small
  * authoritative state the thread body still owns) with the tool rows derived
  * from the per-execution durable run logs.
@@ -1124,7 +1173,12 @@ export function projectThreadWithRunLogs(thread, executions = []) {
       // render the same call twice.
       const cards = toolRowsFromRunLog(e.executionId, e.logs)
         .filter((card) => !card.toolCallId || !bodyToolCallIds.has(card.toolCallId));
-      cardsByExec.set(e.executionId, cards);
+      // A COMPACTED log (CAP-FB-20260830-RUN-LOG-COMPACTION-01) is one honest
+      // summary row in place of the run's tool detail: render it as a
+      // read-only marker where the cards would have been, so the thread says
+      // what happened to them instead of silently showing nothing.
+      const compacted = compactedMarker(e.executionId, e.logs);
+      cardsByExec.set(e.executionId, compacted ? [compacted, ...cards] : cards);
     }
     const terminalPhase = e.phase === "terminal" || e.phase === "cancelled";
     if (terminalPhase && e.terminal && !terminalExecs.has(e.executionId)) {
@@ -1603,6 +1657,12 @@ export async function runConversationTurn(container, { text, attachments = [], h
   // duplicate-projection defect). Remember what was streamed; the completion
   // append fires only when the authoritative result differs.
   let streamedAgentText = null;
+  // The bubble currently holding that text. agent-do re-emits the SAME final
+  // text on each continuation step, which appended an identical bubble every
+  // time (seven for one delegation — CAP-FB-20260830-CLAIM-CHECK-BROWSER-
+  // TOOLS-01); and the authoritative result is that same text with the claim-
+  // check correction appended, which belongs IN the bubble, not beside it.
+  let streamedAgentBubble = null;
   // The terminal arbiter: settles the queue + unsubscribes EXACTLY ONCE on the
   // first authoritative terminal (the port's done/error or the run response —
   // which carries the final outcome incl. aborted). No timing dependency.
@@ -1742,7 +1802,13 @@ export async function runConversationTurn(container, { text, attachments = [], h
       case "text":
         if (ev.hidden === true) { streamer.finalize(ev.step, ""); break; }
         if (ev.text && (ev.hasToolCalls || streamer.active)) {
-          if (!streamer.finalize(ev.step, ev.text)) appendBubble(c, "agent", ev.text);
+          // ONE bubble per distinct final text: a step that repeats the text
+          // already rendered still settles any streaming row, but never adds a
+          // duplicate.
+          const repeat = ev.text === streamedAgentText;
+          const settled = streamer.finalize(ev.step, ev.text);
+          if (settled) streamedAgentBubble = settled;
+          else if (!repeat) streamedAgentBubble = appendBubble(c, "agent", ev.text);
           streamedAgentText = ev.text;
         }
         break;
@@ -1755,7 +1821,10 @@ export async function runConversationTurn(container, { text, attachments = [], h
         // claim-checked result) in place; an aborted run keeps what streamed.
         if (streamer.active) {
           if (ev.aborted === true) streamer.finalize(null, undefined);
-          else if (ev.text) { streamer.finalize(null, ev.text); streamedAgentText = ev.text; }
+          else if (ev.text) {
+            streamedAgentBubble = streamer.finalize(null, ev.text) ?? streamedAgentBubble;
+            streamedAgentText = ev.text;
+          }
         }
         if (ev.aborted === true) {
           status({ state: "cancelled", message: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted" });
@@ -1877,7 +1946,17 @@ export async function runConversationTurn(container, { text, attachments = [], h
       res.result !== streamedAgentText &&
       !authoritativeAlreadyProjected
     ) {
-      appendBubble(c, "agent", res.result);
+      // The authoritative result is often the rendered text with the honesty
+      // correction appended (extension/lib/mutation-claim-check.js). That is
+      // the SAME turn's reply — correct the bubble in place instead of
+      // painting the answer twice.
+      if (streamedAgentBubble?.isConnected && isClaimCorrectionOf(res.result, streamedAgentText)) {
+        streamedAgentBubble.setAttribute("content", res.result);
+        streamedAgentText = res.result;
+      } else {
+        streamedAgentBubble = appendBubble(c, "agent", res.result);
+        streamedAgentText = res.result;
+      }
     }
     // Provider-server grounding (Gemini google_search): the run response
     // carries the render-only citation rows (the reopened thread renders the

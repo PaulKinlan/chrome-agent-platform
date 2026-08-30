@@ -8,9 +8,12 @@
 // There is deliberately NO iframe preview and NO morph stub — the panel never
 // claims to embed or morph the page; the page lives in its real tab.
 //
-// The AGENT can open this surface with the `open_side_panel` tool: it stores a
-// target URL (sidepanel.getTarget) and this panel loads it on startup + shows
-// the origin's discovered tools (sidepanel.getTools).
+// A target URL may already be stored (sidepanel.getTarget); this panel loads it
+// on startup + shows the origin's discovered tools (sidepanel.getTools). The
+// agent-facing `open_side_panel` tool was REMOVED 2026-08-30
+// (CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01) — chrome.sidePanel.open() needs a
+// user gesture the service worker does not have, so the panel is opened by the
+// owner (the toolbar action or the keyboard command), never by the model.
 
 import { send } from "../lib/messages.js";
 import {
@@ -111,10 +114,10 @@ async function go() {
 goBtn.addEventListener("click", go);
 urlInput.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
 
-// On load: if the AGENT opened this panel (open_side_panel stored a target),
-// show that target + its tools WITHOUT opening a tab. Agent-driven tab opens
-// remain on the browser-control-granted open_tab tool; only the owner's Go /
-// Enter gesture invokes sidepanel.openPage.
+// On load: if a target URL was stored, show that target + its tools WITHOUT
+// opening a tab. Agent-driven tab opens remain on the browser-control-granted
+// open_tab tool; only the owner's Go / Enter gesture invokes
+// sidepanel.openPage.
 (async function boot() {
   try {
     const res = await send("sidepanel.getTarget");

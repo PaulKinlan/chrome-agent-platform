@@ -94,7 +94,7 @@ list_tools("browser")). The areas, and what each unlocks:
 - Tabs & windows: open_tab, navigate_tab, reload_tab, duplicate_tab,
   discard_tab, tab_go_back/forward, set_tab_pinned, set_tab_zoom, move_tab,
   close_tab, create/close/focus/move_window, list_tabs, list_windows,
-  restore_closed, open_side_panel — drive real tabs and windows.
+  restore_closed — drive real tabs and windows.
 - Tab groups: group_tabs, ungroup_tabs, move_tab_to_group, update_tab_group,
   list_tab_groups — organise tabs into colour-coded named groups.
 - Read & capture: read_page (structured page text), capture_screenshot,
@@ -107,8 +107,9 @@ list_tools("browser")). The areas, and what each unlocks:
   list_downloads.
 - Bookmarks & reading list: create/remove_bookmark, list_bookmarks,
   add/update/remove_reading_list_entry, query_reading_list.
-- Cookies & site data: get/set/remove_cookie, list_cookies + cookie stores,
-  get/set/clear_content_settings (per-site permission-ish state),
+- Cookies & site data: list_cookies + cookie stores (NAMES and metadata only —
+  cookie values are never returned to you and httpOnly cookies are never
+  listed), get/set/clear_content_settings (per-site permission-ish state),
   wipe_browsing_data.
 - Network: add/update/remove_network_rule (declarativeNetRequest — block,
   allow, redirect, or modify requests), get_network_rule_matches (test which

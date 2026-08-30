@@ -6,11 +6,12 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { scheduleTask } from "./scheduler.js";
-import { canonicalOrigin } from "./memory.js";
+import { canonicalOrigin, masterMemory, saveScreenshot } from "./memory.js";
 import { kvGet, kvRemove, kvSet } from "./kv.js";
 import { assertRunOwned } from "./run-fence.js";
 import { currentRunContext } from "./run-context.js";
 import { normalizeHostPattern } from "./permission-orchestration.js";
+import { DEVELOPER_ONLY_TOOL_NAMES } from "./chrome-tool-capabilities.js";
 import { capLog } from "./cap-log.js";
 import { perfSpan } from "./cap-perf.js";
 
@@ -295,7 +296,7 @@ function permissionDenial(error, { reason, permissions = [], grantOrigins = [], 
 
 // ── CAP-FB-20260830-PRIVILEGED-URL-BLOCK-01: destination scheme guard ──
 /** Every browser mutation that takes a DESTINATION url (open_tab, navigate_tab,
- * create_window, open_side_panel) runs this BEFORE any permission or grant
+ * create_window) runs this BEFORE any permission or grant
  * check. `canonicalOrigin` RETURNS null for non-web schemes (memory keying
  * must never treat chrome:/file:/about: as a storage boundary), and a global
  * browser-control grant authorizes a null origin — so without this guard the
@@ -513,6 +514,81 @@ function validateGrantFor(grant, origin) {
   return grant.id;
 }
 
+/** The base64 payload of a `data:<mediaType>;base64,<payload>` URL, or null.
+ * Pure — no decoding, no rendering. */
+function dataUrlParts(dataUrl) {
+  const match = /^data:([a-z]+\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]*)$/i.exec(
+    String(dataUrl ?? ""),
+  );
+  return match ? { mediaType: match[1].toLowerCase(), base64: match[2] } : null;
+}
+
+/** The decoded byte length of a base64 payload, without decoding it. */
+function base64ByteLength(base64) {
+  const text = String(base64 ?? "");
+  if (!text) return 0;
+  const padding = text.endsWith("==") ? 2 : text.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor(text.length / 4) * 3 - padding);
+}
+
+/** Read a PNG's pixel dimensions straight out of its IHDR chunk — the FIRST
+ * 33 bytes of the file — so a screenshot can report `width`/`height` without
+ * decoding or rendering the image (a service worker has no canvas, and
+ * `createImageBitmap` on a multi-megabyte PNG is not free). Returns null for
+ * anything that is not a base64 PNG with a well-formed signature + IHDR.
+ * Exported for the unit gate. */
+export function pngPixelSize(dataUrl) {
+  const parts = dataUrlParts(dataUrl);
+  if (!parts || parts.mediaType !== "image/png") return null;
+  // 33 bytes = 8 signature + 4 length + 4 "IHDR" + 8 width/height + …
+  // 44 base64 characters decode to exactly 33 bytes.
+  const head = parts.base64.slice(0, 44);
+  if (head.length < 44) return null;
+  let bytes;
+  try {
+    const binary = atob(head);
+    bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  } catch {
+    return null;
+  }
+  if (bytes.length < 24) return null;
+  const SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  for (let i = 0; i < SIGNATURE.length; i++) {
+    if (bytes[i] !== SIGNATURE[i]) return null;
+  }
+  if (String.fromCharCode(bytes[12], bytes[13], bytes[14], bytes[15]) !== "IHDR") {
+    return null;
+  }
+  const read32 = (at) =>
+    (bytes[at] << 24 | bytes[at + 1] << 16 | bytes[at + 2] << 8 | bytes[at + 3]) >>> 0;
+  const width = read32(16);
+  const height = read32(20);
+  if (!width || !height) return null;
+  return { width, height };
+}
+
+/** Persist a captured PNG to the master screenshots store (a dedicated OPFS
+ * file with an evict-oldest index — never an inline memory value, which the
+ * 256 KiB per-value bound would refuse). EVERY capture persists, the model's
+ * as well as the owner's: before this, only the action click stored anything,
+ * so `screenshots.list` was empty after an agent took a screenshot and the
+ * owner had no way to open the image
+ * (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01).
+ *
+ * Persistence is BEST-EFFORT and never fails the capture: a full quota or an
+ * unavailable store must not turn a successful screenshot into an error. The
+ * id is simply absent, and the caller says so honestly. */
+async function persistScreenshot({ url, dataURL }) {
+  try {
+    const saved = await saveScreenshot(masterMemory(), { url, dataURL });
+    return typeof saved?.id === "string" ? saved.id : null;
+  } catch (e) {
+    toolDispatchLog.warn("screenshot not persisted", e?.message ?? e);
+    return null;
+  }
+}
+
 /** The POST-activation capture body (active-tab resolution + capture + post-
  * checks), extracted so the `if (tabId)` path can wrap it in a prior-tab restore
  * on ANY later failure (round-23 finding 7: a failed capture must never leave
@@ -596,9 +672,22 @@ async function captureActiveTab({ origin, grantIdBefore, tabId }) {
   // abort/ownership loss during the captureVisibleTab await must discard the
   // bytes rather than return them (the round-18 fence coverage finding).
   await assertRunOwned();
+  // The bytes are KEPT (the owner can open them; a vision model is shown them
+  // as a real image part) but they never travel as model-facing JSON: the lazy
+  // protocol lifts `screenshot` out of the result into its attachment side
+  // channel, so what the model reads is the id + the dimensions
+  // (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01).
+  const screenshotId = await persistScreenshot({ url: nowTab.url, dataURL: dataUrl });
+  const size = pngPixelSize(dataUrl);
   return {
-    screenshot: dataUrl,
+    ok: true,
+    screenshotId,
     url: nowTab.url, // the SOURCE page, so the UI re-opens the page (not the data URL)
+    width: size?.width ?? null,
+    height: size?.height ?? null,
+    bytes: base64ByteLength(dataUrlParts(dataUrl)?.base64),
+    ...(screenshotId ? {} : { persisted: false }),
+    screenshot: dataUrl,
   };
 }
 
@@ -1334,50 +1423,31 @@ async function withScriptRegistrationGrant({ permission, permissionLabel, patter
   });
 }
 
-/** The browser-control toolset, passed into the agent. */
-export function browserToolset(readOnly = false, { scheduleScriptGate = null } = {}) {
+/** The browser-control toolset, passed into the agent.
+ *
+ * `developerFeatures` (CAP-FB-20260830-COOKIE-TOOLS-CUT-01) selects the
+ * DEVELOPER build's toolset. It defaults to false — fail closed — so a caller
+ * that forgets to read the flag gets the default product's smaller surface,
+ * never the larger one. `cookieValueGate` is the owner-approval leg for a
+ * cookie VALUE read; with no gate bound the read fails closed. */
+export function browserToolset(readOnly = false, {
+  scheduleScriptGate = null,
+  cookieValueGate = null,
+  developerFeatures = false,
+} = {}) {
   // SCOPED (hook) runs are side-effect-free: untrusted browser event data must
   // never drive a browser mutation (open/navigate/close a tab) or a durable
   // schedule. When readOnly, expose only the READ tools (read_page,
   // capture_screenshot, list_tabs, recent_browser_events).
+  // REMOVED 2026-08-30 (CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01, owner decision):
+  // `open_side_panel`. `chrome.sidePanel.open()` requires a user gesture and
+  // this toolset runs in the service worker with none, so every model call
+  // failed with "sidePanel.open() may only be called in response to a user
+  // gesture" while the tool description promised the panel would open. The
+  // owner's own paths into the panel (the action click, the keyboard command)
+  // are unaffected, and the `sidePanel` capability stays grantable in Settings.
+  // The removal guard lives in tests/chrome-tools-t12.test.ts.
   const all = {
-    open_side_panel: tool({
-      description:
-        "Open the Chrome side panel and load a page in it so you can watch and act on that page (its WebMCP tools are discovered via the content bridge). Requires the sidePanel permission.",
-      inputSchema: z.object({ url: z.string().url() }),
-      execute: async ({ url }) => {
-        // Scheme guard FIRST (see webDestination): the panel loads a web page.
-        const dest = webDestination(url);
-        if (dest.error) return { error: dest.error };
-        if (!(await hasSidePanelPermission())) {
-          return permissionDeniedResult("sidePanel", { reason: `open ${url} in the side panel` });
-        }
-        // Get the active tab so the panel is bound to it (chrome.sidePanel is
-        // per-tab). The panel reads the target URL on load (sidepanel.getTarget).
-        const active = (
-          await chrome.tabs.query({ active: true, currentWindow: true })
-        )[0];
-        if (!active?.id) return { error: "no active tab to bind the side panel" };
-        try {
-          await assertRunOwned();
-        } catch {
-          return { error: "run aborted — side panel not opened" };
-        }
-        // Store the target URL for the panel to load, then open the panel.
-        await kvSet({ "cap:sidepanelTarget": url });
-        try {
-          await chrome.sidePanel.setOptions({
-            tabId: active.id,
-            path: "sidepanel/sidepanel.html",
-            enabled: true,
-          });
-          await chrome.sidePanel.open({ tabId: active.id });
-        } catch (e) {
-          return { error: `side panel could not open: ${e?.message ?? e}` };
-        }
-        return { ok: true, url };
-      },
-    }),
     open_tab: tool({
       description:
         "Open a URL in a new browser tab. Requires browser-control permission (scoped + expiring).",
@@ -2176,7 +2246,7 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
     // the grant; the browser-wide browsing-data wipe needs a GLOBAL grant.
     list_cookies: tool({
       description:
-        "List cookies for a domain or URL (bounded). Requires cookies permission.",
+        "List cookie NAMES and metadata (domain, path, flags, expiry) for a domain or URL, bounded. Cookie VALUES are never returned and httpOnly cookies are never listed. Requires cookies permission.",
       inputSchema: z.object({
         domain: z.string().min(1).max(253).optional(),
         url: z.string().url().max(2048).optional(),
@@ -2197,21 +2267,28 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
           return { error: `cookie query failed: ${String(e?.message ?? e).slice(0, 200)}` };
         }
         const rows = Array.isArray(all) ? all : [];
+        // A tool result becomes the content of the NEXT request to the model
+        // provider. A cookie value is a bearer credential, so it never enters
+        // one (CAP-FB-20260830-COOKIE-TOOLS-CUT-01): the listing is metadata
+        // only, and an httpOnly cookie — the shape session cookies take — is
+        // withheld entirely, counted rather than described.
+        const visible = rows.filter((c) => c?.httpOnly !== true);
         return {
-          cookies: rows.slice(0, maxResults).map((c) => ({
+          cookies: visible.slice(0, maxResults).map((c) => ({
             name: c.name,
-            value: c.value,
             domain: c.domain,
             path: c.path,
             secure: c.secure,
-            httpOnly: c.httpOnly,
             sameSite: c.sameSite ?? null,
             expirationDate: c.expirationDate ?? null,
             storeId: c.storeId ?? null,
           })),
-          returned: Math.min(rows.length, maxResults),
-          total: rows.length,
-          truncated: rows.length > maxResults,
+          returned: Math.min(visible.length, maxResults),
+          total: visible.length,
+          truncated: visible.length > maxResults,
+          // Honest about what was withheld, without naming or valuing it.
+          httpOnlyHidden: rows.length - visible.length,
+          valuesRedacted: true,
         };
       },
     }),
@@ -2239,12 +2316,15 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
     }),
     get_cookie: tool({
       description:
-        "Read one cookie by URL + name. Requires cookies permission AND the exact-origin host permission for the URL's site.",
+        "Read one cookie's metadata by URL + name (name, domain, path, flags, expiry). The VALUE is withheld unless revealValue is set AND the owner approves it, and httpOnly cookies are never returned. Requires cookies permission AND the exact-origin host permission for the URL's site.",
       inputSchema: z.object({
         url: z.string().url().max(2048),
         name: z.string().min(1).max(512),
+        // Asking for the value is a separate, owner-approved act. The default
+        // is metadata — the model has to say it needs the credential.
+        revealValue: z.boolean().optional(),
       }),
-      execute: async ({ url, name }) => {
+      execute: async ({ url, name, revealValue = false }) => {
         if (!(await hasPermission("cookies"))) {
           return permissionDeniedResult("cookies");
         }
@@ -2253,6 +2333,19 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
         if (!(await hasOriginHostPermission(origin))) {
           return { error: `host permission for ${origin} not granted — broad host access is granted at install (<all_urls>); if it is missing, reinstall the extension` };
         }
+        // The approval is settled BEFORE Chrome is asked for the cookie, so a
+        // refused read never even materialises the value in this worker.
+        let valueApproved = false;
+        if (revealValue === true) {
+          if (typeof cookieValueGate !== "function") {
+            return { ok: false, error: "reading a cookie value requires owner approval, which this run cannot request" };
+          }
+          const gate = await cookieValueGate({ origin, name });
+          if (!gate || gate.ok !== true) {
+            return gate ?? { ok: false, error: "the cookie value read was not approved" };
+          }
+          valueApproved = true;
+        }
         let cookie = null;
         try {
           cookie = await chrome.cookies.get({ url, name });
@@ -2260,16 +2353,22 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
           return { error: `cookie read failed: ${String(e?.message ?? e).slice(0, 200)}` };
         }
         if (!cookie) return { ok: true, cookie: null, found: false };
+        // httpOnly is the browser saying "script must never see this". The
+        // model is further from the page than a script is, so approval does
+        // not unlock it either — the existence is reported, nothing else.
+        if (cookie.httpOnly === true) {
+          return { ok: true, cookie: null, found: false, httpOnlyWithheld: true };
+        }
         return {
           ok: true,
           found: true,
+          ...(valueApproved ? { valueApproved: true } : { valueRedacted: true }),
           cookie: {
             name: cookie.name,
-            value: cookie.value,
+            ...(valueApproved ? { value: cookie.value } : {}),
             domain: cookie.domain,
             path: cookie.path,
             secure: cookie.secure,
-            httpOnly: cookie.httpOnly,
             sameSite: cookie.sameSite ?? null,
             expirationDate: cookie.expirationDate ?? null,
             storeId: cookie.storeId ?? null,
@@ -5170,6 +5269,15 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
       },
     }),
   };
+  // DEVELOPER-ONLY tools (CAP-FB-20260830-COOKIE-TOOLS-CUT-01): the default
+  // product does not hand the model a way to read a cookie value or write a
+  // cookie at all. The names stay in the capability catalogue — the build
+  // genuinely contains them — but they are omitted from the toolset unless the
+  // developer flag is on. The list is read from the capability table so the
+  // catalogue and the toolset can never disagree about which tools those are.
+  if (!developerFeatures) {
+    for (const name of DEVELOPER_ONLY_TOOL_NAMES) delete all[name];
+  }
   // SCOPED (hook) runs are side-effect-free: read_page / capture_screenshot /
   // list_tabs / recent_browser_events are the only tools exposed. open_tab /
   // navigate_tab / close_tab / schedule_task are DURABLE/DESTRUCTIVE and must
@@ -5189,7 +5297,10 @@ export function browserToolset(readOnly = false, { scheduleScriptGate = null } =
       list_context_menus: all.list_context_menus,
       list_cookies: all.list_cookies,
       list_cookie_stores: all.list_cookie_stores,
-      get_cookie: all.get_cookie,
+      // get_cookie is developer-only: `all` no longer carries it in the
+      // default build, and a key holding `undefined` would still look like an
+      // offered tool, so it is spread in only when it exists.
+      ...(all.get_cookie ? { get_cookie: all.get_cookie } : {}),
       get_content_setting: all.get_content_setting,
       // T13 deep tab control reads (observe-only).
       get_tab_zoom: all.get_tab_zoom,

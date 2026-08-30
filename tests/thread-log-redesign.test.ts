@@ -358,3 +358,36 @@ Deno.test("bounded replay: a single run with >250 log rows still shows the recen
   assert(view.truncatedLogs === true, "the row-level truncation is flagged honestly");
   assertEquals(view.status, "done");
 });
+
+// ── CAP-FB-20260830-RUN-LOG-COMPACTION-01 ────────────────────────────────────
+Deno.test("KAT 10: a compacted run reopens honestly — one marker in place of its cards, the answer intact", async () => {
+  const store = new FakeStore();
+  const registry = createDurableRunRegistry({
+    store,
+    logHandleFor: (store.__logHandles ??= createMemoryRunLogHandles()),
+    bootId: "boot-compact",
+    now: (() => { let n = 1000; return () => ++n; })(),
+    resolveJournalStore: async () => ({ journal: [] }),
+    appendJournal: async () => {},
+    replaceCancellationJournal: async () => {},
+    commitThread: (threadId, execId, terminal) => commitThreadTerminal(threadId, execId, terminal),
+    replaceCancellationThread: (threadId, execId, terminal) => commitThreadTerminal(threadId, execId, { ...terminal, role: "error", category: "cancelled" }),
+    retentionSetting: async () => ({ mode: "bounded", perThread: 1 }),
+  });
+  const t = await createThread("compacted task");
+  await seedRun(registry, "exec_k9_00000001", t.id, 3, { result: "first answer" });
+  await continueThread(t.id, "again");
+  await seedRun(registry, "exec_k9_00000002", t.id, 2, { result: "second answer" });
+  const view = await viewOf(registry, t.id);
+  // The newest run keeps its cards; the older run's cards are gone and ONE
+  // marker says so — in the older run's place, before its answer.
+  assertEquals(toolCards(view).length, 2, "only the newest run's tool cards remain");
+  const markers = view.messages.filter((m) => m.role === "system" && m.compacted === true);
+  assertEquals(markers.length, 1, "exactly one compaction marker");
+  assert(/Run log compacted: this run completed; 8 log rows/.test(markers[0].content), markers[0].content);
+  const firstAnswer = view.messages.findIndex((m) => m.role === "assistant" && m.content === "first answer");
+  assert(firstAnswer >= 0, "the compacted run's answer is still in the thread");
+  assertEquals(view.messages.indexOf(markers[0]), firstAnswer - 1, "the marker sits where the cards were");
+  assert(view.messages.some((m) => m.role === "assistant" && m.content === "second answer"));
+  assertEquals(view.viewDegraded, undefined, "compaction is not degradation");
+});

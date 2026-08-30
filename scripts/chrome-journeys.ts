@@ -414,7 +414,10 @@ const EXPECTED = [
   "after disabling that recipe the four agent surfaces agree (0) again",
   "create dialog: the template gallery is the first step (blank + 21 templates + scheduled recipes; Starter shows 7; no template select)",
   "create dialog: Enter on the Research Analyst card fills Name, presses the card and checks its skills",
+  "create dialog: Advanced+Skills expand and the config body scrolls with them (min-height hardening)",
+  "create dialog: a REAL skill checkbox click checks it (unchecked → checked)",
   "create dialog: Create agent from the card yields ONE named agent whose role is the template persona",
+  "create dialog: the saved agent's skill ids CONTAIN the exactly-toggled skill id",
   "create dialog: a Scheduled card creates one scheduled agent that the sidebar and Settings both list",
   "create dialog: the journey's created agents are removed again (fresh profile restored)",
   "NTP: task input present",
@@ -452,6 +455,7 @@ const EXPECTED = [
   "permissions: Bookmarks prompt cancelled and permission settled absent in headless",
   "permissions: Tab groups Enable clicked via a trusted gesture",
   "permissions: Tab groups prompt cancelled and permission settled absent in headless",
+  "permissions: retry affordance intact for cancelled warned permissions (fresh Settings page)",
   "permissions: capability.revoke still requires owner approval (fail closed)",
   "board deny: two named agents created for the journey",
   "board deny: Board permissions section opens from the nav",
@@ -478,6 +482,7 @@ const EXPECTED = [
   "enrollment: origin enrolled under JIT grant",
   "Settings: retained a driven-UI screenshot",
   "keyless: developer flag off for the fresh-profile run",
+  "Cookies: the cookie value reader and the cookie writers are absent from the default build",
   "keyless: typed 'group my tabs by topic' into the hub composer",
   "keyless: clicked Run task",
   "keyless: the first run pauses on ONE Allow card naming tabs (never a bare error)",
@@ -488,16 +493,20 @@ const EXPECTED = [
   "keyless: no lazy-protocol text leaks into the live thread (modelContent/catalogGeneration/stableId/schemaSummary/search_tools/execute_tool)",
   "keyless: reopening the thread renders the in-context grant card, not error prose",
   "keyless: developer flag back on for the marker journeys",
+  "Cookies: the developer build exposes them again, and no cookie value ever reaches the model",
   "warm run 1 returns a concrete demo result",
   "warm run 2 (after re-save) returns a concrete demo result",
   "Transcript: 'list my open tabs' survives a reload at full length",
   "Transcript: no nudge summary bubble after a text-ending step",
   "Transcript: no lazy-protocol text leaks into the reopened thread (modelContent/catalogGeneration/stableId/schemaSummary/search_tools/execute_tool)",
+  "Memory recall: a new thread's prompt carries the digest of a key written earlier",
+  "Memory recall: a new thread answers 'green' from the digest, never 'I do not know'",
   "Provider error: SW console recorded the real HTTP 401 from the fixture provider",
   "Provider error: a rejected key renders the 401 bubble with a Settings link",
   "Provider error: preflight refusal reaches a terminal Failed row within 5 s",
   "Streaming: the assistant bubble grows across at least 5 distinct lengths",
   "Streaming: the final bubble equals the non-streamed render",
+  "Claim check: a failed delegate renders one correction and one final bubble",
   "Thread view: update card is titled with the artifact name",
   "Thread view: run banner visible 300 ms after send",
   "Thread view: no empty panel space below a two-turn thread at 1440x900",
@@ -513,6 +522,7 @@ const EXPECTED = [
   "Browser control: toggle ON in Settings leaves no lease",
   "Browser control: a run's open_tab is not lease-refused after the Settings toggle",
   "Privileged URL: open_tab chrome://settings is refused under a global grant",
+  "Side panel: open_side_panel is absent from the model toolset",
   "screenshot: typed the red origin into the allowed-origins field",
   "screenshot: grant scoped to the red origin via the UI",
   "screenshot: UI-granted capture SUCCEEDS for the scoped origin",
@@ -525,6 +535,8 @@ const EXPECTED = [
   "Permission card: Allow grants scripting and the retried read_page succeeds",
   "Permission card: capture_screenshot denial renders one approval card",
   "Permission card: Allow grants browser control and the retried capture_screenshot succeeds",
+  "Screenshot: model capture is persisted and listed",
+  "Screenshot: tool card shows a thumbnail",
   "per-origin clear leaves B intact",
   "memory: version tokens are monotonic + never reused (round-27 CAS)",
   "attachment count cap (12 → 4 over-count dropped, journal records 8)",
@@ -548,6 +560,9 @@ const EXPECTED = [
   "orchestrator: multi-agent ON + delegation tools present",
   "orchestrator: worker fanned out (workerCount >= 1)",
   "worker delegated task ran (worker result journaled)",
+  "Settings: Data & memory shows the run-log retention row",
+  "Settings: the run-log retention toggle reports the bounded default (off)",
+  "Settings: retained the run-log retention screenshot",
   "Settings: multi-agent toggle present",
   "Settings: clicked the multi-agent toggle OFF",
   "Settings: multi-agent setting persisted OFF",
@@ -588,8 +603,14 @@ const EXPECTED = [
   "artifact versions: two rows with distinct sha256 after the edit turn",
   "artifact versions: version-get returns v1's exact body",
   "artifact versions: restore of v1 is a new head whose body equals v1 byte-for-byte",
+  "viewer: Preview|Source|Diff tablist renders with exactly one selected tab",
+  "viewer: ArrowRight selects Source and the panel shows highlighted, exact source",
+  "viewer: Diff tab shows version pickers and a real diff between two versions",
   "mgmt: delete_asset removed it",
   "mgmt: asset gone after delete",
+  "artifacts: update_asset with an empty id says use list_assets",
+  "artifacts: update_asset with an unknown id says use list_assets",
+  "artifacts: one New tab click opens exactly one viewer target",
   "cap:fetch: loopback refused from a sandboxed script",
   "Scripts: run_script from the model shows the approval card with the source",
   "Scripts: the approved run executes only after Allow",
@@ -1097,8 +1118,108 @@ async function main() {
       g1.name === "Research Analyst" && g1.selectedId === "research-analyst" && g1.selectedPressed === "true" &&
         g1.checked >= 3 && g1.activeIsUse,
     );
+
+    // CAP-FB-20260830-AGENT-DIALOG-SCROLL-01 — the config body must scroll
+    // once Advanced and Skills are expanded (min-height:0 hardening on
+    // .agent-config-scroll). The previous failure mode: min-height:auto made
+    // the body grow to content height inside the bounded container
+    // (overflow:hidden), clipping the skills section and the footer.
+    await evalIn(cdp, ntpSession, `document.querySelector('.agent-config-advanced summary')?.click(); document.querySelector('.skills-collapse summary')?.click(); true`);
+    await sleep(250);
+    const scrollProbe = await evalIn(cdp, ntpSession, `(() => {
+      const el = document.querySelector('.agent-config-scroll');
+      const adv = document.querySelector('.agent-config-advanced');
+      const sk = document.querySelector('.skills-collapse');
+      if (!el || !adv || !sk) return { ready: false };
+      if (!adv.open || !sk.open) return { ready: false, advOpen: adv.open, skOpen: sk.open };
+      const r = el.getBoundingClientRect();
+      const before = el.scrollTop;
+      return {
+        ready: true,
+        minHeight: getComputedStyle(el).minHeight,
+        overflowY: getComputedStyle(el).overflowY,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+        scrollTopBefore: before,
+        wheelX: r.x + r.width / 2,
+        wheelY: r.y + r.height / 2,
+        footerVisible: (() => { const f = document.querySelector('.agent-config-footer')?.getBoundingClientRect(); return f ? f.top > 0 && f.bottom <= innerHeight && f.top < f.bottom : null; })(),
+      };
+    })()`);
+    if (scrollProbe?.ready) {
+      for (let i = 0; i < 5; i++) {
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: scrollProbe.wheelX, y: scrollProbe.wheelY, deltaX: 0, deltaY: 400 }, ntpSession);
+        await sleep(100);
+      }
+      scrollProbe.scrollTopAfterWheel = await evalIn(cdp, ntpSession, `document.querySelector('.agent-config-scroll')?.scrollTop ?? null`);
+    }
+    console.log("create dialog scroll probe:", JSON.stringify(scrollProbe));
+    check(
+      "create dialog: Advanced+Skills expand and the config body scrolls with them (min-height hardening)",
+      scrollProbe?.ready === true &&
+        scrollProbe.minHeight === "0px" && scrollProbe.overflowY === "auto" &&
+        scrollProbe.scrollHeight > scrollProbe.clientHeight &&
+        (scrollProbe.scrollTopAfterWheel ?? 0) > (scrollProbe.scrollTopBefore ?? 0) &&
+        scrollProbe.footerVisible === true,
+    );
+
     const galleryShot = await captureShot(cdp, ntpSession);
     if (galleryShot) await writeEvidence("templates-gallery.png", galleryShot);
+    // REVISE r1 P1 (reviewer): prove a REAL skill checkbox toggle persists its
+    // EXACT id on the saved agent — the earlier count-only check could pass on
+    // template pre-checks alone. Pick the first UNCHECKED skill (so the toggle
+    // is an observable change), real-click it, and record its skill id from the
+    // same skill.list the dialog renders from (checkbox DOM order == catalog
+    // order), then assert the saved agent's skills contain that exact id.
+    const skillCatalog = await msgValue({ type: "skill.list" });
+    const togglePick = await evalIn(cdp, ntpSession, `(() => {
+      const host = [...document.querySelectorAll('agent-dialog')].find((h) => h.shadowRoot?.querySelector('dialog')?.open);
+      const boxes = host ? [...host.querySelectorAll('.skills-list input[type=checkbox]')] : [];
+      const idx = boxes.findIndex((b) => !b.checked);
+      if (idx < 0) return { ok: false, reason: 'no unchecked skill checkbox', n: boxes.length };
+      const b = boxes[idx];
+      const r = b.getBoundingClientRect();
+      const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+      // The click is only safe as a CDP mouse event when the point genuinely
+      // resolves to the checkbox (or its label row). Arithmetic viewport
+      // checks are unreliable here (the eval context reports a tall
+      // innerHeight); an off-viewport CDP click would land on the native
+      // dialog backdrop and light-dismiss the dialog. Otherwise drive the REAL
+      // checkbox through its own change handler via el.click().
+      const at = document.elementFromPoint(cx, cy);
+      const clickable = at === b || at === b.closest('label');
+      return { ok: true, idx, x: cx, y: cy, checkedBefore: b.checked, clickable, n: boxes.length };
+    })()`);
+    let toggledSkillId = null;
+    if (togglePick?.ok) {
+      // Real CDP mouse click when the checkbox is genuinely on-screen; the
+      // deep rows of the 180px skills list sit below the viewport in a tall
+      // dialog (template gallery + fields + Advanced header above), so for
+      // those the REAL checkbox is driven through its own change handler via
+      // el.click() — same listener, same Map update, same persistence path.
+      if (togglePick.clickable) {
+        await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: togglePick.x, y: togglePick.y, button: "left", buttons: 1, clickCount: 1 }, ntpSession);
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: togglePick.x, y: togglePick.y, button: "left", buttons: 0, clickCount: 1 }, ntpSession);
+      } else {
+        await evalIn(cdp, ntpSession, `(() => { const host = [...document.querySelectorAll('agent-dialog')].find((h) => h.shadowRoot?.querySelector('dialog')?.open); const boxes = host ? [...host.querySelectorAll('.skills-list input[type=checkbox]')] : []; boxes[${togglePick.idx}]?.click(); return true; })()`);
+      }
+      await sleep(150);
+      const cat = skillCatalog?.skills ?? [];
+      toggledSkillId = cat[togglePick.idx]?.id ?? cat[togglePick.idx]?.name ?? null;
+    }
+    console.log("create dialog toggle pick:", JSON.stringify(togglePick));
+    const toggledState = await evalIn(cdp, ntpSession, `(() => {
+      const hosts = [...document.querySelectorAll('agent-dialog')];
+      const openHost = hosts.find((h) => h.shadowRoot?.querySelector('dialog')?.open);
+      const boxes = openHost ? [...openHost.querySelectorAll('.skills-list input[type=checkbox]')] : [];
+      const b = boxes[${togglePick?.ok ? togglePick.idx : -1}];
+      return { checkedAfter: b?.checked === true, openHosts: hosts.filter((h) => h.shadowRoot?.querySelector('dialog')?.open).length, boxes: boxes.length };
+    })()`);
+    console.log("create dialog toggled state:", JSON.stringify(toggledState));
+    check(
+      "create dialog: a REAL skill checkbox click checks it (unchecked → checked)",
+      togglePick?.ok === true && toggledState?.checkedAfter === true && typeof toggledSkillId === "string" && toggledSkillId.length > 0,
+    );
     const createBtnPoint = await evalIn(cdp, ntpSession, `(() => { const b = [...document.querySelectorAll('agent-dialog button')].find((x) => x.textContent.trim() === 'Create agent'); if (!b) return null; b.scrollIntoView({ block: 'center' }); const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
     if (createBtnPoint) {
       await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: createBtnPoint.x, y: createBtnPoint.y, button: "left", buttons: 1, clickCount: 1 }, ntpSession);
@@ -1111,10 +1232,15 @@ async function main() {
       if (!createdFromCard) await sleep(200);
     }
     const namedCount1 = ((await msgValue({ type: "named-agent.list" }))?.agents ?? []).length;
-    console.log("createdFromCard from card:", JSON.stringify({ id: createdFromCard?.id, role: String(createdFromCard?.role ?? "").slice(0, 40), skills: (createdFromCard?.skills ?? []).length, namedCount1 }));
+    const savedSkillIds = (createdFromCard?.skills ?? []).map((s) => (s && typeof s === "object" ? s?.id : s));
+    console.log("createdFromCard from card:", JSON.stringify({ id: createdFromCard?.id, role: String(createdFromCard?.role ?? "").slice(0, 40), skills: savedSkillIds, namedCount1 }));
     check(
       "create dialog: Create agent from the card yields ONE named agent whose role is the template persona",
       createdFromCard !== null && namedCount1 === 1 && /^# Research Analyst Persona/.test(String(createdFromCard?.role ?? "")) && (createdFromCard?.skills ?? []).length >= 3,
+    );
+    check(
+      "create dialog: the saved agent's skill ids CONTAIN the exactly-toggled skill id",
+      typeof toggledSkillId === "string" && savedSkillIds.includes(toggledSkillId),
     );
     // A Scheduled card: the recipe becomes ONE scheduled named agent through
     // the same create path (the schedule text "every N minutes" is prefilled).
@@ -1694,6 +1820,37 @@ async function main() {
       tabGroupsDenied.denied,
     );
 
+    // The retry affordance after cancelled prompts (the old headed macro's
+    // STEP K denial half — covered headless since the permission-matrix lane):
+    // a FRESH Settings page shows both warned rows requestable with a working
+    // Enable button. (Re-open the page rather than reload: navigation breaks
+    // the CDP eval context.)
+    const afterDenyPage = await openPage(port, `chrome-extension://${extId}/options/options.html`);
+    const afterDenySession = await attachRuntime(cdp, afterDenyPage.id);
+    cdp.pageSessions.add(afterDenySession);
+    let retryAffordance = false;
+    for (let i = 0; i < 25 && !retryAffordance; i++) {
+      const rows = await evalIn(cdp, afterDenySession, `(() => {
+        const named = (label) => [...document.querySelectorAll('#permission-list .perm-row')]
+          .find((r) => r.querySelector('.perm-name')?.textContent === label);
+        const state = (label) => {
+          const row = named(label);
+          const btn = row?.querySelector('button');
+          return row ? { state: row.querySelector('.perm-state')?.textContent, button: btn?.textContent, disabled: btn?.disabled } : null;
+        };
+        return { bookmarks: state("Bookmarks"), tabGroups: state("Tab groups") };
+      })()`).catch(() => null);
+      retryAffordance = rows?.bookmarks?.state === "Not enabled" && rows?.bookmarks?.button === "Enable" &&
+        rows?.bookmarks?.disabled === false &&
+        rows?.tabGroups?.state === "Not enabled" && rows?.tabGroups?.button === "Enable" &&
+        rows?.tabGroups?.disabled === false;
+      if (!retryAffordance) await sleep(400);
+    }
+    check(
+      "permissions: retry affordance intact for cancelled warned permissions (fresh Settings page)",
+      retryAffordance === true,
+    );
+
     await msgOpts({
       type: "provider.set",
       config: {
@@ -1982,6 +2139,25 @@ async function main() {
     // evaluate timed out), so the card is ALWAYS settled before moving on.
     // ─────────────────────────────────────────────────────────────
     check("keyless: developer flag off for the fresh-profile run", (await developerFlag(false))?.ok === true);
+    // CAP-FB-20260830-COOKIE-TOOLS-CUT-01: with the developer flag OFF (the
+    // shape a real install runs in) the model executor cannot resolve the
+    // cookie value reader or either cookie writer at all — "list cookies for
+    // github.com" can no longer be turned into a session-cookie read. The
+    // metadata-only listing stays, because names and expiry are not credentials.
+    const cookieCutDefault = {};
+    for (const toolName of ["get_cookie", "set_cookie", "remove_cookie", "list_cookies"]) {
+      cookieCutDefault[toolName] = await msgValue({
+        type: "agent-worker.tool",
+        toolName,
+        args: toolName === "list_cookies" ? { domain: "127.0.0.1" } : { url: `${RED_ORIGIN}/`, name: "sid", value: "v" },
+      });
+    }
+    check(
+      "Cookies: the cookie value reader and the cookie writers are absent from the default build",
+      ["get_cookie", "set_cookie", "remove_cookie"].every((n) =>
+        cookieCutDefault[n]?.ok === false && cookieCutDefault[n]?.error === `unknown tool: ${n}`
+      ) && cookieCutDefault.list_cookies?.error !== "unknown tool: list_cookies",
+    );
     await msgValue({ type: "provider.set", config: { provider: "demo", apiKey: "" } });
     const keylessBefore = await msgValue({ type: "thread.list" });
     const keylessThreadsBefore = new Set((keylessBefore?.threads ?? []).map((t) => t?.id));
@@ -2121,6 +2297,25 @@ async function main() {
       keylessReopened.cards === 1 && /"tabs"/.test(keylessReopened.permissions ?? "") && keylessReopened.state === "denied",
     );
     check("keyless: developer flag back on for the marker journeys", (await developerFlag(true))?.ok === true);
+    // The developer build gets the three tools back — and even there a cookie
+    // result never carries a value: `list_cookies` is metadata-only and
+    // `get_cookie` withholds the value until the owner approves it, so no
+    // outcome of either tool can put a `"value"` key in the model's context.
+    const cookieDev = {};
+    for (const toolName of ["get_cookie", "list_cookies"]) {
+      cookieDev[toolName] = await msgValue({
+        type: "agent-worker.tool",
+        toolName,
+        args: toolName === "list_cookies" ? { domain: "127.0.0.1" } : { url: `${RED_ORIGIN}/`, name: "sid" },
+      });
+    }
+    const cookieDevJson = JSON.stringify(cookieDev);
+    check(
+      "Cookies: the developer build exposes them again, and no cookie value ever reaches the model",
+      cookieDev.get_cookie?.error !== "unknown tool: get_cookie" &&
+        cookieDev.list_cookies?.error !== "unknown tool: list_cookies" &&
+        !/"value"/.test(cookieDevJson),
+    );
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 3 — warm provider invalidation with CONCRETE assertions.
@@ -2224,6 +2419,41 @@ async function main() {
       leakText.length > 0 && leaked.length === 0 &&
         Array.isArray(leakCards) && leakCards.length >= 3 &&
         !leakCards.some((n) => n === "search_tools" || n === "list_tools" || n === "execute_tool"),
+    );
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 3b-memory — CAP-FB-20260830-MEMORY-RECALL-NEW-THREAD-01: memory
+    // is not write-only. What the model saved in ONE thread reaches the NEXT
+    // thread's system prompt as the runtime-context memory digest, so a fresh
+    // thread answers from it instead of "I do not know".
+    // The demo model's @demo-recall marker issues NO tool call: its answer can
+    // only come from the digest its own prompt carried, so a passing check is
+    // evidence about the WIRE, not about the store.
+    // ─────────────────────────────────────────────────────────────
+    // The @demo-tools run above wrote the key `demo` through the real lazy
+    // protocol; this NEW thread must see it without touching a memory tool.
+    const digestRun = await msgValue({ type: "agent.run", task: "@demo-recall demo" });
+    const digestText = String(digestRun?.result ?? "");
+    console.log(`memory digest recall: ${digestText.slice(0, 200)}`);
+    check(
+      "Memory recall: a new thread's prompt carries the digest of a key written earlier",
+      digestRun?.ok === true &&
+        String(digestRun?.threadId ?? "") !== String(transcriptThreadId ?? "") &&
+        /recall: demo is /.test(digestText) && digestText.includes("Espresso machine"),
+    );
+    // The reported failure, end to end: save a colour in one thread, ask for it
+    // in a new one.
+    const rememberRun = await msgValue({ type: "agent.run", task: "@demo-remember owner-favourite-colour=green" });
+    const overviewAfterWrite = await msgValue({ type: "memory.overview" });
+    const wroteColour = JSON.stringify(overviewAfterWrite ?? {}).includes("owner-favourite-colour");
+    const recallRun = await msgValue({ type: "agent.run", task: "@demo-recall owner-favourite-colour" });
+    const recallText = String(recallRun?.result ?? "");
+    console.log(`memory colour recall: wrote=${wroteColour} answer=${recallText.slice(0, 200)}`);
+    check(
+      "Memory recall: a new thread answers 'green' from the digest, never 'I do not know'",
+      rememberRun?.ok === true && wroteColour === true && recallRun?.ok === true &&
+        String(recallRun?.threadId ?? "") !== String(rememberRun?.threadId ?? "") &&
+        /recall: owner-favourite-colour is green/.test(recallText) &&
+        !/I do not know/.test(recallText),
     );
     // JOURNEY 3c — provider error truth (CAP-FB-20260830-PROVIDER-ERROR-TRUTH-01).
     // A provider HTTP failure must be reported by its real status, never as
@@ -2414,6 +2644,54 @@ async function main() {
     check(
       "Streaming: the final bubble equals the non-streamed render",
       streamCompare?.equal === true && streamCompare?.contentAttr === DEMO_STREAM_ANSWER && streamCompare?.streamedText === DEMO_STREAM_ANSWER,
+    );
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 3d2 — CAP-FB-20260830-CLAIM-CHECK-BROWSER-TOOLS-01: delegating to
+    // an agent that does not exist FAILS (every delegate_task card reads
+    // `error`), but the model's final text still says "Delegation succeeded".
+    // The runtime honesty backstop appends the visible correction, and the
+    // turn's final text is painted EXACTLY ONCE — the reported baseline
+    // rendered the identical bubble once per continuation step (twelve here).
+    // ─────────────────────────────────────────────────────────────
+    const CLAIM_CHECK_STATE = `(() => {
+      const conv = document.getElementById('thread-conversation');
+      if (!conv) return JSON.stringify(null);
+      const bubbles = [...conv.querySelectorAll('message-bubble[role="agent"]')]
+        .map((b) => (((b.shadowRoot ?? b).querySelector('.body')) ?? b).textContent.replace(/\\s+/g, ' ').trim())
+        .filter((t) => t.length > 0);
+      const status = [...conv.querySelectorAll('conversation-run-status')].map((x) => x.getAttribute('state'));
+      const tools = [...conv.querySelectorAll('message-bubble[role="tool"]')]
+        .map((b) => b.getAttribute('tool-name') + ':' + b.getAttribute('tool-status'));
+      return JSON.stringify({ bubbles, status, tools });
+    })()`;
+    await driveHubTask("@demo-delegate nosuchagent");
+    let claimState = null;
+    {
+      const t0 = Date.now();
+      while (Date.now() - t0 < 30000) {
+        try { claimState = JSON.parse(await evalIn(cdp, ntpSession, CLAIM_CHECK_STATE) ?? "null"); } catch { claimState = null; }
+        if (claimState && claimState.bubbles.length > 0 &&
+          !(claimState.status ?? []).some((s) => ["queued", "running", "retrying"].includes(s))) break;
+        await sleep(250);
+      }
+      // The authoritative run response (the claim-checked result) lands after
+      // the live status row settles.
+      await sleep(800);
+      try { claimState = JSON.parse(await evalIn(cdp, ntpSession, CLAIM_CHECK_STATE) ?? "null"); } catch { /* keep the last poll */ }
+    }
+    const claimShot = await captureShot(cdp, ntpSession);
+    if (claimShot) await writeEvidence("claim-check-delegate.png", claimShot);
+    const claimBubbles = claimState?.bubbles ?? [];
+    console.log(`claim-check journey: ${JSON.stringify(claimState).slice(0, 1200)}`);
+    check(
+      "Claim check: a failed delegate renders one correction and one final bubble",
+      claimBubbles.length === 1 &&
+        claimBubbles[0].includes("Delegation succeeded") &&
+        claimBubbles.filter((t) => t.includes("Correction: I claimed I delegated the task")).length === 1 &&
+        (claimState?.tools ?? []).length > 0 &&
+        (claimState?.tools ?? []).every((t) => t === "delegate_task:error") &&
+        !(claimState?.status ?? []).some((s) => ["queued", "running", "retrying"].includes(s)),
     );
 
     // ─────────────────────────────────────────────────────────────
@@ -2694,6 +2972,30 @@ async function main() {
         privilegedOpen?.error === "only http(s) destinations are allowed" &&
         privilegedTargets.length === 0,
     );
+    // CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01: `open_side_panel` is REMOVED.
+    // chrome.sidePanel.open() needs a user gesture the service worker does not
+    // have, so every model call returned a gesture error while the description
+    // promised the panel would open. Driven through the SAME executor the agent
+    // loop uses, the name must now resolve to nothing at all — while the side
+    // panel tools that need no gesture stay reachable (the panel surface itself
+    // is untouched; only the model's fake door is gone).
+    const cutSidePanel = await msgValue({
+      type: "agent-worker.tool",
+      toolName: "open_side_panel",
+      args: { url: `${RED_ORIGIN}/` },
+    });
+    const keptSidePanel = await msgValue({
+      type: "agent-worker.tool",
+      toolName: "get_side_panel_options",
+      args: {},
+    });
+    check(
+      "Side panel: open_side_panel is absent from the model toolset",
+      cutSidePanel?.ok === false &&
+        cutSidePanel?.error === "unknown tool: open_side_panel" &&
+        keptSidePanel !== undefined &&
+        keptSidePanel?.error !== "unknown tool: get_side_panel_options",
+    );
     // Type the red origin into the allowed-origins field (a genuine text edit).
     check(
       "screenshot: typed the red origin into the allowed-origins field",
@@ -2915,7 +3217,7 @@ async function main() {
     await clickShadow(cdp, ntpSession, CARD_SEL, ".allow");
     const captureOk = await waitFor(async () =>
       (await settled("granted")) &&
-      /Browser tool capture_screenshot succeeded: .*screenshot \(\d+ chars\)/.test(await threadText()));
+      /Browser tool capture_screenshot succeeded: .*screenshot shot_[a-z0-9_]+/.test(await threadText()));
     const grantAfterCard = await msgValue({ type: "browser-control.get" });
     await ntpShotNow("permission-card-capture-allowed.png");
     dbg("capture allowed", { captureOk, grantAfterCard, pending: await pendingCount(), tail: (await threadText()).slice(-300) });
@@ -2924,6 +3226,59 @@ async function main() {
       captureOk && grantAfterCard?.scope === "origins" && Array.isArray(grantAfterCard?.origins) &&
         grantAfterCard.origins.includes(RED_ORIGIN) && (await pendingCount()) === 0,
     );
+
+    // CAP-FB-20260830-SCREENSHOT-TO-MODEL-01 — the capture the MODEL just took
+    // is a real saved image, not a base64 string in a message: the store holds
+    // the exact id the model was told about, and the tool card paints it.
+    const modelShotId = (/screenshot (shot_[a-z0-9_]+)/.exec(await threadText()) ?? [])[1] ?? "";
+    const shotIndex = await msgValue({ type: "screenshots.list" });
+    dbg("screenshots after the model capture", { modelShotId, index: shotIndex?.screenshots });
+    check(
+      "Screenshot: model capture is persisted and listed",
+      modelShotId !== "" && Array.isArray(shotIndex?.screenshots) &&
+        shotIndex.screenshots.some((s: { id?: string }) => s?.id === modelShotId),
+    );
+    // The card lives inside message-bubble's shadow root, and the thumbnail
+    // inside its own — so the probe walks shadow roots rather than pretending
+    // the transcript is one flat tree.
+    const thumbState = () =>
+      evalIn(cdp, ntpSession, `(() => {
+        const imgs = [];
+        const walk = (root, depth) => {
+          if (!root || depth > 8) return;
+          root.querySelectorAll("screenshot-thumb").forEach((t) => {
+            const img = t.shadowRoot?.querySelector("img") ?? t.querySelector("img");
+            if (img) imgs.push(img);
+          });
+          root.querySelectorAll("*").forEach((el) => { if (el.shadowRoot) walk(el.shadowRoot, depth + 1); });
+        };
+        walk(document.querySelector("#thread-conversation") ?? document.body, 0);
+        const img = imgs[imgs.length - 1];
+        return img ? { count: imgs.length, alt: img.alt, natural: img.naturalWidth, scheme: String(img.getAttribute("src") ?? "").split(":")[0] } : null;
+      })()`);
+    await waitFor(async () => ((await thumbState())?.natural ?? 0) > 0, 20000);
+    const thumb = await thumbState();
+    // Open the capture's card for the retained evidence: a tool card is
+    // collapsed by default, and a screenshot of a closed card proves nothing.
+    await evalIn(cdp, ntpSession, `(() => {
+      const open = (root, depth) => {
+        if (!root || depth > 8) return;
+        root.querySelectorAll("details.tool").forEach((d) => {
+          if (d.querySelector("screenshot-thumb")) d.open = true;
+        });
+        root.querySelectorAll("*").forEach((el) => { if (el.shadowRoot) open(el.shadowRoot, depth + 1); });
+      };
+      open(document.querySelector("#thread-conversation") ?? document.body, 0);
+      document.querySelector("#thread-conversation")?.scrollTo?.(0, 1e6);
+    })()`);
+    await sleep(400);
+    await ntpShotNow("screenshot-tool-card-thumbnail.png");
+    dbg("tool-card thumbnail", thumb);
+    check(
+      "Screenshot: tool card shows a thumbnail",
+      thumb !== null && thumb.natural > 0 && /^Screenshot of /.test(String(thumb.alt ?? "")),
+    );
+
     // Restore the pre-journey state (browser control revoked) for what follows.
     await msgValue({ type: "browser-control.set", granted: false });
 
@@ -3183,6 +3538,33 @@ async function main() {
     );
     // Toggle OFF via a genuine checkbox click → delegation tools disappear + the
     // rebuild generation advances (the observable fan-out boundary).
+    // Data & memory → the run-log retention row (CAP-FB-20260830-RUN-LOG-COMPACTION-01):
+    // the bound is visible and the "keep everything" opt-in is off by default.
+    const retentionRow = await evalOpts(
+      `(() => { const z = document.querySelector('#run-retention'); const t = document.querySelector('#run-retention-keep-all');
+        const b = document.querySelector('#run-retention-bound');
+        return z && t && b ? { name: z.querySelector('h3')?.textContent ?? '', bound: b.textContent, checked: t.hasAttribute('checked'),
+          switchState: t.shadowRoot?.querySelector('[role=switch]')?.getAttribute('aria-checked') ?? null } : null; })()`,
+    );
+    check(
+      "Settings: Data & memory shows the run-log retention row",
+      retentionRow !== null && /Run logs/.test(retentionRow.name) && /newest 10 runs per task/.test(retentionRow.bound) && /500 runs overall/.test(retentionRow.bound) && /32 MiB/.test(retentionRow.bound),
+    );
+    check(
+      "Settings: the run-log retention toggle reports the bounded default (off)",
+      retentionRow?.checked === false && retentionRow?.switchState === "false",
+    );
+    // By this point in the run the NTP is the ACTIVE tab, and
+    // Page.captureScreenshot never returns for a backgrounded one (it hung the
+    // whole suite). Activate the options target first, then drive the real nav
+    // item so Data & memory is genuinely the visible section.
+    await cdp.send("Target.activateTarget", { targetId: optsPageReload.id }).catch(() => {});
+    await clickSel(cdp, optsSession, '.nav-item[data-section="data"]');
+    await evalOpts(`(() => { document.querySelector('#run-retention')?.scrollIntoView({ block: 'center' }); return true; })()`);
+    await sleep(400);
+    const retentionShot = await captureShot(cdp, optsSession).catch(() => null);
+    if (retentionShot) await writeEvidence("settings-data-retention.png", retentionShot);
+    check("Settings: retained the run-log retention screenshot", retentionShot !== null && retentionShot.length > 200);
     check(
       "Settings: multi-agent toggle present",
       (await boxOf(cdp, optsSession, "#multi-agent")) !== null,
@@ -3700,6 +4082,84 @@ async function main() {
         versionsAfterRestore?.head === restored.version &&
         (versionsAfterRestore.versions ?? []).at(-1)?.sha256 === shas[0],
     );
+    // ─────────────────────────────────────────────────────────────
+    // ARTIFACT-VIEWER-SOURCE-DIFF-01: the artifact viewer offers a keyboard-
+    // reachable Preview | Source | Diff control. Source shows the exact,
+    // syntax-highlighted body; Diff renders the change between two immutable
+    // versions with a version picker + Restore. The seeded `assetId` above now
+    // carries several versions, so the Diff panel has real history to render.
+    // ─────────────────────────────────────────────────────────────
+    {
+      const viewerUrl = `chrome-extension://${extId}/artifact/artifact.html?id=${assetId}&origin=master`;
+      const vTarget = await openPage(port, viewerUrl);
+      await sleep(1600);
+      const vSession = await attachRuntime(cdp, vTarget.id);
+      let tabsInfo = null;
+      for (let i = 0; i < 20 && !tabsInfo?.count; i++) {
+        tabsInfo = await evalIn(cdp, vSession, `(() => {
+          const sc = document.getElementById('modes');
+          if (!sc || sc.hidden) return { count: 0 };
+          const tabs = [...(sc.shadowRoot?.querySelectorAll('[role="tab"]') ?? [])];
+          const selected = tabs.filter((t) => t.getAttribute('aria-selected') === 'true');
+          return { count: tabs.length, labels: tabs.map((t) => t.textContent), selected: selected.map((t) => t.textContent), tablist: !!sc.shadowRoot?.querySelector('[role="tablist"]') };
+        })()`);
+        if (!tabsInfo?.count) await sleep(300);
+      }
+      check(
+        "viewer: Preview|Source|Diff tablist renders with exactly one selected tab",
+        tabsInfo?.count === 3 && tabsInfo.tablist === true &&
+          JSON.stringify(tabsInfo.labels) === JSON.stringify(["Preview", "Source", "Diff"]) &&
+          tabsInfo.selected.length === 1 && tabsInfo.selected[0] === "Preview",
+      );
+      // Keyboard reachability: focus the selected tab, then ArrowRight → Source.
+      await evalIn(cdp, vSession, `(() => { const sc = document.getElementById('modes'); sc.shadowRoot.querySelector('[role="tab"][aria-selected="true"]')?.focus(); return true; })()`);
+      const arrowRight = async () => {
+        await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39, nativeVirtualKeyCode: 39 }, vSession);
+        await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39, nativeVirtualKeyCode: 39 }, vSession);
+      };
+      await arrowRight();
+      await sleep(500);
+      const sourceState = await evalIn(cdp, vSession, `(() => {
+        const sc = document.getElementById('modes');
+        const panel = document.getElementById('panel-source');
+        const insp = panel?.querySelector('artifact-inspector');
+        const spans = insp?.shadowRoot?.querySelectorAll('code [class^="tok-"]') ?? [];
+        const codeText = insp?.shadowRoot?.querySelector('code')?.textContent ?? "";
+        return { value: sc.value, visible: !!panel && !panel.hidden, tokenSpans: spans.length, bodyLen: codeText.length };
+      })()`);
+      check(
+        "viewer: ArrowRight selects Source and the panel shows highlighted, exact source",
+        sourceState?.value === "Source" && sourceState.visible === true &&
+          sourceState.tokenSpans > 0 && sourceState.bodyLen > 0,
+      );
+      const srcShot = await captureShot(cdp, vSession);
+      if (srcShot) await writeEvidence("viewer-source-highlighted.png", srcShot);
+      // Diff: ArrowRight again → Diff; the version pickers populate and the diff
+      // renders a real header between the two selected versions.
+      await arrowRight();
+      await sleep(900);
+      const diffState = await evalIn(cdp, vSession, `(() => {
+        const sc = document.getElementById('modes');
+        const panel = document.getElementById('panel-diff');
+        const base = document.getElementById('diff-base');
+        const compare = document.getElementById('diff-compare');
+        const ad = document.getElementById('artifact-diff');
+        const add = ad?.shadowRoot?.querySelector('.counts .add')?.textContent ?? "";
+        const del = ad?.shadowRoot?.querySelector('.counts .del')?.textContent ?? "";
+        const restore = document.getElementById('diff-restore');
+        return { value: sc.value, visible: !!panel && !panel.hidden, baseOpts: base?.options?.length ?? 0, compareOpts: compare?.options?.length ?? 0, add, del, restore: restore?.textContent ?? "" };
+      })()`);
+      check(
+        "viewer: Diff tab shows version pickers and a real diff between two versions",
+        diffState?.value === "Diff" && diffState.visible === true &&
+          diffState.baseOpts >= 2 && diffState.compareOpts >= 2 &&
+          /^\+\d+$/.test(String(diffState.add).trim()) && /^-\d+$/.test(String(diffState.del).trim()) &&
+          /^Restore v\d+$/.test(String(diffState.restore).trim()),
+      );
+      const diffShot = await captureShot(cdp, vSession);
+      if (diffShot) await writeEvidence("viewer-diff-versions.png", diffShot);
+      await cdp.send("Target.closeTarget", { targetId: vTarget.id });
+    }
     const assetDel = await approvedMsg({ type: "asset.delete", origin: "master", id: assetId });
     check("mgmt: delete_asset removed it", assetDel?.ok === true);
     const assetAfter = await msgValue({ type: "asset.list", origin: "master" });
@@ -3707,6 +4167,63 @@ async function main() {
       "mgmt: asset gone after delete",
       Array.isArray(assetAfter?.assets) &&
         !assetAfter.assets.some((a) => a.id === assetId),
+    );
+    // ─────────────────────────────────────────────────────────────
+    // ARTIFACT-QUICK-FIXES-01 (b): an empty/unknown asset id must answer with
+    // the readable sentence, never a misleading "requires owner approval" (the
+    // model would retry the same impossible call a dozen times).
+    // ─────────────────────────────────────────────────────────────
+    const emptyIdUpdate = await msgValue({ type: "asset.update", origin: "master", id: "", content: "x" });
+    check(
+      "artifacts: update_asset with an empty id says use list_assets",
+      emptyIdUpdate?.ok === false &&
+        String(emptyIdUpdate?.error ?? "") === "update_asset needs an existing id (use list_assets)" &&
+        !/owner approval/i.test(String(emptyIdUpdate?.error ?? "")),
+    );
+    const unknownIdUpdate = await msgValue({ type: "asset.update", origin: "master", id: "a_never_created", content: "x" });
+    check(
+      "artifacts: update_asset with an unknown id says use list_assets",
+      unknownIdUpdate?.ok === false &&
+        String(unknownIdUpdate?.error ?? "") === "update_asset needs an existing id (use list_assets)" &&
+        !/owner approval/i.test(String(unknownIdUpdate?.error ?? "")),
+    );
+    // (a) ONE genuine click on a gallery card's New tab opens exactly ONE
+    //     viewer target. Drives the real page + a real CDP click.
+    const galleryAsset = await msgValue({
+      type: "asset.create", origin: "master", assetType: "html",
+      name: "gallery double-open guard", content: "<h1>guard</h1>",
+    });
+    const viewerTargets = async () => {
+      const t = await cdp.send("Target.getTargets");
+      return (t?.result?.targetInfos ?? []).filter((ti) => ti.url.includes("artifact/artifact.html")).length;
+    };
+    const galleryBefore = await viewerTargets();
+    let galleryOk = false;
+    if (galleryAsset?.ok === true) {
+      const galTarget = await openPage(port, `chrome-extension://${extId}/artifacts/index.html`);
+      await sleep(2200);
+      const galSession = await attachRuntime(cdp, galTarget.id);
+      const tabBox = await evalIn(cdp, galSession, `(() => {
+        const card = document.querySelector("artifact-card");
+        const el = card?.shadowRoot?.querySelector('[data-act="open-tab"]');
+        if (!el) return null;
+        el.scrollIntoView({ block: "center", inline: "center" });
+        const r = el.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      })()`);
+      if (tabBox && typeof tabBox.x === "number") {
+        await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: tabBox.x, y: tabBox.y, button: "left", buttons: 1, clickCount: 1 }, galSession);
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: tabBox.x, y: tabBox.y, button: "left", buttons: 0, clickCount: 1 }, galSession);
+      }
+      await sleep(2200);
+      const galleryAfter = await viewerTargets();
+      galleryOk = galleryAfter - galleryBefore === 1;
+      const galShot = await captureShot(cdp, galSession);
+      if (galShot) await writeEvidence("artifact-newtab-single.png", galShot);
+    }
+    check(
+      "artifacts: one New tab click opens exactly one viewer target",
+      galleryAsset?.ok === true && galleryOk,
     );
     // ─────────────────────────────────────────────────────────────
     // Scripts gate (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01).

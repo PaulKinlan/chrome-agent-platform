@@ -53,6 +53,11 @@ export const DESTRUCTIVE_ACTIONS = new Set([
   "task.pause",
   "task.resume",
   "task.update",
+  // Reading a cookie VALUE (CAP-FB-20260830-COOKIE-TOOLS-CUT-01). A cookie
+  // value is a bearer credential and a tool result is sent verbatim to the
+  // model provider, so the owner approves the exact origin + cookie name
+  // before the value is read at all.
+  "browser.cookie-value",
 ]);
 
 export class CanonicalPayloadError extends Error {
@@ -270,6 +275,14 @@ export function canonicalOperationTarget(kind, parts = Object.create(null)) {
     case "origin":
       values = [normalizedOrigin(parts.origin)];
       break;
+    case "cookie": {
+      // A cookie's identity is its origin + its name; the name is taken
+      // verbatim (bounded), never slug-normalized — two differently-cased
+      // cookie names are two different cookies and must not share an approval.
+      const cookieName = typeof parts.name === "string" ? parts.name.trim() : "";
+      values = [normalizedOrigin(parts.origin), cookieName.slice(0, 512)];
+      break;
+    }
     case "named":
     case "provider":
       values = [normalizedSlug(parts.id)];

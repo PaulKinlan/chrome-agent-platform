@@ -32,8 +32,22 @@ run context) is proven per run by the **run-bound attestation** (below).
    runtime policy structurally final. The `skill_read` tool's returned bodies
    are tagged untrusted too, so on-demand reads carry the same boundary.
 5.5. **runtime-context** — the volatile per-assembly layer (date/time, system
-   identity, roster, memory index), rendered under a "data, not instructions"
-   label; the Settings preview renders its clearly-marked template.
+   identity, roster, the memory digest, memory index), rendered under a "data,
+   not instructions" label; the Settings preview renders its clearly-marked
+   template.
+   The **memory digest** (`CAP-FB-20260830-MEMORY-RECALL-NEW-THREAD-01`) is the
+   block headed "What you remember": up to 32 of the store's AGENT-WRITTEN keys
+   (newest first when the store can order them), each with a one-line summary
+   of its value, bounded to 2 KiB in total. It exists because memory was
+   write-only in practice — a model saved "favourite colour: green" and, in the
+   next thread, said it did not know, because nothing in the request carried
+   any memory and neither model tested ever called `memory_grep` unprompted.
+   The digest is a POINTER INDEX, not the store: the full value stays behind
+   `memory_get`/`memory_grep`. Reserved/authority keys (`threads`, `thread:`,
+   `run*:`, `origins`, `approvals`, `toolDirectory`, the journal, …) are never
+   digested — only what `memory_set` could have written. Each store digests
+   ITSELF: the hub digests the master store, a site worker its own origin's,
+   a named agent its own — the origin-keyed boundary is unchanged.
 5.6. **untrusted-content-policy** — PROTECTED + DYNAMIC
    (`CAP-FB-20260830-UNTRUSTED-CONTENT-FENCING-01`, `extension/lib/untrusted-fence.js`).
    Composes whenever the runtime layer does. Names the per-assembly random
@@ -240,8 +254,10 @@ ever shown in the UI — there is no hidden chain-of-thought in the
 composition.
 
 The dynamic `runtime-context` layer follows the same trust class: the memory
-index it carries is the agent's OWN store content, already fully reachable by
-the model via `memory_grep`/`memory_list` in the same prompts, and the roster
+digest and index it carries are the agent's OWN store content, already fully
+reachable by the model via `memory_grep`/`memory_list` in the same prompts
+(the digest changes only WHEN that content appears, not what is reachable),
+and the roster
 is hub-only and already reachable via `list_agents`. The layer changes WHEN
 this content appears (every composition), never WHO sees it or WHERE it goes —
 all prompt content flows to the configured provider by platform design (page

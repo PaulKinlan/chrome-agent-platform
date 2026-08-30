@@ -34,6 +34,7 @@ import {
   executableBuiltinToolRecords,
   executableManagementToolRecords,
 } from "./lazy-tool-protocol.js";
+import { acceptsImageToolResults } from "./provider.js";
 
 const modelLog = capLog("model");
 
@@ -843,6 +844,11 @@ export function createAgent({
   };
   const instanceGeneration = `agent-instance:${crypto.randomUUID()}`;
   const lazy = createLazyProviderToolset({
+    // A screenshot reaches a vision model as a real IMAGE part, not as base64
+    // text (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01). Only lanes whose
+    // transport carries an image content part get one; everything else reads
+    // the id + dimensions from the JSON, which is honest and small.
+    acceptsImageToolResults: () => acceptsImageToolResults(model),
     readSources: async () => {
       const builtin = executableBuiltinToolRecords(sourceTools, {
         version: "runtime-v1",

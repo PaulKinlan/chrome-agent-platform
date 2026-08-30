@@ -2355,6 +2355,7 @@ async function buildAgentConfigDialog(opts) {
   scrollBody.style.flexDirection = "column";
   scrollBody.style.gap = "14px";
   scrollBody.style.flex = "1 1 auto";
+  scrollBody.style.minHeight = "0";
   scrollBody.style.overflowY = "auto";
   scrollBody.style.overscrollBehavior = "contain";
   scrollBody.style.padding = "4px 6px";

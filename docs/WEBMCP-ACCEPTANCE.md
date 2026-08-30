@@ -93,9 +93,11 @@ Automated mode runs in two phases:
 
 Every check runs for real; the manifest records the split grant provenance and
 `overallStatus: OPEN` — the shipped-manifest fresh-profile picker path IS
-attested headless, while the deep path runs on the pregranted variant. A headed
+attested headless, while the deep path runs on the pregranted variant (the
+permission-state matrix mechanism — see docs/PERMISSION-MATRIX.md). A headed
 run attests every step on shipped bytes (`permissionGrant:
-"jit-silent-no-prompt"`, `overallStatus: ATTESTED` when every check passes).
+"jit-silent-no-prompt"`, `overallStatus: ATTESTED` when every check passes);
+headed is an optional extra, never a requirement.
 
 
 ## Trust boundary

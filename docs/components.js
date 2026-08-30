@@ -2488,13 +2488,148 @@ class ArtifactCard extends Component {
 }
 customElements.define("artifact-card", ArtifactCard);
 
+/* ──────────────────────────────────────────────────────────────────────────
+ * Source highlighting — a tiny, bounded, dependency-free tokenizer
+ * (CAP-FB-20260830-ARTIFACT-VIEWER-SOURCE-DIFF-01). No highlight.js, no regex
+ * `new Function` — MV3 CSP forbids it. `tokenizeSource` is a PURE, loss-free
+ * scanner: the concatenation of every token's text equals the input exactly,
+ * so nothing is ever dropped or reordered. `highlightSource` turns those tokens
+ * into `<span class="tok-…">` nodes built with createElement + textContent —
+ * NEVER an HTML string — so untrusted artifact bodies can never inject markup.
+ * ────────────────────────────────────────────────────────────────────────── */
+const SOURCE_LANGUAGES = new Set(["html", "css", "js", "json", "md", "text"]);
+// Sticky (`y`) rules, tried in order at each cursor position; the first that
+// matches AT the cursor wins. Every regex is anchored to lastIndex, so a
+// keyword only tokenizes on a real word boundary (never inside an identifier).
+const SOURCE_RULES = {
+  js: [
+    ["com", /\/\/[^\n]*/y],
+    ["com", /\/\*[\s\S]*?\*\//y],
+    ["str", /"(?:[^"\\\n]|\\.)*"/y],
+    ["str", /'(?:[^'\\\n]|\\.)*'/y],
+    ["str", /`(?:[^`\\]|\\.)*`/y],
+    ["kw", /\b(?:const|let|var|function|return|if|else|for|while|do|switch|case|break|continue|new|class|extends|super|this|import|export|from|as|default|async|await|try|catch|finally|throw|typeof|instanceof|in|of|void|delete|yield|null|true|false|undefined)\b/y],
+    ["num", /\b\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?\b/y],
+    ["punct", /[{}()\[\];,.:?=+\-*/%<>!&|^~]/y],
+  ],
+  json: [
+    ["str", /"(?:[^"\\]|\\.)*"/y],
+    ["kw", /\b(?:true|false|null)\b/y],
+    ["num", /-?\b\d[\d]*(?:\.\d+)?(?:[eE][+-]?\d+)?\b/y],
+    ["punct", /[{}\[\]:,]/y],
+  ],
+  css: [
+    ["com", /\/\*[\s\S]*?\*\//y],
+    ["str", /"(?:[^"\\\n]|\\.)*"/y],
+    ["str", /'(?:[^'\\\n]|\\.)*'/y],
+    ["kw", /@[a-zA-Z-]+/y],
+    ["num", /-?\b\d*\.?\d+(?:px|em|rem|%|vh|vw|s|ms|deg|fr|ch|ex|pt)?\b/y],
+    ["punct", /[{}();:,]/y],
+  ],
+  html: [
+    ["com", /<!--[\s\S]*?-->/y],
+    ["tag", /<\/?[a-zA-Z!][^>]*>/y],
+  ],
+  md: [
+    ["str", /`[^`\n]*`/y],
+    ["kw", /\*\*[^*\n]+\*\*/y],
+    ["tag", /^#{1,6}[^\n]*/my],
+  ],
+};
+
+/** Split `text` into `{text, cls}` tokens for `language`. Loss-free and bounded
+ * — the concatenation of the token texts always equals the input. `cls` is ""
+ * for a plain run, otherwise one of kw/str/com/num/tag/punct. */
+export function tokenizeSource(text, language) {
+  const src = String(text ?? "");
+  const lang = SOURCE_LANGUAGES.has(String(language)) ? String(language) : "text";
+  const rules = SOURCE_RULES[lang];
+  if (!rules) return src ? [{ text: src, cls: "" }] : [];
+  const out = [];
+  let i = 0;
+  let plainStart = 0;
+  const pushPlain = (end) => { if (end > plainStart) out.push({ text: src.slice(plainStart, end), cls: "" }); };
+  const n = src.length;
+  while (i < n) {
+    let hit = null;
+    let cls = "";
+    for (const [c, re] of rules) {
+      re.lastIndex = i;
+      const m = re.exec(src);
+      if (m && m.index === i && m[0].length > 0) { hit = m[0]; cls = c; break; }
+    }
+    if (hit) {
+      pushPlain(i);
+      out.push({ text: hit, cls });
+      i += hit.length;
+      plainStart = i;
+    } else {
+      i++; // no rule at this position — fold into the surrounding plain run
+    }
+  }
+  pushPlain(n);
+  return out;
+}
+
+/** A DocumentFragment of highlighted source: `<span class="tok-…">` for each
+ * classified token, a text node for each plain run. Built with the DOM API and
+ * textContent only — never an HTML string. */
+export function highlightSource(text, language, doc = (typeof document !== "undefined" ? document : globalThis.document)) {
+  const d = doc;
+  const frag = d.createDocumentFragment();
+  for (const { text: t, cls } of tokenizeSource(text, language)) {
+    if (cls) {
+      const span = d.createElement("span");
+      span.className = `tok-${cls}`;
+      span.textContent = t;
+      frag.appendChild(span);
+    } else {
+      frag.appendChild(d.createTextNode(t));
+    }
+  }
+  return frag;
+}
+
+/** Infer a highlight language from an artifact's type and name. */
+export function inferSourceLanguage(asset) {
+  const type = String(asset?.type ?? "");
+  if (type === "html") return "html";
+  if (type === "json") return "json";
+  const name = String(asset?.name ?? "").toLowerCase();
+  const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : "";
+  if (ext === "js" || ext === "mjs" || ext === "ts") return "js";
+  if (ext === "css") return "css";
+  if (ext === "json") return "json";
+  if (ext === "html" || ext === "htm") return "html";
+  if (ext === "md" || ext === "markdown") return "md";
+  const content = String(asset?.content ?? "");
+  if (type === "text" && /^\s*[<]/.test(content) && /<\/?[a-z]/i.test(content)) return "html";
+  return "text";
+}
+
+// Shared token palette for highlighted source (calm, AA-legible in both themes;
+// colour never carries meaning alone — it rides on the token text). Reused by
+// <artifact-inspector> and the artifact viewer's Source panel.
+const SOURCE_TOKEN_STYLE = `
+  .tok-kw { color: var(--accent,#0e6e63); font-weight: 600; }
+  .tok-str { color: var(--success,#1a7f37); }
+  .tok-com { color: var(--muted,#635e56); font-style: italic; }
+  .tok-num { color: var(--danger,#b3261e); }
+  .tok-tag { color: var(--accent,#0e6e63); }
+  .tok-punct { color: var(--muted,#635e56); }
+`;
+
 /* <artifact-inspector> — source/hex inspection and explicit confined HTML play.
  * Content is property-only and enters the DOM via textContent/srcdoc, never an
  * outer HTML parser. Rendering is bounded while Copy preserves exact content. */
 class ArtifactInspector extends Component {
-  constructor() { super(); this._asset = null; this._frameCleanup = null; this._frameDispose = null; }
+  constructor() { super(); this._asset = null; this._language = ""; this._frameCleanup = null; this._frameDispose = null; }
   set asset(value) { this._asset = value && typeof value === "object" ? value : null; if (this._rendered) this._render(); }
   get asset() { return this._asset; }
+  // Optional syntax highlighting. "" (default) or "text" → plain textContent;
+  // any recognised language tokenises the bounded source into tok-* spans.
+  set language(value) { this._language = SOURCE_LANGUAGES.has(String(value)) ? String(value) : ""; if (this._rendered) this._render(); }
+  get language() { return this._language || (this._asset ? inferSourceLanguage(this._asset) : ""); }
   disconnectedCallback() { this.stopPreview(); }
   _render() {
     const a = this._asset ?? {};
@@ -2515,9 +2650,16 @@ class ArtifactInspector extends Component {
       .preview[hidden] { display:none; }
       .preview { margin-block-start:12px; border:1px solid var(--border,#e3e0d9); border-radius:8px; overflow:hidden; background:var(--panel,#fff); }
       .preview iframe { display:block; inline-size:100%; block-size:min(56vh,520px); border:0; }
+      ${SOURCE_TOKEN_STYLE}
     `, `<div class="bar"><span class="meta"></span><button type="button" class="copy">Copy exact content</button>${type === "html" ? '<button type="button" class="primary play">Preview / Play</button>' : ""}</div><pre tabindex="0"><code></code></pre><p class="note" hidden></p><p class="status" role="status" aria-live="polite"></p><div class="preview" hidden></div>`);
     this._root.querySelector(".meta").textContent = `${type} · ${a.size ?? new TextEncoder().encode(content).byteLength} B · ${a.origin ?? "master"}`;
-    this._root.querySelector("code").textContent = content.slice(0, limit);
+    const code = this._root.querySelector("code");
+    const shown = content.slice(0, limit);
+    const lang = this.language;
+    // Highlight when a recognised language is known; otherwise the exact source
+    // as one text node. Both paths are markup-free (textContent / createTextNode).
+    if (lang && lang !== "text") code.replaceChildren(highlightSource(shown, lang, document));
+    else code.textContent = shown;
     const note = this._root.querySelector(".note");
     note.hidden = !truncated;
     if (truncated) note.textContent = `Inspection is bounded to the first ${limit.toLocaleString()} characters. Copy includes the complete artifact.`;
@@ -2885,6 +3027,111 @@ class ArtifactDiff extends Component {
   }
 }
 customElements.define("artifact-diff", ArtifactDiff);
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * <segmented-control items="Preview,Source,Diff" value="Preview" label="View">
+ * A quiet WAI-ARIA tablist (CAP-FB-20260830-ARTIFACT-VIEWER-SOURCE-DIFF-01):
+ * role="tablist" with role="tab" buttons, roving tabindex, and automatic
+ * activation — ArrowLeft/Right (and Up/Down) move AND select, Home/End jump to
+ * the ends, all wrapping. Selecting emits `change {value}` (never for a no-op
+ * re-select). The host owns the matching tabpanels and shows/hides them on the
+ * event. Styling reuses the Usage range-tab look with the selected tab in the
+ * accent ink. Every label enters via textContent — never an HTML string.
+ * ────────────────────────────────────────────────────────────────────────── */
+class SegmentedControl extends Component {
+  static get observedAttributes() { return ["items", "value", "label"]; }
+  constructor() { super(); this._value = ""; }
+  _items() {
+    return String(this.getAttribute("items") ?? "")
+      .split(",").map((s) => s.trim()).filter(Boolean);
+  }
+  get value() {
+    const items = this._items();
+    if (this._value && items.includes(this._value)) return this._value;
+    const attr = this.getAttribute("value");
+    if (attr && items.includes(attr)) return attr;
+    return items[0] ?? "";
+  }
+  set value(v) { this._select(String(v ?? ""), { silent: true }); }
+  _render() {
+    const items = this._items();
+    const value = this.value;
+    mountTemplate(this, `
+      :host { display:inline-block; }
+      .tabs { display:inline-flex; gap:2px; padding:3px; border:1px solid var(--border,#e3e0d9);
+        border-radius:var(--radius-sm,8px); background:var(--panel-2,#efede8); }
+      button { appearance:none; border:0; background:transparent; color:var(--muted,#635e56);
+        font:inherit; font-size:13px; font-weight:550; line-height:1; min-block-size:30px; padding:0 14px;
+        border-radius:6px; cursor:pointer; white-space:nowrap; transition:color .15s ease, background .15s ease; }
+      button:hover { color:var(--text,#1d1b18); }
+      button[aria-selected="true"] { background:var(--panel,#fff); color:var(--accent,#0e6e63);
+        box-shadow:var(--shadow-1,0 1px 2px rgba(29,27,24,.06)); }
+      button:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      @media (prefers-reduced-motion: reduce) { button { transition:none; } }
+    `, `<div class="tabs" role="tablist"></div>`);
+    const list = this._root.querySelector(".tabs");
+    const label = this.getAttribute("label");
+    if (label) list.setAttribute("aria-label", label);
+    for (const item of items) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.setAttribute("role", "tab");
+      b.dataset.val = item;
+      const selected = item === value;
+      b.setAttribute("aria-selected", selected ? "true" : "false");
+      b.tabIndex = selected ? 0 : -1;
+      b.textContent = item;
+      list.appendChild(b);
+    }
+  }
+  _wire() {
+    const list = this._root.querySelector(".tabs");
+    if (!list) return;
+    list.addEventListener("click", (e) => {
+      const b = e.target?.closest?.('[role="tab"]');
+      if (b?.dataset?.val != null) this._select(b.dataset.val, { focus: true });
+    });
+    list.addEventListener("keydown", (e) => this._onKey(e));
+  }
+  _onKey(e) {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const move = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+    if (e.key in move) { e.preventDefault(); this._move(move[e.key]); }
+    else if (e.key === "Home") { e.preventDefault(); this._select(this._items()[0], { focus: true }); }
+    else if (e.key === "End") { const it = this._items(); e.preventDefault(); this._select(it[it.length - 1], { focus: true }); }
+  }
+  _move(delta) {
+    const items = this._items();
+    if (!items.length) return;
+    const cur = Math.max(0, items.indexOf(this.value));
+    const next = (cur + delta + items.length) % items.length;
+    this._select(items[next], { focus: true });
+  }
+  _select(value, { focus = false, silent = false } = {}) {
+    const items = this._items();
+    if (!items.includes(value)) return;
+    const changed = value !== this.value;
+    this._value = value;
+    this._sync();
+    if (focus) this._focusSelected();
+    if (changed && !silent) this._emit("change", { value });
+  }
+  _sync() {
+    const value = this.value;
+    for (const b of this._root?.querySelectorAll?.('[role="tab"]') ?? []) {
+      const selected = b.dataset.val === value;
+      b.setAttribute("aria-selected", selected ? "true" : "false");
+      b.tabIndex = selected ? 0 : -1;
+    }
+  }
+  _focusSelected() {
+    const value = this.value;
+    for (const b of this._root?.querySelectorAll?.('[role="tab"]') ?? []) {
+      if (b.dataset.val === value) { b.focus?.(); break; }
+    }
+  }
+}
+customElements.define("segmented-control", SegmentedControl);
 
 /* ──────────────────────────────────────────────────────────────────────────
  * <artifact-quick-drawer> — bounded recent/search/filter access to artifact
@@ -3509,6 +3756,74 @@ export function unwrapToolPayload(value) {
   return { value: v, selectedTool };
 }
 
+/** The saved screenshot a tool result points at, or null. The PNG itself is
+ *  never in the payload — the protocol lifts it into an image part for the
+ *  model and the store keeps the file — so the card renders it from the id
+ *  (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01). */
+export function screenshotFromToolPayload(payload) {
+  if (payload == null || payload === "") return null;
+  // The id can sit at any of several transport depths — agent-do's
+  // {modelContent,userSummary} wrapper (whose userSummary is prose, so the
+  // ordinary unwrap walks PAST the object), the lazy envelope's `result`, or a
+  // bare direct result. So look for it, bounded: at most 400 nodes, 7 levels,
+  // one JSON-string decode per string, and only strings that mention the field
+  // are decoded at all.
+  let budget = 400;
+  const seen = new Set();
+  const visit = (value, depth) => {
+    if (value == null || depth > 7 || budget-- <= 0) return null;
+    if (typeof value === "string") {
+      if (!value.includes("screenshotId")) return null;
+      const parsed = safeParseOnce(value);
+      return parsed.kind === "json" ? visit(parsed.value, depth + 1) : null;
+    }
+    if (typeof value !== "object" || seen.has(value)) return null;
+    seen.add(value);
+    const id = Object.getOwnPropertyDescriptor(value, "screenshotId")?.value;
+    if (typeof id === "string" && id) {
+      const width = Number(value.width);
+      const height = Number(value.height);
+      return {
+        id,
+        label: typeof value.url === "string" ? value.url : "",
+        size: Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
+          ? `${width}×${height}`
+          : "",
+      };
+    }
+    for (const child of Object.values(value)) {
+      const hit = visit(child, depth + 1);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  try {
+    const found = visit(payload, 0);
+    if (found) return found;
+  } catch { /* fall through to the text read */ }
+  // THE LIVE PAYLOAD IS OFTEN NOT PARSEABLE. The progress event that fills this
+  // card (and that the run log persists) bounds the result with a mid-string
+  // slice at 300 characters, so any envelope larger than that arrives as a
+  // truncated JSON fragment — the id is right there in the text and no parser
+  // will ever reach it. Read it out of the text instead, from a pattern the
+  // product itself minted: `shot_<digits>_<base36>`. Bounded (8 KiB scanned,
+  // fixed-width captures), read-only, and used for nothing but the id of a file
+  // this extension wrote (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01).
+  const text = typeof payload === "string" ? payload.slice(0, 8192) : "";
+  const id = /\\?"screenshotId\\?"\s*:\s*\\?"(shot_[A-Za-z0-9_]{1,64})/.exec(text)?.[1];
+  if (!id) return null;
+  const num = (field) =>
+    Number(new RegExp(`\\\\?"${field}\\\\?"\\s*:\\s*(\\d{1,6})`).exec(text)?.[1] ?? NaN);
+  const width = num("width");
+  const height = num("height");
+  const url = /\\?"url\\?"\s*:\s*\\?"(https?:[^"\\]{1,300})/.exec(text)?.[1] ?? "";
+  return {
+    id,
+    label: url,
+    size: width > 0 && height > 0 ? `${width}×${height}` : "",
+  };
+}
+
 /** Does a string look like a transport envelope that failed to parse (the
  *  live path once stored a TRUNCATED summary of the envelope in tool-result)?
  *  Such text is never shown: the headline already carries the tool's words. */
@@ -4024,6 +4339,19 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
     div.textContent = String(parsed.value ?? raw ?? "");
     body.appendChild(div);
   };
+
+  // A CAPTURE SHOWS THE PICTURE. The bytes went to the model as an image part
+  // and to the screenshots store as a file; the card resolves the file by id so
+  // the owner sees exactly what the agent saw
+  // (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01).
+  const shot = screenshotFromToolPayload(result) ?? screenshotFromToolPayload(detail);
+  if (shot) {
+    const thumb = document.createElement("screenshot-thumb");
+    thumb.setAttribute("shot-id", shot.id);
+    if (shot.label) thumb.setAttribute("label", shot.label);
+    if (shot.size) thumb.setAttribute("size", shot.size);
+    body.appendChild(thumb);
+  }
 
   addBlock("inputs", shownArgs);
 
@@ -5012,6 +5340,95 @@ class ScreenshotStrip extends Component {
   }
 }
 customElements.define("screenshot-strip", ScreenshotStrip);
+
+/* <screenshot-thumb shot-id="shot_…" label="Example Domain" size="1280×720">
+ * ONE saved screenshot, resolved from the screenshots store by its id.
+ *
+ * A capture the agent took used to be invisible: the bytes went into the model
+ * message and nowhere else, so there was nothing for the owner to look at
+ * (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01). The tool card mounts this, and the
+ * PNG the model saw is the PNG on screen.
+ *
+ * The blob URL is revoked on disconnect and before every re-resolve, so a long
+ * transcript never holds a megabyte per scrolled-past card. `src` short-
+ * circuits the store lookup — that is how the gallery shows a specimen with no
+ * extension backend. */
+class ScreenshotThumb extends Component {
+  static get observedAttributes() { return ["shot-id", "label", "size", "src"]; }
+  _render() {
+    const label = this.getAttribute("label") || "";
+    const size = this.getAttribute("size") || "";
+    // The alt text NAMES what the picture is of. "Screenshot" alone tells a
+    // screen-reader user nothing they could not guess from the tool name.
+    // NOT `loading="lazy"`: a tool card is a collapsed <details>, so a lazy
+    // image inside it is never in a viewport and never decodes — the card
+    // would hold an <img> that stays 0x0 until the owner expands it. The source
+    // is a local blob URL, so there is nothing to defer anyway.
+    const alt = label ? `Screenshot of ${label}` : "Screenshot of the captured page";
+    mountTemplate(this, `
+      :host { display:block; margin:8px 0; }
+      figure { display:inline-flex; flex-direction:column; gap:4px; max-width:100%; margin:0; }
+      img { display:block; width:auto; height:auto; max-width:240px; max-height:160px;
+        border:1px solid var(--border,#e3e0d9); border-radius:8px; background:var(--bg,#f7f6f3); }
+      figcaption { font-size:11px; color:var(--muted,#635e56); overflow-wrap:anywhere; }
+      figure.pending img { min-width:96px; min-height:64px; }
+    `, `<figure class="shot-thumb pending">
+      <img alt="${escapeHtml(alt)}" decoding="async">
+      ${size || label ? `<figcaption>${escapeHtml([label, size].filter(Boolean).join(" · "))}</figcaption>` : ""}
+    </figure>`);
+  }
+  _wire() {
+    this._resolve();
+  }
+  _releaseObjectUrl() {
+    if (this._objectUrl) {
+      try { URL.revokeObjectURL(this._objectUrl); } catch { /* already gone */ }
+      this._objectUrl = null;
+    }
+  }
+  async _resolve() {
+    this._releaseObjectUrl();
+    const img = this._root.querySelector("img");
+    if (!img) return;
+    const direct = this.getAttribute("src");
+    const dataURL = direct || await this._fetchDataURL();
+    if (!dataURL || !this.isConnected) return;
+    const objectUrl = dataUrlToObjectURL(dataURL);
+    // A browser that refuses the decode still gets the picture — the data URL
+    // itself is a valid source, it just is not revocable.
+    this._objectUrl = objectUrl;
+    img.src = objectUrl || dataURL;
+    this._root.querySelector(".shot-thumb")?.classList.remove("pending");
+  }
+  async _fetchDataURL() {
+    const id = this.getAttribute("shot-id");
+    if (!id || !RUNTIME_SEND) return "";
+    const res = await RUNTIME_SEND("screenshots.get", { id });
+    return typeof res?.dataURL === "string" ? res.dataURL : "";
+  }
+  disconnectedCallback() {
+    this._releaseObjectUrl();
+    super.disconnectedCallback();
+  }
+}
+customElements.define("screenshot-thumb", ScreenshotThumb);
+
+/** Decode a base64 data URL into a revocable object URL WITHOUT fetch() — an
+ * extension page's connect-src does not cover `data:`, and a multi-megabyte
+ * PNG should not be re-parsed by the network stack anyway. Returns "" when the
+ * string is not a base64 data URL or the decode fails. */
+export function dataUrlToObjectURL(dataURL) {
+  const match = /^data:([a-z]+\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/i.exec(String(dataURL ?? ""));
+  if (!match || typeof URL?.createObjectURL !== "function") return "";
+  try {
+    const binary = atob(match[2]);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return URL.createObjectURL(new Blob([bytes], { type: match[1].toLowerCase() }));
+  } catch {
+    return "";
+  }
+}
 
 /* ──────────────────────────────────────────────────────────────────────────
  * Composite components

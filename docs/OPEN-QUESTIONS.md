@@ -37,6 +37,11 @@ Resolved answers are recorded here (Paul confirmed each over the course of the b
     `tests/chrome-tools-t12.test.ts` plus the manifest assertion in the journey suite
     make any return a deliberate act. When it does return, it should land behind a
     separate developer-only surface rather than the default product.
+    The same pattern was applied to `open_side_panel` (Paul, 2026-08-30,
+    `CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01`): the tool could never succeed from a
+    model call because `chrome.sidePanel.open()` needs a user gesture, so it was
+    removed with a guard test rather than left in the catalogue as a promise that
+    always failed. Browser tools 126 → 125, capability table 167 → 166.
 
 18. **Host-access posture** — `extension/manifest.json` declares `host_permissions: ["<all_urls>"]`
     plus two content scripts on every http(s) page at `document_start` (install-granted, since

@@ -50,8 +50,9 @@ isolated OPFS memory, run history, skills, and avatar.
   live `MessagePort` with redacted progress; background agents run with zero visible
   pages. Destructive browser commands are authorised by the owner's browser-control
   grant (checked atomically in the service worker) and fenced to their run.
-- **126 Chrome tools**, every `chrome.*` call audited against the Chromium IDL/JSON
-  schemas — tabs and tab groups, windows, downloads, history, cookies, bookmarks,
+- **125 Chrome tools**, every `chrome.*` call audited against the Chromium IDL/JSON
+  schemas — tabs and tab groups, windows, downloads, history, cookies (names and
+  metadata only — values are never returned to the model), bookmarks,
   reading list, content settings, MHTML capture, network rules, extension management,
   privacy/proxy/font/power settings, TTS, and user scripts. All grant-gated; the
   extension can never act on itself.

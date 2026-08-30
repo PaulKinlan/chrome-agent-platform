@@ -27,8 +27,7 @@ alarms) and acts on untrusted page content + model output. Threat vectors:
   explicit, scoped user grant (per-task or per-origin, not a permanent global).
   Read/list are ungated.
 - **Browser mutations accept http(s) destinations only** — every tool that takes
-  a destination URL (`open_tab`, `navigate_tab`, `create_window`,
-  `open_side_panel`) refuses `chrome:`, `chrome-extension:`, `file:`, `about:`,
+  a destination URL (`open_tab`, `navigate_tab`, `create_window`) refuses `chrome:`, `chrome-extension:`, `file:`, `about:`,
   `javascript:`, `data:`, `blob:` and `view-source:` BEFORE any permission or
   grant check, with the plain error "only http(s) destinations are allowed"
   (`webDestination` in `extension/lib/browser-tools.js`). A global grant never
@@ -46,6 +45,16 @@ alarms) and acts on untrusted page content + model output. Threat vectors:
   loopback/private/link-local addresses (`extension/lib/fetch-policy.js`,
   `tests/cap-fetch-deny.test.ts`) and refuses any host not on the run's
   allow-list derived from the approved source. No registered run → no fetch.
+- **Cookie values never leave the machine unapproved**
+  (`CAP-FB-20260830-COOKIE-TOOLS-CUT-01`) — a tool result becomes the content of
+  the next request to the model provider, and a cookie value is a bearer
+  credential. `list_cookies` returns names and metadata only and never lists an
+  `httpOnly` cookie; `get_cookie` withholds the value unless the model asks for
+  it with `revealValue` AND the owner approves the exact origin + cookie name
+  through the in-context card (`browser.cookie-value`), and never returns an
+  `httpOnly` cookie even when approved. `get_cookie`, `set_cookie` and
+  `remove_cookie` exist only in the developer build — the default product hands
+  the model no way to read a cookie value or write a cookie at all.
 - **Untrusted content is fenced** (`CAP-FB-20260830-UNTRUSTED-CONTENT-FENCING-01`,
   `extension/lib/untrusted-fence.js`) — every untrusted tool result (`read_page`
   text, WebMCP tool descriptions + results, board jobs, fetched bodies via the
