@@ -70,3 +70,13 @@ Resolved answers are recorded here (Paul confirmed each over the course of the b
     2026-08-30; still OPEN):** lead the demo with browser control plus WebMCP (what works today),
     and build toward the coworker shape in this order: the activity ledger with undo, the
     companion side panel, the plan strip, scheduled-run reports on the timeline.
+
+21. **Do first-class shared-worker agent runs get conversation history?** — The shared-worker run path
+    (`extension/workers/agent-worker.js` → `extension/lib/agent-loop.js` → `agent.run(task, {}, [])`)
+    hardcodes EMPTY history: `agent-worker.run` accepts `{agentId, task, system, modelKind, maxIterations}`
+    and has no thread source. `historyFromThread` only feeds the hub thread path (continueThread → runTask).
+    **Status (CAP slice 2026-08-30): documented residual, not fixed.** The worker path was never wired to
+    a thread and no caller currently passes threadId into it, so there is nothing to replay; wiring one
+    would be inventing a feature. If first-class worker runs become thread-backed (a durable agent-run
+    surface), the fix is to accept `history`/`threadId` in `agent-worker.run` and pass it into
+    `runAgentLoop`. Until then, worker runs are stateless single-shot executions by design.

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.477] — 2026-08-30
+- Resuming a task restores the tools it used, its skills, and its prompt
+
 ## [0.2.476] — 2026-08-30
 - Tracker: the diff view component is recorded as landed.
 
