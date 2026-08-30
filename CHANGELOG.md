@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.494] — 2026-08-30
+- Two more editing-flow fixes are in progress in parallel and recorded as claimed.
+
 ## [0.2.493] — 2026-08-30
 - Housekeeping: parallel work streams reconciled.
 
