@@ -156,6 +156,8 @@ try {
     "[demo model] Tool calls executed in sequence: memory_set wrote the shopping list, then memory_get read it back twice.";
   const seeded = await ntp.evaluate(`(async () => {
     const send = (message) => chrome.runtime.sendMessage(message);
+    // the marker demo model sits behind the developer flag (CAP-FB-20260830-KEYLESS-FIRST-RESULT-01)
+    await send({ type: 'kv.set', values: { 'cap:developerFeatures': true } });
     const created = await send({ type: 'named-agent.create', name: 'Scheduled Transcript Probe', role: 'Report scheduled work concisely.' });
     if (!created?.ok) return { created };
     const id = created.agent.id;

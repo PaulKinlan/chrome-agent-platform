@@ -390,6 +390,8 @@ async function main() {
     const COMPOSER = `document.getElementById('composer')`;
     const NTP_INPUT = `${COMPOSER}.querySelector('#task-input')`;
     check("NTP: opened with the hub composer present", await evl(ntp, `!!(${NTP_INPUT})`));
+    // the marker demo model sits behind the developer flag (CAP-FB-20260830-KEYLESS-FIRST-RESULT-01)
+    await msg(ntp, { type: "kv.set", values: { "cap:developerFeatures": true } });
 
     // ── run 1: the exact active→terminal transition ──────────────────────
     const marker1 = `rs-run-one-${Date.now() % 100000}`;

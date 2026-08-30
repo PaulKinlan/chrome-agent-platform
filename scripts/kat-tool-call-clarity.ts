@@ -139,6 +139,8 @@ async function main() {
   check("composer input present", !!ibox, null);
   if (ibox) await clickAt(ibox.x, ibox.y);
   await sleep(300);
+  // the marker demo model sits behind the developer flag (CAP-FB-20260830-KEYLESS-FIRST-RESULT-01)
+  await evl(ntp, `chrome.runtime.sendMessage({ type: "kv.set", values: { "cap:developerFeatures": true } })`);
   await send("Input.insertText", { text: `@demo-create-agent name="KAT Bot" role="checks things"` }, ntp);
   await sleep(300);
   await shot("01-task-typed");

@@ -349,6 +349,7 @@ const EXPECTED = [
   "initial SW closed for a pre-attached restart",
   "SW woken for the pre-attached restart",
   "initial SW boot observed via pre-attached restart",
+  "developer flag: the marker demo model is enabled for the suite",
   "fresh profile: the four agent surfaces agree (0)",
   "after enabling one recipe the four agent surfaces agree (1)",
   "after disabling that recipe the four agent surfaces agree (0) again",
@@ -401,6 +402,13 @@ const EXPECTED = [
   "Settings: clicked Enroll via a real click",
   "enrollment: origin enrolled under JIT grant",
   "Settings: retained a driven-UI screenshot",
+  "keyless: developer flag off for the fresh-profile run",
+  "keyless: typed 'group my tabs by topic' into the hub composer",
+  "keyless: clicked Run task",
+  "keyless: the first run answers in plain language — never '[demo model] Task received'",
+  "keyless: without the tabs permission the answer says so honestly",
+  "keyless: the persisted thread carries the plain answer, not the demo literal",
+  "keyless: developer flag back on for the marker journeys",
   "warm run 1 returns a concrete demo result",
   "warm run 2 (after re-save) returns a concrete demo result",
   "Transcript: 'list my open tabs' survives a reload at full length",
@@ -751,6 +759,12 @@ async function main() {
       if (!bootObserved) await sleep(250);
     }
     check("initial SW boot observed via pre-attached restart", bootObserved);
+    // The marker demo model (@demo-tools, @demo-board, …) is the suite's test
+    // seam and sits behind the developer flag; a default profile runs the
+    // local assistant instead (CAP-FB-20260830-KEYLESS-FIRST-RESULT-01). The
+    // keyless journey below turns the flag OFF around its own run.
+    const developerFlag = async (on) => msgValue({ type: "kv.set", values: { "cap:developerFeatures": on === true } });
+    check("developer flag: the marker demo model is enabled for the suite", (await developerFlag(true))?.ok === true);
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 1 — GENUINE CDP INPUT on the NTP: type a task + click Run.
@@ -1513,6 +1527,66 @@ async function main() {
       await writeEvidence("options-driven.png", optsShot);
     }
     check("Settings: retained a driven-UI screenshot", optsShot !== null && optsShot.length > 200);
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 2k — CAP-FB-20260830-KEYLESS-FIRST-RESULT-01: a fresh profile
+    // with NO provider configured (the developer flag OFF, provider "demo" =
+    // the default) gets a real answer from the local assistant through the
+    // REAL hub composer, and the demo provider's plumbing proof ("[demo model]
+    // Task received (N chars)") is unreachable. Headless Chrome cannot grant
+    // the optional `tabs` permission (the prompt never resolves), so here the
+    // first keyless run ends in the HONEST no-permission paragraph; the full
+    // path — real tab groups + the tab-list artifact — is driven by
+    // scripts/keyless-first-result.ts, which seeds the two permissions the
+    // owner's Allow clicks would grant.
+    // ─────────────────────────────────────────────────────────────
+    check("keyless: developer flag off for the fresh-profile run", (await developerFlag(false))?.ok === true);
+    await msgValue({ type: "provider.set", config: { provider: "demo", apiKey: "" } });
+    const keylessBefore = await msgValue({ type: "thread.list" });
+    const keylessThreadsBefore = new Set((keylessBefore?.threads ?? []).map((t) => t?.id));
+    await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});
+    await cdp.send("Page.bringToFront", {}, ntpSession).catch(() => {});
+    await clickSel(cdp, ntpSession, "#home").catch(() => false);
+    await sleep(600);
+    check("keyless: typed 'group my tabs by topic' into the hub composer", await typeInto(cdp, ntpSession, "#task-input", "group my tabs by topic"));
+    check("keyless: clicked Run task", await clickSel(cdp, ntpSession, "#run-task"));
+    const KEYLESS_BUBBLES = `(() => {
+      const conv = document.getElementById('thread-conversation');
+      if (!conv) return JSON.stringify({ agent: [], cards: 0, status: [] });
+      const agent = [...conv.querySelectorAll('message-bubble[role="agent"]')].map((b) => ((b.shadowRoot ?? b).querySelector('.msg, .body') ?? b).textContent.replace(/\\s+/g, ' ').trim());
+      const status = [...conv.querySelectorAll('conversation-run-status')].map((x) => x.getAttribute('state'));
+      return JSON.stringify({ agent, cards: conv.querySelectorAll('approval-card').length, status });
+    })()`;
+    let keyless = { agent: [], cards: 0, status: [] };
+    const keylessT0 = Date.now();
+    while (Date.now() - keylessT0 < 30000) {
+      try { keyless = JSON.parse(await evalIn(cdp, ntpSession, KEYLESS_BUBBLES) ?? "{}"); } catch { /* re-poll */ }
+      if ((keyless.agent ?? []).length > 0 && !(keyless.status ?? []).some((st) => st === "working" || st === "queued")) break;
+      await sleep(250);
+    }
+    const keylessShot = await captureShot(cdp, ntpSession);
+    if (keylessShot) await writeEvidence("keyless-first-result-no-permission.png", keylessShot);
+    console.log(`keyless journey: ${JSON.stringify(keyless).slice(0, 600)}`);
+    const keylessText = (keyless.agent ?? []).join(" | ");
+    check(
+      "keyless: the first run answers in plain language — never '[demo model] Task received'",
+      (keyless.agent ?? []).length >= 1 && !/\[demo model\]|Task received|\d+ chars/u.test(keylessText),
+    );
+    check(
+      "keyless: without the tabs permission the answer says so honestly",
+      /tabs permission was not granted/u.test(keylessText),
+    );
+    // The thread the composer created persisted the SAME paragraph (no demo
+    // literal reaches storage either).
+    const keylessAfter = await msgValue({ type: "thread.list" });
+    const keylessThread = (keylessAfter?.threads ?? []).find((t) => !keylessThreadsBefore.has(t?.id));
+    const keylessStored = keylessThread ? await msgValue({ type: "thread.get", id: keylessThread.id }) : null;
+    const keylessStoredText = (keylessStored?.thread?.messages ?? []).filter((m) => m?.role === "assistant").map((m) => String(m?.content ?? "")).join(" | ");
+    check(
+      "keyless: the persisted thread carries the plain answer, not the demo literal",
+      keylessStoredText.length > 0 && !/\[demo model\]|Task received/u.test(keylessStoredText),
+    );
+    check("keyless: developer flag back on for the marker journeys", (await developerFlag(true))?.ok === true);
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 3 — warm provider invalidation with CONCRETE assertions.

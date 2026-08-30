@@ -207,6 +207,13 @@ defaults in [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md).
 
 ## In flight / next (the ordered queue)
 
+- [ ] **A first result with no key** (`CAP-FB-20260830-KEYLESS-FIRST-RESULT-01`, P0) —
+      candidate in review: the default model on a fresh profile is the deterministic local
+      assistant (real tab groups + a tab-list artifact + one paragraph through the real tool
+      protocol); the demo provider's "[demo model] Task received (N chars)" is unreachable
+      without the developer flag; `@demo-delegate-agent` accepts an origin and stops after
+      one failed delegate. Unit + journey + `scripts/keyless-first-result.ts` (seeded
+      permissions, real `chrome.tabGroups`) green; coordinator merge pending.
 - [ ] **macOS dictation diagnostics** (`CAP-FB-20260829-MIC-DEAD-MACOS-01`) —
       the immediate-start fix is landed; the follow-up candidate distinguishes Web
       Speech's OS-default input from a persisted meter-only device, exposes a live

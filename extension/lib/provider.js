@@ -29,6 +29,7 @@ import {
   isPromptApiAvailable,
 } from "./models/prompt-api-model.js";
 import { createDemoModel } from "./models/demo-model.js";
+import { createLocalAssistant, LOCAL_ASSISTANT_MODEL_ID } from "./models/local-assistant.js";
 import { defaultModelFor } from "./model-catalog.js";
 import { kvGet, kvSet } from "./kv.js";
 
@@ -233,12 +234,38 @@ export async function resolveModelFromConfig(cfg) {
     };
   }
 
-  // default: demo
+  // default: no provider configured. A fresh profile runs the LOCAL ASSISTANT
+  // (deterministic tab skills through the real tool protocol — a real first
+  // result with no key, CAP-FB-20260830-KEYLESS-FIRST-RESULT-01). The marker
+  // demo model — the journey suite's test seam — is reachable ONLY under the
+  // developer flag, so its "[demo model] Task received (N chars)" plumbing
+  // proof can never be the first thing a new user reads.
+  if (await developerFeaturesOn()) {
+    return {
+      model: createDemoModel(),
+      modelId: "demo-local",
+      providerName: "demo",
+    };
+  }
   return {
-    model: createDemoModel(),
-    modelId: "demo-local",
-    providerName: "demo",
+    model: createLocalAssistant(),
+    modelId: LOCAL_ASSISTANT_MODEL_ID,
+    providerName: "local",
   };
+}
+
+/** The developer flag (CAP-FB-20260830-EXEC-BUILD-FLAG-01 owns the surface;
+ * until it lands the flag is the kv key `cap:developerFeatures === true`).
+ * Read once per resolution — never cached, so a toggle takes effect on the
+ * next run. */
+export const DEVELOPER_FEATURES_KEY = "cap:developerFeatures";
+export async function developerFeaturesOn() {
+  try {
+    const stored = await kvGet(DEVELOPER_FEATURES_KEY);
+    return stored?.[DEVELOPER_FEATURES_KEY] === true;
+  } catch {
+    return false;
+  }
 }
 
 /** Resolve the LanguageModel for the stored global provider. */

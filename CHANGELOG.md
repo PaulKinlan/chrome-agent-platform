@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.449] — 2026-08-30
+- A first result with no model connected: on a fresh profile, "group my tabs by topic" now makes real tab groups by site, saves the tab list as an artifact and answers in one plain paragraph; "list", "summarise" and "find duplicate tabs" work the same way, and anything else gets one clear line pointing to Settings. The internal demo reply that showed a character count no longer appears.
+
 ## [0.2.448] — 2026-08-30
 - Tracker: the honest provider-error messages are recorded as landed.
 

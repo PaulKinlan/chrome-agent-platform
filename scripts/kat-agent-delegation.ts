@@ -142,6 +142,8 @@ try {
   check("critic created (parallel sibling target)", critic?.ok === true, critic);
 
   // ── 2. The allowed delegation runs end to end ────────────────────────────
+  // the marker demo model sits behind the developer flag (CAP-FB-20260830-KEYLESS-FIRST-RESULT-01)
+  await page.ev(`globalThis.__katSend("kv.set", { values: { "cap:developerFeatures": true } })`);
   const run = await page.ev(`globalThis.__katSend("named-agent.run", { id: "delegator-prime", task: "@demo-delegate-agent helper-bee" })`);
   check("parent run completed", run?.ok === true, run);
   check("parent result reflects the child delegation", typeof run?.result === "string" && run.result.includes("Agent delegation succeeded"), String(run?.result ?? "").slice(0, 200));

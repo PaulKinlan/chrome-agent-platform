@@ -270,6 +270,31 @@ credential-shape mask (`sk-…`, `AIza…`, …) before they reach any surface. 
 preflight refusal (no endpoint) is a terminal `failed` status row with the
 Settings action, never a "Waiting for permission" state.
 
+## The first result without a model (keyless first run)
+
+A fresh profile has no provider. The first task a new user types still gets a
+real result: the default model is the **local assistant**
+(`extension/lib/models/local-assistant.js`), a deterministic model that
+recognises a small set of tab intents and drives the REAL tool protocol
+(`search_tools` → `execute_tool`) — the same tools, grant gating, permission
+cards and journal rows a provider model gets. "group my tabs by topic" makes
+real tab groups (by site, two or more tabs each), saves the tab list as the
+artifact "Your open tabs", and ends in one plain paragraph that reports what
+was done and what was not ("1 tab stayed ungrouped because it was the only tab
+on its site"). "list / summarise / find duplicate tabs" answer from the real
+tab list; duplicates are reported, never closed.
+
+The copy rules: the paragraph names counts and sites, never a model or a
+character count; a missing permission is said plainly ("the tabs permission was
+not granted — allow it when asked and run this again"); an unrecognised task
+gets exactly one line — "I can group, list or summarise your tabs without a
+model. For anything else, connect a model in Settings — it takes two minutes."
+The demo provider's plumbing proof ("[demo model] Task received (N chars)…") is
+a test seam for the journey suite and is reachable only under the developer
+flag (`cap:developerFeatures === true`); no bracketed model tag ever renders on
+a default build. Tab titles and URLs in the artifact are page-controlled text
+and are escaped before they reach the artifact HTML.
+
 ## Motion
 150–250ms state transitions only; `prefers-reduced-motion` respected. No
 page-load choreography, no decorative glow.

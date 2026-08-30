@@ -154,6 +154,8 @@ try {
   const created = await evaluate(sendExpr("named-agent.create", { name: "Board Worker", role: "You claim and complete board jobs." }), page);
   check("the claimant agent is created", created?.ok === true, created);
   const agentId = created?.agent?.id ?? "board-worker";
+  // the marker demo model sits behind the developer flag (CAP-FB-20260830-KEYLESS-FIRST-RESULT-01)
+  await evaluate(sendExpr("kv.set", { values: { "cap:developerFeatures": true } }), page);
   const run = await evaluate(sendExpr("named-agent.run", { id: agentId, task: "@demo-board" }), page);
   check("the @demo-board run settles ok", run?.ok === true || run?.status === "done" || run?.done === true, run && Object.keys(run).slice(0, 8));
   const settledJob = await evaluate(sendExpr("board.read", { jobId: posted2?.job?.id }), page);
