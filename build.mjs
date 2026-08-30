@@ -29,6 +29,7 @@ import {
 import {
   deltaBetween,
   parseChangelog,
+  readChangelogOrNull,
   readLastBuiltVersion,
   renderDelta,
   shouldRecordBuild,
@@ -284,15 +285,13 @@ try {
     previousBuiltVersion = await readLastBuiltVersion(BUILT_VERSION_PATH);
     const pkg = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8"));
     currentVersion = typeof pkg?.version === "string" ? pkg.version : null;
-    currentChangelog = await readFile(
-      path.join(ROOT, "CHANGELOG.md"),
-      "utf8",
-    ).catch((e) => {
-      console.error(`warning: could not read CHANGELOG.md (${e?.message ?? e}) — skipping the build changelog delta`);
-      return null;
+    currentChangelog = await readChangelogOrNull({
+      read: () => readFile(path.join(ROOT, "CHANGELOG.md"), "utf8"),
+      warn: (msg) => console.error(msg),
     });
-  } catch {
+  } catch (e) {
     // warn-only; the build must never fail over this feature
+    console.error(`warning: build changelog probe failed (${e?.message ?? e}) — skipping the build changelog delta`);
   }
 
   // Staging: private, same-filesystem, fully built BEFORE any dist mutation.

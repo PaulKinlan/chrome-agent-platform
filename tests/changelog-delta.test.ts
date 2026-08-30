@@ -9,6 +9,7 @@ import {
   deltaBetween,
   isValidVersion,
   parseChangelog,
+  readChangelogOrNull,
   readLastBuiltVersion,
   renderDelta,
   shouldRecordBuild,
@@ -64,30 +65,45 @@ Deno.test("renderDelta: newest LAST is implemented (oldest first, newest final l
   assertEquals(entryLines.map((l) => l.slice(2, 9)), ["0.2.479", "0.2.480", "0.2.483", "0.2.484"]);
 });
 
-Deno.test("renderDelta: bounded keeps the NEWEST entries, notes the older ones", () => {
+Deno.test("renderDelta: bounded keeps the NEWEST entries, note FIRST then oldest→newest (exact rendering)", () => {
   const parsed = parseChangelog(SAMPLE);
   const delta = deltaBetween(parsed, null, "0.2.484");
   const rendered = renderDelta(delta, 2);
   const lines = rendered.split("\n");
+  // Exact rendering contract: the older-cut note is the FIRST line, then the
+  // newest `limit` entries print oldest→newest.
+  assert(lines[0].startsWith("… 2 older entr"), `note must be first, got: ${lines[0]}`);
   const entryLines = lines.filter((l) => l.startsWith("- 0.2."));
-  // Newest TWO kept (480 is 4th-newest, 479 is oldest — both cut): shown = [483, 484] → reversed [483, 484].
   assertEquals(entryLines.map((l) => l.slice(2, 9)), ["0.2.483", "0.2.484"]);
-  // Older-cut note.
-  assert(lines.some((l) => l.includes("2 older entr")), `expected older-cut note, got: ${rendered}`);
+  // Full rendering with everything fitting: no note at all, all four ascending.
+  const full = renderDelta(delta).split("\n");
+  assert(!full[0].startsWith("… older"), `no note when everything fits, got: ${full[0]}`);
+  assertEquals(
+    full.filter((l) => l.startsWith("- 0.2.")).map((l) => l.slice(2, 9)),
+    ["0.2.479", "0.2.480", "0.2.483", "0.2.484"],
+  );
 });
 
-Deno.test("shouldRecordBuild: no record on late fatal failure (pure seam)", () => {
-  // Genuine success: buildSucceeded true + exit code 0 → record.
+Deno.test("shouldRecordBuild: STRICT — finite exit code 0 + buildSucceeded true only", () => {
+  // Genuine success.
   assertEquals(shouldRecordBuild({ buildSucceeded: true, exitCode: 0 }), true);
-  // Late fatal: build died in staging cleanup / lock release → exitCode 1 → NO record.
+  // Late fatal: build died in staging cleanup / lock release → exitCode 1.
   assertEquals(shouldRecordBuild({ buildSucceeded: true, exitCode: 1 }), false);
+  // Nonnumeric / missing / NaN exit codes NEVER authorize (r2 P1).
   assertEquals(shouldRecordBuild({ buildSucceeded: true, exitCode: "1" }), false);
+  assertEquals(shouldRecordBuild({ buildSucceeded: true, exitCode: "0" }), false);
+  assertEquals(shouldRecordBuild({ buildSucceeded: true, exitCode: "abc" }), false);
+  assertEquals(shouldRecordBuild({ buildSucceeded: true, exitCode: NaN }), false);
+  assertEquals(shouldRecordBuild({ buildSucceeded: true, exitCode: undefined }), false);
+  assertEquals(shouldRecordBuild({ buildSucceeded: true }), false);
+  assertEquals(shouldRecordBuild({ buildSucceeded: true, exitCode: 2 }), false);
+  assertEquals(shouldRecordBuild({ buildSucceeded: true, exitCode: -0 }), true);
   // Build never succeeded → no record regardless of exit code.
   assertEquals(shouldRecordBuild({ buildSucceeded: false, exitCode: 0 }), false);
   assertEquals(shouldRecordBuild({}), false);
 });
 
-Deno.test("deltaBetween/renderDelta: malformed null entries are skipped, never throw", () => {
+Deno.test("deltaBetween/renderDelta: malformed null entries and junk bullets never throw", () => {
   const parsed = parseChangelog(SAMPLE);
   parsed.push(null, { bad: true }, undefined); // adversarial null/malformed entries
   const delta = deltaBetween(parsed, null, "0.2.484");
@@ -95,6 +111,21 @@ Deno.test("deltaBetween/renderDelta: malformed null entries are skipped, never t
   const rendered = renderDelta(delta);
   assert(rendered.includes("0.2.484"));
   assertEquals(renderDelta([null, null]), "");
+  // Junk bullets: non-array bullets, non-string bullets, missing title/version
+  // must NEVER throw (r2 P1) — skipped or rendered defensively.
+  const junk = [
+    { version: "0.2.500", title: "ok", bullets: "not-an-array" }, // bullets not an array
+    { version: "0.2.501", title: "ok", bullets: [42, null, "real bullet"] }, // non-string bullets
+    { version: "0.2.502", bullets: [] }, // missing title
+    { title: "no version" }, // missing version
+    { version: "0.2.503", title: "ok" }, // missing bullets entirely
+  ];
+  const junkRendered = renderDelta(junk, 10);
+  assert(junkRendered.includes("0.2.503"), "entry with no bullets key renders");
+  assert(junkRendered.includes("real bullet"), "string bullets survive, junk filtered");
+  // No-throw smoke for degenerate single entries.
+  assertEquals(renderDelta([{ version: "0.2.999" }]), "- 0.2.999 —");
+  assertEquals(renderDelta([{ bullets: [1, 2] }]), ""); // no version/title → empty head skipped by filter
 });
 
 Deno.test("parseChangelog: null lines and non-string fragments never throw", () => {
@@ -108,6 +139,22 @@ Deno.test("parseChangelog: null lines and non-string fragments never throw", () 
   assertEquals(parsed.length, 2);
   assertEquals(parsed[0].version, "1.2.3");
   assertEquals(parsed[1].version, "1.2.2");
+});
+
+Deno.test("readChangelogOrNull: read failure warns one line and returns null (r2 P2)", async () => {
+  const warned = [];
+  const warn = (msg) => warned.push(msg);
+  // Failure path: injected read throws → warn + null.
+  const boom = new Error("ENOENT");
+  const result = await readChangelogOrNull({ read: async () => { throw boom; }, warn });
+  assertEquals(result, null);
+  assertEquals(warned.length, 1);
+  assert(warned[0].includes("could not read CHANGELOG.md"), `warning mentions the file: ${warned[0]}`);
+  assert(warned[0].includes("ENOENT"), `warning includes the error: ${warned[0]}`);
+  // Success path: no warning, content returned.
+  const ok = await readChangelogOrNull({ read: async () => "# Changelog\n", warn });
+  assertEquals(ok, "# Changelog\n");
+  assertEquals(warned.length, 1); // no additional warning on success
 });
 
 Deno.test("deltaBetween: entry == previous excluded, entry == current included", () => {

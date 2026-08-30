@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.489] — 2026-08-30
+- Fix r2 review findings: note-first rendering, strict exit-code gate, junk-proof render, warn-on-probe-failure
+
 ## [0.2.488] — 2026-08-30
 - tasks: record the review-fix candidate sha
 

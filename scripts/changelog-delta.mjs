@@ -91,26 +91,37 @@ export function deltaBetween(parsed, previousVersion, currentVersion) {
  */
 export function renderDelta(entries, limit = DEFAULT_DELTA_LIMIT) {
   if (!Array.isArray(entries) || entries.length === 0) return "";
-  const clean = entries.filter((e) => e && typeof e === "object");
+  // Skip junk entries entirely (consistent with deltaBetween's version gate):
+  // only objects with a string version render; everything else is dropped so
+  // no parse/render path ever throws on malformed input.
+  const clean = entries.filter(
+    (e) => e && typeof e === "object" && typeof e.version === "string",
+  );
   const total = clean.length;
   if (total === 0) return "";
   // Input is newest-first; slice the NEWEST `limit`, then reverse so the
   // oldest of the shown set prints first and the newest prints LAST.
   const shown = clean.slice(0, limit).reverse();
-  const lines = [];
-  for (const entry of shown) {
-    const head = `- ${entry.version} — ${entry.title}`.trim();
-    lines.push(head);
-    for (const bullet of entry.bullets.slice(0, 8)) {
-      lines.push(`    ${bullet}`);
-    }
-    if (entry.bullets.length > 8) {
-      lines.push(`    … ${entry.bullets.length - 8} more bullet(s)`);
-    }
-  }
   const older = total - shown.length;
+  const lines = [];
+  // Note FIRST (the entries you are about to read are the newest `limit`;
+  // anything older is collapsed into this single line), then oldest→newest.
   if (older > 0) {
     lines.push(`… ${older} older entr${older === 1 ? "y" : "ies"} — see CHANGELOG.md`);
+  }
+  for (const entry of shown) {
+    const bullets = Array.isArray(entry.bullets)
+      ? entry.bullets.filter((b) => typeof b === "string")
+      : [];
+    const title = String(entry.title ?? "");
+    const head = `- ${String(entry.version ?? "")} — ${title}`.trim();
+    lines.push(head);
+    for (const bullet of bullets.slice(0, 8)) {
+      lines.push(`    ${bullet}`);
+    }
+    if (bullets.length > 8) {
+      lines.push(`    … ${bullets.length - 8} more bullet(s)`);
+    }
   }
   return lines.join("\n");
 }
@@ -118,11 +129,15 @@ export function renderDelta(entries, limit = DEFAULT_DELTA_LIMIT) {
 /**
  * Pure decision seam for the build record: the version may only be recorded
  * after EVERY fatal step (staging cleanup + lock release) completed without
- * setting a non-zero exit code. Exported so the unit tests pin the
+ * setting a non-zero exit code. STRICT: exitCode must be a finite number AND
+ * exactly 0 AND buildSucceeded true — a NaN/undefined/string/non-zero exit
+ * code never authorizes a record. Exported so the unit tests pin the
  * "no record on late fatal failure" rule without invoking a real build.
  */
-export function shouldRecordBuild({ buildSucceeded = false, exitCode = 0 } = {}) {
-  return buildSucceeded === true && (Number(exitCode) || 0) === 0;
+export function shouldRecordBuild({ buildSucceeded = false, exitCode } = {}) {
+  return buildSucceeded === true &&
+    typeof exitCode === "number" && Number.isFinite(exitCode) &&
+    exitCode === 0;
 }
 
 /** Read the recorded previous build version; null when absent/unreadable. */
@@ -140,4 +155,18 @@ export async function writeLastBuiltVersion(builtVersionPath, version) {
   if (!isValidVersion(version)) return;
   await mkdir(path.dirname(builtVersionPath), { recursive: true });
   await writeFile(builtVersionPath, `${version}\n`, "utf8");
+}
+
+/**
+ * Read the CHANGELOG body for the delta; on ANY read failure, call the
+ * injected warn (one line) and return null — never throw, never silence.
+ * Injected `read`/`warn` keep this pure-seam testable without a real build.
+ */
+export async function readChangelogOrNull({ read, warn }) {
+  try {
+    return await read();
+  } catch (e) {
+    warn?.(`warning: could not read CHANGELOG.md (${e?.message ?? e}) — skipping the build changelog delta`);
+    return null;
+  }
 }
