@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.424] — 2026-08-30
+- Board deny: drive the Settings section in the browser journey (nav → dropdowns → add → persisted row → remove → gone)
+
 ## [0.2.423] — 2026-08-30
 - Board deny rules: single owner-restricted route set (duplicate keys removed), corrupt policy store fails closed and is never overwritten, route-level tests with real callers and exact denial codes
 

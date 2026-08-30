@@ -70,9 +70,9 @@ function newJobId() {
 }
 
 /**
- * Whether the caller may post a job. v1: FULLY OPEN — the hub and every known
- * named agent may post (targeted or broadcast). The guard takes the agents
- * registry so the deferred per-edge permission layer slots in here.
+ * Whether the caller may post a job. Default-open — the hub and every known
+ * named agent may post (targeted or broadcast) — minus any owner deny rule
+ * covering this edge (denyRules, fail-closed on malformed entries).
  * Returns { ok: true } or { ok: false, code, error }.
  */
 export function canPostJob({ callerId, agents, targetAgentId = null, denyRules = [] }) {
@@ -102,7 +102,7 @@ export function canPostJob({ callerId, agents, targetAgentId = null, denyRules =
 
 /**
  * Whether the caller may claim a job (decided against the FOLDED job record).
- * v1 rules (fully open among named agents + hub):
+ * Default-open among named agents + hub, minus owner deny rules:
  *  - the caller must be the hub or a known named agent;
  *  - the job must be open (pending — a live claim or a settled job refuses);
  *  - an agent never claims its OWN job (a self-claim is a no-op loop);
@@ -471,12 +471,10 @@ export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => 
   /** Fresh read of the owner's deny rules from the reserved key (r5 P1: the
    *  rules must be loaded INSIDE each locked operation, not captured at
    *  construction time, so a concurrent add/remove is seen by the next
-   *  guarded call). Returns an empty array if the key is absent; a
-   *  MALFORMED value (non-array, over count, bad shape) also returns an
-   *  empty array — the guards then permit (fail OPEN for the default state,
-   *  which is "no rules = fully open"). The fail-closed deny behaviour is
-   *  for INDIVIDUAL MALFORMED RULES within a valid array, not for the whole
-   *  store being corrupt. */
+   *  guarded call). Fail-closed throughout: an absent key is the only
+   *  default-open state; a malformed value, an unreadable store (getStrict
+   *  throw), or a bad rule shape all mark the store corrupt and the guards
+   *  deny. */
   /** Load the owner's deny rules from the reserved key. Returns
    *  { rules, corrupt } where corrupt=true means the stored value is the
    *  wrong shape (the guards then deny all, fail closed). Absent key →
@@ -486,7 +484,9 @@ export function createAgentBoard({ memory, withLock = (fn) => fn(), now = () => 
     try {
       raw = await memory.getStrict(BOARD_DENY_RULES_KEY);
     } catch {
-      raw = undefined;
+      // getStrict THROWS on read/corruption failure by contract — an
+      // unreadable policy authority fails CLOSED, never default-open.
+      return { rules: null, corrupt: true };
     }
     if (raw == null) return { rules: [], corrupt: false };
     if (!Array.isArray(raw)) return { rules: null, corrupt: true };

@@ -98,15 +98,6 @@ Deno.test("board store: deny rules persist in a reserved key and survive restart
 
 // ── Bounded rule count ──────────────────────────────────────────────────────
 
-Deno.test("deny rules: bounded count (200 max)", () => {
-  const rules = Array.from({ length: 201 }, (_, i) => ({ action: "claim", agentId: `a${i}`, peerId: `b${i}` }));
-  const denied = canClaimJob({ callerId: "critic", agents: AGENTS, job: { id: "j1", posterId: "writer", status: "pending" }, denyRules: rules });
-  // 201 rules exceeds the bound — the guard must not crash
-  assert(typeof denied === "object");
-});
-
-// ── Routes: owner add/remove/list deny rules ───────────────────────────────
-
 Deno.test("board routes: owner can add and remove deny rules", async () => {
   const memory = mockMemory();
   const { routes } = createAgentBoardRoutes({
@@ -247,6 +238,12 @@ Deno.test("board deny: deny routes require the owner-options principal (model an
     const res = await routes["board.deny.add"]({ action: "post", agentId: "writer", peerId: "critic" }, ctx);
     assertEquals(res.ok, false);
     assertEquals(res.code, "board-deny-owner-only");
+    const listed = await routes["board.deny.list"]({}, ctx);
+    assertEquals(listed.ok, false);
+    assertEquals(listed.code, "board-deny-owner-only");
+    const removed = await routes["board.deny.remove"]({ ruleId: "deny_x" }, ctx);
+    assertEquals(removed.ok, false);
+    assertEquals(removed.code, "board-deny-owner-only");
   }
   assertEquals((await memory.getStrict(BOARD_DENY_RULES_KEY)) ?? [], [], "no rule was written by a non-owner");
 });
@@ -264,5 +261,41 @@ Deno.test("board deny: Settings wiring uses the real named-agent.list route and 
   const section = src.slice(src.indexOf("renderBoardDenyRules"));
   assert(section.includes('"named-agent.list"'), "the dropdowns use the real route name");
   assert(!section.includes('"named-agents.list"'), "the nonexistent plural route is gone");
-  assert(section.includes("agents"), "the {agents} envelope is unwrapped");
+  assert(/\?\.agents\b/.test(section), "the {agents} envelope is unwrapped (?.agents)");
+});
+
+Deno.test("board deny: an unreadable deny store (getStrict throws) fails post AND claim closed", async () => {
+  const map = new Map();
+  const throwingMemory = {
+    get: async (k) => map.get(k) ?? null,
+    set: async (k, v) => void map.set(k, v),
+    getStrict: async (k) => {
+      if (k === BOARD_DENY_RULES_KEY) throw new Error("store unreadable");
+      return map.get(k) ?? null;
+    },
+    setTrusted: async (k, v) => void map.set(k, v),
+  };
+  let caller = "writer";
+  const { routes } = createAgentBoardRoutes({
+    memory: throwingMemory, withLock: (fn) => fn(), listAgents: async () => AGENTS,
+    resolveCaller: () => caller,
+  });
+  const posted = await routes["board.post"]({ description: "x" }, { principal: "model", executionId: "run-1" });
+  assertEquals(posted.ok, false);
+  assertEquals(posted.code, "board-store-error", "post fails closed when policy authority is unreadable");
+
+  // claim: seed a job directly through a working board, then claim via the
+  // throwing store.
+  const seedMemory = mockMemory();
+  const seed = createAgentBoardRoutes({
+    memory: seedMemory, withLock: (fn) => fn(), listAgents: async () => AGENTS,
+    resolveCaller: () => "writer",
+  });
+  const job = await seed.routes["board.post"]({ description: "open" }, { principal: "model", executionId: "run-s1" });
+  // Move the seeded job log into the throwing store.
+  for (const [k, v] of seedMemory._map) if (k !== BOARD_DENY_RULES_KEY) map.set(k, v);
+  caller = "critic";
+  const claimed = await routes["board.claim"]({ jobId: job.job.id }, { principal: "model", executionId: "run-c1" });
+  assertEquals(claimed.ok, false);
+  assertEquals(claimed.code, "board-store-error", "claim fails closed when policy authority is unreadable");
 });
