@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.414] — 2026-08-30
+- Much better debugging: every tool call is logged with its arguments, result, and duration; there's a Settings switch for full detail in local logs (exports stay protected); and every run now has a View log showing its complete tool-call timeline
+
 ## [0.2.413] — 2026-08-29
 - The microphone picker is smarter: after you first allow the mic it refreshes and shows all your real inputs, each with a live level check, and switching devices mid-dictation can no longer pick up the wrong microphone
 
