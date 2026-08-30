@@ -13,8 +13,16 @@ import {
   deleteAsset,
   getAsset,
   listAssets,
+  listAssetVersions,
+  patchAsset,
+  resolveAssetPatch,
   updateAsset,
 } from "../extension/lib/artifacts.js";
+
+async function sha256(s: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 // ---- minimal in-memory OPFS fake (same shape as tests/memory.test.ts) ----
 function dirNode() {
@@ -264,4 +272,102 @@ Deno.test("assets: concurrent same-tick creates both persist in the index (no RM
   const ids = new Set(list.assets.map((x) => x.id));
   assert(ids.has(a.asset.id), "the first id persists in the index");
   assert(ids.has(b.asset.id), "the second id persists in the index");
+});
+
+// ---- patch_asset: exact search/replace editing (CAP-FB-20260830-PATCH-ASSET-TOOL-01) ----
+
+Deno.test("patchAsset replaces a unique match and reports +1 -1 as a new version", async () => {
+  const created = await createAsset("master", {
+    type: "html",
+    name: "crumb.html",
+    content: "<h1>Crumb</h1>\n<style>--brand: #b91c1c;</style>\n<p>Fresh bread.</p>\n",
+  });
+  const id = created.asset.id;
+  assertEquals((await listAssetVersions("master", id)).head, 1, "starts at version 1");
+
+  const res = await patchAsset("master", id, [
+    { search: "--brand: #b91c1c;", replace: "--brand: #2563eb;" },
+  ]);
+  assert(res.ok, `patch must succeed: ${res.error}`);
+  assertEquals(res.added, 1, "one line added");
+  assertEquals(res.removed, 1, "one line removed");
+  assertEquals(res.version, 2, "the patch lands as a new head version");
+
+  const got = await getAsset("master", id);
+  assert(got.asset.content.includes("--brand: #2563eb;"), "the new colour is written");
+  assert(!got.asset.content.includes("#b91c1c"), "the old colour is gone");
+  assertEquals((await listAssetVersions("master", id)).head, 2, "head advanced to 2");
+});
+
+Deno.test("patchAsset refuses zero matches and multiple matches without all (no mutation)", async () => {
+  const created = await createAsset("master", {
+    type: "text",
+    name: "dup",
+    content: "red\nred\nblue\n",
+  });
+  const id = created.asset.id;
+  const before = await sha256((await getAsset("master", id)).asset.content);
+
+  const zero = await patchAsset("master", id, [{ search: "green", replace: "x" }]);
+  assert(!zero.ok, "a zero-match patch must fail");
+  assert(String(zero.error).includes("not found"), `readable not-found error: ${zero.error}`);
+
+  const multi = await patchAsset("master", id, [{ search: "red", replace: "orange" }]);
+  assert(!multi.ok, "an ambiguous (2-match) patch must fail without all:true");
+  assert(String(multi.error).includes("matches 2 times"), `readable ambiguity error: ${multi.error}`);
+
+  const after = await sha256((await getAsset("master", id)).asset.content);
+  assertEquals(after, before, "a refused patch leaves the body byte-identical");
+  assertEquals((await listAssetVersions("master", id)).head, 1, "no new version was staged");
+
+  // all:true resolves the ambiguity by replacing EVERY occurrence.
+  const all = await patchAsset("master", id, [{ search: "red", replace: "orange", all: true }]);
+  assert(all.ok, `all:true must succeed: ${all.error}`);
+  assertEquals((await getAsset("master", id)).asset.content, "orange\norange\nblue\n");
+});
+
+Deno.test("patchAsset with a stale expectVersion returns version_conflict and does not mutate", async () => {
+  const created = await createAsset("master", { type: "text", name: "guard", content: "one\n" });
+  const id = created.asset.id;
+  // Advance the head to version 2 so an expectVersion of 1 is stale.
+  const first = await patchAsset("master", id, [{ search: "one", replace: "two" }], { expectVersion: 1 });
+  assert(first.ok, `the fresh-version patch must succeed: ${first.error}`);
+  assertEquals(first.version, 2);
+  const before = await sha256((await getAsset("master", id)).asset.content);
+
+  const stale = await patchAsset("master", id, [{ search: "two", replace: "three" }], { expectVersion: 1 });
+  assert(!stale.ok, "a stale expectVersion must be refused");
+  assertEquals(stale.error, "version_conflict");
+  assertEquals(stale.version, 2, "the conflict reports the current head");
+
+  const after = await sha256((await getAsset("master", id)).asset.content);
+  assertEquals(after, before, "a version_conflict leaves the body byte-identical");
+  assertEquals((await listAssetVersions("master", id)).head, 2, "no new version was staged");
+});
+
+Deno.test("patchAsset applies multiple edits in order and refuses an unknown id", async () => {
+  const created = await createAsset("master", { type: "text", name: "multi", content: "a\nb\nc\n" });
+  const id = created.asset.id;
+  const res = await patchAsset("master", id, [
+    { search: "a", replace: "A" },
+    { search: "c", replace: "C" },
+  ]);
+  assert(res.ok, `multi-edit patch must succeed: ${res.error}`);
+  assertEquals((await getAsset("master", id)).asset.content, "A\nb\nC\n");
+
+  const missing = await patchAsset("master", "a_never_created", [{ search: "x", replace: "y" }]);
+  assert(!missing.ok, "unknown-id patch must fail");
+  assertEquals(missing.error, "asset not found");
+
+  const noEdits = await patchAsset("master", id, []);
+  assert(!noEdits.ok, "an empty edits array must fail");
+});
+
+Deno.test("resolveAssetPatch is a pure fail-closed resolver (no store)", () => {
+  assertEquals(resolveAssetPatch("hello world", [{ search: "world", replace: "there" }]).content, "hello there");
+  assert(!resolveAssetPatch("abc", [{ search: "z", replace: "y" }]).ok, "zero match refused");
+  assert(!resolveAssetPatch("a a", [{ search: "a", replace: "b" }]).ok, "ambiguous match refused");
+  assertEquals(resolveAssetPatch("a a", [{ search: "a", replace: "b", all: true }]).content, "b b");
+  assert(!resolveAssetPatch("x", []).ok, "no edits refused");
+  assert(!resolveAssetPatch("x", Array(21).fill({ search: "x", replace: "y" })).ok, "over 20 edits refused");
 });

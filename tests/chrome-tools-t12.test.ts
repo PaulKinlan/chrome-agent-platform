@@ -203,8 +203,8 @@ Deno.test("T12: browserToolset has exactly 125 tools matching BROWSER_TOOL_NAMES
   assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.browserTools, 125);
   // 159 + delegate_to_agent (G5) + 7 board tools (jobs board, 2026-08-29;
   // board_read_messages 2026-08-30) − open_side_panel (removed 2026-08-30,
-  // CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01) = 166.
-  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.totalTools, 166);
+  // CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01) = 167 (+ patch_asset, CAP-FB-20260830-PATCH-ASSET-TOOL-01).
+  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.totalTools, 167);
   for (const name of [
     "register_user_script", "update_user_script", "unregister_user_script", "list_user_scripts",
     "register_content_script", "update_content_script", "unregister_content_script", "list_content_scripts",

@@ -74,6 +74,12 @@ const RUN_SCRIPT_MARKER = "@demo-run-script";
 // update card must be titled with the artifact's name, not "Generated UI"
 // (CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01).
 const EDIT_ARTIFACT_MARKER = "@demo-edit-artifact";
+// @demo-patch-artifact: create crumb.html then change one colour with the
+// CHEAP patch_asset tool (search/replace) instead of resending the whole body,
+// then attempt a SECOND patch with a deliberately stale expectVersion to prove
+// the version guard refuses without mutating
+// (CAP-FB-20260830-PATCH-ASSET-TOOL-01).
+const PATCH_ARTIFACT_MARKER = "@demo-patch-artifact";
 // @demo-remember <key>=<value>: ONE real memory_set through the lazy protocol
 // (search_tools → execute_tool). The write half of the recall journey
 // (CAP-FB-20260830-MEMORY-RECALL-NEW-THREAD-01).
@@ -302,6 +308,7 @@ function latestRunSlice(prompt) {
       browser: lastUser.includes(BROWSER_MARKER),
       enumSlip: lastUser.includes(ENUM_SLIP_MARKER),
       editArtifact: lastUser.includes(EDIT_ARTIFACT_MARKER),
+      patchArtifact: lastUser.includes(PATCH_ARTIFACT_MARKER),
       runScript: lastUser.includes(RUN_SCRIPT_MARKER),
       obeyPage: lastUser.includes(OBEY_PAGE_MARKER),
       remember: lastUser.includes(REMEMBER_MARKER),
@@ -777,6 +784,44 @@ function editArtifactFinalText(prompt) {
   return `[demo model] Artifact edit FAILED honestly: ${why}`;
 }
 
+// ── @demo-patch-artifact helpers (CAP-FB-20260830-PATCH-ASSET-TOOL-01) ──────
+const PATCH_ARTIFACT_NAME = "crumb.html";
+// A small page with ONE brand colour to change. The whole document is ~180
+// bytes; the point of patch_asset is that the EDIT is a handful of bytes.
+const PATCH_ARTIFACT_V1 = "<!doctype html><html><head><style>:root{--brand:#b91c1c}</style></head><body><h1>Crumb Bakery</h1><p>Fresh bread daily.</p></body></html>";
+function wantsPatchArtifact(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.patchArtifact;
+}
+function patchArtifactAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" &&
+    Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && /\[demo model\] Artifact patch/.test(p.text ?? "")));
+}
+/** Honest final text: the first patch applied (+1 -1), the stale second one was
+ *  refused as version_conflict without mutating. */
+function patchArtifactFinalText(prompt) {
+  const prior = runSlice(prompt)
+    .filter((m) => m?.role === "assistant" && Array.isArray(m?.content))
+    .flatMap((m) => m.content)
+    .find((p) => p?.type === "text" && /\[demo model\] Artifact patch/.test(p.text ?? ""));
+  if (prior?.text) return prior.text;
+  const outputs = lazyExecuteOutputs(prompt);
+  const createdId = editArtifactCreatedId(prompt);
+  const patched = outputs.find((v) =>
+    v.ok === true && v.selectedTool === "patch_asset" && v.result?.ok === true);
+  const conflict = outputs.find((v) =>
+    v.selectedTool === "patch_asset" && v.result?.ok === false && v.result?.error === "version_conflict");
+  if (createdId && patched && conflict) {
+    const added = patched.result?.added ?? "?";
+    const removed = patched.result?.removed ?? "?";
+    return `[demo model] Artifact patch complete: created ${PATCH_ARTIFACT_NAME} (${createdId}), changed the brand colour with one patch (+${added} -${removed}), and a stale re-edit was refused as version_conflict without changing the file.`;
+  }
+  const failed = outputs.find((v) => v.result?.ok === false && v.result?.error !== "version_conflict");
+  const why = String(failed?.result?.error ?? failed?.error ?? "the patch never settled").slice(0, 160);
+  return `[demo model] Artifact patch FAILED honestly: ${why}`;
+}
+
 // ── @demo-browser helpers ───────────────────────────────────────────────────
 function wantsBrowser(prompt) {
   return !!latestRunSlice(prompt)?.marker?.browser;
@@ -882,7 +927,7 @@ function browserFinalText(prompt) {
   return `[demo model] Browser tool ${spec.tool} finished without a result.`;
 }
 
-function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, browser = false, enumSlip = false, runScript = false, editArtifact = false, remember = false } = {}) {
+function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, browser = false, enumSlip = false, runScript = false, editArtifact = false, patchArtifact = false, remember = false } = {}) {
   const step = toolResultCount(prompt);
   if (remember) {
     // ONE key, through the REAL lazy protocol: search_tools(memory_set) →
@@ -918,6 +963,39 @@ function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board =
     const id = editArtifactCreatedId(prompt);
     if (!id) return null; // honest stop: the final text reports it
     return { id: "execute_edit_artifact_update", name: "execute_tool", input: { selectionRef, arguments: { origin: "master", id, content: EDIT_ARTIFACT_V2 } } };
+  }
+  if (patchArtifact) {
+    // search(create_asset) → execute create (crumb.html, head 1) →
+    // search(patch_asset) → execute STALE patch (expectVersion 999 while head is
+    //   1 → version_conflict, refused BEFORE the approval gate, no card, no
+    //   mutation) →
+    // search(patch_asset) → execute APPLY patch (one colour, expectVersion 1 →
+    //   owner card → +1 -1, head 2). The approved mutation is the LAST execute
+    //   (the proven lazy-protocol shape — a mid-run approval pause would strand
+    //   the following step's selection); the refused stale patch needs no card,
+    //   so it can precede it safely.
+    const toolParts = boardToolParts(prompt);
+    const searches = toolParts.filter((p) => p.toolName === "search_tools").length;
+    const executes = toolParts.filter((p) => p.toolName === "execute_tool").length;
+    if (executes >= 3) return null;
+    if (searches <= executes) {
+      return { id: `search_patch_artifact_${searches}`, name: "search_tools", input: { query: executes === 0 ? "create_asset" : "patch_asset", limit: 1 } };
+    }
+    const selectionRef = latestSelectionRef(prompt);
+    if (!selectionRef) return null;
+    if (executes === 0) {
+      return { id: "execute_patch_create", name: "execute_tool", input: { selectionRef, arguments: { origin: "master", name: PATCH_ARTIFACT_NAME, type: "html", content: PATCH_ARTIFACT_V1 } } };
+    }
+    const id = editArtifactCreatedId(prompt);
+    if (!id) return null; // honest stop: the final text reports it
+    if (executes === 1) {
+      // The STALE re-edit: expectVersion 999 can never be the head, so it is
+      // refused as version_conflict without a card and without mutating.
+      return { id: "execute_patch_stale", name: "execute_tool", input: { selectionRef, arguments: { origin: "master", id, edits: [{ search: "#b91c1c", replace: "#16a34a" }], expectVersion: 999 } } };
+    }
+    // executes === 2 — the real edit (LAST execute): a few bytes of args, not the
+    // whole document; expectVersion 1 matches the head, so the owner card shows.
+    return { id: "execute_patch_apply", name: "execute_tool", input: { selectionRef, arguments: { origin: "master", id, edits: [{ search: "#b91c1c", replace: "#2563eb" }], expectVersion: 1 } } };
   }
   if (browser) {
     const spec = browserSpec(prompt);
@@ -1227,6 +1305,8 @@ export function createDemoModel() {
         ? lazyDemoCall(options.prompt, { enumSlip: true })
         : wantsEditArtifact(options.prompt) && !editArtifactAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { editArtifact: true })
+        : wantsPatchArtifact(options.prompt) && !patchArtifactAlreadyFinal(options.prompt)
+        ? lazyDemoCall(options.prompt, { patchArtifact: true })
         : wantsRunScript(options.prompt) && !runScriptAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { runScript: true })
         : wantsBoard(options.prompt) && !boardAlreadyFinal(options.prompt)
@@ -1287,6 +1367,14 @@ export function createDemoModel() {
       if (wantsEditArtifact(options.prompt)) {
         return Promise.resolve({
           content: [{ type: "text", text: editArtifactFinalText(options.prompt) }],
+          finishReason: "stop",
+          usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
+          warnings: [],
+        });
+      }
+      if (wantsPatchArtifact(options.prompt)) {
+        return Promise.resolve({
+          content: [{ type: "text", text: patchArtifactFinalText(options.prompt) }],
           finishReason: "stop",
           usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
           warnings: [],
@@ -1392,6 +1480,8 @@ export function createDemoModel() {
             ? lazyDemoCall(options.prompt, { enumSlip: true })
             : wantsEditArtifact(options.prompt) && !editArtifactAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { editArtifact: true })
+            : wantsPatchArtifact(options.prompt) && !patchArtifactAlreadyFinal(options.prompt)
+            ? lazyDemoCall(options.prompt, { patchArtifact: true })
             : wantsRunScript(options.prompt) && !runScriptAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { runScript: true })
             : wantsBoard(options.prompt) && !boardAlreadyFinal(options.prompt)
@@ -1541,6 +1631,11 @@ export function createDemoModel() {
           else if (wantsEditArtifact(options.prompt)) {
             // The artifact-edit final/continuation text: the update's result decides.
             response = editArtifactFinalText(options.prompt);
+          }
+          else if (wantsPatchArtifact(options.prompt)) {
+            // The patch final/continuation text: the first patch's +/- and the
+            // stale second patch's version_conflict decide the outcome.
+            response = patchArtifactFinalText(options.prompt);
           }
           else if (wantsRunScript(options.prompt)) {
             // The script-run final/continuation text: the execute result

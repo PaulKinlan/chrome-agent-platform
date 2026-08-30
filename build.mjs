@@ -315,9 +315,22 @@ try {
     // scan, no-new-Function scrub, oracle/test-control AST scan and the
     // dist.complete marker authority run identically in both modes.
     const DEBUG_BUILD = BUILD_TARGET === "developer";
+    // components.js / lib/artifacts.js import the diff core by its DIST path (so
+    // the unbundled extension pages resolve it at runtime); when esbuild bundles
+    // ANY entry (the SW, the options page, the agent worker) it must inline the
+    // SOURCE wrapper instead, so a clean checkout builds without a stale/absent
+    // dist and no bundle depends on build order
+    // (CAP-FB-20260830-ARTIFACT-DIFF-COMPONENT-01, PATCH-ASSET-TOOL-01).
+    const diffCoreFromSource = {
+      name: "cap-diff-core-from-source",
+      setup(b) {
+        b.onResolve({ filter: /dist\/shared\/diff-core\.bundle\.js$/ }, () => ({ path: path.join(EXT_DIR, "shared/diff-core.js") }));
+      },
+    };
     const shared = {
       bundle: true, format: "esm", target: "chrome120", platform: "browser",
       logLevel: "silent", sourcemap: DEBUG_BUILD, legalComments: "none",
+      plugins: [diffCoreFromSource],
       define: {
         __CAP_BUILD_LOG_DEFAULT__: JSON.stringify(DEBUG_BUILD ? "verbose" : "off"),
       },
@@ -338,18 +351,7 @@ try {
         "node:child_process": shimNode, fs: shimNode, path: shimNode, child_process: shimNode,
       },
     });
-    // components.js imports the diff core by its DIST path (so the unbundled
-    // extension pages resolve it at runtime); when esbuild bundles the options
-    // page it must inline the SOURCE wrapper instead, so a clean checkout
-    // builds without a stale/absent dist and the bundle never depends on
-    // build order (CAP-FB-20260830-ARTIFACT-DIFF-COMPONENT-01).
-    const diffCoreFromSource = {
-      name: "cap-diff-core-from-source",
-      setup(b) {
-        b.onResolve({ filter: /dist\/shared\/diff-core\.bundle\.js$/ }, () => ({ path: path.join(EXT_DIR, "shared/diff-core.js") }));
-      },
-    };
-    await build({ ...shared, entryPoints: [path.join(EXT_DIR, "options/options.js")], outfile: OPT, plugins: [diffCoreFromSource] });
+    await build({ ...shared, entryPoints: [path.join(EXT_DIR, "options/options.js")], outfile: OPT });
     // The diff core (CAP-FB-20260830-DIFF-LIBRARY-01): jsdiff lives in
     // node_modules, so the ONE wrapper module is bundled and every page /
     // component / the SW imports this single build by relative path.

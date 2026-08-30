@@ -43,6 +43,12 @@
 import { masterMemory, siteMemory, canonicalOrigin } from "./memory.js";
 import { TOOL_ARGUMENT_LIMITS } from "./tool-argument-contract.js";
 import { sha256Hex } from "./pure.js";
+// The ONE diff core (jsdiff via ./shared/diff-core.js → dist bundle). The build
+// rewrites this dist import to the source wrapper for every bundle (build.mjs
+// `cap-diff-core-from-source`), so no second diff implementation ships and the
+// line delta a `patch_asset` reports is the SAME core the viewer/thread render
+// (CAP-FB-20260830-PATCH-ASSET-TOOL-01, DIFF-LIBRARY-01).
+import { lineDiffSummary } from "../dist/shared/diff-core.bundle.js";
 
 const INDEX_KEY = "assets"; // reserved authority key (see memory.js)
 const REPAIR_KEY = "assetRepair"; // durable pending-deletion/restore state (reserved)
@@ -1251,6 +1257,107 @@ export async function restoreAssetVersion(origin, id, n, opts = {}) {
     if (typeof content !== "string") return { ok: false, error: "version body missing" };
     const res = await updateAssetLocked(store, origin, id, { content }, { by: opts.by, summary: `restored v${n}` });
     return res?.ok ? { ...res, restoredFrom: n } : res;
+  });
+}
+
+// ---- patch (exact search/replace) editing (CAP-FB-20260830-PATCH-ASSET-TOOL-01) ----
+// The maximum number of edits one patch may carry (also enforced by the model
+// tool's Zod schema; the seam re-checks so a direct/route caller cannot exceed it).
+export const PATCH_MAX_EDITS = 20;
+
+/** First N chars of a search string for a "not found" message — bounded and
+ * single-line so a failed patch never echoes the whole body back to the model
+ * (and never leaks another artifact: this is the caller's own search text). */
+function patchSnippet(s) {
+  const oneLine = String(s ?? "").replace(/\s+/g, " ").trim();
+  return oneLine.length > 80 ? `${oneLine.slice(0, 80)}…` : oneLine;
+}
+
+/** PURE resolver: apply exact-substring search/replace edits to `oldBody` in
+ * order and return the new body, or a readable, fail-closed error. Each search
+ * must occur exactly once in the CURRENT working text unless `all` is set (then
+ * every occurrence is replaced). Zero matches or an ambiguous (>1) match without
+ * `all` is refused WITHOUT partial application. Shared by `patchAsset` (the
+ * authoritative apply under the lock) and the `asset.patch` route (the approval
+ * preview), so the two can never diverge. No store, no I/O. */
+export function resolveAssetPatch(oldBody, edits) {
+  if (!Array.isArray(edits) || edits.length === 0) {
+    return { ok: false, error: "patch_asset needs at least one edit" };
+  }
+  if (edits.length > PATCH_MAX_EDITS) {
+    return { ok: false, error: `patch_asset accepts at most ${PATCH_MAX_EDITS} edits per call` };
+  }
+  let body = typeof oldBody === "string" ? oldBody : "";
+  for (const edit of edits) {
+    const search = edit?.search;
+    const replace = edit?.replace ?? "";
+    if (typeof search !== "string" || search.length === 0) {
+      return { ok: false, error: "each edit needs a non-empty search string" };
+    }
+    if (typeof replace !== "string") {
+      return { ok: false, error: "each edit's replace must be a string" };
+    }
+    // Count NON-OVERLAPPING occurrences with indexOf in the current working body.
+    let count = 0;
+    for (let from = 0; ; ) {
+      const idx = body.indexOf(search, from);
+      if (idx === -1) break;
+      count++;
+      from = idx + search.length;
+    }
+    if (count === 0) {
+      return { ok: false, error: `search text not found: ${patchSnippet(search)}` };
+    }
+    if (count > 1 && edit.all !== true) {
+      return { ok: false, error: `search text matches ${count} times; add all:true or make it unique` };
+    }
+    if (edit.all === true) {
+      body = body.split(search).join(replace);
+    } else {
+      const at = body.indexOf(search);
+      body = body.slice(0, at) + replace + body.slice(at + search.length);
+    }
+  }
+  return { ok: true, content: body };
+}
+
+/** Apply exact search/replace `edits` to an artifact and commit the result as a
+ * NEW head version — the cheap alternative to `update_asset` resending the whole
+ * body (CAP-FB-20260830-PATCH-ASSET-TOOL-01). Runs the SAME S0→S3 compensated
+ * update as any edit (WAL + immutable version via `updateAssetLocked`), so the
+ * store contract is shared. `expectVersion`, when supplied, refuses a stale edit
+ * (the head has moved since the model last saw the body) with `version_conflict`
+ * and the current head, WITHOUT mutating. Returns `{ok, id, asset, version,
+ * added, removed}` with the line delta from the shared diff core. The owner
+ * approval for a model-initiated patch is the caller's (the `asset.patch` route);
+ * this seam is authoritative but unguarded, exactly like `updateAsset`. */
+export async function patchAsset(origin, id, edits, opts = {}) {
+  if (!id || typeof id !== "string") return { ok: false, error: "patch_asset needs an existing id (use list_assets)" };
+  const store = assetStore();
+  return withAssetLock(origin, async () => {
+    const existing = await store.get(`asset:${id}`);
+    if (!existing) return { ok: false, error: "asset not found" };
+    const oldBody = typeof existing.content === "string" ? existing.content : "";
+    // expectVersion guards against editing a body the model has not seen: read
+    // the head from the index and refuse if it has moved (no mutation).
+    if (opts.expectVersion !== undefined && opts.expectVersion !== null) {
+      let index;
+      try { index = await readIndexStrict(store); } catch (e) { return { ok: false, error: String(e?.message ?? e) }; }
+      const row = index.find((e) => e.id === id);
+      const head = Number.isSafeInteger(row?.version) && row.version > 0 ? row.version : 0;
+      if (opts.expectVersion !== head) {
+        return { ok: false, error: "version_conflict", version: head };
+      }
+    }
+    const resolved = resolveAssetPatch(oldBody, edits);
+    if (!resolved.ok) return resolved;
+    if (resolved.content === oldBody) {
+      return { ok: false, error: "the edits made no change" };
+    }
+    const res = await updateAssetLocked(store, origin, id, { content: resolved.content }, { by: opts.by, summary: opts.summary });
+    if (!res?.ok) return res;
+    const delta = lineDiffSummary(oldBody, resolved.content);
+    return { ok: true, id, asset: res.asset, version: res.version, added: delta.added, removed: delta.removed };
   });
 }
 

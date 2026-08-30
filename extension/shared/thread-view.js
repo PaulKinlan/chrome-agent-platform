@@ -104,6 +104,7 @@ export function artifactCardTitle(input = {}) {
   }
   switch (toolName) {
     case "update_asset": return "Updated artifact";
+    case "patch_asset": return "Edited artifact";
     case "create_asset": return "New artifact";
     default: return "Generated page";
   }

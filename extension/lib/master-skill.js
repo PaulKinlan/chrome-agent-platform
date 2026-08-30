@@ -190,7 +190,11 @@ same as every other tool. Prefer them over hand-rolling string manipulation.
   artifact. Pass the same key on every run that should produce the SAME
   artifact: an existing key finds and updates that exact artifact instead of
   creating a duplicate.
-- update_asset(origin, id, ...) — update an artifact's name/type/content.
+- update_asset(origin, id, ...) — replace an artifact's whole name/type/content.
+- patch_asset(origin, id, edits, expectVersion?) — edit PART of an artifact by
+  exact search/replace (edits: [{search, replace, all?}]). Prefer this for small
+  changes: you send only the changed text, not the whole document. Each search
+  must match once (or set all:true); a miss or an ambiguous match is refused.
 - delete_asset(origin, id) — delete an artifact.
 - list_assets(origin) — list an origin's artifacts (or "master" for all hub
   artifacts).
@@ -269,6 +273,10 @@ Write deterministic, side-effect-free scripts.
 - When a task produces something the owner wants (a page, a report, a list, a
   file), create an asset. Prefer "master" scope for hub-level artifacts, or the
   origin for a site-specific artifact. Give it a clear name + type.
+- To CHANGE an existing artifact, prefer patch_asset (exact search/replace on the
+  parts that change) over update_asset (which resends the entire body). Only call
+  get_asset first if you have not already seen the body this turn; if you just
+  created or read it, patch against what you already have and pass expectVersion.
 
 ### The memory model (self-organizing)
 Your store is a living knowledge base, not a scratchpad. Organize it:
