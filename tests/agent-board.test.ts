@@ -1062,3 +1062,10 @@ Deno.test("browser tools: a missing-grant denial carries the conversation permis
   assertEquals(r?.waitingForPermission, true, "the denial must carry waitingForPermission");
   assertEquals(r?.permissionRequirement?.permissions, ["bookmarks"], "the requirement names the exact permission");
 });
+
+// ── review round-5: capability ID uniqueness ────────────────────────────────
+Deno.test("capabilities: no duplicate capability IDs", async () => {
+  const { CAPABILITIES } = await import("../extension/lib/capabilities.js");
+  const ids = CAPABILITIES.map((c) => c.id);
+  assertEquals(new Set(ids).size, ids.length, `duplicate capability IDs: ${ids.join(", ")}`);
+});

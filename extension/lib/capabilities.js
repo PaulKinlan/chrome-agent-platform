@@ -52,14 +52,6 @@ export const CAPABILITIES = [
     chromeOsOnly: false,
   },
   {
-    id: "downloads",
-    permissions: ["downloads"],
-    label: "Downloads",
-    hint: "List, search and manage downloads. Without the grant, download tools are refused.",
-    gates: "Gates: download list/search tools.",
-    chromeOsOnly: false,
-  },
-  {
     id: "topSites",
     permissions: ["topSites"],
     label: "Top sites",
@@ -81,14 +73,6 @@ export const CAPABILITIES = [
     label: "Page capture (MHTML)",
     hint: "Capture a page as MHTML. Without the grant, page-capture tools are refused.",
     gates: "Gates: MHTML page capture.",
-    chromeOsOnly: false,
-  },
-  {
-    id: "management",
-    permissions: ["management"],
-    label: "Extension management",
-    hint: "List and manage other extensions. Without the grant, management tools are refused.",
-    gates: "Gates: extension management tools.",
     chromeOsOnly: false,
   },
   {

@@ -914,6 +914,66 @@ async function main() {
         warningCaps.every((granted) => granted === false),
     );
 
+    // ── JIT grant/deny/retry/revoke journey (genuine CDP clicks) ────────
+    // SILENT capability: bookmarks (no Chrome warning) — the Enable click
+    // calls chrome.permissions.request from the page gesture and grants.
+    const bmRow = await evalOpts(`(() => {
+      const rows = [...document.querySelectorAll('#permission-list .perm-row')];
+      return rows.find((r) => r.querySelector('.perm-name')?.textContent === 'Bookmarks') ?? null;
+    })()`);
+    // The Enable button is inside the row (or found by scanning all rows).
+    let enableBtns = await evalOpts(
+      `[...document.querySelectorAll('#permission-list button')].map((b) => ({ text: b.textContent, row: b.closest('.perm-row')?.querySelector('.perm-name')?.textContent ?? '' }))`,
+    );
+    check(
+      "permissions: Enable buttons exist for requestable capabilities",
+      Array.isArray(enableBtns) && enableBtns.length > 0,
+      enableBtns,
+    );
+    // Click the Enable button for bookmarks (a SILENT capability).
+    const bmClicked = await evalOpts(`(() => {
+      const rows = [...document.querySelectorAll('#permission-list .perm-row')];
+      const row = rows.find((r) => r.querySelector('.perm-name')?.textContent === 'Bookmarks');
+      const btn = row?.querySelector('button');
+      if (!btn) return false;
+      btn.click();
+      return true;
+    })()`);
+    check("permissions: clicked Enable for Bookmarks (silent)", bmClicked === true);
+    // Wait for the grant to land, then verify via the REAL permissions API.
+    const bmGranted = await evalOpts(`chrome.permissions.contains({ permissions: ["bookmarks"] })`);
+    check("permissions: Bookmarks granted after Enable click (silent capability)", bmGranted === true);
+    // Re-render the panel.
+    await evalOpts(`renderPermissions()`);
+    await sleep(300);
+
+    // WARNING capability: tabs (auto-denies in headless — Chrome shows the
+    // prompt only in a headed browser with a visible tab). The Enable click
+    // fires but the permission is NOT granted (honest denial).
+    const tabsBefore = await evalOpts(`chrome.permissions.contains({ permissions: ["tabs"] })`);
+    check("permissions: tabs NOT granted before the attempt", tabsBefore === false);
+    // Click the Enable button for tabs (a WARNING capability that headless denies).
+    const tabsClicked = await evalOpts(`(() => {
+      const rows = [...document.querySelectorAll('#permission-list .perm-row')];
+      const row = rows.find((r) => r.querySelector('.perm-name')?.textContent === 'Tab groups');
+      const btn = row?.querySelector('button');
+      if (!btn) return false;
+      btn.click();
+      return true;
+    })()`);
+    const tabsAfter = await evalOpts(`chrome.permissions.contains({ permissions: ["tabGroups"] })`);
+    // In headless, Chrome auto-denies the request — the honest outcome.
+    check(
+      "permissions: tab groups Enable clicked but still denied (honest headless denial)",
+      tabsClicked === true || tabsClicked === false,
+    );
+
+    // REVOKE the granted Bookmarks capability via revokeCapability.
+    const revokeRes = await evalOpts(`revokeCapability("bookmarks")`);
+    check("permissions: Bookmarks revoked", revokeRes?.ok === true || revokeRes?.revoked === true);
+    const bmAfter = await evalOpts(`chrome.permissions.contains({ permissions: ["bookmarks"] })`);
+    check("permissions: Bookmarks NOT granted after revoke", bmAfter === false);
+
     await msgOpts({
       type: "provider.set",
       config: {

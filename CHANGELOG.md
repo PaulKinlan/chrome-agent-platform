@@ -1,7 +1,13 @@
 # Changelog
 
+## [0.2.406] — 2026-08-30
+- fix(permissions): consolidate duplicate capability descriptors; add JIT grant/deny/retry/revoke journey; clean changelog entries
+
+## [0.2.405] — 2026-08-30
+- Capability permission descriptors are now deduplicated, and the Settings panel offers an Enable button for every requestable capability — click to grant, and the permission is yours
+
 ## [0.2.404] — 2026-08-29
-- fix(permissions): the approval card now JIT-requests the missing capability from the owner's click; enrollment + journeys updated for the OPTIONAL + JIT model
+- The approval card now requests the missing capability directly from your click
 
 ## [0.2.403] — 2026-08-29
 - fix(permissions): remove ChromeOS-only audioCapture/videoCapture permissions entirely
