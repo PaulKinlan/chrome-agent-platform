@@ -188,20 +188,20 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 | Priority | Status | Task | What it is |
 |---|---|---|---|
-| P0 | IN_REVIEW | [`CAP-FB-20260829-APPROVAL-JOURNEY-REGRESSION-01`](#cap-fb-20260829-approval-journey-regression-01-restore-owner-direct-approval-journeys-after-inline-approvals) | Restore owner-direct approval journeys after inline approvals |
+| P0 | DONE | [`CAP-FB-20260829-APPROVAL-JOURNEY-REGRESSION-01`](#cap-fb-20260829-approval-journey-regression-01-restore-owner-direct-approval-journeys-after-inline-approvals) | Restore owner-direct approval journeys after inline approvals |
 | P0 | IN_REVIEW | [`CAP-FB-20260829-BACKGROUND-RUN-TRANSCRIPT-01`](#cap-fb-20260829-background-run-transcript-01-scheduled-named-agent-runs-disappear-from-the-agent-conversation) | Scheduled named-agent runs disappear from the agent conversation |
-| P0 | IN_REVIEW | [`CAP-FB-20260829-MIC-DEAD-MACOS-01`](#cap-fb-20260829-mic-dead-macos-01-macos-dictation-has-no-transcript-or-trustworthy-microphone-diagnostics) | macOS dictation has no transcript or trustworthy microphone diagnostics |
-| P0 | IN_REVIEW | [`CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01`](#cap-fb-20260829-tool-argument-robustness-01-tool-call-argument-robustness-and-schema-accuracy) | Tool-call argument robustness and schema accuracy |
-| P0 | IN_REVIEW | [`CAP-FB-20260829-URGENT-UI-REPAIR-01`](#cap-fb-20260829-urgent-ui-repair-01-restore-agents-and-create-dialog-visual-quality) | Restore Agents and create-dialog visual quality |
-| P0 | IN_REVIEW | [`CAP-FB-20260830-WEBMCP-ACCEPTANCE-GREEN-01`](#cap-fb-20260830-webmcp-acceptance-green-01-restore-passive-webmcp-discovery-acceptance) | Restore passive WebMCP discovery acceptance |
+| P0 | DONE | [`CAP-FB-20260829-MIC-DEAD-MACOS-01`](#cap-fb-20260829-mic-dead-macos-01-macos-dictation-has-no-transcript-or-trustworthy-microphone-diagnostics) | macOS dictation has no transcript or trustworthy microphone diagnostics |
+| P0 | DONE | [`CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01`](#cap-fb-20260829-tool-argument-robustness-01-tool-call-argument-robustness-and-schema-accuracy) | Tool-call argument robustness and schema accuracy |
+| P0 | DONE | [`CAP-FB-20260829-URGENT-UI-REPAIR-01`](#cap-fb-20260829-urgent-ui-repair-01-restore-agents-and-create-dialog-visual-quality) | Restore Agents and create-dialog visual quality |
+| P0 | DONE | [`CAP-FB-20260830-WEBMCP-ACCEPTANCE-GREEN-01`](#cap-fb-20260830-webmcp-acceptance-green-01-restore-passive-webmcp-discovery-acceptance) | Restore passive WebMCP discovery acceptance |
 | P0 | OPEN | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
 | P0 | OPEN | [`CAP-FB-20260830-EXEC-DEMO-01`](#cap-fb-20260830-exec-demo-01-the-five-minute-exec-demo-runs-end-to-end-on-a-fresh-profile) | The five-minute exec demo runs end to end on a fresh profile |
 | P0 | OPEN | [`CAP-FB-20260830-PAGE-ACTION-TOOLS-01`](#cap-fb-20260830-page-action-tools-01-the-control-chrome-story-has-no-page-interaction-tools) | The "control Chrome" story has no page-interaction tools |
 | P1 | BLOCKED | [`CAP-FB-20260819-PROACTIVE-TAB-DISCOVERY-01`](#cap-fb-20260819-proactive-tab-discovery-01-proactive-per-tab-site-agent-discovery-before-run) | Proactive per-tab Site Agent discovery before Run |
-| P1 | IN_REVIEW | [`CAP-FB-20260827-DIALOG-CONSOLIDATION-01`](#cap-fb-20260827-dialog-consolidation-01-five-dialog-implementations-three-hand-rolled) | Five dialog implementations, three hand-rolled |
-| P1 | IN_REVIEW | [`CAP-FB-20260829-AGENTS-SETTINGS-MERGE-01`](#cap-fb-20260829-agents-settings-merge-01-unify-interactive-and-scheduled-agents-in-settings-and-the-task-sidebar) | Unify interactive and scheduled agents in Settings and the task sidebar |
-| P1 | IN_REVIEW | [`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`](#cap-fb-20260829-create-dialog-declutter-01-create-agent-dialog-is-cluttered-and-its-scheduletheme-controls-are-inconsistent) | Create-agent dialog is cluttered and its schedule/theme controls are inconsistent |
-| P1 | IN_REVIEW | [`CAP-FB-20260829-HUB-HOME-BUTTON-01`](#cap-fb-20260829-hub-home-button-01-ntp-brand-returns-directly-home) | NTP brand returns directly Home |
+| P1 | DONE | [`CAP-FB-20260827-DIALOG-CONSOLIDATION-01`](#cap-fb-20260827-dialog-consolidation-01-five-dialog-implementations-three-hand-rolled) | Five dialog implementations, three hand-rolled |
+| P1 | DONE | [`CAP-FB-20260829-AGENTS-SETTINGS-MERGE-01`](#cap-fb-20260829-agents-settings-merge-01-unify-interactive-and-scheduled-agents-in-settings-and-the-task-sidebar) | Unify interactive and scheduled agents in Settings and the task sidebar |
+| P1 | DONE | [`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`](#cap-fb-20260829-create-dialog-declutter-01-create-agent-dialog-is-cluttered-and-its-scheduletheme-controls-are-inconsistent) | Create-agent dialog is cluttered and its schedule/theme controls are inconsistent |
+| P1 | DONE | [`CAP-FB-20260829-HUB-HOME-BUTTON-01`](#cap-fb-20260829-hub-home-button-01-ntp-brand-returns-directly-home) | NTP brand returns directly Home |
 | P1 | IN_REVIEW | [`CAP-FB-20260829-OWNER-OBSERVABILITY-01`](#cap-fb-20260829-owner-observability-01-owner-grade-console-and-run-logs) | Owner-grade console and run logs |
 | P1 | IN_REVIEW | [`CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01`](#cap-fb-20260830-settings-whats-new-copy-01-settings--about--whats-new-renders-raw-engineering-commit-subjects-to-the-user) | Settings → About → What's new renders raw engineering commit subjects to the user |
 | P1 | OPEN | [`CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01`](#cap-fb-20260819-directory-tool-explorer-01-agent-directory-tool-explorer-and-enrollment-policy) | Agent Directory tool explorer and enrollment policy |
@@ -242,8 +242,8 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | OPEN | [`CAP-FB-20260830-THREAD-ARTIFACT-CARD-01`](#cap-fb-20260830-thread-artifact-card-01-artifacts-render-in-the-thread-from-the-store--today-no-artifact-card-renders-in-a-real-lazy-protocol-run) | Artifacts render in the thread from the store — today no artifact card renders in a real lazy-protocol run |
 | P2 | BLOCKED | [`CAP-FB-20260822-MV3-WASM-RUNTIME-PROBE-01`](#cap-fb-20260822-mv3-wasm-runtime-probe-01-loaded-mv3-wasm-runtime-and-termination-probe) | Loaded-MV3 Wasm runtime and termination probe |
 | P2 | BLOCKED | [`CAP-FB-20260822-OWNER-WASM-INSTALL-01`](#cap-fb-20260822-owner-wasm-install-01-owner-selected-wasm-package-lifecycle) | Owner-selected Wasm package lifecycle |
-| P2 | IN_REVIEW | [`CAP-FB-20260829-PROVIDER-TOOLS-COPY-01`](#cap-fb-20260829-provider-tools-copy-01-explain-provider-run-tool-toggles-per-agent) | Explain provider-run tool toggles per agent |
-| P2 | IN_REVIEW | [`CAP-FB-20260829-SETTINGS-NAV-ORDER-01`](#cap-fb-20260829-settings-nav-order-01-settings-nav-follows-the-rendered-document-order) | Settings nav follows the rendered document order |
+| P2 | DONE | [`CAP-FB-20260829-PROVIDER-TOOLS-COPY-01`](#cap-fb-20260829-provider-tools-copy-01-explain-provider-run-tool-toggles-per-agent) | Explain provider-run tool toggles per agent |
+| P2 | DONE | [`CAP-FB-20260829-SETTINGS-NAV-ORDER-01`](#cap-fb-20260829-settings-nav-order-01-settings-nav-follows-the-rendered-document-order) | Settings nav follows the rendered document order |
 | P2 | IN_REVIEW | [`CAP-FB-20260830-ARTIFACT-QUICK-FIXES-01`](#cap-fb-20260830-artifact-quick-fixes-01-small-artifact-defects-new-tab-opens-twice-an-empty-id-masks-the-real-error) | Small artifact defects: New tab opens twice, an empty id masks the real error |
 | P2 | IN_REVIEW | [`CAP-FB-20260830-GENERATED-UI-BOOTSTRAP-SYNTAX-01`](#cap-fb-20260830-generated-ui-bootstrap-syntax-01-the-generated-document-preference-bootstrap-is-a-javascript-syntax-error) | The generated-document preference bootstrap is a JavaScript syntax error |
 | P2 | OPEN | [`CAP-FB-20260822-BUILTIN-WASM-TOOLS-01`](#cap-fb-20260822-builtin-wasm-tools-01-provenance-clean-bundled-wasm-tool-tranche) | Provenance-clean bundled Wasm tool tranche |
@@ -290,7 +290,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 ## [CAP-FB-20260829-APPROVAL-JOURNEY-REGRESSION-01] Restore owner-direct approval journeys after inline approvals
 - Feedback: 2026-08-29 — the landed inline-approval merge left the full Chrome journey suite stopping at agent.delete because its helper treated every operational failure as a pending approval
 - Updated: 2026-08-29 23:00 UTC
-- Status: IN_REVIEW
+- Status: DONE
 - Priority: P0
 - Owner: implementer (worktree lane)
 - Workspace: active (local path private)
@@ -305,13 +305,14 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: independent review, then coordinator merge and rerun the gates on main
 - Recover: `git show cap-approvals-journey-fix && git diff origin/main...cap-approvals-journey-fix`
 - History:
+  - 2026-08-31 00:45 UTC — reconciled to DONE by the hub coordinator: candidate content verified present on origin/main (2 matching commit(s) in `git log origin/main --grep=CAP-FB-20260829-APPROVAL-JOURNEY-REGRESSION-01`). The tracker row had lagged the landing.
   - 2026-08-29 23:00 UTC — reproduced the landed stop at 85/120. Root cause: owner-direct agent.delete executed immediately and returned an honest cleanup result, but the journey assumed every non-ok response meant an approval row existed. Restricted the resolver retry to explicit approval-gate errors. The newly reached checks exposed and repaired two existing install-grant consistency defects: required scripting refusal now precedes enrollment teardown, and agent cleanup trusts unregisterOriginScripts' authoritative success when host access is permanent. Falsification: focused source pins failed 2/9 without the service-worker fix and passed after restoration. Final gates: focused 44/44; Chrome journeys 120/120; full Deno 2389/2389; build passed.
 
 ## [CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01] Tool-call argument robustness and schema accuracy
 
 - Feedback: 2026-08-29 — owner reported frequent argument sanitization failures, including a complete HTML document rejected while saving an artifact, and asked that every model-visible schema state the real enforced constraints
 - Updated: 2026-08-29 20:52 UTC
-- Status: IN_REVIEW
+- Status: DONE
 - Resume: —
 - Priority: P0
 - Owner: implementation lane
@@ -327,6 +328,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: review the three-commit diff, then merge and run the same gates at the integration tip
 - Recover: `git log --oneline 54d70a9b..cap-tool-args`
 - History:
+  - 2026-08-31 00:45 UTC — reconciled to DONE by the hub coordinator: candidate content verified present on origin/main (3 matching commit(s) in `git log origin/main --grep=CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01`). The tracker row had lagged the landing.
   - 2026-08-29 20:52 UTC — implemented a per-field elevated path matching the artifact (256 KiB) and script (64 KiB) stores while retaining ordinary 16 KiB string / 32 KiB payload / shape limits; schemas and enforcement now share one contract; failures are actionable. The 30 KiB owner case failed before the fix and passed byte-exact after it. Full suite and build pass; no push.
 
 ## [CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01] Extended Unix/system tool family admissions
@@ -1547,7 +1549,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 ## [CAP-FB-20260829-URGENT-UI-REPAIR-01] Restore Agents and create-dialog visual quality
 - Feedback: 2026-08-29 — owner reported visual regressions from the landed Agents merge and create-dialog declutter lanes: the background picker was replaced by 22 phantom rows, provider/template selects showed double arrows, agent edit actions drifted out of their action group, the template and microphone disappeared behind Advanced, and disclosures changed the dialog width
 - Updated: 2026-08-29 23:22 BST
-- Status: IN_REVIEW
+- Status: DONE
 - Priority: P0
 - Owner: implementation lane
 - Workspace: durable worktree
@@ -1562,6 +1564,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: independent acceptance review, then coordinator integration
 - Recover: `git log --oneline --all --grep CAP-FB-20260829-URGENT-UI-REPAIR-01`
 - History:
+  - 2026-08-31 00:45 UTC — reconciled to DONE by the hub coordinator: candidate content verified present on origin/main (5 matching commit(s) in `git log origin/main --grep=CAP-FB-20260829-URGENT-UI-REPAIR-01`). The tracker row had lagged the landing.
   - 2026-08-29 23:22 BST — candidate gated: real loaded-extension KAT 11/11 (including genuine Add click and opened rich pickers), full suite 2388/0 and developer build clean. Dialog geometry is 582px in collapsed, Advanced-open and Skills-open states with zero horizontal overflow. The new fixed-width source assertion failed against the prior product and passed after; the corrected Settings projection assertions failed against `cebb4601` and passed after.
   - 2026-08-29 23:18 BST — replaced the content-driven `min-width` with one clamped width plus shrink-safe Advanced/Skills containment. The browser width assertion moved from RED `[582,615.89,878.06]` to GREEN `[582,582,582]`; opened-disclosure screenshots were inspected and show no horizontal jump or overflow.
   - 2026-08-29 23:14 BST — restored the create-dialog hierarchy requested after visual review: Name and What it does remain first; microphone/Refine are visibly attached to the purpose field; the rich template select and English schedule follow before Advanced. The real-browser order and visible-voice assertions turned green while the separate width-jitter assertion remained RED for the next atomic fix.
@@ -1571,7 +1574,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 ## [CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01] Create-agent dialog is cluttered and its schedule/theme controls are inconsistent
 - Feedback: 2026-08-29 — product owner asked to declutter persona controls, accept schedules in plain English, replace the large background-template list with a subtle select, and fix dark conversation contrast
 - Updated: 2026-08-30 11:00 UTC
-- Status: IN_REVIEW
+- Status: DONE
 - Priority: P1
 - Owner: implementation session
 - Workspace: active (local path private)
@@ -1586,6 +1589,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: coordinator merges the five-commit candidate
 - Recover: `git log --oneline --all --grep CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`
 - History:
+  - 2026-08-31 00:45 UTC — reconciled to DONE by the hub coordinator: candidate content verified present on origin/main (5 matching commit(s) in `git log origin/main --grep=CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`). The tracker row had lagged the landing.
   - 2026-08-30 11:00 UTC — reanalysis (ui lane): the Create state is the best-composed dialog in the product (clear hierarchy, one primary, stable width) — delivered. Edit mode is not: the footer carries four actions ("Delete agent" in danger red, "Regenerate avatar", "Cancel", "Save"), Advanced stacks nested cards (Avatar/Upload, Skills "54 available" as a nested disclosure, "Can delegate to", a Context files fieldset with a lone "+") inside a `<details>` inside a dialog, and Delete has three entry points. Recorded as a follow-up acceptance item; the in-review candidate is not blocked by it. Files: `extension/ntp/ntp.js` (`openAgentDialog`), `extension/shared/components.js` (`agent-dialog`).
   - 2026-08-29 21:05 UTC — independent review round 2 PASS: verified `scheduleError` propagation, explicit partial-success warning, supported-only examples and regression pins; no remaining findings
   - 2026-08-29 20:55 UTC — independent review round 1's two findings fixed: `{ ok: true, scheduleError }` now remains an honest partial success that opens the saved agent but warns that its schedule was not created, pinned across the SW and dialog contract; invalid feedback now suggests only schedules the parser accepts
@@ -1762,7 +1766,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 ## [CAP-FB-20260829-AGENTS-SETTINGS-MERGE-01] Unify interactive and scheduled agents in Settings and the task sidebar
 - Feedback: 2026-08-29 — owner directive: background agents and agents must be merged in Settings, and background agents must be visible in the left Agents menu on the task view
 - Updated: 2026-08-29 UTC
-- Status: IN_REVIEW
+- Status: DONE
 - Priority: P1
 - Owner: implementation lane
 - Workspace: durable worktree
@@ -1777,6 +1781,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: independent acceptance review, then coordinator merge
 - Recover: `git log --oneline --all --grep=CAP-FB-20260829-AGENTS-SETTINGS-MERGE-01`
 - History:
+  - 2026-08-31 00:45 UTC — reconciled to DONE by the hub coordinator: candidate content verified present on origin/main (4 matching commit(s) in `git log origin/main --grep=CAP-FB-20260829-AGENTS-SETTINGS-MERGE-01`). The tracker row had lagged the landing.
   - 2026-08-29 20:29 UTC — implementation started from `origin/main@54d70a9b`; presentation-only merge keeps named-agent and background-recipe stores/routes distinct, preserves legacy `#background` and `#background-agents` links by normalizing both to `#agents`, and deliberately leaves callable-only filtering in the execution picker rather than applying it to display surfaces.
   - 2026-08-29 20:44 UTC — author falsification: with `agent-display.js` removed, its three changed tests failed type-check/import (RED); with `pure.js` and `options.html` restored to `origin/main`, the final deep-link/structure assertions failed 3 pass / 2 fail (RED). Restored candidate: focused suite 20/20 and build green.
   - 2026-08-29 21:02 UTC — first full suite reached 2359 pass / 4 fail and exposed cross-surface drift: generated changelog copy carried internal IDs, the security pin still hard-coded 13 Settings destinations, two onboarding strings named the removed Background agents section, and the sidebar repeated “Agents” in its accessible name. All four root causes fixed; focused regression set 34/34 and vocabulary/gallery/build green.
@@ -1788,7 +1793,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 ## [CAP-FB-20260829-SETTINGS-NAV-ORDER-01] Settings nav follows the rendered document order
 - Feedback: 2026-08-29 — while unifying Agents, the owner observed that Settings navigation listed Skills before Agents while the document rendered Agents before Skills
 - Updated: 2026-08-29 UTC
-- Status: IN_REVIEW
+- Status: DONE
 - Priority: P2
 - Owner: implementation lane
 - Workspace: durable worktree
@@ -1803,12 +1808,13 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: independent acceptance review, then coordinator merge
 - Recover: `git log --oneline --all --grep=CAP-FB-20260829-SETTINGS-NAV-ORDER-01`
 - History:
+  - 2026-08-31 00:45 UTC — reconciled to DONE by the hub coordinator: candidate content verified present on origin/main (1 matching commit(s) in `git log origin/main --grep=CAP-FB-20260829-SETTINGS-NAV-ORDER-01`). The tracker row had lagged the landing.
   - 2026-08-29 20:47 UTC — falsification RED: the new parser pin showed Skills before Agents in nav but after Permissions in the document; moved the existing Skills nav item after Permissions, producing exact order parity without moving any panel.
 
 ## [CAP-FB-20260829-PROVIDER-TOOLS-COPY-01] Explain provider-run tool toggles per agent
 - Feedback: 2026-08-29 — owner could not tell what the per-agent provider-tool toggles enabled, and the global explainer still described Gemini only after Anthropic web search shipped
 - Updated: 2026-08-29 UTC
-- Status: IN_REVIEW
+- Status: DONE
 - Priority: P2
 - Owner: implementation lane
 - Workspace: durable worktree
@@ -1823,6 +1829,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: independent acceptance review, then coordinator merge
 - Recover: `git log --oneline --all --grep=CAP-FB-20260829-PROVIDER-TOOLS-COPY-01`
 - History:
+  - 2026-08-31 00:45 UTC — reconciled to DONE by the hub coordinator: candidate content verified present on origin/main (1 matching commit(s) in `git log origin/main --grep=CAP-FB-20260829-PROVIDER-TOOLS-COPY-01`). The tracker row had lagged the landing.
   - 2026-08-29 20:52 UTC — falsification RED: the copy pin failed on the Gemini-only global explainer before the subheading, billing hint, stable per-agent list, and per-row consequence line were added.
 
 ## [CAP-FB-20260829-MAIN-GATES-RED-03] Journey suite red on main after the install-granted permission change
@@ -1853,7 +1860,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 ## [CAP-FB-20260827-DIALOG-CONSOLIDATION-01] Five dialog implementations, three hand-rolled
 - Feedback: 2026-08-27 — product owner: "There's lots of issues with dialogs"
 - Updated: 2026-08-27 23:30 UTC
-- Status: IN_REVIEW
+- Status: DONE
 - Priority: P1
 - Owner: coordinator session
 - Workspace: main
@@ -1868,6 +1875,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: owner review of the three converted surfaces in the product. The remaining consolidation work — the ~30 other scripts and any future modal — is now prevented by construction rather than by convention, since there is one confirm and one shell
 - Recover: `git grep -n 'createElement("dialog")' -- extension/`
 - History:
+  - 2026-08-31 00:45 UTC — reconciled to DONE by the hub coordinator: candidate content verified present on origin/main (1 matching commit(s) in `git log origin/main --grep=CAP-FB-20260827-DIALOG-CONSOLIDATION-01`). The tracker row had lagged the landing.
   - 2026-08-29 — **all three hand-rolled dialogs converted; `createElement("dialog")` now appears exactly once in the extension, inside the shared component itself.** (1) `extension/artifacts/index.js` artifact delete → `confirmActionDialog`, gaining backdrop light-dismiss, an `aria-label` and a settled guard it did not have; its 13 lines of bespoke `.delete-dialog` CSS are deleted. (2) `confirmAgentProviderMutation` → the shared confirm. **This one carried a security property the shared confirm lacked** — approve only on a click that is `isTrusted` AND has active user activation — so rather than keep the duplicate for it, the property moved INTO the shared component as `requireGenuineGesture`, alongside `returnFocusTo` and `note`. Every future approval now gets it by construction instead of by remembering to re-implement it. (3) `editRecipePrompt` → `<agent-dialog>`, the content shell; it gains a close button and backdrop dismissal it never had, and its bespoke panel/backdrop CSS is replaced by the shell's. **Evidence, driven in a real loaded extension (`scripts/kat-dialog-consolidation.ts`, 18/18):** a destructive confirm focuses Cancel; a backdrop click resolves false and removes the node; a non-destructive confirm focuses the confirm control; **an untrusted scripted click cannot approve** and the refusal is explained in the dialog; Escape denies; the shell is announced by its title and its body scrolls on overflow. That last group is why this is a KAT and not only a unit test — a DOM shim cannot tell you whether `event.isTrusted` gating actually holds. **Falsification:** `tests/provider-options-approval.test.ts` pinned the OLD implementation's source lines and had to be rewritten; it now pins the property across BOTH halves (the call site must ASK for the check, the component must IMPLEMENT it and gate the true result on it), because asserting only one half would let the flag become a no-op or let the call site quietly stop passing it. Four deliberate regressions — call site drops the flag, component drops the trusted-click check, the guard warns without refusing, and the hand-rolled duplicate returns — each drove it red before being reverted. **Gates:** build clean; unit **2004 pass / 0 fail**; Chrome journeys **127/127**; gallery, vocabulary and tracker schema green.
   - 2026-08-27 23:30 UTC — captured by source audit. **Five dialog implementations ship.** Two are the intended shared ones in `extension/shared/components.js`: `<agent-dialog>` (the content-dialog shell) and `confirmActionDialog` (the promise-based confirm). Three are hand-rolled duplicates outside the component system: `extension/artifacts/index.js:83` (artifact delete), `extension/options/options.js:1236` (`confirmAgentProviderMutation`), and `extension/options/options.js:1555` (`editRecipePrompt`). This is precisely the failure mode the owner already named as a project rule — "never hand-roll a one-off version of an existing component (the blank-toggle + menu bugs came from hand-rolled duplicates)" — and it is the most likely explanation for dialogs behaving inconsistently: each of the five owns its own focus, dismiss, overflow and sizing behaviour, so a fix to one does not reach the others.
   - 2026-08-27 23:30 UTC — **good news worth recording:** `window.confirm` / `window.alert` / `window.prompt` are already fully eliminated from the extension; the only remaining occurrence is the explanatory comment above `confirmActionDialog`. `CAP-FB-20260823-DIALOG-CONFIRM-MODERNIZATION-01` is therefore substantially further along than its OPEN status suggests — what is left of that task is this consolidation.
@@ -1955,7 +1963,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 ## [CAP-FB-20260829-MIC-DEAD-MACOS-01] macOS dictation has no transcript or trustworthy microphone diagnostics
 - Feedback: 2026-08-29 — product owner reports no transcript text on macOS, a constant fallback waveform, no way to configure microphone access, and multiple possible input devices
 - Updated: 2026-08-29 23:24 UTC
-- Status: IN_REVIEW
+- Status: DONE
 - Resume: —
 - Priority: P0
 - Owner: implementation worker
@@ -1971,6 +1979,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: reviewer re-reviews the revised tip and its RED/GREEN browser evidence
 - Recover: `git show cap-mic-devices -- extension/shared/components.js scripts/kat-mic-state.ts tests/mic-button-state.test.ts`
 - History:
+  - 2026-08-31 00:45 UTC — reconciled to DONE by the hub coordinator: candidate content verified present on origin/main (4 matching commit(s) in `git log origin/main --grep=CAP-FB-20260829-MIC-DEAD-MACOS-01`). The tracker row had lagged the landing.
   - 2026-08-29 23:24 UTC — post-commit final gates: full unit 2387/0, production security PASS with no survivor/residue/poison, mic KAT 60/60, and production build clean.
   - 2026-08-29 23:14 UTC — review REVISE on `3636164e` raised two P1s. Fixed hidden pre-permission discovery by re-enumerating exactly once after the first successful meter capture and treating that capture as the label grant. Fixed out-of-order meter adoption with a dedicated monotonically increasing request generation plus the captured selected-device identity; stop/reselection/devicechange invalidate pending requests and stale resolutions stop their tracks. The expanded real-browser KAT is RED on `3636164e` at 56 pass / 4 fail and GREEN on the revision at 60/60, including three deferred meter requests resolved newest-first then stale.
   - 2026-08-29 22:06 UTC — candidate implemented and rebased onto `origin/main@cebb4601`: the picker renders only for two or more physical inputs (default/communications aliases excluded), requests labels once, persists the exact meter device, runs a bounded four-second live analyser preview, and handles devicechange without claiming to retarget Web Speech. Three no-speech rounds and `audio-capture` now name OS-default versus meter inputs and the macOS recovery path; fallback title/ARIA/status identify animation rather than live level. Falsification: unchanged product 43 pass / 1 explicit device-picker fail; candidate 57/57 with screenshot and axe clean. Focused 17/17, unit 2387/0, security PASS, production build clean. Full Chrome journeys reproduce the known new-main inline-approval regression at 85/120; its fix lane is in flight and the remaining 35 checks are not reached.
@@ -2005,7 +2014,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 ## [CAP-FB-20260829-HUB-HOME-BUTTON-01] NTP brand returns directly Home
 - Feedback: 2026-08-29 — owner asked for the top-left Chrome Agent Platform title to become a Home control because browser Back replayed every task and view before reaching the hub
 - Updated: 2026-08-29 22:28 UTC
-- Status: IN_REVIEW
+- Status: DONE
 - Resume: —
 - Priority: P1
 - Owner: implementation worker
@@ -2021,6 +2030,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: independent acceptance review, then coordinator merge
 - Recover: `git log --oneline --all --grep=CAP-FB-20260829-HUB-HOME-BUTTON-01`
 - History:
+  - 2026-08-31 00:45 UTC — reconciled to DONE by the hub coordinator: candidate content verified present on origin/main (1 matching commit(s) in `git log origin/main --grep=CAP-FB-20260829-HUB-HOME-BUTTON-01`). The tracker row had lagged the landing.
   - 2026-08-29 22:12 UTC — implementation candidate prepared: the brand is a semantic Home button, deep-to-deep navigation replaces the current entry, direct deep links seed a hub root, and focused coverage pins root reset plus navigation order
   - 2026-08-29 22:12 UTC — owner expanded the same navigation lane: + from a task/agent must be a real Home destination, not Back. The shared `goHome` path now replace-navigates before closing the surface and focusing the fresh composer; settings Home, delete/invalid-surface recovery, artifact reuse and skill-use paths use the same destination semantics
   - 2026-08-29 22:28 UTC — author review PASS: the changed assertion failed against the unmodified controller and passed on the candidate; focused 29/29, full suite 2389/0, developer build rc=0. A loaded extension was driven with genuine CDP clicks: brand returned task → hub with Home focused; + returned a live task → hub with the fresh task input focused; browser Back did not restore the task. Three screenshots retained privately
@@ -2051,7 +2061,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 ## [CAP-FB-20260830-WEBMCP-ACCEPTANCE-GREEN-01] Restore passive WebMCP discovery acceptance
 - Feedback: 2026-08-30 — automated production-path WebMCP acceptance was 11/37 because the fixture never entered the passively detected tab picker
 - Updated: 2026-08-30 04:44 UTC
-- Status: IN_REVIEW
+- Status: DONE
 - Resume: —
 - Priority: P0
 - Owner: implementation worker
@@ -2067,6 +2077,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: independent acceptance review, then coordinator merge
 - Recover: `git show cap-webmcp-acceptance-green -- extension/manifest.json extension/background/service-worker.js tests/webmcp-detect-auth.test.ts tests/discoverable-tabs-tools.test.ts`
 - History:
+  - 2026-08-31 00:45 UTC — reconciled to DONE by the hub coordinator: candidate content verified present on origin/main (1 matching commit(s) in `git log origin/main --grep=CAP-FB-20260830-WEBMCP-ACCEPTANCE-GREEN-01`). The tracker row had lagged the landing.
   - 2026-08-30 04:44 UTC — diagnosis against the harness-built variant: neither detector appeared in `manifest.content_scripts`, no dynamic detector was registered, the MAIN bootstrap hook was undefined, and `cap:knownWebmcpOrigins` was empty despite the fixture exposing four callable names. After restoring static HTTP(S) MAIN/ISOLATED probes, CDP showed both scripts, the HMAC bootstrap returned a nonce and the SW registry held the fixture's `(tabId, documentId)` snapshot. The picker remained empty because `webNavigation` is optional and unavailable in the two-permission variant; current-document reattestation now reads Chrome's `documentId` from a scripting `InjectionResult`, preserving the exact-document gate without another permission.
   - 2026-08-30 04:44 UTC — focused falsification was 2 pass / 2 fail with the product fix removed and 4/4 green restored. The real loaded-extension acceptance then completed 37/37 green, including picker admission, exact-tab invocation, visible side effects, fencing negatives, re-enrollment, reload and navigation.
   - 2026-08-30 04:49 UTC — final-commit gates passed: developer build clean; 2440 unit tests, security suite and 131 Chrome journeys green; WebMCP production-path acceptance 37/37 green. Author review found no blocker: static probes transport only an authenticated count, the exact `(tabId, documentId)` registry gate remains intact, no permission was broadened, and reattestation injects one bounded isolated no-op only into origins already present in the bounded passive registry.

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.504] — 2026-08-30
+- tasks: reconcile eleven IN_REVIEW entries to DONE — candidate content verified present on origin/main, only the tracker rows had lagged
+
 ## [0.2.503] — 2026-08-30
 - merge: land three approved lanes lost to cross-merges — build changelog delta, context-fidelity durable resumes, generated-UI bootstrap ready delivery
 
