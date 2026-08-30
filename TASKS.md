@@ -4344,3 +4344,63 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - History:
   - 2026-08-30 16:00 UTC — opened from the owner's review of the reanalysis ("we wanted an image strip of things that get generated"); adopts `screenshot-strip`, which the gallery census had marked for deletion.
 
+
+## [CAP-FB-20260830-MASTER-JOURNAL-APPEND-01] The master journal is rewritten whole on every run
+- Feedback: 2026-08-30 — reanalysis follow-up: RUN-LOG-COMPACTION-01 fixed thread.get/run.list (148/152 ms → <10 ms at 120 threads) but the seeded perf gate's remaining soft warning is `agent.run` growth (first-ten p50 118 ms → last-ten 290 ms at 120 threads, ~800 ms at 500). The cause is the master journal, not the durable-run registry.
+- Updated: 2026-08-30 20:48 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P2
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `3037acf5`
+- Candidate: —
+- Shipping: —
+- Acceptance: `agent.run` p50 at 120 seeded threads stays within 1.5x of the first-ten-runs p50 (the `GROWTH_SOFT` check in `scripts/perf-seeded-scale.ts` becomes a hard PASS), and the same at 500 runs.
+  - Context: every run snapshots the master journal, re-bounds it (`boundJournal` re-serialises up to 500 rows / 200 KiB) and rewrites the whole `journal` value, plus a per-run `keys()` enumeration on the master store. Owner is the journal store in `extension/lib/memory.js` (the append/bound path). RUN-LOG-COMPACTION-01's History names this exact residual and left the `GROWTH_SOFT` flag set with a comment pointing here.
+  - Reproduce today: `npm run test:perf:seeded` — the only non-PASS line is "agent.run at 120 threads within 1.5x of the first ten runs", first10 ~118 ms vs last10 ~290 ms.
+  - Files: `extension/lib/memory.js` (journal append + `boundJournal`); `scripts/perf-seeded-scale.ts` (flip `GROWTH_SOFT` to a hard gate once met).
+  - Steps: 1. Make the journal append incremental (append one row + bound by trimming, not a full re-serialise-and-rewrite of every row on every run) or move to a per-row keyed store with a cheap bound. 2. Remove the per-run master-store `keys()` enumeration. 3. Flip `GROWTH_SOFT` to hard. 4. Record before/after in History.
+  - Out of scope: the durable-run registry (RUN-LOG-COMPACTION-01, DONE); OPFS usage accounting (OPFS-USAGE-WALK-01, DONE).
+- Review: pending
+- Gates: the falsification gates apply.
+  - Unit: a memory test asserting a journal append performs O(1) directory work (no full re-serialise of all rows); falsification: revert the incremental append, watch the row-write count assertion go RED.
+  - Browser: `npm run test:perf:seeded` — the growth check is a hard PASS at 120 and 500 threads.
+  - Full suite: `npm run build && deno test -A tests/ && deno run -A scripts/chrome-journeys.ts` green at the tip.
+  - Constraints: retain-all visible journal semantics (no automatic eviction of owner-visible history); origin-keyed OPFS; no fixed debug port.
+- Blockers: —
+- Next: make the journal append incremental in `extension/lib/memory.js`
+- Recover: `git log --oneline --all --grep=CAP-FB-20260830-MASTER-JOURNAL-APPEND-01`
+- History:
+  - 2026-08-30 20:48 UTC — filed from the RUN-LOG-COMPACTION-01 residual (its History named the journal append as the sole remaining O(runs) cost; the perf gate keeps it soft as GROWTH_SOFT with this id in the comment).
+
+## [CAP-FB-20260830-GALLERY-BYTE-IDENTITY-GATE-01] Two gallery gates disagree after a synced-rewrite import
+- Feedback: 2026-08-30 — reanalysis follow-up (DIFF-LIBRARY-01, ARTIFACT-DIFF-COMPONENT-01, THREAD-VIEW-RUN-STATE-01 all hit it): `scripts/component-gallery-smoke.ts` demands `docs/components.js` be byte-identical to `extension/shared/components.js`, but `scripts/sync-gallery.mjs` deliberately rewrites some import lines, so `check:gallery` (which knows the rewrite) is green while the smoke gate fails on the same blobs.
+- Updated: 2026-08-30 20:48 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P3
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `3037acf5`
+- Candidate: —
+- Shipping: —
+- Acceptance: exactly one gallery-drift authority. `component-gallery-smoke.ts` either applies the same rewrite `sync-gallery.mjs` applies before comparing, or delegates to `check:gallery`; a deliberate content drift still fails; a synced import-rewrite does not.
+  - Context: `check:gallery` uses the rewrite rules and is green; the raw-byte compare in `component-gallery-smoke.ts` ignores them and reports a ~28-byte delta on main's own committed blobs. The two gates now contradict each other, so a green `check:gallery` sits next to a red smoke gate that nothing acts on.
+  - Reproduce today: `deno run -A scripts/component-gallery-smoke.ts` → "38 passed, 1 failed" on the byte-identity check, while `npm run check:gallery` exits 0.
+  - Files: `scripts/component-gallery-smoke.ts` (the byte-identity assertion); `scripts/sync-gallery.mjs` (the rewrite, the source of truth for what may differ).
+  - Steps: 1. In the smoke test, run the sync rewrite on `extension/shared/components.js` in memory and compare that to `docs/components.js`, OR import and call the check:gallery comparison. 2. Keep a real drift failing (falsification). 3. Record which authority won.
+  - Out of scope: the components themselves; the diff bundle.
+- Review: pending
+- Gates: the falsification gates apply.
+  - Unit: none (this is a harness gate).
+  - Browser: `deno run -A scripts/component-gallery-smoke.ts` passes on a synced tree and fails when a component's content is changed without syncing.
+  - Full suite: `npm run build` and `npm run check:gallery` stay green.
+  - Constraints: one name per concept; no fixed debug port.
+- Blockers: —
+- Next: teach `component-gallery-smoke.ts` the sync rewrite before its byte compare
+- Recover: `git log --oneline --all --grep=CAP-FB-20260830-GALLERY-BYTE-IDENTITY-GATE-01`
+- History:
+  - 2026-08-30 20:48 UTC — filed from three lanes hitting the same false-red on main's own blobs.

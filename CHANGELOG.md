@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.483] — 2026-08-30
+- Two smaller follow-up issues found during the parallel work are now written down as tasks.
+
 ## [0.2.482] — 2026-08-30
 - Tracker: bounded run-log retention is recorded as landed.
 
