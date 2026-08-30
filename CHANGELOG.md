@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.436] — 2026-08-30
+- Permission matrix: refresh the attestation at the falsy-record candidate
+
 ## [0.2.435] — 2026-08-30
 - Refuse falsy integrity records, not just missing ones
 
