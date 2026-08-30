@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.430] — 2026-08-30
+- Permission matrix: refresh the acceptance evidence after the r2 fixes
+
 ## [0.2.429] — 2026-08-30
 - Permission matrix: refuse ancestor-of-source variant outputs, prove warned requests stay pending on the original row, and re-verify variant integrity before Chrome loads it
 
