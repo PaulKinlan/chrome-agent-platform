@@ -97,7 +97,7 @@ import {
 import { kvGet, kvSet, storageAvailable } from "./kv.js";
 import { buildSkillsPrompt } from "./skills.js";
 import { RUNTIME_CONTEXT_PLACEHOLDER } from "./runtime-context.js";
-import { isUntrustedToken, renderUntrustedPolicy, UNTRUSTED_POLICY_PLACEHOLDER } from "./untrusted-fence.js";
+import { isUntrustedToken, renderUntrustedPolicy, UNTRUSTED_POLICY_PLACEHOLDER, fenceUntrustedText, UNTRUSTED_TOKEN_PLACEHOLDER } from "./untrusted-fence.js";
 import { renderRuntimePolicy } from "./runtime-policy.js";
 
 /* ── The protected constraints (immutable, non-editable, FINAL layer) ──────
@@ -804,14 +804,55 @@ export function baselineSystemPrompt(baseId, registry = PROMPT_REGISTRY) {
 /** Render the boundary skills layer. Installed skills render as the
  * name/description manifest (agent-do's buildSkillsPrompt shape); a skill
  * carrying a full prompt body (a /skill:<id> reference resolved for THIS
- * run) composes its FULL body — the instructions the model must actually
- * follow, never a bare name the model could ignore. */
-function renderBoundarySkills(skills) {
-  const blocks = (skills ?? []).map((s) =>
-    s?.prompt != null && String(s.prompt).trim()
-      ? `## Skill: ${s.name}\n${String(s.prompt)}`
-      : `- ${s.name}: ${s.description ?? ""}`
-  );
+ * run) composes its FULL body when the body fits the prompt budget — the
+ * instructions the model must actually follow. A LARGE imported skill
+ * (> PROMPT_SKILL_BODY_BUDGET bytes, i.e. one that would blow the context
+ * window if composed verbatim) instead composes a marker naming the
+ * on-demand loader (skill_read) — the model reads what it needs mid-run,
+ * never paying the whole body per call (CAP-FB-20260830-SKILLS-UNCAPPED-01).
+ *
+ * IMPORTED (remote) skills are UNTRUSTED content: their composed body and
+ * their marker/metadata are wrapped in the run's untrusted boundary
+ * (lib/untrusted-fence.js) exactly like other remote content — the protected
+ * untrusted-content-policy layer tells the model the fenced text is data,
+ * never an instruction. Owner-authored content (built-in and custom recipes)
+ * stays unfenced per the established trust model: the owner explicitly
+ * created or attached it, and the protected-last invariant still keeps the
+ * runtime policy structurally final.
+ *
+ * @param {Array} skills skill/recipe records
+ * @param {string|null} untrustedToken the run's untrusted boundary token
+ *   (null/absent → the placeholder, matching the Settings preview path) */
+export const PROMPT_SKILL_BODY_BUDGET = 8 * 1024; // 8KiB — compose small bodies, defer large ones
+function renderBoundarySkills(skills, untrustedToken = null) {
+  const token = isUntrustedToken(untrustedToken) ? untrustedToken : UNTRUSTED_TOKEN_PLACEHOLDER;
+  const fence = (text) => fenceUntrustedText(text, token);
+  const blocks = (skills ?? []).map((s) => {
+    const name = String(s?.name ?? "unknown");
+    const desc = String(s?.description ?? "");
+    const body = s?.prompt != null ? String(s.prompt) : "";
+    // Imported skill index rows carry `promptBytes` (the body lives in OPFS,
+    // not in the row); the marker rule must use it, never an empty body.
+    const bodyBytes = Number.isInteger(s?.promptBytes) ? s.promptBytes : body.length;
+    const isImported = s?.source === "imported" || (s?.files && typeof s.files === "object");
+    // The marker may ONLY be emitted when the body is genuinely retrievable
+    // from the body store: `promptBytes` is an INTEGER only when the body was
+    // written to OPFS (a fresh install or a successful legacy migration). A
+    // legacy row whose migration FAILED keeps `promptBytes` undefined and its
+    // inline body in `prompt` — composing a skill_read marker there would be a
+    // dead loader (the body was never stored), so the full inline body is
+    // composed instead (the pre-OPFS behavior).
+    if (isImported && Number.isInteger(s?.promptBytes) && bodyBytes > PROMPT_SKILL_BODY_BUDGET) {
+      const marker = (
+        `- ${name}: ${desc} (large skill: ${bodyBytes} bytes — the body is NOT composed; ` +
+        `call skill_read with skill:"${s?.id ?? ""}" to load SKILL.md or a file on demand)`
+      );
+      return fence(marker);
+    }
+    if (!body.trim()) return isImported ? fence(`- ${name}: ${desc}`) : `- ${name}: ${desc}`;
+    const composed = `## Skill: ${name}\n${body}`;
+    return isImported ? fence(composed) : composed;
+  });
   if (!blocks.length) return "";
   return `## Available skills\n${blocks.join("\n\n")}`;
 }
@@ -827,9 +868,9 @@ function renderBoundarySkills(skills) {
  * the immutable runtime policy, so no owner text, role, site-origin skill,
  * or foreign prompt can override it with a later instruction.
  */
-export function appendSkillsLayer(systemText, skills, registry = PROMPT_REGISTRY) {
+export function appendSkillsLayer(systemText, skills, registry = PROMPT_REGISTRY, untrustedToken = null) {
   const sys = String(systemText ?? "");
-  const skillsText = renderBoundarySkills(skills).trim();
+  const skillsText = renderBoundarySkills(skills, untrustedToken).trim();
   const constraints = registryEntry(CONSTRAINTS_ID, registry);
   const protectedText = constraints ? String(constraints.content ?? "") : "";
   let out = sys;

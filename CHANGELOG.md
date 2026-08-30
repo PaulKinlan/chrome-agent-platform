@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.509] — 2026-08-30
+- merge: Skills uncapped lane (bb6e2711) — the arbitrary 64KiB import cap is gone: multi-file skills are first-class, large bodies live in OPFS and load on demand via skill_read, and imported content stays fenced
+
 ## [0.2.508] — 2026-08-30
 - Tracker: the edit-approval diff card is recorded as landed.
 
