@@ -342,7 +342,6 @@ function check(name, cond) {
 const EXPECTED = [
   "SW auto-attach configured (waitForDebuggerOnStart)",
   "extension loaded",
-  "extension loaded",
   "SW attach returned a session id",
   "SW Runtime.enable succeeded",
   "manifest: boot-critical permissions mandatory, capabilities optional, <all_urls> host",
@@ -361,10 +360,17 @@ const EXPECTED = [
   "permissions: optional capabilities start ungranted (JIT) and the mandatory boot set is granted",
   "permissions: Settings panel renders three-state rows + mandatory boot rows",
   "permissions: optional capabilities start ungranted (JIT model)",
-  "permissions: Bookmarks Enable button found in the Settings panel",
-  "permissions: Bookmarks Enable clicked",
-  "permissions: Bookmarks Enable clicked but denied in headless (the grant requires a headed run)",
-  "permissions: tab groups Enable clicked but still denied (honest headless denial)",
+  "permissions: Context menus Enable button found in the Settings panel",
+  "permissions: Context menus Enable clicked via a trusted gesture",
+  "permissions: Context menus granted after Enable settled",
+  "permissions: Context menus Turn off clicked via a trusted gesture",
+  "permissions: Context menus absent after Turn off settled",
+  "permissions: Context menus retry Enable clicked via a trusted gesture",
+  "permissions: Context menus granted after retry settled",
+  "permissions: Bookmarks Enable clicked via a trusted gesture",
+  "permissions: Bookmarks prompt cancelled and permission settled absent in headless",
+  "permissions: Tab groups Enable clicked via a trusted gesture",
+  "permissions: Tab groups prompt cancelled and permission settled absent in headless",
   "permissions: capability.revoke still requires owner approval (fail closed)",
   "Settings: OpenAI provider card rendered",
   "Settings: Clear key button present for the keyed provider",
@@ -435,8 +441,8 @@ const EXPECTED = [
   "disenroll: an owner click needs no second approval (owner-direct action)",
   "disenroll: agent removed from list + enrollment tombstoned",
   "scripting Disable: two origins enrolled before the revoke",
-  "scripting Disable: refused because scripting is install-granted",
-  "scripting Disable: a refused revoke tombstones NOTHING",
+  "scripting Disable: optional permission revoked",
+  "scripting Disable: successful revoke tombstones every enrolled origin",
   "mgmt: orchestrator exposes the management tool suite",
   "mgmt: create_agent returned ok",
   "mgmt: agent.directory lists it with enrollment state",
@@ -927,43 +933,124 @@ async function main() {
     );
 
     // ── JIT grant/deny/retry/revoke journey ──────────────────────────────
-    // The Settings panel's Enable buttons call requestCapability(cap.id)
-    // which performs chrome.permissions.request from the page gesture.
-
-    // Helper: find and click the Enable button for a capability by its label.
-    const clickEnable = async (label) => {
-      // NO awaitPromise: the click is sync (dispatches the request), so the
-      // evaluate returns immediately. The grant state is polled separately
-      // via chrome.permissions.contains.
-      return await evalOpts(`(() => {
-        const rows = [...document.querySelectorAll('#permission-list .perm-row')];
-        const row = rows.find((r) => r.querySelector('.perm-name')?.textContent === ${JSON.stringify(label)});
-        if (!row) return { ok: false, reason: "row not found" };
-        const btn = row.querySelector("button");
-        if (!btn) return { ok: false, reason: "no button" };
-        btn.click();
-        return { ok: true };
-      })()`);
+    // Permission requests are tied to the active extension page, not merely
+    // its CDP session. Bring Settings to the front before dispatching input.
+    await cdp.send("Target.activateTarget", { targetId: optsPage.id });
+    await cdp.send("Page.bringToFront", {}, optsSession);
+    // Find the row in-page, then use clickSel for the click itself so Chrome
+    // receives a trusted CDP pointer event (never a synthetic btn.click()).
+    const capabilityButtonSelector = async (session, label, text) => {
+      const index = await evalIn(cdp, session, `(() => [...document.querySelectorAll('#permission-list .perm-row')]
+        .findIndex((row) => row.querySelector('.perm-name')?.textContent === ${JSON.stringify(label)} &&
+          row.querySelector('button')?.textContent === ${JSON.stringify(text)}))()`);
+      return Number.isInteger(index) && index >= 0
+        ? `#permission-list > .perm-row:nth-child(${index + 1}) button`
+        : null;
+    };
+    const clickCapability = async (session, label, text) => {
+      for (let i = 0; i < 40; i++) {
+        const selector = await capabilityButtonSelector(session, label, text);
+        if (selector !== null) return await clickSel(cdp, session, selector);
+        await sleep(250);
+      }
+      return false;
+    };
+    // A permission result is settled only when contains() and the asynchronously
+    // re-rendered row agree. This avoids reading the pre-click false state.
+    const pollCapability = async (label, permission, granted, buttonText) => {
+      let state = null;
+      for (let i = 0; i < 40; i++) {
+        state = await evalOpts(`(async () => {
+          const granted = await chrome.permissions.contains({ permissions: [${JSON.stringify(permission)}] });
+          const row = [...document.querySelectorAll('#permission-list .perm-row')]
+            .find((r) => r.querySelector('.perm-name')?.textContent === ${JSON.stringify(label)});
+          const button = row?.querySelector('button');
+          return { granted, buttonText: button?.textContent ?? null, disabled: button?.disabled ?? null };
+        })()`);
+        if (state?.granted === granted && state?.buttonText === buttonText && state?.disabled === false) {
+          return true;
+        }
+        await sleep(250);
+      }
+      console.log(`[debug] ${label} did not settle: ${JSON.stringify(state)}`);
+      return false;
     };
 
-    // SILENT capability: bookmarks — Enable click requests from the page
-    // gesture and Chrome grants it (no warning dialog for bookmarks).
-    const bmRow = await evalOpts(`(() => {
-      const rows = [...document.querySelectorAll('#permission-list .perm-row')];
-      return rows.find((r) => r.querySelector('.perm-name')?.textContent === 'Bookmarks') ?? null;
-    })()`);
-    check("permissions: Bookmarks Enable button found in the Settings panel", bmRow !== null);
-    const bmClick = await clickEnable("Bookmarks");
-    check("permissions: Bookmarks Enable clicked", bmClick?.ok === true);
-    // Headless auto-denies chrome.permissions.request — the honest outcome.
-    const bmGranted = await evalOpts(`chrome.permissions.contains({ permissions: ["bookmarks"] })`);
-    check("permissions: Bookmarks Enable clicked but denied in headless (the grant requires a headed run)", bmGranted === false);
-    // Tab groups also denies in headless — the honest denial.
-    const tgClick = await clickEnable("Tab groups");
-    const tgAfter = await evalOpts(`chrome.permissions.contains({ permissions: ["tabGroups"] })`);
+    // Context menus is warningless: headless Chrome can grant and revoke it,
+    // so drive the complete owner lifecycle instead of deferring it to headed.
+    const contextMenusEnable = await capabilityButtonSelector(optsSession, "Context menus", "Enable");
+    check("permissions: Context menus Enable button found in the Settings panel", contextMenusEnable !== null);
     check(
-      "permissions: tab groups Enable clicked but still denied (honest headless denial)",
-      tgClick?.ok === true && tgAfter === false,
+      "permissions: Context menus Enable clicked via a trusted gesture",
+      contextMenusEnable !== null && await clickSel(cdp, optsSession, contextMenusEnable),
+    );
+    check(
+      "permissions: Context menus granted after Enable settled",
+      await pollCapability("Context menus", "contextMenus", true, "Turn off"),
+    );
+    check(
+      "permissions: Context menus Turn off clicked via a trusted gesture",
+      await clickCapability(optsSession, "Context menus", "Turn off"),
+    );
+    check(
+      "permissions: Context menus absent after Turn off settled",
+      await pollCapability("Context menus", "contextMenus", false, "Enable"),
+    );
+    check(
+      "permissions: Context menus retry Enable clicked via a trusted gesture",
+      await clickCapability(optsSession, "Context menus", "Enable"),
+    );
+    check(
+      "permissions: Context menus granted after retry settled",
+      await pollCapability("Context menus", "contextMenus", true, "Turn off"),
+    );
+
+    // Prompt-requiring outcomes stay in the headed macro. In headless, drive
+    // the genuine gesture on an isolated Settings target, observe contains()
+    // remain false for a bounded interval, then close that target to cancel
+    // the pending prompt and poll the final absent state. This cannot strand a
+    // browser prompt that poisons the rest of the journey.
+    const probePromptedDenial = async (label, permission) => {
+      const page = await openPage(port, `chrome-extension://${extId}/options/options.html`);
+      const session = await attachRuntime(cdp, page.id);
+      cdp.pageSessions.add(session);
+      await cdp.send("Target.activateTarget", { targetId: page.id });
+      await cdp.send("Page.bringToFront", {}, session);
+      const clicked = await clickCapability(session, label, "Enable");
+      let stayedAbsent = clicked;
+      for (let i = 0; i < 12; i++) {
+        stayedAbsent &&= (await evalIn(cdp, session,
+          `chrome.permissions.contains({ permissions: [${JSON.stringify(permission)}] })`)) === false;
+        await sleep(250);
+      }
+      const closed = await cdp.send("Target.closeTarget", { targetId: page.id });
+      cdp.pageSessions.delete(session);
+      let settledAbsent = false;
+      for (let i = 0; i < 40 && !settledAbsent; i++) {
+        settledAbsent = (await evalOpts(
+          `chrome.permissions.contains({ permissions: [${JSON.stringify(permission)}] })`,
+        )) === false;
+        if (!settledAbsent) await sleep(250);
+      }
+      return { clicked, denied: stayedAbsent && closed?.result?.success === true && settledAbsent };
+    };
+    const bookmarksDenied = await probePromptedDenial("Bookmarks", "bookmarks");
+    check(
+      "permissions: Bookmarks Enable clicked via a trusted gesture",
+      bookmarksDenied.clicked,
+    );
+    check(
+      "permissions: Bookmarks prompt cancelled and permission settled absent in headless",
+      bookmarksDenied.denied,
+    );
+    const tabGroupsDenied = await probePromptedDenial("Tab groups", "tabGroups");
+    check(
+      "permissions: Tab groups Enable clicked via a trusted gesture",
+      tabGroupsDenied.clicked,
+    );
+    check(
+      "permissions: Tab groups prompt cancelled and permission settled absent in headless",
+      tabGroupsDenied.denied,
     );
 
     await msgOpts({
@@ -1663,24 +1750,19 @@ async function main() {
         preDisable.includes("https://script-disable-a.example") &&
         preDisable.includes("https://script-disable-b.example"),
     );
-    // Under the install-granted model `scripting` is a REQUIRED manifest
-    // permission, so Chrome can never remove it. The revoke is refused up
-    // front — and the property that matters is that a refusal destroys
-    // NOTHING. Previously the route tombstoned every enrolled origin first and
-    // only then discovered the removal could not commit, so an operation that
-    // could never succeed still took the origins' authority with it.
+    // Under OPTIONAL + JIT, scripting is runtime-revocable. Its dependent
+    // teardown must tombstone every enrolled origin before removing the grant.
     const revokeScripting = await approvedMsg({ type: "capability.revoke", id: "scripting" });
     check(
-      "scripting Disable: refused because scripting is install-granted",
-      revokeScripting?.ok === false && revokeScripting?.required === true &&
-        revokeScripting?.revoked === false,
+      "scripting Disable: optional permission revoked",
+      revokeScripting?.ok === true && revokeScripting?.revoked === true,
     );
     const postDisable = await msgValue({ type: "agent.list" });
     check(
-      "scripting Disable: a refused revoke tombstones NOTHING",
+      "scripting Disable: successful revoke tombstones every enrolled origin",
       Array.isArray(postDisable) &&
-        postDisable.includes("https://script-disable-a.example") &&
-        postDisable.includes("https://script-disable-b.example"),
+        !postDisable.includes("https://script-disable-a.example") &&
+        !postDisable.includes("https://script-disable-b.example"),
     );
 
     // ─────────────────────────────────────────────────────────────
