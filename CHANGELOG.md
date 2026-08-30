@@ -1,7 +1,7 @@
 # Changelog
 
 ## [0.2.449] — 2026-08-30
-- CAP-FB-20260830-AGENT-BOARD-WORKING-01: the jobs board works end to end — asking the hub to hand work to an agent posts a job, wakes that agent, and delivers its result back into the thread; agents can read board messages, blocked jobs say so, settled results stay visible, Settings board rules use the shared selects and update live, claims are heartbeated automatically
+- The jobs board works end to end — asking the hub to hand work to an agent posts a job, wakes that agent, and delivers its result back into the thread; agents can read board messages, blocked jobs say so, settled results stay visible, Settings board rules use the shared selects and update live, claims are heartbeated automatically
 
 ## [0.2.448] — 2026-08-30
 - Tracker: the honest provider-error messages are recorded as landed.
