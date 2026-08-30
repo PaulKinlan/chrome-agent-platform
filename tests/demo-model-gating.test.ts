@@ -112,3 +112,72 @@ Deno.test("demo-model: @demo-delegate-agent accepts an origin and stops after th
   assertEquals(parts.filter((p) => p.type === "tool-call").length, 0);
   assertMatch(parts.filter((p) => p.type === "text-delta").map((p) => p.delta).join(""), /DENIED\/FAILED/u);
 });
+
+// ── @demo-skill-read (CAP-FB-20260830-SKILLS-UNCAPPED-01) ──────────────────
+// The marker drives search → execute(skill_read) through the REAL lazy
+// protocol, then a final text naming the read result. Falsification: revert
+// the marker dispatch and the model never calls skill_read.
+
+function skillToolMsg(id, toolName, output) {
+  return { role: "tool", content: [{ type: "tool-result", toolCallId: id, toolName, output }] };
+}
+
+Deno.test("demo-model: @demo-skill-read drives search → execute(skill_read) → final text", async () => {
+  await kvSet({ "cap:developerFeatures": true });
+  try {
+    const resolved = await resolveModelFromConfig({ provider: "demo", baseURL: "", apiKey: "", model: "" });
+    const model = resolved.model;
+    const user = [{ role: "user", content: [{ type: "text", text: "read the skill body with @demo-skill-read big-skill" }] }];
+    // step 1: search_tools(skill_read)
+    const s1 = await model.doGenerate({ prompt: user });
+    assertEquals(s1.content[0].toolName, "search_tools");
+    assertEquals(JSON.parse(s1.content[0].input).query, "skill_read");
+    // step 2: execute_tool({skill:"big-skill"})
+    const afterSearch = [
+      ...user,
+      { role: "assistant", content: [{ type: "tool-call", toolCallId: "s1", toolName: "search_tools", input: JSON.stringify({ query: "skill_read", limit: 1 }) }] },
+      skillToolMsg("s1", "search_tools", { ok: true, selectedTool: "skill_read", result: { name: "skill_read", selectionRef: "sel_000000000000000000000000000000000000" } }),
+    ];
+    const s2 = await model.doGenerate({ prompt: afterSearch });
+    assertEquals(s2.content[0].toolName, "execute_tool");
+    const args = JSON.parse(s2.content[0].input).arguments;
+    assertEquals(args.skill, "big-skill");
+    // step 3: final text from the fenced read result
+    const body = "lorem ipsum dolor sit amet ".repeat(2048); // > 16KiB → truncated
+    const afterExecute = [
+      ...afterSearch,
+      { role: "assistant", content: [{ type: "tool-call", toolCallId: "e1", toolName: "execute_tool", input: s2.content[0].input }] },
+      skillToolMsg("e1", "execute_tool", { ok: true, selectedTool: "skill_read", result: { ok: true, skill: "big-skill", path: "SKILL.md", bytes: 16384, totalBytes: body.length, truncated: true, nextOffset: 16384, text: body.slice(0, 16384) } }),
+    ];
+    const s3 = await model.doGenerate({ prompt: afterExecute });
+    assertEquals(s3.content.filter((p) => p.type === "tool-call").length, 0);
+    assertMatch(s3.content[0].text, /Skill read completed.*big-skill.*truncated.*lorem ipsum/u);
+  } finally {
+    await kvRemove("cap:developerFeatures");
+  }
+});
+
+Deno.test("demo-model: @demo-skill-read reports a missing skill honestly (no success claim)", async () => {
+  await kvSet({ "cap:developerFeatures": true });
+  try {
+    const resolved = await resolveModelFromConfig({ provider: "demo", baseURL: "", apiKey: "", model: "" });
+    const model = resolved.model;
+    const user = [{ role: "user", content: [{ type: "text", text: "@demo-skill-read nope" }] }];
+    const afterSearch = [
+      ...user,
+      { role: "assistant", content: [{ type: "tool-call", toolCallId: "s1", toolName: "search_tools", input: JSON.stringify({ query: "skill_read", limit: 1 }) }] },
+      skillToolMsg("s1", "search_tools", { ok: true, selectedTool: "skill_read", result: { name: "skill_read", selectionRef: "sel_000000000000000000000000000000000001" } }),
+    ];
+    const s2 = await model.doGenerate({ prompt: afterSearch });
+    const afterExecute = [
+      ...afterSearch,
+      { role: "assistant", content: [{ type: "tool-call", toolCallId: "e1", toolName: "execute_tool", input: s2.content[0].input }] },
+      skillToolMsg("e1", "execute_tool", { ok: true, selectedTool: "skill_read", result: { ok: false, error: 'no imported skill "nope"' } }),
+    ];
+    const s3 = await model.doGenerate({ prompt: afterExecute });
+    assert(s3.content.filter((p) => p.type === "tool-call").length === 0);
+    assertMatch(s3.content[0].text, /DENIED\/FAILED.*no imported skill/u);
+  } finally {
+    await kvRemove("cap:developerFeatures");
+  }
+});

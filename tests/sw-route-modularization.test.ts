@@ -162,6 +162,7 @@ const BASELINE_ROUTES = [
   "recipe.list",
   "skill.list",
   "skill.import",
+  "skill.delete",
   "recipe.run",
   "background-agent.list",
   "background-agent.set",

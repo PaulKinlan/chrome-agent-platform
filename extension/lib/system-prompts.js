@@ -804,14 +804,31 @@ export function baselineSystemPrompt(baseId, registry = PROMPT_REGISTRY) {
 /** Render the boundary skills layer. Installed skills render as the
  * name/description manifest (agent-do's buildSkillsPrompt shape); a skill
  * carrying a full prompt body (a /skill:<id> reference resolved for THIS
- * run) composes its FULL body — the instructions the model must actually
- * follow, never a bare name the model could ignore. */
+ * run) composes its FULL body when the body fits the prompt budget — the
+ * instructions the model must actually follow. A LARGE imported skill
+ * (> PROMPT_SKILL_BODY_BUDGET bytes, i.e. one that would blow the context
+ * window if composed verbatim) instead composes a marker naming the
+ * on-demand loader (skill_read) — the model reads what it needs mid-run,
+ * never paying the whole body per call (CAP-FB-20260830-SKILLS-UNCAPPED-01). */
+export const PROMPT_SKILL_BODY_BUDGET = 8 * 1024; // 8KiB — compose small bodies, defer large ones
 function renderBoundarySkills(skills) {
-  const blocks = (skills ?? []).map((s) =>
-    s?.prompt != null && String(s.prompt).trim()
-      ? `## Skill: ${s.name}\n${String(s.prompt)}`
-      : `- ${s.name}: ${s.description ?? ""}`
-  );
+  const blocks = (skills ?? []).map((s) => {
+    const name = String(s?.name ?? "unknown");
+    const desc = String(s?.description ?? "");
+    const body = s?.prompt != null ? String(s.prompt) : "";
+    // Imported skill index rows carry `promptBytes` (the body lives in OPFS,
+    // not in the row); the marker rule must use it, never an empty body.
+    const bodyBytes = Number.isInteger(s?.promptBytes) ? s.promptBytes : body.length;
+    const isImported = s?.source === "imported" || (s?.files && typeof s.files === "object");
+    if (isImported && bodyBytes > PROMPT_SKILL_BODY_BUDGET) {
+      return (
+        `- ${name}: ${desc} (large skill: ${bodyBytes} bytes — the body is NOT composed; ` +
+        `call skill_read with skill:"${s?.id ?? ""}" to load SKILL.md or a file on demand)`
+      );
+    }
+    if (!body.trim()) return `- ${name}: ${desc}`;
+    return `## Skill: ${name}\n${body}`;
+  });
   if (!blocks.length) return "";
   return `## Available skills\n${blocks.join("\n\n")}`;
 }

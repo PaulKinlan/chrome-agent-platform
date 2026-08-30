@@ -240,6 +240,7 @@ import {
   restampPromptOverride,
   rotateAttestationKey,
   setPromptOverride,
+  PROMPT_SKILL_BODY_BUDGET,
 } from "../lib/system-prompts.js";
 import { gatherRuntimeContext } from "../lib/runtime-context.js";
 import {
@@ -276,7 +277,8 @@ import {
   setOriginBrowserControlGrant,
 } from "../lib/browser-tools.js";
 import { getRecipe, RECIPES, backgroundRecipes, intentOf, agentSkillIds, mergeRunSkills } from "../lib/recipes.js";
-import { fetchSkillFromUrl, installImportedSkill } from "../lib/skill-import.js";
+import { fetchSkillFromUrl, installImportedSkill, removeImportedSkill } from "../lib/skill-import.js";
+import { readSkillFile, writeSkillFiles, removeSkillFiles } from "../lib/skill-files.js";
 import { durableRuns, sweepOrphanAgentData } from "../lib/durable-runs.js";
 import { replaySafetyForTool } from "../lib/tool-replay-safety.js";
 import { createAlarmPermissionLifecycle } from "../lib/alarm-permission-lifecycle.js";
@@ -405,7 +407,21 @@ async function resolveRecipe(id) {
   const fromCustom = custom.find((r) => r.id === id);
   if (fromCustom) return fromCustom;
   const imported = (await masterMemory().get("importedSkills")) ?? [];
-  return imported.find((s) => s.id === id) ?? null;
+  const row = imported.find((s) => s.id === id);
+  if (!row) return null;
+  // Index rows carry metadata only (bodies live in OPFS). A SMALL body is
+  // read back and composed into the system prompt like before; a LARGE body
+  // stays out of the prompt (the skill_read marker rule handles it —
+  // renderBoundarySkills keys on promptBytes, never an empty body).
+  if ((row.promptBytes ?? 0) <= PROMPT_SKILL_BODY_BUDGET && row.promptBytes > 0) {
+    try {
+      const body = await readSkillFile(row.id, "SKILL.md");
+      return { ...row, prompt: body };
+    } catch {
+      return { ...row, prompt: "" };
+    }
+  }
+  return { ...row, prompt: "" };
 }
 
 // ── skill references (a skill is INCLUDED in a task) ─────────────────────
@@ -1565,6 +1581,14 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       // the lazy projection fences page/site/board results with it
       // (lib/untrusted-fence.js, CAP-FB-20260830-UNTRUSTED-CONTENT-FENCING-01).
       untrustedToken: runtimeContext.untrustedToken ?? null,
+      // Imported skills are a SHARED master store; every agent (master + site
+      // workers) can skill_read them on demand (large / multi-file skills,
+      // CAP-FB-20260830-SKILLS-UNCAPPED-01). Index rows live in memory, the
+      // bodies in OPFS — the tool gets both halves.
+      skillStore: {
+        list: async () => (await masterMemory().get("importedSkills")) ?? [],
+        read: async (id, path) => readSkillFile(id, path),
+      },
       // SCOPED (hook) runs: the read-only browser set (no open/navigate/close/schedule)
       // + read-only memory — untrusted browser event data must never drive a
       // browser mutation, a durable schedule, or a memory write (the wider-goal
@@ -6332,11 +6356,25 @@ const handlers = mergeRouteMaps(
     if (!url) return { ok: false, error: "no skill URL provided" };
     try {
       const fetched = await fetchSkillFromUrl(url);
-      const skill = await installImportedSkill(masterMemory(), fetched);
+      const skill = await installImportedSkill(masterMemory(), fetched, {
+        writeSkillFiles,
+        removeSkillFiles,
+      });
+      broadcastRegistryChanged();
       return { ok: true, skill };
     } catch (e) {
       return { ok: false, error: e?.message ?? String(e) };
     }
+  },
+  async "skill.delete"({ id }) {
+    const rid = String(id ?? "").trim();
+    if (!rid) return { ok: false, error: "no skill id provided" };
+    const out = await removeImportedSkill(masterMemory(), rid, {
+      writeSkillFiles,
+      removeSkillFiles,
+    });
+    if (out?.ok) broadcastRegistryChanged();
+    return out;
   },
   async "recipe.run"(m) {
     const recipe = getRecipe(m.id);

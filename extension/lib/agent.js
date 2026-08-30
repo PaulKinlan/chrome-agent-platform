@@ -187,6 +187,93 @@ export function isAbortShape(value) {
   return false;
 }
 
+// One skill_read response carries at most this many bytes of file text — the
+// lazy protocol's per-string projection bound (TOOL_ARGUMENT_LIMITS.
+// maxStringUtf8Bytes, 16KiB) hard-caps what the model can receive in one
+// result, so requesting more would be silently truncated. The tool returns
+// EXACTLY what the model can read, with pagination (`truncated`/`nextOffset`)
+// for larger bodies.
+const SKILL_READ_LIMIT = 16 * 1024;
+
+/**
+ * The skill_read tool: on-demand loader for large / multi-file imported
+ * skills. Reads the SKILL.md body or any stored file, bounded per read, with
+ * honest pagination. Results are tagged untrusted (imported skill content is
+ * foreign data — the lazy projection wraps it in the run's untrusted
+ * boundary, lib/untrusted-fence.js). Read-only, path-confined to the skill's
+ * own files — never the filesystem.
+ *
+ * @param {object|function} skillStore either:
+ *   - an object { list: async () => importedSkillIndexRows, read: async (id, path) => text }
+ *     (the production wiring: index rows in memory, bodies in OPFS), or
+ *   - a function async () => full skill records with a `files` map
+ *     (legacy/test shape — the read falls back to the record's files map).
+ */
+export function skillReadToolset(skillStore = null) {
+  if (!skillStore) return {};
+  const listFn = typeof skillStore === "function" ? skillStore : skillStore.list;
+  const readFn = typeof skillStore === "function" ? null : (skillStore.read ?? null);
+  return {
+    skill_read: tool({
+      description:
+        "Read an imported skill's SKILL.md body or one of its files. A large skill's body is NOT composed into the system prompt; call this to load the body or a supporting file (scripts/, references/) on demand. Args: skill (the /skill: id), path (default SKILL.md), offset+limit for pagination. Returns the text chunk with totalBytes and nextOffset when more remains.",
+      inputSchema: z.object({
+        skill: z.string().min(1).max(64),
+        path: z.string().min(1).max(512).optional(),
+        offset: z.number().int().min(0).optional(),
+        limit: z.number().int().min(1).max(SKILL_READ_LIMIT).optional(),
+      }),
+      execute: async ({ skill, path = "SKILL.md", offset = 0, limit = SKILL_READ_LIMIT }) => {
+        const rawKey = String(path ?? "SKILL.md");
+        // Path safety at the tool boundary (the file store re-validates, but
+        // the model is a hostile caller): no leading slash, no `..`, no
+        // backslash, no NUL.
+        if (!rawKey || rawKey.includes("\\") || rawKey.includes("\u0000") ||
+            rawKey.split("/").some((seg) => seg === ".." || seg === "") || rawKey.startsWith("/")) {
+          return { untrusted: true, ok: false, error: `skill file path is not safe: "${rawKey}"` };
+        }
+        const key = rawKey;
+        let list = [];
+        try { list = (await listFn()) ?? []; } catch { /* store read failed */ }
+        const rec = (Array.isArray(list) ? list : []).find((s) => s?.id === String(skill));
+        if (!rec) return { untrusted: true, ok: false, error: `no imported skill "${skill}"` };
+        let text = null;
+        if (readFn) {
+          try {
+            text = await readFn(String(skill), key);
+          } catch {
+            text = null;
+          }
+        } else {
+          const files =
+            rec.files && typeof rec.files === "object"
+              ? rec.files
+              : { "SKILL.md": rec.prompt ?? "" };
+          text = typeof files[key] === "string" ? files[key] : null;
+        }
+        if (text === null) {
+          return { untrusted: true, ok: false, error: `skill "${skill}" has no file "${key}"` };
+        }
+        const start = Math.max(0, Number(offset) || 0);
+        const chunk = text.slice(start, start + limit);
+        const more = start + chunk.length < text.length;
+        return {
+          untrusted: true,
+          ok: true,
+          skill: String(skill),
+          path: key,
+          offset: start,
+          bytes: chunk.length,
+          totalBytes: text.length,
+          truncated: more,
+          nextOffset: more ? start + chunk.length : null,
+          text: chunk,
+        };
+      },
+    }),
+  };
+}
+
 export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, readOnly = false) {
   if (!memory) return {};
   // Reads must be ENROLLMENT-scoped too (the round-24/25 finding: memory_get/
@@ -457,6 +544,11 @@ export function createAgent({
   // `readOnlyMemory` (SCOPED hook runs): memory_set is omitted — untrusted
   // event data must never persist state.
   readOnlyMemory = false,
+  // The imported-skills store reader: async () => importedSkillRecords. When
+  // present, the agent gets the `skill_read` tool — on-demand loading of a
+  // large/multi-file imported skill's SKILL.md body or any stored file
+  // (CAP-FB-20260830-SKILLS-UNCAPPED-01). Absent → no skill_read tool.
+  skillStore = null,
   // Additional LIVE source records (WebMCP, Chrome/management, bundled
   // catalog-only rows). Called for every search and every execute fence.
   readLazySources = async () => [],
@@ -738,6 +830,7 @@ export function createAgent({
 
   const sourceTools = {
     ...memoryToolset(memory, enrollmentGuard, getRunGen, readOnlyMemory),
+    ...skillReadToolset(skillStore),
     ...tools,
   };
   const instanceGeneration = `agent-instance:${crypto.randomUUID()}`;
@@ -1236,6 +1329,9 @@ export function createOrchestrator({
                         // tools are page-bound, not provider-bound)
   untrustedToken = null, // the master's untrusted-content boundary token (workers
                          // carry their own as `w.untrustedToken`)
+  skillStore = null, // async () => imported-skill records — enables skill_read
+                     // (CAP-FB-20260830-SKILLS-UNCAPPED-01) on the master AND
+                     // every worker (skills are a shared master store)
 }) {
   const workerAgents = new Map();
   let currentRunIdentity = null;
@@ -1248,6 +1344,7 @@ export function createOrchestrator({
       memory: w.memory,
       skills: w.skills ?? [],
       tools: w.tools ?? {},
+      skillStore,
       readLazySources: w.readLazySources ?? (async () => []),
       readLazyScope: w.readLazyScope ?? (async () => ({
         origin: w.origin,
@@ -1399,6 +1496,7 @@ export function createOrchestrator({
     ...(maxIterations !== undefined ? { maxIterations } : {}),
     iterationGuard,
     serverTooling,
+    skillStore,
     // `extraTools` stay out of this eager map. Their live records come from
     // readMasterLazySources; only delegation's existing closures are added to
     // the private built-in source map.

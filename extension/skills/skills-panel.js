@@ -34,10 +34,18 @@ function recipeCard(r, onUse) {
   const summary = document.createElement("summary");
   summary.textContent = "How it works";
   const how = document.createElement("p");
-  how.textContent = r.prompt ?? "";
   const hint = document.createElement("span");
   hint.className = "hint";
-  hint.textContent = `/skill:${r.id}`;
+  const fileCount = (r.fileCount ?? 0) > 1 ? ` · ${r.fileCount} files` : "";
+  const large = (r.promptBytes ?? 0) > 8192 || (r.prompt ?? "").length > 8192 ? " · large (load on demand)" : "";
+  hint.textContent = `/skill:${r.id}${fileCount}${large}`;
+  // Imported large skills carry metadata only (the body lives in OPFS); the
+  // "how it works" panel must not dump an absent body — show the description
+  // and the on-demand loader note instead.
+  const bodyText = r.prompt ?? "";
+  how.textContent = bodyText
+    ? bodyText
+    : `${r.description ?? ""}${large ? " — the full body and supporting files load on demand via skill_read during a run." : ""}`.trim() || r.id;
   details.append(summary, how, hint);
 
   wrap.append(row, details);
@@ -122,7 +130,8 @@ export function mountSkillsSection(sectionEl) {
     const out = await send("skill.import", { url }).catch(() => ({ ok: false, error: "import failed" }));
     importBtn.disabled = false;
     if (out?.ok) {
-      status.textContent = `Imported "${out.skill.name}" — use /skill:${out.skill.id}`;
+      const fileNote = (out.skill?.fileCount ?? 0) > 1 ? ` (${out.skill.fileCount} files)` : "";
+      status.textContent = `Imported "${out.skill.name}"${fileNote} — use /skill:${out.skill.id}`;
       urlInput.value = "";
       await refresh();
     } else {

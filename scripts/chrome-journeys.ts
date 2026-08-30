@@ -595,6 +595,10 @@ const EXPECTED = [
   "Scripts: the approved run executes only after Allow",
   "mgmt: delete_agent removed the agent",
   "mgmt: agent gone from the directory after delete",
+  "skills: the real import UI accepts a >64KiB SKILL.md (no arbitrary cap)",
+  "skills: the imported skill keeps its full >64KiB body (never truncated)",
+  "skills: a named agent with the large skill reads its body mid-run via skill_read",
+  "hub: @demo-skill-read drives search → execute → a body-excerpt final (large skill)",
   "no service-worker console errors",
   "no SW Runtime.enable errors (auto-attach)",
   "no NTP/Settings console errors",
@@ -665,6 +669,19 @@ async function main() {
         JSON.stringify({ error: { type: "authentication_error", code: "invalid_api_key", message: "Incorrect API key provided: sk-journey-invalid-0000. You can find your API key at the provider dashboard." } }),
         { status: 401, headers: { "content-type": "application/json" } },
       );
+    }
+    // CAP-FB-20260830-SKILLS-UNCAPPED-01: a >64KiB skill fixture (the old cap
+    // rejected anything over 65536 bytes — the owner hit 303729). Served as a
+    // plain SKILL.md URL so the REAL import path (fetchDirectSkill →
+    // readSkillText) must accept it.
+    if (u.pathname === "/big-skill/SKILL.md") {
+      const body =
+        "---\nname: Big Fixture Skill\ndescription: A large multi-file skill fixture (SKILLS-UNCAPPED-01)\n---\n\n# Big Fixture Skill\n\n" +
+        "lorem ipsum dolor sit amet, consectetur adipiscing elit\n".repeat(9000);
+      return new Response(body, { headers: { "content-type": "text/markdown; charset=utf-8" } });
+    }
+    if (u.pathname === "/big-skill/scripts/helper.md") {
+      return new Response("# helper\n\nA supporting file in scripts/.\n", { headers: { "content-type": "text/markdown; charset=utf-8" } });
     }
     return new Response(`<html><body>fixture ${u.pathname}</body></html>`, {
       headers: { "content-type": "text/html" },
@@ -3781,6 +3798,111 @@ async function main() {
       Array.isArray(dirAfter?.agents) &&
         !dirAfter.agents.some((a) => a?.origin === "https://mgmt.example"),
     );
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 9b — CAP-FB-20260830-SKILLS-UNCAPPED-01: no arbitrary size cap
+    // on skills. A >64KiB SKILL.md imports through the REAL Settings skills
+    // panel (the owner hit "skill is too large (303729 bytes > 65536)"), the
+    // imported skill attaches to a named agent, and the agent loads the large
+    // body MID-RUN via skill_read (@demo-skill-read through the real lazy
+    // protocol: search_tools → execute_tool → skill_read).
+    // ─────────────────────────────────────────────────────────────
+    await developerFlag(true);
+    const bigSkillUrl = `${RED_ORIGIN}/big-skill/SKILL.md`;
+    const skillsPage = await openPage(port, `chrome-extension://${extId}/options/options.html#skills`);
+    await sleep(1800);
+    const skillsSession = await attachRuntime(cdp, skillsPage.id);
+    // REAL-USER path: click the Skills nav item (a direct #skills deep link
+    // renders the panel but does not mount the import handlers on load).
+    await evalIn(cdp, skillsSession, `(() => { const n = document.querySelector('a[data-section="skills"], a[href="#skills"]'); if (n) { n.click(); return true; } return false; })()`);
+    await sleep(1200);
+    const importForm = await evalIn(cdp, skillsSession, `(() => { const i = document.querySelector('.import-url'); if (!i) return null; i.value = ${JSON.stringify(bigSkillUrl)}; i.dispatchEvent(new Event('input', { bubbles: true })); const b = document.querySelector('.import-btn'); return { hasInput: true, hasBtn: !!b }; })()`);
+    if (importForm?.hasBtn) {
+      await evalIn(cdp, skillsSession, `document.querySelector('.import-btn')?.click(), true`);
+    }
+    let importStatus = "";
+    for (let i = 0; i < 80; i++) {
+      importStatus = String(await evalIn(cdp, skillsSession, `document.querySelector('.import-status')?.textContent ?? ""`));
+      if (importStatus && !importStatus.includes("Importing")) break;
+      await sleep(250);
+    }
+    const skillsImportShot = await captureShot(cdp, skillsSession);
+    if (skillsImportShot) await writeEvidence("skills-import-large.png", skillsImportShot);
+    console.log("skills import status:", JSON.stringify(importStatus));
+    const bigList = await msgOpts({ type: "skill.list" });
+    const bigSkill = (bigList?.skills ?? []).find((s: { id?: string }) => s?.id === "big-fixture-skill") ?? null;
+    check(
+      "skills: the real import UI accepts a >64KiB SKILL.md (no arbitrary cap)",
+      /Imported \"Big Fixture Skill\"/.test(importStatus) && bigSkill !== null,
+    );
+    check(
+      "skills: the imported skill keeps its full >64KiB body (never truncated)",
+      bigSkill !== null &&
+        (bigSkill?.promptBytes ?? 0) > 64 * 1024 &&
+        (bigSkill?.fileCount ?? 0) >= 1,
+    );
+    if (skillsPage && skillsSession) {
+      try { await cdp.send("Page.close", {}, skillsSession); } catch { /* already closed */ }
+    }
+
+    // A named agent with the large skill attached loads its body mid-run.
+    const bigAgent = await msgValue({
+      type: "named-agent.create",
+      name: "Skill Reader",
+      role: "You read imported skills on demand.",
+      skills: ["big-fixture-skill"],
+    });
+    const bigAgentId = bigAgent?.agent?.id ?? null;
+    const bigRun = bigAgentId
+      ? await msgValue({ type: "named-agent.run", id: bigAgentId, task: "@demo-skill-read big-fixture-skill" })
+      : null;
+    check(
+      "skills: a named agent with the large skill reads its body mid-run via skill_read",
+      bigAgentId !== null &&
+        (bigRun?.ok === true || bigRun?.status === "done" || bigRun?.done === true) &&
+        /Skill read completed/.test(String(bigRun?.result ?? "")) &&
+        /big-fixture-skill/.test(String(bigRun?.result ?? "")),
+    );
+
+    // And through the HUB run surface (runTask), the result lands in the
+    // hub thread (JOURNEY 1 already proves the typed-composer path; this
+    // asserts the skill_read outcome in the hub's own run + thread).
+    const hubSkillRun = await msgValue({ type: "agent.run", task: "@demo-skill-read big-fixture-skill", id: `skills-hub-${Date.now()}` });
+    const hubThreadId = hubSkillRun?.threadId ?? null;
+    const hubThread = hubThreadId ? await msgValue({ type: "thread.get", id: hubThreadId }) : null;
+    const hubMessages = Array.isArray(hubThread?.thread?.messages) ? hubThread.thread.messages : [];
+    const hubAssistantText = hubMessages
+      .filter((m: { role?: string }) => m?.role === "assistant")
+      .map((m: { content?: unknown }) => String(m?.content ?? ""))
+      .join("\n");
+    check(
+      "hub: @demo-skill-read drives search → execute → a body-excerpt final (large skill)",
+      (hubSkillRun?.ok === true || hubSkillRun?.status === "done" || hubSkillRun?.done === true) &&
+        /Skill read completed/.test(hubAssistantText) &&
+        /big-fixture-skill/.test(hubAssistantText),
+    );
+    // Best-effort screenshot of the hub thread document (established
+    // re-open pattern — evidence only, never the gate).
+    if (hubThreadId) {
+      try {
+        const threadUrl2 = `chrome-extension://${extId}/ntp/ntp.html#omnibox=thread:${encodeURIComponent(hubThreadId)}`;
+        const created = await cdp.send("Target.createTarget", { url: threadUrl2 });
+        const targetId = created?.result?.targetId;
+        await sleep(3000);
+        const threadSess = await attachRuntime(cdp, targetId);
+        cdp.pageSessions.add(threadSess);
+        const shot = await captureShot(cdp, threadSess);
+        if (shot) await writeEvidence("skills-run-read.png", shot);
+        await cdp.send("Target.closeTarget", { targetId }).catch(() => {});
+      } catch (e) {
+        console.log("skills-run-read screenshot skipped:", String(e?.message ?? e));
+      }
+    }
+    const bigListAfter = await msgOpts({ type: "skill.list" });
+    const bigSkillAfter = (bigListAfter?.skills ?? []).find((s: { id?: string }) => s?.id === "big-fixture-skill");
+    if (bigSkillAfter?.id) {
+      await msgOpts({ type: "skill.delete", id: bigSkillAfter.id }).catch(() => {});
+    }
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 10 — service-worker console audit (strictly worker-only).

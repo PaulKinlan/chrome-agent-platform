@@ -35,20 +35,49 @@ export function slugifySkillId(name) {
 }
 
 // Bounds for external skill import (the one fetch-and-persist path).
-const MAX_SKILL_BYTES = 64 * 1024; // 64KiB
-const MAX_DIR_WALK = 10; // max subdirectories scanned on a GitHub repo
+// These are PHYSICAL budgets, not arbitrary caps: a skill's body can be large
+// (SKILL.md + scripts/ + references/ directories, cf. cloudflare/skills), and
+// the product must accept it — but the fetch-and-persist path must still be
+// bounded so a hostile URL cannot drive unbounded downloads or storage. The
+// old 64KiB ceiling (owner: "I don't want arbitrary constraints, especially
+// around skills") is gone; skills up to 2MiB per file / 8MiB total import.
+const MAX_SKILL_FILE_BYTES = 2 * 1024 * 1024; // 2MiB per fetched file
+const MAX_SKILL_TOTAL_BYTES = 8 * 1024 * 1024; // 8MiB per import (all files)
+const MAX_DIR_WALK = 64; // max subdirectories walked on a GitHub repo
 
-/** Read a response body, hard-capped at MAX_SKILL_BYTES (reject, not truncate). */
-async function readSkillText(resp) {
+/** Read a response body, capped at the per-file budget (reject, not truncate).
+ * @param {string} label what is being read (for the error message) */
+async function readSkillText(resp, label = "skill") {
   const declared = Number(resp.headers.get("content-length") ?? 0);
-  if (declared > MAX_SKILL_BYTES) {
-    throw new Error(`skill is too large (${declared} bytes > ${MAX_SKILL_BYTES})`);
+  if (declared > MAX_SKILL_FILE_BYTES) {
+    throw new Error(
+      `${label} is too large (${declared} bytes > ${MAX_SKILL_FILE_BYTES} per-file budget; split it or shrink it)`,
+    );
   }
   const buf = await resp.arrayBuffer();
-  if (buf.byteLength > MAX_SKILL_BYTES) {
-    throw new Error(`skill is too large (${buf.byteLength} bytes > ${MAX_SKILL_BYTES})`);
+  if (buf.byteLength > MAX_SKILL_FILE_BYTES) {
+    throw new Error(
+      `${label} is too large (${buf.byteLength} bytes > ${MAX_SKILL_FILE_BYTES} per-file budget; split it or shrink it)`,
+    );
   }
   return new TextDecoder().decode(buf);
+}
+
+/** Track the running total for a multi-file import and reject when the total
+ * budget is exhausted (reject, not truncate — a partial skill is a broken skill). */
+function makeTotalBudget(label) {
+  let total = 0;
+  return {
+    add(byteLength) {
+      total += byteLength;
+      if (total > MAX_SKILL_TOTAL_BYTES) {
+        throw new Error(
+          `${label} import exceeds the ${MAX_SKILL_TOTAL_BYTES}-byte total budget (${total} bytes); remove files or shrink them`,
+        );
+      }
+      return total;
+    },
+  };
 }
 
 /**
@@ -117,49 +146,106 @@ async function fetchGitHubSkill(url) {
     : `https://api.github.com/repos/${owner}/${repo}/contents?ref=${branch}`;
   let skillContent = null;
   let author = owner;
+  // The directory containing SKILL.md (repo-relative) — files are keyed
+  // relative to it. Declared at function scope (the multi-file walk below
+  // reads it after the SKILL.md discovery block).
+  let skillParent = "";
+  // Multi-file skill: every walked file lands in `files` keyed by its path
+  // RELATIVE TO THE DIRECTORY CONTAINING SKILL.md (so the skill's own layout
+  // is preserved: SKILL.md, scripts/, references/, …). Bounded by the per-file
+  // budget, the total-import budget, and MAX_DIR_WALK.
+  const files = {};
+
+  const contents = async (p) => {
+    const resp = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/contents/${p}?ref=${branch}`,
+      { headers: { Accept: "application/vnd.github.v3+json" } },
+    );
+    if (resp.status === 403 || resp.status === 429) {
+      throw new Error(
+        `GitHub API rate-limited (HTTP ${resp.status}) while walking ${owner}/${repo}; wait and retry, or use a raw.githubusercontent.com URL`,
+      );
+    }
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return Array.isArray(data) ? data : [];
+  };
+
+  const fetchFileBody = async (file) => {
+    if (!file?.download_url) return null;
+    const fr = await fetch(file.download_url);
+    if (!fr.ok) return null;
+    const label = `${owner}/${repo} ${file.path ?? file.name}`;
+    return await readSkillText(fr, label);
+  };
 
   try {
-    const resp = await fetch(apiUrl, { headers: { Accept: "application/vnd.github.v3+json" } });
-    if (resp.ok) {
-      const data = await resp.json();
-      const items = Array.isArray(data) ? data : [];
-      const skillFile = items.find((i) => i.type === "file" && i.name === "SKILL.md");
-      if (skillFile?.download_url) {
-        const fr = await fetch(skillFile.download_url);
-        if (fr.ok) skillContent = await readSkillText(fr);
-      } else {
-        // A repo whose skills live under skills/ or .agents/skills/. Bound the
-        // walk (MAX_DIR_WALK) so a hostile repo can't drive unbounded fetches.
-        const dirs = items.filter((i) => i.type === "dir").slice(0, MAX_DIR_WALK);
-        for (const dir of dirs) {
-          const dresp = await fetch(
-            `https://api.github.com/repos/${owner}/${repo}/contents/${dir.path}?ref=${branch}`,
-            { headers: { Accept: "application/vnd.github.v3+json" } },
-          );
-          if (!dresp.ok) continue;
-          const dItems = await dresp.json();
-          const sub = (Array.isArray(dItems) ? dItems : []).find(
-            (i) => i.type === "file" && i.name === "SKILL.md",
-          );
-          if (sub?.download_url) {
-            const fr = await fetch(sub.download_url);
-            if (fr.ok) { skillContent = await readSkillText(fr); break; }
-          }
+    const items = (await contents(path)) ?? [];
+    skillParent = path ? String(path).replace(/\/$/, "") : "";
+    const skillFile = items.find((i) => i.type === "file" && i.name === "SKILL.md");
+    if (skillFile?.download_url) {
+      const body = await fetchFileBody(skillFile);
+      if (body) skillContent = body;
+    } else {
+      // A repo whose skills live under skills/ or .agents/skills/. Bound the
+      // walk (MAX_DIR_WALK) so a hostile repo can't drive unbounded fetches.
+      const dirs = items.filter((i) => i.type === "dir").slice(0, MAX_DIR_WALK);
+      for (const dir of dirs) {
+        const dItems = (await contents(dir.path)) ?? [];
+        const sub = dItems.find((i) => i.type === "file" && i.name === "SKILL.md");
+        if (sub?.download_url) {
+          const body = await fetchFileBody(sub);
+          if (body) { skillContent = body; skillParent = dir.path; break; }
         }
       }
     }
-  } catch { /* fall through to raw */ }
+  } catch (e) {
+    if (String(e?.message ?? "").includes("rate-limited")) throw e;
+    /* fall through to raw */
+  }
 
   if (!skillContent) {
     const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path ? path + "/" : ""}SKILL.md`;
     const resp = await fetch(rawUrl);
     if (!resp.ok) return null;
-    skillContent = await readSkillText(resp);
+    skillContent = await readSkillText(resp, `${owner}/${repo} SKILL.md`);
   }
+
+  // Re-walk the SKILL.md's own directory tree to collect every sibling file
+  // (scripts/, references/, …). Best-effort: if the walk hits a rate limit or
+  // fails mid-way, the SKILL.md body alone is still a valid skill.
+  const total = makeTotalBudget(`${owner}/${repo}`);
+  files["SKILL.md"] = skillContent;
+  total.add(new TextEncoder().encode(skillContent).byteLength);
+  try {
+    let dirsToWalk = 0;
+    const walk = async (dir) => {
+      if (dirsToWalk >= MAX_DIR_WALK) return;
+      const items = (await contents(dir)) ?? [];
+      for (const item of items) {
+        if (item?.type === "dir") {
+          if (dirsToWalk < MAX_DIR_WALK) {
+            dirsToWalk += 1;
+            await walk(item.path);
+          }
+        } else if (item?.type === "file" && item.name !== "SKILL.md") {
+          const body = await fetchFileBody(item);
+          if (body === null) continue;
+          // key the file by its path relative to the SKILL.md parent so the
+          // skill's own layout is preserved (SKILL.md, scripts/, references/)
+          const rel = skillParent ? item.path.replace(skillParent + "/", "") : item.path;
+          if (rel === "SKILL.md" || rel in files) continue;
+          files[rel] = body;
+          total.add(new TextEncoder().encode(body).byteLength);
+        }
+      }
+    };
+    await walk(skillParent);
+  } catch { /* multi-file walk is best-effort */ }
 
   const { meta } = parseFrontmatter(skillContent);
   return {
-    files: { "SKILL.md": skillContent },
+    files,
     meta: {
       name: meta.name || `${owner}/${repo}`,
       description: meta.description || `Skill from ${owner}/${repo}`,
@@ -169,12 +255,25 @@ async function fetchGitHubSkill(url) {
 }
 
 /**
- * Install an imported skill into the master store (under `importedSkills`).
- * The skill becomes /skill:<id>-referenceable and attachable to agents.
+ * Install an imported skill. The SKILL BODIES (SKILL.md + scripts/ +
+ * references/ — the multi-file map) are written to the OPFS skill-files
+ * store; memory keeps a metadata-only INDEX row (bodies can exceed the
+ * memory store's 256KiB per-value bound, CAP-FB-20260830-SKILLS-UNCAPPED-01).
+ *
+ * @param {object} memory the master memory store
+ * @param {object} fetched { files, meta } from fetchSkillFromUrl
+ * @param {object=} fileStore { writeSkillFiles(id, files), removeSkillFiles(id) }
+ *   defaults to lib/skill-files.js (OPFS). Tests inject an in-memory fake.
  */
-export async function installImportedSkill(memory, fetched) {
+export async function installImportedSkill(memory, fetched, fileStore = null) {
   const name = fetched.meta.name || "imported-skill";
   const id = slugifySkillId(name);
+  const files =
+    fetched.files && typeof fetched.files === "object" ? fetched.files : { "SKILL.md": fetched.files?.["SKILL.md"] ?? "" };
+  const prompt = files["SKILL.md"] ?? "";
+  const promptBytes = new TextEncoder().encode(String(prompt ?? "")).byteLength;
+  const store = fileStore ?? (await import("./skill-files.js"));
+  const { fileCount, totalBytes } = await store.writeSkillFiles(id, files);
   const skill = {
     id,
     name,
@@ -183,7 +282,12 @@ export async function installImportedSkill(memory, fetched) {
     source: "imported",
     mode: "on-demand",
     category: "imported",
-    prompt: fetched.files["SKILL.md"] ?? "",
+    // Metadata only — the body lives in OPFS (small skills read it back via
+    // resolveRecipe; large skills compose a skill_read marker instead).
+    prompt: "",
+    promptBytes,
+    fileCount,
+    totalBytes,
     requiredCapabilities: [],
     importedAt: Date.now(),
   };
@@ -193,4 +297,15 @@ export async function installImportedSkill(memory, fetched) {
   else list.push(skill);
   await memory.set("importedSkills", list);
   return skill;
+}
+
+/** Remove an imported skill: its index row AND its OPFS bodies. */
+export async function removeImportedSkill(memory, id, fileStore = null) {
+  const store = fileStore ?? (await import("./skill-files.js"));
+  const list = (await memory.get("importedSkills")) ?? [];
+  const next = list.filter((s) => s.id !== id);
+  if (next.length === list.length) return { ok: false, error: "no imported skill with that id" };
+  await memory.set("importedSkills", next);
+  await store.removeSkillFiles(id).catch(() => null);
+  return { ok: true };
 }

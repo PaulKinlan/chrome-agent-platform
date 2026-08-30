@@ -67,6 +67,12 @@ const ENUM_SLIP_MARKER = "@demo-enum-slip";
 // pauses a model-initiated script run (CAP-FB-20260830-RUN-SCRIPT-FETCH-
 // APPROVAL-01). The final text reports the outcome honestly.
 const RUN_SCRIPT_MARKER = "@demo-run-script";
+// @demo-skill-read <skillId>: the demo model issues a REAL skill_read call
+// through the lazy protocol (search_tools → execute_tool with {skill, path})
+// and the final text reports the returned body excerpt — the keyless proof
+// that a large/multi-file imported skill is loadable on demand mid-run
+// (CAP-FB-20260830-SKILLS-UNCAPPED-01).
+const SKILL_READ_MARKER = "@demo-skill-read";
 // @demo-edit-artifact: the demo model creates an HTML artifact and then EDITS
 // it through the REAL lazy protocol — search_tools(create_asset) →
 // execute_tool(create crumb.html) → search_tools(update_asset) →
@@ -290,6 +296,7 @@ function latestRunSlice(prompt) {
       enumSlip: lastUser.includes(ENUM_SLIP_MARKER),
       editArtifact: lastUser.includes(EDIT_ARTIFACT_MARKER),
       runScript: lastUser.includes(RUN_SCRIPT_MARKER),
+      skillRead: lastUser.includes(SKILL_READ_MARKER),
       obeyPage: lastUser.includes(OBEY_PAGE_MARKER),
     },
   };
@@ -421,6 +428,43 @@ function runScriptFinalText(prompt) {
   if (!last) return "[demo model] Script run finished without a result.";
   if (last.ok === false) return `[demo model] Script run DENIED/FAILED honestly: ${String(last.error ?? "unknown").slice(0, 160)}`;
   return `[demo model] Script run completed: ${JSON.stringify(last.result ?? null).slice(0, 160)}`;
+}
+
+// ── @demo-skill-read helpers ────────────────────────────────────────────────
+function wantsSkillRead(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.skillRead;
+}
+function skillReadId(prompt) {
+  const slice = latestRunSlice(prompt);
+  if (!slice) return "";
+  const text = extractText([slice.slice[0]]);
+  return text.match(/@demo-skill-read\s+([A-Za-z0-9_-]{1,64})/)?.[1] ?? "";
+}
+function skillReadPath(prompt) {
+  const slice = latestRunSlice(prompt);
+  if (!slice) return undefined;
+  const text = extractText([slice.slice[0]]);
+  const m = text.match(/path=([A-Za-z0-9_.\/-]{1,200})/);
+  return m ? m[1] : undefined;
+}
+function skillReadAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" && Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && /\[demo model\] Skill read/.test(p.text ?? "")));
+}
+function skillReadFinalText(prompt) {
+  const parts = boardToolParts(prompt)
+    .filter((p) => p?.type === "tool-result")
+    .map((p) => lazyUnwrap(p.output?.value ?? p.output));
+  const last = parts.filter((v) => v && typeof v === "object" && ("ok" in v || "text" in v || "error" in v)).at(-1);
+  const id = skillReadId(prompt);
+  if (!last) return "[demo model] Skill read was not performed.";
+  if (last.ok === false || typeof last.error === "string") {
+    return `[demo model] Skill read DENIED/FAILED honestly: ${String(last.error ?? "unknown").slice(0, 160)}`;
+  }
+  const body = String(last.text ?? "").slice(0, 120).replace(/\s+/g, " ").trim();
+  const extra = last.truncated === true ? ` (truncated, ${last.totalBytes ?? "?"} bytes total)` : "";
+  return `[demo model] Skill read completed: skill=${id} path=${String(last.path ?? "SKILL.md")} ${last.bytes ?? 0} bytes read${extra}; body starts: ${body || "(empty)"}`;
 }
 
 // ── @demo-board helpers ─────────────────────────────────────────────────────
@@ -766,7 +810,7 @@ function browserFinalText(prompt) {
   return `[demo model] Browser tool ${spec.tool} finished without a result.`;
 }
 
-function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, browser = false, enumSlip = false, runScript = false, editArtifact = false } = {}) {
+function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, browser = false, enumSlip = false, runScript = false, editArtifact = false, skillRead = false } = {}) {
   const step = toolResultCount(prompt);
   if (editArtifact) {
     // search(create_asset) → execute create → search(update_asset) → execute
@@ -832,6 +876,21 @@ function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board =
     return selectionRef
       ? { id: "execute_run_script", name: "execute_tool", input: { selectionRef, arguments: { id: runScriptId(prompt), origin: "master" } } }
       : null;
+  }
+  if (skillRead) {
+    // search → execute skill_read({skill, path}) → final (the keyless proof
+    // that a large/multi-file imported skill loads on demand mid-run).
+    const toolParts = boardToolParts(prompt);
+    const searches = toolParts.filter((p) => p.toolName === "search_tools").length;
+    const executes = toolParts.filter((p) => p.toolName === "execute_tool").length;
+    if (executes >= 1) return null;
+    if (searches === 0) return { id: "search_skill_read", name: "search_tools", input: { query: "skill_read", limit: 1 } };
+    const selectionRef = latestSelectionRef(prompt);
+    if (!selectionRef) return null;
+    const args = { skill: skillReadId(prompt) };
+    const path = skillReadPath(prompt);
+    if (path) args.path = path;
+    return { id: "execute_skill_read", name: "execute_tool", input: { selectionRef, arguments: args } };
   }
   if (board) {
     // search → execute per board tool (a selectionRef is single-use):
@@ -1095,6 +1154,8 @@ export function createDemoModel() {
         ? lazyDemoCall(options.prompt, { editArtifact: true })
         : wantsRunScript(options.prompt) && !runScriptAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { runScript: true })
+        : wantsSkillRead(options.prompt) && !skillReadAlreadyFinal(options.prompt)
+        ? lazyDemoCall(options.prompt, { skillRead: true })
         : wantsBoard(options.prompt) && !boardAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { board: true })
         : wantsBrowser(options.prompt) && !browserAlreadyFinal(options.prompt)
@@ -1143,6 +1204,14 @@ export function createDemoModel() {
       if (wantsRunScript(options.prompt)) {
         return Promise.resolve({
           content: [{ type: "text", text: runScriptFinalText(options.prompt) }],
+          finishReason: "stop",
+          usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
+          warnings: [],
+        });
+      }
+      if (wantsSkillRead(options.prompt)) {
+        return Promise.resolve({
+          content: [{ type: "text", text: skillReadFinalText(options.prompt) }],
           finishReason: "stop",
           usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
           warnings: [],
@@ -1232,6 +1301,8 @@ export function createDemoModel() {
             ? lazyDemoCall(options.prompt, { editArtifact: true })
             : wantsRunScript(options.prompt) && !runScriptAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { runScript: true })
+            : wantsSkillRead(options.prompt) && !skillReadAlreadyFinal(options.prompt)
+            ? lazyDemoCall(options.prompt, { skillRead: true })
             : wantsBoard(options.prompt) && !boardAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { board: true })
             : wantsBrowser(options.prompt) && !browserAlreadyFinal(options.prompt)
@@ -1372,6 +1443,11 @@ export function createDemoModel() {
             // The script-run final/continuation text: the execute result
             // decides (a denied approval reads as a failure, never a success).
             response = runScriptFinalText(options.prompt);
+          }
+          else if (wantsSkillRead(options.prompt)) {
+            // The skill-read final/continuation text: the execute result
+            // decides (a missing skill/file reads as a failure, never a success).
+            response = skillReadFinalText(options.prompt);
           }
           else if (wantsBoard(options.prompt)) {
             // The board flow's final/continuation text: the claim + complete
