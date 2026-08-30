@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.446] — 2026-08-30
+- WIP CAP-FB-20260830-TRANSCRIPT-STREAMING-01: coalescer, nudge tracker hook, @demo-stream marker, unit test (RED pending)
+
 ## [0.2.445] — 2026-08-30
 - Seven more fixes are in progress in parallel and recorded as claimed in the tracker.
 

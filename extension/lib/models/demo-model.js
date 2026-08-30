@@ -49,6 +49,15 @@ const ENUM_SLIP_MARKER = "@demo-enum-slip";
 const RUN_SCRIPT_MARKER = "@demo-run-script";// @demo-slow: the FIRST model step is delayed (a deterministic mid-run window
 // for abort tests).
 const SLOW_MARKER = "@demo-slow";
+// DEMO STREAMING MODE (CAP-FB-20260830-TRANSCRIPT-STREAMING-01): "@demo-stream"
+// makes the text-only answer LONG and PACED (one 24-char chunk every
+// DEMO_STREAM_CHUNK_MS) so a keyless journey can watch the assistant bubble
+// grow across many samples, exactly as a hosted provider's tokens arrive.
+const STREAM_MARKER = "@demo-stream";
+export const DEMO_STREAM_CHUNK_MS = 30;
+export const DEMO_STREAM_ANSWER = "[demo model] Streaming answer. " + Array.from({ length: 12 }, (_, i) =>
+  `Paragraph ${i + 1}: the agent hub runs on your new tab, keeps memory per origin in OPFS, drives the browser through granted tools, and streams every answer token as the provider produces it.`
+).join(" ");
 /** Public deterministic cancellation window used by the demo provider. This is
  * product behavior (the documented @demo-slow marker), not a hidden test seam. */
 export const DEMO_SLOW_HOLD_MS = 10_000;
@@ -142,6 +151,12 @@ function delegateAgentId(prompt) {
   const text = extractText([last]);
   const m = text.match(new RegExp(DELEGATE_MARKER + "\\s+([\\w.-]+)"));
   return m ? m[1] : "demo-site";
+}
+
+function wantsStream(prompt) {
+  const msgs = Array.isArray(prompt) ? prompt : [];
+  const last = [...msgs].reverse().find((m) => m?.role === "user");
+  return extractText([last]).toLowerCase().includes(STREAM_MARKER);
 }
 
 function wantsSlow(prompt) {
@@ -912,12 +927,32 @@ export function createDemoModel() {
             response = demoAlreadyFinal(options.prompt)
               ? "[demo model] Task complete — nothing more to do."
               : "[demo model] Tool calls executed in sequence: memory_set wrote the shopping list, then memory_get read it back twice.";
+          } else if (wantsStream(options.prompt)) {
+            response = DEMO_STREAM_ANSWER;
           } else {
             response = `[demo model] Task received (${text.length} chars). Configure a real provider in Settings ` +
               `to get real completions. This demo response proves the agent loop runs end-to-end.`;
           }
           controller.enqueue({ type: "text-start", id });
           const chunks = response.match(/.{1,24}/g) ?? [response];
+          if (wantsStream(options.prompt)) {
+            // Paced delivery: each chunk lands in its own macrotask so the
+            // transcript can grow visibly (and abort cuts the stream short).
+            (async () => {
+              try {
+                for (const chunk of chunks) {
+                  await abortableDelay(DEMO_STREAM_CHUNK_MS, options.abortSignal);
+                  controller.enqueue({ type: "text-delta", id, delta: chunk });
+                }
+                controller.enqueue({ type: "text-end", id });
+                controller.enqueue({ type: "finish", usage, finishReason: "stop" });
+                controller.close();
+              } catch (err) {
+                controller.error(err);
+              }
+            })();
+            return;
+          }
           for (const chunk of chunks) {
             controller.enqueue({ type: "text-delta", id, delta: chunk });
           }
