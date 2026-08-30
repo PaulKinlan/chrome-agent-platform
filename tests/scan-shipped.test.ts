@@ -62,6 +62,12 @@ Deno.test("scan: window.__oracle = 1 is caught", async () => {
   assertEquals(v[0].includes('window["__oracle"]'), true);
 });
 
+Deno.test("scan: allowUntrustedEventsForTesting is caught", async () => {
+  const v = await violations(`window.allowUntrustedEventsForTesting = true;`);
+  assertEquals(v.length, 1);
+  assertEquals(v[0].includes("allowUntrustedEventsForTesting"), true);
+});
+
 Deno.test("scan: globalThis[`__reset`] (template literal) is caught", async () => {
   const v = await violations("globalThis[`__reset`] = 1;");
   assertEquals(v.length, 1);

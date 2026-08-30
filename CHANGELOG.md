@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.417] — 2026-08-30
+- Remove untrusted event test bypass
+
 ## [0.2.416] — 2026-08-30
 - The composer slash menu got an overhaul: dead commands are gone (/theme, /focus, /model, /schedule), and new ones pull real Chrome context into your message — /tabs picks any open tab, /artifacts attaches a saved artifact, /bookmarks and /history search and insert links, /files attaches files from folders you've granted
 
