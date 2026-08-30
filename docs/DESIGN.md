@@ -35,6 +35,10 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 ## Settings responsive composition
 - The 240px navigation and multi-column forms are the wide composition. At the content-driven 680px breakpoint the navigation becomes a wrapping full-width header and every form/card grid becomes one shrink-safe column using `minmax(0, 1fr)` and `min-inline-size: 0`.
 - Every section and control remains present at 500px and 360px. The document reflows rather than clipping; intentionally scrollable data tables retain local `overflow: auto` without widening the Settings iframe.
+- Advanced → Observability keeps the verbosity selector and full-local-detail switch adjacent. The warning names exactly what full detail exposes locally and states that dumps, exports, shared bundles, and reports remain redacted.
+
+## Run-log affordance
+- A task or agent surface keeps a plainly labelled **Run logs** action after a run settles. Its existing durable registry pages ten retained runs at a time so every run remains reachable without unbounded DOM growth; each row has **View log** and displays at most the latest 200 retained timeline entries with an honest truncation note.
 
 ## Typography
 - Workhorse system sans (SF/Segoe/Roboto), antialiased, `cv02/cv03/cv04/cv11`.

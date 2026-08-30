@@ -56,7 +56,7 @@ import {
   resolveEntryMeta,
   shouldDispatchForNavigationType,
 } from "../lib/navigation-controller.js";
-import { actionableRunsForSurface, isSettledLiveRunRecord, latestRunForSurface } from "../lib/run-scope.js";
+import { actionableRunsForSurface, isSettledLiveRunRecord, latestRunForSurface, runsForSurface } from "../lib/run-scope.js";
 import {
   SITE_AGENT_COPY,
   enrollOutcomeState,
@@ -107,7 +107,9 @@ function setRunDebugOpen(open, { pin = false, focusToggle = false } = {}) {
 
 function syncConversationRunControls() {
   if (!durableRunRegistry) return;
-  const runs = actionableRunsForSurface(latestDurableRuns, {
+  // Run logs remain reachable after settlement; filtering to actionable phases
+  // made the affordance disappear the moment a successful run completed.
+  const runs = runsForSurface(latestDurableRuns, {
     threadId: currentThreadId,
     agentId: currentAgentId,
     agentKind: currentAgentKind,

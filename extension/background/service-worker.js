@@ -551,7 +551,7 @@ import {
 import { bridgeAndAuditApprovalBindings } from "../lib/approval-bridge-audit.js";
 import { journalJson } from "../shared/tool-tree.js";
 import { createAgentBoardRoutes, BOARD_HUB_ID } from "../lib/agent-board.js";
-import { capLog, dumpLogBuffer, clearLogBuffer, getLogVerbosity, setLogVerbosity } from "../lib/cap-log.js";
+import { capLog, dumpLogBuffer, clearLogBuffer, getLogVerbosity, setLogVerbosity, observeToolCall } from "../lib/cap-log.js";
 import { perfSpan, perfSummary, perfClear } from "../lib/cap-perf.js";
 
 // Suppress the AI SDK's own warning/retry console spam. The extension surfaces
@@ -1762,6 +1762,27 @@ async function bindSnapshotGate(canonical, pickedTabId) {
 }
 
 async function invokeSiteTool(
+  origin,
+  name,
+  args,
+  expectedGen = null,
+  expectedSource = null,
+  expectedSourceGeneration = null,
+) {
+  return observeToolCall(name, args, () => invokeSiteToolCore(
+    origin,
+    name,
+    args,
+    expectedGen,
+    expectedSource,
+    expectedSourceGeneration,
+  ), {
+    source: expectedSource ? `webmcp-${expectedSource}` : "webmcp-bridge",
+    runId: currentRunContext()?.runId ?? null,
+  });
+}
+
+async function invokeSiteToolCore(
   origin,
   name,
   args,
@@ -3559,12 +3580,16 @@ function executeWorkerTool(toolName, args, context) {
   const management = managementToolset({
     callRoute: (type, body) => dispatchRoute(type, body, context),
   });
-  const tool = workerBrowserTools()[name] ?? management[name];
+  const browser = workerBrowserTools()[name];
+  const tool = browser ?? management[name];
   if (!tool) return Promise.resolve({ ok: false, error: `unknown tool: ${name}` });
   // Bounded per-tool call counter for the Usage panel (fire-and-forget — a
   // telemetry write must never fail or slow a tool execution).
   recordToolCall(name).catch(() => {});
-  return Promise.resolve(tool.execute(a))
+  return observeToolCall(name, a, () => tool.execute(a), {
+    source: browser ? "chrome-api" : "management",
+    runId: context?.runId ?? context?.executionId ?? null,
+  })
     .then((result) => redactSecrets(result ?? null))
     .catch((e) => ({ ok: false, error: String(e?.message ?? e).slice(0, 200) }));
 }
@@ -5984,7 +6009,8 @@ const handlers = mergeRouteMaps(
       return { ok: false, error: "owner_extension_required" };
     }
     const executionId = String(m?.executionId ?? "");
-    return { ok: true, executionId, logs: await durableRuns.listLogs(executionId) };
+    const logs = await durableRuns.listLogs(executionId, { limit: 200 });
+    return { ok: true, executionId, logs, truncated: logs.exhausted === false };
   },
   async "schedule.cancelOrphans"() {
     // ORPHANED-ALARM CLEANUP (owner P0 2026-08-28): a deleted agent's schedule

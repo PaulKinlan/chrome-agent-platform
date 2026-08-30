@@ -132,10 +132,13 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
       MHTML save, keep-awake release and per-site content settings were all calling
       APIs that don't exist or that escaped their grant scope. Test doubles now mirror
       the real shapes and reject wrong ones.
-- [x] **Observability (`0.2.287`, `0.2.294`)** — `npm run build` produces a debug build
-      with source maps and a namespaced, levelled, timed logger + performance marks
-      across grants, tool calls, model round-trips and task loading. Redacted: no prompt
-      or page content. Security assertions identical in both modes.
+- [x] **Observability (`0.2.287`, `0.2.294`; owner-grade follow-up in review)** —
+      `npm run build` produces a debug build with source maps and a namespaced,
+      levelled, timed logger + performance marks. Verbose pairs every tool-call start/end
+      with arguments, outcome/error and duration across every tool source. Settings owns
+      verbosity plus explicit full detail for local DevTools; the trace/export ring stays
+      redacted regardless. Every retained conversation/background run exposes a paged,
+      bounded View log timeline.
 - [x] **Thread-open performance (`0.2.314`, `0.2.317`)** — task open was 10–15 s on
       well-used threads because it replayed the whole history. Now a per-execution
       ordered log index with cursor pagination reads only the requested page (O(page),

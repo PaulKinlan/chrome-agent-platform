@@ -176,6 +176,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P0 | IN_REVIEW | [`CAP-FB-20260829-TOOL-ARGUMENT-ROBUSTNESS-01`](#cap-fb-20260829-tool-argument-robustness-01-tool-call-argument-robustness-and-schema-accuracy) | Tool-call argument robustness and schema accuracy |
 | P1 | DONE | [`CAP-FB-20260829-AGENT-BOARD-01`](#cap-fb-20260829-agent-board-01-the-shared-jobs-board-agents-post-and-claim-work) | The shared jobs board — agents post and claim work |
 | P1 | IN_REVIEW | [`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`](#cap-fb-20260829-create-dialog-declutter-01-create-agent-dialog-is-cluttered-and-its-scheduletheme-controls-are-inconsistent) | Create-agent dialog is cluttered and its schedule/theme controls are inconsistent |
+| P1 | IN_REVIEW | [`CAP-FB-20260829-OWNER-OBSERVABILITY-01`](#cap-fb-20260829-owner-observability-01-owner-grade-console-and-run-logs) | Owner-grade console and run logs |
 | P0 | OPEN | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
 | P0 | OPEN | [`CAP-FB-20260827-HUB-FIRST-RUN-01`](#cap-fb-20260827-hub-first-run-01-the-first-screen-is-an-onboarding-wall-not-a-command-center) | The first screen is an onboarding wall, not a command center |
 | P0 | OPEN | [`CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01`](#cap-fb-20260827-tool-call-legibility-01-tool-call-cards-show-shape-not-answers) | Tool-call cards show shape, not answers |
@@ -1218,6 +1219,27 @@ evidence every other task depends on).
 - Recover: `deno run -A scripts/ui-integration.ts 2>&1 | grep -E "^FAIL|RESULT"`
 - History:
   - 2026-08-25 22:40 UTC — opened with attribution evidence. Five failures: the `+` menu bounds check, "running a demo task creates a thread in the sidebar" (`items: 0`), "clicking the sidebar thread opens the thread surface", "overlay-open matrix: the thread overlay is OPEN" (`noThread: true`) and the midnight-theme nub check (`overlayVisible: false`). All five reproduce with identical values on pristine `7642f76` with local work stashed, so they predate that work. The suite also did not print `RESULT` within 1800s on pristine main, so it is over budget as well as red — checks appended near its end are unreachable, which is why an unrelated fix's coverage went into its own script instead.
+## [CAP-FB-20260829-OWNER-OBSERVABILITY-01] Owner-grade console and run logs
+- Feedback: 2026-08-29 — owner: tool calls and their details are missing from the console, local logs are over-redacted for an owner-only extension, and retained run logs are not discoverable
+- Updated: 2026-08-29 23:58 BST
+- Status: IN_REVIEW
+- Priority: P1
+- Owner: implementer (worktree lane)
+- Workspace: active (local path private)
+- Branch: `cap-observability`
+- Base: `origin/main@90b4a837`
+- Candidate: branch `cap-observability` (not pushed)
+- Shipping: —
+- Acceptance: Verbose logs every model-visible and resolved tool dispatch with name, arguments, paired start/end, outcome/error and duration across management, Chrome API, bundled Wasm, provider-server and WebMCP sources; Settings owns verbosity plus an explicit full-local-detail toggle; trace/export/report buffers remain redacted regardless; every retained conversation or background run is reachable through Run logs and has a bounded 200-entry View log timeline
+- Review: required fresh-session review; author falsification records RED/GREEN focused assertions before handoff
+- Gates: focused owner-observability/cap-log/lazy/run-scope/durable tests; full `nice -n 10 deno test --allow-all tests/`; developer build; loaded-extension Settings and Run logs journey
+- Blockers: —
+- Next: independent review of the candidate and browser evidence, then coordinator merge
+- Recover: `git log --oneline --all --grep='owner-grade tool and run observability'`
+- History:
+  - 2026-08-30 00:12 BST — falsification: with product files restored to `origin/main@90b4a837` and only `tests/owner-observability.test.ts` present, the focused gate was RED at type-check because `runsForSurface` did not exist; restoring the candidate made the focused owner/cap-log/lazy set GREEN (32/32). The lazy hostile-accessor regression also caught an initial logger read of an untrusted `ok` getter; descriptor-only snapshots fixed it and returned the existing hostile-input test to green without weakening its assertion.
+  - 2026-08-29 23:58 BST — candidate implemented: one paired `observeToolCall` seam wraps the lazy dispatcher (all catalog sources), direct worker Chrome/management dispatch and the WebMCP bridge; agent-do hooks also log search/list/execute envelope calls. Settings adds verbosity and full-local-detail controls while the export ring stays unconditionally redacted. The existing durable run registry is now discoverable after terminal settlement, paginates every retained run, and loads the latest 200 timeline rows per run instead of an unbounded dump.
+
 - id: CAP-FB-20260826-OBSERVABILITY-01
   severity: P1
   status: done

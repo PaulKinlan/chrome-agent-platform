@@ -52,6 +52,33 @@ import { createNavigationController } from "../lib/navigation-controller.js";
 import { confirmActionDialog } from "../shared/components.js";
 import { saveFsGrant, wireLocalFolderPickers, regrantFsGrantAccess } from "../lib/fs-grants.js";
 import { mountSkillsSection } from "../skills/skills-panel.js";
+import {
+  capLogReady,
+  getLogFullDetail,
+  getLogVerbosity,
+  setLogFullDetail,
+  setLogVerbosity,
+} from "../lib/cap-log.js";
+
+async function wireObservabilitySettings() {
+  const verbosity = document.getElementById("log-verbosity");
+  const fullDetail = document.getElementById("log-full-detail");
+  if (!verbosity || !fullDetail) return;
+  await capLogReady();
+  verbosity.value = getLogVerbosity();
+  fullDetail.checked = getLogFullDetail();
+  verbosity.addEventListener("change", async () => {
+    await setLogVerbosity(verbosity.value);
+    saveFlash(`Console logging set to ${verbosity.options[verbosity.selectedIndex]?.text ?? verbosity.value}.`);
+  });
+  fullDetail.addEventListener("toggle", async (event) => {
+    const enabled = event.detail?.checked === true;
+    await setLogFullDetail(enabled);
+    saveFlash(enabled
+      ? "Full detail enabled for local DevTools only; exports stay redacted."
+      : "Local console payloads are redacted.");
+  });
+}
 
 // ── Provider presets (the user picks one; OpenAI-compatible endpoints) ──
 // NOTE: the "demo" + "prompt-api" providers are deliberately NOT in this
@@ -3018,6 +3045,7 @@ async function renderAbout() {
     renderChangelog("# Changelog\n\n## [0.0.0] — \n- Changelog unavailable in this context.\n");
   }
 }
+await wireObservabilitySettings();
 await renderAbout();
 await navigationController.syncCurrent();
 

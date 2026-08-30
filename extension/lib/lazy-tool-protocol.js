@@ -26,6 +26,7 @@ import {
 } from "./tool-argument-contract.js";
 import { ToolSelectionAuthority } from "./tool-selection.js";
 import { assertRunOwned } from "./run-fence.js";
+import { observeToolCall } from "./cap-log.js";
 import {
   buildLazyProviderCapture,
   LAZY_PROTOCOL_TOOL_WIRE,
@@ -745,21 +746,29 @@ export class LazyToolProtocol {
     let rawResult;
     let dispatchError = null;
     try {
-      rawResult = await dispatch(
+      rawResult = await observeToolCall(
+        dispatchResolved.descriptor.name,
         dispatchValidated.data,
-        Object.freeze({
-          signal,
-          runId: ownData(context, "runId"),
-          taskId: ownData(context, "taskId"),
-          agentId: ownData(context, "agentId"),
-          origin: ownData(context, "origin"),
-          documentId: ownData(context, "documentId"),
-          runGeneration: ownData(context, "runGeneration"),
-          replayMetadata: replayProjection(
-            context,
-            dispatchResolved.descriptor,
-          ),
-        }),
+        () => dispatch(
+          dispatchValidated.data,
+          Object.freeze({
+            signal,
+            runId: ownData(context, "runId"),
+            taskId: ownData(context, "taskId"),
+            agentId: ownData(context, "agentId"),
+            origin: ownData(context, "origin"),
+            documentId: ownData(context, "documentId"),
+            runGeneration: ownData(context, "runGeneration"),
+            replayMetadata: replayProjection(
+              context,
+              dispatchResolved.descriptor,
+            ),
+          }),
+        ),
+        {
+          source: ownData(dispatchResolved.descriptor, "sourceKind") ?? "lazy",
+          runId: ownData(context, "runId") ?? null,
+        },
       );
     } catch (error) {
       // Preserve the platform's typed cancellation/ownership failures as real

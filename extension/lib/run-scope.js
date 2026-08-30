@@ -20,15 +20,20 @@ export function runSurfaceIdentity({ threadId = null, agentId = null, agentKind 
   return { type: "agent", id: `named:${id}` };
 }
 
-export function actionableRunsForSurface(runs, surface = {}) {
+export function runsForSurface(runs, surface = {}) {
   const identity = runSurfaceIdentity(surface);
   if (!identity) return [];
-  return (Array.isArray(runs) ? runs : []).filter((run) => {
-    if (!ACTIONABLE_PHASES.has(String(run?.phase ?? ""))) return false;
-    return identity.type === "thread"
+  return (Array.isArray(runs) ? runs : []).filter((run) =>
+    identity.type === "thread"
       ? run?.threadId === identity.id
-      : run?.agentId === identity.id;
-  });
+      : run?.agentId === identity.id
+  ).sort((a, b) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0));
+}
+
+export function actionableRunsForSurface(runs, surface = {}) {
+  return runsForSurface(runs, surface).filter((run) =>
+    ACTIONABLE_PHASES.has(String(run?.phase ?? ""))
+  );
 }
 
 /** The most-recent retained run for a surface (any phase — running, terminal or

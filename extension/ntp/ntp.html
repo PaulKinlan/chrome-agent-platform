@@ -937,9 +937,9 @@
         <span class="view-title" id="thread-title" tabindex="-1">Task</span>
         <button class="back subtle" id="edit-agent" type="button" aria-label="Edit agent" hidden>Edit</button>
         <button class="back subtle danger" id="delete-agent" type="button" aria-label="Delete agent" hidden>Delete</button>
-        <button class="back subtle" id="run-debug-toggle" type="button" aria-label="Run debug info" aria-expanded="false" aria-controls="run-debug-panel" hidden>
+        <button class="back subtle" id="run-debug-toggle" type="button" aria-label="View run logs" aria-expanded="false" aria-controls="run-debug-panel" hidden>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-          Runs
+          Run logs
         </button>
       </div>
       <div class="thread-body">
@@ -948,7 +948,7 @@
              exist as a visible panel). It lives in this on-demand overlay,
              toggled by #run-debug-toggle (hover or click), never in flow. -->
         <div id="run-debug-panel" class="run-debug" role="region" aria-label="Run debug details" hidden>
-          <p class="run-debug-note">Debug — retained run registry for this surface. Cancel, resume and logs live here; the conversation below is the status view.</p>
+          <p class="run-debug-note">Retained runs for this conversation. Open any run to inspect its bounded tool-call timeline; exports remain redacted.</p>
           <durable-run-registry id="durable-run-registry" hidden></durable-run-registry>
         </div>
         <agent-conversation id="thread-conversation" role="log" aria-live="polite" aria-relevant="additions" aria-label="Conversation transcript" tabindex="0"></agent-conversation>

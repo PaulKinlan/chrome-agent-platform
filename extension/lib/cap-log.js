@@ -26,18 +26,20 @@
 // pages (NTP / side panel) inherit the same default. An explicit user choice
 // (origin:"user") is never clobbered by a build.
 //
-// REDACTION (Constitution: no secrets in logs): every argument passes through
-// scrubLogValue — token-like strings (long hex/base64 runs, Bearer/sk-/AIza
-// shapes, grant ids) are masked, strings are byte-bounded, objects are
-// JSON-serialised with the same scrub, Errors reduce to name+message. Never
-// log page content, message bodies, provider keys, or raw grant records.
+// REDACTION: console arguments pass through scrubLogValue by default. The owner
+// may explicitly enable full detail for LOCAL DevTools only; this can include
+// page content, arguments, results, and errors. The ring buffer remains redacted
+// regardless, so trace dumps/exports/shared reports never inherit that choice.
 //
 // Ring buffer: the last MAX_RING entries per context are kept in memory for
 // the trace dump (`observability.dumpTrace`); bounded with an honest dropped
 // counter. MV3-CSP-safe: no eval, no new Function.
 
+import { SECRET_KEY_RE } from "./pure.js";
+
 const LEVELS = Object.freeze({ off: 0, normal: 1, verbose: 2 });
 const STORAGE_KEY = "cap:logVerbosity";
+const FULL_DETAIL_STORAGE_KEY = "cap:logFullDetail";
 const MAX_RING = 500;
 const MAX_STRING_CHARS = 800;
 const MAX_JSON_CHARS = 1200;
@@ -47,6 +49,7 @@ const BUILD_DEFAULT =
   typeof __CAP_BUILD_LOG_DEFAULT__ === "string" ? __CAP_BUILD_LOG_DEFAULT__ : "off";
 
 let currentLevel = normaliseLevel(BUILD_DEFAULT) ?? "off";
+let currentFullDetail = false;
 let storageReady = false;
 
 /** @type {Array<{ts:number, level:string, ns:string, msg:string}>} */
@@ -84,8 +87,9 @@ function applyLevel(level, reason) {
 async function initFromStorage() {
   if (!hasStorage()) return;
   try {
-    const read = await chrome.storage.local.get(STORAGE_KEY);
+    const read = await chrome.storage.local.get([STORAGE_KEY, FULL_DETAIL_STORAGE_KEY]);
     const stored = readStoredLevel(read?.[STORAGE_KEY]);
+    currentFullDetail = read?.[FULL_DETAIL_STORAGE_KEY] === true;
     if (stored) applyLevel(stored, "storage");
     // Build default bridge: bundled contexts (SW / options) persist the build
     // default so unbundled pages inherit it — unless the OWNER chose a level.
@@ -100,9 +104,14 @@ async function initFromStorage() {
   } catch { /* storage races must never break logging */ }
   try {
     chrome.storage.onChanged?.addListener((changes, area) => {
-      if (area !== "local" || !(STORAGE_KEY in (changes ?? {}))) return;
-      const next = readStoredLevel(changes[STORAGE_KEY]?.newValue);
-      if (next) applyLevel(next, "storage-change");
+      if (area !== "local") return;
+      if (STORAGE_KEY in (changes ?? {})) {
+        const next = readStoredLevel(changes[STORAGE_KEY]?.newValue);
+        if (next) applyLevel(next, "storage-change");
+      }
+      if (FULL_DETAIL_STORAGE_KEY in (changes ?? {})) {
+        currentFullDetail = changes[FULL_DETAIL_STORAGE_KEY]?.newValue === true;
+      }
     });
   } catch { /* older shims without onChanged are fine */ }
 }
@@ -128,6 +137,19 @@ export async function setLogVerbosity(level) {
 
 export function getLogVerbosity() {
   return currentLevel;
+}
+
+/**
+ * Owner-only local console detail. This NEVER changes the redacted ring buffer
+ * used by trace dumps/exports; it only controls values passed to DevTools.
+ */
+export async function setLogFullDetail(enabled) {
+  currentFullDetail = enabled === true;
+  if (hasStorage()) await chrome.storage.local.set({ [FULL_DETAIL_STORAGE_KEY]: currentFullDetail });
+}
+
+export function getLogFullDetail() {
+  return currentFullDetail;
 }
 
 /** Test seam: subscribe to level changes. Returns an unsubscribe function. */
@@ -160,16 +182,24 @@ export function scrubLogValue(value, depth = 0) {
     return `${value.name}: ${boundString(maskTokens(value.message ?? ""))}`;
   }
   if (depth >= 3) return "[…]";
-  if (Array.isArray(value)) {
-    const out = value.slice(0, 20).map((v) => scrubLogValue(v, depth + 1));
-    if (value.length > 20) out.push(`…(+${value.length - 20} items)`);
-    return out;
-  }
   if (typeof value === "object") {
     try {
-      const json = JSON.stringify(value, (k, v) =>
-        typeof v === "string" ? boundString(maskTokens(v)) : v,
-      );
+      // Never invoke accessors while logging an untrusted tool result. Build a
+      // bounded descriptor-only snapshot before JSON serialization.
+      const descriptors = Object.getOwnPropertyDescriptors(value);
+      const keys = Object.keys(descriptors).filter((key) => key !== "length").slice(0, 20);
+      const out = Array.isArray(value) ? [] : {};
+      for (const key of keys) {
+        const descriptor = descriptors[key];
+        out[key] = SECRET_KEY_RE.test(key)
+          ? "«redacted»"
+          : "value" in descriptor
+          ? scrubLogValue(descriptor.value, depth + 1)
+          : "[accessor]";
+      }
+      const total = Object.keys(descriptors).filter((key) => key !== "length").length;
+      if (total > keys.length) out[Array.isArray(out) ? out.length : "…"] = `…(+${total - keys.length} items)`;
+      const json = JSON.stringify(out);
       return boundString(json ?? "[object]", MAX_JSON_CHARS);
     } catch {
       return "[unserialisable]";
@@ -220,11 +250,13 @@ export function capLog(ns) {
     const plain = scrubbed
       .map((a) => (typeof a === "string" ? a : typeof a === "object" ? JSON.stringify(a) : String(a)))
       .join(" ");
+    // The ring is an export boundary and stays redacted even when the owner
+    // explicitly asks DevTools for full local detail.
     pushRing(level, ns, plain);
     if (!enabled(level)) return;
     const fn = console[CONSOLE_FN[level]] ?? console.log;
     try {
-      fn(`${tag} ${new Date(now).toISOString()} ${delta}`, ...scrubbed);
+      fn(`${tag} ${new Date(now).toISOString()} ${delta}`, ...(currentFullDetail ? args : scrubbed));
     } catch { /* never throw from a logger */ }
   }
 
@@ -238,7 +270,7 @@ export function capLog(ns) {
       const scrubbedLabel = scrubLogValue(label);
       pushRing("group", ns, String(scrubbedLabel));
       if (currentLevel === "verbose") {
-        try { console.groupCollapsed(`${tag} ${scrubbedLabel}`); } catch { /* noop */ }
+        try { console.groupCollapsed(`${tag} ${currentFullDetail ? String(label) : scrubbedLabel}`); } catch { /* noop */ }
       }
       let closed = false;
       return {
@@ -256,4 +288,53 @@ export function capLog(ns) {
       return currentLevel === "verbose";
     },
   };
+}
+
+const toolLog = capLog("tool");
+let toolCallSequence = 0;
+
+/**
+ * Observe one real tool dispatch without changing its result/error semantics.
+ * Every source routes through this seam (lazy catalog, worker bridge, WebMCP).
+ */
+export async function observeToolCall(name, args, dispatch, { source = "unknown", runId = null } = {}) {
+  const toolName = String(name ?? "unknown").slice(0, 160);
+  const callId = `${toolName}#${++toolCallSequence}`;
+  const started = globalThis.performance?.now?.() ?? Date.now();
+  toolLog.debug("tool-call:start", { callId, name: toolName, source, runId, arguments: args });
+  try {
+    const result = await dispatch();
+    const durationMs = Math.max(0, (globalThis.performance?.now?.() ?? Date.now()) - started);
+    let failed = false;
+    if (result != null && typeof result === "object") {
+      try {
+        const descriptors = Object.getOwnPropertyDescriptors(result);
+        failed = descriptors.ok?.value === false || typeof descriptors.error?.value === "string";
+      } catch { /* hostile proxy: logging never gets to inspect it */ }
+    }
+    toolLog.debug("tool-call:end", {
+      callId,
+      name: toolName,
+      source,
+      runId,
+      durationMs: Math.round(durationMs * 10) / 10,
+      outcome: failed ? "error" : "ok",
+      result,
+    });
+    return result;
+  } catch (error) {
+    const durationMs = Math.max(0, (globalThis.performance?.now?.() ?? Date.now()) - started);
+    // At full local detail DevTools receives the Error object (stack/cause
+    // included); the export-safe ring still receives scrubLogValue(error).
+    toolLog.debug("tool-call:end", {
+      callId,
+      name: toolName,
+      source,
+      runId,
+      durationMs: Math.round(durationMs * 10) / 10,
+      outcome: "threw",
+      error,
+    });
+    throw error;
+  }
 }

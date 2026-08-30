@@ -62,7 +62,7 @@
       <section id="providers" class="panel">
         <h2>Providers</h2>
         <p
-          class="muted">Choose the model the hub agent uses. Your API key is stored locally in <code>chrome.storage</code> — never in the bundle, logs, or receipts.</p>
+          class="muted">Choose the model the hub agent uses. Your API key is stored locally in <code>chrome.storage</code> — never in the bundle or receipts. Logs are redacted unless you explicitly enable full local detail under Advanced.</p>
         <div class="providers-layout">
           <div id="provider-tabs" class="provider-tabs" role="tablist"
             aria-orientation="vertical" aria-label="Configured providers"></div>
@@ -211,7 +211,31 @@
       </section>
 
       <section id="prompts" class="panel">
-        <h2>Advanced — system prompts</h2>
+        <h2>Advanced</h2>
+        <h3>Observability</h3>
+        <p class="muted">Control local DevTools diagnostics. Tool calls log a paired start and end with their name, arguments, outcome, and duration at Verbose.</p>
+        <div class="toggle-field">
+          <label class="field" for="log-verbosity">
+            <span class="field-label">Log verbosity</span>
+            <select id="log-verbosity" class="input-select">
+              <option value="off">Off</option>
+              <option value="normal">Normal</option>
+              <option value="verbose">Verbose</option>
+            </select>
+          </label>
+          <div class="toggle-text">
+            <span class="toggle-name">Console logging</span>
+            <span class="muted">Choose Verbose to see every tool-call start and outcome in the extension console.</span>
+          </div>
+        </div>
+        <div class="toggle-field">
+          <switch-toggle id="log-full-detail" label="Full detail in local logs"></switch-toggle>
+          <div class="toggle-text">
+            <span class="toggle-name">Full detail in local logs</span>
+            <span class="muted">Shows unredacted prompts, page content, tool arguments, results, and errors in DevTools on this machine. Trace dumps, exports, shared bundles, and reports stay redacted.</span>
+          </div>
+        </div>
+        <h3>System prompts</h3>
         <p
           class="muted">The system prompt each agent runs with, layer by layer: the versioned built-in prompt, your customization, and the protected runtime policy (never editable, always applied last). The preview is the exact platform composition; every run also records a run-bound attestation of the exact provider-bound system message (digest + bytes, never content).</p>
         <label class="field prompt-scope-field"><span class="field-label">Agent scope</span>
