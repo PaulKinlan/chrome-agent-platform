@@ -20,7 +20,7 @@ const FORBIDDEN_NAMES = [
   "__setkvfaultfortest", "kv.fault", "cap-kv-fault-test", "injected test fault",
   "__sidebarpersistence", "__lastviewtransition",
   "__resetsessionfortest", "__resetmigrationfortest", "__resetbootfortest",
-  "buildscriptsrcdoc", "test-only",
+  "allowUntrustedEventsForTesting", "buildscriptsrcdoc", "test-only",
 ];
 
 // __-prefixed globals that are legitimate library internals (NOT oracles).
@@ -301,7 +301,7 @@ export async function scanShippedJs(files, {
     // 1. Forbidden test-control names (case-insensitive raw-text scan).
     const lower = text.toLowerCase();
     for (const needle of FORBIDDEN_NAMES) {
-      if (lower.includes(needle)) {
+      if (lower.includes(needle.toLowerCase())) {
         violations.push(
           `${file}: contains forbidden test control \`${needle}\` (test controls/oracles must live only in the test/harness layer)`,
         );
