@@ -3479,15 +3479,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-GENERATED-UI-BOOTSTRAP-SYNTAX-01] The generated-document preference bootstrap is a JavaScript syntax error
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 editing lane, finding 5. Every generated page the agent renders throws `SyntaxError: Unexpected token ')'` in its sandbox frame, so the documented theme/locale projection into generated UI has never worked.
-- Updated: 2026-08-30 20:15 UTC
+- Updated: 2026-08-30 21:35 UTC
 - Status: IN_REVIEW
 - Resume: worker run 0c918cf7 (flash) — the fix, the unit gate and the journey assertion were dispatched with the full spec
 - Priority: P2
-- Owner: hub coordinator (journal session)
+- Owner: worker (cap-genui-bootstrap)
 - Workspace: /home/paulkinlan/worktrees/cap-genui-bootstrap
 - Branch: cap-genui-bootstrap
-- Base: `abae5d2b`
-- Candidate: —
+- Base: `b0b962b0` (rebased onto the new origin/main tip; was `abae5d2b`)
+- Candidate: `cd894024` + r3 delivery-ordering fix (wireHtmlFramePreference) committed on the same lane
 - Shipping: —
 - Acceptance: The injected preference bootstrap parses; a rendered frame posts `cap:preference-ready` and its `documentElement.lang` equals the owner's locale; a unit test parses both injected scripts and is RED on today's string.
   - Context: `preferenceBootstrapScript(nonce)` at `extension/shared/components.js:355-366` joins these fragments: `"(function(){var nonce=…;"`, `"function apply(p){if(!p)return;"`, `"if(p.locale){try{…}catch(e){}}"`, `"window.addEventListener('message',…apply(d.preference);});"`, `"try{window.parent.postMessage({type:'cap:preference-ready',…},'*');}catch(e){}"`, `"})();"`. The `if(p.locale){…}` closes only the `if`; `function apply(p){` is never closed, so the listener and the ready post sit inside `apply`, and the final `})();` closes `apply` and then hits `)` with no open expression. Consequences: the frame never announces readiness, `wireHtmlFramePreference` only fires on `load`, `apply()` never runs. The navigation guard script (301-330) parses fine. `injectFrameGuards` (372) prepends this script into every generated document (thread frames, viewer, library card, dialog). Measured: 14 `SyntaxError: Unexpected token ')'` in one run across every `about:srcdoc` context. What must NOT change: the nonce-matched one-way message contract with `sandbox/artifact-preview.js`; the CSP.
@@ -3507,6 +3507,9 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - History:
   - 2026-08-30 11:00 UTC — measured: every `about:srcdoc` context throws `SyntaxError: Unexpected token ')'` (14 occurrences in one run); the documented theme/locale projection has never run.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); the fragment list re-read at `components.js:355-366` and the missing brace confirmed.
+  - 2026-08-30 21:35 UTC — IN_REVIEW (candidate on `cap-genui-bootstrap` off `abae5d2b`): locale fragment closed with `…catch(e){}}}` so the listener + ready post sit at IIFE level; `wireHtmlFramePreference` marks the wrapper `data-cap-preference="ready"` on a genuine ready message. Falsification: unit parse test RED on the old string (`SyntaxError: Unexpected token ')'`, 1/4 passed) → GREEN 4/4 after; journey check RED on the stashed fix (205/206) → GREEN 206/206 with it. Full gates: build clean, unit 2584/0, chrome journeys 206/206. `tests/frame-guards.test.ts` parses the shipped fragments via `Function("n", "return […]")` (no eval of shipped code — test-side only) + a shim behavioural test that apply() sets `documentElement.lang` and the nonce gate holds.
+  - 2026-08-30 22:40 UTC — r3 review REVISE (sol): P1 — `wireHtmlFramePreference` set `done=true` before `post()`, so the genuine-ready handler delivered nothing (the ready attribute fired but the preference payload never reached the frame; the load/timeout fallbacks fire earlier while the sandbox host is inactive and are dropped). Fixed: the ready handler sets `done` and delivers in one step (`if (!done) { done = true; post(); }`), the guard lives at the call sites (fallbacks check `!done` but never set it), so the first genuine ready sends exactly one payload and a second ready/later load is suppressed. New falsification unit test: on genuine ready the preference is posted into the frame exactly once with the right nonce+payload, no re-delivery on repeat ready or the load fallback (RED on the r3 code 4/5, GREEN 5/5 after). Rebased onto `b0b962b0`; gates re-run at the new tip.
+  - 2026-08-30 23:10 UTC — cross-lane disturbance: an external coordinator merge rebased this lane mid-review; the lane was reconciled (TASKS.md conflict resolved to THIS entry's state, version files → theirs, rebase completed as cd894024 + 0ecb6dfe on b0b962b0). r3 delivery-ordering fix committed separately on top.
 
 ## [CAP-FB-20260830-ARTIFACT-QUICK-FIXES-01] Small artifact defects: New tab opens twice, an empty id masks the real error
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 editing lane, findings 9 and 13. One click on "New tab" opens two viewer tabs; an agent that forgets the artifact id is told "requires owner approval" and retries the same call twelve times.
