@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.482] — 2026-08-30
+- Tracker: bounded run-log retention is recorded as landed.
+
 ## [0.2.481] — 2026-08-30
 - Landed: opening a thread and listing runs stay fast no matter how many past runs you have - old run logs are folded into a compact summary instead of growing without limit, and nothing you can see is deleted.
 
