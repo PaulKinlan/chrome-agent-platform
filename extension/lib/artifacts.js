@@ -42,6 +42,7 @@
 
 import { masterMemory, siteMemory, canonicalOrigin } from "./memory.js";
 import { TOOL_ARGUMENT_LIMITS } from "./tool-argument-contract.js";
+import { sha256Hex } from "./pure.js";
 
 const INDEX_KEY = "assets"; // reserved authority key (see memory.js)
 const REPAIR_KEY = "assetRepair"; // durable pending-deletion/restore state (reserved)
@@ -107,6 +108,17 @@ async function readWal(store) {
   const safeTok = (v) => Number.isSafeInteger(v); // a token may be a write gen (positive) or a per-key absence version (negative)
   const safePos = (v) => Number.isSafeInteger(v) && v >= 0; // body/row tokens are always write generations
   if (raw.state === "prepared") {
+    // The staged VERSION fields (CAP-FB-20260830-ARTIFACT-VERSIONS-01): a
+    // create/update intent that staged a version row + blob carries them so
+    // the compensation can release exactly what it staged. An intent WITHOUT
+    // them is a pre-versions intent (an upgrade over a crashed write) — it
+    // stays recoverable; an intent WITH them must carry the exact shape.
+    if ((raw.op === "create" || raw.op === "update") && raw.newVersion != null) {
+      if (!safePos(raw.newVersion) || raw.newVersion < 1 || typeof raw.blobSha !== "string" ||
+        !/^[0-9a-f]{64}$/.test(raw.blobSha) || typeof raw.blobIsNew !== "boolean" || !safePos(raw.blobSize)) {
+        throw new Error(`the transaction WAL (${raw.op} version) is corrupt`);
+      }
+    }
     if (raw.op === "create") {
       if (!Array.isArray(raw.newIndex) || !Array.isArray(raw.droppedIds) || !safeTok(raw.idxGen)) {
         throw new Error("the transaction WAL (create) is corrupt");
@@ -158,6 +170,7 @@ async function recoverTx(store) {
           const cleaned = await store.compareAndDelete(`asset:${intent.id}`, tok);
           if (cleaned === false) throw new Error("recovery cleanup was refused");
         }
+        await releaseStagedVersion(store, intent);
         terminal = "compensated";
       }
     } else if (op === "update") {
@@ -184,6 +197,7 @@ async function recoverTx(store) {
             }
           }
         }
+        await releaseStagedVersion(store, intent);
         terminal = "compensated";
       }
     } else if (op === "delete") {
@@ -213,6 +227,13 @@ async function recoverTx(store) {
     await writeWal(store, intent);
   } else if (!["committed", "compensated"].includes(intent.state)) {
     throw new Error("the transaction WAL state is corrupt");
+  }
+  // A COMMITTED delete releases the artifact's version rows + blobs; the
+  // committed WAL stays until they are gone, so a crash mid-release is redone
+  // here (idempotent: every drop is a read-then-delete of one row).
+  if (intent.state === "committed" && op === "delete") {
+    const row = (intent.index ?? []).find((r) => r && r.id === intent.id);
+    await dropAllVersions(store, intent.id, row?.version);
   }
   // A COMMITTED intent completes the lastGood mirror (the reviewer's finding:
   // lastGood must reflect EVERY commit — a best-effort write that failed left a
@@ -405,7 +426,184 @@ export const ASSET_BOUNDS = {
   // defers that, it does not fix it. The evict-versus-refuse policy is
   // CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01.
   maxIndexBytes: 2 * 1024 * 1024,
+  // Immutable per-artifact versions (CAP-FB-20260830-ARTIFACT-VERSIONS-01):
+  // the last 20 versions of each artifact are kept; the bodies behind them are
+  // content-addressed blobs whose total is capped library-wide. Over either
+  // bound the OLDEST versions are evicted (never the head) and the eviction
+  // is visible as `versionsTruncated` on the row — the same evict-versus-
+  // refuse choice as CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01: a version
+  // is a convenience the head does not depend on, so evicting one loses
+  // history, not work, and the head is never refused for lack of history
+  // space. Only a body that cannot fit even after every evictable version is
+  // gone refuses (fail closed, readable error).
+  maxVersionsPerAsset: 20,
+  maxVersionBytes: 4 * 1024 * 1024,
 };
+
+// ---- immutable versions: rows, content-addressed blobs, refcounts ----
+//
+//   asset-version:<id>:<n>  = { n, at, size, sha256, by, summary? }  (no body)
+//   asset-blob:<sha256>     = the body string (shared by every version with
+//                             that content — an unchanged re-save adds a row
+//                             and no blob)
+//   asset-blob-ref:<sha256> = integer refcount (the last release deletes the blob)
+//   asset-version-bytes     = integer total of live blob bytes (the cap's input)
+//
+// Every key is in the reserved `asset-` namespace (memory.js): unwritable
+// through the model's memory_set and hidden from enumeration, like the bodies.
+// The head pointer lives on the index row (`version`, `versionsTruncated`).
+const versionKey = (id, n) => `asset-version:${id}:${n}`;
+const blobKey = (sha) => `asset-blob:${sha}`;
+const blobRefKey = (sha) => `asset-blob-ref:${sha}`;
+const VERSION_BYTES_KEY = "asset-version-bytes";
+const MAX_EVICTION_READS = 400; // bounded victim search per write
+
+async function readVersionBytes(store) {
+  const v = await store.getStrict(VERSION_BYTES_KEY).catch(() => null);
+  return Number.isSafeInteger(v) && v >= 0 ? v : 0;
+}
+async function adjustVersionBytes(store, delta) {
+  const cur = await readVersionBytes(store);
+  await store.setTrusted(VERSION_BYTES_KEY, Math.max(0, cur + delta));
+}
+async function readBlobRef(store, sha) {
+  const v = await store.getStrict(blobRefKey(sha)).catch(() => null);
+  return Number.isSafeInteger(v) && v > 0 ? v : 0;
+}
+async function readVersionRow(store, id, n) {
+  const row = await store.getStrict(versionKey(id, n)).catch(() => null);
+  if (!row || typeof row !== "object" || row.n !== n || typeof row.sha256 !== "string") return null;
+  return row;
+}
+
+/** Plan (no writes) the version for `content`: its sha and whether a blob
+ * already holds it. */
+async function stageVersion(store, content, size) {
+  const sha = sha256Hex(content);
+  const ref = await readBlobRef(store, sha);
+  return { sha, blobIsNew: ref === 0, size };
+}
+
+/** Write the staged version BEFORE the body mutation: blob → refcount → byte
+ * accounting → row. The prepared WAL intent carries {newVersion, blobSha,
+ * blobIsNew, blobSize}, so a crash anywhere in here is released by
+ * `releaseStagedVersion` (recovery or the S3 compensation). */
+async function writeVersion(store, id, n, content, staged, { by, summary, at }) {
+  if (staged.blobIsNew) {
+    await store.setTrusted(blobKey(staged.sha), content);
+    await store.setTrusted(blobRefKey(staged.sha), 1);
+    await adjustVersionBytes(store, staged.size);
+  } else {
+    await store.setTrusted(blobRefKey(staged.sha), (await readBlobRef(store, staged.sha)) + 1);
+  }
+  const row = { n, at, size: staged.size, sha256: staged.sha, by };
+  if (typeof summary === "string" && summary) row.summary = summary.slice(0, 200);
+  await store.setTrusted(versionKey(id, n), row);
+  return row;
+}
+
+/** Release one reference to a blob; the last reference deletes it. */
+async function releaseBlob(store, sha, size) {
+  const ref = await readBlobRef(store, sha);
+  if (ref <= 1) {
+    await store.delete(blobKey(sha));
+    await store.delete(blobRefKey(sha));
+    await adjustVersionBytes(store, -(Number.isSafeInteger(size) ? size : 0));
+  } else {
+    await store.setTrusted(blobRefKey(sha), ref - 1);
+  }
+}
+
+/** Drop one version row + its blob reference (idempotent). */
+async function dropVersion(store, id, n) {
+  const row = await readVersionRow(store, id, n);
+  if (!row) return false;
+  await store.delete(versionKey(id, n));
+  await releaseBlob(store, row.sha256, row.size);
+  return true;
+}
+
+/** Release everything an artifact's versions hold (delete / index eviction).
+ * Walks down from the head; below the retention floor it stops at the first
+ * absent row (earlier evictions already cleaned lower ones). */
+async function dropAllVersions(store, id, head) {
+  if (!Number.isSafeInteger(head) || head < 1) return;
+  const floor = head - ASSET_BOUNDS.maxVersionsPerAsset;
+  for (let k = head; k >= 1; k--) {
+    const dropped = await dropVersion(store, id, k);
+    if (!dropped && k <= floor) break;
+  }
+}
+
+/** Compensate a staged (never committed) version from its WAL intent. */
+async function releaseStagedVersion(store, intent) {
+  if (intent?.newVersion == null) return;
+  const dropped = await dropVersion(store, intent.id, intent.newVersion);
+  if (dropped || !intent.blobIsNew || typeof intent.blobSha !== "string") return;
+  // The row never landed but the blob/refcount may have. `blobIsNew` means no
+  // reference existed before this intent, so anything present under the sha
+  // is ours to release.
+  const hasRef = (await readBlobRef(store, intent.blobSha)) > 0;
+  const hasBlob = (await store.getStrict(blobKey(intent.blobSha)).catch(() => null)) != null;
+  if (!hasRef && !hasBlob) return;
+  await store.delete(blobKey(intent.blobSha));
+  await store.delete(blobRefKey(intent.blobSha));
+  if (hasRef) await adjustVersionBytes(store, -(intent.blobSize ?? 0));
+}
+
+/** Plan which versions the write at `id`/`n` (adding `addBytes` of new blob)
+ * must evict to stay within the bounds. Reads only; the plan is applied
+ * AFTER the commit. Marks every artifact that loses a version so the index
+ * rows written by the SAME CAS carry `versionsTruncated`. Never evicts a
+ * head. */
+async function planVersionEvictions(store, index, { id, n, addBytes }) {
+  const victims = [];
+  const seen = new Set();
+  const truncated = new Set();
+  const take = (vid, k) => { victims.push({ id: vid, n: k }); seen.add(`${vid}:${k}`); truncated.add(vid); };
+  // (a) the per-artifact count: everything at or below n - max goes; the scan
+  // stops at the first absent row (lower ones were evicted by earlier writes).
+  for (let k = n - ASSET_BOUNDS.maxVersionsPerAsset; k >= 1; k--) {
+    if (!(await readVersionRow(store, id, k))) break;
+    take(id, k);
+  }
+  // (b) the library-wide blob bytes: this artifact's oldest first, then the
+  // oldest other artifacts' oldest versions.
+  let total = (await readVersionBytes(store)) + addBytes;
+  if (total > ASSET_BOUNDS.maxVersionBytes) {
+    const others = index
+      .filter((r) => r && r.id !== id && Number.isSafeInteger(r.version))
+      .sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+    const candidates = [{ id, version: n }, ...others];
+    let reads = 0;
+    outer: for (const r of candidates) {
+      const head = r.version;
+      for (let k = Math.max(1, head - ASSET_BOUNDS.maxVersionsPerAsset); k < head; k++) {
+        if (reads++ >= MAX_EVICTION_READS) break outer;
+        if (seen.has(`${r.id}:${k}`)) continue;
+        const row = await readVersionRow(store, r.id, k);
+        if (!row) continue;
+        const ref = await readBlobRef(store, row.sha256);
+        take(r.id, k);
+        if (ref <= 1) total -= row.size;
+        if (total <= ASSET_BOUNDS.maxVersionBytes) break outer;
+      }
+    }
+    if (total > ASSET_BOUNDS.maxVersionBytes) {
+      return { error: `artifact version storage is full (${ASSET_BOUNDS.maxVersionBytes} bytes) — delete artifacts to make room` };
+    }
+  }
+  for (const r of index) {
+    if (r && truncated.has(r.id)) r.versionsTruncated = true;
+  }
+  return { victims };
+}
+
+async function applyVersionEvictions(store, victims) {
+  for (const v of victims ?? []) {
+    try { await dropVersion(store, v.id, v.n); } catch { /* the next write's plan retries */ }
+  }
+}
 
 export const ASSET_TYPES = new Set(["html", "text", "json", "image", "data"]);
 
@@ -498,7 +696,7 @@ function boundAssetMeta({ type, name, content }) {
  * the optional stable PROMOTION KEY (createAssetKeyed sets it — the exact-
  * token dedup record in the row). The wrapper never calls this unkeyed path
  * for promotion (a retry would create a duplicate). */
-async function createAssetLocked(store, origin, o, { type, name, content, meta, pk }) {
+async function createAssetLocked(store, origin, o, { type, name, content, meta, pk, by, summary }) {
   const bounded = boundAssetMeta({ type, name, content });
   if (bounded.error) return { ok: false, error: bounded.error };
   const id = newId();
@@ -520,6 +718,7 @@ async function createAssetLocked(store, origin, o, { type, name, content, meta, 
   const row = {
     id, type: bounded.type, name: bounded.name, origin: o, at: now, size: bounded.size,
     ...(pk ? { pk } : {}),
+    version: 1, versionsTruncated: false,
   };
     const next = [...index, row];
     let idx = next;
@@ -527,6 +726,12 @@ async function createAssetLocked(store, origin, o, { type, name, content, meta, 
       idx = idx.slice(1);
     }
     const dropped = next.filter((r) => !idx.some((k) => k.id === r.id));
+    // Version 1 is staged (planned, not written) here; the plan's evictions
+    // land on the rows the index CAS writes.
+    const staged = await stageVersion(store, content, bounded.size);
+    const versionFields = { newVersion: 1, blobSha: staged.sha, blobIsNew: staged.blobIsNew, blobSize: staged.size };
+    const plan = await planVersionEvictions(store, idx, { id, n: 1, addBytes: staged.blobIsNew ? staged.size : 0 });
+    if (plan.error) return { ok: false, error: plan.error };
     // S1 — record the eviction obligations DURABLY BEFORE any commit, WITH the
     // evicted bodies' EXACT tokens (captured here — the repair can then clean
     // by checked token, never an unconditional delete).
@@ -560,13 +765,26 @@ async function createAssetLocked(store, origin, o, { type, name, content, meta, 
     };
     // S2 — WRITE THE DURABLE WAL INTENT (prepared) BEFORE the body write; a
     // crash at any await is recovered by exact tokens.
-    await writeWal(store, { op: "create", id, bodyGen: null, idxGen, newIndex: idx, droppedIds, state: "prepared" });
-    // S3 — write the body (capture the exact write's version token); the
-    // exact-token WAL record MUST land — a failure compensates the body by its
-    // exact token (the reviewer's body→token gap).
-    const bodyGen = await store.setTrusted(`asset:${id}`, asset);
+    await writeWal(store, { op: "create", id, bodyGen: null, idxGen, newIndex: idx, droppedIds, ...versionFields, state: "prepared" });
+    // S2b — write version 1 (blob + refcount + row) BEFORE the body; the
+    // prepared intent above carries exactly what was staged, so a crash here
+    // is released by recovery.
+    let bodyGen;
     try {
-      await writeWal(store, { op: "create", id, bodyGen, idxGen, newIndex: idx, droppedIds, state: "prepared" });
+      await writeVersion(store, id, 1, content, staged, { by: by === "owner" ? "owner" : "model", summary, at: now });
+      // S3 — write the body (capture the exact write's version token); the
+      // exact-token WAL record MUST land — a failure compensates the body by its
+      // exact token (the reviewer's body→token gap).
+      bodyGen = await store.setTrusted(`asset:${id}`, asset);
+    } catch (e) {
+      await releaseStagedVersion(store, { id, ...versionFields }).catch(() => {});
+      await removeObligations().catch(() => {});
+      await writeWal(store, { op: "create", id, bodyGen: null, idxGen, newIndex: idx, droppedIds, ...versionFields, state: "compensated" }).catch(() => {});
+      await clearWal(store).catch(() => {});
+      throw e;
+    }
+    try {
+      await writeWal(store, { op: "create", id, bodyGen, idxGen, newIndex: idx, droppedIds, ...versionFields, state: "prepared" });
     } catch (e) {
       await store.compareAndDelete(`asset:${id}`, bodyGen).catch(() => {});
       throw e;
@@ -587,7 +805,8 @@ async function createAssetLocked(store, origin, o, { type, name, content, meta, 
         // S6 — compensate with the EXACT-write delete + drop the obligations.
         await removeObligations();
         await store.compareAndDelete(`asset:${id}`, bodyGen).catch(() => {});
-        await writeWal(store, { op: "create", id, bodyGen, idxGen, newIndex: idx, droppedIds, state: "compensated" });
+        await releaseStagedVersion(store, { id, ...versionFields }).catch(() => {});
+        await writeWal(store, { op: "create", id, bodyGen, idxGen, newIndex: idx, droppedIds, ...versionFields, state: "compensated" });
         await clearWal(store).catch(() => {});
       }
       throw e; // the caller observes the failure; the WAL/recovery state is consistent
@@ -597,7 +816,8 @@ async function createAssetLocked(store, origin, o, { type, name, content, meta, 
       // body is cleaned by its EXACT token + the intent is compensated.
       await removeObligations();
       await store.compareAndDelete(`asset:${id}`, bodyGen).catch(() => {});
-      await writeWal(store, { op: "create", id, bodyGen, idxGen, newIndex: idx, droppedIds, state: "compensated" });
+      await releaseStagedVersion(store, { id, ...versionFields }).catch(() => {});
+      await writeWal(store, { op: "create", id, bodyGen, idxGen, newIndex: idx, droppedIds, ...versionFields, state: "compensated" });
       await clearWal(store);
       return { ok: false, error: "concurrent asset write — retry" };
     }
@@ -615,13 +835,17 @@ async function createAssetLocked(store, origin, o, { type, name, content, meta, 
       const rollback = await store.compareAndRestore(INDEX_KEY, postIdxGen, index).catch(() => false);
       if (rollback !== false) {
         await store.compareAndDelete(`asset:${id}`, bodyGen).catch(() => {});
+        await releaseStagedVersion(store, { id, ...versionFields }).catch(() => {});
       }
       await removeObligations();
-      await writeWal(store, { op: "create", id, bodyGen, idxGen, postIdxGen, newIndex: idx, droppedIds, state: "compensated" });
+      await writeWal(store, { op: "create", id, bodyGen, idxGen, postIdxGen, newIndex: idx, droppedIds, ...versionFields, state: "compensated" });
       throw e;
     } finally {
       await clearWal(store).catch(() => {});
     }
+    // The planned version evictions (bounds) land after the commit; a crash
+    // here is re-planned by the next write.
+    await applyVersionEvictions(store, plan.victims);
     // S7 — cleanup the evicted bodies: the CURRENT index is authoritative — a
     // row still referenced is never deleted.
     if (dropped.length) {
@@ -644,6 +868,9 @@ async function createAssetLocked(store, origin, o, { type, name, content, meta, 
           const ok = await store.compareAndDelete(`asset:${r.id}`, tok);
           if (ok !== false) removed.push(r.id);
         } catch { /* stays pending */ }
+        // An evicted artifact's versions go with it (best effort; an orphan
+        // row is unreachable without its index row and bounded by its count).
+        await dropAllVersions(store, r.id, r.version).catch(() => {});
       }
       if (removed.length) {
         await recordRepairEntry(store, (repair) => {
@@ -653,7 +880,7 @@ async function createAssetLocked(store, origin, o, { type, name, content, meta, 
         });
       }
     }
-    return { ok: true, asset: { ...asset, content: undefined }, index: idx };
+    return { ok: true, asset: { ...asset, content: undefined }, index: idx, version: 1 };
 }
 
 /** S0→S7 — create (the UNKEYED path; never used for workspace promotion). */
@@ -707,15 +934,16 @@ export async function createAssetKeyed(origin, { key, type, name, content, meta 
 
 /** S0→S3 — update (the exact-write compensation: the restored body is guarded
  * by the NEW body's version token, so a repair can actually complete). */
-export async function updateAsset(origin, id, patch) {
+export async function updateAsset(origin, id, patch, opts = {}) {
   const store = assetStore();
   if (!id || typeof id !== "string") return { ok: false, error: "update_asset needs an id" };
-  return withAssetLock(origin, async () => updateAssetLocked(store, origin, id, patch));
+  return withAssetLock(origin, async () => updateAssetLocked(store, origin, id, patch, opts));
 }
 
 /** The S0→S3 compensated-update body (shared by updateAsset + the keyed
  * create-or-update); the caller holds the origin lock. */
-async function updateAssetLocked(store, origin, id, patch) {
+async function updateAssetLocked(store, origin, id, patch, opts = {}) {
+  const by = opts.by === "owner" ? "owner" : "model";
   await recoverTx(store); // crash recovery (the durable WAL — FAILS closed)
   await repairPendingLocked(store, origin);
   const existing = await store.get(`asset:${id}`); // S0
@@ -736,24 +964,46 @@ async function updateAssetLocked(store, origin, id, patch) {
     return { ok: false, error: "asset is not indexed — update refused" };
   }
   const idxGen = await store.getVersion(INDEX_KEY);
+  // The next immutable version (CAP-FB-20260830-ARTIFACT-VERSIONS-01): a
+  // legacy row without a head pointer starts its history here.
+  const n = (Number.isSafeInteger(i.version) && i.version > 0 ? i.version : 0) + 1;
+  const staged = await stageVersion(store, nextContent, meta.size);
+  const versionFields = { newVersion: n, blobSha: staged.sha, blobIsNew: staged.blobIsNew, blobSize: staged.size };
+  const oldRow = { ...i };
+  const plan = await planVersionEvictions(store, index, { id, n, addBytes: staged.blobIsNew ? staged.size : 0 });
+  if (plan.error) return { ok: false, error: plan.error };
   // S1 — WRITE THE DURABLE WAL INTENT (prepared) BEFORE the body mutation.
   // The intent carries the OLD body + BOTH rows (old + new) + the exact
-  // tokens — a write failure (e.g. the old body + rows exceed the value
-  // cap) REJECTS the update BEFORE any mutation: the compensation capacity
-  // is RESERVED (the reviewer's finding — the old body must never be
-  // lost).
+  // tokens + the staged version — a write failure (e.g. the old body + rows
+  // exceed the value cap) REJECTS the update BEFORE any mutation: the
+  // compensation capacity is RESERVED (the reviewer's finding — the old body
+  // must never be lost).
   const walIntent = {
     op: "update", id,
     oldBody: existing, oldBodyGen: await store.getVersion(`asset:${id}`),
-    oldRow: i, newRow: { ...i, type: meta.type, name: meta.name, size: meta.size },
-    idxGen, state: "prepared",
+    oldRow, newRow: { ...i, type: meta.type, name: meta.name, size: meta.size, version: n },
+    idxGen, ...versionFields, state: "prepared",
   };
   await writeWal(store, walIntent); // throws (over-cap) → the update rejects
-  // S2 — write the new body; the returned version is the EXACT write token.
-  const newBodyGen = await store.setTrusted(`asset:${id}`, updated);
+  // S2a — write the version (blob + refcount + row) BEFORE the body; S2b —
+  // write the new body; the returned version is the EXACT write token. A
+  // throw in either releases what was staged (the old body is untouched
+  // until S2b lands, and a failed S2b leaves it in place).
+  let newBodyGen;
+  try {
+    await writeVersion(store, id, n, nextContent, staged, { by, summary: opts.summary, at: updated.updatedAt });
+    newBodyGen = await store.setTrusted(`asset:${id}`, updated);
+  } catch (e) {
+    await releaseStagedVersion(store, walIntent).catch(() => {});
+    await writeWal(store, { ...walIntent, state: "compensated" }).catch(() => {});
+    await clearWal(store).catch(() => {});
+    throw e;
+  }
   i.type = meta.type;
   i.name = meta.name;
   i.size = meta.size;
+  i.version = n;
+  if (i.versionsTruncated !== true) i.versionsTruncated = false;
   // S2 — CAS the index (CHECKED).
   let casOk;
   try {
@@ -794,11 +1044,14 @@ async function updateAssetLocked(store, origin, id, patch) {
         if (repair.pendingRestores.length >= REPAIR_BOUNDS.maxPendingRestores) {
           throw new Error("asset repair queue is full — surface the failure");
         }
-        repair.pendingRestores.push({ id, row: i, body: existing, bodyVersion: newBodyGen, indexVersion: idxGen });
+        repair.pendingRestores.push({ id, row: oldRow, body: existing, bodyVersion: newBodyGen, indexVersion: idxGen });
         return true;
       });
     }
-    await writeWal(store, { op: "update", id, newBodyGen, row: i, idxGen, state: "compensated" });
+    // S3 — the staged version goes with the failed update (no orphan row, the
+    // blob refcount back where it was).
+    await releaseStagedVersion(store, walIntent).catch(() => {});
+    await writeWal(store, { op: "update", id, newBodyGen, row: i, idxGen, ...versionFields, state: "compensated" });
     await clearWal(store).catch(() => {});
     return { ok: false, error: "concurrent asset write — retry" };
   }
@@ -812,9 +1065,10 @@ async function updateAssetLocked(store, origin, id, patch) {
     const repair = await readRepair(store);
     repair.lastGoodIndex = index;
     await writeRepair(store, repair);
-  } catch { /* the committed WAL completes the mirror via recovery */ return { ok: true, asset: { ...updated, content: undefined } }; }
+  } catch { /* the committed WAL completes the mirror via recovery */ return { ok: true, asset: { ...updated, content: undefined }, version: n }; }
   await clearWal(store).catch(() => {});
-  return { ok: true, asset: { ...updated, content: undefined } };
+  await applyVersionEvictions(store, plan.victims);
+  return { ok: true, asset: { ...updated, content: undefined }, version: n };
 }
 
 /** The CREATE-OR-UPDATE keyed path — the model-facing idempotency entry
@@ -906,6 +1160,9 @@ export async function deleteAsset(origin, id) {
     } catch { deleted = false; }
     if (deleted) {
       await writeWal(store, { op: "delete", id, bodyGen, idxGen, index, postIdxGen, newIndex: remaining, state: "committed" });
+      // The versions go with the artifact, inside the committed intent: a
+      // crash here leaves the committed WAL, and recovery redoes the release.
+      await dropAllVersions(store, id, row.version);
       try {
         const repair = await readRepair(store);
         repair.lastGoodIndex = remaining;
@@ -942,6 +1199,58 @@ export async function getAsset(origin, id) {
     const asset = await store.get(`asset:${id}`);
     if (!asset) return { ok: false, error: "asset not found" };
     return { ok: true, asset };
+  });
+}
+
+/** The immutable version rows of one artifact (newest last): `{n, at, size,
+ * sha256, by, summary?}` — never a body. `head` is the current version,
+ * `truncated` whether older versions were evicted under the bounds. */
+export async function listAssetVersions(origin, id) {
+  if (!id || typeof id !== "string") return { ok: false, error: "asset.versions needs an id" };
+  return withAssetLock(origin, async () => {
+    const store = assetStore();
+    let index;
+    try { index = await readIndexStrict(store); } catch (e) { return { ok: false, error: String(e?.message ?? e) }; }
+    const row = index.find((r) => r.id === id);
+    if (!row) return { ok: false, error: "asset not found" };
+    const head = Number.isSafeInteger(row.version) && row.version > 0 ? row.version : 0;
+    const versions = [];
+    for (let k = Math.max(1, head - ASSET_BOUNDS.maxVersionsPerAsset + 1); k <= head; k++) {
+      const v = await readVersionRow(store, id, k);
+      if (v) versions.push(v);
+    }
+    return { ok: true, id, head, truncated: row.versionsTruncated === true, versions };
+  });
+}
+
+/** One version's body + sha256 (an evicted or unknown version fails closed). */
+export async function getAssetVersion(origin, id, n) {
+  if (!id || typeof id !== "string") return { ok: false, error: "asset.version-get needs an id" };
+  if (!Number.isSafeInteger(n) || n < 1) return { ok: false, error: "asset.version-get needs a version number" };
+  return withAssetLock(origin, async () => {
+    const store = assetStore();
+    const row = await readVersionRow(store, id, n);
+    if (!row) return { ok: false, error: "version not found" };
+    const content = await store.getStrict(blobKey(row.sha256)).catch(() => null);
+    if (typeof content !== "string") return { ok: false, error: "version body missing" };
+    return { ok: true, id, version: row, content, sha256: row.sha256 };
+  });
+}
+
+/** Restore version `n` as a NEW head version (never a rewind): the same
+ * S0→S3 compensated update as any edit, with the restored body and
+ * `by:"owner"` (or `"model"`, behind the approval card). */
+export async function restoreAssetVersion(origin, id, n, opts = {}) {
+  if (!id || typeof id !== "string") return { ok: false, error: "asset.restore needs an id" };
+  if (!Number.isSafeInteger(n) || n < 1) return { ok: false, error: "asset.restore needs a version number" };
+  const store = assetStore();
+  return withAssetLock(origin, async () => {
+    const row = await readVersionRow(store, id, n);
+    if (!row) return { ok: false, error: "version not found" };
+    const content = await store.getStrict(blobKey(row.sha256)).catch(() => null);
+    if (typeof content !== "string") return { ok: false, error: "version body missing" };
+    const res = await updateAssetLocked(store, origin, id, { content }, { by: opts.by, summary: `restored v${n}` });
+    return res?.ok ? { ...res, restoredFrom: n } : res;
   });
 }
 

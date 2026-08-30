@@ -247,10 +247,13 @@ import {
   createOrUpdateAssetKeyed,
   deleteAsset,
   getAsset,
+  getAssetVersion,
   listAssets,
   listAllAssets,
+  listAssetVersions,
   migrateSiteAssetsToLibrary,
   normalizeModelAssetKey,
+  restoreAssetVersion,
   updateAsset,
 } from "../lib/artifacts.js";
 import {
@@ -3511,7 +3514,11 @@ function namedBoundMutationPayload(request, existing) {
  *  the bulk. Deliberately omits `content` — the caller supplied it, the UI
  *  fetches it on demand, and echoing it back is what pushed create results past
  *  the lazy protocol's result bound and erased them entirely. */
-function assetIdentity(asset) {
+function ownerPrincipal(context) {
+  return context?.principal === "extension" || context?.principal === "owner-options";
+}
+
+function assetIdentity(asset, version = undefined) {
   if (!asset || typeof asset !== "object") return null;
   return {
     id: asset.id,
@@ -3521,6 +3528,7 @@ function assetIdentity(asset) {
     size: asset.size,
     createdAt: asset.createdAt,
     updatedAt: asset.updatedAt,
+    ...(Number.isSafeInteger(version) ? { version } : {}),
   };
 }
 
@@ -5859,7 +5867,39 @@ const handlers = mergeRouteMaps(
     if (assetType !== undefined) patch.type = assetType;
     if (name !== undefined) patch.name = name;
     if (content !== undefined) patch.content = content;
-    return await updateAsset(scope, id, patch);
+    // Who made this version: the owner's own click in an extension document
+    // (the hand edit in the viewer), else the model (behind the card above).
+    return await updateAsset(scope, id, patch, { by: ownerPrincipal(context) ? "owner" : "model" });
+  },
+  // ---- immutable artifact versions (CAP-FB-20260830-ARTIFACT-VERSIONS-01) ----
+  // Every create/update appends a version row; the rows never carry a body
+  // (`asset.version-get` returns one body on request). A restore is a NEW
+  // head version through the same compensated update: owner-direct from an
+  // extension document, an approval card for the model.
+  async "asset.versions"({ origin, id }) {
+    return await listAssetVersions(origin ?? "master", id);
+  },
+  async "asset.version-get"({ origin, id, n }) {
+    return await getAssetVersion(origin ?? "master", id, Number(n));
+  },
+  async "asset.restore"({ origin, id, n }, context) {
+    const scope = origin ?? "master";
+    const version = Number(n);
+    if (!Number.isSafeInteger(version) || version < 1) return { ok: false, error: "asset.restore needs a version number" };
+    const target = canonicalOperationTarget("asset", { origin: scope, id });
+    let payload;
+    try {
+      payload = payloadFields([
+        ["origin", scope === "master" ? "master" : canonicalOrigin(scope)],
+        ["id", id], ["n", version],
+      ]);
+    } catch { return { ok: false, error: "asset restore payload is not approvable" }; }
+    const gate = await requireOwnerApproval(context, "asset.restore", target, payload);
+    if (!gate.ok) return gate;
+    const res = await restoreAssetVersion(scope, id, version, { by: ownerPrincipal(context) ? "owner" : "model" });
+    return res?.ok
+      ? { ok: true, id, asset: assetIdentity(res.asset, res.version), version: res.version, restoredFrom: version }
+      : res;
   },
   async "asset.delete"({ origin, id }, context) {
     const scope = origin ?? "master";

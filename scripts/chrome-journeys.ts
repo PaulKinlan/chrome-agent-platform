@@ -539,6 +539,9 @@ const EXPECTED = [
   "approval: install-scoped opaque reference survives a worker restart",
   "approval: post-restart deny leaves the exact asset unchanged",
   "mgmt: update_asset patched the asset",
+  "artifact versions: two rows with distinct sha256 after the edit turn",
+  "artifact versions: version-get returns v1's exact body",
+  "artifact versions: restore of v1 is a new head whose body equals v1 byte-for-byte",
   "mgmt: delete_asset removed it",
   "mgmt: asset gone after delete",
   "cap:fetch: loopback refused from a sandboxed script",
@@ -3325,6 +3328,35 @@ async function main() {
     check(
       "mgmt: update_asset patched the asset",
       assetUpdate?.ok === true && assetUpdate.asset?.name === "final page",
+    );
+    // Immutable versions (CAP-FB-20260830-ARTIFACT-VERSIONS-01): the edit turn
+    // leaves the previous body retrievable, and a restore is a NEW head
+    // version whose body equals the old one byte-for-byte.
+    const editTurn = await approvedMsg({
+      type: "asset.update", origin: "master", id: assetId, content: "<h1>hello</h1>\n<p>edited</p>",
+    });
+    const versionsAfterEdit = await msgValue({ type: "asset.versions", origin: "master", id: assetId });
+    const shas = (versionsAfterEdit?.versions ?? []).map((v) => v?.sha256);
+    check(
+      "artifact versions: two rows with distinct sha256 after the edit turn",
+      editTurn?.ok === true && versionsAfterEdit?.ok === true &&
+        shas.length >= 2 && new Set(shas.slice(-2)).size === 2 &&
+        (versionsAfterEdit.versions ?? []).every((v) => /^[0-9a-f]{64}$/.test(String(v?.sha256)) && !("content" in v)),
+    );
+    const firstVersion = await msgValue({ type: "asset.version-get", origin: "master", id: assetId, n: 1 });
+    check(
+      "artifact versions: version-get returns v1's exact body",
+      firstVersion?.ok === true && firstVersion.content === "<h1>hello</h1>" && firstVersion.sha256 === shas[0],
+    );
+    const restored = await approvedMsg({ type: "asset.restore", origin: "master", id: assetId, n: 1 });
+    const afterRestore = await msgValue({ type: "asset.get", origin: "master", id: assetId });
+    const versionsAfterRestore = await msgValue({ type: "asset.versions", origin: "master", id: assetId });
+    check(
+      "artifact versions: restore of v1 is a new head whose body equals v1 byte-for-byte",
+      restored?.ok === true && restored.version === (versionsAfterEdit?.head ?? 0) + 1 &&
+        afterRestore?.asset?.content === "<h1>hello</h1>" &&
+        versionsAfterRestore?.head === restored.version &&
+        (versionsAfterRestore.versions ?? []).at(-1)?.sha256 === shas[0],
     );
     const assetDel = await approvedMsg({ type: "asset.delete", origin: "master", id: assetId });
     check("mgmt: delete_asset removed it", assetDel?.ok === true);

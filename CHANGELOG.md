@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.464] — 2026-08-30
+- Every edit of an artifact now keeps the previous version. The last 20 versions of each artifact are retrievable and any earlier version can be restored as a new current version; older versions are dropped visibly once the limit is reached. Nothing shows this in the interface yet — the viewer's source and diff views come next.
+
 ## [0.2.463] — 2026-08-30
 - Six more fixes are in progress in parallel and recorded as claimed in the tracker.
 
