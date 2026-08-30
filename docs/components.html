@@ -102,7 +102,19 @@
         <div class="stage row" style="max-width:620px">
           <agent-template-card id="agent-template-demo" starter></agent-template-card>
         </div>
-        <p class="caption">bounded persona + three skill badges + overflow; curated starters carry the Starter badge; emits <code>use</code>.</p>
+        <p class="caption">bounded persona + three skill badges + overflow; curated starters carry the Starter badge; <code>selected</code> presses the Use button (<code>aria-pressed</code>); <code>blank</code> is the "Custom agent" card; the whole card activates; emits <code>use</code>.</p>
+        <div class="stage row" style="max-width:620px">
+          <agent-template-card id="agent-template-selected-demo" starter selected></agent-template-card>
+          <agent-template-card id="agent-template-blank-demo" blank></agent-template-card>
+        </div>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;agent-template-gallery&gt;</code> — the template catalogue as a filtered grid</h3>
+        <div class="stage column" style="max-width:720px">
+          <agent-template-gallery id="agent-template-gallery-demo" blank filter="starter" filters="starter,all,scheduled" selected=""></agent-template-gallery>
+        </div>
+        <p class="caption">one tab stop (roving tabindex; arrows / Home / End move, Enter or Space activates); Starter / All / Scheduled filters with counts; the selected card reflects what the form currently holds; emits <code>use</code> and <code>filter-change</code>.</p>
       </div>
 
       <div class="specimen">
@@ -439,6 +451,26 @@
           skills: ["multi-tab-researcher", "link-collector", "reader-mode", "data-extractor", "page-summary"],
         };
         agentTemplateDemo.addEventListener("use", () => log("#hub-log", "agent-template-card: use"));
+      }
+      const templateFixtures = [
+        { id: "research-analyst", name: "Research Analyst", starter: true, description: "Researches across tabs, cross-checks sources, and reports what it found with links.", skills: ["multi-tab-researcher", "link-collector", "reader-mode", "data-extractor", "page-summary"] },
+        { id: "writing-editor", name: "Writing Editor", starter: true, description: "Edits drafts for clarity and tone without changing what you meant.", skills: ["tone-shifter", "clarity-editor"] },
+        { id: "tab-organizer", name: "Tab Organizer", description: "Groups the open tabs by topic and closes the duplicates.", skills: ["tab-grouper", "duplicate-closer", "tab-cleaner"] },
+        { id: "price-watcher", name: "Price Watcher", mode: "background", schedule: { periodInMinutes: 60 }, description: "Checks a product page on a schedule and records the price.", skills: ["price-tracker"] },
+        { id: "inbox-digest", name: "Inbox Digest", mode: "background", schedule: { periodInMinutes: 30 }, description: "Summarises what changed on a page every half hour.", skills: [] },
+      ];
+      const skillNames = { "multi-tab-researcher": "Multi-tab researcher", "link-collector": "Link collector", "reader-mode": "Reader mode", "data-extractor": "Data extractor", "page-summary": "Page summary", "tone-shifter": "Tone shifter", "clarity-editor": "Clarity editor", "tab-grouper": "Tab grouper", "duplicate-closer": "Duplicate closer", "tab-cleaner": "Tab cleaner", "price-tracker": "Price tracker" };
+      const agentTemplateSelectedDemo = document.getElementById("agent-template-selected-demo");
+      if (agentTemplateSelectedDemo) {
+        agentTemplateSelectedDemo.template = templateFixtures[0];
+        agentTemplateSelectedDemo.skillNames = skillNames;
+      }
+      const agentTemplateGalleryDemo = document.getElementById("agent-template-gallery-demo");
+      if (agentTemplateGalleryDemo) {
+        agentTemplateGalleryDemo.templates = templateFixtures;
+        agentTemplateGalleryDemo.skillNames = skillNames;
+        agentTemplateGalleryDemo.addEventListener("use", (e) => log("#hub-log", `agent-template-gallery: use ${e.detail?.id || "(custom)"}`));
+        agentTemplateGalleryDemo.addEventListener("filter-change", (e) => log("#hub-log", `agent-template-gallery: filter ${e.detail?.filter}`));
       }
 
       const toolDirectoryDemo = document.getElementById("tool-directory-demo");

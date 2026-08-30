@@ -69,13 +69,22 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   reselection or devicechange. Stop, hide, detach, devicechange, pagehide,
   reduced-motion, and late-stream generation guards remain authoritative.
 - Agent templates render through shared `<agent-template-card>`: name, a two-line
-  persona summary, at most three skill badges plus an overflow count, and one
-  labelled Use action. Curated starters come first and carry the Starter badge.
+  persona summary, at most three skill chips (the skill's display name) plus an
+  overflow count, a cadence chip for scheduled templates, and one labelled Use
+  action. The whole card activates that button; `selected` presses it
+  (`aria-pressed="true"`, accent ring); `blank` is the "Custom agent" card.
+  Curated starters come first and carry the Starter badge.
+- `<agent-template-gallery>` is the ONE catalogue surface: a segmented
+  Starter / All / Scheduled filter (`aria-pressed` buttons with counts) over an
+  auto-fill grid of cards with a roving tabindex (one tab stop; arrows, Home,
+  End move; Enter/Space activate). The create dialog opens on it (Starter
+  first, Custom selected) and Settings → Agents reuses it filtered to Scheduled.
 - Customizable selects use the shared native `appearance: base-select` vocabulary:
   one browser `::picker-icon` (never a second drawn chevron), safe inline SVG option
   icons, and a one-line ellipsized closed state contained by `min-width: 0`.
-- The create-agent dialog's primary order is Name → what it does (with visible
-  dictation/refine tools) → starting template → English schedule → Advanced.
+- The create-agent dialog's primary order is template gallery → Name → what it
+  does (with visible dictation/refine tools) → English schedule → Advanced.
+  Initial focus lands on the gallery's selected card.
   Its inline size is a fixed viewport clamp; every disclosure uses shrink-safe
   containment so opening Advanced or Skills never changes the dialog width.
 - SVG line-art icons, one stroke weight, currentColor. No emoji.

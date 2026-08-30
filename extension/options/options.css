@@ -749,13 +749,13 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   margin-top: 8px;
 }
 
-/* Background templates stay a compact picker; only agents the owner has
+/* Background templates are the SAME gallery the hub's create flow uses
+   (agent-template-gallery, filtered to Scheduled); only agents the owner has
    created or enabled become management rows below it. */
 .background-agent-add {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
-  align-items: end;
   margin-top: var(--space-4);
   padding: var(--space-4);
   border: 1px solid var(--border);
@@ -765,7 +765,8 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
 .background-agent-add[hidden] { display: none; }
 .background-agent-add h3 { margin: 0 0 4px; font-size: var(--text-sm); }
 .background-agent-add p { margin: 0; font-size: var(--text-xs); }
-.background-agent-add-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.background-agent-add-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.background-agent-add-chosen { font-size: var(--text-xs); }
 .agent-select,
 .agent-select::picker(select) { appearance: base-select; }
 .agent-select {

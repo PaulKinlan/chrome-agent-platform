@@ -66,6 +66,7 @@ export const ICONS = {
   alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
   chevron: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>',
   user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>',
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>',
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
   external: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
@@ -1965,7 +1966,7 @@ class AgentTemplateCard extends Component {
       .starter { flex:0 0 auto; padding:2px 7px; border:1px solid var(--accent,#0e6e63);
         border-radius:999px; color:var(--accent,#0e6e63); font-size:10px; font-weight:700; line-height:1.4; }
       .persona { display:-webkit-box; margin:0; color:var(--muted,#635e56); font-size:var(--text-xs,12px);
-        line-height:1.4; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; overflow-wrap:anywhere; }
+        line-height:1.4; max-block-size:2.8em; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; overflow-wrap:anywhere; }
       .skills { display:flex; flex-wrap:wrap; align-items:center; gap:5px; min-inline-size:0; min-block-size:1.5em; }
       .skill, .overflow, .cadence { display:inline-flex; align-items:center; gap:4px; max-inline-size:100%; padding:2px 7px; border-radius:999px;
         background:var(--panel-2,#efede8); color:var(--muted,#635e56); font-size:10px; line-height:1.5;
@@ -2063,9 +2064,15 @@ class AgentTemplateGallery extends Component {
   }
   attributeChangedCallback(name, oldValue, newValue) {
     if (this._suppressRender) return;
-    const focusedFilter = this._root?.activeElement?.dataset?.filter;
+    // A filter change re-renders the grid; keep focus where it was — on the
+    // filter button that was pressed, or back on the grid's tab stop when a
+    // card had it (the cards are new elements after the render).
+    const active = this._root?.activeElement;
+    const focusedFilter = active?.dataset?.filter;
+    const focusedCard = active?.localName === "agent-template-card";
     super.attributeChangedCallback(name, oldValue, newValue);
     if (focusedFilter) this._root.querySelector(`.filter[data-filter="${focusedFilter}"]`)?.focus();
+    else if (focusedCard) this.focus();
   }
   focus() {
     const cards = this._cards();

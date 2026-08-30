@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.450] — 2026-08-30
+- Creating an agent now starts from a gallery of templates (starters first, "Custom agent" selected): pick one and the name, persona, skills and schedule are filled in for you to edit, then Create makes exactly one agent. The built-in scheduled agents are offered as templates there and in Settings through the same cards; the old template dropdown and the one-click "add seven starter agents" button are gone.
+
 ## [0.2.449] — 2026-08-30
 - Merge remote-tracking branch 'origin/main' into cap/agent-templates-integration
 

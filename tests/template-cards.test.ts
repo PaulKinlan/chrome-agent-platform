@@ -17,7 +17,7 @@ Deno.test("template cards: shared component renders persona, bounded skill badge
   assertStringIncludes(components, "skills.slice(0, 3)");
   assertStringIncludes(components, "skills.length - shownSkills.length");
   assertStringIncludes(components, ">Starter</span>");
-  assertStringIncludes(components, 'this._emit("use", { id: template.id })');
+  assertStringIncludes(components, 'this._emit("use", { id: this.hasAttribute("blank") ? "" : String(template?.id ?? ""), template })');
   assertStringIncludes(components, '<button class="use" type="button"');
 });
 

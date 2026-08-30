@@ -6,7 +6,7 @@
 //   and the hub lists every prior thread (auto-named).
 
 import { send } from "../lib/messages.js";
-import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, templatePrefill } from "../lib/agent-templates.js";
+import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, recipeAsTemplate, templatePrefill } from "../lib/agent-templates.js";
 import { projectUnifiedAgents } from "../lib/named-agents.js";
 import { schedulePreviewText } from "../lib/schedule-preview.js";
 import { parseEnglishSchedule } from "../shared/schedule-parser.js";
@@ -738,17 +738,19 @@ async function renderNamedAgents() {
   if (el) {
     el.replaceChildren();
     if (!active.length) {
-      // First-run / empty state: ONE click seeds the curated starter set
-      // (never automatic — the owner chooses).
+      // First-run / empty state: templates are the first-class way to create
+      // an agent (CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01) — the button
+      // opens the create flow on the Starter gallery; nothing is created until
+      // the owner presses "Create agent" on ONE chosen template.
       const empty = document.createElement("div");
       empty.className = "empty";
-      empty.textContent = "No agents yet. Create one with the + above, or:";
+      empty.textContent = "No agents yet. Choose a template or start from scratch.";
       const starterBtn = document.createElement("button");
       starterBtn.id = "add-starter-agents";
       starterBtn.type = "button";
-      starterBtn.textContent = "Add starter agents";
+      starterBtn.textContent = "Browse starter templates";
       starterBtn.style.cssText = "margin-top:8px;padding:8px 14px;border-radius:8px;border:1px solid var(--border,#e3e0d9);background:var(--panel,#ffffff);color:var(--text,#1f1d1a);font:inherit;cursor:pointer;";
-      starterBtn.addEventListener("click", () => addStarterAgents(starterBtn));
+      starterBtn.addEventListener("click", () => addStarterAgents());
       empty.append(document.createElement("br"), starterBtn);
       el.append(empty);
     } else {
@@ -2123,36 +2125,18 @@ async function openAgentConfig() {
   });
 }
 
-// One-click seeding of the CURATED starter set (owner directive 2026-08-28):
-// the six starters become REAL agents — persona, skills, memory, and (for any
-// background-mode starter) a live schedule. Each is fully editable afterwards.
-async function addStarterAgents(btn = null) {
-  if (btn) btn.disabled = true;
-  const created = [];
-  const failed = [];
-  for (const id of STARTER_TEMPLATE_IDS) {
-    const t = agentTemplateById(id);
-    if (!t) { failed.push(`${id} (missing template)`); continue; }
-    const pre = templatePrefill(t);
-    const r = await send("named-agent.create", {
-      name: pre.name,
-      role: pre.role,
-      skills: pre.skills,
-      schedule: pre.schedule ? { periodInMinutes: pre.schedule.periodInMinutes, task: pre.schedule.prompt } : null,
-    }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
-    if (r?.ok) created.push(pre.name);
-    else failed.push(`${pre.name} (${r?.error ?? "unknown"})`);
-  }
-  await renderNamedAgents();
-  if (failed.length === 0) {
-    setStatus(`Added ${created.length} starter agents: ${created.join(", ")}.`, true);
-  } else {
-    setStatus(`Added ${created.length} starter agents; failed: ${failed.join(", ")}.`, false);
-  }
-  if (btn) btn.disabled = false;
+// The starter set is a CURATED gallery, not a batch action (owner directive
+// 2026-08-30, CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01): "starter
+// templates" opens the create flow with the gallery filtered to the seven
+// STARTER_TEMPLATE_IDS. Each template becomes ONE real agent — persona,
+// skills, memory and (for a background template) a live schedule — only when
+// the owner picks it and presses "Create agent"; never seven at once, never
+// silently.
+function addStarterAgents() {
+  return openQuickCreateAgent({ templateFilter: "starter" });
 }
 
-function openQuickCreateAgent() {
+function openQuickCreateAgent({ templateFilter = "starter" } = {}) {
   buildAgentConfigDialog({
     title: "Create an agent",
     name: "",
@@ -2162,6 +2146,7 @@ function openQuickCreateAgent() {
     initialCoreAssets: [],
     canRegenerateAvatar: false,
     showTemplates: true,
+    templateFilter,
     savedLabel: "Create agent",
     onSave: async (v) => {
       const r = await send("named-agent.create", {
@@ -2191,8 +2176,16 @@ function openQuickCreateAgent() {
 // Features: non-clipped focus outline, sticky outside-scroll footer with
 // Create/Cancel, collapsible skills section, and overscroll-behavior: contain.
 async function buildAgentConfigDialog(opts) {
-  const skillsRes = await send("skill.list").catch(() => ({ skills: [] }));
+  const [skillsRes, bgRes] = await Promise.all([
+    send("skill.list").catch(() => ({ skills: [] })),
+    // The 22 background recipes are scheduled TEMPLATES in the create flow
+    // (CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01) — fetched only when the
+    // gallery is shown, projected through recipeAsTemplate (no data copy).
+    opts.showTemplates ? send("background-agent.list").catch(() => ({ agents: [] })) : Promise.resolve({ agents: [] }),
+  ]);
   const available = Array.isArray(skillsRes.skills) ? skillsRes.skills : [];
+  const backgroundTemplates = (Array.isArray(bgRes?.agents) ? bgRes.agents : [])
+    .map(recipeAsTemplate).filter(Boolean);
   const agentSkillIds = new Set((opts.initialSkills ?? []).map((s) => (typeof s === "string" ? s : s?.id ?? s?.name)));
 
   const dialog = document.createElement("agent-dialog");
@@ -2269,21 +2262,50 @@ async function buildAgentConfigDialog(opts) {
 
   const nameField = configField("Name", "input", opts.name ?? "");
 
-  // ── Template picker (G2, docs/AGENT-PRODUCT-GAPS.md §3): a STARTING POINT
-  // with full specialization. Picking a template pre-fills name/role/skills
-  // (+ the first-task suggestion carried to the composer after create), and
-  // the owner can then edit ALL of it — rewrite the persona, add/remove
-  // skills — before creating. "Custom agent" (blank) stays the default.
+  // ── Template gallery (CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01;
+  // G2, docs/AGENT-PRODUCT-GAPS.md §3): templates are the FIRST step of the
+  // create flow, not a collapsed select. Picking a card pre-fills name/role/
+  // skills/schedule (+ the first-task suggestion carried to the composer after
+  // create), and the owner can then edit ALL of it — rewrite the persona,
+  // add/remove skills — before creating. The card stays selected while the
+  // owner edits (it reflects the ORIGIN of the form, not equality with it).
+  // "Custom agent" (blank) is selected by default; choosing it again clears
+  // what the last template put in the form.
   let selectedTemplate = null;
   let templateSection = null;
+  let templateGallery = null;
   if (opts.showTemplates) {
     const starterIds = new Set(STARTER_TEMPLATE_IDS);
-    const orderedTemplates = [
-      ...STARTER_TEMPLATE_IDS.map(agentTemplateById).filter(Boolean),
+    const catalogue = [
+      ...STARTER_TEMPLATE_IDS.map(agentTemplateById).filter(Boolean).map((t) => ({ ...t, starter: true })),
       ...AGENT_TEMPLATES.filter((t) => !starterIds.has(t.id)),
+      // A recipe that already has a curated template (same id, e.g.
+      // price-watcher) is offered once — the curated card is the richer one.
+      ...backgroundTemplates.filter((t) => !AGENT_TEMPLATES.some((c) => c.id === t.id)),
     ];
+    const templateById = new Map(catalogue.map((t) => [t.id, t]));
+    const updateSkillCount = () => {
+      const countEl = skillsSummary?.querySelector(".skill-count");
+      if (!countEl) return;
+      const count = [...skillChecks.values()].filter((c) => c.checked).length;
+      countEl.textContent = count > 0 ? `${count} selected` : `${available.length} available`;
+    };
     const applyTemplate = (t) => {
-      if (!t) { selectedTemplate = null; return; }
+      if (!t) {
+        // Back to a blank agent: undo the last template's prefill (the owner's
+        // own picks on top of it are kept — removal is theirs).
+        if (selectedTemplate) {
+          const prev = templatePrefill(selectedTemplate);
+          if (nameField.el.value === prev.name) nameField.el.value = "";
+          if (roleField.el.value === prev.role) roleField.el.value = "";
+          for (const [id, cb] of skillChecks) if (prev.skills.includes(id)) cb.checked = false;
+          scheduleField.el.value = "";
+          scheduleField.el.dispatchEvent(new Event("input", { bubbles: true }));
+          updateSkillCount();
+        }
+        selectedTemplate = null;
+        return;
+      }
       const pre = templatePrefill(t);
       selectedTemplate = t;
       nameField.el.value = pre.name;
@@ -2297,27 +2319,35 @@ async function buildAgentConfigDialog(opts) {
       for (const [id, cb] of skillChecks) {
         if (pre.skills.includes(id)) cb.checked = true;
       }
-      const countEl = skillsSummary?.querySelector(".skill-count");
-      if (countEl) {
-        const count = [...skillChecks.values()].filter((c) => c.checked).length;
-        countEl.textContent = count > 0 ? `${count} selected` : "0 selected";
-      }
+      updateSkillCount();
     };
-    // Reuse the shared provider-select primitive: same native base-select,
-    // --input-h grid, tokens, keyboard behavior and subtle control styling.
-    const templateSelect = document.createElement("provider-select");
-    templateSelect.id = "agent-template-select";
-    templateSelect.setAttribute("label", "Start from a template");
-    templateSelect.setAttribute("placeholder", "Custom agent");
-    templateSelect.providers = orderedTemplates.map((t) => ({
-      id: t.id,
-      name: t.name,
-      icon: t.mode === "background" ? "terminal" : "user",
-    }));
-    templateSelect.addEventListener("change", (event) => {
-      applyTemplate(agentTemplateById(event.detail?.value));
+    const gallery = document.createElement("agent-template-gallery");
+    gallery.id = "agent-template-gallery";
+    gallery.setAttribute("blank", "");
+    gallery.setAttribute("filters", "starter,all,scheduled");
+    gallery.setAttribute("filter", opts.templateFilter ?? "starter");
+    gallery.setAttribute("selected", "");
+    gallery.templates = catalogue;
+    gallery.skillNames = new Map(available.map((s) => [s?.id ?? s?.name ?? String(s), s?.name ?? s?.id]));
+    gallery.addEventListener("use", (event) => {
+      const id = String(event.detail?.id ?? "");
+      applyTemplate(id ? templateById.get(id) ?? null : null);
     });
-    templateSection = templateSelect;
+    templateGallery = gallery;
+    const section = document.createElement("div");
+    section.className = "agent-template-step";
+    section.style.cssText = "display:flex;flex-direction:column;gap:8px;min-width:0;";
+    const heading = document.createElement("h3");
+    heading.id = "agent-template-step-title";
+    heading.textContent = "Start from a template";
+    heading.style.cssText = "margin:0;font-size:13px;font-weight:600;line-height:1.4;";
+    const lead = document.createElement("p");
+    lead.textContent = "Choose a template or start from scratch. Everything it fills in stays editable.";
+    lead.style.cssText = "margin:0;font-size:12px;line-height:1.4;color:var(--muted,#635e56);";
+    section.setAttribute("role", "group");
+    section.setAttribute("aria-labelledby", heading.id);
+    section.append(heading, lead, gallery);
+    templateSection = section;
   }
 
 
@@ -2340,8 +2370,8 @@ async function buildAgentConfigDialog(opts) {
   const refineBtn = configButton("Refine", "secondary");
   roleTools.append(mic, refineBtn);
   roleField.wrap.append(roleTools);
-  scrollBody.append(nameField.wrap, roleField.wrap);
   if (templateSection) scrollBody.append(templateSection);
+  scrollBody.append(nameField.wrap, roleField.wrap);
 
   const advancedDetails = document.createElement("details");
   advancedDetails.className = "agent-config-advanced";
@@ -2664,7 +2694,10 @@ async function buildAgentConfigDialog(opts) {
   });
 
   dialog.show();
-  nameField.el.focus();
+  // The gallery is the first step: initial focus lands on its selected card
+  // (the Custom card by default) so Tab order reads gallery → Name → ….
+  if (templateGallery) templateGallery.focus();
+  else nameField.el.focus();
 }
 
 // ── the ONE live-status surface: the conversation's inline pinned bottom row ──

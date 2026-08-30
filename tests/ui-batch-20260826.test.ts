@@ -11,9 +11,10 @@ const read = (rel) =>
 
 Deno.test("NTP add-agent: the named-agent empty state carries the owner's requested affordance text", () => {
   const ntp = read("../extension/ntp/ntp.js");
-  // The unified-agent empty state (owner directive 2026-08-28): create with +
-  // OR one-click seed the curated starter set — never automatic.
-  assertMatch(ntp, /No agents yet\. Create one with the \+ above/, "empty-state text present");
+  // The unified-agent empty state (owner directive 2026-08-28, revised
+  // 2026-08-30 by CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01): create
+  // with + OR browse the curated starter templates — never automatic.
+  assertMatch(ntp, /No agents yet\. Choose a template or start from scratch\./, "empty-state text present");
   assertMatch(ntp, /add-starter-agents/, "the empty state offers the starter set");
   // the '+' button (new-agent) must open the NAMED-agent create dialog
   assertMatch(ntp, /openQuickCreateAgent/, "the + button routes to the named-agent quick-create");
