@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.433] — 2026-08-30
+- Three more fixes are in progress in parallel and recorded as claimed in the tracker.
+
 ## [0.2.432] — 2026-08-30
 - Landed: the browser-control switch no longer blocks the next run, and browser control can always be turned off.
 
