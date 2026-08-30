@@ -6977,9 +6977,14 @@ class ApprovalCard extends Component {
           : (detail || "The decision could not be recorded — try again.");
     mountTemplate(this, `
       :host { display:block; margin-block-end:14px; }
-      .card { border:1px solid var(--accent,#0e6e63); border-radius:12px; background:var(--panel,#ffffff); padding:14px 16px; max-width:440px; }
+      .card { border:1px solid var(--accent,#0e6e63); border-radius:12px; background:var(--panel,#ffffff); padding:14px 16px; max-width:min(680px, 100%); }
       .title { font-size:14px; font-weight:600; color:var(--ink,#1d1b18); margin:0 0 4px; overflow-wrap:anywhere; }
       .body { font-size:13px; color:var(--muted,#635e56); margin:0 0 12px; white-space:pre-wrap; overflow-wrap:anywhere; }
+      /* An optional slotted region (e.g. an <artifact-diff> on an edit
+         approval) between the body and the decision buttons. The slot has no
+         box unless something is assigned to it. */
+      slot[name="extra"] { display:block; margin-block-end:12px; }
+      slot[name="extra"]::slotted(*) { display:block; }
       .actions { display:flex; flex-wrap:wrap; gap:8px; }
       .approve { border:0; border-radius:8px; padding:7px 16px; min-height:34px; background:var(--accent,#0e6e63); color:var(--accent-contrast,#fff); cursor:pointer; font:inherit; font-weight:600; }
       .deny { border:1px solid var(--border,#e3e0d9); border-radius:8px; padding:7px 16px; min-height:34px; background:var(--panel,#ffffff); color:var(--ink,#1d1b18); cursor:pointer; font:inherit; }
@@ -6992,6 +6997,7 @@ class ApprovalCard extends Component {
         <p class="title">${escapeHtml(title)}</p>
         ${body ? `<p class="body">${escapeHtml(body)}</p>` : ""}
         ${this._detail ? `<span class="source-label" id="source-label">Script source</span><pre class="source" tabindex="0" role="region" aria-labelledby="source-label"></pre><span class="source-label">Sites it fetches</span><ul class="hosts" aria-label="Sites this script fetches">${this._detail.hosts.length ? this._detail.hosts.map((h) => `<li>${escapeHtml(h)}</li>`).join("") : `<li class="none">none — the script makes no fetch to a listed site</li>`}</ul>${this._detail.dynamic ? `<p class="dynamic" role="note">Builds a URL at run time (unknown hosts) — only the sites listed above will be reachable; localhost and private addresses are always refused.</p>` : ""}` : ""}
+        <slot name="extra"></slot>
         ${state === "pending"
           ? `<div class="actions"><button type="button" class="approve">${escapeHtml(approveLabel)}</button><button type="button" class="deny">${escapeHtml(denyLabel)}</button></div>`
           : `<p class="state ${state}" role="status">${escapeHtml(stateText)}</p>`}

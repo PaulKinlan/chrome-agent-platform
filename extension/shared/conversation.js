@@ -1562,6 +1562,36 @@ export async function runConversationTurn(container, { text, attachments = [], h
       card?.setAttribute("detail", outcome.errors.join("; ") || "the approval could not be completed");
     }
   };
+  // Fetch the staged edit detail (current + proposed body) for an edit
+  // approval and render it as an <artifact-diff> slotted into the card, with a
+  // title that names the artifact and its +n -m. The detail is the extension
+  // principal's to read (SW `approval.detail` gate); a failure or a missing
+  // record leaves the card in its opaque form — the decision still works.
+  const augmentApprovalCardWithDiff = async (card, approval) => {
+    let detail = null;
+    try {
+      const res = await send("approval.detail", { approvalId: approval.approvalId });
+      if (res?.ok && res.detail && typeof res.detail === "object") detail = res.detail;
+    } catch { detail = null; }
+    if (!detail || !card || typeof document === "undefined") return;
+    // The card may already have been decided (granted/denied) or replaced.
+    if (card.getAttribute?.("state") && card.getAttribute("state") !== "pending") return;
+    const name = typeof detail.name === "string" && detail.name ? detail.name : "this artifact";
+    const added = Number.isSafeInteger(detail.added) ? detail.added : 0;
+    const removed = Number.isSafeInteger(detail.removed) ? detail.removed : 0;
+    const noun = detail.kind === "script.update" ? "script" : "artifact";
+    card.setAttribute("title", `Update ${name}? (+${added} -${removed})`);
+    card.setAttribute("body", `The agent wants to change this ${noun}. Review the changes, then approve or deny.`);
+    if (card.querySelector?.("artifact-diff")) return;
+    const diff = document.createElement("artifact-diff");
+    diff.setAttribute("slot", "extra");
+    diff.setAttribute("mode", "unified");
+    diff.beforeLabel = typeof detail.oldLabel === "string" && detail.oldLabel ? detail.oldLabel : `${name} (current)`;
+    diff.afterLabel = typeof detail.newLabel === "string" && detail.newLabel ? detail.newLabel : `${name} (proposed)`;
+    diff.before = typeof detail.oldContent === "string" ? detail.oldContent : "";
+    diff.after = typeof detail.newContent === "string" ? detail.newContent : "";
+    card.appendChild(diff);
+  };
   const maybeRenderApproval = (result, { blocking = false, requestId = null } = {}) => {
     const requirement = normalizePermissionRequirement(result);
     if (!requirement) return;
@@ -1616,6 +1646,16 @@ export async function runConversationTurn(container, { text, attachments = [], h
         const focusAllow = () => card.shadowRoot?.querySelector?.("button")?.focus?.();
         if (typeof requestAnimationFrame === "function") requestAnimationFrame(focusAllow);
         else focusAllow();
+      }
+      // An EDIT approval (asset.update / script.update) shows the DIFF the owner
+      // is being asked to approve — the artifact NAME, a +n -m title, and the
+      // line diff between the current stored body and the proposed one — before
+      // the decision (CAP-FB-20260830-EDIT-APPROVAL-SHOWS-DIFF-01). The bodies
+      // live behind the SW's `approval.detail` principal gate (never in the
+      // model-facing envelope), so they are fetched here, once, for this card.
+      const editApproval = actionApproval ? requirement.approvals[0] : null;
+      if (editApproval && (editApproval.action === "asset.update" || editApproval.action === "script.update")) {
+        augmentApprovalCardWithDiff(card, editApproval);
       }
     }
     const entry = { requirement, status: "pending", card, blocking, requestId };

@@ -370,7 +370,12 @@ export function bindModelApprovalDispatcher(executionId, dispatch, onApprovalEve
 }
 
 export function createApprovalStore() {
-  return { approvals: new Map(), byTuple: new Map(), waiters: new Map() };
+  // `details` holds the PRIVATE, extension-principal-only edit detail for a
+  // pending approval (the diff bodies the owner reads on the card). Keyed by
+  // approvalId, it lives exactly as long as its approval row — removeApproval /
+  // sweep / consumeApproved evict it — and never reaches the model
+  // (EDIT-APPROVAL-SHOWS-DIFF-01).
+  return { approvals: new Map(), byTuple: new Map(), waiters: new Map(), details: new Map() };
 }
 
 function approvalKey(runId, action, target, digest) {
@@ -392,6 +397,7 @@ function settleWaiters(store, approvalId, result) {
 function removeApproval(store, approvalId, entry) {
   store.approvals.delete(approvalId);
   store.byTuple.delete(entry.key);
+  store.details?.delete(approvalId);
 }
 
 function sweep(store, now = Date.now()) {
@@ -493,6 +499,7 @@ export function consumeApproved(store, runId, action, target, digest) {
   if (id && entry?.status === "approved") {
     store.approvals.delete(id);
     store.byTuple.delete(key);
+    store.details?.delete(id);
     return { ok: true };
   }
   return { ok: false };
@@ -582,6 +589,75 @@ export function approvalCardDenial({ approvalId, action, targetRef, detail }) {
       approvals: [{ approvalId, action, targetRef: ref, ...(bounded ? { detail: bounded } : {}) }],
     },
   };
+}
+
+// ── staged edit detail for the approval card (EDIT-APPROVAL-SHOWS-DIFF-01) ──
+// When the model calls asset.update / script.update, the owner is asked to
+// approve an EDIT. The card must show the diff between the current stored body
+// and the proposed new body — not an opaque digest. The two bodies are the
+// PRIVATE record of the extension principal (the owner surface renders them);
+// they never enter the model-facing envelope (approvalCardDenial), because the
+// current body is not necessarily model-authored. The record is staged in the
+// approval store keyed by approvalId and evicted with the approval row.
+export const STAGED_APPROVAL_DETAIL_KINDS = new Set(["asset.update", "script.update"]);
+export const STAGED_APPROVAL_DETAIL_BOUNDS = Object.freeze({
+  maxContentChars: 1024 * 1024,
+  maxNameChars: 256,
+  maxLabelChars: 256,
+});
+
+/** Bound a staged edit detail ({ kind, name, oldContent, newContent, added,
+ * removed, oldLabel, newLabel }). A malformed record (unknown kind, no name)
+ * is dropped — the card then falls back to the opaque form. The `added` /
+ * `removed` counts are computed by the caller with the diff core over the SAME
+ * two bodies stored here, so the card title's `+n -m` can never disagree with
+ * the rendered diff. */
+export function boundStagedApprovalDetail(detail) {
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return null;
+  if (!STAGED_APPROVAL_DETAIL_KINDS.has(detail.kind)) return null;
+  const str = (value, max) => (typeof value === "string" ? value.slice(0, max) : "");
+  const count = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : 0);
+  const name = str(detail.name, STAGED_APPROVAL_DETAIL_BOUNDS.maxNameChars);
+  if (!name) return null;
+  return {
+    kind: detail.kind,
+    name,
+    oldContent: str(detail.oldContent, STAGED_APPROVAL_DETAIL_BOUNDS.maxContentChars),
+    newContent: str(detail.newContent, STAGED_APPROVAL_DETAIL_BOUNDS.maxContentChars),
+    added: count(detail.added),
+    removed: count(detail.removed),
+    oldLabel: str(detail.oldLabel, STAGED_APPROVAL_DETAIL_BOUNDS.maxLabelChars) || `${name} (current)`,
+    newLabel: str(detail.newLabel, STAGED_APPROVAL_DETAIL_BOUNDS.maxLabelChars) || `${name} (proposed)`,
+  };
+}
+
+/** Stage the private edit detail for a still-pending approval. Fails closed if
+ * no such pending row exists (no orphan staging) or the detail is malformed. */
+export function stageApprovalDetail(store, approvalId, detail) {
+  if (!store?.details || typeof approvalId !== "string" || !store.approvals?.has(approvalId)) {
+    return { ok: false, error: "no pending approval to stage detail for" };
+  }
+  const bounded = boundStagedApprovalDetail(detail);
+  if (!bounded) return { ok: false, error: "invalid staged detail" };
+  store.details.set(approvalId, bounded);
+  return { ok: true };
+}
+
+/** Read the staged detail for an approval (the owner surface only — the caller
+ * enforces `mayReadApprovalDetail` on the sender). Sweeps first, so an expired
+ * approval's detail is already gone (fail closed). */
+export function getStagedApprovalDetail(store, approvalId) {
+  if (!store?.details || typeof approvalId !== "string") return null;
+  sweep(store);
+  return store.details.get(approvalId) ?? null;
+}
+
+/** WHICH principal may read a staged approval detail: only the owner surfaces
+ * (the conversation's extension document, or Settings). The model and any page
+ * / content-script sender are refused — the staged bodies never cross to a
+ * model-controlled or web principal. */
+export function mayReadApprovalDetail(principal) {
+  return principal === "extension" || principal === "owner-options";
 }
 
 /** Which surface may resolve WHICH approval (per-agent alarms P1-3): Settings

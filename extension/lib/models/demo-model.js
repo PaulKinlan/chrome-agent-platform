@@ -730,8 +730,30 @@ const ENUM_SLIP_ARGS = Object.freeze({
 
 // ── @demo-edit-artifact helpers ─────────────────────────────────────────────
 const EDIT_ARTIFACT_NAME = "crumb.html";
-const EDIT_ARTIFACT_V1 = "<!doctype html><html><body><h1>crumb</h1><p>version one</p></body></html>";
-const EDIT_ARTIFACT_V2 = "<!doctype html><html><body><h1>crumb</h1><p>version two — edited by the demo model</p></body></html>";
+// A small multi-line page so the owner-approval card renders a REAL line diff
+// (EDIT-APPROVAL-SHOWS-DIFF-01): the edit changes the tagline and adds an
+// "Opening hours" section, so the card shows +added -removed with a `+` line
+// carrying "Opening hours".
+const EDIT_ARTIFACT_V1 = [
+  "<!doctype html>",
+  "<html>",
+  "  <body>",
+  "    <h1>Crumb</h1>",
+  "    <p>Fresh sourdough, baked daily.</p>",
+  "  </body>",
+  "</html>",
+].join("\n");
+const EDIT_ARTIFACT_V2 = [
+  "<!doctype html>",
+  "<html>",
+  "  <body>",
+  "    <h1>Crumb Bakery</h1>",
+  "    <p>Fresh sourdough and pastries, baked daily.</p>",
+  "    <h2>Opening hours</h2>",
+  "    <p>Mon to Sat, 7am to 3pm.</p>",
+  "  </body>",
+  "</html>",
+].join("\n");
 function wantsEditArtifact(prompt) {
   return !!latestRunSlice(prompt)?.marker?.editArtifact;
 }

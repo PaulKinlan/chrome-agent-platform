@@ -117,6 +117,7 @@ const BASELINE_ROUTES = [
   "usage.clear",
   "management.pending-approvals",
   "management.resolve-approval",
+  "approval.detail",
   "asset.create",
   "asset.update",
   // Exact search/replace editing (CAP-FB-20260830-PATCH-ASSET-TOOL-01).

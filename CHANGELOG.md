@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.507] — 2026-08-30
+- Landed: when the agent asks to change an artifact, the approval now shows you exactly what changes - the artifact name and the added and removed lines - before you say yes.
+
 ## [0.2.506] — 2026-08-30
 - Tracker: the targeted patch_asset tool is recorded as landed.
 
