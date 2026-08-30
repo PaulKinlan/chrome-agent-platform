@@ -794,28 +794,50 @@
     #thread-view.view-overlay { top: 0; bottom: 0; right: 0; left: 240px; transition: left .18s ease, right .18s ease; }
     #side.collapsed ~ #thread-view.view-overlay { left: 60px; }
 
-    /* ── the full-screen task thread ── */
+    /* ── the full-screen task thread ──
+       The thread body is the ONE scroll container: the conversation is
+       content-height (no bordered box with empty panel under two bubbles),
+       and the composer is docked at the bottom of the viewport with
+       position: sticky so the newest turn always lands right above it
+       (CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01). */
     .thread-body {
       flex: 1;
       display: flex;
       flex-direction: column;
       min-height: 0;
-      max-width: 760px;
+      overflow-y: auto;
       width: 100%;
-      margin: 0 auto;
-      padding: 20px 24px 24px;
-      gap: 16px;
+      scrollbar-gutter: stable;
     }
     .thread-body agent-conversation {
-      flex: 1;
+      flex: 0 0 auto;
       min-height: 0;
-      overflow-y: auto;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      background: var(--panel);
-      padding: 16px;
+      width: 100%;
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 20px 24px 8px;
+      box-sizing: border-box;
     }
-    .thread-body agent-composer { flex: 0 0 auto; }
+    .thread-body agent-composer {
+      flex: 0 0 auto;
+      position: sticky;
+      bottom: 0;
+      z-index: 3;
+      width: 100%;
+      max-width: 760px;
+      margin: auto auto 0;
+      padding: 8px 24px 16px;
+      box-sizing: border-box;
+      /* The dock: the page ground bleeds up so rows scroll under the composer
+         with a soft edge rather than a hard cut. */
+      background: linear-gradient(to top, var(--bg) 0, var(--bg) calc(100% - 12px), transparent);
+    }
+    /* The debug overlay stays out of flow above the transcript. */
+    .thread-body .run-debug { flex: 0 0 auto; }
+    /* Programmatic focus on the title (the thread just opened) paints no
+       ring; a keyboard user's own Tab back onto it does (focus-quiet clears
+       on the first keydown). */
+    #thread-title.focus-quiet:focus-visible { outline: none; }
     </style>
   </head>
   <body>

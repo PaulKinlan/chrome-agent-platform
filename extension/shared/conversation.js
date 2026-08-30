@@ -16,6 +16,7 @@
 import { send } from "../lib/messages.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
 import { safeJsonStringify } from "./tool-tree.js";
+import { artifactIdentityFromPayloads } from "./thread-view.js";
 import { isAuthoritativeThreadResultProjected } from "./thread-projection-authority.js";
 
 // ── the live progress port ────────────────────────────────────────────────
@@ -293,6 +294,13 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
         const raw = safeToolResult(ev.result);
         const summary = ev.result != null ? summarizeToolResult(ev.toolName, ev.result) : "";
         const status = isToolErrorEvent(ev) ? "error" : "success";
+        // Remember id → name from the untruncated live result BEFORE the card
+        // re-renders, so the card (and a later update card) can be titled
+        // with the artifact's name (CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01).
+        if (status === "success" && typeof c.rememberArtifact === "function") {
+          const known = artifactIdentityFromPayloads([ev.result]);
+          if (known) c.rememberArtifact(known.id, known.name);
+        }
         if (card) {
           // The result names the tool that actually ran; correct the header
           // from `execute_tool` to that name now it is known. The event's own
@@ -397,7 +405,16 @@ export function friendlyActivityLabel(toolName, args) {
     case "list_agents": return "listing agents";
     case "open_tab": case "navigate": return name ? `opening ${name}` : "opening a page";
     case "memory_set": return "writing memory";
+    case "memory_get": return "reading memory";
     case "memory_grep": return "searching memory";
+    case "list_tabs": return "reading your tabs";
+    case "read_page": return name ? `reading ${name}` : "reading the page";
+    case "capture_screenshot": return "taking a screenshot";
+    case "search_tools": return "choosing a tool";
+    case "execute_tool": return "running a tool";
+    case "update_asset": return name ? `updating ${name}` : "updating an artifact";
+    case "get_asset": return "reading an artifact";
+    case "list_assets": return "listing artifacts";
     case "generate_ui": return "generating UI";
     case "create_asset": return name ? `creating ${name}` : "creating an artifact";
     case "delegate_task": return name ? `delegating to ${name}` : "delegating a task";
@@ -1542,6 +1559,14 @@ export async function runConversationTurn(container, { text, attachments = [], h
         if (!err && typeof c.appendArtifact === "function") {
           const artifact = artifactFromToolResult(ev.toolName, ev.result);
           if (artifact) c.appendArtifact({ artifact });
+        }
+        // The conversation remembers id → name from the UNTRUNCATED live result
+        // (the card's own attributes are bounded, and the persisted summary is
+        // just "done"), so an update card can be titled with the artifact's
+        // name (CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01).
+        if (!err && typeof c.rememberArtifact === "function") {
+          const known = artifactIdentityFromPayloads([ev.result]);
+          if (known) c.rememberArtifact(known.id, known.name);
         }
         // A structured permission/grant denial surfaces an IN-CONTEXT approval
         // card (one per distinct requirement) instead of only an error card.

@@ -1686,6 +1686,29 @@ function renderTaskRows(threads, activeId = null) {
 // ── the full-screen thread surface ────────────────────────────────────────
 const threadView = document.getElementById("thread-view");
 const threadTitle = document.getElementById("thread-title");
+// The docked composer's height feeds the conversation's sticky live-status
+// row (`--conversation-dock`) so the "Working — …" banner pins just above the
+// composer rather than under it (CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01).
+{
+  const dockHost = document.getElementById("thread-view");
+  const dock = document.getElementById("thread-composer");
+  if (dockHost && dock && typeof ResizeObserver !== "undefined") {
+    const apply = () => dockHost.style.setProperty("--conversation-dock", `${Math.round(dock.getBoundingClientRect().height)}px`);
+    new ResizeObserver(apply).observe(dock);
+    apply();
+  }
+}
+// Programmatic focus on the thread title (the view just opened) paints no
+// focus ring; the first keydown restores the ring for keyboard users.
+if (threadTitle) {
+  threadTitle?.addEventListener("focus", () => {
+    if (threadTitle.dataset.pointerFocus === "1") return;
+    threadTitle.classList.add("focus-quiet");
+    const clear = () => { threadTitle.classList.remove("focus-quiet"); document.removeEventListener("keydown", clear, true); };
+    document.addEventListener("keydown", clear, true);
+    threadTitle?.addEventListener("blur", clear, { once: true });
+  });
+}
 const threadComposer = document.getElementById("thread-composer");
 
 // Artifacts rendered INSIDE a thread (CAP-FB-20260828-ARTIFACTS-IN-THREAD-01).
@@ -1773,6 +1796,8 @@ function hideThreadViewInner() {
   currentThreadId = null;
   currentAgentId = null;
   currentAgentKind = null;
+  // Back to the hub: the next task's assistant turns are the hub's own agent.
+  threadConversation?.setIdentity?.({ name: "Agent", avatar: initialAvatar("Agent") });
   hideAgentSchedules();
   syncComposerScope();
   syncConversationRunControls();
@@ -1890,6 +1915,8 @@ async function openThread(id) {
   currentThreadId = id;
   currentAgentId = null; // a thread is NOT an agent chat
   currentAgentKind = null;
+  // Assistant turns in a task thread are the hub's own agent.
+  threadConversation?.setIdentity?.({ name: "Agent", avatar: initialAvatar("Agent") });
   setRunDebugOpen(false); // a surface switch always starts with the debug overlay closed
   syncConversationRunControls();
   hideAgentSchedules();
@@ -1949,6 +1976,7 @@ async function openThread(id) {
 //    INDEPENDENT agent — click it to see its OWN run history + talk to it (a
 //    task runs in its own OPFS sandbox), exactly like a named agent.
 async function openBackgroundAgentChat(id, name) {
+  threadConversation?.setIdentity?.({ name: name || id, avatar: initialAvatar(name || id) });
   const owner = runSurfaceOwner.claim();
   currentAgentId = id;
   currentAgentKind = "background";
@@ -2016,6 +2044,16 @@ async function openAgentSurface({ kind, id, name }) {
   currentAgentId = id;
   currentAgentKind = kind;
   currentThreadId = null;
+  // Assistant turns carry THIS agent's identity (its generated avatar when it
+  // has one, the initial otherwise). The list read is cached by the SW.
+  threadConversation?.setIdentity?.({ name: name || id, avatar: initialAvatar(name || id) });
+  if (kind === "named") {
+    send("named-agent.list").then((r) => {
+      if (currentAgentId !== id) return;
+      const a = (Array.isArray(r?.agents) ? r.agents : []).find((x) => x?.id === id);
+      if (a) threadConversation?.setIdentity?.({ name: a.name || name || id, avatar: a.avatar || initialAvatar(a.name || name || id) });
+    }).catch(() => {});
+  }
   setRunDebugOpen(false);
   syncConversationRunControls();
   refreshAgentSchedules(kind, id);

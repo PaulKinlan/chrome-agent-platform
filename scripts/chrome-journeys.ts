@@ -456,6 +456,10 @@ const EXPECTED = [
   "Provider error: preflight refusal reaches a terminal Failed row within 5 s",
   "Streaming: the assistant bubble grows across at least 5 distinct lengths",
   "Streaming: the final bubble equals the non-streamed render",
+  "Thread view: update card is titled with the artifact name",
+  "Thread view: run banner visible 300 ms after send",
+  "Thread view: no empty panel space below a two-turn thread at 1440x900",
+  "Thread view: conversation scrolled to bottom after an edit turn",
   "real red tab resolved (active tab id)",
   "screenshot: denied after revoke (secondary probe)",
   "screenshot: capture SUCCEEDS for the granted origin",
@@ -2205,6 +2209,7 @@ async function main() {
       const fresh = document.createElement('message-bubble');
       fresh.setAttribute('role', 'agent');
       fresh.setAttribute('content', last.getAttribute('content') ?? '');
+      for (const a of ['author', 'author-avatar', 'ts']) { const v = last.getAttribute(a); if (v != null) fresh.setAttribute(a, v); }
       fresh.hidden = true;
       document.body.appendChild(fresh);
       const freshHtml = fresh.shadowRoot.innerHTML;
@@ -2217,6 +2222,142 @@ async function main() {
       "Streaming: the final bubble equals the non-streamed render",
       streamCompare?.equal === true && streamCompare?.contentAttr === DEMO_STREAM_ANSWER && streamCompare?.streamedText === DEMO_STREAM_ANSWER,
     );
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 3e — CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01: the thread view
+    // at 1440x900 — a content-height conversation with the composer docked at
+    // the viewport bottom, the run banner ("Working — …") visible 300 ms after
+    // a send, the thread scrolled to its newest content after an edit turn
+    // (assistant turns carrying the identity header: avatar + name + time),
+    // and an update card titled with the artifact's name. Driven through the
+    // REAL hub + thread composers on the demo model: @demo-edit-artifact
+    // creates crumb.html and then edits it through the lazy protocol;
+    // @demo-stream is the paced edit turn (long enough to sample mid-run).
+    // ─────────────────────────────────────────────────────────────
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false }, ntpSession);
+    const THREAD_VIEW_STATE = `(() => {
+      const conv = document.getElementById('thread-conversation');
+      if (!conv) return JSON.stringify(null);
+      const rows = [...conv.children].filter((el) => !el.hidden);
+      const rects = rows.map((el) => el.getBoundingClientRect());
+      const first = rects[0], last = rects.at(-1);
+      const host = conv.getBoundingClientRect();
+      const contentHeight = first && last ? (last.bottom - first.top) : 0;
+      // The scroll container: the conversation itself, or its nearest scrolling ancestor.
+      let scroller = conv;
+      while (scroller && scroller !== document.documentElement) {
+        const o = getComputedStyle(scroller).overflowY;
+        if ((o === 'auto' || o === 'scroll') && scroller.scrollHeight > scroller.clientHeight + 1) break;
+        scroller = scroller.parentElement;
+      }
+      if (!scroller) scroller = document.scrollingElement;
+      const composer = document.getElementById('thread-composer');
+      const cr = composer ? composer.getBoundingClientRect() : null;
+      const status = [...conv.querySelectorAll('conversation-run-status')].map((x) => {
+        const r = x.getBoundingClientRect();
+        const sr = x.shadowRoot ?? x;
+        return { state: x.getAttribute('state'), label: (sr.querySelector('.label')?.textContent ?? '').trim(), visible: r.height > 0 && r.top >= 0 && r.bottom <= innerHeight };
+      });
+      const heads = [...conv.querySelectorAll('message-bubble[role="tool"]')].map((b) => (b.shadowRoot ?? b).querySelector('.genui-head')?.textContent?.trim() ?? null).filter((t) => t != null);
+      const identity = [...conv.querySelectorAll('message-bubble[role="agent"]')].map((b) => {
+        const sr = b.shadowRoot ?? b; const id = sr.querySelector('agent-identity'); const ir = id ? (id.shadowRoot ?? id) : null;
+        return id ? { name: (ir.querySelector('.name')?.textContent ?? '').trim(), time: ir.querySelector('time')?.getAttribute('datetime') ?? null, avatar: !!ir.querySelector('svg, img') } : null;
+      });
+      return JSON.stringify({ innerHeight, hostHeight: Math.round(host.height), hostTop: Math.round(host.top), contentHeight: Math.round(contentHeight), rows: rows.length,
+        scroller: scroller === conv ? 'conversation' : String(scroller.className || scroller.id || scroller.tagName), scrollTop: Math.round(scroller.scrollTop), scrollHeight: scroller.scrollHeight, clientHeight: scroller.clientHeight,
+        composerTop: cr ? Math.round(cr.top) : null, composerBottom: cr ? Math.round(cr.bottom) : null, status, heads, identity, agentBubbles: conv.querySelectorAll('message-bubble[role="agent"]').length });
+    })()`;
+    const threadState = async () => { try { return JSON.parse(await evalIn(cdp, ntpSession, THREAD_VIEW_STATE) ?? "null"); } catch { return null; } };
+    const settledThread = async (deadlineMs) => {
+      const t0 = Date.now();
+      let st = null;
+      while (Date.now() - t0 < deadlineMs) {
+        st = await threadState();
+        if (st && st.agentBubbles > 0 && !(st.status ?? []).some((r) => ["queued", "running", "retrying"].includes(r.state))) break;
+        await sleep(250);
+      }
+      await sleep(400); // the terminal re-projection from the durable log lands after the row settles
+      return await threadState() ?? st;
+    };
+    await driveHubTask("@demo-edit-artifact create crumb.html then edit it");
+    // asset.update is an owner-approved action: the run pauses on the
+    // in-context approval card. Approve it with a GENUINE click (the same
+    // real-input path the Scripts journey uses) so the edit actually lands.
+    {
+      const t0 = Date.now();
+      let approved = false;
+      while (Date.now() - t0 < 20000 && !approved) {
+        const pending = await evalIn(cdp, ntpSession, `(() => { const c = [...document.querySelectorAll('#thread-conversation approval-card')].find((x) => (x.getAttribute('state') || 'pending') === 'pending'); return c ? true : false; })()`).catch(() => false);
+        if (pending === true) {
+          approved = await clickShadow(cdp, ntpSession, "#thread-conversation approval-card", ".approve");
+          break;
+        }
+        const st = await threadState();
+        if (st && st.agentBubbles > 0 && !(st.status ?? []).some((r) => ["queued", "running", "retrying", "waiting-for-permission"].includes(r.state))) break;
+        await sleep(250);
+      }
+      console.log(`thread-view journey: update approved via real click = ${approved}`);
+    }
+    const editTurn = await settledThread(30000);
+    console.log(`thread-view journey (turn 1): ${JSON.stringify(editTurn).slice(0, 700)}`);
+    {
+      // Hygiene for the approval journey that follows: an approved
+      // model-originated asset.update leaves its owner-approval row pending
+      // in the store until it expires (observed: 1 row after settle — noted
+      // in the tracker as an adjacent finding). Deny any leftover here so the
+      // later "deny row is singular" assertion measures its own request only.
+      const leftover = await msgOpts({ type: "management.pending-approvals" }).catch(() => null);
+      const rows = Array.isArray(leftover?.approvals) ? leftover.approvals : [];
+      for (const row of rows) {
+        if (row?.approvalId) await msgOpts({ type: "management.resolve-approval", approvalId: row.approvalId, approve: false }).catch(() => null);
+      }
+      console.log(`thread-view journey (turn 1): leftover pending approvals after the approved edit = ${rows.length}`);
+    }
+    const tvShot1 = await captureShot(cdp, ntpSession);
+    if (tvShot1) await writeEvidence("thread-view-1440-turn1.png", tvShot1);
+    check(
+      "Thread view: update card is titled with the artifact name",
+      Array.isArray(editTurn?.heads) && editTurn.heads.length >= 2 && editTurn.heads.every((h) => h === "crumb.html"),
+    );
+    // Turn 2 — the edit turn through the THREAD composer; sample the banner
+    // 300 ms after the send, then wait for the settle.
+    await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});
+    await typeInto(cdp, ntpSession, "#thread-composer #task-input", "@demo-stream now make it shorter");
+    await clickSel(cdp, ntpSession, "#thread-composer #run-task");
+    await sleep(300);
+    const at300 = await threadState();
+    const tvShot300 = await captureShot(cdp, ntpSession);
+    if (tvShot300) await writeEvidence("thread-view-1440-running-300ms.png", tvShot300);
+    console.log(`thread-view journey (300 ms after send): ${JSON.stringify(at300?.status)}`);
+    check(
+      "Thread view: run banner visible 300 ms after send",
+      (at300?.status ?? []).some((r) => (r.state === "running" || r.state === "queued") && r.visible === true && /^Working/.test(r.label)),
+    );
+    const afterEdit = await settledThread(30000);
+    const tvShot2 = await captureShot(cdp, ntpSession);
+    if (tvShot2) await writeEvidence("thread-view-1440-turn2.png", tvShot2);
+    console.log(`thread-view journey (turn 2): ${JSON.stringify(afterEdit).slice(0, 900)}`);
+    // Content-height: the conversation host is as tall as its rows plus its
+    // own 28px padding and row margins (48px slack; the pre-fix tree measured
+    // a 622px host around 1571px of rows, or 440px of empty panel under two
+    // bubbles), and the composer is docked at the viewport bottom.
+    check(
+      "Thread view: no empty panel space below a two-turn thread at 1440x900",
+      afterEdit != null && afterEdit.rows > 0 && Math.abs(afterEdit.hostHeight - afterEdit.contentHeight) <= 48 &&
+        afterEdit.composerBottom != null && afterEdit.composerBottom <= afterEdit.innerHeight &&
+        afterEdit.composerBottom >= afterEdit.innerHeight - 40,
+    );
+    check(
+      "Thread view: conversation scrolled to bottom after an edit turn",
+      afterEdit != null && afterEdit.scrollTop === afterEdit.scrollHeight - afterEdit.clientHeight &&
+        afterEdit.identity.length > 0 && afterEdit.identity.every((i) => i && i.name && i.time && i.avatar),
+    );
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 700, deviceScaleFactor: 1, mobile: false }, ntpSession);
+    await sleep(400);
+    const tvShotSmall = await captureShot(cdp, ntpSession);
+    if (tvShotSmall) await writeEvidence("thread-view-1024-turn2.png", tvShotSmall);
+    await cdp.send("Emulation.clearDeviceMetricsOverride", {}, ntpSession);
+    await sleep(200);
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 4 — screenshot matrix. Owner grant/scope/revoke is driven via the
@@ -3163,13 +3304,22 @@ async function main() {
       const frame = document.querySelector('iframe[data-panel-path="options/options.html"]');
       return frame && frame.contentDocument ? "present" : null;
     })()`);
-    const frameTree = await cdp.send("Page.getFrameTree", {}, ntpSession);
-    const settingsFrame = (frameTree?.result?.frameTree?.childFrames ?? [])
-      .find((f) => String(f?.frame?.url ?? "").includes("options/options.html"));
-    const settingsCtx = cdp.executionContextEvents
-      .filter((e) => e.kind === "created" && e.sessionId === ntpSession && e.isDefault &&
-        e.frameId === settingsFrame?.frame?.id)
-      .pop();
+    // The embedded frame's default execution context is reported on the NTP
+    // session a beat after the frame navigates; wait (bounded) for it rather
+    // than reading the event list once — the pooled frame's creation raced
+    // this read and the deny then ran in no context at all (observed 2026-08-30).
+    let settingsFrame = null;
+    let settingsCtx = null;
+    for (let i = 0; i < 25 && !settingsCtx; i++) {
+      const frameTree = await cdp.send("Page.getFrameTree", {}, ntpSession);
+      settingsFrame = (frameTree?.result?.frameTree?.childFrames ?? [])
+        .find((f) => String(f?.frame?.url ?? "").includes("options/options.html")) ?? null;
+      settingsCtx = cdp.executionContextEvents
+        .filter((e) => e.kind === "created" && e.sessionId === ntpSession && e.isDefault &&
+          e.frameId === settingsFrame?.frame?.id)
+        .pop() ?? null;
+      if (!settingsCtx) await sleep(200);
+    }
     const iframeNav = settingsFrameId === "present" && !!settingsCtx?.id;
     let iframeDeny = false;
     if (iframeNav) {
@@ -3197,6 +3347,7 @@ async function main() {
     if (iframeShot) await writeEvidence("approval-iframe-denied.png", iframeShot);
     const iframePass = iframeDeniedRequest?.ok === false && iframeNav && iframeDeny &&
       iframeAfter?.ok === true && iframeAfter.asset?.name === "generated page";
+    console.log(`approval journey (iframe deny): ${JSON.stringify({ deniedRequest: iframeDeniedRequest, settingsFrameId, settingsCtx: !!settingsCtx?.id, iframeNav, iframeDeny, after: iframeAfter?.asset?.name ?? iframeAfter })}`);
     check(
       "approval: primary NTP Settings iframe can deny an exact request",
       iframePass,
@@ -3252,6 +3403,7 @@ async function main() {
       return shot;
     };
     await captureApprovalEvidence("approval-deny-pending.png");
+    console.log(`approval journey (deny row): ${JSON.stringify({ denyRequest, denyDom: { ...denyDom, text: String(denyDom.text).slice(0, 300) } })}`);
     check(
       "approval: deny row is singular and capability material absent from the payload",
       denyRequest?.ok === false && denyDom.count === 1 &&

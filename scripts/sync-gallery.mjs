@@ -22,6 +22,8 @@ const FILES = [
   ["extension/shared/command-parser.js", "docs/command-parser.js"],
   ["extension/shared/composer-commands.js", "docs/composer-commands.js"],
   ["extension/shared/run-status.js", "docs/run-status.js"],
+  // The thread view's pure rules (components.js + run-status.js import it).
+  ["extension/shared/thread-view.js", "docs/thread-view.js"],
   ["extension/shared/tool-tree.js", "docs/tool-tree.js"],
   // The canonical secret matcher (tool-tree.js imports it — the gallery must resolve it).
   ["extension/lib/pure.js", "docs/pure.js"],

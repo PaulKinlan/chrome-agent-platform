@@ -141,7 +141,26 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   `done`) replaces the streamed body with the sanitised markdown render in one
   paint, byte-identical to a non-streamed render. The hidden nudge reply never
   streams; the durable log never sees a delta; a within-run provider retry
-  restarts the bubble rather than appending to a failed attempt. Thread storage remains
+  restarts the bubble rather than appending to a failed attempt. The room the
+  turns sit in (CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01): the thread body is
+  the ONE scroll container, the conversation is content-height (no bordered
+  620px box with empty panel under two bubbles), and the composer is docked at
+  the viewport bottom with `position: sticky` over a soft `--bg` gradient so
+  rows scroll under it; the run row pins just above the composer through
+  `--conversation-dock`. Every assistant turn carries `<agent-identity>` —
+  a 24px avatar (the agent's generated image or an inline-SVG initial in the
+  accent), the name, and a `<time datetime>` ("just now" / "3m ago" / a clock
+  time, muted at ≥ 4.5:1 in both schemes) — set once per surface via
+  `agent-conversation.setIdentity()`. The run row reads as one sentence,
+  "Working — reading your tabs…", composed from the progress port's activity
+  (`composeWorkingLabel`), hosts the shared `<loading-state>` grid with the
+  elapsed seconds, and removes itself on completion. Appends scroll to the
+  newest content unless the owner has scrolled up more than 24px to read
+  (`isScrolledToBottom`); the owner's own send and a thread (re)projection
+  always re-stick, and a ResizeObserver keeps the view pinned while a
+  streaming bubble or a rendered frame grows. A generated-page card is
+  titled with the artifact's name — args, the returned asset, or the
+  conversation's id → name registry — never a generic "Generated UI". Thread storage remains
   the Tasks list authority: thread-bound durable run revisions only signal a
   fresh `thread.list` replacement, never supply or duplicate row data. A failed
   list read preserves the current rows and leaves its run revision unacknowledged

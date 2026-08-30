@@ -151,7 +151,7 @@
         <h3 class="spec"><code class="tag">&lt;message-bubble&gt;</code> — conversation turns</h3>
         <div class="stage column" style="max-width:560px">
           <message-bubble role="user" content="Summarise the key points of the current page."></message-bubble>
-          <message-bubble role="agent" content="This page argues three things: a, b, and c…"></message-bubble>
+          <message-bubble role="agent" author="Researcher" ts="1756550400000" content="This page argues three things: a, b, and c…"></message-bubble>
           <message-bubble role="thinking" content="I should list the tabs first, then group by domain, then name each group." step="1" total-steps="3"></message-bubble>
           <message-bubble role="tool" tool-name="tab_list" tool-status="success" tool-args='{"windowId": 3}' tool-result="12 tabs"></message-bubble>
           <message-bubble role="tool" tool-name="tab_group" tool-status="error" tool-args='{"title":"github.com"}' tool-result="tab already grouped"></message-bubble>
@@ -159,6 +159,16 @@
           <message-bubble role="agent" content="<div class='card'><h3>Generated dashboard</h3><p>Here is the HTML the agent produced.</p></div>"></message-bubble>
         </div>
         <p class="caption">role carried by alignment + surface — user right, agent/thinking/tool/error left; markdown + code + tool cards render inside <code>agent</code>/<code>system</code>. HTML output (a full document or a block-level fragment) renders in a SANDBOXED iframe, not as escaped text.</p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;agent-identity&gt;</code> — who + when on a turn</h3>
+        <div class="stage row">
+          <agent-identity name="Researcher" time="1756550400000"></agent-identity>
+          <agent-identity name="Sorting Hat" time="1756540000000"></agent-identity>
+          <agent-identity name="Agent"></agent-identity>
+        </div>
+        <p class="caption">the one identity header for a conversation turn: a 24px avatar (the agent's generated avatar via <code>avatar</code>, otherwise an inline-SVG initial in the accent), the name, and a <code>&lt;time datetime&gt;</code> stamp ("just now", "3m ago", a clock time). <code>&lt;message-bubble role="agent" author ts&gt;</code> renders it above the bubble.</p>
       </div>
 
       <div class="specimen">
@@ -201,6 +211,7 @@
         <div class="stage row">
           <loading-state label="Working…" active></loading-state>
           <loading-state label="Scheduling" elapsed="3" active></loading-state>
+          <loading-state label="" active></loading-state>
         </div>
         <p class="caption">a calm pixel-grid working indicator (not a generic spinner); <code>active</code> animates, <code>elapsed</code> shows the time.</p>
       </div>
@@ -209,7 +220,8 @@
         <h3 class="spec"><code class="tag">&lt;conversation-run-status&gt;</code> — the single conversation lifecycle surface</h3>
         <div class="stage column" style="max-width:560px">
           <conversation-run-status state="queued"></conversation-run-status>
-          <conversation-run-status state="running" activity="Reading the active tabs"></conversation-run-status>
+          <conversation-run-status state="running" activity="reading your tabs"></conversation-run-status>
+          <conversation-run-status state="running" activity="Writing the answer…"></conversation-run-status>
           <conversation-run-status state="retrying"></conversation-run-status>
           <conversation-run-status state="waiting-for-permission" error-reason="the provider origin is not granted" action-label="Fix in Settings"></conversation-run-status>
           <conversation-run-status state="completed"></conversation-run-status>

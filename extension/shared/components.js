@@ -22,6 +22,7 @@ import {
   shouldApplyRegistrySnapshot,
 } from "./agent-registry.js";
 import { parseMentionToken, parseSlashCommand } from "./command-parser.js";
+import { artifactCardTitle, artifactIdentityFromPayloads, isScrolledToBottom, turnTime } from "./thread-view.js";
 import {
   COMMAND_NAMESPACES as ALL_COMMAND_NAMESPACES,
   loadComposerCommandItems,
@@ -3691,9 +3692,37 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
  *   - error: a left card with a danger border
  * Content comes from the `content` attribute (or the light-DOM text as a
  * fallback), so the gallery can populate it declaratively. */
+/* <agent-identity name="Researcher" avatar="data:image/svg+xml…" time="1756550400000">
+ * The one identity header for a conversation turn: a 24px avatar (the agent's
+ * generated avatar image when it has one, otherwise an inline-SVG initial in
+ * the accent — never an emoji), the name, and a <time datetime> stamp
+ * (CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01). Used by <message-bubble> on
+ * assistant turns; reuse it anywhere a turn needs a "who + when". */
+class AgentIdentity extends Component {
+  static get observedAttributes() { return ["name", "avatar", "time"]; }
+  _render() {
+    const name = (this.getAttribute("name") || "Agent").trim() || "Agent";
+    const avatar = String(this.getAttribute("avatar") || "");
+    // Only an image data URL or https is ever set as a src (no javascript:).
+    const avatarOk = /^(data:image\/|https:\/\/)/iu.test(avatar);
+    const initial = ([...name][0] || "A").toUpperCase();
+    const t = turnTime(this.getAttribute("time"));
+    const avatarMarkup = avatarOk
+      ? `<img class="avatar" src="${escapeHtml(avatar)}" alt="" width="24" height="24">`
+      : `<svg class="avatar" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="var(--panel,#fff)" stroke="currentColor" stroke-width="1.5"/><text x="12" y="16" text-anchor="middle" font-size="11" font-weight="600" fill="currentColor" font-family="system-ui,sans-serif">${escapeHtml(initial)}</text></svg>`;
+    mountTemplate(this, `
+      :host { display:inline-flex; align-items:center; gap:8px; min-width:0; color:var(--accent,#0e6e63); line-height:1; }
+      .avatar { width:24px; height:24px; border-radius:50%; flex:0 0 auto; display:block; object-fit:cover; }
+      .name { font-size:12.5px; font-weight:600; color:var(--ink,#1d1b18); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+      time { font-size:12px; color:var(--muted,#635e56); font-variant-numeric:tabular-nums; white-space:nowrap; }
+    `, `${avatarMarkup}<span class="name">${escapeHtml(name)}</span>${t ? `<time datetime="${escapeHtml(t.iso)}" title="${escapeHtml(t.full)}">${escapeHtml(t.label)}</time>` : ""}`);
+  }
+}
+customElements.define("agent-identity", AgentIdentity);
+
 class MessageBubble extends Component {
   static get observedAttributes() {
-    return ["role", "content", "attachments", "tool-name", "tool-status", "tool-args", "tool-result", "tool-detail", "tool-duration", "step", "total-steps", "error-reason", "error-action", "error-category"];
+    return ["role", "content", "attachments", "tool-name", "tool-status", "tool-args", "tool-result", "tool-detail", "tool-duration", "step", "total-steps", "error-reason", "error-action", "error-category", "author", "author-avatar", "ts"];
   }
   _attachments() {
     const raw = this.getAttribute("attachments");
@@ -3748,6 +3777,10 @@ class MessageBubble extends Component {
       :host(:last-child) { margin-bottom:0; }
       :host([role="user"]) { justify-content:flex-end; }
       .msg { max-width:78%; border-radius:12px; padding:10px 14px; overflow-wrap:anywhere; }
+      /* An assistant turn: the identity header (avatar · name · time) above the bubble. */
+      .turn { display:flex; flex-direction:column; gap:6px; max-width:78%; min-width:0; }
+      .turn .msg { max-width:100%; }
+      .turn agent-identity { padding-inline-start:2px; }
       .body { font-size:14px; line-height:1.55; color:var(--ink,#1d1b18); }
       .body .cite-ref a { color:var(--accent,#0e6e63); text-decoration:none; font-size:0.75em; margin-left:1px; }
       :host([role="user"]) .msg { background:var(--secondary-layer,#efede8); }
@@ -3936,8 +3969,21 @@ class MessageBubble extends Component {
           detail ? `Detail:\n${detail}` : "",
         ].filter(Boolean).join("\n\n");
 
+        // The card is titled with the ARTIFACT'S NAME: the args (create), the
+        // returned asset (update), or the name the conversation already knows
+        // for that id — never a meaningless generic head.
+        const conversation = typeof this.closest === "function" ? this.closest("agent-conversation") : null;
+        const cardTitle = genName || artifactCardTitle({
+          toolName: name, args, result, detail,
+          lookup: (id) => conversation?.artifactName?.(id) ?? null,
+        });
+        // Remember id → name from whatever this card knows (the create card's
+        // raw result names the asset) so a later update card — and the durable
+        // re-projection, whose persisted result is only a summary — can be titled.
+        const identity = artifactIdentityFromPayloads([detail, result, args]);
+        if (identity) conversation?.rememberArtifact?.(identity.id, identity.name);
         markup = `<div class="genui" role="status">
-          <div class="genui-head">${escapeHtml(genName || "Generated UI")}</div>
+          <div class="genui-head">${escapeHtml(cardTitle)}</div>
           ${renderHtmlFrame(genHtml)}
           ${rawPayload ? `<details class="genui-raw"><summary>Raw payload</summary><pre class="tool-detail-raw">${escapeHtml(rawPayload)}</pre></details>` : ""}
         </div>`;
@@ -4010,7 +4056,15 @@ class MessageBubble extends Component {
         });
         attachHtml = `<div class="attach">${pieces.join("")}</div>`;
       }
-      markup = `<div class="msg ${role}">${attachHtml}<div class="body">${body}</div></div>`;
+      const bubble = `<div class="msg ${role}">${attachHtml}<div class="body">${body}</div></div>`;
+      if (role === "agent") {
+        const author = this.getAttribute("author") || "Agent";
+        const avatar = this.getAttribute("author-avatar") || "";
+        const ts = this.getAttribute("ts") || "";
+        markup = `<div class="turn"><agent-identity name="${escapeHtml(author)}"${avatar ? ` avatar="${escapeHtml(avatar)}"` : ""}${ts ? ` time="${escapeHtml(ts)}"` : ""}></agent-identity>${bubble}</div>`;
+      } else {
+        markup = bubble;
+      }
     }
     mountTemplate(this, style, markup);
     if (this._cardDom) {
@@ -4126,7 +4180,92 @@ export function formatTsLabel(ts) {
 }
 class AgentConversation extends Component {
   static shadow() { return false; }
-  static get observedAttributes() { return ["messages"]; }
+  static get observedAttributes() { return ["messages", "agent-name", "agent-avatar"]; }
+  /** The identity assistant turns carry (avatar + name); the page sets it for
+   *  the agent the thread belongs to. */
+  setIdentity({ name, avatar } = {}) {
+    if (typeof name === "string" && name.trim()) this.setAttribute("agent-name", name.trim());
+    else this.removeAttribute("agent-name");
+    if (typeof avatar === "string" && avatar) this.setAttribute("agent-avatar", avatar);
+    else this.removeAttribute("agent-avatar");
+  }
+  _identityAttrs(ts) {
+    return {
+      author: this.getAttribute("agent-name") || null,
+      "author-avatar": this.getAttribute("agent-avatar") || null,
+      ts: String(typeof ts === "number" && ts > 0 ? ts : Date.now()),
+    };
+  }
+  /** id → name registry so a later card (update_asset carries only the id)
+   *  can be titled with the artifact's name. Bounded. */
+  rememberArtifact(id, name) {
+    if (typeof id !== "string" || !id || typeof name !== "string" || !name.trim()) return;
+    if (!this._artifactNames) this._artifactNames = new Map();
+    if (this._artifactNames.size >= 200 && !this._artifactNames.has(id)) {
+      this._artifactNames.delete(this._artifactNames.keys().next().value);
+    }
+    this._artifactNames.set(id, name.trim());
+  }
+  artifactName(id) { return this._artifactNames?.get(id) ?? null; }
+  // ── stick-to-bottom scrolling ─────────────────────────────────────────
+  // The conversation is content-height; the SCROLL CONTAINER is whichever
+  // ancestor scrolls (the thread body on the hub, the panel itself in the side
+  // panel, or this element when it is styled to scroll). Every append scrolls
+  // to the newest content unless the owner has scrolled up to read (the
+  // latch, isScrolledToBottom with a 24px slack); the owner's own send always
+  // re-sticks. Content that grows AFTER its append (a streaming bubble, a
+  // rendered frame, a tool result) keeps the view pinned through a
+  // ResizeObserver on this element's box.
+  _scroller() {
+    if (this._scrollHost?.isConnected) return this._scrollHost;
+    let el = this;
+    while (el && el !== document.documentElement) {
+      let overflow = "";
+      try { overflow = getComputedStyle(el).overflowY; } catch { overflow = ""; }
+      if (overflow === "auto" || overflow === "scroll") break;
+      el = el.parentElement;
+    }
+    const host = el && el !== document.documentElement ? el : (document.scrollingElement ?? this);
+    if (host !== this._scrollHost) {
+      this._scrollCleanup?.();
+      this._scrollHost = host;
+      this._stuck = true;
+      const onScroll = () => { this._stuck = isScrolledToBottom(host); };
+      host.addEventListener("scroll", onScroll, { passive: true });
+      // A viewport resize shrinks the scroll container: stay pinned to the
+      // newest turn rather than leaving it under the docked composer.
+      if (host !== this && this._growth && host instanceof Element) this._growth.observe(host);
+      this._scrollCleanup = () => {
+        host.removeEventListener("scroll", onScroll);
+        if (host !== this && host instanceof Element) this._growth?.unobserve?.(host);
+      };
+    }
+    return host;
+  }
+  _scrollToBottom(force = false) {
+    const host = this._scroller();
+    if (!host) return;
+    if (force) this._stuck = true;
+    if (!this._stuck) return;
+    host.scrollTop = host.scrollHeight;
+  }
+  _observeGrowth() {
+    if (this._growth || typeof ResizeObserver === "undefined") return;
+    this._growth = new ResizeObserver(() => { if (this._stuck) this._scrollToBottom(); });
+    this._growth.observe(this);
+  }
+  connectedCallback() {
+    super.connectedCallback();
+    this._observeGrowth();
+  }
+  disconnectedCallback() {
+    this._growth?.disconnect();
+    this._growth = null;
+    this._scrollCleanup?.();
+    this._scrollCleanup = null;
+    this._scrollHost = null;
+    super.disconnectedCallback();
+  }
   _render() {
     ensureStyle("sc-agent-conversation-style", `
       agent-conversation { display:flex; flex-direction:column; min-height:0; }
@@ -4145,7 +4284,7 @@ class AgentConversation extends Component {
          visible, part of the conversation flow (owner 2026-08-28: the label
          belongs inline at the bottom of the chat, not as a separate banner
          duplicating the running entry beneath it). */
-      agent-conversation .live-status { position: sticky; bottom: 0; z-index: 2; margin-block-start: 8px; flex: 0 0 auto; }
+      agent-conversation .live-status { position: sticky; bottom: var(--conversation-dock, 0px); z-index: 2; margin-block-start: 8px; flex: 0 0 auto; }
     `);
     const msgs = this.getAttribute("messages");
     if (msgs != null) this.setMessages(parseJSONAttr(msgs, []));
@@ -4160,11 +4299,11 @@ class AgentConversation extends Component {
   // (the pinned bottom-of-flow invariant) no matter what lands mid-run —
   // tool cards, error bubbles, permission cards, artifact blocks (review
   // P1-a: appends used to land AFTER the row, leaving it mid-transcript).
-  appendTranscript(node) {
+  appendTranscript(node, { force = false } = {}) {
     const row = this._liveStatusRow;
     if (row && row.isConnected) this.insertBefore(node, row);
     else this.appendChild(node);
-    this.scrollTop = this.scrollHeight;
+    this._scrollToBottom(force);
     return node;
   }
   _bubble(role, content, extra) {
@@ -4176,7 +4315,8 @@ class AgentConversation extends Component {
       if (v === "") b.setAttribute(k, "");
       else b.setAttribute(k, String(v));
     }
-    return this.appendTranscript(b);
+    // The owner's own message always re-sticks the view to the bottom.
+    return this.appendTranscript(b, { force: role === "user" });
   }
   // A subtle timestamp divider, inserted ONLY when there is a SIGNIFICANT time
   // gap between consecutive persisted messages (or at the first message — the
@@ -4195,7 +4335,7 @@ class AgentConversation extends Component {
     this.appendTranscript(d);
   }
   appendUser(text, ts, attachments) { if (ts) this._maybeTsGap(ts); return this._bubble("user", text, attachments?.length ? { attachments: JSON.stringify(attachments) } : null); }
-  appendAgent(text, ts) { if (ts) this._maybeTsGap(ts); return this._bubble("agent", text); }
+  appendAgent(text, ts) { if (ts) this._maybeTsGap(ts); return this._bubble("agent", text, this._identityAttrs(ts)); }
   /** Render-only provider-server rows for a message: the collapsed tool-step
    *  card per executed provider-side query ("🔎 Searched: …" — NEVER routed
    *  back through the agent loop) + a bounded sources list with clickable
@@ -4244,7 +4384,7 @@ class AgentConversation extends Component {
         wrap.appendChild(a);
       });
       this.appendChild(wrap);
-      this.scrollTop = this.scrollHeight;
+      this._scrollToBottom();
     }
   }
   appendSystem(text, ts) { if (ts) this._maybeTsGap(ts); return this._bubble("system", text); }
@@ -4277,6 +4417,7 @@ class AgentConversation extends Component {
     // Only what the thread actually handles.
     card.setAttribute("actions", "open-tab reuse");
     wrap.appendChild(card);
+    this.rememberArtifact(String(a.id), typeof a.name === "string" ? a.name : "");
     this.appendTranscript(wrap);
     return card;
   }
@@ -4348,7 +4489,7 @@ class AgentConversation extends Component {
     // Append LAST so the row is the newest thing in the flow; the sticky
     // bottom pin keeps it visible even when the owner scrolls up.
     this.appendChild(row);
-    this.scrollTop = this.scrollHeight;
+    this._scrollToBottom();
   }
   bindLiveStatusExecution(executionId) {
     const row = this._liveStatusRow;
@@ -4399,7 +4540,8 @@ class AgentConversation extends Component {
       }
     }
     if (liveRow) this.appendChild(liveRow);
-    this.scrollTop = this.scrollHeight;
+    // A (re)projection is a fresh read of the thread: land on the newest turn.
+    this._scrollToBottom(true);
   }
 }
 customElements.define("agent-conversation", AgentConversation);
@@ -5511,18 +5653,22 @@ class LoadingState extends Component {
     const cells = Array.from({ length: 9 }, (_, i) =>
       `<span class="px" style="animation-delay:${(i * 60)}ms" aria-hidden="true"></span>`
     ).join("");
+    // The grid is decorative: the host that needs an announcement (the
+    // conversation's run-status row) owns the ONE live region; this element
+    // never nests a second one. The grid takes currentColor so the host's
+    // tone (accent / success / danger / muted) colours it.
+    const hasLabel = this.hasAttribute("label") ? Boolean(this.getAttribute("label")) : true;
     mountTemplate(this, `
-      :host { display:inline-flex; align-items:center; gap:10px; }
-      .grid { display:grid; grid-template-columns:repeat(3,4px); gap:3px; width:18px; height:18px; }
-      .px { width:4px; height:4px; border-radius:1px; background:var(--accent,#0e6e63); }
+      :host { display:inline-flex; align-items:center; gap:10px; color:var(--accent,#0e6e63); }
+      .grid { display:grid; grid-template-columns:repeat(3,4px); gap:3px; width:18px; height:18px; flex:0 0 auto; }
+      .px { width:4px; height:4px; border-radius:1px; background:currentColor; opacity:.65; }
       :host([active]) .px { animation:cap-px 1.4s ease-in-out infinite; }
       .label { font-size:13px; color:var(--muted,#635e56); }
-      .time { font-size:12px; color:var(--muted,#635e56); font-variant-numeric:tabular-nums; opacity:.85; }
-      .settled { color:var(--success,#1a7f37); font-weight:600; }
+      .time { font-size:12px; color:var(--muted,#635e56); font-variant-numeric:tabular-nums; }
       @keyframes cap-px { 0%,100%{opacity:.25;} 50%{opacity:1;} }
-      @media (prefers-reduced-motion: reduce) { :host([active]) .px { animation:none; opacity:.6; } }
-    `, `<span class="grid" role="status" aria-label="${escapeHtml(label)}">${cells}</span>
-      <span class="label">${escapeHtml(label)}</span>
+      @media (prefers-reduced-motion: reduce) { :host([active]) .px { animation:none; opacity:.7; } }
+    `, `<span class="grid" aria-hidden="true">${cells}</span>
+      ${hasLabel ? `<span class="label">${escapeHtml(label)}</span>` : ""}
       ${elapsed > 0 ? `<span class="time">${escapeHtml(String(elapsed))}s</span>` : ""}`);
   }
 }
@@ -5549,18 +5695,17 @@ class ConversationRunStatus extends Component {
     }
     const actionLabel = this.getAttribute("action-label")?.trim() || "";
     const executionId = this.getAttribute("execution-id")?.trim() || "";
-    const cells = Array.from({ length: 9 }, (_, i) =>
-      `<span class="px" style="animation-delay:${i * 60}ms" aria-hidden="true"></span>`
-    ).join("");
+    // The loader is the shared <loading-state> (label-less: this row's own
+    // .label is the announced text; the elapsed seconds tick while active).
+    this._startedAt = status.active ? (this._startedAt ?? Date.now()) : null;
+    const elapsed = this._startedAt ? Math.floor((Date.now() - this._startedAt) / 1000) : 0;
     mountTemplate(this, `
       :host { display:block; min-width:0; }
-      .surface { display:flex; align-items:center; gap:12px; min-height:44px; padding:8px 12px; border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-md,12px); background:var(--panel,#fff); color:var(--text,#1d1b18); }
-      .grid { display:grid; grid-template-columns:repeat(3,4px); gap:3px; inline-size:18px; block-size:18px; flex:0 0 auto; color:var(--muted,#635e56); }
-      .px { inline-size:4px; block-size:4px; border-radius:1px; background:currentColor; opacity:.65; }
-      .surface[data-tone="accent"] .grid { color:var(--accent,#0e6e63); }
-      .surface[data-tone="success"] .grid { color:var(--success,#1a7f37); }
-      .surface[data-tone="danger"] .grid { color:var(--danger,#b3261e); }
-      .surface[data-active="true"] .px { animation:cap-run-grid 1.4s ease-in-out infinite; }
+      .surface { display:flex; align-items:center; gap:12px; min-height:44px; padding:8px 12px; border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-md,12px); background:var(--panel,#fff); color:var(--text,#1d1b18); box-shadow:0 4px 16px rgb(0 0 0 / .06); }
+      loading-state { flex:0 0 auto; color:var(--muted,#635e56); }
+      .surface[data-tone="accent"] loading-state { color:var(--accent,#0e6e63); }
+      .surface[data-tone="success"] loading-state { color:var(--success,#1a7f37); }
+      .surface[data-tone="danger"] loading-state { color:var(--danger,#b3261e); }
       .label { flex:1 1 auto; min-width:0; overflow-wrap:anywhere; font-size:13px; line-height:1.4; }
       .action, .stop { flex:0 0 auto; min-height:36px; padding:6px 10px; border-radius:var(--radius-sm,8px); background:transparent; font:inherit; font-size:12px; font-weight:650; cursor:pointer; }
       .action { border:1px solid var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
@@ -5568,11 +5713,9 @@ class ConversationRunStatus extends Component {
       .stop { border:1px solid var(--danger,#b3261e); color:var(--danger,#b3261e); }
       .stop:hover { background:var(--danger,#b3261e); color:var(--on-accent,#fff); }
       .action:focus-visible, .stop:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
-      @keyframes cap-run-grid { 0%,100% { opacity:.25; } 50% { opacity:1; } }
-      @media (prefers-reduced-motion:reduce) { .surface[data-active="true"] .px { animation:none; opacity:.7; } }
       @media (max-width:480px) { .surface { align-items:flex-start; flex-wrap:wrap; } .action, .stop { margin-inline-start:30px; } }
     `, `<div class="surface" data-state="${status.state}" data-tone="${status.tone}" data-active="${status.active}" role="status" aria-live="polite" aria-atomic="true">
-      <span class="grid" aria-hidden="true">${cells}</span>
+      <loading-state label=""${status.active ? " active" : ""}${elapsed > 0 ? ` elapsed="${elapsed}"` : ""} aria-hidden="true"></loading-state>
       <span class="label">${escapeHtml(status.label)}</span>
       ${status.stoppable && executionId ? `<button class="stop" type="button">Stop</button>` : ""}
       ${actionLabel ? `<button class="action" type="button">${escapeHtml(actionLabel)}</button>` : ""}
@@ -5583,6 +5726,24 @@ class ConversationRunStatus extends Component {
     this._root.querySelector(".stop")?.addEventListener("click", (sourceEvent) =>
       this._emit("stop", { sourceEvent, executionId }));
     this._root.querySelector(".action")?.addEventListener("click", () => this._emit("action"));
+    // The elapsed readout ticks once a second while the run is active — it
+    // updates the loader's attribute only (no re-render of the live region,
+    // so the announcement is never repeated).
+    clearInterval(this._tick);
+    this._tick = null;
+    if (this._startedAt) {
+      this._tick = setInterval(() => {
+        const loader = this._root.querySelector("loading-state");
+        if (!loader || !this._startedAt || !this.isConnected) { clearInterval(this._tick); this._tick = null; return; }
+        loader.setAttribute("elapsed", String(Math.floor((Date.now() - this._startedAt) / 1000)));
+      }, 1000);
+    }
+  }
+  disconnectedCallback() {
+    clearInterval(this._tick);
+    this._tick = null;
+    this._startedAt = null;
+    super.disconnectedCallback();
   }
 }
 customElements.define("conversation-run-status", ConversationRunStatus);

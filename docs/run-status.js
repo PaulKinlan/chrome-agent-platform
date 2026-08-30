@@ -1,5 +1,7 @@
 // Pure lifecycle normalization for the single conversation run-status surface.
 // Keep legacy aliases while every caller migrates to the canonical vocabulary.
+import { composeWorkingLabel } from "./thread-view.js";
+
 const STATE_ALIASES = Object.freeze({
   working: "running",
   done: "completed",
@@ -33,7 +35,9 @@ export function normalizeConversationRunStatus(input) {
     case "queued":
       return { state, label: activity || "Queued", active: true, stoppable: true, tone: "muted" };
     case "running":
-      return { state, label: activity || "Working…", active: true, stoppable: true, tone: "accent" };
+      // The banner reads as one sentence — "Working — reading your tabs…" —
+      // fed from the progress port (CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01).
+      return { state, label: composeWorkingLabel(activity), active: true, stoppable: true, tone: "accent" };
     case "retrying":
       return { state, label: activity || "Retrying…", active: true, stoppable: true, tone: "accent" };
     case "waiting-for-permission":

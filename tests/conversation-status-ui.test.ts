@@ -6,8 +6,10 @@ Deno.test("conversation run status: canonical lifecycle states use truthful labe
   assertEquals(normalizeConversationRunStatus({ state: "queued" }), {
     state: "queued", label: "Queued", active: true, stoppable: true, tone: "muted",
   });
+  // The live banner reads as one sentence: "Working — <activity>…"
+  // (CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01).
   assertEquals(normalizeConversationRunStatus({ state: "running", activity: "Reading tabs" }), {
-    state: "running", label: "Reading tabs", active: true, stoppable: true, tone: "accent",
+    state: "running", label: "Working — reading tabs…", active: true, stoppable: true, tone: "accent",
   });
   assertEquals(normalizeConversationRunStatus({ state: "retrying" }), {
     state: "retrying", label: "Retrying…", active: true, stoppable: true, tone: "accent",
@@ -153,7 +155,9 @@ Deno.test("conversation run status: the live status is the conversation's own in
     "the conversation (which owns the inline status row) sits above the composer");
   const components = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
   assert(components.includes("setLiveStatus(status)"), "agent-conversation exposes the inline live-status API");
-  assert(components.includes("agent-conversation .live-status { position: sticky; bottom: 0;"),
+  // Still sticky at the bottom — offset by the docked composer's height so the
+  // row pins just above it (CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01).
+  assert(components.includes("agent-conversation .live-status { position: sticky; bottom: var(--conversation-dock, 0px);"),
     "the inline status row is pinned (sticky) at the bottom of the conversation viewport");
   assert(/state === "idle" \|\| state === "completed"/.test(components),
     "idle/completed resolve the row — the final conversation entry is the resolution, no orphan chrome");
@@ -255,4 +259,158 @@ Deno.test("run-status-lifecycle: no stale #run-status / loading-state selectors 
   assert(src.includes("conversation-run-status.live-status"), "the journey drives the inline live-status row");
   assert(src.includes("fuContinuous"), "the follow-up assertion forbids working→hidden→working flaps");
   assertEquals(src.includes("fuBlocksResolve"), false, "the old every-block-eventually-resolves loophole is gone");
+});
+
+// ── CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01 — the thread view's run state ──
+// The run banner is fed from the progress port: a tool-call event sets the
+// row to `running` with a "Working — …" label, and the run's completion sets
+// `completed` (the row hides itself). Driven through the REAL
+// runConversationTurn with a stubbed chrome runtime + progress port.
+import { composeWorkingLabel, isScrolledToBottom, artifactCardTitle, turnTime } from "../extension/shared/thread-view.js";
+
+const threadPort: { listener: ((msg: unknown) => void) | null } = { listener: null };
+function installThreadChromeStub(sw: { lastRunId: string | null; holdMs: number }) {
+  (globalThis as Record<string, unknown>).chrome = {
+    runtime: {
+      lastError: null,
+      sendMessage(msg: { type: string; runId?: string }, cb: (res: unknown) => void) {
+        if (msg.type === "provider.permission-summary") { queueMicrotask(() => cb({ ok: true, local: true })); return; }
+        if (msg.type === "agent.run") {
+          sw.lastRunId = msg.runId ?? null;
+          setTimeout(() => cb({ ok: true, threadId: "t_state", executionId: `exec:${msg.runId}`, result: "[demo] done" }), sw.holdMs);
+          return;
+        }
+        queueMicrotask(() => cb({ ok: true }));
+      },
+      connect() {
+        return {
+          onMessage: { addListener(fn: (msg: unknown) => void) { threadPort.listener = fn; } },
+          onDisconnect: { addListener() {} },
+          postMessage() {},
+        };
+      },
+    },
+    permissions: { contains: () => Promise.resolve(true) },
+  };
+}
+
+Deno.test("thread view: run-status reflects the running state — a tool-call progress event yields running + 'Working — …', completion yields completed", async () => {
+  const sw = { lastRunId: null as string | null, holdMs: 150 };
+  installThreadChromeStub(sw);
+  const { runConversationTurn } = await import("../extension/shared/conversation.js");
+  const statuses: Array<{ state: string; activity?: string }> = [];
+  const cards: Array<Record<string, string>> = [];
+  const container = {
+    appendUser() {}, appendAgent() {}, appendSystem() {}, appendError() {},
+    appendTool(m: Record<string, string>) { cards.push(m); return { setAttribute() {} }; },
+    setMessages() {}, clear() {},
+  };
+  const turn = runConversationTurn(container as never, {
+    text: "thread view run state",
+    onStatus: (s: { state: string; activity?: string }) => statuses.push(s),
+  } as never);
+  const end = Date.now() + 1000;
+  while ((sw.lastRunId === null || threadPort.listener === null) && Date.now() < end) await new Promise((r) => setTimeout(r, 5));
+  assert(sw.lastRunId && threadPort.listener, "the run dispatched and the progress port connected");
+  const before = statuses.length;
+  threadPort.listener!({ type: "progress", event: { type: "tool-call", runId: sw.lastRunId, toolName: "list_tabs", toolArgs: {} } });
+  const running = statuses.slice(before).find((s) => s.state === "running");
+  assert(running, `a tool-call progress event must set the running state (got ${JSON.stringify(statuses)})`);
+  const rendered = normalizeConversationRunStatus(running);
+  assertEquals(rendered?.state, "running");
+  assert(rendered && rendered.label.length > 0, "the running row has a non-empty label");
+  assert(/^Working — .+…$/u.test(rendered!.label), `the banner reads "Working — <activity>…" (got ${JSON.stringify(rendered?.label)})`);
+  assertEquals(rendered?.label, "Working — reading your tabs…");
+  await turn;
+  assertEquals(statuses.at(-1)?.state, "completed", "done settles the row to completed (which hides it)");
+  assertEquals(normalizeConversationRunStatus(statuses.at(-1))?.active, false);
+});
+
+Deno.test("thread view: composeWorkingLabel reads as one sentence with exactly one ellipsis", () => {
+  assertEquals(composeWorkingLabel("reading 4 tabs"), "Working — reading 4 tabs…");
+  assertEquals(composeWorkingLabel("Writing the answer…"), "Working — writing the answer…");
+  assertEquals(composeWorkingLabel("Thinking · step 2 of 4"), "Working — thinking · step 2 of 4…");
+  assertEquals(composeWorkingLabel(""), "Working…");
+  assertEquals(composeWorkingLabel(undefined), "Working…");
+  assertEquals(composeWorkingLabel("…"), "Working…");
+});
+
+Deno.test("thread view: the stick-to-bottom latch releases when the owner scrolls up more than the slack", () => {
+  assertEquals(isScrolledToBottom({ scrollTop: 0, clientHeight: 500, scrollHeight: 400 }), true, "a non-scrolling container is at the bottom");
+  assertEquals(isScrolledToBottom({ scrollTop: 500, clientHeight: 500, scrollHeight: 1000 }), true);
+  assertEquals(isScrolledToBottom({ scrollTop: 480, clientHeight: 500, scrollHeight: 1000 }), true, "within 24px slack still sticks");
+  assertEquals(isScrolledToBottom({ scrollTop: 470, clientHeight: 500, scrollHeight: 1000 }), false, "scrolled up beyond the slack: the owner is reading");
+  assertEquals(isScrolledToBottom({ scrollTop: 267, clientHeight: 320, scrollHeight: 907 }), false, "the measured defect (267 of 587) is 'scrolled up'");
+});
+
+Deno.test("thread view: an update card is titled with the artifact's name, never 'Generated UI'", () => {
+  const args = JSON.stringify({ id: "as_1", content: "<!doctype html><h1>v2</h1>" });
+  assertEquals(artifactCardTitle({ toolName: "update_asset", args, result: JSON.stringify({ ok: true, asset: { id: "as_1", name: "crumb.html", type: "html" } }) }), "crumb.html");
+  // The lazy envelope (execute_tool → modelContent → {ok, result}) still resolves the name.
+  const envelope = JSON.stringify({ modelContent: JSON.stringify({ ok: true, selectedTool: "update_asset", result: { ok: true, asset: { id: "as_1", name: "crumb.html" } } }) });
+  assertEquals(artifactCardTitle({ toolName: "update_asset", args, result: envelope }), "crumb.html");
+  // While the call is still running (no result yet) the conversation's own registry names it.
+  assertEquals(artifactCardTitle({ toolName: "update_asset", args, lookup: (id: string) => (id === "as_1" ? "crumb.html" : null) }), "crumb.html");
+  // The durable re-projection hands the card the persisted lazy CALL shape
+  // (execute_tool args: { selectionRef, arguments: {…} }) and a summary-only
+  // result — the registry resolves the id one level down.
+  const lazyArgs = JSON.stringify({ selectionRef: "sel_" + "0".repeat(36), arguments: { origin: "master", id: "as_1", content: "<!doctype html><h1>v2</h1>" } });
+  assertEquals(artifactCardTitle({ toolName: "execute_tool", args: lazyArgs, result: "done", lookup: (id: string) => (id === "as_1" ? "crumb.html" : null) }), "crumb.html");
+  assertEquals(artifactCardTitle({ toolName: "execute_tool", args: JSON.stringify({ selectionRef: "sel_x", arguments: { name: "crumb.html", type: "html", content: "<h1/>" } }) }), "crumb.html");
+  // create_asset carries the name in its args.
+  assertEquals(artifactCardTitle({ toolName: "create_asset", args: JSON.stringify({ name: "crumb.html", type: "html", content: "<h1>v1</h1>" }) }), "crumb.html");
+  // Nothing known: a truthful generic head, never the literal "Generated UI".
+  const bare = artifactCardTitle({ toolName: "update_asset", args });
+  assertEquals(bare, "Updated artifact");
+  assert(!/Generated UI/.test(bare));
+  assertEquals(artifactCardTitle({ toolName: "generate_ui", args: JSON.stringify({ html: "<h1/>" }) }), "Generated page");
+});
+
+Deno.test("thread view: the artifact identity survives the progress port's 300-character truncation", async () => {
+  const { artifactIdentityFromPayloads } = await import("../extension/shared/thread-view.js");
+  const inner = JSON.stringify({ ok: true, selectedTool: "create_asset", result: { asset: { createdAt: 1788112453696, id: "a_mtg3zjgg_hwepfn3l", name: "crumb.html", origin: "master", size: 73, type: "html", updatedAt: 1788112453696 }, id: "a_mtg3zjgg_hwepfn3l", ok: true }, schemaSummary: "{\"properties\":{\"asset\":{}}}" });
+  const full = JSON.stringify({ modelContent: inner });
+  assertEquals(artifactIdentityFromPayloads([full]), { id: "a_mtg3zjgg_hwepfn3l", name: "crumb.html" }, "the intact envelope parses");
+  const truncated = full.slice(0, 300) + "...";
+  assertEquals(artifactIdentityFromPayloads([truncated]), { id: "a_mtg3zjgg_hwepfn3l", name: "crumb.html" }, "the bounded live payload still names the asset");
+  // A search_tools result names TOOLS, not assets: never mistaken for one.
+  const search = JSON.stringify({ modelContent: JSON.stringify({ ok: true, results: [{ name: "create_asset", summary: "Create an artifact" }] }) }).slice(0, 300) + "...";
+  assertEquals(artifactIdentityFromPayloads([search]), null);
+});
+
+Deno.test("thread view: turnTime yields an ISO datetime and a short local label", () => {
+  const now = Date.UTC(2026, 7, 30, 12, 0, 0);
+  assertEquals(turnTime(now - 10_000, now)?.label, "just now");
+  assertEquals(turnTime(now - 3 * 60_000, now)?.label, "3m ago");
+  assertEquals(turnTime(now - 10_000, now)?.iso, new Date(now - 10_000).toISOString());
+  assertEquals(turnTime(NaN, now), null);
+  assertEquals(turnTime(0, now), null);
+});
+
+Deno.test("thread view: assistant turns carry an <agent-identity> header, the composer docks, the title focus is quiet", async () => {
+  const components = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  assert(components.includes('customElements.define("agent-identity"'), "the identity header is a reusable component");
+  const bubbleStart = components.indexOf("class MessageBubble");
+  const bubbleEnd = components.indexOf('customElements.define("message-bubble"', bubbleStart);
+  const bubble = components.slice(bubbleStart, bubbleEnd);
+  assert(bubble.includes("<agent-identity"), "the agent bubble renders the shared identity header (not a hand-rolled row)");
+  const identityStart = components.indexOf("class AgentIdentity");
+  const identity = components.slice(identityStart, components.indexOf('customElements.define("agent-identity"', identityStart));
+  assert(identity.includes("<time datetime="), "the header carries a <time datetime> element");
+  assert(identity.includes("<svg") && !/[\u{1F300}-\u{1FAFF}]/u.test(identity), "the fallback avatar is inline SVG, never an emoji");
+  assert(!bubble.includes('"Generated UI"'), "the literal 'Generated UI' head is gone");
+  assert(bubble.includes("artifactCardTitle("), "the card head resolves the artifact name through the shared rule");
+  const convStart = components.indexOf("class AgentConversation");
+  const convEnd = components.indexOf('customElements.define("agent-conversation"', convStart);
+  const conv = components.slice(convStart, convEnd);
+  assert(conv.includes("isScrolledToBottom("), "appends honour the stick-to-bottom latch");
+  const statusStart = components.indexOf("class ConversationRunStatus");
+  const statusEnd = components.indexOf('customElements.define("conversation-run-status"', statusStart);
+  const status = components.slice(statusStart, statusEnd);
+  assert(status.includes("<loading-state"), "the run row adopts the shared <loading-state> loader (DEAD-COMPONENTS-01)");
+  assert(status.includes('aria-live="polite"'), "the banner is the single polite live region");
+  const html = await Deno.readTextFile(new URL("../extension/ntp/ntp.html", import.meta.url));
+  assert(/\.thread-body agent-composer\s*\{[^}]*position:\s*sticky/su.test(html), "the thread composer is docked (position: sticky)");
+  assert(/\.thread-body agent-conversation\s*\{[^}]*flex:\s*0 0 auto/su.test(html), "the conversation is content-height, not a fixed flex:1 box");
+  assert(html.includes("#thread-title.focus-quiet:focus-visible"), "programmatic title focus paints no ring");
 });

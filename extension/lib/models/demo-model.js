@@ -66,7 +66,14 @@ const ENUM_SLIP_MARKER = "@demo-enum-slip";
 // journey attests the owner-approval card (source + fetch hosts) genuinely
 // pauses a model-initiated script run (CAP-FB-20260830-RUN-SCRIPT-FETCH-
 // APPROVAL-01). The final text reports the outcome honestly.
-const RUN_SCRIPT_MARKER = "@demo-run-script";// @demo-slow: the FIRST model step is delayed (a deterministic mid-run window
+const RUN_SCRIPT_MARKER = "@demo-run-script";
+// @demo-edit-artifact: the demo model creates an HTML artifact and then EDITS
+// it through the REAL lazy protocol — search_tools(create_asset) →
+// execute_tool(create crumb.html) → search_tools(update_asset) →
+// execute_tool(update <that id>) → honest final text. The thread view's
+// update card must be titled with the artifact's name, not "Generated UI"
+// (CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01).
+const EDIT_ARTIFACT_MARKER = "@demo-edit-artifact";// @demo-slow: the FIRST model step is delayed (a deterministic mid-run window
 // for abort tests).
 const SLOW_MARKER = "@demo-slow";
 // @demo-obey-page: the prompt-injection regression probe
@@ -281,6 +288,7 @@ function latestRunSlice(prompt) {
       board: lastUser.includes(BOARD_MARKER) || BOARD_WAKE_RE.test(extractText([msgs[lastIdx]])),
       browser: lastUser.includes(BROWSER_MARKER),
       enumSlip: lastUser.includes(ENUM_SLIP_MARKER),
+      editArtifact: lastUser.includes(EDIT_ARTIFACT_MARKER),
       runScript: lastUser.includes(RUN_SCRIPT_MARKER),
       obeyPage: lastUser.includes(OBEY_PAGE_MARKER),
     },
@@ -609,6 +617,62 @@ const ENUM_SLIP_ARGS = Object.freeze({
   content: "<h1>enum slip</h1><p>created on the corrected retry</p>",
 });
 
+// ── @demo-edit-artifact helpers ─────────────────────────────────────────────
+const EDIT_ARTIFACT_NAME = "crumb.html";
+const EDIT_ARTIFACT_V1 = "<!doctype html><html><body><h1>crumb</h1><p>version one</p></body></html>";
+const EDIT_ARTIFACT_V2 = "<!doctype html><html><body><h1>crumb</h1><p>version two — edited by the demo model</p></body></html>";
+function wantsEditArtifact(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.editArtifact;
+}
+function editArtifactAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" &&
+    Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && /\[demo model\] Artifact edit/.test(p.text ?? "")));
+}
+/** Every executed lazy call's unwrapped output in order (the execute_tool
+ *  envelope reaches the model as an object, an agent-do {modelContent}
+ *  wrapper, or a raw JSON string). */
+function lazyExecuteOutputs(prompt) {
+  const parse = (v) => {
+    if (typeof v === "string") { try { return JSON.parse(v); } catch { return null; } }
+    return v && typeof v === "object" ? v : null;
+  };
+  return boardToolParts(prompt)
+    .filter((p) => p?.type === "tool-result" || p?.type === "tool-error")
+    .map((p) => {
+      let v = parse(p.output?.value ?? p.output ?? p.error);
+      if (v && "modelContent" in v && !("error" in v && "retryable" in v)) v = parse(v.modelContent) ?? v;
+      return v ?? {};
+    });
+}
+function editArtifactCreatedId(prompt) {
+  const created = lazyExecuteOutputs(prompt).find((v) =>
+    v.ok === true && v.selectedTool === "create_asset" && typeof v.result?.asset?.id === "string");
+  return created?.result?.asset?.id ?? null;
+}
+/** Honest final text: the update's result decides. */
+function editArtifactFinalText(prompt) {
+  const prior = runSlice(prompt)
+    .filter((m) => m?.role === "assistant" && Array.isArray(m?.content))
+    .flatMap((m) => m.content)
+    .find((p) => p?.type === "text" && /\[demo model\] Artifact edit/.test(p.text ?? ""));
+  if (prior?.text) return prior.text;
+  const outputs = lazyExecuteOutputs(prompt);
+  const createdId = editArtifactCreatedId(prompt);
+  // The update's result envelope is bounded on its way to the model (the
+  // asset identity is dropped as "bulk"), so success is the envelope's own
+  // ok + the selected tool, not the asset id.
+  const updated = outputs.find((v) =>
+    v.ok === true && v.selectedTool === "update_asset" && (v.result?.ok === true || typeof v.result?.asset?.id === "string"));
+  if (createdId && updated) {
+    return `[demo model] Artifact edit complete: created ${EDIT_ARTIFACT_NAME} (${createdId}) and then updated it to version two.`;
+  }
+  const failed = outputs.find((v) => v.ok === false);
+  const why = String(failed?.error ?? (createdId ? "the update never settled" : "the create never settled")).slice(0, 160);
+  return `[demo model] Artifact edit FAILED honestly: ${why}`;
+}
+
 // ── @demo-browser helpers ───────────────────────────────────────────────────
 function wantsBrowser(prompt) {
   return !!latestRunSlice(prompt)?.marker?.browser;
@@ -702,8 +766,27 @@ function browserFinalText(prompt) {
   return `[demo model] Browser tool ${spec.tool} finished without a result.`;
 }
 
-function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, browser = false, enumSlip = false, runScript = false } = {}) {
+function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, browser = false, enumSlip = false, runScript = false, editArtifact = false } = {}) {
   const step = toolResultCount(prompt);
+  if (editArtifact) {
+    // search(create_asset) → execute create → search(update_asset) → execute
+    // update on the created id → final text (two real edits of one artifact).
+    const toolParts = boardToolParts(prompt);
+    const searches = toolParts.filter((p) => p.toolName === "search_tools").length;
+    const executes = toolParts.filter((p) => p.toolName === "execute_tool").length;
+    if (executes >= 2) return null;
+    if (searches <= executes) {
+      return { id: `search_edit_artifact_${searches}`, name: "search_tools", input: { query: executes === 0 ? "create_asset" : "update_asset", limit: 1 } };
+    }
+    const selectionRef = latestSelectionRef(prompt);
+    if (!selectionRef) return null;
+    if (executes === 0) {
+      return { id: "execute_edit_artifact_create", name: "execute_tool", input: { selectionRef, arguments: { origin: "master", name: EDIT_ARTIFACT_NAME, type: "html", content: EDIT_ARTIFACT_V1 } } };
+    }
+    const id = editArtifactCreatedId(prompt);
+    if (!id) return null; // honest stop: the final text reports it
+    return { id: "execute_edit_artifact_update", name: "execute_tool", input: { selectionRef, arguments: { origin: "master", id, content: EDIT_ARTIFACT_V2 } } };
+  }
   if (browser) {
     const spec = browserSpec(prompt);
     if (!spec) return null; // honest stop: the final text reports it
@@ -1008,6 +1091,8 @@ export function createDemoModel() {
         ? lazyDemoCall(options.prompt, { delegateAgent: true })
         : wantsEnumSlip(options.prompt) && !enumSlipAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { enumSlip: true })
+        : wantsEditArtifact(options.prompt) && !editArtifactAlreadyFinal(options.prompt)
+        ? lazyDemoCall(options.prompt, { editArtifact: true })
         : wantsRunScript(options.prompt) && !runScriptAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { runScript: true })
         : wantsBoard(options.prompt) && !boardAlreadyFinal(options.prompt)
@@ -1039,6 +1124,14 @@ export function createDemoModel() {
       // the loop ends (mirrors the @demo-tools alreadyFinal pattern).
       // The board final/continuation text: honest about the outcome (the
       // marker lets the stripped-history continuation re-emit it + stop).
+      if (wantsEditArtifact(options.prompt)) {
+        return Promise.resolve({
+          content: [{ type: "text", text: editArtifactFinalText(options.prompt) }],
+          finishReason: "stop",
+          usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
+          warnings: [],
+        });
+      }
       if (wantsEnumSlip(options.prompt)) {
         return Promise.resolve({
           content: [{ type: "text", text: enumSlipFinalText(options.prompt) }],
@@ -1135,6 +1228,8 @@ export function createDemoModel() {
             ? lazyDemoCall(options.prompt, { delegateAgent: true })
             : wantsEnumSlip(options.prompt) && !enumSlipAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { enumSlip: true })
+            : wantsEditArtifact(options.prompt) && !editArtifactAlreadyFinal(options.prompt)
+            ? lazyDemoCall(options.prompt, { editArtifact: true })
             : wantsRunScript(options.prompt) && !runScriptAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { runScript: true })
             : wantsBoard(options.prompt) && !boardAlreadyFinal(options.prompt)
@@ -1268,6 +1363,10 @@ export function createDemoModel() {
             // The enum-slip final/continuation text: the second execute's
             // result decides the outcome (never a neutral rewrite).
             response = enumSlipFinalText(options.prompt);
+          }
+          else if (wantsEditArtifact(options.prompt)) {
+            // The artifact-edit final/continuation text: the update's result decides.
+            response = editArtifactFinalText(options.prompt);
           }
           else if (wantsRunScript(options.prompt)) {
             // The script-run final/continuation text: the execute result
