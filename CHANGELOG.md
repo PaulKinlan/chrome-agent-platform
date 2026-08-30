@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.432] — 2026-08-30
+- Scripts: when the assistant wants to save, run or schedule a script, you now approve it on a card in the conversation that shows the exact code and the sites it will fetch; a script can no longer reach localhost or private network addresses, and it can only fetch the sites you saw on the card. Writing and running scripts is back for the assistant, behind that approval.
+
 ## [0.2.431] — 2026-08-30
 - Scripts: the assistant can no longer write or run a saved script on its own — those two actions now belong to you in the hub until the approval card that shows the script and the sites it reaches lands (next release). Listing, reading, editing, deleting and scheduling saved scripts are unchanged.
 

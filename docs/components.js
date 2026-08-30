@@ -5383,6 +5383,13 @@ class PermissionApprovalCard extends Component {
       .state.granted { color:var(--success,#1a7f37); }
       .state.denied { color:var(--muted,#635e56); }
       .state.error, .state.expired { color:var(--danger,#b3261e); }
+      .source-label { display:block; font-size:12px; font-weight:600; color:var(--muted,#635e56); margin:0 0 4px; }
+      .source { margin:0 0 10px; max-height:220px; overflow:auto; padding:8px 10px; border:1px solid var(--border,#e3e0d9); border-radius:8px; background:var(--panel-2,#f6f4f0); font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--ink,#1d1b18); white-space:pre-wrap; overflow-wrap:anywhere; }
+      .source:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .hosts { margin:0 0 12px; padding:0; list-style:none; font-size:12.5px; color:var(--ink,#1d1b18); }
+      .hosts li { overflow-wrap:anywhere; }
+      .hosts .none { color:var(--muted,#635e56); }
+      .dynamic { margin:0 0 12px; font-size:12.5px; font-weight:600; color:var(--danger,#b3261e); }
       :host([state="granted"]) .card, :host([state="denied"]) .card, :host([state="expired"]) .card { border-color:var(--border,#e3e0d9); opacity:.85; }
     `, `<div class="card" role="group" aria-label="Permission request">
       <p class="title">Permission request</p>
@@ -5600,6 +5607,16 @@ customElements.define("streaming-text", StreamingText);
  * or Denies. Emits `approve` / `deny`. */
 class ApprovalCard extends Component {
   static get observedAttributes() { return ["title", "body", "approve-label", "deny-label", "state", "detail"]; }
+  /** Script approvals (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01): the exact
+   * source the owner is approving + the hosts it fetches. A PROPERTY (never
+   * an attribute) rendered with textContent — the source is untrusted text. */
+  get detail() { return this._detail ?? null; }
+  set detail(value) {
+    this._detail = value && typeof value === "object" && typeof value.source === "string"
+      ? { source: value.source, hosts: Array.isArray(value.hosts) ? value.hosts.filter((h) => typeof h === "string") : [], dynamic: value.dynamic === true }
+      : null;
+    if (this._rendered) { this._render(); this._wire(); }
+  }
   _render() {
     const title = this.getAttribute("title") || "Approve this action?";
     const body = this.getAttribute("body") || "";
@@ -5630,12 +5647,16 @@ class ApprovalCard extends Component {
     `, `<div class="card" role="group" aria-label="Approval request">
         <p class="title">${escapeHtml(title)}</p>
         ${body ? `<p class="body">${escapeHtml(body)}</p>` : ""}
+        ${this._detail ? `<span class="source-label" id="source-label">Script source</span><pre class="source" tabindex="0" role="region" aria-labelledby="source-label"></pre><span class="source-label">Sites it fetches</span><ul class="hosts" aria-label="Sites this script fetches">${this._detail.hosts.length ? this._detail.hosts.map((h) => `<li>${escapeHtml(h)}</li>`).join("") : `<li class="none">none — the script makes no fetch to a listed site</li>`}</ul>${this._detail.dynamic ? `<p class="dynamic" role="note">Builds a URL at run time (unknown hosts) — only the sites listed above will be reachable; localhost and private addresses are always refused.</p>` : ""}` : ""}
         ${state === "pending"
           ? `<div class="actions"><button type="button" class="approve">${escapeHtml(approveLabel)}</button><button type="button" class="deny">${escapeHtml(denyLabel)}</button></div>`
           : `<p class="state ${state}" role="status">${escapeHtml(stateText)}</p>`}
       </div>`);
   }
   _wire() {
+    // The source is untrusted text: textContent, never markup.
+    const pre = this._root.querySelector(".source");
+    if (pre && this._detail) pre.textContent = this._detail.source;
     this._root.querySelector(".approve")?.addEventListener("click", (event) => this._emit("approve", { sourceEvent: event }));
     this._root.querySelector(".deny")?.addEventListener("click", (event) => this._emit("deny", { sourceEvent: event }));
   }

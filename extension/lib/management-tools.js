@@ -40,14 +40,12 @@ export const MANAGEMENT_TOOL_NAMES = [
   "subscribe_hook",
   "unsubscribe_hook",
   "generate_ui",
-  // create_script + run_script are CUT from the model toolset until owner
-  // approval gates them (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01): a
-  // model-written script fetches any http(s) URL through cap:fetch with no
-  // approval — an exfiltration + SSRF channel. The script routes stay.
+  "create_script",
   "update_script",
   "delete_script",
   "list_scripts",
   "get_script",
+  "run_script",
   "schedules_list",
   "schedules_pause",
   "schedules_resume",
@@ -351,8 +349,21 @@ export function managementToolset({ callRoute }) {
     // on its behalf, http/https only, size-bounded) and `log(...)`. It is an ASYNC
     // function body — `return` the result. It has NO DOM, NO extension APIs, NO
     // other origins, and NO direct network. A script can be scheduled (run it
-    // on a timer via schedule_task with scriptId). The model-facing create + run
-    // tools are cut until the owner-approval gate lands (see MANAGEMENT_TOOL_NAMES).
+    // on a timer via schedule_task with scriptId) or run on demand (run_script).
+    // A model-initiated create/run/schedule pays an OWNER APPROVAL card that
+    // shows the exact source + the hosts it fetches; the host-side fetch
+    // refuses private addresses and any host not on that list
+    // (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01).
+    create_script: tool({
+      description:
+        "Create a reusable JavaScript script (an async function body) that runs sandboxed + repeatedly without re-invoking the model. The script gets a controlled api: await fetch(url, opts) (reads a PUBLIC http/https page, returns {status, text}) + log(...). Return a value as the result. No DOM/extension/network access of its own. REQUIRES OWNER APPROVAL: the owner sees the full source and every host it fetches before it is saved; use plain string-literal URLs so the hosts are visible — a computed URL is flagged and only the listed hosts are ever reachable; localhost and private addresses are always refused.",
+      inputSchema: z.object({
+        name: z.string().max(SCRIPT_BOUNDS.maxNameLength).describe("a short, clear name for the script"),
+        source: z.string().describe(`the complete JavaScript function body (max ${SCRIPT_BOUNDS.maxSourceBytes} UTF-8 bytes)`),
+        origin: z.string().default("master").describe("'master' (hub-level script)"),
+      }),
+      execute: ({ name, source, origin }) => call("script.create", { origin, name, source }),
+    }),
     update_script: tool({
       description: "Update a script's name/source.",
       inputSchema: z.object({
@@ -377,6 +388,12 @@ export function managementToolset({ callRoute }) {
       description: "Read one script (name + source + last-run status).",
       inputSchema: z.object({ id: z.string(), origin: z.string().default("master") }),
       execute: ({ id, origin }) => call("script.get", { origin, id }),
+    }),
+    run_script: tool({
+      description:
+        "Run a script NOW (sandboxed, no model re-invocation) and return its result. REQUIRES OWNER APPROVAL: the owner sees the script's source and the hosts it fetches on an approval card; the run waits for that decision.",
+      inputSchema: z.object({ id: z.string(), origin: z.string().default("master") }),
+      execute: ({ id, origin }) => call("script.run", { origin, id }),
     }),
 
     // ---- schedules (per-agent alarm visibility + control) ----

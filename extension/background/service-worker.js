@@ -339,12 +339,30 @@ async function ensureOffscreen() {
  * on-demand fallback is the NTP hub page. A TWO-PHASE CLAIM PROTOCOL ensures
  * exactly ONE host executes (the offscreen doc AND the hub are often both
  * open — a plain broadcast made every fetch/side-effect fire twice). */
+// Per-run fetch policy (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01): the
+// hosts a script may reach are derived from its exact source at run time and
+// registered under the run id before the source is sent to the host. The
+// "cap:fetch" route applies THIS list (plus the private-address deny list) and
+// refuses any fetch that carries no registered run id. Entries are removed
+// when the run settles; a bounded sweep drops any the host never settled.
+const scriptRunPolicies = new Map();
+const SCRIPT_RUN_POLICY_TTL_MS = 60_000;
+function registerScriptRunPolicy(runId, source) {
+  const policy = { ...extractFetchHosts(source), at: Date.now() };
+  for (const [id, row] of scriptRunPolicies) {
+    if (Date.now() - row.at > SCRIPT_RUN_POLICY_TTL_MS) scriptRunPolicies.delete(id);
+  }
+  if (scriptRunPolicies.size >= 64) scriptRunPolicies.delete(scriptRunPolicies.keys().next().value);
+  scriptRunPolicies.set(runId, policy);
+  return policy;
+}
 async function runScriptSandboxed(source) {
   // Best-effort: open the offscreen doc (the scheduled host). If it is
   // unavailable (e.g. headless Chrome), the NTP page — the on-demand host —
   // answers the claim instead.
   await ensureOffscreen().catch(() => {});
   const runId = `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  registerScriptRunPolicy(runId, source);
   // Phase 1 — announce + claim: the FIRST host to respond wins (the runtime
   // sendMessage resolves with the first sendResponse).
   let winner = null;
@@ -353,12 +371,13 @@ async function runScriptSandboxed(source) {
     if (claim?.claimed && typeof claim.host === "string") winner = claim.host;
   } catch { /* no host is open */ }
   if (!winner) {
+    scriptRunPolicies.delete(runId);
     return { ok: false, error: "no script host is open — open the hub or enable a host page" };
   }
   // Phase 2 — send the source to the winning host ONLY.
   return new Promise((resolve) => {
     let settled = false;
-    const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+    const finish = (v) => { if (!settled) { settled = true; scriptRunPolicies.delete(runId); resolve(v); } };
     const timer = setTimeout(() => finish({ ok: false, error: "script run timed out (SW)" }), 40_000);
     chrome.runtime.sendMessage({ type: "cap:script-run", source, runId, for: winner }).then(
       (res) => { clearTimeout(timer); finish(res ?? { ok: false, error: "no response from the script host" }); },
@@ -499,6 +518,7 @@ import { tool, generateText } from "ai";
 import { z } from "zod";
 import { setRunFence, clearRunFence, runAborted } from "../lib/run-fence.js";
 import { setRunContext, clearRunContext, currentRunContext } from "../lib/run-context.js";
+import { checkFetchPolicy, extractFetchHosts } from "../lib/fetch-policy.js";
 import {
   currentBrowserCommandSurface,
   exitBrowserCommandContext,
@@ -1511,7 +1531,11 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       dispatchRoute,
       (event) => onProgress?.(event),
     );
-    const liveBrowserTools = browserToolset(scoped);
+    const liveBrowserTools = browserToolset(scoped, {
+      // schedule_task with a scriptId pays the same source-disclosing card as
+      // run_script — through the run's bound model dispatcher.
+      scheduleScriptGate: (scriptId) => modelManagementDispatch("task.schedule-script", { scriptId }),
+    });
     const liveManagementTools = scoped ? {} : managementToolset({
       // Immutable build-local capture. A stale tool closure keeps its original
       // execution id, which activeExecutions rejects after the run finalizes.
@@ -3285,7 +3309,12 @@ function approvalExecutionId(context) {
   return "";
 }
 
-async function requireOwnerApproval(context, action, target, payload) {
+// `detail` (optional, script actions only): { source, hosts, dynamic } shown
+// on the in-context card so the owner approves code they have SEEN
+// (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01). It never enters the digest
+// (the payload binds the source digest + hosts) and is bounded by
+// approvalCardDenial before it leaves the worker.
+async function requireOwnerApproval(context, action, target, payload, detail = undefined) {
   const executionId = approvalExecutionId(context);
   if (!executionId || !target) return { ok: false, error: "This operation requires owner approval." };
   // Owner-DIRECT actions: the owner's own click in an extension UI document IS
@@ -3320,7 +3349,7 @@ async function requireOwnerApproval(context, action, target, payload) {
   // bounded request on the run's own progress channel, then await the exact
   // owner decision. No model step can continue while this promise is pending.
   if (context?.principal === "model") {
-    const request = approvalCardDenial({ approvalId: pending.approvalId, action, targetRef });
+    const request = approvalCardDenial({ approvalId: pending.approvalId, action, targetRef, detail });
     if (!request || typeof context.onApprovalEvent !== "function") {
       resolvePendingApproval(ownerApprovalStore, pending.approvalId, false);
       return { ok: false, error: "Owner approval was required but no originating conversation could show it." };
@@ -3367,6 +3396,25 @@ async function requireOwnerApproval(context, action, target, payload) {
 
 function payloadFields(entries) {
   return canonicalRecord(...entries.map(([name, value]) => canonicalField(name, canonicalScalar(value))));
+}
+
+/** The owner-approval gate for a script action: the payload binds the exact
+ * source (digest) + the hosts the source can reach; the card shows both. */
+async function scriptApprovalGate(context, action, scope, id, source, extra) {
+  const target = canonicalOperationTarget("script", { origin: scope, id: String(id ?? "") });
+  const { hosts, dynamic } = extractFetchHosts(source);
+  let payload;
+  try {
+    payload = payloadFields([
+      ["origin", scope === "master" ? "master" : canonicalOrigin(scope)],
+      ["id", String(id ?? "")],
+      ["name", extra?.name ?? null],
+      ["sourceDigest", sha256Hex(String(source ?? ""))],
+      ["fetchHosts", hosts.join(",")],
+      ["dynamic", dynamic],
+    ]);
+  } catch { return { ok: false, error: `${action} payload is not approvable` }; }
+  return await requireOwnerApproval(context, action, target, payload, { source: String(source ?? ""), hosts, dynamic });
 }
 
 function payloadStringArray(values) {
@@ -3554,7 +3602,9 @@ function executeWorkerTool(toolName, args, context) {
   const management = managementToolset({
     callRoute: (type, body) => dispatchRoute(type, body, context),
   });
-  const browser = workerBrowserTools()[name];
+  const browser = name === "schedule_task"
+    ? browserToolset(false, { scheduleScriptGate: (scriptId) => dispatchRoute("task.schedule-script", { scriptId }, context) })[name]
+    : workerBrowserTools()[name];
   const tool = browser ?? management[name];
   if (!tool) return Promise.resolve({ ok: false, error: `unknown tool: ${name}` });
   // Bounded per-tool call counter for the Usage panel (fire-and-forget — a
@@ -3962,20 +4012,22 @@ const handlers = mergeRouteMaps(
   // permission (which bypasses CORS), so a page/script fetch never hits the
   // CORS wall a direct chrome-extension://-page fetch does. GET/HEAD, http/https
   // only, size-bounded.
-  async "cap:fetch"({ url, method = "GET" }) {
-    let u;
-    try {
-      u = new URL(String(url ?? ""));
-    } catch {
-      return { ok: false, error: "invalid URL" };
-    }
-    if (u.protocol !== "http:" && u.protocol !== "https:") {
-      return { ok: false, error: `protocol ${u.protocol} is not allowed` };
-    }
+  async "cap:fetch"({ url, method = "GET", runId }) {
+    // Policy (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01): the fetch runs
+    // from the USER'S network position with the extension's host permission,
+    // so it refuses loopback/private/link-local addresses outright, and any
+    // host that is not on the approved allow-list registered for THIS script
+    // run (no registered run → nothing is allowed). Credentials are never
+    // attached and redirects are not followed (a redirect could land on a
+    // host the owner never saw).
     const m = String(method ?? "GET").toUpperCase();
     if (m !== "GET" && m !== "HEAD") {
       return { ok: false, error: `method ${m} is not allowed (GET/HEAD only)` };
     }
+    const policy = typeof runId === "string" && runId ? scriptRunPolicies.get(runId) : undefined;
+    const verdict = checkFetchPolicy(url, policy ?? null);
+    if (!verdict.ok) return { ok: false, error: verdict.error };
+    const u = new URL(verdict.url);
     try {
       // The SW fetch only bypasses CORS when the extension holds the host
       // permission for the origin. The all-optional host permissions are not
@@ -3989,7 +4041,10 @@ const handlers = mergeRouteMaps(
           error: `network access to ${u.host} is not granted — host access is granted at install (<all_urls>); if Settings → Permissions shows it missing, reinstall the extension`,
         };
       }
-      const res = await fetch(u.href, { method: m });
+      const res = await fetch(u.href, { method: m, credentials: "omit", redirect: "manual" });
+      if (res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400)) {
+        return { ok: false, error: `fetch to ${u.host} refused: the response redirected elsewhere; a script fetch may only reach its approved hosts directly` };
+      }
       const MAX = 1_000_000;
       // Response bodies are one-shot streams: cache the single read before
       // bounding it (arrayBuffer() followed by text() throws in Chrome).
@@ -5747,8 +5802,23 @@ const handlers = mergeRouteMaps(
   },
 
   // ---- agent-generated scripts (create/update/delete/list/get/run) ----
-  async "script.create"({ origin, name, source }) {
-    return await createScript(origin ?? "master", { name, source });
+  // A MODEL-initiated script create/run/schedule pays an in-context approval
+  // card that shows the exact source (digest-bound in the payload) and the
+  // hosts it fetches; the owner's own hub action is owner-direct
+  // (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01).
+  async "script.create"({ origin, name, source }, context) {
+    const scope = origin ?? "master";
+    const src = typeof source === "string" ? source : "";
+    const gate = await scriptApprovalGate(context, "script.create", scope, sha256Hex(src), src, { name });
+    if (!gate.ok) return gate;
+    return await createScript(scope, { name, source });
+  },
+  async "task.schedule-script"({ scriptId }, context) {
+    // The approval leg of schedule_task with a scriptId: the browser tool
+    // calls this route (model context) before it commits the schedule.
+    const got = await getScript("master", scriptId);
+    if (!got.ok) return got;
+    return await scriptApprovalGate(context, "task.schedule-script", "master", got.script.id, got.script.source, {});
   },
   async "script.update"({ origin, id, name, source }, context) {
     const scope = origin ?? "master";
@@ -5783,13 +5853,15 @@ const handlers = mergeRouteMaps(
   async "script.get"({ origin, id }) {
     return await getScript(origin ?? "master", id);
   },
-  async "script.run"({ origin, id }) {
+  async "script.run"({ origin, id }, context) {
     // Run an agent-generated script SANDBOXED (no model re-invocation — the
     // same JS every time). Resolve the script body, run it in the offscreen
     // host, record the outcome on the script, and return the result + logs.
     const got = await getScript(origin ?? "master", id);
     if (!got.ok) return got;
     const source = got.script.source;
+    const gate = await scriptApprovalGate(context, "script.run", origin ?? "master", id, source, {});
+    if (!gate.ok) return gate;
     const run = await runScriptSandboxed(source);
     // Bound the returned result so a script can't balloon the telemetry.
     let result = run?.result ?? null;

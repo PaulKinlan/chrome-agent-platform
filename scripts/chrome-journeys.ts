@@ -467,6 +467,9 @@ const EXPECTED = [
   "mgmt: update_asset patched the asset",
   "mgmt: delete_asset removed it",
   "mgmt: asset gone after delete",
+  "cap:fetch: loopback refused from a sandboxed script",
+  "Scripts: run_script from the model shows the approval card with the source",
+  "Scripts: the approved run executes only after Allow",
   "mgmt: delete_agent removed the agent",
   "mgmt: agent gone from the directory after delete",
   "no service-worker console errors",
@@ -519,8 +522,12 @@ async function main() {
 
   // A local HTTP fixture server (red page + wrong-origin page) for a REAL
   // screenshot target that isn't a chrome-extension:// page.
+  // Every request the fixture receives (the script-fetch journey asserts a
+  // refused loopback fetch never reaches it).
+  const fixtureHits = [];
   const fixture = Deno.serve({ port: 0, hostname: "127.0.0.1" }, (req) => {
     const u = new URL(req.url);
+    fixtureHits.push(u.pathname + u.search);
     if (u.pathname === "/red.html") {
       return new Response(
         `<html><body style="margin:0;background:#ff0000;width:400px;height:300px"></body></html>`,
@@ -2140,6 +2147,88 @@ async function main() {
       Array.isArray(assetAfter?.assets) &&
         !assetAfter.assets.some((a) => a.id === assetId),
     );
+    // ─────────────────────────────────────────────────────────────
+    // Scripts gate (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01).
+    // (a) The host-side cap:fetch refuses a loopback target even for an
+    //     owner-direct run (the Settings principal creates + runs the script;
+    //     the NTP page is the sandbox host). The fixture must see NO request.
+    // ─────────────────────────────────────────────────────────────
+    const loopSource = `return (await fetch("${RED_ORIGIN}/?d=leak")).status`;
+    const loopScript = await msgOpts({ type: "script.create", origin: "master", name: "loopback probe", source: loopSource });
+    const loopRun = loopScript?.ok === true
+      ? await msgOpts({ type: "script.run", origin: "master", id: loopScript.script.id })
+      : loopScript;
+    check(
+      "cap:fetch: loopback refused from a sandboxed script",
+      loopRun?.ok === false &&
+        /private or loopback address/.test(String(loopRun?.error ?? "")) &&
+        !fixtureHits.some((h) => h.includes("d=leak")),
+    );
+    // (b) A MODEL-initiated run_script pauses on the in-context approval card
+    //     that shows the exact source + the hosts it fetches; nothing runs
+    //     until a genuine Allow click. The demo model's @demo-run-script
+    //     marker drives the REAL lazy protocol (search_tools → execute_tool →
+    //     run_script) through the hub composer.
+    const cardSource = `const url = "https://example.com/";\nreturn url.length;`;
+    const cardScript = await msgOpts({ type: "script.create", origin: "master", name: "card probe", source: cardSource });
+    const cardScriptId = cardScript?.script?.id ?? "";
+    await cdp.send("Page.navigate", { url: `chrome-extension://${extId}/ntp/ntp.html` }, ntpSession);
+    await sleep(2500);
+    let composerReady = false;
+    for (let i = 0; i < 20 && !composerReady; i++) {
+      composerReady = (await boxOf(cdp, ntpSession, "#task-input")) !== null;
+      if (!composerReady) await sleep(250);
+    }
+    if (composerReady) {
+      await typeInto(cdp, ntpSession, "#task-input", `@demo-run-script ${cardScriptId}`);
+      await clickSel(cdp, ntpSession, "#run-task");
+    }
+    const readCard = () => evalIn(
+      cdp, ntpSession,
+      `(() => { const card = document.querySelector("approval-card"); if (!card) return null; const root = card.shadowRoot; return { state: card.getAttribute("state") || "pending", title: root?.querySelector(".title")?.textContent ?? "", source: root?.querySelector(".source")?.textContent ?? null, hosts: [...(root?.querySelectorAll(".hosts li") ?? [])].map((li) => li.textContent), hasApprove: !!root?.querySelector(".approve") }; })()`,
+    );
+    let card = null;
+    for (let i = 0; i < 60 && !card?.hasApprove; i++) {
+      card = await readCard();
+      if (!card?.hasApprove) await sleep(500);
+    }
+    const beforeAllow = await msgValue({ type: "script.get", origin: "master", id: cardScriptId });
+    const cardShot = await captureShot(cdp, ntpSession);
+    if (cardShot) await writeEvidence("script-approval-card.png", cardShot);
+    check(
+      "Scripts: run_script from the model shows the approval card with the source",
+      card?.hasApprove === true &&
+        card?.title === "Run this script now?" &&
+        card?.source === cardSource &&
+        Array.isArray(card?.hosts) && card.hosts.includes("example.com") &&
+        beforeAllow?.script?.lastRunAt == null,
+    );
+    // A GENUINE click on the card's Approve (inside its shadow root).
+    const approveBox = await evalIn(
+      cdp, ntpSession,
+      `(() => { const b = document.querySelector("approval-card")?.shadowRoot?.querySelector(".approve"); if (!b) return null; b.scrollIntoView({ block: "center" }); const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
+    );
+    if (approveBox) {
+      await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: approveBox.x, y: approveBox.y, button: "left", buttons: 1, clickCount: 1 }, ntpSession);
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: approveBox.x, y: approveBox.y, button: "left", buttons: 0, clickCount: 1 }, ntpSession);
+    }
+    let afterAllow = null;
+    for (let i = 0; i < 40; i++) {
+      afterAllow = await msgValue({ type: "script.get", origin: "master", id: cardScriptId });
+      if (afterAllow?.script?.lastRunAt != null) break;
+      await sleep(500);
+    }
+    const cardAfter = await readCard();
+    check(
+      "Scripts: the approved run executes only after Allow",
+      approveBox !== null &&
+        afterAllow?.script?.lastRunAt != null &&
+        afterAllow?.script?.status === "ok" &&
+        cardAfter?.state === "granted",
+    );
+    await msgOpts({ type: "script.delete", origin: "master", id: cardScriptId }).catch(() => {});
+    if (loopScript?.script?.id) await msgOpts({ type: "script.delete", origin: "master", id: loopScript.script.id }).catch(() => {});
+
     const mgmtDel = await approvedMsg({ type: "agent.delete", origin: "https://mgmt.example" });
     check("mgmt: delete_agent removed the agent", mgmtDel?.ok === true);
     const dirAfter = await msgValue({ type: "agent.directory" });

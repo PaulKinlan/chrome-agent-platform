@@ -191,29 +191,18 @@ Deno.test("management: every callable tool declares a description", () => {
   }
 });
 
-// CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01 (commit A, the cut): a script
-// the model writes can fetch any http(s) URL through the host-side cap:fetch
-// bridge with no owner approval — an exfiltration + SSRF channel. Until the
-// gate lands (commit B: DESTRUCTIVE_ACTIONS + the approval card + the fetch
-// policy), the two tools that open that channel are absent from the model
-// toolset. Deleted again in commit B, where the gate's own tests take over.
-Deno.test("GUARD: run_script and create_script are absent from the model toolset until gated", async () => {
-  const { toolset } = makeTools();
+// CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01 (commit B, the gate): the two
+// tools are back, and their descriptions tell the model the owner approves the
+// exact source + hosts (a description that omits this invites computed URLs
+// and private targets the gate will refuse).
+Deno.test("run_script and create_script are model-callable again and declare the owner-approval gate", async () => {
+  const { toolset, calls } = makeTools();
   for (const name of ["run_script", "create_script"]) {
-    assert(!(name in toolset), `${name} must not be model-callable until owner approval gates it`);
-    assert(!MANAGEMENT_TOOL_NAMES.includes(name), `${name} must not be in the introspection catalog`);
+    assert(name in toolset, `${name} is callable`);
+    assert(/OWNER APPROVAL/.test(String(toolset[name].description)), `${name} declares the approval gate`);
   }
-  // The read/manage tools stay: the owner can still inspect + edit scripts
-  // through the model, and the script routes themselves are unchanged.
-  for (const name of ["update_script", "delete_script", "list_scripts", "get_script"]) {
-    assert(name in toolset, `${name} stays callable`);
-  }
-  // The prompt surfaces must not teach the model a tool it cannot call.
-  const standalone = (name) => new RegExp(`\\b${name}\\b`);
-  for (const file of ["extension/lib/master-skill.js", "extension/lib/system-prompts.js"]) {
-    const text = await Deno.readTextFile(file);
-    for (const name of ["run_script", "create_script"]) {
-      assert(!standalone(name).test(text), `${file} must not mention ${name} while it is cut`);
-    }
-  }
+  await toolset.create_script.execute({ name: "x", source: "return 1", origin: "master" });
+  assertEquals(calls[0].type, "script.create");
+  await toolset.run_script.execute({ id: "s_1", origin: "master" });
+  assertEquals(calls[1].type, "script.run");
 });

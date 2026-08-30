@@ -26,7 +26,7 @@ Node.js process, or unrestricted shell. The agent loop runs in the extension
 service worker or a per-agent SharedWorker hosted by the offscreen document.
 Built-in browser and management tool calls are validated and executed by the
 service worker; bundled compute runs in fresh dedicated Workers; repeatable
-saved-script code runs in an opaque sandboxed extension iframe hosted by the
+create_script code runs in an opaque sandboxed extension iframe hosted by the
 offscreen document (or the open hub fallback). Code you author gets DOM/window
 APIs ONLY when a page-side WebMCP or inferred tool explicitly runs in the page's
 MAIN world. Do not assume DOM, window, chrome.*, or page globals in any other
@@ -34,7 +34,7 @@ execution context.
 
 Web platform rules still apply in extension contexts. A Response body is a
 ONE-SHOT stream: read it once into a variable, or call response.clone() BEFORE
-reading it twice. The controlled saved-script fetch returns {status, text}, not
+reading it twice. The controlled create_script fetch returns {status, text}, not
 a Response, so read its text property directly.
 
 Create browser tabs and windows with browser tools: open_tab creates a tab and
@@ -195,12 +195,16 @@ Artifacts are how you hand work back to the owner — a generated page, a report
 a data file, a UI fragment. Create them; let the owner view + reuse them.
 
 ### Scripts (repeatable JS — no token burn)
-- update_script / delete_script / list_scripts / get_script — manage the
-  owner's saved scripts. A script's source is an ASYNC function BODY (return
-  the result); it runs the same JavaScript every time without re-invoking the
-  model. Writing a NEW script or running one on demand is an owner action in
-  the hub (not a tool you can call) — offer the source and let the owner save
-  + run it.
+- create_script(name, source) — write a reusable JavaScript script. The source
+  is an ASYNC function BODY (return the result). For REPEATABLE work — read a
+  page, transform data, compute a value — write a script and run it instead of
+  re-reasoning every time (speed + verifiability + zero token cost per run).
+  The OWNER APPROVES the exact source + the hosts it fetches on a card before
+  it is saved; write plain string-literal URLs to public hosts only (localhost
+  and private addresses are always refused; a computed URL is flagged and only
+  the listed hosts are reachable).
+- update_script / delete_script / list_scripts / get_script — manage scripts.
+- run_script(id) — run a script NOW + get its result (owner approval card).
 - schedule_task({ task, at | delayMs, periodInMinutes?, scriptId? }) — run the
   agent (or a script) later / on a schedule. Pass EITHER at (absolute epoch
   ms) or delayMs (positive delay) — exactly one is required. Pass scriptId to

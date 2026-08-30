@@ -152,6 +152,8 @@ const BASELINE_ROUTES = [
   "task.pause",
   "task.resume",
   "task.update",
+  // The approval leg of schedule_task with a scriptId (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01).
+  "task.schedule-script",
   "schedules.list",
   "recipe.list",
   "skill.list",

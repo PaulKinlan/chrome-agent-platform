@@ -34,7 +34,13 @@ const AGENT_DELEGATE_MARKER = "@demo-delegate-agent";// @demo-board: the demo mo
 // protocol — board_list → claim the first claimable job → board_complete_job —
 // so the browser KAT attests a NAMED AGENT genuinely claims + settles a board
 // job (its execution id resolves through the live run registry).
-const BOARD_MARKER = "@demo-board";// @demo-slow: the FIRST model step is delayed (a deterministic mid-run window
+const BOARD_MARKER = "@demo-board";
+// @demo-run-script <scriptId>: the demo model issues a REAL run_script call
+// through the lazy protocol (search_tools → execute_tool) so the browser
+// journey attests the owner-approval card (source + fetch hosts) genuinely
+// pauses a model-initiated script run (CAP-FB-20260830-RUN-SCRIPT-FETCH-
+// APPROVAL-01). The final text reports the outcome honestly.
+const RUN_SCRIPT_MARKER = "@demo-run-script";// @demo-slow: the FIRST model step is delayed (a deterministic mid-run window
 // for abort tests).
 const SLOW_MARKER = "@demo-slow";
 /** Public deterministic cancellation window used by the demo provider. This is
@@ -217,6 +223,7 @@ function latestRunSlice(prompt) {
       delegateAgent: lastUser.includes(AGENT_DELEGATE_MARKER),
       createAgent: lastUser.includes(CREATE_AGENT_MARKER),
       board: lastUser.includes(BOARD_MARKER),
+      runScript: lastUser.includes(RUN_SCRIPT_MARKER),
     },
   };
 }
@@ -243,6 +250,31 @@ function latestSelectionRef(prompt) {
   } catch {
     return null;
   }
+}
+
+// ── @demo-run-script helpers ────────────────────────────────────────────────
+function wantsRunScript(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.runScript;
+}
+function runScriptId(prompt) {
+  const slice = latestRunSlice(prompt);
+  if (!slice) return "";
+  const text = extractText([slice.slice[0]]);
+  return text.match(/@demo-run-script\s+([A-Za-z0-9_-]{1,80})/)?.[1] ?? "";
+}
+function runScriptAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" && Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && /\[demo model\] Script run/.test(p.text ?? "")));
+}
+function runScriptFinalText(prompt) {
+  const results = boardToolParts(prompt)
+    .filter((p) => p?.type === "tool-result")
+    .map((p) => lazyUnwrap(p.output?.value ?? p.output));
+  const last = results.filter((v) => v && typeof v === "object" && ("result" in v || "error" in v || "ok" in v)).at(-1);
+  if (!last) return "[demo model] Script run finished without a result.";
+  if (last.ok === false) return `[demo model] Script run DENIED/FAILED honestly: ${String(last.error ?? "unknown").slice(0, 160)}`;
+  return `[demo model] Script run completed: ${JSON.stringify(last.result ?? null).slice(0, 160)}`;
 }
 
 // ── @demo-board helpers ─────────────────────────────────────────────────────
@@ -307,8 +339,22 @@ function boardFinalText(prompt) {
   return "[demo model] Board job flow finished without board results.";
 }
 
-function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false } = {}) {
+function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, runScript = false } = {}) {
   const step = toolResultCount(prompt);
+  if (runScript) {
+    // search → execute run_script(id) → final (the execute pauses on the
+    // owner's approval card; a denial returns ok:false and the final text
+    // reports it).
+    const toolParts = boardToolParts(prompt);
+    const searches = toolParts.filter((p) => p.toolName === "search_tools").length;
+    const executes = toolParts.filter((p) => p.toolName === "execute_tool").length;
+    if (executes >= 1) return null;
+    if (searches === 0) return { id: "search_run_script", name: "search_tools", input: { query: "run_script", limit: 1 } };
+    const selectionRef = latestSelectionRef(prompt);
+    return selectionRef
+      ? { id: "execute_run_script", name: "execute_tool", input: { selectionRef, arguments: { id: runScriptId(prompt), origin: "master" } } }
+      : null;
+  }
   if (board) {
     // search → execute per board tool (a selectionRef is single-use):
     // board_list → board_claim_job(the first claimable) → board_complete_job.
@@ -514,6 +560,8 @@ export function createDemoModel() {
         (createAgentFinal(options.prompt) || toolResultCount(options.prompt) >= 2);
       const lazyCall = wantsAgentDelegate(options.prompt)
         ? lazyDemoCall(options.prompt, { delegateAgent: true })
+        : wantsRunScript(options.prompt) && !runScriptAlreadyFinal(options.prompt)
+        ? lazyDemoCall(options.prompt, { runScript: true })
         : wantsBoard(options.prompt) && !boardAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { board: true })
         : wantsDelegate(options.prompt)        ? lazyDemoCall(options.prompt, { delegate: true })
@@ -541,6 +589,14 @@ export function createDemoModel() {
       // the loop ends (mirrors the @demo-tools alreadyFinal pattern).
       // The board final/continuation text: honest about the outcome (the
       // marker lets the stripped-history continuation re-emit it + stop).
+      if (wantsRunScript(options.prompt)) {
+        return Promise.resolve({
+          content: [{ type: "text", text: runScriptFinalText(options.prompt) }],
+          finishReason: "stop",
+          usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
+          warnings: [],
+        });
+      }
       if (wantsBoard(options.prompt)) {
         return Promise.resolve({
           content: [{ type: "text", text: boardFinalText(options.prompt) }],
@@ -589,6 +645,8 @@ export function createDemoModel() {
             (createAgentFinal(options.prompt) || toolResultCount(options.prompt) >= 2);
           const lazyCall = wantsADel && !agentDelegateAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { delegateAgent: true })
+            : wantsRunScript(options.prompt) && !runScriptAlreadyFinal(options.prompt)
+            ? lazyDemoCall(options.prompt, { runScript: true })
             : wantsBoard(options.prompt) && !boardAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { board: true })
             : wantsDel            ? lazyDemoCall(options.prompt, { delegate: true })
@@ -734,6 +792,11 @@ export function createDemoModel() {
             controller.enqueue({ type: "finish", usage, finishReason: "stop" });
             controller.close();
             return;
+          }
+          else if (wantsRunScript(options.prompt)) {
+            // The script-run final/continuation text: the execute result
+            // decides (a denied approval reads as a failure, never a success).
+            response = runScriptFinalText(options.prompt);
           }
           else if (wantsBoard(options.prompt)) {
             // The board flow's final/continuation text: the claim + complete

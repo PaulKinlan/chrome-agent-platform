@@ -24,7 +24,7 @@ Deno.test("replay safety: every shipped built-in is EXPLICITLY classified (the e
     assertEquals(safety.replaySafetyForTool(name), REPLAY_READ_ONLY, `${name} must be read-only`);
   }
   // Known MUTATING built-ins.
-  for (const name of ["navigate_tab", "close_tab", "open_tab", "delete_agent", "create_asset", "delete_asset", "generate_ui", "schedule_task"]) {
+  for (const name of ["navigate_tab", "close_tab", "open_tab", "delete_agent", "create_asset", "delete_asset", "run_script", "generate_ui", "schedule_task"]) {
     assertEquals(safety.replaySafetyForTool(name), REPLAY_MUTATING, `${name} must be mutating`);
   }
 });

@@ -35,6 +35,14 @@ export const DESTRUCTIVE_ACTIONS = new Set([
   "named-agent.update",
   "script.delete",
   "script.update",
+  // A MODEL-created / -run / -scheduled script (CAP-FB-20260830-RUN-SCRIPT-
+  // FETCH-APPROVAL-01): the script's controlled fetch is an exfiltration +
+  // SSRF channel, so the owner approves the exact source (digest-bound) and
+  // sees the hosts it fetches before it runs. The owner's own hub/Settings
+  // action on the same routes is owner-direct (below).
+  "script.create",
+  "script.run",
+  "task.schedule-script",
   // Per-agent schedule controls are approvable mutations: a MODEL-initiated
   // pause/resume/update creates a pending approval (the in-context card flow,
   // per-agent alarms P1-3). Without membership here createPendingApproval
@@ -75,6 +83,10 @@ export const OWNER_DIRECT_ACTIONS = new Set([
   "task.pause",
   "task.resume",
   "task.update",
+  // The owner writing or running a script from the hub/Settings IS the
+  // approval; only a model-initiated create/run pays the card.
+  "script.create",
+  "script.run",
 ]);
 
 export function isOwnerDirectApproval(context, action) {
@@ -522,16 +534,34 @@ export function approvalPendingCount(store) {
  * resolve-approval authority and the EXACT retry consumes it by digest match.
  * The requirement is a bounded DESCRIPTION (action + opaque target ref) — it
  * grants nothing by itself. Returns null for an unusable tuple (fail closed). */
-export function approvalCardDenial({ approvalId, action, targetRef }) {
+// The actions whose card discloses the exact script source + the hosts it
+// fetches. The owner cannot approve code they have not seen, so for these
+// (and only these) the card carries the bounded source and host list.
+export const SOURCE_DISCLOSING_ACTIONS = new Set(["script.create", "script.run", "task.schedule-script"]);
+export const APPROVAL_DETAIL_BOUNDS = Object.freeze({ maxSourceChars: 64 * 1024, maxHosts: 64, maxHostChars: 253 });
+
+/** Bound a script-approval detail ({ source, hosts, dynamic }) for the card;
+ * a malformed detail is dropped (the card still renders without it). */
+export function boundApprovalDetail(detail) {
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return undefined;
+  const source = typeof detail.source === "string" ? detail.source.slice(0, APPROVAL_DETAIL_BOUNDS.maxSourceChars) : "";
+  const hosts = Array.isArray(detail.hosts)
+    ? detail.hosts.filter((h) => typeof h === "string" && h.length > 0 && h.length <= APPROVAL_DETAIL_BOUNDS.maxHostChars).slice(0, APPROVAL_DETAIL_BOUNDS.maxHosts)
+    : [];
+  return { source, hosts, dynamic: detail.dynamic === true };
+}
+
+export function approvalCardDenial({ approvalId, action, targetRef, detail }) {
   if (typeof approvalId !== "string" || !approvalId || approvalId.length > 160) return null;
   if (typeof action !== "string" || !DESTRUCTIVE_ACTIONS.has(action)) return null;
   const ref = String(targetRef ?? "").slice(0, 200);
+  const bounded = SOURCE_DISCLOSING_ACTIONS.has(action) ? boundApprovalDetail(detail) : undefined;
   return {
     ok: false,
     waitingForPermission: true,
     permissionRequirement: {
       reason: `${action}: ${ref}`,
-      approvals: [{ approvalId, action, targetRef: ref }],
+      approvals: [{ approvalId, action, targetRef: ref, ...(bounded ? { detail: bounded } : {}) }],
     },
   };
 }

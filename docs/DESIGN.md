@@ -155,6 +155,13 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   or credentials. Approval ids stay in event-handler closures and never become DOM
   attributes. Approve and Deny are ordinary labelled buttons with immediate
   disabled/pending state and a polite live result.
+  **The one deliberate exception is a script** (`script.create` / `script.run` /
+  a scheduled script): the owner cannot approve code they have not read, so the
+  card shows the exact source in a scrollable, labelled, keyboard-focusable
+  `<pre>` (set as a property and rendered with `textContent`, never an attribute
+  or markup), lists the sites it fetches, and calls out a computed URL in the
+  danger tone ("unknown hosts — only the listed sites will be reachable"). The
+  title is plain words ("Run this script now?"), not the action id.
 
 ## Generated artifact boundary
 Interactive HTML previews use three distinct layers: the privileged extension

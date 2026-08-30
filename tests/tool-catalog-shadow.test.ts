@@ -100,7 +100,9 @@ Deno.test("tool catalog shadow: route remains Settings-only and absent from prov
   assertStringIncludes(worker, 'async "tool-catalog.shadow"(m, context)');
   assertStringIncludes(worker, 'context?.principal !== "owner-options"');
   assertEquals(PAGE_ALLOWED_ROUTES.has("tool-catalog.shadow"), false);
-  assertStringIncludes(worker, "const liveBrowserTools = browserToolset(scoped)");
+  // The interactive toolset binds the per-run schedule-script approval gate
+  // (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01); the scoped flag is unchanged.
+  assertStringIncludes(worker, "const liveBrowserTools = browserToolset(scoped, {");
   assertStringIncludes(worker, "const liveManagementTools = scoped ? {} : managementToolset({");
   assertStringIncludes(worker, "readMasterLazySources");
   assertStringIncludes(worker, "readSiteLazySources");

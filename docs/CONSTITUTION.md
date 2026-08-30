@@ -29,6 +29,15 @@ alarms) and acts on untrusted page content + model output. Threat vectors:
 - **Untrusted content → model → action** — page text can influence a model that
   can act. Prompt-injection: model output must not directly trigger destructive
   actions without the grant.
+- **Model-written scripts are approved as code, and their fetch is fenced** —
+  `script.create`, `script.run` and a scheduled script (`task.schedule-script`)
+  are destructive actions: a model-initiated call pauses on an in-context card
+  that shows the EXACT source (the approval payload binds its digest) and the
+  hosts it fetches; the owner's own hub action is owner-direct. The host-side
+  `cap:fetch` sends `credentials:"omit"`, never follows redirects, refuses
+  loopback/private/link-local addresses (`extension/lib/fetch-policy.js`,
+  `tests/cap-fetch-deny.test.ts`) and refuses any host not on the run's
+  allow-list derived from the approved source. No registered run → no fetch.
 - **MV3 CSP** — no `eval`/`new Function` in the bundle (verified: 0 sites).
   (Exemption: the agent-script host `sandbox/script-sandbox.js` runs in the
   manifest `sandbox` page — an opaque origin with no chrome.* access — and uses
