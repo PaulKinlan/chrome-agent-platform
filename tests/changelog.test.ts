@@ -1,7 +1,17 @@
 // tests/changelog.test.ts — verifies CHANGELOG.md validity, uniqueness, ordering,
 // and lockstep sync with package.json and extension/CHANGELOG.md.
+//
+// CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01: the user-facing-voice rules and
+// the recent/complement partition are tested HERE against the SAME exported
+// implementation the About renderer ships (extension/options/changelog-filter.js),
+// so the renderer, the unit tests and scripts/check-changelog.mjs cannot drift.
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
+import {
+  isUserFacingEntry,
+  parseChangelog,
+  partitionChangelog,
+} from "../extension/options/changelog-filter.js";
 
 Deno.test("changelog: parsed entries are unique and strictly descending semver", async () => {
   const changelog = await Deno.readTextFile(new URL("../CHANGELOG.md", import.meta.url));
@@ -41,18 +51,104 @@ Deno.test("changelog: extension/CHANGELOG.md is in exact lockstep with root CHAN
   assertEquals(rootChangelog, extChangelog, "extension/CHANGELOG.md must be byte-identical to root CHANGELOG.md");
 });
 
-Deno.test("changelog: recent entries (last ten versions) are plain user language without internal task IDs, SHAs, or raw jargon", async () => {
+// ── the exported rules (CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01) ─────────
+
+Deno.test("changelog filter: isUserFacingEntry rejects engineering and workflow copy", () => {
+  const reject = [
+    "merge: WebMCP acceptance green lane (0c9783c8)",
+    "chore(tasks): record bundled-inventory drift fix",
+    "fix(build): version bumps now keep inventory in lockstep",
+    "test: widen recent-section assertions",
+    "ci: run the gate",
+    "docs: update the style guide",
+    "detector registration restored at discover (a1b2c3d)",
+    "journey assertion restored",
+    "KAT 10/10",
+    "CDP eval context dropped",
+    "harness port fixed",
+    "worktree hygiene",
+    "board deny lane merged",
+    "tracker: the diff view component is recorded as landed.",
+    "merge splice had folded the check names",
+    "the run was RED then GREEN",
+    "Landed: a reusable diff view is ready",
+    "the change is now in review",
+    "two more fixes are in progress",
+    "recorded as landed",
+    "the job was claimed by the Research agent",
+  ];
+  for (const s of reject) {
+    assert(!isUserFacingEntry(s), `should reject: ${s}`);
+  }
+});
+
+Deno.test("changelog filter: isUserFacingEntry accepts plain user copy", () => {
+  const accept = [
+    "The diff view is now ready for the editing flow (side by side or unified).",
+    "Tool cards in a conversation now show what the tool actually returned.",
+    "Every edit to an artifact keeps the previous version, and any earlier version can be restored.",
+    "The hub stays fast as you use it.",
+    "Notifications from the agent work again.",
+    "The new tab opens on the composer.",
+  ];
+  for (const s of accept) {
+    assert(isUserFacingEntry(s), `should accept: ${s}`);
+  }
+});
+
+// ── the Show-all-complement rule ────────────────────────────────────────────
+
+const FIXTURE = `# Changelog
+
+## [0.2.4] — 2026-08-30
+- A user-facing change in the newest release.
+- Tracker: an internal note in the newest release.
+
+## [0.2.3] — 2026-08-30
+- Another readable change.
+
+## [0.2.2] — 2026-08-30
+- merge: an internal merge line.
+
+## [0.2.1] — 2026-08-30
+- A third readable change.
+
+## [0.2.0] — 2026-08-30
+- A fourth readable change.
+
+## [0.1.9] — 2026-08-30
+- A fifth readable change.
+
+## [0.1.8] — 2026-08-30
+- A sixth readable change (beyond the five visible).
+`;
+
+Deno.test("changelog filter: partitionChangelog keeps the newest five readable entries and puts the REST in the complement", () => {
+  const { recent, rest } = partitionChangelog(FIXTURE);
+  assertEquals(recent.length, 5, "exactly five recent entries");
+  // The five visible versions, newest first: 0.2.4, 0.2.3, 0.2.1, 0.2.0, 0.1.9
+  // (0.2.2 is skipped — its only bullet is internal).
+  assertEquals(recent.map((r) => r.version), ["0.2.4", "0.2.3", "0.2.1", "0.2.0", "0.1.9"]);
+  // The newest release's internal bullet goes into the complement, not the visible list.
+  assert(recent.every((r) => r.bullets.every(isUserFacingEntry)), "visible bullets are all user-facing");
+  const restVersions = rest.map((r) => r.version);
+  assert(restVersions.includes("0.2.2"), "the all-internal version is in the complement");
+  assert(restVersions.includes("0.1.8"), "versions beyond the five visible are in the complement");
+  assert(restVersions.includes("0.2.4"), "the newest release's internal bullets are in the complement");
+  // Complement carries every bullet that was not shown up front — and nothing else.
+  const restBullets = rest.flatMap((r) => r.bullets);
+  const visibleBullets = recent.flatMap((r) => r.bullets);
+  const allBullets = parseChangelog(FIXTURE).flatMap((v) => v.bullets);
+  assertEquals([...visibleBullets, ...restBullets].sort(), [...allBullets].sort(),
+    "visible + complement = every bullet exactly once (no duplication, no loss)");
+  // No bullet appears in both sides.
+  for (const b of visibleBullets) {
+    assert(!restBullets.includes(b), `no duplication of visible bullet: ${b}`);
+  }
+});
+
+Deno.test("changelog: recent entries (last ten versions) are plain user language via the exported filter", async () => {
   const changelog = await Deno.readTextFile(new URL("../CHANGELOG.md", import.meta.url));
-  // Mirror of extension/options/options.js isUserFacingEntry: a bullet a
-  // non-engineer can read. Kept in lockstep with the renderer and
-  // scripts/check-changelog.mjs (CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01).
-  const isUserFacingEntry = (text: string) => {
-    const line = String(text).trim();
-    if (/^(merge|chore|fix\(|test|ci|docs):/i.test(line)) return false;
-    if (/\b[0-9a-f]{7,40}\b/i.test(line)) return false;
-    if (/journey|KAT|assertion|CDP|harness|worktree|lane|tracker|splice|\bRED\b|\bGREEN\b/i.test(line)) return false;
-    return true;
-  };
   const versions = [...changelog.matchAll(/^## \[([^\]]+)\][^\n]*\n([\s\S]*?)(?=^## |\z)/gm)]
     .slice(0, 10)
     .map((m) => ({ version: m[1], bullets: m[2].split(/\r?\n/).filter((l) => l.startsWith("- ")).map((l) => l.slice(2).trim()) }));

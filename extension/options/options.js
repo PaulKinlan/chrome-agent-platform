@@ -3095,43 +3095,15 @@ renderShortcuts();
 // versions whose bullets a non-engineer can read are shown up front; every
 // older or internal entry is behind a "Show all" disclosure so the About page
 // stays small and the copy stays human. Rendered lazily on first open.
-//
-// A bullet is user-facing unless it reads like an engineering log line: a
-// conventional commit prefix (merge:/chore:/fix(...):/test:/ci:/docs:), a
-// bare git SHA, or any of the project's internal vocabularies (journeys, KAT,
-// CDP, harnesses, worktrees, lanes, trackers, RED/GREEN gates, merge splices).
-export function isUserFacingEntry(text) {
-  const line = String(text).trim();
-  if (/^(merge|chore|fix\(|test|ci|docs):/i.test(line)) return false;
-  if (/\b[0-9a-f]{7,40}\b/i.test(line)) return false;
-  if (/journey|KAT|assertion|CDP|harness|worktree|lane|tracker|splice|\bRED\b|\bGREEN\b/i.test(line)) return false;
-  return true;
-}
-
-function parseChangelog(md) {
-  const lines = String(md).split(/\r?\n/);
-  const versions = [];
-  let current = null;
-  for (const raw of lines) {
-    const line = raw.trimEnd();
-    const h = line.match(/^##\s+\[([^\]]+)\]\s*—?\s*(.*)$/);
-    if (h) {
-      current = { version: h[1].trim(), date: h[2].trim(), bullets: [] };
-      versions.push(current);
-      continue;
-    }
-    if (current && line.startsWith("- ")) {
-      current.bullets.push(line.slice(2).trim());
-    }
-  }
-  return versions;
-}
+// The rules live in changelog-filter.js (shared with the test and the release
+// gate) so the renderer, the unit tests and `check-changelog` cannot drift.
+import { isUserFacingEntry, partitionChangelog } from "./changelog-filter.js";
 
 function renderChangelog(md) {
   const host = $("#changelog");
   if (!host) return;
   host.replaceChildren();
-  const versions = parseChangelog(md);
+  const { recent, rest } = partitionChangelog(md);
   const buildCard = (v, bullets) => {
     const card = document.createElement("div");
     card.className = "changelog-entry";
@@ -3154,15 +3126,8 @@ function renderChangelog(md) {
     card.append(list);
     return card;
   };
-  const recent = [];
-  for (const v of versions) {
-    const visible = v.bullets.filter(isUserFacingEntry);
-    if (!visible.length) continue; // an entry with nothing a user can read is skipped
-    recent.push({ v, visible, hidden: v.bullets.length - visible.length });
-    if (recent.length >= 5) break;
-  }
   for (const r of recent) {
-    host.append(buildCard(r.v, r.visible));
+    host.append(buildCard(r, r.bullets));
     if (r.hidden > 0) {
       const note = document.createElement("p");
       note.className = "muted changelog-hidden-note";
@@ -3174,9 +3139,9 @@ function renderChangelog(md) {
     host.innerHTML = `<p class="muted">No changelog yet.</p>`;
     return;
   }
-  // Everything else — including the internal engineering entries — behind a
-  // disclosure, built LAZILY on first open so the About page stays bounded at
-  // load (the full history stays reachable without the 2,000+ node cost).
+  // The disclosure renders ONLY the complement of the visible five — the
+  // internal bullets of those releases and every other release in full. It is
+  // built LAZILY on first open so the About page stays bounded at load.
   const details = document.createElement("details");
   details.className = "changelog-all";
   const summary = document.createElement("summary");
@@ -3186,10 +3151,7 @@ function renderChangelog(md) {
     if (!details.open || details.querySelector(".changelog-all-body")) return;
     const all = document.createElement("div");
     all.className = "changelog-all-body";
-    for (const v of versions) {
-      if (v.bullets.length === 0) continue;
-      all.append(buildCard(v, v.bullets));
-    }
+    for (const c of rest) all.append(buildCard(c, c.bullets));
     details.append(all);
   });
   host.append(details);

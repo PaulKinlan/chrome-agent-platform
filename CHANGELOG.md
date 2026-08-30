@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.2.481] — 2026-08-30
+- The What's new section keeps the last five readable changes up front and puts everything else, without duplication, behind Show all
+
 ## [0.2.480] — 2026-08-30
-- The What's new section change is now in review
+- The What's new section in Settings now keeps the changelog readable — the most recent user-facing changes are shown plainly, with older and internal notes one click away.
 
 ## [0.2.479] — 2026-08-30
 - The What's new section shows the last five readable changes, with everything else behind a disclosure
@@ -16,19 +19,19 @@
 - The diff view is now ready for the editing flow (side by side or unified, with added/removed counts and keyboard navigation between changes).
 
 ## [0.2.475] — 2026-08-30
-- Landed: a reusable diff view (side by side or unified, with added/removed counts and keyboard navigation between changes) is ready for the editing flow.
+- A reusable diff view (side by side or unified, with added/removed counts and keyboard navigation between changes) is ready for the editing flow.
 
 ## [0.2.474] — 2026-08-30
 - The conversation now shows what a tool call returned in plain terms, without internal plumbing.
 
 ## [0.2.473] — 2026-08-30
-- Landed: tool cards in a conversation now show what the tool actually returned, in plain terms, with no internal plumbing; a permission request is still there to answer when you reopen the thread.
+- Tool cards in a conversation now show what the tool actually returned, in plain terms, with no internal plumbing; a permission request is still there to answer when you reopen the thread.
 
 ## [0.2.472] — 2026-08-30
 - Every edit to an artifact keeps the previous version, and any earlier version can be restored.
 
 ## [0.2.471] — 2026-08-30
-- Landed: every edit to an artifact keeps the previous version, and any earlier version can be restored.
+- Every edit to an artifact keeps the previous version, and any earlier version can be restored.
 
 ## [0.2.470] — 2026-08-30
 - The hub stays fast as you use it — a run that took 2.5 seconds with 120 past tasks now takes about 0.3 seconds.

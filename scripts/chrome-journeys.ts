@@ -601,6 +601,7 @@ const EXPECTED = [
   "about: Full release notes link targets the bundled changelog",
   "about: the About section DOM is bounded (< 600 nodes at load)",
   "about: the full history builds only when the disclosure opens",
+  "about: Show all complements the visible five (no duplicated versions)",
   "about: retained a what's-new screenshot",
   "profile removed (no leak)",
   "cleanup hard-failed on descendants (none survived)",
@@ -3708,6 +3709,13 @@ async function main() {
             `[...document.querySelectorAll('#changelog > .changelog-entry .changelog-items li')].map((li) => li.textContent).join('\n')`,
           )
         : "";
+      const visibleVersions = aboutSession
+        ? await evalIn(
+            cdp,
+            aboutSession,
+            `[...document.querySelectorAll('#changelog > .changelog-entry .changelog-head strong')].map((e) => e.textContent)`,
+          )
+        : [];
       const hasShowAll = aboutSession
         ? await evalIn(
             cdp,
@@ -3733,6 +3741,7 @@ async function main() {
       if (aboutShot) await writeEvidence("about-whats-new.png", aboutShot);
       // Open the disclosure and confirm the full history builds lazily.
       let allEntriesInDetails = 0;
+      let restVersions = [];
       if (aboutSession) {
         await evalIn(
           cdp,
@@ -3745,6 +3754,11 @@ async function main() {
           aboutSession,
             `document.querySelectorAll('#changelog .changelog-all-body .changelog-entry').length`,
         );
+        restVersions = await evalIn(
+          cdp,
+          aboutSession,
+            `[...document.querySelectorAll('#changelog .changelog-all-body .changelog-head strong')].map((e) => e.textContent)`,
+        );
       }
       if (aboutPage) {
         await fetch(`http://127.0.0.1:${port}/json/close/${aboutPage.id}`).catch(() => {});
@@ -3756,8 +3770,8 @@ async function main() {
       check(
         "about: visible copy is user-facing (no SHAs, no merge:/Tracker:, no gate jargon)",
         !/\b[0-9a-f]{7,40}\b/.test(String(visibleText)) &&
-          !/merge:|Tracker:/.test(String(visibleText)) &&
-          !/journey|KAT|CDP|harness|worktree|lane|splice|\bRED\b|\bGREEN\b/i.test(String(visibleText)),
+          !/merge:|Tracker:|Landed:/.test(String(visibleText)) &&
+          !/journey|KAT|CDP|harness|worktree|lane|splice|in review|in progress|recorded as|\bRED\b|\bGREEN\b/i.test(String(visibleText)),
       );
       check(
         "about: 'Show all release notes' disclosure present",
@@ -3775,6 +3789,11 @@ async function main() {
         "about: the full history builds only when the disclosure opens",
         Number(allEntriesInDetails) > 100,
       );
+      check(
+        "about: Show all complements the visible five (no duplicated versions)",
+        Array.isArray(visibleVersions) && Array.isArray(restVersions) &&
+          visibleVersions.every((v) => !restVersions.includes(v)),
+      );
       check("about: retained a what's-new screenshot", !!aboutShot);
     } catch (e) {
       // A CDP/browser hiccup here must FAIL the About checks honestly, never
@@ -3786,6 +3805,7 @@ async function main() {
       check("about: Full release notes link targets the bundled changelog", false);
       check("about: the About section DOM is bounded (< 600 nodes at load)", false);
       check("about: the full history builds only when the disclosure opens", false);
+      check("about: Show all complements the visible five (no duplicated versions)", false);
       check("about: retained a what's-new screenshot", false);
     }
 
