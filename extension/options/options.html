@@ -135,7 +135,7 @@
         <div class="enroll">
           <h3>Add a Site Agent</h3>
           <p
-            class="muted">Grant access to one site so the tools it makes available can become Site Agent actions. Chrome requests only that site's origin — never broad <code>&lt;all_urls&gt;</code> access.</p>
+            class="muted">Chrome grants <code>&lt;all_urls&gt;</code> host access when the extension is installed; page tools require it. The capabilities in Permissions are separate optional permissions, requested only when you enable or use them.</p>
           <div id="discovered-tabs" class="origin-list" style="margin-bottom:12px; display:none;"></div>
           <div class="enroll-row">
             <label class="field" style="flex:1"><span class="field-label">Site origin</span>
@@ -183,7 +183,7 @@
       <section id="permissions" class="panel">
         <h2>Permissions</h2>
         <p
-          class="muted">Every permission is granted at install (this extension is loaded unpacked; it never ships to a store). This is the live, verified state of each grant — there is nothing to enable here. If any row shows MISSING, reload the extension.</p>
+          class="muted">Capability permissions are optional and requested just-in-time from your click (the chat offers the same Enable inline). Host access and the core runtime permissions are granted at install. This is the live, verified state of each grant.</p>
         <div id="permission-list" class="permission-list"></div>
       </section>
 

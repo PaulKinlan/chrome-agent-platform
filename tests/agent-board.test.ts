@@ -1028,3 +1028,44 @@ Deno.test("board wiring: drain rejections reschedule through one shared bounded 
   // Startup, alarm, and live-kick rejection paths all route through it.
   assert((swSrc.match(/\.catch\(\(e\) => handleBoardDrainRejection\(/g) ?? []).length >= 3, "startup, alarm, and live-kick rejection paths must share the scheduler");
 });
+
+// ── r5 P0 REDs: the OPTIONAL + JIT model must be REAL at runtime ────────────
+
+// (P0-2) requestCapability must REQUEST (chrome.permissions.request) — the
+// superseded contains-only model can never enable a capability.
+Deno.test("capabilities: requestCapability performs a JIT permissions.request", async () => {
+  const requested = [];
+  const granted = new Set();
+  globalThis.chrome = {
+    runtime: { id: "t", getURL: (p) => "chrome-extension://t/" + p, getManifest: () => ({ permissions: [] }) },
+    permissions: {
+      contains: async (q) => (q?.permissions ?? []).every((p) => granted.has(p)),
+      request: async (q) => { requested.push(...(q?.permissions ?? [])); (q?.permissions ?? []).forEach((p) => granted.add(p)); return true; },
+    },
+  };
+  const { requestCapability } = await import("../extension/lib/capabilities.js");
+  const res = await requestCapability("bookmarks");
+  assertEquals(res.granted, true);
+  assertEquals(requested.includes("bookmarks"), true, "requestCapability must call chrome.permissions.request");
+});
+
+// (P0-3) Tool denials carry the CONVERSATION contract (waitingForPermission +
+// permissionRequirement) so the chat renders the inline Enable card.
+Deno.test("browser tools: a missing-grant denial carries the conversation permission contract", async () => {
+  globalThis.chrome = {
+    runtime: { id: "t", getURL: (p) => "chrome-extension://t/" + p, getManifest: () => ({ permissions: [] }) },
+    permissions: { contains: async () => false },
+  };
+  const { browserToolset } = await import("../extension/lib/browser-tools.js");
+  const tools = browserToolset(false);
+  const r = await tools.list_bookmarks.execute({});
+  assertEquals(r?.waitingForPermission, true, "the denial must carry waitingForPermission");
+  assertEquals(r?.permissionRequirement?.permissions, ["bookmarks"], "the requirement names the exact permission");
+});
+
+// ── review round-5: capability ID uniqueness ────────────────────────────────
+Deno.test("capabilities: no duplicate capability IDs", async () => {
+  const { CAPABILITIES } = await import("../extension/lib/capabilities.js");
+  const ids = CAPABILITIES.map((c) => c.id);
+  assertEquals(new Set(ids).size, ids.length, `duplicate capability IDs: ${ids.join(", ")}`);
+});

@@ -146,12 +146,12 @@ Deno.test("T11 management permission: reads fail closed without the management p
   reset();
   const t = tools();
   const noPerm = await t.list_extensions.execute({});
-  assertEquals(noPerm.error, "management permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals(noPerm.error, "management permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
   assertEquals(chromeCalls.filter((c) => c[0] === "management.getAll").length, 0, "no management call without permission");
   const getNoPerm = await t.get_extension.execute({ id: "other-extension-id" });
-  assertEquals(getNoPerm.error, "management permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals(getNoPerm.error, "management permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
   const warnNoPerm = await t.get_extension_permission_warnings.execute({ id: "other-extension-id" });
-  assertEquals(warnNoPerm.error, "management permission not granted — all permissions are granted at install; if Settings → Permissions shows it missing, reload the extension");
+  assertEquals(warnNoPerm.error, "management permission not granted — enable it from the chat when prompted, or in Settings → Permissions");
 });
 
 Deno.test("T11 management reads: bounded output + honest totals once permission granted", async () => {

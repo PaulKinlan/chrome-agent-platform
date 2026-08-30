@@ -641,13 +641,12 @@ function openDiscoverPicker(tabs) {
 }
 
 async function discoverTab(tab) {
-  // The scripting permission + host access are GRANTED AT INSTALL (manifest
-  // permissions + host_permissions <all_urls>) — VERIFY the install grant
-  // rather than running an obsolete runtime request. A verification failure
-  // or absence is surfaced honestly (fail closed).
+  // OPTIONAL + JIT model: the discover click IS the user gesture — request
+  // the scripting permission + the site's origin here (chrome.permissions
+  // .request needs a gesture; the SW can never provide one).
   let granted = false;
   try {
-    granted = (await chrome.permissions.contains({
+    granted = (await chrome.permissions.request({
       permissions: ["scripting"],
       origins: [`${tab.origin}/*`],
     })) === true;

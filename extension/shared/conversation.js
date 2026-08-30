@@ -451,19 +451,11 @@ export function normalizePermissionRequirement(result) {
   };
 }
 
-/** Execute an approved permission requirement FROM THE OWNER'S CLICK. Every
- * Chrome API permission + host access is GRANTED AT INSTALL (manifest
- * permissions + host_permissions <all_urls>) — so the Chrome side is VERIFIED
- * (chrome.permissions.contains, fail closed: a contains() error is treated as
- * NOT granted and surfaced) rather than requested at runtime. The
- * browser-control grant — the in-context MUTATION approval, a separate policy
- * layer — is then routed through the service worker (the single grant
- * authority). Scope is exactly what the tool computed: grantOrigins set an
- * origin-scoped grant; grantGlobal (only when the tool's own semantics already
- * required the global grant) sets the global grant; nothing is silently
- * broadened. "storage" is verified too so the grant PERSISTS (without it the
- * grant is session-only and evaporates with the MV3 worker). Returns an
- * honest outcome; every failure is surfaced, never swallowed. */
+/** Resolve each pending owner-approval by id through the service worker's
+ * authority (the resolver enforces run-bound-only for extension principals).
+ * Shared by the approve path (inside approvePermissionRequirement) and the
+ * inline-approval deny path. Returns an honest outcome; every failure is
+ * surfaced, never swallowed. */
 export async function resolveApprovalRequirement(requirement, approve, { sendFn = send } = {}) {
   const out = { ok: true, errors: [] };
   for (const approval of requirement?.approvals ?? []) {
@@ -479,10 +471,21 @@ export async function resolveApprovalRequirement(requirement, approve, { sendFn 
   return out;
 }
 
+/** Execute an approved permission requirement FROM THE OWNER'S CLICK
+ * (OPTIONAL + JIT model, owner directive 2026-08-29): the owner's card click
+ * IS the user gesture — the page calls chrome.permissions.request for the
+ * exact permissions the requirement names, THEN applies the browser-control
+ * policy grant through the service worker (the single grant authority). Scope
+ * is exactly what the tool computed: grantOrigins set an origin-scoped grant;
+ * grantGlobal (only when the tool's own semantics already required the global
+ * grant) sets the global grant; nothing is silently broadened. If storage is
+ * among the requested permissions the grant persists; otherwise it is
+ * reported session-only. Returns an honest outcome; every failure is
+ * surfaced, never swallowed. */
 export async function approvePermissionRequirement(requirement, {
   sendFn = send,
-  verifyPermissions = async (permissions) => {
-    try { return (await chrome.permissions.contains({ permissions })) === true; }
+  requestPermissions = async (permissions) => {
+    try { return (await chrome.permissions.request({ permissions })) === true; }
     catch { return false; }
   },
 } = {}) {
@@ -499,14 +502,14 @@ export async function approvePermissionRequirement(requirement, {
   }
   if (requirement?.permissions?.length) {
     try {
-      out.permissionsGranted = (await verifyPermissions([...requirement.permissions])) === true;
+      out.permissionsGranted = (await requestPermissions([...requirement.permissions])) === true;
     } catch (e) {
       out.permissionsGranted = false;
       out.errors.push(String(e?.message ?? e));
     }
     if (!out.permissionsGranted) {
       out.ok = false;
-      if (!out.errors.length) out.errors.push("the install grant could not be verified");
+      if (!out.errors.length) out.errors.push("the owner did not grant the permission");
       return out;
     }
   }
@@ -515,9 +518,11 @@ export async function approvePermissionRequirement(requirement, {
     // session-only and the retry would deny again after a worker restart. A
     // failed verify is reported, not hidden.
     try {
-      out.storagePersisted = (await verifyPermissions(["storage"])) === true;
+      out.storagePersisted = requirement.permissions.includes("storage")
+        ? true // granted in the JIT request above
+        : (await chrome.permissions.contains({ permissions: ["storage"] })) === true;
     } catch {
-      out.storagePersisted = false;
+      out.storagePersisted = null;
     }
     const body = requirement.grantGlobal === true
       ? { granted: true }

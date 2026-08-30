@@ -208,7 +208,8 @@ Deno.test("T5/T6: registry parity — the 11 new tools are registered with capab
   // HOST-PERMISSION SIMPLIFICATION: these are GRANTED AT INSTALL now
   const manifest = JSON.parse(await Deno.readTextFile(new URL("../extension/manifest.json", import.meta.url)));
   for (const p of ["system.cpu", "system.memory", "system.storage", "system.display", "topSites", "readingList", "pageCapture"]) {
-    assert(manifest.permissions.includes(p), `manifest granted ${p}`);
+    // Capability permissions are OPTIONAL (JIT) under the 2026-08-29 model.
+    assert(manifest.optional_permissions.includes(p), `manifest made ${p} optional`);
   }
   assert((manifest.host_permissions ?? []).includes("<all_urls>"), "host access is permanent (<all_urls>)");
 });
