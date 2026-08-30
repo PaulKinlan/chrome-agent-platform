@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.432] — 2026-08-30
+- Jobs panel: sync the component gallery with the error-state fix
+
 ## [0.2.431] — 2026-08-30
 - Jobs panel: a failed board read now shows the honest error instead of an empty board
 
