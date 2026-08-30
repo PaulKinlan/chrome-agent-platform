@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.466] — 2026-08-30
+- Tracker: the diff engine is recorded as landed.
+
 ## [0.2.465] — 2026-08-30
 - Landed: the groundwork for showing what changed in an edited page — a real diff engine is now bundled and tested.
 
