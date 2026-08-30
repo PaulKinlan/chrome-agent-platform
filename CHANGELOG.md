@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.501] — 2026-08-30
+- Housekeeping: a task entry was completed to the required shape so the tracker check passes.
+
 ## [0.2.500] — 2026-08-30
 - Housekeeping: parallel work streams reconciled.
 

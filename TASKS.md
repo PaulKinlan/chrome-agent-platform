@@ -4221,6 +4221,11 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
     - 2026-08-30 22:30 UTC — review r1 P1 fixed: journey asserts exact saved skill id. The reviewer (sol) found the persistence check toggled no REAL skill checkbox and asserted only a count; reworked `scripts/chrome-journeys.ts` to real-click the first UNCHECKED skill in the live dialog, record its id from `skill.list` (checkbox DOM order == catalog order), then assert the saved `named-agent.list` record's skill ids CONTAIN that exact id (new check "create dialog: the saved agent's skill ids CONTAIN the exactly-toggled skill id"). Falsification: toggle removed → the exact-id check RED; restored → GREEN.
 - Review: pending
 - Gates: full suite green at the tip; the new journey check is the permanent regression gate (fails if the body can no longer scroll with Advanced+Skills expanded).
+- Blockers: —
+- Next: none — IN_REVIEW; the fix and its regression journey landed, awaiting archive
+- Recover: `git log --oneline --all --grep=CAP-FB-20260830-AGENT-DIALOG-SCROLL-01`
+- History:
+  - 2026-08-30 — coordinator: added the missing top-level required fields so check:tasks passes (the lane's own History notes sit under Acceptance).
 
 ## [CAP-FB-20260830-AGENT-BOARD-WORKING-01] Make the jobs board work end to end: an agent can post a job for another agent, the target picks it up, and the owner sees the result
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 board lane, findings 1-10. Owner: "jobs board is new and I need to get working". Typing "ask the Research agent to find three articles about WebMCP and report back" into the hub ends after 3.5 minutes with the model apologising that both hand-off tools failed, then falsely announcing the work was handed off; nothing is ever posted, nobody is woken, and no result comes back.
