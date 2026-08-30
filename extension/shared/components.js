@@ -23,11 +23,14 @@ import {
 } from "./agent-registry.js";
 import { parseMentionToken, parseSlashCommand } from "./command-parser.js";
 import {
-  COMMAND_NAMESPACES,
+  COMMAND_NAMESPACES as ALL_COMMAND_NAMESPACES,
   loadComposerCommandItems,
   resolveComposerCommandSelection,
 } from "./composer-commands.js";
-export { COMMAND_NAMESPACES } from "./composer-commands.js";
+// /files is progressive enhancement — absent where showDirectoryPicker is missing.
+export const COMMAND_NAMESPACES = ALL_COMMAND_NAMESPACES.filter(
+  (n) => !n.localFiles || supportsLocalFilesCommand(),
+);
 import { normalizeConversationRunStatus } from "./run-status.js";
 import { safeParseOnce, buildTree, subtreeJson, safeJsonStringify } from "./tool-tree.js";
 // The CANONICAL secret redactor (lib/pure.js — one semantic, shared with the
@@ -4927,7 +4930,6 @@ class AgentComposer extends Component {
         // No colon typed yet — FILTER the namespace list by the typed prefix
         // (/ → all, /s → schedule + skill, /sk → skill).
         const items = COMMAND_NAMESPACES
-          .filter((n) => !n.localFiles || supportsLocalFilesCommand())
           .filter((n) => !ns || n.id.startsWith(ns) || n.label.startsWith(ns))
           .map((n) => ({ id: `cmd:${n.id}`, label: `/${n.label}`, description: n.description, kind: n.kind, ns: n.id }));
         this._showPopup(items, { type: "command", start: slashPos, end: caret, ns: "", arg: "" });
@@ -4935,7 +4937,7 @@ class AgentComposer extends Component {
       }
       if (!ns) {
         // A colon with no namespace (e.g. "/:") — show all namespaces.
-        const items = COMMAND_NAMESPACES.filter((n) => !n.localFiles || supportsLocalFilesCommand()).map((n) => ({
+        const items = COMMAND_NAMESPACES.map((n) => ({
           id: `cmd:${n.id}`, label: `/${n.label}`, description: n.description, kind: n.kind, ns: n.id,
         }));
         this._showPopup(items, { type: "command", start: slashPos, end: caret, ns: "", arg: "" });

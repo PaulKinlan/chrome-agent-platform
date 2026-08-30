@@ -14,6 +14,7 @@ Deno.test("composer command audit removes obsolete commands and exposes the usef
     "artifacts",
     "bookmarks",
     "history",
+    "files",
     "remember",
   ]);
   for (const id of ["tabs", "artifacts", "bookmarks", "history", "agent"]) {
