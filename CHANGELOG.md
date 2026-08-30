@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.463] — 2026-08-30
+- Six more fixes are in progress in parallel and recorded as claimed in the tracker.
+
 ## [0.2.462] — 2026-08-30
 - Tracker: the working jobs board is recorded as landed.
 
