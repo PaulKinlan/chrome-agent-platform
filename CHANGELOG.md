@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.506] — 2026-08-30
+- tasks: record candidate SHA
+
 ## [0.2.505] — 2026-08-30
 - tasks: claim CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01 (hub coordinator worker)
 
