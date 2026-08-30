@@ -92,14 +92,16 @@ Deno.test("first-run composition redacts setup state and only prefills the real 
   assert(!/return\s*\{[^}]*apiKey/s.test(summaryRoute));
   assert(!/return\s*\{[^}]*model/s.test(summaryRoute));
 
-  const seedStart = ntp.indexOf('firstRunGuide?.addEventListener("seed-task"');
+  // An example chip only PREFILLS the real composer (CAP-FB-20260827-HUB-
+  // FIRST-RUN-01 replaced the starter-task button with example chips).
+  const seedStart = ntp.indexOf('exampleChips?.addEventListener("pick"');
   const seedEnd = ntp.indexOf(
     'firstRunGuide?.addEventListener("dismiss-guide"',
     seedStart,
   );
   assert(seedStart >= 0 && seedEnd > seedStart);
   const seedHandler = ntp.slice(seedStart, seedEnd);
-  assert(seedHandler.includes("composer.value = FIRST_RUN_TASK_PROMPT"));
+  assert(seedHandler.includes("composer.value = text"));
   assert(seedHandler.includes("composer.focus()"));
   assert(!seedHandler.includes("dispatchEvent"));
   assert(!seedHandler.includes("run-task"));
@@ -149,4 +151,88 @@ Deno.test("first-run composition preserves transaction and provider boundaries",
     ),
   );
   assert(manifest.sandbox?.pages?.includes("sandbox/artifact-preview.html"));
+});
+
+// ── CAP-FB-20260827-HUB-FIRST-RUN-01 — the composer is the first thing ─────
+// FALSIFICATION: both tests below were observed RED on the pre-change tree
+// (the sidebar preceded <main>; the guide rendered six buttons) and GREEN after.
+
+Deno.test("hub first run: the hub main content precedes the sidebar in DOM order", async () => {
+  const html = await text("../extension/ntp/ntp.html");
+  const mainAt = html.indexOf("<main");
+  const asideAt = html.indexOf("<aside");
+  assert(mainAt >= 0 && asideAt >= 0, "both landmarks exist");
+  assert(
+    mainAt < asideAt,
+    `<main> (${mainAt}) must come before <aside> (${asideAt}) so Tab #1 lands in the composer`,
+  );
+  // The composer is the first focusable thing inside <main>: it precedes the
+  // header's status controls and the first-run banner in DOM order.
+  const composerAt = html.indexOf('<agent-composer id="composer"');
+  const headerAt = html.indexOf('<header class="top"');
+  const guideAt = html.indexOf('<first-run-guide id="first-run-guide"');
+  assert(composerAt > mainAt, "the composer is inside <main>");
+  assert(composerAt < headerAt, "the composer precedes the header's status controls");
+  assert(composerAt < guideAt, "the composer precedes the first-run banner");
+});
+
+Deno.test("hub first run: the first-run guide renders at most one action button and no stepper", async () => {
+  // A recording DOM double (the components.test.ts pattern) — the shadow root
+  // keeps what mountTemplate writes so the rendered markup can be inspected.
+  const registry = new Map();
+  class ShadowRootStub {
+    constructor() { this.innerHTML = ""; }
+    querySelector() { return null; }
+    querySelectorAll() { return []; }
+    appendChild() {}
+  }
+  class HTMLElementStub {
+    attachShadow(_init) { return new ShadowRootStub(); }
+    getAttribute(_n) { return null; }
+    hasAttribute(_n) { return false; }
+    setAttribute(_n, _v) {}
+    removeAttribute(_n) {}
+    dispatchEvent(_e) { return true; }
+    addEventListener() {}
+    querySelector() { return null; }
+    querySelectorAll() { return []; }
+  }
+  globalThis.HTMLElement = HTMLElementStub;
+  globalThis.customElements = {
+    define(name, cls) { registry.set(name, cls); },
+    get(name) { return registry.get(name); },
+  };
+  globalThis.window = globalThis;
+  globalThis.CustomEvent = class CustomEvent {
+    constructor(type, init = {}) { this.type = type; this.detail = init.detail ?? {}; }
+  };
+  globalThis.matchMedia = () => ({ matches: false });
+  await import("../extension/shared/components.js");
+  const FirstRunGuide = registry.get("first-run-guide");
+  assert(FirstRunGuide, "first-run-guide is registered");
+
+  const render = (attrs) => {
+    const el = new FirstRunGuide();
+    el.hasAttribute = (n) => Object.hasOwn(attrs, n);
+    el.getAttribute = (n) => attrs[n] ?? null;
+    el._render();
+    return String(el._root.innerHTML);
+  };
+  const noProvider = render({ "storage-ready": "" });
+  const buttons = noProvider.match(/<button\b[^>]*>/g) ?? [];
+  const dismiss = buttons.filter((b) => /aria-label="Dismiss first-run setup"/.test(b));
+  const actions = buttons.filter((b) => !/aria-label="Dismiss first-run setup"/.test(b));
+  assertEquals(actions.length, 1, `exactly ONE action button (got ${buttons.length} buttons)`);
+  assertEquals(dismiss.length, 1, "the dismiss control is still offered");
+  assert(
+    buttons.indexOf(dismiss[0]) > buttons.indexOf(actions[0]),
+    "the dismiss control comes AFTER the action in tab order",
+  );
+  assert(!/<ol\b/.test(noProvider), "no 3-step stepper");
+  for (const banned of ["starter task", "Storage", "Wasm", "enrollment", "Weekly browsing review", "Allow browser control"]) {
+    assert(!noProvider.includes(banned), `the banner never says "${banned}"`);
+  }
+  // With a provider connected the banner has nothing to ask for.
+  const ready = render({ "storage-ready": "", "provider-ready": "" });
+  assertEquals((ready.match(/<button\b/g) ?? []).length, 0, "a connected profile renders no banner actions");
 });

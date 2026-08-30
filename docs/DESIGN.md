@@ -324,6 +324,26 @@ flag (`cap:developerFeatures === true`); no bracketed model tag ever renders on
 a default build. Tab titles and URLs in the artifact are page-controlled text
 and are escaped before they reach the artifact HTML.
 
+## First run (the first screen is a command center)
+
+A fresh profile opens on the composer, not on onboarding
+(CAP-FB-20260827-HUB-FIRST-RUN-01). The hub's `<main>` precedes the sidebar in
+the DOM (`.side { order: -1 }` keeps it painted on the left), and inside it the
+composer comes first, so Tab #1 lands in the task input and the composer is
+fully visible at 1024x700. Above it, `<first-run-guide>` is a slim banner — one
+sentence and ONE action ("Connect a model" → Settings → Providers) with the
+dismiss control last in the tab order — shown only while no provider is
+connected and no artifact exists; with a provider it renders nothing. Browser
+control is asked for in context by the approval card at the moment a task needs
+it, never up front. Under the composer, `<example-chips>` offers three example
+tasks; a chip prefills the composer and focuses it — it never runs anything.
+The Agents / Jobs / Recent artifacts / Recent activity sections are `hidden`
+until their store has ever had data (`cap:hub-seen:<section>`, page-local,
+cleared by a factory reset), so a fresh profile never stacks empty states; once
+a store has been used its honest empty copy returns. The activity explorer's
+zero state ("Nothing has happened yet.") and its filtered-empty state ("No
+activity matches this filter.") are different sentences.
+
 ## Motion
 150–250ms state transitions only; `prefers-reduced-motion` respected. No
 page-load choreography, no decorative glow.

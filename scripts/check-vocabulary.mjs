@@ -62,6 +62,14 @@ const BANNED_TERMS = [
     why: 'say "artifact"/"Artifacts" (agent output) or "context file" (owner-supplied input) — never "asset"',
   },
   {
+    id: "starter-task",
+    // CAP-FB-20260827-HUB-FIRST-RUN-01: the first-run "starter task" button is
+    // gone; example chips prefill the composer instead. Nothing a person reads
+    // may promise a starter task.
+    test: /\bstarter task\b/i,
+    why: 'the first run has no "starter task" — the example chips under the composer are the way in',
+  },
+  {
     id: "recipes",
     // The nav has said Skills since the rename; nothing a person reads may
     // still say recipe.

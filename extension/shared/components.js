@@ -664,129 +664,95 @@ function mountTemplate(host, style, markup) {
  * ────────────────────────────────────────────────────────────────────────── */
 
 /* <first-run-guide storage-ready provider-ready browser-ready browser-choice>
- * A compact, optional path to first value. It never runs a task or asks for a
- * permission: owner actions are emitted for the NTP/options surfaces to wire. */
+ * The first-run BANNER (CAP-FB-20260827-HUB-FIRST-RUN-01): one sentence and ONE
+ * action. A fresh profile can already run tab tasks without a model (the local
+ * assistant), so the only thing worth asking for is a model — everything else
+ * (browser control, storage, examples) is asked for in context at the moment a
+ * task needs it. It never runs a task or requests a permission itself: the
+ * owner actions are emitted for the hub to wire (`open-settings`,
+ * `dismiss-guide`). With a provider connected it renders nothing.
+ * The dismiss control is LAST in the tab order — the action comes first. */
 class FirstRunGuide extends Component {
   static get observedAttributes() { return ["storage-ready", "provider-ready", "browser-ready", "browser-choice"]; }
   _render() {
-    const storageReady = this.hasAttribute("storage-ready");
     const providerReady = this.hasAttribute("provider-ready");
-    const browserReady = this.hasAttribute("browser-ready");
-    const browserChoice = this.getAttribute("browser-choice") || (browserReady ? "granted" : "unselected");
-    const canSeed = storageReady && providerReady;
-    // The gate is honest (UX-005): the CTA stays visible and enabled-looking,
-    // and an inline status line names exactly what is missing — the same line
-    // the button points at via aria-describedby so assistive tech announces it.
-    const seedGateReason = !providerReady && !storageReady
-      ? "Configure a provider first — then reload if the storage grant still needs restoring to restore storage before starting. If storage is still missing, reinstall the extension."
-      : !providerReady
-      ? "Configure a provider to unlock the starter task."
-      : "Storage is missing — reload the extension before starting. If it is still missing, reinstall the extension.";
-    const check = `<span class="check" aria-hidden="true">${ICONS.check}</span>`;
     mountTemplate(this, `
-      :host { display:block; margin-block-end:24px; color:var(--text,#1d1b18); }
+      :host { display:block; margin-block-end:16px; color:var(--text,#1d1b18); }
       :host([hidden]) { display:none; }
-      .guide { position:relative; border:1px solid var(--border,#e3e0d9);
-        border-radius:var(--radius-md,12px); background:var(--panel,#fff); padding:20px; }
-      h2 { margin:0 40px 4px 0; font-size:16px; letter-spacing:-.01em; }
-      .intro { margin:0 0 16px; max-width:68ch; color:var(--muted,#635e56); font-size:13px; }
-      ol { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px;
-        margin:0; padding:0; list-style:none; counter-reset:setup; }
-      li { counter-increment:setup; min-width:0; display:grid; grid-template-columns:28px 1fr;
-        gap:8px; align-content:start; }
-      .marker { width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center;
-        border-radius:50%; background:var(--panel-2,#efede8); color:var(--muted,#635e56);
-        font-size:12px; font-weight:700; }
-      .marker::before { content:counter(setup); }
-      li.ready .marker { background:var(--on-accent-muted,#d7f0ea); color:var(--accent,#0e6e63); }
-      li.ready .marker::before { content:""; }
-      .check { display:inline-flex; }
-      .step strong, .step span { display:block; }
-      .step strong { font-size:13px; margin-bottom:2px; }
-      .step span { color:var(--muted,#635e56); font-size:12px; line-height:1.4; }
-      .consent-card { margin-top:16px; padding:12px 14px; border:1px solid var(--border,#e3e0d9);
-        border-radius:var(--radius-sm,8px); background:var(--bg,#f7f6f3); }
-      .consent-card strong { display:block; font-size:13px; margin-bottom:4px; }
-      .consent-card p { margin:0 0 10px; font-size:12px; color:var(--muted,#635e56); line-height:1.45; }
-      .consent-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
-      .consent-status { font-size:12px; font-weight:600; }
-      .consent-status.granted { color:var(--accent,#0e6e63); }
-      .consent-status.declined { color:var(--muted,#635e56); }
-      .example-card { margin-top:16px; padding:12px 14px; border:1px solid var(--border,#e3e0d9);
-        border-radius:var(--radius-sm,8px); background:var(--bg,#f7f6f3); }
-      .example-card strong { display:block; font-size:13px; margin-bottom:4px; }
-      .example-card p { margin:0 0 10px; font-size:12px; color:var(--muted,#635e56); line-height:1.45; }
-      .actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
-      .seed-status { margin:8px 0 0; font-size:12px; color:var(--muted,#635e56); font-weight:600; }
-      button { min-height:var(--control,36px); border-radius:var(--radius-sm,6px); padding:0 12px;
-        border:1px solid var(--border,#e3e0d9); background:transparent; color:var(--text,#1d1b18);
-        font:inherit; font-weight:600; cursor:pointer; }
-      button.primary { border-color:var(--accent,#0e6e63); background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); }
-      button:hover:not(:disabled) { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
-      button.primary:hover:not(:disabled) { color:var(--btn-fg,#fff); }
-      button:disabled { opacity:.5; cursor:default; }
+      .banner { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:12px; align-items:center;
+        padding:10px 10px 10px 14px; border:1px solid var(--border,#e3e0d9);
+        border-radius:var(--radius-md,12px); background:var(--panel,#fff); }
+      p { margin:0; font-size:13px; line-height:1.45; color:var(--muted,#635e56); text-wrap:pretty; }
+      p strong { color:var(--text,#1d1b18); font-weight:600; }
+      button { min-height:var(--control,36px); border-radius:var(--radius-sm,6px); padding:0 14px;
+        border:1px solid var(--accent,#0e6e63); background:var(--accent,#0e6e63); color:var(--btn-fg,#fff);
+        font:inherit; font-weight:600; cursor:pointer; white-space:nowrap; }
+      button:hover { filter:brightness(1.08); }
       button:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
-      .dismiss { position:absolute; inset-block-start:12px; inset-inline-end:12px; width:36px; padding:0;
-        display:inline-flex; align-items:center; justify-content:center; color:var(--muted,#635e56); }
+      .dismiss { width:36px; padding:0; display:inline-flex; align-items:center; justify-content:center;
+        border-color:transparent; background:transparent; color:var(--muted,#635e56); }
+      .dismiss:hover { filter:none; color:var(--text,#1d1b18); border-color:var(--border,#e3e0d9); }
       .dismiss svg { width:16px; height:16px; }
-      @media (max-width:720px) { ol { grid-template-columns:1fr; } }
-    `, `<section class="guide" aria-labelledby="first-run-title">
+      @media (max-width:640px) { .banner { grid-template-columns:minmax(0,1fr) auto; }
+        .banner > p { grid-column:1 / -1; } }
+    `, providerReady ? "" : `<section class="banner" aria-labelledby="first-run-title">
+      <p id="first-run-title"><strong>No model connected yet.</strong> Tab tasks already work — connect a model for everything else.</p>
+      <button class="primary connect-model" type="button">Connect a model</button>
       <button class="dismiss" type="button" aria-label="Dismiss first-run setup">${ICONS.close}</button>
-      <h2 id="first-run-title">Set up your first task</h2>
-      <p class="intro">Connect one provider, choose browser control, then create a visible artifact.</p>
-      <ol>
-        <li class="${providerReady ? "ready" : ""}"><span class="marker">${providerReady ? check : ""}</span><div class="step"><strong>Choose a provider</strong><span>${providerReady ? "Provider and key are ready." : "Pick a model service and enter its key."}</span></div></li>
-        <li class="${storageReady ? "ready" : ""}"><span class="marker">${storageReady ? check : ""}</span><div class="step"><strong>Keep the key</strong><span>${storageReady ? "Storage is available." : "Storage is missing from this installation. Reload it; if storage is still missing, reinstall it."}</span></div></li>
-        <li><span class="marker"></span><div class="step"><strong>Create an artifact</strong><span>Use the starter task, review it, then choose Run task.</span></div></li>
-      </ol>
-      <div class="consent-card" aria-label="Browser control consent">
-        <strong>Browser control (optional)</strong>
-        <p>Allow the agent to open, navigate, and close tabs, and inspect tab URLs and titles (reading page content requires separate per-origin site enrollment). Without it, tab navigation actions stay unavailable, but local models, Wasm tools, and artifacts remain fully usable. You can change this choice any time in Settings → Browser control.</p>
-        ${browserReady
-          ? `<span class="consent-status granted">${check} Browser control is enabled.</span>`
-          : browserChoice === "declined"
-          ? `<div class="consent-actions"><span class="consent-status declined">Reduced-capability mode (local tools only).</span><button class="primary grant-browser" type="button">Enable browser control</button></div>`
-          : `<div class="consent-actions"><button class="primary grant-browser" type="button">Allow browser control</button><button class="decline-browser" type="button">Continue without browser control</button></div>`
-        }
-      </div>
-      <div class="actions">
-        <button class="open-settings" type="button">${providerReady && storageReady ? "Review provider settings" : "Open provider settings"}</button>
-        <button class="primary seed-task" type="button"${canSeed ? "" : ' aria-disabled="true" aria-describedby="seed-status"'}>Use starter task</button>
-      </div>
-      ${canSeed ? "" : `<p class="seed-status" id="seed-status" role="status">${seedGateReason}</p>`}
-      <div class="example-card" aria-label="Example agent (optional)">
-        <strong>Add an example agent (optional)</strong>
-        <p>Create the <em>Weekly browsing review</em> agent — a named agent whose job is a weekly plain-language summary of your activity (recent browser events, usage, and artifacts). Creating it is a single explicit action; decline and nothing changes. To run it automatically on a schedule, add it later in Settings → Agents.</p>
-        <div class="consent-actions"><button class="create-example-agent" type="button">Create the Weekly browsing review agent</button></div>
-      </div>
     </section>`);
   }
   _wire() {
-    this._root.querySelector(".open-settings")?.addEventListener("click", (sourceEvent) =>
+    this._root.querySelector(".connect-model")?.addEventListener("click", (sourceEvent) =>
       this._emit("open-settings", { sourceEvent }));
-    this._root.querySelector(".seed-task")?.addEventListener("click", (sourceEvent) => {
-      if (!this.hasAttribute("storage-ready") || !this.hasAttribute("provider-ready")) {
-        // Gated: guide the click to the unblock path instead of dead-ending.
-        this._root.querySelector(".open-settings")?.focus();
-        return;
-      }
-      this._emit("seed-task", { sourceEvent });
-    });
-    this._root.querySelector(".create-example-agent")?.addEventListener("click", (sourceEvent) =>
-      this._emit("create-example-agent", { sourceEvent, id: "weekly-browsing-review" }));
     this._root.querySelector(".dismiss")?.addEventListener("click", (sourceEvent) =>
       this._emit("dismiss-guide", { sourceEvent }));
-    this._root.querySelector(".grant-browser")?.addEventListener("click", (sourceEvent) =>
-      this._emit("request-browser-control", { sourceEvent }));
-    this._root.querySelector(".decline-browser")?.addEventListener("click", (sourceEvent) =>
-      this._emit("decline-browser-control", { sourceEvent }));
   }
   focusNextAction() {
-    const seed = this._root.querySelector('.seed-task:not([aria-disabled="true"])');
-    (seed ?? this._root.querySelector(".open-settings"))?.focus();
+    this._root.querySelector(".connect-model")?.focus();
   }
 }
 customElements.define("first-run-guide", FirstRunGuide);
+
+/* <example-chips label="Try one of these" chips="Group my tabs by topic|Summarise this page|Watch this price">
+ * Three example tasks under the hub composer (CAP-FB-20260827-HUB-FIRST-RUN-01).
+ * A click emits `pick` with the chip's text; the host puts it in the composer
+ * and focuses it — a chip never runs anything. Chip text is static markup
+ * authored here, but it is rendered with textContent all the same. */
+class ExampleChips extends Component {
+  static get observedAttributes() { return ["label", "chips"]; }
+  get chips() {
+    return String(this.getAttribute("chips") ?? "").split("|").map((c) => c.trim()).filter(Boolean);
+  }
+  _render() {
+    const label = this.getAttribute("label") || "Try one of these";
+    mountTemplate(this, `
+      :host { display:block; margin-block-end:32px; }
+      :host([hidden]) { display:none; }
+      .row { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+      .label { font-size:12px; color:var(--muted,#635e56); margin-inline-end:2px; }
+      button { min-height:32px; padding:0 12px; border-radius:999px; border:1px solid var(--border,#e3e0d9);
+        background:var(--panel,#fff); color:var(--text,#1d1b18); font:inherit; font-size:13px; cursor:pointer;
+        transition:border-color .15s ease, color .15s ease, background .15s ease; }
+      button:hover { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
+      button:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      @media (prefers-reduced-motion: reduce) { button { transition:none; } }
+    `, `<div class="row" role="group" aria-label="${escapeHtml(label)}"><span class="label" aria-hidden="true">${escapeHtml(label)}</span></div>`);
+    const row = this._root.querySelector(".row");
+    for (const text of this.chips) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "chip";
+      b.textContent = text;
+      row.append(b);
+    }
+  }
+  _wire() {
+    for (const b of this._root.querySelectorAll("button.chip")) {
+      b.addEventListener("click", (sourceEvent) => this._emit("pick", { text: b.textContent, sourceEvent }));
+    }
+  }
+}
+customElements.define("example-chips", ExampleChips);
 
 /* <run-task-button label="Run task" loading disabled> */
 class RunTaskButton extends Component {
@@ -7760,12 +7726,19 @@ class ActivityExplorer extends Component {
       if (d.dataset.ekey) openBefore.add(d.dataset.ekey);
     }
     this._list.replaceChildren();
+    // The hub hides the Recent activity section until the log has ever had
+    // an entry (a never-used store shows no empty copy at all).
+    this._emit("entries-change", { count: (this._entries || []).length, shown: filtered.length });
     if (!filtered.length) {
       const d = document.createElement("div");
       d.className = "aex-empty";
       // A load failure is surfaced HONESTLY with a retry (never the silent
       // empty select + dead search box the unbounded load produced).
-      d.textContent = this._loadError || "No activity matches.";
+      // The zero state and the filtered-empty state say different things: a
+      // never-used log is "nothing yet", a filter that hides rows says so
+      // (CAP-FB-20260827-HUB-FIRST-RUN-01).
+      d.textContent = this._loadError ||
+        (q || agent ? "No activity matches this filter." : "Nothing has happened yet.");
       if (this._loadError) {
         const retry = document.createElement("button");
         retry.type = "button";
@@ -7962,6 +7935,8 @@ class JobsBoard extends Component {
       this._loadError = String(e?.error ?? e?.message ?? e ?? "unavailable").slice(0, 160);
     }
     this._paint();
+    // The hub hides the Jobs section until the board has ever had anything.
+    this._emit("jobs-change", { count: (this._jobs ?? []).length + (this._messages ?? []).length });
   }
   _paint() {
     const jobs = this._jobs ?? [];

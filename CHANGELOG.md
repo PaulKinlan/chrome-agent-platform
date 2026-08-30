@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.464] — 2026-08-30
+- The new-tab hub now opens on the composer: it is the first thing on the page and the first Tab stop, and it stays fully visible on a 1024×700 window. The first-run card is a one-line banner with a single action, "Connect a model"; three example tasks sit under the composer; and empty sections stay out of the way until they have something to show.
+
 ## [0.2.463] — 2026-08-30
 - Six more fixes are in progress in parallel and recorded as claimed in the tracker.
 
