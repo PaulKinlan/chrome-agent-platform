@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.495] — 2026-08-30
+- Local-folder Browse: re-land the full folder-tree navigator (folder-browser.js module + options wiring + tests) after a cross-lane merge dropped it
+
 ## [0.2.494] — 2026-08-30
 - Two more editing-flow fixes are in progress in parallel and recorded as claimed.
 

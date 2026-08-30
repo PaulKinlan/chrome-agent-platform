@@ -53,6 +53,7 @@ import { createNavigationController } from "../lib/navigation-controller.js";
 // everywhere — no hand-rolled duplicates).
 import { confirmActionDialog } from "../shared/components.js";
 import { saveFsGrant, wireLocalFolderPickers, regrantFsGrantAccess } from "../lib/fs-grants.js";
+import { mountGrantBrowser } from "../lib/folder-browser.js";
 import { mountSkillsSection } from "../skills/skills-panel.js";
 import {
   capLogReady,
@@ -547,127 +548,19 @@ export async function renderLocalFolders() {
       drawer.style.border = "1px solid var(--border,#e3e0d9)";
       drawer.style.fontSize = "12px";
       drawer.style.width = "100%";
+      drawer.style.boxSizing = "border-box";
 
-      drawer.innerHTML = `<span class="muted">Loading contents…</span>`;
       cardWrapper.append(drawer);
 
-      const listRes = await boundedSend("fs-grant.list-entries", {
-        grantId: grant.grantId,
-      }).catch((e) => ({ ok: false, error: String(e?.message || e) }));
-
-      if (!listRes?.ok) {
-        drawer.innerHTML = `<span class="muted" style="color:var(--danger,#d93025)">Failed to read entries: ${escapeHtml(listRes?.error || "unknown")}</span>`;
-        return;
-      }
-
-      const entries = Array.isArray(listRes.entries) ? listRes.entries : [];
-      if (entries.length === 0) {
-        drawer.innerHTML = `<span class="muted">This directory is empty.</span>`;
-        return;
-      }
-
-      drawer.replaceChildren();
-      const countHeader = document.createElement("div");
-      countHeader.className = "muted";
-      countHeader.style.marginBottom = "6px";
-      countHeader.textContent = `${entries.length}${listRes.truncated ? " (truncated at limit)" : ""} item${entries.length === 1 ? "" : "s"}:`;
-      drawer.append(countHeader);
-
-      const entriesList = document.createElement("div");
-      entriesList.style.display = "flex";
-      entriesList.style.flexDirection = "column";
-      entriesList.style.gap = "4px";
-
-      for (const entry of entries) {
-        const itemRowWrapper = document.createElement("div");
-        itemRowWrapper.style.display = "flex";
-        itemRowWrapper.style.flexDirection = "column";
-        itemRowWrapper.style.width = "100%";
-
-        const itemRow = document.createElement("div");
-        itemRow.style.display = "flex";
-        itemRow.style.alignItems = "center";
-        itemRow.style.justifyContent = "space-between";
-        itemRow.style.padding = "3px 6px";
-        itemRow.style.borderRadius = "4px";
-        itemRow.style.background = "var(--panel,#ffffff)";
-
-        const left = document.createElement("span");
-        left.textContent = `${entry.kind === "directory" ? "📁 " : "📄 "}${entry.name}`;
-
-        const right = document.createElement("div");
-        right.style.display = "flex";
-        right.style.alignItems = "center";
-        right.style.gap = "6px";
-
-        if (entry.kind === "file") {
-          const viewBtn = document.createElement("button");
-          viewBtn.type = "button";
-          viewBtn.className = "btn small";
-          viewBtn.style.padding = "1px 6px";
-          viewBtn.style.fontSize = "11px";
-          viewBtn.textContent = "View";
-
-          let fileViewer = null;
-          viewBtn.addEventListener("click", async () => {
-            if (fileViewer) {
-              fileViewer.remove();
-              fileViewer = null;
-              viewBtn.textContent = "View";
-              return;
-            }
-            viewBtn.textContent = "Close";
-            fileViewer = document.createElement("div");
-            fileViewer.className = "fs-file-viewer";
-            fileViewer.style.marginTop = "6px";
-            fileViewer.style.padding = "8px 10px";
-            fileViewer.style.borderRadius = "6px";
-            fileViewer.style.background = "var(--bg,#ffffff)";
-            fileViewer.style.border = "1px solid var(--border,#e3e0d9)";
-            fileViewer.style.fontSize = "11.5px";
-            fileViewer.style.fontFamily = "monospace";
-            fileViewer.style.width = "100%";
-            fileViewer.innerHTML = `<span class="muted">Reading file…</span>`;
-            itemRowWrapper.append(fileViewer);
-
-            const readRes = await boundedSend("fs-grant.read-file", {
-              grantId: grant.grantId,
-              relativePath: entry.name,
-              asText: true,
-            }).catch((e) => ({ ok: false, error: String(e?.message || e) }));
-
-            if (!readRes?.ok) {
-              fileViewer.innerHTML = `<span class="muted" style="color:var(--danger,#d93025)">Read failed: ${escapeHtml(readRes?.error || "unknown")}</span>`;
-              return;
-            }
-
-            fileViewer.replaceChildren();
-            const header = document.createElement("div");
-            header.style.marginBottom = "4px";
-            header.style.color = "var(--text-muted,#666)";
-            header.textContent = `${readRes.name} (${readRes.size} bytes, SHA-256: ${readRes.sha256})`;
-
-            const pre = document.createElement("pre");
-            pre.style.margin = "0";
-            pre.style.padding = "6px 8px";
-            pre.style.background = "var(--bg-subtle,#f4f2ed)";
-            pre.style.borderRadius = "4px";
-            pre.style.overflowX = "auto";
-            pre.style.maxHeight = "240px";
-            pre.style.whiteSpace = "pre-wrap";
-            pre.style.wordBreak = "break-word";
-            pre.textContent = readRes.content ?? "[Binary content]";
-
-            fileViewer.append(header, pre);
-          });
-          right.append(viewBtn);
-        }
-
-        itemRow.append(left, right);
-        itemRowWrapper.append(itemRow);
-        entriesList.append(itemRowWrapper);
-      }
-      drawer.append(entriesList);
+      // Full folder-tree navigation (breadcrumbs + Up + directory
+      // click-through + file View) lives in lib/folder-browser.js; the
+      // backend already resolves the relativePath into subdirectory
+      // segments. `send` is injected so the drawer stays unit-testable.
+      mountGrantBrowser({
+        host: drawer,
+        grant,
+        send: (type, payload) => boundedSend(type, payload),
+      });
     });
 
     const revokeBtn = document.createElement("button");
