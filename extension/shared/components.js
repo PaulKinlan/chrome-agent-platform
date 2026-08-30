@@ -30,6 +30,11 @@ import { safeParseOnce, buildTree, subtreeJson, safeJsonStringify } from "./tool
 // redacted value.
 import { redactSecrets } from "../lib/pure.js";
 import { describeToolCall, redactToolResult } from "../lib/tool-summary.js";
+import {
+  isTextLikeAttachment,
+  MAX_LOCAL_TEXT_BYTES,
+  textToDataUrl,
+} from "../lib/attachments.js";
 
 const ARIA_HIDDEN = "aria-hidden";
 const TRUE = ""; // boolean-attribute present marker
@@ -516,7 +521,12 @@ function shortOrigin(o) {
 }
 
 // Command namespaces (the / palette). Selecting one either opens its sub-items
-// or inserts the prefix for free-text commands (remember).
+// or inserts the prefix for free-text commands (remember). Local files are
+// progressive enhancement: browsers without showDirectoryPicker never offer a
+// command they cannot fulfil.
+export function supportsLocalFilesCommand(scope = globalThis) {
+  return typeof scope?.showDirectoryPicker === "function";
+}
 export const COMMAND_NAMESPACES = [
   { id: "skill", label: "skill", description: "invoke a skill", kind: "skill" },
   { id: "schedule", label: "schedule", description: "run a skill in the background", kind: "background" },
@@ -525,6 +535,7 @@ export const COMMAND_NAMESPACES = [
   { id: "theme", label: "theme", description: "switch the theme", kind: "theme" },
   { id: "remember", label: "remember", description: "write something to memory", kind: "free" },
   { id: "focus", label: "focus", description: "protect attention", kind: "skill" },
+  ...(supportsLocalFilesCommand() ? [{ id: "files", label: "files", description: "attach a file from a granted folder", kind: "files" }] : []),
 ];
 
 // Sub-items for a selected command namespace, filtered by the typed argument.
@@ -570,6 +581,42 @@ async function commandItems(ns, arg = "", currentAgentId = null, currentAgentKin
         .filter((r) => r.mode === "background" && (r.category === "focus" || (r.id || "").includes("focus")))
         .filter((r) => matches(r.name) || matches(r.id))
         .map((r) => ({ id: `skill:${r.id}`, label: r.name, description: r.description || "", kind: "skill" }));
+    }
+    case "files": {
+      const res = RUNTIME_SEND
+        ? await RUNTIME_SEND("fs-grant.search", { query: arg, limit: 50 }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }))
+        : { ok: false, error: "extension runtime unavailable" };
+      const rows = [];
+      for (const issue of (res.permissionIssues || [])) {
+        rows.push({
+          id: `files-settings:${issue.grantId}`,
+          label: issue.name || "Granted folder",
+          description: issue.status === "prompt" ? "needs access again — open Settings" : "access denied — forget and add again in Settings",
+          recovery: issue.status === "prompt"
+            ? `Open Settings → Local folders and choose Re-grant access for ${issue.name}.`
+            : `Open Settings → Local folders, forget ${issue.name}, then add it again.`,
+          kind: "files-action",
+        });
+      }
+      for (const file of (res.files || [])) {
+        rows.push({
+          id: `files:${file.grantId}:${file.relativePath}`,
+          label: file.name,
+          description: `${file.folderName} / ${file.relativePath}`,
+          kind: "local-file",
+          ...file,
+        });
+      }
+      if (!rows.length) {
+        rows.push({
+          id: "files-settings",
+          label: res.ok === false ? "Local files unavailable" : "No matching files",
+          description: res.ok === false ? `${res.error || "search failed"} — open Settings` : "Grant a folder or change the search — Settings → Local folders",
+          recovery: "Open Settings → Local folders and choose Add folder.",
+          kind: "files-action",
+        });
+      }
+      return rows.slice(0, 50);
     }
     default:
       return [];
@@ -4843,6 +4890,64 @@ class AgentComposer extends Component {
   }
   focus() { this._input?.focus(); }
 
+  async _openLocalFoldersSettings(recovery = "Open Settings → Local folders to grant or re-grant access.") {
+    const api = globalThis.chrome;
+    try {
+      if (api?.tabs?.create && api?.runtime?.getURL) {
+        await api.tabs.create({ url: api.runtime.getURL("options/options.html#local-folders") });
+      } else {
+        await api?.runtime?.openOptionsPage?.();
+      }
+      this.setStatus(recovery);
+    } catch (err) {
+      this.setStatus(`Couldn't open Settings: ${err?.message ?? err}. Open Settings → Local folders manually.`, false);
+    }
+  }
+
+  async _attachLocalFile(file) {
+    if (!file?.grantId || !file?.relativePath) {
+      this.setStatus("That local file reference is incomplete — search again with /files.", false);
+      return;
+    }
+    const textLike = isTextLikeAttachment(file);
+    let attachAsText = textLike && Number(file.size) <= MAX_LOCAL_TEXT_BYTES;
+    let dataURL = "";
+    let type = String(file.type || (textLike ? "text/plain" : "application/octet-stream"));
+    if (attachAsText) {
+      const read = RUNTIME_SEND
+        ? await RUNTIME_SEND("fs-grant.read-file", {
+          grantId: file.grantId,
+          relativePath: file.relativePath,
+          asText: true,
+          maxBytes: MAX_LOCAL_TEXT_BYTES,
+        }).catch((err) => ({ ok: false, error: String(err?.message ?? err) }))
+        : { ok: false, error: "extension runtime unavailable" };
+      if (read?.error === "fs_file_not_text") {
+        attachAsText = false;
+      } else if (!read?.ok || typeof read.content !== "string") {
+        const recovery = read?.error === "fs_permission_lapsed"
+          ? read.status === "denied"
+            ? `${file.folderName} access was denied. Open Settings → Local folders, forget it, then add it again.`
+            : `${file.folderName} needs access again. Open Settings → Local folders and choose Re-grant access.`
+          : `Couldn't read ${file.name}: ${read?.error || "unknown error"}.`;
+        this.setStatus(recovery, false);
+        return;
+      } else {
+        dataURL = textToDataUrl(read.content, type);
+      }
+    }
+    this.addAttachment({
+      name: file.name,
+      type,
+      size: Number(file.size) || 0,
+      dataURL,
+      kind: "local-file",
+    });
+    this.setStatus(attachAsText
+      ? `Attached ${file.name} from ${file.folderName} as text context.`
+      : `Attached ${file.name} as a reference (${textLike && Number(file.size) > MAX_LOCAL_TEXT_BYTES ? "over 1 MiB" : "binary"}; contents weren't read).`);
+  }
+
   // ── / command + @ mention popup ─────────────────────────────────────────
   get _popupOpen() { return !!(this._popup && !this._popup.hidden); }
 
@@ -4877,6 +4982,13 @@ class AgentComposer extends Component {
       const slashPos = slash.start;
       const ns = slash.ns;
       const arg = slash.arg.trim();
+      // `/files` is itself the browse command; the colon form remains useful
+      // for a name substring (`/files:report`).
+      if (!slash.hasColon && ns === "files" && supportsLocalFilesCommand()) {
+        const items = await commandItems("files", "", this._currentAgentId, this._currentAgentKind);
+        this._showPopup(items, { type: "command", start: slashPos, end: caret, ns: "files", arg: "" });
+        return;
+      }
       if (!slash.hasColon) {
         // No colon typed yet — FILTER the namespace list by the typed prefix
         // (/ → all, /s → schedule + skill, /sk → skill).
@@ -4981,6 +5093,20 @@ class AgentComposer extends Component {
     if (!item || !token || !input) { this._hidePopup(); return; }
 
     if (token.type === "command") {
+      if (item.kind === "files-action") {
+        input.setRangeText("", token.start, token.end, "end");
+        this._hidePopup();
+        this._openLocalFoldersSettings(item.recovery);
+        input.focus();
+        return;
+      }
+      if (item.kind === "local-file") {
+        input.setRangeText("", token.start, token.end, "end");
+        this._hidePopup();
+        this._attachLocalFile(item);
+        input.focus();
+        return;
+      }
       if (item.free) {
         input.setRangeText(`/${item.ns} `, token.start, token.end, "end");
         this._hidePopup();

@@ -21,6 +21,10 @@ isolated OPFS memory, run history, skills, and avatar.
   "Choose agent" (a removable agent chip routes the run by canonical ID), and
   the `/agent` slash command (grouped, keyboard-complete, stale selections
   rejected).
+- **Local folder context** — grant one or more directories in **Settings → Local
+  folders**, then type `/files` or `/files:name` in any composer to search by file
+  name and attach a result. Text reads are capped at 1 MiB; binary and larger files
+  stay metadata-only references, and lapsed access always shows the re-grant path.
 - **Sites as sub-agents** — lightweight detection-only scripts notice WebMCP on every
   http(s) page, so **Find site tools** lists only open tabs known to expose tools;
   plain pages never become setup candidates. Choosing one then installs the authenticated

@@ -95,6 +95,11 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   loading/error states, popover top-layer presentation anchored with logical
   `position-area` + `position-try-fallbacks` (JS `placeFloating` fallback). The
   selected agent shows as a removable accent chip in the composer's chip row.
+- The composer `/files` palette is progressive enhancement: it is absent when
+  `showDirectoryPicker` is unavailable, uses the existing listbox keyboard
+  contract, and turns a selected file into the same removable attachment chip
+  as the + menu. Permission loss and empty/error states name Settings → Local
+  folders as the recovery path; no picker or permission prompt fires implicitly.
 - Hub sidebar Tasks/Agents sections share one intrinsic flex primitive: fixed
   headers with inline-end actions, independently scrolling lists with stable
   symmetric gutters while expanded, and gutter-free scrollable lists in the

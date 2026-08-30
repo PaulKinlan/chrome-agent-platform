@@ -79,9 +79,10 @@ import {
   readFsGrantFile,
   writeFsGrantFile,
   scanFsGrantManifest,
+  searchFsGrantFiles,
 } from "../lib/fs-grants.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
-import { buildMultimodalTask } from "../lib/attachments.js";
+import { buildMultimodalTask, isTextLikeAttachment } from "../lib/attachments.js";
 import {
   canonicalOrigin,
   journalAppend,
@@ -2224,14 +2225,12 @@ function attachmentContext(attachments) {
     // build — they are honestly labelled as attached-but-unprocessed until a
     // multimodal provider path is wired. Never claim the bytes reach the model.
     const type = String(a.type ?? "").toLowerCase();
-    const name = String(a.name ?? "").toLowerCase();
-    const textish =
-      type.startsWith("text/") ||
-      /json|xml|yaml|yml|toml|csv|markdown|\.md$/.test(type) ||
-      /\.(json|xml|yaml|yml|toml|csv|md|txt|log)$/.test(name);
+    const textish = isTextLikeAttachment(a);
     if (a.dataURL && textish) {
       try {
-        const body = atob(a.dataURL.split(",")[1] ?? "");
+        const binary = atob(a.dataURL.split(",")[1] ?? "");
+        const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+        const body = new TextDecoder().decode(bytes);
         parts.push("--- text content ---\n" + body.slice(0, 4000) + "\n---");
       } catch { /* not decodable */ }
     } else if (a.dataURL && type.startsWith("image/")) {
@@ -4678,6 +4677,17 @@ const handlers = mergeRouteMaps(
     }
     const result = await listFsGrantEntries(grantId, { relativePath, limit });
     return result;
+  },
+
+  async "fs-grant.search"({ query, limit }, context) {
+    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
+      securityEvent(
+        "blocked-action",
+        `fs-grant search denied for principal ${context?.principal ?? "unknown"}`,
+      );
+      return { ok: false, error: "fs-grant.search is restricted to extension surfaces" };
+    }
+    return await searchFsGrantFiles(query, { limit });
   },
 
   async "fs-grant.read-file"({ grantId, relativePath, asText, maxBytes }, context) {

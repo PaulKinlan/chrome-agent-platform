@@ -16,6 +16,7 @@ import {
   readFsGrantFile,
   writeFsGrantFile,
   scanFsGrantManifest,
+  searchFsGrantFiles,
   watchFsGrant,
   unwatchFsGrant,
   getActiveFsWatchers,
@@ -27,6 +28,8 @@ import {
   MAX_FS_WRITE_BYTES,
   MAX_FS_SCAN_ENTRIES,
   MAX_FS_SCAN_BYTES,
+  MAX_FS_SEARCH_RESULTS,
+  MAX_FS_SEARCH_SCANNED,
 } from "../extension/lib/fs-grants.js";
 import {
   SETTINGS_SECTIONS,
@@ -426,6 +429,10 @@ Deno.test("service-worker.js: fs-grant routes require owner-options or extension
     "service worker must register fs-grant.list-entries route",
   );
   assert(
+    sw.includes('async "fs-grant.search"'),
+    "service worker must register the bounded composer search route",
+  );
+  assert(
     sw.includes('async "fs-grant.read-file"'),
     "service worker must register fs-grant.read-file route",
   );
@@ -593,6 +600,66 @@ Deno.test("listFsGrantEntries: fails closed when permission has lapsed (prompt)"
   assertEquals(res.status, "prompt");
 });
 
+Deno.test("searchFsGrantFiles: recursively matches names, bounds results, and reports lapsed permission", async () => {
+  const matchingFile = (name: string, size = 12, type = "text/plain") => ({
+    kind: "file",
+    name,
+    getFile: async () => ({ name, size, type, lastModified: 1700000000000 }),
+  });
+  const nested = {
+    kind: "directory",
+    name: "notes",
+    values: async function* () {
+      yield matchingFile("unique-fs-search-report.md", 37, "text/markdown");
+      yield matchingFile("other.bin", 8, "application/octet-stream");
+    },
+  };
+  const root = {
+    kind: "directory",
+    name: "search-root",
+    queryPermission: async () => "granted",
+    values: async function* () { yield nested; },
+  };
+  const lapsed = {
+    kind: "directory",
+    name: "search-lapsed",
+    queryPermission: async () => "prompt",
+  };
+  await saveFsGrant({ grantId: "fsg_search_root", handle: root, name: root.name });
+  await saveFsGrant({ grantId: "fsg_search_lapsed", handle: lapsed, name: lapsed.name });
+  await saveFsGrant({
+    grantId: "fsg_search_other_task",
+    handle: {
+      kind: "directory",
+      name: "private-task-folder",
+      queryPermission: async () => "granted",
+      values: async function* () { yield matchingFile("unique-fs-search-private.txt"); },
+    },
+    name: "private-task-folder",
+    scope: { taskId: "different-task" },
+  });
+
+  const res = await searchFsGrantFiles("unique-fs-search", { limit: 50 });
+  assertEquals(res.ok, true);
+  assertEquals(res.files.length, 1, "a task-scoped handle must not leak into global composer search");
+  assertEquals(res.files[0], {
+    grantId: "fsg_search_root",
+    folderName: "search-root",
+    relativePath: "notes/unique-fs-search-report.md",
+    name: "unique-fs-search-report.md",
+    size: 37,
+    type: "text/markdown",
+    lastModified: 1700000000000,
+  });
+  assert(res.permissionIssues.some((issue) => issue.grantId === "fsg_search_lapsed" && issue.status === "prompt"));
+  assertEquals(MAX_FS_SEARCH_RESULTS, 50);
+  assertEquals(MAX_FS_SEARCH_SCANNED, 5000);
+
+  const capped = await searchFsGrantFiles("", { limit: 1 });
+  assertEquals(capped.files.length, 1);
+  assertEquals(capped.truncated, true);
+});
+
 Deno.test("readFsGrantFile: reads text with SHA-256 digest and enforces maxBytes bound", async () => {
   const fileContent = "Hello from local persistent filesystem!";
   const fileBytes = new TextEncoder().encode(fileContent);
@@ -624,6 +691,32 @@ Deno.test("readFsGrantFile: reads text with SHA-256 digest and enforces maxBytes
   const cappedRes = await readFsGrantFile("fsg_read_test", { maxBytes: 10 });
   assertEquals(cappedRes.ok, false);
   assertEquals(cappedRes.error, "fs_file_too_large");
+});
+
+Deno.test("readFsGrantFile: mislabelled .txt binary bytes fail closed instead of becoming replacement text", async () => {
+  for (const [grantId, bytes] of [
+    ["fsg_binary_utf8", new Uint8Array([0x66, 0x6f, 0x80])],
+    ["fsg_binary_control", new Uint8Array([0x66, 0x00, 0x6f])],
+  ] as const) {
+    await saveFsGrant({
+      grantId,
+      name: "mislabelled.txt",
+      kind: "file",
+      handle: {
+        kind: "file",
+        name: "mislabelled.txt",
+        queryPermission: async () => "granted",
+        getFile: async () => ({
+          name: "mislabelled.txt",
+          size: bytes.byteLength,
+          arrayBuffer: async () => bytes.buffer,
+        }),
+      },
+    });
+    const res = await readFsGrantFile(grantId, { asText: true });
+    assertEquals(res.ok, false);
+    assertEquals(res.error, "fs_file_not_text");
+  }
 });
 
 Deno.test("writeFsGrantFile: mode gate blocks write on read-only grant", async () => {

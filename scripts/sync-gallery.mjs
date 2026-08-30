@@ -26,6 +26,8 @@ const FILES = [
   ["extension/lib/pure.js", "docs/pure.js"],
   // The human tool-summary renderer (components.js imports it).
   ["extension/lib/tool-summary.js", "docs/tool-summary.js"],
+  // Attachment classification/encoding used by the composer's /files flow.
+  ["extension/lib/attachments.js", "docs/attachments.js"],
 ];
 
 export async function syncGallery({ check = false } = {}) {
@@ -43,6 +45,7 @@ export async function syncGallery({ check = false } = {}) {
     }
     if (dst === "docs/components.js") {
       expected = Buffer.from(expected.toString("utf8").replace('../lib/tool-summary.js', './tool-summary.js'));
+      expected = Buffer.from(expected.toString("utf8").replace('../lib/attachments.js', './attachments.js'));
       expected = Buffer.from(expected.toString("utf8").replace('../lib/pure.js', './pure.js'));
     }
     if (dst === "docs/tool-summary.js") {

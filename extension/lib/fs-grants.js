@@ -27,6 +27,8 @@ export const MAX_FS_TEXT_DECODE_BYTES = 2 * 1024 * 1024; // 2 MiB
 export const MAX_FS_WRITE_BYTES = 5 * 1024 * 1024; // 5 MiB
 export const MAX_FS_SCAN_ENTRIES = 10000;
 export const MAX_FS_SCAN_BYTES = 1024 * 1024; // 1 MiB
+export const MAX_FS_SEARCH_RESULTS = 50;
+export const MAX_FS_SEARCH_SCANNED = 5000;
 
 const DB_NAME = "cap_fs_grants";
 const DB_VERSION = 1;
@@ -420,6 +422,113 @@ export async function listFsGrantEntries(
   };
 }
 
+/** Search file names across every stored grant without reading file content. */
+export async function searchFsGrantFiles(
+  query = "",
+  { limit = MAX_FS_SEARCH_RESULTS, maxScanned = MAX_FS_SEARCH_SCANNED } = {},
+  { customIdb = null } = {},
+) {
+  const q = String(query ?? "").trim().toLowerCase();
+  const effectiveLimit = Math.min(Math.max(1, Number(limit) || MAX_FS_SEARCH_RESULTS), MAX_FS_SEARCH_RESULTS);
+  const effectiveScanLimit = Math.min(Math.max(effectiveLimit, Number(maxScanned) || MAX_FS_SEARCH_SCANNED), MAX_FS_SEARCH_SCANNED);
+  const files = [];
+  const permissionIssues = [];
+  const errors = [];
+  let scanned = 0;
+  let truncated = false;
+
+  // Composer search is global-owner context. Never leak a task/agent-scoped
+  // handle into a different conversation; Settings-created folder grants are
+  // global, while scoped grants remain available only through their owner.
+  const grants = (await listFsGrants({}, { customIdb }))
+    .filter((grant) => grant.scopeKey === "global");
+  for (const grant of grants) {
+    const status = await queryFsGrantStatus(grant);
+    if (status !== "granted") {
+      if (permissionIssues.length < MAX_FS_SEARCH_RESULTS) {
+        permissionIssues.push({ grantId: grant.grantId, name: grant.name, status });
+      }
+      continue;
+    }
+
+    const addFile = async (handle, relativePath) => {
+      scanned += 1;
+      if (files.length >= effectiveLimit || scanned > effectiveScanLimit) {
+        truncated = true;
+        return;
+      }
+      const name = String(handle?.name ?? relativePath.split("/").pop() ?? "");
+      if (q && !name.toLowerCase().includes(q)) return;
+      try {
+        const file = typeof handle?.getFile === "function" ? await handle.getFile() : handle;
+        files.push({
+          grantId: grant.grantId,
+          folderName: grant.name,
+          relativePath,
+          name,
+          size: Number(file?.size) || 0,
+          type: String(file?.type ?? ""),
+          lastModified: Number(file?.lastModified) || 0,
+        });
+      } catch (err) {
+        if (errors.length < MAX_FS_SEARCH_RESULTS) {
+          errors.push({ grantId: grant.grantId, path: relativePath, error: `get_file_failed: ${err?.message || err}` });
+        }
+      }
+    };
+
+    if (grant.kind === "file") {
+      await addFile(grant.handle, grant.name);
+      continue;
+    }
+
+    const walk = async (dirHandle, prefix = "", depth = 0) => {
+      if (truncated || depth > MAX_FS_PATH_DEPTH) {
+        truncated = true;
+        return;
+      }
+      try {
+        const iter = typeof dirHandle?.values === "function"
+          ? dirHandle.values()
+          : typeof dirHandle?.entries === "function"
+          ? dirHandle.entries()
+          : [];
+        for await (const raw of iter) {
+          if (files.length >= effectiveLimit || scanned >= effectiveScanLimit) {
+            truncated = true;
+            return;
+          }
+          const handle = Array.isArray(raw) ? raw[1] : raw;
+          const name = String(handle?.name ?? "");
+          const path = prefix ? `${prefix}/${name}` : name;
+          if (handle?.kind === "directory") {
+            scanned += 1;
+            await walk(handle, path, depth + 1);
+          } else {
+            await addFile(handle, path);
+          }
+        }
+      } catch (err) {
+        if (errors.length < MAX_FS_SEARCH_RESULTS) {
+          errors.push({ grantId: grant.grantId, path: prefix, error: `enumeration_failed: ${err?.message || err}` });
+        }
+      }
+    };
+    await walk(grant.handle);
+    if (truncated) break;
+  }
+
+  return {
+    ok: true,
+    query: String(query ?? ""),
+    files,
+    permissionIssues,
+    errors,
+    scanned: Math.min(scanned, effectiveScanLimit),
+    truncated,
+  };
+}
+
 /**
  * Bounded file reading within a granted handle (digest-pinned).
  * @param {string} grantId
@@ -515,10 +624,14 @@ export async function readFsGrantFile(
     if (bytes.byteLength > MAX_FS_TEXT_DECODE_BYTES) {
       textContent = `[Binary or text content exceeds decode limit (${MAX_FS_TEXT_DECODE_BYTES / (1024 * 1024)} MiB)]`;
     } else {
+      const hasBinaryControls = bytes.some((byte) =>
+        byte === 0 || (byte < 32 && byte !== 9 && byte !== 10 && byte !== 13) || byte === 127
+      );
       try {
-        textContent = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-      } catch {
-        textContent = null;
+        textContent = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      } catch { /* rejected below */ }
+      if (hasBinaryControls || textContent === null) {
+        return { ok: false, error: "fs_file_not_text", grantId, path: segments.join("/"), size: fileSize, sha256 };
       }
     }
   }
