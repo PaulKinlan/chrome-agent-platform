@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.458] — 2026-08-30
+- Tracker: the keyless first result is recorded as landed.
+
 ## [0.2.457] — 2026-08-30
 - Landed: with no API key set up, asking the hub to group or list your tabs now really groups them and leaves a tab-list page behind, instead of replying with a placeholder.
 
