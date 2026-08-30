@@ -128,6 +128,19 @@ function validationError(reason, detail) {
   return Object.freeze(out);
 }
 
+/** The lazy-arguments-invalid error with the un-consumed selectionRef and an
+ * explicit retry signal, bounded to maxErrorBytes. */
+function retryableArgumentFailure(failure, selectionRef) {
+  if (ownData(failure, "error") !== "lazy-arguments-invalid") return failure;
+  const out = { ...failure, selectionRef, retryable: true };
+  const budget = LAZY_TOOL_PROTOCOL_BOUNDS.maxErrorBytes;
+  if (typeof out.detail === "string" && utf8ByteLength(JSON.stringify(out)) > budget) {
+    const overhead = utf8ByteLength(JSON.stringify({ ...out, detail: "" }));
+    out.detail = truncateUtf8(out.detail, Math.max(0, budget - overhead));
+  }
+  return Object.freeze(out);
+}
+
 function safeKey(key) {
   if (typeof key !== "string" || hasLoneSurrogates(key)) return "";
   let normalized;
@@ -686,11 +699,19 @@ export class LazyToolProtocol {
       first.catalog,
     );
     if (!firstResolved.ok) return firstResolved;
+    // An argument-validation failure never reaches dispatch, so it must not
+    // burn the single-use ref: hand it back and tell the model the SAME ref
+    // works on the corrected retry (CAP-FB-20260830-SELECTION-REF-VALIDATE-FIRST-01
+    // — a MIME-type enum slip used to end the whole run as selection-replayed).
+    const retryable = (failure) => {
+      this.#selections.release(firstResolved.claim);
+      return retryableArgumentFailure(failure, firstResolved.selectionRef);
+    };
     let args;
     try {
       args = sanitizeLazyToolArguments(ownData(request, "arguments"), firstResolved.descriptor);
     } catch (error) {
-      return sanitizationFailure(error);
+      return retryable(sanitizationFailure(error));
     }
     const firstRecord = first.byStableId.get(firstResolved.descriptor.stableId);
     const firstAuthority = await authorizeRecord(
@@ -702,7 +723,7 @@ export class LazyToolProtocol {
     );
     if (!firstAuthority.ok) return firstAuthority;
     const validated = await validateRecordArguments(firstRecord, args, firstResolved.descriptor);
-    if (!validated.ok) return validated;
+    if (!validated.ok) return retryable(validated);
     if (isAborted(signal)) return fixedError("lazy-run-aborted");
 
     // Validation is an async boundary. Rebuild and re-resolve every live

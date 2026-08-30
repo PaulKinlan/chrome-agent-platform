@@ -117,3 +117,27 @@ Deno.test("manifest descriptions: all 28 manifests contain matching agent-useful
     );
   }
 });
+
+// CAP-FB-20260830-SELECTION-REF-VALIDATE-FIRST-01 — models copy enum values
+// from the tool text; prose like `type: html|text|json` produced "text/html".
+// Both the description and the schemaSummary must state enums as quoted
+// literals the model can paste verbatim.
+Deno.test("schemaSummary renders enums as quoted literals", async () => {
+  const { managementToolset } = await import("../extension/lib/management-tools.js");
+  const { summarizeToolSchema } = await import("../extension/lib/tool-catalog.js");
+  const tools = managementToolset(async () => ({ ok: true }));
+  for (const name of ["create_asset", "update_asset"]) {
+    const summary = summarizeToolSchema(tools[name].inputSchema, "extension-builtin", name);
+    assert(
+      summary.includes('"enum":["html","text","json","image","data"]'),
+      `${name} schemaSummary carries the quoted enum: ${summary.slice(0, 200)}`,
+    );
+    assert(!summary.includes("text/html"), `${name} never mentions a MIME type`);
+  }
+  const description = String(tools.create_asset.description);
+  assert(
+    description.includes('type: "html" | "text" | "json" | "image" | "data"'),
+    `create_asset description states the enum as quoted literals: ${description}`,
+  );
+  assert(!/type: html\|text\|json/.test(description), "the unquoted prose form is gone");
+});

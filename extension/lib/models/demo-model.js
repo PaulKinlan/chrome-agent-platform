@@ -34,7 +34,13 @@ const AGENT_DELEGATE_MARKER = "@demo-delegate-agent";// @demo-board: the demo mo
 // protocol — board_list → claim the first claimable job → board_complete_job —
 // so the browser KAT attests a NAMED AGENT genuinely claims + settles a board
 // job (its execution id resolves through the live run registry).
-const BOARD_MARKER = "@demo-board";// @demo-slow: the FIRST model step is delayed (a deterministic mid-run window
+const BOARD_MARKER = "@demo-board";
+// @demo-enum-slip: the demo model reproduces the live-lane enum slip through
+// the REAL lazy protocol — search_tools(create_asset) → execute_tool with
+// type:"text/html" (refused as lazy-arguments-invalid, retryable) → execute_tool
+// with type:"html" on the SAME selectionRef → honest final text
+// (CAP-FB-20260830-SELECTION-REF-VALIDATE-FIRST-01).
+const ENUM_SLIP_MARKER = "@demo-enum-slip";// @demo-slow: the FIRST model step is delayed (a deterministic mid-run window
 // for abort tests).
 const SLOW_MARKER = "@demo-slow";
 /** Public deterministic cancellation window used by the demo provider. This is
@@ -217,6 +223,7 @@ function latestRunSlice(prompt) {
       delegateAgent: lastUser.includes(AGENT_DELEGATE_MARKER),
       createAgent: lastUser.includes(CREATE_AGENT_MARKER),
       board: lastUser.includes(BOARD_MARKER),
+      enumSlip: lastUser.includes(ENUM_SLIP_MARKER),
     },
   };
 }
@@ -307,8 +314,82 @@ function boardFinalText(prompt) {
   return "[demo model] Board job flow finished without board results.";
 }
 
-function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false } = {}) {
+// ── @demo-enum-slip helpers ─────────────────────────────────────────────────
+function wantsEnumSlip(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.enumSlip;
+}
+
+function enumSlipAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" &&
+    Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && /\[demo model\] Enum slip/.test(p.text ?? "")));
+}
+
+/** Honest final text: the SECOND execute's result decides — an artifact id
+ *  means the corrected retry on the same ref went through; anything else
+ *  (a replay refusal, a denial) reads as a failure, never a success. */
+function enumSlipFinalText(prompt) {
+  // Continuation AFTER the final text (agent-do compacts the tool exchange
+  // away, then asks to continue): re-emit the EXACT prior final so the
+  // thread's terminal message stays the real answer.
+  const prior = runSlice(prompt)
+    .filter((m) => m?.role === "assistant" && Array.isArray(m?.content))
+    .flatMap((m) => m.content)
+    .find((p) => p?.type === "text" && /\[demo model\] Enum slip/.test(p.text ?? ""));
+  if (prior?.text) return prior.text;
+  const executes = boardToolParts(prompt).filter((p) =>
+    p?.type === "tool-result" || p?.type === "tool-error");
+  // The execute_tool envelope reaches the model as a direct object, inside an
+  // agent-do {modelContent} wrapper, or as a raw JSON string (agent.js
+  // lazyEnvelope) — unwrap every form before deciding.
+  const parse = (v) => {
+    if (typeof v === "string") { try { return JSON.parse(v); } catch { return null; } }
+    return v && typeof v === "object" ? v : null;
+  };
+  const outputs = executes.map((p) => {
+    let v = parse(p.output?.value ?? p.output ?? p.error);
+    if (v && "modelContent" in v && !("error" in v && "retryable" in v)) v = parse(v.modelContent) ?? v;
+    return v ?? {};
+  });
+  // Tool parts may be relabelled by the selected tool, so decide on CONTENT:
+  // the refused call (retryable, ref handed back) and the created artifact.
+  const refused = outputs.find((v) => v.error === "lazy-arguments-invalid" && v.retryable === true);
+  const created = outputs.find((v) =>
+    v.ok === true && v.selectedTool === "create_asset" && typeof v.result?.asset?.id === "string");
+  if (refused && created) {
+    return `[demo model] Enum slip recovered: the first create_asset used type "text/html" and was refused as retryable; the corrected retry on the SAME selectionRef created artifact ${created.result.asset.id}.`;
+  }
+  const failed = outputs.find((v) => v.ok === false && v.error !== "lazy-arguments-invalid");
+  const why = String(failed?.error ?? (refused ? "the corrected retry never created the artifact" : "the first call was not refused as retryable")).slice(0, 160);
+  return `[demo model] Enum slip recovery FAILED honestly: ${why}`;
+}
+
+const ENUM_SLIP_ARGS = Object.freeze({
+  origin: "master",
+  name: "enum slip page",
+  content: "<h1>enum slip</h1><p>created on the corrected retry</p>",
+});
+
+function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, enumSlip = false } = {}) {
   const step = toolResultCount(prompt);
+  if (enumSlip) {
+    const toolParts = boardToolParts(prompt);
+    const searches = toolParts.filter((p) => p.toolName === "search_tools").length;
+    const executes = toolParts.filter((p) => p.toolName === "execute_tool").length;
+    if (executes >= 2) return null;
+    if (searches === 0) {
+      return { id: "search_enum_slip", name: "search_tools", input: { query: "create_asset", limit: 1 } };
+    }
+    const selectionRef = latestSelectionRef(prompt);
+    if (!selectionRef) return null;
+    if (executes === 0) {
+      // the live-lane slip: a MIME type where the enum wants a literal
+      return { id: "execute_enum_slip_wrong", name: "execute_tool", input: { selectionRef, arguments: { ...ENUM_SLIP_ARGS, type: "text/html" } } };
+    }
+    // the corrected retry — deliberately the SAME ref (no second search)
+    return { id: "execute_enum_slip_fixed", name: "execute_tool", input: { selectionRef, arguments: { ...ENUM_SLIP_ARGS, type: "html" } } };
+  }
   if (board) {
     // search → execute per board tool (a selectionRef is single-use):
     // board_list → board_claim_job(the first claimable) → board_complete_job.
@@ -514,6 +595,8 @@ export function createDemoModel() {
         (createAgentFinal(options.prompt) || toolResultCount(options.prompt) >= 2);
       const lazyCall = wantsAgentDelegate(options.prompt)
         ? lazyDemoCall(options.prompt, { delegateAgent: true })
+        : wantsEnumSlip(options.prompt) && !enumSlipAlreadyFinal(options.prompt)
+        ? lazyDemoCall(options.prompt, { enumSlip: true })
         : wantsBoard(options.prompt) && !boardAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { board: true })
         : wantsDelegate(options.prompt)        ? lazyDemoCall(options.prompt, { delegate: true })
@@ -541,6 +624,14 @@ export function createDemoModel() {
       // the loop ends (mirrors the @demo-tools alreadyFinal pattern).
       // The board final/continuation text: honest about the outcome (the
       // marker lets the stripped-history continuation re-emit it + stop).
+      if (wantsEnumSlip(options.prompt)) {
+        return Promise.resolve({
+          content: [{ type: "text", text: enumSlipFinalText(options.prompt) }],
+          finishReason: "stop",
+          usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
+          warnings: [],
+        });
+      }
       if (wantsBoard(options.prompt)) {
         return Promise.resolve({
           content: [{ type: "text", text: boardFinalText(options.prompt) }],
@@ -589,6 +680,8 @@ export function createDemoModel() {
             (createAgentFinal(options.prompt) || toolResultCount(options.prompt) >= 2);
           const lazyCall = wantsADel && !agentDelegateAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { delegateAgent: true })
+            : wantsEnumSlip(options.prompt) && !enumSlipAlreadyFinal(options.prompt)
+            ? lazyDemoCall(options.prompt, { enumSlip: true })
             : wantsBoard(options.prompt) && !boardAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { board: true })
             : wantsDel            ? lazyDemoCall(options.prompt, { delegate: true })
@@ -734,6 +827,11 @@ export function createDemoModel() {
             controller.enqueue({ type: "finish", usage, finishReason: "stop" });
             controller.close();
             return;
+          }
+          else if (wantsEnumSlip(options.prompt)) {
+            // The enum-slip final/continuation text: the second execute's
+            // result decides the outcome (never a neutral rewrite).
+            response = enumSlipFinalText(options.prompt);
           }
           else if (wantsBoard(options.prompt)) {
             // The board flow's final/continuation text: the claim + complete

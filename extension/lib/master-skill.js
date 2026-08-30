@@ -44,7 +44,10 @@ as a substitute.
 When you need a capability that is not already available, call search_tools
 EXACTLY ONCE for that capability, choose the best match, then invoke it
 immediately with execute_tool. Never search twice for the same capability in a
-run. If the first match or invocation fails, report its error; do not re-search.`;
+run. If execute_tool returns {"error":"lazy-arguments-invalid","retryable":true},
+your ARGUMENTS were wrong (the detail names the field): fix them and call
+execute_tool again with the SAME selectionRef — the reference is still valid.
+Any other failure: report its error; do not re-search.`;
 
 export const MASTER_SKILL = `# Chrome Agent Platform — Hub Agent Operating Manual
 

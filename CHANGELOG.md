@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.431] — 2026-08-30
+- Tool calls: a wrong argument value (for example a MIME type where the artifact type wants "html") no longer ends the run — the tool tells the agent which field was wrong, keeps the selected tool available, and the corrected call succeeds. The artifact type options are now spelled out exactly as the agent must write them.
+
 ## [0.2.430] — 2026-08-30
 - Six fixes are now in progress in parallel and recorded as claimed in the task tracker so no two agents work the same item.
 

@@ -355,6 +355,8 @@ const EXPECTED = [
   "NTP: clicked Run task via a real click",
   "NTP: retained a driven-UI screenshot",
   "NTP: the typed task reached the agent journal",
+  "Lazy protocol: a first-call enum slip is recoverable in one run",
+  "Lazy protocol: the enum-slip run rendered the refused call, the retry and the answer",
   "Settings: Permissions panel present",
   "approval: forged NTP owner/activation fields are refused",
   "permissions: optional capabilities start ungranted (JIT) and the mandatory boot set is granted",
@@ -753,6 +755,68 @@ async function main() {
     const ntpTask = (Array.isArray(journalAfterNtp) ? journalAfterNtp : [])
       .find((e) => e?.task === typedTask);
     check("NTP: the typed task reached the agent journal", Boolean(ntpTask));
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 1b — CAP-FB-20260830-SELECTION-REF-VALIDATE-FIRST-01. The demo
+    // model reproduces the live-lane slip through the REAL lazy protocol:
+    // search_tools(create_asset) → execute_tool with type:"text/html" (refused
+    // as lazy-arguments-invalid, retryable) → execute_tool with type:"html" on
+    // the SAME selectionRef. One wrong enum value must no longer end the run
+    // with two tool cards and no answer: the artifact exists and the model
+    // reports it.
+    // ─────────────────────────────────────────────────────────────
+    const slipRun = await withTimeout(
+      msgValue({ type: "agent.run", task: "@demo-enum-slip" }),
+      60000,
+      "enum-slip run",
+    ).catch(() => null);
+    const slipListed = await msgValue({ type: "asset.list", origin: "master" }).catch(() => null);
+    const slipAssets = (Array.isArray(slipListed?.assets) ? slipListed.assets : [])
+      .filter((a) => a?.name === "enum slip page");
+    check(
+      "Lazy protocol: a first-call enum slip is recoverable in one run",
+      slipAssets.length === 1 && slipAssets[0]?.type === "html" &&
+        typeof slipRun?.result === "string" && /Enum slip recovered/.test(slipRun.result) &&
+        slipRun.result.includes(slipAssets[0].id),
+    );
+    // The thread that ran it, in the REAL NTP: the refused execute card, the
+    // successful retry card and the answer are all visible.
+    // (Target.createTarget — the /json/new endpoint drops the #thread= hash.)
+    const slipCreated = await cdp.send("Target.createTarget", {
+      url: `chrome-extension://${extId}/ntp/ntp.html#thread=${encodeURIComponent(String(slipRun?.threadId ?? ""))}`,
+    });
+    const slipPage = { id: slipCreated?.result?.targetId };
+    const slipSession = await attachRuntime(cdp, slipPage.id);
+    cdp.pageSessions.add(slipSession);
+    let slipDom = null;
+    for (let i = 0; i < 20; i++) {
+      slipDom = await evalIn(cdp, slipSession, `(() => {
+        const tools = [...document.querySelectorAll('message-bubble[role="tool"]')]
+          .map((b) => ({ name: b.getAttribute('tool-name'), status: b.getAttribute('tool-status'), result: String(b.getAttribute('tool-result') ?? '').slice(0, 600) }));
+        const answers = [...document.querySelectorAll('message-bubble[role="agent"]')]
+          .map((b) => String(b.getAttribute('content') ?? ''));
+        const conv = document.querySelector('agent-conversation');
+        if (conv) conv.scrollTop = conv.scrollHeight;
+        return { tools, answers };
+      })()`);
+      if ((slipDom?.answers ?? []).some((t) => /Enum slip recovered/.test(t))) break;
+      await sleep(500);
+    }
+    const slipTools = Array.isArray(slipDom?.tools) ? slipDom.tools : [];
+    const slipRefused = slipTools.find((t) =>
+      t.status === "error" && /lazy-arguments-invalid/.test(t.result) && /retryable\\?":true/.test(t.result)
+    );
+    const slipRetried = slipTools.find((t) => t.name === "create_asset" && t.status === "success");
+    const slipAnswered = (Array.isArray(slipDom?.answers) ? slipDom.answers : [])
+      .some((t) => /Enum slip recovered/.test(t));
+    check(
+      "Lazy protocol: the enum-slip run rendered the refused call, the retry and the answer",
+      Boolean(slipRefused) && Boolean(slipRetried) && slipAnswered,
+    );
+    const slipShot = await captureShot(cdp, slipSession);
+    if (slipShot) await writeEvidence("lazy-enum-slip-recovered.png", slipShot);
+    await cdp.send("Target.closeTarget", { targetId: slipPage.id }).catch(() => {});
+    cdp.pageSessions.delete(slipSession);
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 2 — capability onboarding + provider Update/Clear key.
