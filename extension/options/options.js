@@ -3092,13 +3092,9 @@ async function renderBoardDenyRules() {
 async function initBoardDenyUI() {
   const list = document.getElementById("board-deny-list");
   if (!list) return;
-  // Populate the agent dropdowns.
-  const agents = await chrome.runtime.sendMessage({ type: "board.list" }).then(
-    (r) => (r?.jobs ? [] : []), // not needed — we use the named agents list
-  ).catch(() => []);
-  const namedAgents = await chrome.runtime.sendMessage({ type: "named-agents.list" }).then(
-    (r) => (Array.isArray(r) ? r : []),
-  ).catch(() => []);
+  // Populate the agent dropdowns from the real named-agent route.
+  const namedAgentRes = await chrome.runtime.sendMessage({ type: "named-agent.list" }).catch(() => null);
+  const namedAgents = namedAgentRes?.agents ?? [];
   const agentSelect = document.getElementById("board-deny-agent");
   const peerSelect = document.getElementById("board-deny-peer");
   if (!agentSelect || !peerSelect) return;

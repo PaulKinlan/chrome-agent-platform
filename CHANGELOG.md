@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.420] — 2026-08-30
+- feat(board): add per-edge deny rules with owner Settings UI
+
 ## [0.2.419] — 2026-08-30
 - fix(permissions): add board-permissions to SETTINGS_SECTIONS + OPTIONS_PRODUCT_HASHES
 

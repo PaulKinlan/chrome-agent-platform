@@ -51,7 +51,7 @@ Deno.test("deny rules: agent denied posting jobs targeting a peer", () => {
 });
 
 Deno.test("deny rules: agent denied claiming jobs from a peer", () => {
-  const rules = [{ action: "claim", agentId: "critic", peerId: "writer" }];
+  const rules = [{ id: "deny_test", action: "claim", agentId: "critic", peerId: "writer" }];
   const job = { id: "j1", posterId: "writer", status: "pending" };
   const denied = canClaimJob({ callerId: "critic", agents: AGENTS, job, denyRules: rules });
   assertEquals(denied.ok, false);
@@ -80,13 +80,18 @@ Deno.test("deny rules: malformed rule is fail-closed (deny)", () => {
 
 Deno.test("board store: deny rules persist in a reserved key and survive restart", async () => {
   const memory = mockMemory();
-  const board = createAgentBoard({ memory, denyRules: [{ action: "claim", agentId: "critic", peerId: "writer" }] });
+  // Seed the deny rules via setTrusted (the SW route does the same via
+  // loadDenyRules + saveDenyRules). The board loads them FRESH under the
+  // lock — never captured at construction time.
+  const rules = [{ id: "deny_test", action: "claim", agentId: "critic", peerId: "writer" }];
+  await memory.setTrusted(BOARD_DENY_RULES_KEY, rules);
+  const board = createAgentBoard({ memory });
   const posted = await board.postJob({ callerId: "writer", agents: AGENTS, description: "test" });
   assertEquals(posted.ok, true);
   const denied = await board.claimJob({ callerId: "critic", agents: AGENTS, jobId: posted.job.id });
   assertEquals(denied.ok, false, "deny rule blocks the claim");
   // A fresh board instance with the same memory sees the same rules.
-  const revived = createAgentBoard({ memory, denyRules: [{ action: "claim", agentId: "critic", peerId: "writer" }] });
+  const revived = createAgentBoard({ memory });
   const denied2 = await revived.claimJob({ callerId: "critic", agents: AGENTS, jobId: posted.job.id });
   assertEquals(denied2.ok, false, "deny rules survive a restart");
 });
