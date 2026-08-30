@@ -237,3 +237,35 @@ Deno.test("P1-c wiring: named-agent.run resolves saved skills and runTask merges
   assert(/alarm\.name\.startsWith\("agent:"\)/.test(sw),
     "the scheduler fire path routes agent:<slug> schedules as real named-agent runs");
 });
+
+// CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01 — a background recipe renders
+// as a template card WITHOUT duplicating its data: the adapter is a pure
+// projection, so choosing a recipe card pre-fills the create form through the
+// same templatePrefill path as a curated template (one code path, not two).
+Deno.test("recipeAsTemplate maps a background recipe to a template with mode background and its schedule", async () => {
+  const mod: any = await import("../extension/lib/agent-templates.js");
+  const recipeAsTemplate = mod.recipeAsTemplate;
+  assertExists(recipeAsTemplate, "recipeAsTemplate is exported");
+  const recipe: any = RECIPES.find((r: any) => r.mode === "background" && r.schedule?.periodInMinutes);
+  assertExists(recipe);
+  const t: any = recipeAsTemplate({ ...recipe, enabled: false });
+  assertExists(t);
+  assertEquals(t.id, recipe.id);
+  assertEquals(t.name, recipe.name);
+  assertEquals(t.description, recipe.description);
+  assertEquals(t.mode, "background");
+  assertEquals(t.source, "recipe");
+  assertEquals(t.schedule, { periodInMinutes: recipe.schedule.periodInMinutes, prompt: recipe.prompt });
+  assertEquals(t.skills, []);
+  // The prefill the create form applies is the ordinary one — schedule text
+  // "every N minutes" comes from the same field the dialog already parses.
+  const pre: any = templatePrefill(t);
+  assertEquals(pre.schedule.periodInMinutes, recipe.schedule.periodInMinutes);
+  assertEquals(pre.name, recipe.name);
+  assertEquals(pre.mode, "background");
+  // Not a recipe → null; an on-demand recipe → null (only scheduled work is a
+  // scheduled template).
+  assertEquals(recipeAsTemplate(null), null);
+  const onDemand = RECIPES.find((r) => r.mode !== "background");
+  assertEquals(recipeAsTemplate(onDemand), null);
+});

@@ -8,7 +8,7 @@ import {
   normalizeSettingsSectionId,
 } from "../lib/pure.js";
 import { projectUnifiedAgents } from "../lib/named-agents.js";
-import { SKILL_ICON } from "../shared/skill-icons.js";
+import { recipeAsTemplate } from "../lib/agent-templates.js";
 import {
   agentScheduleMarker,
   backgroundAgentsForDisplay,
@@ -1720,6 +1720,12 @@ function editRecipePrompt(recipe) {
   textarea.focus();
 }
 
+// Settings offers the SAME scheduled catalogue as the hub's create flow,
+// through the SAME component (CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01):
+// the disabled background recipes render as <agent-template-card>s inside an
+// <agent-template-gallery> filtered to Scheduled. Choosing a card selects it;
+// "Add" enables exactly ONE recipe through background-agent.set, and it then
+// appears in every agent list.
 function renderBackgroundAgentPicker(agents) {
   const host = $("#background-agent-add");
   if (!host) return;
@@ -1733,62 +1739,52 @@ function renderBackgroundAgentPicker(agents) {
   const copy = document.createElement("div");
   copy.className = "background-agent-add-copy";
   const title = document.createElement("h3");
-  title.textContent = "Add a background agent";
+  title.id = "background-agent-add-title";
+  title.textContent = "Add a scheduled agent";
   const hint = document.createElement("p");
   hint.className = "muted";
-  hint.textContent = "Choose a built-in scheduled agent, then add it to your list.";
+  hint.textContent = "Choose a built-in scheduled template, then add it to your agents.";
   copy.append(title, hint);
+  host.setAttribute("role", "group");
+  host.setAttribute("aria-labelledby", title.id);
+
+  const gallery = document.createElement("agent-template-gallery");
+  gallery.id = "background-agent-gallery";
+  gallery.setAttribute("filters", "scheduled");
+  gallery.setAttribute("filter", "scheduled");
+  gallery.templates = agents.map(recipeAsTemplate).filter(Boolean);
 
   const controls = document.createElement("div");
   controls.className = "background-agent-add-controls";
-  const select = document.createElement("select");
-  select.className = "agent-select";
-  select.setAttribute("aria-label", "Background agent");
-  const selectButton = document.createElement("button");
-  selectButton.type = "button";
-  selectButton.append(document.createElement("selectedcontent"));
-  select.append(selectButton);
-  const empty = document.createElement("option");
-  empty.value = "";
-  empty.textContent = "Choose a background agent…";
-  select.append(empty);
-  for (const agent of agents) {
-    const option = document.createElement("option");
-    option.value = agent.id;
-    option.setAttribute("aria-label", agent.name);
-    const icon = document.createElement("span");
-    icon.className = "opt-icon";
-    icon.innerHTML = SKILL_ICON[agent.icon] ?? SKILL_ICON.default ?? "";
-    const text = document.createElement("span");
-    text.className = "opt-text";
-    const name = document.createElement("span");
-    name.className = "opt-title";
-    name.textContent = agent.name;
-    const description = document.createElement("span");
-    description.className = "opt-desc";
-    description.textContent = agent.description ?? "";
-    text.append(name, description);
-    option.append(icon, text);
-    select.append(option);
-  }
+  const chosen = document.createElement("span");
+  chosen.className = "muted background-agent-add-chosen";
+  chosen.setAttribute("role", "status");
+  chosen.setAttribute("aria-live", "polite");
+  chosen.textContent = "Nothing chosen yet.";
   const add = document.createElement("button");
   add.type = "button";
   add.className = "btn primary";
   add.textContent = "Add";
   add.disabled = true;
-  select.addEventListener("change", () => { add.disabled = !select.value; });
+  let selectedId = "";
+  gallery.addEventListener("use", (event) => {
+    selectedId = String(event.detail?.id ?? "");
+    const agent = agents.find((candidate) => candidate.id === selectedId);
+    add.disabled = !agent;
+    chosen.textContent = agent ? `${agent.name} — runs every ${agent.schedule?.periodInMinutes ?? "?"} min once added.` : "Nothing chosen yet.";
+    add.textContent = agent ? `Add ${agent.name}` : "Add";
+  });
   add.addEventListener("click", async () => {
-    const id = select.value;
-    const agent = agents.find((candidate) => candidate.id === id);
-    if (!id || !agent) return;
+    const agent = agents.find((candidate) => candidate.id === selectedId);
+    if (!selectedId || !agent) return;
     add.disabled = true;
-    const out = await chrome.runtime.sendMessage({ type: "background-agent.set", id, enabled: true })
+    const out = await chrome.runtime.sendMessage({ type: "background-agent.set", id: selectedId, enabled: true })
       .catch((error) => ({ ok: false, error: String(error?.message ?? error) }));
     saveFlash(out?.ok ? `${agent.name} added.` : `Could not add ${agent.name}: ${out?.error ?? "failed"}.`);
     await renderUnifiedAgentSettings();
   });
-  controls.append(select, add);
-  host.append(copy, controls);
+  controls.append(chosen, add);
+  host.append(copy, gallery, controls);
 }
 
 async function renderUnifiedAgentSettings() {

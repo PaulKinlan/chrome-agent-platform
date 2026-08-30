@@ -52,8 +52,10 @@ Deno.test("create-agent dialog: primary hierarchy keeps voice, template and sche
   );
 
   assert(
-    /configField\("What it does", "textarea"[\s\S]*?roleField\.wrap\.append\(roleTools\);[\s\S]*?scrollBody\.append\(nameField\.wrap, roleField\.wrap\);[\s\S]*?if \(templateSection\) scrollBody\.append\(templateSection\);/.test(ntpJs),
-    "name, purpose with voice tools, and template must remain on the direct primary path",
+    // The template gallery is the FIRST step of the create flow
+    // (CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01), then name + purpose.
+    /configField\("What it does", "textarea"[\s\S]*?roleField\.wrap\.append\(roleTools\);[\s\S]*?if \(templateSection\) scrollBody\.append\(templateSection\);\s*scrollBody\.append\(nameField\.wrap, roleField\.wrap\);/.test(ntpJs),
+    "template gallery, then name and purpose with voice tools, must remain on the direct primary path",
   );
   assert(
     /scrollBody\.insertBefore\(scheduleField\.wrap, advancedDetails\);/.test(ntpJs),

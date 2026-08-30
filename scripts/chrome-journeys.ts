@@ -353,6 +353,11 @@ const EXPECTED = [
   "fresh profile: the four agent surfaces agree (0)",
   "after enabling one recipe the four agent surfaces agree (1)",
   "after disabling that recipe the four agent surfaces agree (0) again",
+  "create dialog: the template gallery is the first step (blank + 21 templates + scheduled recipes; Starter shows 7; no template select)",
+  "create dialog: Enter on the Research Analyst card fills Name, presses the card and checks its skills",
+  "create dialog: Create agent from the card yields ONE named agent whose role is the template persona",
+  "create dialog: a Scheduled card creates one scheduled agent that the sidebar and Settings both list",
+  "create dialog: the journey's created agents are removed again (fresh profile restored)",
   "NTP: task input present",
   "NTP: typed a task via Input events",
   "NTP: textarea reflects the typed text",
@@ -849,6 +854,143 @@ async function main() {
       "after disabling that recipe the four agent surfaces agree (0) again",
       unseeded?.ok === true && surfaces2.sidebarRows === 0 && /^0 agents/.test(surfaces2.panelCount) &&
         surfaces2.panelRows === 0 && /^No agents yet\./.test(surfaces2.settingsText) && surfaces2.sidepanelRows === 0,
+    );
+
+    // ─────────────────────────────────────────────────────────────
+    // CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01 — templates are the
+    // first-class way to create an agent: the sidebar "+" opens the create
+    // dialog on an <agent-template-gallery> (Starter first), one Use applies
+    // the persona/skills, and Create persists through named-agent.create.
+    const pressKey = async (session, key, code, vk, text = undefined) => {
+      const base = { key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk };
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", ...base, ...(text ? { text, unmodifiedText: text } : {}) }, session);
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...base }, session);
+    };
+    const galleryState = () => evalIn(cdp, ntpSession, `(() => {
+      const dlg = document.querySelector('agent-dialog');
+      const g = document.getElementById('agent-template-gallery');
+      if (!dlg || !g) return { open: false };
+      const root = g.shadowRoot;
+      const cards = [...root.querySelectorAll('agent-template-card')];
+      const filters = [...root.querySelectorAll('.filter')].map((b) => ({ f: b.dataset.filter, n: Number(b.querySelector('.count')?.textContent || 0), pressed: b.getAttribute('aria-pressed') }));
+      const nameInput = dlg.querySelector('.agent-config-scroll input');
+      const firstChild = dlg.querySelector('.agent-config-scroll')?.firstElementChild?.className ?? '';
+      let active = document.activeElement; while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+      const selected = cards.find((c) => c.hasAttribute('selected'));
+      const checked = [...dlg.querySelectorAll('.skills-list input[type=checkbox]')].filter((c) => c.checked).length;
+      return { open: true, cards: cards.length, blank: cards.filter((c) => c.hasAttribute('blank')).length,
+        filters, firstChild, select: !!document.getElementById('agent-template-select'),
+        name: nameInput?.value ?? '', activeIsUse: active?.classList?.contains('use') === true,
+        selectedId: selected ? (selected.hasAttribute('blank') ? '' : selected.template?.id) : null,
+        selectedPressed: selected?.shadowRoot?.querySelector('.use')?.getAttribute('aria-pressed') ?? null,
+        checked, schedule: dlg.querySelector('#agent-schedule')?.value ?? '' };
+    })()`);
+    const setFilter = (f) => evalIn(cdp, ntpSession, `document.getElementById('agent-template-gallery')?.shadowRoot?.querySelector('.filter[data-filter="${f}"]')?.click(), true`);
+    const countTemplates = (f) => evalIn(cdp, ntpSession, `(() => { const g = document.getElementById('agent-template-gallery'); return g ? g.templates.filter((t) => ${f}).length : -1; })()`);
+    const openCreateDialog = async () => {
+      await clickSel(cdp, ntpSession, "#new-agent");
+      for (let i = 0; i < 20; i++) { if ((await galleryState()).open) break; await sleep(150); }
+      await sleep(200);
+    };
+    await openCreateDialog();
+    const g0 = await galleryState();
+    await setFilter("all"); await sleep(150);
+    const gAll = await galleryState();
+    await setFilter("scheduled"); await sleep(150);
+    const gSched = await galleryState();
+    await setFilter("starter"); await sleep(150);
+    // The script-driven filter clicks above never moved focus (a real click
+    // would focus the filter button); put focus back on the grid the way Tab
+    // would, so the keyboard checks below start from the selected card.
+    await evalIn(cdp, ntpSession, `document.getElementById('agent-template-gallery')?.focus(), true`);
+    const curated = await countTemplates("t.source !== 'recipe'");
+    const recipes = await countTemplates("t.source === 'recipe'");
+    const background = await countTemplates("t.mode === 'background'");
+    console.log("create dialog gallery:", JSON.stringify({ g0, all: gAll.cards, sched: gSched.cards, curated, recipes, background }));
+    check(
+      "create dialog: the template gallery is the first step (blank + 21 templates + scheduled recipes; Starter shows 7; no template select)",
+      g0.open && g0.firstChild === "agent-template-step" && g0.blank === 1 && g0.cards === 8 && g0.select === false &&
+        g0.selectedId === "" && g0.selectedPressed === "true" && g0.activeIsUse &&
+        g0.filters.find((x) => x.f === "starter")?.n === 7 && curated === 21 && recipes >= 20 &&
+        gAll.cards === 1 + curated + recipes && gSched.cards === 1 + background,
+    );
+    // Keyboard: focus is on the Custom card; ArrowRight twice reaches Research
+    // Analyst (chief-of-staff is the first starter), Enter presses its Use.
+    await pressKey(ntpSession, "ArrowRight", "ArrowRight", 39);
+    await pressKey(ntpSession, "ArrowRight", "ArrowRight", 39);
+    await pressKey(ntpSession, "Enter", "Enter", 13, "\r");
+    await sleep(200);
+    const g1 = await galleryState();
+    console.log("create dialog after Enter:", JSON.stringify(g1));
+    check(
+      "create dialog: Enter on the Research Analyst card fills Name, presses the card and checks its skills",
+      g1.name === "Research Analyst" && g1.selectedId === "research-analyst" && g1.selectedPressed === "true" &&
+        g1.checked >= 3 && g1.activeIsUse,
+    );
+    const galleryShot = await captureShot(cdp, ntpSession);
+    if (galleryShot) await writeEvidence("templates-gallery.png", galleryShot);
+    const createBtnPoint = await evalIn(cdp, ntpSession, `(() => { const b = [...document.querySelectorAll('agent-dialog button')].find((x) => x.textContent.trim() === 'Create agent'); if (!b) return null; b.scrollIntoView({ block: 'center' }); const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+    if (createBtnPoint) {
+      await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: createBtnPoint.x, y: createBtnPoint.y, button: "left", buttons: 1, clickCount: 1 }, ntpSession);
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: createBtnPoint.x, y: createBtnPoint.y, button: "left", buttons: 0, clickCount: 1 }, ntpSession);
+    }
+    let createdFromCard = null;
+    for (let i = 0; i < 30 && !createdFromCard; i++) {
+      const list = await msgValue({ type: "named-agent.list" });
+      createdFromCard = (list?.agents ?? []).find((a) => a?.name === "Research Analyst") ?? null;
+      if (!createdFromCard) await sleep(200);
+    }
+    const namedCount1 = ((await msgValue({ type: "named-agent.list" }))?.agents ?? []).length;
+    console.log("createdFromCard from card:", JSON.stringify({ id: createdFromCard?.id, role: String(createdFromCard?.role ?? "").slice(0, 40), skills: (createdFromCard?.skills ?? []).length, namedCount1 }));
+    check(
+      "create dialog: Create agent from the card yields ONE named agent whose role is the template persona",
+      createdFromCard !== null && namedCount1 === 1 && /^# Research Analyst Persona/.test(String(createdFromCard?.role ?? "")) && (createdFromCard?.skills ?? []).length >= 3,
+    );
+    // A Scheduled card: the recipe becomes ONE scheduled named agent through
+    // the same create path (the schedule text "every N minutes" is prefilled).
+    await evalIn(cdp, ntpSession, `document.querySelector('agent-dialog')?.close?.(); true`);
+    await sleep(300);
+    await openCreateDialog();
+    await setFilter("scheduled"); await sleep(150);
+    const schedPick = await evalIn(cdp, ntpSession, `(() => { const g = document.getElementById('agent-template-gallery'); const card = [...g.shadowRoot.querySelectorAll('agent-template-card')].find((c) => c.template?.source === 'recipe'); if (!card) return null; card.shadowRoot.querySelector('.use').click(); return { id: card.template.id, name: card.template.name, minutes: card.template.schedule?.periodInMinutes }; })()`);
+    await sleep(200);
+    const g2 = await galleryState();
+    await evalIn(cdp, ntpSession, `(() => { const b = [...document.querySelectorAll('agent-dialog button')].find((x) => x.textContent.trim() === 'Create agent'); b?.click(); return !!b; })()`);
+    let scheduledAgent = null;
+    for (let i = 0; i < 30 && !scheduledAgent; i++) {
+      const list = await msgValue({ type: "named-agent.list" });
+      scheduledAgent = (list?.agents ?? []).find((a) => a?.name === schedPick?.name) ?? null;
+      if (!scheduledAgent) await sleep(200);
+    }
+    await sleep(1500);
+    const sidebarSched = await evalIn(cdp, ntpSession, `[...document.querySelectorAll('#side-agents .agent-item')].map((el) => el.textContent.replace(/\s+/g, ' ').trim())`);
+    const surfacesS = await measureAgentSurfaces();
+    if (surfacesS.shot) await writeEvidence("templates-created.png", surfacesS.shot);
+    console.log("scheduled from card:", JSON.stringify({ schedPick, g2schedule: g2.schedule, scheduledAgent: scheduledAgent && { id: scheduledAgent.id, schedule: scheduledAgent.schedule }, sidebarSched, surfaces: { ...surfacesS, shot: undefined } }));
+    check(
+      "create dialog: a Scheduled card creates one scheduled agent that the sidebar and Settings both list",
+      schedPick !== null && g2.schedule === `every ${schedPick.minutes} minutes` && scheduledAgent !== null &&
+        Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedPick.name) && /Scheduled · every \d+ min/.test(t)) &&
+        surfacesS.sidebarRows === 2 && surfacesS.panelRows === 2 && surfacesS.settingsRows === 2 && /^2 agents/.test(surfacesS.panelCount),
+    );
+    // Restore the fresh profile the rest of the suite expects: delete the two
+    // agents through the real owner-direct route (a click in an extension page
+    // IS the approval), which also cancels the scheduled one's alarm.
+    const deletions = [];
+    for (const a of [createdFromCard, scheduledAgent]) {
+      if (a?.id) deletions.push(await msgValue({ type: "named-agent.delete", id: a.id }));
+    }
+    await sleep(500);
+    // Creating an agent opens its thread; go Home so the hub composer is the
+    // surface the next journey types into.
+    await evalIn(cdp, ntpSession, `document.querySelector('agent-dialog')?.close?.(); document.getElementById('new-task')?.click(); true`);
+    await sleep(500);
+    const surfacesR = await measureAgentSurfaces();
+    console.log("agent surfaces (restored):", JSON.stringify({ ...surfacesR, shot: undefined, deletions }));
+    check(
+      "create dialog: the journey's created agents are removed again (fresh profile restored)",
+      deletions.length === 2 && deletions.every((d) => d?.ok === true) &&
+        surfacesR.sidebarRows === 0 && surfacesR.panelRows === 0 && surfacesR.settingsRows === 0,
     );
 
     // ─────────────────────────────────────────────────────────────
