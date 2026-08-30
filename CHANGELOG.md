@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.504] — 2026-08-30
+- The images an agent makes now show up as a strip of thumbnails under the turn: every screenshot it took and every image it created, side by side. Click one to open it. They're read from your library, so reopening the thread shows them again.
+
 ## [0.2.503] — 2026-08-30
 - When an agent creates or edits an artifact, the thread now shows the artifact itself — a card that previews the page from your library, titled with its name, with an "Updated … (+n −m) / View diff" control on an edit — instead of a blank frame. It's there while the run streams and again when you reopen the thread.
 

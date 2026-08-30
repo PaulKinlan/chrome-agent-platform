@@ -538,6 +538,7 @@ const EXPECTED = [
   "Permission card: Allow grants browser control and the retried capture_screenshot succeeds",
   "Screenshot: model capture is persisted and listed",
   "Screenshot: tool card shows a thumbnail",
+  "Generated-image strip: the run's screenshot renders in a strip resolved from the store",
   "per-origin clear leaves B intact",
   "memory: version tokens are monotonic + never reused (round-27 CAS)",
   "attachment count cap (12 → 4 over-count dropped, journal records 8)",
@@ -3305,6 +3306,38 @@ async function main() {
     check(
       "Screenshot: tool card shows a thumbnail",
       thumb !== null && thumb.natural > 0 && /^Screenshot of /.test(String(thumb.alt ?? "")),
+    );
+
+    // CAP-FB-20260830-GENERATED-IMAGE-STRIP-01 — the capture the run took also
+    // appears in the generated-image strip under that turn. Reopen the thread
+    // from the Tasks rail (the durable re-projection path) and assert the strip
+    // resolves the screenshot from the store.
+    await clickSel(cdp, ntpSession, "#home").catch(() => false);
+    await sleep(600);
+    await clickSel(cdp, ntpSession, ".t-open").catch(() => false);
+    await sleep(1200);
+    const stripState = () => evalIn(cdp, ntpSession, `(() => {
+      const conv = document.getElementById("thread-conversation");
+      const strip = conv?.querySelector("screenshot-strip");
+      if (!strip) return JSON.stringify({ hasStrip: false });
+      const sr = strip.shadowRoot ?? strip;
+      const img = sr.querySelector(".shot img");
+      const btn = sr.querySelector(".shot");
+      return JSON.stringify({ hasStrip: true, shots: sr.querySelectorAll(".shot").length, natural: img?.naturalWidth ?? 0, label: btn?.getAttribute("aria-label") ?? null });
+    })()`);
+    let stripInfo: any = null;
+    for (let i = 0; i < 16; i++) {
+      try { stripInfo = JSON.parse(await stripState() ?? "null"); } catch { stripInfo = null; }
+      if (stripInfo?.hasStrip && (stripInfo.natural ?? 0) > 0) break;
+      await sleep(400);
+    }
+    dbg("generated-image strip after reopen", stripInfo);
+    const stripShot = await captureShot(cdp, ntpSession);
+    if (stripShot) await writeEvidence("image-strip-thread.png", stripShot);
+    check(
+      "Generated-image strip: the run's screenshot renders in a strip resolved from the store",
+      stripInfo?.hasStrip === true && stripInfo.shots >= 1 && (stripInfo.natural ?? 0) > 0 &&
+        /^Open screenshot 1 of /.test(String(stripInfo.label ?? "")),
     );
 
     // Restore the pre-journey state (browser control revoked) for what follows.

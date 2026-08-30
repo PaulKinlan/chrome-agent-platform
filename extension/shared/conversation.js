@@ -903,6 +903,45 @@ export function pairToolJournal(entries) {
  * safe to call on every tool result. */
 const ARTIFACT_TOOLS = new Set(["create_asset", "update_asset", "generate_ui"]);
 
+/** The screenshot a capture tool's result names (CAP-FB-20260830-GENERATED-
+ *  IMAGE-STRIP-01): `capture_screenshot` returns `{ok, screenshotId, url, …}`.
+ *  Like the artifact derivation, the result can be a wrapped or truncated
+ *  string, so unwrap both orders and, failing that, text-scan the head for the
+ *  id — the strip resolves the picture from the screenshots store by that id,
+ *  it never carries image bytes. Returns `{id, label}` or null. Pure. */
+export function screenshotFromToolResult(result) {
+  for (const outer of [unwrapLazyEnvelope(result), unwrapLazyEnvelopeStructured(result)]) {
+    let parsed = outer && typeof outer === "object" && outer.result !== undefined ? unwrapLazyEnvelope(outer.result) : outer;
+    if (typeof parsed === "string") { try { parsed = JSON.parse(parsed); } catch { parsed = null; } }
+    if (parsed && typeof parsed === "object" && typeof parsed.screenshotId === "string" && parsed.screenshotId) {
+      return { id: parsed.screenshotId, label: typeof parsed.url === "string" ? parsed.url : "" };
+    }
+  }
+  const text = typeof result === "string" ? result : "";
+  const id = text.match(/\\*"screenshotId\\*"\s*:\s*\\*"([A-Za-z0-9_.:-]{1,80})\\*"/u)?.[1] ?? null;
+  if (!id) return null;
+  const label = text.match(/\\*"url\\*"\s*:\s*\\*"(https?:\/\/[^"\\]{1,200})\\*"/u)?.[1] ?? "";
+  return { id, label };
+}
+
+/** The image items (screenshots + image-type assets) one run produced, in tool
+ *  order, for the generated-image strip. Each item is `{ id, kind, label }`
+ *  where kind is "screenshot" | "image" — IDS ONLY, resolved from the stores at
+ *  render time (image bytes never travel through the row). Shared by the live,
+ *  replay and reopen paths so the strip cannot appear during a run and vanish. */
+function imageItemsFromToolCards(cards) {
+  const items = [];
+  for (const c of Array.isArray(cards) ? cards : []) {
+    if (c.status === "error") continue;
+    const shot = screenshotFromToolResult(c.result);
+    if (shot) { items.push({ id: shot.id, kind: "screenshot", label: shot.label }); continue; }
+    if (c.artifact && c.artifact.type === "image") {
+      items.push({ id: c.artifact.id, kind: "image", label: typeof c.artifact.name === "string" ? c.artifact.name : "" });
+    }
+  }
+  return items;
+}
+
 /** THE LAZY PROTOCOL ENVELOPE (CAP-FB-20260828-TOOL-RESULT-ENVELOPE-01).
  *
  * Every provider run now receives exactly two definitions, `search_tools` and
@@ -1177,7 +1216,8 @@ export function toolRowsFromRunLog(executionId, logs) {
       ts: typeof r.at === "number" ? r.at : null,
     }));
   const seenApprovals = new Set();
-  return pairToolJournal(rows).flatMap((p) => {
+  const imageCards = []; // {status, result, artifact} in tool order, for the strip
+  const derived = pairToolJournal(rows).flatMap((p) => {
     // Show the tool that RAN, not the lazy protocol's envelope.
     const eff = effectiveToolCall(p.tool, p.args, p.result);
     const toolRow = {
@@ -1243,8 +1283,18 @@ export function toolRowsFromRunLog(executionId, logs) {
         derived: true,
       });
     }
+    // Feed the generated-image strip (screenshots + image assets) in tool order.
+    imageCards.push({ status: p.status, result: p.result, artifact });
     return out;
   });
+  // ONE images row per execution, after its tool rows: every screenshot the run
+  // captured and every image-type asset it produced, as IDS the strip resolves
+  // from the stores (CAP-FB-20260830-GENERATED-IMAGE-STRIP-01).
+  const items = imageItemsFromToolCards(imageCards);
+  if (items.length) {
+    derived.push({ role: "images", items, executionId, ts: null, derived: true });
+  }
+  return derived;
 }
 
 /** The derived marker for a run whose log was compacted to its summary row. */
@@ -1550,6 +1600,7 @@ export function projectThreadMessages(thread) {
       // (CAP-FB-20260830-THREAD-ARTIFACT-CARD-01). This is the REOPEN /
       // re-projection path — the live run appends the same card, and both must
       // agree, so a reopened thread shows the artifact where the run left it.
+      const imageCards = [];
       for (const tc of turn.tools) {
         output.push(tc);
         // Prefer the persisted artifact row (authoritative, full-fidelity); only
@@ -1567,6 +1618,13 @@ export function projectThreadMessages(thread) {
             derived: true,
           });
         }
+        imageCards.push({ status: tc.status === "error" ? "error" : "success", result: tc.result, artifact });
+      }
+      // The generated-image strip under this turn: the screenshots it captured
+      // and the image assets it produced (CAP-FB-20260830-GENERATED-IMAGE-STRIP-01).
+      const imageItems = imageItemsFromToolCards(imageCards);
+      if (imageItems.length) {
+        output.push({ role: "images", items: imageItems, executionId: turn.execId ?? null, ts: null, derived: true });
       }
     }
     if (turn.approvals.length) {

@@ -959,6 +959,31 @@ async function openArtifactDiffDialog(id, origin, name, fromVersion, toVersion) 
   return true;
 }
 
+// A screenshot from the generated-image strip: resolve it from the screenshots
+// store and show it in an <agent-dialog> (screenshots have no viewer route).
+async function openScreenshotDialog(id) {
+  const res = await send("screenshots.get", { id }).catch(() => ({ ok: false }));
+  const dataURL = res?.ok && typeof res.dataURL === "string" ? res.dataURL : "";
+  if (!dataURL) { setStatus("Screenshot not found", false); return false; }
+  const dialog = document.createElement("agent-dialog");
+  dialog.setAttribute("title", res.url ? `Screenshot — ${res.url}` : "Screenshot");
+  const body = document.createElement("div");
+  body.style.minWidth = "min(92vw, 900px)";
+  const img = document.createElement("img");
+  img.src = dataURL; // a data: URL, escaped by assignment (never innerHTML)
+  img.alt = res.url ? `Screenshot of ${res.url}` : "Screenshot of the captured page";
+  img.style.maxWidth = "100%";
+  img.style.height = "auto";
+  img.style.borderRadius = "10px";
+  img.style.border = "1px solid var(--border)";
+  body.append(img);
+  dialog.append(body);
+  document.body.append(dialog);
+  dialog.show();
+  dialog.addEventListener("close", () => dialog.remove());
+  return true;
+}
+
 // Clicking a recent artifact opens it in an <agent-dialog> — the full live
 // render (an html artifact in the sandboxed double-iframe, an image inline, or
 // the text), without navigating away from the hub.
@@ -1758,6 +1783,22 @@ if (threadConversation) {
     const { id, origin, name, fromVersion, toVersion } = e.detail ?? {};
     if (!id || !Number.isSafeInteger(fromVersion) || !Number.isSafeInteger(toVersion)) return;
     openArtifactDiffDialog(id, origin ?? "master", name, fromVersion, toVersion);
+  });
+  // A thumbnail in the generated-image strip: an image asset opens in the
+  // artifact viewer tab; a screenshot opens in a dialog (it lives in the
+  // screenshots store, not the asset store, so it has no viewer route).
+  threadConversation.addEventListener("open-image", (e) => {
+    const { id, kind, origin } = e.detail ?? {};
+    if (!id) return;
+    if (kind === "image") {
+      const url = chrome.runtime.getURL(
+        `artifact/artifact.html?id=${encodeURIComponent(id)}&origin=${encodeURIComponent(origin ?? "master")}`,
+      );
+      if (chrome.tabs?.create) chrome.tabs.create({ url });
+      else window.open(url, "_blank", "noopener");
+    } else {
+      openScreenshotDialog(id);
+    }
   });
 }
 const editAgentBtn = document.getElementById("edit-agent");

@@ -5008,6 +5008,8 @@ class AgentConversation extends Component {
       /* An artifact is a deliverable, not a chat line: it gets its own block on
          the 8px grid rather than being squeezed into the bubble column. */
       agent-conversation .msg-artifact { margin:var(--space-2,8px) 0; max-width:min(560px, 100%); }
+      /* The generated-image strip is a row of deliverables, not a chat line. */
+      agent-conversation .msg-images { margin:var(--space-2,8px) 0; max-width:min(560px, 100%); }
       /* The edit affordance under an updated artifact: what changed, and a way
          to see it. Quiet by default — one accent, actions only (PRODUCT.md). */
       agent-conversation .artifact-change { display:flex; align-items:center; gap:var(--space-2,8px);
@@ -5247,6 +5249,49 @@ class AgentConversation extends Component {
     return row;
   }
 
+  /** The generated-image strip under a turn (CAP-FB-20260830-GENERATED-IMAGE-
+   *  STRIP-01): every screenshot the run captured and every image asset it
+   *  produced, as a `<screenshot-strip>` whose thumbnails are resolved from the
+   *  stores by id (screenshots.get / asset.get) — image bytes never come from
+   *  the tool result. Clicking a thumbnail bubbles `open-image` for the host to
+   *  open the viewer. Reuses the shared component — never a second strip. */
+  appendImages(m = {}) {
+    const items = Array.isArray(m.items) ? m.items.filter((it) => it && typeof it.id === "string" && it.id) : [];
+    if (!items.length) return null;
+    if (typeof m.ts === "number") this._maybeTsGap(m.ts);
+    const wrap = document.createElement("div");
+    wrap.className = "msg-images";
+    const strip = document.createElement("screenshot-strip");
+    if (m.max != null) strip.setAttribute("max", String(m.max));
+    wrap.appendChild(strip);
+    // Resolve each id to a data URL from its store; keep the item order.
+    const resolve = async () => {
+      const shots = await Promise.all(items.map(async (it) => {
+        let url = "";
+        try {
+          if (it.kind === "image") {
+            const res = await RUNTIME_SEND?.("asset.get", { origin: it.origin ?? "master", id: it.id });
+            url = res?.ok && typeof res.asset?.content === "string" ? res.asset.content : "";
+          } else {
+            const res = await RUNTIME_SEND?.("screenshots.get", { id: it.id });
+            url = typeof res?.dataURL === "string" ? res.dataURL : "";
+          }
+        } catch { url = ""; }
+        return { url, label: typeof it.label === "string" ? it.label : "", kind: it.kind === "image" ? "image" : "screenshot" };
+      }));
+      if (strip.isConnected) strip.setAttribute("shots", JSON.stringify(shots.filter((s) => s.url)));
+    };
+    if (RUNTIME_SEND) resolve();
+    // Clicking a thumbnail: map the index back to the item and ask the host to
+    // open it (image → artifact viewer, screenshot → its own viewer).
+    strip.addEventListener("open", (ev) => {
+      const idx = Number(ev?.detail?.index);
+      const it = items[idx] ?? items[0];
+      if (it) this._emit("open-image", { id: it.id, kind: it.kind === "image" ? "image" : "screenshot", origin: it.origin ?? "master", overflow: ev?.detail?.overflow === true });
+    });
+    return this.appendTranscript(wrap);
+  }
+
   appendTool(m = {}) {
     // Accept both the imperative {name,args,status,result,detail} and the
     // message object {tool-name,tool-status,tool-args,tool-result,tool-detail}
@@ -5403,6 +5448,7 @@ class AgentConversation extends Component {
           // it stays in the run log and renders no card (§9).
           case "tool": if (m.protocol !== true) this.appendTool(m); break;
           case "artifact": this.appendArtifact(m); break;
+          case "images": this.appendImages(m); break;
           case "approval": this.appendApproval(m); break;
           case "error": this.appendError(m.content, { reason: m.reason ?? null, action: m.action ?? null, category: m.category ?? null }); break;
           default: this.appendAgent(m.content, ts); break;
@@ -5416,22 +5462,41 @@ class AgentConversation extends Component {
 }
 customElements.define("agent-conversation", AgentConversation);
 
-/* <screenshot-strip shots="[url,label]"> — screenshot history */
+/* <screenshot-strip shots="[{url,label,kind}]" max="6"> — a horizontal strip of
+ * the images a run produced: screenshots it captured and image assets it made
+ * (CAP-FB-20260830-GENERATED-IMAGE-STRIP-01). `kind` ("screenshot" | "image")
+ * only steers the accessible label; `max` caps the visible thumbnails and shows
+ * a "+N" overflow button. Emits `open` with { index }, or { index, overflow } on
+ * the +N button. Escapes every src/label — a data URL is untrusted content. */
 class ScreenshotStrip extends Component {
-  static get observedAttributes() { return ["shots"]; }
+  static get observedAttributes() { return ["shots", "max"]; }
   _render() {
     const shots = parseJSONAttr(this.getAttribute("shots"), []);
-    const items = shots.map((s, i) => {
+    const total = shots.length;
+    const maxAttr = Number(this.getAttribute("max"));
+    const max = Number.isFinite(maxAttr) && maxAttr > 0 ? Math.floor(maxAttr) : total;
+    const visible = shots.slice(0, max);
+    const overflow = total - visible.length;
+    const items = visible.map((s, i) => {
       const src = typeof s === "string" ? s : s?.url;
-      const label = typeof s === "object" ? s?.label : "";
-      return `<button type="button" class="shot" data-index="${i}" aria-label="Open screenshot ${i + 1}">
+      const label = typeof s === "object" ? (s?.label ?? "") : "";
+      const kind = typeof s === "object" && (s?.kind === "image" || s?.kind === "screenshot") ? s.kind : "screenshot";
+      // The label NAMES the picture and its place in the set, so a screen-reader
+      // user hears "Open image 2 of 3", not a bare "Open screenshot".
+      const aria = `Open ${kind} ${i + 1} of ${total}${label ? `: ${label}` : ""}`;
+      return `<button type="button" class="shot" data-index="${i}" aria-label="${escapeHtml(aria)}">
         <img src="${escapeHtml(src || "")}" alt="" loading="lazy">
-        ${label ? `<span class="lbl">${escapeHtml(label)}</span>` : ""}</button>`;
+        ${label ? `<span class="lbl">${escapeHtml(String(label))}</span>` : ""}</button>`;
     }).join("");
+    const overflowBtn = overflow > 0
+      ? `<button type="button" class="shot more" data-index="${visible.length}" data-overflow="1" aria-label="Show ${overflow} more image${overflow === 1 ? "" : "s"}">+${overflow}</button>`
+      : "";
     mountTemplate(this, `
       :host { display:block; }
       .strip { display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; }
       .shot { position:relative; flex:0 0 auto; width:96px; height:64px; border:1px solid var(--border,#e3e0d9); border-radius:8px; overflow:hidden; padding:0; cursor:pointer; background:var(--bg,#f7f6f3); }
+      .shot.more { display:inline-flex; align-items:center; justify-content:center; font:600 var(--text-sm,13px)/1 var(--sans,system-ui); color:var(--muted,#635e56); font-variant-numeric:tabular-nums; }
+      .shot.more:hover { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
       .shot img { width:100%; height:100%; object-fit:cover; display:block; }
       .shot:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .lbl { position:absolute; inset:auto 0 0 0; font-size:9px; background:rgba(0,0,0,.6); color:#fff; padding:1px 3px; }
