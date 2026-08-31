@@ -282,7 +282,8 @@ import {
   setGlobalBrowserControlGrant,
   setOriginBrowserControlGrant,
 } from "../lib/browser-tools.js";
-import { getRecipe, RECIPES, backgroundRecipes, intentOf, agentSkillIds, mergeRunSkills, parseSkillRef, skillResolutionOrder } from "../lib/recipes.js";
+import { getRecipe, RECIPES, backgroundRecipes, intentOf, agentSkillIds, mergeRunSkills } from "../lib/recipes.js";
+import { resolveSkillRef } from "../lib/skill-resolve.js";
 import { fetchSkillFromUrl, installImportedSkill, removeImportedSkill, loadAllImportedSkills } from "../lib/skill-import.js";
 import { readSkillFile, writeSkillFiles, removeSkillFiles } from "../lib/skill-files.js";
 import { durableRuns, sweepOrphanAgentData } from "../lib/durable-runs.js";
@@ -440,63 +441,18 @@ const loadAllImported = async () => {
 };
 
 async function resolveRecipe(id) {
-  const raw = String(id ?? "").trim();
-  if (!raw) return null;
-  // Collision-proof identity (CAP-FB-20260831-SKILL-LIST-SYNC-01 r2/r3): a
-  // source-qualified reference resolves ONLY in its own source — imported:<id>
-  // never touches the built-in table or custom store, custom:<id> never falls
-  // through to built-in/imported, builtin:<id> stays in the built-in table.
-  // Unprefixed (raw) ids keep the historical order (built-in → custom →
-  // imported) so saved agents and old task text still resolve, and
-  // background-agent.set can still resolve a duplicated (custom) background
-  // agent by its raw id.
-  const { source, id: rawId } = parseSkillRef(raw);
-  const refId = source === "raw" ? null : `${source}:${rawId}`;
-  // Source-locked branch order (r3): skillResolutionOrder pins which stores a
-  // reference may consult. imported:<id> only the imported store; custom:<id>
-  // only the custom store; builtin:<id> only the built-in table; raw ids keep
-  // built-in → custom → imported (background-agent.set on duplicated agents).
-  const order = skillResolutionOrder(source);
-  // Built-in branch.
-  if (order.includes("builtin")) {
-    const builtIn = getRecipe(rawId);
-    if (builtIn) return { ...builtIn, refId: refId ?? `builtin:${rawId}` };
-  }
-  // Custom branch. A custom:<id> absent from the custom store returns null
-  // (never falls through to imported — r3 source-locking).
-  if (order.includes("custom")) {
-    const custom = await getCustomRecipes();
-    const fromCustom = custom.find((r) => r.id === rawId);
-    if (fromCustom) return { ...fromCustom, refId: refId ?? `custom:${rawId}` };
-  }
-  // Imported branch.
-  if (order.includes("imported")) {
-    const imported = await loadAllImported();
-    const row = imported.find((s) => s.id === rawId);
-    if (!row) return null;
-    // Index rows carry metadata only (bodies live in OPFS). A SMALL body is
-    // read back and composed into the system prompt like before; a LARGE body
-    // stays out of the prompt (the skill_read marker rule handles it —
-    // renderBoundarySkills keys on promptBytes, never an empty body). A legacy
-    // row whose migration failed keeps its inline body (never lost).
-    const base = { ...row, refId: refId ?? `imported:${rawId}` };
-    if (Number.isInteger(row.promptBytes) && row.promptBytes > 0 && row.promptBytes <= PROMPT_SKILL_BODY_BUDGET) {
-      try {
-        const body = await readSkillFile(row.id, "SKILL.md");
-        return { ...base, prompt: body };
-      } catch {
-        return { ...base, prompt: "" };
-      }
-    }
-    if (!Number.isInteger(row.promptBytes)) {
-      // legacy inline body (migration failed) — serve it so it never vanishes
-      return { ...base };
-    }
-    return { ...base, prompt: "" };
-  }
-  return null;
+  // The REAL resolver lives in lib/skill-resolve.js (CAP-FB-20260831-SKILL-
+  // LIST-SYNC-01 r4) so tests exercise the actual resolution logic against
+  // real (faked-OPFS) stores. Source-locking: imported:<id> only the imported
+  // store, custom:<id> only the custom store, builtin:<id> only the built-in
+  // table; raw ids keep built-in → custom → imported (background-agent.set on
+  // duplicated agents).
+  return await resolveSkillRef({
+    ref: id,
+    stores: { getRecipe, getCustomRecipes, loadAllImported, readSkillFile },
+    bodyBudget: PROMPT_SKILL_BODY_BUDGET,
+  });
 }
-
 // ── skill references (a skill is INCLUDED in a task) ─────────────────────
 // The composer can reference a skill ANYWHERE in the string via /skill:<id>.
 // resolveSkillRefs extracts those references + expands each to its prompt, so

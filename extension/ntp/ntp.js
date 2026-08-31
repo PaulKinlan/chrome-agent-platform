@@ -7,7 +7,7 @@
 
 import { send } from "../lib/messages.js";
 import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, recipeAsTemplate, templatePrefill } from "../lib/agent-templates.js";
-import { skillRowChecked, templateSkillMatches } from "../lib/recipes.js";
+import { buildAgentSkillRows } from "../lib/agent-skill-rows.js";
 import { projectUnifiedAgents } from "../lib/named-agents.js";
 import { schedulePreviewText } from "../lib/schedule-preview.js";
 import { parseEnglishSchedule } from "../shared/schedule-parser.js";
@@ -2585,9 +2585,9 @@ async function buildAgentConfigDialog(opts) {
     ];
     const templateById = new Map(catalogue.map((t) => [t.id, t]));
     const updateSkillCount = () => {
-      const countEl = skillsSummary?.querySelector(".skill-count");
+      const countEl = skillCountEl;
       if (!countEl) return;
-      const count = [...skillChecks.values()].filter((c) => c.checked).length;
+      const count = skillSection.count();
       countEl.textContent = count > 0 ? `${count} selected` : `${available.length} available`;
     };
     const applyTemplate = (t) => {
@@ -2598,11 +2598,10 @@ async function buildAgentConfigDialog(opts) {
           const prev = templatePrefill(selectedTemplate);
           if (nameField.el.value === prev.name) nameField.el.value = "";
           if (roleField.el.value === prev.role) roleField.el.value = "";
-          const templateIds = new Set(prev.skills);
-          for (const [id, cb] of skillChecks) {
-            const s = available.find((x) => (x?.refId ?? x?.id ?? x?.name ?? String(x)) === id);
-            if (s && templateSkillMatches(available, [...templateIds], s)) cb.checked = false;
-          }
+          // Collision-proof undo (r3/r4): a raw template skill id unchecks
+          // exactly one row of a colliding pair (the unique owner, or the
+          // built-in on collision).
+          skillSection.uncheckTemplate(prev.skills);
           scheduleField.el.value = "";
           scheduleField.el.dispatchEvent(new Event("input", { bubbles: true }));
           updateSkillCount();
@@ -2620,14 +2619,10 @@ async function buildAgentConfigDialog(opts) {
       scheduleField.el.dispatchEvent(new Event("input", { bubbles: true }));
       // Suggested skills: CHECK the template's suggestions on top of whatever
       // the owner already picked — removal is theirs (full specialization).
-      // Collision-proof (r3): a raw template skill id toggles exactly one row
-      // (the unique owner, or the built-in on collision) — never both rows of
-      // a colliding pair.
-      const templateIds = new Set(pre.skills);
-      for (const [id, cb] of skillChecks) {
-        const s = available.find((x) => (x?.refId ?? x?.id ?? x?.name ?? String(x)) === id);
-        if (s && templateSkillMatches(available, [...templateIds], s)) cb.checked = true;
-      }
+      // Collision-proof (r3/r4): a raw template skill id toggles exactly one
+      // row of a colliding pair (the unique owner, or the built-in on
+      // collision) — never both rows.
+      skillSection.checkTemplate(pre.skills);
       updateSkillCount();
     };
     const gallery = document.createElement("agent-template-gallery");
@@ -2712,7 +2707,6 @@ async function buildAgentConfigDialog(opts) {
   skillsDetails.style.maxWidth = "100%";
   skillsDetails.style.overflow = "hidden";
 
-  const selectedInitialCount = [...agentSkillIds].filter((id) => available.some((s) => (s?.id ?? s?.name ?? String(s)) === id)).length;
   const skillsSummary = document.createElement("summary");
   skillsSummary.style.padding = "10px 12px";
   skillsSummary.style.fontWeight = "600";
@@ -2724,7 +2718,10 @@ async function buildAgentConfigDialog(opts) {
   skillsSummary.style.minWidth = "0";
   skillsSummary.style.gap = "8px";
   skillsSummary.style.userSelect = "none";
-  skillsSummary.innerHTML = `<span>Skills</span><span class="skill-count" style="font-size:12px;color:var(--muted,#635e56);font-weight:normal;">${selectedInitialCount > 0 ? `${selectedInitialCount} selected` : `${available.length} available`}</span>`;
+  const skillCountEl = document.createElement("span");
+  skillCountEl.className = "skill-count";
+  skillCountEl.style.cssText = "font-size:12px;color:var(--muted,#635e56);font-weight:normal;";
+  skillsSummary.append("Skills", skillCountEl);
   skillsDetails.append(skillsSummary);
 
   const skillsList = document.createElement("div");
@@ -2738,8 +2735,15 @@ async function buildAgentConfigDialog(opts) {
   skillsList.style.gap = "6px";
   skillsList.style.borderTop = "1px solid var(--border,#e3e0d9)";
 
-  const skillChecks = new Map();
-  if (!available.length) {
+  // The REAL skills-section render path (lib/agent-skill-rows.js): rows keyed
+  // by refId, collision-proof restore/count, template apply/undo, and
+  // refId-keyed save collection.
+  const skillSection = buildAgentSkillRows({
+    available,
+    savedIds: [...agentSkillIds],
+    countEl: skillCountEl,
+  });
+  if (!skillSection.rows.length) {
     const none = document.createElement("p");
     none.textContent = "No skills available.";
     none.style.fontSize = "12.5px";
@@ -2747,36 +2751,7 @@ async function buildAgentConfigDialog(opts) {
     none.style.margin = "4px 0 0";
     skillsList.append(none);
   } else {
-    for (const s of available) {
-      // Collision-proof identity (CAP-FB-20260831-SKILL-LIST-SYNC-01 r2): the
-      // checkbox key is the source-qualified refId, so attaching a colliding
-      // imported skill saves `imported:<id>` and the run resolves it to the
-      // imported row. Existing agents with raw ids still match via s.id.
-      const id = s?.refId ?? s?.id ?? s?.name ?? String(s);
-      const row = document.createElement("label");
-      row.style.display = "flex";
-      row.style.alignItems = "baseline";
-      row.style.gap = "8px";
-      row.style.fontSize = "13px";
-      row.style.padding = "2px 0";
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      // Collision-proof restore (CAP-FB-20260831-SKILL-LIST-SYNC-01 r3): the
-      // refId matches only its own row; a legacy raw saved id matches exactly
-      // one row (the unique owner, or the built-in on collision — resolveRecipe's
-      // raw order) — never both rows of a colliding pair.
-      cb.checked = skillRowChecked(available, [...agentSkillIds], s);
-      cb.addEventListener("change", () => {
-        const count = [...skillChecks.values()].filter((c) => c.checked).length;
-        const countEl = skillsSummary.querySelector(".skill-count");
-        if (countEl) countEl.textContent = count > 0 ? `${count} selected` : `${available.length} available`;
-      });
-      const text = document.createElement("span");
-      text.textContent = `${s.name ?? id} — ${s.description ?? ""}`.replace(/\s+—\s*$/, "");
-      row.append(cb, text);
-      skillChecks.set(id, cb);
-      skillsList.append(row);
-    }
+    for (const r of skillSection.rows) skillsList.append(r.row);
   }
   skillsDetails.append(skillsList);
   advancedBody.append(skillsDetails);
@@ -2969,15 +2944,10 @@ async function buildAgentConfigDialog(opts) {
     const name = nameField.el.value.trim();
     const role = roleField.el.value.trim();
     if (!name) { setStatus("An agent needs a name.", false); nameField.el.focus(); return; }
-    const skills = [];
-    for (const [id, cb] of skillChecks) {
-      if (cb.checked) {
-        const s = available.find((x) => (x?.refId ?? x?.id ?? x?.name ?? String(x)) === id);
-        skills.push(s
-          ? { id: s.refId ?? s.id ?? s.name, name: s.name ?? s.id, description: s.description ?? "" }
-          : { id, name: id });
-      }
-    }
+    // RefId-keyed save (r4): collectChecked returns the source-qualified id
+    // for every checked row, so a colliding imported skill saves as
+    // `imported:<id>` and resolves to the imported row at run time.
+    const skills = skillSection.collectChecked();
     const parsedSchedule = parseEnglishSchedule(
       scheduleField.el.value,
       // A background template carries its own recurring prompt; a manual

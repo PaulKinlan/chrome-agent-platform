@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.556] — 2026-08-31
+- Skills: r4 — real dialog render path (agent-skill-rows.js) with dialog-level collision + count tests; real resolver (skill-resolve.js) with faked-store tests
+
 ## [0.2.555] — 2026-08-31
 - Skills: r3 — dialog checkboxes keyed by refId end to end (collision selects exactly one row); resolveRecipe source-locks custom:<id> via skillResolutionOrder
 

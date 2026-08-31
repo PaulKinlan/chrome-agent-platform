@@ -21,7 +21,8 @@
 // would be offered as the raw colliding id).
 // @ts-nocheck — memory/skill-files doubles are intentionally dynamic.
 import { assertEquals, assert } from "jsr:@std/assert@1";
-import { mergeRunSkills, skillRowChecked, templateSkillMatches, skillResolutionOrder } from "../extension/lib/recipes.js";
+import { mergeRunSkills, skillRowChecked, templateSkillMatches, skillResolutionOrder, getRecipe } from "../extension/lib/recipes.js";
+import { resolveSkillRef } from "../extension/lib/skill-resolve.js";
 
 function fakeMemory() {
   const data = new Map();
@@ -276,4 +277,219 @@ Deno.test("r3: a raw id that only a custom recipe owns still resolves to it (bac
   const { getRecipe, skillResolutionOrder } = await import("../extension/lib/recipes.js");
   assert(!getRecipe("auto-group-by-domain-custom-123"), "no built-in holds the duplicated id");
   assertEquals(skillResolutionOrder("raw"), ["builtin", "custom", "imported"], "raw order reaches custom after built-in misses");
+});
+
+// ── r4: DIALOG-LEVEL collision proof + initial-count fix + real resolver ──
+
+// Minimal fake DOM for the real dialog render path (lib/agent-skill-rows.js).
+// Supports what buildAgentSkillRows uses: createElement, append, addEventListener,
+// dispatchEvent (for a real checkbox change), checked, textContent, className,
+// style.
+function installFakeDoc() {
+  function makeNode(tag) {
+    return {
+      tagName: String(tag).toUpperCase(),
+      children: [],
+      _listeners: {},
+      style: {},
+      textContent: "",
+      className: "",
+      checked: false,
+      type: "",
+      append(...kids) {
+        for (const k of kids) {
+          if (typeof k === "string") { this.textContent += k; continue; }
+          k.parent = this;
+          this.children.push(k);
+        }
+        return this;
+      },
+      addEventListener(type, fn) { (this._listeners[type] ??= []).push(fn); },
+      dispatchEvent() {
+        for (const fn of (this._listeners.change ?? [])) fn({ target: this });
+        return true;
+      },
+      querySelector() { return null; },
+    };
+  }
+  const fakeDoc = { createElement: (t) => makeNode(t) };
+  const prev = globalThis.document;
+  globalThis.document = fakeDoc;
+  return () => { if (prev === undefined) delete globalThis.document; else globalThis.document = prev; };
+}
+
+const { buildAgentSkillRows } = await import("../extension/lib/agent-skill-rows.js");
+
+Deno.test("r4 DIALOG: with a colliding pair, toggling one checkbox checks exactly one row and save collects the refId", async () => {
+  const restoreDoc = installFakeDoc();
+  try {
+    const available = [
+      { id: "tab-hygiene", refId: "builtin:tab-hygiene", source: "builtin", name: "Tab hygiene", description: "builtin" },
+      { id: "tab-hygiene", refId: "imported:tab-hygiene", source: "imported", name: "Imported Tab Hygiene", description: "imported" },
+    ];
+    const countEl = document.createElement("span");
+    const section = buildAgentSkillRows({ available, savedIds: [], countEl });
+    assertEquals(section.rows.length, 2, "two colliding rows render");
+    assertEquals(section.count(), 0, "initial count 0");
+    assertEquals(countEl.textContent, "2 available");
+    // Toggle the IMPORTED row through its real change handler.
+    const importedRow = section.rows.find((r) => r.id === "imported:tab-hygiene");
+    importedRow.checkbox.checked = true;
+    importedRow.checkbox.dispatchEvent();
+    assertEquals(section.count(), 1, "exactly one row checked after toggling the imported row");
+    assertEquals(countEl.textContent, "1 selected");
+    const builtinRow = section.rows.find((r) => r.id === "builtin:tab-hygiene");
+    assertEquals(builtinRow.checkbox.checked, false, "the built-in row stays unchecked");
+    // Save collects the refId for the checked row.
+    const saved = section.collectChecked();
+    assertEquals(saved.length, 1, "exactly one saved skill");
+    assertEquals(saved[0].id, "imported:tab-hygiene", "saved ref is the refId");
+  } finally {
+    restoreDoc();
+  }
+});
+
+Deno.test("r4 DIALOG: a legacy raw saved id restores exactly one row of a colliding pair (built-in wins)", async () => {
+  const restoreDoc = installFakeDoc();
+  try {
+    const available = [
+      { id: "page-summary", refId: "builtin:page-summary", source: "builtin", name: "Page summary", description: "b" },
+      { id: "page-summary", refId: "imported:page-summary", source: "imported", name: "Imported page summary", description: "i" },
+    ];
+    const countEl = document.createElement("span");
+    const section = buildAgentSkillRows({ available, savedIds: ["page-summary"], countEl });
+    const builtin = section.rows.find((r) => r.id === "builtin:page-summary");
+    const imported = section.rows.find((r) => r.id === "imported:page-summary");
+    assertEquals(builtin.checkbox.checked, true, "legacy raw id → built-in row checked");
+    assertEquals(imported.checkbox.checked, false, "imported row NOT checked");
+    assertEquals(section.count(), 1, "count reflects exactly one checked");
+    assertEquals(countEl.textContent, "1 selected");
+  } finally {
+    restoreDoc();
+  }
+});
+
+Deno.test("r4 DIALOG: a refId-keyed saved selection renders the correct initial count (r3 P2 count fix)", async () => {
+  const restoreDoc = installFakeDoc();
+  try {
+    const available = [
+      { id: "reader-mode", refId: "builtin:reader-mode", source: "builtin", name: "Reader mode", description: "b" },
+      { id: "tab-hygiene", refId: "builtin:tab-hygiene", source: "builtin", name: "Tab hygiene", description: "b" },
+    ];
+    const countEl = document.createElement("span");
+    const section = buildAgentSkillRows({ available, savedIds: ["imported:tab-hygiene", "builtin:reader-mode"], countEl });
+    // imported:tab-hygiene is NOT in available here (no collision in this
+    // catalog) — the count must reflect the rows ACTUALLY checked, not a
+    // raw-id cross-count that ignores refId-keyed selections.
+    assertEquals(section.rows.find((r) => r.id === "builtin:reader-mode").checkbox.checked, true);
+    assertEquals(section.rows.find((r) => r.id === "builtin:tab-hygiene").checkbox.checked, false);
+    assertEquals(section.count(), 1, "count = rows actually checked");
+    assertEquals(countEl.textContent, "1 selected");
+    // Now the same saved set with BOTH colliding rows present: imported:tab-hygiene
+    // matches the imported row, builtin:reader-mode matches the built-in row.
+    const both = [
+      { id: "reader-mode", refId: "builtin:reader-mode", source: "builtin", name: "Reader mode", description: "b" },
+      { id: "tab-hygiene", refId: "builtin:tab-hygiene", source: "builtin", name: "Tab hygiene", description: "b" },
+      { id: "tab-hygiene", refId: "imported:tab-hygiene", source: "imported", name: "Imported Tab Hygiene", description: "i" },
+    ];
+    const countEl2 = document.createElement("span");
+    const section2 = buildAgentSkillRows({ available: both, savedIds: ["imported:tab-hygiene", "builtin:reader-mode"], countEl: countEl2 });
+    assertEquals(section2.rows.find((r) => r.id === "imported:tab-hygiene").checkbox.checked, true);
+    assertEquals(section2.rows.find((r) => r.id === "builtin:tab-hygiene").checkbox.checked, false);
+    assertEquals(section2.count(), 2, "both refId-keyed selections count");
+    assertEquals(countEl2.textContent, "2 selected");
+  } finally {
+    restoreDoc();
+  }
+});
+
+// ── r4: REAL-resolver tests (lib/skill-resolve.js) with real + faked stores ──
+// The reviewer's r3 P2: the source-lock tests must exercise the ACTUAL
+// resolver against real (faked-OPFS) stores, not helpers. resolveSkillRef is
+// the real resolver the service worker calls; getRecipe is the real built-in
+// table; custom/imported stores are faked (memory rows + OPFS file bodies).
+
+function fakeResolverStores({ custom = [], imported = [], files = {} } = {}) {
+  return {
+    getRecipe: (id) => getRecipe(id), // the REAL built-in table (recipes.js)
+    getCustomRecipes: async () => custom,
+    loadAllImported: async () => imported,
+    readSkillFile: async (id, path) => {
+      const f = files[id]?.[path];
+      if (f === undefined) throw new Error("NotFoundError");
+      return f;
+    },
+  };
+}
+
+Deno.test("r4 resolver: custom:<id> resolves ONLY in the custom store — a colliding built-in id is ignored", async () => {
+  const stores = fakeResolverStores({
+    // A custom recipe whose id collides with the built-in auto-group-by-domain.
+    custom: [{ id: "auto-group-by-domain", name: "Duplicated Sorting Hat", mode: "background", schedule: { periodInMinutes: 7 } }],
+  });
+  const r = await resolveSkillRef({ ref: "custom:auto-group-by-domain", stores });
+  assert(r, "custom ref resolves");
+  assertEquals(r.name, "Duplicated Sorting Hat", "the CUSTOM row wins, never the built-in");
+  assertEquals(r.refId, "custom:auto-group-by-domain");
+  // The raw id still resolves to the BUILT-IN background recipe (unchanged contract).
+  const raw = await resolveSkillRef({ ref: "auto-group-by-domain", stores });
+  assert(raw, "raw id resolves");
+  assertEquals(raw.mode, "background");
+  assertEquals(raw.refId, "builtin:auto-group-by-domain");
+});
+
+Deno.test("r4 resolver: custom:<id> absent from the custom store returns null — no fall-through to built-in/imported", async () => {
+  const stores = fakeResolverStores({
+    custom: [],
+    // The id EXISTS as an imported skill — the custom: ref must NOT reach it.
+    imported: [{ id: "mystery", name: "Imported Mystery", source: "imported", mode: "on-demand", promptBytes: 4, prompt: "" }],
+  });
+  const r = await resolveSkillRef({ ref: "custom:mystery", stores });
+  assertEquals(r, null, "custom:<id> absent from custom → null (never the imported row)");
+});
+
+Deno.test("r4 resolver: imported:<id> reads the OPFS body for small skills and never touches built-in/custom", async () => {
+  const stores = fakeResolverStores({
+    custom: [{ id: "reader-mode", name: "Custom reader", mode: "background" }],
+    imported: [{ id: "reader-mode", name: "Imported reader", source: "imported", mode: "on-demand", promptBytes: 40, prompt: "" }],
+    files: { "reader-mode": { "SKILL.md": "imported body for reader-mode" } },
+  });
+  const r = await resolveSkillRef({ ref: "imported:reader-mode", stores });
+  assert(r, "imported ref resolves");
+  assertEquals(r.name, "Imported reader", "the IMPORTED row wins, never the custom/built-in");
+  assertEquals(r.prompt, "imported body for reader-mode", "small body composed from the OPFS store");
+  assertEquals(r.refId, "imported:reader-mode");
+});
+
+Deno.test("r4 resolver: builtin:<id> resolves ONLY in the built-in table", async () => {
+  const stores = fakeResolverStores({
+    custom: [{ id: "tab-hygiene", name: "Custom tab hygiene", mode: "background" }],
+    imported: [{ id: "tab-hygiene", name: "Imported tab hygiene", source: "imported", mode: "on-demand", promptBytes: 4, prompt: "" }],
+  });
+  const r = await resolveSkillRef({ ref: "builtin:tab-hygiene", stores });
+  assert(r, "builtin ref resolves");
+  assertEquals(r.refId, "builtin:tab-hygiene");
+  assertEquals(r.mode, "on-demand", "the built-in on-demand row wins");
+  assertEquals(r.name, "Tab hygiene");
+});
+
+Deno.test("r4 resolver: a raw id held only by a custom recipe still resolves to it (background-agent.set duplicated-agent contract)", async () => {
+  const stores = fakeResolverStores({
+    custom: [{ id: "auto-group-by-domain-custom-123", name: "My Sorting Hat", mode: "background", schedule: { periodInMinutes: 30 } }],
+  });
+  assert(!getRecipe("auto-group-by-domain-custom-123"), "no built-in holds the duplicated id");
+  const r = await resolveSkillRef({ ref: "auto-group-by-domain-custom-123", stores });
+  assert(r, "raw id resolves to the custom recipe");
+  assertEquals(r.name, "My Sorting Hat");
+  assertEquals(r.refId, "custom:auto-group-by-domain-custom-123");
+});
+
+Deno.test("r4 resolver: a raw id held by a built-in wins over custom/imported (historical order pinned)", async () => {
+  const stores = fakeResolverStores({
+    custom: [{ id: "page-summary", name: "Custom summary", mode: "background" }],
+    imported: [{ id: "page-summary", name: "Imported summary", source: "imported", mode: "on-demand", promptBytes: 4, prompt: "" }],
+  });
+  const r = await resolveSkillRef({ ref: "page-summary", stores });
+  assert(r, "raw id resolves");
+  assertEquals(r.refId, "builtin:page-summary", "built-in first for raw ids");
 });
