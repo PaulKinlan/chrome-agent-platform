@@ -107,13 +107,17 @@ export function createProviderRoutes({ invalidateAgent = () => {} } = {}) {
         const cur = await getProviderConfig();
         const previous = String(cur.model ?? "").trim();
         if (previous) cfg.model = previous; // keep the previous model in storage
+        const preservedKey = Boolean(cur.provider === cfg.provider && cur.apiKey);
         return {
           ok: false,
           error: "model id missing",
           reason: "model id missing — set it in Settings → Providers",
           provider: cfg.provider ?? "",
           apiKey: "",
-          hasApiKey: false,
+          // Report the PRESERVED state honestly: a stored key is still there,
+          // only the model is missing (review r2 NOTE — never claim the key
+          // is gone when the refusal kept it).
+          hasApiKey: preservedKey,
         };
       }
       // Blank/absent key on the SAME provider → preserve (the final review's

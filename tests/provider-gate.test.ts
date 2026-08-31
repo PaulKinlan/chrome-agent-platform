@@ -71,6 +71,20 @@ Deno.test("isProviderError does NOT classify tool errors or fence aborts", () =>
   assert(!isProviderError(new Error("no matching tool")));
 });
 
+// CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01, review r2 BLOCKER 2: a
+// model-missing refusal is a CONFIG error, not a provider outage — it must
+// never feed the provider circuit-breaker / retry classification.
+Deno.test("a model-missing refusal is NOT a provider error (no retry scheduling)", () => {
+  assert(!isProviderError(new Error("model id missing — set it in Settings → Providers")));
+  assert(!isProviderError(new Error("the provider endpoint is not configured — set it in Settings → Providers")));
+  // recordProviderFailure must therefore never trip on it: record once and
+  // the breaker stays closed (a single call cannot trip; MAX is 3, but the
+  // classification gate is what matters — it never counts toward the breaker).
+  recordProviderSuccess();
+  const r = recordProviderFailure("model id missing — set it in Settings → Providers");
+  assertEquals(r.tripped, false);
+});
+
 // ---- local providers (demo + Prompt API) are never gated ----
 Deno.test("isLocalProvider identifies the demo + Prompt API (no host permission)", () => {
   assert(isLocalProvider({ provider: "demo", baseURL: "" }));

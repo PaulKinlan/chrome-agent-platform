@@ -14,6 +14,11 @@ export function providerFieldsFromCard(card, provider, currentConfig) {
   const legacySelect = card.querySelector(".model-select");
   let model = "";
   if (picker) {
+    // The Use/Test button paths read the committed value WITHOUT blurring the
+    // picker first (a click that never moves focus away would drop typed text).
+    // Commit typed-but-not-picked text BEFORE reading the value so the save
+    // carries exactly what the owner typed (CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01).
+    picker.commitTyped?.();
     // Read the component's committed public value exactly. In particular, do
     // not reconstruct a free-text value from its shadow input or catalogue.
     model = picker.value ?? "";

@@ -1,10 +1,13 @@
 # Changelog
 
+## [0.2.507] — 2026-08-31
+- Model save: route Use through commitTyped, settle model-missing as a config error, report the preserved key honestly
+
 ## [0.2.506] — 2026-08-31
-- tasks: CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01 IN_REVIEW (candidate 67b27141, gates 2682/0, 240/240)
+- Typing a model name now saves it, and a provider without a model shows a clear Settings warning instead of silently running the demo model.
 
 ## [0.2.505] — 2026-08-31
-- Typed-but-unpicked model saves model:'' and silently runs the demo — commit typed picker text, refuse model-less keyed providers
+- A typed-but-unpicked model id is no longer dropped: the picker keeps what you type, and saving a provider with no model explains itself in Settings.
 
 ## [0.2.504] — 2026-08-30
 - tasks: reconcile eleven IN_REVIEW entries to DONE — candidate content verified present on origin/main, only the tracker rows had lagged

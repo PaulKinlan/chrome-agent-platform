@@ -242,3 +242,36 @@ Deno.test("provider save: a provider.set refusal is surfaced, not swallowed", as
   assertEquals(outcome.saved.ok, false);
   assert(outcome.saved.reason.includes("model id missing"), "the refusal reason must reach the caller");
 });
+
+// CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01, review r2 BLOCKER 1: the Use
+// path must commit typed-but-not-picked text even when the picker is never
+// blurred. providerFieldsFromCard calls picker.commitTyped() BEFORE reading
+// the value; a picker whose value stays stale until commitTyped() (simulating
+// a Use click that never blurs the input) must still yield the typed model.
+// Falsification: revert the commitTyped() call in providerFieldsFromCard →
+// this test RED (the stale value "" is saved), restore → GREEN.
+Deno.test("provider save: the Use path commits typed-but-unblurred text before reading the model", () => {
+  let commitCalls = 0;
+  // Simulates a picker whose input holds the typed text but whose committed
+  // value is NOT updated by blur (the no-blur Use click case): only
+  // commitTyped() moves the typed text into the committed value.
+  const typedPicker = {
+    _typed: "grok-4.6",
+    value: "", // stale committed value
+    commitTyped() {
+      commitCalls += 1;
+      this.value = this._typed; // commit moves typed text into the value
+    },
+  };
+  const card = {
+    querySelector(selector) {
+      if (selector === "model-picker") return typedPicker;
+      if (selector === ".api-key") return { value: "key" };
+      if (selector === ".base-url") return { value: "https://my-byo.example/v1" };
+      return null;
+    },
+  };
+  const fields = providerFieldsFromCard(card, provider, { provider: "demo", baseURL: "", model: "" });
+  assertEquals(commitCalls, 1, "providerFieldsFromCard must call commitTyped() on the picker");
+  assertEquals(fields.model, "grok-4.6", "the typed-but-unblurred model must be read");
+});
