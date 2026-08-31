@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.565] — 2026-08-31
+- Merge remote-tracking branch 'origin/main' into coordinator
+
 ## [0.2.564] — 2026-08-31
 - Release notes wording corrected.
 
