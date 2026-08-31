@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.546] — 2026-08-31
+- Two jobs-board gaps were written up: it is hard to find, and the agent is not told to use it.
+
 ## [0.2.545] — 2026-08-31
 - Housekeeping: parallel work streams reconciled.
 

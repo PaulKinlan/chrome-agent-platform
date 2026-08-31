@@ -4370,3 +4370,63 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); the explorer (`components.js:7151-7477`), the `activity.list` route (`routes/activity.js:72`) and `renderHubUsage` (`ntp.js:1115`) re-verified.
   - 2026-08-31 UTC — FOLDED INTO THE TIMELINE. This entry landed in parallel with CAP-FB-20260828-HUB-AS-TIMELINE-01, which REPLACED the hub's `<activity-explorer>`/`#run-log`/`#hub-usage` object catalogs with a single `#timeline-section` (`<agent-timeline>`; projection `extension/lib/hub-timeline.js`). The two lanes' behavior is preserved by folding this entry's INTENT into the replacement surface rather than restoring the removed explorer: (a) the run-count header is restored as `<span class="hint" id="hub-usage">` in the Timeline panel-head (`extension/ntp/ntp.html`), populated "N runs today" by the surviving `renderHubUsage()` from `run.list` — no `$`/token/calls vocabulary (matches `/^\d+ runs? today$/`); (b) the three JOURNEY 3a2 checks in `scripts/chrome-journeys.ts` are retargeted from `<activity-explorer> .aex-entry` to the timeline's `<agent-timeline>` shadow `.tl-row` rows — user events only (buildTimeline never emits attestation/tool rows), and the row body (`.tl-body`) right edge never crosses the time cell (`.tl-time`) left edge at 1440/1024 (the timeline row is a CSS grid, so it cannot overlap by construction; the check still requires ≥2 real rows). Check-name strings unchanged, so the EXPECTED assertion-set-exact + order gates are undisturbed. The USER-VISIBLE-KINDS allowlist / `activity.list` `kinds` param / gallery-specimen steps are moot on the retired explorer. Verified: `npm run build:production` clean; `deno test tests/hub-timeline.test.ts` 7/7; full journey suite green (both previously-red checks now pass, nothing else regressed).
 
+
+## [CAP-FB-20260831-BOARD-VISIBILITY-01] The shared jobs board is hidden and buried — the owner has no visibility into requested/shared/claimed work
+- Feedback: 2026-08-31 — owner: "I'm not seeing the Jobs board anywhere so I have no visibility into what tasks are being requested or shared or picked up." The board section is `hidden` until it has data (`noteHubData("jobs","board",count>0)`, `extension/ntp/ntp.html:975` `id="board-section" ... hidden`) and, when shown, is a squeezed sidebar strip (`#board-section { max-height: 34% }`) — there is no owner-facing view of open/claimed/settled jobs.
+- Updated: 2026-08-31 19:00 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: —
+- Candidate: —
+- Shipping: —
+- Acceptance: the owner can always see the shared jobs board and the state of every job (open, claimed by whom, blocked, completed with its result), not only when a job happens to exist.
+  - Context: the board routes and tools work (CAP-FB-20260830-AGENT-BOARD-WORKING-01, DONE) but the surface is a hidden sidebar afterthought. HUB-AS-TIMELINE-01 landed a full-width `#timeline-section`; the board should be a peer surface, not a 34%-height sidebar clip. `renderJobsBoard()` + `refreshBoard()` (`extension/ntp/ntp.js`) already fetch `board.list`/`board.messages`.
+  - Reproduce today: fresh profile → the hub shows no board at all; post a job agent-to-agent → a small "Board (N open)" strip appears low in the sidebar; a settled job's result is only reachable by clicking a truncated row.
+  - Files: `extension/ntp/ntp.html` (promote the board to a visible surface — a section that is present with an empty state, not `hidden`, OR a labelled entry that opens a board view), `extension/ntp/ntp.js` (`renderJobsBoard`/`refreshBoard`), `extension/shared/components.js` (reuse/extend the board row component; a `<jobs-board>` view showing open/claimed/blocked/settled columns or groups with poster, claimant, status word, and the result for settled), gallery sync. Coordinate with the hub timeline (runs) and the sidebar Agents/Activity sections — the board is the shared-work queue, distinct from the run timeline and the action ledger.
+  - Steps: 1. Decide the surface: a persistent hub board section with an honest empty state ("No shared jobs yet — agents post work here for each other") OR a first-class board view opened from a visible entry. 2. Show every job with poster, claimant, status word (colour never the only signal), blockedBy, and the settled result openable in place. 3. Keep it fast (reuse the debounced board refresh). 4. a11y: keyboard-operable rows, one heading, live region on state change.
+  - Out of scope: the board routes/tools (AGENT-BOARD-WORKING-01, DONE); the system-prompt guidance that makes agents USE the board (CAP-FB-20260831-BOARD-SYSTEM-PROMPT-01).
+- Review: pending
+- Gates: the falsification gates apply.
+  - Unit: a projection test for the board view model (open/claimed/blocked/settled grouping from `board.list` events); falsification: revert the empty-state/reveal change, watch the "board is present on a fresh profile" assertion go RED.
+  - Browser: a journey/KAT (extend `scripts/kat-agent-board.ts`) — a fresh profile shows the board surface with its empty state; after a real `board_post_job` the job appears with poster+status; after a claim it shows the claimant; after complete it shows the result openable; screenshots.
+  - Full suite: `npm run build:production && deno test -A tests/ && deno run -A scripts/chrome-journeys.ts` green at the tip.
+  - Constraints: textContent for untrusted job text; inline SVG icons; one name per concept (Jobs board); no fixed debug port.
+- Blockers: —
+- Next: decide the surface (persistent hub section with empty state vs a board view), then the view model + empty state
+- Recover: `git log --oneline --all --grep=CAP-FB-20260831-BOARD-VISIBILITY-01`
+- History:
+  - 2026-08-31 19:00 UTC — filed from owner feedback that the jobs board is invisible; root cause: `#board-section` is `hidden` until data and squeezed into the sidebar; no owner-facing open/claimed/settled view.
+
+## [CAP-FB-20260831-BOARD-SYSTEM-PROMPT-01] The system prompt never tells the agent the shared jobs board exists
+- Feedback: 2026-08-31 — owner: "is it clear in the system prompt that this should happen?" It is not — `git grep -i "board\|post a job\|shared jobs" extension/lib/system-prompts.js` finds no board guidance, so agents never proactively post work to the board, claim jobs, or hand off — which is why the owner sees no requested/shared/picked-up tasks.
+- Updated: 2026-08-31 19:00 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: —
+- Candidate: —
+- Shipping: —
+- Acceptance: the composed system prompt tells the agent, in plain terms, that a shared jobs board exists and how to use it — when to post a job (long-running or parallel work, or work another agent is better suited to), how to claim an open job it can complete, that it never claims its own, and that a completed job's result is delivered back to the thread that posted it. With this guidance, a run that reasonably should delegate posts a board job instead of doing everything inline.
+  - Context: the board tools (`board_post_job`, `board_list`, `board_claim_job`, `board_complete_job`, `board_send_message`, `board_read_messages`) are in the lazy catalog but the system prompt (`extension/lib/system-prompts.js`, composed via `composeSystemPrompt`) gives no board guidance, so the model has to discover them cold. `delegate_task`/`delegate_to_agent` are separate (direct delegation); the board is the SHARED queue.
+  - Reproduce today: run a multi-part task with the demo or a real model — it does everything in one run and never posts to the board; the owner's board stays empty.
+  - Files: `extension/lib/system-prompts.js` (a concise board layer/paragraph in the composed prompt — a dynamic layer if it must not break the receipt attestation, following the pattern UNTRUSTED-CONTENT-FENCING-01 used), `extension/lib/master-skill.js` (the tool manual entry for the board tools, if the operating manual needs the how). Coordinate with CAP-FB-20260830-MODEL-TOOL-ADHERENCE-01 (also edits the prompt/manual) — keep the board guidance a distinct, small paragraph.
+  - Steps: 1. Write the board paragraph (what the board is, when to post, when to claim, never-claim-your-own, results return to the poster's thread). 2. Add it as a layer in `composeSystemPrompt`; keep the constraints layer last and the receipt attestation intact. 3. If needed, a `master-skill.js` manual entry for the board verbs. 4. A demo `@marker` that shows an agent posting a board job from a prompt that should delegate.
+  - Out of scope: the board UI (CAP-FB-20260831-BOARD-VISIBILITY-01); the board routes/tools (AGENT-BOARD-WORKING-01, DONE).
+- Review: pending
+- Gates: the falsification gates apply.
+  - Unit: extend `tests/system-prompts.test.ts` — `composeSystemPrompt(...)` contains the board guidance with the board verbs and "never claim your own"/"result returns to the posting thread"; falsification: revert the layer, watch it go RED; the layer-receipt/attestation tests stay green.
+  - Browser: a journey (demo `@marker`) where a delegating prompt results in a `board_post_job` call and the job appears on the board.
+  - Full suite: `npm run build:production && deno test -A tests/ && deno run -A scripts/chrome-journeys.ts` green at the tip.
+  - Constraints: no key/secret in the prompt; the constraints layer stays last; one name per concept.
+- Blockers: —
+- Next: write the board paragraph and add it as a composeSystemPrompt layer
+- Recover: `git log --oneline --all --grep=CAP-FB-20260831-BOARD-SYSTEM-PROMPT-01`
+- History:
+  - 2026-08-31 19:00 UTC — filed from owner feedback; confirmed the system prompt has no board guidance (grep found none).
