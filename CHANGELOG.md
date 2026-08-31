@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.517] — 2026-08-31
+- tasks: record the r4 candidate sha
+
 ## [0.2.516] — 2026-08-31
 - Recent activity: r4 review fix — nested result-object summaries take the honest refusal path, never a silent drop
 
