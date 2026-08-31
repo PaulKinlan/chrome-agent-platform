@@ -908,6 +908,8 @@ Deno.test("jobs-board: a structured {ok:false} route response renders the error 
     // stub harness never runs connectedCallback, so _wire() never ran).
     const groups = { replaceChildren() {}, append() {} };
     element._openEl = groups;
+    element._claimedEl = groups;
+    element._blockedEl = groups;
     element._settledEl = groups;
     element._msgsEl = groups;
     element._emptyEl = { hidden: true, textContent: "" };

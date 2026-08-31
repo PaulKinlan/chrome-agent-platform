@@ -26,6 +26,10 @@ import { parseMentionToken, parseSlashCommand } from "./command-parser.js";
 // authority; the explorer imports the same frozen array so client + server can
 // never drift (CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01).
 import { USER_VISIBLE_KINDS as USER_VISIBLE_KINDS_ARR } from "./activity-kinds.js";
+// The pure jobs-board projection (open/claimed/blocked/settled + status words):
+// one authority shared by <jobs-board> and its unit test. The gallery sync
+// rewrites this path to ./board-view-model.js beside the deploy copy.
+import { partiesOf, projectBoard, statusOf } from "./board-view-model.js";
 // Local Set view (the explorer filters in-memory against it; the server also
 // enforces the same list, default-deny).
 const USER_VISIBLE_KINDS = new Set(USER_VISIBLE_KINDS_ARR);
@@ -9884,31 +9888,62 @@ class JobsBoard extends Component {
     this._root.innerHTML = `
       <style>
         :host { display:block; }
-        .jb { display:flex; flex-direction:column; gap:12px; }
+        .jb { display:flex; flex-direction:column; gap:14px; }
+        /* Empty group containers collapse so the flex gap never stacks up as
+           blank space (a fresh board is just the empty line, no dead air). */
+        .jb-open:empty, .jb-claimed:empty, .jb-blocked:empty, .jb-settled:empty, .jb-msgs:empty { display:none; }
         .jb-group { display:flex; flex-direction:column; }
         .jb-head { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em;
-          color:var(--muted,#635e56); padding:0 2px 4px; }
-        .jb-row { display:flex; flex-direction:column; gap:1px; padding:7px 2px;
+          color:var(--muted,#635e56); padding:0 2px 5px; display:flex; align-items:baseline; gap:6px; }
+        .jb-head .jb-n { font-weight:600; color:var(--muted,#635e56); }
+        .jb-row { display:flex; flex-direction:column; gap:3px; padding:8px 2px;
           border-bottom:1px solid var(--border,#e3e0d9); }
         .jb-row:last-child { border-bottom:0; }
         .jb-desc { font-size:13px; line-height:1.4; color:var(--text,#1d1b18);
           overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
-        .jb-meta { font-size:11.5px; color:var(--muted,#635e56); display:flex; gap:6px; align-items:baseline;
+        .jb-meta { font-size:11.5px; color:var(--muted,#635e56); display:flex; gap:6px 8px; align-items:baseline;
           flex-wrap:wrap; }
-        .jb-dot { display:inline-block; width:7px; height:7px; border-radius:50%;
-          background:var(--accent,#0e6e63); flex:0 0 auto; }
-        .jb-dot.claimed { background:var(--accent2,#7a5c1d); }
+        /* The status WORD is a text badge — never colour alone. A left border in
+           the tone accent + the uppercase label together carry the state. */
+        .jb-badge { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+          padding:1px 6px; border-radius:999px; border:1px solid var(--border,#e3e0d9);
+          color:var(--muted,#635e56); background:var(--surface-2,#f5f2ec); flex:0 0 auto;
+          display:inline-flex; align-items:center; gap:5px; }
+        .jb-badge::before { content:""; width:6px; height:6px; border-radius:50%;
+          background:var(--muted,#635e56); flex:0 0 auto; }
+        .jb-badge.open::before { background:var(--accent,#0e6e63); }
+        .jb-badge.claimed::before { background:var(--accent2,#7a5c1d); }
+        .jb-badge.blocked::before { background:var(--danger,#b3261e); }
+        .jb-badge.done::before { background:var(--accent,#0e6e63); }
+        .jb-badge.fail::before { background:var(--danger,#b3261e); }
+        .jb-party { white-space:nowrap; }
         .jb-outcome { font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
         .jb-outcome.completed { color:var(--accent,#0e6e63); }
         .jb-outcome.failed { color:var(--danger,#b3261e); }
-        .jb-result { font-size:12px; color:var(--muted,#635e56); overflow:hidden;
+        /* Settled row is a real button that expands its result in place. The
+           wrapper drops its own padding/border so the button carries them. */
+        .jb-row--settled { padding:0; border-bottom:0; }
+        .jb-settled-btn { display:flex; flex-direction:column; gap:3px; width:100%; text-align:left;
+          font:inherit; color:inherit; background:transparent; border:0; padding:8px 2px; cursor:pointer;
+          border-bottom:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,6px); }
+        .jb-row--settled:last-child .jb-settled-btn { border-bottom:0; }
+        .jb-settled-btn:hover { background:var(--hover,rgba(0,0,0,.04)); }
+        .jb-settled-btn:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
+        .jb-settled-btn[disabled] { cursor:default; opacity:.85; }
+        .jb-excerpt { font-size:12px; color:var(--muted,#635e56); overflow:hidden;
           text-overflow:ellipsis; white-space:nowrap; }
+        .jb-full { font-size:12.5px; line-height:1.5; color:var(--text,#1d1b18); white-space:pre-wrap;
+          word-break:break-word; margin:4px 0 2px; max-height:40vh; overflow:auto;
+          background:var(--surface-2,#f5f2ec); border-radius:var(--radius-sm,6px); padding:8px 10px; }
+        .jb-caret { font-size:11px; color:var(--muted,#635e56); }
         .jb-msg { font-size:12.5px; line-height:1.45; color:var(--text,#1d1b18); overflow:hidden;
           display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
         .jb-empty { font-size:13px; color:var(--muted,#635e56); padding:6px 2px; line-height:1.5; }
       </style>
       <div class="jb">
         <div class="jb-open" role="list" aria-label="Open jobs" aria-live="polite"></div>
+        <div class="jb-claimed" role="list" aria-label="Claimed jobs"></div>
+        <div class="jb-blocked" role="list" aria-label="Blocked jobs"></div>
         <div class="jb-settled" role="list" aria-label="Recently settled jobs"></div>
         <div class="jb-msgs" role="list" aria-label="Board messages"></div>
         <div class="jb-empty" hidden></div>
@@ -9916,6 +9951,8 @@ class JobsBoard extends Component {
   }
   _wire() {
     this._openEl = this._root.querySelector(".jb-open");
+    this._claimedEl = this._root.querySelector(".jb-claimed");
+    this._blockedEl = this._root.querySelector(".jb-blocked");
     this._settledEl = this._root.querySelector(".jb-settled");
     this._msgsEl = this._root.querySelector(".jb-msgs");
     this._emptyEl = this._root.querySelector(".jb-empty");
@@ -9925,10 +9962,11 @@ class JobsBoard extends Component {
   // Gallery/demo seeding (the showcase has no extension backend).
   set jobs(v) { this._jobs = Array.isArray(v) ? v : []; this._seeded = true; if (this._rendered) this._paint(); }
   set messages(v) { this._messages = Array.isArray(v) ? v : []; this._seeded = true; if (this._rendered) this._paint(); }
-  /** "N open" for the panel-head hint (empty string when nothing is open). */
+  /** "N open" for the panel-head hint — every UNSETTLED job the owner is
+   *  waiting on (open + claimed + blocked). Empty string when nothing is open. */
   get summary() {
-    const open = (this._jobs ?? []).filter((j) => j && (j.status === "pending" || j.status === "claimed")).length;
-    return open > 0 ? `${open} open` : "";
+    const active = projectBoard(this._jobs ?? []).counts.active;
+    return active > 0 ? `${active} open` : "";
   }
   refresh() {
     if (this._seeded) return Promise.resolve(); // gallery demos own their data
@@ -9979,50 +10017,58 @@ class JobsBoard extends Component {
     // the paint cheap when a burst of board events settles identically).
     const signature = JSON.stringify([
       this._loadError,
-      jobs.map((j) => [j?.id, j?.status, j?.claimantId, j?.settledAt]),
+      jobs.map((j) => [j?.id, j?.status, j?.claimantId, j?.blocked, j?.blockedByOpen, j?.settledAt]),
       messages.map((m) => m?.id),
     ]);
     if (signature === this._lastSignature) return;
     this._lastSignature = signature;
 
-    const open = jobs.filter((j) => j && (j.status === "pending" || j.status === "claimed")).slice(0, 10);
-    const settled = jobs.filter((j) => j && (j.status === "completed" || j.status === "failed")).slice(0, 5);
+    // ONE projection authority (extension/lib/board-view-model.js): open /
+    // claimed / blocked / settled, so the owner sees the state of every job.
+    const vm = projectBoard(jobs);
+    const open = vm.open.slice(0, 10);
+    const claimed = vm.claimed.slice(0, 10);
+    const blocked = vm.blocked.slice(0, 10);
+    const settled = vm.settled.slice(0, 5);
 
     this._openEl.replaceChildren();
+    this._claimedEl.replaceChildren();
+    this._blockedEl.replaceChildren();
     this._settledEl.replaceChildren();
     this._msgsEl.replaceChildren();
 
-    if (open.length) {
-      const head = document.createElement("div");
-      head.className = "jb-head";
-      head.textContent = "Open";
-      this._openEl.append(head);
-      for (const job of open) this._openEl.append(this._jobRow(job));
-    }
-    if (settled.length) {
-      const head = document.createElement("div");
-      head.className = "jb-head";
-      head.textContent = "Settled";
-      this._settledEl.append(head);
-      for (const job of settled) this._settledEl.append(this._settledRow(job));
-    }
-    if (messages.length) {
-      const head = document.createElement("div");
-      head.className = "jb-head";
-      head.textContent = "Messages";
-      this._msgsEl.append(head);
-      for (const m of messages.slice(0, 5)) this._msgsEl.append(this._messageRow(m));
-    }
+    this._group(this._openEl, "Open", open, (j) => this._jobRow(j));
+    this._group(this._claimedEl, "Claimed", claimed, (j) => this._jobRow(j));
+    this._group(this._blockedEl, "Blocked", blocked, (j) => this._jobRow(j));
+    this._group(this._settledEl, "Settled", settled, (j) => this._settledRow(j));
+    this._group(this._msgsEl, "Messages", messages.slice(0, 5), (m) => this._messageRow(m));
 
-    const isEmpty = !open.length && !settled.length && !messages.length;
+    const isEmpty = !open.length && !claimed.length && !blocked.length && !settled.length && !messages.length;
     this._emptyEl.hidden = !isEmpty;
     if (isEmpty) {
       // An unreadable board is an HONEST error, never a false "empty".
       this._emptyEl.textContent = this._loadError
         ? `The board could not be read (${this._loadError}) — try reloading the page.`
-        : "No shared jobs yet — when agents hand work to each other, it shows up here.";
+        : "No shared jobs yet — agents post work here for each other.";
     }
   }
+  // A titled group with a count in its head; skipped entirely when empty.
+  _group(container, title, items, build) {
+    if (!items.length) return;
+    const head = document.createElement("div");
+    head.className = "jb-head";
+    const label = document.createElement("span");
+    label.textContent = title;
+    const n = document.createElement("span");
+    n.className = "jb-n";
+    n.textContent = String(items.length);
+    head.append(label, n);
+    container.append(head);
+    for (const item of items) container.append(build(item));
+  }
+  // An ACTIVE job row (open / claimed / blocked): description, the status WORD
+  // as a text badge (colour is never the only signal), the poster, and the
+  // claimant (or "unclaimed"). A blocked row also says what it waits on.
   _jobRow(job) {
     const row = document.createElement("div");
     row.className = "jb-row";
@@ -10032,22 +10078,49 @@ class JobsBoard extends Component {
     desc.textContent = job.description ?? "";
     const meta = document.createElement("span");
     meta.className = "jb-meta";
-    const dot = document.createElement("span");
-    dot.className = "jb-dot" + (job.status === "claimed" ? " claimed" : "");
-    const state = document.createElement("span");
-    const poster = job.posterName ?? job.posterId ?? "an agent";
-    state.textContent = job.status === "claimed"
-      ? `claimed by ${job.claimantName ?? job.claimantId ?? "an agent"} · ${timeAgo(job.claimedAt)} · posted by ${poster}`
-      : `posted by ${poster} · ${timeAgo(job.createdAt)}${job.targetName ? ` · for ${job.targetName}` : ""}`;
-    meta.append(dot, state);
+    const { key, label } = statusOf(job);
+    const { poster, claimant, unclaimed } = partiesOf(job);
+    const badge = document.createElement("span");
+    badge.className = `jb-badge ${key}`;
+    badge.textContent = label;
+    const who = document.createElement("span");
+    who.className = "jb-party";
+    who.textContent = unclaimed
+      ? `posted by ${poster} · unclaimed`
+      : `${claimant} is on it · posted by ${poster}`;
+    meta.append(badge, who);
+    if (key === "blocked") {
+      const blk = document.createElement("span");
+      blk.className = "jb-party";
+      const n = Number(job.blockedByOpen ?? job.blockedBy?.length ?? 1);
+      blk.textContent = `waiting on ${n} job${n === 1 ? "" : "s"}`;
+      meta.append(blk);
+    }
+    const when = document.createElement("span");
+    when.className = "jb-party";
+    when.textContent = key === "claimed" && job.claimedAt ? timeAgo(job.claimedAt) : timeAgo(job.createdAt);
+    meta.append(when);
+    if (job.targetName) {
+      const tgt = document.createElement("span");
+      tgt.className = "jb-party";
+      tgt.textContent = `for ${job.targetName}`;
+      meta.append(tgt);
+    }
     row.append(desc, meta);
     row.title = desc.textContent;
     return row;
   }
+  // A SETTLED job row: a real button that expands the full result in place
+  // (openable without leaving the board), plus the outcome word + claimant.
   _settledRow(job) {
     const row = document.createElement("div");
-    row.className = "jb-row";
+    row.className = "jb-row jb-row--settled";
     row.setAttribute("role", "listitem");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "jb-settled-btn";
+    const result = typeof job.result === "string" ? job.result.trim() : "";
+    const hasResult = result.length > 0;
     const desc = document.createElement("span");
     desc.className = "jb-desc";
     desc.textContent = job.description ?? "";
@@ -10057,18 +10130,40 @@ class JobsBoard extends Component {
     outcome.className = `jb-outcome ${job.status === "failed" ? "failed" : "completed"}`;
     outcome.textContent = job.status === "failed" ? "Failed" : "Completed";
     const who = document.createElement("span");
+    who.className = "jb-party";
     who.textContent = `by ${job.claimantName ?? job.claimantId ?? "an agent"} · ${timeAgo(job.settledAt)}`;
     meta.append(outcome, who);
-    row.append(desc, meta);
-    // Bounded one-line result excerpt (never the full result — the board's own
-    // size authority already caps it, and the row shows the shape, not the dump).
-    if (typeof job.result === "string" && job.result.trim()) {
-      const result = document.createElement("span");
-      result.className = "jb-result";
-      result.textContent = _short(job.result.trim(), 120);
-      row.append(result);
+    if (hasResult) {
+      const caret = document.createElement("span");
+      caret.className = "jb-caret";
+      caret.textContent = "▸";
+      meta.append(caret);
     }
-    row.title = desc.textContent;
+    // Collapsed one-line excerpt; expands to the full result on click.
+    const excerpt = document.createElement("span");
+    excerpt.className = "jb-excerpt";
+    excerpt.textContent = hasResult ? _short(result, 120) : "No result recorded.";
+    const full = document.createElement("pre");
+    full.className = "jb-full";
+    full.textContent = result;
+    full.hidden = true;
+    btn.append(desc, meta, excerpt);
+    btn.title = desc.textContent;
+    if (hasResult) {
+      btn.setAttribute("aria-expanded", "false");
+      btn.setAttribute("aria-label", `${job.description ?? "Job"} — ${outcome.textContent} by ${job.claimantName ?? job.claimantId ?? "an agent"}. Open the result.`);
+      btn.addEventListener("click", () => {
+        const nowHidden = !full.hidden;
+        full.hidden = nowHidden;
+        excerpt.hidden = !nowHidden;
+        btn.setAttribute("aria-expanded", String(!nowHidden));
+        const c = btn.querySelector(".jb-caret");
+        if (c) c.textContent = nowHidden ? "▸" : "▾";
+      });
+    } else {
+      btn.disabled = true;
+    }
+    row.append(btn, full);
     return row;
   }
   _messageRow(m) {

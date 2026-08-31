@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.548] — 2026-08-31
+- The shared Jobs board is now always on the hub — a fresh profile shows it empty, and each job shows its status, who posted it, who is working on it, what it is waiting on, and its result.
+
 ## [0.2.547] — 2026-08-31
 - The jobs-board fixes and more polish have begun.
 

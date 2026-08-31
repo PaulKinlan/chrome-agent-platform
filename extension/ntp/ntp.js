@@ -1171,7 +1171,10 @@ function renderJobsBoard() {
   if (!host) return;
   if (!jobsBoardEl) {
     jobsBoardEl = document.createElement("jobs-board");
-    jobsBoardEl.addEventListener("jobs-change", (ev) => noteHubData("jobs", "board", (ev.detail?.count ?? 0) > 0));
+    // The Jobs section is ALWAYS visible (CAP-FB-20260831-BOARD-VISIBILITY-01):
+    // the owner can always see the shared work queue, empty state included, so
+    // it is NOT gated behind noteHubData like Timeline/Agents. The board's own
+    // honest empty state carries the "nothing yet" message.
     host.replaceChildren(jobsBoardEl);
   }
   jobsBoardEl?.refresh?.().then(() => {

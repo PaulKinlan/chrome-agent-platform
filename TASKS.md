@@ -4379,15 +4379,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260831-BOARD-VISIBILITY-01] The shared jobs board is hidden and buried — the owner has no visibility into requested/shared/claimed work
 - Feedback: 2026-08-31 — owner: "I'm not seeing the Jobs board anywhere so I have no visibility into what tasks are being requested or shared or picked up." The board section is `hidden` until it has data (`noteHubData("jobs","board",count>0)`, `extension/ntp/ntp.html:975` `id="board-section" ... hidden`) and, when shown, is a squeezed sidebar strip (`#board-section { max-height: 34% }`) — there is no owner-facing view of open/claimed/settled jobs.
-- Updated: 2026-08-31 18:51 UTC
-- Status: OPEN
+- Updated: 2026-08-31 21:30 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P1
 - Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — CLAIMED; do not start a parallel attempt
 - Workspace: active (local path private)
 - Branch: `cap/board-visibility` (pushed to origin as the candidate branch; merged by the coordinator)
 - Base: `2426b915`
-- Candidate: —
+- Candidate: this tracker commit on `cap/board-visibility`
 - Shipping: —
 - Acceptance: the owner can always see the shared jobs board and the state of every job (open, claimed by whom, blocked, completed with its result), not only when a job happens to exist.
   - Context: the board routes and tools work (CAP-FB-20260830-AGENT-BOARD-WORKING-01, DONE) but the surface is a hidden sidebar afterthought. HUB-AS-TIMELINE-01 landed a full-width `#timeline-section`; the board should be a peer surface, not a 34%-height sidebar clip. `renderJobsBoard()` + `refreshBoard()` (`extension/ntp/ntp.js`) already fetch `board.list`/`board.messages`.
@@ -4395,16 +4395,17 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - Files: `extension/ntp/ntp.html` (promote the board to a visible surface — a section that is present with an empty state, not `hidden`, OR a labelled entry that opens a board view), `extension/ntp/ntp.js` (`renderJobsBoard`/`refreshBoard`), `extension/shared/components.js` (reuse/extend the board row component; a `<jobs-board>` view showing open/claimed/blocked/settled columns or groups with poster, claimant, status word, and the result for settled), gallery sync. Coordinate with the hub timeline (runs) and the sidebar Agents/Activity sections — the board is the shared-work queue, distinct from the run timeline and the action ledger.
   - Steps: 1. Decide the surface: a persistent hub board section with an honest empty state ("No shared jobs yet — agents post work here for each other") OR a first-class board view opened from a visible entry. 2. Show every job with poster, claimant, status word (colour never the only signal), blockedBy, and the settled result openable in place. 3. Keep it fast (reuse the debounced board refresh). 4. a11y: keyboard-operable rows, one heading, live region on state change.
   - Out of scope: the board routes/tools (AGENT-BOARD-WORKING-01, DONE); the system-prompt guidance that makes agents USE the board (CAP-FB-20260831-BOARD-SYSTEM-PROMPT-01).
-- Review: pending
+- Review: author review 2026-08-31 — falsification gates cleared (projection RED/GREEN recorded below); surface driven in a real loaded extension with screenshots.
 - Gates: the falsification gates apply.
-  - Unit: a projection test for the board view model (open/claimed/blocked/settled grouping from `board.list` events); falsification: revert the empty-state/reveal change, watch the "board is present on a fresh profile" assertion go RED.
-  - Browser: a journey/KAT (extend `scripts/kat-agent-board.ts`) — a fresh profile shows the board surface with its empty state; after a real `board_post_job` the job appears with poster+status; after a claim it shows the claimant; after complete it shows the result openable; screenshots.
-  - Full suite: `npm run build:production && deno test -A tests/ && deno run -A scripts/chrome-journeys.ts` green at the tip.
-  - Constraints: textContent for untrusted job text; inline SVG icons; one name per concept (Jobs board); no fixed debug port.
+  - Unit: `tests/board-view-model.test.ts` — a projection test for the board view model (open/claimed/blocked/settled grouping + text status words from `board.list` events). Falsification: reverting the blocked-grouping branch in `extension/lib/board-view-model.js` turned 3 assertions RED ("partitions open/claimed/blocked/settled", "a CLAIMED job that is still blocked reads as blocked", "every state has a text label"); restored → 5 passed. GREEN.
+  - Browser: `scripts/kat-agent-board.ts` extended — a fresh profile shows the always-present `#jobs-section` board with its honest empty state; a real `board_post_job` appears grouped with poster+status word; a claim shows the claimant; a blocked job shows "waiting on N jobs"; a settled job's result is openable in place (click expands the full result). Screenshots at 1440x900 and 1024x700. Result: 45 passed, 0 failed.
+  - Full suite: `npm run build:production` (ok), `deno test -A tests/` (2812 passed, 0 failed), `deno run -A scripts/chrome-journeys.ts` (272/272 passed). Green at the tip.
+  - Constraints: textContent for untrusted job text (all agent-authored fields via textContent); inline SVG icons (no new icons); one name per concept (Jobs board); no fixed debug port (KAT uses `launchChrome()`).
 - Blockers: —
-- Next: decide the surface (persistent hub section with empty state vs a board view), then the view model + empty state
+- Next: coordinator review + merge.
 - Recover: `git log --oneline --all --grep=CAP-FB-20260831-BOARD-VISIBILITY-01`
 - History:
+  - 2026-08-31 21:30 UTC — IN_REVIEW. Promoted the hub `#jobs-section` (the `<jobs-board>` peer surface to the Timeline) to ALWAYS visible with an honest empty state ("No shared jobs yet — agents post work here for each other"); extracted a pure projection (`extension/lib/board-view-model.js`) grouping open/claimed/blocked/settled with a text status WORD per job (colour never the only signal); the `<jobs-board>` component now renders those four groups with poster, claimant-or-unclaimed, "waiting on N jobs" for blocked, and a settled result openable in place (expand-in-row). Gallery specimen + sync updated (board-view-model added to `scripts/sync-gallery.mjs`). The compact sidebar `#board-section` strip and its KAT coverage are left intact (a secondary in-thread glance). Gates: projection RED/GREEN recorded; KAT 45/45; unit 2812/0; journeys 272/272; build:production ok.
   - 2026-08-31 19:00 UTC — filed from owner feedback that the jobs board is invisible; root cause: `#board-section` is `hidden` until data and squeezed into the sidebar; no owner-facing open/claimed/settled view.
   - 2026-08-31 18:51 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/board-visibility` off `origin/main@2426b915`. Other agents: pick a different entry.
 

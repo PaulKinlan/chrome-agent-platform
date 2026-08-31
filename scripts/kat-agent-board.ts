@@ -72,6 +72,52 @@ try {
   await cdp("Emulation.setDeviceMetricsOverride", { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false }, page);
   await sleep(1500);
 
+  // ── CAP-FB-20260831-BOARD-VISIBILITY-01 — the MAIN, always-visible board ──
+  // Reads the owner-facing <jobs-board> in the hub's #jobs-section (the peer
+  // surface to the Timeline), NOT the compact sidebar strip. Snapshots the
+  // grouped view model out of its shadow root.
+  const mainJobs = async () => await evaluate(`(() => {
+    const section = document.getElementById("jobs-section");
+    const el = document.querySelector("#jobs-board-host jobs-board");
+    const sr = el && el.shadowRoot;
+    return {
+      sectionHidden: section ? section.hidden : null,
+      empty: sr ? (sr.querySelector(".jb-empty")?.textContent ?? null) : null,
+      emptyHidden: sr ? (sr.querySelector(".jb-empty")?.hidden ?? null) : null,
+      open: sr ? sr.querySelectorAll(".jb-open .jb-row").length : 0,
+      claimed: sr ? sr.querySelectorAll(".jb-claimed .jb-row").length : 0,
+      blocked: sr ? sr.querySelectorAll(".jb-blocked .jb-row").length : 0,
+      settled: sr ? sr.querySelectorAll(".jb-settled .jb-row").length : 0,
+      badges: sr ? [...sr.querySelectorAll(".jb-badge")].map((b) => b.textContent) : [],
+      text: sr ? sr.textContent : "",
+      hint: document.getElementById("jobs-count")?.textContent ?? null,
+    };
+  })()`, page);
+  // A snapshot of the hub main area at a named size (owner-facing evidence).
+  const shotAt = async (w: number, h: number, name: string) => {
+    await cdp("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: 1, mobile: false }, page);
+    await evaluate(`document.getElementById("jobs-section")?.scrollIntoView({ block: "start" }); true`, page);
+    await sleep(400);
+    const s = await cdp("Page.captureScreenshot", { format: "png" }, page);
+    await Deno.writeFile(`${OUT}/${name}`, Uint8Array.from(atob(s.result.data), (c) => c.charCodeAt(0)));
+    console.log(`screenshot: ${OUT}/${name}`);
+  };
+
+  // A fresh profile shows the always-present board with its honest empty state.
+  let freshBoard = null;
+  for (let i = 0; i < 20; i++) {
+    freshBoard = await mainJobs();
+    if (freshBoard && freshBoard.emptyHidden === false && freshBoard.empty) break;
+    await sleep(250);
+  }
+  check("the Jobs board is ALWAYS visible on a fresh profile (section not hidden)", freshBoard?.sectionHidden === false, freshBoard?.sectionHidden);
+  check("a fresh Jobs board shows the honest empty state, not nothing",
+    typeof freshBoard?.empty === "string" && freshBoard.empty.includes("No shared jobs yet") && freshBoard.emptyHidden === false, freshBoard?.empty);
+  await shotAt(1440, 900, "jobs-board-empty-1440x900.png");
+  // Restore the working viewport for the sidebar geometry assertions below.
+  await cdp("Emulation.setDeviceMetricsOverride", { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false }, page);
+  await sleep(300);
+
   // The page's own message chokepoint drives the REAL SW routes.
   const sendExpr = (type: string, payload: object) =>
     `new Promise((r) => chrome.runtime.sendMessage({ type: ${JSON.stringify(type)}, ...${JSON.stringify(payload)} }, (res) => r(res ?? null)))`;
@@ -280,6 +326,43 @@ try {
     return { metas: [...s.querySelectorAll(".fr-meta")].map((m) => m.textContent), settled: s.querySelectorAll("button.board-settled").length, text: s.textContent, buttons: [...s.querySelectorAll("button.board-settled")].map((b) => b.textContent) };
   })()`, page);
   check("settled jobs render as buttons with the claimant's result", finalDom === true && dom?.settled >= 1 && dom.buttons.some((t: string) => t.includes("Board Worker finished")), dom);
+
+  // ── CAP-FB-20260831-BOARD-VISIBILITY-01 — the MAIN board shows every state ──
+  // With open, blocked and settled jobs live, the always-visible hub board
+  // groups them and carries the status WORD, poster, claimant/unclaimed, and an
+  // OPENABLE settled result — the owner sees the whole shared queue in one place.
+  await waitFor(async () => {
+    const m = await mainJobs();
+    return Boolean(m) && m.settled >= 1 && m.blocked >= 1;
+  }, 15000);
+  const mainState = await mainJobs();
+  check("the main Jobs board groups blocked + settled jobs (owner sees every state)",
+    mainState?.blocked >= 1 && mainState?.settled >= 1, { blocked: mainState?.blocked, settled: mainState?.settled });
+  check("active rows carry a TEXT status-word badge (colour is never the only signal)",
+    Array.isArray(mainState?.badges) && mainState.badges.includes("Blocked") &&
+      mainState.badges.some((b: string) => b === "Open" || b === "Claimed"), mainState?.badges);
+  check("the main board shows the poster and the claimant/unclaimed in visible text",
+    typeof mainState?.text === "string" && /posted by/.test(mainState.text) &&
+      (/unclaimed/.test(mainState.text) || /is on it/.test(mainState.text)), mainState?.text?.slice(0, 320));
+  // The settled result is openable IN PLACE: clicking a settled button reveals
+  // its full result <pre> (aria-expanded flips true) without leaving the board.
+  const opened = await evaluate(`(() => {
+    const el = document.querySelector("#jobs-board-host jobs-board");
+    const sr = el && el.shadowRoot;
+    const btn = sr && sr.querySelector(".jb-settled-btn:not([disabled])");
+    if (!btn) return { noBtn: true };
+    btn.click();
+    const full = btn.parentElement.querySelector(".jb-full");
+    return { expanded: btn.getAttribute("aria-expanded"), fullShown: full ? full.hidden === false : false,
+      resultText: full && typeof full.textContent === "string" ? full.textContent.slice(0, 80) : null };
+  })()`, page);
+  check("a settled job's result is openable in place (click expands the full result)",
+    opened?.expanded === "true" && opened?.fullShown === true &&
+      typeof opened?.resultText === "string" && opened.resultText.length > 0, opened);
+  await shotAt(1440, 900, "jobs-board-1440x900.png");
+  await shotAt(1024, 700, "jobs-board-1024x700.png");
+  await cdp("Emulation.setDeviceMetricsOverride", { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false }, page);
+  await sleep(300);
 
   // 12. Settings → Board permissions (step 9): the Agent select lists an agent
   //     created AFTER the options page loaded (no reload), rule rows print
