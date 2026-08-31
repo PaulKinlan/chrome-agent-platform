@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.548] — 2026-08-31
+- Agents now know about the shared jobs board — the assistant is told when to post work for another agent to pick up, when to claim an open job, and that a finished job's result comes back to the thread that posted it.
+
 ## [0.2.547] — 2026-08-31
 - The jobs-board fixes and more polish have begun.
 

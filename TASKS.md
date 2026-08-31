@@ -4410,15 +4410,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260831-BOARD-SYSTEM-PROMPT-01] The system prompt never tells the agent the shared jobs board exists
 - Feedback: 2026-08-31 — owner: "is it clear in the system prompt that this should happen?" It is not — `git grep -i "board\|post a job\|shared jobs" extension/lib/system-prompts.js` finds no board guidance, so agents never proactively post work to the board, claim jobs, or hand off — which is why the owner sees no requested/shared/picked-up tasks.
-- Updated: 2026-08-31 18:51 UTC
-- Status: OPEN
+- Updated: 2026-08-31 (worker)
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P1
 - Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — CLAIMED; do not start a parallel attempt
 - Workspace: active (local path private)
 - Branch: `cap/board-system-prompt` (pushed to origin as the candidate branch; merged by the coordinator)
-- Base: `2426b915`
-- Candidate: —
+- Base: `63a36aa4`
+- Candidate: this tracker commit
 - Shipping: —
 - Acceptance: the composed system prompt tells the agent, in plain terms, that a shared jobs board exists and how to use it — when to post a job (long-running or parallel work, or work another agent is better suited to), how to claim an open job it can complete, that it never claims its own, and that a completed job's result is delivered back to the thread that posted it. With this guidance, a run that reasonably should delegate posts a board job instead of doing everything inline.
   - Context: the board tools (`board_post_job`, `board_list`, `board_claim_job`, `board_complete_job`, `board_send_message`, `board_read_messages`) are in the lazy catalog but the system prompt (`extension/lib/system-prompts.js`, composed via `composeSystemPrompt`) gives no board guidance, so the model has to discover them cold. `delegate_task`/`delegate_to_agent` are separate (direct delegation); the board is the SHARED queue.
@@ -4426,15 +4426,16 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - Files: `extension/lib/system-prompts.js` (a concise board layer/paragraph in the composed prompt — a dynamic layer if it must not break the receipt attestation, following the pattern UNTRUSTED-CONTENT-FENCING-01 used), `extension/lib/master-skill.js` (the tool manual entry for the board tools, if the operating manual needs the how). Coordinate with CAP-FB-20260830-MODEL-TOOL-ADHERENCE-01 (also edits the prompt/manual) — keep the board guidance a distinct, small paragraph.
   - Steps: 1. Write the board paragraph (what the board is, when to post, when to claim, never-claim-your-own, results return to the poster's thread). 2. Add it as a layer in `composeSystemPrompt`; keep the constraints layer last and the receipt attestation intact. 3. If needed, a `master-skill.js` manual entry for the board verbs. 4. A demo `@marker` that shows an agent posting a board job from a prompt that should delegate.
   - Out of scope: the board UI (CAP-FB-20260831-BOARD-VISIBILITY-01); the board routes/tools (AGENT-BOARD-WORKING-01, DONE).
-- Review: pending
+- Review: author review 2026-08-31 — falsification gates cleared (RED/GREEN recorded). Same-model fresh-diff read not available; author review per CLAUDE.md "Review without a second model".
 - Gates: the falsification gates apply.
-  - Unit: extend `tests/system-prompts.test.ts` — `composeSystemPrompt(...)` contains the board guidance with the board verbs and "never claim your own"/"result returns to the posting thread"; falsification: revert the layer, watch it go RED; the layer-receipt/attestation tests stay green.
-  - Browser: a journey (demo `@marker`) where a delegating prompt results in a `board_post_job` call and the job appears on the board.
-  - Full suite: `npm run build:production && deno test -A tests/ && deno run -A scripts/chrome-journeys.ts` green at the tip.
-  - Constraints: no key/secret in the prompt; the constraints layer stays last; one name per concept.
+  - Unit: extend `tests/system-prompts.test.ts` — `composeSystemPrompt(...)` contains the board guidance with the board verbs and "never claim your own"/"result returns to the posting thread"; falsification: revert the layer, watch it go RED; the layer-receipt/attestation tests stay green. DONE — new test "the composed prompt teaches the SHARED JOBS BOARD …"; RED verbatim: `FAILED … AssertionError: the composed hub prompt must name the board verb "board_post_job"`; GREEN verbatim: `ok | 1 passed | 0 failed | 60 filtered out`. Attestation/layer-receipt tests stay green (61/61 in system-prompts.test.ts).
+  - Browser: a journey (demo `@marker`) where a delegating prompt results in a `board_post_job` call and the job appears on the board. DONE — `scripts/kat-agent-board.ts` (the `@demo-board-post` step): "the hub @demo-board-post run settles ok with a thread", "posting wakes the target", "the settled result lands in the poster thread" — 39/39 PASS. Screenshots: board-sidebar.png, board-settings.png.
+  - Full suite: `npm run build:production && deno test -A tests/ && deno run -A scripts/chrome-journeys.ts` green at the tip. build:production OK; `deno test -A tests/` → 2808 passed, 0 failed; chrome-journeys → recorded in History.
+  - Constraints: no key/secret in the prompt; the constraints layer stays last; one name per concept. Held — the board guidance is a distinct paragraph inside the product-base `MASTER_SKILL` (registry `cap.hub.master`), so the protected constraints layer still composes LAST and the keyed-receipt attestation is untouched (no new layer).
 - Blockers: —
-- Next: write the board paragraph and add it as a composeSystemPrompt layer
+- Next: coordinator merge to `origin/main`.
 - Recover: `git log --oneline --all --grep=CAP-FB-20260831-BOARD-SYSTEM-PROMPT-01`
 - History:
   - 2026-08-31 18:51 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/board-system-prompt` off `origin/main@2426b915`. Other agents: pick a different entry.
   - 2026-08-31 19:00 UTC — filed from owner feedback; confirmed the system prompt has no board guidance (grep found none).
+  - 2026-08-31 (worker) — implemented on `origin/main@63a36aa4`. Added the "The shared jobs board (hand work off + pick work up)" paragraph to `extension/lib/master-skill.js` (product-base `MASTER_SKILL`): names all six verbs (board_post_job, board_list, board_claim_job, board_complete_job, board_send_message, board_read_messages), distinguishes the board from delegate_task/delegate_to_agent, states "You NEVER claim your own job", and that a posted job's result "is delivered back to the posting thread". Bumped `cap.hub.master` 1.4.0 → 1.5.0 in `extension/lib/system-prompts.js` (content change ⇒ version/hash event) and updated the two version-pinned tests. Because the guidance rides in the base layer (not a new composeSystemPrompt layer), the protected-constraints-last invariant and the layer-receipt attestation are untouched. RED/GREEN recorded; full unit suite 2808/0; kat-agent-board 39/0.

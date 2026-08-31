@@ -148,7 +148,11 @@ export const PROMPT_REGISTRY = [
     // discipline, self-restructuring) — the store is read-first, not write-only.
     // 1.4.0: MV3 execution-context grounding, one-shot Response bodies,
     // browser-tool tab creation, and one-search-then-invoke discipline.
-    version: "1.4.0",
+    // 1.5.0: the SHARED JOBS BOARD doctrine (post/claim verbs, never-claim-your-
+    // own, a posted job's result returns to the posting thread) so agents hand
+    // work off proactively instead of discovering the board tools cold
+    // (CAP-FB-20260831-BOARD-SYSTEM-PROMPT-01).
+    version: "1.5.0",
     release: "0.2.408",
     protected: false,
     content: MASTER_SKILL,

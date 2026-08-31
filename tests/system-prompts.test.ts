@@ -211,6 +211,40 @@ Deno.test("hub prompt: capability breadth — the chrome.* areas, the wasm suite
     "the manual must not hardcode a browser-tool count (drifts; list_tools is authoritative)");
 });
 
+Deno.test("hub prompt: the composed prompt teaches the SHARED JOBS BOARD (post/claim verbs, never-claim-your-own, result returns to the posting thread) — CAP-FB-20260831-BOARD-SYSTEM-PROMPT-01", () => {
+  // The board guidance rides in the product-base (cap.hub.master), so the
+  // COMPOSED hub prompt — and every named agent that inherits it — carries it.
+  const composed = composeSystemPrompt({ baseId: "cap.hub.master" });
+  // Wrap-robust: flatten runs of whitespace so the assertions do not depend on
+  // where the paragraph happens to line-wrap.
+  const flat = composed.text.replace(/\s+/g, " ");
+  const flatLower = flat.toLowerCase();
+  // (a) all six board verbs are named — the model must not discover them cold.
+  for (
+    const verb of [
+      "board_post_job",
+      "board_list",
+      "board_claim_job",
+      "board_complete_job",
+      "board_send_message",
+      "board_read_messages",
+    ]
+  ) {
+    assert(flat.includes(verb), `the composed hub prompt must name the board verb "${verb}"`);
+  }
+  // (b) the board is named as a distinct, shared queue (not direct delegation).
+  assert(flatLower.includes("shared jobs board"), "the prompt must name the shared jobs board");
+  // (c) never claim your own job — the core anti-self-claim rule.
+  assert(flatLower.includes("never claim your own"), "the prompt must say an agent never claims its own job");
+  // (d) a posted job's result returns to the posting thread (do not wait/report).
+  assert(flatLower.includes("posting thread"), "the prompt must say the result returns to the posting thread");
+  // (e) it is distinct from delegate_task / delegate_to_agent (direct delegation).
+  assert(
+    flat.includes("delegate_task") && flat.includes("delegate_to_agent"),
+    "the board guidance must distinguish the board from direct delegation (delegate_task/delegate_to_agent)",
+  );
+});
+
 Deno.test("policy drift: the EDITABLE base carries NONE of the runtime-security constraints", () => {
   // No rule text may live in the replaceable product base — a "replace"
   // override must not be able to suppress any runtime-security instruction.
@@ -776,7 +810,7 @@ Deno.test("upgrade WITH override: flagged, the override still applies, and the d
   const reg = upgradedRegistry();
   const d = await describePrompt("hub", { registry: reg });
   assertEquals(d.builtinChanged, true, "the release-update state is detected");
-  assertEquals(d.override.baseVersion, "1.4.0");
+  assertEquals(d.override.baseVersion, "1.5.0");
   assertEquals(d.base.version, "2.0.0");
   assertStringIncludes(d.effective.text, "MY-CUSTOM");
   assertStringIncludes(d.effective.text, "Always name artifacts clearly.");
@@ -1373,7 +1407,7 @@ Deno.test("prompt registry versions carry the latest built-in grounding", () => 
   // preview surface these versions so existing customizations show the update.
   const hub = PROMPT_REGISTRY.find((p) => p.id === "cap.hub.master");
   const worker = PROMPT_REGISTRY.find((p) => p.id === "cap.worker.base");
-  assertEquals(hub?.version, "1.4.0", "cap.hub.master carries the environment grounding bump");
+  assertEquals(hub?.version, "1.5.0", "cap.hub.master carries the shared-jobs-board doctrine bump");
   assertEquals(worker?.version, "1.2.0", "cap.worker.base carries the environment grounding bump");
 });
 
