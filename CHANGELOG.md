@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.2.517] — 2026-08-31
+- The release notes entry for the tidy-up is now in plain language too
+
 ## [0.2.516] — 2026-08-31
-- bump-version writes plain-language changelog entries (prefixes, SHAs and tracker ids sanitized) and the test pins it
+- The release notes now tidy themselves: commit shorthand no longer leaks into them, and the automated quality check pins it.
 
 ## [0.2.515] — 2026-08-31
 - Typing / or @ in the composer now shows an accessible suggestion list that keyboard and screen-reader users can follow
