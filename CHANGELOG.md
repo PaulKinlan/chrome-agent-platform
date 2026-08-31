@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.578] — 2026-08-31
+- Fix the multi-slash journeys for the source-qualified skill refId (the skill-sync catalog stamped builtin: ids)
+
 ## [0.2.577] — 2026-08-31
 - Skill list work — /skill and Settings read one catalog; collision-proof refIds; broken skills hidden and reported
 

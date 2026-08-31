@@ -1500,7 +1500,7 @@ async function main() {
     })()`);
     const skillResolved = JSON.parse(afterSkill ?? "{}");
     check("multi-slash: the skill reference is inserted and the popup closes",
-      /\/skill:page-summary/.test(skillResolved?.value ?? "") && skillResolved?.popupHidden === true);
+      /\/skill:(?:builtin:)?page-summary/.test(skillResolved?.value ?? "") && skillResolved?.popupHidden === true);
     // The SECOND command: append a space + /tabs: to the resolved text. On the
     // pre-fix code the /tabs token is mid-input and NEVER opens the picker.
     await typeText(cdp, ntpSession, " /tabs:");
@@ -1529,7 +1529,7 @@ async function main() {
     await sleep(800);
     const multiValue = await evalIn(cdp, ntpSession, `document.querySelector('agent-composer #task-input')?.value ?? ''`);
     check("multi-slash: the final input holds BOTH the skill and the tab reference",
-      /\/skill:page-summary/.test(multiValue) && /\/tabs:/.test(multiValue));
+      /\/skill:(?:builtin:)?page-summary/.test(multiValue) && /\/tabs:/.test(multiValue));
     check("multi-slash: clicked Run task", await clickSel(cdp, ntpSession, "#run-task"));
     // Wait for the run to FULLY settle (the demo model streams; the journal
     // entry lands at run START, so a journal poll is not enough — the run-end
@@ -1547,7 +1547,7 @@ async function main() {
       if (!runSettled) continue;
       const journalMulti = await msgValue({ type: "memory.get", origin: "master", key: "journal" }).catch(() => []) ?? [];
       multiTask = (Array.isArray(journalMulti) ? journalMulti : [])
-        .find((e) => typeof e?.task === "string" && /\/skill:page-summary/.test(e.task) && /\/tabs:/.test(e.task));
+        .find((e) => typeof e?.task === "string" && /\/skill:(?:builtin:)?page-summary/.test(e.task) && /\/tabs:/.test(e.task));
     }
     await sleep(1500); // the run-end UI settle before the NTP block
     // The hub's run opens the THREAD view, hiding the hub composer. Return to
