@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.512] — 2026-08-31
+- tasks: record the r2 candidate SHA (935e19b0) in the FOCUS-ORDER-VISIBILITY entry
+
 ## [0.2.511] — 2026-08-31
 - Focus order r2: real label association gate (no vacuously-true regex), anchors included in the 24px gate, focus-ring check enumerates shadow roots and detects style CHANGES on focus, tab-walk classifies body stops against the real first/last focusable; repair tracker metadata duplicated across entries by the r1 History insert
 
