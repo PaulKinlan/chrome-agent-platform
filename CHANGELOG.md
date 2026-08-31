@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.515] — 2026-08-31
+- tasks: FOCUS-ORDER-VISIBILITY-01 DONE — r3 review accepted the product fixes; tracker metadata corrected
+
 ## [0.2.514] — 2026-08-31
 - tasks: record the r3 candidate SHA (d8017787) in the FOCUS-ORDER-VISIBILITY entry
 
