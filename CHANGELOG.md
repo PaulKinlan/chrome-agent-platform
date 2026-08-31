@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.567] — 2026-08-31
+- Groundwork for connecting the agent to external tool servers is in place.
+
 ## [0.2.566] — 2026-08-31
 - Work has begun on folder tools and external tool-server support.
 

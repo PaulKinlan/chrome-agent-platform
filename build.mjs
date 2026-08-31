@@ -341,11 +341,21 @@ try {
     const OPT = path.join(STAGE, "options.bundle.js");
     await mkdir(path.dirname(SW), { recursive: true });
     const shimNode = path.join(ROOT, "browser-shim-node.js");
+    // DEVELOPER-ONLY MCP transport-spike probe
+    // (CAP-FB-20260831-MCP-TRANSPORT-SPIKE-01). scripts/mcp-probe-entry.js
+    // imports the remote-MCP client (lib/mcp-client.js → the browser-safe
+    // Streamable-HTTP / SSE transports; NEVER the stdio path) and installs
+    // globalThis.__capMcpProbe so the KAT can drive mount→list→call→teardown
+    // INSIDE the real service worker (SW globals forbid dynamic import(), so
+    // the probe must be part of the bundle). It is injected ONLY for the
+    // developer target and is absent from every store build.
+    const swInject = [path.join(ROOT, "browser-shim-process.js")];
+    if (DEBUG_BUILD) swInject.push(path.join(ROOT, "scripts/mcp-probe-entry.js"));
     await build({
       ...shared,
       entryPoints: [path.join(EXT_DIR, "background/service-worker.js")],
       outfile: SW,
-      inject: [path.join(ROOT, "browser-shim-process.js")],
+      inject: swInject,
       alias: {
         "node:fs": shimNode, "node:fs/promises": shimNode, "node:path": shimNode,
         "node:os": shimNode, "node:crypto": shimNode, "node:process": shimNode,
