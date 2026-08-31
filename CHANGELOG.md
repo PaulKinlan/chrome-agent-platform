@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.557] — 2026-08-31
+- A generated file that used to change after every build is no longer kept in source control.
+
 ## [0.2.556] — 2026-08-31
 - Work has begun on the enterprise-permission and scheduling improvements.
 

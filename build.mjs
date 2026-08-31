@@ -162,7 +162,9 @@ console.log(`build assertion: ${shippedWasm.length} bundled Wasm binaries; exact
 
 // Sync the design-system source into the docs/ component gallery (single
 // source of truth = extension/shared/; see scripts/sync-gallery.mjs). The
-// docs/ copies are committed too so the GitHub Pages showcase works standalone.
+// docs/ source copies are committed so the GitHub Pages showcase works
+// standalone; the generated *.bundle.js is BUILD OUTPUT (gitignored) and is
+// regenerated here on every build.
 await syncGallery();
 // CHANGELOG.md is canonical and tracked; extension/CHANGELOG.md is an ignored
 // generated package file. A clean git archive therefore needs the production
@@ -548,6 +550,12 @@ try {
     // release) below, so a build that dies in a finalizer never records a
     // version (see shouldRecordBuild).
     buildSucceeded = true;
+    // Re-sync the docs/ gallery now that the diff-core bundle exists in DIST.
+    // The earlier syncGallery() (before this build) reads DIST from the PREVIOUS
+    // run, so on a fresh checkout the gitignored docs/diff-core.bundle.js has no
+    // source to copy yet. Running it again here regenerates that build-output
+    // copy from the freshly-published dist (idempotent for the source copies).
+    await syncGallery();
   } finally {
     // Staging ALWAYS removed; a failure is FATAL. Also sweep stale temps from
     // crashed runs (staging, boot links, next links) at the repo root.
