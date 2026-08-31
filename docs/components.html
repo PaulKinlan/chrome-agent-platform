@@ -432,6 +432,15 @@
       </div>
 
       <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;agent-timeline&gt;</code> — the hub's spine: one reverse-chronological stream of tasks + runs</h3>
+        <div class="stage column" style="max-width:680px">
+          <agent-timeline id="timeline-demo" limit="40"></agent-timeline>
+          <agent-timeline id="timeline-empty"></agent-timeline>
+        </div>
+        <p class="caption">The hub below the composer (CAP-FB-20260828-HUB-AS-TIMELINE-01): what is in flight, what is waiting on you, and what came back while you were away — one list, not three object catalogs. Each row is a single Open target that emits <code>open</code> with the entry id (a task thread, or an agent run). A leading status dot carries a status word too, so colour is never the only signal. Seeded demo entries — the real surface is the pure <code>buildTimeline</code> projection of the thread index + the durable-run registry. Second instance shows the empty state.</p>
+      </div>
+
+      <div class="specimen">
         <h3 class="spec"><code class="tag">&lt;activity-explorer&gt;</code> — the browsable/searchable activity log</h3>
         <div class="stage column" style="max-width:680px">
           <activity-explorer id="activity-demo" limit="50"></activity-explorer>
@@ -702,6 +711,19 @@
       const tlEmpty = document.getElementById("tl-empty");
       tlEmpty.summary = { ...tlSummary, descriptorCount: 0, bySource: {}, catalogDiagnostics: { input: 0, accepted: 0, rejected: 0, collisions: 0, duplicateStableIds: 0, truncated: 0, errors: {} }, selectionDiagnostics: { activeSelections: 0, activeRuns: 0, grantsCreated: 0, executableRoutesCreated: 0 } };
       tlEmpty.state = "ready";
+
+      // <agent-timeline> example — seed demo rows (the gallery has no extension
+      // backend; the real surface is the pure buildTimeline projection of the
+      // thread index + the durable-run registry).
+      const now = Date.now();
+      document.getElementById("timeline-demo").entries = [
+        { id: "run:sched-1", kind: "scheduled", agentId: "background:digest", title: "Reading digest — morning run", agent: "Reading digest", time: now - 8 * 60000, status: "done", outcome: "3 articles summarised" },
+        { id: "t-live", kind: "thread", threadId: "t-live", title: "Group my tabs by topic", agent: "", time: now - 20 * 60000, status: "running", outcome: "Running…" },
+        { id: "t-wait", kind: "thread", threadId: "t-wait", title: "Book a table for Friday", agent: "@opentable.com", time: now - 46 * 60000, status: "paused", outcome: "Waiting for you to confirm the time" },
+        { id: "t-fail", kind: "thread", threadId: "t-fail", title: "Watch this price", agent: "", time: now - 3 * 3600000, status: "failed", outcome: "Provider origin not granted" },
+        { id: "t-done", kind: "thread", threadId: "t-done", title: "Summarise the design doc", agent: "Researcher", time: now - 26 * 3600000, status: "done", outcome: "" },
+      ];
+      document.getElementById("timeline-empty").entries = [];
 
       // <activity-explorer> example — seed demo entries (the gallery has no
       // extension backend; the real component queries activity.list).

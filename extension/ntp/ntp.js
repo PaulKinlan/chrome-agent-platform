@@ -52,6 +52,7 @@ import {
   shouldDispatchForNavigationType,
 } from "../lib/navigation-controller.js";
 import { actionableRunsForSurface, isSettledLiveRunRecord, latestRunForSurface, runsForSurface } from "../lib/run-scope.js";
+import { buildTimeline } from "../lib/hub-timeline.js";
 import {
   SITE_AGENT_COPY,
   enrollOutcomeState,
@@ -722,6 +723,12 @@ async function renderNamedAgents() {
     backgroundAgentsForDisplay(background, { activeOnly: true }),
   );
   noteHubData("agents", "named", active.length > 0);
+  // Feed the timeline's agent-name map (keyed by the durable-run agentId) so a
+  // run row reads "Reading digest", not "background:digest".
+  for (const a of active) {
+    if (!a?.id || !a?.name) continue;
+    noteAgentName(a.kind === "named" ? `named:${a.id}` : `background:${a.id}`, a.name);
+  }
   if (el) {
     el.replaceChildren();
     if (!active.length) {
@@ -903,28 +910,61 @@ async function refreshAgentCount(unified = null) {
   el.textContent = `${rows.length} agent${rows.length === 1 ? "" : "s"} · ${siteN} site`;
 }
 
-// ── recent artifacts ──────────────────────────────────────────────────────
-async function renderArtifacts() {
-  const el = document.getElementById("artifacts");
-  if (!el) return;
-  const res = await send("asset.list", { origin: "master" }).catch(() => ({ assets: [] }));
-  const assets = Array.isArray(res.assets) ? res.assets : [];
-  noteHubData("artifacts", "master", assets.length > 0);
-  el.replaceChildren();
-  if (!assets.length) {
-    el.innerHTML = `<div class="empty">No artifacts yet. Ask an agent to make something.</div>`;
-    return;
+// ── the hub timeline (CAP-FB-20260828-HUB-AS-TIMELINE-01) ──────────────────
+// The hub's spine: ONE reverse-chronological stream of what happened, built
+// from the thread index joined with the durable-run registry (the same
+// authorities the sidebar tasks and the run controls read). It replaces the
+// three object catalogs (Agents / Recent artifacts / Recent activity) the
+// review flagged: a returning owner sees what is in flight, what is waiting on
+// them, and what came back while they were away as one thing. A `thread` row
+// opens its conversation; a `run:` row opens its agent's surface.
+let timelineEl = null;
+// Human agent names by durable-run agentId (`named:<id>` / `background:<id>` /
+// site origin), populated as a side effect of the agent renders that already
+// fetch them — so the timeline attributes a run without a fetch of its own.
+const agentNameById = new Map();
+function noteAgentName(agentId, name) {
+  if (typeof agentId === "string" && agentId && typeof name === "string" && name) {
+    agentNameById.set(agentId, name);
   }
-  for (const a of assets.slice(-6).reverse()) {
-    const row = document.createElement("capability-row");
-    row.setAttribute("name", a.name ?? "Untitled");
-    row.setAttribute("description", (a.type ?? "unknown") + " · " + (a.size ?? 0) + " B");
-    row.setAttribute("icon", "");
-    // An artifact is OPENED (viewed), not "run" — the open action (the title is
-    // a link + the Open button) opens the expanded view.
-    row.setAttribute("action", "open");
-    row.addEventListener("open", () => openArtifactDialog(a.id ?? a.name, "master", a.name));
-    el.append(row);
+}
+async function refreshTimeline() {
+  if (!timelineEl) timelineEl = document.getElementById("hub-timeline");
+  if (!timelineEl) return;
+  const [threadsRes] = await Promise.all([
+    send("thread.list").catch(() => ({ threads: [] })),
+  ]);
+  const threads = Array.isArray(threadsRes?.threads) ? threadsRes.threads : [];
+  timelineEl.entries = buildTimeline(threads, latestDurableRuns, {
+    agentNames: agentNameById,
+    limit: 40,
+  });
+}
+function renderTimeline() {
+  timelineEl = document.getElementById("hub-timeline");
+  if (!timelineEl) return;
+  // Reveal/hide the section through the same seen-once machinery every hub
+  // section uses (a fresh profile shows nothing here).
+  timelineEl.addEventListener("entries-change", (ev) =>
+    noteHubData("timeline", "runs", (ev.detail?.count ?? 0) > 0));
+  timelineEl.addEventListener("open", (ev) => openTimelineEntry(ev.detail?.id));
+  refreshTimeline();
+}
+// A timeline row's Open target: a task thread opens its conversation; a
+// standalone agent/scheduled run opens that agent's surface.
+function openTimelineEntry(id) {
+  if (typeof id !== "string" || !id) return;
+  if (!id.startsWith("run:")) { openThread(id); return; }
+  const executionId = id.slice("run:".length);
+  const run = latestDurableRuns.find((r) => r?.executionId === executionId) || null;
+  const agentId = typeof run?.agentId === "string" ? run.agentId : "";
+  if (agentId.startsWith("named:")) {
+    openAgentChat(agentId.slice("named:".length));
+  } else if (agentId.startsWith("background:")) {
+    const bgId = agentId.slice("background:".length);
+    openBackgroundAgentChat(bgId, agentNameById.get(agentId) || bgId);
+  } else if (run?.threadId) {
+    openThread(run.threadId);
   }
 }
 
@@ -1104,20 +1144,6 @@ async function openArtifactDialog(id, origin, fallbackName) {
 }
 
 // ── Recent activity (the agent run log — item 16) ────────────────────────
-// Shows what the agents DID across the WHOLE system (master + named + background
-// + Site Agents), most-recent-first, so a background agent's work is visible
-// even without a live UI. Rendered by the reusable <activity-explorer> Web
-// Component (searchable + filterable by agent).
-async function renderRunLog() {
-  const el = document.getElementById("run-log");
-  if (!el) return;
-  const explorer = document.createElement("activity-explorer");
-  explorer.setAttribute("limit", "100");
-  explorer.addEventListener("entries-change", (ev) => noteHubData("activity", "log", (ev.detail?.count ?? 0) > 0));
-  el.replaceChildren(explorer);
-  runLogExplorer = explorer;
-}
-
 // ── The Activity ledger (CAP-FB-20260830-ACTIVITY-LEDGER-UNDO-01) ─────────────
 // A distinct sidebar "Activity" section listing the mutating actions the agents
 // took, each with Undo where the action is reversible. The section stays hidden
@@ -1154,17 +1180,15 @@ function renderJobsBoard() {
   }).catch(() => {});
 }
 
-// LIVE Recent activity (owner bug: the section froze at page-load state — the
-// explorer loaded ONCE at mount and nothing ever re-queried, so a run that
-// happened while the NTP was open never appeared until a reload). Journal
-// writes are fire-and-forget during a run; re-query the explorer on run
-// progress + registry changes, TRAILING-DEBOUNCED (the aggregation walk is
-// bounded but not free — one settle per burst, not one per tool call).
+// LIVE timeline (CAP-FB-20260828-HUB-AS-TIMELINE-01, replacing the old Recent
+// activity explorer): a run that starts, moves or settles while the NTP is open
+// must land on the timeline without a reload. The durable-run registry and the
+// thread index are the authorities; re-read them on run progress + registry
+// changes, TRAILING-DEBOUNCED (one settle per burst, not one per tool call).
 // Skipped while the hub is covered — but DEFERRED, never dropped: a covered
-// burst marks the log dirty and the route return to HUB flushes exactly one
-// refresh (activity created while Settings/Directory or a task thread is open
-// must be there when the owner comes back).
-let runLogExplorer = null;
+// burst marks the timeline dirty and the route return to HUB flushes exactly
+// one refresh (runs that settled while Settings/Directory or a task thread was
+// open must be there when the owner comes back).
 let runLogRefreshTimer = 0;
 let runLogDirty = false;
 function runLogCovered() {
@@ -1173,11 +1197,11 @@ function runLogCovered() {
   return typeof threadView !== "undefined" && threadView && threadView.hidden !== true;
 }
 function scheduleRunLogRefresh() {
-  if (!runLogExplorer) return;
+  if (!timelineEl) return;
   if (runLogCovered()) { runLogDirty = true; return; }
   clearTimeout(runLogRefreshTimer);
   runLogRefreshTimer = setTimeout(() => {
-    runLogExplorer?.refresh?.().catch(() => {});
+    refreshTimeline().catch(() => {});
     actionLedgerEl?.refresh?.().catch(() => {});
   }, 1500);
 }
@@ -1185,7 +1209,7 @@ function flushRunLogDirty() {
   if (!runLogDirty) return;
   runLogDirty = false;
   clearTimeout(runLogRefreshTimer);
-  runLogExplorer?.refresh?.().catch(() => {});
+  refreshTimeline().catch(() => {});
   actionLedgerEl?.refresh?.().catch(() => {});
 }
 // The progress PORT dies with every MV3 service-worker restart and the shared
@@ -3061,9 +3085,9 @@ async function runThreadTurn(text, attachments = [], mention = null) {
     return res;
   }
   if (res.ok) {
-    // A first task may create an artifact. Refresh the shipped Recent artifacts
-    // surface and onboarding completion state from their real authorities.
-    await Promise.all([renderArtifacts(), renderFirstRunGuide()]);
+    // A first task lands a row on the timeline and may satisfy onboarding.
+    // Refresh both from their real authorities.
+    await Promise.all([refreshTimeline(), renderFirstRunGuide()]);
     if (!owns()) return res;
     if (!agentAtStart) {
       // The SW created (or reused) the thread; capture its id for continuation.
@@ -3272,10 +3296,9 @@ renderSiteAgents();
 renderWebmcpHubStatus();
 renderNamedAgents();
 renderBackgroundAgents();
-renderArtifacts();
 renderFirstRunGuide();
 renderTasks();
-renderRunLog();
+renderTimeline();
 renderActionLedger();
 renderJobsBoard();
 renderHubUsage();

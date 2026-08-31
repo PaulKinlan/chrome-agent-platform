@@ -566,8 +566,9 @@
     .main-wrap > section[hidden] { display: none; }
     /* Wide form factor: the hub uses the available width instead of leaving
        ~700px of dead margins at 1440×900 (UX-AUDIT-2026-08-28 UX-010). The
-       composer/first-run stay full-width; the Agents / Recent artifacts /
-       Recent activity sections flow into two columns. Prose stays inside the
+       composer/first-run AND the Timeline (the hub's spine,
+       CAP-FB-20260828-HUB-AS-TIMELINE-01) stay full-width; the secondary Agents
+       and Jobs sections flow into two columns below it. Prose stays inside the
        panels' own measures, so nothing stretches unreadably. */
     @media (min-width: 1100px) {
       .main-wrap {
@@ -577,7 +578,8 @@
       .main-wrap > header,
       .main-wrap > first-run-guide,
       .main-wrap > agent-composer,
-      .main-wrap > example-chips {
+      .main-wrap > example-chips,
+      .main-wrap > #timeline-section {
         grid-column: 1 / -1;
       }
     }
@@ -893,6 +895,25 @@
           </div>
         </header>
 
+        <!-- The timeline: the hub's spine (CAP-FB-20260828-HUB-AS-TIMELINE-01).
+             ONE reverse-chronological stream of what happened — the tasks the
+             owner started and the runs their agents finished — replacing the
+             separate Recent artifacts / Recent activity object catalogs. Built
+             from the durable-run registry + the thread index; hidden until it
+             has ever had a row (a fresh profile shows the composer + chips
+             only). Each row opens its task thread or its agent's surface. -->
+        <section id="timeline-section" aria-labelledby="timeline-title" hidden>
+          <div class="panel">
+            <div class="panel-head">
+              <h2 class="t" id="timeline-title">Timeline</h2>
+              <span class="hint">what happened</span>
+            </div>
+            <div class="panel-body">
+              <agent-timeline id="hub-timeline" limit="40" aria-label="Timeline of tasks and agent runs"></agent-timeline>
+            </div>
+          </div>
+        </section>
+
         <!-- Agents: one heading, two groupings — your own agents and Site Agents
              (enrolled origins). CAP-FB-20260828-NOUN-DISCIPLINE-01: the noun
              "Agents" names this section ONCE. The section takes its accessible
@@ -925,29 +946,12 @@
           </div>
         </section>
 
-        <!-- Recent artifacts: what the agents have made. -->
-        <section id="artifacts-section" aria-labelledby="recent-artifacts-title" hidden>
-          <div class="panel">
-            <div class="panel-head">
-              <h2 class="t" id="recent-artifacts-title">Recent artifacts</h2>
-              <a href="#" class="hint-link" id="browse-artifacts">Browse all</a>
-            </div>
-            <div class="panel-body" id="artifacts"></div>
-          </div>
-        </section>
-
-        <!-- Recent activity: the agent run log (what the agents DID — their
-             tasks, tool calls, and results, so a background agent's work is
-             visible even without a live UI). -->
-        <section id="activity-section" aria-labelledby="recent-activity-title" hidden>
-          <div class="panel">
-            <div class="panel-head">
-              <h2 class="t" id="recent-activity-title">Recent activity</h2>
-              <span class="hint" id="hub-usage">what the agents did</span>
-            </div>
-            <div class="panel-body runlog" id="run-log"></div>
-          </div>
-        </section>
+        <!-- Recent artifacts and Recent activity were two object catalogs; the
+             Timeline above is the single "what happened" stream that replaces
+             them (CAP-FB-20260828-HUB-AS-TIMELINE-01). An artifact now appears
+             in the thread that produced it and in the sidebar Artifacts library;
+             the mutating-action ledger with Undo lives in the sidebar Activity
+             section. -->
       </div>
     </main>
 

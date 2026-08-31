@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.527] — 2026-08-31
+- The new tab now shows a single timeline of your recent tasks below the composer.
+
 ## [0.2.526] — 2026-08-31
 - Page interaction and timeline improvements have begun.
 

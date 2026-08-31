@@ -101,6 +101,15 @@ mid-task needs two things: somewhere to say the next thing, and what happened wh
 they were gone. Three separate mostly-empty status cards are not that. Collapse
 Agents / Recent artifacts / Recent activity into one activity stream with filters,
 and let the composer own the top of the page.
+*(Spine landed, CAP-FB-20260828-HUB-AS-TIMELINE-01: below the composer the hub now
+shows ONE reverse-chronological `<agent-timeline>` — the tasks the owner started and
+the runs their agents finished, built from the pure `buildTimeline` projection of the
+thread index + the durable-run registry — and the Recent artifacts / Recent activity
+catalog cards are cut. An artifact lives in its thread and the sidebar Artifacts
+library; the mutating-action ledger lives in the sidebar Activity section. Still to
+do on this entry: the filter row (All · Runs · Waiting · Made · Scheduled), the "N
+runs today" header, and moving the Agents card's Find-site-tools / WebMCP entry points
+to the sidebar so that card can be cut too.)*
 
 **Subtract surfaces.** Delete the two dead documents. Then ask of each remaining
 view whether it earns being a view: Directory is a reference table that could live
