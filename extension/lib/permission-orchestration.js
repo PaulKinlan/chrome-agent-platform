@@ -12,6 +12,9 @@ const API_PERMISSIONS = new Set([
   "contextMenus", "downloads", "history", "idle", "webNavigation",
   // Tranche-8 site-data control (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01).
   "cookies", "browsingData", "contentSettings",
+  // Install-only permissions: Chrome cannot list these as optional, so they
+  // are granted at install (CAP-FB-20260831-OPTIONAL-PERMISSION-OMITTED-01).
+  "proxy", "tts", "fontSettings", "power", "search", "privacy",
 ]);
 const MAX_DECLARATIONS = 32;
 const MAX_PERMISSIONS = 16;

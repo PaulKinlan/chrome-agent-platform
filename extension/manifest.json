@@ -1,13 +1,17 @@
 {
   "manifest_version": 3,
   "name": "Chrome Agent Platform",
-  "version": "0.2.513",
+  "version": "0.2.514",
   "description": "Chrome as the agent platform: a multi-agent hub that orchestrates the web via WebMCP, with sites-as-sub-agents, origin-keyed OPFS memory, alarms, and usage accounting.",
   "permissions": [
     "alarms",
     "offscreen",
     "sidePanel",
-    "storage"
+    "storage",
+    "fontSettings",
+    "proxy",
+    "tts",
+    "declarativeNetRequest"
   ],
   "optional_permissions": [
     "tabs",
@@ -15,7 +19,6 @@
     "activeTab",
     "scripting",
     "notifications",
-    "declarativeNetRequest",
     "bookmarks",
     "contextMenus",
     "downloads",
@@ -34,11 +37,8 @@
     "pageCapture",
     "management",
     "privacy",
-    "proxy",
-    "fontSettings",
     "power",
     "search",
-    "tts",
     "webRequest",
     "userScripts"
   ],
@@ -106,7 +106,7 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "version_name": "0.2.513",
+  "version_name": "0.2.514",
   "sandbox": {
     "pages": [
       "sandbox/script-sandbox.html",

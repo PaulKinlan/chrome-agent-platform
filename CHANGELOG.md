@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.514] — 2026-08-31
+- Fix the four install-only permissions Chrome omits from optional_permissions
+
 ## [0.2.513] — 2026-08-31
 - Housekeeping: the completed-work list was corrected after a bookkeeping mix-up between parallel work streams.
 
