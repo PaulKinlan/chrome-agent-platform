@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.511] — 2026-08-31
+- tasks: update candidate SHA to the final tip
+
 ## [0.2.510] — 2026-08-30
 - changelog: user-facing line for the recent-activity work (no internal task ids)
 
