@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.515] — 2026-08-31
+- merge: Slash palette combobox lane (f876762f) — the slash/@ palette is an accessible textbox-with-popup: ARIA wiring for both palettes, textContent-only rendering, list-replacement-aware highlight mirror, no listener leaks
+
+## [0.2.514] — 2026-08-31
+- merge: Slash palette combobox lane (f876762f) — the slash/@ palette is an accessible textbox-with-popup: ARIA wiring for both palettes, textContent-only rendering, list-replacement-aware highlight mirror, no listener leaks
+
 ## [0.2.513] — 2026-08-31
 - Housekeeping: the completed-work list was corrected after a bookkeeping mix-up between parallel work streams.
 

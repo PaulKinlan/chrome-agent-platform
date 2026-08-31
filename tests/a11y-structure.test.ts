@@ -32,19 +32,27 @@ Deno.test("a11y: ntp + sidepanel have a level-one heading (UX-007)", async () =>
   }
 });
 
-Deno.test("a11y: the composer textarea carries no disallowed combobox state", async () => {
+Deno.test("a11y: the composer textarea is a textbox-with-popup (CAP-FB-20260830-SLASH-PALETTE-COMBOBOX-01)", async () => {
   const js = await read("./extension/shared/components.js");
   const m = js.match(/<textarea id="task-input"[^>]*>/);
   assert(m, "task-input textarea not found");
-  // aria-expanded/controls/autocomplete are invalid on a plain textarea
-  // (axe aria-allowed-attr, critical) — the mention popup is its own
-  // role=listbox and announces itself.
-  assert(!/aria-expanded/.test(m[0]), "textarea carries aria-expanded");
-  assert(!/aria-controls/.test(m[0]), "textarea carries aria-controls");
-  assert(!/aria-autocomplete/.test(m[0]), "textarea carries aria-autocomplete");
-  // and no JS path may re-add the expanded state to the input
+  // The multiline textarea KEEPS textbox semantics — the ARIA 1.2 combobox
+  // role is reserved for single-line inputs, so a multiline editable combo is
+  // expressed as a textbox-with-popup: aria-haspopup + aria-expanded +
+  // aria-controls naming the listbox, with aria-activedescendant set by JS
+  // only while a palette is open and removed on hide.
+  assert(!/role="combobox"/.test(m[0]), "multiline textarea must not carry role=combobox");
+  assert(/aria-haspopup="listbox"/.test(m[0]), "textarea lacks aria-haspopup=listbox");
+  assert(/aria-expanded="false"/.test(m[0]), "textarea lacks aria-expanded=false (closed state)");
+  assert(/aria-controls="popup-\$\{this\._uid\}"/.test(m[0]), "textarea lacks aria-controls naming the popup");
+  assert(!/aria-activedescendant=/.test(m[0]), "textarea must not hard-code aria-activedescendant (it is set by JS while open)");
+  // and no other JS path may re-add the expanded state to the input.
   const toggles = js.match(/_input\?\.setAttribute\("aria-expanded"/g) ?? [];
-  assert(toggles.length === 0, "JS still toggles aria-expanded on the input");
+  assert(toggles.length > 0, "JS never toggles aria-expanded on the input");
+  // The hide path must REMOVE the active descendant (no stale name after close).
+  assert(/removeAttribute\("aria-activedescendant"\)/.test(js), "hide path does not clear aria-activedescendant");
+  // The slash-picker path mirrors the picker's highlight onto the textarea.
+  assert(/aria-controls", "ap-list"/.test(js), "slash picker does not point controls at ap-list");
 });
 
 Deno.test("a11y: role=switch never carries aria-pressed (aria-allowed-attr)", async () => {

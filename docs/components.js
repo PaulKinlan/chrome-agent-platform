@@ -5652,6 +5652,7 @@ class AgentComposer extends Component {
     // ID, never by a name.
     this._selectedAgent = null;
     this._agentChip = null;
+    this._apObserver = null; // mirrors the slash-picker highlight onto the textarea
   }
   // The agent this composer is scoped to (null for the hub/thread): agent-id =
   // the agent's slug/id, agent-kind = "named" | "background". Used to EXCLUDE the
@@ -5669,7 +5670,8 @@ class AgentComposer extends Component {
       <div class="composer" part="composer">
         <span class="sr-only" id="composer-description-${this._uid}">${escapeHtml(description)}</span>
         <textarea id="task-input" placeholder="${escapeHtml(placeholder)}" aria-label="${escapeHtml(label)}"
-          aria-describedby="composer-description-${this._uid}" rows="2"></textarea>
+          aria-describedby="composer-description-${this._uid}" aria-haspopup="listbox" aria-expanded="false"
+          aria-controls="popup-${this._uid}" aria-multiline="true" rows="2"></textarea>
         <div class="popup" id="popup-${this._uid}" role="listbox" aria-label="Agent and resource mentions" hidden></div>
         <div class="chips" id="chips"></div>
         <div class="row">
@@ -5999,6 +6001,11 @@ class AgentComposer extends Component {
 
   _presentAgentPopover() {
     if (!this._agentPop || !this._agentPick) return;
+    // Textbox-with-popup contract for the slash picker: the composer input
+    // owns the popup — controls points at the picker's listbox (ap-list) and
+    // the active descendant tracks the picker's highlighted option (ap-opt-<i>).
+    this._input?.setAttribute("aria-expanded", "true");
+    this._input?.setAttribute("aria-controls", "ap-list");
     if (this._selectedAgent) this._agentPick.setAttribute("selected", this._selectedAgent.ref);
     else this._agentPick.removeAttribute("selected");
     this._agentPop.hidden = false;
@@ -6010,6 +6017,27 @@ class AgentComposer extends Component {
     }
     // Live data on every open (the SW registry is the authority).
     this._agentPick.refresh?.();
+    // Mirror the picker's highlight onto the focused composer textarea: the
+    // picker toggles data-active on its options as the highlight moves (its
+    // own search input is not the focused element — the composer textarea is),
+    // so observe the list and keep aria-activedescendant in sync. childList +
+    // subtree are required because the picker REPLACES its list children on
+    // every render (a new query, a zero-result state, a filter change) — an
+    // attributes-only observer would miss those transitions and leave a stale
+    // active-descendant on the textarea.
+    this._apObserver?.disconnect();
+    this._apObserver = new MutationObserver(() => {
+      const active = this._agentPick?.querySelector?.('#ap-list [data-active="true"]');
+      if (active?.id) this._input?.setAttribute("aria-activedescendant", active.id);
+      else this._input?.removeAttribute("aria-activedescendant");
+    });
+    const apList = this._agentPick?.querySelector?.("#ap-list");
+    if (apList) {
+      this._apObserver.observe(apList, { attributes: true, attributeFilter: ["data-active"], childList: true, subtree: true });
+      // Initial sync: the picker may already have an active option.
+      const active = apList.querySelector('[data-active="true"]');
+      if (active?.id) this._input?.setAttribute("aria-activedescendant", active.id);
+    }
     this._agentDocClose = (e) => {
       if (!this._agentPop.contains(e.target) && !this._attach?.contains(e.target)) {
         this._closeAgentPicker(false);
@@ -6018,14 +6046,30 @@ class AgentComposer extends Component {
     document.addEventListener("pointerdown", this._agentDocClose);
   }
 
-  /** Close the picker popover. `returnFocus`: "input" refocuses the composer
-   *  (the slash flow), true refocuses the + trigger, false moves no focus. */
-  _closeAgentPicker(returnFocus) {
-    this._slashAgentToken = null;
+  /** Tear down the slash-picker mirror: the MutationObserver and the
+   *  document-level pointerdown close listener. Called on picker close AND on
+   *  component disconnect so nothing leaks when the composer is removed from
+   *  the DOM while the picker is open. */
+  _teardownPicker() {
+    this._apObserver?.disconnect();
+    this._apObserver = null;
     if (this._agentDocClose) {
       document.removeEventListener("pointerdown", this._agentDocClose);
       this._agentDocClose = null;
     }
+  }
+
+  /** Close the picker popover. `returnFocus`: "input" refocuses the composer
+   *  (the slash flow), true refocuses the + trigger, false moves no focus. */
+  _closeAgentPicker(returnFocus) {
+    this._slashAgentToken = null;
+    // Textbox-with-popup contract: closing the picker popover restores the
+    // default expanded=false state, points controls back at the items popup,
+    // clears the mirror observer and the active descendant.
+    this._teardownPicker();
+    this._input?.setAttribute("aria-expanded", "false");
+    this._input?.setAttribute("aria-controls", `popup-${this._uid}`);
+    this._input?.removeAttribute("aria-activedescendant");
     if (!this._agentPop) return;
     if (typeof this._agentPop.hidePopover === "function") {
       try { this._agentPop.hidePopover(); } catch { /* already hidden */ }
@@ -6476,6 +6520,13 @@ class AgentComposer extends Component {
     this._renderPopupItems();
     if (this._popup) {
       this._popup.hidden = false;
+      // Combobox contract (CAP-FB-20260830-SLASH-PALETTE-COMBOBOX-01): the
+      // textarea owns the popup listbox while it is open — expanded true,
+      // controls the popup, activedescendant the highlighted option.
+      this._input?.setAttribute("aria-expanded", "true");
+      this._input?.setAttribute("aria-controls", `popup-${this._uid}`);
+      const active = this._popup.querySelector(`[data-index="${this._popupActive}"]`);
+      if (active?.id) this._input?.setAttribute("aria-activedescendant", active.id);
             // Always position via the JS fallback (flips above/below + clamps). The
       // native CSS anchor positioning (position-area) proved unreliable for the
       // bottom-anchored composer (the popup fell off-screen), so the JS path
@@ -6486,29 +6537,47 @@ class AgentComposer extends Component {
 
   _renderPopupItems() {
     if (!this._popup) return;
+    this._popup.replaceChildren();
     let lastGroup = null;
-    const html = this._popupItems.map((it, i) => {
+    this._popupItems.forEach((it, i) => {
       // Group headers (the /agent list is grouped Named / Background / Site —
-      // the same grouping as the shared <agent-picker>).
-      const gh = it.group && it.group !== lastGroup
-        ? `<div class="group-label" role="presentation">${escapeHtml(it.group)}</div>`
-        : "";
-      if (it.group) lastGroup = it.group;
-      return `${gh}<div class="item" role="option" id="cmp-${this._uid}-opt-${i}" data-index="${i}" data-active="${i === this._popupActive}" aria-selected="${i === this._popupActive}">
-        <span class="lbl">${escapeHtml(it.label)}</span>${
-          it.description ? `<span class="dsc">${escapeHtml(it.description)}</span>` : ""
-        }</div>`;
-    }).join("");
-    this._popup.innerHTML = html;
-    this._popup.querySelectorAll(".item").forEach((el) => {
-      el.addEventListener("mousedown", (e) => {
+      // the same grouping as the shared <agent-picker>). Group names are
+      // owner-controlled (agent kinds), so they go through textContent.
+      if (it.group && it.group !== lastGroup) {
+        const gh = document.createElement("div");
+        gh.className = "group-label";
+        gh.setAttribute("role", "presentation");
+        gh.textContent = String(it.group);
+        this._popup.appendChild(gh);
+        lastGroup = it.group;
+      }
+      const item = document.createElement("div");
+      item.className = "item";
+      item.setAttribute("role", "option");
+      item.id = `cmp-${this._uid}-opt-${i}`;
+      item.dataset.index = String(i);
+      item.dataset.active = String(i === this._popupActive);
+      item.setAttribute("aria-selected", String(i === this._popupActive));
+      const lbl = document.createElement("span");
+      lbl.className = "lbl";
+      lbl.textContent = String(it.label);
+      item.appendChild(lbl);
+      if (it.description) {
+        const dsc = document.createElement("span");
+        dsc.className = "dsc";
+        dsc.textContent = String(it.description);
+        item.appendChild(dsc);
+      }
+      item.addEventListener("mousedown", (e) => {
         e.preventDefault();
-        this._select(Number(el.dataset.index));
+        this._select(Number(item.dataset.index));
       });
+      this._popup.appendChild(item);
     });
-    // A11Y (UX-006): no combobox state on the plain-textarea input — the
-    // focused option is exposed by the popup's own listbox semantics.
+    // The textarea's activedescendant is kept in lockstep with the highlight
+    // (textbox-with-popup: aria-expanded + aria-controls + activedescendant).
     const active = this._popup.querySelector(`[data-index="${this._popupActive}"]`);
+    if (active?.id) this._input?.setAttribute("aria-activedescendant", active.id);
     active?.scrollIntoView({ block: "nearest" });
   }
 
@@ -6517,7 +6586,10 @@ class AgentComposer extends Component {
     const n = this._popupItems.length;
     this._popupActive = ((i % n) + n) % n;
     this._renderPopupItems();
-    this._popup.querySelector(`[data-index="${this._popupActive}"]`)?.scrollIntoView({ block: "nearest" });
+    const active = this._popup?.querySelector(`[data-index="${this._popupActive}"]`);
+    // Keep the textarea's activedescendant in lockstep with the highlight.
+    if (active?.id) this._input?.setAttribute("aria-activedescendant", active.id);
+    active?.scrollIntoView({ block: "nearest" });
   }
 
   _moveSelection(delta) {
@@ -6617,6 +6689,10 @@ class AgentComposer extends Component {
       // or Accessibility tree after a prior result set.
       this._popup.replaceChildren();
     }
+    // Combobox contract: closed popup ⇒ expanded false, no active descendant.
+    this._input?.setAttribute("aria-expanded", "false");
+    this._input?.setAttribute("aria-controls", `popup-${this._uid}`);
+    this._input?.removeAttribute("aria-activedescendant");
     this._popupItems = [];
     this._popupActive = -1;
     this._popupToken = null;
@@ -6668,6 +6744,15 @@ class AgentComposer extends Component {
     this._selectedAgent = null;
     this._agentChip = null;
     this._emit("send", { text, attachments: pending, agent });
+  }
+
+  disconnectedCallback() {
+    // No leak while the slash picker is open: the MutationObserver and the
+    // document-level pointerdown listener must die with the element (the base
+    // class clears _docListeners only — this element's picker mirror is tracked
+    // separately).
+    this._teardownPicker();
+    super.disconnectedCallback?.();
   }
 }
 customElements.define("agent-composer", AgentComposer);
@@ -7635,15 +7720,29 @@ class AgentPicker extends Component {
     const { state, message } = this._state_();
     if (state === "loading") {
       this._flat = [];
-      this._list.innerHTML = `<div class="state" role="presentation"><span class="spin" aria-hidden="true"></span>Loading agents…</div>`;
+      const row = document.createElement("div");
+      row.className = "state";
+      row.setAttribute("role", "presentation");
+      const spin = document.createElement("span");
+      spin.className = "spin";
+      spin.setAttribute("aria-hidden", "true");
+      row.append(spin, document.createTextNode("Loading agents…"));
+      this._list.replaceChildren(row);
       this._announce("Loading agents");
       return;
     }
     if (state === "error") {
       this._flat = [];
-      this._list.innerHTML = `<div class="state error">Couldn't load the agents — ${escapeHtml(message || "unknown error")}
-        <button type="button" class="retry">Try again</button></div>`;
-      this._list.querySelector(".retry")?.addEventListener("click", () => this.refresh());
+      const row = document.createElement("div");
+      row.className = "state error";
+      row.appendChild(document.createTextNode(`Couldn't load the agents — ${String(message || "unknown error")}`));
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "retry";
+      retry.textContent = "Try again";
+      retry.addEventListener("click", () => this.refresh());
+      row.appendChild(retry);
+      this._list.replaceChildren(row);
       this._announce("Couldn't load the agents");
       return;
     }
@@ -7655,16 +7754,26 @@ class AgentPicker extends Component {
       const emptyText = this._query
         ? `No agents match “${this._query}”.`
         : "No agents yet.";
-      this._list.innerHTML = `<div class="state">${escapeHtml(emptyText)}</div>`;
+      const row = document.createElement("div");
+      row.className = "state";
+      row.textContent = emptyText;
+      this._list.replaceChildren(row);
       this._announce(emptyText);
       return;
     }
     if (this._active >= this._flat.length) this._active = this._flat.length - 1;
-    let html = "";
+    this._list.replaceChildren();
     let idx = 0;
     for (const g of groups) {
-      html += `<div class="group" role="group" aria-label="${escapeHtml(g.label ?? g.id)}">
-        <div class="group-h" id="ap-gh-${escapeHtml(g.id)}">${escapeHtml(g.label ?? g.id)}</div>`;
+      const group = document.createElement("div");
+      group.className = "group";
+      group.setAttribute("role", "group");
+      group.setAttribute("aria-label", String(g.label ?? g.id));
+      const gHead = document.createElement("div");
+      gHead.className = "group-h";
+      gHead.id = `ap-gh-${String(g.id)}`;
+      gHead.textContent = String(g.label ?? g.id);
+      group.appendChild(gHead);
       for (const a of g.agents) {
         const ref = a.ref ?? canonicalRef(a.kind, a.id);
         const isSelected = !!selected && ref === selected;
@@ -7673,23 +7782,65 @@ class AgentPicker extends Component {
         const skills = Array.isArray(a.skills) && a.skills.length
           ? ` · ${a.skills.slice(0, 3).join(", ")}${a.skills.length > 3 ? "…" : ""}`
           : "";
-        html += `<button type="button" class="opt" role="option" id="ap-opt-${idx}" data-index="${idx}"
-            data-active="${idx === this._active}" aria-selected="${isSelected}">
-          <span class="avatar" aria-hidden="true">${a.avatar ? `<img src="${escapeHtml(a.avatar)}" alt="">` : escapeHtml(initial)}</span>
-          <span class="who"><span class="name">${escapeHtml(a.name || a.id)}</span>
-            <span class="sub">${escapeHtml(a.summary || "")}${escapeHtml(skills)}</span></span>
-          <span class="meta">${a.status ? `<span class="status">${escapeHtml(a.status)}</span>` : ""}
-            ${isCurrent ? `<span class="current-badge">Current</span>` : ""}
-            ${isSelected ? `<span class="sel" aria-hidden="true">${ICONS.check}</span>` : ""}</span>
-        </button>`;
+        const opt = document.createElement("button");
+        opt.type = "button";
+        opt.className = "opt";
+        opt.setAttribute("role", "option");
+        opt.id = `ap-opt-${idx}`;
+        opt.dataset.index = String(idx);
+        opt.dataset.active = String(idx === this._active);
+        opt.setAttribute("aria-selected", String(isSelected));
+        // Avatar (owner-controlled URL → img.src property, never innerHTML).
+        const avatar = document.createElement("span");
+        avatar.className = "avatar";
+        avatar.setAttribute("aria-hidden", "true");
+        if (a.avatar) {
+          const img = document.createElement("img");
+          img.src = String(a.avatar);
+          img.alt = "";
+          avatar.appendChild(img);
+        } else {
+          avatar.textContent = initial;
+        }
+        opt.appendChild(avatar);
+        const who = document.createElement("span");
+        who.className = "who";
+        const name = document.createElement("span");
+        name.className = "name";
+        name.textContent = String(a.name || a.id);
+        const sub = document.createElement("span");
+        sub.className = "sub";
+        sub.textContent = `${String(a.summary || "")}${skills}`;
+        who.append(name, sub);
+        opt.appendChild(who);
+        const meta = document.createElement("span");
+        meta.className = "meta";
+        if (a.status) {
+          const status = document.createElement("span");
+          status.className = "status";
+          status.textContent = String(a.status);
+          meta.appendChild(status);
+        }
+        if (isCurrent) {
+          const badge = document.createElement("span");
+          badge.className = "current-badge";
+          badge.textContent = "Current";
+          meta.appendChild(badge);
+        }
+        if (isSelected) {
+          const sel = document.createElement("span");
+          sel.className = "sel";
+          sel.setAttribute("aria-hidden", "true");
+          sel.innerHTML = ICONS.check; // trusted static icon (never owner data)
+          meta.appendChild(sel);
+        }
+        opt.appendChild(meta);
+        opt.addEventListener("click", () => this._commit(Number(opt.dataset.index)));
+        group.appendChild(opt);
         idx++;
       }
-      html += `</div>`;
+      this._list.appendChild(group);
     }
-    this._list.innerHTML = html;
-    this._list.querySelectorAll(".opt").forEach((el) => {
-      el.addEventListener("click", () => this._commit(Number(el.dataset.index)));
-    });
     const n = this._flat.length;
     this._announce(`${n} agent${n === 1 ? "" : "s"}`);
   }

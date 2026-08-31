@@ -355,7 +355,7 @@
         <div class="stage column" style="max-width:640px">
           <agent-composer id="composer" placeholder="Ask anything…" send-label="Run task"></agent-composer>
         </div>
-        <p class="caption">the SAME component the NTP hub + chat use. Emits <code>send</code> (text + attachments).</p>
+        <p class="caption">the SAME component the NTP hub + chat use. Emits <code>send</code> (text + attachments). The textarea is a textbox-with-popup: while a <code>/</code> or <code>@</code> palette is open it carries <code>aria-haspopup="listbox"</code> + <code>aria-expanded="true"</code>, <code>aria-controls</code> naming the listbox, and <code>aria-activedescendant</code> naming the highlighted option (cleared on close); the multiline textarea keeps textbox semantics — never <code>role="combobox"</code>.</p>
       </div>
 
       <div class="specimen">

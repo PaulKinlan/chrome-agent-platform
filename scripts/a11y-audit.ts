@@ -287,6 +287,59 @@ async function main() {
     check("hub: contrast — no AA failures", (a.contrastFails || []).length === 0, a.contrastFails);
     check("hub: has focusable elements + first is not body", a.focus.total > 0 && a.focus.first !== "none", a.focus);
 
+    // ── the slash/@ combobox contract (CAP-FB-20260830-SLASH-PALETTE-COMBOBOX-01) ──
+    // While a palette is open the composer textarea must carry the WAI-ARIA 1.2
+    // combobox attributes and name the highlighted option as its active
+    // descendant. RED on the pre-fix tree (role/expanded/activedescendant all
+    // null with the listbox open and /agent highlighted).
+    async function paletteCombobox(trigger: string, label: string) {
+      await cdp.evl(page.sessionId, `(() => { const t = document.querySelector('agent-composer textarea#task-input'); if (!t) throw new Error('no composer textarea'); t.focus(); return true; })()`);
+      await cdp.send("Input.insertText", { text: trigger }, page.sessionId);
+      await sleep(250); // parser debounce opens the palette
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "ArrowDown", code: "ArrowDown", windowsVirtualKeyCode: 40 }, page.sessionId);
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "ArrowDown", code: "ArrowDown", windowsVirtualKeyCode: 40 }, page.sessionId);
+      await sleep(150);
+      const state = await cdp.evl(page.sessionId, `(() => {
+        const t = document.querySelector('agent-composer textarea#task-input');
+        const pop = document.querySelector('agent-composer .popup');
+        const active = pop?.querySelector('[data-active="true"]');
+        return {
+          role: t?.getAttribute('role'),
+          haspopup: t?.getAttribute('aria-haspopup'),
+          expanded: t?.getAttribute('aria-expanded'),
+          controls: t?.getAttribute('aria-controls'),
+          popupId: pop?.id ?? null,
+          descendant: t?.getAttribute('aria-activedescendant'),
+          activeId: active?.id ?? null,
+          popupHidden: pop?.hidden ?? null,
+        };
+      })()`);
+      // Textbox-with-popup pattern: the multiline textarea keeps textbox
+      // semantics (NO role=combobox on it) and owns the listbox popup via
+      // aria-haspopup + aria-expanded + aria-controls + aria-activedescendant.
+      check(`${label} palette is an accessible textbox-with-popup (haspopup + expanded + controls)`,
+        state.role === null && state.haspopup === "listbox" && state.expanded === "true" && state.controls === state.popupId && state.popupHidden === false, state);
+      check(`${label} palette names the highlighted option as the active descendant`, state.descendant !== null && state.descendant === state.activeId, state);
+      // Evidence (CAP-FB-20260830-SLASH-PALETTE-COMBOBOX-01): capture the open
+      // palette and print the three attribute values in the harness log.
+      console.log(`${label} palette attrs →`, JSON.stringify({ role: state.role, expanded: state.expanded, activedescendant: state.descendant }));
+      try {
+        // NB: this audit's send() resolves the CDP result directly (no .result
+        // wrapper), so the base64 png is at shot.data.
+        const shot = await cdp.send("Page.captureScreenshot", { format: "png" }, page.sessionId);
+        const data = shot?.data ?? shot?.result?.data;
+        if (data) {
+          const png = new Uint8Array(atob(data).split("").map((c) => c.charCodeAt(0)));
+          await Deno.writeFile(`${ROOT}test-artifacts/composer-${label}-palette-aria.png`, png);
+          console.log(`${label} palette screenshot → test-artifacts/composer-${label}-palette-aria.png`);
+        }
+      } catch (e) { console.log(`${label} palette screenshot failed: ${String(e)}`); }
+    }
+    await paletteCombobox("/", "slash");
+    await cdp.evl(page.sessionId, `(() => { const t = document.querySelector('agent-composer textarea#task-input'); t.value=''; t.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+    await sleep(200);
+    await paletteCombobox("@", "at");
+
     // ── the chat ──
     page = await openPage(cdp, `chrome-extension://${id}/chat/chat.html`);
     a = await analyze(cdp, page.sessionId, "chat");

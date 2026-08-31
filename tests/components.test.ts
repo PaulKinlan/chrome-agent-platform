@@ -41,6 +41,69 @@ globalThis.CustomEvent = class CustomEvent {
 };
 globalThis.matchMedia = () => ({ matches: false });
 
+// Minimal fake DOM node for driving renderers that build elements with
+// document.createElement + textContent (never innerHTML). Matches the subset
+// the composer popup renderer and the agent picker touch.
+class FakeNode {
+  constructor(tag) { this.tagName = tag; this.children = []; this.parent = null; this.listeners = {}; this.attributes = {}; this.dataset = {}; this.textContent = ""; this.className = ""; this.id = ""; this.hidden = false; this.type = ""; }
+  setAttribute(n, v) { this.attributes[n] = String(v); }
+  getAttribute(n) { return this.attributes[n] ?? null; }
+  removeAttribute(n) { delete this.attributes[n]; }
+  append(...kids) { for (const k of kids) { k.parent = this; this.children.push(k); } }
+  appendChild(k) { k.parent = this; this.children.push(k); return k; }
+  replaceChildren(...kids) { this.children = []; for (const k of kids) { k.parent = this; this.children.push(k); } }
+  addEventListener(t, f) { (this.listeners[t] ??= []).push(f); }
+  dispatch(t, e = {}) { e.target ??= this; e.preventDefault ??= () => {}; for (const f of this.listeners[t] ?? []) f(e); }
+  getBoundingClientRect() { return { top: 0, left: 0, width: 0, height: 0, right: 0, bottom: 0 }; }
+  querySelector(sel) {
+    const m = sel.match(/data-index="?(\d+)/);
+    if (m) return this.children.find((c) => String(c.dataset.index) === String(Number(m[1]))) ?? null;
+    // Descendant selector "#ap-list [data-active=true]" must be tried BEFORE the
+    // bare data-active search (the descendant string also contains
+    // data-active="true" and would otherwise match the wrong branch).
+    const desc = sel.match(/^#([^\s]+)\s+\[data-active="true"\]$/);
+    if (desc) {
+      const root = this.children.find((c) => c.id === desc[1]) ?? null;
+      if (!root) return null;
+      const walk = (node) => {
+        for (const kid of node.children) {
+          if (kid.dataset?.active === "true") return kid;
+          const hit = walk(kid);
+          if (hit) return hit;
+        }
+        return null;
+      };
+      return walk(root);
+    }
+    if (sel.includes('data-active="true"')) return this.children.find((c) => c.dataset.active === "true") ?? null;
+    if (sel.startsWith("#")) { const id = sel.slice(1); const hit = this.children.find((c) => c.id === id); return hit ?? null; }
+    return null;
+  }
+  querySelectorAll(sel) {
+    if (sel === ".item" || sel === '[role="option"]' || sel === ".opt") return this.children.filter((c) => c.className && String(c.className).split(/\s+/).includes(sel.slice(1)) || c.getAttribute?.("role") === "option");
+    return [];
+  }
+  scrollIntoView() {}
+}
+function installFakeDocument() {
+  const listeners: Record<string, Array<(e: any) => void>> = {};
+  const fakeDoc = {
+    head: new FakeNode("head"), body: new FakeNode("body"), documentElement: new FakeNode("html"),
+    createElement: (tag) => new FakeNode(tag),
+    getElementById() { return null; },
+    addEventListener(type: string, fn: (e: any) => void) { (listeners[type] ??= []).push(fn); },
+    removeEventListener(type: string, fn: (e: any) => void) {
+      const arr = listeners[type] ?? [];
+      const i = arr.indexOf(fn);
+      if (i >= 0) arr.splice(i, 1);
+    },
+    _listeners: listeners,
+  };
+  const prevDoc = globalThis.document;
+  globalThis.document = fakeDoc;
+  return () => { if (prevDoc === undefined) delete globalThis.document; else globalThis.document = prevDoc; };
+}
+
 const COMPONENTS = [
   "first-run-guide",
   "example-chips",
@@ -292,59 +355,44 @@ Deno.test("components: mention keyboard completion routes every agent kind by ca
 
 Deno.test("components: empty mention results remove stale popup options and a later render recovers", async () => {
   await import("../extension/shared/components.js");
-  const AgentComposer = registry.get("agent-composer");
-  const composer = new AgentComposer();
-  const attrs = new Map();
-  const popup = {
-    hidden: true,
-    _html: "",
-    _items: [] as any[],
-    set innerHTML(value: unknown) {
-      this._html = String(value);
-      const count = (this._html.match(/class="item"/g) ?? []).length;
-      this._items = Array.from({ length: count }, (_, index) => ({
-        dataset: { index: String(index) },
-        addEventListener() {},
-        scrollIntoView() {},
-      }));
-    },
-    get innerHTML() { return this._html; },
-    replaceChildren() { this._html = ""; this._items = []; },
-    querySelectorAll(selector: string) {
-      return selector === ".item" || selector === '[role="option"]' ? this._items : [];
-    },
-    querySelector(selector: string) {
-      const match = selector.match(/data-index="?(\d+)/);
-      return match ? this._items[Number(match[1])] ?? null : null;
-    },
-  };
-  composer._popup = popup;
-  composer._input = {
-    setAttribute(name: string, value: unknown) { attrs.set(name, value); },
-    removeAttribute(name: string) { attrs.delete(name); },
-  };
+  const restoreDoc = installFakeDocument();
+  try {
+    const AgentComposer = registry.get("agent-composer");
+    const composer = new AgentComposer();
+    const attrs = new Map();
+    const popup = new FakeNode("div");
+    composer._popup = popup;
+    composer._input = {
+      setAttribute(name, value) { attrs.set(name, value); },
+      removeAttribute(name) { attrs.delete(name); },
+    };
 
-  composer._showPopup([{ label: "Prior candidate", kind: "agent" }], { type: "mention", start: 0, end: 6 });
-  if (popup.hidden || popup.querySelectorAll(".item").length !== 1) {
-    throw new Error("prior candidate did not render");
-  }
+    composer._showPopup([{ label: "Prior candidate", kind: "agent" }], { type: "mention", start: 0, end: 6 });
+    const items = () => popup.children.filter((c) => c.className && String(c.className).split(/\s+/).includes("item"));
+    if (popup.hidden || items().length !== 1) {
+      throw new Error("prior candidate did not render");
+    }
+    if (items()[0].getAttribute("role") !== "option") throw new Error("rendered item is not role=option");
 
-  // Regression: @Disabled/no-match used to hide the popup but leave the prior
-  // .item/role=option nodes in the DOM, so AX and later assertions saw ghosts.
-  composer._showPopup([], { type: "mention", start: 0, end: 9 });
-  if (!popup.hidden || popup.querySelectorAll(".item").length !== 0 || popup.querySelectorAll('[role="option"]').length !== 0) {
-    throw new Error("hidden empty popup retained stale option DOM");
-  }
-  if (attrs.has("aria-expanded") || attrs.has("aria-activedescendant")) {
-    throw new Error("empty popup left combobox accessibility state on the input");
-  }
-  // A11Y (UX-006): the plain textarea may never carry combobox state — the
-  // reset must leave NO aria-expanded/activedescendant on the input at all
-  // (the ghost-DOM guard above still pins the popup itself).
+    // Regression: @Disabled/no-match used to hide the popup but leave the prior
+    // .item/role=option nodes in the DOM, so AX and later assertions saw ghosts.
+    composer._showPopup([], { type: "mention", start: 0, end: 9 });
+    if (!popup.hidden || items().length !== 0) {
+      throw new Error("hidden empty popup retained stale option DOM");
+    }
+    if (attrs.get("aria-expanded") !== "false" || attrs.has("aria-activedescendant")) {
+      throw new Error("empty popup must leave aria-expanded=false and no activedescendant on the input");
+    }
+    // Textbox-with-popup contract (CAP-FB-20260830-SLASH-PALETTE-COMBOBOX-01):
+    // the textarea owns the popup listbox — expanded toggles true/false and
+    // the active descendant is removed on hide.
 
-  composer._showPopup([{ label: "Fresh candidate", kind: "agent" }], { type: "mention", start: 0, end: 6 });
-  if (popup.hidden || popup.querySelectorAll(".item").length !== 1) {
-    throw new Error("popup did not rerender after an empty result");
+    composer._showPopup([{ label: "Fresh candidate", kind: "agent" }], { type: "mention", start: 0, end: 6 });
+    if (popup.hidden || items().length !== 1) {
+      throw new Error("popup did not rerender after an empty result");
+    }
+  } finally {
+    restoreDoc();
   }
 });
 
@@ -989,4 +1037,198 @@ Deno.test("segmented-control moves value with ArrowRight/ArrowLeft and emits cha
   const before = emitted.length;
   el._select("Diff");
   if (emitted.length !== before) throw new Error("selecting the already-current value must not emit change");
+});
+
+Deno.test("composer slash/@ palette is an accessible combobox (CAP-FB-20260830-SLASH-PALETTE-COMBOBOX-01)", async () => {
+  await import("../extension/shared/components.js");
+  // The popup renderer builds options with document.createElement + textContent
+  // (owner-controlled labels are NEVER innerHTML), so the test drives it through
+  // a minimal fake document.
+  const restoreDoc = installFakeDocument();
+  try {
+    const AgentComposer = registry.get("agent-composer");
+    const composer = new AgentComposer();
+    const attrs: Record<string, string | null> = {};
+    composer._input = {
+      setAttribute(name: string, value: string) { attrs[name] = value; },
+      removeAttribute(name: string) { attrs[name] = null; },
+      getAttribute(name: string) { return attrs[name] ?? null; },
+    };
+    composer._uid = "u-test";
+    composer._popup = new FakeNode("div");
+    composer._popup.hidden = false;
+    composer._popupItems = [];
+    composer._popupActive = -1;
+    composer._popupToken = null;
+
+    // Open with TWO options: the popup is a real listbox and the textarea owns
+    // it via expanded + controls, with activedescendant naming the first option.
+    composer._showPopup([
+      { id: "a", label: "/agent", description: "run with an agent", kind: "command" },
+      { id: "f", label: "/files", description: "attach a file", kind: "command" },
+    ], { type: "command", start: 0, end: 1 });
+    if (attrs["aria-expanded"] !== "true") throw new Error(`open popup must set aria-expanded=true, got ${attrs["aria-expanded"]}`);
+    if (attrs["aria-controls"] !== "popup-u-test") throw new Error(`aria-controls must name the popup, got ${attrs["aria-controls"]}`);
+    if (attrs["aria-activedescendant"] !== "cmp-u-test-opt-0") {
+      throw new Error(`aria-activedescendant must name the first option, got ${attrs["aria-activedescendant"]}`);
+    }
+    const opts = composer._popup.children.filter((c) => c.className && String(c.className).split(/\s+/).includes("item"));
+    if (opts.length !== 2) throw new Error("popup did not render two options");
+    const lbl0 = opts[0].children.find((c) => c.className === "lbl");
+    if (!lbl0 || lbl0.textContent !== "/agent") throw new Error(`option 0 label not set via textContent, got ${lbl0?.textContent}`);
+
+    // ArrowDown (selection move): activedescendant follows the EXACT new option id.
+    composer._setSelectionIndex(1);
+    if (attrs["aria-activedescendant"] !== "cmp-u-test-opt-1") {
+      throw new Error(`ArrowDown must move activedescendant to cmp-u-test-opt-1, got ${attrs["aria-activedescendant"]}`);
+    }
+    const optsAfter = composer._popup.children.filter((c) => c.className && String(c.className).split(/\s+/).includes("item"));
+    if (optsAfter[1].dataset.active !== "true") {
+      throw new Error("the second option must be data-active after ArrowDown");
+    }
+
+    // Close: expanded=false, descendant removed.
+    composer._hidePopup();
+    if (attrs["aria-expanded"] !== "false") throw new Error(`hide must set aria-expanded=false, got ${attrs["aria-expanded"]}`);
+    if (attrs["aria-activedescendant"] !== null) throw new Error("hide must remove aria-activedescendant");
+  } finally {
+    restoreDoc();
+  }
+});
+
+Deno.test("composer slash picker: activedescendant re-syncs on list replacement, zero-result, and highlight restore (CAP-FB-20260830-SLASH-PALETTE-COMBOBOX-01 r3)", async () => {
+  await import("../extension/shared/components.js");
+  const restoreDoc = installFakeDocument();
+  // A capture MutationObserver stub: the fake DOM never emits real mutations,
+  // so the test drives the registered callback directly after mutating the
+  // fake list (replacement / zero-result / highlight move).
+  let observerCb = null;
+  const observedTargets = new Set();
+  const observeOptions: Array<Record<string, unknown>> = [];
+  const stubObservers: Array<{ disconnect(): void }> = [];
+  const prevMO = globalThis.MutationObserver;
+  globalThis.MutationObserver = class {
+    constructor(cb: (records: unknown[]) => void) { observerCb = cb; stubObservers.push(this); }
+    observe(target: unknown, options?: Record<string, unknown>) { observedTargets.add(target); observeOptions.push(options ?? {}); }
+    disconnect() { /* no-op for the stub */ }
+  };
+  try {
+    const AgentComposer = registry.get("agent-composer");
+    const composer = new AgentComposer();
+    const attrs: Record<string, string | null> = {};
+    composer._input = {
+      setAttribute(name: string, value: string) { attrs[name] = value; },
+      removeAttribute(name: string) { attrs[name] = null; },
+    };
+    composer._uid = "u-test";
+    composer._agentPick = new FakeNode("agent-picker");
+    const apList = new FakeNode("div");
+    apList.id = "ap-list";
+    apList.setAttribute("role", "listbox");
+    composer._agentPick.appendChild(apList);
+    composer._agentPop = new FakeNode("div");
+    composer._agentPop.hidden = true;
+    composer._attach = new FakeNode("attach-button");
+    composer._selectedAgent = null;
+
+    // Open the picker: observer must be attached to ap-list and the doc-level
+    // pointerdown listener installed.
+    composer._presentAgentPopover();
+    if (stubObservers.length !== 1) throw new Error("expected exactly one observer on open");
+    if (!observedTargets.has(apList)) throw new Error("observer not attached to ap-list");
+    // The observer must include childList+subtree so LIST REPLACEMENT and
+    // zero-result transitions (children swapped/emptied) re-sync the active
+    // descendant — an attributes-only observer would miss them. This assertion
+    // is the RED detector: with childList removed, it fails.
+    const opts = observeOptions[0] ?? {};
+    if (opts.childList !== true || opts.subtree !== true) {
+      throw new Error(`observer must observe childList+subtree to catch list replacement, got ${JSON.stringify(opts)}`);
+    }
+
+    // (a) FULL LIST REPLACEMENT: the picker re-renders, swapping children; a
+    // childList mutation must re-sync activedescendant to the new active option.
+    const optA = new FakeNode("button");
+    optA.className = "opt"; optA.id = "ap-opt-0"; optA.dataset.index = "0"; optA.dataset.active = "true";
+    const optB = new FakeNode("button");
+    optB.className = "opt"; optB.id = "ap-opt-1"; optB.dataset.index = "1"; optB.dataset.active = "false";
+    apList.replaceChildren(optA, optB);
+    observerCb?.([{ type: "childList" }]);
+    if (attrs["aria-activedescendant"] !== "ap-opt-0") {
+      throw new Error(`after list replacement activedescendant must be ap-opt-0, got ${attrs["aria-activedescendant"]}`);
+    }
+
+    // (b) ZERO-RESULT TRANSITION: the list is emptied (children removed) — the
+    // active-descendant must be REMOVED, not left stale.
+    apList.replaceChildren();
+    observerCb?.([{ type: "childList" }]);
+    if (attrs["aria-activedescendant"] !== null) {
+      throw new Error(`zero-result state must remove activedescendant, got ${attrs["aria-activedescendant"]}`);
+    }
+
+    // (c) HIGHLIGHT RESTORE: a fresh list with a different active option must
+    // re-sync (an attribute mutation path also covered by the same observer).
+    const optC = new FakeNode("button");
+    optC.className = "opt"; optC.id = "ap-opt-0"; optC.dataset.index = "0"; optC.dataset.active = "true";
+    apList.replaceChildren(optC);
+    observerCb?.([{ type: "childList" }]);
+    if (attrs["aria-activedescendant"] !== "ap-opt-0") {
+      throw new Error(`restore must re-sync activedescendant to ap-opt-0, got ${attrs["aria-activedescendant"]}`);
+    }
+
+    // Close: observer disconnected, doc listener removed, expanded=false.
+    composer._closeAgentPicker(false);
+    if (attrs["aria-expanded"] !== "false") throw new Error("close must set expanded=false");
+    if (attrs["aria-activedescendant"] !== null) throw new Error("close must clear activedescendant");
+  } finally {
+    globalThis.MutationObserver = prevMO;
+    restoreDoc();
+  }
+});
+
+Deno.test("composer slash picker: no leak when the composer disconnects while the picker is open (CAP-FB-20260830-SLASH-PALETTE-COMBOBOX-01 r3)", async () => {
+  await import("../extension/shared/components.js");
+  const restoreDoc = installFakeDocument();
+  let observerDisconnected = false;
+  let pointerdownRemoved = false;
+  const stubInstances: Array<{ disconnect(): void }> = [];
+  const prevMO = globalThis.MutationObserver;
+  globalThis.MutationObserver = class {
+    constructor(_cb: unknown) { stubInstances.push(this); }
+    observe() {}
+    disconnect() { observerDisconnected = true; }
+  };
+  const prevRemoveListener = globalThis.document.removeEventListener;
+  // Intercept the doc-level listener removal to prove the pointerdown listener
+  // is cleaned up on disconnect.
+  globalThis.document.removeEventListener = (type: string, _fn: unknown) => {
+    if (type === "pointerdown") pointerdownRemoved = true;
+    prevRemoveListener.call(globalThis.document, type, _fn);
+  };
+  try {
+    const AgentComposer = registry.get("agent-composer");
+    const composer = new AgentComposer();
+    composer._input = { setAttribute() {}, removeAttribute() {} };
+    composer._uid = "u-test";
+    composer._agentPick = new FakeNode("agent-picker");
+    const apList = new FakeNode("div");
+    apList.id = "ap-list";
+    composer._agentPick.appendChild(apList);
+    composer._agentPop = new FakeNode("div");
+    composer._agentPop.hidden = true;
+    composer._attach = new FakeNode("attach-button");
+    composer._selectedAgent = null;
+
+    // Open the picker (installs observer + doc listener), then DISCONNECT.
+    composer._presentAgentPopover();
+    if (stubInstances.length !== 1) throw new Error("observer not created on open");
+    composer.disconnectedCallback();
+
+    if (!observerDisconnected) throw new Error("observer not disconnected on component disconnect");
+    if (!pointerdownRemoved) throw new Error("document pointerdown listener not removed on component disconnect");
+    if (composer._agentDocClose !== null) throw new Error("_agentDocClose not cleared on disconnect");
+  } finally {
+    globalThis.MutationObserver = prevMO;
+    globalThis.document.removeEventListener = prevRemoveListener;
+    restoreDoc();
+  }
 });
