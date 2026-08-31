@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.560] — 2026-08-31
+- : merge — fontSettings/proxy/tts/declarativeNetRequest are now optional, not install-required
+
 ## [0.2.559] — 2026-08-31
 - A plan for connecting the agent to external tool servers is written up.
 
@@ -157,7 +160,7 @@
 - Artifacts and generated images now appear in the conversation as they are created — a card showing what changed, plus a thumbnail strip of screenshots and images you can open.
 
 ## [0.2.510] — 2026-08-30
-- Settings now hides the advanced developer surfaces (Wasm tools, Hooks, Scripts, advanced prompts) behind a Show developer features toggle that is off by default; agent templates and the jobs board stay visible.
+- The extension no longer requests fontSettings, proxy, text-to-speech or network-rule permissions at install - they are asked for only when a feature needs them, so it installs cleanly on managed profiles that block them.
 
 ## [0.2.509] — 2026-08-30
 - A size limit on how much a skill could import has been removed.
