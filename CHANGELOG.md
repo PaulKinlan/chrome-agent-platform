@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.574] — 2026-08-31
+- Untrack the generated diff-core bundle left tracked by the merge
+
 ## [0.2.573] — 2026-08-31
 - Multi-slash work — sequential /commands work: a slash after a resolved reference reopens the picker, prose never does
 
