@@ -71,6 +71,7 @@ and `scripts/check-tasks-baseline.json` must only ever shrink.
 - Next: one concrete next action
 - Recover: repository-relative Git commands or —
 - History:
+  - 2026-08-31 09:45 UTC — sol r2 review REVISE: (1) matrix attestation identified the parent 0d5f1003 not the candidate — re-run AT the final tip so testedSourceCommit records the candidate; (2) the probe could pass before the panel finished rendering — now waits for the exact stable row count (31 = 27 rendered caps + 4 core) and asserts no install-only names; (3) TASKS.md DONE/TBD metadata finalized here; (4) the API_PERMISSIONS comment misclassified power/search/privacy as install-only — corrected (they are optional-listable and remain optional). All four fixed; gates re-run.
   - YYYY-MM-DD HH:MM UTC — material event and evidence
 ```
 
@@ -4350,3 +4351,25 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - 2026-08-30 22:29 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/thread-artifact-image-cards` off `origin/main@424c0e75`. Other agents: pick a different entry.
   - 2026-08-31 00:13 UTC — DONE: merged forward by the coordinator and pushed as `origin/main@1602efbe`. Coordinator gates on the merged tip: production build clean, check:gallery clean, unit 2726/0, chrome journeys 247/247. Root cause was projectThreadMessages dropping persisted artifact rows (not toolRowsFromRunLog) — fixed; reopened thread shows the crumb.html cards + 'Updated (+1 -1) View diff' and the image strip resolves a real capture. Candidate 8d4d1a39 merged forward.
   - 2026-08-31 UTC — IMPLEMENTED on `cap/thread-artifact-image-cards` (second commit after THREAD-ARTIFACT-CARD-01, same branch/files by design). `extension/shared/conversation.js`: a pure `screenshotFromToolResult` (unwrap + truncation text-scan) and `imageItemsFromToolCards`; both `toolRowsFromRunLog` and the render path `projectThreadMessages` now emit one `role:"images"` row per turn collecting screenshot ids + image-type asset ids, in tool order. `extension/shared/components.js`: `ScreenshotStrip` gains `kind` (screenshot|image) for total-aware aria labels and a `max`/"+N" overflow, keeping src/label/aria escaping; `AgentConversation.appendImages` mounts the strip and resolves each id from `screenshots.get`/`asset.get`, emitting `open-image` on click. `extension/ntp/ntp.js`: an `open-image` handler opens the artifact viewer for an image and a screenshot dialog for a capture. Gallery specimen + sync updated. Gates green (see Gates).
+
+## [CAP-FB-20260831-OPTIONAL-PERMISSION-OMITTED-01] Chrome omits fontSettings/proxy/tts/declarativeNetRequest from optional_permissions — rows that can never grant
+- Feedback: 2026-08-31 — owner-reported console warnings at load: "Permission 'fontSettings' cannot be listed as optional. This permission will be omitted." (same for proxy, tts, declarativeNetRequest). These four are only grantable at INSTALL; the optional+JIT model cannot serve them, so the Settings rows backed by them could never actually grant — the UI lied.
+- Updated: 2026-08-31 14:55 UTC
+- Status: DONE
+- Resume: r2 review fixes (94f5d527: probe stability-gates the exact source-derived row count + asserts none of the four; matrix attestation re-run AT the candidate a17f472f, 26/0; tracker finalized). r2 review: PASS-pending → this refresh closes the schema P1
+- Review: r2 review (sol) accepted the code; the sole P1 was this entry's schema completeness, closed by this refresh
+- Priority: P1
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-optional-perm-fix
+- Branch: cap-optional-perm-fix
+- Base: origin/main 0d5f1003
+- Candidate: 94f5d527 (code) — final tip 266c857c (evidence refresh; testedSourceCommit = a17f472f)
+- Gates: build clean; suite 2729/0; journeys 247/247; matrix acceptance 26/0 ATTESTED
+- Shipping: merged forward by the hub coordinator
+- Acceptance: The manifest lint test `tests/manifest-permissions.test.ts` asserts (a) optional_permissions ∩ {fontSettings, proxy, tts, declarativeNetRequest} = ∅ (RED on the pre-fix manifest, GREEN after), (b) the four are in install-time `permissions`, (c) no CAPABILITIES row mixes install-only and optional permissions. Settings renders NO row for the four (the mandatory-permission skip already exists); the revoke path already refuses install-granted capabilities honestly (`isRequiredCapability` reads the manifest dynamically). Full gates green; matrix acceptance unaffected (it exercises contextMenus/tabGroups/history/bookmarks, not the four).
+  - Decision per capability (all four ACTIVELY USED — real tools in browser-tools.js + capability records in chrome-tool-capabilities.js + denial-contract tests in chrome-tools-t9/t10): move to install-time `permissions` (the ONLY honest grant Chrome allows for them). Tradeoff noted: they become always-on at install (proxy and declarativeNetRequest carry real install warnings; no runtime Turn-off) — this is the price of honesty, and it matches the existing model for alarms/storage/sidePanel/offscreen. Removing the features was rejected: they are shipped, tested product surface.
+  - Consistency: `API_PERMISSIONS` in permission-orchestration.js gained the four install-only permissions plus power/search/privacy (the set previously rejected these in the plan builder even though the tools exist — part of the same truth-in-UI fix). NOTE: power/search/privacy are OPTIONAL-LISTABLE and remain optional+JIT in the manifest; only the four (proxy/tts/fontSettings/declarativeNetRequest) moved to install.
+  - Removed nothing else: host_permissions <all_urls> untouched; the other optional permissions (tabs, system.*, topSites, etc.) remain optional + JIT (they ARE optional-listable).
+- History:
+  - 2026-08-31 14:55 UTC — r2 review (sol): code ACCEPTED (probe stability-gates the exact source-derived row count; attestation provenance fixed; power/search/privacy fact-check confirmed they were already optional-listable — comment corrected). Sole P1: this entry's schema completeness — closed by this refresh. Candidate 94f5d527, evidence tip 266c857c.
+  - 2026-08-31 02:10 UTC — owner pasted the four load warnings; worker reproduced the mechanism (optional-listed → omitted → request can never grant), verified every reference (manifest, capabilities.js rows, permission-orchestration set, chrome-tool-capabilities records, tests t9/t10 denial paths, matrix acceptance — unaffected), moved the four to install permissions, added the lint test (RED 0/3 on old manifest → GREEN 3/3 on new), full gates pending.

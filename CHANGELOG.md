@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.519] — 2026-08-31
+- Optional permissions lane — fontSettings/proxy/tts/declarativeNetRequest are install-granted so Settings never shows a row Chrome cannot serve
+
 ## [0.2.518] — 2026-08-31
 - Three product decisions were made, and the next set of improvements has begun.
 
@@ -14,6 +17,19 @@
 
 ## [0.2.514] — 2026-08-31
 - Typing / or @ in the composer now shows an accessible suggestion list that keyboard and screen-reader users can follow
+- tasks: OPTIONAL-PERMISSION-OMITTED-01 schema completed (r2 review accepted the code)
+
+## [0.2.517] — 2026-08-31
+- Permission matrix: refresh the attestation at the final candidate (26/0 ATTESTED)
+
+## [0.2.516] — 2026-08-31
+- tasks: OPTIONAL-PERMISSION-OMITTED-01 — record the final candidate SHA
+
+## [0.2.515] — 2026-08-31
+- Address the r2 review: honest probe readiness, accurate permission classification, final matrix provenance
+
+## [0.2.514] — 2026-08-31
+- Fix the four install-only permissions Chrome omits from optional_permissions
 
 ## [0.2.513] — 2026-08-31
 - Housekeeping: the completed-work list was corrected after a bookkeeping mix-up between parallel work streams.
