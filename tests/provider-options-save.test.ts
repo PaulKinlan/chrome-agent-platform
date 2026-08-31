@@ -217,3 +217,28 @@ Deno.test("provider save: unblocked real binding starts permission then persists
     "provider.set",
   ]);
 });
+
+// CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01: an empty-model save must surface
+// the provider.set refusal to the caller (the Settings flash then reports the
+// failure, never "Set … as default."). The refusal itself lives in the SW
+// route (provider.set); the save binding must NOT swallow it.
+Deno.test("provider save: a provider.set refusal is surfaced, not swallowed", async () => {
+  const card = providerCard({
+    baseURL: "https://my-byo.example/v1",
+    apiKey: "key",
+    model: "",
+  });
+  const outcome = await saveProviderFromCard({
+    card,
+    provider,
+    currentConfig: { provider: "demo", baseURL: "", model: "" },
+    requestHostAccess: async () => ({ granted: true }),
+    sendMessage: async () => ({
+      ok: false,
+      reason: "model id missing — set it in Settings → Providers",
+    }),
+    pendingAfterMs: 25,
+  });
+  assertEquals(outcome.saved.ok, false);
+  assert(outcome.saved.reason.includes("model id missing"), "the refusal reason must reach the caller");
+});

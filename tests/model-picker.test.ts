@@ -24,6 +24,7 @@ class ShadowRootStub {
 globalThis.HTMLElement = HTMLElementStub;
 globalThis.customElements = { define(name, cls) { registry.set(name, cls); }, get(name) { return registry.get(name); } };
 globalThis.window = globalThis;
+globalThis.document = { addEventListener() {}, removeEventListener() {} };
 globalThis.CustomEvent = class CustomEvent { constructor(type, init = {}) { this.type = type; this.detail = init.detail ?? {}; } };
 globalThis.matchMedia = () => ({ matches: false });
 
@@ -80,4 +81,73 @@ Deno.test("catalogue: ordering really is newest-first (3.7 before 3.1 for gemini
   assertEquals(first37 < first31, true, "3.7 must sort before 3.1");
   // The retired generation never reaches a picker (CAP-FB-20260830-MODEL-CATALOG-CURRENT-01).
   assertEquals(models.findIndex((m) => /^gemini-[12]/.test(m)), -1, "no 1.x/2.x gemini id in the picker view");
+});
+
+// ——— CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01 ———
+// The picker must commit TYPED-BUT-NOT-PICKED text on blur (and via the public
+// commitTyped() drive hook): typing a model id and clicking Use must save the
+// typed id, never model:"". Arrow-highlighted options must NOT be clobbered by
+// a blur commit (the option click itself commits; the blur handler only fires
+// when no option is highlighted). Real DOM behavior is journey-covered; this
+// unit test drives the registered component with the stub DOM.
+Deno.test("model-picker: typed text commits on blur (no highlighted option)", () => {
+  const Cls = registry.get("model-picker");
+  const picker = new Cls();
+  const listeners = {};
+  const fakeInput = {
+    value: "gpt-5.6-sol",
+    addEventListener(type, fn) { listeners[type] = fn; },
+    setAttribute() {}, removeAttribute() {},
+    set value_(v) { this.value = v; },
+  };
+  picker._root = {
+    querySelector(sel) {
+      if (sel === "input[role='combobox']") return fakeInput;
+      if (sel === ".toggle") return { addEventListener() {} };
+      if (sel === ".listbox") return { querySelectorAll: () => [], replaceChildren() {}, setAttribute() {}, removeAttribute() {} };
+      return null;
+    },
+  };
+  picker._input = fakeInput;
+  picker._listbox = picker._root.querySelector(".listbox");
+  picker._committed = "";
+  picker._activeIndex = -1; // no option highlighted
+  picker._wire();
+  listeners["blur"]();
+  assertEquals(picker.value, "gpt-5.6-sol", "blur with no highlighted option must commit the typed text");
+});
+
+Deno.test("model-picker: commitTyped() commits whatever is typed (the Use-handler drive hook)", () => {
+  const Cls = registry.get("model-picker");
+  const picker = new Cls();
+  picker._input = { value: "deepseek-v4-pro", addEventListener() {} };
+  picker._committed = "";
+  picker.commitTyped();
+  assertEquals(picker.value, "deepseek-v4-pro", "commitTyped() must commit the typed input value");
+});
+
+Deno.test("model-picker: blur does NOT commit while an option is arrow-highlighted", () => {
+  const Cls = registry.get("model-picker");
+  const picker = new Cls();
+  const listeners = {};
+  const fakeInput = {
+    value: "gpt-5.6-sol",
+    addEventListener(type, fn) { listeners[type] = fn; },
+    setAttribute() {}, removeAttribute() {},
+  };
+  picker._root = {
+    querySelector(sel) {
+      if (sel === "input[role='combobox']") return fakeInput;
+      if (sel === ".toggle") return { addEventListener() {} };
+      if (sel === ".listbox") return { querySelectorAll: () => [], replaceChildren() {}, setAttribute() {}, removeAttribute() {} };
+      return null;
+    },
+  };
+  picker._input = fakeInput;
+  picker._listbox = picker._root.querySelector(".listbox");
+  picker._committed = "gpt-5.6-luna"; // a previously-saved value
+  picker._activeIndex = 0; // option highlighted with the arrow keys
+  picker._wire();
+  listeners["blur"]();
+  assertEquals(picker.value, "gpt-5.6-luna", "an arrow-highlighted option must not be clobbered by blur (the option click commits)");
 });

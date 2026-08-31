@@ -83,9 +83,16 @@ Deno.test("an empty model with a key resolves to the catalogue default, not the 
   const explicit = await resolveModelFromConfig({ provider: "openai", baseURL: "", apiKey: "sk-test", model: "gpt-5.5" });
   assertEquals(explicit.modelId, "gpt-5.5");
   assertEquals(Boolean(explicit.usingDefaultModel), false);
-  // No default for the BYO endpoint → still the honest demo fallback.
-  const byo = await resolveModelFromConfig({ provider: "openai-compatible", baseURL: "https://byo.example/v1", apiKey: "k", model: "" });
-  assertEquals(byo.modelId, "demo-local");
+  // No default for the BYO endpoint → the resolution REFUSES (throws) instead
+  // of silently falling back to the demo model
+  // (CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01).
+  let threw = null;
+  try {
+    await resolveModelFromConfig({ provider: "openai-compatible", baseURL: "https://byo.example/v1", apiKey: "k", model: "" });
+  } catch (e) {
+    threw = String(e?.message ?? e);
+  }
+  assert(threw !== null && /model id/.test(threw), "a real provider id with no model must refuse, never demo-fallback");
 });
 
 Deno.test("fetchLiveModels: OpenAI-compatible list, normalised, tiers dropped, never throws", async () => {

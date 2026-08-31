@@ -110,15 +110,20 @@ Deno.test("per-agent provider: getModelForAgent resolves the override, else the 
   assertEquals(resolved.usingDefaultModel, true);
   assert(resolved.providerName.includes("deepseek"), "the resolution names the override provider");
   // A provider WITHOUT a catalogue (BYO endpoint) still needs an explicit id —
-  // the demo fallback remains, and the providerName still names the override.
-  const byo = await resolveModelFromConfig({
-    provider: "openai-compatible",
-    baseURL: "https://byo.example/v1",
-    apiKey: "sk-x",
-    model: "",
-  });
-  assertEquals(byo.modelId, "demo-local");
-  assert(byo.providerName.includes("openai-compatible"), "the fallback names the override provider");
+  // the resolution REFUSES (throws) instead of demo-fallback
+  // (CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01); the throw names the provider.
+  let threw = null;
+  try {
+    await resolveModelFromConfig({
+      provider: "openai-compatible",
+      baseURL: "https://byo.example/v1",
+      apiKey: "sk-x",
+      model: "",
+    });
+  } catch (e) {
+    threw = String(e?.message ?? e);
+  }
+  assert(threw !== null && /openai-compatible/.test(threw), "the refusal names the override provider");
 
   // A null override → the global path (getModelForAgent falls back). The
   // global default with no provider configured is the LOCAL ASSISTANT — the
@@ -245,15 +250,21 @@ Deno.test("k3 HIGH-2: openai-compatible is a first-class provider everywhere", a
   assertEquals(resolved.modelId, "my-model", "a configured openai-compatible resolves");
   assertEquals(resolved.providerName, "openai-compatible");
 
-  // And an UNCONFIGURED one degrades honestly (demo fallback, named reason).
-  const missing = await resolveModelFromConfig({
-    provider: "openai-compatible",
-    baseURL: "",
-    apiKey: "",
-    model: "",
-  });
-  assertEquals(missing.modelId, "demo-local");
-  assert(missing.providerName.includes("missing"), "the fallback names what is missing");
+  // And an UNCONFIGURED one degrades honestly — it REFUSES (throws, naming
+  // what is missing), it never demo-falls
+  // (CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01).
+  let threw = null;
+  try {
+    await resolveModelFromConfig({
+      provider: "openai-compatible",
+      baseURL: "",
+      apiKey: "",
+      model: "",
+    });
+  } catch (e) {
+    threw = String(e?.message ?? e);
+  }
+  assert(threw !== null && /missing/.test(threw), "the refusal names what is missing");
 
   // The override round-trips (not silently dropped).
   store.clear();

@@ -734,3 +734,48 @@ Deno.test("kv.get (real dispatcher): secret namespaces redacted on read-all AND 
   await dispatch({ type: "kv.remove", keys: ["cap:namedAgents", "providerConfig"] }, ownerSender);
   await dispatch({ type: "kv.remove", keys: ["cap:test-key"] }, ownerSender);
 });
+
+// ---- CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01 ----
+// A provider that needs a model id must have one (explicit OR catalogue
+// default). Empty model + no catalogue → refuse "model id missing" so the hub
+// shows the Settings remediation instead of silently running the demo model.
+Deno.test("providerRunGate: a keyed provider with an empty model and no catalogue default is refused with 'model id missing'", async () => {
+  recordProviderSuccess(); // clean breaker
+  const g = await providerRunGate({
+    provider: "openai-compatible",
+    baseURL: "https://my-byo.example/v1",
+    apiKey: "k",
+    model: "",
+  });
+  assertEquals(g.ok, false);
+  assertEquals(g.code, "model id missing");
+  assert(g.reason.includes("model id missing"), "reason must name the missing model");
+});
+
+Deno.test("providerRunGate: an empty model is fine when the provider has a catalogue default", async () => {
+  recordProviderSuccess(); // clean breaker
+  const g = await providerRunGate({
+    provider: "openai",
+    baseURL: "https://api.openai.com/v1",
+    apiKey: "k",
+    model: "",
+  });
+  // openai's catalogue default exists → the MODEL check must NOT refuse; the
+  // gate proceeds to the host-permission step (which, outside a browser, is
+  // the next thing that can refuse).
+  assertEquals(g.code, "permission_required");
+  assertEquals(g.ok, false);
+});
+
+Deno.test("providerRunGate: an EXPLICIT model passes for a no-catalogue provider", async () => {
+  recordProviderSuccess(); // clean breaker
+  const g = await providerRunGate({
+    provider: "openai-compatible",
+    baseURL: "https://my-byo.example/v1",
+    apiKey: "k",
+    model: "grok-4.6",
+  });
+  // The model check passed (explicit id); the host-permission step is the
+  // next refusal point outside a browser.
+  assertEquals(g.code, "permission_required");
+});

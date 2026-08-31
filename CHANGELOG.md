@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.505] — 2026-08-31
+- Typed-but-unpicked model saves model:'' and silently runs the demo — commit typed picker text, refuse model-less keyed providers
+
 ## [0.2.504] — 2026-08-30
 - tasks: reconcile eleven IN_REVIEW entries to DONE — candidate content verified present on origin/main, only the tracker rows had lagged
 

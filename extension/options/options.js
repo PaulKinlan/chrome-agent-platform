@@ -662,7 +662,14 @@ function modelFieldHtml(p, cfg) {
 // .model input during transition).
 function effectiveModel(card) {
   const picker = card.querySelector("model-picker");
-  if (picker) return (picker.value ?? "") || defaultModelFor(card?.dataset?.provider ?? picker.dataset?.provider ?? "");
+  if (picker) {
+    // Commit typed-but-not-picked text BEFORE reading the value: the owner may
+    // type a model id and click Use without selecting a suggestion — blur may
+    // already have committed it, but a programmatic save path must not depend
+    // on blur having fired (CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01).
+    picker.commitTyped?.();
+    return (picker.value ?? "") || defaultModelFor(card?.dataset?.provider ?? picker.dataset?.provider ?? "");
+  }
   const select = card.querySelector(".model-select");
   if (select) {
     return select.value === "__custom__"
@@ -829,9 +836,14 @@ async function renderProviders(restoreFocus = false) {
       shouldBlock: () => blockSessionOnlyCredentialSave(credentialInput),
       requestHostAccess: requestProviderHostAccess,
       sendMessage: (message) => chrome.runtime.sendMessage(message),
-      onAccess(access) {
+      onAccess(access, outcome) {
         const isActive = cfg.provider === p.id;
-        if (access.status === "pending") {
+        // A provider.set refusal (e.g. "model id missing" — the empty-model
+        // save) must be reported as a failure, not a success flash
+        // (CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01).
+        if (outcome?.saved && outcome.saved.ok === false) {
+          saveFlash(`${p.name} was not updated — ${outcome.saved.reason || outcome.saved.error || "check the provider settings"}.`);
+        } else if (access.status === "pending") {
           saveFlash(`Saved ${p.name}. Chrome's network-access decision is still pending; provider requests remain blocked until access is granted.`);
         } else if (access.status === "denied") {
           saveFlash(`Saved ${p.name}, but network access was not granted — provider requests remain blocked. Re-enable it when Chrome asks.`);

@@ -7895,6 +7895,16 @@ class ModelPicker extends Component {
       if (!this._open && this.models.length) { this._renderList(this._input.value); this._setOpen(true); }
     });
     this._input.addEventListener("keydown", (e) => this._onKey(e));
+    // A typed-but-not-picked model id must not be silently dropped when the
+    // field loses focus (the owner types a model id and clicks Use — the saved
+    // config would otherwise carry model:""). Commit the typed text unless an
+    // option is highlighted (arrow keys); an option CLICK commits the option
+    // itself and runs after this, so the click's value always wins.
+    this._input.addEventListener("blur", () => {
+      if (this._activeIndex < 0 && this._input.value !== this._committed) {
+        this._commitInput();
+      }
+    });
     this._root.querySelector(".toggle")?.addEventListener("click", () => {
       this._setOpen(!this._open);
       if (this._open) { this._renderList(this._input.value); this._input.focus(); }
@@ -8034,6 +8044,9 @@ class ModelPicker extends Component {
   }
   /** Test/drive hook: commit whatever is currently typed. */
   _commitInput() { this._commit(this._input?.value ?? ""); }
+  /** Public drive hook: the Use handler commits typed-but-not-picked text
+   * BEFORE reading the committed value (CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01). */
+  commitTyped() { this._commitInput(); }
   _syncInput() { if (this._input && (this._root?.activeElement ?? document.activeElement) !== this._input) this._input.value = this._committed; }
   _syncCustomHint() {
     if (this._customHint) this._customHint.hidden = !(this.isCustom && this.models.length);

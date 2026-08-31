@@ -189,15 +189,15 @@ export async function resolveModelFromConfig(cfg) {
     const usingDefaultModel = !explicitModel && Boolean(model);
     const needsKey = PROVIDER_CHOICES.find((p) => p.id === id)?.needsKey ??
       true;
-    // Ollama needs no key; the others do. A model id is always required.
+    // Ollama needs no key; the others do. A model id is always required — and
+    // a REAL provider id must NEVER silently resolve to the demo model (the
+    // pre-gate check covers the run; this is the same refusal for every other
+    // resolution path, e.g. a per-agent override, so the demo fallback exists
+    // ONLY for the provider id "demo" itself — CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01).
     if (!baseURL || !model || (needsKey && !apiKey)) {
-      return {
-        model: createDemoModel(),
-        modelId: "demo-local",
-        providerName: `${id} (missing ${
-          !baseURL ? "base URL" : !model ? "model id" : "API key"
-        } — fell back to demo)`,
-      };
+      throw new Error(
+        `${id} is misconfigured: missing ${!baseURL ? "base URL" : !model ? "model id" : "API key"}`,
+      );
     }
     // NATIVE GEMINI LANE: the Gemini OpenAI-compatible endpoint silently drops
     // provider-defined server tools (google_search, url_context, code_exec), so
