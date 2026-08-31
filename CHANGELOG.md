@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.527] — 2026-08-31
+- : the hub below the composer is one timeline of runs + tasks
+
 ## [0.2.526] — 2026-08-31
 - Page interaction and timeline improvements have begun.
 

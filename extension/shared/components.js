@@ -9552,6 +9552,114 @@ class ActionLedger extends Component {
 customElements.define("action-ledger", ActionLedger);
 
 /* ──────────────────────────────────────────────────────────────────────────
+ * <agent-timeline limit?> — the hub's spine (CAP-FB-20260828-HUB-AS-TIMELINE-01).
+ * ONE reverse-chronological stream of what happened: the tasks the owner
+ * started and the runs their agents finished, replacing the three object
+ * catalogs (Agents / Recent artifacts / Recent activity). Data is set through
+ * `.entries` (the pure `buildTimeline` projection from lib/hub-timeline.js), so
+ * the component is backend-free and the gallery seeds it directly. Each row is
+ * a single Open target that emits `open` with the entry `id`; the host maps a
+ * `thread` row to its conversation and a `run:` row to its agent surface.
+ *
+ * A row is a scan line, not a card: a leading status dot (colour AND a status
+ * word, so colour is never the only signal), the title, the agent + outcome,
+ * and the time — hairline-separated, the same list vocabulary as the sidebar
+ * task rows. It emits `entries-change` { count } so the host can reveal or hide
+ * the section (a fresh profile shows nothing here).
+ * ────────────────────────────────────────────────────────────────────────── */
+const TIMELINE_STATUS_WORD = {
+  running: "Running",
+  paused: "Waiting",
+  failed: "Failed",
+  done: "Done",
+};
+class AgentTimeline extends Component {
+  static get observedAttributes() { return ["limit"]; }
+  constructor() {
+    super();
+    this._entries = [];
+  }
+  set entries(value) {
+    this._entries = Array.isArray(value) ? value : [];
+    if (this._rendered) { this._render(); this._wire(); }
+    this._emit("entries-change", { count: this._entries.length });
+  }
+  get entries() { return this._entries; }
+  _limit() {
+    const n = Number.parseInt(this.getAttribute("limit") ?? "", 10);
+    return Number.isFinite(n) && n > 0 ? n : 40;
+  }
+  _render() {
+    const rows = this._entries.slice(0, this._limit());
+    const items = rows.map((e) => {
+      const status = ["running", "paused", "failed", "done"].includes(e.status) ? e.status : "idle";
+      const word = TIMELINE_STATUS_WORD[status] || "";
+      const agent = e.agent ? `<span class="tl-agent">${escapeHtml(e.agent)}</span>` : "";
+      const outcome = e.outcome ? `<span class="tl-outcome">${escapeHtml(e.outcome)}</span>` : "";
+      const sep = agent && outcome ? `<span class="tl-sep" aria-hidden="true">·</span>` : "";
+      const t = Number(e.time) || 0;
+      const iso = t ? new Date(t).toISOString() : "";
+      const full = t ? new Date(t).toLocaleString() : "";
+      return `<li class="tl-item">
+        <button type="button" class="tl-row" data-id="${escapeHtml(String(e.id ?? ""))}" aria-label="Open ${escapeHtml(String(e.title ?? "item"))}">
+          <span class="tl-dot ${status}" aria-hidden="true"></span>
+          <span class="tl-body">
+            <span class="tl-title">${escapeHtml(String(e.title ?? "Task"))}</span>
+            <span class="tl-meta">${agent}${sep}${outcome || (agent ? "" : `<span class="tl-outcome">${escapeHtml(word)}</span>`)}<span class="tl-sr">${escapeHtml(word)}</span></span>
+          </span>
+          <time class="tl-time" datetime="${escapeHtml(iso)}" title="${escapeHtml(full)}">${escapeHtml(timeAgo(t))}</time>
+          <span class="tl-chev" aria-hidden="true">${ICONS.chevron}</span>
+        </button>
+      </li>`;
+    }).join("");
+    const body = rows.length
+      ? `<ol class="tl" role="list">${items}</ol>`
+      : `<p class="tl-empty">Nothing yet. Your tasks and your agents’ runs will appear here.</p>`;
+    mountTemplate(this, `
+      :host { display:block; }
+      :host([hidden]) { display:none; }
+      .tl { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; }
+      .tl-item { min-inline-size:0; }
+      .tl-row { display:grid; grid-template-columns:10px minmax(0,1fr) auto 20px; gap:12px; align-items:center;
+        width:100%; text-align:start; padding:11px 14px; background:transparent; border:0;
+        border-bottom:1px solid var(--border,#e3e0d9); color:inherit; font:inherit; cursor:pointer; }
+      .tl-item:last-child .tl-row { border-bottom:0; }
+      .tl-row:hover { background:var(--bg,#f7f6f3); }
+      .tl-row:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:-2px; border-radius:8px; }
+      .tl-dot { inline-size:8px; block-size:8px; border-radius:50%; justify-self:center;
+        background:var(--muted,#8b949e); flex:0 0 auto; }
+      .tl-dot.done { background:var(--accent,#0e6e63); }
+      .tl-dot.failed { background:var(--danger,#b3261e); }
+      .tl-dot.paused { background:var(--accent2,#7a5c1d); }
+      .tl-dot.running { background:var(--accent,#0e6e63); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent,#0e6e63) 22%, transparent); }
+      .tl-body { min-inline-size:0; display:flex; flex-direction:column; gap:2px; }
+      .tl-title { font-weight:600; font-size:var(--text-sm,13px); color:var(--text,#1d1b18);
+        overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .tl-meta { display:flex; align-items:baseline; gap:6px; min-inline-size:0; font-size:var(--text-xs,12px);
+        color:var(--muted,#635e56); overflow:hidden; }
+      .tl-agent { color:var(--accent,#0e6e63); font-weight:600; white-space:nowrap;
+        max-inline-size:180px; overflow:hidden; text-overflow:ellipsis; }
+      .tl-outcome { min-inline-size:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .tl-sep { color:var(--border,#d8d4cc); flex:0 0 auto; }
+      .tl-sr { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
+        clip:rect(0 0 0 0); white-space:nowrap; border:0; }
+      .tl-time { font-size:var(--text-xs,12px); color:var(--muted,#635e56); white-space:nowrap;
+        font-variant-numeric:tabular-nums; }
+      .tl-chev { display:inline-flex; align-items:center; justify-content:center; color:var(--muted,#8b949e); }
+      .tl-chev svg { width:16px; height:16px; display:block; }
+      .tl-row:hover .tl-chev, .tl-row:focus-visible .tl-chev { color:var(--accent,#0e6e63); }
+      .tl-empty { margin:0; padding:12px 14px; font-size:13px; color:var(--muted,#635e56); }
+    `, body);
+  }
+  _wire() {
+    for (const row of this._root.querySelectorAll(".tl-row")) {
+      row.addEventListener("click", () => this._emit("open", { id: row.dataset.id }));
+    }
+  }
+}
+customElements.define("agent-timeline", AgentTimeline);
+
+/* ──────────────────────────────────────────────────────────────────────────
  * <jobs-board> — the shared jobs board (agent-to-agent work): open jobs with
  * poster/claimant + recency, recently settled jobs with outcome and a bounded
  * result excerpt, and the latest board messages. Queries board.list +
