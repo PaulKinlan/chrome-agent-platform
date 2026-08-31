@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.517] — 2026-08-31
+- Permission matrix: refresh the attestation at the final candidate (26/0 ATTESTED)
+
 ## [0.2.516] — 2026-08-31
 - tasks: OPTIONAL-PERMISSION-OMITTED-01 — record the final candidate SHA
 
