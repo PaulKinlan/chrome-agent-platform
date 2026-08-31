@@ -2289,7 +2289,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 ## [CAP-FB-20260830-CLAIM-CHECK-BROWSER-TOOLS-01] Extend the mutation claim check to browser, memory, screenshot and delegate tools
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 tools lane finding 9 (parts b and c); live lane finding 4. The agent can say "I opened the tab" or "I have saved that" when the tool failed or was never called, and nothing corrects it.
 - Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
+- Status: DONE
 - Resume: —
 - Priority: P1
 - Owner: unassigned
@@ -2297,7 +2297,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Branch: none
 - Base: `cf0da958`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@173cd84a` (merged; see History)
 - Acceptance: a final reply claiming to have opened/navigated/closed a tab, saved to memory, taken a screenshot, downloaded a file or delegated a task, with no matching successful tool call in the turn, gets the same visible correction line the agent-create claims get today; the same final text is rendered once per turn, not once per step.
   - Context: `extension/lib/mutation-claim-check.js` is the runtime honesty backstop. Its `CLAIMS` table (`:15-40`) has four kinds — `create`, `update`, `delete`, `schedule` — all about named agents. `correctUnsupportedMutationClaims(text, successfulTools)` is applied in `extension/lib/agent.js:866-872` (on the `done` progress event) and `:1015-1019` (on the returned result), with `okToolNames` being the REAL tool names after the lazy-envelope unwrap. Tools lane: one demo run rendered seven identical "[demo model] Delegation succeeded. Worker response: …" bubbles for a `delegate_task` card that said `error`. Live lane: gpt-4.1 replied "I have saved that your favourite colour is green" with zero tool calls. The repeated bubble comes from `agent.js:784` emitting `{ type: "text", text, hasToolCalls }` on every step and `extension/shared/conversation.js:1441-1445` appending a bubble whenever `hasToolCalls` is true. What must NOT change: the negation/first-person guard in `isSelfClaim` (below `:60`), the pure-module rule (no DOM, no imports).
   - Reproduce today: (1) `deno test tests/mutation-claim-check.test.ts` passes with the four kinds only; (2) in Deno: `correctUnsupportedMutationClaims("I opened example.com in a new tab for you.", [])` returns `corrections: []`; (3) in the loaded extension run "@demo-delegate-agent nosuchagent" and count identical agent bubbles in the conversation (seven at the baseline).
@@ -2314,6 +2314,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: add the tab/memory/screenshot/delegate claim patterns and the outcome lookup
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-CLAIM-CHECK-BROWSER-TOOLS-01`
 - History:
+  - 2026-08-31 — DONE status RESTORED by the coordinator: the candidate is merged and green on origin/main, but a concurrent session\'s forward-merge took `--ours` on TASKS.md from a pre-DONE base and reverted this field (a compare-and-swap conflict resolved the wrong way). Code unchanged; status reconciled forward.
   - 2026-08-30 11:00 UTC — measured: one demo run rendered seven identical "Delegation succeeded. Worker response: ..." bubbles for a tool whose card said error, plus an orphaned running card. Live lane: gpt-4.1 said "I have saved that your favourite colour is green" with zero tool calls and nothing in memory.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); every line reference re-verified against `origin/main@cf0da958`.
 
@@ -2355,7 +2356,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 ## [CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01] The conversation is a fixed-height box with no run state, identity or time
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 ui lane finding 12, editing lane finding 10. Extends CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 (the cards are legible; the room they sit in is not). A two-bubble thread sits in the top third of a 620 px bordered box, nothing says the agent is working, and new content lands below the fold.
 - Updated: 2026-08-30 17:12 UTC
-- Status: OPEN
+- Status: DONE
 - Resume: —
 - Priority: P1
 - Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — CLAIMED; do not start a parallel attempt
@@ -2363,7 +2364,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Branch: `cap/thread-view-run-state` (pushed to origin as the candidate branch; merged by the coordinator)
 - Base: `217cd9e1`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@4fd160b1` (merged; see History)
 - Acceptance: the conversation panel is content-height with the composer docked at the bottom of the viewport; assistant turns show the agent avatar, name and time; a run banner ("Working — reading 4 tabs…") is visible while the run is running; every appended row scrolls the conversation to the bottom unless the owner has scrolled up; an update card is titled with the artifact's name rather than "Generated UI"; the programmatic title focus paints no focus ring. Observable: a two-turn thread has no empty panel space at 1440x900; a screenshot 300 ms after send shows the running state; after an edit turn `scrollTop === scrollHeight - clientHeight`.
   - Context: `extension/ntp/ntp.html` `#thread-view` holds `<agent-conversation>` and `<agent-composer id="thread-composer">` (`:955`). The `conversation-run-status` element is defined at `extension/shared/components.js:5240-5297` (states `queued|running|retrying|waiting-for-permission|completed|failed|cancelled`) and is created at `:4047` but the ui lane observed `#status` staying "ready" through a run — the element is not fed the run's live status. The generated-UI card header falls back to the literal "Generated UI" at `:3649` (`genName || "Generated UI"`). Scrolling: after an edit turn the ui lane measured `scrollTop` 267 of 587 with the closing message below the fold — no scroll-on-append. Identity: `message-bubble` carries no avatar/name/time for assistant turns; `<agent-identity>` exists in `components.js` (see the gallery `docs/components.html`) and must be reused, not re-drawn. What must NOT change: `role="log"` on the conversation; the tool-card components; the composer component.
   - Reproduce today: (1) build, launch headless at 1440x900, demo provider; (2) run "@demo-tools" and open the thread; (3) measure the `<agent-conversation>` host: fixed height (~620 px) with ~440 px empty below two bubbles; (4) screenshot 300 ms after clicking Run — `#status` reads "ready", no banner; (5) send a second turn and read `scrollTop` vs `scrollHeight - clientHeight` on the scroll container — not equal.
@@ -2380,6 +2381,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: adopt `conversation-run-status` and make the panel content-height
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01`
 - History:
+  - 2026-08-31 — DONE status RESTORED by the coordinator: the candidate is merged and green on origin/main, but a concurrent session\'s forward-merge took `--ours` on TASKS.md from a pre-DONE base and reverted this field (a compare-and-swap conflict resolved the wrong way). Code unchanged; status reconciled forward.
   - 2026-08-30 11:00 UTC — measured: a 620 px bordered panel with two bubbles in the top 180 px and 440 px of empty panel; `#status` stayed "ready" throughout a run; after an edit turn `scrollTop` was 267 of 587 with the closing message below the fold.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); every line reference re-verified against `origin/main@cf0da958`.
   - 2026-08-30 17:12 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/thread-view-run-state` off `origin/main@217cd9e1`. Other agents: pick a different entry.
@@ -2421,7 +2423,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 ## [CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01] open_side_panel can never succeed when the model calls it
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 tools lane finding 4. The model is offered a tool that promises to open the side panel and it always fails, because Chrome requires a user gesture the service worker does not have. Owner decision 2026-08-30: REMOVE the tool (not the card alternative).
 - Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
+- Status: DONE
 - Resume: —
 - Priority: P1
 - Owner: unassigned
@@ -2429,7 +2431,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Branch: none
 - Base: `cf0da958`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@b1a88e23` (merged; see History)
 - Acceptance: `open_side_panel` is removed from the browser toolset, the capability table and the tool names list; `search_tools` never returns it; a removal guard test fails if it comes back; the tool-count assertions are updated in the same commit (126 → 125 browser tools, 166 → 165 total). The owner's own side-panel paths (the action click, Alt+Shift+S) are untouched.
   - Context: `open_side_panel` is defined at `extension/lib/browser-tools.js:1353-1388`; its description (`:1355`) promises "Open the Chrome side panel and load a page in it". `chrome.sidePanel.open()` requires a user gesture; the tool runs in the service worker from a model call, so every invocation returns `"side panel could not open: sidePanel.open() may only be called in response to a user gesture."` (`:1385`). It is listed in `extension/lib/chrome-tool-capabilities.js:19` (the `BROWSER_TOOL_NAMES` array), `:191`, and its record at `:236` (`"owner-gesture-activeTab"`, mutating). `tests/chrome-tool-capabilities.test.ts:226` iterates it by name, and `tests/chrome-tools-t12.test.ts:170-177` asserts exactly 126 browser tools / 166 total (`CHROME_TOOL_CAPABILITY_BOUNDS.browserTools`, `.totalTools`). The previous removal of the four `debugger` tools (2026-08-27) is the template: see the "T12 GUARD" test at `tests/chrome-tools-t12.test.ts:390` and `docs/OPEN-QUESTIONS.md` Q17. What must NOT change: the `sidePanel` capability row in Settings (the owner still opens the panel), `extension/sidepanel/`, the `sidepanel.getTarget` route.
   - Reproduce today: (1) build, launch headless with `sidePanel` granted (it is a silent permission); (2) drive `{ type: "agent-worker.tool", toolName: "open_side_panel", args: { url: "https://example.com" } }`; (3) observe the gesture error above. (4) `deno test tests/chrome-tools-t12.test.ts` currently asserts 126.
@@ -2446,13 +2448,14 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: remove the tool and its description; keep `chrome.sidePanel.open` for the owner gesture paths
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01`
 - History:
+  - 2026-08-31 — DONE status RESTORED by the coordinator: the candidate is merged and green on origin/main, but a concurrent session\'s forward-merge took `--ours` on TASKS.md from a pre-DONE base and reverted this field (a compare-and-swap conflict resolved the wrong way). Code unchanged; status reconciled forward.
   - 2026-08-30 11:00 UTC — measured: `chrome.sidePanel.open()` requires a user gesture and the tool runs in the service worker with none: "side panel could not open: sidePanel.open() may only be called in response to a user gesture." Its description promises otherwise.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); owner confirmed REMOVE (not the card alternative); every line reference re-verified against `origin/main@cf0da958`.
 
 ## [CAP-FB-20260830-SCREENSHOT-TO-MODEL-01] capture_screenshot succeeds but the model cannot see the image and the owner cannot find it
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 tools lane finding 5, live lane finding 3 (the model invented a description of a truncated base64 string). "Take a screenshot and tell me what you see" cannot work with any provider, and the screenshot is not kept anywhere the owner can open.
 - Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
+- Status: DONE
 - Resume: —
 - Priority: P1
 - Owner: unassigned
@@ -2460,7 +2463,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Branch: none
 - Base: `cf0da958`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@d34c01e2` (merged; see History)
 - Acceptance: `capture_screenshot` returns `{ ok, screenshotId, url, width, height, bytes }` with no base64 in the JSON; the PNG is persisted to the screenshots store on every model capture and `screenshots.list` returns it; the tool card shows the thumbnail; on a vision-capable provider the next model call receives the PNG as an image content part, so "take a screenshot of example.com and describe it" produces a description that mentions the page's actual heading text.
   - Context: `captureTabScreenshot(tabId, { ownerInvoked })` (`extension/lib/browser-tools.js:621`) returns `{ screenshot: "data:image/png;base64,…", url }`. The lazy protocol projects every tool result with `maxStringBytes` = 16 KiB (`extension/lib/tool-argument-contract.js:11` `maxStringUtf8Bytes`, applied at `extension/lib/lazy-tool-protocol.js:320`) and a 64 KiB total bound (`:63` `maxResultBytes`; `projectResult` `:312-333` degrades to a summary when exceeded). So the model receives a base64 string cut at 16,384 bytes as TEXT — the live lane captured 16,867 chars on the wire; gpt-4.1 hallucinated a description, Gemini said it cannot see images. There is no image content-part path in `lazy-tool-protocol.js` or `extension/lib/agent.js`. Persistence: only the OWNER-invoked path (the action click, `extension/background/service-worker.js:7745-7760`) calls `saveScreenshot(mem, { url, dataURL })` (`extension/lib/memory.js:1527`, a dedicated OPFS file with evict-oldest) and journals it; the model path persists nothing, so `screenshots.list` (`service-worker.js:5629`) stays `[]`. What must NOT change: the exact-host permission gate at `:664-675` and the grant validation inside `withGrantLock({ destructive:false })` at `:687`; the 256 KiB memory value bound (the reason screenshots are files).
   - Reproduce today: (1) build, launch headless with `tabs` seeded and an exact-host origin granted for `https://example.com`; open example.com; (2) run "@demo-tools" variant or drive `agent-worker.tool capture_screenshot`; (3) observe the result JSON contains `screenshot: "data:image/png;base64,…"`; (4) `{ type: "screenshots.list" }` → `[]`. (5) With a real key on a current model, "take a screenshot of the current tab and describe it" → either a hallucinated description or "I cannot see images".
@@ -2477,6 +2480,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: change the tool's return shape and the projection; then the image part
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-SCREENSHOT-TO-MODEL-01`
 - History:
+  - 2026-08-31 — DONE status RESTORED by the coordinator: the candidate is merged and green on origin/main, but a concurrent session\'s forward-merge took `--ours` on TASKS.md from a pre-DONE base and reverted this field (a compare-and-swap conflict resolved the wrong way). Code unchanged; status reconciled forward.
   - 2026-08-30 11:00 UTC — measured on the wire: the tool result was 16,867 chars of base64 cut mid-stream (the 16 KiB string bound), sent as text; gpt-4.1 replied with a hallucinated description; Gemini said it cannot see images; `screenshots.list` after the run was `[]`.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); every line reference re-verified against `origin/main@cf0da958`.
 
@@ -2687,7 +2691,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 ## [CAP-FB-20260830-COOKIE-TOOLS-CUT-01] Cookie-reading tools send the user's session cookies to the model provider
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 security lane finding 5. "List cookies for github.com" puts the user's session cookie values in the thread and in the next request to the model provider.
 - Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
+- Status: DONE
 - Resume: —
 - Priority: P1
 - Owner: unassigned
@@ -2695,7 +2699,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Branch: none
 - Base: `cf0da958`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@b1a88e23` (merged; see History)
 - Acceptance: `list_cookies` and `get_cookie` return name, domain, path, expiry and flags only — never `value` — unless the owner approves a value read through an in-chat card; `httpOnly` cookies are never returned at all; `get_cookie`, `set_cookie` and `remove_cookie` are absent from the default (non-developer) toolset; a unit test asserts no tool result contains a `value` key without approval.
   - Context: `list_cookies` (`extension/lib/browser-tools.js:2182`, up to 100 cookies) maps `value: c.value` at `:2208` and `httpOnly` at `:2212`; `get_cookie` (`:2245`) returns the full cookie including `value` and `httpOnly` (`:2277`); `set_cookie` `:2285`, `remove_cookie` `:2332`. The gate is only `permissionDeniedResult("cookies")` (`:2192`) plus the exact-host check (the extension holds `<all_urls>`). Tool results become the next model call's content; nothing in `redactSecrets` (`extension/background/service-worker.js:3567`) or `redactResultStrings` (`extension/lib/lazy-tool-protocol.js`) recognises cookie values. Combined with the unapproved fetch channel (`RUN-SCRIPT-FETCH-APPROVAL-01`) this is session theft on prompt injection. What must NOT change: the `cookies` permission stays optional; the cookie-store listing tool (`:2225`) is metadata-only and fine.
   - Reproduce today: (1) build, launch headless with `cookies` seeded; set a cookie on a fixture origin with `httpOnly:true`; (2) drive `agent-worker.tool list_cookies { domain: "127.0.0.1" }`; (3) observe `value` and `httpOnly:true` entries in the result; with a real provider the same JSON is in the next request body.
@@ -2712,6 +2716,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: redact values and gate the value path
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-COOKIE-TOOLS-CUT-01`
 - History:
+  - 2026-08-31 — DONE status RESTORED by the coordinator: the candidate is merged and green on origin/main, but a concurrent session\'s forward-merge took `--ours` on TASKS.md from a pre-DONE base and reverted this field (a compare-and-swap conflict resolved the wrong way). Code unchanged; status reconciled forward.
   - 2026-08-30 11:00 UTC — verified: with the cookies permission, "list cookies for github.com" shows values in the thread and sends them to the provider on the next call; combined with the unapproved fetch channel this is full session theft on prompt injection.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); every line reference re-verified against `origin/main@cf0da958`.
 
@@ -3032,7 +3037,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 ## [CAP-FB-20260830-RUN-LOG-COMPACTION-01] Run-log retention is retain-all with no compaction
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 perf lane, finding 2. Every run keeps its full log forever; opening a two-message thread already reads up to 25 executions x 250 rows, and a month of real use recreates the "click a task and wait" complaint.
 - Updated: 2026-08-30 17:43 UTC
-- Status: OPEN
+- Status: DONE
 - Resume: —
 - Priority: P1
 - Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — CLAIMED; do not start a parallel attempt
@@ -3040,7 +3045,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Branch: `cap/run-log-compaction` (pushed to origin as the candidate branch; merged by the coordinator)
 - Base: `1e111d26`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@6753fd6e` (merged; see History)
 - Acceptance: Storage growth from run logs is bounded by a visible policy: full logs are kept for the last N executions per thread (default 10) and a global cap (default 500 executions or 32 MiB), older executions are compacted to one terminal summary row, the policy is shown in Settings → Data & memory with an explicit "keep everything" opt-in, and `run.list` reports the active policy. A seeded 500-run profile stays under the cap and `thread.get` stays under 50 ms.
   - Context: `extension/lib/durable-runs.js` `RUN_RETENTION_POLICY` (lines 48-55) is frozen to `{mode:"retain-all", automaticCompaction:false, automaticEviction:false, explicitClearOnly:true}` and `normalizeRetention` (line 67) only migrates/validates the policy version — there is no compaction code path at all. Per-execution logs are append-only WAL files (`extension/lib/run-log-wal.js`: `appendRecords` 113, `readRecent` 152 with `WAL_DEFAULT_TAIL_BYTES` 64 KiB / `WAL_MAX_TAIL_BYTES` 4 MiB, `rewrite` 191). The thread view (`extension/lib/thread-run-view.js`) bounds reads at `MAX_VIEW_EXECUTIONS = 25` (line 38) and `MAX_VIEW_LOG_ROWS = 250` (line 40) with `VIEW_READ_CONCURRENCY = 8`, and is called from the `thread.get` route at `extension/background/service-worker.js:4569` inside the `thread.get:view` perf span (line 4580) with `listLogs: (id, limit) => durableRuns.listLogs(id, limit)` (4583). Measured: 120 one-sentence demo runs = 1,336 OPFS files and 960 KB of run logs (~8 KB and ~11 files per run); `thread.get:view` averages 96 ms and peaks at 286 ms for two-message threads. Note: `extension/lib/run-log-wal-memory.js` is the in-memory test double for these log handles (used by six test files) — it is not product code to change, but your unit tests inject it through `createDurableRunRegistry({ logHandleFor })` exactly as `tests/durable-runs.test.ts:72` does. What must NOT change: the WAL record format, the "honest history" guarantee (a compacted execution keeps its terminal status/summary row and says it was compacted), the explicit-clear path in Settings.
   - Reproduce today: (1) build; (2) with the seeded harness from SEEDED-PROFILE-GATES-01 run 120 demo tasks; (3) from the hub page call `chrome.runtime.sendMessage({type:"run.list"})` and read `retentionPolicy` — it is `retain-all`; (4) enumerate OPFS through `navigator.storage.getDirectory()` on an extension page and count files under the durable-runs directory (1,336 after 120 runs); (5) call `thread.get` for a thread and read the `thread.get:view` span from `observability.dumpTrace` (route at `service-worker.js:7214`) — 96-286 ms.
@@ -3057,6 +3062,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: write the "compacts the 11th execution" unit test against the injected memory log handles, then implement steps 1-3.
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-RUN-LOG-COMPACTION-01`
 - History:
+  - 2026-08-31 — DONE status RESTORED by the coordinator: the candidate is merged and green on origin/main, but a concurrent session\'s forward-merge took `--ours` on TASKS.md from a pre-DONE base and reverted this field (a compare-and-swap conflict resolved the wrong way). Code unchanged; status reconciled forward.
   - 2026-08-30 11:00 UTC — measured: `retentionPolicy: {mode:"retain-all", automaticCompaction:false}`; 120 one-sentence demo runs produced 1,336 OPFS files and 960 KB of run logs; `thread.get:view` peaks at 286 ms for two-message threads because it reads up to 25 executions x 250 rows per open.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); noted that `run-log-wal-memory.js` is the test double to inject, not a product seam to edit.
   - 2026-08-30 19:40 UTC — from OPFS-USAGE-WALK-01: with the memory-write walk gone, `thread.get` (155 ms) and `run.list` (146 ms) at 120 seeded threads are still dominated by `durableRuns.list`/`listThreadExecutions` enumerating every execution store (`store.keys()` per execution). `scripts/perf-seeded-scale.ts` reports the `thread.get < 30 ms`, `run.list < 30 ms` and 1.5x-growth budgets as SOFT warnings; flip `SOFT` to false in this lane once the enumeration is bounded.
@@ -3263,7 +3269,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 ## [CAP-FB-20260830-EDIT-APPROVAL-SHOWS-DIFF-01] The asset.update approval card is an opaque hash; it must show the diff
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 editing lane, task T4 and finding 3. When the agent wants to change an artifact the owner is asked "Approve asset.update? Target reference: 4ea13f8b…" with no artifact name, no content and no diff.
 - Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
+- Status: DONE
 - Resume: —
 - Priority: P1
 - Owner: unassigned
@@ -3271,7 +3277,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Branch: none
 - Base: `fc2255be`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@a6a75dce` (merged; see History)
 - Acceptance: The approval card for a model-initiated `asset.update` names the artifact, shows `+n -m`, and renders the line diff (old body from the store, new body from the staged payload) inside the card before the owner decides; Deny leaves `asset.get` unchanged; the keyless artifact journey asserts the card body contains `+` lines with "Opening hours".
   - Context: the card is built in `extension/shared/conversation.js` `maybeRenderApproval` at 1264-1271: it creates `<approval-card>` (`components.js:5601-5643`, attributes `title|body|approve-label|deny-label|state|detail`, body rendered as escaped text in a `<p>`) with `title = Approve ${approval.action}?` and `body = Action: …\nTarget reference: ${targetRef}`. The requirement comes from the SW: `asset.update` route (`service-worker.js:5710-5727`) builds a canonical target + payload digest and calls `requireOwnerApproval` (3288-3365), which for `principal:"model"` publishes `approvalCardDenial({approvalId, action, targetRef})` (`owner-approval.js:525-537`) over `context.onApprovalEvent` and awaits the decision; the card's Approve/Deny go through `handleApprovalDecision` (conversation.js ~1200-1215, which requires `isTrusted` + `navigator.userActivation.isActive`) to `run.resolve-inline-approval` (SW 5655). The pending row lives in `ownerApprovalStore` (SW; `createPendingApproval` owner-approval.js:375, TTL 60 s, `MAX_PENDING_APPROVALS` 64). Only the digest/targetRef crosses to the UI today — deliberately, so nothing model-controlled is rendered without a bound. The old body is available via `asset.get` (SW 5745); the new body is in the route's `content` argument at 5710. What must NOT change: the single-use, TTL, digest-bound approval tuple; the genuine-gesture check; `approvalCardDenial`'s bounded shape as seen by the MODEL (the model result stays opaque — the staged detail is for the extension principal only).
   - Reproduce today: (1) run the two-turn Crumb flow with the scripted provider (editing lane `drive5.ts` pattern / the SUITE-HONESTY-01 journey); (2) turn 2 pauses on a card reading exactly "Approve asset.update? / Action: asset.update / Target reference: <32 hex>"; (3) `diff -u crumb-v1.html crumb-v2.html` is +10 -2 and nothing on screen says so.
@@ -3288,6 +3294,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: add the staging map + `approval.detail` route with its principal-gate unit test.
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-EDIT-APPROVAL-SHOWS-DIFF-01`
 - History:
+  - 2026-08-31 — DONE status RESTORED by the coordinator: the candidate is merged and green on origin/main, but a concurrent session\'s forward-merge took `--ours` on TASKS.md from a pre-DONE base and reverted this field (a compare-and-swap conflict resolved the wrong way). Code unchanged; status reconciled forward.
   - 2026-08-30 11:00 UTC — measured in a real run: the card reads exactly "Approve asset.update? / Action: asset.update / Target reference: <32 hex>" with no artifact name, no content and no diff; the real change was +10 -2 and nothing in the UI said so.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); the approval path re-traced: `service-worker.js:5710` → `requireOwnerApproval` 3288 → `approvalCardDenial` (owner-approval.js:525) → `maybeRenderApproval` (conversation.js:1264-1271) → `<approval-card>` (components.js:5601).
 
@@ -3326,7 +3333,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 ## [CAP-FB-20260830-PATCH-ASSET-TOOL-01] A patch_asset search/replace tool so an edit is not a whole-file rewrite paid for twice
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 editing lane, task T6 and finding 7 (and finding 13). Changing one colour in a page makes the model resend the whole document, and a mistaken empty id is reported as "requires owner approval" so the model retries twelve times.
 - Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
+- Status: DONE
 - Resume: —
 - Priority: P2
 - Owner: unassigned
@@ -3334,7 +3341,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Branch: none
 - Base: `fc2255be`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@e8a0b7a8` (merged; see History)
 - Acceptance: A `patch_asset` model tool applies exact-substring search/replace edits server-side under the asset lock, fails closed on zero or multiple matches unless `all` is set, refuses a stale `expectVersion`, returns `{ok, id, version, added, removed}`, goes through the same approval card as `update_asset`, and the bakery colour change is one call under 400 bytes of arguments showing `+1 -1` in the thread; `update_asset` with an empty or unknown id returns a readable error before the approval gate.
   - Context: model tools are `ai` SDK `tool({description, inputSchema: z.object(...), execute})` objects in `extension/lib/management-tools.js` (`create_asset` 111-123, `update_asset` 124-141 whose `content` is documented as "complete replacement content", `get_asset` 155-160); names are listed in `MANAGEMENT_TOOL_NAMES` (19-60). They call SW routes: `asset.update` (`service-worker.js:5710-5727`) builds `canonicalOperationTarget("asset", {origin, id})` + `payloadFields` and gates on `requireOwnerApproval` (3288) before `updateAsset(scope, id, patch)` (`artifacts.js:710`, which already returns `"update_asset needs an id"` at 712 for a non-string id — but the route reaches `requireOwnerApproval` first, whose `!target` branch at 3290 returns "This operation requires owner approval." because `canonicalOperationTarget` yields nothing for an empty id). The model's manual is `extension/lib/master-skill.js` (tool list 184-193, artifacts model 260+); tool summaries for cards are in `extension/lib/tool-summary.js` (`update_asset` at 302). Measured: edit-turn request bodies 19.8-26.3 KB with the 1.6 KB document duplicated in args and echoed into the next prompt. What must NOT change: `update_asset` stays for full rewrites; `create_asset`'s keyed idempotency; the approval gate for model-initiated mutations.
   - Reproduce today: (1) scripted-provider two-turn flow; (2) inspect the provider request bodies for turn 2 — the full document appears in `execute_tool` args; (3) send `update_asset {origin:"master", id:"", content:"x"}` through the lazy protocol — result `{"error":"This operation requires owner approval.","ok":false}` and no card.
@@ -3351,13 +3358,14 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: land step 4 (empty-id message) with its unit test, then the `patchAsset` core in `artifacts.js`.
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-PATCH-ASSET-TOOL-01`
 - History:
+  - 2026-08-31 — DONE status RESTORED by the coordinator: the candidate is merged and green on origin/main, but a concurrent session\'s forward-merge took `--ours` on TASKS.md from a pre-DONE base and reverted this field (a compare-and-swap conflict resolved the wrong way). Code unchanged; status reconciled forward.
   - 2026-08-30 11:00 UTC — measured: edit-turn request bodies of 19.8-26.3 KB with the full document duplicated in args and echoed into the next prompt; an empty-id update masked the real problem and the model retried the same call 12 times.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); tool definition and route line numbers re-verified (`management-tools.js:124-141`, `service-worker.js:5710`, `artifacts.js:710-712`, `requireOwnerApproval` 3290).
 
 ## [CAP-FB-20260830-ARTIFACT-VIEWER-SOURCE-DIFF-01] Preview | Source | Diff in the artifact viewer and dialog, with hand edit and restore
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 editing lane, task T7 and finding 6 (and finding 9). Opening an artifact offers only "Back" and "Copy content": no source, no code/preview toggle, no highlighting, no way to edit by hand or go back to an earlier version.
 - Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
+- Status: DONE
 - Resume: —
 - Priority: P2
 - Owner: unassigned
@@ -3365,7 +3373,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Branch: none
 - Base: `fc2255be`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@3cf86b25` (merged; see History)
 - Acceptance: The artifact viewer page and the hub/library artifact dialog offer a keyboard-reachable Preview | Source | Diff control; Source shows the bounded, syntax-highlighted content with a hand-edit textarea whose Save creates a new version through `asset.update` (owner-direct); Diff shows `<artifact-diff>` between any two versions with a Restore button; a single "New tab" click on a library card opens exactly one viewer tab.
   - Context: the viewer is `extension/artifact/artifact.js` (98 lines): reads `id`/`origin` from the URL, `asset.get` at 53, renders HTML through `renderHtmlFrame` at 64-67 or text in a `<pre>`, with two buttons (`#back` 23, copy 31) — CDP-enumerated buttons are exactly ["← Back", "Copy content"]. The dialogs are `openArtifactDialog` in `extension/ntp/ntp.js:944` and `extension/artifacts/index.js:159`, whose only action is "Open in new tab" (URL built at ntp.js 987 / index.js 201). `<artifact-inspector>` (`components.js:2267-2330`: bounded 64 KiB `<pre><code>` set with `textContent`, "Copy exact content", "Preview / Play" through `createHtmlFrame`) is fully built but mounted by nothing except the gallery. Owner-direct mutations already exist: `isOwnerDirectApproval` (`owner-approval.js:80`, `OWNER_DIRECT_ACTIONS` 63) lets an extension-document click perform `asset.delete` without a card (SW 3294-3300) — `asset.update` from the viewer/dialog principal follows the same path. The double-open: one genuine CDP click on a library card's "New tab" opened two `artifact/artifact.html` targets; `ArtifactCard.set preview` (2148-2150) re-renders and re-wires, and `_wire` (2234-2255) adds the `open-tab` listener on the fresh node, while the page-level `wireCard(card)` (`artifacts/index.js:99`) adds the `open-tab` handler — bisect which side doubles (the component re-wires on every attribute change through `attributeChangedCallback` at 606-614, so setting `time`/`size` after wiring is a candidate). What must NOT change: the sandbox for Preview; Copy and New tab; the dialog being the shared `<agent-dialog>`.
   - Reproduce today: (1) build, open the hub, create an artifact through the demo (or seed one with `asset.create` from the page); (2) open Artifacts → click a card → the dialog shows only "Open in new tab"; (3) open the viewer → buttons ["← Back", "Copy content"]; (4) in the library, dispatch one `Input.dispatchMouseEvent` click on a card's New tab → `Target.getTargets` lists two `artifact/artifact.html` pages.
@@ -3382,6 +3390,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: land the double-open fix with its journey assertion (RED today), then the `<segmented-control>` element.
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-ARTIFACT-VIEWER-SOURCE-DIFF-01`
 - History:
+  - 2026-08-31 — DONE status RESTORED by the coordinator: the candidate is merged and green on origin/main, but a concurrent session\'s forward-merge took `--ours` on TASKS.md from a pre-DONE base and reverted this field (a compare-and-swap conflict resolved the wrong way). Code unchanged; status reconciled forward.
   - 2026-08-30 11:00 UTC — measured: viewer buttons are exactly ["← Back", "Copy content"]; one genuine CDP click on a library card's New tab opened two viewer tabs.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); viewer, dialog and inspector anchors re-verified (`artifact.js:23-67`, `ntp.js:944`, `artifacts/index.js:99,159`, `components.js:2144-2330`).
 
@@ -4080,7 +4089,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 ## [CAP-FB-20260830-MEMORY-RECALL-NEW-THREAD-01] Memory is write-only in practice: the model never reads it in a new thread
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 live lane finding 9. The agent saves "favourite colour: green" and, in the next thread, says it does not know your favourite colour — nothing in the request carried any memory.
 - Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
+- Status: DONE
 - Resume: —
 - Priority: P1
 - Owner: unassigned
@@ -4088,7 +4097,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Branch: none
 - Base: `cf0da958`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@357c9d39` (merged; see History)
 - Acceptance: a bounded memory digest (keys plus one-line summaries, for example the `owner-preferences` block) is injected into the runtime-context layer of every hub prompt, and/or `memory_grep(task)` runs deterministically before the first model call with hits attached as context. Observable: the two-thread journey ("remember my favourite colour is green" then, in a new thread, "what is my favourite colour?") answers "green" with the scripted provider and, recorded once, with two current providers.
   - Context: `gatherRuntimeContext({ scope, agentLabel, memory, listAgents, chromeApi, now })` (`extension/lib/runtime-context.js:144`) already accepts a `memory` handle and renders its blocks under the "data, not instructions" label (`:77`, `:93`); the layer is inserted by `composeSystemPrompt` at `extension/lib/system-prompts.js:725-742` as a dynamic layer. The live lane's request body for the recall thread carried no memory content, so either `memory` is passed as `null` from the hub path or the digest does not include the keys the model wrote (`owner-favourite-colour` via `memory_set`). The manual's "memory_grep your store before answering" is ignored by both models tested. `memory_grep` exists (`extension/lib/agent.js:349`). What must NOT change: the origin-keyed OPFS boundary (a hub prompt digests only the master store; a site agent only its own); the 256 KiB memory value bound; the "data, not instructions" label.
   - Reproduce today: (1) build, launch headless with a real key on a current model, or the demo provider with `@demo-tools` to write a key; (2) thread 1: "remember that my favourite colour is green" → `{ type: "memory.overview" }` shows the key; (3) thread 2 (new): "what is my favourite colour?" → capture the request body from the SW target: no memory text; the reply is "I do not know".
@@ -4105,6 +4114,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: the digest in the runtime-context layer
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-MEMORY-RECALL-NEW-THREAD-01`
 - History:
+  - 2026-08-31 — DONE status RESTORED by the coordinator: the candidate is merged and green on origin/main, but a concurrent session\'s forward-merge took `--ours` on TASKS.md from a pre-DONE base and reverted this field (a compare-and-swap conflict resolved the wrong way). Code unchanged; status reconciled forward.
   - 2026-08-30 11:00 UTC — measured: Gemini wrote `owner-favourite-colour`, then in a fresh thread answered "I do not know" with one call and no tool call; nothing in the request carried any memory content.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); every line reference re-verified against `origin/main@cf0da958`.
 

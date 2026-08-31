@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.513] — 2026-08-31
+- Housekeeping: the completed-work list was corrected after a bookkeeping mix-up between parallel work streams.
+
 ## [0.2.512] — 2026-08-31
 - The thread now shows artifacts and generated images as you make them.
 
