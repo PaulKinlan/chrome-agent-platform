@@ -40,6 +40,8 @@ const FILES = [
   ["extension/dist/shared/diff-core.bundle.js", "docs/diff-core.bundle.js"],
   // The activity-kinds allowlist (components.js imports it — the gallery must resolve it).
   ["extension/lib/activity-kinds.js", "docs/activity-kinds.js"],
+  // The pure jobs-board projection (components.js imports it — the gallery must resolve it).
+  ["extension/lib/board-view-model.js", "docs/board-view-model.js"],
 ];
 
 export async function syncGallery({ check = false } = {}) {
@@ -70,6 +72,8 @@ export async function syncGallery({ check = false } = {}) {
       expected = Buffer.from(expected.toString("utf8").replace('../lib/pure.js', './pure.js'));
       // The activity-kinds allowlist sits in lib/; the gallery copy is beside components.js.
       expected = Buffer.from(expected.toString("utf8").replace('../lib/activity-kinds.js', './activity-kinds.js'));
+      // The jobs-board projection sits in lib/; the gallery copy is beside components.js.
+      expected = Buffer.from(expected.toString("utf8").replace('../lib/board-view-model.js', './board-view-model.js'));
       // <artifact-diff> imports the diff core by its dist path; the gallery
       // copy of the bundle sits beside components.js.
       expected = Buffer.from(expected.toString("utf8").replace('../dist/shared/diff-core.bundle.js', './diff-core.bundle.js'));

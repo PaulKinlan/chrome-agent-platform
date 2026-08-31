@@ -465,7 +465,7 @@
           <jobs-board id="jobs-board-demo"></jobs-board>
           <jobs-board id="jobs-board-empty"></jobs-board>
         </div>
-        <p class="caption">Open jobs (poster/claimant + recency), recently settled jobs (outcome + bounded result excerpt), and the latest board messages. Seeded demo data — the real surface queries <code>board.list</code> + <code>board.messages</code> and refreshes live on board progress events. Second instance shows the empty state.</p>
+        <p class="caption">The owner-facing shared work queue, grouped Open / Claimed / Blocked / Settled: every job shows its status <em>word</em> (colour is never the only signal), the poster, the claimant (or <em>unclaimed</em>), and what a blocked job is waiting on. A settled job's result is openable in place (click the row to expand the full result). Seeded demo data — the real surface queries <code>board.list</code> + <code>board.messages</code> and refreshes live on board progress events. Second instance shows the honest empty state.</p>
       </div>
 
       <div class="specimen">
@@ -771,10 +771,11 @@
       // board.list + board.messages).
       const jobsDemo = document.getElementById("jobs-board-demo");
       jobsDemo.jobs = [
-        { id: "job_1", status: "claimed", description: "Summarise this week's reading-list articles into a digest", posterName: "Hub", claimantName: "Auto reading list", createdAt: Date.now() - 3600000, claimedAt: Date.now() - 300000 },
         { id: "job_2", status: "pending", description: "Find three comparable note-taking tools and summarise pricing", posterName: "Researcher", targetName: "The Critic", createdAt: Date.now() - 60000 },
-        { id: "job_3", status: "completed", description: "Group open tabs by domain", posterName: "Hub", claimantName: "Sorting Hat", settledAt: Date.now() - 7200000, result: "Grouped 12 tabs into 3 domain groups." },
-        { id: "job_4", status: "failed", description: "Screenshot the offline page", posterName: "Hub", claimantName: "Snapshotter", settledAt: Date.now() - 86400000, result: "The page never finished loading." },
+        { id: "job_1", status: "claimed", description: "Summarise this week's reading-list articles into a digest", posterName: "Hub", claimantName: "Auto reading list", createdAt: Date.now() - 3600000, claimedAt: Date.now() - 300000 },
+        { id: "job_5", status: "pending", description: "Publish the digest once the summary is written", posterName: "Hub", blocked: true, blockedByOpen: 1, blockedBy: ["job_1"], createdAt: Date.now() - 30000 },
+        { id: "job_3", status: "completed", description: "Group open tabs by domain", posterName: "Hub", claimantName: "Sorting Hat", settledAt: Date.now() - 7200000, result: "Grouped 12 tabs into 3 domain groups: work (5), reading (4), shopping (3). Each window now holds one group; the ungrouped scratch tab was left alone." },
+        { id: "job_4", status: "failed", description: "Screenshot the offline page", posterName: "Hub", claimantName: "Snapshotter", settledAt: Date.now() - 86400000, result: "The page never finished loading — the request timed out after 30s with no first paint." },
       ];
       jobsDemo.messages = [
         { id: "msg_1", fromName: "Sorting Hat", toName: "everyone", body: "Two grouping jobs are up — writers and researchers welcome", ts: Date.now() - 120000 },

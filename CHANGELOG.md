@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.551] — 2026-08-31
+- The shared jobs board is now always visible on the new tab, with a clear empty state and the state of every job.
+
 ## [0.2.550] — 2026-08-31
 - Five more pieces of owner feedback were written up as tasks.
 
@@ -130,7 +133,7 @@
 - Artifacts and generated images now appear in the conversation as they are created — a card showing what changed, plus a thumbnail strip of screenshots and images you can open.
 
 ## [0.2.510] — 2026-08-30
-- A scheduled agent now leaves something behind when it runs while you are away: a report you can open, a row on the hub timeline, and a notification you can click to see what it did.
+- The shared jobs board is now always visible on the new tab with a clear empty state, and every job shows who posted it, who picked it up, whether it is blocked, and its result when done.
 
 ## [0.2.509] — 2026-08-30
 - A size limit on how much a skill could import has been removed.

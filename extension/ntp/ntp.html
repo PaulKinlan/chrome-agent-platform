@@ -686,6 +686,11 @@
       border-radius: 4px;
     }
     .panel-body { padding: 4px 0; }
+    /* The Jobs board is always present: a long board scrolls INSIDE its own
+       panel body rather than pushing the hub down (CAP-FB-20260831-BOARD-
+       VISIBILITY-01). The empty state and short boards keep their natural
+       height. */
+    .jobs-board-body { max-height: min(60vh, 520px); overflow-y: auto; }
     /* Shared row treatment: the WebMCP discovery status line IS a .panel-body
        (so a child selector can never reach it) — the shared .hub-row class is
        applied DIRECTLY to the element and overrides the panel-body's 4px 0
@@ -939,14 +944,18 @@
         </section>
 
         <!-- Jobs: the shared agent-to-agent work board — what agents posted
-             for each other, who claimed it, and how it settled. -->
-        <section id="jobs-section" aria-labelledby="jobs-title" hidden>
+             for each other, who claimed it, and how it settled. Unlike the
+             Timeline/Agents sections, this one is ALWAYS present (owner report
+             CAP-FB-20260831-BOARD-VISIBILITY-01: "I'm not seeing the Jobs board
+             anywhere"): a fresh profile shows its honest empty state so the
+             owner can always see the shared work queue. -->
+        <section id="jobs-section" aria-labelledby="jobs-title">
           <div class="panel">
             <div class="panel-head">
               <h2 class="t" id="jobs-title">Jobs</h2>
               <span class="hint" id="jobs-count"></span>
             </div>
-            <div class="panel-body" id="jobs-board-host"></div>
+            <div class="panel-body jobs-board-body" id="jobs-board-host"></div>
           </div>
         </section>
 
