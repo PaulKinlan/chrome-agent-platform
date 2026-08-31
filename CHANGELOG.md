@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.558] — 2026-08-31
+- Font, proxy, text-to-speech and network-rule tools now request their permission the first time you use them, so the extension installs on managed profiles that block those permissions.
+
 ## [0.2.557] — 2026-08-31
 - : move fontSettings/proxy/tts/declarativeNetRequest to optional_permissions so a managed install no longer demands them
 
