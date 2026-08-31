@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.539] — 2026-08-31
+- Model field empty-save lane — a typed model id is always committed, and a missing model refuses as a configuration error instead of silently running the demo model
+
+## [0.2.538] — 2026-08-31
+- Model field empty-save lane — a typed model id is always committed, and a missing model refuses as a configuration error instead of silently running the demo model
+
 ## [0.2.537] — 2026-08-31
 - The side panel is now a companion for the current tab, and the hub timeline shows a runs-today count.
 

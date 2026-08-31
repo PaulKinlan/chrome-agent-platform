@@ -95,6 +95,31 @@ export function createProviderRoutes({ invalidateAgent = () => {} } = {}) {
       // from the dedicated clear-key route is the only removal path. The route
       // returns the REDACTED config — the raw key never crosses back out.
       const cfg = m?.config ?? {};
+      // Local providers (demo / prompt-api) need no model id — never gate them.
+      const isLocal = isLocalProvider(cfg);
+      // A provider that needs a model id must have one — an explicit id or the
+      // catalogue default. An empty model with no catalogue would silently run
+      // the demo model for a REAL provider id; refuse and keep the previous
+      // model (CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01).
+      const choice = PROVIDER_CHOICES.find((p) => p.id === cfg.provider) ?? null;
+      const needsModel = !isLocal && choice?.needsModel !== false;
+      if (needsModel && !String(cfg.model ?? "").trim() && !defaultModelFor(cfg.provider)) {
+        const cur = await getProviderConfig();
+        const previous = String(cur.model ?? "").trim();
+        if (previous) cfg.model = previous; // keep the previous model in storage
+        const preservedKey = Boolean(cur.provider === cfg.provider && cur.apiKey);
+        return {
+          ok: false,
+          error: "model id missing",
+          reason: "model id missing — set it in Settings → Providers",
+          provider: cfg.provider ?? "",
+          apiKey: "",
+          // Report the PRESERVED state honestly: a stored key is still there,
+          // only the model is missing (review r2 NOTE — never claim the key
+          // is gone when the refusal kept it).
+          hasApiKey: preservedKey,
+        };
+      }
       // Blank/absent key on the SAME provider → preserve (the final review's
       // HIGH: an explicit "" must NOT erase — provider.clear-key, restricted to
       // the Settings surface, is the ONLY removal path).

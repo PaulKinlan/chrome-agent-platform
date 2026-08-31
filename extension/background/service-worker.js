@@ -2462,9 +2462,18 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       await durableRuns.settle(executionId, {
         ok: false,
         error: early.reason,
-        errorCategory: "provider",
+        // A CONFIGURATION refusal (missing model / missing endpoint) is not a
+        // provider outage — it must not carry the generic provider retry
+        // metadata ("Retry after the provider becomes available") nor feed
+        // provider retry classification. The fix is in Settings, not a retry
+        // (CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01, review r2 BLOCKER 2).
+        // The canonical category is MODEL_CONFIG so the terminal row and the
+        // downstream describeError() agree (review r3 P1).
+        errorCategory: early.code === "model id missing" ? "model-config" : "provider",
         errorReason: early.reason,
-        errorAction: "Retry after the provider becomes available.",
+        errorAction: early.code === "model id missing"
+          ? "Check the model id in Settings — it may not exist for this provider."
+          : "Retry after the provider becomes available.",
         logicalId: taskId,
       });
       throw new ProviderUnavailableError(early.reason);

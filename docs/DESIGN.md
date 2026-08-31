@@ -425,6 +425,7 @@ reserved for a genuinely empty HTTP 200 stream.
 | `provider-server` (5xx) | `<Provider> returned a server error (503)` | The provider's servers are having an issue — retry in a moment. | no |
 | `provider-config` (preflight) | the configured provider has no valid https:// endpoint | Set the provider endpoint in Settings → Providers, then run the task again. | yes |
 | `host-permission` | network access to `<origin>` is not granted | Grant network access in Settings. | yes |
+| `model id missing` | a provider that needs a model id has none (no explicit id, no catalogue default) | Set the model id in Settings → Providers — the run never falls back to the demo model. | yes |
 | `model-no-output` (empty 200) | the model (`<id>`) returned no content | Retry, or try a different model. | no |
 
 `<Provider>` is the human name for the configured provider id (OpenAI, Anthropic,

@@ -81,6 +81,23 @@ Deno.test("error-report: the provider-run gate refusal maps to HOST_PERMISSION (
   assertStringIncludes(d.action.toLowerCase(), "grant network access");
 });
 
+// CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01, review r3 P1: a MODEL-MISSING
+// gate refusal (ProviderUnavailableError thrown at run start) must classify as
+// MODEL_CONFIG — the hub/named/background route catches must never surface a
+// false "grant network access" host-permission category/action for a config
+// problem. RED before the model-missing branch exists in describeError (it
+// falls into the ProviderUnavailableError branch → HOST_PERMISSION); GREEN
+// after.
+Deno.test("error-report: a model-missing gate refusal maps to MODEL_CONFIG, never host-permission", () => {
+  const e = new Error("model id missing — set it in Settings → Providers");
+  e.name = "ProviderUnavailableError";
+  const d = describeError(e, { provider: "openai-compatible" });
+  assertEquals(d.category, ERROR_CATEGORY.MODEL_CONFIG);
+  assertStringIncludes(d.action.toLowerCase(), "model id");
+  assert(!/grant network access/i.test(d.action), "a config refusal must not ask for host permission");
+  assert(!/grant network access/i.test(d.reason), "the reason must not claim a permission gap");
+});
+
 Deno.test("error-report: categorizes a plain auth text error", () => {
   const e = new Error("Unauthorized: invalid api key");
   const d = describeError(e, {});

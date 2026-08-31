@@ -482,6 +482,15 @@ const EXPECTED = [
   "Settings: empty model + valid key resolves to the default (provider.status usingDefaultModel:true, modelId gpt-5.6-luna)",
   "Settings: provider restored to demo",
   "Settings: demo still resolvable via the SW (testing only)",
+  "Settings: BYO picker input reachable for typing",
+  "Settings: BYO base URL field filled before the typed-model save",
+  "Settings: BYO card Use clicked via a real gesture",
+  "Settings: typing a model id and clicking Use saves it (provider.get model === grok-4.6)",
+  "Settings: BYO picker can be cleared to an empty model",
+  "Settings: BYO card Use clicked for the empty-model save",
+  "Settings: saving with an empty BYO model is refused and keeps the previous model",
+  "Settings: the refusal is reported in the flash, not 'Set … as default.'",
+  "Settings: the hub strip shows the red provider issue chip for a broken stored config",
   "Settings: Enroll input present",
   "Settings: typed a loopback origin into the Enroll field",
   "Settings: clicked Enroll via a real click",
@@ -2228,6 +2237,116 @@ async function main() {
       "Settings: demo still resolvable via the SW (testing only)",
       demoCfg?.provider === "demo",
     );
+
+    // ─────────────────────────────────────────────────────────────
+    // CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01 — typing a model id without
+    // picking a suggestion must SAVE the typed id (blur/Use commits it), and a
+    // no-catalogue provider with an EMPTY model must be refused with
+    // "model id missing" (Settings red status + hub strip), never silently
+    // falling back to the demo model.
+    // ─────────────────────────────────────────────────────────────
+    // Select the OpenAI-compatible (BYO, no catalogue) card.
+    await evalIn(cdp, optsSession,
+      `document.querySelector('#provider-tab-openai-compatible')?.click(); true`).catch(() => {});
+    await sleep(300);
+    // Focus the picker's shadow input and TYPE a model id (no suggestion pick).
+    const focused = await evalOpts(`(() => {
+      const p = document.querySelector('.provider-card[data-provider="openai-compatible"] model-picker');
+      if (!p) return false;
+      const input = p.shadowRoot?.querySelector('input[role=combobox]');
+      if (!input) return false;
+      input.focus();
+      input.value = "";
+      return true;
+    })()`).catch(() => false);
+    check("Settings: BYO picker input reachable for typing", focused === true);
+    if (focused === true) {
+      // Fill the card's base URL field FIRST — storage must carry an endpoint
+      // so a later empty-model save reaches the model gate in provider.status
+      // (an empty stored base URL would report "endpoint not configured"
+      // before the model check).
+      const baseSet = await evalOpts(`(() => {
+        const b = document.querySelector('.provider-card[data-provider="openai-compatible"] .base-url');
+        if (!b) return false;
+        b.value = "https://my-byo.example/v1";
+        return true;
+      })()`).catch(() => false);
+      check("Settings: BYO base URL field filled before the typed-model save", baseSet === true);
+      await cdp.send("Input.insertText", { text: "grok-4.6" }, optsSession);
+      await sleep(150);
+      // Click Use (real gesture) — blur commits the typed text, then the save
+      // reads picker.value (the typed id).
+      check("Settings: BYO card Use clicked via a real gesture",
+        await clickSel(cdp, optsSession, `.provider-card[data-provider="openai-compatible"] .set-default`));
+      await sleep(600);
+      const typedCfg = await evalOpts(`chrome.runtime.sendMessage({ type: "provider.get" })`);
+      check(
+        "Settings: typing a model id and clicking Use saves it (provider.get model === grok-4.6)",
+        typedCfg?.provider === "openai-compatible" && typedCfg?.model === "grok-4.6" &&
+          typedCfg?.baseURL === "https://my-byo.example/v1",
+      );
+      const typedShot = await captureShot(cdp, optsSession).catch(() => null);
+      if (typedShot) await writeEvidence("settings-byo-typed-model.png", typedShot);
+    }
+    // Now save with an EMPTY model (no catalogue default for BYO) → the SW
+    // route refuses with "model id missing" and keeps the previous model.
+    const emptyModel = await evalOpts(`(() => {
+      const p = document.querySelector('.provider-card[data-provider="openai-compatible"] model-picker');
+      if (!p) return false;
+      p.commitTyped();
+      p.value = "";
+      return true;
+    })()`).catch(() => false);
+    check("Settings: BYO picker can be cleared to an empty model", emptyModel === true);
+    if (emptyModel === true) {
+      check("Settings: BYO card Use clicked for the empty-model save",
+        await clickSel(cdp, optsSession, `.provider-card[data-provider="openai-compatible"] .set-default`));
+      await sleep(600);
+      const refusedCfg = await evalOpts(`chrome.runtime.sendMessage({ type: "provider.get" })`);
+      const refusedStatus = await msgOpts({ type: "provider.status" });
+      const flashText = await evalOpts(`document.getElementById('save-status')?.textContent ?? ""`).catch(() => "");
+      check(
+        "Settings: saving with an empty BYO model is refused and keeps the previous model",
+        refusedCfg?.provider === "openai-compatible" && refusedCfg?.model === "grok-4.6" &&
+          // The refusal PRESERVED the valid config, so the provider genuinely
+          // still works — provider.status stays honest (ok, no model-missing
+          // panic); the refusal is what the user sees in the flash.
+          refusedStatus?.ok === true &&
+          /model id missing/.test(String(flashText ?? "")),
+      );
+      check(
+        "Settings: the refusal is reported in the flash, not 'Set … as default.'",
+        /model id missing/.test(String(flashText ?? "")) && !/as default/.test(String(flashText ?? "")),
+      );
+      const redShot = await captureShot(cdp, optsSession).catch(() => null);
+      if (redShot) await writeEvidence("settings-byo-empty-model-red.png", redShot);
+      // The HUB strip must show a red "Provider issue" chip whenever the
+      // STORED provider config cannot run — here a broken BYO endpoint (empty
+      // base URL, model present) — the Settings remediation bubble, not a
+      // silent demo run. The model-missing chip state is unreachable by
+      // design: provider.set now REFUSES empty-model saves (the fix), so the
+      // only red states that can persist are endpoint/permission-shaped.
+      await msgOpts({ type: "provider.set", config: { provider: "openai-compatible", apiKey: "sk-byo", baseURL: "", model: "grok-4.6" } });
+      await sleep(300);
+      const hubPage = await openPage(port, `chrome-extension://${extId}/ntp/ntp.html`).catch(() => null);
+      if (hubPage) {
+        await sleep(1200);
+        const hubSession = await attachRuntime(cdp, hubPage.id);
+        cdp.pageSessions.add(hubSession);
+        const chip = await evalIn(cdp, hubSession,
+          `document.getElementById('provider-status')?.textContent ?? ""`).catch(() => "");
+        const chipHidden = await evalIn(cdp, hubSession,
+          `document.getElementById('provider-status')?.hidden ?? true`).catch(() => true);
+        check(
+          "Settings: the hub strip shows the red provider issue chip for a broken stored config",
+          /Provider issue/.test(String(chip ?? "")) && chipHidden !== true,
+        );
+        await cdp.send("Target.closeTarget", { targetId: hubPage.id }).catch(() => {});
+      }
+    }
+    // Restore demo so later journeys are deterministic.
+    await msgOpts({ type: "provider.set", config: { provider: "demo", apiKey: "", baseURL: "", model: "" } });
+    await sleep(300);
 
     // ─────────────────────────────────────────────────────────────
     // ENROLLMENT — genuine owner gesture: type a loopback origin + click Enroll.

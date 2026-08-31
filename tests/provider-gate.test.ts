@@ -71,6 +71,20 @@ Deno.test("isProviderError does NOT classify tool errors or fence aborts", () =>
   assert(!isProviderError(new Error("no matching tool")));
 });
 
+// CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01, review r2 BLOCKER 2: a
+// model-missing refusal is a CONFIG error, not a provider outage — it must
+// never feed the provider circuit-breaker / retry classification.
+Deno.test("a model-missing refusal is NOT a provider error (no retry scheduling)", () => {
+  assert(!isProviderError(new Error("model id missing — set it in Settings → Providers")));
+  assert(!isProviderError(new Error("the provider endpoint is not configured — set it in Settings → Providers")));
+  // recordProviderFailure must therefore never trip on it: record once and
+  // the breaker stays closed (a single call cannot trip; MAX is 3, but the
+  // classification gate is what matters — it never counts toward the breaker).
+  recordProviderSuccess();
+  const r = recordProviderFailure("model id missing — set it in Settings → Providers");
+  assertEquals(r.tripped, false);
+});
+
 // ---- local providers (demo + Prompt API) are never gated ----
 Deno.test("isLocalProvider identifies the demo + Prompt API (no host permission)", () => {
   assert(isLocalProvider({ provider: "demo", baseURL: "" }));
@@ -733,4 +747,49 @@ Deno.test("kv.get (real dispatcher): secret namespaces redacted on read-all AND 
   // cleanup via owner principal
   await dispatch({ type: "kv.remove", keys: ["cap:namedAgents", "providerConfig"] }, ownerSender);
   await dispatch({ type: "kv.remove", keys: ["cap:test-key"] }, ownerSender);
+});
+
+// ---- CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01 ----
+// A provider that needs a model id must have one (explicit OR catalogue
+// default). Empty model + no catalogue → refuse "model id missing" so the hub
+// shows the Settings remediation instead of silently running the demo model.
+Deno.test("providerRunGate: a keyed provider with an empty model and no catalogue default is refused with 'model id missing'", async () => {
+  recordProviderSuccess(); // clean breaker
+  const g = await providerRunGate({
+    provider: "openai-compatible",
+    baseURL: "https://my-byo.example/v1",
+    apiKey: "k",
+    model: "",
+  });
+  assertEquals(g.ok, false);
+  assertEquals(g.code, "model id missing");
+  assert(g.reason.includes("model id missing"), "reason must name the missing model");
+});
+
+Deno.test("providerRunGate: an empty model is fine when the provider has a catalogue default", async () => {
+  recordProviderSuccess(); // clean breaker
+  const g = await providerRunGate({
+    provider: "openai",
+    baseURL: "https://api.openai.com/v1",
+    apiKey: "k",
+    model: "",
+  });
+  // openai's catalogue default exists → the MODEL check must NOT refuse; the
+  // gate proceeds to the host-permission step (which, outside a browser, is
+  // the next thing that can refuse).
+  assertEquals(g.code, "permission_required");
+  assertEquals(g.ok, false);
+});
+
+Deno.test("providerRunGate: an EXPLICIT model passes for a no-catalogue provider", async () => {
+  recordProviderSuccess(); // clean breaker
+  const g = await providerRunGate({
+    provider: "openai-compatible",
+    baseURL: "https://my-byo.example/v1",
+    apiKey: "k",
+    model: "grok-4.6",
+  });
+  // The model check passed (explicit id); the host-permission step is the
+  // next refusal point outside a browser.
+  assertEquals(g.code, "permission_required");
 });

@@ -222,7 +222,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | OPEN | [`CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01`](#cap-fb-20260829-provider-set-no-baseurl-01-saving-a-preset-provider-without-a-base-url-yields-a-config-that-can-never-run) | Saving a preset provider without a base URL yields a config that can never run |
 | P1 | OPEN | [`CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01`](#cap-fb-20260830-destructive-action-policy-01-destructive-browser-actions-are-grant-gated-not-approval-gated-and-the-policy-is-invisible) | Destructive browser actions are grant-gated, not approval-gated, and the policy is invisible |
 | P1 | OPEN | [`CAP-FB-20260830-EXEC-BUILD-FLAG-01`](#cap-fb-20260830-exec-build-flag-01-a-show-developer-features-switch-hides-the-platform-lanes-from-the-default-settings-and-hub) | A "Show developer features" switch hides the platform lanes from the default Settings and hub |
-| P1 | OPEN | [`CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01`](#cap-fb-20260830-model-field-empty-save-01-typing-a-model-name-without-picking-it-saves-model-and-the-hub-silently-runs-the-demo-model) | Typing a model name without picking it saves model:"" and the hub silently runs the demo model |
+| P1 | DONE | [`CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01`](#cap-fb-20260830-model-field-empty-save-01-typing-a-model-name-without-picking-it-saves-model-and-the-hub-silently-runs-the-demo-model) | Typing a model name without picking it saves model:"" and the hub silently runs the demo model |
 | P1 | OPEN | [`CAP-FB-20260830-MODEL-TOOL-ADHERENCE-01`](#cap-fb-20260830-model-tool-adherence-01-with-some-models-make-me-a-website-never-creates-an-artifact-and-remember-x-is-answered-with-a-lie) | With some models "make me a website" never creates an artifact and "remember X" is answered with a lie |
 | P1 | OPEN | [`CAP-FB-20260830-PROVIDER-DEFAULT-AND-KEY-FLOW-01`](#cap-fb-20260830-provider-default-and-key-flow-01-a-recommended-default-provider-and-a-four-click-key-flow) | A recommended default provider and a four-click key flow |
 | P1 | IN_REVIEW | [`CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01`](#cap-fb-20260830-recent-activity-user-events-01-recent-activity-shows-system-events-and-overflows-into-the-timestamp-column) | Recent activity shows system events and overflows into the timestamp column (folded into the Timeline) |
@@ -3983,15 +3983,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01] Typing a model name without picking it saves model:"" and the hub silently runs the demo model
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 live lane finding 7 (real Settings UI, real clicks). Extends CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01. You type a valid key and a model name, click Use, see "Set OpenAI as default.", and your next task is answered by "[demo model] Task received…".
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-31 03:10 UTC
+- Status: DONE
+- Resume: worker (hub coordinator dispatch) — candidate built; gates below
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `cf0da958`
-- Candidate: —
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-model-field-save
+- Branch: cap-model-field-save
+- Base: `origin/main@7037b6e6`
+- Candidate: `b96db729`
 - Shipping: —
 - Acceptance: `<model-picker>` commits the typed text on blur, Enter and on Use (value = the input text when no option was chosen); `provider.set` and `provider.status` return `{ ok:false, reason:"model id missing" }` for a keyed provider without a model; the hub never falls back to the demo model once a real provider is selected — it shows the Settings remediation bubble instead. Observable: type a model id, click Use, run → a real answer; save with an empty model → red status in Settings and in the hub strip.
   - Context: `ModelPicker` (`extension/shared/components.js:6396`) exposes `get value() { return this._committed; }` (`:6427`); `_committed` is set by `_commit(v)` (`:6608`) which runs on option selection and by the `value` attribute (`:6429`, `:6450`); typing alone does not commit. `effectiveModel(card)` (`extension/options/options.js:705-707`) reads `picker.value`. `saveProviderFromCard` (`extension/lib/provider-options-save.js:76`) sends `provider.set` (`extension/background/routes/provider.js:72`), which stores `model:""` and returns success; `provider.status` (`:58-70`) uses `providerRunGate(cfg)` which does not check for an empty model; the hub strip reads "ready"; `resolveModelFromConfig` (`extension/lib/provider.js:137`) proceeds with `model = ""` and the run reaches the demo model (the product lane saw "[demo model] Task received"). Only "Test connection" (`routes/provider.js:103`) notices ("Missing model id"). What must NOT change: the SW-side key preservation on `provider.set` (`:74-80`); the write-only key field.
@@ -4009,6 +4009,10 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: the picker commit-on-blur and the status check
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01`
 - History:
+  - 2026-08-31 16:10 UTC — merged forward by the hub coordinator after r3 review PASS (422a4b19).
+  - 2026-08-31 03:10 UTC — review round 3 (sol) REVISE: P1 (the model-missing gate refusal settled as config but the thrown ProviderUnavailableError was still classified by describeError() as HOST_PERMISSION — route catches surfaced a false "grant network access"; fixed with an explicit model-missing branch in describeError() → MODEL_CONFIG + canonical "model-config" settlement category; falsification RED→GREEN) and P2 (tracker Candidate/Updated/round labels corrected) fixed. Re-gated at candidate `b96db729`: build clean; unit 2685/0; journeys 240/240. Review pending.
+  - 2026-08-31 02:45 UTC — review round 2 (sol) REVISE: BLOCKER 1 (the Use path never called commitTyped — blur-only covered the blur case but a no-blur Use click still dropped typed text; fixed in `providerFieldsFromCard`, falsification RED→GREEN) and BLOCKER 2 (model-missing runs carried generic provider retry metadata; settled with `errorCategory:"config"` + a Settings action instead, and the refusal is not classified as a provider error so the circuit-breaker never trips — test added) fixed; NOTES addressed (the refusal reports the preserved `hasApiKey` honestly; tracker wording aligned with what is proven). Re-gated: build clean; unit 2684/0; journeys 240/240. Review pending.
+  - 2026-08-31 02:10 UTC — worker (hub coordinator dispatch) implementation at `67b27141` (base `origin/main@7037b6e6`): ModelPicker commits typed text on blur + `commitTyped()`; `providerRunGate`/`provider.set` refuse `model id missing` for a provider that needs a model with no explicit id and no catalogue default (local providers exempt, previous model preserved); `resolveModelFromConfig` throws instead of demo-falling for a real provider id; Settings flash reports the refusal. Gates: build clean; unit 2682/0 (incl. 5 new picker/gate/save tests + 3 pre-existing tests updated from the old demo-fallback contract); journeys 240/240 (2 new checks: typed-model saves; empty-model save refused; the red hub chip check uses a broken STORED config honestly — the model-missing chip state is unreachable by design once set refuses). Falsification: gate reverted → "model id missing" gate test RED; restored → GREEN. Screenshots `settings-byo-typed-model.png`, `settings-byo-empty-model-red.png`. Review pending.
   - 2026-08-30 11:00 UTC — measured: key typed, "gpt-4.1" typed with the suggestion list open, Use → "Set OpenAI as default.", `provider.get → {model:"", hasApiKey:true}`, `provider.status → ok:true`, hub strip "ready", run → "[demo model] Task received". Only "Test connection" noticed.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); every line reference re-verified against `origin/main@cf0da958`.
 

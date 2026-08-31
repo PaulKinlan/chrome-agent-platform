@@ -20,6 +20,8 @@
 
 import { normalizeHostPattern, requestPermissionBundleFromGesture } from "./permission-orchestration.js";
 import { safeProviderError } from "./pure.js";
+import { PROVIDER_CHOICES } from "./provider.js";
+import { defaultModelFor } from "./model-catalog.js";
 
 /** Derive the exact host-permission origin pattern for a provider base URL.
  * Returns null for missing, malformed, credential-bearing, or non-http(s) URLs. */
@@ -237,6 +239,19 @@ export async function providerRunGate(cfg) {
   if (isLocalProvider(cfg)) return { ok: true, reason: "", code: "ready" };
   if (providerBreakerOpen()) {
     return { ok: false, code: "provider_temporarily_unavailable", reason: `provider is temporarily unavailable (${lastReason || "recent failures"}) — paused, will retry automatically` };
+  }
+  // A provider that NEEDS a model id must have one — either explicit or the
+  // provider's catalogue default. An empty model with no catalogue would run
+  // the demo model for a REAL provider id (the silent demo fallback), so the
+  // gate refuses BEFORE the run and the hub shows the Settings remediation
+  // bubble instead (CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01).
+  const choice = PROVIDER_CHOICES?.find?.((p) => p.id === cfg?.provider) ?? null;
+  const needsModel = choice?.needsModel !== false;
+  if (needsModel) {
+    const explicit = String(cfg?.model ?? "").trim();
+    if (!explicit && !defaultModelFor(cfg?.provider)) {
+      return { ok: false, code: "model id missing", reason: "model id missing — set it in Settings → Providers" };
+    }
   }
   const hasHost = await hasProviderHostAccess(cfg);
   if (!hasHost) {
