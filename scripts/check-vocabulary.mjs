@@ -76,6 +76,19 @@ const BANNED_TERMS = [
     test: /\brecipes?\b/i,
     why: 'say "skill"/"Skills" — "recipe" is the pre-rename internal word',
   },
+  {
+    id: "host-access-optional",
+    // CAP-FB-20260830-HOST-ACCESS-STORY-01 / open question Q18 resolved (a):
+    // host access is install-granted `host_permissions: ["<all_urls>"]` with
+    // passive WebMCP detection. No user-facing copy may claim host access is
+    // optional, or that the extension holds no <all_urls>. The honest line is
+    // "this extension can read every page in order to notice when a site offers
+    // tools; it acts on a site only after you allow it." (Capability
+    // permissions ARE optional + JIT — this rule is scoped to HOST access, so
+    // "capability permissions are optional" is untouched.)
+    test: /host (?:access|permissions?) (?:is|are) (?:all[-\s]?)?optional|no <all_urls>|without <all_urls>/i,
+    why: 'host access is install-granted <all_urls> (Q18 (a)) — never say host access is optional or that there is no <all_urls>',
+  },
 ];
 
 // ── rule 2: Skills is not a destination ───────────────────────────────────

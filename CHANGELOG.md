@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.519] — 2026-08-31
+- : make the host-access story honest everywhere (Q18 (a))
+
 ## [0.2.518] — 2026-08-31
 - Three product decisions were made, and the next set of improvements has begun.
 
