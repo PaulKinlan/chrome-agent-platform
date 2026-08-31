@@ -21,7 +21,7 @@
 // would be offered as the raw colliding id).
 // @ts-nocheck — memory/skill-files doubles are intentionally dynamic.
 import { assertEquals, assert } from "jsr:@std/assert@1";
-import { mergeRunSkills } from "../extension/lib/recipes.js";
+import { mergeRunSkills, skillRowChecked, templateSkillMatches, skillResolutionOrder } from "../extension/lib/recipes.js";
 
 function fakeMemory() {
   const data = new Map();
@@ -222,4 +222,58 @@ Deno.test("resolution: a builtin: ref maps to the built-in table only", async ()
   // builtin: prefix or the raw id (never via /skill offering, which excludes
   // background rows).
   assert(getRecipe("auto-group-by-domain"), "builtin table has the row");
+});
+
+// ── r3 review: dialog checkbox collision + custom source-locking ──────────
+Deno.test("r3: skillRowChecked selects EXACTLY ONE row of a colliding pair for a legacy raw saved id", () => {
+  const available = [
+    { id: "tab-hygiene", refId: "builtin:tab-hygiene", source: "builtin", name: "Tab hygiene" },
+    { id: "tab-hygiene", refId: "imported:tab-hygiene", source: "imported", name: "Imported Tab Hygiene" },
+  ];
+  // Legacy raw saved id → built-in wins (resolveRecipe raw order) — exactly one.
+  assertEquals(skillRowChecked(available, ["tab-hygiene"], available[0]), true);
+  assertEquals(skillRowChecked(available, ["tab-hygiene"], available[1]), false);
+  // A refId save matches only its own row.
+  assertEquals(skillRowChecked(available, ["imported:tab-hygiene"], available[0]), false);
+  assertEquals(skillRowChecked(available, ["imported:tab-hygiene"], available[1]), true);
+  assertEquals(skillRowChecked(available, ["builtin:tab-hygiene"], available[0]), true);
+  assertEquals(skillRowChecked(available, ["builtin:tab-hygiene"], available[1]), false);
+});
+
+Deno.test("r3: skillRowChecked unique raw id matches the unique owner; no save → unchecked", () => {
+  const available = [
+    { id: "reader-mode", refId: "builtin:reader-mode", source: "builtin", name: "Reader mode" },
+  ];
+  assertEquals(skillRowChecked(available, ["reader-mode"], available[0]), true, "unique raw id → unique owner");
+  assertEquals(skillRowChecked(available, [], available[0]), false, "no saved id → unchecked");
+  assertEquals(skillRowChecked(available, ["other-skill"], available[0]), false, "unrelated saved id → unchecked");
+});
+
+Deno.test("r3: templateSkillMatches toggles exactly one row of a colliding pair", () => {
+  const available = [
+    { id: "page-summary", refId: "builtin:page-summary", source: "builtin", name: "Page summary" },
+    { id: "page-summary", refId: "imported:page-summary", source: "imported", name: "Imported page summary" },
+  ];
+  assertEquals(templateSkillMatches(available, ["page-summary"], available[0]), true, "raw template id → built-in row on collision");
+  assertEquals(templateSkillMatches(available, ["page-summary"], available[1]), false, "raw template id → NOT the imported row on collision");
+  assertEquals(templateSkillMatches(available, ["imported:page-summary"], available[0]), false);
+  assertEquals(templateSkillMatches(available, ["imported:page-summary"], available[1]), true, "refId template id → its own row");
+});
+
+Deno.test("r3: skillResolutionOrder source-locks custom/imported/builtin; raw keeps historical order", async () => {
+  const { skillResolutionOrder } = await import("../extension/lib/recipes.js");
+  assertEquals(skillResolutionOrder("custom"), ["custom"], "custom:<id> consults ONLY the custom store (never built-in/imported)");
+  assertEquals(skillResolutionOrder("imported"), ["imported"], "imported:<id> consults ONLY the imported store");
+  assertEquals(skillResolutionOrder("builtin"), ["builtin"], "builtin:<id> consults ONLY the built-in table");
+  assertEquals(skillResolutionOrder("raw"), ["builtin", "custom", "imported"], "raw id keeps built-in → custom → imported (background-agent.set on duplicated agents)");
+});
+
+Deno.test("r3: a raw id that only a custom recipe owns still resolves to it (background-agent.set duplicated-agent contract)", async () => {
+  // background-agent.set resolves a duplicated background agent by its raw id;
+  // the duplicated copy lives in the custom store (recipe.duplicate writes
+  // customRecipes) and has no built-in/imported counterpart — the raw path
+  // MUST reach custom for that to work. The order contract pins it.
+  const { getRecipe, skillResolutionOrder } = await import("../extension/lib/recipes.js");
+  assert(!getRecipe("auto-group-by-domain-custom-123"), "no built-in holds the duplicated id");
+  assertEquals(skillResolutionOrder("raw"), ["builtin", "custom", "imported"], "raw order reaches custom after built-in misses");
 });

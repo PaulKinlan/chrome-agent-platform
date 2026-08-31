@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.555] — 2026-08-31
+- Skills: r3 — dialog checkboxes keyed by refId end to end (collision selects exactly one row); resolveRecipe source-locks custom:<id> via skillResolutionOrder
+
 ## [0.2.554] — 2026-08-31
 - Skills: collision-proof skill identity — source-qualified refIds (builtin:/imported:/custom:) in the catalog, offering, agent dialog and run journal; resolveRecipe parses prefixes via parseSkillRef; mergeRunSkills dedups by refId
 

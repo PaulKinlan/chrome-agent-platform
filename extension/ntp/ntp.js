@@ -7,6 +7,7 @@
 
 import { send } from "../lib/messages.js";
 import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, recipeAsTemplate, templatePrefill } from "../lib/agent-templates.js";
+import { skillRowChecked, templateSkillMatches } from "../lib/recipes.js";
 import { projectUnifiedAgents } from "../lib/named-agents.js";
 import { schedulePreviewText } from "../lib/schedule-preview.js";
 import { parseEnglishSchedule } from "../shared/schedule-parser.js";
@@ -2599,11 +2600,8 @@ async function buildAgentConfigDialog(opts) {
           if (roleField.el.value === prev.role) roleField.el.value = "";
           const templateIds = new Set(prev.skills);
           for (const [id, cb] of skillChecks) {
-            if (templateIds.has(id)) cb.checked = false;
-            else {
-              const s = available.find((x) => (x?.refId ?? x?.id ?? x?.name ?? String(x)) === id);
-              if (s && templateIds.has(s.id)) cb.checked = false;
-            }
+            const s = available.find((x) => (x?.refId ?? x?.id ?? x?.name ?? String(x)) === id);
+            if (s && templateSkillMatches(available, [...templateIds], s)) cb.checked = false;
           }
           scheduleField.el.value = "";
           scheduleField.el.dispatchEvent(new Event("input", { bubbles: true }));
@@ -2622,15 +2620,13 @@ async function buildAgentConfigDialog(opts) {
       scheduleField.el.dispatchEvent(new Event("input", { bubbles: true }));
       // Suggested skills: CHECK the template's suggestions on top of whatever
       // the owner already picked — removal is theirs (full specialization).
-      // Template skill ids are raw; the checkbox key may be a source-qualified
-      // refId, so match either (CAP-FB-20260831-SKILL-LIST-SYNC-01 r2).
+      // Collision-proof (r3): a raw template skill id toggles exactly one row
+      // (the unique owner, or the built-in on collision) — never both rows of
+      // a colliding pair.
       const templateIds = new Set(pre.skills);
       for (const [id, cb] of skillChecks) {
-        if (templateIds.has(id)) cb.checked = true;
-        else {
-          const s = available.find((x) => (x?.refId ?? x?.id ?? x?.name ?? String(x)) === id);
-          if (s && templateIds.has(s.id)) cb.checked = true;
-        }
+        const s = available.find((x) => (x?.refId ?? x?.id ?? x?.name ?? String(x)) === id);
+        if (s && templateSkillMatches(available, [...templateIds], s)) cb.checked = true;
       }
       updateSkillCount();
     };
@@ -2765,7 +2761,11 @@ async function buildAgentConfigDialog(opts) {
       row.style.padding = "2px 0";
       const cb = document.createElement("input");
       cb.type = "checkbox";
-      cb.checked = agentSkillIds.has(id) || agentSkillIds.has(s?.id);
+      // Collision-proof restore (CAP-FB-20260831-SKILL-LIST-SYNC-01 r3): the
+      // refId matches only its own row; a legacy raw saved id matches exactly
+      // one row (the unique owner, or the built-in on collision — resolveRecipe's
+      // raw order) — never both rows of a colliding pair.
+      cb.checked = skillRowChecked(available, [...agentSkillIds], s);
       cb.addEventListener("change", () => {
         const count = [...skillChecks.values()].filter((c) => c.checked).length;
         const countEl = skillsSummary.querySelector(".skill-count");

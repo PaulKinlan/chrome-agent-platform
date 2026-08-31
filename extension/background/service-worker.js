@@ -282,7 +282,7 @@ import {
   setGlobalBrowserControlGrant,
   setOriginBrowserControlGrant,
 } from "../lib/browser-tools.js";
-import { getRecipe, RECIPES, backgroundRecipes, intentOf, agentSkillIds, mergeRunSkills, parseSkillRef } from "../lib/recipes.js";
+import { getRecipe, RECIPES, backgroundRecipes, intentOf, agentSkillIds, mergeRunSkills, parseSkillRef, skillResolutionOrder } from "../lib/recipes.js";
 import { fetchSkillFromUrl, installImportedSkill, removeImportedSkill, loadAllImportedSkills } from "../lib/skill-import.js";
 import { readSkillFile, writeSkillFiles, removeSkillFiles } from "../lib/skill-files.js";
 import { durableRuns, sweepOrphanAgentData } from "../lib/durable-runs.js";
@@ -442,29 +442,35 @@ const loadAllImported = async () => {
 async function resolveRecipe(id) {
   const raw = String(id ?? "").trim();
   if (!raw) return null;
-  // Collision-proof identity (CAP-FB-20260831-SKILL-LIST-SYNC-01 r2): a
-  // source-qualified reference resolves ONLY in its own source. An imported
-  // skill whose id collides with a built-in recipe id (imported:<id>) can
-  // NEVER resolve to the built-in — and built-in BACKGROUND recipes are never
-  // offered as skills, so a reference can never run a background recipe via
-  // /skill. Unprefixed ids keep the historical order (built-in → custom →
+  // Collision-proof identity (CAP-FB-20260831-SKILL-LIST-SYNC-01 r2/r3): a
+  // source-qualified reference resolves ONLY in its own source — imported:<id>
+  // never touches the built-in table or custom store, custom:<id> never falls
+  // through to built-in/imported, builtin:<id> stays in the built-in table.
+  // Unprefixed (raw) ids keep the historical order (built-in → custom →
   // imported) so saved agents and old task text still resolve, and
-  // background-agent.set can still resolve built-in background recipes by
-  // their raw id.
+  // background-agent.set can still resolve a duplicated (custom) background
+  // agent by its raw id.
   const { source, id: rawId } = parseSkillRef(raw);
-  const importedOnly = source === "imported";
-  const builtinOnly = source === "builtin";
   const refId = source === "raw" ? null : `${source}:${rawId}`;
-  if (!importedOnly) {
+  // Source-locked branch order (r3): skillResolutionOrder pins which stores a
+  // reference may consult. imported:<id> only the imported store; custom:<id>
+  // only the custom store; builtin:<id> only the built-in table; raw ids keep
+  // built-in → custom → imported (background-agent.set on duplicated agents).
+  const order = skillResolutionOrder(source);
+  // Built-in branch.
+  if (order.includes("builtin")) {
     const builtIn = getRecipe(rawId);
     if (builtIn) return { ...builtIn, refId: refId ?? `builtin:${rawId}` };
   }
-  if (!builtinOnly) {
-    if (source !== "imported") {
-      const custom = await getCustomRecipes();
-      const fromCustom = custom.find((r) => r.id === rawId);
-      if (fromCustom) return { ...fromCustom, refId: refId ?? `custom:${rawId}` };
-    }
+  // Custom branch. A custom:<id> absent from the custom store returns null
+  // (never falls through to imported — r3 source-locking).
+  if (order.includes("custom")) {
+    const custom = await getCustomRecipes();
+    const fromCustom = custom.find((r) => r.id === rawId);
+    if (fromCustom) return { ...fromCustom, refId: refId ?? `custom:${rawId}` };
+  }
+  // Imported branch.
+  if (order.includes("imported")) {
     const imported = await loadAllImported();
     const row = imported.find((s) => s.id === rawId);
     if (!row) return null;
