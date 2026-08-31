@@ -762,6 +762,30 @@ export function getRecipe(id) {
 }
 
 /**
+ * Parse a skill reference into its source + raw id (CAP-FB-20260831-
+ * SKILL-LIST-SYNC-01 r2). The catalog offers every skill under a
+ * source-qualified refId (builtin:<id> / imported:<id> / custom:<id>); this
+ * parser tells the resolver whether a reference is source-locked:
+ *   - "imported:x"  → resolve ONLY in the imported store (never a built-in)
+ *   - "builtin:x"   → resolve ONLY in the built-in table
+ *   - "custom:x"    → resolve ONLY among custom recipes
+ *   - "x" (raw)     → historical order: built-in → custom → imported
+ * Pure, no store access — unit-testable.
+ */
+export function parseSkillRef(ref) {
+  const raw = String(ref ?? "").trim();
+  if (!raw) return { source: "raw", id: "" };
+  const i = raw.indexOf(":");
+  if (i > 0) {
+    const prefix = raw.slice(0, i);
+    if (prefix === "builtin" || prefix === "imported" || prefix === "custom") {
+      return { source: prefix, id: raw.slice(i + 1) };
+    }
+  }
+  return { source: "raw", id: raw };
+}
+
+/**
  * Normalize an agent record's saved skills to a deduped id list. The record
  * stores `{id,name,description}` objects (the create dialog), but tolerates
  * bare strings (older records / imports). Pure — no store access.
@@ -776,19 +800,23 @@ export function agentSkillIds(agent) {
 }
 
 /**
- * Merge skill/recipe objects for ONE run's composition, deduped by id with
- * first occurrence winning (an agent's saved skills first, then any /skill:<id>
- * references in the task text — a reference to an already-saved skill composes
- * once, never twice). Pure — the caller resolves ids to records.
+ * Merge skill/recipe objects for ONE run's composition, deduped by identity
+ * with first occurrence winning (an agent's saved skills first, then any
+ * /skill:<id> references in the task text — a reference to an already-saved
+ * skill composes once, never twice). The dedup key is the source-qualified
+ * refId when present (CAP-FB-20260831-SKILL-LIST-SYNC-01 r2): a built-in
+ * `tab-hygiene` and an imported `tab-hygiene` are DISTINCT skills and both
+ * compose; two references to the SAME row compose once. Pure — the caller
+ * resolves ids to records.
  */
 export function mergeRunSkills(...lists) {
   const out = [];
   const seen = new Set();
   for (const list of lists) {
     for (const r of Array.isArray(list) ? list : []) {
-      const id = r?.id;
-      if (typeof id !== "string" || !id || seen.has(id)) continue;
-      seen.add(id);
+      const key = r?.refId ?? r?.id;
+      if (typeof key !== "string" || !key || seen.has(key)) continue;
+      seen.add(key);
       out.push(r);
     }
   }

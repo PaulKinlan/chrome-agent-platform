@@ -38,7 +38,7 @@ function recipeCard(r, onUse) {
   hint.className = "hint";
   const fileCount = (r.fileCount ?? 0) > 1 ? ` · ${r.fileCount} files` : "";
   const large = (r.promptBytes ?? 0) > 8192 || (r.prompt ?? "").length > 8192 ? " · large (load on demand)" : "";
-  hint.textContent = `/skill:${r.id}${fileCount}${large}`;
+  hint.textContent = `/skill:${r.refId ?? r.id}${fileCount}${large}`;
   // Imported large skills carry metadata only (the body lives in OPFS); the
   // "how it works" panel must not dump an absent body — show the description
   // and the on-demand loader note instead.
@@ -106,10 +106,12 @@ export async function renderSkillList(listEl, { onUse } = {}) {
  * When Settings is opened as a bare tab (no hub parent), degrade honestly:
  * copy the /skill:<id> reference and confirm inline — never a silent no-op. */
 export function useSkill(skill, { statusEl } = {}) {
-  const ref = `/skill:${skill.id}`;
+  const ref = `/skill:${skill.refId ?? skill.id}`;
   try {
     if (window.parent && window.parent !== window) {
-      window.parent.postMessage({ type: "use-skill", id: skill.id }, "*");
+      // Send the source-qualified refId so the hub pre-fills a collision-proof
+      // reference (CAP-FB-20260831-SKILL-LIST-SYNC-01 r2).
+      window.parent.postMessage({ type: "use-skill", id: skill.refId ?? skill.id }, "*");
       return;
     }
   } catch {
@@ -149,7 +151,9 @@ export function mountSkillsSection(sectionEl) {
     importBtn.disabled = false;
     if (out?.ok) {
       const fileNote = (out.skill?.fileCount ?? 0) > 1 ? ` (${out.skill.fileCount} files)` : "";
-      status.textContent = `Imported "${out.skill.name}"${fileNote} — use /skill:${out.skill.id}`;
+      // Fresh imports always live in the imported store → the collision-proof
+      // reference is imported:<id>.
+      status.textContent = `Imported "${out.skill.name}"${fileNote} — use /skill:imported:${out.skill.id}`;
       urlInput.value = "";
       await refresh();
     } else {

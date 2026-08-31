@@ -2597,7 +2597,14 @@ async function buildAgentConfigDialog(opts) {
           const prev = templatePrefill(selectedTemplate);
           if (nameField.el.value === prev.name) nameField.el.value = "";
           if (roleField.el.value === prev.role) roleField.el.value = "";
-          for (const [id, cb] of skillChecks) if (prev.skills.includes(id)) cb.checked = false;
+          const templateIds = new Set(prev.skills);
+          for (const [id, cb] of skillChecks) {
+            if (templateIds.has(id)) cb.checked = false;
+            else {
+              const s = available.find((x) => (x?.refId ?? x?.id ?? x?.name ?? String(x)) === id);
+              if (s && templateIds.has(s.id)) cb.checked = false;
+            }
+          }
           scheduleField.el.value = "";
           scheduleField.el.dispatchEvent(new Event("input", { bubbles: true }));
           updateSkillCount();
@@ -2615,8 +2622,15 @@ async function buildAgentConfigDialog(opts) {
       scheduleField.el.dispatchEvent(new Event("input", { bubbles: true }));
       // Suggested skills: CHECK the template's suggestions on top of whatever
       // the owner already picked — removal is theirs (full specialization).
+      // Template skill ids are raw; the checkbox key may be a source-qualified
+      // refId, so match either (CAP-FB-20260831-SKILL-LIST-SYNC-01 r2).
+      const templateIds = new Set(pre.skills);
       for (const [id, cb] of skillChecks) {
-        if (pre.skills.includes(id)) cb.checked = true;
+        if (templateIds.has(id)) cb.checked = true;
+        else {
+          const s = available.find((x) => (x?.refId ?? x?.id ?? x?.name ?? String(x)) === id);
+          if (s && templateIds.has(s.id)) cb.checked = true;
+        }
       }
       updateSkillCount();
     };
@@ -2738,7 +2752,11 @@ async function buildAgentConfigDialog(opts) {
     skillsList.append(none);
   } else {
     for (const s of available) {
-      const id = s?.id ?? s?.name ?? String(s);
+      // Collision-proof identity (CAP-FB-20260831-SKILL-LIST-SYNC-01 r2): the
+      // checkbox key is the source-qualified refId, so attaching a colliding
+      // imported skill saves `imported:<id>` and the run resolves it to the
+      // imported row. Existing agents with raw ids still match via s.id.
+      const id = s?.refId ?? s?.id ?? s?.name ?? String(s);
       const row = document.createElement("label");
       row.style.display = "flex";
       row.style.alignItems = "baseline";
@@ -2747,7 +2765,7 @@ async function buildAgentConfigDialog(opts) {
       row.style.padding = "2px 0";
       const cb = document.createElement("input");
       cb.type = "checkbox";
-      cb.checked = agentSkillIds.has(id);
+      cb.checked = agentSkillIds.has(id) || agentSkillIds.has(s?.id);
       cb.addEventListener("change", () => {
         const count = [...skillChecks.values()].filter((c) => c.checked).length;
         const countEl = skillsSummary.querySelector(".skill-count");
@@ -2954,8 +2972,10 @@ async function buildAgentConfigDialog(opts) {
     const skills = [];
     for (const [id, cb] of skillChecks) {
       if (cb.checked) {
-        const s = available.find((x) => (x?.id ?? x?.name ?? String(x)) === id);
-        skills.push(s ? { id: s.id ?? s.name, name: s.name ?? s.id, description: s.description ?? "" } : { id, name: id });
+        const s = available.find((x) => (x?.refId ?? x?.id ?? x?.name ?? String(x)) === id);
+        skills.push(s
+          ? { id: s.refId ?? s.id ?? s.name, name: s.name ?? s.id, description: s.description ?? "" }
+          : { id, name: id });
       }
     }
     const parsedSchedule = parseEnglishSchedule(

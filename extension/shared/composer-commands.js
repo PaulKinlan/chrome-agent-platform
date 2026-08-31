@@ -104,7 +104,12 @@ export async function loadComposerCommandItems(
       return (res.skills || [])
         .filter((item) => hit(query, item.name, item.id))
         .map((item) => ({
-          id: `skill:${item.id}`,
+          // Collision-proof reference (CAP-FB-20260831-SKILL-LIST-SYNC-01 r2):
+          // the reference is built from the source-qualified refId so an
+          // imported skill whose id collides with a built-in recipe id is
+          // inserted as /skill:imported:<id> and resolves to the imported row
+          // — never to a built-in BACKGROUND recipe.
+          id: `skill:${item.refId ?? item.id}`,
           label: clean(item.name || item.id, 256),
           description: clean(item.description, 512),
           kind: "skill",

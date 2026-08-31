@@ -607,7 +607,7 @@ async function mentionCandidates(q = "", currentAgentId = null, currentAgentKind
     }
     for (const s of (skills.skills || [])) {
       if (!hit(s.name) && !hit(s.id)) continue;
-      items.push({ id: `skill:${s.id}`, label: s.name, description: s.description || "skill", kind: "skill", group: "Skills" });
+      items.push({ id: `skill:${s.refId ?? s.id}`, label: s.name, description: s.description || "skill", kind: "skill", group: "Skills" });
     }
     for (const a of assets.assets || []) {
       if (!hit(a.name) && !hit(a.id)) continue;

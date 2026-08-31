@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.554] — 2026-08-31
+- Skills: collision-proof skill identity — source-qualified refIds (builtin:/imported:/custom:) in the catalog, offering, agent dialog and run journal; resolveRecipe parses prefixes via parseSkillRef; mergeRunSkills dedups by refId
+
 ## [0.2.553] — 2026-08-31
 - Skills: /skill and Settings read ONE catalog — background recipes are scheduled agents, never on-demand skills; corrupt skills hidden and reported
 

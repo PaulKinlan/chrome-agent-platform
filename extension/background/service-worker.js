@@ -282,7 +282,7 @@ import {
   setGlobalBrowserControlGrant,
   setOriginBrowserControlGrant,
 } from "../lib/browser-tools.js";
-import { getRecipe, RECIPES, backgroundRecipes, intentOf, agentSkillIds, mergeRunSkills } from "../lib/recipes.js";
+import { getRecipe, RECIPES, backgroundRecipes, intentOf, agentSkillIds, mergeRunSkills, parseSkillRef } from "../lib/recipes.js";
 import { fetchSkillFromUrl, installImportedSkill, removeImportedSkill, loadAllImportedSkills } from "../lib/skill-import.js";
 import { readSkillFile, writeSkillFiles, removeSkillFiles } from "../lib/skill-files.js";
 import { durableRuns, sweepOrphanAgentData } from "../lib/durable-runs.js";
@@ -440,32 +440,55 @@ const loadAllImported = async () => {
 };
 
 async function resolveRecipe(id) {
-  const builtIn = getRecipe(id);
-  if (builtIn) return builtIn;
-  const custom = await getCustomRecipes();
-  const fromCustom = custom.find((r) => r.id === id);
-  if (fromCustom) return fromCustom;
-  const imported = await loadAllImported();
-  const row = imported.find((s) => s.id === id);
-  if (!row) return null;
-  // Index rows carry metadata only (bodies live in OPFS). A SMALL body is
-  // read back and composed into the system prompt like before; a LARGE body
-  // stays out of the prompt (the skill_read marker rule handles it —
-  // renderBoundarySkills keys on promptBytes, never an empty body). A legacy
-  // row whose migration failed keeps its inline body (never lost).
-  if (Number.isInteger(row.promptBytes) && row.promptBytes > 0 && row.promptBytes <= PROMPT_SKILL_BODY_BUDGET) {
-    try {
-      const body = await readSkillFile(row.id, "SKILL.md");
-      return { ...row, prompt: body };
-    } catch {
-      return { ...row, prompt: "" };
+  const raw = String(id ?? "").trim();
+  if (!raw) return null;
+  // Collision-proof identity (CAP-FB-20260831-SKILL-LIST-SYNC-01 r2): a
+  // source-qualified reference resolves ONLY in its own source. An imported
+  // skill whose id collides with a built-in recipe id (imported:<id>) can
+  // NEVER resolve to the built-in — and built-in BACKGROUND recipes are never
+  // offered as skills, so a reference can never run a background recipe via
+  // /skill. Unprefixed ids keep the historical order (built-in → custom →
+  // imported) so saved agents and old task text still resolve, and
+  // background-agent.set can still resolve built-in background recipes by
+  // their raw id.
+  const { source, id: rawId } = parseSkillRef(raw);
+  const importedOnly = source === "imported";
+  const builtinOnly = source === "builtin";
+  const refId = source === "raw" ? null : `${source}:${rawId}`;
+  if (!importedOnly) {
+    const builtIn = getRecipe(rawId);
+    if (builtIn) return { ...builtIn, refId: refId ?? `builtin:${rawId}` };
+  }
+  if (!builtinOnly) {
+    if (source !== "imported") {
+      const custom = await getCustomRecipes();
+      const fromCustom = custom.find((r) => r.id === rawId);
+      if (fromCustom) return { ...fromCustom, refId: refId ?? `custom:${rawId}` };
     }
+    const imported = await loadAllImported();
+    const row = imported.find((s) => s.id === rawId);
+    if (!row) return null;
+    // Index rows carry metadata only (bodies live in OPFS). A SMALL body is
+    // read back and composed into the system prompt like before; a LARGE body
+    // stays out of the prompt (the skill_read marker rule handles it —
+    // renderBoundarySkills keys on promptBytes, never an empty body). A legacy
+    // row whose migration failed keeps its inline body (never lost).
+    const base = { ...row, refId: refId ?? `imported:${rawId}` };
+    if (Number.isInteger(row.promptBytes) && row.promptBytes > 0 && row.promptBytes <= PROMPT_SKILL_BODY_BUDGET) {
+      try {
+        const body = await readSkillFile(row.id, "SKILL.md");
+        return { ...base, prompt: body };
+      } catch {
+        return { ...base, prompt: "" };
+      }
+    }
+    if (!Number.isInteger(row.promptBytes)) {
+      // legacy inline body (migration failed) — serve it so it never vanishes
+      return { ...base };
+    }
+    return { ...base, prompt: "" };
   }
-  if (!Number.isInteger(row.promptBytes)) {
-    // legacy inline body (migration failed) — serve it so it never vanishes
-    return { ...row };
-  }
-  return { ...row, prompt: "" };
+  return null;
 }
 
 // ── skill references (a skill is INCLUDED in a task) ─────────────────────
@@ -477,7 +500,9 @@ async function resolveRecipe(id) {
 function skillRefIds(task) {
   if (typeof task !== "string") return [];
   const ids = [];
-  const re = /\/skill:([a-z0-9][a-z0-9-]*)/gi;
+  // The token allows a source-qualified prefix (imported:<id> / builtin:<id>)
+  // — collision-proof identity (CAP-FB-20260831-SKILL-LIST-SYNC-01 r2).
+  const re = /\/skill:([a-z0-9][a-z0-9:-]*)/gi;
   let m;
   while ((m = re.exec(task)) !== null) {
     const id = m[1].toLowerCase();
@@ -2811,8 +2836,10 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       }
       // The resolved skill IDs journal onto the terminal thread row so a LATER
       // continuation re-applies them (the same union the caller of a fresh
-      // continuation reads from the thread).
-      runSkillIds = runSkills.map((r) => r?.id).filter((x) => typeof x === "string" && x).slice(0, 24);
+      // continuation reads from the thread). The journal stores the
+      // source-qualified refId when present so a colliding imported skill is
+      // re-resolved to the imported row, never the built-in.
+      runSkillIds = runSkills.map((r) => r?.refId ?? r?.id).filter((x) => typeof x === "string" && x).slice(0, 24);
       // agent-do's run(task, context, history) -> result text; context is a STRING.
       // `history` carries the prior conversation turns (the unified surface: a
       // follow-up / nudge is a new turn in the SAME persistent thread, so the

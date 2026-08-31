@@ -322,9 +322,12 @@ Deno.test("durable resume of a named-agent run re-applies the thread's journaled
   assert(settledRun, `the resumed run settles (phase=${settledRun?.phase ?? "unknown"})`);
 
   // THE FIDELITY OBSERVABLE: the resumed run's terminal thread row carries the
-  // journaled skill id ("page-summary"). On the pre-fix code the resume dispatch drops
-  // journaledSkillIds → runTask merges none → runSkillIds empty → the terminal
-  // row has no skills → this assertion is RED.
+  // journaled skill identity. Since the journal stores the source-qualified
+  // refId (CAP-FB-20260831-SKILL-LIST-SYNC-01 r2 — collision-proof identity),
+  // the built-in recipe page-summary journals as "builtin:page-summary". On
+  // the pre-fix code the resume dispatch drops journaledSkillIds → runTask
+  // merges none → runSkillIds empty → the terminal row has no skills → this
+  // assertion is RED.
   const { getThread } = await import("../extension/lib/threads.js");
   const rawThread = await getThread(threadId);
   const messages = rawThread?.messages ?? [];
@@ -332,7 +335,7 @@ Deno.test("durable resume of a named-agent run re-applies the thread's journaled
   assert(lastAssistant, "the thread has an assistant terminal row");
   const skills = Array.isArray(lastAssistant?.skills) ? lastAssistant.skills : [];
   assert(
-    skills.includes("page-summary"),
-    `the resumed run's terminal row re-applied the journaled skill — got skills=${JSON.stringify(skills)}, expected to include "page-summary"`,
+    skills.includes("builtin:page-summary"),
+    `the resumed run's terminal row re-applied the journaled skill — got skills=${JSON.stringify(skills)}, expected to include "builtin:page-summary"`,
   );
 });

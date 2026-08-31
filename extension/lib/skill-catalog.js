@@ -53,10 +53,16 @@ export async function skillCatalog({ memory, fileStore = null }) {
       broken.push({ id: r.id, reason: "body migration to OPFS failed — skill_read cannot serve it until storage recovers" });
       continue;
     }
-    skills.push({ ...r, source: r.source ?? "imported", intent: intentOf(r) });
+    // Collision-proof identity (r2 review P1): every catalog row carries a
+    // source-qualified refId. An imported skill whose id collides with a
+    // built-in recipe id (e.g. an import named `auto-group-by-domain`) is
+    // offered as `imported:<id>` and resolves ONLY to the imported row — it
+    // can never resolve to the built-in BACKGROUND recipe (the owner bug
+    // returning through a different door).
+    skills.push({ ...r, refId: `imported:${r.id}`, source: r.source ?? "imported", intent: intentOf(r) });
   }
   for (const r of onDemandRecipes()) {
-    skills.push({ ...r, source: "builtin", intent: intentOf(r) });
+    skills.push({ ...r, refId: `builtin:${r.id}`, source: "builtin", intent: intentOf(r) });
   }
   return { skills, broken };
 }
