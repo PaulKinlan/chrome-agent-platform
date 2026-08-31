@@ -1999,6 +1999,9 @@ async function openThread(id) {
   // Hide the previous run's banner at the ownership hand-off, not after the
   // asynchronous thread read. The old run continues and journals in the SW.
   renderRunStatus({ state: "idle" });
+  // Clear the prior surface's plan strip; THIS thread's live transcript (below)
+  // rebuilds it from its own step events (CAP-FB-20260830-PLAN-STRIP-CHECKPOINTS-01).
+  threadConversation?.resetPlan?.();
   // Tasks use direct click-to-edit on the title with an editable hover affordance;
   // the separate Edit button is removed from the task view (CAP-FB-20260823-TASK-INLINE-EDIT-01).
   editAgentBtn.hidden = true;
@@ -2072,6 +2075,7 @@ async function openBackgroundAgentChat(id, name) {
   threadTitle.removeAttribute("title");
   threadTitle.removeAttribute("aria-label");
   syncComposerScope();
+  threadConversation?.resetPlan?.(); // clear the prior surface's plan strip
   const hRes = await send("background-agent.history", { id }).catch(() => ({ entries: [] }));
   if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== "background") return;
   threadTitle.textContent = name || id || "Background agent";
@@ -2146,6 +2150,7 @@ async function openAgentSurface({ kind, id, name }) {
   threadTitle.removeAttribute("title");
   threadTitle.removeAttribute("aria-label");
   syncComposerScope();
+  threadConversation?.resetPlan?.(); // clear the prior surface's plan strip
   const entries = await loadAgentHistoryEntries(kind, id);
   if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== kind) return;
   threadTitle.textContent = name || id || "Agent";

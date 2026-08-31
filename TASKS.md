@@ -202,6 +202,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | IN_REVIEW | [`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`](#cap-fb-20260829-create-dialog-declutter-01-create-agent-dialog-is-cluttered-and-its-scheduletheme-controls-are-inconsistent) | Create-agent dialog is cluttered and its schedule/theme controls are inconsistent |
 | P1 | IN_REVIEW | [`CAP-FB-20260829-HUB-HOME-BUTTON-01`](#cap-fb-20260829-hub-home-button-01-ntp-brand-returns-directly-home) | NTP brand returns directly Home |
 | P1 | IN_REVIEW | [`CAP-FB-20260829-OWNER-OBSERVABILITY-01`](#cap-fb-20260829-owner-observability-01-owner-grade-console-and-run-logs) | Owner-grade console and run logs |
+| P1 | IN_REVIEW | [`CAP-FB-20260830-PLAN-STRIP-CHECKPOINTS-01`](#cap-fb-20260830-plan-strip-checkpoints-01-multi-tab-tasks-have-no-visible-plan-or-checkpoints-although-durable-runs-exist-underneath) | Multi-tab tasks have no visible plan or checkpoints although durable runs exist underneath |
 | P1 | OPEN | [`CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01`](#cap-fb-20260819-directory-tool-explorer-01-agent-directory-tool-explorer-and-enrollment-policy) | Agent Directory tool explorer and enrollment policy |
 | P1 | OPEN | [`CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`](#cap-fb-20260819-permission-remediation-ux-01-user-facing-permission-management-and-run-remediation) | User-facing permission management and run remediation |
 | P1 | OPEN | [`CAP-FB-20260819-UI-FLASH-RELAYOUT-01`](#cap-fb-20260819-ui-flash-relayout-01-intermittent-extension-wide-ui-flash-and-relayout-investigation) | Intermittent extension-wide UI flash and relayout investigation |
@@ -2384,6 +2385,31 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - 2026-08-30 11:00 UTC — measured: a 620 px bordered panel with two bubbles in the top 180 px and 440 px of empty panel; `#status` stayed "ready" throughout a run; after an edit turn `scrollTop` was 267 of 587 with the closing message below the fold.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); every line reference re-verified against `origin/main@cf0da958`.
   - 2026-08-30 17:12 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/thread-view-run-state` off `origin/main@217cd9e1`. Other agents: pick a different entry.
+
+## [CAP-FB-20260830-PLAN-STRIP-CHECKPOINTS-01] Multi-tab tasks have no visible plan or checkpoints although durable runs exist underneath
+- Feedback: 2026-08-30 — reanalysis 2026-08-30 product lane finding 18. A Q20 coworker feature the owner approved (EXEC-DEMO-01 wave 8).
+- Updated: 2026-08-31 15:05 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P1
+- Owner: model worker (Opus 4.8 subagent) under the reanalysis coordinator session — CLAIMED; do not start a parallel attempt
+- Workspace: active (local path private)
+- Branch: `cap/plan-strip-checkpoints` (pushed to origin as the candidate branch)
+- Base: `5113acfd`
+- Candidate: this tracker commit
+- Shipping: —
+- Acceptance: while a multi-step run is executing, the thread shows a compact plan strip — the run's tool calls as a checklist pinned to the top of the conversation, the current one active and completed ones checked — built from the durable run's own step events (the tool-call/tool-result progress events, the same stream `extension/lib/durable-runs.js` records) fed through the progress port. It appears while running and settles into a collapsed "N steps" `<details>` summary on `done`. Keyboard-accessible (a native `<summary>`), a11y-clean (one visually-hidden `aria-live="polite"` region announces the active step). Done = a three-step demo task (`@demo-tools`: memory_set, memory_get, memory_get) shows three steps advancing, then a collapsed "3 steps" summary with every step checked — driven in the journey suite with the demo marker and a mid-run screenshot.
+- Review: author review 2026-08-31 — falsification gates cleared (RED/GREEN recorded below). No independent second model available (see CLAUDE.md "Review without a second model"); the impeccable design pass was loaded (Operate surface: hairline border, single petrol-teal accent, drawn line icons, 8px grid, reduced-motion respected). Taste/architecture rest on the owner exercising the product.
+- Gates: Chrome journeys (2 new checks); a11y pass; the impeccable design pass. Falsification gates cleared.
+  - Unit: `tests/plan-strip.test.ts` pins the pure reducer (`extension/shared/plan-strip.js`) — a tool call starts an active step, its result checks it (FIFO, corrected label wins), a three-step run settles to a collapsed summary with the active step driving aria-live, and an error settles as an error. RED/GREEN: neutered `reducePlan` to return its input unchanged → 5 of 6 tests RED (`plan-strip.test.ts:17,26,41,70,86`); restored → 6/6 GREEN.
+  - Browser: `scripts/chrome-journeys.ts` JOURNEY 3f gains "Plan strip: a running multi-step task shows an advancing checklist pinned to the top of the thread" (mid-run: ≥1 active + ≥1 done row, `position:sticky`, first child, `<summary>`, `aria-live="polite"`) and "Plan strip: on done it settles into a collapsed 'N steps' summary with every step checked" (settled, `<details>` closed, 3 rows all done, summary matches "3 steps", labels corrected to "Writing memory"/"Reading memory"). Screenshots `plan-strip-mid-run.png` + `plan-strip-settled.png`.
+  - Full suite: `npm run build && deno test -A tests/ && deno run -A scripts/chrome-journeys.ts` green at the tip; `npm run check:gallery` green (the `<plan-strip>` specimen synced into `docs/components.html`).
+  - Constraints: labels render with `escapeHtml` (a tool argument is untrusted); inline SVG line icons, currentColor, no emoji; the spinner honors `prefers-reduced-motion`; the strip is a reused component (`<plan-strip>`), never hand-rolled; no eval/new Function.
+- Blockers: — (dependency CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 landed; TRANSCRIPT-STREAMING-01 and THREAD-VIEW-RUN-STATE-01 landed — the strip sits beside the `conversation-run-status` banner they introduced).
+- Next: coordinator merge (build → units → journeys → explicit-SHA push).
+- Recover: `git grep -n "plan-strip" -- extension/shared`
+- History:
+  - 2026-08-31 15:05 UTC — CLAIMED and IMPLEMENTED. New pure reducer `extension/shared/plan-strip.js` (+ `tests/plan-strip.test.ts`, RED/GREEN recorded); a `<plan-strip>` Web Component in `extension/shared/components.js` (sticky-top `<details>` checklist, drawn line icons, aria-live, gallery specimen synced); `<agent-conversation>` owns it via `resetPlan()`/`planEvent()` and preserves it across `setMessages`; `extension/shared/conversation.js` feeds step events from both the live turn (`runConversationTurn`) and the reopened-thread transcript (`renderRunTranscript`); `extension/ntp/ntp.js` resets the strip on a thread/agent surface switch. JOURNEY 3f drives `@demo-tools` with a mid-run screenshot.
 
 ## [CAP-FB-20260830-NOTIFY-ICON-PATH-01] The notify tool never works: it references an icon that does not exist
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 tools lane finding 3. Asking the agent to notify you always fails with "Unable to download all specified images."

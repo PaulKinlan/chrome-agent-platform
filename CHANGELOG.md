@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.519] — 2026-08-31
+- A running task now shows a compact plan at the top of the thread — its steps as a checklist, the current one working and finished ones checked — that settles into a collapsed summary when the task is done.
+
 ## [0.2.518] — 2026-08-31
 - Three product decisions were made, and the next set of improvements has begun.
 

@@ -36,6 +36,7 @@ export const COMMAND_NAMESPACES = ALL_COMMAND_NAMESPACES.filter(
   (n) => !n.localFiles || supportsLocalFilesCommand(),
 );
 import { normalizeConversationRunStatus } from "./run-status.js";
+import { emptyPlan, reducePlan, planSummary, isPlanStepStatus } from "./plan-strip.js";
 import { safeParseOnce, buildTree, subtreeJson, safeJsonStringify } from "./tool-tree.js";
 // The CANONICAL secret redactor (lib/pure.js — one semantic, shared with the
 // SW write path): activity journals may predate write-path redaction, so the
@@ -5435,10 +5436,53 @@ class AgentConversation extends Component {
     this._liveStatusRow = null;
   }
 
+  // ── the plan strip ────────────────────────────────────────────────────
+  // A running multi-step task shows a compact plan at the TOP of the thread —
+  // its tool calls as a checklist, the current one active, completed ones
+  // checked — built from the run's own step events fed through the progress
+  // port (CAP-FB-20260830-PLAN-STRIP-CHECKPOINTS-01). resetPlan() clears it at
+  // the start of a new turn or on a thread switch; planEvent() folds one
+  // normalized step event in and re-renders; on `done`/`fail` it settles into a
+  // collapsed "N steps" summary that persists (unlike the live-status row).
+  resetPlan() {
+    this._plan = emptyPlan();
+    this._planStrip?.remove();
+    this._planStrip = null;
+    this._planKey = null;
+  }
+  planEvent(ev) {
+    this._plan = reducePlan(this._plan ?? emptyPlan(), ev);
+    this._renderPlanStrip();
+  }
+  _renderPlanStrip() {
+    const plan = this._plan ?? emptyPlan();
+    if (!plan.steps.length) { this._planStrip?.remove(); this._planStrip = null; this._planKey = null; return; }
+    const stepsAttr = JSON.stringify(plan.steps);
+    const stateAttr = plan.state === "settled" ? "settled" : "running";
+    const key = `${stateAttr}|${stepsAttr}`;
+    let strip = this._planStrip;
+    if (!strip || !strip.isConnected) {
+      strip = document.createElement("plan-strip");
+      strip.classList.add("run-plan");
+      this._planStrip = strip;
+      this._planKey = null;
+    }
+    // The strip pins to the TOP of the conversation flow — insert it FIRST so
+    // it stays above the transcript that streams below it.
+    if (this.firstChild !== strip) this.insertBefore(strip, this.firstChild);
+    if (key === this._planKey) return; // deduped: no attribute churn, no re-announce
+    this._planKey = key;
+    strip.setAttribute("steps", stepsAttr);
+    strip.setAttribute("state", stateAttr);
+  }
+
   setMessages(messages) {
     // Keep the live-status row across the rebuild: replaceChildren detaches
-    // it, so re-append it LAST afterwards (review P1-a).
+    // it, so re-append it LAST afterwards (review P1-a). The plan strip is
+    // likewise preserved (re-inserted FIRST below) so a terminal re-projection
+    // from the durable log does not wipe the just-settled "N steps" summary.
     const liveRow = this._liveStatusRow;
+    const planStrip = this._planStrip?.isConnected ? this._planStrip : null;
     this.replaceChildren();
     this._lastTs = null;
     this._approvalKeys = new Map();
@@ -5474,6 +5518,9 @@ class AgentConversation extends Component {
       }
     }
     if (liveRow) this.appendChild(liveRow);
+    // The plan strip pins to the TOP — re-insert it as the first child so it
+    // survives the rebuild in place.
+    if (planStrip) this.insertBefore(planStrip, this.firstChild);
     // A (re)projection is a fresh read of the thread: land on the newest turn.
     this._scrollToBottom(true);
   }
@@ -6874,6 +6921,94 @@ class ConversationRunStatus extends Component {
   }
 }
 customElements.define("conversation-run-status", ConversationRunStatus);
+
+// Plan-strip line icons — one stroke weight, currentColor, drawn (never emoji).
+const ICON_STEP_ACTIVE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true" class="spin"><path d="M12 3a9 9 0 1 0 9 9"/></svg>';
+const ICON_STEP_DONE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>';
+const ICON_STEP_ERROR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
+const ICON_PLAN_DONE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>';
+const ICON_CHEVRON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>';
+
+/* <plan-strip steps='[{"label":"Reading the page","status":"done"},…]' state="running|settled">
+ * — the compact plan of a running multi-step task
+ * (CAP-FB-20260830-PLAN-STRIP-CHECKPOINTS-01). The steps the run declared —
+ * its tool calls, streamed through the progress port — render as a checklist:
+ * the current step active, completed ones checked. It pins to the top of the
+ * thread while the run is live and, on `done`, settles into a collapsed
+ * "N steps" summary the owner can re-open. Built on a native <details> so the
+ * summary is keyboard-toggleable for free; a single visually-hidden aria-live
+ * region announces the step in flight without the checklist itself shouting.
+ * Every label is escaped — a tool argument is untrusted content. */
+class PlanStrip extends Component {
+  static get observedAttributes() { return ["steps", "state"]; }
+  _render() {
+    const steps = parseJSONAttr(this.getAttribute("steps"), [])
+      .filter((s) => s && typeof s === "object")
+      .map((s) => ({
+        label: typeof s.label === "string" ? s.label : "",
+        status: isPlanStepStatus(s.status) ? s.status : "active",
+      }));
+    if (!steps.length) { mountTemplate(this, ":host{display:none;}", ""); return; }
+    const settled = this.getAttribute("state") === "settled";
+    const sum = planSummary({ steps, state: settled ? "settled" : "running" });
+    // The summary line: while running, the step in flight; once settled, the
+    // count (with an honest note when a step failed).
+    const summaryText = settled
+      ? `${sum.total} ${sum.total === 1 ? "step" : "steps"}${sum.errored ? " · 1 or more failed" : ""}`
+      : sum.activeLabel
+        ? `Step ${sum.current} of ${sum.total} · ${sum.activeLabel}`
+        : `Step ${sum.current} of ${sum.total}`;
+    // aria-live text: the active step (running) or the outcome (settled).
+    const liveText = settled
+      ? `Plan complete — ${sum.total} ${sum.total === 1 ? "step" : "steps"}${sum.errored ? ", with an error" : ""}`
+      : sum.activeLabel ? `Now: ${sum.activeLabel}` : "";
+    const rows = steps.map((s) => {
+      const icon = s.status === "done" ? ICON_STEP_DONE
+        : s.status === "error" ? ICON_STEP_ERROR
+        : ICON_STEP_ACTIVE;
+      return `<li data-status="${s.status}"><span class="ic" aria-hidden="true">${icon}</span><span class="tx">${escapeHtml(s.label)}</span></li>`;
+    }).join("");
+    mountTemplate(this, `
+      :host { display:block; position:sticky; top:0; z-index:4; margin:0 0 12px; min-width:0; }
+      :host([hidden]) { display:none; }
+      .plan { border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-md,12px); background:var(--panel,#fff); color:var(--text,#1d1b18); box-shadow:0 4px 16px rgb(0 0 0 / .06); overflow:clip; }
+      details > summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:10px; min-height:44px; padding:10px 12px; font-size:13px; font-weight:650; color:var(--text,#1d1b18); }
+      summary::-webkit-details-marker { display:none; }
+      summary:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:-2px; border-radius:var(--radius-md,12px); }
+      .lead { flex:0 0 auto; width:16px; height:16px; display:inline-flex; color:var(--accent,#0e6e63); }
+      .lead.done { color:var(--success,#1a7f37); }
+      .lead.err { color:var(--danger,#b3261e); }
+      .sumtx { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .chev { flex:0 0 auto; width:16px; height:16px; display:inline-flex; color:var(--muted,#635e56); transition:transform .18s ease; }
+      details[open] .chev { transform:rotate(180deg); }
+      ol { margin:0; padding:2px 12px 12px; list-style:none; display:flex; flex-direction:column; gap:8px; }
+      li { display:flex; align-items:center; gap:9px; font-size:12px; line-height:1.4; color:var(--muted,#635e56); min-width:0; }
+      li[data-status="active"] { color:var(--text,#1d1b18); font-weight:600; }
+      li[data-status="error"] { color:var(--danger,#b3261e); }
+      li .ic { flex:0 0 auto; width:15px; height:15px; display:inline-flex; }
+      li[data-status="done"] .ic { color:var(--success,#1a7f37); }
+      li[data-status="active"] .ic { color:var(--accent,#0e6e63); }
+      li[data-status="error"] .ic { color:var(--danger,#b3261e); }
+      li .tx { min-width:0; overflow-wrap:anywhere; }
+      .lead svg, .chev svg, li .ic svg { width:100%; height:100%; display:block; }
+      .spin { transform-origin:center; animation:plan-spin .9s linear infinite; }
+      @media (prefers-reduced-motion: reduce) { .spin { animation:none; } .chev { transition:none; } }
+      @keyframes plan-spin { to { transform:rotate(360deg); } }
+      .sr { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0; }
+    `, `<div class="plan">
+      <details${settled ? "" : " open"}>
+        <summary>
+          <span class="lead${settled && !sum.errored ? " done" : ""}${settled && sum.errored ? " err" : ""}" aria-hidden="true">${settled ? (sum.errored ? ICON_STEP_ERROR : ICON_PLAN_DONE) : ICON_STEP_ACTIVE}</span>
+          <span class="sumtx">${escapeHtml(summaryText)}</span>
+          <span class="chev" aria-hidden="true">${ICON_CHEVRON}</span>
+        </summary>
+        <ol aria-label="Run steps">${rows}</ol>
+      </details>
+      <span class="sr" role="status" aria-live="polite">${escapeHtml(liveText)}</span>
+    </div>`);
+  }
+}
+customElements.define("plan-strip", PlanStrip);
 
 /* <permission-approval-card reason="…" permissions='["tabs"]' origins='["https://a.com"]'
  * global="true" state="pending|granted|denied|error" detail="…"> — the IN-CONTEXT

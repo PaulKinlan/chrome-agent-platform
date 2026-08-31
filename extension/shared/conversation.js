@@ -335,6 +335,12 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
     switch (ev.type) {
       case "tool-call": {
         onStatus?.({ state: "running", activity: friendlyActivityLabel(ev.toolName, ev.toolArgs) });
+        // A tool call is a plan step — append it to the strip (a protocol call
+        // is plumbing, not a step, so it never appears).
+        if (!isProtocolTool(ev.toolName)) {
+          const callLabel = effectiveToolCall(ev.toolName, ev.toolArgs, null);
+          c.planEvent?.({ type: "step-start", label: planStepLabel(callLabel.name, callLabel.args) });
+        }
         // The invoked tool is not known until the result arrives, but the
         // arguments already carry it nested under `arguments` alongside a
         // selectionRef that means nothing to a reader — unwrap now so the card
@@ -361,6 +367,10 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
         const raw = safeToolResult(shown);
         const summary = shown != null ? summarizeToolResult(resEff.name, shown) : "";
         const status = isToolErrorEvent(ev) ? "error" : "success";
+        // Resolve this call's plan step — and adopt the tool's REAL name, now
+        // known from the result, as the corrected checklist label.
+        const doneName = (typeof ev.selectedTool === "string" && ev.selectedTool) || resEff.name || ev.toolName;
+        c.planEvent?.({ type: "step-end", status: status === "error" ? "error" : "done", label: planStepLabel(doneName, resEff.args ?? ev.toolArgs) });
         // Remember id → name from the untruncated live result BEFORE the card
         // re-renders, so the card (and a later update card) can be titled
         // with the artifact's name (CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01).
@@ -405,6 +415,7 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
         break;
       case "done":
         terminal.onPortDone(ev.aborted === true);
+        c.planEvent?.({ type: ev.aborted === true ? "fail" : "settle" });
         // The agent view has no other live source for the conclusion — the
         // streamed bubble takes the final text on a NON-aborted settle (an
         // aborted run reports no successful answer), else it is appended. A
@@ -421,6 +432,7 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
         break;
       case "error":
         terminal.onPortError();
+        c.planEvent?.({ type: "fail" });
         onStatus?.({ state: "failed", message: ev.reason ?? ev.message ?? "error" });
         break;
       default:
@@ -502,6 +514,13 @@ export function friendlyActivityLabel(toolName, args) {
     case "delegate_task": return name ? `delegating to ${name}` : "delegating a task";
     default: return verb;
   }
+}
+
+/** The plan strip's checklist labels read as a title-cased phrase ("Reading the
+ * page") — capitalize the first letter of the friendly activity label. */
+function planStepLabel(toolName, args) {
+  const s = friendlyActivityLabel(toolName, args);
+  return typeof s === "string" && s ? s.charAt(0).toUpperCase() + s.slice(1) : "Working…";
 }
 
 // ── the tool-card lifecycle (pure, unit-testable) ───────────────────────────
@@ -1657,6 +1676,10 @@ export async function runConversationTurn(container, { text, attachments = [], h
     catch { return false; }
   };
   const status = (s) => { if (!stale()) onStatus?.(s); };
+  // A new turn starts with a fresh plan strip: clear the prior turn's checklist
+  // so the strip rebuilds from THIS turn's steps (CAP-FB-20260830-PLAN-STRIP-
+  // CHECKPOINTS-01).
+  if (!stale()) c.resetPlan?.();
   // Surface the accepted turn immediately, including while provider capability
   // checks are pending. This is the sole queued signal for the conversation.
   status({ state: "queued" });
@@ -1978,6 +2001,12 @@ export async function runConversationTurn(container, { text, attachments = [], h
       }
       case "tool-call": {
         status({ state: attempt > 1 ? "retrying" : "running", activity: friendlyActivityLabel(ev.toolName, ev.toolArgs) });
+        // A tool call is a plan step — append it to the top-of-thread checklist
+        // (protocol plumbing is never a step).
+        if (!isProtocolTool(ev.toolName)) {
+          const callLabel = effectiveToolCall(ev.toolName, ev.toolArgs, null);
+          c.planEvent?.({ type: "step-start", label: planStepLabel(callLabel.name, callLabel.args) });
+        }
         // Unwrap the lazy envelope immediately (the selectionRef plumbing is
         // never shown); the header corrects to the real tool at result time.
         const callEff = effectiveToolCall(ev.toolName, ev.toolArgs, null);
@@ -2024,6 +2053,12 @@ export async function runConversationTurn(container, { text, attachments = [], h
         const summary = shown != null ? summarizeToolResult(resEff.name, shown) : "";
         const err = isToolErrorEvent(ev);
         const status = err ? "error" : "success";
+        // Resolve this call's plan step, adopting the tool's REAL name (known
+        // now from the result) as the corrected checklist label.
+        {
+          const doneName = (typeof ev.selectedTool === "string" && ev.selectedTool) || resEff.name || ev.toolName;
+          c.planEvent?.({ type: "step-end", status: err ? "error" : "done", label: planStepLabel(doneName, resEff.args ?? ev.toolArgs) });
+        }
         if (card) {
           // The result names the tool that actually ran (the lazy envelope):
           // correct the header + unwrap the arguments now the real tool is
@@ -2089,6 +2124,9 @@ export async function runConversationTurn(container, { text, attachments = [], h
         // queue once; a later response is a no-op. An ABORTED run must never
         // report a successful "done" status.
         terminal.onPortDone(ev.aborted === true);
+        // Settle the plan strip into its collapsed "N steps" summary (an aborted
+        // run marks any unfinished step as errored).
+        c.planEvent?.({ type: ev.aborted === true ? "fail" : "settle" });
         // A bubble still streaming at settle takes the run's final text (the
         // claim-checked result) in place; an aborted run keeps what streamed.
         if (streamer.active) {
@@ -2104,6 +2142,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
         break;
       case "error":
         terminal.onPortError();
+        c.planEvent?.({ type: "fail" });
         status({
           state: "failed",
           message: ev.reason ?? ev.message ?? "error",
@@ -2236,6 +2275,10 @@ export async function runConversationTurn(container, { text, attachments = [], h
     if ((res.serverToolEvents || res.citations) && typeof c.appendServerToolRows === "function") {
       c.appendServerToolRows(res);
     }
+    // Backstop: settle the plan strip even if the port's `done` was missed
+    // (the authoritative response is the terminal authority) — reducePlan on an
+    // already-settled plan is idempotent.
+    c.planEvent?.({ type: "settle" });
     status({ state: "completed" });
   } else {
     // A provider/config failure must be CLEAR + ACTIONABLE, not a generic
@@ -2245,6 +2288,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
     const action = res?.errorAction ?? (res?.aborted ? "the run stopped before completing" : null);
     const category = res?.errorCategory ?? (res?.aborted ? "aborted" : null);
     const msg = res?.error ?? (res?.aborted ? "run aborted" : "unknown error");
+    c.planEvent?.({ type: "fail" });
     status({
       state: res?.aborted ? "cancelled" : "failed",
       message: reason ?? msg,
