@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.515] — 2026-08-31
+- tasks: record the r3 candidate sha
+
 ## [0.2.514] — 2026-08-31
 - Recent activity: r3 review fixes — every kind bounded to a human sentence, expanded rows show summaries, runs-today on both refresh paths
 

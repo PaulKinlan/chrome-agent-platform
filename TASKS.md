@@ -3630,7 +3630,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Workspace: /home/paulkinlan/worktrees/cap-recent-activity-user
 - Branch: cap-recent-activity-user
 - Base: origin/main 7037b6e6
-- Candidate: <r3 tip>
+- Candidate: bb2cc56c
 - Shipping: pending review
 - Acceptance: Two demo turns produce two activity rows; attestation rows and raw provider result dumps never appear on the hub (they stay in Run logs); no row text overlaps the time column at 1440 or 1024; the zero state says "Nothing has happened yet" and the filtered-empty state "No activity matches this filter"; the hub header no longer shows `$0.0000`/tokens and agrees with itself across renders.
   - Context: `<activity-explorer>` is `extension/shared/components.js:7151-7477`; it loads `activity.list` (7323) which merges every memory store's `journal` array (`extension/background/routes/activity.js:72-110`) and renders each entry with `.aex-kind` = `e.type` (7403-7405) inside a `summary` grid `auto 1fr auto` (7172). Entry types come from the SW journal writes: `prompt-attestation` (`service-worker.js:2555`), `task` (2584, 6971) and `result` (`durable-runs.js:1457, 1539` and the SW result append). The empty text is `"No activity matches."` regardless of filter (7382). The header is `renderHubUsage` in `extension/ntp/ntp.js:1115-1125` → `${t.calls} calls · ${tokens} tokens · $${t.estimatedCost.toFixed(4)}` from `usage.get`; it disagreed between renders ("0 calls · 0 tokens" vs "2 calls · 80 tokens") because it is rendered once at load and again on a timer elsewhere. What must NOT change: the journal contents (attestation rows are the durable prompt receipt — hide, do not delete); the per-store caps in `activity.js`; Run logs.
