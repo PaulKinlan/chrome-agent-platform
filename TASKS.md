@@ -4592,21 +4592,22 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01] Agent templates in a customizable select (searchable, grouped incl. Scheduled)
 - Feedback: 2026-08-31 — owner: "I also said all the agent templates listed in a <select> using the new Customizable select elements… you can keep a similar type of UI to the current templates because that info is useful, I just want it searchable, and nice looking inside a select (I also like the current grouping including scheduled)."
-- Updated: 2026-08-31 22:45 UTC
+- Updated: 2026-09-01 00:40 UTC
 - Status: DONE
-- Resume: sol r1 REVISE addressed in r2 (selection preserved across filtering; ::picker dark styling; REAL WCAG contrast + viewport journey checks; tracker completed)
+- Resume: sol r1 REVISE addressed in r2 (selection preserved across filtering; ::picker dark styling; REAL WCAG contrast + viewport journey checks); sol r3 REVISE addressed (open-picker functional measurement); sol r4 REVISE addressed (enforced open precondition before measurement, closed-refusal sensitivity proof)
 - Priority: P2
 - Owner: hub coordinator (journal session)
 - Workspace: /tmp/cap-dialog-templates
 - Branch: cap-dialog-templates
 - Base: origin/main e9bd59c9
-- Candidate: (final commit recorded on merge)
+- Candidate: e64ab4be + r4 fix commit (recorded on merge)
 - Shipping: merged forward by the hub coordinator (pending review PASS)
 - Acceptance: the create dialog offers the template catalogue as a native, searchable, grouped select (Starter / Other / Scheduled incl. the background recipes); the selectedcontent mirrors the choice; feature-detect falls back to a classic select; the filter narrows live with an empty state; a picked template still prefills name/role/skills/schedule; Settings keeps its scheduled gallery.
-- Gates: build clean; unit 2814/0; chrome journeys 274/274; falsification RED→GREEN (filter, grouping).
+- Gates: build clean; unit 2816/0; chrome journeys 276/276 (r3) → 276/276 (r4 re-gate); falsification RED→GREEN (filter, grouping, low-contrast popup, closed-picker refusal).
 - History:
   - 2026-08-31 — worker delivered the select module + create-dialog wiring + journey checks; Part 1 (owner's invisible-Advanced report) verified as already-fixed on the tip, hardened with the both-schemes contrast check.
   - 2026-08-31 22:45 UTC — sol r1 REVISE (3 P1s + 1 P2) addressed: (P1a) filtering now PRESERVES the chosen native value via a retained hidden option (journey: select → filter → clear → selection restored exactly; unit: source pins the retained branch); (P1b) the customizable picker popup is styled with light-dark() tokens in BOTH schemes (::picker(select), option hover/checked states) — the dark picker no longer renders white-on-white; (P1c) the journey computes REAL WCAG contrast (module's parseRgb + wcagContrast, ≥4.5 for skills rows AND picker in both schemes) plus viewport-in-dialog containment, with a deliberate low-contrast fixture proven RED; (P2) this entry completed. Gates: build clean; unit 2816/0; chrome journeys 275/275.
   - 2026-09-01 00:15 UTC — sol r3 REVISE (1 P1) addressed: the picker contrast is now measured from the LIVE OPEN popup — a real CDP click opens the picker (trusted activation), `:open`/aria-expanded is asserted, and the ACTUAL rendered option text color + popup background are read via getComputedStyle from the open picker in BOTH schemes; WCAG ≥4.5 (light 17.18, dark 12.91). Falsification proven at the journey level: a deliberately low-contrast popup override drives the SAME probe to 2.61 (< 4.5) in both schemes and removal restores it (RED → GREEN). Gates: build clean; unit 2816/0; chrome journeys 276/276.
-- Review: r1 sol review — 3 P1s + 1 P2 (addressed in r2). r3 sol review — 1 P1 (addressed in r3).
+  - 2026-09-01 00:40 UTC — sol r4 REVISE (1 P1 + 1 P2) addressed: the open precondition is now ENFORCED before any measurement — readPopup polls until the picker is genuinely open (`:open`/aria-expanded AND a rendered option box) and hard-fails with `picker-never-opened` if it never opens; the same probe REFUSES a closed picker (proven: closed → picker-never-opened → RED, open → GREEN), and the low-contrast fixture still drives it RED in both schemes. Candidate e64ab4be + r4 fix; gates: build clean; unit 2816/0; chrome journeys 276/276 (re-gate).
+- Review: r1 sol review — 3 P1s + 1 P2 (addressed in r2). r3 sol review — 1 P1 (addressed in r3). r4 sol review — 1 P1 + 1 P2 (addressed in r4).
 - Next: — (closed)

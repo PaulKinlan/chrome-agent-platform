@@ -1331,10 +1331,17 @@ async function main() {
     const readPopup = (dark) => evalIn(cdp, ntpSession, `(async () => {
       const sel = document.getElementById('agent-template-select');
       if (!sel) return { ready: false, why: 'no-select' };
-      const openSignal = sel.matches(':open') || sel.getAttribute('aria-expanded') === 'true' ||
+      const isOpen = () =>
+        sel.matches(':open') || sel.getAttribute('aria-expanded') === 'true' ||
         sel.querySelector('.agent-template-select-button')?.getAttribute('aria-expanded') === 'true';
+      // ENFORCED open precondition (r4 P1): measure ONLY after the picker is
+      // genuinely open. Poll until the open attribute AND a rendered option
+      // box are present; if the picker never opens, HARD-FAIL with
+      // picker-never-opened (no silent fallback to closed/hidden styles).
+      let open = isOpen();
+      for (let i = 0; i < 20 && !open; i++) { await new Promise((r) => setTimeout(r, 60)); open = isOpen(); }
+      if (!open) return { ready: false, why: 'picker-never-opened' };
       const firstOpt = [...sel.options].find((o) => !o.hidden && o.value !== '');
-      if (!firstOpt) return { ready: false, why: 'no-visible-option', open: openSignal };
       const optStyle = getComputedStyle(firstOpt);
       const fg = optStyle.color;
       const optBg = optStyle.backgroundColor || '';
@@ -1348,7 +1355,7 @@ async function main() {
       const bg = (optBg && optBg !== 'rgba(0, 0, 0, 0)' && optBg !== 'transparent')
         ? optBg
         : (popupBg && popupBg !== 'rgba(0, 0, 0, 0)' && popupBg !== 'transparent' ? popupBg : '');
-      return { ready: true, dark: ${dark}, open: openSignal, fg, bg, sample: firstOpt.textContent.slice(0, 40) };
+      return { ready: true, dark: ${dark}, open: true, fg, bg, sample: firstOpt.textContent.slice(0, 40) };
     })()`);
     const injectLowContrast = () => evalIn(cdp, ntpSession, `(() => {
       let st = document.getElementById('__picker-low-contrast');
@@ -1362,6 +1369,12 @@ async function main() {
     // Functional popup contrast: light scheme, styled (GREEN) then a deliberately
     // low-contrast override (RED), then restored (GREEN). Each measurement
     // OPENS the picker with a real click, reads the live popup, and closes it.
+    // r4 P1 sensitivity proof: measuring while the picker is CLOSED must be
+    // refused by the enforced precondition (picker-never-opened) — the SAME
+    // probe that later passes while open. This proves the measurement cannot
+    // silently read closed/hidden styles.
+    await closePicker();
+    const popupClosedProbe = (await readPopup(false)) ?? { ready: false, why: "eval-undefined" };
     const popupLight = await (async () => { await closePicker(); return (await openPickerClick()) ? (await readPopup(false)) ?? { ready: false, why: "eval-undefined" } : { ready: false, why: "click-failed" }; })();
     await closePicker();
     await injectLowContrast();
@@ -1423,6 +1436,7 @@ async function main() {
       parseRgb(lightC.skills.fg)?.join(",") !== parseRgb(darkC.skills.fg)?.join(","));
     console.log("create dialog contrast probe (WCAG):", JSON.stringify({
       lightC, darkC, lightSkillsRatio, darkSkillsRatio,
+      popupClosedProbe,
       popupLight, popupLightRatio, popupLightLow, popupLightLowRatio, popupLightRestoredRatio,
       popupDark, popupDarkRatio, popupDarkLow, popupDarkLowRatio, popupDarkRestoredRatio,
       redFixture,
@@ -1436,7 +1450,12 @@ async function main() {
     );
     check(
       "create dialog: the OPEN template picker popup is legible in both schemes (live option vs popup bg, WCAG >= 4.5)",
-      popupLight?.open === true && popupDark?.open === true &&
+      // Closed-state sensitivity (r4 P1): the SAME enforced probe must REFUSE
+      // a closed picker (picker-never-opened) — proving the measurement cannot
+      // pass on closed/hidden styles — then PASS once the picker is genuinely
+      // open (open === true, real rendered option vs popup bg, WCAG >= 4.5).
+      popupClosedProbe?.ready === false && popupClosedProbe?.why === "picker-never-opened" &&
+        popupLight?.open === true && popupDark?.open === true &&
         popupLightRatio !== null && popupLightRatio >= CONTRAST_AA_TEXT &&
         popupDarkRatio !== null && popupDarkRatio >= CONTRAST_AA_TEXT &&
         // falsification: low-contrast override drives the SAME probe RED, and
