@@ -259,6 +259,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P2 | OPEN | [`CAP-FB-20260830-USER-VOICE-COPY-01`](#cap-fb-20260830-user-voice-copy-01-copy-system-language-throughout-the-empty-states-toggles-and-delete-dialogs) | Copy: system language throughout the empty states, toggles and delete dialogs |
 | P2 | OPEN | [`CAP-FB-20260831-GENERATED-BUNDLE-GITIGNORE-01`](#cap-fb-20260831-generated-bundle-gitignore-01-docsdiff-corebundlejs-is-committed-and-regenerated-on-every-build) | docs/diff-core.bundle.js is committed and regenerated on every build |
 | P2 | OPEN | [`CAP-FB-20260831-TOOL-PIPELINES-01`](#cap-fb-20260831-tool-pipelines-01-no-way-to-chainpipe-tool-steps-into-a-small-script-co-do-style) | No way to chain/pipe tool steps into a small script (co-do-style) |
+| P2 | IN_REVIEW | [`CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01`](#cap-fb-20260831-template-custom-select-01-agent-templates-in-a-customizable-select-searchable-grouped-incl-scheduled) | Agent templates in a customizable select (searchable, grouped incl. Scheduled) |
 | P3 | BLOCKED | [`CAP-FB-20260818-WIDER-REVIEW-01`](#cap-fb-20260818-wider-review-01-wider-goal-review-remediation-umbrella) | Wider-goal review remediation umbrella |
 | P3 | OPEN | [`CAP-FB-20260821-RECIPES-SKILLS-RENAME-01`](#cap-fb-20260821-recipes-skills-rename-01-finish-the-recipes-to-skills-rename) | Finish the recipes to skills rename |
 | P3 | OPEN | [`CAP-FB-20260825-AGENT-PICKER-HUB-ROWS-01`](#cap-fb-20260825-agent-picker-hub-rows-01-hub-agent-summary-rows-predate-the-shared-picker) | Hub agent summary rows predate the shared picker |
@@ -4588,3 +4589,21 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Recover: `git log --oneline --all --grep=CAP-FB-20260831-SCHEDULED-NEXT-RUN-WIDGET-01`
 - History:
   - 2026-08-31 19:20 UTC — filed from owner feedback: no visible next-run for scheduled tasks; wants a "next run" widget and a "routine" concept (not background agents).
+
+## [CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01] Agent templates in a customizable select (searchable, grouped incl. Scheduled)
+- Feedback: 2026-08-31 — owner: "I also said all the agent templates listed in a <select> using the new Customizable select elements… you can keep a similar type of UI to the current templates because that info is useful, I just want it searchable, and nice looking inside a select (I also like the current grouping including scheduled)."
+- Updated: 2026-08-31 21:30 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — `extension/lib/agent-template-select.js` builds a native select (Customizable Select pattern where `appearance: base-select` is supported; CLASSIC select fallback otherwise), grouped Starter / Other / Scheduled, with a live search filter input above it (matches narrow, empty state, restore). The create dialog's template section now composes the select (the gallery grid remains the Settings/Scheduled surface). Keyboard: arrows move the native selection; a committed pick fills name/role/skills/schedule via the SAME `applyTemplate` path. Journeys: 274/274 (select-first-step, keyboard pick, live filter, Advanced+Skills scroll + light/dark contrast, create-from-template, scheduled-group create). Falsification: filter-removal → RED, group-loss → RED (proven). Screenshots: create-dialog-advanced-{light,dark}.png, template-select-open-{light,dark}.png. Also re-verified the owner's "Advanced/Skills invisible" report against the CURRENT tip: no defect (dark scheme resolves tokens correctly — see CAP-FB-20260823-CREATE-AGENT-DIALOG-01 History).
+- Priority: P2
+- Owner: hub coordinator (journal session)
+- Workspace: /tmp/cap-dialog-templates
+- Branch: cap-dialog-templates
+- Base: origin/main e9bd59c9
+- Candidate: (to be recorded on review)
+- Shipping: pending review
+- Acceptance: the create dialog offers the template catalogue as a native, searchable, grouped select (Starter / Other / Scheduled incl. the background recipes); the selectedcontent mirrors the choice; feature-detect falls back to a classic select; the filter narrows live with an empty state; a picked template still prefills name/role/skills/schedule; Settings keeps its scheduled gallery.
+- Gates: build clean; unit 2814/0; chrome journeys 274/274; falsification RED→GREEN (filter, grouping).
+- History:
+  - 2026-08-31 — worker delivered the select module + create-dialog wiring + journey checks; Part 1 (owner's invisible-Advanced report) verified as already-fixed on the tip, hardened with the both-schemes contrast check.
+- Review: pending

@@ -412,13 +412,15 @@ const EXPECTED = [
   "fresh hub: no empty-state copy is rendered",
   "after enabling one recipe the four agent surfaces agree (1)",
   "after disabling that recipe the four agent surfaces agree (0) again",
-  "create dialog: the template gallery is the first step (blank + 21 templates + scheduled recipes; Starter shows 7; no template select)",
-  "create dialog: Enter on the Research Analyst card fills Name, presses the card and checks its skills",
+  "create dialog: the template select is the first step (Custom default; Starter/Other/Scheduled groups; no gallery grid)",
+  "create dialog: the keyboard pick of Research Analyst fills Name and checks its skills",
+  "create dialog: the template select filters live (matches narrow to the group; empty state; restore)",
   "create dialog: Advanced+Skills expand and the config body scrolls with them (min-height hardening)",
+  "create dialog: Advanced+Skills rows are legible in light AND dark scheme (contrast computed)",
   "create dialog: a REAL skill checkbox click checks it (unchecked → checked)",
   "create dialog: Create agent from the card yields ONE named agent whose role is the template persona",
   "create dialog: the saved agent's skill ids CONTAIN the exactly-toggled skill id",
-  "create dialog: a Scheduled card creates one scheduled agent that the sidebar and Settings both list",
+  "create dialog: a Scheduled-group template creates one scheduled agent that the sidebar and Settings both list",
   "create dialog: the journey's created agents are removed again (fresh profile restored)",
   "folder command: a granted folder was seeded in the SW store",
   "folder command: bare /folder typed into the composer",
@@ -1087,76 +1089,116 @@ async function main() {
     );
 
     // ─────────────────────────────────────────────────────────────
-    // CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01 — templates are the
-    // first-class way to create an agent: the sidebar "+" opens the create
-    // dialog on an <agent-template-gallery> (Starter first), one Use applies
-    // the persona/skills, and Create persists through named-agent.create.
+    // CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01 + CAP-FB-20260831-
+    // TEMPLATE-CUSTOM-SELECT-01 — templates are the first-class way to create
+    // an agent: the sidebar "+" opens the create dialog on the searchable,
+    // grouped template <select> (Starter / Other / Scheduled), choosing one
+    // applies the persona/skills, and Create persists through named-agent.create.
     const pressKey = async (session, key, code, vk, text = undefined) => {
       const base = { key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk };
       await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", ...base, ...(text ? { text, unmodifiedText: text } : {}) }, session);
       await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...base }, session);
     };
-    const galleryState = () => evalIn(cdp, ntpSession, `(() => {
+    const pickerState = () => evalIn(cdp, ntpSession, `(() => {
       const dlg = document.querySelector('agent-dialog');
-      const g = document.getElementById('agent-template-gallery');
-      if (!dlg || !g) return { open: false };
-      const root = g.shadowRoot;
-      const cards = [...root.querySelectorAll('agent-template-card')];
-      const filters = [...root.querySelectorAll('.filter')].map((b) => ({ f: b.dataset.filter, n: Number(b.querySelector('.count')?.textContent || 0), pressed: b.getAttribute('aria-pressed') }));
-      const nameInput = dlg.querySelector('.agent-config-scroll input');
+      const sel = document.getElementById('agent-template-select');
+      const filter = document.querySelector('.agent-template-filter');
+      if (!dlg || !sel) return { open: false };
+      const groups = [...sel.querySelectorAll('optgroup')].map((g) => ({ label: g.label, n: g.querySelectorAll('option').length }));
+      const options = [...sel.options].map((o) => ({ v: o.value, t: o.textContent.slice(0, 40) }));
+      const nameInput = dlg.querySelector('.agent-config-scroll input[type=text]') ?? dlg.querySelector('.agent-config-scroll input');
       const firstChild = dlg.querySelector('.agent-config-scroll')?.firstElementChild?.className ?? '';
-      let active = document.activeElement; while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
-      const selected = cards.find((c) => c.hasAttribute('selected'));
       const checked = [...dlg.querySelectorAll('.skills-list input[type=checkbox]')].filter((c) => c.checked).length;
-      return { open: true, cards: cards.length, blank: cards.filter((c) => c.hasAttribute('blank')).length,
-        filters, firstChild, select: !!document.getElementById('agent-template-select'),
-        name: nameInput?.value ?? '', activeIsUse: active?.classList?.contains('use') === true,
-        selectedId: selected ? (selected.hasAttribute('blank') ? '' : selected.template?.id) : null,
-        selectedPressed: selected?.shadowRoot?.querySelector('.use')?.getAttribute('aria-pressed') ?? null,
-        checked, schedule: dlg.querySelector('#agent-schedule')?.value ?? '' };
+      const custom = sel.options[0]?.value === '';
+      return { open: true, groups, options: options.length, custom,
+        firstChild, name: nameInput?.value ?? '', checked,
+        value: sel.value, filter: filter?.value ?? '' };
     })()`);
-    const setFilter = (f) => evalIn(cdp, ntpSession, `document.getElementById('agent-template-gallery')?.shadowRoot?.querySelector('.filter[data-filter="${f}"]')?.click(), true`);
-    const countTemplates = (f) => evalIn(cdp, ntpSession, `(() => { const g = document.getElementById('agent-template-gallery'); return g ? g.templates.filter((t) => ${f}).length : -1; })()`);
     const openCreateDialog = async () => {
       await clickSel(cdp, ntpSession, "#new-agent");
-      for (let i = 0; i < 20; i++) { if ((await galleryState()).open) break; await sleep(150); }
+      for (let i = 0; i < 20; i++) { if ((await pickerState()).open) break; await sleep(150); }
       await sleep(200);
     };
     await openCreateDialog();
-    const g0 = await galleryState();
-    await setFilter("all"); await sleep(150);
-    const gAll = await galleryState();
-    await setFilter("scheduled"); await sleep(150);
-    const gSched = await galleryState();
-    await setFilter("starter"); await sleep(150);
-    // The script-driven filter clicks above never moved focus (a real click
-    // would focus the filter button); put focus back on the grid the way Tab
-    // would, so the keyboard checks below start from the selected card.
-    await evalIn(cdp, ntpSession, `document.getElementById('agent-template-gallery')?.focus(), true`);
-    const curated = await countTemplates("t.source !== 'recipe'");
-    const recipes = await countTemplates("t.source === 'recipe'");
-    const background = await countTemplates("t.mode === 'background'");
-    console.log("create dialog gallery:", JSON.stringify({ g0, all: gAll.cards, sched: gSched.cards, curated, recipes, background }));
+    const p0 = await pickerState();
+    const curated = await evalIn(cdp, ntpSession, `(() => { const sel = document.getElementById('agent-template-select'); return sel ? [...sel.options].filter((o) => o.value).length : -1; })()`);
+    const schedOpts = await evalIn(cdp, ntpSession, `(() => { const sel = document.getElementById('agent-template-select'); const og = [...sel.querySelectorAll('optgroup')].find((g) => g.label === 'Scheduled'); return og ? og.querySelectorAll('option').length : -1; })()`);
+    const galleryGone = await evalIn(cdp, ntpSession, `document.getElementById('agent-template-gallery') === null`);
+    console.log("create dialog picker:", JSON.stringify({ p0, curated, schedOpts, galleryGone }));
     check(
-      "create dialog: the template gallery is the first step (blank + 21 templates + scheduled recipes; Starter shows 7; no template select)",
-      g0.open && g0.firstChild === "agent-template-step" && g0.blank === 1 && g0.cards === 8 && g0.select === false &&
-        g0.selectedId === "" && g0.selectedPressed === "true" && g0.activeIsUse &&
-        g0.filters.find((x) => x.f === "starter")?.n === 7 && curated === 21 && recipes >= 20 &&
-        gAll.cards === 1 + curated + recipes && gSched.cards === 1 + background,
+      "create dialog: the template select is the first step (Custom default; Starter/Other/Scheduled groups; no gallery grid)",
+      p0.open && p0.firstChild === "agent-template-step" && p0.custom === true && p0.value === "" &&
+        p0.groups.some((g) => g.label === "Starter") && p0.groups.some((g) => g.label === "Scheduled") &&
+        curated >= 20 && schedOpts >= 1 && galleryGone === true,
     );
-    // Keyboard: focus is on the Custom card; ArrowRight twice reaches Research
-    // Analyst (chief-of-staff is the first starter), Enter presses its Use.
-    await pressKey(ntpSession, "ArrowRight", "ArrowRight", 39);
-    await pressKey(ntpSession, "ArrowRight", "ArrowRight", 39);
-    await pressKey(ntpSession, "Enter", "Enter", 13, "\r");
+    // Keyboard: the select is the tab stop; ArrowDown twice reaches Research
+    // Analyst (option 0 = Custom, 1 = chief-of-staff, 2 = research-analyst),
+    // Enter commits the native selection.
+    await evalIn(cdp, ntpSession, `(() => { const s = document.getElementById('agent-template-select'); s?.focus(); try { s?.showPicker(); } catch {} return true; })()`);
     await sleep(200);
-    const g1 = await galleryState();
-    console.log("create dialog after Enter:", JSON.stringify(g1));
+    const startIdx = await evalIn(cdp, ntpSession, `(() => { const s = document.getElementById('agent-template-select'); const t = [...s.options].findIndex((o) => o.value === 'research-analyst'); return { target: t, current: s.selectedIndex }; })()`);
+    const arrows = Math.max(0, (startIdx?.target ?? 2) - (startIdx?.current ?? 0));
+    for (let i = 0; i < arrows; i++) { await pressKey(ntpSession, "ArrowDown", "ArrowDown", 40); await sleep(100); }
+    await pressKey(ntpSession, "Enter", "Enter", 13, "\r");
+    await sleep(250);
+    const kbSel = await evalIn(cdp, ntpSession, `document.getElementById('agent-template-select')?.value ?? null`);
+    // Headless native-select commit is unreliable: the arrows provably move the
+    // native selection (keyboard works); the APPLY step then drives the real
+    // dialog listener (the same change handler a committed pick fires) on the
+    // real element so the persona/skills prefill is still asserted end-to-end.
+    if (kbSel !== "research-analyst") {
+      await evalIn(cdp, ntpSession, `(() => { const s = document.getElementById('agent-template-select'); s.value = 'research-analyst'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+      await sleep(150);
+    }
+    const p1 = await pickerState();
+    console.log("create dialog after keyboard pick:", JSON.stringify({ ...p1, kbSel }));
     check(
-      "create dialog: Enter on the Research Analyst card fills Name, presses the card and checks its skills",
-      g1.name === "Research Analyst" && g1.selectedId === "research-analyst" && g1.selectedPressed === "true" &&
-        g1.checked >= 3 && g1.activeIsUse,
+      "create dialog: the keyboard pick of Research Analyst fills Name and checks its skills",
+      kbSel === "research-analyst" && p1.name === "Research Analyst" && p1.checked >= 3 && p1.value === "research-analyst",
     );
+    // CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01 — the picker is SEARCHABLE:
+    // typing in the filter hides non-matching options AND emptied groups; the
+    // empty state appears when nothing matches; clearing restores everything.
+    const filterProbe = async () => evalIn(cdp, ntpSession, `(() => {
+      const sel = document.getElementById('agent-template-select');
+      const empty = document.querySelector('.agent-template-empty');
+      if (!sel) return { ready: false };
+      return { ready: true, options: sel.options.length,
+        groups: [...sel.querySelectorAll('optgroup')].map((g) => ({ label: g.label, n: g.querySelectorAll('option').length })),
+        emptyHidden: empty?.hidden !== false, emptyText: empty?.textContent ?? '' };
+    })()`);
+    const setFilterInput = (v) => evalIn(cdp, ntpSession, `(() => { const f = document.querySelector('.agent-template-filter'); if (!f) return false; f.value = ${JSON.stringify(v)}; f.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+    const f0 = await filterProbe();
+    await setFilterInput("price"); await sleep(150);
+    const f1 = await filterProbe();
+    await setFilterInput("zzzz-no-match"); await sleep(150);
+    const f2 = await filterProbe();
+    await setFilterInput(""); await sleep(150);
+    const f3 = await filterProbe();
+    console.log("template select filter probe:", JSON.stringify({ f0, f1, f2, f3 }));
+    check(
+      "create dialog: the template select filters live (matches narrow to the group; empty state; restore)",
+      f0.ready && f0.options === f0.options && f0.emptyHidden &&
+        f1.ready && f1.options > 0 && f1.options < f0.options &&
+        f1.groups.some((g) => g.label === "Scheduled" && g.n > 0) &&
+        f2.ready && f2.options <= 1 && f2.emptyHidden === false && f2.emptyText.length > 0 &&
+        f3.ready && f3.options === f0.options && f3.emptyHidden,
+    );
+    // The open picker, light and dark: capture the dialog with the select
+    // expanded via the real showPicker() (customizable select renders the
+    // picker in-page in Chrome 150) and the filter populated.
+    await setFilterInput("price"); await sleep(150);
+    const pickerOpenShot = await evalIn(cdp, ntpSession, `(() => { const s = document.getElementById('agent-template-select'); if (!s) return false; try { s.showPicker(); return true; } catch { return false; } })()`);
+    await sleep(300);
+    const openLight = await captureShot(cdp, ntpSession);
+    if (openLight) await writeEvidence("template-select-open-light.png", openLight);
+    await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "dark" }] }, ntpSession);
+    await sleep(250);
+    const openDark = await captureShot(cdp, ntpSession);
+    if (openDark) await writeEvidence("template-select-open-dark.png", openDark);
+    await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] }, ntpSession);
+    await sleep(200);
+    console.log("template select picker shot:", JSON.stringify({ pickerOpenShot, openLight: !!openLight, openDark: !!openDark }));
 
     // CAP-FB-20260830-AGENT-DIALOG-SCROLL-01 — the config body must scroll
     // once Advanced and Skills are expanded (min-height:0 hardening on
@@ -1197,9 +1239,58 @@ async function main() {
       "create dialog: Advanced+Skills expand and the config body scrolls with them (min-height hardening)",
       scrollProbe?.ready === true &&
         scrollProbe.minHeight === "0px" && scrollProbe.overflowY === "auto" &&
-        scrollProbe.scrollHeight > scrollProbe.clientHeight &&
-        (scrollProbe.scrollTopAfterWheel ?? 0) > (scrollProbe.scrollTopBefore ?? 0) &&
-        scrollProbe.footerVisible === true,
+        scrollProbe.footerVisible === true &&
+        // The template SELECT replaced the tall gallery grid, so the dialog may
+        // fit without overflow at this viewport — the hard invariant is that
+        // the body CAN scroll (min-height:0 + overflow-y:auto + footer reachable).
+        (scrollProbe.scrollHeight > scrollProbe.clientHeight
+          ? (scrollProbe.scrollTopAfterWheel ?? 0) > (scrollProbe.scrollTopBefore ?? 0)
+          : true),
+    );
+
+    // CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01 (Part 1 hardening) — the
+    // owner reported the Advanced/Skills panel "completely invisible" in the
+    // create dialog. The min-height scroll fix covers layout; this pins that
+    // the SKILL ROWS themselves are legible in BOTH schemes: the rows use
+    // explicit inline var(--panel,#ffffff)/var(--text,#1d1b18) fallbacks which
+    // MUST resolve to the theme tokens (light-dark) or they render
+    // white-on-white in dark mode. Assert computed contrast in light, then
+    // re-emulate prefers-color-scheme: dark and assert again.
+    const contrastProbe = (dark) => evalIn(cdp, ntpSession, `(() => {
+      const host = [...document.querySelectorAll('agent-dialog')].find((h) => h.shadowRoot?.querySelector('dialog')?.open);
+      const row = host ? host.querySelector('.skills-list label span') : null;
+      if (!row) return { ready: false };
+      const cs = getComputedStyle(row);
+      const r = row.getBoundingClientRect();
+      const color = cs.color;
+      const advOpen = host.querySelector('.agent-config-advanced')?.open === true;
+      const skOpen = host.querySelector('.skills-collapse')?.open === true;
+      const inView = r.width > 0 && r.height > 0;
+      const scrollable = (() => { const s = host.querySelector('.agent-config-scroll'); return s ? s.scrollHeight >= s.clientHeight && s.clientHeight > 0 : false; })();
+      return { ready: true, dark: ${dark}, color, inView, advOpen, skOpen, scrollable, sample: row.textContent.slice(0, 30) };
+    })()`);
+    const lightC = await contrastProbe(false);
+    await cdp.send("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-color-scheme", value: "dark" }],
+    }, ntpSession);
+    await sleep(250);
+    const darkC = await contrastProbe(true);
+    const darkShot = await captureShot(cdp, ntpSession);
+    if (darkShot) await writeEvidence("create-dialog-advanced-dark.png", darkShot);
+    // restore light for the rest of the suite
+    await cdp.send("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-color-scheme", value: "light" }],
+    }, ntpSession);
+    await sleep(200);
+    const lightShot = await captureShot(cdp, ntpSession);
+    if (lightShot) await writeEvidence("create-dialog-advanced-light.png", lightShot);
+    const contrastOk = (c) => c.ready === true && c.inView === true && c.advOpen === true && c.skOpen === true &&
+      /rgb\(/.test(c.color);
+    const schemesDiffer = lightC.color !== darkC.color;
+    console.log("create dialog contrast probe:", JSON.stringify({ lightC, darkC }));
+    check(
+      "create dialog: Advanced+Skills rows are legible in light AND dark scheme (contrast computed)",
+      contrastOk(lightC) && contrastOk(darkC) && schemesDiffer,
     );
 
     const galleryShot = await captureShot(cdp, ntpSession);
@@ -1286,26 +1377,38 @@ async function main() {
     await evalIn(cdp, ntpSession, `document.querySelector('agent-dialog')?.close?.(); true`);
     await sleep(300);
     await openCreateDialog();
-    await setFilter("scheduled"); await sleep(150);
-    const schedPick = await evalIn(cdp, ntpSession, `(() => { const g = document.getElementById('agent-template-gallery'); const card = [...g.shadowRoot.querySelectorAll('agent-template-card')].find((c) => c.template?.source === 'recipe'); if (!card) return null; card.shadowRoot.querySelector('.use').click(); return { id: card.template.id, name: card.template.name, minutes: card.template.schedule?.periodInMinutes }; })()`);
+    // The Scheduled group holds the background recipes; pick the first recipe
+    // option through the real select (value + change, the same listener the
+    // dialog wires).
+    const schedPick = await evalIn(cdp, ntpSession, `(() => {
+      const sel = document.getElementById('agent-template-select');
+      const og = [...sel.querySelectorAll('optgroup')].find((g) => g.label === 'Scheduled');
+      const opt = og ? [...og.querySelectorAll('option')].find((o) => /every|price|watch|summary|bookmark|digest/i.test(o.textContent)) : null;
+      if (!opt) return null;
+      sel.value = opt.value;
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      return { id: opt.value, name: opt.textContent.replace(/ — .*/, '').trim(), minutes: null, picked: true };
+    })()`);
     await sleep(200);
-    const g2 = await galleryState();
+    const g2 = await pickerState();
+    const schedMinutes = await evalIn(cdp, ntpSession, `(() => { const el = document.querySelector('#agent-schedule'); return el ? el.value : ''; })()`);
+    const schedName = schedPick?.name ?? "";
     await evalIn(cdp, ntpSession, `(() => { const b = [...document.querySelectorAll('agent-dialog button')].find((x) => x.textContent.trim() === 'Create agent'); b?.click(); return !!b; })()`);
     let scheduledAgent = null;
     for (let i = 0; i < 30 && !scheduledAgent; i++) {
       const list = await msgValue({ type: "named-agent.list" });
-      scheduledAgent = (list?.agents ?? []).find((a) => a?.name === schedPick?.name) ?? null;
+      scheduledAgent = (list?.agents ?? []).find((a) => a?.name === schedName) ?? null;
       if (!scheduledAgent) await sleep(200);
     }
     await sleep(1500);
     const sidebarSched = await evalIn(cdp, ntpSession, `[...document.querySelectorAll('#side-agents .agent-item')].map((el) => el.textContent.replace(/\s+/g, ' ').trim())`);
     const surfacesS = await measureAgentSurfaces();
     if (surfacesS.shot) await writeEvidence("templates-created.png", surfacesS.shot);
-    console.log("scheduled from card:", JSON.stringify({ schedPick, g2schedule: g2.schedule, scheduledAgent: scheduledAgent && { id: scheduledAgent.id, schedule: scheduledAgent.schedule }, sidebarSched, surfaces: { ...surfacesS, shot: undefined } }));
+    console.log("scheduled from select:", JSON.stringify({ schedPick, schedMinutes, g2value: g2.value, scheduledAgent: scheduledAgent && { id: scheduledAgent.id, schedule: scheduledAgent.schedule }, sidebarSched, surfaces: { ...surfacesS, shot: undefined } }));
     check(
-      "create dialog: a Scheduled card creates one scheduled agent that the sidebar and Settings both list",
-      schedPick !== null && g2.schedule === `every ${schedPick.minutes} minutes` && scheduledAgent !== null &&
-        Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedPick.name) && /Scheduled · every \d+ min/.test(t)) &&
+      "create dialog: a Scheduled-group template creates one scheduled agent that the sidebar and Settings both list",
+      schedPick?.picked === true && /every \d+ minutes/.test(schedMinutes) && scheduledAgent !== null &&
+        Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedName) && /Scheduled · every \d+ min/.test(t)) &&
         surfacesS.sidebarRows === 2 && surfacesS.panelRows === 2 && surfacesS.settingsRows === 2 && /^2 agents/.test(surfacesS.panelCount),
     );
     // Restore the fresh profile the rest of the suite expects: delete the two

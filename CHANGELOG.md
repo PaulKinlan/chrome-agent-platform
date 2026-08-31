@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.553] — 2026-08-31
+- Create-agent dialog: searchable grouped template select (customizable/classic fallback); both-scheme visibility hardening
+
 ## [0.2.552] — 2026-08-31
 - DONE (coordinator gates 2813/0, 272/272)
 
