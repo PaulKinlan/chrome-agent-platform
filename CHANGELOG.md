@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.529] — 2026-08-31
+- Recent activity user-events lane — the hub activity feed shows only what a person cares about, in plain bounded sentences, with fresh counts
+
+## [0.2.528] — 2026-08-31
+- Recent activity user-events lane — the hub activity feed shows only what a person cares about, in plain bounded sentences, with fresh counts
+
+## [0.2.527] — 2026-08-31
+- Recent activity user-events lane — the hub activity feed shows only what a person cares about, in plain bounded sentences, with fresh counts
+
 ## [0.2.526] — 2026-08-31
 - Page interaction and timeline improvements have begun.
 

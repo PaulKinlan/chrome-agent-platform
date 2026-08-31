@@ -1172,12 +1172,20 @@ function runLogCovered() {
   if (view && view.hidden !== true) return true;
   return typeof threadView !== "undefined" && threadView && threadView.hidden !== true;
 }
+// ONE refresh helper for the whole Recent-activity surface: the explorer AND
+// the runs-today header. Every path that recomputes one must recompute the
+// other, or the header goes stale (CAP-FB-20260830-RECENT-ACTIVITY-USER-
+// EVENTS-01 r2 B4 / r3 P1).
+function refreshHubActivity() {
+  runLogExplorer?.refresh?.().catch(() => {});
+  renderHubUsage().catch(() => {});
+}
 function scheduleRunLogRefresh() {
   if (!runLogExplorer) return;
   if (runLogCovered()) { runLogDirty = true; return; }
   clearTimeout(runLogRefreshTimer);
   runLogRefreshTimer = setTimeout(() => {
-    runLogExplorer?.refresh?.().catch(() => {});
+    refreshHubActivity();
     actionLedgerEl?.refresh?.().catch(() => {});
   }, 1500);
 }
@@ -1185,7 +1193,7 @@ function flushRunLogDirty() {
   if (!runLogDirty) return;
   runLogDirty = false;
   clearTimeout(runLogRefreshTimer);
-  runLogExplorer?.refresh?.().catch(() => {});
+  refreshHubActivity();
   actionLedgerEl?.refresh?.().catch(() => {});
 }
 // The progress PORT dies with every MV3 service-worker restart and the shared
@@ -1227,14 +1235,25 @@ subscribeRunRegistry(() => scheduleRunLogRefresh(), { emitCurrent: false });
 async function renderHubUsage() {
   const el = document.getElementById("hub-usage");
   if (!el) return;
-  const u = await send("usage.get").catch(() => null);
-  if (!u?.totals) {
-    el.textContent = "what the agents did";
-    return;
-  }
-  const t = u.totals;
-  const tokens = (t.inputTokens + t.outputTokens).toLocaleString();
-  el.textContent = `${t.calls} calls · ${tokens} tokens · $${t.estimatedCost.toFixed(4)}`;
+  // "N runs today" from the run registry — the count of durable runs started
+  // within TODAY'S LOCAL [00:00, next-00:00) WINDOW (upper bound included so
+  // a run started at 23:59:59.999 still counts today and tomorrow's runs do
+  // not leak in). Cost/token figures live in Settings → Usage; the hub header
+  // says what happened, not what it cost (CAP-FB-20260830-RECENT-ACTIVITY-
+  // USER-EVENTS-01 r2 B4).
+  const res = await send("run.list").catch(() => null);
+  const runs = Array.isArray(res?.runs) ? res.runs : [];
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const startOfTomorrow = new Date(startOfToday);
+  startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
+  const todayStart = startOfToday.getTime();
+  const tomorrowStart = startOfTomorrow.getTime();
+  const today = runs.filter((r) => {
+    const at = r?.startedAt ?? 0;
+    return at >= todayStart && at < tomorrowStart;
+  }).length;
+  el.textContent = `${today} run${today === 1 ? "" : "s"} today`;
 }
 
 // ── Tasks (the distinct task threads) ────────────────────────────────────

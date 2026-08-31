@@ -8,6 +8,15 @@
   "ts": "2026-08-30T21:13:12.891Z",
   "evidenceDir": "/home/paulkinlan/worktrees/cap-whatsnew-copy/test-artifacts",
   "passed": 212,
+  "testedSourceCommit": "9f401755550281f796b50c1a4b0e82873d1274e5",
+  "evidenceCommitNote": "committed AFTER this run — a tracked manifest cannot contain its own commit hash",
+  "worktreeClean": true,
+  "worktreeDirtyFiles": [],
+  "runId": "cap-1788133041152",
+  "retain": true,
+  "ts": "2026-08-30T23:40:55.909Z",
+  "evidenceDir": "/home/paulkinlan/worktrees/cap-recent-activity-user/test-artifacts",
+  "passed": 234,
   "failed": 0,
   "checks": [
     {
@@ -87,7 +96,19 @@
       "pass": true
     },
     {
+      "name": "create dialog: Advanced+Skills expand and the config body scrolls with them (min-height hardening)",
+      "pass": true
+    },
+    {
+      "name": "create dialog: a REAL skill checkbox click checks it (unchecked → checked)",
+      "pass": true
+    },
+    {
       "name": "create dialog: Create agent from the card yields ONE named agent whose role is the template persona",
+      "pass": true
+    },
+    {
+      "name": "create dialog: the saved agent's skill ids CONTAIN the exactly-toggled skill id",
       "pass": true
     },
     {
@@ -239,6 +260,10 @@
       "pass": true
     },
     {
+      "name": "permissions: retry affordance intact for cancelled warned permissions (fresh Settings page)",
+      "pass": true
+    },
+    {
       "name": "permissions: capability.revoke still requires owner approval (fail closed)",
       "pass": true
     },
@@ -343,6 +368,10 @@
       "pass": true
     },
     {
+      "name": "Cookies: the cookie value reader and the cookie writers are absent from the default build",
+      "pass": true
+    },
+    {
       "name": "keyless: typed 'group my tabs by topic' into the hub composer",
       "pass": true
     },
@@ -383,11 +412,27 @@
       "pass": true
     },
     {
+      "name": "Cookies: the developer build exposes them again, and no cookie value ever reaches the model",
+      "pass": true
+    },
+    {
       "name": "warm run 1 returns a concrete demo result",
       "pass": true
     },
     {
       "name": "warm run 2 (after re-save) returns a concrete demo result",
+      "pass": true
+    },
+    {
+      "name": "hub: two demo turns produce two user activity rows (no attestation/tool rows)",
+      "pass": true
+    },
+    {
+      "name": "hub: header reads N runs today with no $ or tokens",
+      "pass": true
+    },
+    {
+      "name": "hub: no activity row text overlaps the time column at 1440 and 1024",
       "pass": true
     },
     {
@@ -400,6 +445,14 @@
     },
     {
       "name": "Transcript: no lazy-protocol text leaks into the reopened thread (modelContent/catalogGeneration/stableId/schemaSummary/search_tools/execute_tool)",
+      "pass": true
+    },
+    {
+      "name": "Memory recall: a new thread's prompt carries the digest of a key written earlier",
+      "pass": true
+    },
+    {
+      "name": "Memory recall: a new thread answers 'green' from the digest, never 'I do not know'",
       "pass": true
     },
     {
@@ -420,6 +473,26 @@
     },
     {
       "name": "Streaming: the final bubble equals the non-streamed render",
+      "pass": true
+    },
+    {
+      "name": "Claim check: a failed delegate renders one correction and one final bubble",
+      "pass": true
+    },
+    {
+      "name": "Thread view: update card is titled with the artifact name",
+      "pass": true
+    },
+    {
+      "name": "Thread view: run banner visible 300 ms after send",
+      "pass": true
+    },
+    {
+      "name": "Thread view: no empty panel space below a two-turn thread at 1440x900",
+      "pass": true
+    },
+    {
+      "name": "Thread view: conversation scrolled to bottom after an edit turn",
       "pass": true
     },
     {
@@ -464,6 +537,10 @@
     },
     {
       "name": "Privileged URL: open_tab chrome://settings is refused under a global grant",
+      "pass": true
+    },
+    {
+      "name": "Side panel: open_side_panel is absent from the model toolset",
       "pass": true
     },
     {
@@ -512,6 +589,14 @@
     },
     {
       "name": "Permission card: Allow grants browser control and the retried capture_screenshot succeeds",
+      "pass": true
+    },
+    {
+      "name": "Screenshot: model capture is persisted and listed",
+      "pass": true
+    },
+    {
+      "name": "Screenshot: tool card shows a thumbnail",
       "pass": true
     },
     {
@@ -604,6 +689,18 @@
     },
     {
       "name": "worker delegated task ran (worker result journaled)",
+      "pass": true
+    },
+    {
+      "name": "Settings: Data & memory shows the run-log retention row",
+      "pass": true
+    },
+    {
+      "name": "Settings: the run-log retention toggle reports the bounded default (off)",
+      "pass": true
+    },
+    {
+      "name": "Settings: retained the run-log retention screenshot",
       "pass": true
     },
     {
@@ -727,6 +824,10 @@
       "pass": true
     },
     {
+      "name": "frame-guards: generated frame announces cap:preference-ready (bootstrap parses)",
+      "pass": true
+    },
+    {
       "name": "approval: primary NTP Settings iframe can deny an exact request",
       "pass": true
     },
@@ -767,11 +868,35 @@
       "pass": true
     },
     {
+      "name": "viewer: Preview|Source|Diff tablist renders with exactly one selected tab",
+      "pass": true
+    },
+    {
+      "name": "viewer: ArrowRight selects Source and the panel shows highlighted, exact source",
+      "pass": true
+    },
+    {
+      "name": "viewer: Diff tab shows version pickers and a real diff between two versions",
+      "pass": true
+    },
+    {
       "name": "mgmt: delete_asset removed it",
       "pass": true
     },
     {
       "name": "mgmt: asset gone after delete",
+      "pass": true
+    },
+    {
+      "name": "artifacts: update_asset with an empty id says use list_assets",
+      "pass": true
+    },
+    {
+      "name": "artifacts: update_asset with an unknown id says use list_assets",
+      "pass": true
+    },
+    {
+      "name": "artifacts: one New tab click opens exactly one viewer target",
       "pass": true
     },
     {
@@ -869,6 +994,8 @@
       "name": "hub-fresh-1440-after.png",
       "sha256": "53393a315a665d54642ec9936d52f21bab8252692389960086664a28d5bf131a",
       "bytes": 46185
+      "sha256": "2f42ba47d33ee4015315ccb70149c4ca6fed483522bccce58c6e600581bdcb16",
+      "bytes": 46159
     },
     {
       "name": "hub-fresh-1024-after.png",
@@ -884,6 +1011,8 @@
       "name": "templates-gallery.png",
       "sha256": "36cc7fade7f2cfa5e44779ec4718b8dea0f939ce74093e3b2d0e93cb30a005a0",
       "bytes": 144127
+      "sha256": "8617931598d8e42c9eb52026ada5f4104d2019e1247e0f6ed243b225b397773f",
+      "bytes": 110534
     },
     {
       "name": "templates-created.png",
@@ -1044,6 +1173,213 @@
       "name": "about-whats-new.png",
       "sha256": "412345ffa56f71af4ee26c9ad49cba58f38659945b8326625b261e35ce2ca8bc",
       "bytes": 198980
+      "sha256": "9615ede2343644449d556c87a76c6fe0c48e36690e93344c1003b36be2de507b",
+      "bytes": 73905
+    },
+    {
+      "name": "lazy-enum-slip-recovered.png",
+      "sha256": "ec865a458190666c1db55e51e28fe6981287b972f15ca2370ed5b60f1578c7fc",
+      "bytes": 94192
+    },
+    {
+      "name": "ntp-jobs-empty.png",
+      "sha256": "33f1eee5b8bd7e2a451b097ffbca866b2d78616e44889e8f7a3019b0e55db65b",
+      "bytes": 145498
+    },
+    {
+      "name": "ntp-jobs-populated.png",
+      "sha256": "859f7e9c1c59940164601a1361870ec894e714a884d144c4a4dcba871a2df321",
+      "bytes": 176124
+    },
+    {
+      "name": "ntp-jobs-settled.png",
+      "sha256": "34bb639ca28e5ce2dee8b12a0839935562f4c13021d6cb25614fb39b6829d9e7",
+      "bytes": 180242
+    },
+    {
+      "name": "settings-turn-off-owner-dialog.png",
+      "sha256": "0b7f0e2ca60641c94a1aa64eb449b64df12ddb25a9e43d75c2616b568ce5cfd2",
+      "bytes": 292948
+    },
+    {
+      "name": "board-deny-added.png",
+      "sha256": "df00cab600dac360c40b673a702d278b368777ac9cc01615ab5269b105600da1",
+      "bytes": 272787
+    },
+    {
+      "name": "settings-openai-picker-after.png",
+      "sha256": "d55c600939c0dcc9bf6bf8dd88fa81dfe699e30f4d954f16f75b303d32bc97c8",
+      "bytes": 231190
+    },
+    {
+      "name": "options-driven.png",
+      "sha256": "f4023c50e6f93f9a2355deaefa9e67fcc6e9c86b5daf423f4835f4155be028ee",
+      "bytes": 252163
+    },
+    {
+      "name": "keyless-first-result-card.png",
+      "sha256": "272ca79bca2c74229c94a7a92d41ea55bfaed7270654d632034a81bf86fead6b",
+      "bytes": 99747
+    },
+    {
+      "name": "keyless-first-result-no-permission.png",
+      "sha256": "6a583a9b00b31fcb88b39f8213d2f48ce8ce2495d70f7b1dccbe1ca1771cd18d",
+      "bytes": 113563
+    },
+    {
+      "name": "tool-cards-no-leak-live-denial.png",
+      "sha256": "6a583a9b00b31fcb88b39f8213d2f48ce8ce2495d70f7b1dccbe1ca1771cd18d",
+      "bytes": 113563
+    },
+    {
+      "name": "grant-card-reopened-thread.png",
+      "sha256": "cf414537303be3ce3937b1940fcef25eb31ab70373b798127c35d8baf6246f65",
+      "bytes": 112588
+    },
+    {
+      "name": "hub-activity-two-rows-1440.png",
+      "sha256": "1d8f7994917d55a4c1c547bd80262add83ba8cc71df4aab57d80ee70738e6f00",
+      "bytes": 142820
+    },
+    {
+      "name": "hub-activity-two-rows-1024.png",
+      "sha256": "0cb966c40a4c44c3a86c1d24cd8b53d9c53884bca26d7343a1e15a51f7c2b828",
+      "bytes": 81529
+    },
+    {
+      "name": "transcript-before-reload.png",
+      "sha256": "1c1897e0d16d4f703b8b05cb07d110f957fd88306e29ea9c45a3af01ba6bfa13",
+      "bytes": 125874
+    },
+    {
+      "name": "transcript-after-reload.png",
+      "sha256": "1c1897e0d16d4f703b8b05cb07d110f957fd88306e29ea9c45a3af01ba6bfa13",
+      "bytes": 125874
+    },
+    {
+      "name": "tool-cards-no-leak-reopened.png",
+      "sha256": "3a7a28e0ba9c4417eaa497a4ddd634d7f652bb02825582590cbcf6cb2847f87e",
+      "bytes": 154107
+    },
+    {
+      "name": "provider-401-bubble.png",
+      "sha256": "379c4957d7c60ddcb52124a2d599b5fc05b23aaa853c5c0dba741cb65204a42f",
+      "bytes": 149218
+    },
+    {
+      "name": "provider-preflight-failed.png",
+      "sha256": "2ed362a1442514ecf9430ca9e760cffdf6f53638b8c1642a179e2c225d19436d",
+      "bytes": 136802
+    },
+    {
+      "name": "streaming-mid.png",
+      "sha256": "bacc332980b8f25cfe042c1229f70a00e105977f89605972b6e9dd3b3914f05b",
+      "bytes": 139620
+    },
+    {
+      "name": "streaming-final.png",
+      "sha256": "4efc30e46f32299df024687de458fc84d6ab7a3816318b263f02dba429c8d1c4",
+      "bytes": 288766
+    },
+    {
+      "name": "claim-check-delegate.png",
+      "sha256": "144283aaaf3216b3076509ce7733daea70ac5553d58af51afa53a9adbc7375f4",
+      "bytes": 317372
+    },
+    {
+      "name": "thread-view-1440-turn1.png",
+      "sha256": "7c8bbc62dc599c55bae115371890917582c8b6cbcad04408a00bda8e86962c5b",
+      "bytes": 95715
+    },
+    {
+      "name": "thread-view-1440-running-300ms.png",
+      "sha256": "7e9482b913ae24d7eba2c45e3166470047aebf244e16a7c1fe03e64a1663c171",
+      "bytes": 124962
+    },
+    {
+      "name": "thread-view-1440-turn2.png",
+      "sha256": "eda08751393b6b025e8b3e83d5bfe9c488af3165aaa09a8db49e7eda1369bc6c",
+      "bytes": 112262
+    },
+    {
+      "name": "thread-view-1024-turn2.png",
+      "sha256": "7b796039183a3356647c6e0f2443813bc05ba7f1b2376a99b041c1d31b946153",
+      "bytes": 95070
+    },
+    {
+      "name": "lease-settings-after-toggle-on.png",
+      "sha256": "688a6f2164d45106f24f6907bc2de3d0775dd1e6962cdb61c7fe7fbc7f2db9ec",
+      "bytes": 271334
+    },
+    {
+      "name": "lease-settings-after-toggle-off.png",
+      "sha256": "89e660298f22997c87ae33c8fc2a6e1a9dd107a8ace8e8d23b3f166f2e24d5f6",
+      "bytes": 287367
+    },
+    {
+      "name": "permission-card-open-tab.png",
+      "sha256": "85f372d2f3ad14837132baeeaae60d7da8962baf0395efcadc383673dbcf0903",
+      "bytes": 210832
+    },
+    {
+      "name": "permission-card-read-page-allowed.png",
+      "sha256": "2198a7ed4de50eaab7ab1deb5113da2db61fd9db6fea63a86edf6987833a42c2",
+      "bytes": 263708
+    },
+    {
+      "name": "permission-card-capture-allowed.png",
+      "sha256": "639d2d3ea6392a291a8454ee9663fe41999397358e521acffdc88ae0a82510a0",
+      "bytes": 301762
+    },
+    {
+      "name": "screenshot-tool-card-thumbnail.png",
+      "sha256": "2af959c8306182365058a3c4105903532e0dbbffa98c95736ce492970313f266",
+      "bytes": 310108
+    },
+    {
+      "name": "settings-data-retention.png",
+      "sha256": "a49db0f70143a1de559c0675c5ac083a4477da830ce2ce1b38f37ec8b1537dd6",
+      "bytes": 209975
+    },
+    {
+      "name": "settings-site-agents-after-turn-off.png",
+      "sha256": "b5be884c8e6baece693ffdf8e2de5a61f90c683966ccb494838a90c80a521305",
+      "bytes": 384562
+    },
+    {
+      "name": "approval-iframe-denied.png",
+      "sha256": "d9bfed1300e156e38c5188f31660239aecb018fff066e29da1c9b611da893aa8",
+      "bytes": 220670
+    },
+    {
+      "name": "approval-deny-pending.png",
+      "sha256": "c8aab1b5892667c0d26b42a5d973a4f445efc395d06c9f6dc8841751aae7788e",
+      "bytes": 249206
+    },
+    {
+      "name": "approval-deny-resolved.png",
+      "sha256": "c8aab1b5892667c0d26b42a5d973a4f445efc395d06c9f6dc8841751aae7788e",
+      "bytes": 249206
+    },
+    {
+      "name": "viewer-source-highlighted.png",
+      "sha256": "b34e13088250127098d362a88280650f0b4f2f9c9eb195c30c6b12c9907397c8",
+      "bytes": 31499
+    },
+    {
+      "name": "viewer-diff-versions.png",
+      "sha256": "6fa922abf728752d5288aa41270216601382b8c6c9b68725bce94a8c33649228",
+      "bytes": 44355
+    },
+    {
+      "name": "artifact-newtab-single.png",
+      "sha256": "5a987d39d8756845221e8e05eb2745638ad74135ed955055cc99adaa291aa17b",
+      "bytes": 55316
+    },
+    {
+      "name": "script-approval-card.png",
+      "sha256": "5dbb908ea224780d99778537c95c7fc83b543d79fe9e24210b085f6a85488c38",
+      "bytes": 157216
     }
   ]
 }
