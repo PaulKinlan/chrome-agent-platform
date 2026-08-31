@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.516] — 2026-08-31
+- tasks: OPTIONAL-PERMISSION-OMITTED-01 — record the final candidate SHA
+
 ## [0.2.515] — 2026-08-31
 - Address the r2 review: honest probe readiness, accurate permission classification, final matrix provenance
 

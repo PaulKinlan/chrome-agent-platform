@@ -4351,13 +4351,13 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Feedback: 2026-08-31 — owner-reported console warnings at load: "Permission 'fontSettings' cannot be listed as optional. This permission will be omitted." (same for proxy, tts, declarativeNetRequest). These four are only grantable at INSTALL; the optional+JIT model cannot serve them, so the Settings rows backed by them could never actually grant — the UI lied.
 - Updated: 2026-08-31 02:10 UTC
 - Status: DONE
-- Resume: worker (hub coordinator dispatch) — manifest move + orchestration set + lint test; gates green
+- Resume: worker (hub coordinator dispatch) — manifest move + orchestration set + lint test; r2 review fixes; gates: build clean, suite 2729/0, journeys 247/247, matrix 26/0 ATTESTED (attestation re-run at the final candidate)
 - Priority: P1
 - Owner: hub coordinator (journal session)
 - Workspace: /home/paulkinlan/worktrees/cap-optional-perm-fix
 - Branch: cap-optional-perm-fix
 - Base: origin/main 0d5f1003
-- Candidate: (final SHA recorded after the r2 review-fix commit)
+- Candidate: 94f5d527 (r2 review fixes) atop d0ad495d (the manifest move)
 - Shipping: merged forward by the hub coordinator (pending review PASS)
 - Acceptance: The manifest lint test `tests/manifest-permissions.test.ts` asserts (a) optional_permissions ∩ {fontSettings, proxy, tts, declarativeNetRequest} = ∅ (RED on the pre-fix manifest, GREEN after), (b) the four are in install-time `permissions`, (c) no CAPABILITIES row mixes install-only and optional permissions. Settings renders NO row for the four (the mandatory-permission skip already exists); the revoke path already refuses install-granted capabilities honestly (`isRequiredCapability` reads the manifest dynamically). Full gates green; matrix acceptance unaffected (it exercises contextMenus/tabGroups/history/bookmarks, not the four).
   - Decision per capability (all four ACTIVELY USED — real tools in browser-tools.js + capability records in chrome-tool-capabilities.js + denial-contract tests in chrome-tools-t9/t10): move to install-time `permissions` (the ONLY honest grant Chrome allows for them). Tradeoff noted: they become always-on at install (proxy and declarativeNetRequest carry real install warnings; no runtime Turn-off) — this is the price of honesty, and it matches the existing model for alarms/storage/sidePanel/offscreen. Removing the features was rejected: they are shipped, tested product surface.
