@@ -66,6 +66,13 @@ Deno.test("skills-in-settings: renderSkillList groups by intent and hands use to
   // contract (the integration is covered by the browser KAT).
   const panel = await Deno.readTextFile("extension/skills/skills-panel.js");
   assert(panel.includes('send("recipe.list")'), "the list renders from the live recipe.list record");
-  assert(panel.includes('mode === "on-demand"'), "only on-demand skills are offered (the store contract)");
+  // The only remaining occurrence of the old private filter is in a doc comment
+  // (CAP-FB-20260831-SKILL-LIST-SYNC-01): executable code must not re-filter.
+  const executable = panel.split(/\n/).filter((l) => {
+    const t = l.trim();
+    return !t.startsWith("//") && !t.startsWith("*") && !t.startsWith("/*");
+  }).join("\n");
+  assert(!executable.includes('mode === "on-demand"'), "the panel applies NO private filter — the catalog (CAP-FB-20260831-SKILL-LIST-SYNC-01) is the single filter authority");
   assert(panel.includes("byIntent"), "skills group by intent");
+  assert(panel.includes("skills-broken"), "failed-to-load skills surface in Settings, never silently");
 });

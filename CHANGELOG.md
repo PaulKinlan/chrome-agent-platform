@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.576] — 2026-08-31
+- Skill list work — /skill and Settings read one catalog; collision-proof refIds; broken skills hidden and reported
+
 ## [0.2.575] — 2026-08-31
 - Focus order work — 24px hit areas, a real label-for gate, shadow-DOM aware audit checks, and the attach button's ring restored
 

@@ -762,6 +762,90 @@ export function getRecipe(id) {
 }
 
 /**
+ * Parse a skill reference into its source + raw id (CAP-FB-20260831-
+ * SKILL-LIST-SYNC-01 r2). The catalog offers every skill under a
+ * source-qualified refId (builtin:<id> / imported:<id> / custom:<id>); this
+ * parser tells the resolver whether a reference is source-locked:
+ *   - "imported:x"  → resolve ONLY in the imported store (never a built-in)
+ *   - "builtin:x"   → resolve ONLY in the built-in table
+ *   - "custom:x"    → resolve ONLY among custom recipes
+ *   - "x" (raw)     → historical order: built-in → custom → imported
+ * Pure, no store access — unit-testable.
+ */
+export function parseSkillRef(ref) {
+  const raw = String(ref ?? "").trim();
+  if (!raw) return { source: "raw", id: "" };
+  const i = raw.indexOf(":");
+  if (i > 0) {
+    const prefix = raw.slice(0, i);
+    if (prefix === "builtin" || prefix === "imported" || prefix === "custom") {
+      return { source: prefix, id: raw.slice(i + 1) };
+    }
+  }
+  return { source: "raw", id: raw };
+}
+
+/**
+ * The store-resolution order for a skill reference (CAP-FB-20260831-
+ * SKILL-LIST-SYNC-01 r3). A source-qualified ref is LOCKED to its own store
+ * (custom:<id> only ever consults the custom store — it can never fall
+ * through to built-in or imported); a raw ref keeps the historical order
+ * built-in → custom → imported (saved agents, old task text, and
+ * background-agent.set resolving a duplicated background agent by its raw id).
+ * Pure — resolveRecipe (service-worker) drives its branches from this order.
+ */
+export function skillResolutionOrder(source) {
+  switch (source) {
+    case "builtin": return ["builtin"];
+    case "custom": return ["custom"];
+    case "imported": return ["imported"];
+    default: return ["builtin", "custom", "imported"];
+  }
+}
+
+/**
+ * Checkbox state for ONE catalog row in the agent-config dialog
+ * (CAP-FB-20260831-SKILL-LIST-SYNC-01 r3). The dialog keys checkboxes by the
+ * source-qualified refId; this decides whether the row is selected given the
+ * agent's saved skill ids.
+ *
+ * Collision rule: a raw saved id that several catalog rows share (a built-in
+ * and an imported skill with the same id) matches EXACTLY ONE row — the
+ * built-in — mirroring resolveRecipe's raw-id order (built-in first). This is
+ * what prevents "selecting the checkbox selects BOTH source-qualified rows".
+ * A refId saved id matches only its own row.
+ *
+ * Pure, no DOM, no store access — unit-testable.
+ */
+export function skillRowChecked(available, savedIds, row) {
+  const saved = new Set(Array.isArray(savedIds) ? savedIds : []);
+  if (row?.refId && saved.has(row.refId)) return true;
+  const rawId = row?.id ?? row?.name;
+  if (!rawId || !saved.has(rawId)) return false;
+  const owners = (Array.isArray(available) ? available : [])
+    .filter((x) => (x?.id ?? x?.name) === rawId);
+  if (owners.length <= 1) return true; // the unique owner
+  return row?.source === "builtin"; // legacy raw id → built-in wins (resolveRecipe order)
+}
+
+/**
+ * Template suggestion matching for ONE catalog row (same collision rule as
+ * skillRowChecked). A template references skills by raw id; the row whose
+ * refId is in the template, or the unique raw-id owner, or (on collision) the
+ * built-in row, is the one toggled — never both.
+ */
+export function templateSkillMatches(available, templateIds, row) {
+  const ids = new Set(Array.isArray(templateIds) ? templateIds : []);
+  if (row?.refId && ids.has(row.refId)) return true;
+  const rawId = row?.id ?? row?.name;
+  if (!rawId || !ids.has(rawId)) return false;
+  const owners = (Array.isArray(available) ? available : [])
+    .filter((x) => (x?.id ?? x?.name) === rawId);
+  if (owners.length <= 1) return true;
+  return row?.source === "builtin";
+}
+
+/**
  * Normalize an agent record's saved skills to a deduped id list. The record
  * stores `{id,name,description}` objects (the create dialog), but tolerates
  * bare strings (older records / imports). Pure — no store access.
@@ -776,19 +860,23 @@ export function agentSkillIds(agent) {
 }
 
 /**
- * Merge skill/recipe objects for ONE run's composition, deduped by id with
- * first occurrence winning (an agent's saved skills first, then any /skill:<id>
- * references in the task text — a reference to an already-saved skill composes
- * once, never twice). Pure — the caller resolves ids to records.
+ * Merge skill/recipe objects for ONE run's composition, deduped by identity
+ * with first occurrence winning (an agent's saved skills first, then any
+ * /skill:<id> references in the task text — a reference to an already-saved
+ * skill composes once, never twice). The dedup key is the source-qualified
+ * refId when present (CAP-FB-20260831-SKILL-LIST-SYNC-01 r2): a built-in
+ * `tab-hygiene` and an imported `tab-hygiene` are DISTINCT skills and both
+ * compose; two references to the SAME row compose once. Pure — the caller
+ * resolves ids to records.
  */
 export function mergeRunSkills(...lists) {
   const out = [];
   const seen = new Set();
   for (const list of lists) {
     for (const r of Array.isArray(list) ? list : []) {
-      const id = r?.id;
-      if (typeof id !== "string" || !id || seen.has(id)) continue;
-      seen.add(id);
+      const key = r?.refId ?? r?.id;
+      if (typeof key !== "string" || !key || seen.has(key)) continue;
+      seen.add(key);
       out.push(r);
     }
   }

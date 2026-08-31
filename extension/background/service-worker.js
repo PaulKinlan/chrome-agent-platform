@@ -285,6 +285,7 @@ import {
   setOriginBrowserControlGrant,
 } from "../lib/browser-tools.js";
 import { getRecipe, RECIPES, backgroundRecipes, intentOf, agentSkillIds, mergeRunSkills } from "../lib/recipes.js";
+import { resolveSkillRef } from "../lib/skill-resolve.js";
 import { fetchSkillFromUrl, installImportedSkill, removeImportedSkill, loadAllImportedSkills } from "../lib/skill-import.js";
 import { readSkillFile, writeSkillFiles, removeSkillFiles } from "../lib/skill-files.js";
 import { durableRuns, sweepOrphanAgentData } from "../lib/durable-runs.js";
@@ -442,34 +443,18 @@ const loadAllImported = async () => {
 };
 
 async function resolveRecipe(id) {
-  const builtIn = getRecipe(id);
-  if (builtIn) return builtIn;
-  const custom = await getCustomRecipes();
-  const fromCustom = custom.find((r) => r.id === id);
-  if (fromCustom) return fromCustom;
-  const imported = await loadAllImported();
-  const row = imported.find((s) => s.id === id);
-  if (!row) return null;
-  // Index rows carry metadata only (bodies live in OPFS). A SMALL body is
-  // read back and composed into the system prompt like before; a LARGE body
-  // stays out of the prompt (the skill_read marker rule handles it —
-  // renderBoundarySkills keys on promptBytes, never an empty body). A legacy
-  // row whose migration failed keeps its inline body (never lost).
-  if (Number.isInteger(row.promptBytes) && row.promptBytes > 0 && row.promptBytes <= PROMPT_SKILL_BODY_BUDGET) {
-    try {
-      const body = await readSkillFile(row.id, "SKILL.md");
-      return { ...row, prompt: body };
-    } catch {
-      return { ...row, prompt: "" };
-    }
-  }
-  if (!Number.isInteger(row.promptBytes)) {
-    // legacy inline body (migration failed) — serve it so it never vanishes
-    return { ...row };
-  }
-  return { ...row, prompt: "" };
+  // The REAL resolver lives in lib/skill-resolve.js (CAP-FB-20260831-SKILL-
+  // LIST-SYNC-01 r4) so tests exercise the actual resolution logic against
+  // real (faked-OPFS) stores. Source-locking: imported:<id> only the imported
+  // store, custom:<id> only the custom store, builtin:<id> only the built-in
+  // table; raw ids keep built-in → custom → imported (background-agent.set on
+  // duplicated agents).
+  return await resolveSkillRef({
+    ref: id,
+    stores: { getRecipe, getCustomRecipes, loadAllImported, readSkillFile },
+    bodyBudget: PROMPT_SKILL_BODY_BUDGET,
+  });
 }
-
 // ── skill references (a skill is INCLUDED in a task) ─────────────────────
 // The composer can reference a skill ANYWHERE in the string via /skill:<id>.
 // resolveSkillRefs extracts those references + expands each to its prompt, so
@@ -479,7 +464,9 @@ async function resolveRecipe(id) {
 function skillRefIds(task) {
   if (typeof task !== "string") return [];
   const ids = [];
-  const re = /\/skill:([a-z0-9][a-z0-9-]*)/gi;
+  // The token allows a source-qualified prefix (imported:<id> / builtin:<id>)
+  // — collision-proof identity (CAP-FB-20260831-SKILL-LIST-SYNC-01 r2).
+  const re = /\/skill:([a-z0-9][a-z0-9:-]*)/gi;
   let m;
   while ((m = re.exec(task)) !== null) {
     const id = m[1].toLowerCase();
@@ -2827,8 +2814,10 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       }
       // The resolved skill IDs journal onto the terminal thread row so a LATER
       // continuation re-applies them (the same union the caller of a fresh
-      // continuation reads from the thread).
-      runSkillIds = runSkills.map((r) => r?.id).filter((x) => typeof x === "string" && x).slice(0, 24);
+      // continuation reads from the thread). The journal stores the
+      // source-qualified refId when present so a colliding imported skill is
+      // re-resolved to the imported row, never the built-in.
+      runSkillIds = runSkills.map((r) => r?.refId ?? r?.id).filter((x) => typeof x === "string" && x).slice(0, 24);
       // agent-do's run(task, context, history) -> result text; context is a STRING.
       // `history` carries the prior conversation turns (the unified surface: a
       // follow-up / nudge is a new turn in the SAME persistent thread, so the
@@ -6830,17 +6819,21 @@ const handlers = mergeRouteMaps(
   },
 
   async "recipe.list"() {
-    // Decorate each recipe with its intent so the hub can group the unified
-    // capability list (on-demand + background) by what the user is trying to do.
-    // Imported skills are included too (they are first-class skills).
-    const imported = await loadAllImported();
-    return {
-      recipes: [...RECIPES, ...imported].map((r) => ({ ...r, intent: intentOf(r) })),
-    };
+    // ONE catalog (CAP-FB-20260831-SKILL-LIST-SYNC-01): built-in on-demand
+    // recipes + healthy imported skills. Background recipes are scheduled
+    // agents (background-agent.list), never on-demand skills — Settings and
+    // every picker read this SAME query, so no surface can drift.
+    const { skillCatalog } = await import("../lib/skill-catalog.js");
+    const { skills } = await skillCatalog({ memory: masterMemory(), fileStore: skillFileStore });
+    return { recipes: skills };
   },
   async "skill.list"() {
-    const imported = await loadAllImported();
-    return { skills: [...RECIPES, ...imported].map((r) => ({ ...r, intent: intentOf(r) })) };
+    // Same single catalog as recipe.list. `broken` carries the skills that
+    // failed to load so Settings can surface them honestly (never silently
+    // offered, never silently hidden).
+    const { skillCatalog } = await import("../lib/skill-catalog.js");
+    const { skills, broken } = await skillCatalog({ memory: masterMemory(), fileStore: skillFileStore });
+    return { skills, broken };
   },
   async "skill.import"(m) {
     const url = String(m?.url ?? "").trim();

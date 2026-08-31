@@ -660,6 +660,15 @@ const EXPECTED = [
   "skills: the imported skill keeps its full >64KiB body (never truncated)",
   "skills: a named agent with the large skill reads its body mid-run via skill_read",
   "hub: @demo-skill-read drives search → execute → a body-excerpt final (large skill)",
+  "skill sync: retained the /skill popup screenshot",
+  "skill sync: an imported skill appears in /skill (skill.list) AND Settings (recipe.list) — same catalog",
+  "skill sync: the background Sorting Hat recipe is in NEITHER surface (it is a scheduled agent, not an on-demand skill)",
+  "skill sync: skill.list and recipe.list return the IDENTICAL set (single source of truth)",
+  "skill sync: deleting a skill removes it from BOTH surfaces instantly (one store write)",
+  "skill sync: a colliding import lands in the imported store under the built-in's id",
+  "skill sync: the colliding imported skill is offered as imported:<id>, and NO background recipe row is offered",
+  "skill sync: the colliding id serves the IMPORTED skill body, never the background recipe's prompt",
+  "skill sync: deleting the colliding import removes it from the catalog",
   "no service-worker console errors",
   "no SW Runtime.enable errors (auto-attach)",
   "no NTP/Settings console errors",
@@ -751,6 +760,15 @@ async function main() {
     }
     if (u.pathname === "/big-skill/scripts/helper.md") {
       return new Response("# helper\n\nA supporting file in scripts/.\n", { headers: { "content-type": "text/markdown; charset=utf-8" } });
+    }
+    // CAP-FB-20260831-SKILL-LIST-SYNC-01 r2: an imported skill whose name
+    // slugs to a BUILT-IN BACKGROUND recipe's id (auto-group-by-domain, the
+    // Sorting Hat). The import must be offered as imported:auto-group-by-domain
+    // and never resolve to the background recipe.
+    if (u.pathname === "/collide/SKILL.md") {
+      const body =
+        "---\nname: Auto Group By Domain\ndescription: An imported skill that collides with the Sorting Hat recipe id\n---\n\n# Colliding Import\n\nGroup domains into sets for review. (imported body marker: COLLIDE-IMPORTED-BODY)\n";
+      return new Response(body, { headers: { "content-type": "text/markdown; charset=utf-8" } });
     }
     return new Response(`<html><body>fixture ${u.pathname}</body></html>`, {
       headers: { "content-type": "text/html" },
@@ -1267,7 +1285,9 @@ async function main() {
       }
       await sleep(150);
       const cat = skillCatalog?.skills ?? [];
-      toggledSkillId = cat[togglePick.idx]?.id ?? cat[togglePick.idx]?.name ?? null;
+      // Collision-proof identity: the dialog saves the source-qualified refId,
+      // so capture the refId for the exact-persistence assertion.
+      toggledSkillId = cat[togglePick.idx]?.refId ?? cat[togglePick.idx]?.id ?? cat[togglePick.idx]?.name ?? null;
     }
     console.log("create dialog toggle pick:", JSON.stringify(togglePick));
     const toggledState = await evalIn(cdp, ntpSession, `(() => {
@@ -5214,9 +5234,123 @@ async function main() {
     }
     const bigListAfter = await msgOpts({ type: "skill.list" });
     const bigSkillAfter = (bigListAfter?.skills ?? []).find((s: { id?: string }) => s?.id === "big-fixture-skill");
+
+    // CAP-FB-20260831-SKILL-LIST-SYNC-01: /skill and Settings must be tallied
+    // from the SAME data source. Both routes return the single catalog — the
+    // imported skill is in BOTH, the background Sorting Hat recipe
+    // (auto-group-by-domain) is in NEITHER (it is a scheduled agent, surfaced
+    // via background-agent.list, never an on-demand /skill invocation).
+    const recipeList = await msgOpts({ type: "recipe.list" });
+    const recipeSkills = Array.isArray(recipeList?.recipes) ? recipeList.recipes : [];
+    // Evidence pair (CAP-FB-20260831-SKILL-LIST-SYNC-01): Settings → Skills
+    // (captured as skills-import-large.png above) and the /skill popup must
+    // list the SAME set. Open a FRESH hub page (the established refresh
+    // pattern — the ambient ntpSession can be mid-thread / context-detached
+    // after earlier navigations), type /skill:, capture, then close.
+    let skillPopupShot = null;
+    try {
+      const popupPage = await openPage(port, `chrome-extension://${extId}/ntp/ntp.html`);
+      await sleep(2500);
+      const popupSess = await attachRuntime(cdp, popupPage.id);
+      cdp.pageSessions.add(popupSess);
+      await evalIn(cdp, popupSess, `(() => { document.querySelector('agent-composer')?.focusInput?.(); return true; })()`);
+      await sleep(400);
+      await typeInto(cdp, popupSess, "#task-input", "/skill:");
+      await sleep(1600); // the popup loads skill.list async
+      skillPopupShot = await captureShot(cdp, popupSess);
+      if (skillPopupShot) await writeEvidence("skill-popup-sync.png", skillPopupShot);
+      await cdp.send("Target.closeTarget", { targetId: popupPage.id }).catch(() => {});
+    } catch (e) {
+      console.log("skill-popup screenshot skipped:", String(e?.message ?? e));
+    }
+    check("skill sync: retained the /skill popup screenshot", skillPopupShot !== null && skillPopupShot.length > 200);
+    const bigInBoth = (bigListAfter?.skills ?? []).some((s: { id?: string }) => s?.id === "big-fixture-skill")
+      && recipeSkills.some((s: { id?: string }) => s?.id === "big-fixture-skill");
+    check(
+      "skill sync: an imported skill appears in /skill (skill.list) AND Settings (recipe.list) — same catalog",
+      bigInBoth,
+    );
+    const sortingHatInSkill = (bigListAfter?.skills ?? []).some((s: { id?: string }) => s?.id === "auto-group-by-domain");
+    const sortingHatInSettings = recipeSkills.some((s: { id?: string }) => s?.id === "auto-group-by-domain");
+    check(
+      "skill sync: the background Sorting Hat recipe is in NEITHER surface (it is a scheduled agent, not an on-demand skill)",
+      !sortingHatInSkill && !sortingHatInSettings,
+    );
+    const skillSetSkill = (bigListAfter?.skills ?? []).map((s: { id?: string }) => s?.id).sort().join(",");
+    const skillSetSettings = recipeSkills.map((s: { id?: string }) => s?.id).sort().join(",");
+    check(
+      "skill sync: skill.list and recipe.list return the IDENTICAL set (single source of truth)",
+      skillSetSkill === skillSetSettings,
+    );
     if (bigSkillAfter?.id) {
       await msgOpts({ type: "skill.delete", id: bigSkillAfter.id }).catch(() => {});
     }
+    const listAfterDelete = await msgOpts({ type: "skill.list" });
+    const goneFromSkill = !(listAfterDelete?.skills ?? []).some((s: { id?: string }) => s?.id === "big-fixture-skill");
+    const settingsAfterDelete = await msgOpts({ type: "recipe.list" });
+    const goneFromSettings = !(settingsAfterDelete?.recipes ?? []).some((s: { id?: string }) => s?.id === "big-fixture-skill");
+    check(
+      "skill sync: deleting a skill removes it from BOTH surfaces instantly (one store write)",
+      goneFromSkill && goneFromSettings,
+    );
+
+    // CAP-FB-20260831-SKILL-LIST-SYNC-01 r2: collision-proof identity. An
+    // imported skill named to slug `auto-group-by-domain` (the Sorting Hat
+    // BACKGROUND recipe id) must be offered as imported:auto-group-by-domain,
+    // must NOT surface the background recipe through /skill, and must resolve
+    // (at run time) to the IMPORTED body — never the background recipe's
+    // prompt. The owner bug returning through a different door.
+    const collideImport = await msgOpts({ type: "skill.import", url: `${RED_ORIGIN}/collide/SKILL.md` });
+    const collideId = collideImport?.skill?.id ?? null;
+    check("skill sync: a colliding import lands in the imported store under the built-in's id", collideId === "auto-group-by-domain");
+    const collideList = await msgOpts({ type: "skill.list" });
+    const collideRows = (collideList?.skills ?? []).filter((s: { id?: string }) => s?.id === "auto-group-by-domain");
+    const collideImported = collideRows.find((s: { source?: string }) => s?.source === "imported");
+    const collideBuiltin = collideRows.find((s: { source?: string }) => s?.source === "builtin");
+    check(
+      "skill sync: the colliding imported skill is offered as imported:<id>, and NO background recipe row is offered",
+      collideImported?.refId === "imported:auto-group-by-domain" && !collideBuiltin,
+    );
+    // Run-time resolution, observed through the REAL skill_read tool: the
+    // colliding id must serve the IMPORTED body (COLLIDE-IMPORTED-BODY), never
+    // the background recipe's prompt. A named agent carrying the
+    // source-qualified ref runs @demo-skill-read against the raw id — the
+    // imported store owns that id, so the served body is the import's.
+    const collideAgent = await msgValue({
+      type: "named-agent.create",
+      name: "Collide Agent",
+      role: "You follow the attached skill.",
+      skills: ["imported:auto-group-by-domain"],
+    });
+    const collideAgentId = collideAgent?.agent?.id ?? null;
+    const collideRun = collideAgentId
+      ? await msgValue({ type: "named-agent.run", id: collideAgentId, task: "@demo-skill-read auto-group-by-domain" })
+      : null;
+    console.log("collide run:", JSON.stringify({
+      agentId: collideAgentId,
+      ok: collideRun?.ok ?? null,
+      status: collideRun?.status ?? null,
+      done: collideRun?.done ?? null,
+      error: collideRun?.error ?? null,
+      result: String(collideRun?.result ?? "").slice(0, 220),
+    }));
+    check(
+      "skill sync: the colliding id serves the IMPORTED skill body, never the background recipe's prompt",
+      collideAgentId !== null &&
+        (collideRun?.ok === true || collideRun?.status === "done" || collideRun?.done === true) &&
+        /Skill read completed: skill=auto-group-by-domain/.test(String(collideRun?.result ?? "")) &&
+        // The imported row's OWN text (its name is in the file's frontmatter,
+        // within the demo's 120-char excerpt) — proves the imported store
+        // served the colliding id, not the built-in background recipe.
+        /Auto Group By Domain/.test(String(collideRun?.result ?? "")) &&
+        !/Group open tabs into tab groups by registered domain/.test(String(collideRun?.result ?? "")),
+    );
+    await msgOpts({ type: "skill.delete", id: collideId }).catch(() => {});
+    const collideGone = await msgOpts({ type: "skill.list" });
+    check(
+      "skill sync: deleting the colliding import removes it from the catalog",
+      !(collideGone?.skills ?? []).some((s: { id?: string }) => s?.id === "auto-group-by-domain" && s?.source === "imported"),
+    );
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 10 — service-worker console audit (strictly worker-only).
