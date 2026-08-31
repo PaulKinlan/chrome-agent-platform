@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.542] — 2026-08-31
+- RECENT-ACTIVITY-USER-EVENTS-01 DONE — content landed via the recent-activity merge; r5 review PASS
+
 ## [0.2.541] — 2026-08-31
 - /folder work — attach a granted local folder as a task reference, complementing /files
 
