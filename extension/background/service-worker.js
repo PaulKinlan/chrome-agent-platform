@@ -243,6 +243,7 @@ import {
 } from "../lib/system-prompts.js";
 import { gatherRuntimeContext } from "../lib/runtime-context.js";
 import {
+  assetLibraryCapacity,
   createAsset,
   createOrUpdateAssetKeyed,
   deleteAsset,
@@ -6371,6 +6372,11 @@ const handlers = mergeRouteMaps(
     // exists. An explicit origin still filters by provenance.
     if (origin === undefined || origin === null || origin === "all") return await listAllAssets();
     return await listAssets(origin);
+  },
+  async "asset.capacity"() {
+    // The library's capacity state for the gallery indicator
+    // (CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01).
+    return await assetLibraryCapacity();
   },
   async "asset.get"({ origin, id }) {
     return await getAsset(origin ?? "master", id);

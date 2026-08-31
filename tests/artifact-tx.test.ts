@@ -8,6 +8,7 @@ import {
   ASSET_BOUNDS,
   REPAIR_BOUNDS,
   createAsset,
+  createAssetKeyed,
   deleteAsset,
   getAsset,
   getAssetVersion,
@@ -148,29 +149,37 @@ Deno.test("tx: separate store INSTANCES issue ONE durable sequence (no path-obje
 Deno.test("tx: create's eviction obligations are recorded BEFORE the commit and a FAILED create removes them — valid bodies are NEVER deleted by the repair", async () => {
   resetStore();
   const original = ASSET_BOUNDS.maxIndexBytes;
-  ASSET_BOUNDS.maxIndexBytes = 500; // create 2 fits (403B); create 3 evicts (604B)
-  // Create two small assets, then a create that EVICTS them.
-  const a = await createAsset("master", { type: "text", name: `keep-a-${"x".repeat(100)}`, content: "a" });
-  const b = await createAsset("master", { type: "text", name: `keep-b-${"x".repeat(100)}`, content: "b" });
-  const ids = [a.asset.id, b.asset.id];
-  // The next create evicts the oldest + FAILS at the index CAS (inject a close
-  // failure on the index write — but the CAS uses a durable gen write... use
-  // the getFileHandle failure on assets.json to fail the CAS compare? No — the
-  // CAS compare reads. Fail the WRITE: the compareAndRestore writes via
-  // writeEntry — inject __failWritable on assets.json).
-  globalThis.__failWritable = new Set(["assets.json"]);
-  let threw = false;
-  try { await createAsset("master", { type: "text", name: `big-${"x".repeat(100)}`, content: "c" }); } catch { threw = true; }
-  globalThis.__failWritable = new Set();
-  assert(threw, "the create surfaces the failure");
-  // The obligations are REMOVED (the failed create never committed the
-  // eviction) + the two valid bodies SURVIVE + are still listed.
-  const repair = readRepairRaw();
-  assert(repair && repair.pendingDeletes.length === 0, "no stale eviction obligations remain");
-  assertEquals(bodyCount(), 2, "the two valid bodies survive");
-  const list = await listAssets("master");
-  assert(list.ok && list.assets.length === 2, "both valid rows survive");
-  ASSET_BOUNDS.maxIndexBytes = original;
+  try {
+    // Auto-eviction is now REGENERABLE-ONLY (CAP-FB-20260828-ARTIFACT-LIBRARY-
+    // CAPACITY-01): owner rows are never dropped, so the eviction machinery is
+    // exercised with regenerable derived rows (a `scheduled-report:` key). The
+    // crash-safety property under test is unchanged — a FAILED evicting create
+    // removes its obligations and never deletes a valid body.
+    ASSET_BOUNDS.maxIndexBytes = 1024 * 1024;
+    const a = await createAssetKeyed("master", { key: `scheduled-report:a-${"x".repeat(100)}`, type: "text", name: "report a", content: "a" });
+    const b = await createAssetKeyed("master", { key: `scheduled-report:b-${"x".repeat(100)}`, type: "text", name: "report b", content: "b" });
+    assert(a.ok && b.ok, "the two regenerable seeds are created");
+    // Clamp the bound to exactly the current index size so the next create must
+    // evict a regenerable row to fit.
+    const list0 = await listAssets("master");
+    ASSET_BOUNDS.maxIndexBytes = new TextEncoder().encode(JSON.stringify(list0.assets)).byteLength;
+    // The next create evicts a regenerable row + FAILS at the index CAS write
+    // (inject a write failure on assets.json).
+    globalThis.__failWritable = new Set(["assets.json"]);
+    let threw = false;
+    try { await createAsset("master", { type: "text", name: `big-${"x".repeat(100)}`, content: "c" }); } catch { threw = true; }
+    globalThis.__failWritable = new Set();
+    assert(threw, "the create surfaces the failure");
+    // The obligations are REMOVED (the failed create never committed the
+    // eviction) + the two valid bodies SURVIVE + are still listed.
+    const repair = readRepairRaw();
+    assert(repair && repair.pendingDeletes.length === 0, "no stale eviction obligations remain");
+    assertEquals(bodyCount(), 2, "the two valid bodies survive");
+    const list = await listAssets("master");
+    assert(list.ok && list.assets.length === 2, "both valid rows survive");
+  } finally {
+    ASSET_BOUNDS.maxIndexBytes = original;
+  }
 });
 
 Deno.test("tx: update compensation is guarded by the EXACT new-body version — a repair can COMPLETE (non-null versions)", async () => {

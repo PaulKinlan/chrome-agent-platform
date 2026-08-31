@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.553] — 2026-08-31
+- : merge — the library never silently drops your oldest artifact
+
 ## [0.2.552] — 2026-08-31
 - DONE (coordinator gates 2813/0, 272/272)
 
@@ -136,7 +139,7 @@
 - Artifacts and generated images now appear in the conversation as they are created — a card showing what changed, plus a thumbnail strip of screenshots and images you can open.
 
 ## [0.2.510] — 2026-08-30
-- The shared jobs board is now always visible on the new tab with a clear empty state, and every job shows who posted it, who picked it up, whether it is blocked, and its result when done.
+- The artifact library no longer quietly deletes your oldest saved item when it fills up - only the system's own regenerable outputs roll off, and it warns you when the library is full.
 
 ## [0.2.509] — 2026-08-30
 - A size limit on how much a skill could import has been removed.
