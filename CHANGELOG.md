@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.2.511] — 2026-08-31
+- A missing model id now points you to Settings to set one, instead of asking for network access.
+
 ## [0.2.510] — 2026-08-31
-- Changelog: user-voice entry for the model-config error classification
+- A missing model id now points you to Settings to set one, instead of asking for network access.
 
 ## [0.2.509] — 2026-08-31
 - When a provider has no model id, the error now points you to Settings to set one instead of asking for network access.
