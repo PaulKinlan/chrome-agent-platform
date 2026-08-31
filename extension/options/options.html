@@ -19,13 +19,13 @@
         <a href="#local-folders" class="nav-item" data-section="local-folders">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
         Local folders</a>
-        <a href="#tool-library" class="nav-item" data-section="tool-library">
+        <a href="#tool-library" class="nav-item" data-section="tool-library" data-developer="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
         Tool library</a>
         <a href="#agents" class="nav-item" data-section="agents">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         Agents</a>
-        <a href="#board-permissions" class="nav-item" data-section="board-permissions">
+        <a href="#board-permissions" class="nav-item" data-section="board-permissions" data-developer="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" aria-hidden="true"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
         Board permissions</a>
         <a href="#browser" class="nav-item" data-section="browser">
@@ -37,10 +37,10 @@
         <a href="#skills" class="nav-item" data-section="skills">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M12 2l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4L4.2 7.7l5.4-.8z"/></svg>
         Skills</a>
-        <a href="#hooks" class="nav-item" data-section="hooks">
+        <a href="#hooks" class="nav-item" data-section="hooks" data-developer="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
         Hooks</a>
-        <a href="#prompts" class="nav-item" data-section="prompts">
+        <a href="#prompts" class="nav-item" data-section="prompts" data-developer="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
         Advanced</a>
         <a href="#usage" class="nav-item" data-section="usage">
@@ -72,7 +72,7 @@
           <div id="provider-panels" class="provider-panels"></div>
         </div>
         <p id="provider-selection-status" class="hint" role="status" aria-live="polite" aria-atomic="true" hidden></p>
-        <div class="toggle-field" id="server-tools-card">
+        <div class="toggle-field" id="server-tools-card" data-developer="true">
           <switch-toggle id="server-tools-enabled" label="Provider server tools"></switch-toggle>
           <div class="toggle-text">
             <span class="toggle-name">Provider server tools</span>
@@ -117,7 +117,7 @@
         <div id="local-folders-list" class="local-folders-list"></div>
       </section>
 
-      <section id="tool-library" class="panel">
+      <section id="tool-library" class="panel" data-developer="true">
         <h2>Tool library</h2>
         <p class="muted">Read-only diagnostics: the tools the platform can see, grouped by source. Nothing here runs, installs, grants, updates, or removes tools.</p>
         <tool-library id="tool-library-view"></tool-library>
@@ -163,7 +163,7 @@
         </div>
       </section>
 
-      <section id="board-permissions" class="panel">
+      <section id="board-permissions" class="panel" data-developer="true">
         <h2>Board permissions</h2>
         <p class="muted">Every named agent and the hub can post and claim jobs on the shared board. A rule blocks one specific edge.</p>
         <div id="board-deny-list" role="list" aria-live="polite" aria-label="Board deny rules"></div>
@@ -218,14 +218,14 @@
         <div class="skills-list"></div>
       </section>
 
-      <section id="hooks" class="panel">
+      <section id="hooks" class="panel" data-developer="true">
         <h2>System hooks</h2>
         <p
           class="muted">Every chrome.* event an agent can listen to + respond to. <strong>Deny</strong> a hook to stop the agent ever using it — the deny-list is authoritative and the agent cannot break past it. A hook's permission is granted at install; the deny-list is the control here.</p>
         <div id="hook-list" class="hook-list"></div>
       </section>
 
-      <section id="prompts" class="panel">
+      <section id="prompts" class="panel" data-developer="true">
         <h2>Advanced</h2>
         <h3>Observability</h3>
         <p class="muted">Control local DevTools diagnostics. Tool calls log a paired start and end with their name, arguments, outcome, and duration at Verbose.</p>
@@ -340,6 +340,15 @@
             <span>Version <strong id="about-version">v0.0.0</strong></span>
           </div>
         </div>
+        <h3>Developer features</h3>
+        <div class="toggle-field" id="developer-features-field">
+          <switch-toggle id="developer-features" label="Show developer features"></switch-toggle>
+          <div class="toggle-text">
+            <span class="toggle-name">Show developer features</span>
+            <span class="muted">Off by default. Reveals the platform-building surfaces — the Tool library, Board permissions, Hooks, Advanced (system prompts) and provider server tools — plus the demo test model and its markers. Turning this off never removes anything you built; it only hides these lanes from the default Settings.</span>
+          </div>
+        </div>
+
         <h3>Keyboard shortcuts</h3>
         <p class="muted">Three shortcuts, none of them destructive and none able to grant a
           permission. Chrome owns the bindings — change or clear any of them in Chrome's own

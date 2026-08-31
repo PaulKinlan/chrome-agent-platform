@@ -5,6 +5,8 @@ import {
 } from "../lib/recipes.js";
 import {
   SETTINGS_SECTIONS,
+  DEVELOPER_SECTIONS_SET,
+  DEVELOPER_FEATURES_KEY,
   normalizeSettingsSectionId,
 } from "../lib/pure.js";
 import { projectUnifiedAgents } from "../lib/named-agents.js";
@@ -239,6 +241,41 @@ const storage = {
     }
   },
 };
+
+// ── Developer features flag (CAP-FB-20260830-EXEC-BUILD-FLAG-01) ────────────
+// One boolean preference, OFF by default, that hides the platform-building
+// lanes (Tool library, Board permissions, Hooks, Advanced/system prompts) and
+// the provider server-tools card from the DEFAULT Settings surface, and (via
+// developerFeaturesOn() in lib/provider.js, which reads the SAME kv key) keeps
+// the demo test model + its @demo-* markers and the developer-only browser
+// tools out of a fresh profile. Nothing is deleted — the ids stay valid so a
+// deep link still resolves, and turning the flag on renders every section
+// exactly as before.
+let developerFeaturesEnabled = false;
+
+async function readDeveloperFeaturesFlag() {
+  try {
+    const got = await storage.get(DEVELOPER_FEATURES_KEY);
+    developerFeaturesEnabled = got?.[DEVELOPER_FEATURES_KEY] === true;
+  } catch {
+    developerFeaturesEnabled = false;
+  }
+  return developerFeaturesEnabled;
+}
+
+// Show/hide every developer-marked nav item + section and the server-tools card.
+// The server-tools AGENTS sub-panel is governed by the global server-tools
+// toggle (renderProviders) when the flag is on, so we only force it closed when
+// the flag is off — never open it here.
+function applyDeveloperVisibility(on) {
+  for (const el of document.querySelectorAll('[data-developer="true"]')) {
+    el.hidden = !on;
+  }
+  if (!on) {
+    const agentsPanel = document.getElementById("server-tools-agents");
+    if (agentsPanel) agentsPanel.hidden = true;
+  }
+}
 
 let storageGranted = false;
 
@@ -2791,6 +2828,47 @@ function saveFlash(msg) {
   }, 2500);
 }
 
+// A deep link to a developer section while the flag is OFF must not be a dead
+// link (the panel is hidden, so scrolling to it shows nothing). Instead, a
+// one-line notice at the top of the content column points to the About toggle.
+function ensureDeveloperLockedNotice() {
+  let el = document.getElementById("developer-locked-notice");
+  if (el) return el;
+  const main = document.querySelector("main.content") || document.body;
+  el = document.createElement("div");
+  el.id = "developer-locked-notice";
+  el.className = "panel developer-locked-notice";
+  el.setAttribute("role", "status");
+  el.hidden = true;
+  el.tabIndex = -1;
+  const h = document.createElement("h2");
+  h.textContent = "Developer feature";
+  const p = document.createElement("p");
+  p.className = "muted";
+  p.textContent = "This section is part of the developer features. Turn on “Show developer features” in About to see it.";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn small";
+  btn.textContent = "Go to About";
+  btn.addEventListener("click", () => navigationController.navigate("#about", { replace: true }));
+  el.append(h, p, btn);
+  const header = main.querySelector(".head");
+  if (header && header.nextSibling) main.insertBefore(el, header.nextSibling);
+  else main.appendChild(el);
+  return el;
+}
+function showDeveloperLockedNotice() {
+  const el = ensureDeveloperLockedNotice();
+  el.hidden = false;
+  document.querySelectorAll(".nav-item").forEach((x) => x.removeAttribute("aria-current"));
+  el.scrollIntoView({ behavior: "smooth", block: "start" });
+  el.focus({ preventScroll: true });
+}
+function hideDeveloperLockedNotice() {
+  const el = document.getElementById("developer-locked-notice");
+  if (el) el.hidden = true;
+}
+
 // nav active state
 export function handleSettingsHashNavigation(hash, isTraverse = false) {
   const sectionId = normalizeSettingsSectionId(hash);
@@ -2798,6 +2876,14 @@ export function handleSettingsHashNavigation(hash, isTraverse = false) {
 
   const section = document.getElementById(sectionId);
   if (!section) return false;
+
+  // Developer section requested while the flag is off — show the notice, never
+  // a silent scroll to a hidden panel.
+  if (!developerFeaturesEnabled && DEVELOPER_SECTIONS_SET.has(sectionId)) {
+    showDeveloperLockedNotice();
+    return true;
+  }
+  hideDeveloperLockedNotice();
 
   document.querySelectorAll(".nav-item").forEach((x) => {
     const match = x.dataset.section === sectionId ||
@@ -2932,15 +3018,22 @@ document.querySelectorAll(".nav-item").forEach((a) => {
 // re-reads from the SW on focus so a grant landed anywhere is reflected.
 window.addEventListener("focus", () => { providerStatusChanged(); }, { once: true });
 await refreshStoragePermission();
+// Read the developer-features flag BEFORE the section renderers run, then hide
+// the developer nav items + panels and the server-tools card. The renderers for
+// the hidden sections are SKIPPED (the panel is not shown; no need to build it),
+// but the DOM stays intact so a deep link still resolves and the toggle can
+// reveal them without a reload.
+await readDeveloperFeaturesFlag();
+applyDeveloperVisibility(developerFeaturesEnabled);
 await renderProviders();
 await renderLocalFolders();
-await renderToolLibrary();
+if (developerFeaturesEnabled) await renderToolLibrary();
 await renderAgents();
 await renderEnroll();
 await renderBrowser();
 await renderPermissions();
-await renderHooks();
-await renderPrompts();
+if (developerFeaturesEnabled) await renderHooks();
+if (developerFeaturesEnabled) await renderPrompts();
 await renderUsage();
 // The OPEN Usage panel must reflect a record/clear the moment it happens (a run
 // completing, or the owner clearing), not show a stale count until a manual
@@ -2965,6 +3058,43 @@ await renderData();
 await renderMemoryExplorer();
 await renderEnrolledSites();
 await renderWebmcpStatus();
+
+// ── Developer-features toggle (About) ───────────────────────────────────────
+// The switch reflects the stored flag and, on change, persists it, re-applies
+// the nav/section visibility, and renders any section that just became visible
+// (the initial load skipped its renderer). Turning it OFF hides the lanes
+// without tearing down the DOM — a later turn-on reveals them immediately. The
+// service worker re-reads the flag per run, so the demo model + developer-only
+// tools follow on the next task without a reload.
+{
+  const devToggle = document.getElementById("developer-features");
+  if (devToggle) {
+    // Render each developer section AT MOST ONCE per page load — the moment it
+    // first becomes visible. Some renderers (renderPrompts) wire listeners on
+    // every call, so a second render would stack them; the panels are hidden,
+    // not torn down, so one render is enough for the life of the page.
+    const devRendered = new Set(developerFeaturesEnabled ? ["tool-library", "hooks", "prompts", "board-permissions"] : []);
+    devToggle.checked = developerFeaturesEnabled;
+    devToggle.addEventListener("toggle", async (e) => {
+      const on = e.detail.checked === true;
+      developerFeaturesEnabled = on;
+      await storage.set({ [DEVELOPER_FEATURES_KEY]: on });
+      applyDeveloperVisibility(on);
+      if (on) {
+        // Build the sections that were skipped while the flag was off — once.
+        if (!devRendered.has("tool-library")) { devRendered.add("tool-library"); try { await renderToolLibrary(); } catch { /* section visible; empty */ } }
+        if (!devRendered.has("hooks")) { devRendered.add("hooks"); try { await renderHooks(); } catch { /* idem */ } }
+        if (!devRendered.has("prompts")) { devRendered.add("prompts"); try { await renderPrompts(); } catch { /* idem */ } }
+        if (!devRendered.has("board-permissions")) { devRendered.add("board-permissions"); try { populateBoardDenyAgents(); } catch { /* idem */ } }
+      }
+      // The SW resolves the model + toolset per run from the same kv key; nudge
+      // any running orchestrator so the demo model / developer tools switch
+      // takes effect on the next task without a reload.
+      try { await chrome.runtime.sendMessage({ type: "invalidate-agent" }); } catch { /* worker idle — the setting still persists */ }
+      saveFlash(on ? "Developer features on." : "Developer features off.");
+    });
+  }
+}
 
 // The version in the footer (chaos-style semantic versioning — read from the
 // manifest so it always matches the installed build).
@@ -3196,7 +3326,10 @@ function initBoardDenyUI() {
     const res = await chrome.runtime.sendMessage({ type: "board.deny.add", action, agentId, peerId }).catch(() => null);
     if (res?.ok) renderBoardDenyRules();
   });
-  populateBoardDenyAgents();
+  // Skip the initial render while the developer flag is off (the panel is
+  // hidden); the About toggle renders it on demand when turned on. The form +
+  // port listeners still wire so a turn-on needs no re-init.
+  if (developerFeaturesEnabled) populateBoardDenyAgents();
   // Live registry updates: an agent created after this page loaded appears in
   // the selects without a reload (the SW broadcasts on the progress port).
   try {

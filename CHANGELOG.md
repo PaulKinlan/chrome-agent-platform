@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.548] — 2026-08-31
+- Settings has a new "Show developer features" switch in About. It is off by default and keeps the tool library, board permissions, hooks and advanced sections out of the way until you turn it on.
+
 ## [0.2.547] — 2026-08-31
 - The jobs-board fixes and more polish have begun.
 
