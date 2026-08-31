@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.556] — 2026-08-31
+- Work has begun on the enterprise-permission and scheduling improvements.
+
 ## [0.2.555] — 2026-08-31
 - ARTIFACT-LIBRARY-CAPACITY-01, EXEC-BUILD-FLAG-01 DONE (coordinator gates 2816/0, 272/272)
 
