@@ -1209,7 +1209,6 @@ function scheduleRunLogRefresh() {
   if (runLogCovered()) { runLogDirty = true; return; }
   clearTimeout(runLogRefreshTimer);
   runLogRefreshTimer = setTimeout(() => {
-  runLogRefreshTimer = setTimeout(() => {
     refreshTimeline().catch(() => {});
     refreshHubActivity();
     actionLedgerEl?.refresh?.().catch(() => {});
