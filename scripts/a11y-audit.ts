@@ -148,9 +148,14 @@ const ANALYZE = `
     if (!name) {
       out.unlabeled.push(el.tagName.toLowerCase() + ":" + (el.getAttribute("role") || "") + " id=" + (el.id || "none"));
     }
-    // small-target check: buttons/inputs/selects must be >= 24x24 px
-    // (native checkboxes/radios are exempt per WCAG 2.5.8).
-    if (visible(el) && ["button", "input", "textarea", "select"].includes(tag) &&
+    // small-target check: buttons, anchors and form controls must be >= 24x24
+    // px (WCAG 2.5.8). Native checkboxes/radios are exempt; anchors that are
+    // inline prose (an <a> whose text sits inside a paragraph, not a standalone
+    // control) are exempt per the "inline in a sentence" exception.
+    const interactiveTarget = ["button", "input", "textarea", "select"].includes(tag) ||
+      (tag === "a" && !!el.getAttribute("href"));
+    const isInlineLink = tag === "a" && el.closest("p, li, span:not(.panel-subhead), .muted, .hint") !== null;
+    if (visible(el) && interactiveTarget && !isInlineLink &&
         !(el.getAttribute("type") === "checkbox" || el.getAttribute("type") === "radio")) {
       const r = el.getBoundingClientRect();
       if (r.width < 24 || r.height < 24) {
@@ -241,43 +246,53 @@ const ANALYZE = `
   out.focus.total = focusables().length;
   out.focus.first = start ? (start.tagName.toLowerCase() + ":" + (start.getAttribute("aria-label") || start.textContent.trim().slice(0, 20))) : "none";
 
-  // 5. FOCUS RING — every focusable element, when focused, must show a
-  // visible focus indication: an outline, a box-shadow, an accent border via
-  // :focus-within on a container, or a styled child (e.g. a nub). The shared
-  // accent ring is the design; border-color-on-focus-within is the composer's
-  // pattern and the nub box-shadow the side-toggle's — all visible.
-  const hasVisibleIndication = (el) => {
-    const cs = getComputedStyle(el);
-    const outline = cs.outlineStyle !== "none" && parseFloat(cs.outlineWidth || "0") > 0;
-    const shadow = (cs.boxShadow || "").trim() !== "" && (cs.boxShadow || "") !== "none";
-    if (outline || shadow) return true;
-    // a child drawing the indication (e.g. .side-toggle .nub box-shadow)
-    for (const child of el.children || []) {
-      const ccs = getComputedStyle(child);
-      if ((ccs.boxShadow || "").trim() !== "" && (ccs.boxShadow || "") !== "none") return true;
-    }
-    // a :focus-within container changing its border color (e.g. the composer)
+  // 5. FOCUS RING — every focusable element (including inside OPEN shadow
+  // roots), when focused, must show a VISIBLE CHANGE: an outline, box-shadow,
+  // border-color, background or text color difference vs its unfocused state,
+  // measured on the element itself, its :focus-within ancestors and its styled
+  // children (e.g. the side-toggle nub). A focus indication is a CHANGE, so a
+  // permanently-decorative static style is never a false positive. Only
+  // elements that actually RECEIVE focus are flagged (a display:none/hidden
+  // element cannot be focused and is skipped, matching the visible() filter).
+  const allFocusables = () => {
+    const found = [];
+    const scan = (root) => {
+      for (const el of Array.from(root.querySelectorAll ? root.querySelectorAll('button, a[href], input, textarea, select, [tabindex]:not([tabindex="-1"]), [role="switch"], [role="button"], [role="checkbox"]') : [])) {
+        if (visible(el)) found.push(el);
+        if (el.shadowRoot) scan(el.shadowRoot);
+      }
+      if (root.shadowRoot) scan(root.shadowRoot);
+    };
+    scan(document);
+    return found;
+  };
+  const visualSignature = (el) => {
+    const read = (node) => {
+      if (!node || node.nodeType !== 1) return "";
+      const cs = getComputedStyle(node);
+      return [cs.outlineStyle, cs.outlineWidth, cs.boxShadow, cs.borderTopColor, cs.backgroundColor, cs.color].join("|");
+    };
+    // element + up to 2 :focus-within ancestors + first child (the nub pattern)
+    let sig = read(el);
     let a = el.parentElement;
     for (let depth = 0; a && depth < 2; a = a.parentElement, depth++) {
-      if (a.matches(":focus-within")) {
-        const acs = getComputedStyle(a);
-        const borderColor = acs.borderTopColor || "";
-        if (borderColor && borderColor !== "rgb(0, 0, 0)" && borderColor !== "transparent" && parseFloat(acs.borderTopWidth || "0") > 0) {
-          // accent-ish: not the neutral border color (compare against the unfocused value would need a snapshot;
-          // a non-default visible border color while focused is a positive indication)
-          return true;
-        }
-      }
+      sig += "~" + read(a);
     }
-    return false;
+    const child = el.firstElementChild;
+    if (child) sig += "~" + read(child);
+    return sig;
   };
-  for (const el of focusables()) {
+  for (const el of allFocusables()) {
     try {
+      const before = visualSignature(el);
       el.focus();
-      if (!hasVisibleIndication(el)) {
+      const focusedOk = document.activeElement === el || el.contains(document.activeElement);
+      if (!focusedOk) continue; // element cannot actually take focus (hidden etc.)
+      const after = visualSignature(el);
+      if (before === after) {
         out.ringMissing.push(el.tagName.toLowerCase() + (el.id ? "#" + el.id : "") + ":" + (el.getAttribute("aria-label") || "").slice(0, 24));
       }
-    } catch { /* focus may fail for hidden children; skip */ }
+    } catch { /* skip */ }
   }
   return out;
 })()
@@ -330,6 +345,14 @@ async function main() {
 
     // ── the hub ──
     let page = await openPage(cdp, `chrome-extension://${id}/ntp/ntp.html`);
+    // Seed a named agent so the Agents panel (with its hint-link anchors and
+    // rows) RENDERS — on a fresh profile the panels are hidden, which would
+    // let the small-target and ring checks pass vacuously over real anchors.
+    await cdp.evl(page.sessionId,
+      `(() => { try { chrome.runtime.sendMessage({ type: "named-agent.create", name: "Audit Seed", role: "a11y audit fixture" }); } catch (e) { return String(e); } })()`);
+    await sleep(1000);
+    await cdp.send("Page.reload", {}, page.sessionId);
+    await sleep(2500);
     let a = await analyze(cdp, page.sessionId, "hub");
     check("hub: no unlabeled interactive controls", (a.unlabeled || []).length === 0, a.unlabeled);
     check("hub: no generic div-interactives", (a.genericInteractives || []).length === 0, a.genericInteractives);
@@ -346,6 +369,17 @@ async function main() {
     // stop is standard Chromium sequential-focus behavior on any scrollable page
     // (control-verified); the finding's actual defect was mid-walk dead stops.
     {
+      // Pre-compute the FIRST and LAST focusable ids from the live DOM so a
+      // body stop can be classified against the REAL sequence: the only legal
+      // body stop is the wrap (last -> body -> first). A body stop that is NOT
+      // followed by the first focusable is a mid-sequence dead stop. The final
+      // truncated stop (no successor) is never a violation by itself.
+      const seqInfo = await cdp.evl(page.sessionId, `(() => {
+        const vis = [...document.querySelectorAll('button, a[href], input, textarea, select, [tabindex]:not([tabindex="-1"])')].filter((e) => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; });
+        const idOf = (e) => e.tagName + (e.id ? '#' + e.id : '');
+        return JSON.stringify({ first: idOf(vis[0] ?? {}), last: idOf(vis[vis.length - 1] ?? {}) });
+      })()`);
+      const { first, last } = JSON.parse(seqInfo);
       await cdp.evl(page.sessionId, `document.getElementById("side-toggle")?.focus()`);
       const stops: string[] = [];
       for (let i = 0; i < 40; i++) {
@@ -355,13 +389,18 @@ async function main() {
         const info = await cdp.evl(page.sessionId, `(() => { const ae = document.activeElement; if (!ae || ae === document.body || ae === document.documentElement) return "BODY"; return ae.tagName + (ae.id ? "#" + ae.id : ""); })()`);
         stops.push(info);
       }
-      // a body stop is legal ONLY as the wrap: the stop right after the LAST
-      // focusable of the sequence (i.e. it must be immediately followed by the
-      // FIRST focusable). Detect any body stop NOT followed by the first element.
-      const first = stops[1] ?? "?"; // the first real stop after the initial focus
-      const wrapStops = stops.filter((s, idx) => s === "BODY" && stops[idx + 1] === first).length;
-      const badStops = stops.filter((s, idx) => s === "BODY" && stops[idx + 1] !== first).length;
-      check("hub: the Tab walk has no mid-sequence dead stops (body only at the standard wrap)", badStops === 0, { badStops, wrapStops, stops: stops.slice(0, 8) });
+      // Classify each body stop: legal ONLY when it is the wrap (preceded by
+      // the last focusable OR followed by the first). Anything else is a dead
+      // stop. The very last stop (truncation) is not judged.
+      const badStops: string[] = [];
+      for (let idx = 0; idx < stops.length - 1; idx++) {
+        if (stops[idx] !== "BODY") continue;
+        const prev = idx > 0 ? stops[idx - 1] : null;
+        const next = stops[idx + 1] ?? null;
+        const isWrap = (prev === last || next === first);
+        if (!isWrap) badStops.push(`@${idx} prev=${prev} next=${next}`);
+      }
+      check("hub: the Tab walk has no mid-sequence dead stops (body only at the standard wrap)", badStops.length === 0, { badStops, first, last, stops: stops.slice(0, 10) });
     }
 
     // ── the chat ──

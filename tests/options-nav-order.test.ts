@@ -9,16 +9,52 @@ Deno.test("Settings nav order matches rendered section order", async () => {
   assertEquals(navOrder, sectionOrder);
 });
 
-Deno.test("Settings field labels are real <label for> elements (CAP-FB-20260830-FOCUS-ORDER-VISIBILITY-01)", async () => {
+/** A deterministic, non-vacuous label scan of options.html.
+ *
+ * Walks the HTML as a tag stream tracking `<label>` nesting: a control is
+ * "wrapped" when an unclosed `<label>` is open at the point the control's tag
+ * appears; it is "for-associated" when any `<label for="id">` names it. A
+ * control with neither is unlabeled. This never uses a spanning regex, so it
+ * cannot accidentally match a label from an unrelated section, and it fails
+ * RED the moment a `<label for>` or a wrapping label is replaced by a bare
+ * `<span class="field-label">`.
+ */
+Deno.test("Settings field labels are real <label> associations (CAP-FB-20260830-FOCUS-ORDER-VISIBILITY-01)", async () => {
   const html = await Deno.readTextFile(new URL("../extension/options/options.html", import.meta.url));
-  // Every input/select/textarea in options.html must be associated with a
-  // <label for="id"> or wrapped in a <label> — never a bare span.field-label.
-  const controls = [...html.matchAll(/<(input|select|textarea)[^>]*?id="([^"]+)"[^>]*>/g)];
-  const ids = new Set(controls.map((m) => m[2]));
-  const labelFors = [...html.matchAll(/<label[^>]*for="([^"]+)"/g)].map((m) => m[1]);
-  const unlabeled = [...ids].filter((id) => !labelFors.includes(id));
-  // wrapped labels: <label ...><span class="field-label">…</span><select id="x">…
-  const wrapped = [...html.matchAll(/<label(?![^>]*for=)[\s\S]*?<span class="field-label">[\s\S]*?<(?:select|input|textarea)[^>]*id="([^"]+)"/g)].map((m) => m[1]);
-  const trulyUnlabeled = unlabeled.filter((id) => !wrapped.includes(id));
-  assertEquals(trulyUnlabeled, [], `controls without a label-for or wrapping label: ${trulyUnlabeled.join(", ")}`);
+
+  // <label for="id"> associations (anywhere in the document).
+  const labelFor = new Set([...html.matchAll(/<label\b[^>]*\bfor="([^"]+)"/g)].map((m) => m[1]));
+
+  // Tag-stream walk: track open <label> depth; record each control's id and
+  // whether a label wraps it (an unclosed label is open at that position).
+  const controlIds: string[] = [];
+  const wrappedIds = new Set<string>();
+  let labelDepth = 0;
+  const TAG_RE = /<\/?([a-zA-Z][a-zA-Z0-9]*)\b[^>]*>/g;
+  let m: RegExpExecArray | null;
+  let lastIndex = 0;
+  while ((m = TAG_RE.exec(html)) !== null) {
+    const tag = m[0];
+    const name = m[1].toLowerCase();
+    if (tag.startsWith("</")) {
+      if (name === "label") labelDepth = Math.max(0, labelDepth - 1);
+      continue;
+    }
+    if (name === "label") {
+      labelDepth += 1;
+      continue;
+    }
+    if (["input", "select", "textarea"].includes(name)) {
+      const idMatch = tag.match(/\bid="([^"]+)"/);
+      if (idMatch) {
+        controlIds.push(idMatch[1]);
+        if (labelDepth > 0) wrappedIds.add(idMatch[1]);
+      }
+    }
+    lastIndex = m.index;
+  }
+  assertEquals(controlIds.length > 0, true, "expected at least one control in options.html (the scan must not be vacuous)");
+
+  const unlabeled = controlIds.filter((id) => !labelFor.has(id) && !wrappedIds.has(id));
+  assertEquals(unlabeled, [], `controls without a <label for> or a wrapping <label>: ${unlabeled.join(", ")}`);
 });

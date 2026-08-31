@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.511] — 2026-08-31
+- Focus order r2: real label association gate (no vacuously-true regex), anchors included in the 24px gate, focus-ring check enumerates shadow roots and detects style CHANGES on focus, tab-walk classifies body stops against the real first/last focusable; repair tracker metadata duplicated across entries by the r1 History insert
+
 ## [0.2.510] — 2026-08-30
 - Focus order and visibility: 24px targets for hint links, activity-copy and Settings anchors; a11y audit gains hub tab-walk, focus-ring and small-target checks; Settings labels gate
 
