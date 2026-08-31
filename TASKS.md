@@ -225,7 +225,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | OPEN | [`CAP-FB-20260830-PROVIDER-DEFAULT-AND-KEY-FLOW-01`](#cap-fb-20260830-provider-default-and-key-flow-01-a-recommended-default-provider-and-a-four-click-key-flow) | A recommended default provider and a four-click key flow |
 | P1 | OPEN | [`CAP-FB-20260831-FS-GRANT-TASK-USE-01`](#cap-fb-20260831-fs-grant-task-use-01-file-tools-do-not-work-on-a-granted-folder-in-a-task--the-folder-is-ignored-tools-fail-silently-errors-are-opaque) | File tools do not work on a granted folder in a task — the folder is ignored, tools fail silently, errors are opaque |
 | P1 | OPEN | [`CAP-FB-20260831-MCP-SUPPORT-01`](#cap-fb-20260831-mcp-support-01-mcp-server-support--global-for-the-task-view-and-per-agent) | MCP server support — global for the task view, and per-agent |
-| P1 | OPEN | [`CAP-FB-20260831-MCP-TRANSPORT-SPIKE-01`](#cap-fb-20260831-mcp-transport-spike-01-prove-remote-mcp-works-in-the-loaded-extension-and-resolve-the-agent-do-bundle-question) | Prove remote MCP works in the loaded extension and resolve the agent-do bundle question |
+| P1 | IN_REVIEW | [`CAP-FB-20260831-MCP-TRANSPORT-SPIKE-01`](#cap-fb-20260831-mcp-transport-spike-01-prove-remote-mcp-works-in-the-loaded-extension-and-resolve-the-agent-do-bundle-question) | Prove remote MCP works in the loaded extension and resolve the agent-do bundle question |
 | P2 | BLOCKED | [`CAP-FB-20260822-MV3-WASM-RUNTIME-PROBE-01`](#cap-fb-20260822-mv3-wasm-runtime-probe-01-loaded-mv3-wasm-runtime-and-termination-probe) | Loaded-MV3 Wasm runtime and termination probe |
 | P2 | BLOCKED | [`CAP-FB-20260822-OWNER-WASM-INSTALL-01`](#cap-fb-20260822-owner-wasm-install-01-owner-selected-wasm-package-lifecycle) | Owner-selected Wasm package lifecycle |
 | P2 | IN_REVIEW | [`CAP-FB-20260829-PROVIDER-TOOLS-COPY-01`](#cap-fb-20260829-provider-tools-copy-01-explain-provider-run-tool-toggles-per-agent) | Explain provider-run tool toggles per agent |
@@ -4601,30 +4601,32 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260831-MCP-TRANSPORT-SPIKE-01] Prove remote MCP works in the loaded extension and resolve the agent-do bundle question
 - Feedback: 2026-08-31 — first child of CAP-FB-20260831-MCP-SUPPORT-01. agent-do's mcp.js imports StdioClientTransport at module top (uses node child_process) — in MV3 there is no subprocess, and that import may pull node built-ins into the esbuild bundle and break the CSP/build. Must be resolved before building the feature.
-- Updated: 2026-08-31 20:25 UTC
-- Status: OPEN
+- Updated: 2026-08-31 21:40 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P1
 - Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — CLAIMED; do not start a parallel attempt
 - Workspace: active (local path private)
 - Branch: `cap/mcp-transport-spike` (pushed to origin as the candidate branch; merged by the coordinator)
 - Base: `add13ca0`
-- Candidate: —
+- Candidate: this tracker commit on `cap/mcp-transport-spike`
 - Shipping: —
 - Acceptance: a working spike in the loaded extension connects to a local Streamable-HTTP MCP server from the service worker (or agent worker), lists its tools, calls one, and tears the connection down — with the production build clean (no node built-ins, no eval). A written decision in `docs/MCP-SUPPORT-DESIGN.md`: either (a) agent-do's `mountMcpServers` is usable in our bundle (the stdio import tree-shakes/stubs cleanly) with a per-server resilience wrapper, or (b) we mount MCP ourselves using `@modelcontextprotocol/sdk`'s `StreamableHTTPClientTransport`/`SSEClientTransport` directly and never import the stdio path. Per-server resilience is proven (a second, unreachable server does not kill the working one).
   - Context: `docs/MCP-SUPPORT-DESIGN.md` constraints 1 and 2. The SDK is `@modelcontextprotocol/sdk@1.30.0` (already a transitive dep via agent-do); `node_modules/@modelcontextprotocol/sdk/dist/esm/client/{streamableHttp,sse}.js` are the browser-safe transports.
   - Files: a spike module in `extension/lib/` (e.g. `mcp-client.js`), a test MCP server for the harness (a tiny Deno/node Streamable-HTTP server under scripts/ or tests/fixtures), `scripts/build.mjs` if a bundle shim/alias is needed to keep node stdio out, `docs/MCP-SUPPORT-DESIGN.md` (write the decision).
   - Steps: 1. Stand up a minimal Streamable-HTTP MCP test server (one tool). 2. Try mounting via agent-do; if the bundle breaks on stdio, mount via the SDK transports directly. 3. Connect from the SW, list+call+teardown. 4. Prove per-server resilience. 5. Record the decision in the design doc.
-- Review: pending
+- Review: author review 2026-08-31 — falsification gates cleared (RED/GREEN recorded below); a fresh-session review on the diff is welcome for taste/architecture.
+- Decision: option (b) — mount MCP ourselves over the SDK's `StreamableHTTPClientTransport`/`SSEClientTransport`, never import agent-do's stdio path or `mountMcpServers` (it is all-or-nothing → no per-server resilience, and it drags in stdio). Recorded in `docs/MCP-SUPPORT-DESIGN.md` → "Transport spike result". Bundle note: the stdio import does NOT break the build — `build.mjs` already shims `node:*` for the SW/worker bundles, which already contain agent-do's shimmed MCP — but our new client adds zero stdio surface by importing only the two remote transports.
 - Gates: the falsification gates apply.
-  - Unit: a test of the mount/resolve helper (per-server isolation: one failing server yields its error and does not throw for the others); falsify by removing the isolation.
-  - Browser: a KAT (launchChrome) — the loaded extension connects to the test MCP server, lists a tool, calls it, tears down; a second unreachable server is reported failed without killing the run.
-  - Full suite: `npm run build:production` clean (no node built-ins in the SW bundle — assert via the existing seam/scan) and full suite green.
-  - Constraints: MV3-CSP-safe; remote transports only; no eval; no node built-ins in the bundle.
+  - Unit: `tests/mcp-client-core.test.ts` (6 tests) — per-server isolation of `mountRemoteMcpServers`. Falsified by reverting the mount to all-or-nothing (rethrow on any server failure): the two isolation tests observed RED (`4 passed | 2 failed`); isolation restored → GREEN (`6 passed | 0 failed`).
+  - Browser: `scripts/kat-mcp-transport.ts` (launchChrome) — the loaded extension's SW connects over Streamable-HTTP to `scripts/mcp-test-server.ts`, lists `mcp__calc__add`/`mcp__calc__echo`, calls `add(3,5)` → `"8"`, and a second unreachable server is reported `{ok:false}` without killing the run; teardown clean. Observed 8/8 PASS.
+  - Full suite: `npm run build:production` clean (no `node:` builtins in the SW bundle per the existing seam/scan; no eval/new Function per the scrub; the developer-only probe absent from the store bundle). `deno test tests/` = 2834 passed / 0 failed. Chrome journey suite not run under machine contention (200+ Chromiums) — coordinator confirms at merge; the MCP KAT + unit + production build stand as this lane's evidence.
+  - Constraints: MV3-CSP-safe; remote transports only; no eval; no node built-ins in the bundle. All met.
 - Blockers: —
-- Next: stand up a minimal Streamable-HTTP MCP test server, then attempt the agent-do mount and check the bundle
+- Next: coordinator confirms the full Chrome journey suite at merge; downstream children (`MCP-CONFIG-STORE-01`, `MCP-TOOL-INJECTION-01`) build on `extension/lib/mcp-client.js`.
 - Recover: `git log --oneline --all --grep=CAP-FB-20260831-MCP-TRANSPORT-SPIKE-01`
 - History:
+  - 2026-08-31 21:40 UTC — SPIKE DONE (IN_REVIEW). Decision (b) recorded in the design doc. New: `extension/lib/mcp-client-core.js` (pure, per-server-isolated mount/resolve), `extension/lib/mcp-client.js` (SDK Streamable-HTTP/SSE binding, no stdio), `scripts/mcp-test-server.ts` (stateless test server), `scripts/mcp-probe-entry.js` + a developer-only `build.mjs` SW `inject`. RED (`4 passed | 2 failed` without isolation) → GREEN (`6/6`); KAT 8/8 in the loaded-extension SW; `build:production` clean; unit suite 2834/0. Pushed `cap/mcp-transport-spike`.
   - 2026-08-31 21:00 UTC — filed as the first MCP child; the go/no-go on agent-do's mount vs an own SDK mount.
   - 2026-08-31 20:25 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/mcp-transport-spike` off `origin/main@add13ca0`. Other agents: pick a different entry.
 

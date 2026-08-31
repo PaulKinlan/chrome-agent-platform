@@ -109,3 +109,85 @@ This is the plan of record. Tracker umbrella: `CAP-FB-20260831-MCP-SUPPORT-01` (
   bundle/logs/receipts; remote transports only (no stdio in the extension); per-server resilience;
   the lazy catalog stays small; RED-first tests; real loaded-extension verification against a test MCP
   server; production build + full suite green.
+
+---
+
+## Transport spike result (CAP-FB-20260831-MCP-TRANSPORT-SPIKE-01) — landed 2026-08-31
+
+**Decision: option (b). We mount MCP ourselves over the SDK's browser-safe
+transports (`StreamableHTTPClientTransport` / `SSEClientTransport`) directly,
+and never import agent-do's stdio path. We do NOT call agent-do's
+`mountMcpServers`.**
+
+Both reasons in constraint 1's risk and constraint 2 hold, and either is
+sufficient:
+
+1. **All-or-nothing (constraint 2).** agent-do's `mountMcpServers` tears the
+   whole set down and rethrows on any single server's `connect()`/`listTools()`
+   failure. Per-server resilience is a hard requirement, so we own the mount
+   loop. Wrapping agent-do per-server would mean calling it once per server and
+   reimplementing the aggregation anyway.
+2. **Dead stdio weight.** Importing `mountMcpServers` pulls
+   `StdioClientTransport` (node `child_process`) — a transport MV3 can never
+   use. Importing only `streamableHttp.js` + `sse.js` keeps it out by
+   construction.
+
+**On the bundle question specifically:** the stdio import does **not** break
+`npm run build:production`. `build.mjs` already aliases every `node:*`
+specifier (`child_process` included) to `browser-shim-node.js` for the SW and
+agent-worker bundles, and those bundles *already* contain agent-do's MCP code
+(including a shimmed, never-called `StdioClientTransport`) because the agent
+loop imports agent-do. So the risk is real in mechanism but already mitigated
+by the existing shim + `new Function` scrub. Our new client adds **zero** stdio
+surface. (This also answers part of `AGENT-DO-MCP-ASSESSMENT-01`: we mount
+ourselves; a future agent-do bump is only warranted if it adds per-server
+resilience *and* stops importing stdio at module top.)
+
+### What landed
+
+- **`extension/lib/mcp-client-core.js`** — transport-agnostic mount/resolve
+  helper (no SDK import → no `node:` builtins → Deno-unit-testable). Owns the
+  **per-server-isolated** mount loop, `mcp__<server>__<tool>` namespacing
+  (agent-do's `__`-rejecting rule), result flattening, and idempotent teardown.
+  `mountRemoteMcpServers(configs)` returns `{ tools, toolOrigins, servers,
+  close }`; each tool is `{ name, description, inputSchema, origin, call(args)
+  → Promise<string> }`; `servers[]` is the per-server `{ name, ok, error?,
+  toolCount? }` status the UI (config-store / global-UI children) should
+  surface. A server-level failure is recorded and its half-open client closed;
+  the mount never throws for it.
+- **`extension/lib/mcp-client.js`** — binds the helper to real SDK `Client`s
+  over `StreamableHTTPClientTransport` (transport `"http"`) and
+  `SSEClientTransport` (`"sse"`). The SW / agent worker imports this; it never
+  imports `client/stdio.js`.
+- **`scripts/mcp-test-server.ts`** — a dependency-free, stateless MCP
+  Streamable-HTTP test server (`add`, `echo`; CORS-permissive; `GET` → 405;
+  `notifications/initialized` → 202). Library (`startMcpTestServer()`) or CLI.
+- **`scripts/mcp-probe-entry.js`** — a developer-build-only probe `inject`-ed
+  into the SW bundle (SW globals forbid `import()`, so the probe must be part of
+  the bundle) that installs `globalThis.__capMcpProbe`. Absent from every store
+  build.
+
+### Evidence
+
+- **Unit (falsification gate):** `tests/mcp-client-core.test.ts` (6 tests) — per-
+  server isolation, atomic listTools-failure isolation, idempotent teardown,
+  name validation, result formatting. Falsified by reverting the mount to
+  all-or-nothing: the two isolation tests go **RED**; restored → **GREEN** 6/6.
+- **Browser KAT:** `scripts/kat-mcp-transport.ts` (8/8) — the real loaded
+  extension's **service worker** connects over Streamable-HTTP to the test
+  server, lists `mcp__calc__add` / `mcp__calc__echo`, `add(3,5)` returns `"8"`,
+  and a second **unreachable** server is reported `{ ok:false, error:"Failed to
+  fetch" }` **without** aborting the run; teardown clean.
+- **Build/suite:** `npm run build:production` clean (no `node:` builtins reach
+  the SW, no `eval`/`new Function`, dev probe absent from store); full unit
+  suite `deno test tests/` 2834 passed / 0 failed.
+
+### Integration notes for the downstream children
+
+- The untrusted-output fence (constraint 3) is **not** yet applied inside
+  `call()` — the spike keeps `formatMcpToolResult` a plain text flatten. Wrap it
+  with the project's `wrapForModel` guard when folding MCP tools into the
+  model-visible lazy catalog (`MCP-TOOL-INJECTION-01`).
+- Credentials go in `transport.headers` at connect time, sourced from secure
+  storage; never persist them into a logged/exported config
+  (`MCP-CONFIG-STORE-01`).

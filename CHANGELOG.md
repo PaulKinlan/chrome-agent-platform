@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.567] — 2026-08-31
+- Groundwork for connecting to external MCP tool servers over the network, proven end to end in the extension.
+
 ## [0.2.566] — 2026-08-31
 - Work has begun on folder tools and external tool-server support.
 
