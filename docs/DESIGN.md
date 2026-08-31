@@ -494,6 +494,30 @@ view. Sentences are built with `textContent` (tab titles and bookmark names are
 untrusted); the Undo button is a real `<button>` whose accessible name names the
 specific action ("Undo: Closed Example Domain").
 
+## Side panel companion (the Page view)
+*(CAP-FB-20260830-SIDE-PANEL-COMPANION-01.)* The side panel's **Page** view is a
+companion pinned to the **current tab**, not a WebMCP status surface with a URL
+bar. Its header shows that tab's favicon (an `<img>` on the tab's `favIconUrl`
+with an empty `alt`, falling back to an inline globe) and host — both untrusted,
+so the host is set with `textContent` — plus one tool-state line (*Offers N
+tools* / *No site tools added* / *No tools on this page*). Below the header the
+origin's discovered tools appear as chips, then the tab's own conversation
+(`<agent-conversation>`), then the **Activity on this tab** ledger, then a
+compact composer (`<agent-composer>` with an *Ask* button) bound to the tab.
+`read_page` and the page-action tools default to the active tab, so a run
+started from the composer reads and acts on the page in front of the owner. Each
+tab keeps its own thread; **Continue in hub** (a hairline ghost button in the
+header, hidden until the tab has a thread) reopens that exact thread on the
+new-tab hub. The panel tracks `chrome.tabs.query({active,lastFocusedWindow})` and
+updates on tab switch, navigation, and window focus.
+
+There is exactly **one `<h1>`** (a visually-hidden "Page companion" — the
+two-H1 bug is gone). The former URL box is demoted into a secondary **"Open
+another site…"** `<details>` disclosure at the very bottom; nothing wraps inside
+a control at 360 px (`.btn`, the tabs and the header host are `white-space:
+nowrap`, and a container query collapses the disclosure's Open button to its icon
+under 360 px). The numbered instruction card is removed.
+
 ## Motion
 150–250ms state transitions only; `prefers-reduced-motion` respected. No
 page-load choreography, no decorative glow.

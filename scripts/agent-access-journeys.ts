@@ -658,6 +658,10 @@ async function main() {
     // tab through that authority — the panel never calls chrome.tabs.create.
     const tabsBefore = (await fetchJson(`http://127.0.0.1:${port}/json/list`))
       .filter((t) => t.url?.startsWith("https://example.com")).length;
+    // The URL field is now the secondary "Open another site…" disclosure
+    // (CAP-FB-20260830-SIDE-PANEL-COMPANION-01): open it before typing.
+    await evl(sp, `document.getElementById('open-another').open = true`);
+    await sleep(150);
     await clearField(sp, `document.getElementById('url')`);
     await typeText(sp, "https://example.com");
     await clickExpr(sp, `document.getElementById('go')`);
@@ -666,7 +670,7 @@ async function main() {
       .filter((t) => t.url?.startsWith("https://example.com"));
     const navStatus = await evl(sp, `document.getElementById('status').textContent`);
     check("navigation: the Go flow opens a REAL tab via the SW authority (real typing + real click)",
-      navTargets.length === tabsBefore + 1 && /Opened https:\/\/example\.com in a tab/.test(navStatus),
+      navTargets.length === tabsBefore + 1 && /Opened https:\/\/example\.com in a new tab/.test(navStatus),
       { tabsBefore, after: navTargets.length, navStatus });
     // Clean up the opened tab.
     if (navTargets.length) {

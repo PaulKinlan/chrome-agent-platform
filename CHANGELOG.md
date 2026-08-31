@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.535] — 2026-08-31
+- : merge — the side panel is a companion pinned to the current tab
+
 ## [0.2.534] — 2026-08-31
 - Fix refreshHubActivity to use the current timeline surface after the hub-timeline rename
 
@@ -82,7 +85,7 @@
 - Artifacts and generated images now appear in the conversation as they are created — a card showing what changed, plus a thumbnail strip of screenshots and images you can open.
 
 ## [0.2.510] — 2026-08-30
-- The agent can now act inside a web page - find a control by its name, click it, type into a field, choose an option, scroll - after you grant the site, with each action recorded in the activity log and page text still treated as untrusted.
+- The side panel is now a companion for the page you are on - it shows the site and whether it offers tools, and gives you a compact box to ask the agent to act on this page, with the conversation and activity right there.
 
 ## [0.2.509] — 2026-08-30
 - A size limit on how much a skill could import has been removed.
