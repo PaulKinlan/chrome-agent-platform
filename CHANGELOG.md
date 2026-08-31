@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.536] — 2026-08-31
+- The companion side panel is now available.
+
 ## [0.2.535] — 2026-08-31
 - : merge — the side panel is a companion pinned to the current tab
 
