@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.518] — 2026-08-31
+- Three product decisions were made, and the next set of improvements has begun.
+
 ## [0.2.517] — 2026-08-31
 - The release notes entry for the tidy-up is now in plain language too
 

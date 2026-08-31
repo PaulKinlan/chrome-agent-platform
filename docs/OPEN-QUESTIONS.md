@@ -43,7 +43,7 @@ Resolved answers are recorded here (Paul confirmed each over the course of the b
     removed with a guard test rather than left in the catalogue as a promise that
     always failed. Browser tools 126 → 125, capability table 167 → 166.
 
-18. **Host-access posture** — `extension/manifest.json` declares `host_permissions: ["<all_urls>"]`
+18. **Host-access posture** — **RESOLVED (Paul, 2026-08-31): option (a) — keep install-granted host_permissions <all_urls>; this is a private tool and the broad access is acceptable, the capability must demonstrate clearly. Make README/comments/docs honest about it.** `extension/manifest.json` declares `host_permissions: ["<all_urls>"]`
     plus two content scripts on every http(s) page at `document_start` (install-granted, since
     `0.2.419`), while the README and several comments still describe an all-optional model. The
     install prompt reads "Read and change all your data on all websites" — the first question a
@@ -56,7 +56,7 @@ Resolved answers are recorded here (Paul confirmed each over the course of the b
     offers tools; it acts only after you allow it". Blocks `CAP-FB-20260830-HOST-ACCESS-STORY-01`;
     shapes `WEBSTORE-RELEASE-01` and `CAP-FB-20260830-PRIVACY-STATEMENT-01`.
 
-19. **Are page actions in scope?** — There is no click, type, fill, scroll or find-element tool;
+19. **Are page actions in scope?** — **RESOLVED (Paul, 2026-08-31): YES — add the minimal grant-gated page-action family (find/click/type/select/scroll/wait) behind the untrusted-content fence and the activity ledger.** There is no click, type, fill, scroll or find-element tool;
     the only way to act inside a page is a site that ships WebMCP tools. Every comparator leads
     with "it fills the form". Either add a minimal grant-gated page-action family on
     `chrome.scripting` (find by accessible name, click, type, select, scroll, wait) behind the
@@ -67,7 +67,7 @@ Resolved answers are recorded here (Paul confirmed each over the course of the b
     against screenshot-and-click agents. Blocks `CAP-FB-20260830-PAGE-ACTION-TOOLS-01` and, through
     it, `CAP-FB-20260830-SIDE-PANEL-COMPANION-01`.
 
-20. **"Browser control" first, or "coworker" first?** — The product carries two thesis
+20. **"Browser control" first, or "coworker" first?** — **RESOLVED (Paul, 2026-08-31): progress to the coworker features in the recommended order: activity ledger with undo, companion side panel, plan strip, scheduled-run reports on the timeline.** The product carries two thesis
     statements: sites-as-sub-agents via WebMCP (unique, working, hidden) and a coworking
     environment for knowledge workers (`PRODUCT.md`; aspirational, missing page actions and a
     companion). The hub is a third thing — an agent-management dashboard. The answer orders the
