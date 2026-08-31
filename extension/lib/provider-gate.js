@@ -2,12 +2,14 @@
 //
 // Two related fixes (Paul, 2026-08-17):
 //
-// 1. The provider FETCH fails ("TypeError: Failed to fetch") because the
-//    extension's OPTIONAL host permission for the provider's origin is not
-//    granted. The manifest has only optional_host_permissions [http/https *],
-//    so the service worker's cross-origin fetch to the provider (OpenAI /
-//    Anthropic / Gemini / DeepSeek / a custom OpenAI-compatible endpoint)
-//    needs the host permission granted — otherwise Chrome refuses the request.
+// 1. The provider FETCH can fail ("TypeError: Failed to fetch") when the
+//    extension does not hold the host permission for the provider's origin.
+//    Host access is install-granted (the manifest declares
+//    host_permissions: ["<all_urls>"]), so every http(s) provider origin is
+//    normally already covered; the service worker's cross-origin fetch to the
+//    provider (OpenAI / Anthropic / Gemini / DeepSeek / a custom
+//    OpenAI-compatible endpoint) still verifies the grant and fails closed if
+//    it is somehow missing — otherwise Chrome refuses the request.
 //
 // 2. When the provider IS unreachable (bad key, bad base URL, no network, no
 //    host permission), every hook/task run fails identically and the console

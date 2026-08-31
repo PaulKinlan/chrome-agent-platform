@@ -154,6 +154,59 @@ Deno.test("bug 7 sweep: permission REQUESTS live only in PAGES (never the SW)", 
   assert(!/chrome\.permissions\.request\s*\(/.test(offscreen), "the offscreen document must never call chrome.permissions.request");
 });
 
+Deno.test("host-access posture: no retired all-optional / no-<all_urls> claim survives (Q18 (a))", async () => {
+  // CAP-FB-20260830-HOST-ACCESS-STORY-01 — Q18 resolved (a): host access is
+  // install-granted `host_permissions: ["<all_urls>"]` with passive WebMCP
+  // detection. No comment, string or doc may still describe the retired
+  // all-optional / no-<all_urls> host model. This scans the surfaces that
+  // carried the contradiction. The decision doc (docs/OPEN-QUESTIONS.md) and
+  // the known-issues trackers legitimately QUOTE the retired claim while
+  // recording its retirement, so they are deliberately NOT scanned.
+  const FILES = [
+    "../extension/background/service-worker.js",
+    "../extension/lib/capabilities.js",
+    "../extension/lib/provider-gate.js",
+    "../extension/options/options.html",
+    "../extension/options/options.js",
+    "../scripts/chrome-journeys.ts",
+    "../scripts/agent-provider-picker.ts",
+    "../docs/CONSTITUTION.md",
+    "../README.md",
+  ];
+  const RETIRED: Array<[RegExp, string]> = [
+    [/all[-\s]optional host/gi, "'all-optional host' — host access is install-granted <all_urls>"],
+    [/host permissions?\s+are\s+all\s+optional/gi, "'host permissions are ALL optional' — they are install-granted <all_urls>"],
+    [/host access is\s+`?optional_host_permissions`?/gi, "'host access is optional_host_permissions' — it is host_permissions <all_urls>"],
+    [/only\s+optional_host_permissions/gi, "'only optional_host_permissions' — the manifest declares host_permissions <all_urls>"],
+    [/(?:base\s+)?permissions?\s+(?:array\s+)?is\s+empty/gi, "'permissions array is empty' — the manifest declares four required permissions"],
+    [/empty\s+`?permissions`?\s+array/gi, "'empty permissions array' — the manifest declares four required permissions"],
+  ];
+  // Falsification self-check: every pin must fire on its canonical retired
+  // sample (a pin matching nothing real would silently rot).
+  const samples = [
+    "The all-optional host permissions are not granted by default",
+    "the extension's host permissions are ALL optional and headless",
+    "host access is `optional_host_permissions`. No debugger anywhere.",
+    "The manifest has only optional_host_permissions [http/https *]",
+    "the base permissions array is empty and the six API",
+    "the manifest declares an empty `permissions` array",
+  ];
+  for (let i = 0; i < RETIRED.length; i++) {
+    const re = RETIRED[i][0];
+    re.lastIndex = 0;
+    assert(re.test(samples[i]), `retired-claim pin ${i} must match its canonical sample`);
+  }
+  const offenders: string[] = [];
+  for (const rel of FILES) {
+    const src = await Deno.readTextFile(new URL(rel, import.meta.url));
+    for (const [re, label] of RETIRED) {
+      re.lastIndex = 0;
+      for (const m of src.matchAll(re)) offenders.push(`${rel}: ${label} — “${m[0]}”`);
+    }
+  }
+  assert(offenders.length === 0, `retired host-access claim survives:\n${offenders.join("\n")}`);
+});
+
 Deno.test("bug 7 sweep: the inline approval card remains the runtime-grantable path", () => {
   const conversation = sources.get([...sources.keys()].find((p) => p.endsWith("shared/conversation.js"))!)!;
   assertStringIncludes(conversation, "permission-approval-card", "the in-context approval card still renders");

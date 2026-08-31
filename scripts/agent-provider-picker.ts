@@ -734,10 +734,10 @@ for (let _try = 0; _try < 5 && !BYO_PORT; _try++) {
 if (!BYO_PORT) throw new Error("no free BYO port after 5 attempts");
 var byoHits = 0;
 var byoSawAuth = false;
-// CORS-OPEN local OpenAI-compatible endpoint: the extension's host permissions
-// are ALL optional and headless cannot answer an origin-permission prompt —
-// so the honest path (the same one a real CORS-open BYO endpoint takes) is a
-// server that answers the adapter's preflight + allows cross-origin reads.
+// CORS-OPEN local OpenAI-compatible endpoint: host access is install-granted
+// (<all_urls>), so the honest path (the same one a real CORS-open BYO endpoint
+// takes) is a server that answers the adapter's preflight + allows
+// cross-origin reads.
 // The Authorization header is COUNTED only — never stored or logged.
 const CORS = {
   "access-control-allow-origin": "*",

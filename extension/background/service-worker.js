@@ -4276,8 +4276,9 @@ const handlers = mergeRouteMaps(
     const u = new URL(verdict.url);
     try {
       // The SW fetch only bypasses CORS when the extension holds the host
-      // permission for the origin. The all-optional host permissions are not
-      // granted by default, so check + fail clearly (not a raw "Failed to fetch").
+      // permission for the origin. Host access is install-granted (<all_urls>),
+      // so this normally holds — but check + fail clearly if it is somehow
+      // missing (not a raw "Failed to fetch").
       const hasHost = await chrome.permissions?.contains?.({
         origins: [`${u.protocol}//${u.host}/*`],
       }).catch(() => false);

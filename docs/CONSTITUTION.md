@@ -75,24 +75,33 @@ alarms) and acts on untrusted page content + model output. Threat vectors:
   eval-free.)
 - **XSS** — chat/directory/memory render untrusted data with `textContent`/
   escaping, never `innerHTML` with unvalidated data.
-- **Permissions** — ALL optional (Paul's hard requirement): the manifest declares
-  an empty `permissions` array; `alarms`/`storage`/`sidePanel`/`tabs`/`scripting`/
-  `notifications` are `optional_permissions`, host access is
-  `optional_host_permissions`. No `debugger` anywhere. It was re-declared
+- **Permissions** — capabilities optional, host access install-granted (owner
+  decision Q18, 2026-08-31, option (a)): the manifest declares four required
+  boot-critical permissions (`alarms`, `offscreen`, `sidePanel`, `storage`);
+  every other capability permission (`tabs`, `scripting`, `notifications`, … —
+  31 in all) is an `optional_permission`, requested just-in-time from a real
+  owner gesture (Settings → Permissions, or the in-context approval card — the
+  SW never requests). Host access is install-granted: the manifest declares
+  `host_permissions: ["<all_urls>"]` plus two content scripts on every http(s)
+  page, so the extension can read every page in order to notice when a site
+  offers WebMCP tools; it acts on a site only after you allow it. This is a
+  deliberate, settled posture for a private tool — the broad read is what lets
+  the hub notice tools passively, and every mutation still waits on an owner
+  grant. No `debugger` anywhere. It was re-declared
   as an *optional* permission at `0.2.286` for the CDP power tools and removed
   again on 2026-08-27 (owner decision, Q17): the original rationale was
   imprecise — `debugger` **can** be declared optional — but the real costs
   stand, namely Chrome's all-sites permission warning and the persistent
   "started debugging this browser" bar. `tests/chrome-tools-t12.test.ts` holds
   a removal guard and `scripts/chrome-journeys.ts` asserts absence from the
-  manifest, so a future tranche cannot reintroduce it silently. Screenshots useScreenshots use
+  manifest, so a future tranche cannot reintroduce it silently. Screenshots use
   `chrome.tabs.captureVisibleTab` (the ACTIVE tab). `activeTab` is transient and
   tied to a qualifying owner invocation on the current tab; it is never a
-  model/background fallback. Model-selected screenshots require exact host
-  access and fail closed without it. The extension boots + runs with ZERO optional
-  permissions (degrade gracefully), and each capability is requested from a real
-  owner gesture in Settings → Permissions (the SW never requests). Enrollment
-  requests `scripting` + exact host access; browser control requests `tabs`.
+  model/background fallback. The extension boots + runs with ZERO optional
+  capability permissions (degrade gracefully), and each capability is requested
+  from a real owner gesture in Settings → Permissions (the SW never requests).
+  Enrollment verifies `scripting` + the install-granted host access; browser
+  control requests `tabs`.
 - **Credentials** — provider keys live in chrome.storage (user-entered), never
   in the bundle, never logged, never in receipts.
 

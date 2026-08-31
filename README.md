@@ -87,11 +87,11 @@ isolated OPFS memory, run history, skills, and avatar.
   `storage`); every other capability permission (`tabs`, `scripting`, `bookmarks`, … — 31 in
   all) is optional and requested on a user gesture at the moment of need — never silently.
 - **Host access is install-granted:** the manifest declares `host_permissions: ["<all_urls>"]`
-  and two content scripts on every http(s) page, so the extension can notice when a site
-  offers WebMCP tools; it acts on a site only after you allow it. Whether this stays
-  install-granted or moves to optional host access is an open owner decision
-  (`CAP-FB-20260830-HOST-ACCESS-STORY-01`, Q18 in `docs/OPEN-QUESTIONS.md`). Screenshots go
-  via `captureVisibleTab`/`activeTab`.
+  and two content scripts on every http(s) page, so the extension can read every page in order
+  to notice when a site offers WebMCP tools; it acts on a site only after you allow it. This is
+  a deliberate, settled posture for a private tool (owner decision Q18, 2026-08-31, option (a)
+  in `docs/OPEN-QUESTIONS.md`): the broad read is what lets the hub notice tools passively, and
+  every mutation still waits on your grant. Screenshots go via `captureVisibleTab`/`activeTab`.
 - **No `debugger`.** It was re-declared as an optional permission at `0.2.286` for the
   CDP power tools and **removed again on 2026-08-27** (owner decision): it carries
   Chrome's all-sites permission warning and a persistent "started debugging this

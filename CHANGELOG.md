@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.2.520] — 2026-08-31
+- : merge — the host-access story is now told truthfully everywhere (Q18a)
+
 ## [0.2.519] — 2026-08-31
-- Optional permissions lane — fontSettings/proxy/tts/declarativeNetRequest are install-granted so Settings never shows a row Chrome cannot serve
+- More optional permissions can now be requested only when a feature needs them.
 
 ## [0.2.518] — 2026-08-31
 - Three product decisions were made, and the next set of improvements has begun.
@@ -9,26 +12,22 @@
 ## [0.2.517] — 2026-08-31
 - The release notes entry for the tidy-up is now in plain language too
 
+- Permission matrix: refresh the attestation at the final candidate (26/0 ATTESTED)
+
 ## [0.2.516] — 2026-08-31
 - The release notes now tidy themselves: commit shorthand no longer leaks into them, and the automated quality check pins it.
 
+- tasks: OPTIONAL-PERMISSION-OMITTED-01 — record the final candidate SHA
+
 ## [0.2.515] — 2026-08-31
 - Typing / or @ in the composer now shows an accessible suggestion list that keyboard and screen-reader users can follow
+
+- Address the r2 review: honest probe readiness, accurate permission classification, final matrix provenance
 
 ## [0.2.514] — 2026-08-31
 - Typing / or @ in the composer now shows an accessible suggestion list that keyboard and screen-reader users can follow
 - tasks: OPTIONAL-PERMISSION-OMITTED-01 schema completed (r2 review accepted the code)
 
-## [0.2.517] — 2026-08-31
-- Permission matrix: refresh the attestation at the final candidate (26/0 ATTESTED)
-
-## [0.2.516] — 2026-08-31
-- tasks: OPTIONAL-PERMISSION-OMITTED-01 — record the final candidate SHA
-
-## [0.2.515] — 2026-08-31
-- Address the r2 review: honest probe readiness, accurate permission classification, final matrix provenance
-
-## [0.2.514] — 2026-08-31
 - Fix the four install-only permissions Chrome omits from optional_permissions
 
 ## [0.2.513] — 2026-08-31
@@ -41,7 +40,7 @@
 - Artifacts and generated images now appear in the conversation as they are created — a card showing what changed, plus a thumbnail strip of screenshots and images you can open.
 
 ## [0.2.510] — 2026-08-30
-- An artifact the agent makes or edits now shows in the conversation as a card.
+- The extension's description now matches what it actually does: it can read every page in order to notice when a site offers tools, and it acts on a site only after you allow it.
 
 ## [0.2.509] — 2026-08-30
 - A size limit on how much a skill could import has been removed.
@@ -759,8 +758,6 @@
 ## [0.2.267] — 2026-08-25
 - Site Agents are now discoverable: when you open a page that offers agent tools you get a clear "Add Site Agent" button, and the Site Agents list shows discovered-but-not-yet-added sites (no typing origins). Enrolled sites now reliably work after a browser restart instead of going silent.
 
-
-
 ## [0.2.266] — 2026-08-25
 - The memory tree in Settings → Data & memory now stays open where you left it when you clear a store, instead of collapsing.
 
@@ -770,11 +767,8 @@
 ## [0.2.264] — 2026-08-25
 - Fixed Site Agent tool calls opening the website's home page instead of the specific page that registered the tool. The booking now opens the exact page (e.g. the Le Petit Bistro demo page) and runs its tool there; older site records heal automatically.
 
-
 ## [0.2.263] — 2026-08-25
 - Agent roles now show as a short, readable one-line preview in the task list (hover to see the full text) — the full role is still saved without any length limit.
-
-
 
 ## [0.2.262] — 2026-08-25
 - Internal: hardened thread-id validation, reclaimed storage when a task thread is deleted, and fixed the side-panel shortcut's permission check. No user-visible change.
@@ -788,16 +782,11 @@
 ## [0.2.259] — 2026-08-25
 - Fixed two tests that were incorrectly failing, and added a safeguard so the test data stays fresh and won't silently expire in the future.
 
-
-
 ## [0.2.258] — 2026-08-25
 - Added keyboard shortcuts: Alt+Shift+H opens the agent hub, Alt+Shift+K starts a new task with the composer ready, and Alt+Shift+S opens the side panel on the current tab. Settings → About lists them and links to Chrome's page for changing them.
 
-
-
 ## [0.2.257] — 2026-08-25
 - Reworked how task and agent logs are stored and shown so nothing is lost or hidden: every tool call and every reply now shows correctly when you reopen a task, and a task can no longer get stuck showing "running" after an interruption.
-
 
 ## [0.2.256] — 2026-08-25
 - fix(build): regenerate the bundled inventory after the version bump
@@ -808,20 +797,14 @@
 ## [0.2.254] — 2026-08-25
 - Fixed Site Agent tool calls (like the bistro booking) failing to connect — the site tab is now opened, focused, and confirmed ready before the tool runs, and any genuine connection problem is explained clearly instead of a bare "connection failed".
 
-
-
 ## [0.2.252] — 2026-08-25
 - Site Agents can now tell apart different pages on the same website, so each page's own tools stay available and the right page is opened when a tool needs it.
-
 
 ## [0.2.251] — 2026-08-25
 - Rewrote all 26 built-in tool descriptions in clear, complete language (what each does, when to use it, inputs/outputs, key flags, limits, and a worked example) so agents can pick and call the right tool.
 
-
-
 ## [0.2.250] — 2026-08-24
 - Fixed Site Agent tool calls (like the bistro booking) failing with an unexplained "invalid arguments" error. The tool's full set of allowed values is now accepted, and any genuinely wrong argument is clearly explained so it can be corrected automatically.
-
 
 ## [0.2.249] — 2026-08-24
 - Raised the agent limits significantly: descriptions up to 32,000 characters, plus higher caps for names, skills, and attached files. Over-limit input now shows a clear message instead of being silently cut off.
@@ -831,7 +814,6 @@
 
 ## [0.2.247] — 2026-08-24
 - Fixed deleting an agent leaving you stuck on a dead view. It now returns you to the main page.
-
 
 ## [0.2.246] — 2026-08-24
 - Reconstructed and modernized the release changelog with clear, user-focused descriptions.

@@ -804,9 +804,10 @@ async function main() {
     cdp.swSessions.add(swSession);
     check("SW Runtime.enable succeeded", true);
 
-    // Manifest attestation: ALL permissions must be OPTIONAL (Paul's hard
-    // requirement) — the base permissions array is empty and the six API
-    // permissions are optional. `debugger` must be absent everywhere: it was
+    // Manifest attestation (OPTIONAL + JIT model, owner directive 2026-08-29):
+    // four boot-critical permissions stay mandatory, every capability
+    // permission is optional (JIT), and host access is install-granted
+    // <all_urls> (Q18 (a)). `debugger` must be absent everywhere: it was
     // re-declared by the T12 power tools at 0.2.286 and REMOVED again on
     // 2026-08-27 (owner decision Q17) because it carries Chrome's all-sites
     // permission warning and a persistent "started debugging this browser"
@@ -1648,11 +1649,6 @@ async function main() {
     const drivenCapabilities = [
       "storage", "alarms", "activeTab", "scripting", "sidePanel", "tabs", "notifications",
     ];
-    // INSTALL-GRANTED MODEL. There is no enable/disable journey any more:
-    // Settings renders a read-only diagnostic of what the install granted, so
-    // the old checks drove `.grant-perm` / `.revoke-perm` controls that no
-    // longer exist.
-    //
     // Deliberately NOT derived from the product's own capability list — that
     // was tried before and made the check tautological, because Settings
     // renders its rows from the same list so both sides move together. The
