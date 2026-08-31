@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.562] — 2026-08-31
+- Scheduled tasks now show when they will next run, and repeating tasks are called routines.
+
 ## [0.2.561] — 2026-08-31
 - DONE — enterprise install fix (required set minimal; four perms optional)
 
@@ -163,7 +166,7 @@
 - Artifacts and generated images now appear in the conversation as they are created — a card showing what changed, plus a thumbnail strip of screenshots and images you can open.
 
 ## [0.2.510] — 2026-08-30
-- The extension no longer requests fontSettings, proxy, text-to-speech or network-rule permissions at install - they are asked for only when a feature needs them, so it installs cleanly on managed profiles that block them.
+- A scheduled task now shows when it will next run - a live Next run countdown - and these repeating tasks are called routines.
 
 ## [0.2.509] — 2026-08-30
 - A size limit on how much a skill could import has been removed.

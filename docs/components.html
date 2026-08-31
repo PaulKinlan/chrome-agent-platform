@@ -324,6 +324,17 @@
       </div>
 
       <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;next-run&gt;</code> — a routine's forward-looking next fire</h3>
+        <div class="stage column" style="max-width:360px">
+          <next-run id="next-run-soon"></next-run>
+          <next-run id="next-run-recurring" period="60"></next-run>
+          <next-run id="next-run-fired" period="1440"></next-run>
+          <next-run label="Paused"></next-run>
+        </div>
+        <p class="caption">the "Next run <em>relative</em> · <em>absolute</em>" indicator for a routine (a scheduled/recurring task), computed from its REAL alarm's <code>scheduledTime</code> via the shared <code>nextRunLabel</code> projector. <code>at</code> is the fire time; <code>period</code> marks a recurring routine; <code>last</code> adds "Last run <em>ago</em>"; with no armed fire it shows the <code>label</code> fallback (paused / needs attention).</p>
+      </div>
+
+      <div class="specimen">
         <h3 class="spec"><code class="tag">&lt;streaming-text&gt;</code> — a streamed answer with sources + actions</h3>
         <div class="stage column" style="max-width:520px">
           <streaming-text content="This page argues three things: **a**, **b**, and **c**." sources='["paul.kinlan.me","github.com"]' actions='["Summarise further","Compare with the spec"]'></streaming-text>
@@ -726,6 +737,16 @@
         { id: "t-done", kind: "thread", threadId: "t-done", title: "Summarise the design doc", agent: "Researcher", time: now - 26 * 3600000, status: "done", outcome: "" },
       ];
       document.getElementById("timeline-empty").entries = [];
+
+      // <next-run> examples — the gallery has no alarms backend, so seed the
+      // fire times relative to now (the real surface reads the alarm's
+      // scheduledTime via lib/scheduler.js).
+      document.getElementById("next-run-soon").setAttribute("at", String(now + 3 * 60000));
+      const recurring = document.getElementById("next-run-recurring");
+      recurring.setAttribute("at", String(now + 47 * 60000));
+      const fired = document.getElementById("next-run-fired");
+      fired.setAttribute("at", String(now + 20 * 3600000));
+      fired.setAttribute("last", String(now - 4 * 3600000));
 
       // <activity-explorer> example — seed demo entries (the gallery has no
       // extension backend; the real component queries activity.list).

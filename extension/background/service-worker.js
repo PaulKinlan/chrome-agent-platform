@@ -565,6 +565,8 @@ import {
   releaseInflight,
   resumeScheduledTask,
   retryScheduledTask,
+  recordScheduledFire,
+  nextFireForTask,
   scheduleTask,
   tryAcquireInflight,
   updateScheduledTask,
@@ -916,6 +918,10 @@ async function handleAlarm(alarm) {
     // stale already-queued alarm after that transition, skip it silently rather
     // than recreating the console flood.
     if (task.storageBlocked) return;
+    // Stamp the LAST fire time (best-effort, additive) so the hub's routine row
+    // can show "Last run <ago>" beside the next run. Fire-and-forget: it takes
+    // the scheduler lock itself and never gates the run.
+    recordScheduledFire(alarm.name).catch(() => {});
     // Run FIRST, delete only on success (durable across worker interruption).
     // A script-backed schedule runs the agent-generated JS SANDBOXED (no model
     // re-invocation — the same script every tick, no token burn).
@@ -6748,6 +6754,15 @@ const handlers = mergeRouteMaps(
     // delivery blocker: a quarantined task must not run, but it must be VISIBLE
     // and CANCELLABLE).
     return { tasks: await listScheduledTasks() };
+  },
+  async "task.nextRun"(m) {
+    // The forward-looking "Next run" time for ONE routine, read from its REAL
+    // chrome.alarms alarm (scheduledTime). The hub's routine row uses this to
+    // confirm a just-scheduled alarm is actually armed. Null when the alarm is
+    // not armed (paused/quarantined/never scheduled).
+    const name = String(m?.name ?? "");
+    if (!name) return { ok: false, error: "task name is required" };
+    return { ok: true, name, nextFireAt: await nextFireForTask(name) };
   },
   async "task.cancel"(m) {
     // Authoritative owner cancellation of a scheduled (or quarantined) task:

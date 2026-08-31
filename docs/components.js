@@ -30,6 +30,11 @@ import { USER_VISIBLE_KINDS as USER_VISIBLE_KINDS_ARR } from "./activity-kinds.j
 // one authority shared by <jobs-board> and its unit test. The gallery sync
 // rewrites this path to ./board-view-model.js beside the deploy copy.
 import { partiesOf, projectBoard, statusOf } from "./board-view-model.js";
+// The "Next run" projector for a routine (a scheduled/recurring task): one
+// authority shared by <next-run> and the NTP routine row, so a routine's next
+// fire reads identically everywhere. The gallery sync rewrites this path to
+// ./next-run-label.js beside the deploy copy.
+import { nextRunLabel, lastRunLabel, NEXT_RUN_TICK_MS } from "./next-run-label.js";
 // Local Set view (the explorer filters in-memory against it; the server also
 // enforces the same list, default-deny).
 const USER_VISIBLE_KINDS = new Set(USER_VISIBLE_KINDS_ARR);
@@ -7323,6 +7328,86 @@ class TaskRow extends Component {
   }
 }
 customElements.define("task-row", TaskRow);
+
+/* <next-run at="<epoch-ms>" period last="<epoch-ms>"> — the forward-looking
+ * "Next run" indicator for a ROUTINE (a scheduled/recurring task). `at` is the
+ * routine's REAL alarm scheduledTime (epoch ms, from chrome.alarms via
+ * lib/scheduler.js); the widget renders "Next run <relative> · <absolute>"
+ * through the shared nextRunLabel projector and re-computes the countdown on a
+ * bounded interval so it stays honest as the fire approaches. `period` (minutes)
+ * marks a recurring routine with a small "repeats" affordance; `last` (epoch ms)
+ * adds a "Last run <ago>" line once the routine has fired. With no `at` (paused,
+ * quarantined, or no armed alarm) the widget shows the supplied fallback text
+ * (the `label` attribute) or nothing — it never invents a time. */
+class NextRun extends Component {
+  static get observedAttributes() { return ["at", "period", "last", "label"]; }
+  _tick = null;
+  _num(attr) {
+    const v = Number(this.getAttribute(attr));
+    return Number.isFinite(v) && this.getAttribute(attr) != null && this.getAttribute(attr) !== "" ? v : null;
+  }
+  _render() {
+    const at = this._num("at");
+    const period = this._num("period");
+    const last = this._num("last");
+    const fallback = this.getAttribute("label") || "";
+    const next = nextRunLabel(at);
+    const lastR = lastRunLabel(last);
+    // The clock/alarm glyph — inline SVG, currentColor (no emoji icons).
+    const clock = `<svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>`;
+    const repeat = `<svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>`;
+    let body;
+    if (next) {
+      // The relative countdown is the emphasized part; the absolute time is the
+      // quiet, exact confirmation beside it (title carries the full label for
+      // hover + assistive tech).
+      body = `<span class="line" title="${escapeHtml(next.label)}">${clock}<span class="rel${next.due ? " due" : ""}">${escapeHtml(next.relative === "due now" ? "Next run due now" : `Next run ${next.relative}`)}</span>${next.absolute ? `<span class="sep" aria-hidden="true">·</span><span class="abs">${escapeHtml(next.absolute)}</span>` : ""}${period ? `<span class="rep" title="Repeats every ${escapeHtml(String(period))} min">${repeat}</span>` : ""}</span>`;
+    } else if (fallback) {
+      body = `<span class="line muted" title="${escapeHtml(fallback)}">${clock}<span class="rel">${escapeHtml(fallback)}</span></span>`;
+    } else {
+      body = "";
+    }
+    const lastLine = lastR ? `<span class="line last" title="${escapeHtml(lastR.label)}">${escapeHtml(lastR.label)}</span>` : "";
+    mountTemplate(this, `
+      :host { display:block; }
+      .line { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--muted,#635e56); max-width:100%; }
+      .ic { flex:0 0 auto; opacity:.8; }
+      .rel { color:var(--ink,#1d1b18); font-weight:600; white-space:nowrap; }
+      .rel.due { color:var(--accent,#0e6e63); }
+      .sep { color:var(--muted,#635e56); flex:0 0 auto; }
+      .abs { color:var(--muted,#635e56); font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .rep { display:inline-flex; color:var(--accent,#0e6e63); }
+      .line.muted .rel { color:var(--muted,#635e56); font-weight:500; }
+      .last { display:block; margin-top:2px; font-size:11px; color:var(--muted,#635e56); }
+    `, `${body}${lastLine}`);
+  }
+  _wire() {
+    // Re-compute the countdown as the fire approaches. A future alarm keeps the
+    // relative label honest without a full page refresh; once it is due (or
+    // there is no armed fire) the ticking stops until the attribute changes.
+    this._stopTick();
+    const at = this._num("at");
+    if (at == null) return;
+    const label = nextRunLabel(at);
+    if (!label || label.due) return;
+    this._tick = setInterval(() => {
+      // Re-render only; a fresh nextRunLabel() reads the current time.
+      this._render();
+      // If the render just crossed into "due", _wire (called by _render's
+      // re-entry path is NOT automatic here) — so re-arm/stop explicitly.
+      const still = nextRunLabel(this._num("at"));
+      if (!still || still.due) this._stopTick();
+    }, NEXT_RUN_TICK_MS);
+  }
+  _stopTick() {
+    if (this._tick) { clearInterval(this._tick); this._tick = null; }
+  }
+  disconnectedCallback() {
+    this._stopTick();
+    super.disconnectedCallback();
+  }
+}
+customElements.define("next-run", NextRun);
 
 /* <streaming-text content sources='[]' actions='[]' streaming> — a streamed answer
  * with inline source chips + follow-up actions (the BeautifulUI "Streaming Text"

@@ -4569,36 +4569,6 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - History:
   - 2026-08-31 19:20 UTC — filed from owner feedback (co-do-style piped tool chains); design-first.
 
-## [CAP-FB-20260831-SCHEDULED-NEXT-RUN-WIDGET-01] A task that schedules an alarm shows no "next run" — no way to see it will fire (call them routines, not background agents)
-- Feedback: 2026-08-31 — owner: "if a task schedules an alarm, there's no way to see that or know it's going to work. The task should have a 'next run' widget or something. In the past these were made 'background agents' which I don't want, but it makes me think these might be 'routines' or something similar." A scheduled task gives no visible confirmation it is scheduled or when it will next fire.
-- Updated: 2026-08-31 19:34 UTC
-- Status: OPEN
-- Resume: —
-- Priority: P1
-- Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — CLAIMED; do not start a parallel attempt
-- Workspace: active (local path private)
-- Branch: `cap/scheduled-next-run` (pushed to origin as the candidate branch; merged by the coordinator)
-- Base: `46407794`
-- Candidate: —
-- Shipping: —
-- Acceptance: when a task/agent schedules a recurring or future run, the UI shows a clear "Next run <when>" indicator (a widget on the task/timeline row and on the agent) computed from the real alarm, updating as it approaches and after it fires (last run / next run); the concept is surfaced as a "routine" (a task that repeats on a schedule) — NOT a "background agent". A routine is discoverable and its schedule and next fire time are visible; scheduled-run output (SCHEDULED-RUN-OUTPUT-01, DONE) already leaves a timeline row + report, so this closes the loop by showing the UPCOMING run, not only past ones.
-  - Context: `extension/lib/scheduler.js` holds the alarms; `chrome.alarms.get` gives the next scheduled time. The hub timeline (HUB-AS-TIMELINE-01) shows past runs; add the forward-looking "next run" on the routine's row/agent. Vocabulary: introduce "routine" for a scheduled/recurring task and keep it distinct from named agents; do NOT reintroduce "background agent" naming.
-  - Files: `extension/lib/scheduler.js` (expose next-fire time), a route to read scheduled/next-run state, `extension/ntp/ntp.js` + `extension/shared/components.js` (a "next run" widget on the timeline/task row and the agent; a routines view or grouping), `scripts/check-vocabulary.mjs` (retire "background agent" for this surface if applicable), docs/DESIGN.md.
-  - Steps: 1. Expose the next-fire time from the scheduler/alarms. 2. A "Next run <relative + absolute>" widget on the routine's row and agent, live-updating. 3. Name the concept "routine"; make routines discoverable with their schedule. 4. Coordinate with the hub timeline and BOARD-VISIBILITY so scheduled/routine runs are legible.
-  - Out of scope: reintroducing background agents; the past-run report (SCHEDULED-RUN-OUTPUT-01, DONE).
-- Review: pending
-- Gates: the falsification gates apply.
-  - Unit: a test computing the "next run" label from an alarm's scheduledTime (relative + absolute, singular/plural); falsify by reverting the compute.
-  - Browser: a journey/KAT — schedule a routine, assert a "Next run …" widget appears with a real time and updates after the alarm; screenshot.
-  - Full suite: `npm run build:production && deno test -A tests/ && deno run -A scripts/chrome-journeys.ts` green.
-  - Constraints: no "background agent" naming; one name per concept (routine); a11y (the widget announced); no fixed debug port.
-- Blockers: Depends on CAP-FB-20260831-BOARD-VISIBILITY-01 and CAP-FB-20260828-HUB-AS-TIMELINE-01 (DONE) for where routines/next-run surface — coordinate the hub edits
-- Next: expose the next-fire time from scheduler.js/chrome.alarms, then build the Next run widget on the routine row
-- Recover: `git log --oneline --all --grep=CAP-FB-20260831-SCHEDULED-NEXT-RUN-WIDGET-01`
-- History:
-  - 2026-08-31 19:34 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/scheduled-next-run` off `origin/main@46407794`. Other agents: pick a different entry.
-  - 2026-08-31 19:20 UTC — filed from owner feedback: no visible next-run for scheduled tasks; wants a "next run" widget and a "routine" concept (not background agents).
-
 ## [CAP-FB-20260831-MCP-SUPPORT-01] MCP server support — global for the task view, and per-agent
 - Feedback: 2026-08-31 — owner: "I need to plan to add MCP support. MCP will be a global option for the task view, but then each agent should have its own MCP servers that might have their own configurations. Also the agent-do harness doesn't support the latest MCP spec iirc, we might need to update that." Investigation: agent-do 0.7 ALREADY supports MCP (`mountMcpServers`, `@modelcontextprotocol/sdk@1.30.0` = LATEST_PROTOCOL_VERSION 2025-11-25) — the harness is current, not behind. Plan of record: `docs/MCP-SUPPORT-DESIGN.md`.
 - Updated: 2026-08-31 21:00 UTC
@@ -4655,3 +4625,33 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Recover: `git log --oneline --all --grep=CAP-FB-20260831-MCP-TRANSPORT-SPIKE-01`
 - History:
   - 2026-08-31 21:00 UTC — filed as the first MCP child; the go/no-go on agent-do's mount vs an own SDK mount.
+
+## [CAP-FB-20260831-SCHEDULED-NEXT-RUN-WIDGET-01] A task that schedules an alarm shows no "next run" — no way to see it will fire (call them routines, not background agents)
+- Feedback: 2026-08-31 — owner: "if a task schedules an alarm, there's no way to see that or know it's going to work. The task should have a 'next run' widget or something. In the past these were made 'background agents' which I don't want, but it makes me think these might be 'routines' or something similar." A scheduled task gives no visible confirmation it is scheduled or when it will next fire.
+- Updated: 2026-08-31 19:34 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — CLAIMED; do not start a parallel attempt
+- Workspace: active (local path private)
+- Branch: `cap/scheduled-next-run` (pushed to origin as the candidate branch; merged by the coordinator)
+- Base: `46407794`
+- Candidate: —
+- Shipping: —
+- Acceptance: when a task/agent schedules a recurring or future run, the UI shows a clear "Next run <when>" indicator (a widget on the task/timeline row and on the agent) computed from the real alarm, updating as it approaches and after it fires (last run / next run); the concept is surfaced as a "routine" (a task that repeats on a schedule) — NOT a "background agent". A routine is discoverable and its schedule and next fire time are visible; scheduled-run output (SCHEDULED-RUN-OUTPUT-01, DONE) already leaves a timeline row + report, so this closes the loop by showing the UPCOMING run, not only past ones.
+  - Context: `extension/lib/scheduler.js` holds the alarms; `chrome.alarms.get` gives the next scheduled time. The hub timeline (HUB-AS-TIMELINE-01) shows past runs; add the forward-looking "next run" on the routine's row/agent. Vocabulary: introduce "routine" for a scheduled/recurring task and keep it distinct from named agents; do NOT reintroduce "background agent" naming.
+  - Files: `extension/lib/scheduler.js` (expose next-fire time), a route to read scheduled/next-run state, `extension/ntp/ntp.js` + `extension/shared/components.js` (a "next run" widget on the timeline/task row and the agent; a routines view or grouping), `scripts/check-vocabulary.mjs` (retire "background agent" for this surface if applicable), docs/DESIGN.md.
+  - Steps: 1. Expose the next-fire time from the scheduler/alarms. 2. A "Next run <relative + absolute>" widget on the routine's row and agent, live-updating. 3. Name the concept "routine"; make routines discoverable with their schedule. 4. Coordinate with the hub timeline and BOARD-VISIBILITY so scheduled/routine runs are legible.
+  - Out of scope: reintroducing background agents; the past-run report (SCHEDULED-RUN-OUTPUT-01, DONE).
+- Review: pending
+- Gates: the falsification gates apply.
+  - Unit: a test computing the "next run" label from an alarm's scheduledTime (relative + absolute, singular/plural); falsify by reverting the compute.
+  - Browser: a journey/KAT — schedule a routine, assert a "Next run …" widget appears with a real time and updates after the alarm; screenshot.
+  - Full suite: `npm run build:production && deno test -A tests/ && deno run -A scripts/chrome-journeys.ts` green.
+  - Constraints: no "background agent" naming; one name per concept (routine); a11y (the widget announced); no fixed debug port.
+- Blockers: Depends on CAP-FB-20260831-BOARD-VISIBILITY-01 and CAP-FB-20260828-HUB-AS-TIMELINE-01 (DONE) for where routines/next-run surface — coordinate the hub edits
+- Next: expose the next-fire time from scheduler.js/chrome.alarms, then build the Next run widget on the routine row
+- Recover: `git log --oneline --all --grep=CAP-FB-20260831-SCHEDULED-NEXT-RUN-WIDGET-01`
+- History:
+  - 2026-08-31 19:34 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/scheduled-next-run` off `origin/main@46407794`. Other agents: pick a different entry.
+  - 2026-08-31 19:20 UTC — filed from owner feedback: no visible next-run for scheduled tasks; wants a "next run" widget and a "routine" concept (not background agents).
