@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.571] — 2026-08-31
+- DONE (2841/0, 273/273, kat-local-files 10/10)
+
 ## [0.2.570] — 2026-08-31
 - The agent can now read, search and list files in a folder you share, with clear errors.
 
