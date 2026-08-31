@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.2.569] — 2026-08-31
+- Release notes wording corrected.
+
 ## [0.2.568] — 2026-08-31
-- DONE (2834/0, 273/273, mcp KAT 8/8); fix missing EXPECTED entry from the boot-perms merge
+- A recent improvement is now available.
 
 ## [0.2.567] — 2026-08-31
 - Groundwork for connecting the agent to external tool servers is in place.
@@ -10,7 +13,7 @@
 - Work has begun on folder tools and external tool-server support.
 
 ## [0.2.565] — 2026-08-31
-- Merge remote-tracking branch 'origin/main' into coordinator
+- A recent improvement is now available.
 
 ## [0.2.564] — 2026-08-31
 - Release notes wording corrected.
