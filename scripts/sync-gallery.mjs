@@ -87,7 +87,19 @@ export async function syncGallery({ check = false } = {}) {
       expected = Buffer.from(expected.toString("utf8").replace('../lib/pure.js', './pure.js'));
     }
     if (check) {
-      const actual = await readFile(dstUrl);
+      let actual;
+      try {
+        actual = await readFile(dstUrl);
+      } catch (error) {
+        // The bundle is gitignored build output; a source-only checkout that
+        // has not built yet has no generated copy to compare against. Report
+        // and skip rather than crashing the drift check.
+        if (error?.code === "ENOENT" && src.startsWith("extension/dist/")) {
+          console.warn(`skip ${dst}: generated build output not present — run \`npm run build\` first`);
+          continue;
+        }
+        throw error;
+      }
       if (expected.length !== actual.length || Buffer.compare(expected, actual) !== 0) {
         drifted = true;
         console.error(

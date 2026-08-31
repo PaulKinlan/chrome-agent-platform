@@ -4481,32 +4481,33 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260831-GENERATED-BUNDLE-GITIGNORE-01] docs/diff-core.bundle.js is committed and regenerated on every build
 - Feedback: 2026-08-31 — owner: "diff-code.bundle.js shouldn't be in source control on every build." `git ls-files` shows `docs/diff-core.bundle.js` tracked; `scripts/sync-gallery.mjs` rewrites it on every build, so it shows as a diff constantly. `.gitignore` already ignores `extension/**/*.bundle.js` but not `docs/*.bundle.js`.
-- Updated: 2026-08-31 19:34 UTC
-- Status: OPEN
+- Updated: 2026-08-31 20:45 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P2
 - Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — CLAIMED; do not start a parallel attempt
 - Workspace: active (local path private)
 - Branch: `cap/generated-bundle-gitignore` (pushed to origin as the candidate branch; merged by the coordinator)
-- Base: `46407794`
-- Candidate: —
+- Base: `04841296`
+- Candidate: this tracker commit
 - Shipping: —
 - Acceptance: generated bundle artifacts are not tracked in git and do not appear as changes after a build. `docs/diff-core.bundle.js` (and any other generated `*.bundle.js` under `docs/`) is gitignored and removed from tracking; `scripts/sync-gallery.mjs` regenerates it locally; the component gallery still works (docs/components.html loads its bundle when a build has run); `check:gallery` and `component-gallery-smoke.ts` pass without requiring the generated bundle to be committed (the byte-identity gate compares source→sync output, not a committed blob — coordinate with CAP-FB-20260830-GALLERY-BYTE-IDENTITY-GATE-01).
   - Context: the gallery (docs/) is a dev-only playground; its synced bundle is a build artifact, not source. Committing it creates noise and merge conflicts on every build (this session hit changelog/version churn partly from generated files).
   - Files: `.gitignore` (add `docs/*.bundle.js` — or the specific name), `git rm --cached docs/diff-core.bundle.js`, `scripts/sync-gallery.mjs` (ensure it regenerates on build and does not fail when the file is absent from git), `scripts/component-gallery-smoke.ts` / `scripts/check-gallery` if either asserts the committed blob.
   - Steps: 1. `git rm --cached docs/diff-core.bundle.js`; add it to `.gitignore`. 2. Confirm `npm run build` regenerates it and `git status` is clean afterward. 3. Ensure the gallery checks pass without the committed file. 4. Check no other generated bundle under docs/ is tracked.
-- Review: pending
+- Review: author review 2026-08-31 — falsification gates cleared (RED/GREEN recorded in History).
 - Gates: the falsification gates apply.
-  - Unit: a test asserting `docs/diff-core.bundle.js` is not tracked (`git ls-files` excludes it) and is gitignored; falsify by re-adding it.
+  - Unit: `tests/generated-bundle-untracked.test.ts` — asserts `docs/diff-core.bundle.js` is not tracked (`git ls-files` excludes it), is gitignored (`git check-ignore`), and no other `*.bundle.js` under docs/ is tracked. RED (3 failed) before the change, GREEN (3 passed) after. Full unit suite green.
   - Browser: none (build artifact only).
-  - Full suite: `npm run build:production` then `git status --porcelain` shows no generated-bundle change; `check:gallery` green.
+  - Full suite: `npm run build:production` then `git status --porcelain` shows no generated-bundle change (only the intended `D docs/diff-core.bundle.js` untracking); `check:gallery` green; fresh-clone simulation (rm docs bundle + extension/dist, rebuild) regenerates docs/diff-core.bundle.js.
   - Constraints: no generated artifacts in source control; one name per concept.
 - Blockers: —
-- Next: git rm --cached the bundle and add docs/*.bundle.js to .gitignore
+- Next: coordinator merge.
 - Recover: `git log --oneline --all --grep=CAP-FB-20260831-GENERATED-BUNDLE-GITIGNORE-01`
 - History:
   - 2026-08-31 19:20 UTC — filed from owner feedback; confirmed docs/diff-core.bundle.js is tracked and rewritten by sync-gallery on every build.
   - 2026-08-31 19:34 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/generated-bundle-gitignore` off `origin/main@46407794`. Other agents: pick a different entry.
+  - 2026-08-31 20:45 UTC — IMPLEMENTED off `origin/main@04841296`. `git rm --cached docs/diff-core.bundle.js`; added `docs/*.bundle.js` to `.gitignore`. `build.mjs` now re-runs `syncGallery()` after the diff-core bundle is published (the pre-build sync reads DIST from the previous run, so a fresh checkout had no source to copy — the removed committed blob had masked this); `scripts/sync-gallery.mjs` `--check` mode now skips (reports) an absent build-output copy instead of throwing ENOENT. RED: `tests/generated-bundle-untracked.test.ts` 3 failed while the bundle was tracked. GREEN: 3 passed after untracking + gitignoring. `npm run build:production` clean (`git status --porcelain` shows only the intended untracking); `check:gallery` green; fresh-clone simulation regenerated the docs bundle. Status → IN_REVIEW.
 
 ## [CAP-FB-20260831-FS-GRANT-TASK-USE-01] File tools do not work on a granted folder in a task — the folder is ignored, tools fail silently, errors are opaque
 - Feedback: 2026-08-31 — owner: "The tools for finding files don't seem to work well on DirectoryHandles when using them in a task. I asked it to do some work on a folder that I provided with /folder but then it didn't use the folder at first, then when it tried to run a tool against it it failed without error messages (the tools could use better error messages, and it would be nice to have them output JSON). I would have expected things like grep to work." Three problems: (a) a folder provided via the `/folder` composer command is not reliably picked up by the run; (b) file tools against a granted DirectoryHandle fail with no error message; (c) tool errors are opaque — they should be actionable and JSON.

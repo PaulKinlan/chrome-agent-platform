@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.557] — 2026-08-31
+- : stop tracking the generated docs gallery bundle
+
 ## [0.2.556] — 2026-08-31
 - Work has begun on the enterprise-permission and scheduling improvements.
 
