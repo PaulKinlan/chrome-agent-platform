@@ -91,6 +91,8 @@ if (existsSync(changelogPath) && finalNote) {
     .replace(/\(\s*[0-9a-f]{7,40}\s*\)/gi, "")
     .replace(/\bCAP-FB-\d{8}-[A-Z0-9-]+\b/g, "")
     .replace(/\b\w+ lane\b/gi, "work")
+    .replace(/\bjourneys\b/gi, "checks")
+    .replace(/\bjourney\b/gi, "check")
     .replace(/\s{2,}/g, " ")
     .trim();
   const cleanNote = sanitizeEntry(finalNote) || "Maintenance and fixes.";

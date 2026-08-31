@@ -1,7 +1,13 @@
 # Changelog
 
+## [0.2.580] — 2026-08-31
+- Release notes entries are in plain language, and the version bump keeps them that way
+
+## [0.2.579] — 2026-08-31
+- Typing a second /command after the first now works; the release notes gained two entries for it.)
+
 ## [0.2.578] — 2026-08-31
-- Fix the multi-slash journeys for the source-qualified skill refId (the skill-sync catalog stamped builtin: ids)
+- Typing a second /command after the first now works; the release notes gained two entries for it.)
 
 ## [0.2.577] — 2026-08-31
 - Skill list work — /skill and Settings read one catalog; collision-proof refIds; broken skills hidden and reported
