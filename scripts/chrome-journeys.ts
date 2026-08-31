@@ -438,6 +438,12 @@ const EXPECTED = [
   "jobs panel: a real named agent claimed + completed a job",
   "jobs panel: the settled group renders the outcome + result excerpt (live, no reload)",
   "jobs panel: retained the settled-state screenshot",
+  "Activity ledger: a real create_named_agent writes a ledger row with an undo",
+  "Activity ledger: the hub sidebar renders the sentence and an Undo button",
+  "Activity ledger: retained the activity-surface screenshot",
+  "Activity ledger: a real Undo deletes the agent and marks the row undone",
+  "Activity ledger: retained the after-undo screenshot",
+  "Activity ledger: a seeded close_tab row renders 'Closed …' with Undo",
   "Settings: Permissions panel present",
   "approval: forged NTP owner/activation fields are refused",
   "permissions: optional capabilities start ungranted (JIT) and the mandatory boot set is granted",
@@ -1514,6 +1520,136 @@ async function main() {
       "jobs panel: retained the settled-state screenshot",
       jobsSettledShot !== null && jobsSettledShot.length > 200,
     );
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 1c — the "what I did" activity ledger + a real Undo
+    // (CAP-FB-20260830-ACTIVITY-LEDGER-UNDO-01). A mutating tool call writes a
+    // plain-language ledger row with the reversing call; the hub sidebar renders
+    // it with Undo; the owner's Undo click re-runs the inverse THROUGH the same
+    // executor and the same owner-direct/grant checks the original went through.
+    // Driven end-to-end with a real reversible pair that needs no OS permission
+    // (create_named_agent ↔ delete_named_agent) — the `tabs` permission cannot be
+    // granted in headless, so the tab sentence + Undo UI is covered by a seeded
+    // close_tab row through the exact production render path.
+    // ─────────────────────────────────────────────────────────────
+    await msgValue({ type: "memory.set", origin: "master", key: "cap:action-ledger", value: [] });
+    const ledgerCreate = await msgValue({
+      type: "agent-worker.tool",
+      toolName: "create_named_agent",
+      args: { name: "Undo Journey Agent", role: "created to prove the activity ledger's Undo" },
+    });
+    const createdAgentId = ledgerCreate?.agent?.id ?? ledgerCreate?.id ?? null;
+    // The ledger write is fire-and-forget off the tool result — poll actions.list.
+    let ledgerRows = [];
+    for (let i = 0; i < 24; i++) {
+      const r = await msgValue({ type: "actions.list", limit: 20 });
+      ledgerRows = Array.isArray(r?.rows) ? r.rows : [];
+      if (ledgerRows.some((row) => row.tool === "create_named_agent")) break;
+      await sleep(250);
+    }
+    const createRow = ledgerRows.find((row) => row.tool === "create_named_agent") ?? null;
+    check(
+      "Activity ledger: a real create_named_agent writes a ledger row with an undo",
+      createRow !== null &&
+        createRow.sentence === "Created the agent Undo Journey Agent" &&
+        createRow.inverse?.tool === "delete_named_agent" &&
+        createRow.inverse?.args?.id === createdAgentId &&
+        createRow.undone === false,
+    );
+    // The hub sidebar renders it. The create went through a route (no run
+    // progress event), so drive the component's own refresh, then read its
+    // shadow DOM — the exact production render.
+    const ledgerUi = async () => await evalIn(cdp, ntpSession, `(async () => {
+      const el = document.getElementById("side-action-ledger");
+      const section = document.getElementById("activity-ledger-section");
+      if (!el) return null;
+      await el.refresh?.();
+      const sr = el.shadowRoot;
+      const undo = sr?.querySelector(".al-undo");
+      return {
+        sectionHidden: section?.hidden ?? null,
+        text: sr?.textContent ?? "",
+        rows: sr?.querySelectorAll(".al-row").length ?? 0,
+        hasUndo: !!undo,
+        undoLabel: undo?.getAttribute("aria-label") ?? null,
+      };
+    })()`);
+    let lui = null;
+    for (let i = 0; i < 24; i++) {
+      lui = await ledgerUi();
+      if (lui && lui.hasUndo && lui.sectionHidden === false) break;
+      await sleep(250);
+    }
+    check(
+      "Activity ledger: the hub sidebar renders the sentence and an Undo button",
+      lui !== null && lui.sectionHidden === false && lui.rows >= 1 &&
+        lui.text.includes("Created the agent Undo Journey Agent") &&
+        lui.hasUndo === true &&
+        typeof lui.undoLabel === "string" && lui.undoLabel.includes("Undo:"),
+    );
+    const ledgerShot = await captureShot(cdp, ntpSession);
+    if (ledgerShot) await writeEvidence("ntp-activity-ledger.png", ledgerShot);
+    check(
+      "Activity ledger: retained the activity-surface screenshot",
+      ledgerShot !== null && ledgerShot.length > 200,
+    );
+    // A REAL Undo — a genuine click on the button in the component's shadow DOM.
+    // It calls actions.undo, which re-runs delete_named_agent through the SAME
+    // executor (owner-direct via the clicking document's identity).
+    const undoClicked = await clickShadow(cdp, ntpSession, "#side-action-ledger", ".al-undo");
+    let agentGone = false;
+    let rowUndone = false;
+    for (let i = 0; i < 24; i++) {
+      const list = await msgValue({ type: "named-agent.list" });
+      const ids = (list?.agents ?? []).map((a) => a.id);
+      agentGone = createdAgentId !== null && !ids.includes(createdAgentId);
+      const r = await msgValue({ type: "actions.list", limit: 20 });
+      const row = (r?.rows ?? []).find((x) => x.id === createRow?.id);
+      rowUndone = row?.undone === true;
+      if (agentGone && rowUndone) break;
+      await sleep(250);
+    }
+    check(
+      "Activity ledger: a real Undo deletes the agent and marks the row undone",
+      undoClicked && agentGone && rowUndone,
+    );
+    const undoShot = await captureShot(cdp, ntpSession);
+    if (undoShot) await writeEvidence("ntp-activity-ledger-undone.png", undoShot);
+    check(
+      "Activity ledger: retained the after-undo screenshot",
+      undoShot !== null && undoShot.length > 200,
+    );
+    // The tab sentence + Undo UI (the entry's headline case). `tabs` cannot be
+    // granted in headless, so the row is SEEDED into the real store; the render
+    // path is the exact production one (textContent, real <button>, Undo label).
+    await msgValue({
+      type: "memory.set", origin: "master", key: "cap:action-ledger",
+      value: [{
+        id: "act-seed-close", ts: Date.now(), tool: "close_tab",
+        sentence: "Closed Example Domain", argsDigest: "tabId=3",
+        inverse: { tool: "restore_closed", args: { sessionId: "seed-s1" } },
+        source: "hub", undone: false,
+      }],
+    });
+    const seededUi = async () => await evalIn(cdp, ntpSession, `(async () => {
+      const el = document.getElementById("side-action-ledger");
+      if (!el) return null;
+      await el.refresh?.();
+      const sr = el.shadowRoot;
+      return { text: sr?.textContent ?? "", hasUndo: !!sr?.querySelector(".al-undo") };
+    })()`);
+    let sui = null;
+    for (let i = 0; i < 24; i++) {
+      sui = await seededUi();
+      if (sui && sui.text.includes("Closed Example Domain")) break;
+      await sleep(250);
+    }
+    check(
+      "Activity ledger: a seeded close_tab row renders 'Closed …' with Undo",
+      sui !== null && sui.text.includes("Closed Example Domain") && sui.hasUndo === true,
+    );
+    // Restore a clean ledger so later journeys are unaffected.
+    await msgValue({ type: "memory.set", origin: "master", key: "cap:action-ledger", value: [] });
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 2 — capability onboarding + provider Update/Clear key.

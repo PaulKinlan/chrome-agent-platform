@@ -9230,6 +9230,193 @@ class ActivityExplorer extends Component {
 customElements.define("activity-explorer", ActivityExplorer);
 
 /* ──────────────────────────────────────────────────────────────────────────
+ * <action-ledger> — the "what I did" surface (CAP-FB-20260830-ACTIVITY-LEDGER-UNDO-01).
+ * A quiet, most-recent-first list of the mutating actions the agents took, each
+ * a plain-language sentence with an Undo control when the action is reversible.
+ * Reversible rows carry the reversing tool call; irreversible mutations say so
+ * plainly rather than offering a dead button. Data comes from actions.list; Undo
+ * calls actions.undo (which re-runs the inverse through the SAME grant/approval
+ * checks the original went through). Seed `entries`/`rows` for the gallery.
+ * ────────────────────────────────────────────────────────────────────────── */
+class ActionLedger extends Component {
+  static get observedAttributes() {
+    return ["limit"];
+  }
+  _render() {
+    this._root.innerHTML = `
+      <style>
+        :host { display:block; }
+        .al { display:flex; flex-direction:column; }
+        .al-row { display:grid; grid-template-columns:1fr auto; align-items:baseline; gap:12px;
+          padding:9px 2px; border-bottom:1px solid var(--border,#e3e0d9); }
+        .al-row:last-child { border-bottom:0; }
+        .al-main { min-width:0; display:flex; flex-direction:column; gap:2px; }
+        .al-sentence { font-size:13px; line-height:1.4; color:var(--text,#1d1b18);
+          overflow:hidden; text-overflow:ellipsis; }
+        .al-row.undone .al-sentence { color:var(--muted,#635e56); text-decoration:line-through;
+          text-decoration-thickness:1px; }
+        .al-meta { font-size:11px; color:var(--muted,#635e56); display:flex; gap:8px; align-items:baseline; }
+        .al-ts { white-space:nowrap; }
+        .al-note { font-size:11px; color:var(--muted,#635e56); white-space:nowrap; font-style:italic; }
+        .al-undo { display:inline-flex; align-items:center; gap:5px; padding:4px 10px; font:inherit; font-size:12px;
+          cursor:pointer; color:var(--accent,#0e6e63); background:transparent;
+          border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,8px);
+          transition:border-color .15s ease, color .15s ease, background .15s ease; white-space:nowrap; }
+        .al-undo:hover { border-color:var(--accent,#0e6e63); background:var(--panel-2,#efede8); }
+        .al-undo:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
+        .al-undo:disabled { cursor:default; color:var(--muted,#635e56); opacity:.7; }
+        .al-undo svg { width:13px; height:13px; flex:0 0 auto; }
+        .al-done { font-size:11px; color:var(--muted,#635e56); white-space:nowrap; }
+        .al-empty { padding:12px 2px; font-size:13px; color:var(--muted,#635e56); }
+        .al-error { padding:12px 2px; font-size:13px; color:var(--danger,#b3261e); display:flex; gap:8px; align-items:baseline; }
+        .al-retry { padding:3px 10px; font:inherit; font-size:12px; cursor:pointer; color:var(--accent,#0e6e63);
+          background:transparent; border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,8px); }
+        @media (prefers-reduced-motion: reduce) { .al-undo { transition:none; } }
+      </style>
+      <div class="al" role="list" aria-label="Recent actions"></div>
+    `;
+    this._list = this._root.querySelector(".al");
+    this._paint();
+  }
+  attributeChangedCallback(name, oldV, newV) {
+    if (this._rendered && oldV !== newV) { this._render(); this.refresh(); }
+  }
+  connectedCallback() {
+    super.connectedCallback();
+    if (!this._seeded) this.refresh();
+  }
+  set entries(v) {
+    this._rows = Array.isArray(v) ? v : [];
+    this._seeded = true;
+    this._loadError = null;
+    if (this._rendered) this._paint();
+  }
+  get entries() { return this._rows ?? []; }
+  // Alias — the store/route speak "rows"; the gallery may seed either name.
+  set rows(v) { this.entries = v; }
+  get rows() { return this._rows ?? []; }
+  async refresh() {
+    if (this._seeded) return; // seeded demos own their data
+    const seq = (this._loadSeq = (this._loadSeq ?? 0) + 1);
+    this._loadError = null;
+    try {
+      const res = await backendBounded("actions.list", {
+        limit: Number(this.getAttribute("limit")) || 20,
+      });
+      if (seq !== this._loadSeq) return; // superseded
+      this._rows = Array.isArray(res?.rows) ? res.rows : [];
+    } catch {
+      if (seq !== this._loadSeq) return;
+      this._loadError = "Couldn't load recent actions.";
+    }
+    this._paint();
+  }
+  _undoIcon() {
+    // A single-stroke "undo" arc-with-arrowhead, currentColor.
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+    const p1 = document.createElementNS(ns, "path");
+    p1.setAttribute("d", "M9 14 4 9l5-5");
+    const p2 = document.createElementNS(ns, "path");
+    p2.setAttribute("d", "M4 9h11a5 5 0 0 1 0 10h-4");
+    svg.append(p1, p2);
+    return svg;
+  }
+  _paint() {
+    if (!this._list) return;
+    // Let a host (the hub sidebar) show/hide its Activity section on the count.
+    this._emit("entries-change", { count: (this._rows ?? []).length, error: !!this._loadError });
+    this._list.textContent = "";
+    if (this._loadError) {
+      const e = document.createElement("div");
+      e.className = "al-error";
+      e.textContent = this._loadError;
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "al-retry";
+      retry.textContent = "Retry";
+      retry.addEventListener("click", () => { this._loadError = null; this.refresh(); });
+      e.append(retry);
+      this._list.append(e);
+      return;
+    }
+    const rows = this._rows ?? [];
+    if (rows.length === 0) {
+      const d = document.createElement("div");
+      d.className = "al-empty";
+      d.textContent = "Nothing to undo yet.";
+      this._list.append(d);
+      return;
+    }
+    for (const row of rows) {
+      const el = document.createElement("div");
+      el.className = "al-row" + (row.undone ? " undone" : "");
+      el.setAttribute("role", "listitem");
+
+      const main = document.createElement("div");
+      main.className = "al-main";
+      const sentence = document.createElement("span");
+      sentence.className = "al-sentence";
+      // The sentence embeds untrusted content (a tab title, a bookmark name) —
+      // textContent only, never innerHTML.
+      sentence.textContent = row.sentence || "Did something";
+      const meta = document.createElement("span");
+      meta.className = "al-meta";
+      const ts = document.createElement("span");
+      ts.className = "al-ts";
+      ts.textContent = timeAgo(row.ts);
+      meta.append(ts);
+      main.append(sentence, meta);
+
+      const trailing = document.createElement("span");
+      if (row.undone) {
+        trailing.className = "al-done";
+        trailing.textContent = "Undone";
+      } else if (row.inverse && row.inverse.tool) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "al-undo";
+        // Accessible name names the specific action, not just "Undo".
+        btn.setAttribute("aria-label", `Undo: ${row.sentence || "this action"}`);
+        btn.append(this._undoIcon(), document.createTextNode("Undo"));
+        btn.addEventListener("click", () => this._undo(row, btn));
+        trailing.append(btn);
+      } else {
+        trailing.className = "al-note";
+        trailing.textContent = "Can't be undone";
+      }
+
+      el.append(main, trailing);
+      this._list.append(el);
+    }
+  }
+  async _undo(row, btn) {
+    if (this._seeded) { this._emit("action-undo", { id: row.id, seeded: true }); return; }
+    btn.disabled = true;
+    btn.textContent = "Undoing…";
+    try {
+      const res = await backendBounded("actions.undo", { id: row.id });
+      if (res && res.ok) {
+        this._emit("action-undo", { id: row.id, tool: res.tool });
+      } else {
+        this._emit("action-undo-error", { id: row.id, error: res?.error ?? "undo failed" });
+      }
+    } catch {
+      this._emit("action-undo-error", { id: row.id, error: "undo timed out" });
+    }
+    await this.refresh();
+  }
+}
+customElements.define("action-ledger", ActionLedger);
+
+/* ──────────────────────────────────────────────────────────────────────────
  * <jobs-board> — the shared jobs board (agent-to-agent work): open jobs with
  * poster/claimant + recency, recently settled jobs with outcome and a bounded
  * result excerpt, and the latest board messages. Queries board.list +

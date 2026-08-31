@@ -39,6 +39,7 @@
   #agents-list-pane[hidden] { display:none; }
   .tasks-sect { margin-top:16px; border-top:1px solid var(--border); padding-top:10px; }
   .tasks-h { font-size:11px; font-weight:700; letter-spacing:.01em; color:var(--muted); margin:0 0 6px; }
+  .ledger-sect { padding:10px 14px 14px; border-top:1px solid var(--border); }
   #agents-tasks { display:flex; flex-direction:column; gap:2px; }
   #agents-tasks .tasks-empty { font-size:12.5px; color:var(--muted); padding:4px 2px; }
   #agent-detail-pane { flex:1; display:flex; flex-direction:column; min-height:0; }
@@ -99,6 +100,10 @@
       <p class="muted">Tools come from the site's WebMCP page or are inferred from the page itself.</p>
     </div>
     <div class="tools" id="tools" role="status" aria-live="polite" aria-atomic="true" aria-label="Available Site Agent tools"></div>
+    <section id="activity-ledger-section" class="ledger-sect" hidden aria-labelledby="ledger-h">
+      <h2 class="tasks-h" id="ledger-h">Activity</h2>
+      <action-ledger id="action-ledger" limit="10" aria-label="Recent actions with undo"></action-ledger>
+    </section>
   </section>
 
   <section id="agents-view" role="tabpanel" aria-labelledby="tab-agents" hidden>

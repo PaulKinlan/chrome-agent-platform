@@ -297,6 +297,12 @@ import {
   chromeToolCapability,
 } from "../lib/chrome-tool-capabilities.js";
 import {
+  ledgerRowFor,
+  isLedgerableTool,
+  appendLedgerRow,
+  ACTION_LEDGER_MAX_ROWS,
+} from "../lib/action-ledger.js";
+import {
   executableBrowserToolRecords,
   executableBundledToolRecords,
   executableManagementToolRecords,
@@ -3802,8 +3808,70 @@ async function executeWorkerTool(toolName, args, context) {
     source: browser ? "chrome-api" : "management",
     runId: context?.runId ?? context?.executionId ?? null,
   })
-    .then((result) => redactSecrets(result ?? null))
+    .then((result) => {
+      // The "what I did" ledger (CAP-FB-20260830-ACTIVITY-LEDGER-UNDO-01): a
+      // SUCCESSFUL mutation writes one plain-language row with its inverse when
+      // one exists. Fire-and-forget and re-entrancy-guarded — an undo (which
+      // re-executes an inverse THROUGH this same path) must not itself ledger,
+      // and a ledger-write failure must never fail or slow the tool result.
+      if (isLedgerableTool(name) && context?.__ledgerReentrant !== true) {
+        writeActionLedgerRow(name, a, result, context).catch(() => {});
+      }
+      return redactSecrets(result ?? null);
+    })
     .catch((e) => ({ ok: false, error: String(e?.message ?? e).slice(0, 200) }));
+}
+
+// ── The action ledger ────────────────────────────────────────────────────────
+// A durable, bounded record (masterMemory → "cap:action-ledger") of the mutating
+// tool calls the agents made, each with the plain-language sentence and the
+// reversing call when one exists. Rendered by the hub + side panel <action-ledger>
+// element and reversed by the actions.undo route. Origin-keyed OPFS memory (the
+// master tier); never fails a tool execution.
+const ACTION_LEDGER_KEY = "cap:action-ledger";
+// Serialize ledger writes so two concurrent tool results cannot read-modify-write
+// the same array and lose a row (the run-log WAL is append-only; this small array
+// store is not, so it needs the queue the sidebar writes also use).
+let actionLedgerWriteQueue = Promise.resolve();
+
+async function readActionLedger() {
+  try {
+    const rows = await masterMemory().get(ACTION_LEDGER_KEY);
+    return Array.isArray(rows) ? rows : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeActionLedgerRow(name, args, result, context) {
+  // For a close, the sessionId + title that make the restore inverse live in the
+  // recently-closed list, not the close result — capture them right after the
+  // close (read-only, so it never itself ledgers) so the inverse is resolvable.
+  let extra = {};
+  if (name === "close_tab") {
+    try {
+      const recent = await executeWorkerTool("list_recently_closed", { maxResults: 1 }, {
+        ...(context ?? {}),
+        __ledgerReentrant: true,
+      });
+      if (Array.isArray(recent?.closed)) extra = { recentlyClosed: recent.closed };
+    } catch { /* the inverse is simply unavailable — the row still records the close */ }
+  }
+  const row = ledgerRowFor(name, args, result, extra);
+  if (!row) return;
+  const record = {
+    id: `act-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    ts: Date.now(),
+    source: context?.runId ?? context?.executionId ? "agent" : "hub",
+    runId: context?.runId ?? context?.executionId ?? null,
+    undone: false,
+    ...row,
+  };
+  actionLedgerWriteQueue = actionLedgerWriteQueue.then(async () => {
+    const rows = await readActionLedger();
+    await masterMemory().set(ACTION_LEDGER_KEY, appendLedgerRow(rows, record, ACTION_LEDGER_MAX_ROWS));
+  }).catch(() => {});
+  await actionLedgerWriteQueue;
 }
 
 // The named-agent run pipeline, factored so BOTH the trusted named-agent.run
@@ -4253,6 +4321,55 @@ const handlers = mergeRouteMaps(
     journalAppend,
   }),
   {
+  // ── The "what I did" action ledger (CAP-FB-20260830-ACTIVITY-LEDGER-UNDO-01) ──
+  // actions.list returns the most-recent reversible-first ledger rows the hub +
+  // side panel render; actions.undo re-executes a row's inverse THROUGH the same
+  // executeWorkerTool path (so the SAME grant/approval checks the original went
+  // through apply — undo is never a privilege shortcut), then marks the row done.
+  async "actions.list"({ limit = 20 } = {}) {
+    const bound = Math.max(1, Math.min(100, Number(limit) || 20));
+    const rows = await readActionLedger();
+    // Most-recent first for display; the store keeps most-recent LAST.
+    const recent = rows.slice(-bound).reverse();
+    return { rows: recent, count: recent.length, total: rows.length };
+  },
+  async "actions.undo"({ id } = {}, context) {
+    const rowId = String(id ?? "");
+    if (!rowId) return { ok: false, error: "no ledger row id" };
+    const rows = await readActionLedger();
+    const row = rows.find((r) => r && r.id === rowId);
+    if (!row) return { ok: false, error: "no such ledger row" };
+    if (row.undone) return { ok: false, error: "already undone" };
+    if (!row.inverse || !row.inverse.tool) {
+      return { ok: false, error: "this action can't be undone" };
+    }
+    // Re-execute the inverse carrying the OWNER'S real surface identity (the
+    // clicking document): the owner's own Undo click is the approval for an
+    // owner-direct destructive inverse (e.g. named-agent.delete), exactly as a
+    // Restore/Delete click in the artifact view is — never a privilege shortcut,
+    // since actions.undo is unreachable from a page or a model. Marked reentrant
+    // so the undo does not itself write a ledger row; the inverse tool still
+    // enforces its own browser-control grant + run fence as the original did.
+    const undoContext = {
+      principal: context?.principal === "owner-options" ? "owner-options" : "extension",
+      documentId: typeof context?.documentId === "string" ? context.documentId : "",
+      senderUrl: typeof context?.senderUrl === "string" ? context.senderUrl : "",
+      __ledgerReentrant: true,
+    };
+    const result = await executeWorkerTool(row.inverse.tool, row.inverse.args ?? {}, undoContext);
+    if (result && (result.error || result.ok === false)) {
+      return { ok: false, error: String(result.error ?? "undo failed").slice(0, 200) };
+    }
+    // Mark the row undone (compare-and-set on the freshest read so a concurrent
+    // append is not clobbered).
+    actionLedgerWriteQueue = actionLedgerWriteQueue.then(async () => {
+      const fresh = await readActionLedger();
+      const next = fresh.map((r) => (r && r.id === rowId ? { ...r, undone: true, undoneAt: Date.now() } : r));
+      await masterMemory().set(ACTION_LEDGER_KEY, next);
+    }).catch(() => {});
+    await actionLedgerWriteQueue;
+    return { ok: true, id: rowId, tool: row.inverse.tool };
+  },
   // The controlled cross-origin fetch for the script-host (and any extension
   // page): the service worker performs the fetch with the extension's host
   // permission (which bypasses CORS), so a page/script fetch never hits the

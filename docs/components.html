@@ -430,6 +430,15 @@
       </div>
 
       <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;action-ledger&gt;</code> — the "what I did" surface with Undo</h3>
+        <div class="stage column" style="max-width:680px">
+          <action-ledger id="ledger-demo" limit="20"></action-ledger>
+          <action-ledger id="ledger-empty"></action-ledger>
+        </div>
+        <p class="caption">A most-recent-first list of the mutating actions the agents took, each a plain-language sentence. Reversible rows (a closed tab, a group, a bookmark, an opened tab) carry an <strong>Undo</strong> button; an already-reversed row reads <em>Undone</em>; a mutation with no inverse says <em>Can't be undone</em>. Seeded demo rows — the real surface queries <code>actions.list</code> and Undo calls <code>actions.undo</code>, which re-runs the inverse through the same grant/approval checks the original went through. Second instance shows the empty state.</p>
+      </div>
+
+      <div class="specimen">
         <h3 class="spec"><code class="tag">&lt;jobs-board&gt;</code> — the shared agent-to-agent jobs board</h3>
         <div class="stage column" style="max-width:680px">
           <jobs-board id="jobs-board-demo"></jobs-board>
@@ -694,6 +703,17 @@
         { ts: Date.now() - 180000, source: "background:recipe:auto-group-by-domain", agentLabel: "Sorting Hat", type: "tool-result", tool: "tab_group", result: "grouped 12 tabs into 3 domains" },
         { ts: Date.now() - 300000, source: "https://paul.kinlan.me", agentLabel: "https://paul.kinlan.me", type: "screenshot", url: "https://paul.kinlan.me" },
       ];
+
+      // <action-ledger> example — seed demo rows (the gallery has no extension
+      // backend; the real component queries actions.list + calls actions.undo).
+      const ledgerDemo = document.getElementById("ledger-demo");
+      ledgerDemo.entries = [
+        { id: "act_1", ts: Date.now() - 45000, sentence: "Closed Example Domain", inverse: { tool: "restore_closed", args: { sessionId: "s1" } }, undone: false },
+        { id: "act_2", ts: Date.now() - 120000, sentence: "Grouped 3 tabs", inverse: { tool: "ungroup_tabs", args: { tabIds: [11, 12, 13] } }, undone: false },
+        { id: "act_3", ts: Date.now() - 240000, sentence: "Bookmarked The Rust Programming Language", inverse: { tool: "remove_bookmark", args: { id: "b42" } }, undone: true },
+        { id: "act_4", ts: Date.now() - 360000, sentence: "Removed a bookmark", inverse: null, undone: false },
+      ];
+      document.getElementById("ledger-empty").entries = [];
 
       // <jobs-board> examples — seeded demo data (the real surface queries
       // board.list + board.messages).

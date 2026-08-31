@@ -139,6 +139,13 @@
       border-block-start: 1px solid var(--border);
       padding-block-start: 6px;
     }
+    /* The Activity ledger section is content-sized (not a flex-grow pane) and
+       hidden when empty. `.side-section { display:flex }` beats the UA
+       `[hidden]` rule, so — like every other collapsible sidebar section — it
+       needs its own explicit `[hidden]` display:none (the pattern documented at
+       `.view-head .back[hidden]`). */
+    .side-activity { flex: 0 0 auto; max-block-size: 40%; overflow-y: auto; }
+    .side-activity[hidden] { display: none; }
     .side-label-row { display: flex; align-items: center; gap: 4px; min-inline-size: 0; }
     .side-label-row .side-label { flex: 1 1 auto; min-inline-size: 0; }
     /* Rail action buttons (new-task / new-agent) share one icon scale. */
@@ -964,6 +971,12 @@
           <button class="new-task" id="new-agent" type="button" aria-label="Create agent" title="Create agent"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
         </div>
         <div class="side-list agent-list" id="side-agents" aria-label="Interactive and scheduled agent list" tabindex="0"></div>
+      </section>
+      <section id="activity-ledger-section" class="side-section side-activity" hidden aria-labelledby="activity-ledger-label">
+        <div class="side-label-row">
+          <span class="side-label" id="activity-ledger-label">Activity</span>
+        </div>
+        <action-ledger id="side-action-ledger" limit="8" aria-label="Recent actions with undo"></action-ledger>
       </section>
       <div class="side-foot">
         <span id="sidebar-durability-hint" role="status" aria-live="polite" hidden></span>

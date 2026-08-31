@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.519] — 2026-08-31
+- The hub and side panel now show an Activity list of what the agents did — closed a tab, grouped tabs, added a bookmark — with an Undo button on the actions that can be reversed.
+
 ## [0.2.518] — 2026-08-31
 - Three product decisions were made, and the next set of improvements has begun.
 

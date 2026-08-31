@@ -149,7 +149,12 @@ Agents, Recent artifacts and Recent activity are three catalogs — they answer 
 objects exist?" A colleague-shaped environment answers "what is in flight, what is
 waiting on me, what came back while I was gone?" Same information, different spine.
 This is the real argument for `CAP-FB-20260828-HUB-AS-TIMELINE-01`, and a better one
-than the composition argument it was filed with.
+than the composition argument it was filed with. A first step landed
+(`CAP-FB-20260830-ACTIVITY-LEDGER-UNDO-01`): a coworker you can trust is one whose
+work you can see and take back, so every mutating action the agents take now writes
+a plain-language "what I did" row — "Closed Example Domain", "Grouped 3 tabs" — with
+an Undo on the ones that can be reversed, shown in the hub's Activity section and the
+side panel. It is the ledger the coworker page actions and the companion build on.
 
 **Artifacts are the central store of everything the person has made — and they must
 outlive the agent and the task that made them.** (Paul, 2026-08-28.) The point of an
