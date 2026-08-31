@@ -8517,7 +8517,10 @@ export function userKindLabel(e) {
 // The readable one-liner for a journal entry.
 export function activityText(e) {
   switch (e?.type) {
-    case "task": return e.task || "";
+    // A task row is the user's own task title — bounded to a human sentence
+    // like every other kind (a pathological giant title must never dump raw
+    // text into the collapsed row).
+    case "task": return summarizeTask(e);
     // A result row's one-liner is a DERIVED HUMAN SUMMARY, never the raw
     // model/provider dump (a multi-thousand-char reply or a {modelContent,…}
     // envelope). We unwrap the transport layers, pull the human-readable
@@ -8551,10 +8554,31 @@ export function activityText(e) {
 }
 
 // ── per-kind HUMAN summaries (CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01
-// r2 B2): each row's one-liner is derived from the meaningful content, then
-// bounded — a raw journal payload is never rendered, even truncated. The
-// unwrap walks transport envelopes ({modelContent,…}, {userSummary,…} JSON-
-// string layers) so the model's actual answer is what gets summarized.
+// r2 B2 / r3 P1): each row's one-liner is derived from the meaningful content
+// and then bounded to a HARD 140 chars — a raw journal payload is never
+// rendered, even truncated, and every kind's output is a bounded human
+// sentence. The unwrap walks transport envelopes ({modelContent,…},
+// {userSummary,…} JSON-string layers) so the model's actual answer is what
+// gets summarized.
+const AEX_ONELINER_MAX = 140;
+
+// A bounded human sentence from a raw text blob: collapse whitespace; take
+// the first sentence when sentence punctuation exists; take the whole text
+// when it is short and readable without punctuation (names, titles); and
+// refuse (return "") ONLY when the text is longer than the budget AND has no
+// sentence boundary — that shape is a raw dump, and the caller emits a short
+// fixed form instead of a truncated raw fragment.
+function firstHumanSentence(raw, budget) {
+  const clean = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (!clean) return "";
+  const first = clean.match(/^.*?[.!?](?:\s|$)/);
+  if (first) {
+    const s = first[0].replace(/\s+$/g, "").trim();
+    return s.length <= budget ? s : "";
+  }
+  return clean.length <= budget ? clean : "";
+}
+
 function summarizeResult(e) {
   const raw = String(e?.result ?? "");
   const verdict = e?.ok === false ? "Failed" : "Finished";
@@ -8562,37 +8586,60 @@ function summarizeResult(e) {
   const unwrapped = (() => {
     try { return unwrapToolPayload(raw).value; } catch { return raw; }
   })();
-  const text = typeof unwrapped === "string"
-    ? unwrapped
-    : (unwrapped && typeof unwrapped === "object"
-      ? JSON.stringify(unwrapped)
-      : raw);
-  // Strip transport/demo noise (a leading bracketed model tag such as
-  // "[demo model]"), collapse whitespace, then take the first sentence as
-  // the human summary and bound it. A raw dump is never rendered, even
-  // truncated (CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01 r2 B2).
-  const clean = text.replace(/^\[[^\]]*\]\s*/, "").replace(/\s+/g, " ").trim();
-  if (!clean) return verdict;
-  const head = clean.split(/[.!?](?:\s|$)/)[0]?.trim() || clean;
-  return `${verdict}: ${shortText(head, 130)}`;
+  // The human core is the unwrapped STRING, or a bounded scalar from a JSON
+  // object — NEVER JSON.stringify of the whole object (that is the raw
+  // payload again).
+  let core = "";
+  if (typeof unwrapped === "string") {
+    core = unwrapped.replace(/^\[[^\]]*\]\s*/, "").trim();
+  } else if (unwrapped && typeof unwrapped === "object") {
+    const scalar = (() => {
+      for (const k of ["summary", "text", "message", "result", "error"]) {
+        const v = unwrapped[k];
+        if (typeof v === "string") return v;
+        if (typeof v === "number" || typeof v === "boolean") return String(v);
+      }
+      return "";
+    })();
+    core = scalar.replace(/^\[[^\]]*\]\s*/, "").trim();
+  } else if (typeof unwrapped === "number" || typeof unwrapped === "boolean") {
+    core = String(unwrapped);
+  }
+  const sentence = firstHumanSentence(core, AEX_ONELINER_MAX - verdict.length - 2);
+  // No readable sentence boundary → a short honest verdict, never a raw cut.
+  return sentence ? `${verdict}: ${sentence}` : verdict;
 }
 
 function summarizeArtifact(e) {
   // The artifact NAME is the human summary (Made <name>); never the body.
   const name = String(e?.artifact?.name ?? e?.name ?? e?.task ?? "an artifact");
-  return `Made ${shortText(name, 130)}`;
+  const s = firstHumanSentence(name, AEX_ONELINER_MAX - 5);
+  return `Made ${s || "an artifact"}`;
 }
 
 function summarizeApproval(e, verb) {
-  // The approval SUBJECT (what the owner is being asked to approve).
+  // The approval SUBJECT (what the owner is being asked to approve), bounded
+  // so the WHOLE line (subject + " — " + verb) never exceeds 140.
   const subject = String(e?.task ?? e?.description ?? e?.artifact?.name ?? "an action");
-  return shortText(subject, 140) + ` — ${verb}`;
+  const budget = AEX_ONELINER_MAX - verb.length - 3;
+  const s = firstHumanSentence(subject, Math.max(8, budget));
+  return `${s || "an action"} — ${verb}`;
 }
 
 function summarizeSchedule(e) {
   // The scheduled task's sentence.
   const what = String(e?.task ?? e?.result ?? "scheduled task");
-  return `Ran ${shortText(what, 130)}`;
+  const s = firstHumanSentence(what, AEX_ONELINER_MAX - 4);
+  return `Ran ${s || "a scheduled task"}`;
+}
+
+function summarizeTask(e) {
+  // The user's task title, bounded like every other kind. If there is no
+  // readable sentence boundary (a giant unbroken token), fall back to a
+  // fixed phrase — never a truncated raw fragment.
+  const title = String(e?.task ?? "");
+  const s = firstHumanSentence(title, AEX_ONELINER_MAX);
+  return s || "a task";
 }
 
 // Plain-text details are bounded inline; longer payloads truncate with a
@@ -8991,7 +9038,11 @@ class ActivityExplorer extends Component {
       case "tool-result": addBlock("result", redactToolResult(e.result)); break;
       case "error": addBlock("error", [e.error, e.message, e.stack].filter(Boolean).join("\n") || "error"); break;
       case "task": addBlock("task", e.task); break;
-      case "result": addBlock("result", e.result); break;
+      // The EXPANDED result row shows the same bounded human summary as the
+      // collapsed row — never the raw provider/model payload. The full output
+      // lives in Run logs (CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01 r3
+      // P1): an expansion must not turn a glanceable surface into a dump.
+      case "result": addBlock("result", activityText(e)); break;
       default: addBlock("detail", e?.detail || e?.url || "");
     }
     return any ? wrap : null;

@@ -1005,10 +1005,10 @@ Deno.test("activity-explorer: the user-visible allowlist excludes system rows an
   if (line.startsWith("Finished: Here is the actual answer to your task. Followed")) {
     throw new Error("raw result text must never render even the first sentence as-is (BLOCKER 2: derive a summary)");
   }
-  if (line !== "Finished: Here is the actual answer to your task") {
-    throw new Error(`result should read 'Finished: <first sentence>', got: ${line}`);
+  if (line !== "Finished: Here is the actual answer to your task.") {
+    throw new Error(`result should read 'Finished: <first sentence>.', got: ${line}`);
   }
-  if (activityText({ type: "result", result: "all done.", ok: true }) !== "Finished: all done") {
+  if (activityText({ type: "result", result: "all done.", ok: true }) !== "Finished: all done.") {
     throw new Error("short results derive a Finished sentence");
   }
   if (activityText({ type: "result", result: "", ok: false }) !== "Failed") {
@@ -1032,4 +1032,59 @@ Deno.test("activity-explorer: the two empty-state strings are distinct (zero vs 
   const zero = explorerRegion.includes("Nothing has happened yet.");
   const filtered = explorerRegion.includes("No activity matches this filter.");
   if (!zero || !filtered) throw new Error("both empty-state strings must exist in the explorer (zero + filtered-empty)");
+});
+
+Deno.test("activity-explorer: EVERY user-kind one-liner is a bounded human sentence (≤140), even for pathological inputs", async () => {
+  const mod = await import("../extension/shared/components.js");
+  const { activityText } = mod;
+  const giant = "z".repeat(9000);
+  const giantJson = JSON.stringify({ modelContent: JSON.stringify({ result: { summary: giant, text: giant } }) });
+  const giantName = "n".repeat(9000);
+  const cases = [
+    // [label, entry] — every USER_VISIBLE kind with pathological inputs.
+    ["task with giant title", { type: "task", task: giant }],
+    ["result with giant unbroken text", { type: "result", result: giant, ok: true }],
+    ["result with giant JSON payload", { type: "result", result: giantJson, ok: true }],
+    ["result failed with giant payload", { type: "result", result: giantJson, ok: false }],
+    ["artifact with giant name", { type: "artifact", task: giantName }],
+    ["approval-requested with giant subject", { type: "approval-requested", task: giant }],
+    ["approval-granted with giant subject", { type: "approval-granted", description: giant }],
+    ["approval-denied with giant subject", { type: "approval-denied", task: giant }],
+    ["schedule-ran with giant task", { type: "schedule-ran", task: giant }],
+    ["schedule-ran with giant result fallback", { type: "schedule-ran", task: "", result: giant }],
+    // Empty-ish pathological inputs (falsification: a raw-fallback would leak).
+    ["result with empty-ish whitespace", { type: "result", result: "   ", ok: true }],
+    ["approval with no subject at all", { type: "approval-requested" }],
+  ];
+  for (const [label, entry] of cases) {
+    const line = activityText(entry);
+    if (line.length > 140) throw new Error(`${label}: one-liner exceeds 140 chars (${line.length}): ${line.slice(0, 60)}`);
+    if (!line.trim()) throw new Error(`${label}: one-liner must not be empty`);
+    // Never a raw fragment: a giant unbroken token must not appear verbatim.
+    if (line.includes(giant.slice(0, 40)) || line.includes(giantName.slice(0, 40))) {
+      throw new Error(`${label}: raw payload fragment leaked into the one-liner`);
+    }
+    // No transport/demo tag.
+    if (line.includes("[demo model]") || line.includes("modelContent")) {
+      throw new Error(`${label}: transport noise leaked into the one-liner`);
+    }
+  }
+  // Positive controls: normal inputs still read as human sentences.
+  if (activityText({ type: "result", result: "[demo model] The plan is ready. More detail here.", ok: true }) !== "Finished: The plan is ready.") {
+    throw new Error("normal result should read 'Finished: <first sentence>' with the demo tag stripped");
+  }
+  if (activityText({ type: "approval-requested", task: "Publish the page" }) !== "Publish the page — needs approval") {
+    throw new Error("approval rows carry the subject");
+  }
+});
+
+Deno.test("activity-explorer: approval rows stay ≤140 even with a long sentence subject", async () => {
+  const mod = await import("../extension/shared/components.js");
+  const { activityText } = mod;
+  const longSubject = "Please approve this carefully worded request that has quite a lot of words in it and keeps going for a while. More trailing text after the first sentence.";
+  const line = activityText({ type: "approval-requested", task: longSubject });
+  if (line.length > 140) throw new Error(`approval line exceeds 140 chars: ${line.length}`);
+  // The verb and the first sentence survive; the trailing sentence does not.
+  if (!line.endsWith("needs approval")) throw new Error("approval verb must survive");
+  if (line.includes("More trailing text")) throw new Error("approval must not include past-the-first-sentence raw text");
 });

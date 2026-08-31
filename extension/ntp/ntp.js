@@ -1099,23 +1099,25 @@ function runLogCovered() {
   if (view && view.hidden !== true) return true;
   return typeof threadView !== "undefined" && threadView && threadView.hidden !== true;
 }
+// ONE refresh helper for the whole Recent-activity surface: the explorer AND
+// the runs-today header. Every path that recomputes one must recompute the
+// other, or the header goes stale (CAP-FB-20260830-RECENT-ACTIVITY-USER-
+// EVENTS-01 r2 B4 / r3 P1).
+function refreshHubActivity() {
+  runLogExplorer?.refresh?.().catch(() => {});
+  renderHubUsage().catch(() => {});
+}
 function scheduleRunLogRefresh() {
   if (!runLogExplorer) return;
   if (runLogCovered()) { runLogDirty = true; return; }
   clearTimeout(runLogRefreshTimer);
-  runLogRefreshTimer = setTimeout(() => {
-    runLogExplorer?.refresh?.().catch(() => {});
-    // The header's runs-today count rides the SAME activity-refresh path so
-    // it never goes stale after bootstrap (CAP-FB-20260830-RECENT-ACTIVITY-
-    // USER-EVENTS-01 r2 B4).
-    renderHubUsage().catch(() => {});
-  }, 1500);
+  runLogRefreshTimer = setTimeout(refreshHubActivity, 1500);
 }
 function flushRunLogDirty() {
   if (!runLogDirty) return;
   runLogDirty = false;
   clearTimeout(runLogRefreshTimer);
-  runLogExplorer?.refresh?.().catch(() => {});
+  refreshHubActivity();
 }
 // The progress PORT dies with every MV3 service-worker restart and the shared
 // dispatcher settles its listeners fail-closed (clears them) — an AMBIENT
