@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.2.510] — 2026-08-31
+- Changelog: user-voice entry for the model-config error classification
+
 ## [0.2.509] — 2026-08-31
-- Model-save: classify the model-missing gate refusal as model-config end to end
+- When a provider has no model id, the error now points you to Settings to set one instead of asking for network access.
 
 ## [0.2.508] — 2026-08-31
 - Changelog: user-voice entries for the model-save fix
