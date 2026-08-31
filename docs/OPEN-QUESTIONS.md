@@ -64,8 +64,14 @@ Resolved answers are recorded here (Paul confirmed each over the course of the b
     page interaction and say so on the slide. **Recommended default (reanalysis 2026-08-30;
     OPEN, needed before the demo script is final):** add the minimal family — it is the largest
     missing piece of the thesis and the Chrome-native permission model is the differentiator
-    against screenshot-and-click agents. Blocks `CAP-FB-20260830-PAGE-ACTION-TOOLS-01` and, through
-    it, `CAP-FB-20260830-SIDE-PANEL-COMPANION-01`.
+    against screenshot-and-click agents. **DELIVERED (2026-08-31, `CAP-FB-20260830-PAGE-ACTION-TOOLS-01`):**
+    the six-tool family (`find_elements`, `click_element`, `type_text`, `select_option`, `scroll_page`,
+    `wait_for`) ships in `extension/lib/browser-tools.js`, executed through
+    `chrome.scripting.executeScript` under the `scripting` permission + the per-origin browser-control
+    grant + the privileged-URL block. The model only ever receives an opaque per-snapshot integer ref
+    (never a selector or JS); `find_elements` is tagged untrusted so attacker-controlled accessible names
+    are fenced; click/type/select write an activity-ledger row. Unblocks
+    `CAP-FB-20260830-SIDE-PANEL-COMPANION-01`.
 
 20. **"Browser control" first, or "coworker" first?** — **RESOLVED (Paul, 2026-08-31): progress to the coworker features in the recommended order: activity ledger with undo, companion side panel, plan strip, scheduled-run reports on the timeline.** The product carries two thesis
     statements: sites-as-sub-agents via WebMCP (unique, working, hidden) and a coworking

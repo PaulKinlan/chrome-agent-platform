@@ -240,6 +240,7 @@ export function describeToolCall(name, args) {
       const u = pickArg(args, ["url", "tabId"]);
       return u ? `Reading the page (${u})` : "Reading the page";
     }
+    case "find_elements": return "Finding elements on the page";
     case "click": case "click_element": {
       const t = pickArg(args, ["selector", "text", "target"]);
       return t ? `Clicking ${t}` : "Clicking an element";
@@ -248,6 +249,9 @@ export function describeToolCall(name, args) {
       const t = pickArg(args, ["selector", "field", "name"]);
       return t ? `Filling ${t}` : "Filling a field";
     }
+    case "select_option": return "Choosing an option";
+    case "scroll_page": return "Scrolling the page";
+    case "wait_for": return "Waiting for the page";
     case "screenshot": case "capture_screenshot": return "Taking a screenshot";
     case "search_history": {
       const q = pickArg(args, ["query", "text"]);

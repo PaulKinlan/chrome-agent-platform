@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.529] — 2026-08-31
+- : merge — the agent can act inside a page (find, click, type, select, scroll) under a grant
+
 ## [0.2.528] — 2026-08-31
 - DONE (coordinator gates 2758/0, 255/255)
 
@@ -64,7 +67,7 @@
 - Artifacts and generated images now appear in the conversation as they are created — a card showing what changed, plus a thumbnail strip of screenshots and images you can open.
 
 ## [0.2.510] — 2026-08-30
-- You can now see a running log of what the agent did - open a tab, group tabs, create an agent - and undo the last reversible actions with one click.
+- The agent can now act inside a web page - find a control by its name, click it, type into a field, choose an option, scroll - after you grant the site, with each action recorded in the activity log and page text still treated as untrusted.
 
 ## [0.2.509] — 2026-08-30
 - A size limit on how much a skill could import has been removed.

@@ -104,6 +104,12 @@ const BROWSER_READ_TOOLS = new Set([
   // Tranche-12 Chrome API coverage: script registries
   "list_user_scripts",
   "list_content_scripts",
+  // CAP-FB-20260830-PAGE-ACTION-TOOLS-01: the page-action reads observe only —
+  // a snapshot, a scroll and a bounded wait leave no durable state to reverse,
+  // so they are safe to re-run after an interruption.
+  "find_elements",
+  "scroll_page",
+  "wait_for",
 ]);
 // Memory reads: observe only.
 const MEMORY_READ_TOOLS = new Set(["memory_get", "memory_grep", "memory_list"]);
@@ -224,6 +230,9 @@ const BUILT_IN_TOOLS = new Set([
   // (reads are classified above; ALL are built-ins).
   "register_user_script", "update_user_script", "unregister_user_script", "list_user_scripts",
   "register_content_script", "update_content_script", "unregister_content_script", "list_content_scripts",
+  // CAP-FB-20260830-PAGE-ACTION-TOOLS-01: the page-action family (reads
+  // classified above; click/type/select are mutating by exclusion).
+  "find_elements", "click_element", "type_text", "select_option", "scroll_page", "wait_for",
   "memory_get", "memory_grep", "memory_list", "memory_set",
   "create_agent", "update_agent", "delete_agent", "get_agent", "list_agents",
   "disenroll_origin", "create_asset", "update_asset", "patch_asset", "delete_asset", "list_assets",

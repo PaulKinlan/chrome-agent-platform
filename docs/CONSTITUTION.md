@@ -36,6 +36,23 @@ alarms) and acts on untrusted page content + model output. Threat vectors:
 - **Untrusted content → model → action** — page text can influence a model that
   can act. Prompt-injection: model output must not directly trigger destructive
   actions without the grant.
+- **Page actions are grant-gated and selector-free**
+  (`CAP-FB-20260830-PAGE-ACTION-TOOLS-01`) — the page-action family
+  (`find_elements`, `click_element`, `type_text`, `select_option`, `scroll_page`,
+  `wait_for`) injects through `chrome.scripting.executeScript` under the SAME
+  gates as `read_page`/`open_tab`: the `scripting` permission, the per-origin
+  browser-control grant (a denial renders the ONE Allow card naming the exact
+  origin — `withPageActionGrant` in `extension/lib/browser-tools.js`), and the
+  privileged-URL block (a `chrome:`/`file:`/non-web page is refused before any
+  injection, since `canonicalOrigin` returns null there). The model NEVER passes
+  a selector or JS — only an opaque per-snapshot integer `ref` it got from
+  `find_elements`, re-resolved inside the page by a stamped `data-cap-ref`
+  attribute; a stale ref (a superseded snapshot's) resolves to nothing and
+  refuses. `find_elements` results are tagged `untrusted` so attacker-controlled
+  accessible names are fenced; the integer ref is a non-string and survives the
+  fence for the round-trip. Every click/type/select writes an activity-ledger
+  row through the `executeWorkerTool` path; page actions are honestly
+  irreversible (no inverse), so the row records them without an Undo.
 - **Model-written scripts are approved as code, and their fetch is fenced** —
   `script.create`, `script.run` and a scheduled script (`task.schedule-script`)
   are destructive actions: a model-initiated call pauses on an in-context card

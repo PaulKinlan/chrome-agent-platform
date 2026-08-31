@@ -137,16 +137,16 @@ function tools() {
 // ──────────────────────────────────────────────────────────────────────────
 // Registry parity: the T3/T4 tools are appended to the toolset AND recorded.
 // ──────────────────────────────────────────────────────────────────────────
-Deno.test("T3/T4: browserToolset has exactly 125 tools matching BROWSER_TOOL_NAMES (T1/T2 + T8 + T13 + T5/T6 + T7 + T11 + T9 + T10 + T12 + 14)", () => {
+Deno.test("T3/T4: browserToolset has exactly 131 tools matching BROWSER_TOOL_NAMES (T1/T2 + T8 + T13 + T5/T6 + T7 + T11 + T9 + T10 + T12 + 14 + 6 page actions)", () => {
   reset();
   // BROWSER_TOOL_NAMES is the SHIPPED inventory (the developer build); the
   // default build omits the developer-only cookie tools
   // (CAP-FB-20260830-COOKIE-TOOLS-CUT-01).
   const browser = browserToolset(false, { developerFeatures: true });
   assertEquals(Object.keys(browser), BROWSER_TOOL_NAMES);
-  assertEquals(BROWSER_TOOL_NAMES.length, 125);
-  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.browserTools, 125);
-  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.totalTools, 167);
+  assertEquals(BROWSER_TOOL_NAMES.length, 131);
+  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.browserTools, 131);
+  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.totalTools, 173);
   for (const name of ["list_tab_groups", "group_tabs", "update_tab_group", "ungroup_tabs", "move_tab_to_group", "download_file", "list_downloads", "pause_download", "resume_download", "cancel_download", "erase_download", "show_download", "open_download", "remove_download_file"]) {
     assert(name in browser, `${name} present`);
   }
