@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.524] — 2026-08-31
+- : merge — a what-I-did activity log with Undo
+
 ## [0.2.523] — 2026-08-31
 - DONE (coordinator gates 2740/0, 249/249)
 
@@ -49,7 +52,7 @@
 - Artifacts and generated images now appear in the conversation as they are created — a card showing what changed, plus a thumbnail strip of screenshots and images you can open.
 
 ## [0.2.510] — 2026-08-30
-- A multi-step task now shows a compact checklist of its steps at the top of the conversation - the current step active, finished ones ticked - which collapses to a short summary when it is done.
+- You can now see a running log of what the agent did - open a tab, group tabs, create an agent - and undo the last reversible actions with one click.
 
 ## [0.2.509] — 2026-08-30
 - A size limit on how much a skill could import has been removed.

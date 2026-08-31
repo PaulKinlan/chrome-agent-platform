@@ -459,6 +459,21 @@ a store has been used its honest empty copy returns. The activity explorer's
 zero state ("Nothing has happened yet.") and its filtered-empty state ("No
 activity matches this filter.") are different sentences.
 
+The sidebar's **Activity** section is a separate surface from Recent activity:
+the `<action-ledger>` element lists the mutating actions the agents took —
+each a plain-language sentence ("Closed Example Domain", "Grouped 3 tabs",
+"Bookmarked …") — with an **Undo** control on the rows that can be reversed. A
+reversible row carries the exact reversing call (a closed tab → restore, a group
+→ ungroup, a bookmark → remove, an opened tab → close, a created agent →
+delete); an already-reversed row reads *Undone* struck through; a mutation with
+no inverse says *Can't be undone* rather than offering a dead button. The
+section is hidden until it has rows. Undo re-runs the inverse through the same
+executor and the same owner-direct/browser-control checks the original passed —
+never a privilege shortcut. The same element renders in the side panel's Page
+view. Sentences are built with `textContent` (tab titles and bookmark names are
+untrusted); the Undo button is a real `<button>` whose accessible name names the
+specific action ("Undo: Closed Example Domain").
+
 ## Motion
 150–250ms state transitions only; `prefers-reduced-motion` respected. No
 page-load choreography, no decorative glow.

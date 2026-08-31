@@ -78,6 +78,8 @@ const BASELINE_ROUTES = [
   "named-agent.delegations",
   "run-log.list",
   "activity.list",
+  "actions.list",
+  "actions.undo",
   "agent.discoverable-tabs",
   "agent.directory",
   "system.factoryReset",

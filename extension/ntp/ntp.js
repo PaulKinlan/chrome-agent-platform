@@ -1118,6 +1118,24 @@ async function renderRunLog() {
   runLogExplorer = explorer;
 }
 
+// ── The Activity ledger (CAP-FB-20260830-ACTIVITY-LEDGER-UNDO-01) ─────────────
+// A distinct sidebar "Activity" section listing the mutating actions the agents
+// took, each with Undo where the action is reversible. The section stays hidden
+// until it has rows (a fresh profile shows the composer + agents only). An undo
+// changed the browser, so it re-reads the other live surfaces too.
+let actionLedgerEl = null;
+function renderActionLedger() {
+  actionLedgerEl = document.getElementById("side-action-ledger");
+  const section = document.getElementById("activity-ledger-section");
+  if (!actionLedgerEl || !section) return;
+  actionLedgerEl.addEventListener("entries-change", (ev) => {
+    section.hidden = (ev.detail?.count ?? 0) === 0;
+  });
+  // An undo mutates tabs/bookmarks — refresh the run log so both surfaces agree.
+  actionLedgerEl.addEventListener("action-undo", () => scheduleRunLogRefresh());
+  actionLedgerEl.refresh?.().catch(() => {});
+}
+
 // The Jobs panel (the shared agent-to-agent board): ONE <jobs-board> mounted
 // in the host; refresh() re-queries and updates the head hint. Board progress
 // events re-render it live (see subscribeProgress below).
@@ -1158,13 +1176,17 @@ function scheduleRunLogRefresh() {
   if (!runLogExplorer) return;
   if (runLogCovered()) { runLogDirty = true; return; }
   clearTimeout(runLogRefreshTimer);
-  runLogRefreshTimer = setTimeout(() => { runLogExplorer?.refresh?.().catch(() => {}); }, 1500);
+  runLogRefreshTimer = setTimeout(() => {
+    runLogExplorer?.refresh?.().catch(() => {});
+    actionLedgerEl?.refresh?.().catch(() => {});
+  }, 1500);
 }
 function flushRunLogDirty() {
   if (!runLogDirty) return;
   runLogDirty = false;
   clearTimeout(runLogRefreshTimer);
   runLogExplorer?.refresh?.().catch(() => {});
+  actionLedgerEl?.refresh?.().catch(() => {});
 }
 // The progress PORT dies with every MV3 service-worker restart and the shared
 // dispatcher settles its listeners fail-closed (clears them) — an AMBIENT
@@ -3254,6 +3276,7 @@ renderArtifacts();
 renderFirstRunGuide();
 renderTasks();
 renderRunLog();
+renderActionLedger();
 renderJobsBoard();
 renderHubUsage();
 renderProviderStatus();

@@ -37,6 +37,19 @@ const statusEl = document.getElementById("status");
 const goBtn = document.getElementById("go");
 const toolsEl = document.getElementById("tools");
 
+// The Activity ledger (CAP-FB-20260830-ACTIVITY-LEDGER-UNDO-01): the mutating
+// actions the agents took, each with Undo where reversible. The section stays
+// hidden until it has rows. After an undo, re-read so the list reflects the new
+// state (the undone row flips to "Undone").
+const actionLedgerEl = document.getElementById("action-ledger");
+const actionLedgerSection = document.getElementById("activity-ledger-section");
+if (actionLedgerEl && actionLedgerSection) {
+  actionLedgerEl.addEventListener("entries-change", (ev) => {
+    actionLedgerSection.hidden = (ev.detail?.count ?? 0) === 0;
+  });
+  actionLedgerEl.refresh?.().catch(() => {});
+}
+
 function setStatus(text, isError = false) {
   statusEl.textContent = text;
   statusEl.classList.toggle("error", isError);
