@@ -348,6 +348,26 @@ with that registry for every caller, including the explicit **Find site tools** 
 Only after the owner chooses a detected tab does the existing MAC-authenticated,
 exact-document enrollment/invocation bridge run.
 
+## Page actions (the fallback for sites without WebMCP)
+
+When a site ships WebMCP tools, that consented, typed bridge is the preferred way
+to act. For every other site the agent has the minimal **page-action family**
+(`CAP-FB-20260830-PAGE-ACTION-TOOLS-01`): `find_elements` snapshots the page's
+interactive/labelled elements as a bounded list (≤200) of
+`{ ref, role, accessibleName, tag }`, and `click_element`, `type_text`,
+`select_option`, `scroll_page` and `wait_for` act by that `ref`. All six inject
+through `chrome.scripting.executeScript` (the same mechanism `read_page` uses) and
+are gated exactly like the other browser mutations — the `scripting` permission
+plus the per-origin browser-control grant, with a denial rendered as the ONE
+in-context Allow card. The model is handed an OPAQUE per-snapshot integer ref,
+never a selector or JS; the ref is stamped as a `data-cap-ref` attribute and
+re-resolved inside the page, and a superseded snapshot's refs stop resolving. The
+accessible names are attacker-controlled web content, so a `find_elements` result
+is tagged untrusted and fenced; the integer ref survives the fence for the
+round-trip. Every click/type/select is written to the activity ledger as a plain
+sentence ("Clicked 'Add to cart'"); page actions have no inverse, so the ledger
+records them without an Undo.
+
 ## Distribution archive boundary
 The production ZIP is a projection, not a copy of the developer's local
 `extension/` directory. Its only authorities are Git-tracked regular extension

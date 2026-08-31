@@ -62,6 +62,14 @@ function tabWord(n) {
   return n === 1 ? "tab" : "tabs";
 }
 
+// A page-derived accessible name, bounded and stripped of control characters
+// for a one-line ledger sentence (rendered with textContent, never innerHTML).
+function boundedName(value) {
+  if (typeof value !== "string") return "";
+  // deno-lint-ignore no-control-regex
+  return value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
 // `chromeToolCapability` THROWS on an unknown identity rather than returning
 // null, so wrap it — a tool with no capability record is simply not classified
 // (treated as non-ledgerable), never a thrown error on the tool hot path.
@@ -137,6 +145,23 @@ const INVERSE_BUILDERS = Object.freeze({
     // "recently removed bookmarks" the way there is for tabs), so this is a
     // mutating action that is honestly NOT reversible.
     return { sentence: "Removed a bookmark", inverse: null };
+  },
+  // CAP-FB-20260830-PAGE-ACTION-TOOLS-01: page actions are recorded so the
+  // owner sees them, but they are honestly NOT reversible (there is no inverse
+  // for a click or a keystroke), so `inverse` is always null. The accessible
+  // name is page-derived (untrusted) — rendered with textContent by the ledger
+  // UI — and bounded here.
+  click_element(_args, result) {
+    const name = boundedName(result?.name);
+    return { sentence: name ? `Clicked “${name}”` : "Clicked an element on the page", inverse: null };
+  },
+  type_text(_args, result) {
+    const name = boundedName(result?.name);
+    return { sentence: name ? `Typed into “${name}”` : "Typed into a field on the page", inverse: null };
+  },
+  select_option(_args, result) {
+    const name = boundedName(result?.name);
+    return { sentence: name ? `Chose an option in “${name}”` : "Chose an option on the page", inverse: null };
   },
   create_named_agent(args, result) {
     // Creating a teammate is reversible by deleting it (id from the created

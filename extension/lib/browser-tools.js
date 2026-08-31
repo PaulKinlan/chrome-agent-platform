@@ -938,6 +938,341 @@ export async function readPage(tabId) {
   }
 }
 
+// ── CAP-FB-20260830-PAGE-ACTION-TOOLS-01: the minimal page-action family ──────
+// A grant-gated way to act inside a page (click/type/select/scroll/wait) for
+// sites that ship NO WebMCP tools, executed through the SAME
+// chrome.scripting.executeScript mechanism read_page uses, under the SAME
+// gates: the `scripting` permission + the per-origin browser-control grant +
+// the privileged-URL block. The model never sees a raw selector or runs JS: it
+// gets an OPAQUE per-snapshot integer ref from find_elements and passes it back.
+//
+// `pageActionInjected` is the ONE self-contained function injected into the
+// page. It is PURE (no closure over module scope — chrome serialises it to the
+// page), BOUNDED (<=200 nodes), and has NO eval / no model-supplied JS. It
+// builds an accessibility snapshot from `document.querySelectorAll` + aria/label
+// resolution (content scripts cannot reach the real a11y tree), stamps each
+// element with a `data-cap-ref` attribute so a later action re-resolves it
+// INSIDE the page, and clears the prior snapshot's stamps first so a stale ref
+// (from a superseded snapshot) resolves to nothing. Every accessible name is
+// attacker-controlled — the find_elements RESULT is tagged untrusted so the run
+// fence wraps it (CAP-FB-20260830-UNTRUSTED-CONTENT-FENCING-01); the integer ref
+// is a non-string and passes the fence unchanged so the round-trip survives.
+function pageActionInjected(op, params) {
+  params = params || {};
+  var CAP = "data-cap-ref";
+  var MAX = 200;
+  function q(sel) {
+    try { return Array.prototype.slice.call(document.querySelectorAll(sel)); } catch (e) { return []; }
+  }
+  function attr(el, n) { try { return el.getAttribute ? el.getAttribute(n) : null; } catch (e) { return null; } }
+  function txt(el) { try { return (el.textContent || "").replace(/\s+/g, " ").trim(); } catch (e) { return ""; } }
+  function labelledBy(el) {
+    var ids = (attr(el, "aria-labelledby") || "").split(/\s+/).filter(Boolean);
+    if (!ids.length) return "";
+    var parts = [];
+    for (var i = 0; i < ids.length; i++) {
+      var ref = null;
+      try { ref = document.getElementById(ids[i]); } catch (e) { ref = null; }
+      if (ref) parts.push(txt(ref));
+    }
+    return parts.join(" ").trim();
+  }
+  function nameOf(el) {
+    var al = attr(el, "aria-label");
+    if (al && al.trim()) return al.trim().slice(0, 300);
+    var lb = labelledBy(el);
+    if (lb) return lb.slice(0, 300);
+    var tag = (el.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "select" || tag === "textarea") {
+      var lab = "";
+      try { if (el.labels && el.labels.length) lab = txt(el.labels[0]); } catch (e) { lab = ""; }
+      if (!lab && el.id) {
+        var labels = q("label");
+        for (var j = 0; j < labels.length; j++) { if (attr(labels[j], "for") === el.id) { lab = txt(labels[j]); break; } }
+      }
+      if (!lab && el.closest) { var wrap = el.closest("label"); if (wrap) lab = txt(wrap); }
+      if (lab) return lab.slice(0, 300);
+      var ph = attr(el, "placeholder"); if (ph && ph.trim()) return ph.trim().slice(0, 300);
+    }
+    var alt = attr(el, "alt"); if (alt && alt.trim()) return alt.trim().slice(0, 300);
+    var title = attr(el, "title"); if (title && title.trim()) return title.trim().slice(0, 300);
+    var body = txt(el); if (body) return body.slice(0, 300);
+    var val = ""; try { val = el.value || ""; } catch (e) { val = ""; }
+    return String(val).slice(0, 300);
+  }
+  function roleOf(el) {
+    var r = attr(el, "role"); if (r && r.trim()) return r.trim().slice(0, 40);
+    var tag = (el.tagName || "").toLowerCase();
+    if (tag === "a") return attr(el, "href") != null ? "link" : "generic";
+    if (tag === "button") return "button";
+    if (tag === "select") return "combobox";
+    if (tag === "textarea") return "textbox";
+    if (tag === "summary") return "button";
+    if (tag === "input") {
+      var ty = (attr(el, "type") || "text").toLowerCase();
+      if (ty === "checkbox") return "checkbox";
+      if (ty === "radio") return "radio";
+      if (ty === "submit" || ty === "button" || ty === "reset" || ty === "image") return "button";
+      if (ty === "range") return "slider";
+      if (ty === "hidden") return "generic";
+      return "textbox";
+    }
+    return tag || "generic";
+  }
+  function visible(el) {
+    try {
+      if (el.hidden === true) return false;
+      if (attr(el, "aria-hidden") === "true") return false;
+      var ty = (el.tagName === "INPUT") ? (attr(el, "type") || "").toLowerCase() : "";
+      if (ty === "hidden") return false;
+      if (typeof window !== "undefined" && typeof window.getComputedStyle === "function") {
+        var s = window.getComputedStyle(el);
+        if (s && (s.display === "none" || s.visibility === "hidden")) return false;
+      }
+      if (typeof el.getBoundingClientRect === "function") {
+        var rc = el.getBoundingClientRect();
+        if (rc && rc.width === 0 && rc.height === 0) return false;
+      }
+      return true;
+    } catch (e) { return true; }
+  }
+  function resolve(ref) {
+    if (ref == null) return null;
+    var want = String(ref);
+    var list = q("[" + CAP + "]");
+    for (var i = 0; i < list.length; i++) { if (attr(list[i], CAP) === want) return list[i]; }
+    return null;
+  }
+  var SEL = 'a[href],button,input,select,textarea,summary,[role],[tabindex],[contenteditable="true"],[contenteditable=""]';
+
+  if (op === "snapshot") {
+    var prev = q("[" + CAP + "]");
+    for (var p = 0; p < prev.length; p++) { try { prev[p].removeAttribute(CAP); } catch (e) { /* ignore */ } }
+    var max = Math.max(1, Math.min(MAX, (params.max | 0) || MAX));
+    var cand = q(SEL);
+    var seen = [];
+    var vis = [];
+    for (var c = 0; c < cand.length; c++) {
+      var e0 = cand[c];
+      if (seen.indexOf(e0) !== -1) continue;
+      seen.push(e0);
+      if (visible(e0)) vis.push(e0);
+    }
+    var truncated = vis.length > max;
+    var take = vis.slice(0, max);
+    var out = [];
+    for (var t = 0; t < take.length; t++) {
+      var el = take[t];
+      try { el.setAttribute(CAP, String(t)); } catch (e) { continue; }
+      out.push({ ref: t, role: roleOf(el), accessibleName: nameOf(el), tag: (el.tagName || "").toLowerCase() });
+    }
+    return { elements: out, total: vis.length, truncated: truncated };
+  }
+
+  if (op === "click") {
+    var cel = resolve(params.ref);
+    if (!cel) return { error: "element not found — take a new snapshot" };
+    var crole = roleOf(cel), cname = nameOf(cel);
+    try { if (cel.scrollIntoView) cel.scrollIntoView({ block: "center", inline: "nearest" }); } catch (e) { /* ignore */ }
+    try {
+      if (cel.style) {
+        var po = cel.style.outline, poo = cel.style.outlineOffset;
+        cel.style.outline = "3px solid #2f6df6"; cel.style.outlineOffset = "2px";
+        if (typeof setTimeout === "function") setTimeout(function () { try { cel.style.outline = po; cel.style.outlineOffset = poo; } catch (e) { /* ignore */ } }, 700);
+      }
+    } catch (e) { /* highlight is best-effort */ }
+    try {
+      if (typeof cel.click === "function") cel.click();
+      else if (typeof cel.dispatchEvent === "function") cel.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      else return { error: "element is not clickable" };
+    } catch (e) { return { error: "click failed: " + String((e && e.message) || e).slice(0, 120) }; }
+    return { ok: true, ref: params.ref, role: crole, name: cname };
+  }
+
+  if (op === "type") {
+    var tel = resolve(params.ref);
+    if (!tel) return { error: "element not found — take a new snapshot" };
+    var ttag = (tel.tagName || "").toLowerCase();
+    var value = params.value == null ? "" : String(params.value);
+    try { if (tel.focus) tel.focus(); } catch (e) { /* ignore */ }
+    try {
+      if (ttag === "input" || ttag === "textarea") {
+        var proto = null;
+        try { proto = ttag === "input" ? (typeof HTMLInputElement !== "undefined" ? HTMLInputElement : null) : (typeof HTMLTextAreaElement !== "undefined" ? HTMLTextAreaElement : null); } catch (e) { proto = null; }
+        var desc = null;
+        try { desc = proto && Object.getOwnPropertyDescriptor(proto.prototype, "value"); } catch (e) { desc = null; }
+        if (desc && desc.set) desc.set.call(tel, value); else tel.value = value;
+        if (typeof tel.dispatchEvent === "function") {
+          tel.dispatchEvent(new Event("input", { bubbles: true }));
+          tel.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      } else if (tel.isContentEditable) {
+        tel.textContent = value;
+        if (typeof tel.dispatchEvent === "function") tel.dispatchEvent(new Event("input", { bubbles: true }));
+      } else {
+        return { error: "element is not a text field — take a new snapshot and target an input, textarea or editable element" };
+      }
+    } catch (e) { return { error: "type failed: " + String((e && e.message) || e).slice(0, 120) }; }
+    var submitted = false;
+    if (params.submit) {
+      try {
+        var form = tel.form || (tel.closest ? tel.closest("form") : null);
+        if (form && typeof form.requestSubmit === "function") { form.requestSubmit(); submitted = true; }
+        else if (form && typeof form.dispatchEvent === "function") { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); submitted = true; }
+        else if (typeof tel.dispatchEvent === "function") {
+          tel.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+          tel.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true }));
+          submitted = true;
+        }
+      } catch (e) { /* submit is best-effort */ }
+    }
+    return { ok: true, ref: params.ref, name: nameOf(tel), submitted: submitted };
+  }
+
+  if (op === "select") {
+    var sel = resolve(params.ref);
+    if (!sel) return { error: "element not found — take a new snapshot" };
+    if ((sel.tagName || "").toLowerCase() !== "select") return { error: "element is not a <select> — take a new snapshot and target a dropdown" };
+    var want = params.value == null ? "" : String(params.value);
+    var opts = [];
+    try { opts = sel.options ? Array.prototype.slice.call(sel.options) : q("option"); } catch (e) { opts = []; }
+    var matched = false;
+    for (var oi = 0; oi < opts.length; oi++) {
+      var o = opts[oi];
+      var ov = ""; try { ov = o.value; } catch (e) { ov = ""; }
+      var ot = txt(o);
+      if (ov === want || ot === want) { try { sel.value = ov; } catch (e) { /* ignore */ } matched = true; break; }
+    }
+    if (!matched) return { error: "no option matches '" + want.slice(0, 80) + "'" };
+    try { if (typeof sel.dispatchEvent === "function") { sel.dispatchEvent(new Event("input", { bubbles: true })); sel.dispatchEvent(new Event("change", { bubbles: true })); } } catch (e) { /* ignore */ }
+    var sv = ""; try { sv = sel.value; } catch (e) { sv = ""; }
+    return { ok: true, ref: params.ref, name: nameOf(sel), value: String(sv).slice(0, 200) };
+  }
+
+  if (op === "scroll") {
+    if (params.ref != null) {
+      var rel = resolve(params.ref);
+      if (!rel) return { error: "element not found — take a new snapshot" };
+      try { if (rel.scrollIntoView) rel.scrollIntoView({ block: "center", inline: "nearest" }); } catch (e) { /* ignore */ }
+      return { ok: true, ref: params.ref };
+    }
+    var dir = String(params.direction || "down").toLowerCase();
+    var amount = (typeof params.amount === "number" && isFinite(params.amount) && params.amount > 0)
+      ? params.amount
+      : ((typeof window !== "undefined" && window.innerHeight) ? window.innerHeight * 0.9 : 600);
+    try {
+      if (dir === "top") { if (window.scrollTo) window.scrollTo(0, 0); }
+      else if (dir === "bottom") {
+        var h = (document.body && document.body.scrollHeight) || (document.documentElement && document.documentElement.scrollHeight) || 0;
+        if (window.scrollTo) window.scrollTo(0, h);
+      } else {
+        var dx = 0, dy = 0;
+        if (dir === "up") dy = -amount; else if (dir === "left") dx = -amount; else if (dir === "right") dx = amount; else dy = amount;
+        if (window.scrollBy) window.scrollBy(dx, dy);
+        else if (window.scrollTo) window.scrollTo((window.scrollX || 0) + dx, (window.scrollY || 0) + dy);
+      }
+    } catch (e) { return { error: "scroll failed: " + String((e && e.message) || e).slice(0, 120) }; }
+    return { ok: true, direction: dir, x: (typeof window !== "undefined" && window.scrollX) || 0, y: (typeof window !== "undefined" && window.scrollY) || 0 };
+  }
+
+  if (op === "wait") {
+    var deadline = Date.now() + Math.max(100, Math.min(10000, (params.timeoutMs | 0) || 3000));
+    var wantRef = params.ref != null ? String(params.ref) : null;
+    var wantText = params.text != null ? String(params.text) : null;
+    var present = function () {
+      try {
+        if (wantRef) return !!resolve(wantRef);
+        if (wantText) {
+          var body = (document.body && (document.body.innerText || document.body.textContent)) || "";
+          return String(body).indexOf(wantText) !== -1;
+        }
+      } catch (e) { /* ignore */ }
+      return false;
+    };
+    return (async function () {
+      while (Date.now() < deadline) {
+        if (present()) return { ok: true, found: true };
+        await new Promise(function (r) { setTimeout(r, 150); });
+      }
+      return { ok: false, found: false, error: "timed out waiting for " + (wantRef ? ("the element") : "the text") };
+    })();
+  }
+
+  return { error: "unknown page action" };
+}
+
+/** A page-action ref is an OPAQUE per-snapshot integer index the model got from
+ * find_elements — never a selector or JS. Reject anything else BEFORE injecting
+ * (defence in depth: the injected resolver already compares by attribute). */
+function isValidPageActionRef(ref) {
+  return Number.isInteger(ref) && ref >= 0 && ref < 100000;
+}
+
+/** The tab-origin the page action would run against (null for chrome://, file://,
+ * data:, about: and other non-web pages — canonicalOrigin returns null there). */
+function pageActionOrigin(url) {
+  if (typeof url !== "string" || !url) return null;
+  try { return canonicalOrigin(url); } catch { return null; }
+}
+
+/** The shared gate for every page action, matching the discipline `close_tab`/
+ * `open_tab` use: the `scripting` permission (a card, never a raw failure), then
+ * — under the grant lock so a revoke cannot interleave — the tab's origin is
+ * re-read, a privileged/non-web page is refused before any injection, the
+ * per-origin browser-control grant is required (the ONE Allow card naming the
+ * exact origin), and durable run ownership is asserted around the injection. */
+async function withPageActionGrant(tabId, verb, run) {
+  if (!(await hasScriptingPermission())) {
+    return permissionDeniedResult("scripting", { reason: verb });
+  }
+  return await withGrantLock(async () => {
+    const target = tabId
+      ? await chrome.tabs.get(tabId).catch(() => null)
+      : await activeTab();
+    if (!target?.id) return { error: "no tab" };
+    const origin = pageActionOrigin(target.url);
+    if (!origin) {
+      return { error: "page actions are only available on http(s) pages (not chrome://, file:// or other privileged pages)" };
+    }
+    if (!(await isBrowserControlGranted(origin))) {
+      return permissionDenial(
+        "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
+        { reason: `${verb} on ${origin}`, grantOrigins: [origin] },
+      );
+    }
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — ${verb} not performed` };
+    }
+    let out;
+    try {
+      out = await run(target.id);
+    } catch (e) {
+      return { error: `${verb} failed: ${String(e?.message ?? e).slice(0, 200)}` };
+    }
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — ${verb} then aborted` };
+    }
+    return out;
+  });
+}
+
+/** Run the injected page-action function on a resolved tab id, returning its
+ * structured result (or an honest error). */
+async function injectPageAction(tabId, op, params) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: pageActionInjected,
+    args: [op, params],
+  });
+  const r = results?.[0]?.result;
+  if (!r || typeof r !== "object") return { error: "no result from the page" };
+  return r;
+}
+
 /** Tab-origin grant discipline for the T3 tabGroups mutations: the affected
  * tabs' origins are read INSIDE the grant lock (a navigation since any earlier
  * read must not smuggle an unauthorized origin past the check); the grant must
@@ -5266,6 +5601,113 @@ export function browserToolset(readOnly = false, {
           total: rows.length,
           truncated: rows.length > maxResults,
         };
+      },
+    }),
+    // ── CAP-FB-20260830-PAGE-ACTION-TOOLS-01: the page-action family ──────────
+    // Each runs through chrome.scripting.executeScript under the SAME gates as
+    // read_page/open_tab: the `scripting` permission + the per-origin browser-
+    // control grant + the privileged-URL block. The model only ever passes an
+    // opaque per-snapshot integer ref (from find_elements) — never a selector or
+    // JS. Mutations (click/type/select) write an activity-ledger row through the
+    // executeWorkerTool path (they are `mutating` in the capability table); the
+    // snapshot/scroll/wait reads are not ledgered.
+    find_elements: tool({
+      description:
+        "Snapshot the interactive/labelled elements on a page (or the active tab) as a bounded list of { ref, role, accessibleName, tag } — the ref is an opaque id valid only until the next find_elements. Use it to find what to click or type into by its accessible name, then pass the ref to click_element / type_text / select_option. Requires the scripting permission + browser-control grant for the page's origin.",
+      inputSchema: z.object({
+        tabId: z.number().optional(),
+        maxResults: z.number().int().min(1).max(200).optional(),
+      }),
+      execute: async ({ tabId, maxResults }) =>
+        withPageActionGrant(tabId, "find the page's elements", async (id) => {
+          const r = await injectPageAction(id, "snapshot", { max: Math.min(Math.max(Number(maxResults) || 200, 1), 200) });
+          if (r.error) return r;
+          // The accessible names are attacker-controlled web content: tag the
+          // result untrusted so the run fence wraps every string leaf. The
+          // integer `ref` is a non-string and passes the fence unchanged, so the
+          // model can pass it straight back to an action tool.
+          return { untrusted: true, elements: r.elements, total: r.total, truncated: r.truncated };
+        }),
+    }),
+    click_element: tool({
+      description:
+        "Click an element by a ref from the last find_elements snapshot. Requires the scripting permission + browser-control grant for the page's origin.",
+      inputSchema: z.object({ tabId: z.number().optional(), ref: z.number().int() }),
+      execute: async ({ tabId, ref }) => {
+        if (!isValidPageActionRef(ref)) return { error: "invalid ref — call find_elements first and use a ref it returned" };
+        return withPageActionGrant(tabId, "click an element", async (id) => {
+          const r = await injectPageAction(id, "click", { ref });
+          // `name` is page-derived (attacker-controlled) — tag untrusted so it
+          // is fenced when the model reads it back.
+          return r.error ? r : { untrusted: true, ...r };
+        });
+      },
+    }),
+    type_text: tool({
+      description:
+        "Type text into a field by a ref from the last find_elements snapshot (sets the value + dispatches input/change). Pass submit:true to submit the field's form. Requires the scripting permission + browser-control grant for the page's origin.",
+      inputSchema: z.object({
+        tabId: z.number().optional(),
+        ref: z.number().int(),
+        value: z.string().max(20000),
+        submit: z.boolean().optional(),
+      }),
+      execute: async ({ tabId, ref, value, submit }) => {
+        if (!isValidPageActionRef(ref)) return { error: "invalid ref — call find_elements first and use a ref it returned" };
+        return withPageActionGrant(tabId, "type into a field", async (id) => {
+          const r = await injectPageAction(id, "type", { ref, value: String(value ?? ""), submit: submit === true });
+          return r.error ? r : { untrusted: true, ...r };
+        });
+      },
+    }),
+    select_option: tool({
+      description:
+        "Choose an option in a <select> dropdown by a ref from the last find_elements snapshot, matching the option's value or its visible text. Requires the scripting permission + browser-control grant for the page's origin.",
+      inputSchema: z.object({
+        tabId: z.number().optional(),
+        ref: z.number().int(),
+        value: z.string().max(2000),
+      }),
+      execute: async ({ tabId, ref, value }) => {
+        if (!isValidPageActionRef(ref)) return { error: "invalid ref — call find_elements first and use a ref it returned" };
+        return withPageActionGrant(tabId, "select an option", async (id) => {
+          const r = await injectPageAction(id, "select", { ref, value: String(value ?? "") });
+          return r.error ? r : { untrusted: true, ...r };
+        });
+      },
+    }),
+    scroll_page: tool({
+      description:
+        "Scroll a page (or the active tab): pass a direction (up/down/left/right/top/bottom) with an optional pixel amount, or a ref from the last find_elements snapshot to scroll that element into view. Requires the scripting permission + browser-control grant for the page's origin.",
+      inputSchema: z.object({
+        tabId: z.number().optional(),
+        ref: z.number().int().optional(),
+        direction: z.enum(["up", "down", "left", "right", "top", "bottom"]).optional(),
+        amount: z.number().optional(),
+      }),
+      execute: async ({ tabId, ref, direction, amount }) => {
+        if (ref !== undefined && !isValidPageActionRef(ref)) return { error: "invalid ref — call find_elements first and use a ref it returned" };
+        return withPageActionGrant(tabId, "scroll the page", async (id) =>
+          injectPageAction(id, "scroll", { ref, direction, amount }));
+      },
+    }),
+    wait_for: tool({
+      description:
+        "Wait (bounded, up to 10 s) for a ref from the last find_elements snapshot to resolve, or for a piece of visible text to appear on the page. Requires the scripting permission + browser-control grant for the page's origin.",
+      inputSchema: z.object({
+        tabId: z.number().optional(),
+        ref: z.number().int().optional(),
+        text: z.string().max(2000).optional(),
+        timeoutMs: z.number().int().min(100).max(10000).optional(),
+      }),
+      execute: async ({ tabId, ref, text, timeoutMs }) => {
+        if (ref !== undefined && !isValidPageActionRef(ref)) return { error: "invalid ref — call find_elements first and use a ref it returned" };
+        if (ref === undefined && (text == null || text === "")) return { error: "wait_for needs a ref or a text to wait for" };
+        return withPageActionGrant(tabId, "wait for the page", async (id) => {
+          const r = await injectPageAction(id, "wait", { ref, text: text == null ? null : String(text), timeoutMs: Number(timeoutMs) || 3000 });
+          // The matched text is page content — fence it.
+          return r.error && r.found !== false ? r : { untrusted: true, ...r };
+        });
       },
     }),
   };

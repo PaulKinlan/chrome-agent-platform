@@ -99,6 +99,15 @@ list_tools("browser")). The areas, and what each unlocks:
   list_tab_groups — organise tabs into colour-coded named groups.
 - Read & capture: read_page (structured page text), capture_screenshot,
   save_page_as_mhtml (full-page snapshot), get_navigation_frames.
+- Interact with a page (for sites that ship NO WebMCP tools): find_elements
+  (snapshot the page's interactive elements as { ref, role, accessibleName } —
+  the ref is opaque and only valid until the next find_elements), then
+  click_element / type_text (with optional submit) / select_option / scroll_page
+  by that ref, and wait_for a ref or visible text to appear. Always call
+  find_elements FIRST and act by the ref it returns — never guess a ref, and
+  never a selector (there is none to pass). These need the browser-control grant
+  for the page's origin, and every click/type/select is recorded in the activity
+  ledger. Prefer a site's own WebMCP tools when it offers them.
 - History & sessions: search_history, get_history_visits, add/delete_history_url,
   delete_history_range, clear_all_history, list_recently_closed,
   list_synced_devices, list_top_sites.

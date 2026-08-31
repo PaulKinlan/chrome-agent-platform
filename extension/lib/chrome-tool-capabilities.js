@@ -5,9 +5,9 @@
 // dispatcher, validator, provider binding, or execution allowlist.
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
-  browserTools: 125,
+  browserTools: 131,
   managementTools: 42,
-  totalTools: 167,
+  totalTools: 173,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -141,6 +141,15 @@ export const BROWSER_TOOL_NAMES = Object.freeze([
   "update_content_script",
   "unregister_content_script",
   "list_content_scripts",
+  // CAP-FB-20260830-PAGE-ACTION-TOOLS-01: the page-action family (grant-gated
+  // DOM interaction via chrome.scripting.executeScript). Appended in the same
+  // order browserToolset() adds them so Object.keys parity holds.
+  "find_elements",
+  "click_element",
+  "type_text",
+  "select_option",
+  "scroll_page",
+  "wait_for",
 ]);
 
 export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
@@ -480,6 +489,16 @@ const rows = [
   record("update_content_script", "chrome-api", ["chrome.content-scripts.update"], ["scripting"], "destination-origin", "mutating", false, "mutating", "browser.content-scripts"),
   record("unregister_content_script", "chrome-api", ["chrome.content-scripts.unregister"], ["scripting"], "destination-origin", "mutating", false, "mutating", "browser.content-scripts"),
   record("list_content_scripts", "chrome-api", ["chrome.content-scripts.list"], ["scripting"], "none", "read-only", false, "read", "browser.content-scripts"),
+  // CAP-FB-20260830-PAGE-ACTION-TOOLS-01: the page-action family. Each injects
+  // through chrome.scripting.executeScript (the `scripting` permission) and is
+  // gated by the per-origin browser-control grant (tab-scoped). find_elements /
+  // scroll_page / wait_for observe (read); click / type / select mutate.
+  record("find_elements", "chrome-api", ["chrome.host.exact-origin", "chrome.page.find-elements"], ["scripting"], "tab-scoped", "read-only", false, "read", "browser.page"),
+  record("click_element", "chrome-api", ["chrome.host.exact-origin", "chrome.page.click"], ["scripting"], "tab-scoped", "mutating", false, "mutating", "browser.page"),
+  record("type_text", "chrome-api", ["chrome.host.exact-origin", "chrome.page.type"], ["scripting"], "tab-scoped", "mutating", false, "mutating", "browser.page"),
+  record("select_option", "chrome-api", ["chrome.host.exact-origin", "chrome.page.select"], ["scripting"], "tab-scoped", "mutating", false, "mutating", "browser.page"),
+  record("scroll_page", "chrome-api", ["chrome.host.exact-origin", "chrome.page.scroll"], ["scripting"], "tab-scoped", "read-only", false, "read", "browser.page"),
+  record("wait_for", "chrome-api", ["chrome.host.exact-origin", "chrome.page.wait"], ["scripting"], "tab-scoped", "read-only", false, "read", "browser.page"),
 ];
 
 function validateRow(row, seen) {

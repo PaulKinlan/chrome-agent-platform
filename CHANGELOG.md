@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.527] — 2026-08-31
+- The agent can now act on a page — find elements by their label, click, type, choose a dropdown option, and scroll — on sites that offer no built-in tools, always behind your per-site permission, with every click and keystroke shown in the activity log.
+
 ## [0.2.526] — 2026-08-31
 - Page interaction and timeline improvements have begun.
 
