@@ -2050,6 +2050,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Blockers: —
 - Next: independent review, then merge.
 - History:
+  - 2026-08-31 18:57 UTC — r1 review (sol) REVISE: 2 P1s. (a) bare `/folder` did not list grants immediately (only the colon form did) — added the bare-form branch mirroring /files; journey now types bare `/folder` end to end. (b) UI copy claimed "the agent can browse it" — the model has no fs tool today; the row description now says "attach as a reference" and the status names the grant id without overclaiming. New test "composer bare /folder lists granted folders immediately" with RED→GREEN (revert branch → RED). Full suite 2736/0, journeys 252/252 (bare form).
   - 2026-08-31 16:40 UTC — owner requested /folder to complement /files; implemented on cap-folder-command off 9dc93e82. Scope decision (verified against the tree): the model cannot browse grants today (fs-grant.* routes are extension-only; no model tool), so /folder attaches the grant reference + surfaces the grantId for CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01 — the brief's approved "one-line text note" fallback.
 
 ## [CAP-FB-20260830-WEBMCP-ACCEPTANCE-GREEN-01] Restore passive WebMCP discovery acceptance

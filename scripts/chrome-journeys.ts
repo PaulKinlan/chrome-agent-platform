@@ -421,7 +421,7 @@ const EXPECTED = [
   "create dialog: a Scheduled card creates one scheduled agent that the sidebar and Settings both list",
   "create dialog: the journey's created agents are removed again (fresh profile restored)",
   "folder command: a granted folder was seeded in the SW store",
-  "folder command: /folder: typed into the composer",
+  "folder command: bare /folder typed into the composer",
   "folder command: the popup lists the granted folder",
   "folder command: the granted folder attaches as a local-folder chip with its grant id",
   "folder command: retained the attached-chip screenshot",
@@ -1366,7 +1366,7 @@ async function main() {
     // Type /folder: into the composer (the hub input is empty after the Run).
     await evalIn(cdp, ntpSession, `(() => { document.querySelector('agent-composer')?.focusInput?.(); return true; })()`);
     await sleep(400);
-    check("folder command: /folder: typed into the composer", await typeInto(cdp, ntpSession, "#task-input", "/folder:"));
+    check("folder command: bare /folder typed into the composer", await typeInto(cdp, ntpSession, "#task-input", "/folder"));
     await sleep(1200); // the popup loads fs-grant.list async
     const popupRows = await evalIn(cdp, ntpSession, `(() => {
       const comp = document.querySelector('agent-composer');

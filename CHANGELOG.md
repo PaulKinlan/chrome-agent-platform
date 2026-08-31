@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.519] — 2026-08-31
+- Fix r1 review findings: bare /folder lists grants immediately; honest copy
+
 ## [0.2.518] — 2026-08-31
 - Add /folder slash command: attach a granted local folder as a task reference
 

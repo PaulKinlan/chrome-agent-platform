@@ -160,7 +160,7 @@ export async function loadComposerCommandItems(
           rows.push({
             id: `folder:${grant.grantId}`,
             label: clean(grant.name || "Granted folder", 256),
-            description: "granted local folder — the agent can browse it",
+            description: "granted local folder — attach as a reference",
             kind: "local-folder",
             grantId: clean(grant.grantId, 128),
             folderName: clean(grant.name || "folder", 256),

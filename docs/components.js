@@ -6429,7 +6429,7 @@ class AgentComposer extends Component {
       grantId: String(folder.grantId),
       folderName: name,
     });
-    this.setStatus(`Attached folder ${name} as a reference (grant ${String(folder.grantId).slice(0, 8)}…) — the agent can browse it.`);
+    this.setStatus(`Attached folder ${name} as a reference (grant ${String(folder.grantId).slice(0, 8)}…).`);
   }
 
   // ── / command + @ mention popup ─────────────────────────────────────────
@@ -6470,6 +6470,13 @@ class AgentComposer extends Component {
       if (!slash.hasColon && ns === "files" && supportsLocalFilesCommand()) {
         const items = await commandItems("files", "", this._currentAgentId, this._currentAgentKind);
         this._showPopup(items, { type: "command", start: slashPos, end: caret, ns: "files", arg: "" });
+        return;
+      }
+      // `/folder` behaves like `/files`: bare `/folder` lists granted folders
+      // immediately; `/folder:query` filters by name substring.
+      if (!slash.hasColon && ns === "folder" && supportsLocalFilesCommand()) {
+        const items = await commandItems("folder", "", this._currentAgentId, this._currentAgentKind);
+        this._showPopup(items, { type: "command", start: slashPos, end: caret, ns: "folder", arg: "" });
         return;
       }
       if (!slash.hasColon) {
