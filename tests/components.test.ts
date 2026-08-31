@@ -1231,4 +1231,137 @@ Deno.test("composer slash picker: no leak when the composer disconnects while th
     globalThis.document.removeEventListener = prevRemoveListener;
     restoreDoc();
   }
+// ── activity-explorer user-facing rows (CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01) ──
+
+Deno.test("activity-explorer: the user-visible allowlist excludes system rows and the row words map to user language", async () => {
+  const mod = await import("../extension/shared/components.js");
+  const { userKindLabel, activityText } = mod;
+  // The allowlist is server-authoritative (routes/activity.js) and shared
+  // with the explorer — assert it directly from the single source.
+  const routesMod = await import("../extension/background/routes/activity.js");
+  const { USER_VISIBLE_KINDS } = routesMod;
+  const allow = new Set(USER_VISIBLE_KINDS);
+  // The hub allowlist keeps task/result/artifact/approval/schedule rows…
+  for (const k of ["task", "result", "artifact", "approval-requested", "approval-granted", "approval-denied", "schedule-ran"]) {
+    if (!allow.has(k)) throw new Error(`allowlist missing ${k}`);
+  }
+  // …and hides the attestation + tool-protocol rows (they stay in Run logs).
+  for (const k of ["prompt-attestation", "tool-call", "tool-result", "screenshot", "error"]) {
+    if (allow.has(k)) throw new Error(`allowlist must not contain ${k}`);
+  }
+  // Kind pills are USER words, not protocol kind names.
+  if (userKindLabel({ type: "task" }) !== "Started") throw new Error("task should read Started");
+  if (userKindLabel({ type: "result", ok: true }) !== "Finished") throw new Error("ok result should read Finished");
+  if (userKindLabel({ type: "result", ok: false }) !== "Failed") throw new Error("!ok result should read Failed");
+  if (userKindLabel({ type: "artifact" }) !== "Made") throw new Error("artifact should read Made");
+  // A result row's one-liner is a DERIVED HUMAN SUMMARY — never the raw
+  // multi-thousand-char model dump, even truncated (falsification: revert to
+  // raw truncation, this REDs on the prefix assertion).
+  const dump = "[demo model] Here is the actual answer to your task. Followed by thousands of chars of raw trailing detail that must never surface: " + "x".repeat(5000);
+  const line = activityText({ type: "result", result: dump, ok: true });
+  if (line.length > 140) throw new Error(`result one-liner must be bounded to 140 chars, got ${line.length}`);
+  if (line.startsWith("[demo model]")) throw new Error("transport tag must never render (BLOCKER 2)");
+  if (line.startsWith("Finished: Here is the actual answer to your task. Followed")) {
+    throw new Error("raw result text must never render even the first sentence as-is (BLOCKER 2: derive a summary)");
+  }
+  if (line !== "Finished: Here is the actual answer to your task.") {
+    throw new Error(`result should read 'Finished: <first sentence>.', got: ${line}`);
+  }
+  if (activityText({ type: "result", result: "all done.", ok: true }) !== "Finished: all done.") {
+    throw new Error("short results derive a Finished sentence");
+  }
+  if (activityText({ type: "result", result: "", ok: false }) !== "Failed") {
+    throw new Error("failed result with no text reads Failed");
+  }
+  // Per-kind summaries (BLOCKER 2): artifact name, approval subject, schedule.
+  if (activityText({ type: "artifact", task: "Weekly digest" }) !== "Made Weekly digest") {
+    throw new Error("artifact rows read Made <name>");
+  }
+  if (activityText({ type: "approval-requested", task: "Publish the page" }) !== "Publish the page — needs approval") {
+    throw new Error("approval rows carry the subject");
+  }
+  if (activityText({ type: "schedule-ran", task: "list my tabs" }) !== "Ran list my tabs") {
+    throw new Error("schedule rows read Ran <task>");
+  }
+});
+
+Deno.test("activity-explorer: the two empty-state strings are distinct (zero vs filtered-empty)", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const explorerRegion = source.slice(source.indexOf("class ActivityExplorer"), source.indexOf("customElements.define(\"activity-explorer\""));
+  const zero = explorerRegion.includes("Nothing has happened yet.");
+  const filtered = explorerRegion.includes("No activity matches this filter.");
+  if (!zero || !filtered) throw new Error("both empty-state strings must exist in the explorer (zero + filtered-empty)");
+});
+
+Deno.test("activity-explorer: EVERY user-kind one-liner is a bounded human sentence (≤140), even for pathological inputs", async () => {
+  const mod = await import("../extension/shared/components.js");
+  const { activityText } = mod;
+  const giant = "z".repeat(9000);
+  const giantJson = JSON.stringify({ modelContent: JSON.stringify({ result: { summary: giant, text: giant } }) });
+  const giantName = "n".repeat(9000);
+  const cases = [
+    // [label, entry] — every USER_VISIBLE kind with pathological inputs.
+    ["task with giant title", { type: "task", task: giant }],
+    ["result with giant unbroken text", { type: "result", result: giant, ok: true }],
+    ["result with giant JSON payload", { type: "result", result: giantJson, ok: true }],
+    ["result failed with giant payload", { type: "result", result: giantJson, ok: false }],
+    ["artifact with giant name", { type: "artifact", task: giantName }],
+    ["approval-requested with giant subject", { type: "approval-requested", task: giant }],
+    ["approval-granted with giant subject", { type: "approval-granted", description: giant }],
+    ["approval-denied with giant subject", { type: "approval-denied", task: giant }],
+    ["schedule-ran with giant task", { type: "schedule-ran", task: giant }],
+    ["schedule-ran with giant result fallback", { type: "schedule-ran", task: "", result: giant }],
+    // Empty-ish pathological inputs (falsification: a raw-fallback would leak).
+    ["result with empty-ish whitespace", { type: "result", result: "   ", ok: true }],
+    ["approval with no subject at all", { type: "approval-requested" }],
+  ];
+  for (const [label, entry] of cases) {
+    const line = activityText(entry);
+    if (line.length > 140) throw new Error(`${label}: one-liner exceeds 140 chars (${line.length}): ${line.slice(0, 60)}`);
+    if (!line.trim()) throw new Error(`${label}: one-liner must not be empty`);
+    // Never a raw fragment: a giant unbroken token must not appear verbatim.
+    if (line.includes(giant.slice(0, 40)) || line.includes(giantName.slice(0, 40))) {
+      throw new Error(`${label}: raw payload fragment leaked into the one-liner`);
+    }
+    // No transport/demo tag.
+    if (line.includes("[demo model]") || line.includes("modelContent")) {
+      throw new Error(`${label}: transport noise leaked into the one-liner`);
+    }
+  }
+  // Positive controls: normal inputs still read as human sentences.
+  if (activityText({ type: "result", result: "[demo model] The plan is ready. More detail here.", ok: true }) !== "Finished: The plan is ready.") {
+    throw new Error("normal result should read 'Finished: <first sentence>' with the demo tag stripped");
+  }
+  if (activityText({ type: "approval-requested", task: "Publish the page" }) !== "Publish the page — needs approval") {
+    throw new Error("approval rows carry the subject");
+  }
+  // The giant-JSON case must take the GENUINE REFUSAL path — a nested object
+  // with no usable scalar core is never silently dropped, and its refusal
+  // phrase is explicit (r4 P1: the scalar shortcut used to consume the object
+  // and return the bare verdict, making this a false positive).
+  const jsonOk = activityText({ type: "result", result: giantJson, ok: true });
+  const jsonFail = activityText({ type: "result", result: giantJson, ok: false });
+  for (const [label, line] of [
+    ["giant-JSON ok", jsonOk],
+    ["giant-JSON failed", jsonFail],
+  ]) {
+    if (!line.includes("see the run log")) {
+      throw new Error(`${label}: refusal phrase missing, got: ${line.slice(0, 60)}`);
+    }
+    if (line.includes("\"summary\"") || line.includes("\"result\":") || line.includes("modelContent") || line.includes(giant.slice(0, 40))) {
+      throw new Error(`${label}: raw JSON leaked past the refusal path`);
+    }
+  }
+  if (!jsonFail.startsWith("Failed")) throw new Error("failed giant-JSON should carry the Failed verdict");
+});
+
+Deno.test("activity-explorer: approval rows stay ≤140 even with a long sentence subject", async () => {
+  const mod = await import("../extension/shared/components.js");
+  const { activityText } = mod;
+  const longSubject = "Please approve this carefully worded request that has quite a lot of words in it and keeps going for a while. More trailing text after the first sentence.";
+  const line = activityText({ type: "approval-requested", task: longSubject });
+  if (line.length > 140) throw new Error(`approval line exceeds 140 chars: ${line.length}`);
+  // The verb and the first sentence survive; the trailing sentence does not.
+  if (!line.endsWith("needs approval")) throw new Error("approval verb must survive");
+  if (line.includes("More trailing text")) throw new Error("approval must not include past-the-first-sentence raw text");
 });

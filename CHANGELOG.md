@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.532] — 2026-08-31
+- Recent activity user-events lane — the hub activity feed shows only what a person cares about, in plain bounded sentences, with fresh counts
+
 ## [0.2.531] — 2026-08-31
 - The companion side panel work has begun.
 

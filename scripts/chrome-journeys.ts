@@ -502,6 +502,9 @@ const EXPECTED = [
   "Cookies: the developer build exposes them again, and no cookie value ever reaches the model",
   "warm run 1 returns a concrete demo result",
   "warm run 2 (after re-save) returns a concrete demo result",
+  "hub: two demo turns produce two user activity rows (no attestation/tool rows)",
+  "hub: header reads N runs today with no $ or tokens",
+  "hub: no activity row text overlaps the time column at 1440 and 1024",
   "Transcript: 'list my open tabs' survives a reload at full length",
   "Transcript: no nudge summary bubble after a text-ending step",
   "Transcript: no lazy-protocol text leaks into the reopened thread (modelContent/catalogGeneration/stableId/schemaSummary/search_tools/execute_tool)",
@@ -2477,6 +2480,73 @@ async function main() {
     await msgValue({ type: "provider.set", config: { provider: "demo", apiKey: "" } });
     const warmRun2 = await msgValue({ type: "agent.run", task: "ping two" });
     check("warm run 2 (after re-save) returns a concrete demo result", concrete(warmRun2));
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 3a2 — CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01: the hub's
+    // Recent activity shows USER rows only (no attestation/tool-protocol
+    // rows), each row's text stays inside its column (never under the time
+    // cell) at 1440 AND 1024, and the header reads "N runs today" with no
+    // $/tokens/calls vocabulary.
+    // ─────────────────────────────────────────────────────────────
+    const activityHubPage = await openPage(port, `chrome-extension://${extId}/ntp/ntp.html`);
+    const activityHubSession = await attachRuntime(cdp, activityHubPage.id);
+    cdp.pageSessions.add(activityHubSession);
+    await sleep(2500); // explorer load + run-log refresh debounce
+    const activityRows = await evalIn(cdp, activityHubSession, `(() => {
+      const ex = document.querySelector("activity-explorer");
+      if (!ex) return null;
+      const rows = [...(ex.shadowRoot?.querySelectorAll(".aex-entry") ?? [])];
+      return rows.map((r) => ({
+        kind: r.querySelector(".aex-kind")?.textContent?.trim() ?? "",
+        text: r.querySelector(".aex-text")?.textContent ?? "",
+      }));
+    })()`);
+    console.log("hub activity rows:", JSON.stringify(activityRows));
+    const kinds = (activityRows ?? []).map((r) => r.kind);
+    const kindsOk = Array.isArray(activityRows) && activityRows.length >= 2 &&
+      kinds.every((k) => ["Started", "Finished", "Failed", "Made", "Needs approval", "Approved", "Denied", "Schedule ran"].includes(k));
+    const noAttestation = Array.isArray(activityRows) &&
+      !(activityRows ?? []).some((r) => /attestation|modelContent|PROMPT-ATTESTATION|executed: memory_set/i.test(r.text));
+    check("hub: two demo turns produce two user activity rows (no attestation/tool rows)",
+      kindsOk && noAttestation && kinds.filter((k) => k === "Started" || k === "Finished" || k === "Failed").length >= 2);
+    const activityHeader = await evalIn(cdp, activityHubSession, `document.getElementById("hub-usage")?.textContent?.trim() ?? ""`);
+    console.log("hub-usage header:", JSON.stringify(activityHeader));
+    check("hub: header reads N runs today with no $ or tokens",
+      /^\d+ runs? today$/.test(activityHeader) && !/\$|token|calls/.test(activityHeader));
+    // Overlap probe: the row's text right edge must not cross the time cell's
+    // left edge, at BOTH widths (the regression the grid fix kills).
+    const overlapAt = async (width, height, name) => {
+      await cdp.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false }, activityHubSession);
+      await sleep(400);
+      const probe = await evalIn(cdp, activityHubSession, `(() => {
+        const ex = document.querySelector("activity-explorer");
+        if (!ex) return null;
+        const rows = [...(ex.shadowRoot?.querySelectorAll(".aex-entry") ?? [])];
+        const overlaps = [];
+        for (const r of rows) {
+          const t = r.querySelector(".aex-text");
+          const ts = r.querySelector(".aex-ts");
+          if (!t || !ts) continue;
+          const tr = t.getBoundingClientRect();
+          const tsr = ts.getBoundingClientRect();
+          if (tr.right > tsr.left + 1) overlaps.push({ right: tr.right, tsLeft: tsr.left });
+        }
+        return { rows: rows.length, overlaps };
+      })()`);
+      const shot = await captureShot(cdp, activityHubSession);
+      if (shot) await writeEvidence(name, shot);
+      return probe;
+    };
+    const ov1440 = await overlapAt(1440, 900, "hub-activity-two-rows-1440.png");
+    const ov1024 = await overlapAt(1024, 700, "hub-activity-two-rows-1024.png");
+    console.log("activity overlap 1440:", JSON.stringify(ov1440));
+    console.log("activity overlap 1024:", JSON.stringify(ov1024));
+    check("hub: no activity row text overlaps the time column at 1440 and 1024",
+      ov1440 !== null && ov1440.rows >= 2 && ov1440.overlaps.length === 0 &&
+      ov1024 !== null && ov1024.rows >= 2 && ov1024.overlaps.length === 0);
+    await cdp.send("Emulation.clearDeviceMetricsOverride", {}, activityHubSession);
+    await cdp.send("Target.closeTarget", { targetId: activityHubPage.id }).catch(() => {});
+    cdp.pageSessions.delete(activityHubSession);
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 3b — CAP-FB-20260830-TRANSCRIPT-FULL-ANSWER-01: the answer a

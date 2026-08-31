@@ -38,6 +38,8 @@ const FILES = [
   // bundle is absent the entry is reported and skipped rather than failing
   // a source-only checkout.
   ["extension/dist/shared/diff-core.bundle.js", "docs/diff-core.bundle.js"],
+  // The activity-kinds allowlist (components.js imports it — the gallery must resolve it).
+  ["extension/lib/activity-kinds.js", "docs/activity-kinds.js"],
 ];
 
 export async function syncGallery({ check = false } = {}) {
@@ -66,6 +68,8 @@ export async function syncGallery({ check = false } = {}) {
       expected = Buffer.from(expected.toString("utf8").replace('../lib/tool-summary.js', './tool-summary.js'));
       expected = Buffer.from(expected.toString("utf8").replace('../lib/attachments.js', './attachments.js'));
       expected = Buffer.from(expected.toString("utf8").replace('../lib/pure.js', './pure.js'));
+      // The activity-kinds allowlist sits in lib/; the gallery copy is beside components.js.
+      expected = Buffer.from(expected.toString("utf8").replace('../lib/activity-kinds.js', './activity-kinds.js'));
       // <artifact-diff> imports the diff core by its dist path; the gallery
       // copy of the bundle sits beside components.js.
       expected = Buffer.from(expected.toString("utf8").replace('../dist/shared/diff-core.bundle.js', './diff-core.bundle.js'));
