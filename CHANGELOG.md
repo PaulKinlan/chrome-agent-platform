@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.545] — 2026-08-31
+- Housekeeping: parallel work streams reconciled.
+
 ## [0.2.544] — 2026-08-31
 - DONE (coordinator gates 2807/0, 272/272); repair FOLDER-COMMAND-01 schema
 
