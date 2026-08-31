@@ -6333,6 +6333,10 @@ class AgentComposer extends Component {
       dataURL: detail.dataURL,
       content: detail.content,
       kind: detail.kind ?? "file",
+      // local-folder references carry their grant identity through to the
+      // run: sanitize + attachmentContext both preserve these (CAP-FB-20260831-FOLDER-COMMAND-01).
+      grantId: typeof detail.grantId === "string" ? detail.grantId : undefined,
+      folderName: typeof detail.folderName === "string" ? detail.folderName : undefined,
     };
     this.attachments.push(d);
     this._addChip(d);
@@ -6405,6 +6409,27 @@ class AgentComposer extends Component {
     this.setStatus(attachAsText
       ? `Attached ${file.name} from ${file.folderName} as text context.`
       : `Attached ${file.name} as a reference (${textLike && Number(file.size) > MAX_LOCAL_TEXT_BYTES ? "over 1 MiB" : "binary"}; contents weren't read).`);
+  }
+
+  // /folder — a granted FOLDER attaches as a REFERENCE ONLY: never read or
+  // inline its contents (unlike /files, which reads text files ≤ 1 MiB). The
+  // grantId survives sanitization so the model-facing local-file tools
+  // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01) can resolve it once they land.
+  async _attachLocalFolder(folder) {
+    if (!folder?.grantId) {
+      this.setStatus("That local folder reference is incomplete — search again with /folder.", false);
+      return;
+    }
+    const name = String(folder.folderName || folder.label || "folder");
+    this.addAttachment({
+      name,
+      type: "text/uri-list",
+      size: 0,
+      kind: "local-folder",
+      grantId: String(folder.grantId),
+      folderName: name,
+    });
+    this.setStatus(`Attached folder ${name} as a reference (grant ${String(folder.grantId).slice(0, 8)}…) — the agent can browse it.`);
   }
 
   // ── / command + @ mention popup ─────────────────────────────────────────
@@ -6616,6 +6641,13 @@ class AgentComposer extends Component {
         input.setRangeText("", token.start, token.end, "end");
         this._hidePopup();
         this._attachLocalFile(item);
+        input.focus();
+        return;
+      }
+      if (item.kind === "local-folder") {
+        input.setRangeText("", token.start, token.end, "end");
+        this._hidePopup();
+        this._attachLocalFolder(item);
         input.focus();
         return;
       }

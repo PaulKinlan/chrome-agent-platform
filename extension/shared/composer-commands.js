@@ -46,6 +46,13 @@ export const COMMAND_NAMESPACES = Object.freeze([
     localFiles: true,
   },
   {
+    id: "folder",
+    label: "folder",
+    description: "attach a granted folder",
+    kind: "folder",
+    localFiles: true,
+  },
+  {
     id: "remember",
     label: "remember",
     description: "write something to memory",
@@ -135,6 +142,47 @@ export async function loadComposerCommandItems(
           id: "files-settings",
           label: res.ok === false ? "Local files unavailable" : "No matching files",
           description: res.ok === false ? `${clean(res.error || "search failed")} — open Settings` : "Grant a folder or change the search — Settings → Local folders",
+          recovery: "Open Settings → Local folders and choose Add folder.",
+          kind: "files-action",
+        });
+      }
+      return rows.slice(0, 50);
+    }
+    case "folder": {
+      const res = runtimeSend
+        ? await runtimeSend("fs-grant.list", {}).catch((e) => ({ ok: false, error: String(e?.message ?? e) }))
+        : { ok: false, error: "extension runtime unavailable" };
+      const rows = [];
+      for (const grant of (res.grants || [])) {
+        if (grant.kind !== "directory") continue;
+        if (!hit(query, grant.name)) continue;
+        if (grant.status === "granted") {
+          rows.push({
+            id: `folder:${grant.grantId}`,
+            label: clean(grant.name || "Granted folder", 256),
+            description: "granted local folder — the agent can browse it",
+            kind: "local-folder",
+            grantId: clean(grant.grantId, 128),
+            folderName: clean(grant.name || "folder", 256),
+          });
+        } else {
+          rows.push({
+            id: `folder-settings:${grant.grantId}`,
+            label: clean(grant.name || "Granted folder", 256),
+            description: grant.status === "prompt" ? "needs access again — open Settings" : "access denied — forget and add again in Settings",
+            recovery: grant.status === "prompt"
+              ? `Open Settings → Local folders and choose Re-grant access for ${grant.name}.`
+              : `Open Settings → Local folders, forget ${grant.name}, then add it again.`,
+            kind: "files-action",
+          });
+        }
+      }
+      const directoryGrants = (res.grants || []).filter((g) => g.kind === "directory");
+      if (!rows.length) {
+        rows.push({
+          id: "folder-settings",
+          label: res.ok === false ? "Local folders unavailable" : (directoryGrants.length ? "No matching folders" : "No granted folders"),
+          description: res.ok === false ? `${clean(res.error || "fs-grant.list failed")} — open Settings` : (directoryGrants.length ? "Change the search — Settings → Local folders" : "Grant a folder — Settings → Local folders"),
           recovery: "Open Settings → Local folders and choose Add folder.",
           kind: "files-action",
         });

@@ -281,6 +281,9 @@ Deno.test("composer local files: unsupported browsers omit /files and binary sel
   if (mod.COMMAND_NAMESPACES.some((item) => item.id === "files")) {
     throw new Error("/files must be absent without showDirectoryPicker");
   }
+  if (mod.COMMAND_NAMESPACES.some((item) => item.id === "folder")) {
+    throw new Error("/folder must be absent without showDirectoryPicker");
+  }
   if (!mod.supportsLocalFilesCommand({ showDirectoryPicker() {} })) {
     throw new Error("showDirectoryPicker support was not detected");
   }
@@ -304,6 +307,31 @@ Deno.test("composer local files: unsupported browsers omit /files and binary sel
   if (!status.includes("binary") || !status.includes("weren't read")) {
     throw new Error("binary reference status was not honest");
   }
+});
+
+Deno.test("composer /folder attaches a granted folder as a reference-only chip with its grantId", async () => {
+  const mod = await import("../extension/shared/components.js");
+  if (!mod.supportsLocalFilesCommand({ showDirectoryPicker() {} })) {
+    throw new Error("showDirectoryPicker support was not detected");
+  }
+  const AgentComposer = registry.get("agent-composer");
+  const composer = new AgentComposer();
+  let attached = null;
+  let status = "";
+  composer.addAttachment = (value) => { attached = value; return value; };
+  composer.setStatus = (value) => { status = value; };
+  await composer._attachLocalFolder({ grantId: "fsg_docs", folderName: "Documents" });
+  if (attached?.kind !== "local-folder") throw new Error("folder must attach as kind local-folder");
+  if (attached?.grantId !== "fsg_docs") throw new Error("grantId must survive the attachment");
+  if (attached?.folderName !== "Documents") throw new Error("folderName must survive the attachment");
+  if (attached?.size !== 0) throw new Error("folder reference must carry size 0 (never inlined)");
+  if (attached?.dataURL) throw new Error("folder reference must never carry file bytes");
+  if (!status.includes("Attached folder Documents")) throw new Error("attachment status must name the folder");
+  // An incomplete reference is refused with honest recovery copy.
+  attached = null;
+  await composer._attachLocalFolder({ folderName: "NoGrant" });
+  if (attached !== null) throw new Error("folder without grantId must not attach");
+  if (!status.includes("incomplete")) throw new Error("missing grantId must surface recovery copy");
 });
 
 Deno.test("components: mention keyboard completion routes every agent kind by canonical ref", async () => {
