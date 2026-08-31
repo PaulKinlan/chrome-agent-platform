@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.557] — 2026-08-31
+- : show a routine's next run
+
 ## [0.2.556] — 2026-08-31
 - Work has begun on the enterprise-permission and scheduling improvements.
 

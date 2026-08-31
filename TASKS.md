@@ -273,6 +273,26 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## Active
 
+## [CAP-FB-20260831-SCHEDULED-NEXT-RUN-WIDGET-01] A scheduled task has no visible "next run"
+- Feedback: 2026-08-31 — owner: "if a task schedules an alarm, there's no way to see that or know it's going to work. The task should have a 'next run' widget. In the past these were 'background agents' which I don't want, but these might be 'routines' or similar."
+- Updated: 2026-08-31 19:53 UTC
+- Status: IN_REVIEW
+- Priority: P1
+- Owner: implementer (worktree lane)
+- Workspace: active (local path private)
+- Branch: `cap/scheduled-next-run`
+- Base: `04841296`
+- Candidate: this tracker commit
+- Shipping: —
+- Acceptance: when a task/agent schedules a recurring or future run, the UI shows a clear forward-looking "Next run <relative + absolute>" indicator computed from the REAL alarm (chrome.alarms scheduledTime, exposed from `lib/scheduler.js`), on the routine's row in the hub's per-agent section and updating as the fire approaches; last-run/next-run shown after firing; the vocabulary "routine" replaces "background agent" on this surface (the section is "Routines").
+- Review: author review 2026-08-31 — falsification gates cleared (RED/GREEN recorded below)
+- Gates: unit `tests/next-run-label.test.ts` 7/7 (RED 4/7 with the arithmetic reverted, GREEN restored); `tests/sw-route-modularization.test.ts` updated for the new `task.nextRun` route + green; browser KAT `scripts/kat-scheduled-next-run-widget.ts` 7/7 (real recurring routine → real alarm time → `<next-run>` widget on the row); focused component suite (a11y-structure, dark-scheme, agent-alarms, bgagent-delete) green; full `deno test tests/`; `npm run build:production` clean; `check:gallery` + `check:vocabulary` clean
+- Blockers: —
+- Next: independent/coordinator review of the diff, then merge and rerun the gates at the integration tip
+- Recover: `git diff origin/main...cap/scheduled-next-run`
+- History:
+  - 2026-08-31 19:53 UTC — added the pure `nextRunLabel`/`lastRunLabel` projector (`extension/lib/next-run-label.js`) and the `<next-run>` web component (relative countdown + absolute clock, bounded self-tick, repeat glyph, last-run line, fallback for paused/unarmed). Exposed `nextFireForTask` + a `task.nextRun` route from `lib/scheduler.js`/service-worker (single-alarm scheduledTime), and stamped `lastFiredAt` best-effort on fire (surfaced via `listScheduledTasks`). The hub's per-agent section is renamed **Routines** and its rows render the widget from the real alarm time. Gallery specimen + `docs/DESIGN.md` updated; sync-gallery carries the new lib. Falsification: reverting the projector's singular/plural + due-now branches turned the unit test RED (4/7), restoring it GREEN (7/7). Browser KAT drove a real recurring routine and asserted the widget shows "Next run in 1 hour · <clock>" from the alarm's scheduledTime (7/7, screenshot `routine-next-run.png`).
+
 ## [CAP-FB-20260829-APPROVAL-JOURNEY-REGRESSION-01] Restore owner-direct approval journeys after inline approvals
 - Feedback: 2026-08-29 — the landed inline-approval merge left the full Chrome journey suite stopping at agent.delete because its helper treated every operational failure as a pending approval
 - Updated: 2026-08-29 23:00 UTC

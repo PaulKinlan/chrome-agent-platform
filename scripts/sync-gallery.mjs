@@ -42,6 +42,8 @@ const FILES = [
   ["extension/lib/activity-kinds.js", "docs/activity-kinds.js"],
   // The pure jobs-board projection (components.js imports it — the gallery must resolve it).
   ["extension/lib/board-view-model.js", "docs/board-view-model.js"],
+  // The "Next run" projector for a routine (components.js imports it — the gallery must resolve it).
+  ["extension/lib/next-run-label.js", "docs/next-run-label.js"],
 ];
 
 export async function syncGallery({ check = false } = {}) {
@@ -74,6 +76,8 @@ export async function syncGallery({ check = false } = {}) {
       expected = Buffer.from(expected.toString("utf8").replace('../lib/activity-kinds.js', './activity-kinds.js'));
       // The jobs-board projection sits in lib/; the gallery copy is beside components.js.
       expected = Buffer.from(expected.toString("utf8").replace('../lib/board-view-model.js', './board-view-model.js'));
+      // The "Next run" projector sits in lib/; the gallery copy is beside components.js.
+      expected = Buffer.from(expected.toString("utf8").replace('../lib/next-run-label.js', './next-run-label.js'));
       // <artifact-diff> imports the diff core by its dist path; the gallery
       // copy of the bundle sits beside components.js.
       expected = Buffer.from(expected.toString("utf8").replace('../dist/shared/diff-core.bundle.js', './diff-core.bundle.js'));

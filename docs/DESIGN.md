@@ -79,6 +79,20 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   auto-fill grid of cards with a roving tabindex (one tab stop; arrows, Home,
   End move; Enter/Space activate). The create dialog opens on it (Starter
   first, Custom selected) and Settings → Agents reuses it filtered to Scheduled.
+- A scheduled or recurring task is a **routine** (not a "background agent" — that
+  naming is retired on the hub). A routine is discoverable *with its schedule*:
+  the hub's per-agent **Routines** section lists each one with a forward-looking
+  `<next-run>` widget so the owner can see the alarm fired correctly and when it
+  runs next. `<next-run at period last label>` renders `Next run <relative> ·
+  <absolute>` — an emphasized relative countdown ("in 1 hour") joined to the
+  exact clock time — from the routine's REAL alarm `scheduledTime` (read via
+  `lib/scheduler.js`; the `nextRunLabel` projector is the single source both this
+  widget and the row share). It re-computes on a bounded interval so the
+  countdown stays honest as the fire approaches, marks a recurring routine with a
+  repeat glyph, shows `Last run <ago>` once it has fired, and — with no armed
+  fire (paused, needs-attention) — shows the `label` fallback rather than
+  inventing a time. A routine's next fire is never rendered by hand-formatting a
+  timestamp; it always goes through `<next-run>` / `nextRunLabel`.
 - Customizable selects use the shared native `appearance: base-select` vocabulary:
   one browser `::picker-icon` (never a second drawn chevron), safe inline SVG option
   icons, and a one-line ellipsized closed state contained by `min-width: 0`.

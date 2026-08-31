@@ -157,6 +157,40 @@ function withLock(fn) {
 
 export const SCHEDULED_TASK_KEY = TASK_KEY;
 
+/** The REAL next-fire time for ONE routine, read straight from its live
+ * chrome.alarms alarm (`scheduledTime`, epoch ms) — the authority the "Next
+ * run" widget renders from. Returns null when the alarm is not armed (paused,
+ * quarantined, never scheduled, or the alarms permission is absent) so the
+ * widget shows a fallback rather than an invented time. Read-only: no lock, no
+ * mutation. */
+export async function nextFireForTask(name) {
+  const alarms = alarmsApi();
+  if (!alarms) return null;
+  try {
+    const a = await alarms.get(name);
+    return a && typeof a.scheduledTime === "number" ? a.scheduledTime : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Stamp a routine's LAST fire time (epoch ms) so the hub can show
+ * "Last run <ago>" alongside the forward-looking next run. Additive +
+ * best-effort: it only touches an EXISTING payload's `lastFiredAt` field (never
+ * resurrecting a deleted/cancelling task) and never affects firing, rollback,
+ * or the fence — a display timestamp, not run authority. */
+export async function recordScheduledFire(name, at = Date.now()) {
+  return withLock(async () => {
+    const store = await kvGet(TASK_KEY);
+    const tasks = { ...(store[TASK_KEY] ?? {}) };
+    const task = tasks[name];
+    if (!task || task.cancelling) return false;
+    tasks[name] = { ...task, lastFiredAt: at };
+    await kvSet({ [TASK_KEY]: tasks });
+    return true;
+  });
+}
+
 /** Validate timing FIRST, then persist, then create the alarm (atomic order). */
 export async function scheduleTask(
   { task, at, delayMs, periodInMinutes, attachments = [], name: explicitName, scriptId, owner = null },
@@ -367,6 +401,10 @@ export async function listScheduledTasks() {
       nextFireAt: (t.paused || t.quarantined || t.cancelling || t.storageBlocked)
         ? null
         : (liveFire.get(t.name) ?? null),
+      // The routine's LAST fire time (epoch ms), so the hub can show
+      // "Last run <ago>" beside the forward-looking next run. Null until it
+      // has fired at least once.
+      lastFiredAt: t.lastFiredAt ?? null,
       // The owning agent/thread (when the task was scheduled from inside an
       // agent run) — surfaced so the owner can see WHICH agent a scheduled
       // task belongs to.

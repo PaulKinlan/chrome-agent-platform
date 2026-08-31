@@ -1351,7 +1351,10 @@ async function refreshAgentSchedules(kind, id) {
   if (!mine.length) return;
   const label = document.createElement("div");
   label.className = "fr-label";
-  label.textContent = "Schedules";
+  // "Routines" — the vocabulary for an agent's scheduled/recurring tasks
+  // (CAP-FB-20260831): discoverable with their schedule, never "background
+  // agents".
+  label.textContent = "Routines";
   section.append(label);
   for (const t of mine) section.append(agentScheduleRow(t));
 }
@@ -1365,18 +1368,26 @@ function agentScheduleRow(t) {
   // the test pins that function's output, never a re-implementation.
   const preview = schedulePreviewText(t.task);
   text.textContent = preview;
-  const when = t.paused
-    ? "paused"
-    : t.quarantined
-    ? "quarantined"
-    : (typeof t.nextFireAt === "number"
-      ? `next ${new Date(t.nextFireAt).toLocaleTimeString()}`
-      : (t.periodInMinutes ? `every ${t.periodInMinutes} min` : ""));
-  text.title = `${preview}${when ? ` · ${when}` : ""}`;
+  text.title = preview;
   row.append(text);
-  const whenEl = document.createElement("span");
+  // The forward-looking "Next run" widget, computed from the routine's REAL
+  // alarm (t.nextFireAt is the alarm's scheduledTime from lib/scheduler.js). A
+  // paused/quarantined routine has no armed fire, so the widget shows that
+  // state as its fallback rather than an invented time; a live routine shows
+  // the relative + absolute next fire, its repeat cadence, and its last run.
+  const whenEl = document.createElement("next-run");
   whenEl.className = "fr-status";
-  whenEl.textContent = when;
+  if (typeof t.nextFireAt === "number") whenEl.setAttribute("at", String(t.nextFireAt));
+  if (t.periodInMinutes) whenEl.setAttribute("period", String(t.periodInMinutes));
+  if (typeof t.lastFiredAt === "number") whenEl.setAttribute("last", String(t.lastFiredAt));
+  const fallback = t.paused
+    ? "Paused"
+    : t.quarantined
+    ? "Needs attention"
+    : t.storageBlocked
+    ? "Storage full — retry or cancel"
+    : (t.periodInMinutes ? `Repeats every ${t.periodInMinutes} min` : "Not scheduled");
+  whenEl.setAttribute("label", fallback);
   row.append(whenEl);
   // Pause/Resume (an owner-approved mutation route — the owner's own click IS
   // the approval for owner-direct actions).
