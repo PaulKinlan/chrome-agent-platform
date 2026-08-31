@@ -906,7 +906,11 @@
           <div class="panel">
             <div class="panel-head">
               <h2 class="t" id="timeline-title">Timeline</h2>
-              <span class="hint">what happened</span>
+              <!-- The run-count summary (CAP-FB-20260830-RECENT-ACTIVITY-USER-
+                   EVENTS-01, folded into the timeline): a quiet "N runs today"
+                   read from the run registry by renderHubUsage(). It says what
+                   happened, never what it cost — no $/token/calls vocabulary. -->
+              <span class="hint" id="hub-usage">what happened</span>
             </div>
             <div class="panel-body">
               <agent-timeline id="hub-timeline" limit="40" aria-label="Timeline of tasks and agent runs"></agent-timeline>

@@ -2482,50 +2482,54 @@ async function main() {
     check("warm run 2 (after re-save) returns a concrete demo result", concrete(warmRun2));
 
     // ─────────────────────────────────────────────────────────────
-    // JOURNEY 3a2 — CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01: the hub's
-    // Recent activity shows USER rows only (no attestation/tool-protocol
-    // rows), each row's text stays inside its column (never under the time
-    // cell) at 1440 AND 1024, and the header reads "N runs today" with no
-    // $/tokens/calls vocabulary.
+    // JOURNEY 3a2 — CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01, folded into
+    // the hub Timeline (CAP-FB-20260828-HUB-AS-TIMELINE-01): the Timeline IS the
+    // hub's activity surface now. Its rows are USER events only — tasks the owner
+    // started and the runs their agents finished — never attestation/tool-
+    // protocol rows (buildTimeline never emits a tool-call/attestation row).
+    // Each row's text stays inside its column (never under the time cell) at 1440
+    // AND 1024, and the panel-head reads "N runs today" with no $/tokens/calls
+    // vocabulary (the run-count header, id="hub-usage", populated from the run
+    // registry by renderHubUsage()).
     // ─────────────────────────────────────────────────────────────
     const activityHubPage = await openPage(port, `chrome-extension://${extId}/ntp/ntp.html`);
     const activityHubSession = await attachRuntime(cdp, activityHubPage.id);
     cdp.pageSessions.add(activityHubSession);
-    await sleep(2500); // explorer load + run-log refresh debounce
+    await sleep(2500); // timeline load + run-log refresh debounce
     const activityRows = await evalIn(cdp, activityHubSession, `(() => {
-      const ex = document.querySelector("activity-explorer");
-      if (!ex) return null;
-      const rows = [...(ex.shadowRoot?.querySelectorAll(".aex-entry") ?? [])];
+      const tl = document.querySelector("agent-timeline");
+      if (!tl) return null;
+      const rows = [...(tl.shadowRoot?.querySelectorAll(".tl-row") ?? [])];
       return rows.map((r) => ({
-        kind: r.querySelector(".aex-kind")?.textContent?.trim() ?? "",
-        text: r.querySelector(".aex-text")?.textContent ?? "",
+        title: r.querySelector(".tl-title")?.textContent?.trim() ?? "",
+        text: r.textContent ?? "",
       }));
     })()`);
-    console.log("hub activity rows:", JSON.stringify(activityRows));
-    const kinds = (activityRows ?? []).map((r) => r.kind);
-    const kindsOk = Array.isArray(activityRows) && activityRows.length >= 2 &&
-      kinds.every((k) => ["Started", "Finished", "Failed", "Made", "Needs approval", "Approved", "Denied", "Schedule ran"].includes(k));
+    console.log("hub timeline rows:", JSON.stringify(activityRows));
+    const twoUserRows = Array.isArray(activityRows) && activityRows.length >= 2;
     const noAttestation = Array.isArray(activityRows) &&
-      !(activityRows ?? []).some((r) => /attestation|modelContent|PROMPT-ATTESTATION|executed: memory_set/i.test(r.text));
+      !(activityRows ?? []).some((r) => /attestation|modelContent|PROMPT-ATTESTATION|executed: memory_set|tool-call|tool-result|search_tools|execute_tool/i.test(r.text));
     check("hub: two demo turns produce two user activity rows (no attestation/tool rows)",
-      kindsOk && noAttestation && kinds.filter((k) => k === "Started" || k === "Finished" || k === "Failed").length >= 2);
+      twoUserRows && noAttestation);
     const activityHeader = await evalIn(cdp, activityHubSession, `document.getElementById("hub-usage")?.textContent?.trim() ?? ""`);
     console.log("hub-usage header:", JSON.stringify(activityHeader));
     check("hub: header reads N runs today with no $ or tokens",
       /^\d+ runs? today$/.test(activityHeader) && !/\$|token|calls/.test(activityHeader));
-    // Overlap probe: the row's text right edge must not cross the time cell's
-    // left edge, at BOTH widths (the regression the grid fix kills).
+    // Overlap probe: a timeline row's text body right edge must not cross the
+    // time cell's left edge, at BOTH widths. The row is a CSS grid
+    // (10px | minmax(0,1fr) body | auto time | 20px chev), so the body can never
+    // ride under the time — this pins that guarantee against a regression.
     const overlapAt = async (width, height, name) => {
       await cdp.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false }, activityHubSession);
       await sleep(400);
       const probe = await evalIn(cdp, activityHubSession, `(() => {
-        const ex = document.querySelector("activity-explorer");
-        if (!ex) return null;
-        const rows = [...(ex.shadowRoot?.querySelectorAll(".aex-entry") ?? [])];
+        const tl = document.querySelector("agent-timeline");
+        if (!tl) return null;
+        const rows = [...(tl.shadowRoot?.querySelectorAll(".tl-row") ?? [])];
         const overlaps = [];
         for (const r of rows) {
-          const t = r.querySelector(".aex-text");
-          const ts = r.querySelector(".aex-ts");
+          const t = r.querySelector(".tl-body");
+          const ts = r.querySelector(".tl-time");
           if (!t || !ts) continue;
           const tr = t.getBoundingClientRect();
           const tsr = ts.getBoundingClientRect();

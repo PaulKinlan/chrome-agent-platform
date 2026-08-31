@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.537] — 2026-08-31
+- The side panel is now a companion for the current tab, and the hub timeline shows a runs-today count.
+
 ## [0.2.536] — 2026-08-31
 - The companion side panel is now available.
 

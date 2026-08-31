@@ -225,7 +225,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | OPEN | [`CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01`](#cap-fb-20260830-model-field-empty-save-01-typing-a-model-name-without-picking-it-saves-model-and-the-hub-silently-runs-the-demo-model) | Typing a model name without picking it saves model:"" and the hub silently runs the demo model |
 | P1 | OPEN | [`CAP-FB-20260830-MODEL-TOOL-ADHERENCE-01`](#cap-fb-20260830-model-tool-adherence-01-with-some-models-make-me-a-website-never-creates-an-artifact-and-remember-x-is-answered-with-a-lie) | With some models "make me a website" never creates an artifact and "remember X" is answered with a lie |
 | P1 | OPEN | [`CAP-FB-20260830-PROVIDER-DEFAULT-AND-KEY-FLOW-01`](#cap-fb-20260830-provider-default-and-key-flow-01-a-recommended-default-provider-and-a-four-click-key-flow) | A recommended default provider and a four-click key flow |
-| P1 | OPEN | [`CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01`](#cap-fb-20260830-recent-activity-user-events-01-recent-activity-shows-system-events-and-overflows-into-the-timestamp-column) | Recent activity shows system events and overflows into the timestamp column |
+| P1 | IN_REVIEW | [`CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01`](#cap-fb-20260830-recent-activity-user-events-01-recent-activity-shows-system-events-and-overflows-into-the-timestamp-column) | Recent activity shows system events and overflows into the timestamp column (folded into the Timeline) |
 | P1 | OPEN | [`CAP-FB-20260830-SCHEDULED-RUN-OUTPUT-01`](#cap-fb-20260830-scheduled-run-output-01-a-scheduled-agent-runs-but-leaves-nothing-the-owner-can-see-on-the-hub) | A scheduled agent runs but leaves nothing the owner can see on the hub |
 | P2 | BLOCKED | [`CAP-FB-20260822-MV3-WASM-RUNTIME-PROBE-01`](#cap-fb-20260822-mv3-wasm-runtime-probe-01-loaded-mv3-wasm-runtime-and-termination-probe) | Loaded-MV3 Wasm runtime and termination probe |
 | P2 | BLOCKED | [`CAP-FB-20260822-OWNER-WASM-INSTALL-01`](#cap-fb-20260822-owner-wasm-install-01-owner-selected-wasm-package-lifecycle) | Owner-selected Wasm package lifecycle |
@@ -4303,13 +4303,13 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01] Recent activity shows system events and overflows into the timestamp column
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 ui lane finding 4, product lane finding 19. Extends CAP-FB-20260828-HUB-AS-TIMELINE-01 (this is the short-term fix on the existing explorer). Two questions to the agent produce six rows including "PROMPT-ATTESTATION" and a raw "RESULT [demo model] Task received (19582 chars)…" that runs under the time column.
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
+- Updated: 2026-08-31 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P1
-- Owner: unassigned
+- Owner: coordinator (merge lane)
 - Workspace: none
-- Branch: none
+- Branch: `coordinator` (local merge, not yet pushed)
 - Base: `fc2255be`
 - Candidate: —
 - Shipping: —
@@ -4331,4 +4331,5 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - History:
   - 2026-08-30 11:00 UTC — measured: six rows for two user turns (TASK, PROMPT-ATTESTATION, RESULT twice); RESULT text runs under the "just now" column; "0 calls · 0 tokens · $0.0000" in one render and "2 calls · 80 tokens" in another of the same data.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); the explorer (`components.js:7151-7477`), the `activity.list` route (`routes/activity.js:72`) and `renderHubUsage` (`ntp.js:1115`) re-verified.
+  - 2026-08-31 UTC — FOLDED INTO THE TIMELINE. This entry landed in parallel with CAP-FB-20260828-HUB-AS-TIMELINE-01, which REPLACED the hub's `<activity-explorer>`/`#run-log`/`#hub-usage` object catalogs with a single `#timeline-section` (`<agent-timeline>`; projection `extension/lib/hub-timeline.js`). The two lanes' behavior is preserved by folding this entry's INTENT into the replacement surface rather than restoring the removed explorer: (a) the run-count header is restored as `<span class="hint" id="hub-usage">` in the Timeline panel-head (`extension/ntp/ntp.html`), populated "N runs today" by the surviving `renderHubUsage()` from `run.list` — no `$`/token/calls vocabulary (matches `/^\d+ runs? today$/`); (b) the three JOURNEY 3a2 checks in `scripts/chrome-journeys.ts` are retargeted from `<activity-explorer> .aex-entry` to the timeline's `<agent-timeline>` shadow `.tl-row` rows — user events only (buildTimeline never emits attestation/tool rows), and the row body (`.tl-body`) right edge never crosses the time cell (`.tl-time`) left edge at 1440/1024 (the timeline row is a CSS grid, so it cannot overlap by construction; the check still requires ≥2 real rows). Check-name strings unchanged, so the EXPECTED assertion-set-exact + order gates are undisturbed. The USER-VISIBLE-KINDS allowlist / `activity.list` `kinds` param / gallery-specimen steps are moot on the retired explorer. Verified: `npm run build:production` clean; `deno test tests/hub-timeline.test.ts` 7/7; full journey suite green (both previously-red checks now pass, nothing else regressed).
 
