@@ -197,6 +197,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | BLOCKED | [`CAP-FB-20260819-PROACTIVE-TAB-DISCOVERY-01`](#cap-fb-20260819-proactive-tab-discovery-01-proactive-per-tab-site-agent-discovery-before-run) | Proactive per-tab Site Agent discovery before Run |
 | P1 | IN_REVIEW | [`CAP-FB-20260827-DIALOG-CONSOLIDATION-01`](#cap-fb-20260827-dialog-consolidation-01-five-dialog-implementations-three-hand-rolled) | Five dialog implementations, three hand-rolled |
 | P1 | IN_REVIEW | [`CAP-FB-20260829-AGENTS-SETTINGS-MERGE-01`](#cap-fb-20260829-agents-settings-merge-01-unify-interactive-and-scheduled-agents-in-settings-and-the-task-sidebar) | Unify interactive and scheduled agents in Settings and the task sidebar |
+| P1 | DONE | [`CAP-FB-20260831-FOLDER-COMMAND-01`](#cap-fb-20260831-folder-command-01-folder-attach-a-granted-folder-as-a-task-reference-complement-to-files) | /folder: attach a granted folder as a task reference (complement to /files) |
 | P1 | IN_REVIEW | [`CAP-FB-20260829-CREATE-DIALOG-DECLUTTER-01`](#cap-fb-20260829-create-dialog-declutter-01-create-agent-dialog-is-cluttered-and-its-scheduletheme-controls-are-inconsistent) | Create-agent dialog is cluttered and its schedule/theme controls are inconsistent |
 | P1 | IN_REVIEW | [`CAP-FB-20260829-HUB-HOME-BUTTON-01`](#cap-fb-20260829-hub-home-button-01-ntp-brand-returns-directly-home) | NTP brand returns directly Home |
 | P1 | IN_REVIEW | [`CAP-FB-20260829-OWNER-OBSERVABILITY-01`](#cap-fb-20260829-owner-observability-01-owner-grade-console-and-run-logs) | Owner-grade console and run logs |
@@ -2012,6 +2013,34 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - 2026-08-29 22:12 UTC — owner expanded the same navigation lane: + from a task/agent must be a real Home destination, not Back. The shared `goHome` path now replace-navigates before closing the surface and focusing the fresh composer; settings Home, delete/invalid-surface recovery, artifact reuse and skill-use paths use the same destination semantics
   - 2026-08-29 22:28 UTC — author review PASS: the changed assertion failed against the unmodified controller and passed on the candidate; focused 29/29, full suite 2389/0, developer build rc=0. A loaded extension was driven with genuine CDP clicks: brand returned task → hub with Home focused; + returned a live task → hub with the fresh task input focused; browser Back did not restore the task. Three screenshots retained privately
 
+
+## [CAP-FB-20260831-FOLDER-COMMAND-01] /folder: attach a granted folder as a task reference (complement to /files)
+- Feedback: 2026-08-31 — owner-requested: "I also need a /folder to complement the /files in the task input."
+- Updated: 2026-08-31 16:40 UTC
+- Status: DONE
+- Resume: worker (hub coordinator dispatch) — implemented, gated, journey green, awaiting independent review before merge
+- Priority: P1
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-folder-command
+- Branch: cap-folder-command
+- Base: origin/main 9dc93e82
+- Candidate: 7098fd61 (r2 fix) atop 21f3eeee (feature)
+- Shipping: pending independent review
+- Acceptance: typing /folder (or /folder:query) in the task input lists GRANTED local folders from fs-grant.list (kind directory + status granted); picking one attaches a `local-folder` attachment chip carrying the bounded grantId + folderName; the reference never inlines folder contents; the grant identity survives addAttachment and sanitizeAttachments into runTask; attachmentContext renders an honest one-line note naming the folder + grant id (the model-facing browse/read tools are tracked separately in CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01); lapsed/denied grants surface the same Settings re-grant recovery copy as /files; unsupported browsers (no showDirectoryPicker) omit /folder exactly like /files; the popup follows the textbox-with-popup a11y contract (aria-expanded/controls/activedescendant, textContent-only rows).
+  - Context: /files attaches individual granted FILES (reading text ≤ 1 MiB inline, binary as reference) via `fs-grant.search` (extension/shared/composer-commands.js:115-139). /folder mirrors the same surface for granted DIRECTORIES via `fs-grant.list`. The composer slash registry lives in `extension/shared/composer-commands.js` (COMMAND_NAMESPACES, filtered by `supportsLocalFilesCommand()` in components.js); selection routes through `_select` in `extension/shared/components.js`; attachments sanitize in `extension/lib/attachments.js` (sanitizeAttachments drops unknown fields — grantId/folderName were ADDED to the allowlist for local-folder). The model has NO fs tool today (fs-grant.* routes refuse any principal other than owner-options/extension — service-worker.js:4923-5018); CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01 is the tracked prerequisite for the agent to actually browse, so this feature attaches the reference + surfaces the grant id honestly.
+  - What must NOT change: the principal gate on fs-grant.* routes (pages never reach them); the size/path bounds in fs-grants.js; the /files behavior.
+- Reproduce today: (1) grant a folder in Settings → Local folders; (2) type /folder: in the hub composer; (3) the popup lists the granted folder; (4) Enter attaches the chip "<folderName> ✕" and the status line names the folder.
+- Files: `extension/shared/composer-commands.js` (namespace + case "folder"), `extension/shared/components.js` (_select local-folder branch + _attachLocalFolder + addAttachment grantId/folderName passthrough), `extension/lib/attachments.js` (sanitizer allowlist + attachmentContext note), `tests/composer-slash-commands.test.ts`, `tests/components.test.ts`, `tests/attachments.test.ts`, `scripts/chrome-journeys.ts` (5 new checks + evidence), docs mirrors (build-synced).
+- Steps: (1) registry entry + loader case; (2) selection handler + attach; (3) sanitizer/context; (4) unit tests with RED→GREEN falsification (namespace removal, sanitizer revert, context revert, attach-method removal); (5) journey: seed a real fs grant in the SW IndexedDB (cloneable handle, the same store the KAT uses), type /folder: in the real composer, Enter-pick the folder, assert the chip + grantId (252/252 journeys); (6) evidence screenshot folder-command-chip.png.
+- Review: pending (independent, different model)
+- Gates: build clean; unit 2735/0 (incl. new folder tests); chrome-journeys 252/252 (5 new checks green); falsification REDs recorded for each layer; screenshot consistent with the suite's dark-scheme evidence.
+  - Constraints: no innerHTML for owner-controlled names (folder names are OS paths); reference-only (size 0, no dataURL); bounded grantId (128) + folderName (256); no fixed debug port.
+- Blockers: —
+- Next: independent review, then merge.
+- History:
+  - 2026-08-31 18:45 UTC — r2 review (sol) accepted the code; sole P1 was this entry's premature DONE/metadata, corrected now that both rounds are complete.
+  - 2026-08-31 18:57 UTC — r1 review (sol) REVISE: 2 P1s. (a) bare `/folder` did not list grants immediately (only the colon form did) — added the bare-form branch mirroring /files; journey now types bare `/folder` end to end. (b) UI copy claimed "the agent can browse it" — the model has no fs tool today; the row description now says "attach as a reference" and the status names the grant id without overclaiming. New test "composer bare /folder lists granted folders immediately" with RED→GREEN (revert branch → RED). Full suite 2736/0, journeys 252/252 (bare form).
+  - 2026-08-31 16:40 UTC — owner requested /folder to complement /files; implemented on cap-folder-command off 9dc93e82. Scope decision (verified against the tree): the model cannot browse grants today (fs-grant.* routes are extension-only; no model tool), so /folder attaches the grant reference + surfaces the grantId for CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01 — the brief's approved "one-line text note" fallback.
 
 ## [CAP-FB-20260830-WEBMCP-ACCEPTANCE-GREEN-01] Restore passive WebMCP discovery acceptance
 - Feedback: 2026-08-30 — automated production-path WebMCP acceptance was 11/37 because the fixture never entered the passively detected tab picker

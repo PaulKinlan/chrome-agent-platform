@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.541] — 2026-08-31
+- /folder work — attach a granted local folder as a task reference, complementing /files
+
 ## [0.2.540] — 2026-08-31
 - Changelog entries for the permissions and model fixes are in plain language, and the version bump keeps jargon out
 

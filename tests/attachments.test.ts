@@ -97,6 +97,44 @@ Deno.test("sanitizeAttachments: empty/non-array → undefined", () => {
   assertEquals(sanitizeAttachments(undefined), undefined);
 });
 
+Deno.test("sanitizeAttachments: local-folder references keep their bounded grant identity", () => {
+  const r = sanitizeAttachments([{
+    name: "Documents",
+    type: "text/uri-list",
+    size: 0,
+    kind: "local-folder",
+    grantId: "fsg_docs_1234567890",
+    folderName: "Documents",
+    dataURL: "",
+  }]);
+  assertEquals(r[0].kind, "local-folder");
+  assertEquals(r[0].grantId, "fsg_docs_1234567890");
+  assertEquals(r[0].folderName, "Documents");
+  assertEquals(r[0].size, 0);
+  // Bounded: absurdly long ids are sliced, non-strings are dropped.
+  const long = sanitizeAttachments([{ name: "x", kind: "local-folder", grantId: "g".repeat(500), folderName: "y" }]);
+  assertEquals(long[0].grantId.length, 128);
+  const dirty = sanitizeAttachments([{ name: "x", kind: "local-folder", grantId: 42, folderName: null }]);
+  assertEquals("grantId" in dirty[0], false);
+  assertEquals("folderName" in dirty[0], false);
+});
+
+Deno.test("attachmentContext names an attached folder and its grant id", () => {
+  const context = attachmentContext([{
+    name: "Documents",
+    type: "text/uri-list",
+    size: 0,
+    kind: "local-folder",
+    grantId: "fsg_docs",
+    folderName: "Documents",
+  }]);
+  assert(context.includes("Documents"), "folder name in context");
+  assert(context.includes("fsg_docs"), "grant id in context");
+  assert(context.includes("attached folder"), "kind labeled");
+  // No dataURL → nothing beyond the note is rendered.
+  assert(!context.includes("text content"), "folder bodies are never inlined");
+});
+
 Deno.test("attachArtifactToComposer: the Reuse path emits the canonical artifact attachment (kind + exact ref)", async () => {
   // The NTP's single Reuse path (full browser + quick drawer) must attach the
   // canonical artifact shape so the SW's attachmentContext re-emits the exact

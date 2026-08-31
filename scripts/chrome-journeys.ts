@@ -420,6 +420,11 @@ const EXPECTED = [
   "create dialog: the saved agent's skill ids CONTAIN the exactly-toggled skill id",
   "create dialog: a Scheduled card creates one scheduled agent that the sidebar and Settings both list",
   "create dialog: the journey's created agents are removed again (fresh profile restored)",
+  "folder command: a granted folder was seeded in the SW store",
+  "folder command: bare /folder typed into the composer",
+  "folder command: the popup lists the granted folder",
+  "folder command: the granted folder attaches as a local-folder chip with its grant id",
+  "folder command: retained the attached-chip screenshot",
   "NTP: task input present",
   "NTP: typed a task via Input events",
   "NTP: textarea reflects the typed text",
@@ -1324,6 +1329,96 @@ async function main() {
     );
 
     // ─────────────────────────────────────────────────────────────
+    // JOURNEY 1a2 — CAP-FB-20260831-FOLDER-COMMAND-01. /folder attaches a
+    // GRANTED FOLDER as a reference: seed a real fs grant in the SW (the same
+    // cloneable-handle store the tests use), type /folder: in the real
+    // composer, pick the folder row from the popup, and assert the chip + the
+    // grant identity. The model-facing browse tools are tracked separately
+    // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01) — this journey stops at the
+    // attachment boundary, honestly.
+    // ─────────────────────────────────────────────────────────────
+    const seedFolder = await cdp.send(
+      "Runtime.evaluate",
+      {
+        expression: `(async () => {
+          // Seed the grant the same way the unit tests do (cloneable directory
+          // handle in the real IndexedDB store) — the fs-grant module is
+          // bundled into the SW, so we write the record directly.
+          const req = indexedDB.open("cap_fs_grants", 1);
+          const db = await new Promise((res, rej) => {
+            req.onsuccess = () => res(req.result);
+            req.onerror = () => rej(req.error);
+            req.onupgradeneeded = () => {
+              if (!req.result.objectStoreNames.contains("grants")) {
+                req.result.createObjectStore("grants", { keyPath: "grantId" });
+              }
+            };
+          });
+          const tx = db.transaction("grants", "readwrite");
+          const store = tx.objectStore("grants");
+          const now = Date.now();
+          const handle = { kind: "directory", name: "journey-folder" };
+          const record = {
+            grantId: "fsg_journey_folder",
+            handle,
+            name: "journey-folder",
+            kind: "directory",
+            mode: "read",
+            scope: null,
+            scopeKey: "",
+            createdAt: now,
+            lastUsedAt: now,
+          };
+          store.put(record);
+          await new Promise((res, rej) => {
+            tx.oncomplete = () => res(true);
+            tx.onerror = () => rej(tx.error);
+            tx.onabort = () => rej(tx.error);
+          });
+          return { ok: true };
+        })()`,
+        awaitPromise: true,
+        returnByValue: true,
+      },
+      swSession,
+    );
+    const seededFolder = seedFolder?.result?.result?.value;
+    check("folder command: a granted folder was seeded in the SW store", seededFolder?.ok === true);
+    // Type /folder: into the composer (the hub input is empty after the Run).
+    await evalIn(cdp, ntpSession, `(() => { document.querySelector('agent-composer')?.focusInput?.(); return true; })()`);
+    await sleep(400);
+    check("folder command: bare /folder typed into the composer", await typeInto(cdp, ntpSession, "#task-input", "/folder"));
+    await sleep(1200); // the popup loads fs-grant.list async
+    const popupRows = await evalIn(cdp, ntpSession, `(() => {
+      const comp = document.querySelector('agent-composer');
+      const pop = comp?.querySelector('.popup');
+      if (!pop) return JSON.stringify({ rows: [], popup: null });
+      const rows = [...pop.querySelectorAll('[data-index]')].map((r) => ({ text: (r.textContent || '').replace(/\\s+/g, ' ').trim(), index: r.getAttribute('data-index') }));
+      return JSON.stringify({ rows, popup: (pop.className || '') + ' hidden=' + pop.hidden });
+    })()`);
+    const popupParsed = JSON.parse(popupRows ?? "{}");
+    const folderRow = (popupParsed.rows || []).find((r) => /journey-folder/.test(r.text));
+    check("folder command: the popup lists the granted folder", Boolean(folderRow));
+    // Select the row with a REAL Enter key (the same path an owner uses).
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, ntpSession);
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, ntpSession);
+    await sleep(800);
+    const chipState = await evalIn(cdp, ntpSession, `(() => {
+      const comp = document.querySelector('agent-composer');
+      const chips = comp ? [...comp.querySelectorAll('.chip')].map((c) => (c.textContent || '').trim()) : [];
+      const attachment = comp?.attachments ? [...comp.attachments].map((a) => ({ kind: a.kind, grantId: a.grantId, folderName: a.folderName, name: a.name })) : [];
+      return JSON.stringify({ chips, attachment });
+    })()`);
+    const chipParsed = JSON.parse(chipState ?? "{}");
+    const folderAttachment = (chipParsed.attachment || []).find((a) => a.kind === "local-folder");
+    check(
+      "folder command: the granted folder attaches as a local-folder chip with its grant id",
+      Boolean(folderAttachment) && folderAttachment.grantId === "fsg_journey_folder" && folderAttachment.folderName === "journey-folder" && (chipParsed.chips || []).some((c) => /journey-folder/.test(c)),
+    );
+    const folderShot = await captureShot(cdp, ntpSession);
+    if (folderShot) await writeEvidence("folder-command-chip.png", folderShot);
+    check("folder command: retained the attached-chip screenshot", folderShot !== null && folderShot.length > 200);
+
     check(
       "NTP: task input present",
       (await boxOf(cdp, ntpSession, "#task-input")) !== null,

@@ -15,6 +15,7 @@ Deno.test("composer command audit removes obsolete commands and exposes the usef
     "bookmarks",
     "history",
     "files",
+    "folder",
     "remember",
   ]);
   for (const id of ["tabs", "artifacts", "bookmarks", "history", "agent"]) {
@@ -29,6 +30,49 @@ Deno.test("composer command audit removes obsolete commands and exposes the usef
       `/${removed} must stay absent`,
     );
   }
+});
+
+Deno.test("/folder lists granted directories, filters by query, and excludes files/lapsed grants", async () => {
+  const calls: Array<{ type: string; payload?: Record<string, unknown> }> = [];
+  const runtimeSend = async (type: string, payload?: Record<string, unknown>) => {
+    calls.push({ type, payload });
+    if (type === "fs-grant.list") {
+      return {
+        ok: true,
+        grants: [
+          { grantId: "fsg_docs", name: "Documents", kind: "directory", status: "granted" },
+          { grantId: "fsg_pics", name: "Photos", kind: "directory", status: "granted" },
+          { grantId: "fsg_lapsed", name: "Old Drive", kind: "directory", status: "prompt" },
+          { grantId: "fsg_file", name: "notes.txt", kind: "file", status: "granted" },
+        ],
+      };
+    }
+    return { ok: false, error: `unexpected ${type}` };
+  };
+  const all = await loadComposerCommandItems("folder", "", { runtimeSend });
+  assertEquals(calls[0].type, "fs-grant.list");
+  const folderRows = all.filter((item) => item.kind === "local-folder");
+  assertEquals(folderRows.map((item) => item.label), ["Documents", "Photos"]);
+  assertEquals(folderRows[0].grantId, "fsg_docs");
+  assertEquals(folderRows[0].folderName, "Documents");
+  // Files and lapsed grants are NOT folder rows; the lapsed grant surfaces an honest recovery row.
+  assert(all.some((item) => item.kind === "files-action" && /Old Drive/.test(item.label)), "lapsed grant must surface a recovery row");
+  assert(!all.some((item) => item.label === "notes.txt"), "files must not appear as folders");
+  // Query filtering goes through the same loader with the query as the search arg.
+  const filtered = await loadComposerCommandItems("folder", "photo", { runtimeSend });
+  assertEquals(calls[1].type, "fs-grant.list");
+  assert(filtered.every((item) => /photo/i.test(item.label + " " + (item.description ?? "")) || item.kind === "files-action"), "filtered rows match the query");
+});
+
+Deno.test("/folder with no grants shows the Settings recovery row and a runtime failure is honest", async () => {
+  const empty = await loadComposerCommandItems("folder", "", {
+    runtimeSend: async () => ({ ok: true, grants: [] }),
+  });
+  assert(empty.some((item) => item.label === "No granted folders" && item.kind === "files-action"), "empty state must offer Settings");
+  const failed = await loadComposerCommandItems("folder", "", {
+    runtimeSend: async () => ({ ok: false, error: "nope" }),
+  });
+  assert(failed.some((item) => /unavailable/.test(item.label)), "runtime failure must be surfaced");
 });
 
 Deno.test("/tabs lists every window, searches title/url, and resolves an agent-readable tab attachment", async () => {

@@ -40,6 +40,15 @@ export function attachmentContext(attachments) {
   if (!Array.isArray(attachments) || attachments.length === 0) return "";
   const parts = [];
   for (const a of attachments) {
+    if (a.kind === "local-folder") {
+      // A granted folder reference: the grantId is the handle the model-facing
+      // local-file tools (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01) resolve
+      // against once they land. Bounded, honest about what exists today.
+      parts.push(
+        `[attached folder: ${a.folderName ?? a.name ?? "folder"} (grant id ${a.grantId ?? "unknown"}) — the local-file browse/read tools are pending; until then the folder is a reference]`,
+      );
+      continue;
+    }
     if (a.kind === "tab" || a.url) {
       parts.push(`[tab: ${a.name ?? "tab"} — ${a.url ?? "(no url)"}]`);
       continue;
@@ -105,6 +114,11 @@ export function sanitizeAttachments(attachments) {
       size: typeof a.size === "number" ? a.size : 0,
       kind: typeof a.kind === "string" ? a.kind : "file",
       dataURL: url.length > MAX_URL ? "" : url,
+      // local-folder references: the grant identity is the reference — it must
+      // survive persistence so the model-facing local-file tools can resolve
+      // it (CAP-FB-20260831-FOLDER-COMMAND-01). Bounded like every other field.
+      ...(typeof a.grantId === "string" && a.grantId ? { grantId: a.grantId.slice(0, 128) } : {}),
+      ...(typeof a.folderName === "string" && a.folderName ? { folderName: a.folderName.slice(0, 256) } : {}),
     });
   }
   return out.length ? out : undefined;

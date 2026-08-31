@@ -281,6 +281,9 @@ Deno.test("composer local files: unsupported browsers omit /files and binary sel
   if (mod.COMMAND_NAMESPACES.some((item) => item.id === "files")) {
     throw new Error("/files must be absent without showDirectoryPicker");
   }
+  if (mod.COMMAND_NAMESPACES.some((item) => item.id === "folder")) {
+    throw new Error("/folder must be absent without showDirectoryPicker");
+  }
   if (!mod.supportsLocalFilesCommand({ showDirectoryPicker() {} })) {
     throw new Error("showDirectoryPicker support was not detected");
   }
@@ -303,6 +306,89 @@ Deno.test("composer local files: unsupported browsers omit /files and binary sel
   }
   if (!status.includes("binary") || !status.includes("weren't read")) {
     throw new Error("binary reference status was not honest");
+  }
+});
+
+Deno.test("composer /folder attaches a granted folder as a reference-only chip with its grantId", async () => {
+  const mod = await import("../extension/shared/components.js");
+  if (!mod.supportsLocalFilesCommand({ showDirectoryPicker() {} })) {
+    throw new Error("showDirectoryPicker support was not detected");
+  }
+  const AgentComposer = registry.get("agent-composer");
+  const composer = new AgentComposer();
+  let attached = null;
+  let status = "";
+  composer.addAttachment = (value) => { attached = value; return value; };
+  composer.setStatus = (value) => { status = value; };
+  await composer._attachLocalFolder({ grantId: "fsg_docs", folderName: "Documents" });
+  if (attached?.kind !== "local-folder") throw new Error("folder must attach as kind local-folder");
+  if (attached?.grantId !== "fsg_docs") throw new Error("grantId must survive the attachment");
+  if (attached?.folderName !== "Documents") throw new Error("folderName must survive the attachment");
+  if (attached?.size !== 0) throw new Error("folder reference must carry size 0 (never inlined)");
+  if (attached?.dataURL) throw new Error("folder reference must never carry file bytes");
+  if (!status.includes("Attached folder Documents")) throw new Error("attachment status must name the folder");
+  if (/browse/.test(status)) throw new Error("status must not overclaim browsing (the model has no fs tool yet)");
+  if (!status.includes("reference")) throw new Error("status must say the folder is a reference");
+  if (!status.includes("fsg_docs")) throw new Error("status must name the grant id");
+  // An incomplete reference is refused with honest recovery copy.
+  attached = null;
+  await composer._attachLocalFolder({ folderName: "NoGrant" });
+  if (attached !== null) throw new Error("folder without grantId must not attach");
+  if (!status.includes("incomplete")) throw new Error("missing grantId must surface recovery copy");
+});
+
+Deno.test("composer bare /folder lists granted folders immediately (mirrors /files; colon form filters)", async () => {
+  // A FRESH module instance (query-busted import) so RUNTIME_SEND binds to our
+  // chrome.sendMessage stub: bare /folder must reach commandItems("folder", "")
+  // → fs-grant.list → the popup shows the granted folder row.
+  const prevChrome = globalThis.chrome;
+  const prevSdp = globalThis.showDirectoryPicker;
+  globalThis.showDirectoryPicker = () => Promise.resolve({});
+  globalThis.chrome = {
+    runtime: {
+      getURL: (p) => `chrome-extension://extid/${p}`,
+      sendMessage: (msg, cb) => {
+        if (msg?.type === "fs-grant.list") {
+          cb({ ok: true, grants: [{ grantId: "fsg_docs", name: "Documents", kind: "directory", status: "granted" }] });
+        } else {
+          cb({ ok: false, error: `unexpected ${msg?.type}` });
+        }
+        return undefined;
+      },
+      lastError: null,
+    },
+  };
+  try {
+    const mod = await import("../extension/shared/components.js?bare-folder=1");
+    if (!mod.supportsLocalFilesCommand({ showDirectoryPicker() {} })) {
+      throw new Error("showDirectoryPicker support was not detected");
+    }
+    const AgentComposer = registry.get("agent-composer");
+    const composer = new AgentComposer();
+    composer._uid = "u-bare";
+    composer._popup = new FakeNode("div");
+    composer._popup.hidden = true;
+    composer._popupItems = [];
+    composer._popupActive = -1;
+    composer._popupToken = null;
+    composer._input = {
+      value: "/folder",
+      selectionStart: 7,
+      setRangeText() {},
+      setAttribute() {},
+      getAttribute: () => null,
+    };
+    composer._autoGrow = () => {};
+    composer._hidePopup = () => { composer._popup.hidden = true; };
+    composer._showPopup = (items, token) => { composer._popupItems = items; composer._popupToken = token; composer._popup.hidden = false; };
+    await composer._onComposerInput();
+    if (composer._popup.hidden) throw new Error("bare /folder must open the popup");
+    const folderRow = (composer._popupItems || []).find((item) => item.kind === "local-folder" && item.label === "Documents");
+    if (!folderRow) throw new Error("bare /folder must list granted folders immediately, got: " + JSON.stringify(composer._popupItems));
+    if (folderRow.grantId !== "fsg_docs") throw new Error("grantId must be carried on the row");
+  } finally {
+    globalThis.chrome = prevChrome;
+    globalThis.showDirectoryPicker = prevSdp;
   }
 });
 
