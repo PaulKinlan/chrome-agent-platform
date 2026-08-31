@@ -71,6 +71,7 @@ and `scripts/check-tasks-baseline.json` must only ever shrink.
 - Next: one concrete next action
 - Recover: repository-relative Git commands or —
 - History:
+  - 2026-08-31 09:45 UTC — sol r2 review REVISE: (1) matrix attestation identified the parent 0d5f1003 not the candidate — re-run AT the final tip so testedSourceCommit records the candidate; (2) the probe could pass before the panel finished rendering — now waits for the exact stable row count (31 = 27 rendered caps + 4 core) and asserts no install-only names; (3) TASKS.md DONE/TBD metadata finalized here; (4) the API_PERMISSIONS comment misclassified power/search/privacy as install-only — corrected (they are optional-listable and remain optional). All four fixed; gates re-run.
   - YYYY-MM-DD HH:MM UTC — material event and evidence
 ```
 
@@ -4356,11 +4357,11 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Workspace: /home/paulkinlan/worktrees/cap-optional-perm-fix
 - Branch: cap-optional-perm-fix
 - Base: origin/main 0d5f1003
-- Candidate: TBD (post-hook)
-- Shipping: —
+- Candidate: (final SHA recorded after the r2 review-fix commit)
+- Shipping: merged forward by the hub coordinator (pending review PASS)
 - Acceptance: The manifest lint test `tests/manifest-permissions.test.ts` asserts (a) optional_permissions ∩ {fontSettings, proxy, tts, declarativeNetRequest} = ∅ (RED on the pre-fix manifest, GREEN after), (b) the four are in install-time `permissions`, (c) no CAPABILITIES row mixes install-only and optional permissions. Settings renders NO row for the four (the mandatory-permission skip already exists); the revoke path already refuses install-granted capabilities honestly (`isRequiredCapability` reads the manifest dynamically). Full gates green; matrix acceptance unaffected (it exercises contextMenus/tabGroups/history/bookmarks, not the four).
   - Decision per capability (all four ACTIVELY USED — real tools in browser-tools.js + capability records in chrome-tool-capabilities.js + denial-contract tests in chrome-tools-t9/t10): move to install-time `permissions` (the ONLY honest grant Chrome allows for them). Tradeoff noted: they become always-on at install (proxy and declarativeNetRequest carry real install warnings; no runtime Turn-off) — this is the price of honesty, and it matches the existing model for alarms/storage/sidePanel/offscreen. Removing the features was rejected: they are shipped, tested product surface.
-  - Consistency: `API_PERMISSIONS` in permission-orchestration.js gained proxy/tts/fontSettings/power/search/privacy (the set previously rejected these in the plan builder even though the tools exist — part of the same truth-in-UI fix).
+  - Consistency: `API_PERMISSIONS` in permission-orchestration.js gained the four install-only permissions plus power/search/privacy (the set previously rejected these in the plan builder even though the tools exist — part of the same truth-in-UI fix). NOTE: power/search/privacy are OPTIONAL-LISTABLE and remain optional+JIT in the manifest; only the four (proxy/tts/fontSettings/declarativeNetRequest) moved to install.
   - Removed nothing else: host_permissions <all_urls> untouched; the other optional permissions (tabs, system.*, topSites, etc.) remain optional + JIT (they ARE optional-listable).
 - History:
   - 2026-08-31 02:10 UTC — owner pasted the four load warnings; worker reproduced the mechanism (optional-listed → omitted → request can never grant), verified every reference (manifest, capabilities.js rows, permission-orchestration set, chrome-tool-capabilities records, tests t9/t10 denial paths, matrix acceptance — unaffected), moved the four to install permissions, added the lint test (RED 0/3 on old manifest → GREEN 3/3 on new), full gates pending.

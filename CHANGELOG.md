@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.515] — 2026-08-31
+- Address the r2 review: honest probe readiness, accurate permission classification, final matrix provenance
+
 ## [0.2.514] — 2026-08-31
 - Fix the four install-only permissions Chrome omits from optional_permissions
 

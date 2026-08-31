@@ -12,9 +12,15 @@ const API_PERMISSIONS = new Set([
   "contextMenus", "downloads", "history", "idle", "webNavigation",
   // Tranche-8 site-data control (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01).
   "cookies", "browsingData", "contentSettings",
-  // Install-only permissions: Chrome cannot list these as optional, so they
-  // are granted at install (CAP-FB-20260831-OPTIONAL-PERMISSION-OMITTED-01).
-  "proxy", "tts", "fontSettings", "power", "search", "privacy",
+  // Chrome cannot list these four as optional (they are omitted at load), so
+  // they are granted at install — the only honest grant path
+  // (CAP-FB-20260831-OPTIONAL-PERMISSION-OMITTED-01).
+  "proxy", "tts", "fontSettings", "declarativeNetRequest",
+  // Consistency: the tools for these exist in browser-tools.js and the
+  // manifest carries them (optional+JIT for power/search/privacy — they ARE
+  // optional-listable, unlike the four above); the plan builder must accept
+  // what the shipped toolset declares.
+  "power", "search", "privacy",
 ]);
 const MAX_DECLARATIONS = 32;
 const MAX_PERMISSIONS = 16;

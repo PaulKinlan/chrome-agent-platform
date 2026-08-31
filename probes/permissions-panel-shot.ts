@@ -1,14 +1,40 @@
 // probes/permissions-panel-shot.ts — screenshot the Settings → Permissions panel
 // on a fresh profile with the fixed manifest (CAP-FB-20260831-OPTIONAL-PERMISSION-OMITTED-01)
-// and assert the four install-only capabilities render NO optional row.
+// and assert the exact honest row set: every non-install capability row + the
+// four core rows, with NONE of the install-only capability names present.
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { CAPABILITIES } from "../extension/lib/capabilities.js";
 
 const ROOT = new URL("../", import.meta.url).pathname;
 const EXT = join(ROOT, "extension");
 const EVIDENCE = join(ROOT, "test-artifacts");
 
+// Chrome omits these four from optional_permissions; the fix grants them at
+// install, so their Settings rows must not render.
+const INSTALL_ONLY = new Set(["proxy", "fontSettings", "tts", "declarativeNetRequest"]);
+
+// The four core rows rendered alongside the capability rows (options.js):
+// alarms→Scheduled tasks, offscreen→Background execution host, sidePanel→Side
+// panel, storage→Memory & settings.
+const CORE_ROW_COUNT = 4;
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function expectedPanelRows(manifest) {
+  const mandatory = new Set(manifest.permissions ?? []);
+  const skipped = CAPABILITIES.filter(
+    (c) => (c.permissions ?? []).length && c.permissions.every((p) => mandatory.has(p)),
+  );
+  // install-only caps MUST be among the skipped (install-granted → no row)
+  for (const p of INSTALL_ONLY) {
+    if (!skipped.some((c) => (c.permissions ?? []).includes(p))) {
+      throw new Error(`capability backed by install-only permission ${p} is NOT install-covered — a lying row would render`);
+    }
+  }
+  const renderedCaps = CAPABILITIES.length - skipped.length;
+  return renderedCaps + CORE_ROW_COUNT;
+}
 
 async function launchChrome(profile) {
   const args = [
@@ -56,6 +82,10 @@ async function extIdForPath(dir) {
   return [...h.slice(0, 16)].flatMap((b) => [97 + (b >> 4), 97 + (b & 15)]).map((c) => String.fromCharCode(c)).join("");
 }
 
+const manifest = JSON.parse(await Deno.readTextFile(join(EXT, "manifest.json")));
+const expectedRows = expectedPanelRows(manifest);
+console.log("expected honest panel rows:", expectedRows);
+
 const profile = join(tmpdir(), `cap-perm-panel-${Date.now()}`);
 const { proc, port } = await launchChrome(profile);
 try {
@@ -66,21 +96,31 @@ try {
   const session = (await cdp.send("Target.attachToTarget", { targetId: t.result.targetId, flatten: true })).result.sessionId;
   await cdp.send("Runtime.enable", {}, session);
   await cdp.send("Page.enable", {}, session);
+  // GENUINE readiness: wait until the row count reaches the expected total and
+  // stays there across two consecutive polls (the panel renders asynchronously
+  // as chrome.permissions.contains resolves per capability — an early "rows>0"
+  // poll would pass before the renderer finished).
   let rows = 0;
-  for (let i = 0; i < 30; i++) {
+  let stable = false;
+  for (let i = 0; i < 40; i++) {
     const r = await cdp.send("Runtime.evaluate", { expression: `document.querySelectorAll('#permission-list .perm-row').length`, returnByValue: true }, session);
-    rows = r.result?.result?.value ?? 0;
-    if (rows > 0) break;
+    const n = r.result?.result?.value ?? 0;
+    if (n === rows && n === expectedRows) { stable = true; break; }
+    rows = n;
     await sleep(500);
+  }
+  if (!stable) {
+    console.log(`FAIL: panel never reached the expected ${expectedRows} rows (last saw ${rows})`);
+    Deno.exit(1);
   }
   const labels = await cdp.send("Runtime.evaluate", {
     expression: `[...document.querySelectorAll('#permission-list .perm-row .perm-name')].map(n => n.textContent)`,
     returnByValue: true,
   }, session);
   const labelList = labels.result?.result?.value ?? [];
-  const forbidden = ["Proxy settings", "Text to speech", "Font settings", "Network request rules"];
-  const leaked = forbidden.filter((l) => labelList.includes(l));
-  console.log("perm rows:", rows);
+  const forbiddenNames = ["Proxy settings", "Text to speech", "Font settings", "Network request rules"];
+  const leaked = forbiddenNames.filter((l) => labelList.includes(l));
+  console.log("perm rows:", labelList.length);
   console.log("labels:", JSON.stringify(labelList));
   console.log("install-only rows present:", JSON.stringify(leaked));
   await cdp.send("Runtime.evaluate", { expression: `document.querySelector('#permission-list')?.scrollIntoView()` }, session);
@@ -92,7 +132,11 @@ try {
     console.log("screenshot: test-artifacts/permissions-panel-honest.png");
   }
   if (leaked.length > 0) { console.log("FAIL: install-only rows still rendered"); Deno.exit(1); }
-  console.log("PASS: no install-only capability row rendered");
+  if (labelList.length !== expectedRows) {
+    console.log(`FAIL: expected ${expectedRows} rows, got ${labelList.length}`);
+    Deno.exit(1);
+  }
+  console.log(`PASS: ${expectedRows} honest rows, no install-only capability row rendered`);
 } finally {
   try { proc.kill("SIGKILL"); } catch { }
   await Deno.remove(profile, { recursive: true }).catch(() => {});
