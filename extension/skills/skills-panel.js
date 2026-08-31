@@ -53,13 +53,31 @@ function recipeCard(r, onUse) {
 }
 
 /** Render the intent-grouped skill list into `listEl` from the live
- * recipe.list record. Exported for tests (a seeded store, no SW needed). */
+ * recipe.list record. Exported for tests (a seeded store, no SW needed).
+ *
+ * CAP-FB-20260831-SKILL-LIST-SYNC-01: the catalog (skill.list / recipe.list)
+ * is the SINGLE filter authority — the panel applies NO private filter (that
+ * private `mode === "on-demand"` copy is what let Settings and /skill drift;
+ * background recipes are excluded by the catalog, not by this panel). Skills
+ * that failed to load surface in the broken-errors line, never silently. */
 export async function renderSkillList(listEl, { onUse } = {}) {
-  const res = await send("recipe.list").catch(() => ({ recipes: [] }));
-  const recipes = (Array.isArray(res.recipes) ? res.recipes : []).filter(
-    (r) => r.mode === "on-demand",
-  );
+  const [res, brokenRes] = await Promise.all([
+    send("recipe.list").catch(() => ({ recipes: [] })),
+    send("skill.list").catch(() => ({ skills: [], broken: [] })),
+  ]);
+  const recipes = Array.isArray(res.recipes) ? res.recipes : [];
+  const broken = Array.isArray(brokenRes?.broken) ? brokenRes.broken : [];
   listEl.replaceChildren();
+  if (broken.length > 0) {
+    const brokenEl = document.createElement("div");
+    brokenEl.className = "skills-broken";
+    brokenEl.setAttribute("role", "note");
+    brokenEl.textContent =
+      `${broken.length} skill${broken.length === 1 ? "" : "s"} could not be loaded and ${broken.length === 1 ? "is" : "are"} hidden from pickers: ` +
+      broken.map((b) => `${b.id} (${b.reason})`).join("; ") +
+      ". See the browser console for details.";
+    listEl.append(brokenEl);
+  }
   if (!recipes.length) {
     const empty = document.createElement("div");
     empty.className = "empty";

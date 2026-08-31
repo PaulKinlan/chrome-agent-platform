@@ -1343,6 +1343,15 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   color: var(--muted);
 }
 #skills .skills-list .empty { color: var(--muted); font-size: var(--text-sm); padding: 14px; }
+#skills .skills-broken {
+  color: var(--danger, #b3261e);
+  font-size: var(--text-sm);
+  padding: 10px 12px;
+  margin: 0 0 10px;
+  border: 1px solid color-mix(in srgb, var(--danger, #b3261e) 40%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger, #b3261e) 8%, transparent);
+}
 
 /* Board permissions (Settings): the add-rule row is three shared
    <provider-select>s + the submit button, wrapping on narrow widths. */

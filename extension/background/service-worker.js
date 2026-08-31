@@ -6789,17 +6789,21 @@ const handlers = mergeRouteMaps(
   },
 
   async "recipe.list"() {
-    // Decorate each recipe with its intent so the hub can group the unified
-    // capability list (on-demand + background) by what the user is trying to do.
-    // Imported skills are included too (they are first-class skills).
-    const imported = await loadAllImported();
-    return {
-      recipes: [...RECIPES, ...imported].map((r) => ({ ...r, intent: intentOf(r) })),
-    };
+    // ONE catalog (CAP-FB-20260831-SKILL-LIST-SYNC-01): built-in on-demand
+    // recipes + healthy imported skills. Background recipes are scheduled
+    // agents (background-agent.list), never on-demand skills — Settings and
+    // every picker read this SAME query, so no surface can drift.
+    const { skillCatalog } = await import("../lib/skill-catalog.js");
+    const { skills } = await skillCatalog({ memory: masterMemory(), fileStore: skillFileStore });
+    return { recipes: skills };
   },
   async "skill.list"() {
-    const imported = await loadAllImported();
-    return { skills: [...RECIPES, ...imported].map((r) => ({ ...r, intent: intentOf(r) })) };
+    // Same single catalog as recipe.list. `broken` carries the skills that
+    // failed to load so Settings can surface them honestly (never silently
+    // offered, never silently hidden).
+    const { skillCatalog } = await import("../lib/skill-catalog.js");
+    const { skills, broken } = await skillCatalog({ memory: masterMemory(), fileStore: skillFileStore });
+    return { skills, broken };
   },
   async "skill.import"(m) {
     const url = String(m?.url ?? "").trim();

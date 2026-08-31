@@ -650,6 +650,11 @@ const EXPECTED = [
   "skills: the imported skill keeps its full >64KiB body (never truncated)",
   "skills: a named agent with the large skill reads its body mid-run via skill_read",
   "hub: @demo-skill-read drives search → execute → a body-excerpt final (large skill)",
+  "skill sync: retained the /skill popup screenshot",
+  "skill sync: an imported skill appears in /skill (skill.list) AND Settings (recipe.list) — same catalog",
+  "skill sync: the background Sorting Hat recipe is in NEITHER surface (it is a scheduled agent, not an on-demand skill)",
+  "skill sync: skill.list and recipe.list return the IDENTICAL set (single source of truth)",
+  "skill sync: deleting a skill removes it from BOTH surfaces instantly (one store write)",
   "no service-worker console errors",
   "no SW Runtime.enable errors (auto-attach)",
   "no NTP/Settings console errors",
@@ -5096,9 +5101,65 @@ async function main() {
     }
     const bigListAfter = await msgOpts({ type: "skill.list" });
     const bigSkillAfter = (bigListAfter?.skills ?? []).find((s: { id?: string }) => s?.id === "big-fixture-skill");
+
+    // CAP-FB-20260831-SKILL-LIST-SYNC-01: /skill and Settings must be tallied
+    // from the SAME data source. Both routes return the single catalog — the
+    // imported skill is in BOTH, the background Sorting Hat recipe
+    // (auto-group-by-domain) is in NEITHER (it is a scheduled agent, surfaced
+    // via background-agent.list, never an on-demand /skill invocation).
+    const recipeList = await msgOpts({ type: "recipe.list" });
+    const recipeSkills = Array.isArray(recipeList?.recipes) ? recipeList.recipes : [];
+    // Evidence pair (CAP-FB-20260831-SKILL-LIST-SYNC-01): Settings → Skills
+    // (captured as skills-import-large.png above) and the /skill popup must
+    // list the SAME set. Open a FRESH hub page (the established refresh
+    // pattern — the ambient ntpSession can be mid-thread / context-detached
+    // after earlier navigations), type /skill:, capture, then close.
+    let skillPopupShot = null;
+    try {
+      const popupPage = await openPage(port, `chrome-extension://${extId}/ntp/ntp.html`);
+      await sleep(2500);
+      const popupSess = await attachRuntime(cdp, popupPage.id);
+      cdp.pageSessions.add(popupSess);
+      await evalIn(cdp, popupSess, `(() => { document.querySelector('agent-composer')?.focusInput?.(); return true; })()`);
+      await sleep(400);
+      await typeInto(cdp, popupSess, "#task-input", "/skill:");
+      await sleep(1600); // the popup loads skill.list async
+      skillPopupShot = await captureShot(cdp, popupSess);
+      if (skillPopupShot) await writeEvidence("skill-popup-sync.png", skillPopupShot);
+      await cdp.send("Target.closeTarget", { targetId: popupPage.id }).catch(() => {});
+    } catch (e) {
+      console.log("skill-popup screenshot skipped:", String(e?.message ?? e));
+    }
+    check("skill sync: retained the /skill popup screenshot", skillPopupShot !== null && skillPopupShot.length > 200);
+    const bigInBoth = (bigListAfter?.skills ?? []).some((s: { id?: string }) => s?.id === "big-fixture-skill")
+      && recipeSkills.some((s: { id?: string }) => s?.id === "big-fixture-skill");
+    check(
+      "skill sync: an imported skill appears in /skill (skill.list) AND Settings (recipe.list) — same catalog",
+      bigInBoth,
+    );
+    const sortingHatInSkill = (bigListAfter?.skills ?? []).some((s: { id?: string }) => s?.id === "auto-group-by-domain");
+    const sortingHatInSettings = recipeSkills.some((s: { id?: string }) => s?.id === "auto-group-by-domain");
+    check(
+      "skill sync: the background Sorting Hat recipe is in NEITHER surface (it is a scheduled agent, not an on-demand skill)",
+      !sortingHatInSkill && !sortingHatInSettings,
+    );
+    const skillSetSkill = (bigListAfter?.skills ?? []).map((s: { id?: string }) => s?.id).sort().join(",");
+    const skillSetSettings = recipeSkills.map((s: { id?: string }) => s?.id).sort().join(",");
+    check(
+      "skill sync: skill.list and recipe.list return the IDENTICAL set (single source of truth)",
+      skillSetSkill === skillSetSettings,
+    );
     if (bigSkillAfter?.id) {
       await msgOpts({ type: "skill.delete", id: bigSkillAfter.id }).catch(() => {});
     }
+    const listAfterDelete = await msgOpts({ type: "skill.list" });
+    const goneFromSkill = !(listAfterDelete?.skills ?? []).some((s: { id?: string }) => s?.id === "big-fixture-skill");
+    const settingsAfterDelete = await msgOpts({ type: "recipe.list" });
+    const goneFromSettings = !(settingsAfterDelete?.recipes ?? []).some((s: { id?: string }) => s?.id === "big-fixture-skill");
+    check(
+      "skill sync: deleting a skill removes it from BOTH surfaces instantly (one store write)",
+      goneFromSkill && goneFromSettings,
+    );
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 10 — service-worker console audit (strictly worker-only).

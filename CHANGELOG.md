@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.553] — 2026-08-31
+- Skills: /skill and Settings read ONE catalog — background recipes are scheduled agents, never on-demand skills; corrupt skills hidden and reported
+
 ## [0.2.552] — 2026-08-31
 - DONE (coordinator gates 2813/0, 272/272)
 
