@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.532] — 2026-08-31
+- The side panel is now a companion pinned to the current tab: it shows the tab's site and tools, a composer to ask the agent about or act on this page, the run inline, and "Continue in hub".
+
 ## [0.2.531] — 2026-08-31
 - The companion side panel work has begun.
 

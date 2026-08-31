@@ -6,9 +6,10 @@
 //            section grid (>=1100px) instead of ~700px of dead margins; the
 //            settings panel fills its viewport.
 //   UX-011 — sidepanel: one <main> landmark wraps the views (axe
-//            landmark-one-main + region clean), and a compact first-run
-//            guidance block shows what Site Agents are + the first action,
-//            hidden once a site is opened.
+//            landmark-one-main + region clean) and exactly one <h1>; the Page
+//            view is a companion pinned to the current tab (header + composer,
+//            no first-run card), and the URL field is a secondary "Open another
+//            site…" details disclosure (CAP-FB-20260830-SIDE-PANEL-COMPANION-01).
 //
 //   deno run -A scripts/kat-ux-lows.ts <path-to-extension> [<out-dir>]
 
@@ -128,25 +129,31 @@ check("UX-010: the settings content fills the wide viewport", optLayout?.fillsMo
 await opt.shot(`${OUT}/settings-1440.png`);
 await send("Target.closeTarget", { targetId: opt.targetId });
 
-// ---- UX-011: sidepanel landmark + first-run guidance -----------------------
+// ---- UX-011: sidepanel landmark + the page companion -----------------------
+// The Page view is a companion pinned to the current tab
+// (CAP-FB-20260830-SIDE-PANEL-COMPANION-01): one <h1>, a header showing the
+// active tab, a composer bound to it — no numbered first-run instruction card,
+// and the URL field demoted into a secondary <details> disclosure.
 const side = await newView(`chrome-extension://${extId}/sidepanel/sidepanel.html`);
 await send("Emulation.setDeviceMetricsOverride", { width: 420, height: 800, deviceScaleFactor: 1, mobile: false }, side.sessionId);
 await sleep(1800);
 const sideState = await side.ev(`(() => {
-  const main = document.querySelector('main.views');
-  const guide = document.getElementById('first-run');
+  const main = document.querySelector('main');
   return {
     mainCount: document.querySelectorAll('main').length,
+    h1Count: document.querySelectorAll('h1').length,
     viewsInMain: !!main && main.contains(document.getElementById('page-view')) && main.contains(document.getElementById('agents-view')),
-    guideVisible: !!guide && !guide.hasAttribute('hidden'),
-    guideSaysSiteAgents: (guide?.querySelector('h2')?.textContent ?? '').includes('Site Agents'),
-    firstAction: (guide?.querySelector('li strong')?.textContent ?? '').toLowerCase().includes('open a site'),
+    hasHeader: !!document.getElementById('tab-host') && !!document.getElementById('tab-favicon'),
+    hasComposer: !!document.getElementById('page-composer'),
+    noFirstRun: !document.getElementById('first-run'),
+    urlInDetails: !!document.getElementById('url')?.closest('details'),
   };
 })()`);
 check("UX-011: exactly ONE main landmark wraps the views", sideState?.mainCount === 1 && sideState?.viewsInMain === true, sideState);
-check("UX-011: the first-run guidance is visible on an untouched panel", sideState?.guideVisible === true, sideState);
-check("UX-011: the guidance names Site Agents + the first action", sideState?.guideSaysSiteAgents === true && sideState?.firstAction === true, sideState);
-await side.shot(`${OUT}/sidepanel-first-run.png`);
+check("UX-011: exactly one <h1> (the two-H1 bug is gone)", sideState?.h1Count === 1, sideState);
+check("UX-011: the companion header + composer render; no first-run card; the URL field is a details disclosure",
+  sideState?.hasHeader === true && sideState?.hasComposer === true && sideState?.noFirstRun === true && sideState?.urlInDetails === true, sideState);
+await side.shot(`${OUT}/sidepanel-companion.png`);
 
 // Real axe corroboration for the two audited rules (landmark-one-main, region).
 try {
@@ -161,15 +168,16 @@ try {
   console.log(`NOTE: axe injection unavailable (${String(e).slice(0, 80)}) — structural landmark checks stand.`);
 }
 
-// Opening a site dismisses the guidance — via a TRUSTED click (the open
-// route is owner-gesture-gated, so a synthetic el.click() would be refused).
-const goRect = await side.ev(`(() => { const r = document.getElementById('go').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+// The "Open another site…" disclosure reveals the URL field on demand — via a
+// TRUSTED click on its summary (the details is collapsed by default so the URL
+// field is no longer the panel's primary control).
+const summaryRect = await side.ev(`(() => { const r = document.querySelector('#open-another > summary').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
 for (const type of ["mousePressed", "mouseReleased"]) {
-  await send("Input.dispatchMouseEvent", { type, x: goRect.x, y: goRect.y, button: "left", clickCount: 1 }, side.sessionId);
+  await send("Input.dispatchMouseEvent", { type, x: summaryRect.x, y: summaryRect.y, button: "left", clickCount: 1 }, side.sessionId);
 }
-await sleep(1500);
-const guideAfter = await side.ev(`(() => { const g = document.getElementById('first-run'); return !!g && g.hasAttribute('hidden'); })()`);
-check("UX-011: the guidance hides once a site is opened", guideAfter === true, { guideAfter });
+await sleep(400);
+const disclosureOpen = await side.ev(`(() => { const d = document.getElementById('open-another'); const u = document.getElementById('url'); return d?.open === true && u?.offsetParent !== null; })()`);
+check("UX-011: the 'Open another site…' disclosure reveals the URL field on demand", disclosureOpen === true, { disclosureOpen });
 await send("Target.closeTarget", { targetId: side.targetId });
 
 console.log(`\nkat-ux-lows: ${pass} passed, ${fail} failed`);

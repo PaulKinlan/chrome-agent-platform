@@ -1,16 +1,21 @@
-// sidepanel/sidepanel.js — the driven-page surface.
+// sidepanel/sidepanel.js — the PAGE COMPANION.
 //
-// Cross-origin iframes cannot be driven (they're isolated + many sites block
-// framing), so the real driven-page mechanism is: open the target page in a
-// real tab (where the MAIN-world bridge + content script can discover and
-// invoke its WebMCP tools), and drive it from there. The side panel shows a
-// control + status surface AND the live WebMCP tool list for the driven origin.
-// There is deliberately NO iframe preview and NO morph stub — the panel never
-// claims to embed or morph the page; the page lives in its real tab.
+// The Page view is a companion pinned to the CURRENT tab
+// (CAP-FB-20260830-SIDE-PANEL-COMPANION-01): it shows the active tab's favicon
+// and host, whether that origin offers Site Agent tools, and a compact composer
+// that runs the hub agent against THIS page. `read_page` and the page-action
+// tools default to the active tab, so a run started here reads and acts on the
+// page in front of the owner. Actions the agents take on the tab show in the
+// Activity ledger below, with Undo where the ledger offers it. Each tab keeps
+// its own conversation thread; "Continue in hub" reopens that exact thread on
+// the new-tab hub.
 //
-// A target URL may already be stored (sidepanel.getTarget); this panel loads it
-// on startup + shows the origin's discovered tools (sidepanel.getTools). The
-// agent-facing `open_side_panel` tool was REMOVED 2026-08-30
+// The active tab is tracked with chrome.tabs.query and kept live on
+// onActivated / onUpdated / window focus. A secondary "Open another site…"
+// disclosure still opens a chosen URL in a real tab (the panel then follows it),
+// but it is no longer the primary control the way the old URL bar was.
+//
+// The agent-facing `open_side_panel` tool was REMOVED 2026-08-30
 // (CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01) — chrome.sidePanel.open() needs a
 // user gesture the service worker does not have, so the panel is opened by the
 // owner (the toolbar action or the keyboard command), never by the model.
@@ -22,10 +27,10 @@ import {
   subscribeRunRegistry,
   cancelDurableRun,
   appendBubble,
+  projectThreadMessages,
 } from "../shared/conversation.js";
 import { cancelRunFromRenderedStop, projectConversationRunStatus } from "../shared/run-status.js";
 import { findAgentByRef } from "../shared/agent-registry.js";
-import { siteAgentToolsMessage } from "../shared/site-agent-copy.js";
 import { confirmActionDialog } from "../shared/components.js"; // registers <agent-picker>, <agent-composer>, <agent-conversation>, <task-row>
 import { capLog } from "../lib/cap-log.js";
 import { actionableRunsForSurface } from "../lib/run-scope.js";
@@ -36,6 +41,14 @@ const urlInput = document.getElementById("url");
 const statusEl = document.getElementById("status");
 const goBtn = document.getElementById("go");
 const toolsEl = document.getElementById("tools");
+const openAnother = document.getElementById("open-another");
+const hostEl = document.getElementById("tab-host");
+const toolStateEl = document.getElementById("tab-toolstate");
+const faviconEl = document.getElementById("tab-favicon");
+const globeEl = document.getElementById("tab-globe");
+const continueHubBtn = document.getElementById("continue-hub");
+const pageHistory = document.getElementById("page-history");
+const pageComposer = document.getElementById("page-composer");
 
 // The Activity ledger (CAP-FB-20260830-ACTIVITY-LEDGER-UNDO-01): the mutating
 // actions the agents took, each with Undo where reversible. The section stays
@@ -55,38 +68,44 @@ function setStatus(text, isError = false) {
   statusEl.classList.toggle("error", isError);
 }
 
+/** The one-line tool-state summary in the companion header. */
+function setToolState(kind, count = 0) {
+  if (!toolStateEl) return;
+  toolStateEl.textContent =
+    kind === "tools" ? `Offers ${count} ${count === 1 ? "tool" : "tools"}`
+    : kind === "empty" ? "No site tools yet — reload to refresh"
+    : kind === "not-added" ? "No site tools added"
+    : kind === "error" ? "Site tools unavailable right now"
+    : kind === "none" ? "No tools on this page"
+    : "";
+}
+
+/** Render the origin's discovered WebMCP tools as chips and set the header
+ *  tool-state line. Tool names come from the SW and are rendered with
+ *  textContent (never innerHTML). */
 async function renderTools(origin) {
   if (!toolsEl) return;
   const res = await send("sidepanel.getTools", { origin });
+  toolsEl.innerHTML = "";
   if (!res?.ok) {
-    toolsEl.innerHTML = "";
-    toolsEl.textContent = siteAgentToolsMessage("error");
+    setToolState("error");
     return;
   }
   const names = res.tools ?? [];
-  toolsEl.innerHTML = "";
   if (!res.enrolled) {
-    const row = document.createElement("div");
-    row.className = "tool-row empty";
-    row.textContent = siteAgentToolsMessage("not-added");
-    toolsEl.append(row);
+    setToolState("not-added");
     return;
   }
   if (names.length === 0) {
-    const row = document.createElement("div");
-    row.className = "tool-row empty";
-    row.textContent = siteAgentToolsMessage("empty");
-    toolsEl.append(row);
+    setToolState("empty");
     return;
   }
+  setToolState("tools", names.length);
   for (const name of names) {
-    const row = document.createElement("div");
-    row.className = "tool-row";
     const chip = document.createElement("span");
     chip.className = "tool-chip";
     chip.textContent = name;
-    row.append(chip);
-    toolsEl.append(row);
+    toolsEl.append(chip);
   }
 }
 
@@ -96,6 +115,7 @@ async function go() {
   // turn it into a browser mutation through this route.
   const ownerGesture = navigator.userActivation?.isActive === true;
   let url = urlInput.value.trim();
+  if (!url) return;
   if (!/^https?:\/\//.test(url)) url = "https://" + url;
   let parsed;
   try { parsed = new URL(url); } catch { setStatus("Invalid URL", true); return; }
@@ -114,42 +134,180 @@ async function go() {
     setStatus("Could not open tab: " + (res?.error ?? "unknown error"), true);
     return;
   }
-  setStatus(`Opened ${parsed.origin} in a tab. Available Site Agent tools are shown below.`);
-  // The first-run guidance has done its job once a site is opened.
-  document.getElementById("first-run")?.setAttribute("hidden", "");
-
-  // Record the origin so the hub can enroll it.
+  setStatus(`Opened ${parsed.origin} in a new tab.`);
+  urlInput.value = "";
+  openAnother?.removeAttribute("open");
+  // Record the origin so the hub can enroll it. The newly-active tab drives the
+  // companion header + tools via chrome.tabs.onActivated → refreshActiveTab.
   send("tools.allOrigins").catch(() => {});
-  // Show the origin's discovered WebMCP tools.
-  renderTools(parsed.origin);
 }
 
 goBtn.addEventListener("click", go);
 urlInput.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
 
-// On load: if a target URL was stored, show that target + its tools WITHOUT
-// opening a tab. Agent-driven tab opens remain on the browser-control-granted
-// open_tab tool; only the owner's Go / Enter gesture invokes
-// sidepanel.openPage.
-(async function boot() {
+/* ──────────────────────────────────────────────────────────────────────────
+ * The COMPANION: the Page view follows the active tab. It shows that tab's
+ * favicon + host, the origin's tools, and a conversation keyed to the tab.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+// The tab the companion is currently pinned to.
+let currentTabId = null;
+let currentTabOrigin = null;
+// The conversation thread for the current tab (created lazily on the first run
+// from the page composer). Each tab keeps its own thread so switching tabs
+// swaps the conversation, and "Continue in hub" reopens the exact thread.
+let pageThreadId = null;
+
+const PAGE_THREADS_KEY = "cap:sidepanel:page-threads";
+function loadPageThreads() {
+  try { return JSON.parse(sessionStorage.getItem(PAGE_THREADS_KEY) || "{}") || {}; }
+  catch { return {}; }
+}
+function savePageThread(tabId, threadId) {
+  if (tabId == null) return;
   try {
-    const res = await send("sidepanel.getTarget");
-    if (res?.url) {
-      urlInput.value = res.url;
-      let parsed = null;
-      try { parsed = new URL(res.url); } catch { /* invalid legacy target */ }
-      if (parsed && (parsed.protocol === "http:" || parsed.protocol === "https:")) {
-        setStatus(`Site ready: ${parsed.origin}. Choose Open site to show its available Site Agent tools.`);
-        // Agent-opened panel: the user is already on a site — the first-run
-        // guidance block has done its job.
-        document.getElementById("first-run")?.setAttribute("hidden", "");
-        await renderTools(parsed.origin);
-      } else {
-        setStatus("The stored target is invalid.", true);
-      }
-    }
-  } catch { /* the panel also works standalone */ }
-})();
+    const m = loadPageThreads();
+    if (threadId) m[String(tabId)] = threadId; else delete m[String(tabId)];
+    sessionStorage.setItem(PAGE_THREADS_KEY, JSON.stringify(m));
+  } catch { /* sessionStorage may be unavailable — persistence is best-effort */ }
+}
+
+function hostFromUrl(url) {
+  try { const u = new URL(url); return u.host || u.protocol.replace(/:$/, ""); }
+  catch { return ""; }
+}
+function originFromUrl(url) {
+  try {
+    const u = new URL(url);
+    return (u.protocol === "http:" || u.protocol === "https:") ? u.origin : null;
+  } catch { return null; }
+}
+
+// The favicon is web-controlled: set it as an <img src> (attribute only, never
+// innerHTML) with an empty alt; fall back to the inline globe on absence/error.
+function setFavicon(url) {
+  if (!faviconEl || !globeEl) return;
+  if (url && /^https?:\/\//.test(url)) {
+    faviconEl.src = url;
+    faviconEl.hidden = false;
+    globeEl.hidden = true;
+  } else {
+    faviconEl.hidden = true;
+    faviconEl.removeAttribute("src");
+    globeEl.hidden = false;
+  }
+}
+faviconEl?.addEventListener("error", () => {
+  faviconEl.hidden = true;
+  faviconEl.removeAttribute("src");
+  if (globeEl) globeEl.hidden = false;
+});
+
+/** Render an existing tab thread into the page conversation (full transcript
+ *  via the shared projection). Clears when the tab has no thread yet. */
+async function loadTabThread(tabId) {
+  const threads = loadPageThreads();
+  pageThreadId = tabId != null ? (threads[String(tabId)] || null) : null;
+  pageHistory?.clear?.();
+  if (pageThreadId) {
+    const res = await send("thread.get", { id: pageThreadId }).catch(() => null);
+    if (res?.thread) pageHistory?.setMessages?.(projectThreadMessages(res.thread));
+    else { pageThreadId = null; savePageThread(tabId, null); }
+  }
+  if (continueHubBtn) continueHubBtn.hidden = !pageThreadId;
+}
+
+// Re-entrancy fence: a burst of tab events must not race two refreshes into an
+// inconsistent header/thread pair (last query wins).
+let refreshSeq = 0;
+async function refreshActiveTab() {
+  const seq = ++refreshSeq;
+  let tab = null;
+  try { [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }); }
+  catch { tab = null; }
+  if (seq !== refreshSeq) return; // superseded by a newer event
+  if (!tab) return;
+  const tabId = tab.id ?? null;
+  const origin = originFromUrl(tab.url || "");
+  const tabChanged = tabId !== currentTabId;
+  currentTabId = tabId;
+  currentTabOrigin = origin;
+  if (hostEl) hostEl.textContent = hostFromUrl(tab.url || "") || (tab.title || "This page");
+  setFavicon(tab.favIconUrl || "");
+  if (toolsEl) toolsEl.innerHTML = "";
+  if (origin) await renderTools(origin);
+  else setToolState("none");
+  if (seq !== refreshSeq) return;
+  if (tabChanged) await loadTabThread(tabId);
+}
+
+// The inline live-status row's recovery action + Stop, for the page
+// conversation (same pattern as the agent detail conversation below).
+pageHistory?.addEventListener("action", (ev) => {
+  if (!ev.target?.classList?.contains?.("live-status")) return;
+  chrome.runtime.openOptionsPage();
+});
+pageHistory?.addEventListener("stop", async (ev) => {
+  if (!ev.target?.classList?.contains?.("live-status")) return;
+  const row = ev.target;
+  const result = await cancelRunFromRenderedStop(ev, (executionId) => {
+    const button = row._root?.querySelector?.(".stop");
+    if (button) { button.disabled = true; button.textContent = "Stopping…"; }
+    return cancelDurableRun(executionId, "stopped by owner");
+  }, navigator.userActivation).catch((error) => ({
+    ok: false,
+    error: error?.message ?? String(error),
+    executionId: ev.detail?.executionId,
+  }));
+  if (result?.ignored) return;
+  projectConversationRunStatus(pageHistory, result?.ok === true
+    ? { state: "cancelled" }
+    : { state: "failed", message: `Stop failed — ${result?.error ?? "unknown error"}`, errorCategory: "aborted" });
+});
+
+// The page composer: run the hub agent against THIS tab. read_page and the
+// page-action tools default to the active tab, so the run reads/acts on the
+// page in front of the owner. An @mention chip routes the turn to that agent.
+pageComposer?.addEventListener("send", async (ev) => {
+  const { text, attachments, agent } = ev.detail ?? {};
+  const mention = agent?.ref ? { kind: agent.kind, id: agent.id, name: agent.name || agent.id } : null;
+  pageHistory?.bindLiveStatusExecution?.(null);
+  const res = await runConversationTurn(pageHistory, {
+    text,
+    attachments,
+    threadId: pageThreadId,
+    mention,
+    onStatus: (s) => projectConversationRunStatus(pageHistory, s),
+    onRunRegistered: () => pageHistory?.bindLiveStatusExecution?.(null),
+  });
+  const newThreadId = res?.threadId ?? pageThreadId;
+  if (newThreadId) {
+    pageThreadId = newThreadId;
+    savePageThread(currentTabId, pageThreadId);
+    if (continueHubBtn) continueHubBtn.hidden = false;
+  }
+  // A run may have mutated this tab — refresh the ledger + the tool list.
+  actionLedgerEl?.refresh?.().catch(() => {});
+  if (currentTabOrigin) renderTools(currentTabOrigin);
+});
+
+// "Continue in hub": reopen the exact tab thread on the new-tab hub.
+continueHubBtn?.addEventListener("click", () => {
+  if (!pageThreadId) return;
+  chrome.tabs.create({ url: chrome.runtime.getURL(`ntp/ntp.html#thread=${encodeURIComponent(pageThreadId)}`) });
+});
+
+// Track the active tab: on load and whenever the owner switches tabs, the tab
+// navigates, or the window focus changes.
+chrome.tabs?.onActivated?.addListener(() => { refreshActiveTab(); });
+chrome.tabs?.onUpdated?.addListener((tabId, changeInfo) => {
+  if (tabId !== currentTabId) return;
+  if (changeInfo.url || changeInfo.favIconUrl || changeInfo.title || changeInfo.status === "complete") {
+    refreshActiveTab();
+  }
+});
+chrome.windows?.onFocusChanged?.addListener(() => { refreshActiveTab(); });
+refreshActiveTab();
 
 // NOTE: there is deliberately NO runtime.onMessage listener that opens tabs
 // (no "navigate"/"sidepanel.navigate" local path). The wider-goal review found

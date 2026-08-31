@@ -183,30 +183,39 @@ Deno.test("site-agent copy: the SW-owned cap:webmcpStatus authority persists the
   assertEquals(two.scriptError ?? null, null);
 });
 
-Deno.test("site-agent copy: sidepanel live region semantics + the Open/Enter transitions", async () => {
+Deno.test("side panel companion: live region semantics + the Open/Enter transitions", async () => {
   const html = await Deno.readTextFile("extension/sidepanel/sidepanel.html");
   const js = await Deno.readTextFile("extension/sidepanel/sidepanel.js");
-  // The dynamic #status + #tools announce via polite + atomic live regions.
+  // The companion (CAP-FB-20260830-SIDE-PANEL-COMPANION-01) announces the active
+  // tab's tool state through a polite + atomic live region in the header; the
+  // #status line keeps the same semantics for the Open/Enter transitions.
   assert(
     /id="status"[^>]*role="status"[^>]*aria-live="polite"[^>]*aria-atomic="true"/.test(html),
     "#status lacks role=status + aria-live=polite + aria-atomic=true",
   );
   assert(
-    /id="tools"[^>]*role="status"[^>]*aria-live="polite"[^>]*aria-atomic="true"/.test(html),
-    "#tools lacks the polite + atomic live semantics",
+    /id="tab-toolstate"[^>]*role="status"[^>]*aria-live="polite"[^>]*aria-atomic="true"/.test(html),
+    "#tab-toolstate lacks the polite + atomic live semantics",
   );
-  // The Open/Enter success + failure transitions use the centralized vocabulary.
+  // The tools chip region is still labelled for assistive tech.
   assert(
-    /Opened \$\{parsed\.origin\} in a tab\. Available Site Agent tools/.test(js),
-    "the Open success transition is not the centralized copy",
+    /id="tools"[^>]*aria-label="Available tools on this page"/.test(html),
+    "#tools lacks an accessible label",
+  );
+  // The Open/Enter success + failure transitions read honestly.
+  assert(
+    /Opened \$\{parsed\.origin\} in a new tab\./.test(js),
+    "the Open success transition copy is missing",
   );
   assert(
     /Could not open tab:/.test(js) && /"Invalid URL"/.test(js),
     "the Open failure transitions are missing",
   );
+  // The tool-state line uses honest, terse companion copy (no dead 'add a Site
+  // Agent' framing on a surface that already knows the tab).
   assert(
-    js.includes('siteAgentToolsMessage'),
-    "the tool-list empty/error states do not consume the centralized vocabulary",
+    js.includes("function setToolState") && js.includes("No site tools added") && js.includes("Offers "),
+    "the tool-state states do not use the honest companion copy",
   );
 });
 
