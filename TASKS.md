@@ -4594,3 +4594,60 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - History:
   - 2026-08-31 19:34 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/scheduled-next-run` off `origin/main@46407794`. Other agents: pick a different entry.
   - 2026-08-31 19:20 UTC — filed from owner feedback: no visible next-run for scheduled tasks; wants a "next run" widget and a "routine" concept (not background agents).
+
+## [CAP-FB-20260831-MCP-SUPPORT-01] MCP server support — global for the task view, and per-agent
+- Feedback: 2026-08-31 — owner: "I need to plan to add MCP support. MCP will be a global option for the task view, but then each agent should have its own MCP servers that might have their own configurations. Also the agent-do harness doesn't support the latest MCP spec iirc, we might need to update that." Investigation: agent-do 0.7 ALREADY supports MCP (`mountMcpServers`, `@modelcontextprotocol/sdk@1.30.0` = LATEST_PROTOCOL_VERSION 2025-11-25) — the harness is current, not behind. Plan of record: `docs/MCP-SUPPORT-DESIGN.md`.
+- Updated: 2026-08-31 21:00 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: —
+- Candidate: —
+- Shipping: —
+- Acceptance: the owner can add remote MCP servers globally (a task-view/Settings option) and per named agent (each with its own config, inheriting/overriding the global set); the agent can discover and call those servers' tools (namespaced, in the lazy catalog, results fenced, per-server first-use approval, credentials handled like provider keys); stdio/local-command servers are explicitly out of scope in MV3 (remote Streamable-HTTP/SSE only). This is an UMBRELLA — it closes when its children are DONE.
+  - Context: see `docs/MCP-SUPPORT-DESIGN.md` for the full design, the verified facts (agent-do MCP surface, per-agent provider-override pattern to copy, the lazy toolset), and the real constraints (no subprocess in MV3 → remote transports only; mountMcpServers is all-or-nothing → need per-server resilience; MCP output is untrusted → fence it; credentials are secrets; SSE teardown per ephemeral worker).
+  - Files: see the design doc's work breakdown; each child names its own.
+  - Steps: land the children in order — TRANSPORT-SPIKE (prove remote MCP in the loaded extension + resolve the agent-do stdio-import/bundle question) → CONFIG-STORE → TOOL-INJECTION → GLOBAL-UI → AGENT-UI → (later) OAUTH → AGENT-DO-MCP-ASSESSMENT.
+  - Out of scope: WebMCP (the existing site-tools protocol — different surface); stdio/local MCP servers in the extension.
+- Review: pending
+- Gates: each child carries its own; the umbrella closes when all children are DONE with a real loaded-extension demo against a test MCP server.
+  - Unit: per child.
+  - Browser: a demo — configure a remote test MCP server globally and on an agent, run a task that calls one of its tools, see it fenced + ledgered + approved.
+  - Full suite: green at the tip for each child.
+  - Constraints: MV3-CSP-safe (no eval); remote transports only; MCP output fenced as untrusted; credentials never in bundle/logs/receipts; lazy catalog stays small.
+- Blockers: —
+- Next: land CAP-FB-20260831-MCP-TRANSPORT-SPIKE-01 first (proves feasibility + resolves the bundle question)
+- Recover: `git log --oneline --all --grep=CAP-FB-20260831-MCP-SUPPORT-01`
+- History:
+  - 2026-08-31 21:00 UTC — filed from owner planning ask; investigation found agent-do 0.7 already ships current MCP; design written to docs/MCP-SUPPORT-DESIGN.md; broken into seven children.
+
+## [CAP-FB-20260831-MCP-TRANSPORT-SPIKE-01] Prove remote MCP works in the loaded extension and resolve the agent-do bundle question
+- Feedback: 2026-08-31 — first child of CAP-FB-20260831-MCP-SUPPORT-01. agent-do's mcp.js imports StdioClientTransport at module top (uses node child_process) — in MV3 there is no subprocess, and that import may pull node built-ins into the esbuild bundle and break the CSP/build. Must be resolved before building the feature.
+- Updated: 2026-08-31 21:00 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: —
+- Candidate: —
+- Shipping: —
+- Acceptance: a working spike in the loaded extension connects to a local Streamable-HTTP MCP server from the service worker (or agent worker), lists its tools, calls one, and tears the connection down — with the production build clean (no node built-ins, no eval). A written decision in `docs/MCP-SUPPORT-DESIGN.md`: either (a) agent-do's `mountMcpServers` is usable in our bundle (the stdio import tree-shakes/stubs cleanly) with a per-server resilience wrapper, or (b) we mount MCP ourselves using `@modelcontextprotocol/sdk`'s `StreamableHTTPClientTransport`/`SSEClientTransport` directly and never import the stdio path. Per-server resilience is proven (a second, unreachable server does not kill the working one).
+  - Context: `docs/MCP-SUPPORT-DESIGN.md` constraints 1 and 2. The SDK is `@modelcontextprotocol/sdk@1.30.0` (already a transitive dep via agent-do); `node_modules/@modelcontextprotocol/sdk/dist/esm/client/{streamableHttp,sse}.js` are the browser-safe transports.
+  - Files: a spike module in `extension/lib/` (e.g. `mcp-client.js`), a test MCP server for the harness (a tiny Deno/node Streamable-HTTP server under scripts/ or tests/fixtures), `scripts/build.mjs` if a bundle shim/alias is needed to keep node stdio out, `docs/MCP-SUPPORT-DESIGN.md` (write the decision).
+  - Steps: 1. Stand up a minimal Streamable-HTTP MCP test server (one tool). 2. Try mounting via agent-do; if the bundle breaks on stdio, mount via the SDK transports directly. 3. Connect from the SW, list+call+teardown. 4. Prove per-server resilience. 5. Record the decision in the design doc.
+- Review: pending
+- Gates: the falsification gates apply.
+  - Unit: a test of the mount/resolve helper (per-server isolation: one failing server yields its error and does not throw for the others); falsify by removing the isolation.
+  - Browser: a KAT (launchChrome) — the loaded extension connects to the test MCP server, lists a tool, calls it, tears down; a second unreachable server is reported failed without killing the run.
+  - Full suite: `npm run build:production` clean (no node built-ins in the SW bundle — assert via the existing seam/scan) and full suite green.
+  - Constraints: MV3-CSP-safe; remote transports only; no eval; no node built-ins in the bundle.
+- Blockers: —
+- Next: stand up a minimal Streamable-HTTP MCP test server, then attempt the agent-do mount and check the bundle
+- Recover: `git log --oneline --all --grep=CAP-FB-20260831-MCP-TRANSPORT-SPIKE-01`
+- History:
+  - 2026-08-31 21:00 UTC — filed as the first MCP child; the go/no-go on agent-do's mount vs an own SDK mount.

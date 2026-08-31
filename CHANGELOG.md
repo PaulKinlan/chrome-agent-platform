@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.559] — 2026-08-31
+- A plan for connecting the agent to external tool servers is written up.
+
 ## [0.2.558] — 2026-08-31
 - DONE (build clean, git status clean after build, unit 2819/0)
 
