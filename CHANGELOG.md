@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.525] — 2026-08-31
+- DONE (coordinator gates 2751/0, 255/255)
+
 ## [0.2.524] — 2026-08-31
 - : merge — a what-I-did activity log with Undo
 
