@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.555] — 2026-08-31
+- ARTIFACT-LIBRARY-CAPACITY-01, EXEC-BUILD-FLAG-01 DONE (coordinator gates 2816/0, 272/272)
+
 ## [0.2.554] — 2026-08-31
 - : merge — a Show developer features toggle hides the advanced surfaces by default
 
