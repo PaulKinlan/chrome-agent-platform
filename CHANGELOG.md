@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.530] — 2026-08-31
+- DONE — Q19 delivered (coordinator gates 2772/0, 255/255, page-actions 14/14)
+
 ## [0.2.529] — 2026-08-31
 - : merge — the agent can act inside a page (find, click, type, select, scroll) under a grant
 
