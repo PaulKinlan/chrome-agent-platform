@@ -38,6 +38,14 @@ globalThis.CustomEvent = class CustomEvent {
   constructor(type, init = {}) { this.type = type; this.detail = init.detail ?? {}; }
 };
 globalThis.matchMedia = () => ({ matches: false });
+// The slash /agent picker mirrors its highlight onto the composer textarea via
+// a MutationObserver — stub it so the real picker-open path is testable.
+globalThis.MutationObserver = class MutationObserver {
+  constructor(cb) { this._cb = cb; }
+  observe() {}
+  disconnect() {}
+  takeRecords() { return []; }
+};
 
 // The SW message surface + the tabs API the composer's command loaders use.
 globalThis.chrome = {
@@ -132,6 +140,13 @@ function setup() {
   composer._popupToken = null;
   composer._slashAgentToken = null;
   composer._resolvedSpans = [];
+  composer._agentPick = new FakeNode("agent-picker");
+  composer._agentPop = new FakeNode("div");
+  composer._apObserver = null;
+  composer._selectedAgent = null;
+  composer._agentChip = null;
+  composer._emit = () => {};
+  composer._renderAgentChip = () => {};
   input._onInput = () => composer._onComposerInput();
   return { composer, input, popup };
 }
@@ -222,4 +237,43 @@ Deno.test("multi-slash: a mid-prose slash NOT after the resolved boundary stays 
   input.selectionStart = input.selectionEnd = input.value.length;
   await composer._onComposerInput();
   if (popup.hidden !== true) throw new Error("leading-space /tabs: must NOT open the popup");
+});
+
+Deno.test("multi-slash: a resolved /agent reference establishes a boundary too (r2 P1)", async () => {
+  const { composer, input, popup } = setup();
+
+  // Phase 1 — type /agent:rea → the shared agent picker opens (slash mode).
+  input.value = "/agent:rea";
+  input.selectionStart = input.selectionEnd = input.value.length;
+  await composer._onComposerInput();
+  if (composer._slashAgentToken === null) throw new Error("phase 1: /agent must arm the slash picker token");
+
+  // Phase 2 — the picker selects an agent: the token is replaced by the
+  // canonical ref AND the resolved boundary is recorded (the r2 P1 fix).
+  composer._onAgentSelect({ detail: { ref: "named:reader", kind: "named", id: "reader", name: "Reader" } });
+  if (input.value !== "/agent:named:reader") throw new Error(`phase 2: the /agent token must become the canonical ref, got "${input.value}"`);
+  const span = (composer._resolvedSpans || [])[0];
+  if (!span || span.start !== 0 || span.end !== "/agent:named:reader".length || span.text !== "/agent:named:reader") {
+    throw new Error(`phase 2: the /agent resolution must record its span (${JSON.stringify(span)})`);
+  }
+  if (composer._slashAgentToken !== null) throw new Error("phase 2: the slash token must clear after the selection");
+
+  // Phase 3 — a SECOND command right after the /agent reference opens its picker.
+  input.value = input.value + " /skill:screenshot";
+  input.selectionStart = input.selectionEnd = input.value.length;
+  await composer._onComposerInput();
+  if (popup.hidden !== false) throw new Error("phase 3: the /skill popup must open after a resolved /agent reference");
+  const secondToken = composer._popupToken;
+  if (!secondToken || secondToken.ns !== "skill") {
+    throw new Error(`phase 3: the second token must be the skill command, got ${JSON.stringify(secondToken)}`);
+  }
+  if (secondToken.start !== "/agent:named:reader ".length) {
+    throw new Error(`phase 3: the second token must start after the /agent boundary + space, got ${secondToken.start}`);
+  }
+
+  // Phase 4 — mid-prose after the /agent reference stays text (free-text guard).
+  input.value = "/agent:named:reader please /tabs:y";
+  input.selectionStart = input.selectionEnd = input.value.length;
+  await composer._onComposerInput();
+  if (popup.hidden !== true) throw new Error("phase 4: mid-prose /tabs after an /agent reference must NOT open");
 });

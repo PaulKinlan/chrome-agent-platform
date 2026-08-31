@@ -5925,24 +5925,31 @@ class AgentComposer extends Component {
     // the + menu's "Choose agent" → the shared <agent-picker> in a top-layer
     // popover anchored to the + button.
     this._attach?.addEventListener("choose-agent", () => this._openAgentPicker());
-    this._agentPick?.addEventListener("agent-select", (e) => {
-      const detail = e.detail ?? {};
-      // Slash mode: replace the /agent:… token with the CANONICAL textual
-      // reference (/agent:named:<id> — never the ambiguous bare-id form).
-      const token = this._slashAgentToken;
-      this._closeAgentPicker(token ? "input" : false);
-      if (token && this._input && detail.ref) {
-        this._input.setRangeText(`/agent:${detail.ref}`, token.start, token.end, "end");
-        this._autoGrow();
-      }
-      this._setSelectedAgent(detail);
-      this._input?.focus();
-    });
+    this._agentPick?.addEventListener("agent-select", (e) => this._onAgentSelect(e));
     this._agentPick?.addEventListener("agent-cancel", () => {
       // Escape: close + revert — the typed text stays, nothing commits; focus
       // returns to the input in slash mode, to the + trigger otherwise.
       this._closeAgentPicker(this._slashAgentToken ? "input" : true);
     });
+  }
+
+  /** The shared <agent-picker> selected an agent: in slash mode, replace the
+   * /agent:… token with the CANONICAL textual reference (/agent:named:<id> —
+   * never the ambiguous bare-id form) and record the resolved boundary so a
+   * SECOND /command right after it opens its picker too (CAP-FB-20260831-
+   * MULTI-SLASH-COMMANDS-01, r2 P1). */
+  _onAgentSelect(e) {
+    const detail = e?.detail ?? {};
+    const token = this._slashAgentToken;
+    this._closeAgentPicker(token ? "input" : false);
+    if (token && this._input && detail.ref) {
+      const ref = `/agent:${detail.ref}`;
+      this._input.setRangeText(ref, token.start, token.end, "end");
+      this._recordResolvedSpan(token.start, token.start + ref.length, ref);
+      this._autoGrow();
+    }
+    this._setSelectedAgent(detail);
+    this._input?.focus();
   }
 
   // ── the agent selection (the + menu's Choose agent + a committed /agent:

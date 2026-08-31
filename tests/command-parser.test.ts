@@ -69,6 +69,43 @@ Deno.test("parseSlashCommand: a SECOND command after a resolved reference parses
   assertEquals(parseSlashCommand("/skill:screenshot-annotate /tabs:y", "/skill:scre".length, resolvedEnds)?.ns, "skill");
 });
 
+Deno.test("parseSlashCommand: boundary space matrix — zero or one literal space only (r2 P1)", () => {
+  const refEnd = "/skill:x".length; // 8
+  const ends = new Set([refEnd]);
+  // ZERO spaces: the slash directly abuts the resolved reference → command.
+  const zero = parseSlashCommand("/skill:x/tabs:y", "/skill:x/tabs:y".length, ends);
+  assertEquals(zero?.ns, "tabs");
+  assertEquals(zero?.start, refEnd);
+  // ONE space: the canonical "boundary + single space + slash" → command.
+  const one = parseSlashCommand("/skill:x /tabs:y", "/skill:x /tabs:y".length, ends);
+  assertEquals(one?.ns, "tabs");
+  assertEquals(one?.start, refEnd + 1);
+  // TWO spaces: must NOT be a command position.
+  assertEquals(parseSlashCommand("/skill:x  /tabs:y", "/skill:x  /tabs:y".length, ends), null);
+  // A TAB (not a literal space) after the boundary: NOT a command position.
+  assertEquals(parseSlashCommand("/skill:x\t/tabs:y", "/skill:x\t/tabs:y".length, ends), null);
+  // A NEWLINE after the boundary: NOT a command position.
+  assertEquals(parseSlashCommand("/skill:x\n/tabs:y", "/skill:x\n/tabs:y".length, ends), null);
+  // Two spaces with the caret mid-token: still not a command.
+  assertEquals(parseSlashCommand("/skill:x  /ta", "/skill:x  /ta".length, ends), null);
+});
+
+Deno.test("parseSlashCommand: a resolved /agent reference establishes a boundary too (r2 P1)", () => {
+  // /agent:named:reader resolves to its canonical ref; a following /skill must
+  // open. The reference text is "/agent:named:reader" (19 chars).
+  const agentEnd = "/agent:named:reader".length;
+  const ends = new Set([agentEnd]);
+  const next = parseSlashCommand("/agent:named:reader /skill:x", "/agent:named:reader /skill:x".length, ends);
+  assertEquals(next?.ns, "skill");
+  assertEquals(next?.start, agentEnd + 1);
+  // Zero spaces after the agent reference also works.
+  const nextZero = parseSlashCommand("/agent:named:reader/skill:x", "/agent:named:reader/skill:x".length, ends);
+  assertEquals(nextZero?.ns, "skill");
+  assertEquals(nextZero?.start, agentEnd);
+  // Two spaces after the agent reference: NOT a command.
+  assertEquals(parseSlashCommand("/agent:named:reader  /skill:x", "/agent:named:reader  /skill:x".length, ends), null);
+});
+
 Deno.test("parseSlashCommand: a mid-prose slash NOT after a resolved boundary NEVER parses", () => {
   // The reviewer blocker: ordinary prose mentioning a slash-command name must
   // NOT open the UI — a post-whitespace slash is only a command when the token

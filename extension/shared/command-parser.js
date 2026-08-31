@@ -37,28 +37,45 @@ export function parseSlashCommand(text, caret, resolvedEnds = null) {
     Math.min(typeof caret === "number" && Number.isFinite(caret) ? caret : t.length, t.length),
   );
   const before = t.slice(0, c);
-  // The slash must be at index 0 (start of input) OR begin a fresh token after
-  // whitespace that IMMEDIATELY follows a resolved command reference (group 1
-  // = the whitespace run, group 2 = the slash, group 3 = the ns, group 4 = arg).
-  const m = before.match(/(?:^|(\s+))(\/)([a-z]*)(?::(\S*))?$/i);
+  // The slash token at the caret: `[a-z]*` namespace, optional `:arg`. The
+  // token must be whitespace-free, end at the caret, and the arg must not
+  // contain a further slash (so "/skill:x/tabs:y" resolves the token AT the
+  // caret — "/tabs:y" — not the earlier "/skill:x" as one giant arg).
+  const m = before.match(/(\/)([a-z]*)(?::([^/ ]*))?$/i);
   if (!m) return null;
-  const ws = m[1] ?? "";
-  const slashIndex = (m.index ?? 0) + ws.length;
-  if (ws) {
-    // The position right before the whitespace run is where the previous token
-    // ended (`m.index`). That must be a RESOLVED COMMAND REFERENCE boundary —
-    // arbitrary prose (or a leading-space token, where `m.index` is 0) never
-    // qualifies, so the free-text guard is preserved.
-    const refEnd = m.index ?? 0;
-    if (refEnd <= 0 || !resolvedEnds || !resolvedEnds.has(refEnd)) return null;
+  const slashIndex = (m.index ?? 0);
+  if (slashIndex === 0) {
+    // First character of the input → a command (the original strict rule;
+    // resolved boundaries are irrelevant here).
+    return {
+      start: 0,
+      end: c,
+      ns: (m[2] || "").toLowerCase(),
+      arg: m[3] ?? "",
+      hasColon: m[3] !== undefined,
+    };
   }
-  const ns = (m[3] || "").toLowerCase();
+  // Post-boundary command position: the slash must sit at a RESOLVED COMMAND
+  // REFERENCE boundary with AT MOST ONE literal space after that boundary —
+  // exactly "boundary + optional single space + slash token". Zero spaces:
+  // the slash directly abuts the reference (its end == slashIndex). One
+  // space: the char before the slash is a literal space AND the boundary is
+  // directly before it (slashIndex - 1). Two spaces, a tab/newline, or any
+  // other preceding text (mid-prose, URLs, mid-word slashes) is NOT a command
+  // position — the free-text guard is preserved.
+  const charBefore = before[slashIndex - 1];
+  if (charBefore === " ") {
+    if (!resolvedEnds || !resolvedEnds.has(slashIndex - 1)) return null;
+  } else {
+    // Zero spaces — the reference's end must be exactly where the slash is.
+    if (!resolvedEnds || !resolvedEnds.has(slashIndex)) return null;
+  }
   return {
     start: slashIndex,
     end: c,
-    ns,
-    arg: m[4] ?? "",
-    hasColon: m[4] !== undefined,
+    ns: (m[2] || "").toLowerCase(),
+    arg: m[3] ?? "",
+    hasColon: m[3] !== undefined,
   };
 }
 

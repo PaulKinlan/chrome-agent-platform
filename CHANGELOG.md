@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.553] — 2026-08-31
+- Multi-slash commands r3: literal single-space boundary + /agent boundaries (r2 review P1s)
+
 ## [0.2.552] — 2026-08-31
 - Multi-slash commands r2: gate second commands on resolved-reference boundaries
 
