@@ -426,6 +426,15 @@ const EXPECTED = [
   "folder command: the popup lists the granted folder",
   "folder command: the granted folder attaches as a local-folder chip with its grant id",
   "folder command: retained the attached-chip screenshot",
+  "multi-slash: typed the first /skill:summarise command",
+  "multi-slash: the /skill popup lists the matching recipe",
+  "multi-slash: the skill reference is inserted and the popup closes",
+  "multi-slash: typing /tabs: after a resolved reference opens the tabs popup",
+  "multi-slash: retained the second-command popup screenshot",
+  "multi-slash: the final input holds BOTH the skill and the tab reference",
+  "multi-slash: clicked Run task",
+  "multi-slash: returned to the hub (Home) after the run",
+  "multi-slash: the two-command task reached the agent journal with both references",
   "NTP: task input present",
   "NTP: typed a task via Input events",
   "NTP: textarea reflects the typed text",
@@ -1432,6 +1441,101 @@ async function main() {
     const folderShot = await captureShot(cdp, ntpSession);
     if (folderShot) await writeEvidence("folder-command-chip.png", folderShot);
     check("folder command: retained the attached-chip screenshot", folderShot !== null && folderShot.length > 200);
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 1a3 — CAP-FB-20260831-MULTI-SLASH-COMMANDS-01. Owner report:
+    // "/skill:… /tabs:…" — the FIRST /command works, but after it completes the
+    // SECOND /command never opens. Fix: a slash that begins a fresh token AFTER
+    // real text is a command position (gated to known namespaces). Reproduce
+    // the exact flow through the REAL composer: /skill:summarise → pick → then
+    // " /tabs:" → the tabs picker must open at the SECOND token's position.
+    await evalIn(cdp, ntpSession, `(() => { document.querySelector('agent-composer')?.focusInput?.(); return true; })()`);
+    await sleep(400);
+    check("multi-slash: typed the first /skill:summarise command", await typeInto(cdp, ntpSession, "#task-input", "/skill:summarise"));
+    // Poll for the skill popup row (skill.list loads async from the SW).
+    let skillParsed = { rows: [], open: false };
+    for (let i = 0; i < 30; i++) {
+      const skillPopup = await evalIn(cdp, ntpSession, `(() => {
+        const comp = document.querySelector('agent-composer');
+        const pop = comp?.querySelector('.popup');
+        if (!pop) return JSON.stringify({ rows: [], open: false });
+        const rows = [...pop.querySelectorAll('.item')].map((r) => ({ text: r.querySelector('.lbl')?.textContent ?? '', index: r.getAttribute('data-index') }));
+        return JSON.stringify({ rows, open: !pop.hidden });
+      })()`);
+      skillParsed = JSON.parse(skillPopup ?? "{}");
+      if (skillParsed.open === true && (skillParsed.rows || []).some((r) => /Summarise this page/.test(r.text))) break;
+      await sleep(200);
+    }
+    const summaryRow = (skillParsed.rows || []).find((r) => /Summarise this page/.test(r.text));
+    check("multi-slash: the /skill popup lists the matching recipe", skillParsed.open === true && Boolean(summaryRow));
+    // Resolve the skill row with a REAL Enter (the same path an owner uses).
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, ntpSession);
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, ntpSession);
+    await sleep(800);
+    const afterSkill = await evalIn(cdp, ntpSession, `(() => {
+      const comp = document.querySelector('agent-composer');
+      const inp = comp?.querySelector('#task-input');
+      const pop = comp?.querySelector('.popup');
+      return JSON.stringify({ value: inp?.value ?? '', popupHidden: pop ? pop.hidden : true });
+    })()`);
+    const skillResolved = JSON.parse(afterSkill ?? "{}");
+    check("multi-slash: the skill reference is inserted and the popup closes",
+      /\/skill:page-summary/.test(skillResolved?.value ?? "") && skillResolved?.popupHidden === true);
+    // The SECOND command: append a space + /tabs: to the resolved text. On the
+    // pre-fix code the /tabs token is mid-input and NEVER opens the picker.
+    await typeText(cdp, ntpSession, " /tabs:");
+    let tabsParsed = { rows: [], open: false };
+    for (let i = 0; i < 30; i++) {
+      const tabsPopup = await evalIn(cdp, ntpSession, `(() => {
+        const comp = document.querySelector('agent-composer');
+        const pop = comp?.querySelector('.popup');
+        if (!pop) return JSON.stringify({ rows: [], open: false });
+        const rows = [...pop.querySelectorAll('.item')].map((r) => ({ text: r.querySelector('.lbl')?.textContent ?? '', index: r.getAttribute('data-index') }));
+        return JSON.stringify({ rows, open: !pop.hidden });
+      })()`);
+      tabsParsed = JSON.parse(tabsPopup ?? "{}");
+      if (tabsParsed.open === true && Array.isArray(tabsParsed.rows) && tabsParsed.rows.length >= 1) break;
+      await sleep(200);
+    }
+    check("multi-slash: typing /tabs: after a resolved reference opens the tabs popup",
+      tabsParsed.open === true && Array.isArray(tabsParsed.rows) && tabsParsed.rows.length >= 1);
+    const tabsShot = await captureShot(cdp, ntpSession);
+    if (tabsShot) await writeEvidence("multi-slash-tabs-popup.png", tabsShot);
+    check("multi-slash: retained the second-command popup screenshot", tabsShot !== null && tabsShot.length > 200);
+    // Resolve the first tab row and run the task: both references must reach
+    // the agent journal and the demo run must complete.
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, ntpSession);
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, ntpSession);
+    await sleep(800);
+    const multiValue = await evalIn(cdp, ntpSession, `document.querySelector('agent-composer #task-input')?.value ?? ''`);
+    check("multi-slash: the final input holds BOTH the skill and the tab reference",
+      /\/skill:page-summary/.test(multiValue) && /\/tabs:/.test(multiValue));
+    check("multi-slash: clicked Run task", await clickSel(cdp, ntpSession, "#run-task"));
+    // Wait for the run to FULLY settle (the demo model streams; the journal
+    // entry lands at run START, so a journal poll is not enough — the run-end
+    // UI re-render clears the composer and must be done before the NTP block
+    // below types). Poll run.list until the latest run is settled.
+    let multiTask = null;
+    let runSettled = false;
+    for (let i = 0; i < 80 && !runSettled; i++) {
+      await sleep(500);
+      const runs = await msgValue({ type: "run.list" }).catch(() => null);
+      const rows = Array.isArray(runs?.runs) ? runs.runs : [];
+      const latest = rows[rows.length - 1];
+      // The durable public record exposes `phase` (terminal = "terminal" | "cancelled").
+      runSettled = !!latest && (latest?.phase === "terminal" || latest?.phase === "cancelled");
+      if (!runSettled) continue;
+      const journalMulti = await msgValue({ type: "memory.get", origin: "master", key: "journal" }).catch(() => []) ?? [];
+      multiTask = (Array.isArray(journalMulti) ? journalMulti : [])
+        .find((e) => typeof e?.task === "string" && /\/skill:page-summary/.test(e.task) && /\/tabs:/.test(e.task));
+    }
+    await sleep(1500); // the run-end UI settle before the NTP block
+    // The hub's run opens the THREAD view, hiding the hub composer. Return to
+    // the hub (Home) so the NTP block below types into the visible composer.
+    const homeClicked = await clickSel(cdp, ntpSession, "#home");
+    await sleep(1200);
+    check("multi-slash: returned to the hub (Home) after the run", homeClicked === true);
+    check("multi-slash: the two-command task reached the agent journal with both references", Boolean(multiTask));
 
     check(
       "NTP: task input present",

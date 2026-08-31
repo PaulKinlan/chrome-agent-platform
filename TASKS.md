@@ -52,6 +52,28 @@ and `scripts/check-tasks-baseline.json` must only ever shrink.
 
 
 
+## [CAP-FB-20260831-MULTI-SLASH-COMMANDS-01] Only the first /command in an input works — sequential commands fail
+- Feedback: 2026-08-31 — owner: "/skill:screenshot-annotate /tabs:<tab> works for the FIRST command, but after it completes the SECOND /command never opens. I want to make sure that we're able to use multiple /commands inside the input method."
+- Updated: 2026-08-31 22:30 UTC
+- Status: DONE
+- Resume: worker (hub coordinator dispatch) — r2 redesign after the r1 review blocked the whitespace-relaxation as a prose false positive. parseSlashCommand now treats a slash typed IMMEDIATELY AFTER a RESOLVED COMMAND REFERENCE the composer inserted earlier (optionally after one space) as a command position; the composer records the resolved-reference spans ({start,end,text}) when it inserts a picked reference, validates them against the live input on every parse, and passes the boundary ends to the parser. Mid-prose slashes ("please inspect /agent:pr"), URLs, mid-word slashes, leading-space tokens and invented namespaces stay text — the original strict guard passes UNCHANGED. Falsification: unit + component RED→GREEN; journey reproduces the owner's exact flow (/skill:summarise → pick → " /tabs:" → the tabs picker opens at the SECOND token; both references land in the run).
+- Priority: P1
+- Owner: hub coordinator (journal session)
+- Workspace: /tmp/cap-multi-slash
+- Branch: cap-multi-slash
+- Base: origin/main 1592bf0a
+- Candidate: — (worker commits; see git log)
+- Shipping: review pending (independent reviewer)
+- Acceptance: (1) unit — sequential parse `/skill:x /tabs:y` yields skill at 0 AND tabs after the whitespace with correct start/end; caret inside the second token selects it; free-text cases stay non-commands (URL, mid-word, leading-space, unknown ns). (2) component — after a /skill resolution inserts the reference, typing /tabs: opens the tabs popup (popup state resets between commands). (3) journey — /skill:summarise + /tabs: both resolve, the task runs, and the journal holds both references. (4) gates: build; full suite; chrome journeys.
+- History:
+  - 2026-08-31 21:30 UTC — r3 review PASS (545faf35); merged forward by the hub coordinator. Rounds: r1 blocked (prose false-positive) → r2 boundary-gated design → r3 single-space grammar + /agent spans.
+  - 2026-08-31 21:30 UTC — r1 (worker): whitespace-preceded relaxation, gated to known namespaces.
+  - 2026-08-31 21:50 UTC — r1 REVIEW (independent): BLOCK — the whitespace-preceded relaxation reintroduces the prose false positive the strict guard existed to prevent (known slash namespaces in ordinary prose reopen the command UI).
+  - 2026-08-31 22:30 UTC — r2 (worker, per coordinator design decision): narrow command positions to exactly the owner's workflow — a slash after whitespace is a command ONLY when the token before that whitespace ends at a RESOLVED COMMAND REFERENCE boundary the composer records (spans validated against the live input). Mid-prose slashes never open the UI. Unit 5/5 + component 2/2 (RED on the strict parser: sequential + component tests failed with "the /tabs popup must open"; GREEN after); full suite 2811/0; journey 281/281 incl. all 9 multi-slash checks + the downstream NTP block. Ready for r2 review.
+  - 2026-08-31 23:10 UTC — r2 REVIEW (independent): REVISE, 2 P1s. (1) command-parser boundary grammar did not enforce ZERO-OR-ONE literal space after a resolved reference (any whitespace run qualified). (2) resolved /agent references did not record a boundary (only /skill and /tabs spans did).
+  - 2026-08-31 23:40 UTC — r3 (worker): (1) the parser now enforces exactly "boundary + optional single literal space + slash token" — zero spaces (slash abuts the reference) and one space qualify; two spaces, tabs and newlines do NOT; the arg grammar excludes slashes so "/skill:x/tabs:y" resolves the caret token, not one giant first-command. (2) the /agent selection path (refactored to _onAgentSelect) records its resolved span identically, so /agent → /skill chains work. Unit 7/7 + component 3/3 (RED on r2 code: space matrix + /agent tests failed; GREEN after); full suite 2814/0; journey 281/281. Ready for r3 review.
+
+
 ## [CAP-FB-YYYYMMDD-SLUG-NN] Title
 - Feedback: YYYY-MM-DD — public-safe source and summary
 - Updated: YYYY-MM-DD HH:MM UTC
