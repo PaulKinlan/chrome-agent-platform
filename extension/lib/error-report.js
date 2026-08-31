@@ -231,6 +231,22 @@ export function describeError(error, context = {}) {
   //    HOST_PERMISSION category (the UI shows a "Grant network access"
   //    button), NOT the generic PERMISSION/NETWORK category. Check FIRST so
   //    the gate's "not granted" phrasing never falls through to NETWORK.
+  //    EXCEPTION (CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01): a MODEL-MISSING
+  //    gate refusal is a CONFIG error, not a permission gap — it must be
+  //    classified as MODEL_CONFIG ("Check the model id in Settings") so the
+  //    hub/named/background route catches never surface a false
+  //    "grant network access" action.
+  if (/model id missing/i.test(raw)) {
+    return build(
+      ERROR_CATEGORY.MODEL_CONFIG,
+      provider
+        ? `${provider} has no model id configured`
+        : (raw || "the provider has no model id configured"),
+      ACTION[ERROR_CATEGORY.MODEL_CONFIG],
+      raw,
+      detailParts,
+    );
+  }
   if (
     e?.name === "ProviderUnavailableError" ||
     /network access to the provider .* is not granted/i.test(raw)

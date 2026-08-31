@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.509] — 2026-08-31
+- Model-save: classify the model-missing gate refusal as model-config end to end
+
 ## [0.2.508] — 2026-08-31
 - Changelog: user-voice entries for the model-save fix
 

@@ -2399,10 +2399,12 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         // metadata ("Retry after the provider becomes available") nor feed
         // provider retry classification. The fix is in Settings, not a retry
         // (CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01, review r2 BLOCKER 2).
-        errorCategory: early.code === "model id missing" ? "config" : "provider",
+        // The canonical category is MODEL_CONFIG so the terminal row and the
+        // downstream describeError() agree (review r3 P1).
+        errorCategory: early.code === "model id missing" ? "model-config" : "provider",
         errorReason: early.reason,
         errorAction: early.code === "model id missing"
-          ? "Set the model id in Settings → Providers, then run again."
+          ? "Check the model id in Settings — it may not exist for this provider."
           : "Retry after the provider becomes available.",
         logicalId: taskId,
       });
