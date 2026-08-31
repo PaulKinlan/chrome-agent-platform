@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.520] — 2026-08-31
+- FOLDER-COMMAND-01 DONE after r2 review accepted the code
+
 ## [0.2.519] — 2026-08-31
 - Fix r1 review findings: bare /folder lists grants immediately; honest copy
 
