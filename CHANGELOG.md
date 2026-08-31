@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.566] — 2026-08-31
+- Work has begun on folder tools and external tool-server support.
+
 ## [0.2.565] — 2026-08-31
 - Merge remote-tracking branch 'origin/main' into coordinator
 
