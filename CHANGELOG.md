@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.551] — 2026-08-31
+- Multi-slash commands: a /command after real text opens (owner P1, )
+
 ## [0.2.550] — 2026-08-31
 - Five more pieces of owner feedback were written up as tasks.
 

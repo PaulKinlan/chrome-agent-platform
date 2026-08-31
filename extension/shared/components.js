@@ -6496,14 +6496,14 @@ class AgentComposer extends Component {
     const text = input.value;
     const caret = input.selectionStart ?? text.length;
 
-    // / command — STRICT command position only (shared/command-parser.js): the
-    // "/" must be the FIRST character of the input and the token up to the
-    // caret must be whitespace-free. Ordinary prose ("please inspect
-    // /agent:pr"), URLs ("https://example.com/agent:foo"), and a leading-space
-    // " /agent" NEVER open the command UI (the review's free-text false
-    // positive); the token ends at the first space, so the task text after
-    // "/agent:<ref> " is plain text again.
-    const slash = parseSlashCommand(text, caret);
+    // / command — command position (shared/command-parser.js): a slash at the
+    // start of the input, OR a slash that begins a fresh whitespace-delimited
+    // token after real text (CAP-FB-20260831-MULTI-SLASH-COMMANDS-01: multiple
+    // /commands in one input). Post-whitespace tokens only open the UI for a
+    // KNOWN command namespace; URLs, mid-word slashes, leading-space tokens and
+    // invented namespaces stay ordinary text. The token ends at the first
+    // space, so the task text after a command is plain text again.
+    const slash = parseSlashCommand(text, caret, COMMAND_NAMESPACES.map((n) => n.id));
     if (slash?.ns === "agent") {
       // /agent or /agent:query — the ONE shared <agent-picker> (the same
       // renderer + a11y contract as the + menu's Choose agent). Exact /agent

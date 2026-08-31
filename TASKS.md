@@ -226,6 +226,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | OPEN | [`CAP-FB-20260830-EXEC-BUILD-FLAG-01`](#cap-fb-20260830-exec-build-flag-01-a-show-developer-features-switch-hides-the-platform-lanes-from-the-default-settings-and-hub) | A "Show developer features" switch hides the platform lanes from the default Settings and hub |
 | P1 | OPEN | [`CAP-FB-20260830-MODEL-TOOL-ADHERENCE-01`](#cap-fb-20260830-model-tool-adherence-01-with-some-models-make-me-a-website-never-creates-an-artifact-and-remember-x-is-answered-with-a-lie) | With some models "make me a website" never creates an artifact and "remember X" is answered with a lie |
 | P1 | OPEN | [`CAP-FB-20260830-PROVIDER-DEFAULT-AND-KEY-FLOW-01`](#cap-fb-20260830-provider-default-and-key-flow-01-a-recommended-default-provider-and-a-four-click-key-flow) | A recommended default provider and a four-click key flow |
+| P1 | DONE | [`CAP-FB-20260831-MULTI-SLASH-COMMANDS-01`](#cap-fb-20260831-multi-slash-commands-01-only-the-first-command-in-an-input-works--sequential-commands-fail) | Only the first /command in an input works — sequential commands fail |
 | P1 | OPEN | [`CAP-FB-20260831-BOARD-VISIBILITY-01`](#cap-fb-20260831-board-visibility-01-the-shared-jobs-board-is-hidden-and-buried--the-owner-has-no-visibility-into-requestedsharedclaimed-work) | The shared jobs board is hidden and buried — the owner has no visibility into requested/shared/claimed work |
 | P2 | BLOCKED | [`CAP-FB-20260822-MV3-WASM-RUNTIME-PROBE-01`](#cap-fb-20260822-mv3-wasm-runtime-probe-01-loaded-mv3-wasm-runtime-and-termination-probe) | Loaded-MV3 Wasm runtime and termination probe |
 | P2 | BLOCKED | [`CAP-FB-20260822-OWNER-WASM-INSTALL-01`](#cap-fb-20260822-owner-wasm-install-01-owner-selected-wasm-package-lifecycle) | Owner-selected Wasm package lifecycle |
@@ -4583,3 +4584,19 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Recover: `git log --oneline --all --grep=CAP-FB-20260831-SCHEDULED-NEXT-RUN-WIDGET-01`
 - History:
   - 2026-08-31 19:20 UTC — filed from owner feedback: no visible next-run for scheduled tasks; wants a "next run" widget and a "routine" concept (not background agents).
+
+## [CAP-FB-20260831-MULTI-SLASH-COMMANDS-01] Only the first /command in an input works — sequential commands fail
+- Feedback: 2026-08-31 — owner: "/skill:screenshot-annotate /tabs:<tab> works for the FIRST command, but after it completes the SECOND /command never opens. I want to make sure that we're able to use multiple /commands inside the input method."
+- Updated: 2026-08-31 21:30 UTC
+- Status: DONE
+- Resume: worker (hub coordinator dispatch) — parseSlashCommand now treats a slash that begins a fresh whitespace-delimited token AFTER real text as a command position, gated to KNOWN namespaces (URLs, mid-word slashes, leading-space tokens and invented namespaces stay text). The composer passes its COMMAND_NAMESPACES ids as the known set. Falsification: unit + component RED→GREEN; journey reproduces the owner's exact flow (/skill:summarise → pick → " /tabs:" → the tabs picker opens at the SECOND token; both references land in the run).
+- Priority: P1
+- Owner: hub coordinator (journal session)
+- Workspace: /tmp/cap-multi-slash
+- Branch: cap-multi-slash
+- Base: origin/main 1592bf0a
+- Candidate: — (worker commits; see git log)
+- Shipping: review pending (independent reviewer)
+- Acceptance: (1) unit — sequential parse `/skill:x /tabs:y` yields skill at 0 AND tabs after the whitespace with correct start/end; caret inside the second token selects it; free-text cases stay non-commands (URL, mid-word, leading-space, unknown ns). (2) component — after a /skill resolution inserts the reference, typing /tabs: opens the tabs popup (popup state resets between commands). (3) journey — /skill:summarise + /tabs: both resolve, the task runs, and the journal holds both references. (4) gates: build; full suite; chrome journeys.
+- History:
+  - 2026-08-31 21:30 UTC — DONE (worker): parser extended + consumer passes known namespaces; unit 5/5 + component 1/1 (RED on the old parser: sequential test failed with "the /tabs popup must open"); full suite 2810/0; journey: 11 multi-slash checks PASS incl. the tabs-popup-after-reference + both-references-in-journal; the downstream NTP block stays green after the journey returns to the hub.
