@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.2.508] — 2026-08-31
+- Changelog: user-voice entries for the model-save fix
+
 ## [0.2.507] — 2026-08-31
-- Model save: route Use through commitTyped, settle model-missing as a config error, report the preserved key honestly
+- Saving a provider keeps the model you typed even when you don't pick a suggestion, and a provider with no model shows a clear Settings warning instead of silently running the demo model.
 
 ## [0.2.506] — 2026-08-31
 - Typing a model name now saves it, and a provider without a model shows a clear Settings warning instead of silently running the demo model.
