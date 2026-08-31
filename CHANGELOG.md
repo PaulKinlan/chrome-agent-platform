@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.528] — 2026-08-31
+- DONE (coordinator gates 2758/0, 255/255)
+
 ## [0.2.527] — 2026-08-31
 - The new tab now shows a single timeline of your recent tasks below the composer.
 
