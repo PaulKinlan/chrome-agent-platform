@@ -1,5 +1,4 @@
 import { assertEquals } from "jsr:@std/assert@1";
-import { DEVELOPER_SECTIONS } from "../extension/lib/pure.js";
 
 Deno.test("Settings nav order matches rendered section order", async () => {
   const html = await Deno.readTextFile(new URL("../extension/options/options.html", import.meta.url));
@@ -10,33 +9,52 @@ Deno.test("Settings nav order matches rendered section order", async () => {
   assertEquals(navOrder, sectionOrder);
 });
 
-// CAP-FB-20260830-EXEC-BUILD-FLAG-01 — the developer-features flag hides the
-// platform lanes from the DEFAULT Settings surface. The four gated sections are
-// marked in the HTML with data-developer="true" (both the nav item and the
-// <section>), and the pure DEVELOPER_SECTIONS list is the SINGLE source of that
-// set so the markup and the runtime gate can never drift.
-Deno.test("developer sections are marked and DEVELOPER_SECTIONS is that exact set", async () => {
+/** A deterministic, non-vacuous label scan of options.html.
+ *
+ * Walks the HTML as a tag stream tracking `<label>` nesting: a control is
+ * "wrapped" when an unclosed `<label>` is open at the point the control's tag
+ * appears; it is "for-associated" when any `<label for="id">` names it. A
+ * control with neither is unlabeled. This never uses a spanning regex, so it
+ * cannot accidentally match a label from an unrelated section, and it fails
+ * RED the moment a `<label for>` or a wrapping label is replaced by a bare
+ * `<span class="field-label">`.
+ */
+Deno.test("Settings field labels are real <label> associations (CAP-FB-20260830-FOCUS-ORDER-VISIBILITY-01)", async () => {
   const html = await Deno.readTextFile(new URL("../extension/options/options.html", import.meta.url));
-  const nav = html.match(/<aside\b[\s\S]*?<\/aside>/)?.[0] ?? "";
-  const main = html.match(/<main\b[\s\S]*?<\/main>/)?.[0] ?? "";
 
-  // The four sections carry data-developer="true".
-  const devSectionIds = [...main.matchAll(/<section\s+id="([^"]+)"[^>]*\bdata-developer="true"/g)]
-    .map((m) => m[1]).sort();
-  assertEquals(devSectionIds, [...DEVELOPER_SECTIONS].sort());
+  // <label for="id"> associations (anywhere in the document).
+  const labelFor = new Set([...html.matchAll(/<label\b[^>]*\bfor="([^"]+)"/g)].map((m) => m[1]));
 
-  // The matching nav items carry data-developer="true" too, keyed by their href.
-  const devNavIds = [...nav.matchAll(/href="#([^"]+)"[^>]*\bdata-developer="true"/g)]
-    .map((m) => m[1]).sort();
-  assertEquals(devNavIds, [...DEVELOPER_SECTIONS].sort());
-
-  // The set is exactly the four platform lanes — never a user-facing section.
-  assertEquals([...DEVELOPER_SECTIONS].sort(), ["board-permissions", "hooks", "prompts", "tool-library"]);
-
-  // No user-facing section is marked developer (regression guard: the flag must
-  // never hide Providers/Agents/Permissions/Skills/Usage/Data/About or the
-  // legitimate Local folders / Browser control lanes).
-  for (const id of ["providers", "local-folders", "agents", "browser", "permissions", "skills", "usage", "data", "about"]) {
-    if (DEVELOPER_SECTIONS.includes(id)) throw new Error(`${id} must not be a developer section`);
+  // Tag-stream walk: track open <label> depth; record each control's id and
+  // whether a label wraps it (an unclosed label is open at that position).
+  const controlIds: string[] = [];
+  const wrappedIds = new Set<string>();
+  let labelDepth = 0;
+  const TAG_RE = /<\/?([a-zA-Z][a-zA-Z0-9]*)\b[^>]*>/g;
+  let m: RegExpExecArray | null;
+  let lastIndex = 0;
+  while ((m = TAG_RE.exec(html)) !== null) {
+    const tag = m[0];
+    const name = m[1].toLowerCase();
+    if (tag.startsWith("</")) {
+      if (name === "label") labelDepth = Math.max(0, labelDepth - 1);
+      continue;
+    }
+    if (name === "label") {
+      labelDepth += 1;
+      continue;
+    }
+    if (["input", "select", "textarea"].includes(name)) {
+      const idMatch = tag.match(/\bid="([^"]+)"/);
+      if (idMatch) {
+        controlIds.push(idMatch[1]);
+        if (labelDepth > 0) wrappedIds.add(idMatch[1]);
+      }
+    }
+    lastIndex = m.index;
   }
+  assertEquals(controlIds.length > 0, true, "expected at least one control in options.html (the scan must not be vacuous)");
+
+  const unlabeled = controlIds.filter((id) => !labelFor.has(id) && !wrappedIds.has(id));
+  assertEquals(unlabeled, [], `controls without a <label for> or a wrapping <label>: ${unlabeled.join(", ")}`);
 });

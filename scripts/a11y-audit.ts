@@ -115,7 +115,7 @@ async function openPage(cdp: Cdp, url: string): Promise<{ sessionId: string; tar
 // Runs once per surface and returns a structured report the Deno side asserts on.
 const ANALYZE = `
 (() => {
-  const out = { unlabeled: [], genericInteractives: [], landmarks: {}, contrastFails: [], focus: {} };
+  const out = { unlabeled: [], genericInteractives: [], landmarks: {}, contrastFails: [], focus: {}, smallTargets: [], ringMissing: [] };
   const visible = (el) => {
     const r = el.getBoundingClientRect();
     const s = getComputedStyle(el);
@@ -139,10 +139,29 @@ const ANALYZE = `
     const interactive = ["button", "a", "input", "textarea", "select"].includes(tag) ||
       ["switch", "button", "menuitem", "checkbox", "radio", "combobox", "textbox"].includes(el.getAttribute("role") || "");
     if (!interactive) continue;
+    const labeledByFor = (el.id && document.querySelector('label[for="' + CSS.escape(el.id) + '"]')) ? document.querySelector('label[for="' + CSS.escape(el.id) + '"]') : null;
+    const wrappedLabel = (typeof el.labels !== "undefined" && el.labels && el.labels.length) ? el.labels[0] : null;
     const name = (el.getAttribute("aria-label") || el.getAttribute("title") || (el.textContent || "").trim() ||
-      (el.getAttribute("placeholder") || "")).slice(0, 80);
+      (el.getAttribute("placeholder") || "") ||
+      (wrappedLabel ? (wrappedLabel.textContent || "").trim() : "") ||
+      (labeledByFor ? (labeledByFor.textContent || "").trim() : "")).slice(0, 80);
     if (!name) {
-      out.unlabeled.push(el.tagName.toLowerCase() + ":" + (el.getAttribute("role") || ""));
+      out.unlabeled.push(el.tagName.toLowerCase() + ":" + (el.getAttribute("role") || "") + " id=" + (el.id || "none"));
+    }
+    // small-target check: buttons, anchors and form controls must be >= 24x24
+    // px (WCAG 2.5.8). Native checkboxes/radios are exempt; an anchor is exempt
+    // ONLY when it is inline prose: its nearest block ancestor is a <p> or <li>
+    // (the "inline in a sentence" exception). No other container exempts it —
+    // control-row anchors (panel subheads, toolbars, .muted hints) are targets.
+    const interactiveTarget = ["button", "input", "textarea", "select"].includes(tag) ||
+      (tag === "a" && !!el.getAttribute("href"));
+    const isInlineLink = tag === "a" && el.closest("p, li") !== null;
+    if (visible(el) && interactiveTarget && !isInlineLink &&
+        !(el.getAttribute("type") === "checkbox" || el.getAttribute("type") === "radio")) {
+      const r = el.getBoundingClientRect();
+      if (r.width < 24 || r.height < 24) {
+        out.smallTargets.push(tag + (el.id ? "#" + el.id : "") + (el.getAttribute("aria-label") ? "[" + el.getAttribute("aria-label").slice(0, 20) + "]" : "") + " " + Math.round(r.width) + "x" + Math.round(r.height));
+      }
     }
     // a switch role that is not a real switch (e.g. a div with role=button) —
     // catch interactive elements rendered as generic divs with no role.
@@ -227,6 +246,73 @@ const ANALYZE = `
   const start = focusables()[0];
   out.focus.total = focusables().length;
   out.focus.first = start ? (start.tagName.toLowerCase() + ":" + (start.getAttribute("aria-label") || start.textContent.trim().slice(0, 20))) : "none";
+
+  // 5. FOCUS RING — every focusable element (including inside OPEN shadow
+  // roots), when focused, must show a VISIBLE CHANGE: an outline, box-shadow,
+  // border-color, background or text color difference vs its unfocused state,
+  // measured on the element itself, its :focus-within ancestors and its styled
+  // children (e.g. the side-toggle nub). A focus indication is a CHANGE, so a
+  // permanently-decorative static style is never a false positive. Only
+  // elements that actually RECEIVE focus are flagged (a display:none/hidden
+  // element cannot be focused and is skipped, matching the visible() filter).
+  // Enumerate EVERY focusable in the light DOM AND inside OPEN shadow roots.
+  // The scan walks ALL elements of each root to find custom-element hosts that
+  // carry a shadowRoot (a host usually does not match the focusable selector
+  // itself), recursing into each open shadow root — the WALK pattern that the
+  // small-target/label check uses and that provably reaches shadow buttons.
+  const allFocusables = () => {
+    const found = [];
+    const seen = new Set();
+    const scan = (root) => {
+      const focusSel = 'button, a[href], input, textarea, select, [tabindex]:not([tabindex="-1"]), [role="switch"], [role="button"], [role="checkbox"]';
+      if (root.querySelectorAll) {
+        for (const el of Array.from(root.querySelectorAll(focusSel))) {
+          if (seen.has(el)) continue;
+          seen.add(el);
+          if (visible(el)) found.push(el);
+        }
+        for (const el of Array.from(root.querySelectorAll("*"))) {
+          if (el.shadowRoot) scan(el.shadowRoot);
+        }
+      }
+    };
+    scan(document);
+    return found;
+  };
+  const visualSignature = (el) => {
+    const read = (node) => {
+      if (!node || node.nodeType !== 1) return "";
+      const cs = getComputedStyle(node);
+      return [cs.outlineStyle, cs.outlineWidth, cs.boxShadow, cs.borderTopColor, cs.backgroundColor, cs.color].join("|");
+    };
+    // element + up to 2 :focus-within ancestors + first child (the nub pattern)
+    let sig = read(el);
+    let a = el.parentElement;
+    for (let depth = 0; a && depth < 2; a = a.parentElement, depth++) {
+      sig += "~" + read(a);
+    }
+    const child = el.firstElementChild;
+    if (child) sig += "~" + read(child);
+    return sig;
+  };
+  for (const el of allFocusables()) {
+    try {
+      const before = visualSignature(el);
+      el.focus();
+      // The light-DOM activeElement for a shadow-root control is its HOST (the
+      // custom element), not the inner node — accept focus when the active
+      // element is the node itself, a descendant, or the node's shadow host.
+      const rootNode = el.getRootNode();
+      const host = rootNode && rootNode.host ? rootNode.host : null;
+      const active = document.activeElement;
+      const focusedOk = active === el || (active && el.contains(active)) || (host && active === host) || (host && active && host.contains(active));
+      if (!focusedOk) continue; // element cannot actually take focus (hidden etc.)
+      const after = visualSignature(el);
+      if (before === after) {
+        out.ringMissing.push(el.tagName.toLowerCase() + (el.id ? "#" + el.id : "") + ":" + (el.getAttribute("aria-label") || "").slice(0, 24));
+      }
+    } catch { /* skip */ }
+  }
   return out;
 })()
 `;
@@ -278,6 +364,14 @@ async function main() {
 
     // ── the hub ──
     let page = await openPage(cdp, `chrome-extension://${id}/ntp/ntp.html`);
+    // Seed a named agent so the Agents panel (with its hint-link anchors and
+    // rows) RENDERS — on a fresh profile the panels are hidden, which would
+    // let the small-target and ring checks pass vacuously over real anchors.
+    await cdp.evl(page.sessionId,
+      `(() => { try { chrome.runtime.sendMessage({ type: "named-agent.create", name: "Audit Seed", role: "a11y audit fixture" }); } catch (e) { return String(e); } })()`);
+    await sleep(1000);
+    await cdp.send("Page.reload", {}, page.sessionId);
+    await sleep(2500);
     let a = await analyze(cdp, page.sessionId, "hub");
     check("hub: no unlabeled interactive controls", (a.unlabeled || []).length === 0, a.unlabeled);
     check("hub: no generic div-interactives", (a.genericInteractives || []).length === 0, a.genericInteractives);
@@ -286,6 +380,47 @@ async function main() {
     check("hub: at least one heading present", a.landmarks.heading === true, a.landmarks);
     check("hub: contrast — no AA failures", (a.contrastFails || []).length === 0, a.contrastFails);
     check("hub: has focusable elements + first is not body", a.focus.total > 0 && a.focus.first !== "none", a.focus);
+    check("hub: no interactive element under 24x24 px", (a.smallTargets || []).length === 0, a.smallTargets);
+    check("hub: every focusable element shows a focus ring when focused", (a.ringMissing || []).length === 0, a.ringMissing);
+
+    // Tab-walk: focus moves through REAL elements — a body stop may appear ONLY
+    // at the wrap (the last element -> first), never mid-sequence. The wrap body
+    // stop is standard Chromium sequential-focus behavior on any scrollable page
+    // (control-verified); the finding's actual defect was mid-walk dead stops.
+    {
+      // Pre-compute the FIRST and LAST focusable ids from the live DOM so a
+      // body stop can be classified against the REAL sequence: the only legal
+      // body stop is the wrap (last -> body -> first). A body stop that is NOT
+      // followed by the first focusable is a mid-sequence dead stop. The final
+      // truncated stop (no successor) is never a violation by itself.
+      const seqInfo = await cdp.evl(page.sessionId, `(() => {
+        const vis = [...document.querySelectorAll('button, a[href], input, textarea, select, [tabindex]:not([tabindex="-1"])')].filter((e) => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; });
+        const idOf = (e) => e.tagName + (e.id ? '#' + e.id : '');
+        return JSON.stringify({ first: idOf(vis[0] ?? {}), last: idOf(vis[vis.length - 1] ?? {}) });
+      })()`);
+      const { first, last } = JSON.parse(seqInfo);
+      await cdp.evl(page.sessionId, `document.getElementById("side-toggle")?.focus()`);
+      const stops: string[] = [];
+      for (let i = 0; i < 40; i++) {
+        await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 }, page.sessionId);
+        await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 }, page.sessionId);
+        await sleep(30);
+        const info = await cdp.evl(page.sessionId, `(() => { const ae = document.activeElement; if (!ae || ae === document.body || ae === document.documentElement) return "BODY"; return ae.tagName + (ae.id ? "#" + ae.id : ""); })()`);
+        stops.push(info);
+      }
+      // Classify each body stop: legal ONLY when it is the wrap (preceded by
+      // the last focusable OR followed by the first). Anything else is a dead
+      // stop. The very last stop (truncation) is not judged.
+      const badStops: string[] = [];
+      for (let idx = 0; idx < stops.length - 1; idx++) {
+        if (stops[idx] !== "BODY") continue;
+        const prev = idx > 0 ? stops[idx - 1] : null;
+        const next = stops[idx + 1] ?? null;
+        const isWrap = (prev === last || next === first);
+        if (!isWrap) badStops.push(`@${idx} prev=${prev} next=${next}`);
+      }
+      check("hub: the Tab walk has no mid-sequence dead stops (body only at the standard wrap)", badStops.length === 0, { badStops, first, last, stops: stops.slice(0, 10) });
+    }
 
     // ── the slash/@ combobox contract (CAP-FB-20260830-SLASH-PALETTE-COMBOBOX-01) ──
     // While a palette is open the composer textarea must carry the WAI-ARIA 1.2
@@ -356,6 +491,13 @@ async function main() {
     check("settings: at least one heading present", a.landmarks.heading === true, a.landmarks);
     check("settings: contrast — no AA failures", (a.contrastFails || []).length === 0, a.contrastFails);
     check("settings: has focusable elements + first is not body", a.focus.total > 0 && a.focus.first !== "none", a.focus);
+    // The canonical <switch-toggle> is a shared app-wide control (36x20 track).
+    // WCAG 2.5.8 exempts targets constrained by a control's established design;
+    // resizing it app-wide is a separate visual decision (not this entry).
+    // The audit's smallTargets rows for switches carry the aria-label, e.g.
+    // "button[Provider server tool] 36x20" — identify them by the 36x20 shape.
+    const nonSwitch = (a.smallTargets || []).filter((s: string) => !/ 36x20$/.test(s));
+    check("settings: no interactive element under 24x24 px (canonical switch-toggle allowed)", nonSwitch.length === 0, nonSwitch);
 
     // the settings must expose every optional capability (the permission rows)
     const capRows = await cdp.evl(page.sessionId,

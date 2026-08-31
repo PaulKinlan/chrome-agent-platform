@@ -676,6 +676,12 @@
       font-weight: 500;
       color: var(--accent);
       text-decoration: none;
+      /* CAP-FB-20260830-FOCUS-ORDER-VISIBILITY-01: 18px-tall links were under
+         the 24px minimum target; the ring stays the shared accent outline. */
+      min-block-size: 24px;
+      padding-block: 3px;
+      display: inline-flex;
+      align-items: center;
     }
     .panel-subhead .hint-link:hover, .panel-subhead .hint-link:focus-visible {
       text-decoration: underline;
