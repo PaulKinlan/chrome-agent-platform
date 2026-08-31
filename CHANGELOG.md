@@ -1,10 +1,13 @@
 # Changelog
 
+## [0.2.534] — 2026-08-31
+- Fix refreshHubActivity to use the current timeline surface after the hub-timeline rename
+
 ## [0.2.533] — 2026-08-31
 - Fix a duplicated refresh timer line left by the recent-activity merge
 
 ## [0.2.532] — 2026-08-31
-- Recent activity user-events lane — the hub activity feed shows only what a person cares about, in plain bounded sentences, with fresh counts
+- The hub activity feed now shows only what a person cares about, in plain bounded sentences, with fresh counts
 
 ## [0.2.531] — 2026-08-31
 - The companion side panel work has begun.

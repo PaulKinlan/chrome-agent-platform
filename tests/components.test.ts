@@ -1231,8 +1231,7 @@ Deno.test("composer slash picker: no leak when the composer disconnects while th
     globalThis.document.removeEventListener = prevRemoveListener;
     restoreDoc();
   }
-// ── activity-explorer user-facing rows (CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01) ──
-
+});
 Deno.test("activity-explorer: the user-visible allowlist excludes system rows and the row words map to user language", async () => {
   const mod = await import("../extension/shared/components.js");
   const { userKindLabel, activityText } = mod;
@@ -1284,7 +1283,6 @@ Deno.test("activity-explorer: the user-visible allowlist excludes system rows an
     throw new Error("schedule rows read Ran <task>");
   }
 });
-
 Deno.test("activity-explorer: the two empty-state strings are distinct (zero vs filtered-empty)", async () => {
   const source = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
   const explorerRegion = source.slice(source.indexOf("class ActivityExplorer"), source.indexOf("customElements.define(\"activity-explorer\""));
@@ -1292,7 +1290,6 @@ Deno.test("activity-explorer: the two empty-state strings are distinct (zero vs 
   const filtered = explorerRegion.includes("No activity matches this filter.");
   if (!zero || !filtered) throw new Error("both empty-state strings must exist in the explorer (zero + filtered-empty)");
 });
-
 Deno.test("activity-explorer: EVERY user-kind one-liner is a bounded human sentence (≤140), even for pathological inputs", async () => {
   const mod = await import("../extension/shared/components.js");
   const { activityText } = mod;
@@ -1354,7 +1351,6 @@ Deno.test("activity-explorer: EVERY user-kind one-liner is a bounded human sente
   }
   if (!jsonFail.startsWith("Failed")) throw new Error("failed giant-JSON should carry the Failed verdict");
 });
-
 Deno.test("activity-explorer: approval rows stay ≤140 even with a long sentence subject", async () => {
   const mod = await import("../extension/shared/components.js");
   const { activityText } = mod;

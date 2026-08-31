@@ -1201,7 +1201,7 @@ function runLogCovered() {
 // other, or the header goes stale (CAP-FB-20260830-RECENT-ACTIVITY-USER-
 // EVENTS-01 r2 B4 / r3 P1).
 function refreshHubActivity() {
-  runLogExplorer?.refresh?.().catch(() => {});
+  refreshTimeline().catch(() => {});
   renderHubUsage().catch(() => {});
 }
 function scheduleRunLogRefresh() {
