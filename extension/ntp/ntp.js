@@ -1103,7 +1103,13 @@ function scheduleRunLogRefresh() {
   if (!runLogExplorer) return;
   if (runLogCovered()) { runLogDirty = true; return; }
   clearTimeout(runLogRefreshTimer);
-  runLogRefreshTimer = setTimeout(() => { runLogExplorer?.refresh?.().catch(() => {}); }, 1500);
+  runLogRefreshTimer = setTimeout(() => {
+    runLogExplorer?.refresh?.().catch(() => {});
+    // The header's runs-today count rides the SAME activity-refresh path so
+    // it never goes stale after bootstrap (CAP-FB-20260830-RECENT-ACTIVITY-
+    // USER-EVENTS-01 r2 B4).
+    renderHubUsage().catch(() => {});
+  }, 1500);
 }
 function flushRunLogDirty() {
   if (!runLogDirty) return;
@@ -1151,15 +1157,23 @@ async function renderHubUsage() {
   const el = document.getElementById("hub-usage");
   if (!el) return;
   // "N runs today" from the run registry — the count of durable runs started
-  // on the current local day. Cost/token figures live in Settings → Usage;
-  // the hub header says what happened, not what it cost (CAP-FB-20260830-
-  // RECENT-ACTIVITY-USER-EVENTS-01).
+  // within TODAY'S LOCAL [00:00, next-00:00) WINDOW (upper bound included so
+  // a run started at 23:59:59.999 still counts today and tomorrow's runs do
+  // not leak in). Cost/token figures live in Settings → Usage; the hub header
+  // says what happened, not what it cost (CAP-FB-20260830-RECENT-ACTIVITY-
+  // USER-EVENTS-01 r2 B4).
   const res = await send("run.list").catch(() => null);
   const runs = Array.isArray(res?.runs) ? res.runs : [];
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
+  const startOfTomorrow = new Date(startOfToday);
+  startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
   const todayStart = startOfToday.getTime();
-  const today = runs.filter((r) => (r?.startedAt ?? 0) >= todayStart).length;
+  const tomorrowStart = startOfTomorrow.getTime();
+  const today = runs.filter((r) => {
+    const at = r?.startedAt ?? 0;
+    return at >= todayStart && at < tomorrowStart;
+  }).length;
   el.textContent = `${today} run${today === 1 ? "" : "s"} today`;
 }
 

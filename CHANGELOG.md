@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.512] — 2026-08-31
+- Recent activity: r2 review fixes — default-deny kinds server-side, per-kind human summaries, createElement agent options, runs-today recompute with day window
+
 ## [0.2.511] — 2026-08-31
 - tasks: update candidate SHA to the final tip
 

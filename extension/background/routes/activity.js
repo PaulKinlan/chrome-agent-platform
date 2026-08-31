@@ -22,6 +22,19 @@ export const ACTIVITY_STORE_CAPS = Object.freeze({
   perStoreEntries: 250,
 });
 
+// THE user-visible kind allowlist — the SERVER is the authority (the hub
+// surface must never see protocol rows, so the default when `kinds` is
+// absent/empty is exactly this set, and a caller can never WIDEN past it: an
+// unknown/ignored kind value is dropped, not honoured). Shared with the hub
+// component via lib/activity-kinds.js so client + server can never drift
+// (CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01 r2 B1).
+import {
+  USER_VISIBLE_KINDS,
+  USER_VISIBLE_KINDS_SET,
+} from "../../lib/activity-kinds.js";
+
+export { USER_VISIBLE_KINDS };
+
 /** Pure filter/sort/bound over the merged, source-tagged entries. Exported for
  * unit tests; the semantics are the route's contract (agent = exact source,
  * query = case-insensitive substring across the readable text, since/until
@@ -31,13 +44,18 @@ export function filterActivityEntries(entries, { agent, query, since, until, lim
   const sinceTs = since ? Number(since) : null;
   const untilTs = until ? Number(until) : null;
   const q = String(query ?? "").trim().toLowerCase();
-  const kindsSet = Array.isArray(kinds) && kinds.length > 0 ? new Set(kinds) : null;
+  // DEFAULT-DENY: `kinds` absent/empty means ONLY the user-visible allowlist.
+  // A caller-supplied list is INTERSECTED with the allowlist — unknown or
+  // protocol kind values are silently dropped, never honoured, so a client
+  // can never widen the surface to see attestation/tool rows.
+  const requestedKinds = Array.isArray(kinds) && kinds.length > 0 ? kinds : null;
+  const kindsSet = new Set(
+    requestedKinds ? requestedKinds.filter((k) => USER_VISIBLE_KINDS_SET.has(k)) : USER_VISIBLE_KINDS,
+  );
   const matchesAgent = agent
     ? (e) => e.source === agent
     : () => true;
-  const matchesKinds = kindsSet
-    ? (e) => kindsSet.has(e.type)
-    : () => true;
+  const matchesKinds = (e) => kindsSet.has(e.type);
   const matchesQuery = q
     ? (e) => {
         const hay = [

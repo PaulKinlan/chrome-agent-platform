@@ -22,6 +22,13 @@ import {
   shouldApplyRegistrySnapshot,
 } from "./agent-registry.js";
 import { parseMentionToken, parseSlashCommand } from "./command-parser.js";
+// The hub's activity allowlist — the SERVER (routes/activity.js) is the single
+// authority; the explorer imports the same frozen array so client + server can
+// never drift (CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01).
+import { USER_VISIBLE_KINDS as USER_VISIBLE_KINDS_ARR } from "../lib/activity-kinds.js";
+// Local Set view (the explorer filters in-memory against it; the server also
+// enforces the same list, default-deny).
+const USER_VISIBLE_KINDS = new Set(USER_VISIBLE_KINDS_ARR);
 import { artifactCardTitle, artifactIdentityFromPayloads, isScrolledToBottom, turnTime } from "./thread-view.js";
 // The bundled diff core (jsdiff via ./diff-core.js → dist; the gallery sync
 // rewrites this to ./diff-core.bundle.js). Only <artifact-diff> uses it.
@@ -8491,21 +8498,6 @@ function shortText(v, n = 80) {
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
 
-// The USER-VISIBLE kind allowlist for the hub's Recent activity: attestation
-// rows (the durable prompt receipt) and protocol/tool rows (tool-call,
-// tool-result, screenshot, error) stay in the journal and in Run logs — they
-// are not something the owner asked to see on the hub (CAP-FB-20260830-
-// RECENT-ACTIVITY-USER-EVENTS-01).
-export const USER_VISIBLE_KINDS = new Set([
-  "task",
-  "result",
-  "artifact",
-  "approval-requested",
-  "approval-granted",
-  "approval-denied",
-  "schedule-ran",
-]);
-
 // The row-kind pill in USER words: "Started" not "task", "Failed" not
 // "result with ok:false". The class stays the raw kind so existing CSS color
 // hooks keep working; the visible text is the word.
@@ -8526,11 +8518,17 @@ export function userKindLabel(e) {
 export function activityText(e) {
   switch (e?.type) {
     case "task": return e.task || "";
-    // A result row's one-liner is the FIRST 140 CHARS OF THE SUMMARY — never
-    // the raw model/provider dump that may sit in e.result (a multi-thousand-
-    // char reply or a {modelContent,…} envelope): the collapsed row must stay
-    // a glanceable user line (CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01).
-    case "result": return shortText(String(e.result ?? ""), 140);
+    // A result row's one-liner is a DERIVED HUMAN SUMMARY, never the raw
+    // model/provider dump (a multi-thousand-char reply or a {modelContent,…}
+    // envelope). We unwrap the transport layers, pull the human-readable
+    // core, and only THEN bound to 140 — a raw dump is never rendered even
+    // truncated (CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01 r2 B2).
+    case "result": return summarizeResult(e);
+    case "artifact": return summarizeArtifact(e);
+    case "approval-requested": return summarizeApproval(e, "needs approval");
+    case "approval-granted": return summarizeApproval(e, "approved");
+    case "approval-denied": return summarizeApproval(e, "denied");
+    case "schedule-ran": return summarizeSchedule(e);
     case "tool-call": {
       // The args preview in the summary line goes through safeJsonStringify —
       // which redacts secret-like KEYS before serialization — so a historical
@@ -8550,6 +8548,51 @@ export function activityText(e) {
     case "error": return e.error || e.message || "error";
     default: return e?.type || "";
   }
+}
+
+// ── per-kind HUMAN summaries (CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01
+// r2 B2): each row's one-liner is derived from the meaningful content, then
+// bounded — a raw journal payload is never rendered, even truncated. The
+// unwrap walks transport envelopes ({modelContent,…}, {userSummary,…} JSON-
+// string layers) so the model's actual answer is what gets summarized.
+function summarizeResult(e) {
+  const raw = String(e?.result ?? "");
+  const verdict = e?.ok === false ? "Failed" : "Finished";
+  if (!raw) return verdict;
+  const unwrapped = (() => {
+    try { return unwrapToolPayload(raw).value; } catch { return raw; }
+  })();
+  const text = typeof unwrapped === "string"
+    ? unwrapped
+    : (unwrapped && typeof unwrapped === "object"
+      ? JSON.stringify(unwrapped)
+      : raw);
+  // Strip transport/demo noise (a leading bracketed model tag such as
+  // "[demo model]"), collapse whitespace, then take the first sentence as
+  // the human summary and bound it. A raw dump is never rendered, even
+  // truncated (CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01 r2 B2).
+  const clean = text.replace(/^\[[^\]]*\]\s*/, "").replace(/\s+/g, " ").trim();
+  if (!clean) return verdict;
+  const head = clean.split(/[.!?](?:\s|$)/)[0]?.trim() || clean;
+  return `${verdict}: ${shortText(head, 130)}`;
+}
+
+function summarizeArtifact(e) {
+  // The artifact NAME is the human summary (Made <name>); never the body.
+  const name = String(e?.artifact?.name ?? e?.name ?? e?.task ?? "an artifact");
+  return `Made ${shortText(name, 130)}`;
+}
+
+function summarizeApproval(e, verb) {
+  // The approval SUBJECT (what the owner is being asked to approve).
+  const subject = String(e?.task ?? e?.description ?? e?.artifact?.name ?? "an action");
+  return shortText(subject, 140) + ` — ${verb}`;
+}
+
+function summarizeSchedule(e) {
+  // The scheduled task's sentence.
+  const what = String(e?.task ?? e?.result ?? "scheduled task");
+  return `Ran ${shortText(what, 130)}`;
 }
 
 // Plain-text details are bounded inline; longer payloads truncate with a
@@ -8808,8 +8851,20 @@ class ActivityExplorer extends Component {
       if (!seen.has(e.source)) seen.set(e.source, e.agentLabel || e.source);
     }
     const cur = this._agent.value;
-    this._agent.innerHTML = `<option value="">All agents</option>` +
-      [...seen].map(([s, label]) => `<option value="${escapeHtml(s)}">${escapeHtml(label)}</option>`).join("");
+    // Journal-derived option strings (agent labels/sources) are built with
+    // createElement + textContent — NEVER innerHTML (CAP-FB-20260830-
+    // RECENT-ACTIVITY-USER-EVENTS-01 r2 B3).
+    this._agent.replaceChildren();
+    const all = document.createElement("option");
+    all.value = "";
+    all.textContent = "All agents";
+    this._agent.append(all);
+    for (const [s, label] of seen) {
+      const opt = document.createElement("option");
+      opt.value = s;
+      opt.textContent = label;
+      this._agent.append(opt);
+    }
     if (cur) this._agent.value = cur;
     this._refresh();
   }

@@ -976,28 +976,54 @@ Deno.test("segmented-control moves value with ArrowRight/ArrowLeft and emits cha
 
 Deno.test("activity-explorer: the user-visible allowlist excludes system rows and the row words map to user language", async () => {
   const mod = await import("../extension/shared/components.js");
-  const { USER_VISIBLE_KINDS, userKindLabel, activityText } = mod;
+  const { userKindLabel, activityText } = mod;
+  // The allowlist is server-authoritative (routes/activity.js) and shared
+  // with the explorer — assert it directly from the single source.
+  const routesMod = await import("../extension/background/routes/activity.js");
+  const { USER_VISIBLE_KINDS } = routesMod;
+  const allow = new Set(USER_VISIBLE_KINDS);
   // The hub allowlist keeps task/result/artifact/approval/schedule rows…
   for (const k of ["task", "result", "artifact", "approval-requested", "approval-granted", "approval-denied", "schedule-ran"]) {
-    if (!USER_VISIBLE_KINDS.has(k)) throw new Error(`allowlist missing ${k}`);
+    if (!allow.has(k)) throw new Error(`allowlist missing ${k}`);
   }
   // …and hides the attestation + tool-protocol rows (they stay in Run logs).
   for (const k of ["prompt-attestation", "tool-call", "tool-result", "screenshot", "error"]) {
-    if (USER_VISIBLE_KINDS.has(k)) throw new Error(`allowlist must not contain ${k}`);
+    if (allow.has(k)) throw new Error(`allowlist must not contain ${k}`);
   }
   // Kind pills are USER words, not protocol kind names.
   if (userKindLabel({ type: "task" }) !== "Started") throw new Error("task should read Started");
   if (userKindLabel({ type: "result", ok: true }) !== "Finished") throw new Error("ok result should read Finished");
   if (userKindLabel({ type: "result", ok: false }) !== "Failed") throw new Error("!ok result should read Failed");
   if (userKindLabel({ type: "artifact" }) !== "Made") throw new Error("artifact should read Made");
-  // A result row's one-liner is the first 140 chars of the summary — never the
-  // raw multi-thousand-char model dump (falsification: revert the 140 bound,
-  // this REDs on the length assertion).
-  const dump = "x".repeat(5000);
+  // A result row's one-liner is a DERIVED HUMAN SUMMARY — never the raw
+  // multi-thousand-char model dump, even truncated (falsification: revert to
+  // raw truncation, this REDs on the prefix assertion).
+  const dump = "[demo model] Here is the actual answer to your task. Followed by thousands of chars of raw trailing detail that must never surface: " + "x".repeat(5000);
   const line = activityText({ type: "result", result: dump, ok: true });
   if (line.length > 140) throw new Error(`result one-liner must be bounded to 140 chars, got ${line.length}`);
-  if (!line.endsWith("…")) throw new Error("bounded one-liner should end with the ellipsis marker");
-  if (activityText({ type: "result", result: "short", ok: true }) !== "short") throw new Error("short results pass through unchanged");
+  if (line.startsWith("[demo model]")) throw new Error("transport tag must never render (BLOCKER 2)");
+  if (line.startsWith("Finished: Here is the actual answer to your task. Followed")) {
+    throw new Error("raw result text must never render even the first sentence as-is (BLOCKER 2: derive a summary)");
+  }
+  if (line !== "Finished: Here is the actual answer to your task") {
+    throw new Error(`result should read 'Finished: <first sentence>', got: ${line}`);
+  }
+  if (activityText({ type: "result", result: "all done.", ok: true }) !== "Finished: all done") {
+    throw new Error("short results derive a Finished sentence");
+  }
+  if (activityText({ type: "result", result: "", ok: false }) !== "Failed") {
+    throw new Error("failed result with no text reads Failed");
+  }
+  // Per-kind summaries (BLOCKER 2): artifact name, approval subject, schedule.
+  if (activityText({ type: "artifact", task: "Weekly digest" }) !== "Made Weekly digest") {
+    throw new Error("artifact rows read Made <name>");
+  }
+  if (activityText({ type: "approval-requested", task: "Publish the page" }) !== "Publish the page — needs approval") {
+    throw new Error("approval rows carry the subject");
+  }
+  if (activityText({ type: "schedule-ran", task: "list my tabs" }) !== "Ran list my tabs") {
+    throw new Error("schedule rows read Ran <task>");
+  }
 });
 
 Deno.test("activity-explorer: the two empty-state strings are distinct (zero vs filtered-empty)", async () => {

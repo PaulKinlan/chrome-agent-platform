@@ -71,7 +71,6 @@ and `scripts/check-tasks-baseline.json` must only ever shrink.
 - Next: one concrete next action
 - Recover: repository-relative Git commands or —
 - History:
-  - 2026-08-31 01:30 UTC — implemented: USER_VISIBLE_KINDS allowlist applied in the explorer `_load` AND server-side via a new `kinds` param on `activity.list` (attestation/tool rows stay in the journal and Run logs); row pills in user words (Started/Finished/Failed/Made/approvals/schedule); result one-liners bounded to 140 chars (never the raw dump); summary grid `auto minmax(0,1fr) auto` with `min-inline-size:0; overflow-wrap:anywhere` on the text cell; header reads "N runs today" from `run.list` (no $/tokens/calls). Falsification: reverting the kinds filter REDs two route tests; the 140-char bound REDs the components test. Evidence: `hub-activity-two-rows-1440.png`, `hub-activity-two-rows-1024.png`.
   - YYYY-MM-DD HH:MM UTC — material event and evidence
 ```
 
@@ -3623,9 +3622,9 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01] Recent activity shows system events and overflows into the timestamp column
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 ui lane finding 4, product lane finding 19. Extends CAP-FB-20260828-HUB-AS-TIMELINE-01 (this is the short-term fix on the existing explorer). Two questions to the agent produce six rows including "PROMPT-ATTESTATION" and a raw "RESULT [demo model] Task received (19582 chars)…" that runs under the time column.
-- Updated: 2026-08-31 01:30 UTC
+- Updated: 2026-08-31 02:10 UTC
 - Status: IN_REVIEW
-- Resume: worker (hub coordinator dispatch) — candidate built; unit 2679/0, journeys 234/234, check:gallery clean
+- Resume: r2 review (sol) — 4 blockers + 1 note fixed (default-deny kinds, per-kind human summaries, createElement options, runs-today recompute + day window; tracker History restored to the entry); re-gated, candidate below
 - Priority: P1
 - Owner: hub coordinator (journal session)
 - Workspace: /home/paulkinlan/worktrees/cap-recent-activity-user
@@ -3651,6 +3650,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - History:
   - 2026-08-30 11:00 UTC — measured: six rows for two user turns (TASK, PROMPT-ATTESTATION, RESULT twice); RESULT text runs under the "just now" column; "0 calls · 0 tokens · $0.0000" in one render and "2 calls · 80 tokens" in another of the same data.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); the explorer (`components.js:7151-7477`), the `activity.list` route (`routes/activity.js:72`) and `renderHubUsage` (`ntp.js:1115`) re-verified.
+  - 2026-08-31 01:30 UTC — implemented: USER_VISIBLE_KINDS allowlist is server-authoritative (`routes/activity.js`, default-deny when `kinds` absent; unknown kinds dropped) and shared with the explorer (client + server cannot drift); row pills in user words (Started/Finished/Failed/Made/approvals/schedule); per-kind HUMAN summaries (result rows unwrap transport layers before bounding, never raw truncation); summary grid `auto minmax(0,1fr) auto` with `min-inline-size:0; overflow-wrap:anywhere`; the agent-filter options are built with createElement + textContent; header reads "N runs today" from `run.list` within today's local [00:00, next-00:00) window and recomputes on the activity-refresh path (never stale after bootstrap). Falsification: reverting the default-deny kinds filter REDs the route tests; the human-summary bound REDs the components test. Evidence: `hub-activity-two-rows-1440.png`, `hub-activity-two-rows-1024.png`.
 
 ## [CAP-FB-20260830-FOCUS-ORDER-VISIBILITY-01] Body dead-stop in the tab walk, invisible focus on hint links, unlabeled Settings controls
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 ui lane, findings 7 and 24. A keyboard user tabbing through the hub lands on nothing (and the page scrolls) after the activity filter, cannot see focus on the hint links, and five Settings fields have no accessible name.

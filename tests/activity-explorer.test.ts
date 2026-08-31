@@ -179,7 +179,7 @@ Deno.test("activity.list: agent/query/window filters pass through to the merged 
   assertEquals(win.entries.map((e) => e.ts), [5, 4]);
 });
 
-Deno.test("filterActivityEntries: kinds is an exact type allowlist (server-side hub filter)", () => {
+Deno.test("filterActivityEntries: kinds is DEFAULT-DENY — omitted/empty means the user allowlist only; unknown kinds are dropped, never widen", () => {
   const entries = [
     E({ ts: 1, type: "task" }),
     E({ ts: 2, type: "result", ok: true }),
@@ -187,22 +187,35 @@ Deno.test("filterActivityEntries: kinds is an exact type allowlist (server-side 
     E({ ts: 4, type: "tool-call" }),
     E({ ts: 5, type: "artifact" }),
   ];
-  // With the hub allowlist: task/result/artifact pass; attestation + tool rows stay out.
+  // Omitted kinds → ONLY user-visible rows (attestation + tool rows invisible).
+  const def = filterActivityEntries(entries, {});
+  assertEquals(def.map((e) => e.ts), [5, 2, 1]);
+  // Explicit full allowlist behaves the same.
   const out = filterActivityEntries(entries, {
     kinds: ["task", "result", "artifact", "approval-requested", "approval-granted", "approval-denied", "schedule-ran"],
   });
   assertEquals(out.map((e) => e.ts), [5, 2, 1]);
-  // No kinds param = full set (Run logs / any full-fidelity caller).
-  assertEquals(filterActivityEntries(entries, {}).length, 5);
-  // Empty kinds array = full set too (never a silent everything-hidden).
-  assertEquals(filterActivityEntries(entries, { kinds: [] }).length, 5);
+  // A protocol kind is DROPPED (never honoured — a client cannot widen).
+  const tool = filterActivityEntries(entries, { kinds: ["tool-call"] });
+  assertEquals(tool.length, 0);
+  // Mixed list intersects with the allowlist.
+  const mixed = filterActivityEntries(entries, { kinds: ["tool-call", "task", "prompt-attestation"] });
+  assertEquals(mixed.map((e) => e.ts), [1]);
+  // Empty kinds array = same as omitted (default-deny, never everything).
+  assertEquals(filterActivityEntries(entries, { kinds: [] }).map((e) => e.ts), [5, 2, 1]);
 });
 
-Deno.test("activity.list: kinds passes through to the merged set", async () => {
+Deno.test("activity.list: kinds passes through to the merged set (default-deny)", async () => {
   const { deps } = fakeDeps();
   const routes = createActivityRoutes(deps);
+  // All four seeded entries are type task → omitted kinds returns them all.
+  const def = await routes["activity.list"]({});
+  assertEquals(def.count, 4);
   const user = await routes["activity.list"]({ kinds: ["task"] });
-  assertEquals(user.count, 4); // all four seeded entries are type task
+  assertEquals(user.count, 4);
   const none = await routes["activity.list"]({ kinds: ["result"] });
   assertEquals(none.count, 0);
+  // A protocol kind never leaks through the route either.
+  const tool = await routes["activity.list"]({ kinds: ["tool-call"] });
+  assertEquals(tool.count, 0);
 });
