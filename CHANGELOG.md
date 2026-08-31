@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.550] — 2026-08-31
+- Five more pieces of owner feedback were written up as tasks.
+
 ## [0.2.549] — 2026-08-31
 - DONE (coordinator gates 2808/0, 272/272)
 

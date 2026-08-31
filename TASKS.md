@@ -4440,3 +4440,146 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - 2026-08-31 19:00 UTC — filed from owner feedback; confirmed the system prompt has no board guidance (grep found none).
   - 2026-08-31 19:15 UTC — DONE: merged forward by the coordinator and pushed as `origin/main@2c65b65d`. Coordinator gates on the merged tip: production build clean, unit 2808/0, chrome journeys 272/272, kat-agent-board 39/39 (a delegating hub prompt now calls board_post_job, the job appears, wakes the target, result lands in the poster thread). Candidate 45f1b7fa fast-forwarded; guidance rides in the product-base MASTER_SKILL so the protected-constraints layer stays last and the layer-receipt attestation is untouched.
   - 2026-08-31 (worker) — implemented on `origin/main@63a36aa4`. Added the "The shared jobs board (hand work off + pick work up)" paragraph to `extension/lib/master-skill.js` (product-base `MASTER_SKILL`): names all six verbs (board_post_job, board_list, board_claim_job, board_complete_job, board_send_message, board_read_messages), distinguishes the board from delegate_task/delegate_to_agent, states "You NEVER claim your own job", and that a posted job's result "is delivered back to the posting thread". Bumped `cap.hub.master` 1.4.0 → 1.5.0 in `extension/lib/system-prompts.js` (content change ⇒ version/hash event) and updated the two version-pinned tests. Because the guidance rides in the base layer (not a new composeSystemPrompt layer), the protected-constraints-last invariant and the layer-receipt attestation are untouched. RED/GREEN recorded; full unit suite 2808/0; kat-agent-board 39/0.
+
+## [CAP-FB-20260831-BOOT-PERMS-OPTIONAL-01] fontSettings/proxy/tts/declarativeNetRequest are install-required — enterprise policy blocks them and some are ChromeOS-only
+- Feedback: 2026-08-31 — owner: "fontSettings, proxy, tts, declarativeNetRequest need to be optional, or not included. my enterprise policy blocks them, and iirc some of these are chrome OS only which I don't want." They are in the REQUIRED `permissions` array in `extension/manifest.json` (boot set), so a fresh install demands them and an enterprise policy that blocks them breaks install. Each backs a tool group (fontSettings tools, get/set_proxy_settings, tts_speak/stop, declarativeNetRequest dynamic rules).
+- Updated: 2026-08-31 19:20 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: —
+- Candidate: —
+- Shipping: —
+- Acceptance: none of `fontSettings`, `proxy`, `tts`, `declarativeNetRequest` is in the manifest's REQUIRED `permissions` array. Each moves to `optional_permissions` (requested JIT via the capability system when its tool is first used, with the standard denial/grant card — an enterprise-blocked grant simply fails closed with a clear message, and install no longer demands it), OR is removed entirely with its tool group if the owner would rather drop the capability. The install prompt no longer lists these four. **This REVERSES CAP-FB-20260831-OPTIONAL-PERMISSION-OMITTED-01's lint** (which asserted they stay OUT of optional_permissions) — update that lint to the new owner decision and note the reversal in both entries' History.
+  - Context: the boot set should be the minimum an install needs; capability permissions are optional+JIT (the established model — tabs, scripting, cookies, etc. are all optional). `extension/lib/capabilities.js` already does JIT requests for optional permissions; the four tool groups must go through that path. `extension/lib/chrome-tool-capabilities.js` records these tools with their `chrome.*` permission.
+  - Reproduce today: `python3 -c "import json;print(json.load(open('extension/manifest.json'))['permissions'])"` shows all four in the required set; on a managed profile that blocks them, install fails or the extension is disabled.
+  - Files: `extension/manifest.json` (move the four out of `permissions` into `optional_permissions`, or remove), `extension/lib/capabilities.js` / `chrome-tool-capabilities.js` (ensure each tool JIT-requests its now-optional permission), `extension/lib/browser-tools.js` (the four tool groups: gate on the permission + render the denial card if absent), `tests/manifest-permissions.test.ts` (reverse the assertion). Coordinate: a sibling may edit browser-tools.js (page actions / fs-grant) — keep to the fontSettings/proxy/tts/DNR tool blocks and the manifest.
+  - Steps: 1. Reverse the lint first (Gates) — RED. 2. Move the four in the manifest. 3. Wire each tool group to JIT-request its permission (reuse the pattern open_tab/read_page use) and render the one Allow card on denial (DENIAL-TO-GRANT-CARD-01). 4. Update counts/records if any. 5. Verify a fresh install prompt no longer lists them.
+- Review: pending
+- Gates: the falsification gates apply.
+  - Unit: `tests/manifest-permissions.test.ts` asserts the four are NOT in `permissions` and ARE in `optional_permissions` (or absent); falsify by reverting the manifest. A capability test that each of the four tools returns the structured permissionDenial when its permission is absent.
+  - Browser: a journey — with the permission ungranted, calling e.g. `tts_speak` renders the Allow card (headless can't grant a warning permission; assert the card, per the established pattern).
+  - Full suite: `npm run build:production && deno test -A tests/ && deno run -A scripts/chrome-journeys.ts` green; the journey suite's manifest attestation updated in the same commit.
+  - Constraints: install-granted boot set stays minimal; one Allow card per denial; no fixed debug port.
+- Blockers: —
+- Next: reverse the OPTIONAL-PERMISSION-OMITTED-01 lint, then move the four in the manifest
+- Recover: `git log --oneline --all --grep=CAP-FB-20260831-BOOT-PERMS-OPTIONAL-01`
+- History:
+  - 2026-08-31 19:20 UTC — filed from owner feedback; confirmed all four are in the REQUIRED permissions array and each backs a tool group; supersedes the OPTIONAL-PERMISSION-OMITTED-01 decision.
+
+## [CAP-FB-20260831-GENERATED-BUNDLE-GITIGNORE-01] docs/diff-core.bundle.js is committed and regenerated on every build
+- Feedback: 2026-08-31 — owner: "diff-code.bundle.js shouldn't be in source control on every build." `git ls-files` shows `docs/diff-core.bundle.js` tracked; `scripts/sync-gallery.mjs` rewrites it on every build, so it shows as a diff constantly. `.gitignore` already ignores `extension/**/*.bundle.js` but not `docs/*.bundle.js`.
+- Updated: 2026-08-31 19:20 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P2
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: —
+- Candidate: —
+- Shipping: —
+- Acceptance: generated bundle artifacts are not tracked in git and do not appear as changes after a build. `docs/diff-core.bundle.js` (and any other generated `*.bundle.js` under `docs/`) is gitignored and removed from tracking; `scripts/sync-gallery.mjs` regenerates it locally; the component gallery still works (docs/components.html loads its bundle when a build has run); `check:gallery` and `component-gallery-smoke.ts` pass without requiring the generated bundle to be committed (the byte-identity gate compares source→sync output, not a committed blob — coordinate with CAP-FB-20260830-GALLERY-BYTE-IDENTITY-GATE-01).
+  - Context: the gallery (docs/) is a dev-only playground; its synced bundle is a build artifact, not source. Committing it creates noise and merge conflicts on every build (this session hit changelog/version churn partly from generated files).
+  - Files: `.gitignore` (add `docs/*.bundle.js` — or the specific name), `git rm --cached docs/diff-core.bundle.js`, `scripts/sync-gallery.mjs` (ensure it regenerates on build and does not fail when the file is absent from git), `scripts/component-gallery-smoke.ts` / `scripts/check-gallery` if either asserts the committed blob.
+  - Steps: 1. `git rm --cached docs/diff-core.bundle.js`; add it to `.gitignore`. 2. Confirm `npm run build` regenerates it and `git status` is clean afterward. 3. Ensure the gallery checks pass without the committed file. 4. Check no other generated bundle under docs/ is tracked.
+- Review: pending
+- Gates: the falsification gates apply.
+  - Unit: a test asserting `docs/diff-core.bundle.js` is not tracked (`git ls-files` excludes it) and is gitignored; falsify by re-adding it.
+  - Browser: none (build artifact only).
+  - Full suite: `npm run build:production` then `git status --porcelain` shows no generated-bundle change; `check:gallery` green.
+  - Constraints: no generated artifacts in source control; one name per concept.
+- Blockers: —
+- Next: git rm --cached the bundle and add docs/*.bundle.js to .gitignore
+- Recover: `git log --oneline --all --grep=CAP-FB-20260831-GENERATED-BUNDLE-GITIGNORE-01`
+- History:
+  - 2026-08-31 19:20 UTC — filed from owner feedback; confirmed docs/diff-core.bundle.js is tracked and rewritten by sync-gallery on every build.
+
+## [CAP-FB-20260831-FS-GRANT-TASK-USE-01] File tools do not work on a granted folder in a task — the folder is ignored, tools fail silently, errors are opaque
+- Feedback: 2026-08-31 — owner: "The tools for finding files don't seem to work well on DirectoryHandles when using them in a task. I asked it to do some work on a folder that I provided with /folder but then it didn't use the folder at first, then when it tried to run a tool against it it failed without error messages (the tools could use better error messages, and it would be nice to have them output JSON). I would have expected things like grep to work." Three problems: (a) a folder provided via the `/folder` composer command is not reliably picked up by the run; (b) file tools against a granted DirectoryHandle fail with no error message; (c) tool errors are opaque — they should be actionable and JSON.
+- Updated: 2026-08-31 19:20 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: —
+- Candidate: —
+- Shipping: —
+- Acceptance: a folder granted through the `/folder` composer command (a `showDirectoryPicker` DirectoryHandle, persisted via `extension/lib/fs-grants.js`) is available to the run's file tools; find/list/read/grep-style tools operate over that handle and RETURN A RESULT (matches, listing) or a clear structured error — never a silent failure; every file-tool error is a bounded JSON object `{ ok:false, error:<human message>, code:<machine code>, path? }` (missing grant, permission revoked by the browser, path not found, not a directory, too large), not an empty/absent response.
+  - Context: `extension/lib/fs-grants.js` holds the granted handles; the file tools live in `extension/lib/browser-tools.js` (or a fs tool module) and are dispatched via the lazy protocol; the `/folder` command wiring is in the composer/command registry (`extension/ntp/ntp.js` + the command registry) and must attach the chosen handle to the run context so tools resolve it. Drive it for real: grant a folder (the KAT `scripts/kat-local-files.ts` fakes the picker — read it), then in a run ask to grep/list the folder and observe today's silent failure; then fix.
+  - Files: `extension/lib/fs-grants.js` (handle resolution + JSON errors), `extension/lib/browser-tools.js` (the file tools: list/read/find/grep over a DirectoryHandle, structured errors), the `/folder` command path (composer/command registry → run context handle), `extension/lib/lazy-tool-protocol.js` if the error projection swallows the message. A sibling may edit browser-tools.js (page actions / boot-perms) — keep to the file/fs tools.
+  - Steps: 1. Reproduce (KAT with a faked granted folder + a grep/list request) — capture the silent failure. 2. Make the `/folder` handle reach the run's tool context. 3. Give each file tool a real grep/list/read over the DirectoryHandle (recursive, bounded) returning matches or a JSON error with a `code`. 4. Verify grep returns matching lines with file+line.
+- Review: pending
+- Gates: the falsification gates apply.
+  - Unit: a fs-tool test over an in-memory DirectoryHandle stub — grep returns matches with path+line; a missing grant / bad path returns `{ok:false, error, code}`; falsify by reverting the error object, watch the "never a silent failure" assertion go RED.
+  - Browser: extend `scripts/kat-local-files.ts` — grant a folder, run a grep/list, assert real results and, for a bad path, a JSON error visible in the tool card.
+  - Full suite: `npm run build:production && deno test -A tests/ && deno run -A scripts/chrome-journeys.ts` green.
+  - Constraints: origin/handle-scoped file access only (never outside the granted folder); untrusted file contents fenced; textContent; no fixed debug port.
+- Blockers: —
+- Next: reproduce with a faked granted folder + a grep request, then wire the /folder handle into the run tool context
+- Recover: `git log --oneline --all --grep=CAP-FB-20260831-FS-GRANT-TASK-USE-01`
+- History:
+  - 2026-08-31 19:20 UTC — filed from owner feedback: /folder-granted directory not used by the run, file tools fail silently, errors opaque; wants JSON errors and working grep.
+
+## [CAP-FB-20260831-TOOL-PIPELINES-01] No way to chain/pipe tool steps into a small script (co-do-style)
+- Feedback: 2026-08-31 — owner: "I want the tools to create better scripts to chain a couple of steps together so we can pipe things... my co-do projects used to do this, we need it here too." Today each tool call is standalone; there is no way to compose a few steps (e.g. list files -> grep -> summarize) into one reusable, inspectable pipeline the way co-do did.
+- Updated: 2026-08-31 19:20 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P2
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: —
+- Candidate: —
+- Shipping: —
+- Acceptance: a bounded, safe way to chain a few tool steps into one pipeline where a step's output feeds the next (a "pipe"), inspectable and reusable, without eval/new Function (MV3 CSP). Design and land a first slice: a `run_pipeline`-style tool (or a saved-skill "recipe" of ordered steps with a declared data flow) that runs N existing tools in sequence, passing each result to the next by an explicit binding, surfaces each step in the transcript/plan-strip, fails closed with the same gates as its constituent tools, and can be saved and re-run. This is a DESIGN task first: write the model (declarative step list with input bindings vs a constrained expression pipe), then implement the minimal version. Reuse the existing sandbox (`extension/sandbox/`, no eval), the lazy protocol, and the plan strip (PLAN-STRIP-CHECKPOINTS-01) for visibility. Reference the co-do pipeline model the owner used.
+  - Context: `run_script` exists (sandboxed JS, owner-approved) but is not a legible pipeline of tools; skills/recipes (`extension/lib/recipes.js` / skills) are prompt templates, not data-flow pipelines. The gap is composing TOOLS with piped IO.
+  - Files (design will refine): a new pipeline module + tool def in `extension/lib/`, the sandbox for any expression evaluation (no eval), the lazy protocol for step dispatch, the plan strip + transcript for visibility, a save path in skills/recipes.
+  - Steps: 1. Write the design (data-flow model, safety, what "pipe" means concretely, how it differs from run_script and skills) in the entry + docs/DESIGN.md. 2. Implement a minimal ordered-steps-with-bindings pipeline over existing tools. 3. Visibility via the plan strip. 4. Save + re-run.
+  - Out of scope: a full scripting language; anything using eval/new Function.
+- Review: pending
+- Gates: the falsification gates apply.
+  - Unit: a pipeline reducer test — a 3-step pipeline passes step 1's output to step 2's declared input; a failing step halts the pipeline with a structured error; falsify by breaking the binding.
+  - Browser: a journey running a small 2-3 step pipeline (demo tools) and showing each step in the plan strip.
+  - Full suite: `npm run build:production && deno test -A tests/ && deno run -A scripts/chrome-journeys.ts` green.
+  - Constraints: no eval/new Function (MV3 CSP); each step keeps its own gates/approvals; untrusted data fenced; one name per concept.
+- Blockers: Depends on CAP-FB-20260831-FS-GRANT-TASK-USE-01 for a compelling file-pipeline demo (grep is a natural pipe source); PLAN-STRIP-CHECKPOINTS-01 (DONE) for visibility
+- Next: write the pipeline design (data-flow model + safety) in this entry and docs/DESIGN.md before implementing
+- Recover: `git log --oneline --all --grep=CAP-FB-20260831-TOOL-PIPELINES-01`
+- History:
+  - 2026-08-31 19:20 UTC — filed from owner feedback (co-do-style piped tool chains); design-first.
+
+## [CAP-FB-20260831-SCHEDULED-NEXT-RUN-WIDGET-01] A task that schedules an alarm shows no "next run" — no way to see it will fire (call them routines, not background agents)
+- Feedback: 2026-08-31 — owner: "if a task schedules an alarm, there's no way to see that or know it's going to work. The task should have a 'next run' widget or something. In the past these were made 'background agents' which I don't want, but it makes me think these might be 'routines' or something similar." A scheduled task gives no visible confirmation it is scheduled or when it will next fire.
+- Updated: 2026-08-31 19:20 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: —
+- Candidate: —
+- Shipping: —
+- Acceptance: when a task/agent schedules a recurring or future run, the UI shows a clear "Next run <when>" indicator (a widget on the task/timeline row and on the agent) computed from the real alarm, updating as it approaches and after it fires (last run / next run); the concept is surfaced as a "routine" (a task that repeats on a schedule) — NOT a "background agent". A routine is discoverable and its schedule and next fire time are visible; scheduled-run output (SCHEDULED-RUN-OUTPUT-01, DONE) already leaves a timeline row + report, so this closes the loop by showing the UPCOMING run, not only past ones.
+  - Context: `extension/lib/scheduler.js` holds the alarms; `chrome.alarms.get` gives the next scheduled time. The hub timeline (HUB-AS-TIMELINE-01) shows past runs; add the forward-looking "next run" on the routine's row/agent. Vocabulary: introduce "routine" for a scheduled/recurring task and keep it distinct from named agents; do NOT reintroduce "background agent" naming.
+  - Files: `extension/lib/scheduler.js` (expose next-fire time), a route to read scheduled/next-run state, `extension/ntp/ntp.js` + `extension/shared/components.js` (a "next run" widget on the timeline/task row and the agent; a routines view or grouping), `scripts/check-vocabulary.mjs` (retire "background agent" for this surface if applicable), docs/DESIGN.md.
+  - Steps: 1. Expose the next-fire time from the scheduler/alarms. 2. A "Next run <relative + absolute>" widget on the routine's row and agent, live-updating. 3. Name the concept "routine"; make routines discoverable with their schedule. 4. Coordinate with the hub timeline and BOARD-VISIBILITY so scheduled/routine runs are legible.
+  - Out of scope: reintroducing background agents; the past-run report (SCHEDULED-RUN-OUTPUT-01, DONE).
+- Review: pending
+- Gates: the falsification gates apply.
+  - Unit: a test computing the "next run" label from an alarm's scheduledTime (relative + absolute, singular/plural); falsify by reverting the compute.
+  - Browser: a journey/KAT — schedule a routine, assert a "Next run …" widget appears with a real time and updates after the alarm; screenshot.
+  - Full suite: `npm run build:production && deno test -A tests/ && deno run -A scripts/chrome-journeys.ts` green.
+  - Constraints: no "background agent" naming; one name per concept (routine); a11y (the widget announced); no fixed debug port.
+- Blockers: Depends on CAP-FB-20260831-BOARD-VISIBILITY-01 and CAP-FB-20260828-HUB-AS-TIMELINE-01 (DONE) for where routines/next-run surface — coordinate the hub edits
+- Next: expose the next-fire time from scheduler.js/chrome.alarms, then build the Next run widget on the routine row
+- Recover: `git log --oneline --all --grep=CAP-FB-20260831-SCHEDULED-NEXT-RUN-WIDGET-01`
+- History:
+  - 2026-08-31 19:20 UTC — filed from owner feedback: no visible next-run for scheduled tasks; wants a "next run" widget and a "routine" concept (not background agents).
