@@ -43,49 +43,53 @@ Deno.test("parseSlashCommand: a command in strict position parses", () => {
 });
 
 Deno.test("parseSlashCommand: a SECOND command after a resolved reference parses (CAP-FB-20260831-MULTI-SLASH-COMMANDS-01)", () => {
-  const KNOWN = ["skill", "tabs", "agent", "files", "folder", "artifacts", "bookmarks", "history", "remember"];
+  // The composer records the resolved reference's end; the parser gates on it.
+  const SKILL_END = "/skill:screenshot-annotate".length; // 26
+  const resolvedEnds = new Set([SKILL_END]);
   // Paul's exact repro: /skill:x resolves to a reference, then /tabs:y is typed.
-  const seq = parseSlashCommand("/skill:screenshot-annotate /tabs:y", "/skill:screenshot-annotate /tabs:y".length, KNOWN);
+  const seq = parseSlashCommand("/skill:screenshot-annotate /tabs:y", "/skill:screenshot-annotate /tabs:y".length, resolvedEnds);
   assertEquals(seq, {
-    start: "/skill:screenshot-annotate ".length,
+    start: SKILL_END + 1,
     end: "/skill:screenshot-annotate /tabs:y".length,
     ns: "tabs",
     arg: "y",
     hasColon: true,
   });
   // Caret inside the SECOND token's arg selects it with the correct start/end.
-  const mid = parseSlashCommand("/skill:x /tabs:y", "/skill:x /tabs:".length, KNOWN);
+  const mid = parseSlashCommand("/skill:x /tabs:y", "/skill:x /tabs:".length, new Set(["/skill:x".length]));
   assertEquals(mid?.ns, "tabs");
   assertEquals(mid?.start, "/skill:x ".length);
   assertEquals(mid?.end, "/skill:x /tabs:".length);
   assertEquals(mid?.arg, "");
   // A bare second command after a space parses too (no colon yet).
-  const bare = parseSlashCommand("/skill:x /tabs", "/skill:x /tabs".length, KNOWN);
+  const bare = parseSlashCommand("/skill:x /tabs", "/skill:x /tabs".length, new Set(["/skill:x".length]));
   assertEquals(bare?.ns, "tabs");
   assertEquals(bare?.hasColon, false);
-  // The FIRST command still parses at position 0.
-  assertEquals(parseSlashCommand("/skill:screenshot-annotate /tabs:y", "/skill:scre".length, KNOWN)?.ns, "skill");
+  // The FIRST command still parses at position 0 (boundaries are irrelevant there).
+  assertEquals(parseSlashCommand("/skill:screenshot-annotate /tabs:y", "/skill:scre".length, resolvedEnds)?.ns, "skill");
 });
 
-Deno.test("parseSlashCommand: free text / URLs / leading space / unknown ns NEVER parse", () => {
-  const KNOWN = ["skill", "tabs", "agent", "files", "folder", "artifacts", "bookmarks", "history", "remember"];
-  // A URL containing a slash-command-looking path is ordinary text (mid-word slash).
-  assertEquals(parseSlashCommand("see https://example.com/agent:foo", 33, KNOWN), null);
-  // A mid-word slash never opens the UI.
-  assertEquals(parseSlashCommand("inspect/agent:pr", 16, KNOWN), null);
-  // Even a leading-space "/agent" is not command position (nothing precedes it).
-  assertEquals(parseSlashCommand(" /agent:x", 9, KNOWN), null);
-  // An INVENTED namespace after whitespace stays text.
-  assertEquals(parseSlashCommand("do /notacommand:x now", 21, KNOWN), null);
-  // The token ends at the first whitespace — the task text after it is plain.
-  assertEquals(parseSlashCommand("/agent:reader summarise this", 28, KNOWN), null);
-  assertEquals(parseSlashCommand("", 0, KNOWN), null);
-  assertEquals(parseSlashCommand("hello", 5, KNOWN), null);
-  // Without a known-namespace set, a post-whitespace KNOWN command still parses
-  // (the set only REFUSES unknown namespaces — it never rejects position 0).
-  assertEquals(parseSlashCommand("/tabs:y", 6, KNOWN)?.ns, "tabs");
-  // Position-0 unknown namespaces keep legacy behavior (namespace-list filter).
-  assertEquals(parseSlashCommand("/notacommand:x", 14, KNOWN)?.ns, "notacommand");
+Deno.test("parseSlashCommand: a mid-prose slash NOT after a resolved boundary NEVER parses", () => {
+  // The reviewer blocker: ordinary prose mentioning a slash-command name must
+  // NOT open the UI — a post-whitespace slash is only a command when the token
+  // before the whitespace ends at a RECORDED resolved-reference boundary.
+  // No boundaries at all → all of these stay text (the original strict guard).
+  assertEquals(parseSlashCommand("please inspect /agent:pr", 24), null);
+  assertEquals(parseSlashCommand("see https://example.com/agent:foo", 33), null);
+  assertEquals(parseSlashCommand("inspect/agent:pr", 16), null);
+  assertEquals(parseSlashCommand(" /agent:x", 9), null);
+  assertEquals(parseSlashCommand("do /notacommand:x now", 21), null);
+  assertEquals(parseSlashCommand("/agent:reader summarise this", 28), null);
+  assertEquals(parseSlashCommand("", 0), null);
+  assertEquals(parseSlashCommand("hello", 5), null);
+  // A boundary recorded ELSEWHERE does not qualify a mid-prose slash.
+  const elsewhere = new Set([5]);
+  assertEquals(parseSlashCommand("please inspect /tabs:y", "please inspect /tabs:y".length, elsewhere), null);
+  // A boundary at the WRONG position (not where the preceding token ends).
+  const wrongEnd = new Set([3]);
+  assertEquals(parseSlashCommand("/skill:x /tabs:y", "/skill:x /tabs:y".length, wrongEnd), null);
+  // A leading-space token with a boundary present elsewhere still stays text.
+  assertEquals(parseSlashCommand(" /tabs:y", " /tabs:y".length, new Set([1])), null);
 });
 
 Deno.test("parseSlashCommand: the caret bounds the parse (mid-token edit)", () => {

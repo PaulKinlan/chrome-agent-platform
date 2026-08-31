@@ -131,6 +131,7 @@ function setup() {
   composer._popupActive = -1;
   composer._popupToken = null;
   composer._slashAgentToken = null;
+  composer._resolvedSpans = [];
   input._onInput = () => composer._onComposerInput();
   return { composer, input, popup };
 }
@@ -147,22 +148,31 @@ Deno.test("multi-slash: after /skill resolves, typing /tabs: opens the tabs popu
   if (composer._popupToken?.start !== 0) throw new Error(`phase 1: first-command token must start at 0, got ${composer._popupToken?.start}`);
 
   // Phase 2 — resolve the skill row (Enter/select path): token replaced, popup
-  // closes, popup state resets (the "second command" bug was stale state here).
+  // closes, popup state resets (the "second command" bug was stale state here),
+  // and the resolved-reference boundary is recorded for the next command.
   composer._select(0);
+  await new Promise((r) => setTimeout(r, 0)); // the resolution .then() runs async
+  await new Promise((r) => setTimeout(r, 0));
   if (popup.hidden !== true) throw new Error("phase 2: the popup must close after a pick");
   if (composer._popupToken !== null) throw new Error("phase 2: _popupToken must reset after a pick (stale token breaks the next command)");
   if (composer._popupItems.length !== 0) throw new Error("phase 2: _popupItems must reset after a pick");
   if (!/\/skill:screenshot-annotate/.test(input.value)) throw new Error(`phase 2: the skill reference must be inserted, got "${input.value}"`);
+  const span = (composer._resolvedSpans || [])[0];
+  if (!span || span.start !== 0 || span.end !== input.value.length || span.text !== input.value) {
+    throw new Error(`phase 2: the resolved-reference span must be recorded (${JSON.stringify(span)} vs value "${input.value}")`);
+  }
+  const spanEnd = span.end;
 
-  // Phase 3 — the SECOND command: type a space then "/tabs:".
+  // Phase 3 — the SECOND command: type a space then "/tabs:". This only opens
+  // because the slash sits immediately after the RECORDED resolved boundary.
   input.value = input.value.replace(/\/skill:screenshot-annotate$/, "/skill:screenshot-annotate /tabs:");
   input.selectionStart = input.selectionEnd = input.value.length;
   await composer._onComposerInput();
   if (popup.hidden !== false) throw new Error("phase 3: the /tabs popup must open (second command after a resolved reference)");
   const secondToken = composer._popupToken;
   if (!secondToken || secondToken.ns !== "tabs") throw new Error(`phase 3: the second token must be the tabs command, got ${JSON.stringify(secondToken)}`);
-  if (secondToken.start !== "/skill:screenshot-annotate ".length) {
-    throw new Error(`phase 3: the second token must start AFTER the resolved reference (${"/skill:screenshot-annotate ".length}), got ${secondToken.start}`);
+  if (secondToken.start !== spanEnd + 1) {
+    throw new Error(`phase 3: the second token must start right after the resolved boundary + space (${spanEnd + 1}), got ${secondToken.start}`);
   }
   if (secondToken.end !== input.value.length) throw new Error(`phase 3: the second token must end at the caret (${input.value.length}), got ${secondToken.end}`);
 
@@ -179,4 +189,37 @@ Deno.test("multi-slash: after /skill resolves, typing /tabs: opens the tabs popu
     throw new Error(`phase 4: the final input must hold BOTH references, got "${input.value}"`);
   }
   if (popup.hidden !== true) throw new Error("phase 4: the popup must close after the second pick");
+});
+
+Deno.test("multi-slash: a mid-prose slash NOT after the resolved boundary stays text (r1 blocker)", async () => {
+  const { composer, input, popup } = setup();
+
+  // Resolve /skill:screenshot → the reference "/skill:screenshot-annotate" is
+  // recorded as the boundary [0, 27].
+  input.value = "/skill:screenshot";
+  input.selectionStart = input.selectionEnd = input.value.length;
+  await composer._onComposerInput();
+  if (popup.hidden === true) throw new Error("the /skill popup must open for the matching query");
+  composer._select(0);
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+  const spanEnd = (composer._resolvedSpans || [])[0]?.end;
+  if (spanEnd !== 26) throw new Error(`expected the resolved span to end at 26, got ${spanEnd}`);
+
+  // Ordinary prose then a slash-command-looking token: the slash is NOT
+  // immediately after the recorded boundary, so it must stay text — the
+  // free-text guard the r1 review required.
+  input.value = "/skill:screenshot-annotate please inspect /tabs:y";
+  input.selectionStart = input.selectionEnd = input.value.length;
+  await composer._onComposerInput();
+  if (popup.hidden !== true) {
+    throw new Error("mid-prose /tabs: must NOT open the popup (no boundary directly before it)");
+  }
+  if (composer._popupToken !== null) throw new Error("mid-prose slash must not set a popup token");
+
+  // Even a leading-space slash with the boundary present elsewhere stays text.
+  input.value = " /tabs:y";
+  input.selectionStart = input.selectionEnd = input.value.length;
+  await composer._onComposerInput();
+  if (popup.hidden !== true) throw new Error("leading-space /tabs: must NOT open the popup");
 });

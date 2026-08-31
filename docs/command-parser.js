@@ -5,34 +5,32 @@
 // COMMAND POSITION (CAP-FB-20260831-MULTI-SLASH-COMMANDS-01, owner
 // directive: multiple /commands must be usable in ONE input):
 //   (a) a "/" at the very start of the input is a command (original rule);
-//   (b) a "/" that begins a NEW whitespace-delimited token AFTER real text is
-//       a command too — so "/skill:x /tabs:y" opens the tabs picker after the
-//       skill reference. The token before the whitespace must be NON-EMPTY
-//       (a leading-space " /agent" stays ordinary text).
-//   (c) post-whitespace commands only open the UI when the namespace is a
-//       KNOWN command namespace (caller passes `knownNamespaces`); an
-//       invented/unknown ns after whitespace stays text.
-// The free-text guard is preserved for: URLs ("https://x/agent:y" — the slash
-// is mid-word, not after whitespace), mid-word slashes ("inspect/agent:pr"),
-// leading-space tokens (" /agent:x"), and unknown namespaces. A slash-command
-// token also ends at the first whitespace, so "/agent:reader summarise this"
-// stops parsing at the space (the rest is task text, where an @mention can
-// still open the mention UI).
+//   (b) a "/" typed IMMEDIATELY AFTER a RESOLVED COMMAND REFERENCE the
+//       composer inserted earlier (optionally after a single space following
+//       it) is a command too — so after "/skill:x" resolves to its reference,
+//       typing " /tabs:y" opens the tabs picker. The composer tracks the
+//       resolved-reference boundaries and passes them as `resolvedEnds`;
+//       "please inspect /agent:pr" (no resolved boundary before the slash)
+//       stays ordinary prose — the free-text guard is fully preserved.
+// A slash-command token also ends at the first whitespace, so
+// "/agent:reader summarise this" stops parsing at the space (the rest is task
+// text, where an @mention can still open the mention UI).
 
 /**
  * Parse a / command token in command position.
  * @param {string} text  the full composer text
  * @param {number} caret the caret position (selectionStart)
- * @param {string[] | Set<string> | null} knownNamespaces  known command ids;
- *   when provided, a post-whitespace token whose ns is NOT in the set returns
- *   null (position-0 tokens keep the legacy behavior so the namespace-list
- *   filter can still show partial matches).
+ * @param {Set<number> | null} resolvedEnds  the set of character indices that
+ *   are the END of a resolved command reference in `text` (the composer
+ *   records these when it inserts a picked reference). A slash that begins a
+ *   fresh token after whitespace is a command ONLY when the token before that
+ *   whitespace ends exactly at one of these indices.
  * @returns {null | { start: number, end: number, ns: string, arg: string, hasColon: boolean }}
  *   null unless the text up to the caret is exactly `/ns` or `/ns:arg`
  *   (whitespace-free) at command position. `start` is the slash's index;
  *   `end` is the caret.
  */
-export function parseSlashCommand(text, caret, knownNamespaces = null) {
+export function parseSlashCommand(text, caret, resolvedEnds = null) {
   const t = String(text ?? "");
   const c = Math.max(
     0,
@@ -40,28 +38,21 @@ export function parseSlashCommand(text, caret, knownNamespaces = null) {
   );
   const before = t.slice(0, c);
   // The slash must be at index 0 (start of input) OR begin a fresh token after
-  // whitespace that follows a NON-EMPTY prefix (a leading-space token is text).
-  // group 1 = the whitespace run before the slash (absent at position 0),
-  // group 2 = the slash, group 3 = the namespace, group 4 = the arg.
+  // whitespace that IMMEDIATELY follows a resolved command reference (group 1
+  // = the whitespace run, group 2 = the slash, group 3 = the ns, group 4 = arg).
   const m = before.match(/(?:^|(\s+))(\/)([a-z]*)(?::(\S*))?$/i);
   if (!m) return null;
   const ws = m[1] ?? "";
   const slashIndex = (m.index ?? 0) + ws.length;
-  if (ws && !before.slice(0, m.index ?? 0).trim()) {
-    // The whitespace before the slash has only whitespace before it too — a
-    // leading-space token like " /agent:x" is ordinary text.
-    return null;
+  if (ws) {
+    // The position right before the whitespace run is where the previous token
+    // ended (`m.index`). That must be a RESOLVED COMMAND REFERENCE boundary —
+    // arbitrary prose (or a leading-space token, where `m.index` is 0) never
+    // qualifies, so the free-text guard is preserved.
+    const refEnd = m.index ?? 0;
+    if (refEnd <= 0 || !resolvedEnds || !resolvedEnds.has(refEnd)) return null;
   }
   const ns = (m[3] || "").toLowerCase();
-  // Post-whitespace commands require a KNOWN namespace (the caller's set);
-  // position-0 keeps legacy behavior (partial namespaces filter the list).
-  if (
-    ws &&
-    knownNamespaces &&
-    !(knownNamespaces instanceof Set ? knownNamespaces.has(ns) : knownNamespaces.includes(ns))
-  ) {
-    return null;
-  }
   return {
     start: slashIndex,
     end: c,

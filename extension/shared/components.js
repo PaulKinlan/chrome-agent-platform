@@ -5845,6 +5845,11 @@ class AgentComposer extends Component {
     this._popupActive = -1;
     this._popupToken = null;
     this._slashAgentToken = null; // { start, end } while /agent: drives the picker
+    // Resolved command-reference spans in the current input: a second /command
+    // typed immediately after one of these opens its picker (CAP-FB-20260831-
+    // MULTI-SLASH-COMMANDS-01). Each is { start, end, text } — `text` lets the
+    // composer drop spans that no longer match the live input after edits.
+    this._resolvedSpans = [];
     // Auto-grow needs a post-layout pass for programmatically prefilled values
     // (e.g. the first-run prompt) — scrollHeight is 0 before the first style.
     requestAnimationFrame(() => this._autoGrow());
@@ -6497,13 +6502,19 @@ class AgentComposer extends Component {
     const caret = input.selectionStart ?? text.length;
 
     // / command — command position (shared/command-parser.js): a slash at the
-    // start of the input, OR a slash that begins a fresh whitespace-delimited
-    // token after real text (CAP-FB-20260831-MULTI-SLASH-COMMANDS-01: multiple
-    // /commands in one input). Post-whitespace tokens only open the UI for a
-    // KNOWN command namespace; URLs, mid-word slashes, leading-space tokens and
-    // invented namespaces stay ordinary text. The token ends at the first
-    // space, so the task text after a command is plain text again.
-    const slash = parseSlashCommand(text, caret, COMMAND_NAMESPACES.map((n) => n.id));
+    // start of the input, OR a slash typed immediately after a RESOLVED
+    // COMMAND REFERENCE the composer inserted earlier (CAP-FB-20260831-MULTI-
+    // SLASH-COMMANDS-01: multiple /commands in one input). Mid-prose slashes,
+    // URLs, mid-word slashes and leading-space tokens never open the UI.
+    // The token ends at the first space, so the task text after a command is
+    // plain text again.
+    const resolvedSpans = (this._resolvedSpans || []).filter((s) => {
+      if (!s || !Number.isInteger(s.start) || !Number.isInteger(s.end) || s.start < 0 || s.end > text.length || s.end <= s.start) return false;
+      return text.slice(s.start, s.end) === s.text;
+    });
+    this._resolvedSpans = resolvedSpans;
+    const resolvedEnds = new Set(resolvedSpans.map((s) => s.end));
+    const slash = parseSlashCommand(text, caret, resolvedEnds);
     if (slash?.ns === "agent") {
       // /agent or /agent:query — the ONE shared <agent-picker> (the same
       // renderer + a11y contract as the + menu's Choose agent). Exact /agent
@@ -6742,9 +6753,14 @@ class AgentComposer extends Component {
       Promise.resolve(resolveComposerCommandSelection(item, { runtimeSend: RUNTIME_SEND }))
         .then((selection) => {
           if (!selection) return;
+          const finalText = selection.text !== fallbackText ? selection.text : fallbackText;
           if (selection.text !== fallbackText) {
             input.setRangeText(selection.text, token.start, token.start + fallbackText.length, "end");
           }
+          // Record the resolved-reference boundary so a SECOND /command typed
+          // right after it opens its picker (CAP-FB-20260831-MULTI-SLASH-
+          // COMMANDS-01): the composer tracks the spans the parser gates on.
+          this._recordResolvedSpan(token.start, token.start + finalText.length, finalText);
           if (selection.attachment) this._attachMedia(selection.attachment);
           this._autoGrow();
         })
@@ -6772,6 +6788,16 @@ class AgentComposer extends Component {
     }
     this._emit("mention", { item, agent: this._selectedAgent ? { ...this._selectedAgent } : null });
     input.focus();
+  }
+
+  /** Record a resolved command reference's span so a second /command typed
+   * immediately after it opens its picker (CAP-FB-20260831-MULTI-SLASH-
+   * COMMANDS-01). `text` is the inserted reference; the span is validated
+   * against the live input on every parse and dropped when it no longer
+   * matches (e.g. after edits before it). */
+  _recordResolvedSpan(start, end, text) {
+    if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start || typeof text !== "string" || !text) return;
+    (this._resolvedSpans ??= []).push({ start, end, text });
   }
 
   _hidePopup() {
@@ -6831,6 +6857,7 @@ class AgentComposer extends Component {
     // recording; only the accepted path tears the mic down.
     this._root.querySelector("#mic")?.stop?.();
     if (this._input) { this._input.value = ""; this._autoGrow(); }
+    this._resolvedSpans = []; // the input is cleared — the recorded boundaries are gone
     const pending = this.attachments.splice(0);
     this._clearChips();
     const agent = this._selectedAgent ? { ...this._selectedAgent } : null;

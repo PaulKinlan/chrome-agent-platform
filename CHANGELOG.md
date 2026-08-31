@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.552] — 2026-08-31
+- Multi-slash commands r2: gate second commands on resolved-reference boundaries
+
 ## [0.2.551] — 2026-08-31
 - Multi-slash commands: a /command after real text opens (owner P1, )
 
