@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.570] — 2026-08-31
+- The agent can now read, search and list files in a folder you share, with clear errors.
+
 ## [0.2.569] — 2026-08-31
 - Release notes wording corrected.
 
@@ -187,7 +190,7 @@
 - Artifacts and generated images now appear in the conversation as they are created — a card showing what changed, plus a thumbnail strip of screenshots and images you can open.
 
 ## [0.2.510] — 2026-08-30
-- A scheduled task now shows when it will next run - a live Next run countdown - and these repeating tasks are called routines.
+- When you give the agent a folder with /folder, it can now really list, read, find and grep files in it, and any problem comes back as a clear message instead of failing silently.
 
 ## [0.2.509] — 2026-08-30
 - A size limit on how much a skill could import has been removed.

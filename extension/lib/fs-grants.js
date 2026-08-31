@@ -29,6 +29,13 @@ export const MAX_FS_SCAN_ENTRIES = 10000;
 export const MAX_FS_SCAN_BYTES = 1024 * 1024; // 1 MiB
 export const MAX_FS_SEARCH_RESULTS = 50;
 export const MAX_FS_SEARCH_SCANNED = 5000;
+// grep bounds: a recursive content search over a granted directory has to stay
+// cheap and terminate. Matches, files scanned, per-file size, and line length
+// are all capped; oversized/binary files are skipped, never decoded as garbage.
+export const MAX_FS_GREP_MATCHES = 200;
+export const MAX_FS_GREP_FILES_SCANNED = 2000;
+export const MAX_FS_GREP_FILE_BYTES = 2 * 1024 * 1024; // 2 MiB — larger files are skipped
+export const MAX_FS_GREP_LINE_LENGTH = 2000; // a matched line is truncated to this many chars
 
 const DB_NAME = "cap_fs_grants";
 const DB_VERSION = 1;
@@ -646,6 +653,160 @@ export async function readFsGrantFile(
     content: textContent,
     truncated: false,
   };
+}
+
+/**
+ * Recursive, bounded content search (grep) over a granted directory handle.
+ * Returns matching lines as `{ path, line, text }` — a real grep, never a
+ * silent empty result. Binary and oversized files are skipped. `regex` opts
+ * into RegExp matching (allowed under MV3 CSP — RegExp is not eval/new
+ * Function); the default is a literal substring match, which cannot ReDoS.
+ * @param {string} grantId
+ * @param {{ query?: string, relativePath?: string, regex?: boolean, ignoreCase?: boolean, maxMatches?: number, maxDepth?: number }} [options]
+ * @param {{ customIdb?: any }} [dbOptions]
+ */
+export async function grepFsGrant(
+  grantId,
+  { query = "", relativePath = "", regex = false, ignoreCase = false, maxMatches = MAX_FS_GREP_MATCHES, maxDepth = MAX_FS_PATH_DEPTH } = {},
+  { customIdb = null } = {},
+) {
+  const grant = await getFsGrant(grantId, { customIdb });
+  if (!grant) return { ok: false, error: "grant_not_found" };
+
+  const status = await queryFsGrantStatus(grant);
+  if (status !== "granted") {
+    return { ok: false, error: "fs_permission_lapsed", status, grantId };
+  }
+
+  const q = String(query ?? "");
+  if (!q.trim()) return { ok: false, error: "fs_grep_empty_query" };
+
+  // Build the line matcher. RegExp is CSP-safe (unlike eval/new Function). A
+  // literal substring is the default so a model-supplied pattern cannot ReDoS.
+  let matcher;
+  if (regex) {
+    let re;
+    try {
+      re = new RegExp(q, ignoreCase ? "i" : "");
+    } catch (err) {
+      return { ok: false, error: "fs_grep_invalid_regex", detail: String(err?.message || err) };
+    }
+    matcher = (line) => re.test(line);
+  } else {
+    const needle = ignoreCase ? q.toLowerCase() : q;
+    matcher = (line) => (ignoreCase ? line.toLowerCase() : line).includes(needle);
+  }
+
+  let segments = [];
+  try {
+    segments = cleanRelativePath(relativePath);
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) };
+  }
+  if (segments.length > MAX_FS_PATH_DEPTH) {
+    return { ok: false, error: "max_depth_exceeded", maxDepth: MAX_FS_PATH_DEPTH };
+  }
+
+  const matches = [];
+  let filesScanned = 0;
+  let truncated = false;
+  const effectiveMax = Math.min(Math.max(1, Number(maxMatches) || MAX_FS_GREP_MATCHES), MAX_FS_GREP_MATCHES);
+
+  const scanFile = async (handle, path) => {
+    if (matches.length >= effectiveMax || filesScanned >= MAX_FS_GREP_FILES_SCANNED) {
+      truncated = true;
+      return;
+    }
+    let file;
+    try {
+      file = typeof handle?.getFile === "function" ? await handle.getFile() : handle;
+    } catch { return; }
+    const size = typeof file?.size === "number" ? file.size : 0;
+    if (size > MAX_FS_GREP_FILE_BYTES) return; // skip oversized files
+    filesScanned += 1;
+    let buffer;
+    try {
+      buffer = typeof file?.arrayBuffer === "function" ? await file.arrayBuffer() : null;
+    } catch { return; }
+    if (!buffer) return;
+    const bytes = new Uint8Array(buffer);
+    // Skip binary files: a NUL or an unexpected control byte means "not text".
+    const hasBinaryControls = bytes.some((byte) =>
+      byte === 0 || (byte < 32 && byte !== 9 && byte !== 10 && byte !== 13) || byte === 127
+    );
+    if (hasBinaryControls) return;
+    let text;
+    try {
+      text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    } catch { return; }
+    const lines = text.split(/\r\n|\r|\n/);
+    for (let i = 0; i < lines.length; i++) {
+      if (matches.length >= effectiveMax) {
+        truncated = true;
+        return;
+      }
+      let line = lines[i];
+      if (matcher(line)) {
+        if (line.length > MAX_FS_GREP_LINE_LENGTH) line = line.slice(0, MAX_FS_GREP_LINE_LENGTH);
+        matches.push({ path, line: i + 1, text: line });
+      }
+    }
+  };
+
+  const walk = async (dir, prefix, depth) => {
+    if (truncated || matches.length >= effectiveMax || filesScanned >= MAX_FS_GREP_FILES_SCANNED) return;
+    if (depth > maxDepth) {
+      truncated = true;
+      return;
+    }
+    let iter;
+    try {
+      iter = typeof dir?.values === "function"
+        ? dir.values()
+        : typeof dir?.entries === "function"
+        ? dir.entries()
+        : [];
+    } catch { return; }
+    try {
+      for await (const raw of iter) {
+        if (matches.length >= effectiveMax || filesScanned >= MAX_FS_GREP_FILES_SCANNED) {
+          truncated = true;
+          return;
+        }
+        const handle = Array.isArray(raw) ? raw[1] : raw;
+        const name = String(handle?.name ?? "");
+        const path = prefix ? `${prefix}/${name}` : name;
+        const kind = handle?.kind || (handle?.getFile ? "file" : "directory");
+        if (kind === "directory") {
+          await walk(handle, path, depth + 1);
+        } else {
+          await scanFile(handle, path);
+        }
+      }
+    } catch { /* enumeration failure is bounded: return what we have */ }
+  };
+
+  if (grant.kind === "file") {
+    await scanFile(grant.handle, grant.name);
+    return { ok: true, grantId, query: q, matches, filesScanned, matchCount: matches.length, truncated };
+  }
+
+  // Optionally scope the grep to a subdirectory of the granted folder.
+  let startDir = grant.handle;
+  for (const seg of segments) {
+    if (!startDir || typeof startDir.getDirectoryHandle !== "function") {
+      return { ok: false, error: "invalid_directory_handle" };
+    }
+    try {
+      startDir = await startDir.getDirectoryHandle(seg);
+    } catch {
+      return { ok: false, error: "directory_not_found", path: seg };
+    }
+  }
+
+  await walk(startDir, segments.join("/"), 1);
+
+  return { ok: true, grantId, query: q, matches, filesScanned, matchCount: matches.length, truncated };
 }
 
 /**

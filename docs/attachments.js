@@ -42,10 +42,11 @@ export function attachmentContext(attachments) {
   for (const a of attachments) {
     if (a.kind === "local-folder") {
       // A granted folder reference: the grantId is the handle the model-facing
-      // local-file tools (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01) resolve
-      // against once they land. Bounded, honest about what exists today.
+      // local-file tools resolve against (CAP-FB-20260831-FS-GRANT-TASK-USE-01).
+      // The tools default to the single attached folder, so the model rarely
+      // needs the id — but it is named here for the multi-folder case.
       parts.push(
-        `[attached folder: ${a.folderName ?? a.name ?? "folder"} (grant id ${a.grantId ?? "unknown"}) — the local-file browse/read tools are pending; until then the folder is a reference]`,
+        `[attached folder: ${a.folderName ?? a.name ?? "folder"} (grant id ${a.grantId ?? "unknown"}) — use the file tools to work with it: list_files, find_files, read_file, and grep_files (content search) all operate over this folder. Call list_folders if you need to choose between folders.]`,
       );
       continue;
     }

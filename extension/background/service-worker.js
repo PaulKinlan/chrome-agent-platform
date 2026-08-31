@@ -79,6 +79,7 @@ import {
   writeFsGrantFile,
   scanFsGrantManifest,
   searchFsGrantFiles,
+  grepFsGrant,
 } from "../lib/fs-grants.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
 import { attachmentContext, buildMultimodalTask } from "../lib/attachments.js";
@@ -2681,7 +2682,15 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // restored in the finally so the child's surface attribution never
       // leaks into the parent's remaining steps (and vice versa).
       savedRunContext = skipRunLock ? currentRunContext() : null;
-      setRunContext({ threadId, agentRole, agentSurfaceRef });
+      // A folder attached to this run via the /folder composer command carries
+      // its grant identity — thread it into the run context so the file tools
+      // (grep_files / read_file / list_files / find_files) resolve the granted
+      // DirectoryHandle instead of failing silently
+      // (CAP-FB-20260831-FS-GRANT-TASK-USE-01).
+      const runFolderGrants = (Array.isArray(attachments) ? attachments : [])
+        .filter((a) => a && a.kind === "local-folder" && typeof a.grantId === "string" && a.grantId)
+        .map((a) => ({ grantId: a.grantId, name: a.folderName || a.name || "folder" }));
+      setRunContext({ threadId, agentRole, agentSurfaceRef, folderGrants: runFolderGrants });
       if (delegationState) activeDelegationRuns.set(executionId, delegationState);
       orch = await ensureOrchestrator(
         journalingProgress,
@@ -5192,6 +5201,17 @@ const handlers = mergeRouteMaps(
     }
     const result = await scanFsGrantManifest(grantId, { maxEntries, maxDepth });
     return result;
+  },
+
+  async "fs-grant.grep"({ grantId, query, relativePath, regex, ignoreCase, maxMatches }, context) {
+    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
+      securityEvent(
+        "blocked-action",
+        `fs-grant grep denied for principal ${context?.principal ?? "unknown"}`,
+      );
+      return { ok: false, error: "fs-grant.grep is restricted to extension surfaces" };
+    }
+    return await grepFsGrant(grantId, { query, relativePath, regex, ignoreCase, maxMatches });
   },
 
   // ── named agents (the persistent named agents) ────────────────────────────
