@@ -11,6 +11,7 @@ import { renderHtmlFrame, isHtmlDocument, wireHtmlFrameContent, confirmActionDia
 const grid = document.getElementById("grid");
 const status = document.getElementById("status");
 const foot = document.getElementById("foot");
+const capacity = document.getElementById("capacity");
 
 // Bound the live-preview work: preview at most this many artifacts (the most
 // recent), so a large gallery stays responsive. The rest render as placeholder
@@ -22,7 +23,48 @@ document.getElementById("back")?.addEventListener("click", () => {
   else location.href = "../ntp/ntp.html";
 });
 
+// CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01 — the library never silently
+// evicts the owner's oldest artifact; at capacity a create is refused. This
+// indicator tells the owner the library is filling up (and when it is full,
+// that they must delete something) BEFORE that refusal is hit. Shown only once
+// the library is meaningfully full so it stays out of the way otherwise.
+async function renderCapacity() {
+  if (!capacity) return;
+  const cap = await send("asset.capacity", {}).catch(() => null);
+  if (!cap?.ok || !(cap.maxBytes > 0)) { capacity.hidden = true; return; }
+  const pct = Math.min(100, Math.round((cap.fraction ?? 0) * 100));
+  if (pct < 75 && !cap.full) { capacity.hidden = true; return; }
+  const full = cap.full === true;
+  capacity.classList.toggle("full", full);
+  capacity.classList.toggle("warn", !full);
+  const label = full ? "Library full" : "Library filling up";
+  const detail = full
+    ? "New artifacts will be refused until you delete some. Nothing you made is ever removed automatically."
+    : `${pct}% of the artifact index used. When it fills, new artifacts are refused rather than dropping your oldest — delete artifacts to keep room.`;
+  capacity.replaceChildren();
+  const row = document.createElement("div");
+  row.className = "cap-row";
+  const l = document.createElement("span");
+  l.className = "cap-label";
+  l.textContent = label;
+  const c = document.createElement("span");
+  c.textContent = `${cap.count} artifact${cap.count === 1 ? "" : "s"} · ${pct}%`;
+  row.append(l, c);
+  const bar = document.createElement("div");
+  bar.className = "cap-bar";
+  const fill = document.createElement("div");
+  fill.className = "cap-fill";
+  fill.style.width = `${pct}%`;
+  bar.append(fill);
+  const p = document.createElement("div");
+  p.style.marginTop = "6px";
+  p.textContent = detail;
+  capacity.append(row, bar, p);
+  capacity.hidden = false;
+}
+
 async function render() {
+  renderCapacity();
   // The LIBRARY — every artifact the owner has, not just the ones the hub agent
   // made. Passing origin:"master" here is what hid every site-origin artifact
   // (CAP-FB-20260828-ARTIFACT-DURABILITY-01).

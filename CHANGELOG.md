@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.548] — 2026-08-31
+- The artifact library never silently drops your oldest artifact: when it fills up it tells you and refuses new artifacts until you delete some, with a capacity indicator in the gallery.
+
 ## [0.2.547] — 2026-08-31
 - The jobs-board fixes and more polish have begun.
 

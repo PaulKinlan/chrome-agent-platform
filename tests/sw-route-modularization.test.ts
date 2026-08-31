@@ -127,6 +127,8 @@ const BASELINE_ROUTES = [
   "asset.delete",
   "asset.list",
   "asset.get",
+  // Library capacity indicator (CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01).
+  "asset.capacity",
   // Immutable artifact versions (CAP-FB-20260830-ARTIFACT-VERSIONS-01).
   "asset.versions",
   "asset.version-get",

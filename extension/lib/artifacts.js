@@ -613,6 +613,28 @@ async function applyVersionEvictions(store, victims) {
 
 export const ASSET_TYPES = new Set(["html", "text", "json", "image", "data"]);
 
+// CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01 — the capacity policy.
+//
+// The library is the owner's accumulated work; silently dropping the OLDEST
+// thing they made when a new row arrives is the wrong terminal behaviour for a
+// store whose whole point is durability. So auto-eviction is REGENERABLE-ONLY:
+// when a create would exceed the index byte bound, only rows the SYSTEM
+// derives on a schedule — and can therefore regenerate — are rolled off
+// (oldest first). If removing every regenerable row still does not fit, the
+// create is REFUSED with `code: "library_full"` rather than dropping any
+// owner-created artifact. Nothing owner-created ever leaves the library except
+// via an explicit `asset.delete`.
+//
+// A row is regenerable iff its promotion key (`pk`) sits in one of these
+// namespaces. These are the SYSTEM's own derived outputs (a scheduled report,
+// a periodic tab snapshot) — never a model- or workspace-produced artifact,
+// which is the owner's output and is filed under `model:` / `opfs:promote:`.
+export const REGENERABLE_KEY_PREFIXES = ["scheduled-report:", "tab-list:"];
+
+export function isRegenerableRow(row) {
+  return typeof row?.pk === "string" && REGENERABLE_KEY_PREFIXES.some((p) => row.pk.startsWith(p));
+}
+
 // A per-origin asset mutex serializes EVERY index/body read-modify-write
 // (reads AND writes — the re-review's read/list interleaving finding).
 const assetLocks = new Map();
@@ -728,8 +750,29 @@ async function createAssetLocked(store, origin, o, { type, name, content, meta, 
   };
     const next = [...index, row];
     let idx = next;
-    while (idx.length > 1 && utf8Bytes(JSON.stringify(idx)) > ASSET_BOUNDS.maxIndexBytes) {
-      idx = idx.slice(1);
+    if (utf8Bytes(JSON.stringify(idx)) > ASSET_BOUNDS.maxIndexBytes) {
+      // At capacity. Reclaim space by rolling ONLY regenerable derived rows
+      // (oldest first) — never the owner's own artifacts, and never the row
+      // being created. If nothing regenerable is left to drop, REFUSE rather
+      // than silently discarding the owner's oldest work
+      // (CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01).
+      idx = next.slice();
+      for (let i = 0; i < idx.length && utf8Bytes(JSON.stringify(idx)) > ASSET_BOUNDS.maxIndexBytes;) {
+        if (idx[i].id !== id && isRegenerableRow(idx[i])) {
+          idx.splice(i, 1);
+        } else {
+          i++;
+        }
+      }
+      if (utf8Bytes(JSON.stringify(idx)) > ASSET_BOUNDS.maxIndexBytes) {
+        // No owner artifact is dropped — the create fails honestly so the owner
+        // can delete something (the library UI shows the capacity indicator).
+        return {
+          ok: false,
+          code: "library_full",
+          error: `the artifact library is full (${ASSET_BOUNDS.maxIndexBytes} bytes) — delete an artifact to make room`,
+        };
+      }
     }
     const dropped = next.filter((r) => !idx.some((k) => k.id === r.id));
     // Version 1 is staged (planned, not written) here; the plan's evictions
@@ -1386,6 +1429,33 @@ export async function listAllAssets() {
     const store = assetStore();
     try {
       return { ok: true, assets: await readIndexStrict(store) };
+    } catch (e) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
+  });
+}
+
+/** The library's capacity state (CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01)
+ *  — what the artifacts gallery shows so the owner sees a full library COMING
+ *  before a create is refused, rather than discovering it as a silent drop.
+ *  `usedBytes`/`maxBytes` are the real index byte budget that governs the
+ *  refusal; `regenerableCount` is how many rows would roll before any refusal. */
+export async function assetLibraryCapacity() {
+  return withAssetLock("master", async () => {
+    const store = assetStore();
+    try {
+      const index = await readIndexStrict(store);
+      const usedBytes = utf8Bytes(JSON.stringify(index));
+      const maxBytes = ASSET_BOUNDS.maxIndexBytes;
+      return {
+        ok: true,
+        count: index.length,
+        usedBytes,
+        maxBytes,
+        fraction: maxBytes > 0 ? usedBytes / maxBytes : 0,
+        regenerableCount: index.filter(isRegenerableRow).length,
+        full: usedBytes >= maxBytes,
+      };
     } catch (e) {
       return { ok: false, error: String(e?.message ?? e) };
     }

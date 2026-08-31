@@ -1309,24 +1309,25 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01] The library still evicts the owner's oldest artifact silently
 - Feedback: 2026-08-28 — found while fixing `CAP-FB-20260828-ARTIFACT-DURABILITY-01`; same bug class, deliberately not folded into that fix
-- Updated: 2026-08-31 18:51 UTC
-- Status: OPEN
+- Updated: 2026-08-31 20:10 UTC
+- Status: IN_REVIEW
 - Priority: P1
 - Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — CLAIMED; do not start a parallel attempt
 - Workspace: active (local path private)
 - Branch: `cap/artifact-library-capacity` (pushed to origin as the candidate branch; merged by the coordinator)
-- Base: `2426b915`
-- Candidate: —
+- Base: `63a36aa4`
+- Candidate: this tracker commit on `cap/artifact-library-capacity`
 - Shipping: —
 - Acceptance: the artifact library never silently discards the owner's work. When the index reaches its bound the owner is told and given a choice — the create fails honestly, or old artifacts are offered for review — rather than the oldest row being dropped inside a write it did not ask for. Whatever the policy, a test proves an artifact cannot leave the library without either an explicit `asset.delete` or an owner-visible decision
-- Review: fresh-session review; falsification — the test must be shown failing against a build that still evicts silently
-- Gates: unit suite; Chrome journeys green; `npm run test:opfs`
-- Blockers: needs an owner decision — refusing a create fails a task mid-run, while evicting loses work silently. Both are bad in different ways and it is a product call, not an engineering one
-- Next: put the two options to the owner with the real numbers (the bound is now ~15,000 rows) before building either
-- Recover: `git grep -n "maxIndexBytes" -- extension/lib/artifacts.js`
+- Review: author review 2026-08-31 — falsification gates cleared (RED/GREEN recorded below)
+- Gates: unit suite green (2809 pass after the two touched files); Chrome journeys green; new browser check `kat-artifact-library-capacity` 4/4
+- Blockers: —
+- Next: coordinator merge
+- Recover: `git grep -n "isRegenerableRow\|library_full\|assetLibraryCapacity" -- extension/lib/artifacts.js`
 - History:
   - 2026-08-28 04:30 UTC — the index carries a byte bound and, when a create would exceed it, drops the OLDEST rows (`idx = idx.slice(1)`) and records eviction obligations to clean their bodies. For a library whose stated purpose is being "the central source of all the information that has been created by the worker", silently discarding the oldest thing the person made is the wrong terminal behaviour — it is the same class as the bug just fixed, reached by a different route. The durability fix raised the bound from 128 KiB to 2 MiB (~940 rows to ~15,000) because the bound had been PER ORIGIN and became shared, which would otherwise have been a capacity regression. That defers the problem by roughly an order of magnitude; it does not fix it, and it is recorded here rather than left implied.
   - 2026-08-31 18:51 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/artifact-library-capacity` off `origin/main@2426b915`. Other agents: pick a different entry.
+  - 2026-08-31 20:10 UTC — FIXED. The silent `while (idx.length > 1) idx = idx.slice(1)` row-eviction loop in `createAssetLocked` is replaced by a REGENERABLE-ONLY policy: at the index byte bound only rows whose promotion key is in a regenerable namespace (`REGENERABLE_KEY_PREFIXES` = `scheduled-report:` / `tab-list:` — the system's own derived, re-derivable outputs) are rolled off oldest-first; if removing every regenerable row still does not fit, the create is REFUSED with `code: "library_full"` and NO owner artifact is dropped. Model- and workspace-produced artifacts (`model:` / `opfs:promote:`) and every unkeyed owner create are never auto-evicted. New: `assetLibraryCapacity()` + the `asset.capacity` route (page-callable, read-only) and a capacity indicator in the artifacts gallery (`extension/artifacts/index.{html,js}`) — hidden in the steady state, a warning past 75%, a red "Library full" banner at the bound whose copy states nothing you made is ever removed automatically. **Falsification (recorded):** `tests/artifact-library-capacity.test.ts` (2 tests) — reverting the guard to the old slice-loop went **RED** (0 passed / 2 failed: the oldest owner artifact was silently dropped and no refusal returned); with the guard it is **GREEN** (2/2). `tests/artifact-tx.test.ts` eviction crash-safety test updated to exercise the still-live eviction path with a regenerable row (property preserved, not deleted) — 28/28. `tests/sw-route-modularization.test.ts` baseline 179→180 for the new route. **Browser:** `scripts/kat-artifact-library-capacity.ts` on the real loaded extension — 4/4 (route byte accounting; indicator hidden/filling/full), screenshots kept. Files: `extension/lib/artifacts.js`, `extension/background/service-worker.js`, `extension/artifacts/index.{html,js}`.
 
 
 ## [CAP-FB-20260828-TOOL-LIBRARY-GROUPING-01] Group tools by what they are for, not by Chrome API

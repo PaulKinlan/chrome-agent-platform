@@ -19,6 +19,22 @@
   .empty { color: var(--muted); padding: 24px 0; }
   .status { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
   .foot { margin-top: 24px; color: var(--muted); font-size: 12px; }
+  /* CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01 — the library capacity
+     indicator: the owner sees a filling library BEFORE a create is refused,
+     never as a silent drop. Hidden until the library is meaningfully full. */
+  .capacity { margin: 0 0 16px; padding: 10px 12px; border: 1px solid var(--border);
+    border-radius: var(--radius-sm, 6px); background: var(--surface-2, transparent);
+    font-size: 12px; color: var(--muted); }
+  .capacity[hidden] { display: none; }
+  .capacity .cap-row { display: flex; justify-content: space-between; align-items: baseline;
+    gap: 12px; margin-bottom: 6px; }
+  .capacity .cap-label { color: var(--text); font-weight: 600; }
+  .capacity .cap-bar { height: 6px; border-radius: 3px; background: var(--border);
+    overflow: hidden; }
+  .capacity .cap-fill { height: 100%; background: var(--accent); width: 0; }
+  .capacity.warn .cap-fill { background: #e0a400; }
+  .capacity.full .cap-fill { background: #d64545; }
+  .capacity.full { border-color: #d64545; }
 </style>
 </head>
 <body>
@@ -31,6 +47,7 @@
     <div class="logo">Artifacts</div>
   </header>
   <p class="sub">Everything the agents have made — generated pages, files, data, UI fragments. Click a card to open it live; Reuse attaches it to a new task; Delete removes it.</p>
+  <div class="capacity" id="capacity" role="status" aria-live="polite" hidden></div>
   <div class="status" id="status" aria-live="polite"></div>
   <div class="grid" id="grid"></div>
   <div class="foot" id="foot"></div>
