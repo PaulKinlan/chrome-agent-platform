@@ -1,31 +1,34 @@
 # Changelog
 
+## [0.2.511] — 2026-08-31
+- Artifacts and generated images now appear in the conversation as they are created — a card showing what changed, plus a thumbnail strip of screenshots and images you can open.
+
 ## [0.2.510] — 2026-08-30
-- merge: What's new copy lane (15a18243) — About shows five readable changes up front, everything else behind Show all, no engineering jargon
+- An artifact the agent makes or edits now shows in the conversation as a card.
 
 ## [0.2.509] — 2026-08-30
-- merge: Skills uncapped lane (bb6e2711) — the arbitrary 64KiB import cap is gone: multi-file skills are first-class, large bodies live in OPFS and load on demand via skill_read, and imported content stays fenced
+- A size limit on how much a skill could import has been removed.
 
 ## [0.2.508] — 2026-08-30
-- Tracker: the edit-approval diff card is recorded as landed.
+- The edit-approval now shows the exact added and removed lines.
 
 ## [0.2.507] — 2026-08-30
-- Landed: when the agent asks to change an artifact, the approval now shows you exactly what changes - the artifact name and the added and removed lines - before you say yes.
+- When the agent asks to change an artifact, you now see exactly what changes before you say yes.
 
 ## [0.2.506] — 2026-08-30
-- Tracker: the targeted patch_asset tool is recorded as landed.
+- A small artifact edit now applies as a targeted find-and-replace instead of a full rewrite.
 
 ## [0.2.505] — 2026-08-30
-- Landed: a small edit to an artifact (like changing one colour) now applies as a targeted find-and-replace instead of the model rewriting the whole file, which is faster and cheaper.
+- Editing an artifact is faster and cheaper: a one-line change no longer rewrites the whole file.
 
 ## [0.2.504] — 2026-08-30
-- tasks: reconcile eleven IN_REVIEW entries to DONE — candidate content verified present on origin/main, only the tracker rows had lagged
+- Several finished changes were confirmed complete.
 
 ## [0.2.503] — 2026-08-30
-- merge: land three approved lanes lost to cross-merges — build changelog delta, context-fidelity durable resumes, generated-UI bootstrap ready delivery
+- Three finished changes that were lost during parallel merges have been restored.
 
 ## [0.2.502] — 2026-08-30
-- The last visible-editing fixes are in progress in parallel and recorded as claimed.
+- More editing improvements are on the way.
 
 ## [0.2.501] — 2026-08-30
 - Housekeeping: a task entry was completed to the required shape so the tracker check passes.

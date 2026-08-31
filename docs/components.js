@@ -4691,10 +4691,19 @@ class MessageBubble extends Component {
         if (genHtml == null && isHtmlDocument(cand)) genHtml = cand;
       };
 
-      if (name === "generate_ui" || name === "create_asset" || name === "update_asset") {
+      if (name === "generate_ui") {
+        // generate_ui's HTML IS its result — it is not stored as an asset, so
+        // the inline frame is the only place it renders.
         if (args != null) checkCandidate(args);
         if (genHtml == null && result != null) checkCandidate(result);
         if (genHtml == null && detail != null) checkCandidate(detail);
+      } else if (name === "create_asset" || name === "update_asset") {
+        // CAP-FB-20260830-THREAD-ARTIFACT-CARD-01: NEVER mount a frame for an
+        // asset tool. The attribute strings are display-bounded (they end in an
+        // ellipsis mid-document), so the frame painted a blank cream rectangle.
+        // The real page renders in the <artifact-card> that follows this card,
+        // whose preview is loaded FROM THE STORE (appendArtifact). Leave
+        // genHtml null so this falls through to the structured tool card.
       } else {
         if (result != null) checkCandidate(result);
         if (genHtml == null && detail != null) checkCandidate(detail);
@@ -5017,6 +5026,21 @@ class AgentConversation extends Component {
       /* An artifact is a deliverable, not a chat line: it gets its own block on
          the 8px grid rather than being squeezed into the bubble column. */
       agent-conversation .msg-artifact { margin:var(--space-2,8px) 0; max-width:min(560px, 100%); }
+      /* The generated-image strip is a row of deliverables, not a chat line. */
+      agent-conversation .msg-images { margin:var(--space-2,8px) 0; max-width:min(560px, 100%); }
+      /* The edit affordance under an updated artifact: what changed, and a way
+         to see it. Quiet by default — one accent, actions only (PRODUCT.md). */
+      agent-conversation .artifact-change { display:flex; align-items:center; gap:var(--space-2,8px);
+        margin:var(--space-1,4px) 0 0; font-size:var(--text-xs,12px); color:var(--muted,#635e56); }
+      agent-conversation .artifact-change .change-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      agent-conversation .artifact-change .delta { font-variant-numeric:tabular-nums; }
+      agent-conversation .artifact-change .delta .add { color:var(--success,#1f7a4d); }
+      agent-conversation .artifact-change .delta .del { color:var(--danger,#b3261e); }
+      agent-conversation .artifact-change .view-diff { flex:0 0 auto; font:inherit; font-size:var(--text-xs,12px);
+        padding:2px 8px; border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,6px);
+        background:transparent; color:var(--text,#1d1b18); cursor:pointer; }
+      agent-conversation .artifact-change .view-diff:hover { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
+      agent-conversation .artifact-change .view-diff:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
       /* The ONE live run-status surface: an inline row pinned (sticky) at the
          bottom of the conversation viewport while a run is live — always
          visible, part of the conversation flow (owner 2026-08-28: the label
@@ -5143,21 +5167,147 @@ class AgentConversation extends Component {
     const a = m.artifact ?? m;
     if (!a || typeof a !== "object" || !a.id) return null;
     if (typeof m.ts === "number") this._maybeTsGap(m.ts);
+    const origin = String(a.origin ?? "master");
+    const id = String(a.id);
+    // An update_asset card's descriptor can arrive thin ("Untitled") because the
+    // bounded result dropped the asset object — resolve the name from the id→name
+    // registry the create card populated, and let the store fetch below fill the
+    // rest. The store is the source of truth; the descriptor is a hint.
+    const descName = typeof a.name === "string" && a.name && a.name !== "Untitled" ? a.name : null;
+    const name = descName ?? this.artifactName(id) ?? "Untitled";
     const wrap = document.createElement("div");
     wrap.className = "msg-artifact";
     const card = document.createElement("artifact-card");
-    card.setAttribute("id", String(a.id));
-    card.setAttribute("name", String(a.name ?? "Untitled"));
+    card.setAttribute("id", id);
+    card.setAttribute("name", name);
     card.setAttribute("type", String(a.type ?? "data"));
     card.setAttribute("size", String(a.size ?? 0));
-    card.setAttribute("origin", String(a.origin ?? "master"));
+    card.setAttribute("origin", origin);
     if (a.at != null) card.setAttribute("time", String(a.at));
     // Only what the thread actually handles.
     card.setAttribute("actions", "open-tab reuse");
     wrap.appendChild(card);
-    this.rememberArtifact(String(a.id), typeof a.name === "string" ? a.name : "");
+    // THE PREVIEW COMES FROM THE STORE, never from the tool-result text
+    // (CAP-FB-20260830-THREAD-ARTIFACT-CARD-01 / the TOOL-RESULT-ENVELOPE rule):
+    // the args string is display-bounded and paints a blank frame. Same read
+    // the library does (artifacts/index.js) so both surfaces show the page.
+    this._loadArtifactPreview(card, origin, id);
+    // An UPDATE (version > 1) says what changed and offers the diff. A fresh
+    // create has no prior version to compare.
+    const version = Number.isSafeInteger(a.version) ? a.version : null;
+    if ((a.updated === true || (version != null && version > 1)) && version != null && version > 1) {
+      wrap.appendChild(this._artifactChangeRow(origin, id, name, version));
+    }
+    this.rememberArtifact(id, typeof a.name === "string" ? a.name : "");
     this.appendTranscript(wrap);
     return card;
+  }
+  /** Load an artifact-card's live preview AND authoritative name/type/size from
+   *  the asset store — the store is the source of truth, the tool result only a
+   *  hint (a bounded update result carries no name/type at all). Bounded and
+   *  best-effort: a slow or absent worker leaves the card's type placeholder. */
+  _loadArtifactPreview(card, origin, id) {
+    if (!RUNTIME_SEND) return;
+    RUNTIME_SEND("asset.get", { origin, id }).then((full) => {
+      if (!full?.ok || !full.asset || !card.isConnected) return;
+      const asset = full.asset;
+      // Type first (the card picks the preview surface from it), then name/size,
+      // then the preview content — one set of attribute writes, one re-render.
+      if (typeof asset.type === "string" && asset.type) card.setAttribute("type", asset.type);
+      if (typeof asset.name === "string" && asset.name) {
+        card.setAttribute("name", asset.name);
+        this.rememberArtifact(id, asset.name);
+      }
+      if (Number.isFinite(asset.size)) card.setAttribute("size", String(asset.size));
+      card.preview = typeof asset.content === "string" ? asset.content : "";
+    }).catch(() => { /* the placeholder stays — no blank frame */ });
+  }
+  /** The "Updated <name> (+n −m) [View diff]" row under an edited artifact.
+   *  The delta is computed from the versions store (never the tool text); the
+   *  button emits `view-diff` with the version range for the host to open. */
+  _artifactChangeRow(origin, id, name, toVersion) {
+    const row = document.createElement("div");
+    row.className = "artifact-change";
+    const label = document.createElement("span");
+    label.className = "change-label";
+    label.textContent = `Updated ${name} `;
+    const delta = document.createElement("span");
+    delta.className = "delta";
+    label.appendChild(delta);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "view-diff";
+    btn.textContent = "View diff";
+    btn.setAttribute("aria-label", `View what changed in ${name}`);
+    const fromVersion = toVersion - 1;
+    btn.addEventListener("click", () => this._emit("view-diff", { id, origin, name, fromVersion, toVersion }));
+    row.append(label, btn);
+    // Fill "+n −m" from the two version bodies; keep it silent on failure so
+    // the row still offers the diff.
+    if (RUNTIME_SEND) {
+      Promise.all([
+        RUNTIME_SEND("asset.version-get", { origin, id, n: fromVersion }),
+        RUNTIME_SEND("asset.version-get", { origin, id, n: toVersion }),
+      ]).then(([before, after]) => {
+        if (!row.isConnected) return;
+        const b = before?.ok ? String(before.content ?? "") : null;
+        const c = after?.ok ? String(after.content ?? "") : null;
+        if (b == null || c == null) return;
+        const { added, removed } = lineDiffSummary(b, c);
+        delta.replaceChildren();
+        const add = document.createElement("span");
+        add.className = "add";
+        add.textContent = `+${added}`;
+        const del = document.createElement("span");
+        del.className = "del";
+        del.textContent = `−${removed}`;
+        delta.append("(", add, " ", del, ")");
+      }).catch(() => { /* no delta — the View diff button is still there */ });
+    }
+    return row;
+  }
+
+  /** The generated-image strip under a turn (CAP-FB-20260830-GENERATED-IMAGE-
+   *  STRIP-01): every screenshot the run captured and every image asset it
+   *  produced, as a `<screenshot-strip>` whose thumbnails are resolved from the
+   *  stores by id (screenshots.get / asset.get) — image bytes never come from
+   *  the tool result. Clicking a thumbnail bubbles `open-image` for the host to
+   *  open the viewer. Reuses the shared component — never a second strip. */
+  appendImages(m = {}) {
+    const items = Array.isArray(m.items) ? m.items.filter((it) => it && typeof it.id === "string" && it.id) : [];
+    if (!items.length) return null;
+    if (typeof m.ts === "number") this._maybeTsGap(m.ts);
+    const wrap = document.createElement("div");
+    wrap.className = "msg-images";
+    const strip = document.createElement("screenshot-strip");
+    if (m.max != null) strip.setAttribute("max", String(m.max));
+    wrap.appendChild(strip);
+    // Resolve each id to a data URL from its store; keep the item order.
+    const resolve = async () => {
+      const shots = await Promise.all(items.map(async (it) => {
+        let url = "";
+        try {
+          if (it.kind === "image") {
+            const res = await RUNTIME_SEND?.("asset.get", { origin: it.origin ?? "master", id: it.id });
+            url = res?.ok && typeof res.asset?.content === "string" ? res.asset.content : "";
+          } else {
+            const res = await RUNTIME_SEND?.("screenshots.get", { id: it.id });
+            url = typeof res?.dataURL === "string" ? res.dataURL : "";
+          }
+        } catch { url = ""; }
+        return { url, label: typeof it.label === "string" ? it.label : "", kind: it.kind === "image" ? "image" : "screenshot" };
+      }));
+      if (strip.isConnected) strip.setAttribute("shots", JSON.stringify(shots.filter((s) => s.url)));
+    };
+    if (RUNTIME_SEND) resolve();
+    // Clicking a thumbnail: map the index back to the item and ask the host to
+    // open it (image → artifact viewer, screenshot → its own viewer).
+    strip.addEventListener("open", (ev) => {
+      const idx = Number(ev?.detail?.index);
+      const it = items[idx] ?? items[0];
+      if (it) this._emit("open-image", { id: it.id, kind: it.kind === "image" ? "image" : "screenshot", origin: it.origin ?? "master", overflow: ev?.detail?.overflow === true });
+    });
+    return this.appendTranscript(wrap);
   }
 
   appendTool(m = {}) {
@@ -5316,6 +5466,7 @@ class AgentConversation extends Component {
           // it stays in the run log and renders no card (§9).
           case "tool": if (m.protocol !== true) this.appendTool(m); break;
           case "artifact": this.appendArtifact(m); break;
+          case "images": this.appendImages(m); break;
           case "approval": this.appendApproval(m); break;
           case "error": this.appendError(m.content, { reason: m.reason ?? null, action: m.action ?? null, category: m.category ?? null }); break;
           default: this.appendAgent(m.content, ts); break;
@@ -5329,22 +5480,41 @@ class AgentConversation extends Component {
 }
 customElements.define("agent-conversation", AgentConversation);
 
-/* <screenshot-strip shots="[url,label]"> — screenshot history */
+/* <screenshot-strip shots="[{url,label,kind}]" max="6"> — a horizontal strip of
+ * the images a run produced: screenshots it captured and image assets it made
+ * (CAP-FB-20260830-GENERATED-IMAGE-STRIP-01). `kind` ("screenshot" | "image")
+ * only steers the accessible label; `max` caps the visible thumbnails and shows
+ * a "+N" overflow button. Emits `open` with { index }, or { index, overflow } on
+ * the +N button. Escapes every src/label — a data URL is untrusted content. */
 class ScreenshotStrip extends Component {
-  static get observedAttributes() { return ["shots"]; }
+  static get observedAttributes() { return ["shots", "max"]; }
   _render() {
     const shots = parseJSONAttr(this.getAttribute("shots"), []);
-    const items = shots.map((s, i) => {
+    const total = shots.length;
+    const maxAttr = Number(this.getAttribute("max"));
+    const max = Number.isFinite(maxAttr) && maxAttr > 0 ? Math.floor(maxAttr) : total;
+    const visible = shots.slice(0, max);
+    const overflow = total - visible.length;
+    const items = visible.map((s, i) => {
       const src = typeof s === "string" ? s : s?.url;
-      const label = typeof s === "object" ? s?.label : "";
-      return `<button type="button" class="shot" data-index="${i}" aria-label="Open screenshot ${i + 1}">
+      const label = typeof s === "object" ? (s?.label ?? "") : "";
+      const kind = typeof s === "object" && (s?.kind === "image" || s?.kind === "screenshot") ? s.kind : "screenshot";
+      // The label NAMES the picture and its place in the set, so a screen-reader
+      // user hears "Open image 2 of 3", not a bare "Open screenshot".
+      const aria = `Open ${kind} ${i + 1} of ${total}${label ? `: ${label}` : ""}`;
+      return `<button type="button" class="shot" data-index="${i}" aria-label="${escapeHtml(aria)}">
         <img src="${escapeHtml(src || "")}" alt="" loading="lazy">
-        ${label ? `<span class="lbl">${escapeHtml(label)}</span>` : ""}</button>`;
+        ${label ? `<span class="lbl">${escapeHtml(String(label))}</span>` : ""}</button>`;
     }).join("");
+    const overflowBtn = overflow > 0
+      ? `<button type="button" class="shot more" data-index="${visible.length}" data-overflow="1" aria-label="Show ${overflow} more image${overflow === 1 ? "" : "s"}">+${overflow}</button>`
+      : "";
     mountTemplate(this, `
       :host { display:block; }
       .strip { display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; }
       .shot { position:relative; flex:0 0 auto; width:96px; height:64px; border:1px solid var(--border,#e3e0d9); border-radius:8px; overflow:hidden; padding:0; cursor:pointer; background:var(--bg,#f7f6f3); }
+      .shot.more { display:inline-flex; align-items:center; justify-content:center; font:600 var(--text-sm,13px)/1 var(--sans,system-ui); color:var(--muted,#635e56); font-variant-numeric:tabular-nums; }
+      .shot.more:hover { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
       .shot img { width:100%; height:100%; object-fit:cover; display:block; }
       .shot:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .lbl { position:absolute; inset:auto 0 0 0; font-size:9px; background:rgba(0,0,0,.6); color:#fff; padding:1px 3px; }

@@ -850,6 +850,10 @@ export function pairToolJournal(entries) {
         return eff.lazy && eff.name !== rawTool ? eff.name : rawTool;
       })(),
       status,
+      // The runtime-authoritative selected tool (the SW journals it on the
+      // result row) — the artifact derivation prefers it over the envelope,
+      // which a prose `userSummary` wrapper can shadow.
+      selectedTool: typeof result?.selectedTool === "string" && result.selectedTool ? result.selectedTool : null,
       // the ORIGINAL immutable callId (the composite ${run}::${callId} stays
       // the INTERNAL pairing key only — persisting it would re-prefix on every
       // reload)
@@ -899,6 +903,45 @@ export function pairToolJournal(entries) {
  * safe to call on every tool result. */
 const ARTIFACT_TOOLS = new Set(["create_asset", "update_asset", "patch_asset", "generate_ui"]);
 
+/** The screenshot a capture tool's result names (CAP-FB-20260830-GENERATED-
+ *  IMAGE-STRIP-01): `capture_screenshot` returns `{ok, screenshotId, url, …}`.
+ *  Like the artifact derivation, the result can be a wrapped or truncated
+ *  string, so unwrap both orders and, failing that, text-scan the head for the
+ *  id — the strip resolves the picture from the screenshots store by that id,
+ *  it never carries image bytes. Returns `{id, label}` or null. Pure. */
+export function screenshotFromToolResult(result) {
+  for (const outer of [unwrapLazyEnvelope(result), unwrapLazyEnvelopeStructured(result)]) {
+    let parsed = outer && typeof outer === "object" && outer.result !== undefined ? unwrapLazyEnvelope(outer.result) : outer;
+    if (typeof parsed === "string") { try { parsed = JSON.parse(parsed); } catch { parsed = null; } }
+    if (parsed && typeof parsed === "object" && typeof parsed.screenshotId === "string" && parsed.screenshotId) {
+      return { id: parsed.screenshotId, label: typeof parsed.url === "string" ? parsed.url : "" };
+    }
+  }
+  const text = typeof result === "string" ? result : "";
+  const id = text.match(/\\*"screenshotId\\*"\s*:\s*\\*"([A-Za-z0-9_.:-]{1,80})\\*"/u)?.[1] ?? null;
+  if (!id) return null;
+  const label = text.match(/\\*"url\\*"\s*:\s*\\*"(https?:\/\/[^"\\]{1,200})\\*"/u)?.[1] ?? "";
+  return { id, label };
+}
+
+/** The image items (screenshots + image-type assets) one run produced, in tool
+ *  order, for the generated-image strip. Each item is `{ id, kind, label }`
+ *  where kind is "screenshot" | "image" — IDS ONLY, resolved from the stores at
+ *  render time (image bytes never travel through the row). Shared by the live,
+ *  replay and reopen paths so the strip cannot appear during a run and vanish. */
+function imageItemsFromToolCards(cards) {
+  const items = [];
+  for (const c of Array.isArray(cards) ? cards : []) {
+    if (c.status === "error") continue;
+    const shot = screenshotFromToolResult(c.result);
+    if (shot) { items.push({ id: shot.id, kind: "screenshot", label: shot.label }); continue; }
+    if (c.artifact && c.artifact.type === "image") {
+      items.push({ id: c.artifact.id, kind: "image", label: typeof c.artifact.name === "string" ? c.artifact.name : "" });
+    }
+  }
+  return items;
+}
+
 /** THE LAZY PROTOCOL ENVELOPE (CAP-FB-20260828-TOOL-RESULT-ENVELOPE-01).
  *
  * Every provider run now receives exactly two definitions, `search_tools` and
@@ -925,6 +968,31 @@ export function unwrapLazyEnvelope(value) {
     // agent-do's {modelContent,userSummary} wrapper.
     if (v.userSummary != null) { v = v.userSummary; continue; }
     if (v.modelContent != null) { v = v.modelContent; continue; }
+    return v;
+  }
+  return v;
+}
+
+/** The SAME bounded unwrap as {@link unwrapLazyEnvelope}, but for agent-do's
+ *  `{modelContent, userSummary}` wrapper it prefers the STRUCTURED
+ *  `modelContent` over the prose `userSummary`. The default unwrap prefers
+ *  `userSummary` (the human-facing summary), which for a real run is prose like
+ *  "Created crumb.html" — so it walks PAST the structured `{selectedTool,
+ *  result:{asset}}` payload and the artifact is never found. Callers try the
+ *  default unwrap first and fall back to this one, so a plain (non-wrapped)
+ *  result is unaffected. Pure. */
+export function unwrapLazyEnvelopeStructured(value) {
+  let v = value;
+  for (let hop = 0; hop < 4; hop++) {
+    if (typeof v === "string") {
+      const t = v.trim();
+      if (!t.startsWith("{") && !t.startsWith("[")) return v;
+      try { v = JSON.parse(t); } catch { return v; }
+      continue;
+    }
+    if (!v || typeof v !== "object" || Array.isArray(v)) return v;
+    if (v.modelContent != null) { v = v.modelContent; continue; }
+    if (v.userSummary != null) { v = v.userSummary; continue; }
     return v;
   }
   return v;
@@ -982,14 +1050,16 @@ export function approvalRequirementFromToolResult(result) {
   return req;
 }
 
-export function artifactFromToolResult(toolName, result) {
-  const outer = unwrapLazyEnvelope(result);
-  // Under the lazy protocol the invoked tool is named in the payload, not in
-  // the card header — keying on the header alone meant this never fired in a
-  // real run, only in the direct-dispatch tests.
-  const selected = outer && typeof outer === "object" && typeof outer.selectedTool === "string"
-    ? outer.selectedTool
-    : null;
+/** Derive an artifact-card descriptor from ONE unwrapped envelope, or null.
+ *  `declaredTool` is the runtime-authoritative selected tool (the SW journals
+ *  it on the result row; the live event carries it) — it wins over the tool
+ *  named in the header AND over the tool named inside the envelope, because a
+ *  wrapper whose prose summary shadows the structured payload never surfaces a
+ *  `selectedTool` to key on. */
+function artifactFromUnwrapped(outer, toolName, declaredTool) {
+  const selected = (typeof declaredTool === "string" && declaredTool)
+    ? declaredTool
+    : (outer && typeof outer === "object" && typeof outer.selectedTool === "string" ? outer.selectedTool : null);
   const effective = selected ?? String(toolName ?? "");
   if (!ARTIFACT_TOOLS.has(effective)) return null;
   if (outer && typeof outer === "object" && outer.ok === false) return null;
@@ -998,11 +1068,7 @@ export function artifactFromToolResult(toolName, result) {
     ? unwrapLazyEnvelope(outer.result)
     : outer;
   if (typeof parsed === "string") {
-    try {
-      parsed = JSON.parse(parsed);
-    } catch {
-      return null;
-    }
+    try { parsed = JSON.parse(parsed); } catch { return null; }
   }
   if (!parsed || typeof parsed !== "object") return null;
   if (parsed.ok === false) return null; // a failed create made nothing
@@ -1011,13 +1077,121 @@ export function artifactFromToolResult(toolName, result) {
     ? asset.id
     : (typeof parsed.id === "string" && parsed.id ? parsed.id : null);
   if (!id) return null;
+  // The version is the head after this write (ARTIFACT-VERSIONS-01): an
+  // update_asset carries `version > 1` at the result top level or on the
+  // returned asset identity; a fresh create has none. The thread uses it to
+  // title an update card and offer a "View diff" over versions n-1 → n.
+  const version = Number.isSafeInteger(parsed.version) ? parsed.version
+    : (Number.isSafeInteger(asset?.version) ? asset.version : null);
   return {
     id,
     name: typeof asset?.name === "string" && asset.name ? asset.name : "Untitled",
     type: typeof asset?.type === "string" && asset.type ? asset.type : "data",
     origin: typeof asset?.origin === "string" && asset.origin ? asset.origin : "master",
     size: Number.isFinite(asset?.size) ? asset.size : 0,
+    ...(version != null ? { version } : {}),
+    ...(effective === "update_asset" ? { updated: true } : {}),
   };
+}
+
+/** Recover an artifact descriptor from a TRUNCATED, no-longer-parseable result
+ *  string. Both the progress port (live) and the durable journal (replay) bound
+ *  a tool result to ~300 characters, so a real run's `execute_tool` result is an
+ *  unparseable `{"modelContent":"{…\"asset\":{\"id\":…"` string cut mid-object.
+ *  The asset identity sits at the head of the `asset` object, before the cut —
+ *  read it out by text scan (the same bound `artifactIdentityFromPayloads` reads
+ *  for the title) and trust nothing else. Only fires for a known artifact tool. */
+function artifactFromTruncatedText(rawText, declared) {
+  const text = typeof rawText === "string" ? rawText : "";
+  if (!text) return null;
+  const at = text.search(/\\*"asset\\*"\s*:\s*\{/u);
+  if (at < 0) return null;
+  const head = text.slice(at, at + 600);
+  const grab = (key) => head.match(new RegExp('\\\\*"' + key + '\\\\*"\\s*:\\s*\\\\*"([^"\\\\]{1,120})\\\\*"', "u"))?.[1] ?? null;
+  const id = grab("id");
+  if (!id) return null;
+  const size = head.match(/\\*"size\\*"\s*:\s*(\d{1,12})/u);
+  // The head version (update): it sits OUTSIDE the asset object, so scan the
+  // whole string, and only after the asset object closes so a stray "version"
+  // inside the asset (there is none today) cannot be mistaken for it.
+  const version = text.match(/\\*"version\\*"\s*:\s*(\d{1,9})/u);
+  return {
+    id,
+    name: grab("name") || "Untitled",
+    type: grab("type") || "data",
+    origin: grab("origin") || "master",
+    size: size ? Number(size[1]) : 0,
+    ...(version ? { version: Number(version[1]) } : {}),
+    ...(declared === "update_asset" ? { updated: true } : {}),
+  };
+}
+
+/** The asset id + origin an artifact tool's ARGUMENTS carry (update_asset takes
+ *  `{origin, id, content}`). The lazy result can be bounded so hard the asset
+ *  object is dropped and only `{version}` survives — the target id then lives
+ *  only in the args, and the name/type are resolved from the store at render. */
+function idFromArgs(args) {
+  let a = args;
+  if (typeof a === "string") { try { a = JSON.parse(a); } catch { return null; } }
+  a = unwrapLazyEnvelope(a);
+  if (a && typeof a === "object" && a.arguments !== undefined) a = a.arguments;
+  if (!a || typeof a !== "object") return null;
+  const id = typeof a.id === "string" && a.id ? a.id : null;
+  return id ? { id, origin: typeof a.origin === "string" && a.origin ? a.origin : "master" } : null;
+}
+
+/** The head version a bounded update result still carries (`{ok, version, …}`
+ *  with the asset dropped), across the two unwrap orders. */
+function versionFromResult(result) {
+  for (const outer of [unwrapLazyEnvelope(result), unwrapLazyEnvelopeStructured(result)]) {
+    let parsed = outer && typeof outer === "object" && outer.result !== undefined ? unwrapLazyEnvelope(outer.result) : outer;
+    if (typeof parsed === "string") { try { parsed = JSON.parse(parsed); } catch { parsed = null; } }
+    if (parsed && typeof parsed === "object" && Number.isSafeInteger(parsed.version)) return parsed.version;
+  }
+  // The result was truncated before it parses (the real-run shape) — the head
+  // `version` still sits in the text, before any schemaSummary. Take the first.
+  const text = typeof result === "string" ? result : "";
+  const m = text.match(/\\*"version\\*"\s*:\s*(\d{1,9})/u);
+  return m ? Number(m[1]) : null;
+}
+
+export function artifactFromToolResult(toolName, result, selectedTool, args) {
+  // Under the lazy protocol the invoked tool is named in the payload, not in
+  // the card header — keying on the header alone meant this never fired in a
+  // real run, only in the direct-dispatch tests. The runtime's own
+  // `selectedTool` (passed here) is authoritative; the envelope's is the
+  // fallback. Try the ordinary unwrap first, then the structured unwrap that
+  // defeats agent-do's prose `userSummary` wrapper — so a plain result and a
+  // wrapped one both yield the SAME descriptor (the property the replay parity
+  // test pins).
+  const declared = (typeof selectedTool === "string" && selectedTool) ? selectedTool : null;
+  const primary = artifactFromUnwrapped(unwrapLazyEnvelope(result), toolName, declared);
+  if (primary) return primary;
+  const viaStructured = artifactFromUnwrapped(unwrapLazyEnvelopeStructured(result), toolName, declared);
+  if (viaStructured) return viaStructured;
+  const effective = declared ?? String(toolName ?? "");
+  if (!ARTIFACT_TOOLS.has(effective)) return null;
+  // Bounded to a truncated string that no longer parses (the real-run shape —
+  // the JSON is cut mid-`asset`). The id + name + type still sit at the head.
+  const rawText = typeof result === "string" ? result : null;
+  const fromText = rawText ? artifactFromTruncatedText(rawText, declared) : null;
+  if (fromText) return fromText;
+  // Bounded so hard the whole asset object was dropped (update_asset returns
+  // just `{version}`). The target id is in the ARGS; the name/type/size come
+  // from the store when the card renders (`_loadArtifactPreview`). Never for
+  // generate_ui — it names no stored asset.
+  if (effective === "create_asset" || effective === "update_asset") {
+    const fromArgs = idFromArgs(args);
+    if (fromArgs) {
+      const version = versionFromResult(result);
+      return {
+        id: fromArgs.id, name: "Untitled", type: "data", origin: fromArgs.origin, size: 0,
+        ...(version != null ? { version } : {}),
+        ...(effective === "update_asset" ? { updated: true } : {}),
+      };
+    }
+  }
+  return null;
 }
 
 export function toolRowsFromRunLog(executionId, logs) {
@@ -1042,7 +1216,8 @@ export function toolRowsFromRunLog(executionId, logs) {
       ts: typeof r.at === "number" ? r.at : null,
     }));
   const seenApprovals = new Set();
-  return pairToolJournal(rows).flatMap((p) => {
+  const imageCards = []; // {status, result, artifact} in tool order, for the strip
+  const derived = pairToolJournal(rows).flatMap((p) => {
     // Show the tool that RAN, not the lazy protocol's envelope.
     const eff = effectiveToolCall(p.tool, p.args, p.result);
     const toolRow = {
@@ -1097,7 +1272,7 @@ export function toolRowsFromRunLog(executionId, logs) {
     }
     // The artifact this call produced renders straight after it, so reopening
     // a thread shows the deliverable in the context that created it.
-    const artifact = p.status === "error" ? null : artifactFromToolResult(p.tool, p.result);
+    const artifact = p.status === "error" ? null : artifactFromToolResult(p.tool, p.result, p.selectedTool, eff.args);
     if (artifact) {
       out.push({
         role: "artifact",
@@ -1108,8 +1283,18 @@ export function toolRowsFromRunLog(executionId, logs) {
         derived: true,
       });
     }
+    // Feed the generated-image strip (screenshots + image assets) in tool order.
+    imageCards.push({ status: p.status, result: p.result, artifact });
     return out;
   });
+  // ONE images row per execution, after its tool rows: every screenshot the run
+  // captured and every image-type asset it produced, as IDS the strip resolves
+  // from the stores (CAP-FB-20260830-GENERATED-IMAGE-STRIP-01).
+  const items = imageItemsFromToolCards(imageCards);
+  if (items.length) {
+    derived.push({ role: "images", items, executionId, ts: null, derived: true });
+  }
+  return derived;
 }
 
 /** The derived marker for a run whose log was compacted to its summary row. */
@@ -1245,6 +1430,20 @@ export function projectThreadMessages(thread) {
   const messages = Array.isArray(thread?.messages) ? thread.messages : [];
   if (!messages.length) return [];
 
+  // The artifact rows the live run PERSISTED into the body (keyed by the tool
+  // call that produced them) are the authoritative descriptor — the live path
+  // derived them from the FULL result before the journal bounded it. The old
+  // projection dropped every `role:"artifact"` row on the floor (no case for
+  // it), which is why ARTIFACTS-IN-THREAD-01 rendered nothing. Render them, and
+  // fall back to deriving from the tool card only for a call that persisted no
+  // artifact row (CAP-FB-20260830-THREAD-ARTIFACT-CARD-01).
+  const bodyArtifactsByCall = new Map();
+  for (const m of messages) {
+    if (m && m.role === "artifact" && m.artifact && typeof m.artifact === "object" && m.artifact.id && m.toolCallId) {
+      if (!bodyArtifactsByCall.has(m.toolCallId)) bodyArtifactsByCall.set(m.toolCallId, m);
+    }
+  }
+
   // Pair raw tool rows into unified tool cards (one card per callId). The
   // protocol's own calls (search_tools/list_tools) are dropped here — they
   // are plumbing, never a card (§9); the durable run log still lists them.
@@ -1275,6 +1474,9 @@ export function projectThreadMessages(thread) {
       status: t.status,
       args: t.args ?? null,
       result: t.result ?? null,
+      // The runtime-authoritative selected tool, so the artifact derivation
+      // below keys on the tool that RAN even when a prose summary shadows it.
+      selectedTool: t.selectedTool ?? null,
       ts: t.ts ?? null,
       executionId: t.executionId ?? orig?.executionId ?? null,
       callId: t.callId,
@@ -1393,7 +1595,37 @@ export function projectThreadMessages(thread) {
     if (turn.user) output.push(turn.user);
     if (turn.tools.length) {
       turn.tools.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
-      output.push(...turn.tools);
+      // Each artifact-producing tool card is followed by the deliverable it
+      // made, rendered from the store in the thread that produced it
+      // (CAP-FB-20260830-THREAD-ARTIFACT-CARD-01). This is the REOPEN /
+      // re-projection path — the live run appends the same card, and both must
+      // agree, so a reopened thread shows the artifact where the run left it.
+      const imageCards = [];
+      for (const tc of turn.tools) {
+        output.push(tc);
+        // Prefer the persisted artifact row (authoritative, full-fidelity); only
+        // derive from the bounded tool result when the run persisted none.
+        const persisted = tc.callId ? bodyArtifactsByCall.get(tc.callId) : null;
+        const artifact = persisted?.artifact
+          ?? (tc.status === "error" ? null : artifactFromToolResult(tc.name, tc.result, tc.selectedTool, tc.args));
+        if (artifact) {
+          output.push({
+            role: "artifact",
+            artifact,
+            toolCallId: tc.callId ?? null,
+            executionId: tc.executionId ?? null,
+            ts: persisted?.ts ?? tc.ts ?? null,
+            derived: true,
+          });
+        }
+        imageCards.push({ status: tc.status === "error" ? "error" : "success", result: tc.result, artifact });
+      }
+      // The generated-image strip under this turn: the screenshots it captured
+      // and the image assets it produced (CAP-FB-20260830-GENERATED-IMAGE-STRIP-01).
+      const imageItems = imageItemsFromToolCards(imageCards);
+      if (imageItems.length) {
+        output.push({ role: "images", items: imageItems, executionId: turn.execId ?? null, ts: null, derived: true });
+      }
     }
     if (turn.approvals.length) {
       turn.approvals.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
@@ -1818,7 +2050,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
         // (the same derivation the durable-log replay uses, so the live view
         // and the reopened view cannot disagree).
         if (!err && typeof c.appendArtifact === "function") {
-          const artifact = artifactFromToolResult(ev.toolName, ev.result);
+          const artifact = artifactFromToolResult(ev.toolName, ev.result, ev.selectedTool, resEff.args ?? ev.toolArgs);
           if (artifact) c.appendArtifact({ artifact });
         }
         // The conversation remembers id → name from the UNTRUNCATED live result

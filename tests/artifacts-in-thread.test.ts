@@ -191,3 +191,104 @@ Deno.test("envelope: a failed execute_tool renders no artifact", () => {
   const inner = JSON.stringify({ ok: false, selectedTool: "create_asset", error: "denied" });
   assertEquals(artifactFromToolResult("execute_tool", { modelContent: inner }), null);
 });
+
+// ── the agent-do {modelContent, userSummary} wrapper (CAP-FB-20260830-THREAD-
+// ARTIFACT-CARD-01) ────────────────────────────────────────────────────────
+// A real run wraps the tool result as {modelContent (structured), userSummary
+// (prose)}. The DEFAULT unwrap prefers userSummary, so it returns "Created
+// crumb.html", the selectedTool is never found, and the derivation returned
+// null — which is why ARTIFACTS-IN-THREAD-01 was DONE while zero cards rendered.
+// The runtime-authoritative selectedTool (passed here) recovers it, and the
+// structured-unwrap fallback defeats the prose summary even without it.
+const wrapper = (over = {}) => ({
+  modelContent: JSON.stringify({
+    ok: true,
+    selectedTool: "create_asset",
+    result: { ok: true, asset: { id: "a_crumb", name: "crumb.html", type: "html", origin: "master", size: 1667, ...over } },
+  }),
+  userSummary: "Created crumb.html",
+});
+
+Deno.test("wrapper: the {modelContent,userSummary} wrapper with prose in userSummary still yields a card", () => {
+  // With the runtime's selectedTool (the authoritative path).
+  const withDeclared = artifactFromToolResult("execute_tool", wrapper(), "create_asset");
+  assert(withDeclared, "the wrapper + selectedTool must produce a descriptor");
+  assertEquals(withDeclared.id, "a_crumb");
+  assertEquals(withDeclared.name, "crumb.html");
+  // AND without it — the structured-unwrap fallback reads the selectedTool
+  // named inside modelContent even though userSummary shadows it.
+  const withoutDeclared = artifactFromToolResult("execute_tool", wrapper());
+  assert(withoutDeclared, "the structured fallback must recover the card with no declared tool");
+  assertEquals(withoutDeclared.id, "a_crumb");
+});
+
+Deno.test("wrapper: an update carries its head version so the thread can title + diff it", () => {
+  const updated = {
+    modelContent: JSON.stringify({
+      ok: true, selectedTool: "update_asset", version: 2,
+      result: { ok: true, version: 2, asset: { id: "a_crumb", name: "crumb.html", type: "html", origin: "master", size: 1700 } },
+    }),
+    userSummary: "Updated crumb.html",
+  };
+  const a = artifactFromToolResult("execute_tool", updated, "update_asset");
+  assert(a, "the update must produce a descriptor");
+  assertEquals(a.version, 2);
+  assertEquals(a.updated, true);
+});
+
+// ── the truncated real-run result (the ACTUAL root cause) ──────────────────
+// The progress port AND the durable journal bound a tool result to ~300 chars,
+// so a real run's execute_tool result is an unparseable JSON string cut
+// mid-`asset` (ending in `…"sch…`). This is the exact string captured from a
+// loaded-extension @demo-edit-artifact run. The card must still render — the
+// id/name/type sit at the head — or the deliverable is invisible after reload.
+const TRUNCATED_REAL_RESULT = "{\"modelContent\":\"{\\\"ok\\\":true,\\\"selectedTool\\\":\\\"create_asset\\\",\\\"result\\\":{\\\"asset\\\":{\\\"createdAt\\\":1788130601801,\\\"id\\\":\\\"a_mtgesimh_nsow6l0f\\\",\\\"name\\\":\\\"crumb.html\\\",\\\"origin\\\":\\\"master\\\",\\\"size\\\":73,\\\"type\\\":\\\"html\\\",\\\"updatedAt\\\":1788130601801},\\\"id\\\":\\\"a_mtgesimh_nsow6l0f\\\",\\\"ok\\\":true},\\\"sch...";
+
+Deno.test("truncated: a ~300-char cut result still yields the full card via a text scan", () => {
+  const a = artifactFromToolResult("execute_tool", TRUNCATED_REAL_RESULT, "create_asset");
+  assert(a, "the truncated result must still produce a card");
+  assertEquals(a.id, "a_mtgesimh_nsow6l0f");
+  assertEquals(a.name, "crumb.html");
+  assertEquals(a.type, "html");
+  assertEquals(a.origin, "master");
+  assertEquals(a.size, 73);
+});
+
+Deno.test("truncated REPLAY: the reopened thread derives the card from the truncated journaled result", () => {
+  const rows = toolRowsFromRunLog("exec_trunc", [
+    { type: "tool-call", callId: "cT", tool: "execute_tool", args: { arguments: {} }, at: 1 },
+    { type: "tool-result", callId: "cT", tool: "execute_tool", selectedTool: "create_asset", result: TRUNCATED_REAL_RESULT, ok: true, at: 2 },
+  ]);
+  const artifact = rows.find((r) => r.role === "artifact");
+  assert(artifact, "the truncated journal must still derive an artifact row");
+  assertEquals(artifact.artifact.id, "a_mtgesimh_nsow6l0f");
+  assertEquals(artifact.artifact.name, "crumb.html");
+});
+
+Deno.test("bounded update: the asset object is dropped, so the id comes from the args + version from the result", () => {
+  // The real update_asset result: bounded so hard the whole asset object is
+  // gone — only {ok, version} survive. The target id is in the args; the
+  // name/type are resolved from the store at render time.
+  const result = { modelContent: JSON.stringify({ ok: true, selectedTool: "update_asset", result: { ok: true, version: 2, bounded: true, droppedFields: 1 } }) };
+  const args = { origin: "master", id: "a_crumb", content: "<!doctype html>…" };
+  const a = artifactFromToolResult("execute_tool", result, "update_asset", args);
+  assert(a, "an update with a dropped asset must still yield a card from the args id");
+  assertEquals(a.id, "a_crumb");
+  assertEquals(a.version, 2);
+  assertEquals(a.updated, true);
+  // Without the id in the args there is nothing addressable — no card.
+  assertEquals(artifactFromToolResult("execute_tool", result, "update_asset", { content: "x" }), null);
+});
+
+Deno.test("wrapper REPLAY: toolRowsFromRunLog passes the row's selectedTool through to the derivation", () => {
+  // The persisted result row carries the runtime selectedTool; the replay must
+  // forward it so a reopened thread renders the same card the live run did.
+  const rows = toolRowsFromRunLog("exec_wrap", [
+    { type: "tool-call", callId: "cW", tool: "execute_tool", args: { arguments: {} }, at: 1 },
+    { type: "tool-result", callId: "cW", tool: "execute_tool", selectedTool: "create_asset", result: wrapper(), ok: true, at: 2 },
+  ]);
+  const artifact = rows.find((r) => r.role === "artifact");
+  assert(artifact, "the reopened thread must derive the artifact from the wrapper");
+  assertEquals(artifact.artifact.id, "a_crumb");
+  assertEquals(artifact.artifact.name, "crumb.html");
+});

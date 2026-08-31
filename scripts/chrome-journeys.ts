@@ -510,6 +510,7 @@ const EXPECTED = [
   "Thread view: edit approval card names the artifact and shows +n -m",
   "Thread view: edit approval card renders the diff with a '+' Opening hours line before the decision",
   "Thread view: update card is titled with the artifact name",
+  "Thread view: artifact card preview renders from the store, not a blank frame",
   "Thread view: run banner visible 300 ms after send",
   "Thread view: no empty panel space below a two-turn thread at 1440x900",
   "Thread view: conversation scrolled to bottom after an edit turn",
@@ -539,6 +540,7 @@ const EXPECTED = [
   "Permission card: Allow grants browser control and the retried capture_screenshot succeeds",
   "Screenshot: model capture is persisted and listed",
   "Screenshot: tool card shows a thumbnail",
+  "Generated-image strip: the run's screenshot renders in a strip resolved from the store",
   "per-origin clear leaves B intact",
   "memory: version tokens are monotonic + never reused (round-27 CAS)",
   "attachment count cap (12 → 4 over-count dropped, journal records 8)",
@@ -2741,13 +2743,29 @@ async function main() {
         return { state: x.getAttribute('state'), label: (sr.querySelector('.label')?.textContent ?? '').trim(), visible: r.height > 0 && r.top >= 0 && r.bottom <= innerHeight };
       });
       const heads = [...conv.querySelectorAll('message-bubble[role="tool"]')].map((b) => (b.shadowRoot ?? b).querySelector('.genui-head')?.textContent?.trim() ?? null).filter((t) => t != null);
+      // CAP-FB-20260830-THREAD-ARTIFACT-CARD-01: the artifact renders as an
+      // artifact-card whose preview loads FROM THE STORE. kind is the preview
+      // surface actually mounted (html-frame / img / text), or placeholder when
+      // nothing loaded — a truncated-frame regression would leave the card
+      // blank (placeholder) or paint a genui-head above.
+      const artifactCards = [...conv.querySelectorAll('artifact-card')].map((c) => {
+        const sr = c.shadowRoot ?? c;
+        const kind = sr.querySelector('.preview .html-frame') ? 'html-frame'
+          : sr.querySelector('.preview .img') ? 'img'
+          : sr.querySelector('.preview .text') ? 'text'
+          : sr.querySelector('.preview .placeholder') ? 'placeholder' : 'none';
+        return { name: c.getAttribute('name'), kind };
+      });
+      const changeRow = conv.querySelector('.artifact-change');
+      const artifactChange = changeRow ? changeRow.textContent.replace(/\\s+/g, ' ').trim() : null;
+      const hasViewDiff = !!conv.querySelector('.artifact-change .view-diff');
       const identity = [...conv.querySelectorAll('message-bubble[role="agent"]')].map((b) => {
         const sr = b.shadowRoot ?? b; const id = sr.querySelector('agent-identity'); const ir = id ? (id.shadowRoot ?? id) : null;
         return id ? { name: (ir.querySelector('.name')?.textContent ?? '').trim(), time: ir.querySelector('time')?.getAttribute('datetime') ?? null, avatar: !!ir.querySelector('svg, img') } : null;
       });
       return JSON.stringify({ innerHeight, hostHeight: Math.round(host.height), hostTop: Math.round(host.top), contentHeight: Math.round(contentHeight), rows: rows.length,
         scroller: scroller === conv ? 'conversation' : String(scroller.className || scroller.id || scroller.tagName), scrollTop: Math.round(scroller.scrollTop), scrollHeight: scroller.scrollHeight, clientHeight: scroller.clientHeight,
-        composerTop: cr ? Math.round(cr.top) : null, composerBottom: cr ? Math.round(cr.bottom) : null, status, heads, identity, agentBubbles: conv.querySelectorAll('message-bubble[role="agent"]').length });
+        composerTop: cr ? Math.round(cr.top) : null, composerBottom: cr ? Math.round(cr.bottom) : null, status, heads, artifactCards, artifactChange, hasViewDiff, identity, agentBubbles: conv.querySelectorAll('message-bubble[role="agent"]').length });
     })()`;
     const threadState = async () => { try { return JSON.parse(await evalIn(cdp, ntpSession, THREAD_VIEW_STATE) ?? "null"); } catch { return null; } };
     const settledThread = async (deadlineMs) => {
@@ -2835,9 +2853,37 @@ async function main() {
     }
     const tvShot1 = await captureShot(cdp, ntpSession);
     if (tvShot1) await writeEvidence("thread-view-1440-turn1.png", tvShot1);
+    // CAP-FB-20260830-THREAD-ARTIFACT-CARD-01 — the acceptance is "again after
+    // reload + reopen": leave to the hub home and reopen the thread from the
+    // Tasks rail, which re-projects it from the durable thread body. Both
+    // artifacts (create + the approved update, same asset id) must render from
+    // the store, and the update card must carry the "+n −m / View diff" affordance.
+    await clickSel(cdp, ntpSession, "#home").catch(() => false);
+    await sleep(600);
+    await clickSel(cdp, ntpSession, ".t-open").catch(() => false);
+    await sleep(1200);
+    let reopened = await threadState();
+    for (let i = 0; i < 12 && !(Array.isArray(reopened?.artifactCards) && reopened.artifactCards.length >= 2 && reopened.artifactCards.every((c) => c.kind === "html-frame")); i++) {
+      await sleep(400);
+      reopened = await threadState();
+    }
+    console.log(`thread-view journey (reopened): ${JSON.stringify(reopened?.artifactCards)} change=${JSON.stringify(reopened?.artifactChange)}`);
+    const tvShotReopen = await captureShot(cdp, ntpSession);
+    if (tvShotReopen) await writeEvidence("thread-two-artifact-cards.png", tvShotReopen);
     check(
       "Thread view: update card is titled with the artifact name",
-      Array.isArray(threadEditTurn?.heads) && threadEditTurn.heads.length >= 2 && threadEditTurn.heads.every((h) => h === "crumb.html"),
+      Array.isArray(reopened?.artifactCards) && reopened.artifactCards.length >= 2 &&
+        reopened.artifactCards.every((c) => c.name === "crumb.html"),
+    );
+    // The preview must come from the STORE — a real surface (the html-frame),
+    // never the blank placeholder a truncated args string leaves behind — and the
+    // edited artifact offers "View diff" over its versions.
+    check(
+      "Thread view: artifact card preview renders from the store, not a blank frame",
+      Array.isArray(reopened?.artifactCards) && reopened.artifactCards.length >= 2 &&
+        reopened.artifactCards.every((c) => c.kind === "html-frame") &&
+        (reopened.heads ?? []).length === 0 &&
+        /Updated crumb\.html/.test(reopened?.artifactChange ?? "") && (reopened?.hasViewDiff === true),
     );
     // Turn 2 — the edit turn through the THREAD composer; sample the banner
     // 300 ms after the send, then wait for the settle.
@@ -3326,6 +3372,38 @@ async function main() {
     check(
       "Screenshot: tool card shows a thumbnail",
       thumb !== null && thumb.natural > 0 && /^Screenshot of /.test(String(thumb.alt ?? "")),
+    );
+
+    // CAP-FB-20260830-GENERATED-IMAGE-STRIP-01 — the capture the run took also
+    // appears in the generated-image strip under that turn. Reopen the thread
+    // from the Tasks rail (the durable re-projection path) and assert the strip
+    // resolves the screenshot from the store.
+    await clickSel(cdp, ntpSession, "#home").catch(() => false);
+    await sleep(600);
+    await clickSel(cdp, ntpSession, ".t-open").catch(() => false);
+    await sleep(1200);
+    const stripState = () => evalIn(cdp, ntpSession, `(() => {
+      const conv = document.getElementById("thread-conversation");
+      const strip = conv?.querySelector("screenshot-strip");
+      if (!strip) return JSON.stringify({ hasStrip: false });
+      const sr = strip.shadowRoot ?? strip;
+      const img = sr.querySelector(".shot img");
+      const btn = sr.querySelector(".shot");
+      return JSON.stringify({ hasStrip: true, shots: sr.querySelectorAll(".shot").length, natural: img?.naturalWidth ?? 0, label: btn?.getAttribute("aria-label") ?? null });
+    })()`);
+    let stripInfo: any = null;
+    for (let i = 0; i < 16; i++) {
+      try { stripInfo = JSON.parse(await stripState() ?? "null"); } catch { stripInfo = null; }
+      if (stripInfo?.hasStrip && (stripInfo.natural ?? 0) > 0) break;
+      await sleep(400);
+    }
+    dbg("generated-image strip after reopen", stripInfo);
+    const stripShot = await captureShot(cdp, ntpSession);
+    if (stripShot) await writeEvidence("image-strip-thread.png", stripShot);
+    check(
+      "Generated-image strip: the run's screenshot renders in a strip resolved from the store",
+      stripInfo?.hasStrip === true && stripInfo.shots >= 1 && (stripInfo.natural ?? 0) > 0 &&
+        /^Open screenshot 1 of /.test(String(stripInfo.label ?? "")),
     );
 
     // Restore the pre-journey state (browser control revoked) for what follows.

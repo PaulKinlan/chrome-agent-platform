@@ -222,11 +222,16 @@
       </div>
 
       <div class="specimen">
-        <h3 class="spec"><code class="tag">&lt;screenshot-strip&gt;</code> — screenshot history</h3>
+        <h3 class="spec"><code class="tag">&lt;screenshot-strip&gt;</code> — generated-image strip</h3>
         <div class="stage column">
           <screenshot-strip shots='[]'></screenshot-strip>
+          <screenshot-strip max="2" shots='[
+            {"url":"data:image/svg+xml;utf8,<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"96\" height=\"64\"><rect width=\"96\" height=\"64\" fill=\"%230e6e63\"/></svg>","label":"example.com","kind":"screenshot"},
+            {"url":"data:image/svg+xml;utf8,<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"96\" height=\"64\"><rect width=\"96\" height=\"64\" fill=\"%23b3843a\"/></svg>","label":"green.png","kind":"image"},
+            {"url":"data:image/svg+xml;utf8,<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"96\" height=\"64\"><rect width=\"96\" height=\"64\" fill=\"%23635e56\"/></svg>","label":"chart.svg","kind":"image"}
+          ]'></screenshot-strip>
         </div>
-        <p class="caption">empty state; pass a JSON array of <code>{url,label}</code> to populate. Emits <code>open</code>.</p>
+        <p class="caption">empty state, then a populated strip. Pass a JSON array of <code>{url,label,kind}</code> (<code>kind</code> = screenshot|image steers the label); <code>max</code> caps the visible thumbnails and adds a "+N" overflow. Emits <code>open</code> with <code>{index}</code>.</p>
       </div>
 
       <div class="specimen">

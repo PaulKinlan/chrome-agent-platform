@@ -185,6 +185,25 @@ Deno.test("task-row exposes the owner retry affordance for storage-blocked sched
   }
 });
 
+Deno.test("screenshot-strip: kind/max/overflow contract with total-aware, escaped labels", async () => {
+  await import("../extension/shared/components.js");
+  const Klass = registry.get("screenshot-strip");
+  if (!Klass) throw new Error("screenshot-strip is not registered");
+  if (!Klass.observedAttributes.includes("max")) throw new Error("screenshot-strip max is not reactive");
+  const source = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const strip = source.slice(source.indexOf("class ScreenshotStrip"), source.indexOf("customElements.define(\"screenshot-strip\""));
+  for (const token of [
+    "Open ${kind} ${i + 1} of ${total}", // the accessible label names kind + place in the set
+    "data-overflow=", // the +N overflow button
+    "Show ${overflow} more image",
+    "escapeHtml(src", // src is escaped (a data URL is untrusted)
+    "escapeHtml(String(label))", // and the label
+    "escapeHtml(aria)",
+  ]) {
+    if (!strip.includes(token)) throw new Error(`screenshot-strip contract missing: ${token}`);
+  }
+});
+
 Deno.test("components: every design-system element registers as a custom element", async () => {
   await import("../extension/shared/components.js");
   for (const name of COMPONENTS) {
