@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.558] — 2026-08-31
+- DONE (build clean, git status clean after build, unit 2819/0)
+
 ## [0.2.557] — 2026-08-31
 - A generated file that used to change after every build is no longer kept in source control.
 
