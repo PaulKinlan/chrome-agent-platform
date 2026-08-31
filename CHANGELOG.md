@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.548] — 2026-08-31
+- The agent now knows about the shared jobs board and will post and pick up work there.
+
 ## [0.2.547] — 2026-08-31
 - The jobs-board fixes and more polish have begun.
 
