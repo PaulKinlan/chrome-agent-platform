@@ -1550,6 +1550,9 @@ class AttachButton extends Component {
         border:1px solid var(--border,#e3e0d9); color:var(--text,#1d1b18); border-radius:var(--radius-sm,6px);
         padding:0; cursor:pointer; font:inherit; line-height:1; anchor-name:--attach-anchor; }
       .plus svg { display:block; }
+      /* CAP-FB-20260830-FOCUS-ORDER-VISIBILITY-01: the + attach button had NO
+         focus ring (outline:none) — every focusable must show the shared accent
+         ring. The ring check now enumerates shadow roots and caught it. */
       .plus:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       /* Item 52: the menu anchors to the + button and flips above/below it.
          block-start span-inline-end = place it above the button, aligned to the

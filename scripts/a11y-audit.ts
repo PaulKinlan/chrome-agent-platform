@@ -149,12 +149,13 @@ const ANALYZE = `
       out.unlabeled.push(el.tagName.toLowerCase() + ":" + (el.getAttribute("role") || "") + " id=" + (el.id || "none"));
     }
     // small-target check: buttons, anchors and form controls must be >= 24x24
-    // px (WCAG 2.5.8). Native checkboxes/radios are exempt; anchors that are
-    // inline prose (an <a> whose text sits inside a paragraph, not a standalone
-    // control) are exempt per the "inline in a sentence" exception.
+    // px (WCAG 2.5.8). Native checkboxes/radios are exempt; an anchor is exempt
+    // ONLY when it is inline prose: its nearest block ancestor is a <p> or <li>
+    // (the "inline in a sentence" exception). No other container exempts it —
+    // control-row anchors (panel subheads, toolbars, .muted hints) are targets.
     const interactiveTarget = ["button", "input", "textarea", "select"].includes(tag) ||
       (tag === "a" && !!el.getAttribute("href"));
-    const isInlineLink = tag === "a" && el.closest("p, li, span:not(.panel-subhead), .muted, .hint") !== null;
+    const isInlineLink = tag === "a" && el.closest("p, li") !== null;
     if (visible(el) && interactiveTarget && !isInlineLink &&
         !(el.getAttribute("type") === "checkbox" || el.getAttribute("type") === "radio")) {
       const r = el.getBoundingClientRect();
@@ -254,14 +255,26 @@ const ANALYZE = `
   // permanently-decorative static style is never a false positive. Only
   // elements that actually RECEIVE focus are flagged (a display:none/hidden
   // element cannot be focused and is skipped, matching the visible() filter).
+  // Enumerate EVERY focusable in the light DOM AND inside OPEN shadow roots.
+  // The scan walks ALL elements of each root to find custom-element hosts that
+  // carry a shadowRoot (a host usually does not match the focusable selector
+  // itself), recursing into each open shadow root — the WALK pattern that the
+  // small-target/label check uses and that provably reaches shadow buttons.
   const allFocusables = () => {
     const found = [];
+    const seen = new Set();
     const scan = (root) => {
-      for (const el of Array.from(root.querySelectorAll ? root.querySelectorAll('button, a[href], input, textarea, select, [tabindex]:not([tabindex="-1"]), [role="switch"], [role="button"], [role="checkbox"]') : [])) {
-        if (visible(el)) found.push(el);
-        if (el.shadowRoot) scan(el.shadowRoot);
+      const focusSel = 'button, a[href], input, textarea, select, [tabindex]:not([tabindex="-1"]), [role="switch"], [role="button"], [role="checkbox"]';
+      if (root.querySelectorAll) {
+        for (const el of Array.from(root.querySelectorAll(focusSel))) {
+          if (seen.has(el)) continue;
+          seen.add(el);
+          if (visible(el)) found.push(el);
+        }
+        for (const el of Array.from(root.querySelectorAll("*"))) {
+          if (el.shadowRoot) scan(el.shadowRoot);
+        }
       }
-      if (root.shadowRoot) scan(root.shadowRoot);
     };
     scan(document);
     return found;
@@ -286,7 +299,13 @@ const ANALYZE = `
     try {
       const before = visualSignature(el);
       el.focus();
-      const focusedOk = document.activeElement === el || el.contains(document.activeElement);
+      // The light-DOM activeElement for a shadow-root control is its HOST (the
+      // custom element), not the inner node — accept focus when the active
+      // element is the node itself, a descendant, or the node's shadow host.
+      const rootNode = el.getRootNode();
+      const host = rootNode && rootNode.host ? rootNode.host : null;
+      const active = document.activeElement;
+      const focusedOk = active === el || (active && el.contains(active)) || (host && active === host) || (host && active && host.contains(active));
       if (!focusedOk) continue; // element cannot actually take focus (hidden etc.)
       const after = visualSignature(el);
       if (before === after) {

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.513] — 2026-08-31
+- Focus order r3: the focus-ring check now reaches shadow-DOM controls (enumerate all elements per root to find shadow hosts AND accept the shadow host as the active element on focus); the attach button's missing accent ring is restored; the inline-link small-target exemption is exactly p/li
+
 ## [0.2.512] — 2026-08-31
 - tasks: record the r2 candidate SHA (935e19b0) in the FOCUS-ORDER-VISIBILITY entry
 
