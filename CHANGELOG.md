@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.2.564] — 2026-08-31
+- Release notes wording corrected.
+
 ## [0.2.563] — 2026-08-31
-- DONE (build clean, unit 2828/0; journeys env-blocked, worker-verified 272/272)
+- The scheduled next-run indicator is recorded as available.
 
 ## [0.2.562] — 2026-08-31
 - Scheduled tasks now show when they will next run, and repeating tasks are called routines.
