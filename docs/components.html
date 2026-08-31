@@ -287,6 +287,16 @@
       </div>
 
       <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;plan-strip&gt;</code> — the running task's plan checklist</h3>
+        <div class="stage column" style="max-width:560px">
+          <plan-strip state="running" steps='[{"label":"Writing memory","status":"done"},{"label":"Reading memory","status":"done"},{"label":"Reading memory","status":"active"}]'></plan-strip>
+          <plan-strip state="settled" steps='[{"label":"Writing memory","status":"done"},{"label":"Reading memory","status":"done"},{"label":"Reading memory","status":"done"}]'></plan-strip>
+          <plan-strip state="settled" steps='[{"label":"Opening a page","status":"done"},{"label":"Taking a screenshot","status":"error"}]'></plan-strip>
+        </div>
+        <p class="caption">the run's tool calls as a checklist pinned to the top of the thread — the current step active (a spinning ring), completed ones checked; on <code>done</code> it settles into a collapsed “N steps” <code>&lt;details&gt;</code> the owner can re-open. One visually-hidden <code>aria-live</code> region announces the step in flight.</p>
+      </div>
+
+      <div class="specimen">
         <h3 class="spec"><code class="tag">&lt;thinking-trace&gt;</code> — an expandable reasoning trace</h3>
         <div class="stage column" style="max-width:520px">
           <thinking-trace label="reasoning · 3 steps" steps='[{"label":"List the tabs","text":"tab_list returned 12 tabs across 2 windows."},{"label":"Group by domain","text":"github.com ×4, news.ycombinator.com ×3, others ×5."},{"label":"Name each group","text":"Use the domain, colour from the hash."}]'></thinking-trace>

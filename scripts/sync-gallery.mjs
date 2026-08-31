@@ -22,6 +22,8 @@ const FILES = [
   ["extension/shared/command-parser.js", "docs/command-parser.js"],
   ["extension/shared/composer-commands.js", "docs/composer-commands.js"],
   ["extension/shared/run-status.js", "docs/run-status.js"],
+  // The pure plan-strip reducer (components.js imports it).
+  ["extension/shared/plan-strip.js", "docs/plan-strip.js"],
   // The thread view's pure rules (components.js + run-status.js import it).
   ["extension/shared/thread-view.js", "docs/thread-view.js"],
   ["extension/shared/tool-tree.js", "docs/tool-tree.js"],

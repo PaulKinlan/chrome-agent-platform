@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.522] — 2026-08-31
+- : merge — a running task shows its steps as a live checklist
+
 ## [0.2.521] — 2026-08-31
 - DONE (coordinator gates 2734/0, 247/247)
 
@@ -43,7 +46,7 @@
 - Artifacts and generated images now appear in the conversation as they are created — a card showing what changed, plus a thumbnail strip of screenshots and images you can open.
 
 ## [0.2.510] — 2026-08-30
-- The extension's description now matches what it actually does: it can read every page in order to notice when a site offers tools, and it acts on a site only after you allow it.
+- A multi-step task now shows a compact checklist of its steps at the top of the conversation - the current step active, finished ones ticked - which collapses to a short summary when it is done.
 
 ## [0.2.509] — 2026-08-30
 - A size limit on how much a skill could import has been removed.

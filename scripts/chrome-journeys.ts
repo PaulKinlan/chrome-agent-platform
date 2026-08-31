@@ -514,6 +514,8 @@ const EXPECTED = [
   "Thread view: run banner visible 300 ms after send",
   "Thread view: no empty panel space below a two-turn thread at 1440x900",
   "Thread view: conversation scrolled to bottom after an edit turn",
+  "Plan strip: a running multi-step task shows an advancing checklist pinned to the top of the thread",
+  "Plan strip: on done it settles into a collapsed 'N steps' summary with every step checked",
   "real red tab resolved (active tab id)",
   "screenshot: denied after revoke (secondary probe)",
   "screenshot: capture SUCCEEDS for the granted origin",
@@ -2920,6 +2922,102 @@ async function main() {
     if (tvShotSmall) await writeEvidence("thread-view-1024-turn2.png", tvShotSmall);
     await cdp.send("Emulation.clearDeviceMetricsOverride", {}, ntpSession);
     await sleep(200);
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 3f — CAP-FB-20260830-PLAN-STRIP-CHECKPOINTS-01: a running
+    // multi-step task shows a compact plan strip pinned to the top of the
+    // thread — its tool calls as a checklist, the current step ACTIVE and
+    // completed ones CHECKED — built from the run's own step events fed through
+    // the progress port. The demo @demo-tools marker runs three real tool steps
+    // (memory_set, memory_get, memory_get) so the strip advances, then settles
+    // into a collapsed "N steps" <details> the owner can re-open. Keyboard- and
+    // a11y-clean: the summary is a native <summary>, and one visually-hidden
+    // aria-live region announces the step in flight.
+    // ─────────────────────────────────────────────────────────────
+    const PLAN_STRIP_STATE = `(() => {
+      const conv = document.getElementById('thread-conversation');
+      if (!conv) return JSON.stringify(null);
+      const strip = conv.querySelector('plan-strip');
+      const status = [...conv.querySelectorAll('conversation-run-status')].map((x) => x.getAttribute('state'));
+      if (!strip) return JSON.stringify({ present: false, status });
+      const sr = strip.shadowRoot;
+      const rows = sr ? [...sr.querySelectorAll('li')].map((li) => ({ status: li.getAttribute('data-status'), label: (li.querySelector('.tx')?.textContent ?? '').trim() })) : [];
+      const details = sr ? sr.querySelector('details') : null;
+      const summaryEl = sr ? sr.querySelector('summary') : null;
+      const liveEl = sr ? sr.querySelector('.sr') : null;
+      const r = strip.getBoundingClientRect();
+      return JSON.stringify({
+        present: true,
+        isFirstChild: conv.firstElementChild === strip,
+        pinnedSticky: strip.shadowRoot ? getComputedStyle(strip).position === 'sticky' : null,
+        state: strip.getAttribute('state'),
+        open: details ? details.open === true : null,
+        summary: summaryEl ? summaryEl.textContent.replace(/\\s+/g, ' ').trim() : '',
+        summaryTag: summaryEl ? summaryEl.tagName.toLowerCase() : null,
+        live: liveEl ? liveEl.textContent.trim() : '',
+        ariaLive: liveEl ? liveEl.getAttribute('aria-live') : null,
+        rows,
+        visible: r.height > 0 && r.top >= 0,
+        status,
+      });
+    })()`;
+    const planState = async () => { try { return JSON.parse(await evalIn(cdp, ntpSession, PLAN_STRIP_STATE) ?? "null"); } catch { return null; } };
+    await driveHubTask("@demo-tools remember and read back my note");
+    // Collect every RUNNING sample — the demo tool steps are quick, so the
+    // "active + done in the same frame" moment can fall between polls; assert
+    // the checklist ADVANCED across the run (an active step was seen, and a
+    // running frame carried a checked one) rather than depending on one frame.
+    const planRunning = [];
+    let planMidShot = null;
+    let planFinal = null;
+    {
+      const t0 = Date.now();
+      while (Date.now() - t0 < 30000) {
+        const st = await planState();
+        if (st && st.present && st.state === "running") {
+          planRunning.push(st);
+          const done = (st.rows ?? []).filter((r) => r.status === "done").length;
+          const active = (st.rows ?? []).filter((r) => r.status === "active").length;
+          // Screenshot the richest advancing frame: a checked step AND one in flight.
+          if (!planMidShot && active >= 1 && done >= 1) {
+            planMidShot = await captureShot(cdp, ntpSession);
+            if (planMidShot) await writeEvidence("plan-strip-mid-run.png", planMidShot);
+          }
+        }
+        if (st && st.present && st.state === "settled" &&
+          !(st.status ?? []).some((s) => ["queued", "running", "retrying"].includes(s))) { planFinal = st; break; }
+        if (st && (st.status ?? []).some((s) => s === "failed" || s === "cancelled")) { planFinal = st; break; }
+        await sleep(120);
+      }
+      if (!planFinal) planFinal = await planState();
+    }
+    // A running frame lacked a checked step only if the mid-run screenshot never
+    // fired — fall back to the last running frame for the evidence image.
+    if (!planMidShot) { planMidShot = await captureShot(cdp, ntpSession); if (planMidShot) await writeEvidence("plan-strip-mid-run.png", planMidShot); }
+    await sleep(400); // let the terminal re-projection from the durable log land
+    planFinal = await planState();
+    const planFinalShot = await captureShot(cdp, ntpSession);
+    if (planFinalShot) await writeEvidence("plan-strip-settled.png", planFinalShot);
+    const sawActive = planRunning.some((s) => (s.rows ?? []).some((r) => r.status === "active"));
+    const sawRunningDone = planRunning.some((s) => (s.rows ?? []).some((r) => r.status === "done"));
+    const wellFormedRunning = planRunning.find((s) => s.isFirstChild === true && s.pinnedSticky === true &&
+      s.open === true && s.summaryTag === "summary" && s.ariaLive === "polite" && s.live.length > 0);
+    console.log(`plan-strip journey (running samples=${planRunning.length}) sawActive=${sawActive} sawRunningDone=${sawRunningDone} wellFormed=${JSON.stringify(wellFormedRunning ?? null)}`);
+    console.log(`plan-strip journey (settled): ${JSON.stringify(planFinal)}`);
+    check(
+      "Plan strip: a running multi-step task shows an advancing checklist pinned to the top of the thread",
+      planRunning.length > 0 && sawActive && sawRunningDone && !!wellFormedRunning &&
+        planRunning.every((s) => s.visible === true),
+    );
+    check(
+      "Plan strip: on done it settles into a collapsed 'N steps' summary with every step checked",
+      !!planFinal && planFinal.present === true && planFinal.state === "settled" && planFinal.open === false &&
+        Array.isArray(planFinal.rows) && planFinal.rows.length >= 3 &&
+        planFinal.rows.every((r) => r.status === "done") &&
+        /\b3 steps\b/.test(String(planFinal.summary)) &&
+        planFinal.rows.some((r) => /Writing memory/i.test(r.label)) &&
+        planFinal.rows.some((r) => /Reading memory/i.test(r.label)),
+    );
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 4 — screenshot matrix. Owner grant/scope/revoke is driven via the
