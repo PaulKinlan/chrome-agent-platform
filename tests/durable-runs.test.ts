@@ -1581,7 +1581,7 @@ Deno.test("WAL buffer: a failed flush rejects every caller whose row it carried"
 });
 
 // ── CAP-FB-20260830-TRANSCRIPT-FULL-ANSWER-01 ────────────────────────────────
-Deno.test("terminal: the outbox carries result (16 KB) beside the 240-char summary", async () => {
+Deno.test("terminal: the outbox carries the full thread back-fill beside bounded previews (r1 B1 de-duplicated the full copy)", async () => {
   const store = new FakeStore();
   const { registry, thread } = harness(store);
   const id = "exec_terminal_full_result";
@@ -1593,8 +1593,13 @@ Deno.test("terminal: the outbox carries result (16 KB) beside the 240-char summa
   await registry.settle(id, { ok: true, result: full, logicalId: "t" });
   const run = (await registry.list()).runs.find((r) => r.executionId === id);
   assert(run?.terminal, "the settled record carries a terminal");
-  assertEquals(run.terminal.result?.length, 1000, "terminal.result is the full (16 KB-bounded) answer");
+  // The journal/registry terminal result is now a SMALL bounded preview (the
+  // ONE full copy lives in the retainedPayloadRef payload; the thread
+  // back-fill below carries the complete text for the task view).
+  assert(run.terminal.result.length <= 300, "terminal.result is a small bounded preview");
   assert(run.terminal.summary.length <= 240, "terminal.summary stays a preview for lists");
+  assert(typeof run.terminal.retainedPayloadRef === "string" && run.terminal.retainedPayloadRef.length > 0,
+    "the retainedPayloadRef names the authoritative full copy");
   // The thread commit still receives the FULL result (the normal path).
   assertEquals(thread.find((row) => row.executionId === id)?.content?.length, 1000);
 });
@@ -1699,4 +1704,61 @@ Deno.test("retention: a wipe under a live registry is survivable — forgetCache
   const after = await registry.getRetryRequest(id);
   assertEquals(after.error, "unknown execution", "no phantom record survives the wipe");
   assertEquals((await registry.list()).runs.length, 0, "the wiped registry lists nothing");
+});
+
+Deno.test("durable runs: the serialized OUTBOX stays under the store per-value bound for a near-bound terminal (r1 B1)", async () => {
+  const store = new FakeStore();
+  // The outbox is deleted after processing — capture it at WRITE time.
+  const captured = {};
+  const origSet = store.setTrusted.bind(store);
+  store.setTrusted = async (key, value) => {
+    if (String(key).startsWith("run-outbox:")) captured[key] = structuredClone(value);
+    return origSet(key, value);
+  };
+  const run = harness(store);
+  await begin(run.registry);
+  // A near-bound response: ~210 KiB of content. The outbox must carry ONE full
+  // copy for the thread back-fill + small previews (journal + terminal), with
+  // the authoritative full text in the retainedPayloadRef payload — the total
+  // serialized outbox must stay under the memory store's 256 KiB per-value
+  // bound, or the real store would throw on settle.
+  const near = "result-".repeat(30_000); // ~210 KiB
+  await run.registry.settle(executionId, { ok: true, result: near, logicalId: "task-near" });
+  const outboxKey = `run-outbox:${executionId}`;
+  const outbox = captured[outboxKey];
+  assert(outbox, "outbox persisted");
+  const serialized = new TextEncoder().encode(JSON.stringify(outbox)).byteLength;
+  assert(serialized < 256 * 1024,
+    `outbox must stay under the store per-value bound (serialized ${serialized} bytes >= 256 KiB)`);
+  // The terminal's result is a small preview; the FULL text is in the
+  // retainedPayloadRef payload (the authoritative copy).
+  const terminalPreview = outbox.terminal?.result ?? "";
+  assert(terminalPreview.length < near.length, "the outbox terminal result is a bounded preview");
+  assert(terminalPreview.length <= 300, "the outbox terminal result is genuinely small");
+  assert(typeof outbox.retainedPayloadRef === "string" && outbox.retainedPayloadRef.length > 0, "retainedPayloadRef present");
+  // The thread back-fill keeps the full bounded text (byte-capped, multi-byte-safe).
+  const threadContent = outbox.threadTerminal?.content ?? "";
+  assert(threadContent.length > near.length * 0.9, "thread back-fill keeps the full response");
+});
+
+Deno.test("durable runs: multi-byte near-bound terminal keeps the outbox under the store bound (r1 B1/B2)", async () => {
+  const store = new FakeStore();
+  const captured = {};
+  const origSet = store.setTrusted.bind(store);
+  store.setTrusted = async (key, value) => {
+    if (String(key).startsWith("run-outbox:")) captured[key] = structuredClone(value);
+    return origSet(key, value);
+  };
+  const run = harness(store);
+  await begin(run.registry);
+  // 70,000 emoji = 140,000 UTF-16 units = 280,000 UTF-8 bytes; the thread
+  // back-fill must be byte-capped (not char-capped) so the outbox stays under
+  // the store bound.
+  const emoji = "\u{1F600}".repeat(70_000);
+  await run.registry.settle(executionId, { ok: true, result: emoji, logicalId: "task-emoji" });
+  const outbox = captured[`run-outbox:${executionId}`];
+  assert(outbox, "outbox persisted");
+  const serialized = new TextEncoder().encode(JSON.stringify(outbox)).byteLength;
+  assert(serialized < 256 * 1024,
+    `multi-byte outbox must stay under the store bound (serialized ${serialized} bytes >= 256 KiB)`);
 });

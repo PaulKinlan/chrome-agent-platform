@@ -151,6 +151,26 @@ function bounded(value, max = MAX_PREVIEW_CHARS) {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
+/** Byte-aware bounded slice (the store bound is UTF-8 bytes — multi-byte
+ * content would otherwise blow it at fewer chars). Binary-search the largest
+ * char prefix that fits the byte budget (CAP-FB-20260831-TASK-VIEW-FULL-
+ * RESPONSE-01 r1 B2). */
+function boundedBytes(value, maxBytes) {
+  const s = String(value ?? "");
+  if (utf8Bytes(s) <= maxBytes) return s;
+  let lo = 0;
+  let hi = s.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (utf8Bytes(s.slice(0, mid)) <= maxBytes) lo = mid; else hi = mid - 1;
+  }
+  return s.slice(0, lo);
+}
+
+function utf8Bytes(str) {
+  return new TextEncoder().encode(str).byteLength;
+}
+
 function redactedPreview(value) {
   // The CANONICAL redactor (the local regex missed the bare-whitespace form —
   // "apiKey sk-…" leaked into the durable log's taskPreview).
@@ -1746,7 +1766,14 @@ export function createDurableRunRegistry({
           errorReason: payload?.errorReason ?? null,
           errorAction: payload?.errorAction ?? null,
         });
-        const result = bounded(fullResult, 256 * 1024);
+        // ONE authoritative full copy: the retainedPayloadRef payload (chunked
+        // at 64 KiB per key, unbounded total). The terminal's `result` is a
+        // SMALL journal preview (list surfaces stay bounded); the thread back-
+        // fill (threadTerminal.content) is the only other copy and is byte-
+        // capped so the whole serialized outbox stays under the store's
+        // 256 KiB per-value bound even for a near-bound response
+        // (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r1 B1).
+        const result = boundedBytes(fullResult, 240 * 1024);
         const outbox = {
           executionId,
           createdAt: at,
@@ -1758,21 +1785,19 @@ export function createDurableRunRegistry({
             at,
             retainedPayloadRef,
             summary: bounded(payload?.summary ?? result),
-            // The FULL (512 KiB-bounded) answer rides beside the 240-char preview
-            // so a thread back-fill never has to commit the preview as content
-            // (CAP-FB-20260830-TRANSCRIPT-FULL-ANSWER-01; the bound was raised from
-            // 16 KiB for CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01). `summary` stays
-            // a preview for lists. The byte-complete text is always in the
-            // retainedPayloadRef payload.
-            result,
+            // The journal/registry terminal result is a BOUNDED PREVIEW — the
+            // byte-complete text lives only in the retainedPayloadRef payload
+            // and the thread back-fill (CAP-FB-20260830-RUN-LOG-COMPACTION-01;
+            // r1 B1 de-duplicated the full copy from here).
+            result: bounded(fullResult),
             ...(payload?.aborted === true ? { aborted: true } : {}),
           },
           journalEntry: {
             type: "result",
             id: payload?.logicalId ?? record.scheduleName ?? record.threadId ?? record.clientCorrelationId ?? executionId,
             // The LEGACY compatibility journal keeps a small bounded preview
-            // (the full bytes live in the retainedPayloadRef + the terminal
-            // result above — CAP-FB-20260830-RUN-LOG-COMPACTION-01).
+            // (the full bytes live in the retainedPayloadRef + the thread
+            // back-fill — CAP-FB-20260830-RUN-LOG-COMPACTION-01).
             result: bounded(fullResult),
             ok,
             ...(payload?.aborted === true ? { aborted: true } : {}),

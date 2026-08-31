@@ -89,11 +89,54 @@ Deno.test("full response: the terminal commit path also stores the complete text
 });
 
 Deno.test("full response: an OVER-budget message (beyond the cap) is never silently truncated", async () => {
-  const huge = "x".repeat((252 * 1024) + 2000);
+  const huge = "x".repeat((240 * 1024) + 2000);
   const thread = await createThread("seed");
   await appendThreadMessage(thread.id, { role: "assistant", content: huge });
   const stored = await getThread(thread.id);
   const last = stored.messages.at(-1);
-  assert(last.content.includes("truncated to 252 KiB"), "the truncation marker is present (never silent)");
+  assert(last.content.includes("truncated to 240 KiB"), "the truncation marker is present (never silent)");
   assert(last.content.includes("complete text is in the run log"), "the reader is told where the full text lives");
+});
+
+Deno.test("full response: the cap is UTF-8 BYTES, not chars — multi-byte content cannot bust the store bound (r1 B2)", async () => {
+  // 90,000 emoji = 180,000 UTF-16 units = 360,000 UTF-8 bytes (4 bytes each) —
+  // over the 240 KiB byte cap but far under it in CHAR count. The store must
+  // hold a byte-fit slice, and the stored value must stay under the memory
+  // store's 256 KiB per-value bound.
+  const emoji = "\u{1F600}".repeat(90_000); // 360,000 bytes
+  const thread = await createThread("seed");
+  await appendThreadMessage(thread.id, { role: "assistant", content: emoji });
+  const stored = await getThread(thread.id);
+  const last = stored.messages.at(-1);
+  const bytes = new TextEncoder().encode(last.content).byteLength;
+  assert(bytes <= 240 * 1024, `multi-byte content must be capped in UTF-8 bytes (stored ${bytes} bytes > 240 KiB)`);
+  assert(last.content.includes("truncated to 240 KiB"), "the multi-byte over-cap response carries the never-silent marker");
+  // The stored thread value must be under the store's 256 KiB per-value bound.
+  const serialized = new TextEncoder().encode(JSON.stringify(stored.messages)).byteLength;
+  assert(serialized <= 256 * 1024, `thread messages must stay under the store bound (${serialized} bytes)`);
+  // A multi-byte response BELOW the cap stores byte-complete.
+  const okEmoji = "\u{1F600}".repeat(45_000); // 90,000 UTF-16 units = 180,000 bytes < 240 KiB
+  const t2 = await createThread("seed");
+  await appendThreadMessage(t2.id, { role: "assistant", content: okEmoji });
+  const stored2 = await getThread(t2.id);
+  const last2 = stored2.messages.at(-1);
+  const bytes2 = new TextEncoder().encode(last2.content).byteLength;
+  assertEquals(bytes2, 180_000, "a below-cap multi-byte response stores byte-complete");
+});
+
+Deno.test("full response: the SIDEBAR error preview stays a small bounded preview (r1 B3)", async () => {
+  const { recordThreadError, listThreads } = await import("../extension/lib/threads.js");
+  const longError = "provider exploded with an extremely long diagnostic message ".repeat(2000); // ~130 KiB
+  const thread = await createThread("seed");
+  await recordThreadError(thread.id, { message: longError, detail: longError });
+  const stored = await getThread(thread.id);
+  const last = stored.messages.at(-1);
+  // The task-view error bubble may carry the full message...
+  assert(last.content.length > 1000, "the thread error row keeps the full message for the task view");
+  // ...but the SIDEBAR index preview must be a small bounded preview.
+  const rows = await listThreads();
+  const row = rows.find((r) => r.id === thread.id);
+  assert(row, "thread row exists in the index");
+  assert(row.preview.length <= 1024, `sidebar preview must stay bounded (got ${row.preview.length} chars)`);
+  assert(row.error.length <= 1024, `sidebar error must stay bounded (got ${row.error.length} chars)`);
 });

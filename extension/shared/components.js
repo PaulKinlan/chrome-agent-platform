@@ -4500,6 +4500,34 @@ class MessageBubble extends Component {
   _content() {
     return this.hasAttribute("content") ? (this.getAttribute("content") ?? "") : (this.textContent ?? "");
   }
+  /** Wire the long-response expander + copy. Extracted from _wire so the copy
+   * source (the FULL stored content, never the DOM text) is unit-testable
+   * (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r1 B4). */
+  _wireLongResponse(long) {
+    const toggle = long.querySelector(".long-toggle");
+    const copy = long.querySelector(".long-copy");
+    toggle?.addEventListener("click", () => {
+      const open = long.getAttribute("data-open") === "1";
+      long.setAttribute("data-open", open ? "0" : "1");
+      toggle.textContent = open ? "Show full response" : "Show less";
+    });
+    copy?.addEventListener("click", async () => {
+      // Copy the COMPLETE stored response (the content attribute), never the
+      // rendered DOM text (a preview/truncated slice would leak an incomplete
+      // response to the clipboard).
+      const text = this._content();
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand("copy"); } catch { /* clipboard unavailable */ }
+        ta.remove();
+      }
+    });
+  }
   /** Grow an agent bubble with streamed model text (CAP-FB-20260830-TRANSCRIPT-STREAMING-01).
    *  The deltas land in a hosted <streaming-text streaming> (text nodes only —
    *  untrusted model output never meets innerHTML mid-stream); the final
@@ -4866,29 +4894,7 @@ class MessageBubble extends Component {
     // Long-response toggle: reveal the FULL text (the store holds it complete)
     // and offer a copy of the whole response (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01).
     const long = this._root.querySelector(".long-response");
-    if (long) {
-      const toggle = long.querySelector(".long-toggle");
-      const copy = long.querySelector(".long-copy");
-      const body = long.querySelector(".body");
-      toggle?.addEventListener("click", () => {
-        const open = long.getAttribute("data-open") === "1";
-        long.setAttribute("data-open", open ? "0" : "1");
-        toggle.textContent = open ? "Show full response" : "Show less";
-      });
-      copy?.addEventListener("click", async () => {
-        const text = body?.textContent ?? "";
-        try {
-          await navigator.clipboard.writeText(text);
-        } catch {
-          const ta = document.createElement("textarea");
-          ta.value = text;
-          document.body.appendChild(ta);
-          ta.select();
-          try { document.execCommand("copy"); } catch { /* clipboard unavailable */ }
-          ta.remove();
-        }
-      });
-    }
+    if (long) this._wireLongResponse(long);
     // The "Fix in Settings" button on a provider/config error: open the options
     // page (the provider pane's Test/Use button grants the host permission +
     // tests the key — the actionable path for a provider failure).

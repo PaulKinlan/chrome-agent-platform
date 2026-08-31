@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.568] — 2026-08-31
+- Task view full response: r1 review fixes — one authoritative full copy in the retained payload, byte-aware caps (UTF-8) under the store bound, bounded sidebar error preview, and Copy takes the full stored content
+
 ## [0.2.567] — 2026-08-31
 - Task view holds the complete agent response: raise the commit-time caps (the 300-char redactor bite, 16 KiB message cap, 16 KiB durable result) to 252 KiB with a never-silent marker, and add a Show-full-response expander with copy for long bubbles
 

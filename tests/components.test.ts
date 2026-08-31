@@ -1497,3 +1497,49 @@ Deno.test("message-bubble: a long agent response gets the Show-full-response tre
     restoreDoc();
   }
 });
+
+Deno.test("message-bubble: Copy always takes the FULL stored response, never the rendered text (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r1 B4)", async () => {
+  await import("../extension/shared/components.js");
+  const restoreDoc = installFakeDocument();
+  try {
+    const MB = registry.get("message-bubble");
+    const fullContent = "The quick brown fox jumps over the lazy dog. ".repeat(500); // ~22.5 KiB > LONG_PREVIEW_CHARS
+    const bubble = new MB();
+    bubble.setAttribute("role", "agent");
+    bubble.setAttribute("content", fullContent);
+    // A fake .long-response tree with a toggle + copy button (class queries are
+    // supported by the FakeNode). The copy source must be the FULL content
+    // attribute — a rendered-DOM slice would be truncated.
+    const long = new FakeNode("div");
+    long.className = "long-response";
+    long.setAttribute("data-open", "0");
+    const toggle = new FakeNode("button");
+    toggle.className = "long-toggle";
+    toggle.textContent = "Show full response";
+    const copy = new FakeNode("button");
+    copy.className = "long-copy";
+    const body = new FakeNode("div");
+    body.className = "body";
+    // A deliberately SHORT rendered body text: the DOM would be a preview/truncated
+    // slice in a real collapse; the copy must IGNORE it and use the full content.
+    body.textContent = "truncated rendered preview only";
+    long.append(body, toggle, copy);
+    let copied = "";
+    const prevClipboard = globalThis.navigator?.clipboard;
+    (globalThis.navigator as any).clipboard = { writeText: async (t: string) => { copied = t; } };
+    try {
+      bubble._wireLongResponse(long);
+      copy.dispatch("click");
+    } finally {
+      (globalThis.navigator as any).clipboard = prevClipboard;
+    }
+    if (copied !== fullContent) {
+      throw new Error(`copy must take the FULL stored response (copied ${copied.length} chars, stored ${fullContent.length}) — got: ${copied.slice(0, 60)}`);
+    }
+    // The toggle flips data-open on a real dispatch too.
+    toggle.dispatch("click");
+    if (long.getAttribute("data-open") !== "1") throw new Error("toggle must flip data-open to 1");
+  } finally {
+    restoreDoc();
+  }
+});
