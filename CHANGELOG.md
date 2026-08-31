@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.552] — 2026-08-31
+- DONE (coordinator gates 2813/0, 272/272)
+
 ## [0.2.551] — 2026-08-31
 - The shared jobs board is now always visible on the new tab, with a clear empty state and the state of every job.
 
