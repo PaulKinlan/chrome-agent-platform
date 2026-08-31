@@ -84,6 +84,44 @@ Deno.test("template select module: grouping, filtering, feature-detect and optio
   assertEquals(mod.optionLabel({ name: "X" }), "X");
 });
 
+Deno.test("template select module: WCAG contrast is real math and rejects a low-contrast fixture", async () => {
+  const mod = await import("../extension/lib/agent-template-select.js");
+  // Good pair: dark text on white passes AA (>= 4.5).
+  assert(mod.wcagContrast([29, 27, 24], [255, 255, 255]) >= mod.CONTRAST_AA_TEXT, "near-black on white is readable");
+  // Light text on the dark panel also passes.
+  assert(mod.wcagContrast([234, 230, 222], [35, 33, 29]) >= mod.CONTRAST_AA_TEXT, "near-white on charcoal is readable");
+  // DELIBERATE LOW-CONTRAST FIXTURE: mid-grey on white must FAIL AA (the RED
+  // detector — the journey check uses this exact math, so a regressed token
+  // pair that drops below 4.5 turns the journey red).
+  assert(mod.wcagContrast([160, 160, 160], [255, 255, 255]) < mod.CONTRAST_AA_TEXT, "grey-on-white is not AA text");
+  assertEquals(mod.relativeLuminance([0, 0, 0]), 0, "black has zero luminance");
+  assertEquals(mod.relativeLuminance([255, 255, 255]), 1, "white has full luminance");
+  // parseRgb handles rgb()/rgba()/hex/space-separated/srgb and alpha compositing.
+  assertEquals(mod.parseRgb("rgb(255, 255, 255)"), [255, 255, 255]);
+  assertEquals(mod.parseRgb("rgb(29 27 24)"), [29, 27, 24]);
+  assertEquals(mod.parseRgb("#1d1b18"), [29, 27, 24]);
+  assertEquals(mod.parseRgb("color(srgb 1 0.5 0)"), [255, 128, 0]);
+  assertEquals(mod.parseRgb("rgba(0, 0, 0, 0.5)", [255, 255, 255]), [128, 128, 128]);
+  assertEquals(mod.parseRgb("bogus"), null);
+});
+
+Deno.test("template select module: selection survives filtering (retained hidden option) and the picker is styled for dark", async () => {
+  const mod = await import("../extension/lib/agent-template-select.js");
+  // P1a (sol r1): the refresh rebuild must retain a filtered-out selection as
+  // a hidden option so the native value never silently resets. The source
+  // pins the retained-option branch (kept value + hidden option re-appended).
+  assertStringIncludes(picker, 'retained.hidden = true', "a filtered-out selection is retained as a hidden option");
+  assertStringIncludes(picker, 'const keep = select.value;', "the current value is preserved across re-renders");
+  assertStringIncludes(picker, 'select.value = keep || "";', "the preserved value is re-applied after the rebuild");
+  // P1b (sol r1): the customizable picker popup is styled with light-dark()
+  // tokens in BOTH schemes (::picker(select) + option states), never a
+  // white-on-white popup in dark mode.
+  assertStringIncludes(picker, "::picker(select)", "the picker popup is styled");
+  assertStringIncludes(picker, "light-dark(#ffffff, #23211d)", "the popup background uses the light-dark panel tokens");
+  assertStringIncludes(picker, "option:hover", "picker option hover state is styled");
+  assertStringIncludes(picker, "option:checked", "picker option checked state is styled");
+});
+
 Deno.test("Settings offers the same scheduled catalogue through the same gallery component", () => {
   assertStringIncludes(options, 'document.createElement("agent-template-gallery")');
   assertStringIncludes(options, 'setAttribute("filters", "scheduled")');

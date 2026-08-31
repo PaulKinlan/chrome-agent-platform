@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.554] — 2026-08-31
+- Template select r2: preserve selection across filtering, dark picker styling, real WCAG contrast checks
+
 ## [0.2.553] — 2026-08-31
 - Create-agent dialog: searchable grouped template select (customizable/classic fallback); both-scheme visibility hardening
 

@@ -15,6 +15,17 @@
 //   - grouping preserved exactly as the gallery had it: Starter / Other /
 //     Scheduled (a background template is `mode === "background"`).
 //
+// Filtering PRESERVES the current selection: a template that matches the
+// search stays selectable, and a selection that is filtered OUT is retained
+// as a hidden option so the native value never silently resets (the button's
+// <selectedcontent> keeps showing the honest current choice; the picker shows
+// only the matches plus an empty-state note). This keeps the dialog form
+// coherent with the select across every re-render.
+//
+// The customizable picker popup is styled with the same light-dark() tokens
+// as the rest of the dialog in BOTH schemes (::picker(select) background and
+// option states) — never a white-on-white popup in dark mode.
+//
 // No DOM in the module head: every function is pure or takes explicit DOM.
 // The picker is a native select so screen readers get the semantics free; the
 // filter input is labelled.
@@ -79,6 +90,59 @@ export function optionLabel(t) {
   return desc ? `${name} — ${desc}` : name;
 }
 
+// ── WCAG contrast (pure, shared by the module tests and the journey) ────────
+
+function srgbChannel(c) {
+  const v = Number(c) / 255;
+  return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+}
+
+/** Relative luminance of an sRGB triplet [0-255]. */
+export function relativeLuminance(rgb) {
+  const [r, g, b] = rgb;
+  return 0.2126 * srgbChannel(r) + 0.7152 * srgbChannel(g) + 0.0722 * srgbChannel(b);
+}
+
+/** WCAG contrast ratio between two sRGB triplets (1..21). */
+export function wcagContrast(fg, bg) {
+  const l1 = relativeLuminance(fg);
+  const l2 = relativeLuminance(bg);
+  const [hi, lo] = l1 >= l2 ? [l1, l2] : [l2, l1];
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/** Parse a CSS color string into [r,g,b]: rgb()/rgba(), space-separated
+ * `rgb(r g b / a)`, hex, or color(srgb r g b). Alpha composited onto a
+ * backdrop when present. Returns null on anything unexpected. */
+export function parseRgb(cssColor, backdrop = [255, 255, 255]) {
+  const s = String(cssColor ?? "").trim();
+  const m = s.match(/rgba?\(\s*([\d.]+)(?:[,\s]+([\d.]+))?(?:[,\s]+([\d.]+))?(?:[,\s/]+([\d.]+))?\s*\)/i);
+  const hex = s.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+  const srgb = s.match(/color\(\s*srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+))?\s*\)/i);
+  let r, g, b, a = 1;
+  if (m) {
+    const nums = [m[1], m[2], m[3]].map((x) => x === undefined ? undefined : Number(x));
+    if (nums.some((n) => n !== undefined && !Number.isFinite(n))) return null;
+    r = nums[0]; g = nums[1] ?? nums[0]; b = nums[2] ?? nums[0];
+    a = m[4] === undefined ? 1 : Number(m[4]);
+  } else if (hex) {
+    r = parseInt(hex[1], 16); g = parseInt(hex[2], 16); b = parseInt(hex[3], 16);
+  } else if (srgb) {
+    r = Math.round(Number(srgb[1]) * 255); g = Math.round(Number(srgb[2]) * 255); b = Math.round(Number(srgb[3]) * 255);
+    a = srgb[4] === undefined ? 1 : Number(srgb[4]);
+  } else {
+    return null;
+  }
+  if ([r, g, b, a].some((n) => n === undefined || !Number.isFinite(n))) return null;
+  if (a >= 1) return [Math.round(r), Math.round(g), Math.round(b)];
+  const [br, bgc, bb] = backdrop;
+  return [Math.round(r * a + br * (1 - a)), Math.round(g * a + bgc * (1 - a)), Math.round(b * a + bb * (1 - a))];
+}
+
+/** Human text is ≥4.5; large text/UI components ≥3 (WCAG 1.4.3/1.4.11). */
+export const CONTRAST_AA_TEXT = 4.5;
+export const CONTRAST_AA_LARGE = 3.0;
+
 /**
  * Build the template picker (a native select + filter input) into `host`.
  *
@@ -94,11 +158,55 @@ export function optionLabel(t) {
  */
 export function buildTemplateSelect({ host, catalogue, blankLabel = "Custom agent", selected = "", onChange, filterLabel = "Search templates" }) {
   const groups = groupTemplates(catalogue);
+  const allById = new Map(groups.flatMap((g) => g.items).map((t) => [String(t.id), t]));
   const custom = supportsCustomSelect();
 
   const wrap = document.createElement("div");
   wrap.className = "agent-template-picker";
   wrap.style.cssText = "display:flex;flex-direction:column;gap:6px;min-width:0;";
+
+  // Customizable-select styling: the popup (::picker) and its option states use
+  // the SAME light-dark() tokens as the dialog so dark mode is charcoal-on-
+  // light-text, never a white popup with white rows. Classic selects keep the
+  // browser's native (already dark-capable via color-scheme: light dark) popup.
+  if (custom) {
+    const style = document.createElement("style");
+    style.textContent = `
+      .agent-template-select { appearance: base-select; }
+      .agent-template-select::picker(select) {
+        background: light-dark(#ffffff, #23211d);
+        color: light-dark(#1d1b18, #eae6de);
+        border: 1px solid light-dark(#e3e0d9, #6b6355);
+        border-radius: 8px;
+        font-size: 13px;
+        color-scheme: light dark;
+      }
+      .agent-template-select::picker(select) optgroup {
+        background: light-dark(#ffffff, #23211d);
+        color: light-dark(#1d1b18, #eae6de);
+      }
+      .agent-template-select::picker(select) option {
+        background: light-dark(#ffffff, #23211d);
+        color: light-dark(#1d1b18, #eae6de);
+      }
+      .agent-template-select::picker(select) option:hover {
+        background: light-dark(#efede8, #2b2823);
+        color: light-dark(#1d1b18, #eae6de);
+      }
+      .agent-template-select::picker(select) option:checked {
+        background: light-dark(#d7f0ea, #0f2f2a);
+        color: light-dark(#0a5c53, #67c7b9);
+      }
+      .agent-template-select::picker(select) option:focus-visible,
+      .agent-template-select::picker(select) option:focus {
+        outline: 2px solid light-dark(#0e6e63, #53b8a9);
+        outline-offset: -2px;
+      }
+      .agent-template-select:open .agent-template-picker-icon { color: light-dark(#0e6e63, #53b8a9); }
+      .agent-template-select .agent-template-picker-icon { color: light-dark(#635e56, #a8a195); }
+    `;
+    wrap.append(style);
+  }
 
   const filter = document.createElement("input");
   filter.type = "search";
@@ -140,9 +248,12 @@ export function buildTemplateSelect({ host, catalogue, blankLabel = "Custom agen
   const refresh = () => {
     const query = filter.value;
     const shown = filterGroupedTemplates(groups, query);
-    // Preserve the current value across a filter re-render (a filtered-out
-    // selection stays selected — the owner can clear the search to see it).
+    // Preserve the current native value across re-renders. If the selection is
+    // filtered OUT it is retained as a HIDDEN option, so select.value never
+    // silently resets and the button's <selectedcontent> keeps showing the
+    // honest current choice while the picker lists only the matches.
     const keep = select.value;
+    const keepTemplate = keep !== "" ? allById.get(keep) : null;
     select.replaceChildren();
     if (custom) {
       const button = document.createElement("button");
@@ -161,6 +272,7 @@ export function buildTemplateSelect({ host, catalogue, blankLabel = "Custom agen
     blank.value = "";
     blank.textContent = String(blankLabel);
     select.append(blank);
+    const keepShown = keepTemplate && shown.some((g) => g.items.some((t) => String(t.id) === keep));
     for (const g of shown) {
       const og = document.createElement("optgroup");
       og.label = g.label;
@@ -172,11 +284,24 @@ export function buildTemplateSelect({ host, catalogue, blankLabel = "Custom agen
       }
       select.append(og);
     }
+    // Retain the filtered-out selection as a hidden option so the native value
+    // stays valid and coherent with the form (button shows the current choice;
+    // the picker does not list it while the filter excludes it).
+    if (keepTemplate && !keepShown) {
+      const retained = document.createElement("option");
+      retained.value = keep;
+      retained.textContent = optionLabel(keepTemplate);
+      retained.hidden = true;
+      select.append(retained);
+    }
     select.value = keep || "";
-    const hasMatch = shown.length > 0 || (query.trim() === "" );
-    empty.hidden = hasMatch;
-    empty.textContent = query.trim() ? "No templates match your search." : "";
     if (select.value === "" && !query.trim()) select.value = String(selected ?? "");
+    // Honest filtered state: with a query and no matches the empty note shows
+    // (even when a selection is retained as a hidden option — the button still
+    // shows the honest current choice); clearing the filter restores all.
+    const matches = shown.some((g) => g.items.length > 0);
+    empty.hidden = !(query.trim() !== "" && !matches);
+    empty.textContent = query.trim() !== "" && !matches ? "No templates match your search." : "";
   };
 
   filter.addEventListener("input", refresh);

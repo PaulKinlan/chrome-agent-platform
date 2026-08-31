@@ -415,6 +415,7 @@ const EXPECTED = [
   "create dialog: the template select is the first step (Custom default; Starter/Other/Scheduled groups; no gallery grid)",
   "create dialog: the keyboard pick of Research Analyst fills Name and checks its skills",
   "create dialog: the template select filters live (matches narrow to the group; empty state; restore)",
+  "create dialog: the template selection survives filtering and is restored exactly on clear",
   "create dialog: Advanced+Skills expand and the config body scrolls with them (min-height hardening)",
   "create dialog: Advanced+Skills rows are legible in light AND dark scheme (contrast computed)",
   "create dialog: a REAL skill checkbox click checks it (unchecked → checked)",
@@ -1163,7 +1164,8 @@ async function main() {
       const sel = document.getElementById('agent-template-select');
       const empty = document.querySelector('.agent-template-empty');
       if (!sel) return { ready: false };
-      return { ready: true, options: sel.options.length,
+      return { ready: true, options: sel.options.length, value: sel.value,
+        visibleOptions: [...sel.options].filter((o) => !o.hidden).length,
         groups: [...sel.querySelectorAll('optgroup')].map((g) => ({ label: g.label, n: g.querySelectorAll('option').length })),
         emptyHidden: empty?.hidden !== false, emptyText: empty?.textContent ?? '' };
     })()`);
@@ -1181,8 +1183,18 @@ async function main() {
       f0.ready && f0.options === f0.options && f0.emptyHidden &&
         f1.ready && f1.options > 0 && f1.options < f0.options &&
         f1.groups.some((g) => g.label === "Scheduled" && g.n > 0) &&
-        f2.ready && f2.options <= 1 && f2.emptyHidden === false && f2.emptyText.length > 0 &&
+        f2.ready && f2.visibleOptions <= 1 && f2.emptyHidden === false && f2.emptyText.length > 0 &&
         f3.ready && f3.options === f0.options && f3.emptyHidden,
+    );
+    // P1a (sol r1): filtering must PRESERVE the chosen native value — the
+    // selection survives a filter that excludes it (retained hidden option) and
+    // is restored exactly when the filter clears. The pick happened earlier
+    // (research-analyst), so the value must stay research-analyst throughout.
+    check(
+      "create dialog: the template selection survives filtering and is restored exactly on clear",
+      f0.value === "research-analyst" && f1.value === "research-analyst" &&
+        f2.value === "research-analyst" && f2.visibleOptions <= 1 && f3.value === "research-analyst" &&
+        f3.visibleOptions === f3.options,
     );
     // The open picker, light and dark: capture the dialog with the select
     // expanded via the real showPicker() (customizable select renders the
@@ -1254,27 +1266,49 @@ async function main() {
     // the SKILL ROWS themselves are legible in BOTH schemes: the rows use
     // explicit inline var(--panel,#ffffff)/var(--text,#1d1b18) fallbacks which
     // MUST resolve to the theme tokens (light-dark) or they render
-    // white-on-white in dark mode. Assert computed contrast in light, then
-    // re-emulate prefers-color-scheme: dark and assert again.
+    // white-on-white in dark mode. Compute REAL WCAG contrast (not just
+    // "colors differ") for the skills rows AND the picker, in both schemes,
+    // and assert the element is inside the dialog's viewport.
+    // Close any open picker from the screenshot block before measuring
+    // computed styles (an open popup can detach/overlay the dialog content).
+    await evalIn(cdp, ntpSession, `(() => { try { document.getElementById('agent-template-select')?.blur(); } catch {} document.body?.click(); return true; })()`);
+    await sleep(200);
     const contrastProbe = (dark) => evalIn(cdp, ntpSession, `(() => {
       const host = [...document.querySelectorAll('agent-dialog')].find((h) => h.shadowRoot?.querySelector('dialog')?.open);
-      const row = host ? host.querySelector('.skills-list label span') : null;
-      if (!row) return { ready: false };
-      const cs = getComputedStyle(row);
-      const r = row.getBoundingClientRect();
-      const color = cs.color;
-      const advOpen = host.querySelector('.agent-config-advanced')?.open === true;
-      const skOpen = host.querySelector('.skills-collapse')?.open === true;
-      const inView = r.width > 0 && r.height > 0;
-      const scrollable = (() => { const s = host.querySelector('.agent-config-scroll'); return s ? s.scrollHeight >= s.clientHeight && s.clientHeight > 0 : false; })();
-      return { ready: true, dark: ${dark}, color, inView, advOpen, skOpen, scrollable, sample: row.textContent.slice(0, 30) };
+      if (!host) return { ready: false, why: 'no-open-dialog' };
+      // Effective background: walk up from the element to the first non-
+      // transparent background (the honest backdrop the text sits on).
+      const effectiveBg = (el) => {
+        let node = el;
+        while (node) {
+          const bg = getComputedStyle(node).backgroundColor;
+          if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return bg;
+          node = node.parentElement;
+        }
+        return getComputedStyle(host).backgroundColor || null;
+      };
+      const dlgEl = host.shadowRoot?.querySelector('.dialog') ?? host;
+      const dlgRect = dlgEl.getBoundingClientRect();
+      const inDialogViewport = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.bottom > dlgRect.top && r.top < dlgRect.bottom && r.right > dlgRect.left && r.left < dlgRect.right; };
+      const row = host.querySelector('.skills-list label span');
+      const panelEl = host.querySelector('.skills-collapse');
+      const pickerSel = host.querySelector('#agent-template-select');
+      const skills = !row || !panelEl
+        ? { missing: !row ? 'row' : 'panel' }
+        : (row.scrollIntoView({ block: 'center' }), (() => { const r = row.getBoundingClientRect(); return { fg: getComputedStyle(row).color, bg: effectiveBg(row), inView: inDialogViewport(row), rw: Math.round(r.width), rh: Math.round(r.height), rt: Math.round(r.top), rb: Math.round(r.bottom), dt: Math.round(dlgRect.top), db: Math.round(dlgRect.bottom) }; })());
+      const picker = !pickerSel
+        ? { missing: 'picker' }
+        : (pickerSel.scrollIntoView({ block: 'center' }), (() => { const r = pickerSel.getBoundingClientRect(); return { fg: getComputedStyle(pickerSel).color, bg: effectiveBg(pickerSel), inView: inDialogViewport(pickerSel), rw: Math.round(r.width), rh: Math.round(r.height), rt: Math.round(r.top), rb: Math.round(r.bottom) }; })());
+      return { ready: true, dark: ${dark}, skills, picker,
+        advOpen: host.querySelector('.agent-config-advanced')?.open === true,
+        skOpen: host.querySelector('.skills-collapse')?.open === true };
     })()`);
-    const lightC = await contrastProbe(false);
+    const lightC = (await contrastProbe(false)) ?? { ready: false, why: "eval-undefined" };
     await cdp.send("Emulation.setEmulatedMedia", {
       features: [{ name: "prefers-color-scheme", value: "dark" }],
     }, ntpSession);
     await sleep(250);
-    const darkC = await contrastProbe(true);
+    const darkC = (await contrastProbe(true)) ?? { ready: false, why: "eval-undefined" };
     const darkShot = await captureShot(cdp, ntpSession);
     if (darkShot) await writeEvidence("create-dialog-advanced-dark.png", darkShot);
     // restore light for the rest of the suite
@@ -1284,13 +1318,39 @@ async function main() {
     await sleep(200);
     const lightShot = await captureShot(cdp, ntpSession);
     if (lightShot) await writeEvidence("create-dialog-advanced-light.png", lightShot);
-    const contrastOk = (c) => c.ready === true && c.inView === true && c.advOpen === true && c.skOpen === true &&
-      /rgb\(/.test(c.color);
-    const schemesDiffer = lightC.color !== darkC.color;
-    console.log("create dialog contrast probe:", JSON.stringify({ lightC, darkC }));
+    const contrastOk = (c) => c.ready === true &&
+      c.skills !== undefined && c.skills.missing === undefined && c.skills.inView === true &&
+      typeof c.skills.fg === "string" && typeof c.skills.bg === "string" &&
+      c.picker !== undefined && c.picker.missing === undefined && c.picker.inView === true &&
+      c.advOpen === true && c.skOpen === true;
+    // Compute WCAG contrast in NODE with the module's pure helpers (the page
+    // returns raw color strings; parsing stays in the testable module).
+    const { parseRgb, wcagContrast, CONTRAST_AA_TEXT } = await import("../extension/lib/agent-template-select.js");
+    const ratioOf = (c) => {
+      if (!c || c.missing !== undefined) return null;
+      const fg = parseRgb(c.fg);
+      const bg = parseRgb(c.bg) ?? parseRgb(c.bg, [255, 255, 255]);
+      return fg && bg ? wcagContrast(fg, bg) : null;
+    };
+    const lightSkillsRatio = ratioOf(lightC.skills);
+    const lightPickerRatio = ratioOf(lightC.picker);
+    const darkSkillsRatio = ratioOf(darkC.skills);
+    const darkPickerRatio = ratioOf(darkC.picker);
+    // RED fixture: the SAME math must reject a deliberately low-contrast pair.
+    const redFixture = wcagContrast([160, 160, 160], [255, 255, 255]);
+    const schemesDiffer = !!(lightC?.skills && darkC?.skills &&
+      parseRgb(lightC.skills.fg)?.join(",") !== parseRgb(darkC.skills.fg)?.join(","));
+    console.log("create dialog contrast probe (WCAG):", JSON.stringify({
+      lightC, darkC, lightSkillsRatio, lightPickerRatio, darkSkillsRatio, darkPickerRatio, redFixture,
+    }));
     check(
       "create dialog: Advanced+Skills rows are legible in light AND dark scheme (contrast computed)",
-      contrastOk(lightC) && contrastOk(darkC) && schemesDiffer,
+      contrastOk(lightC) && contrastOk(darkC) && schemesDiffer &&
+        lightSkillsRatio !== null && lightSkillsRatio >= CONTRAST_AA_TEXT &&
+        darkSkillsRatio !== null && darkSkillsRatio >= CONTRAST_AA_TEXT &&
+        lightPickerRatio !== null && lightPickerRatio >= CONTRAST_AA_TEXT &&
+        darkPickerRatio !== null && darkPickerRatio >= CONTRAST_AA_TEXT &&
+        redFixture < CONTRAST_AA_TEXT,
     );
 
     const galleryShot = await captureShot(cdp, ntpSession);
