@@ -5,9 +5,9 @@
 // dispatcher, validator, provider binding, or execution allowlist.
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
-  browserTools: 131,
+  browserTools: 136,
   managementTools: 42,
-  totalTools: 173,
+  totalTools: 178,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -16,6 +16,14 @@ export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
 });
 
 export const BROWSER_TOOL_NAMES = Object.freeze([
+  // CAP-FB-20260831-FS-GRANT-TASK-USE-01: local-file tools over a granted
+  // folder. Listed FIRST because browserToolset() adds them at the head of its
+  // toolset, and this array must match Object.keys(browserToolset()) in order.
+  "list_folders",
+  "list_files",
+  "find_files",
+  "read_file",
+  "grep_files",
   "open_tab",
   "navigate_tab",
   "read_page",
@@ -247,6 +255,16 @@ function record(toolName, sourceKind, capabilityTokens, optionalPermissions,
 }
 
 const rows = [
+  // CAP-FB-20260831-FS-GRANT-TASK-USE-01: local-file tools over a granted
+  // FileSystemDirectoryHandle. No manifest permission — access is the
+  // product-level File System Access grant (a persisted handle), scoped
+  // strictly to the granted folder subtree. All read-only. Listed first to
+  // match browserToolset()'s Object.keys order.
+  record("list_folders", "chrome-api", ["chrome.fs-grant.folders.list"], [], "none", "read-only", false, "read", "browser.fs-grant"),
+  record("list_files", "chrome-api", ["chrome.fs-grant.entries.list"], [], "none", "read-only", false, "read", "browser.fs-grant"),
+  record("find_files", "chrome-api", ["chrome.fs-grant.files.find"], [], "none", "read-only", false, "read", "browser.fs-grant"),
+  record("read_file", "chrome-api", ["chrome.fs-grant.file.read"], [], "none", "read-only", false, "read", "browser.fs-grant"),
+  record("grep_files", "chrome-api", ["chrome.fs-grant.content.grep"], [], "none", "read-only", false, "read", "browser.fs-grant"),
   record("open_tab", "chrome-api", ["chrome.tabs.open.destination-origin"], ["tabs"], "destination-origin", "mutating", false, "mutating", "browser.tabs"),
   record("navigate_tab", "chrome-api", ["chrome.tabs.navigate.destination-origin"], ["tabs"], "destination-origin", "mutating", false, "mutating", "browser.tabs"),
   record("read_page", "chrome-api", ["chrome.host.exact-origin", "chrome.page.read"], ["activeTab", "scripting", "tabs"], "none", "read-only", false, "read", "browser.page"),

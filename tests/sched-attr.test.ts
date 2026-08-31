@@ -29,9 +29,16 @@ Deno.test("run-context: set/current/clear round-trips a bounded copy; absent fie
   assertEquals(ctx.currentRunContext(), null, "no active run → null");
   ctx.setRunContext({ threadId: " t1 ", agentRole: "hub", agentSurfaceRef: null });
   const got = ctx.currentRunContext();
-  assertEquals(got, { threadId: "t1", agentRole: "hub", agentSurfaceRef: null });
+  assertEquals(got, { threadId: "t1", agentRole: "hub", agentSurfaceRef: null, folderGrants: [] });
   got.threadId = "MUTATED";
   assertEquals(ctx.currentRunContext().threadId, "t1", "callers get a copy — the shared context cannot be mutated");
+  // The folders attached to a run via /folder are carried, string-checked, and
+  // handed back as a deep copy (CAP-FB-20260831-FS-GRANT-TASK-USE-01).
+  ctx.setRunContext({ threadId: "t2", folderGrants: [{ grantId: " fsg_a ", name: "Docs" }, { grantId: "", name: "dropped" }, { name: "no-id" }] });
+  const withFolders = ctx.currentRunContext();
+  assertEquals(withFolders.folderGrants, [{ grantId: "fsg_a", name: "Docs" }], "only grants with an id survive; ids/names are bounded");
+  withFolders.folderGrants[0].grantId = "MUTATED";
+  assertEquals(ctx.currentRunContext().folderGrants[0].grantId, "fsg_a", "folderGrants is a deep copy");
   ctx.setRunContext({ threadId: "x".repeat(500), agentRole: 42, agentSurfaceRef: "  " });
   const bounded = ctx.currentRunContext();
   assertEquals(bounded.threadId.length, 200, "threadId bounded to 200");

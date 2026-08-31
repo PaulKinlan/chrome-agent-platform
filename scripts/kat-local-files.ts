@@ -197,6 +197,38 @@ try {
   check("mislabelled binary bytes degrade to a metadata-only reference", binaryAttached?.dataURL === "" && binaryAttached?.kind === "local-file" && binaryAttached?.status.includes("binary"), binaryAttached);
   await screenshot(hub, "04-binary-reference.png");
 
+  // ── CAP-FB-20260831-FS-GRANT-TASK-USE-01: the file tools operate over the
+  // granted DirectoryHandle in a task. Drive the REAL production grep path (the
+  // fs-grant.grep message route → grepFsGrant over the persisted OPFS handle)
+  // and prove it returns file+line matches, and that a bad grant is a bounded
+  // JSON error — never a silent failure.
+  const grep = await evaluate(hub, `(async () => {
+    return await chrome.runtime.sendMessage({ type: "fs-grant.grep", grantId: "fsg_composer_kat", query: "filesystem" });
+  })()`);
+  check(
+    "fs-grant.grep returns content matches with path + line over the granted DirectoryHandle",
+    grep?.ok === true && Array.isArray(grep.matches) &&
+      grep.matches.some((m: any) => typeof m.path === "string" && typeof m.line === "number" && /filesystem/i.test(String(m.text))),
+    grep,
+  );
+  const grepMissing = await evaluate(hub, `(async () => {
+    return await chrome.runtime.sendMessage({ type: "fs-grant.grep", grantId: "fsg_absent_grant", query: "x" });
+  })()`);
+  check(
+    "fs-grant.grep on a missing grant returns a bounded JSON error (never silent)",
+    grepMissing?.ok === false && typeof grepMissing.error === "string" && grepMissing.error.length > 0,
+    grepMissing,
+  );
+  const grepBinarySkipped = await evaluate(hub, `(async () => {
+    return await chrome.runtime.sendMessage({ type: "fs-grant.grep", grantId: "fsg_composer_kat", query: "" });
+  })()`);
+  check(
+    "fs-grant.grep rejects an empty query with a structured error, not a silent no-op",
+    grepBinarySkipped?.ok === false && grepBinarySkipped?.error === "fs_grep_empty_query",
+    grepBinarySkipped,
+  );
+  await screenshot(hub, "05-fs-grant-grep.png");
+
   console.log(`MANUAL REMAINDER: choose a real directory once via Settings → Local folders → Add folder; CDP cannot select a showDirectoryPicker() directory in headless Chrome.`);
   console.log(`Evidence: ${OUT}`);
 } finally {

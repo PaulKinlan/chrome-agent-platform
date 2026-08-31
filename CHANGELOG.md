@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.567] — 2026-08-31
+- : file tools now work on a /folder-granted directory in a task, with real grep and structured JSON errors
+
 ## [0.2.566] — 2026-08-31
 - Work has begun on folder tools and external tool-server support.
 

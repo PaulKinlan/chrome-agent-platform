@@ -110,6 +110,14 @@ const BROWSER_READ_TOOLS = new Set([
   "find_elements",
   "scroll_page",
   "wait_for",
+  // CAP-FB-20260831-FS-GRANT-TASK-USE-01: the local-file tools over a granted
+  // folder are read-only — listing, finding, reading and grepping observe the
+  // folder without mutating it, so they are safe to re-run.
+  "list_folders",
+  "list_files",
+  "find_files",
+  "read_file",
+  "grep_files",
 ]);
 // Memory reads: observe only.
 const MEMORY_READ_TOOLS = new Set(["memory_get", "memory_grep", "memory_list"]);

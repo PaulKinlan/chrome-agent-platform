@@ -61,6 +61,7 @@ const BASELINE_ROUTES = [
   "fs-grant.read-file",
   "fs-grant.write-file",
   "fs-grant.scan",
+  "fs-grant.grep",
   "named-agent.list",
   "named-agent.get",
   "named-agent.create",

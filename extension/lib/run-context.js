@@ -16,8 +16,13 @@
 // Agents task/conversation surface (the owner report: "scheduled tasks via
 // alarms don't appear in the Agents task/conversation").
 
-/** @type {{ threadId: string|null, agentRole: string, agentSurfaceRef: string|null } | null} */
+/** @type {{ threadId: string|null, agentRole: string, agentSurfaceRef: string|null, folderGrants: Array<{ grantId: string, name: string }> } | null} */
 let current = null;
+
+// A run can carry at most this many attached folder grants (the /folder
+// composer command). Bounded so a hostile/buggy caller cannot grow the run
+// context without limit.
+const MAX_FOLDER_GRANTS = 32;
 
 // Bound every attribution string so a hostile/buggy caller can never grow the
 // scheduled-task payload (and through it chrome.storage) without limit. The
@@ -35,12 +40,33 @@ function boundedString(value) {
 /** The SW calls this inside runTask (under the run lock) BEFORE the agent
  * loop starts so every tool that runs inside THIS run can read its surface.
  * All fields are optional; absent fields normalize to null/"". */
-export function setRunContext({ threadId = null, agentRole = "", agentSurfaceRef = null } = {}) {
+/**
+ * @param {{ threadId?: string|null, agentRole?: string, agentSurfaceRef?: string|null, folderGrants?: Array<{ grantId: string, name?: string }> }} [ctx]
+ */
+export function setRunContext({ threadId = null, agentRole = "", agentSurfaceRef = null, folderGrants = [] } = {}) {
   current = {
     threadId: boundedString(threadId),
     agentRole: boundedString(agentRole) ?? "",
     agentSurfaceRef: boundedString(agentSurfaceRef),
+    // The folders attached to THIS run via the /folder composer command. Each
+    // is the grant identity the file tools (grep_files / read_file / list_files
+    // / find_files) resolve against so a task can actually operate on the
+    // folder the owner provided. Bounded + string-checked.
+    folderGrants: boundFolderGrants(folderGrants),
   };
+}
+
+function boundFolderGrants(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue;
+    const grantId = boundedString(item.grantId);
+    if (!grantId) continue;
+    out.push({ grantId, name: boundedString(item.name) ?? grantId });
+    if (out.length >= MAX_FOLDER_GRANTS) break;
+  }
+  return out;
 }
 
 /** The SW clears this in runTask's finally (next to clearRunFence) so a
@@ -53,5 +79,7 @@ export function clearRunContext() {
  * an owner-facing route that schedules outside any agent run — register-task).
  * Returns a COPY so a tool can never mutate the shared context. */
 export function currentRunContext() {
-  return current ? { ...current } : null;
+  return current
+    ? { ...current, folderGrants: (current.folderGrants || []).map((g) => ({ ...g })) }
+    : null;
 }

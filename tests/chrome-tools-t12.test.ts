@@ -188,7 +188,7 @@ function tools() {
 // Registry parity: the 8 T12 tools are appended AND the counts are honest.
 // (The 4 chrome.debugger CDP tools were removed 2026-08-27 — see the guard below.)
 // ──────────────────────────────────────────────────────────────────────────
-Deno.test("T12: browserToolset has exactly 131 tools matching BROWSER_TOOL_NAMES (117 + 8 + 6 page actions)", () => {
+Deno.test("T12: browserToolset has exactly 136 tools matching BROWSER_TOOL_NAMES (117 + 8 + 6 page actions + 5 file tools)", () => {
   reset();
   // BROWSER_TOOL_NAMES is the SHIPPED inventory (the developer build); the
   // default build omits the developer-only names
@@ -199,12 +199,12 @@ Deno.test("T12: browserToolset has exactly 131 tools matching BROWSER_TOOL_NAMES
     Object.keys(tools()),
     BROWSER_TOOL_NAMES.filter((name) => !DEVELOPER_ONLY_TOOL_NAMES.includes(name)),
   );
-  assertEquals(BROWSER_TOOL_NAMES.length, 131);
-  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.browserTools, 131);
+  assertEquals(BROWSER_TOOL_NAMES.length, 136);
+  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.browserTools, 136);
   // 159 + delegate_to_agent (G5) + 7 board tools (jobs board, 2026-08-29;
   // board_read_messages 2026-08-30) − open_side_panel (removed 2026-08-30,
   // CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01) = 167 (+ patch_asset, CAP-FB-20260830-PATCH-ASSET-TOOL-01).
-  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.totalTools, 173);
+  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.totalTools, 178);
   for (const name of [
     "register_user_script", "update_user_script", "unregister_user_script", "list_user_scripts",
     "register_content_script", "update_content_script", "unregister_content_script", "list_content_scripts",

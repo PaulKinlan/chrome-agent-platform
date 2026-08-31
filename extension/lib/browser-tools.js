@@ -10,6 +10,16 @@ import { canonicalOrigin, masterMemory, saveScreenshot } from "./memory.js";
 import { kvGet, kvRemove, kvSet } from "./kv.js";
 import { assertRunOwned } from "./run-fence.js";
 import { currentRunContext } from "./run-context.js";
+import {
+  listFsGrants,
+  getFsGrant,
+  queryFsGrantStatus,
+  listFsGrantEntries,
+  readFsGrantFile,
+  scanFsGrantManifest,
+  grepFsGrant,
+  MAX_FS_READ_BYTES,
+} from "./fs-grants.js";
 import { normalizeHostPattern } from "./permission-orchestration.js";
 import { DEVELOPER_ONLY_TOOL_NAMES } from "./chrome-tool-capabilities.js";
 import { capLog } from "./cap-log.js";
@@ -1765,6 +1775,128 @@ async function withScriptRegistrationGrant({ permission, permissionLabel, patter
  * that forgets to read the flag gets the default product's smaller surface,
  * never the larger one. `cookieValueGate` is the owner-approval leg for a
  * cookie VALUE read; with no gate bound the read fails closed. */
+// ── local-file tools over granted folders ───────────────────────────────────
+// A folder granted through the /folder composer command (or Settings → Local
+// folders) is a persisted FileSystemDirectoryHandle in the fs-grants store. The
+// model-facing tools below (list_folders / list_files / find_files / read_file /
+// grep_files) resolve that handle and operate over it, ALWAYS returning either a
+// result or a bounded JSON error `{ ok:false, error:<human>, code:<machine>,
+// path? }` — never a silent failure (CAP-FB-20260831-FS-GRANT-TASK-USE-01).
+
+// Machine code -> human message. The fs-grants store returns terse machine
+// strings in `.error`; the tool boundary keeps that string as the `code` and
+// projects a human message so the model (and the owner reading the tool card)
+// gets an actionable error.
+const FS_ERROR_MESSAGES = {
+  grant_not_found: "That folder grant no longer exists — it may have been revoked. Grant a folder in Settings → Local folders.",
+  fs_permission_lapsed: "Access to this folder is no longer granted by the browser — re-grant it in Settings → Local folders.",
+  directory_not_found: "No such directory inside the granted folder.",
+  file_not_found: "No such file inside the granted folder.",
+  invalid_directory_handle: "That path is not a directory.",
+  directory_path_is_not_file: "That path is a folder, not a file — pass a file path to read.",
+  file_grant_cannot_have_subpath: "This grant is a single file; it has no sub-paths.",
+  invalid_file_path: "That is not a valid file path within the grant.",
+  fs_file_too_large: "The file is too large to read within the bounded limit.",
+  fs_file_not_text: "The file is not UTF-8 text, so it cannot be read as text.",
+  max_depth_exceeded: "The path is nested too deeply to traverse.",
+  invalid_path_absolute: "Absolute paths are not allowed — use a path relative to the granted folder.",
+  invalid_path_traversal: "Path traversal ('..') is not allowed.",
+  fs_grep_empty_query: "Provide a non-empty search query.",
+  fs_grep_invalid_regex: "The regular expression is invalid.",
+  no_folder_granted: "No folder is available to this task. Attach one with /folder, or grant one in Settings → Local folders.",
+  grant_ambiguous: "More than one folder is available — pass grantId to choose which folder to use.",
+};
+
+function humanizeFsError(code) {
+  const key = String(code || "");
+  if (FS_ERROR_MESSAGES[key]) return FS_ERROR_MESSAGES[key];
+  // Prefixed machine strings like "enumeration_failed: …" / "get_file_failed: …"
+  const base = key.split(":", 1)[0];
+  if (FS_ERROR_MESSAGES[base]) return FS_ERROR_MESSAGES[base];
+  return key ? `The file operation failed (${key}).` : "The file operation failed.";
+}
+
+// Project any fs-grants store failure into the bounded tool error shape.
+// `fallbackPath` is the path the tool was asked to operate on, surfaced as
+// `path` when the store's own error did not name one (e.g. file_not_found
+// reports `name`, not the full relative path the model supplied).
+function toFsToolError(res, fallbackPath = "") {
+  const code = typeof res?.error === "string" ? res.error : "fs_operation_failed";
+  const out = { ok: false, error: humanizeFsError(code), code };
+  if (typeof res?.path === "string") out.path = res.path;
+  else if (typeof fallbackPath === "string" && fallbackPath) out.path = fallbackPath;
+  if (typeof res?.name === "string" && !out.path) out.path = res.name;
+  if (typeof res?.status === "string") out.status = res.status;
+  if (typeof res?.size === "number") out.size = res.size;
+  if (typeof res?.maxBytes === "number") out.maxBytes = res.maxBytes;
+  if (typeof res?.detail === "string") out.detail = res.detail.slice(0, 512);
+  return out;
+}
+
+// The folders this run can operate on: the ones attached via /folder (run
+// context) plus any GLOBAL directory grants the owner created in Settings.
+// Deduped by grantId; only "granted" handles are offered.
+async function resolveRunFolderGrants() {
+  const out = [];
+  const seen = new Set();
+  const ctx = currentRunContext();
+  const attached = Array.isArray(ctx?.folderGrants) ? ctx.folderGrants : [];
+  for (const g of attached) {
+    const grantId = typeof g?.grantId === "string" ? g.grantId : "";
+    if (!grantId || seen.has(grantId)) continue;
+    const record = await getFsGrant(grantId).catch(() => null);
+    if (!record || record.kind !== "directory") continue;
+    const status = await queryFsGrantStatus(record).catch(() => "prompt");
+    if (status !== "granted") continue;
+    seen.add(grantId);
+    out.push({ grantId, name: record.name || g.name || "folder", source: "attached" });
+  }
+  // Global grants created in Settings are usable too (the owner granted them).
+  let globals = [];
+  try {
+    globals = await listFsGrants({});
+  } catch { globals = []; }
+  for (const record of Array.isArray(globals) ? globals : []) {
+    if (!record || record.kind !== "directory" || record.scopeKey !== "global") continue;
+    if (seen.has(record.grantId)) continue;
+    const status = await queryFsGrantStatus(record).catch(() => "prompt");
+    if (status !== "granted") continue;
+    seen.add(record.grantId);
+    out.push({ grantId: record.grantId, name: record.name || "folder", source: "settings" });
+  }
+  return out;
+}
+
+// Resolve which grant a file tool should act on. Honours an explicit grantId,
+// defaults to the single available folder, and returns a structured error when
+// none or many are available — never a silent no-op.
+async function resolveRunGrantId(grantId) {
+  const folders = await resolveRunFolderGrants();
+  if (typeof grantId === "string" && grantId.trim()) {
+    const wanted = grantId.trim();
+    const known = folders.find((f) => f.grantId === wanted);
+    if (known) return { ok: true, grantId: wanted, folders };
+    // Fall back to a direct store lookup so a valid grant that isn't in the
+    // offered set still resolves (or produces an honest grant_not_found).
+    const record = await getFsGrant(wanted).catch(() => null);
+    if (!record) return toFsToolError({ error: "grant_not_found" });
+    if (record.kind !== "directory" && record.kind !== "file") {
+      return toFsToolError({ error: "grant_not_found" });
+    }
+    const status = await queryFsGrantStatus(record).catch(() => "prompt");
+    if (status !== "granted") return toFsToolError({ error: "fs_permission_lapsed", status });
+    return { ok: true, grantId: wanted, folders };
+  }
+  if (folders.length === 0) return toFsToolError({ error: "no_folder_granted" });
+  if (folders.length === 1) return { ok: true, grantId: folders[0].grantId, folders };
+  return {
+    ok: false,
+    error: humanizeFsError("grant_ambiguous"),
+    code: "grant_ambiguous",
+    folders: folders.map((f) => ({ grantId: f.grantId, name: f.name })),
+  };
+}
+
 export function browserToolset(readOnly = false, {
   scheduleScriptGate = null,
   cookieValueGate = null,
@@ -1783,6 +1915,92 @@ export function browserToolset(readOnly = false, {
   // are unaffected, and the `sidePanel` capability stays grantable in Settings.
   // The removal guard lives in tests/chrome-tools-t12.test.ts.
   const all = {
+    // ── local-file tools over a granted folder ──────────────────────────────
+    list_folders: tool({
+      description:
+        "List the local folders available to this task (granted via /folder or in Settings → Local folders). Returns each folder's grantId and name; pass the grantId to the other file tools when more than one is available.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const folders = await resolveRunFolderGrants();
+        return { ok: true, folders, count: folders.length };
+      },
+    }),
+    list_files: tool({
+      description:
+        "List files and subfolders inside a granted local folder. Optional path (relative to the folder) lists a subdirectory. Returns { ok, entries:[{name,kind}] } or a bounded JSON error.",
+      inputSchema: z.object({
+        grantId: z.string().optional(),
+        path: z.string().optional(),
+        limit: z.number().int().min(1).max(500).optional(),
+      }),
+      execute: async ({ grantId, path, limit }) => {
+        const g = await resolveRunGrantId(grantId);
+        if (g.ok === false) return g;
+        const res = await listFsGrantEntries(g.grantId, { relativePath: path ?? "", limit });
+        return res?.ok === false ? toFsToolError(res, path ?? "") : res;
+      },
+    }),
+    find_files: tool({
+      description:
+        "Find files by name inside a granted local folder (recursive, bounded). Returns { ok, files:[{path,name,size}] } for names containing the query, or a bounded JSON error.",
+      inputSchema: z.object({
+        query: z.string(),
+        grantId: z.string().optional(),
+        limit: z.number().int().min(1).max(500).optional(),
+      }),
+      execute: async ({ query, grantId, limit }) => {
+        const g = await resolveRunGrantId(grantId);
+        if (g.ok === false) return g;
+        const scan = await scanFsGrantManifest(g.grantId, {});
+        if (scan?.ok === false) return toFsToolError(scan);
+        const needle = String(query ?? "").trim().toLowerCase();
+        const cap = Math.min(Math.max(1, Number(limit) || 200), 500);
+        const files = (scan.entries || [])
+          .filter((e) => e.kind === "file" && (!needle || String(e.name).toLowerCase().includes(needle)))
+          .slice(0, cap)
+          .map((e) => ({ path: e.path, name: e.name, size: e.size }));
+        return { ok: true, grantId: g.grantId, query: String(query ?? ""), files, matchCount: files.length, truncated: scan.truncated === true };
+      },
+    }),
+    read_file: tool({
+      description:
+        "Read a text file inside a granted local folder. `path` is relative to the folder. Returns { ok, content, size, sha256 } or a bounded JSON error (file_not_found, fs_file_too_large, fs_file_not_text, …).",
+      inputSchema: z.object({
+        path: z.string(),
+        grantId: z.string().optional(),
+        maxBytes: z.number().int().min(1).max(MAX_FS_READ_BYTES).optional(),
+      }),
+      execute: async ({ path, grantId, maxBytes }) => {
+        const g = await resolveRunGrantId(grantId);
+        if (g.ok === false) return g;
+        const res = await readFsGrantFile(g.grantId, { relativePath: path ?? "", asText: true, maxBytes });
+        return res?.ok === false ? toFsToolError(res, path ?? "") : res;
+      },
+    }),
+    grep_files: tool({
+      description:
+        "Search the CONTENT of files inside a granted local folder (recursive, bounded). Returns { ok, matches:[{path,line,text}] }. Literal substring by default; set regex:true for a regular expression, ignoreCase:true to fold case. Errors are bounded JSON.",
+      inputSchema: z.object({
+        query: z.string(),
+        grantId: z.string().optional(),
+        path: z.string().optional(),
+        regex: z.boolean().optional(),
+        ignoreCase: z.boolean().optional(),
+        maxMatches: z.number().int().min(1).max(200).optional(),
+      }),
+      execute: async ({ query, grantId, path, regex, ignoreCase, maxMatches }) => {
+        const g = await resolveRunGrantId(grantId);
+        if (g.ok === false) return g;
+        const res = await grepFsGrant(g.grantId, {
+          query,
+          relativePath: path ?? "",
+          regex: regex === true,
+          ignoreCase: ignoreCase === true,
+          maxMatches,
+        });
+        return res?.ok === false ? toFsToolError(res, path ?? "") : res;
+      },
+    }),
     open_tab: tool({
       description:
         "Open a URL in a new browser tab. Requires browser-control permission (scoped + expiring).",
