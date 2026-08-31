@@ -82,7 +82,18 @@ const changelogPath = join(ROOT, "CHANGELOG.md");
 if (existsSync(changelogPath) && finalNote) {
   const date = new Date().toISOString().slice(0, 10);
   const existing = readFileSync(changelogPath, "utf-8");
-  const entry = `\n## [${next}] — ${date}\n- ${finalNote}\n`;
+  // Release notes are for the person using the extension, not the VCS: strip
+  // conventional-commit prefixes, bare SHAs and CAP-FB tracker ids so the
+  // automated plain-language check (tests/changelog.test.ts) keeps passing no
+  // matter what the commit subject said (CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01 follow-through).
+  const sanitizeEntry = (note) => String(note)
+    .replace(/^(merge|chore|fix(?:\([^)]*\))?|test|ci|docs|tasks|feat|refactor)\s*:\s*/i, "")
+    .replace(/\(\s*[0-9a-f]{7,40}\s*\)/gi, "")
+    .replace(/\bCAP-FB-\d{8}-[A-Z0-9-]+\b/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  const cleanNote = sanitizeEntry(finalNote) || "Maintenance and fixes.";
+  const entry = `\n## [${next}] — ${date}\n- ${cleanNote}\n`;
   const updated = existing.replace(/(#[^\n]*\n)/, `$1${entry}`);
   writeFileSync(changelogPath, updated);
 }

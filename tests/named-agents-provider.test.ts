@@ -298,7 +298,7 @@ Deno.test("bump-version: unmodified script in a complete scratch mirror (--messa
     await fsp.writeFile(path.join(dir, "CHANGELOG.md"), changelog);
     await fsp.writeFile(path.join(dir, "extension", "CHANGELOG.md"), changelog);
     // Run the UNMODIFIED bump script WITH --message.
-    execFileSync("node", [path.join(dir, "scripts", "bump-version.mjs"), "patch", "--message", "test: the fix"], { cwd: dir, stdio: "pipe" });
+    execFileSync("node", [path.join(dir, "scripts", "bump-version.mjs"), "patch", "--message", "the fix"], { cwd: dir, stdio: "pipe" });
     const pkg = JSON.parse(await fsp.readFile(path.join(dir, "package.json"), "utf8"));
     const lock = JSON.parse(await fsp.readFile(path.join(dir, "package-lock.json"), "utf8"));
     const manifest = JSON.parse(await fsp.readFile(path.join(dir, "extension", "manifest.json"), "utf8"));
@@ -310,10 +310,41 @@ Deno.test("bump-version: unmodified script in a complete scratch mirror (--messa
     // canonical changelog: exactly one 1.2.4 entry with the message
     const canon = await fsp.readFile(path.join(dir, "CHANGELOG.md"), "utf8");
     assertEquals((canon.match(/## \[1\.2\.4\]/g) ?? []).length, 1, "one canonical entry");
-    assert(canon.includes("test: the fix"), "message present");
+    assert(canon.includes("the fix"), "message present");
     // bundled changelog: byte-equal to canonical
     const bundled = await fsp.readFile(path.join(dir, "extension", "CHANGELOG.md"), "utf8");
     assertEquals(bundled, canon, "bundled == canonical (byte equality)");
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+});
+
+Deno.test("bump-version: the changelog entry is sanitized (prefix, SHA and tracker id stripped)", async () => {
+  const fsQ = "node:fs/promises", pathQ = "node:path", osQ = "node:os", cpQ = "node:child_process";
+  const fsp = await import(fsQ);
+  const path = (await import(pathQ)).default;
+  const os = await import(osQ);
+  const { execFileSync } = await import(cpQ);
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "cap-bump-san-"));
+  try {
+    const repoScripts = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "scripts");
+    await fsp.mkdir(path.join(dir, "scripts"), { recursive: true });
+    for (const f of ["bump-version.mjs", "sync-changelog.mjs"]) {
+      await fsp.copyFile(path.join(repoScripts, f), path.join(dir, "scripts", f));
+    }
+    await fsp.mkdir(path.join(dir, "extension"), { recursive: true });
+    await fsp.writeFile(path.join(dir, "package.json"), JSON.stringify({ name: "t", version: "1.2.3" }, null, 2));
+    await fsp.writeFile(path.join(dir, "package-lock.json"), JSON.stringify({ name: "t", version: "1.2.3", packages: { "": { name: "t", version: "1.2.3" } } }, null, 2));
+    await fsp.writeFile(path.join(dir, "extension", "manifest.json"), JSON.stringify({ manifest_version: 3, version: "1.2.3", version_name: "1.2.3" }, null, 2));
+    await fsp.writeFile(path.join(dir, "CHANGELOG.md"), "# Changelog\n");
+    await fsp.writeFile(path.join(dir, "extension", "CHANGELOG.md"), "# Changelog\n");
+    execFileSync("node", [path.join(dir, "scripts", "bump-version.mjs"), "patch", "--message", "merge: the good part (abc1234) for CAP-FB-20260830-SOMETHING-01"], { cwd: dir, stdio: "pipe" });
+    const canon = await fsp.readFile(path.join(dir, "CHANGELOG.md"), "utf8");
+    const bullet = canon.split("\n").find((l) => l.startsWith("- ")) ?? "";
+    assert(!/^\- (merge|chore|test):/i.test(bullet), "no conventional prefix: " + bullet);
+    assert(!/abc1234/.test(bullet), "no bare SHA: " + bullet);
+    assert(!/CAP-FB-/.test(bullet), "no tracker id: " + bullet);
+    assert(bullet.includes("the good part"), "the substance survives: " + bullet);
   } finally {
     await fsp.rm(dir, { recursive: true, force: true });
   }

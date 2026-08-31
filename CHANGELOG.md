@@ -1,10 +1,13 @@
 # Changelog
 
+## [0.2.516] — 2026-08-31
+- bump-version writes plain-language changelog entries (prefixes, SHAs and tracker ids sanitized) and the test pins it
+
 ## [0.2.515] — 2026-08-31
-- merge: Slash palette combobox lane (f876762f) — the slash/@ palette is an accessible textbox-with-popup: ARIA wiring for both palettes, textContent-only rendering, list-replacement-aware highlight mirror, no listener leaks
+- Typing / or @ in the composer now shows an accessible suggestion list that keyboard and screen-reader users can follow
 
 ## [0.2.514] — 2026-08-31
-- merge: Slash palette combobox lane (f876762f) — the slash/@ palette is an accessible textbox-with-popup: ARIA wiring for both palettes, textContent-only rendering, list-replacement-aware highlight mirror, no listener leaks
+- Typing / or @ in the composer now shows an accessible suggestion list that keyboard and screen-reader users can follow
 
 ## [0.2.513] — 2026-08-31
 - Housekeeping: the completed-work list was corrected after a bookkeeping mix-up between parallel work streams.
