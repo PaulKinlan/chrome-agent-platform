@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.523] — 2026-08-31
+- DONE (coordinator gates 2740/0, 249/249)
+
 ## [0.2.522] — 2026-08-31
 - : merge — a running task shows its steps as a live checklist
 
