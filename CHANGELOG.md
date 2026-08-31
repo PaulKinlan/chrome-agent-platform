@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.549] — 2026-08-31
+- DONE (coordinator gates 2808/0, 272/272)
+
 ## [0.2.548] — 2026-08-31
 - The agent now knows about the shared jobs board and will post and pick up work there.
 
