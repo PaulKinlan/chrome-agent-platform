@@ -8586,13 +8586,17 @@ function summarizeResult(e) {
   const unwrapped = (() => {
     try { return unwrapToolPayload(raw).value; } catch { return raw; }
   })();
-  // The human core is the unwrapped STRING, or a bounded scalar from a JSON
-  // object — NEVER JSON.stringify of the whole object (that is the raw
-  // payload again).
+  // Track whether the result actually CARRIES content. A JSON object with no
+  // usable scalar core must take the genuine refusal path — never a silent
+  // drop (r4 P1: the scalar shortcut used to consume the object and return
+  // the bare verdict, which made the giant-JSON test a false positive).
   let core = "";
+  let hadContent = false;
   if (typeof unwrapped === "string") {
     core = unwrapped.replace(/^\[[^\]]*\]\s*/, "").trim();
+    hadContent = core.length > 0;
   } else if (unwrapped && typeof unwrapped === "object") {
+    hadContent = Object.keys(unwrapped).length > 0;
     const scalar = (() => {
       for (const k of ["summary", "text", "message", "result", "error"]) {
         const v = unwrapped[k];
@@ -8604,10 +8608,16 @@ function summarizeResult(e) {
     core = scalar.replace(/^\[[^\]]*\]\s*/, "").trim();
   } else if (typeof unwrapped === "number" || typeof unwrapped === "boolean") {
     core = String(unwrapped);
+    hadContent = true;
   }
   const sentence = firstHumanSentence(core, AEX_ONELINER_MAX - verdict.length - 2);
-  // No readable sentence boundary → a short honest verdict, never a raw cut.
-  return sentence ? `${verdict}: ${sentence}` : verdict;
+  if (sentence) return `${verdict}: ${sentence}`;
+  // No readable sentence. If the result DID carry content, be honest about it
+  // — a fixed refusal phrase (the payload exists but is not renderable as a
+  // human sentence); never silently drop it. Only a truly empty result gets
+  // the bare verdict.
+  if (hadContent) return `${verdict} — see the run log for the full result`;
+  return verdict;
 }
 
 function summarizeArtifact(e) {

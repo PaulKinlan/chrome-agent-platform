@@ -1076,6 +1076,24 @@ Deno.test("activity-explorer: EVERY user-kind one-liner is a bounded human sente
   if (activityText({ type: "approval-requested", task: "Publish the page" }) !== "Publish the page — needs approval") {
     throw new Error("approval rows carry the subject");
   }
+  // The giant-JSON case must take the GENUINE REFUSAL path — a nested object
+  // with no usable scalar core is never silently dropped, and its refusal
+  // phrase is explicit (r4 P1: the scalar shortcut used to consume the object
+  // and return the bare verdict, making this a false positive).
+  const jsonOk = activityText({ type: "result", result: giantJson, ok: true });
+  const jsonFail = activityText({ type: "result", result: giantJson, ok: false });
+  for (const [label, line] of [
+    ["giant-JSON ok", jsonOk],
+    ["giant-JSON failed", jsonFail],
+  ]) {
+    if (!line.includes("see the run log")) {
+      throw new Error(`${label}: refusal phrase missing, got: ${line.slice(0, 60)}`);
+    }
+    if (line.includes("\"summary\"") || line.includes("\"result\":") || line.includes("modelContent") || line.includes(giant.slice(0, 40))) {
+      throw new Error(`${label}: raw JSON leaked past the refusal path`);
+    }
+  }
+  if (!jsonFail.startsWith("Failed")) throw new Error("failed giant-JSON should carry the Failed verdict");
 });
 
 Deno.test("activity-explorer: approval rows stay ≤140 even with a long sentence subject", async () => {
