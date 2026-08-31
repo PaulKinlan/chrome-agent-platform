@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.561] — 2026-08-31
+- DONE — enterprise install fix (required set minimal; four perms optional)
+
 ## [0.2.560] — 2026-08-31
 - : merge — fontSettings/proxy/tts/declarativeNetRequest are now optional, not install-required
 
