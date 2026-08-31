@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.512] — 2026-08-31
+- The thread now shows artifacts and generated images as you make them.
+
 ## [0.2.511] — 2026-08-31
 - Artifacts and generated images now appear in the conversation as they are created — a card showing what changed, plus a thumbnail strip of screenshots and images you can open.
 
