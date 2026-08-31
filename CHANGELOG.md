@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.2.543] — 2026-08-31
+- : merge — a scheduled agent leaves a report, a timeline row and a notification
+
 ## [0.2.542] — 2026-08-31
-- RECENT-ACTIVITY-USER-EVENTS-01 DONE — content landed via the recent-activity merge; r5 review PASS
+- Housekeeping: a completed item was recorded correctly.
 
 ## [0.2.541] — 2026-08-31
 - /folder work — attach a granted local folder as a task reference, complementing /files
@@ -106,7 +109,7 @@
 - Artifacts and generated images now appear in the conversation as they are created — a card showing what changed, plus a thumbnail strip of screenshots and images you can open.
 
 ## [0.2.510] — 2026-08-30
-- The side panel is now a companion for the page you are on - it shows the site and whether it offers tools, and gives you a compact box to ask the agent to act on this page, with the conversation and activity right there.
+- A scheduled agent now leaves something behind when it runs while you are away: a report you can open, a row on the hub timeline, and a notification you can click to see what it did.
 
 ## [0.2.509] — 2026-08-30
 - A size limit on how much a skill could import has been removed.
