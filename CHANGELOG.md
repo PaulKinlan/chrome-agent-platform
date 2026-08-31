@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.555] — 2026-08-31
+- Template select r3: measure the OPEN picker popup contrast functionally (real click, :open asserted, live option vs popup bg in both schemes) with journey-level low-contrast RED->GREEN falsification
+
 ## [0.2.554] — 2026-08-31
 - Template select r2: preserve selection across filtering, dark picker styling, real WCAG contrast checks
 

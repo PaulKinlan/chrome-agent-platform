@@ -418,6 +418,7 @@ const EXPECTED = [
   "create dialog: the template selection survives filtering and is restored exactly on clear",
   "create dialog: Advanced+Skills expand and the config body scrolls with them (min-height hardening)",
   "create dialog: Advanced+Skills rows are legible in light AND dark scheme (contrast computed)",
+  "create dialog: the OPEN template picker popup is legible in both schemes (live option vs popup bg, WCAG >= 4.5)",
   "create dialog: a REAL skill checkbox click checks it (unchecked → checked)",
   "create dialog: Create agent from the card yields ONE named agent whose role is the template persona",
   "create dialog: the saved agent's skill ids CONTAIN the exactly-toggled skill id",
@@ -1292,25 +1293,98 @@ async function main() {
       const inDialogViewport = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.bottom > dlgRect.top && r.top < dlgRect.bottom && r.right > dlgRect.left && r.left < dlgRect.right; };
       const row = host.querySelector('.skills-list label span');
       const panelEl = host.querySelector('.skills-collapse');
-      const pickerSel = host.querySelector('#agent-template-select');
       const skills = !row || !panelEl
         ? { missing: !row ? 'row' : 'panel' }
         : (row.scrollIntoView({ block: 'center' }), (() => { const r = row.getBoundingClientRect(); return { fg: getComputedStyle(row).color, bg: effectiveBg(row), inView: inDialogViewport(row), rw: Math.round(r.width), rh: Math.round(r.height), rt: Math.round(r.top), rb: Math.round(r.bottom), dt: Math.round(dlgRect.top), db: Math.round(dlgRect.bottom) }; })());
-      const picker = !pickerSel
-        ? { missing: 'picker' }
-        : (pickerSel.scrollIntoView({ block: 'center' }), (() => { const r = pickerSel.getBoundingClientRect(); return { fg: getComputedStyle(pickerSel).color, bg: effectiveBg(pickerSel), inView: inDialogViewport(pickerSel), rw: Math.round(r.width), rh: Math.round(r.height), rt: Math.round(r.top), rb: Math.round(r.bottom) }; })());
-      return { ready: true, dark: ${dark}, skills, picker,
+      return { ready: true, dark: ${dark}, skills,
         advOpen: host.querySelector('.agent-config-advanced')?.open === true,
         skOpen: host.querySelector('.skills-collapse')?.open === true };
     })()`);
+    // FUNCTIONAL POPUP PROBE (r3 P1): the picker is OPENED for real — a
+    // genuine CDP click on the select button (the same activation a user's
+    // click grants) — the open state is asserted (:open / aria-expanded), and
+    // the ACTUAL rendered option text color + popup background are read via
+    // getComputedStyle from the live picker (the ::picker(select) option rules
+    // only apply while open — a closed-select measurement would read UA
+    // defaults).
+    const popupProbe = (dark) => evalIn(cdp, ntpSession, `(async () => {
+      const sel = document.getElementById('agent-template-select');
+      const btn = sel?.querySelector('.agent-template-select-button');
+      if (!sel || !btn) return { ready: false, why: 'no-select-button' };
+      const r = btn.getBoundingClientRect();
+      const x = r.x + r.width / 2, y = r.y + r.height / 2;
+      // A genuine activation path: dispatch a real mouse press/release on the
+      // select button via CDP (the probe is evaluated in the page, so this
+      // only locates the point; the caller sends the trusted events).
+      const point = { x: Math.round(x), y: Math.round(y) };
+      return point;
+    })()`);
+    const openPickerClick = async () => {
+      const pt = await popupProbe(false);
+      if (!pt || !Number.isFinite(pt.x)) return false;
+      for (const t of ["mousePressed", "mouseReleased"]) {
+        await cdp.send("Input.dispatchMouseEvent", { type: t, x: pt.x, y: pt.y, button: "left", buttons: t === "mousePressed" ? 1 : 0, clickCount: 1 }, ntpSession);
+      }
+      await sleep(250);
+      return true;
+    };
+    const readPopup = (dark) => evalIn(cdp, ntpSession, `(async () => {
+      const sel = document.getElementById('agent-template-select');
+      if (!sel) return { ready: false, why: 'no-select' };
+      const openSignal = sel.matches(':open') || sel.getAttribute('aria-expanded') === 'true' ||
+        sel.querySelector('.agent-template-select-button')?.getAttribute('aria-expanded') === 'true';
+      const firstOpt = [...sel.options].find((o) => !o.hidden && o.value !== '');
+      if (!firstOpt) return { ready: false, why: 'no-visible-option', open: openSignal };
+      const optStyle = getComputedStyle(firstOpt);
+      const fg = optStyle.color;
+      const optBg = optStyle.backgroundColor || '';
+      let popupBg = '';
+      try {
+        const pseudo = getComputedStyle(sel, '::picker(select)');
+        popupBg = pseudo?.backgroundColor || '';
+      } catch { /* pseudo-element query unsupported */ }
+      // The honest backdrop is the OPTION's own rendered background when it is
+      // opaque (the row color); otherwise the popup container's background.
+      const bg = (optBg && optBg !== 'rgba(0, 0, 0, 0)' && optBg !== 'transparent')
+        ? optBg
+        : (popupBg && popupBg !== 'rgba(0, 0, 0, 0)' && popupBg !== 'transparent' ? popupBg : '');
+      return { ready: true, dark: ${dark}, open: openSignal, fg, bg, sample: firstOpt.textContent.slice(0, 40) };
+    })()`);
+    const injectLowContrast = () => evalIn(cdp, ntpSession, `(() => {
+      let st = document.getElementById('__picker-low-contrast');
+      if (!st) { st = document.createElement('style'); st.id = '__picker-low-contrast'; document.head.append(st); }
+      st.textContent = '#agent-template-select::picker(select) { background: rgb(255,255,255) !important; } #agent-template-select option { color: rgb(160,160,160) !important; background: rgb(255,255,255) !important; }';
+      return true;
+    })()`);
+    const removeLowContrast = () => evalIn(cdp, ntpSession, `document.getElementById('__picker-low-contrast')?.remove(); true`);
+    const closePicker = () => evalIn(cdp, ntpSession, `(() => { try { document.getElementById('agent-template-select')?.blur(); } catch {} document.body?.click(); return true; })()`);
     const lightC = (await contrastProbe(false)) ?? { ready: false, why: "eval-undefined" };
+    // Functional popup contrast: light scheme, styled (GREEN) then a deliberately
+    // low-contrast override (RED), then restored (GREEN). Each measurement
+    // OPENS the picker with a real click, reads the live popup, and closes it.
+    const popupLight = await (async () => { await closePicker(); return (await openPickerClick()) ? (await readPopup(false)) ?? { ready: false, why: "eval-undefined" } : { ready: false, why: "click-failed" }; })();
+    await closePicker();
+    await injectLowContrast();
+    const popupLightLow = await (async () => { await closePicker(); return (await openPickerClick()) ? (await readPopup(false)) ?? { ready: false, why: "eval-undefined" } : { ready: false, why: "click-failed" }; })();
+    await closePicker();
+    await removeLowContrast();
+    const popupLightRestored = await (async () => { await closePicker(); return (await openPickerClick()) ? (await readPopup(false)) ?? { ready: false, why: "eval-undefined" } : { ready: false, why: "click-failed" }; })();
+    await closePicker();
     await cdp.send("Emulation.setEmulatedMedia", {
       features: [{ name: "prefers-color-scheme", value: "dark" }],
     }, ntpSession);
     await sleep(250);
     const darkC = (await contrastProbe(true)) ?? { ready: false, why: "eval-undefined" };
+    const popupDark = await (async () => { await closePicker(); return (await openPickerClick()) ? (await readPopup(true)) ?? { ready: false, why: "eval-undefined" } : { ready: false, why: "click-failed" }; })();
+    await closePicker();
+    await injectLowContrast();
+    const popupDarkLow = await (async () => { await closePicker(); return (await openPickerClick()) ? (await readPopup(true)) ?? { ready: false, why: "eval-undefined" } : { ready: false, why: "click-failed" }; })();
+    await closePicker();
+    await removeLowContrast();
+    const popupDarkRestored = await (async () => { await closePicker(); return (await openPickerClick()) ? (await readPopup(true)) ?? { ready: false, why: "eval-undefined" } : { ready: false, why: "click-failed" }; })();
     const darkShot = await captureShot(cdp, ntpSession);
     if (darkShot) await writeEvidence("create-dialog-advanced-dark.png", darkShot);
+    await closePicker();
     // restore light for the rest of the suite
     await cdp.send("Emulation.setEmulatedMedia", {
       features: [{ name: "prefers-color-scheme", value: "light" }],
@@ -1321,36 +1395,56 @@ async function main() {
     const contrastOk = (c) => c.ready === true &&
       c.skills !== undefined && c.skills.missing === undefined && c.skills.inView === true &&
       typeof c.skills.fg === "string" && typeof c.skills.bg === "string" &&
-      c.picker !== undefined && c.picker.missing === undefined && c.picker.inView === true &&
       c.advOpen === true && c.skOpen === true;
     // Compute WCAG contrast in NODE with the module's pure helpers (the page
     // returns raw color strings; parsing stays in the testable module).
     const { parseRgb, wcagContrast, CONTRAST_AA_TEXT } = await import("../extension/lib/agent-template-select.js");
     const ratioOf = (c) => {
-      if (!c || c.missing !== undefined) return null;
+      if (!c || c.missing !== undefined || c.ready === false) return null;
       const fg = parseRgb(c.fg);
       const bg = parseRgb(c.bg) ?? parseRgb(c.bg, [255, 255, 255]);
       return fg && bg ? wcagContrast(fg, bg) : null;
     };
     const lightSkillsRatio = ratioOf(lightC.skills);
-    const lightPickerRatio = ratioOf(lightC.picker);
     const darkSkillsRatio = ratioOf(darkC.skills);
-    const darkPickerRatio = ratioOf(darkC.picker);
+    // Open-picker ratios: the REAL rendered popup (option text vs popup bg).
+    const popupLightRatio = ratioOf(popupLight);
+    const popupDarkRatio = ratioOf(popupDark);
+    // Falsification: the SAME measurement must drop below AA when a
+    // deliberately low-contrast popup fixture is applied (RED), and recover
+    // when it is removed (GREEN).
+    const popupLightLowRatio = ratioOf(popupLightLow);
+    const popupDarkLowRatio = ratioOf(popupDarkLow);
+    const popupLightRestoredRatio = ratioOf(popupLightRestored);
+    const popupDarkRestoredRatio = ratioOf(popupDarkRestored);
     // RED fixture: the SAME math must reject a deliberately low-contrast pair.
     const redFixture = wcagContrast([160, 160, 160], [255, 255, 255]);
     const schemesDiffer = !!(lightC?.skills && darkC?.skills &&
       parseRgb(lightC.skills.fg)?.join(",") !== parseRgb(darkC.skills.fg)?.join(","));
     console.log("create dialog contrast probe (WCAG):", JSON.stringify({
-      lightC, darkC, lightSkillsRatio, lightPickerRatio, darkSkillsRatio, darkPickerRatio, redFixture,
+      lightC, darkC, lightSkillsRatio, darkSkillsRatio,
+      popupLight, popupLightRatio, popupLightLow, popupLightLowRatio, popupLightRestoredRatio,
+      popupDark, popupDarkRatio, popupDarkLow, popupDarkLowRatio, popupDarkRestoredRatio,
+      redFixture,
     }));
     check(
       "create dialog: Advanced+Skills rows are legible in light AND dark scheme (contrast computed)",
       contrastOk(lightC) && contrastOk(darkC) && schemesDiffer &&
         lightSkillsRatio !== null && lightSkillsRatio >= CONTRAST_AA_TEXT &&
         darkSkillsRatio !== null && darkSkillsRatio >= CONTRAST_AA_TEXT &&
-        lightPickerRatio !== null && lightPickerRatio >= CONTRAST_AA_TEXT &&
-        darkPickerRatio !== null && darkPickerRatio >= CONTRAST_AA_TEXT &&
         redFixture < CONTRAST_AA_TEXT,
+    );
+    check(
+      "create dialog: the OPEN template picker popup is legible in both schemes (live option vs popup bg, WCAG >= 4.5)",
+      popupLight?.open === true && popupDark?.open === true &&
+        popupLightRatio !== null && popupLightRatio >= CONTRAST_AA_TEXT &&
+        popupDarkRatio !== null && popupDarkRatio >= CONTRAST_AA_TEXT &&
+        // falsification: low-contrast override drives the SAME probe RED, and
+        // removal restores it to GREEN.
+        popupLightLowRatio !== null && popupLightLowRatio < CONTRAST_AA_TEXT &&
+        popupDarkLowRatio !== null && popupDarkLowRatio < CONTRAST_AA_TEXT &&
+        popupLightRestoredRatio !== null && popupLightRestoredRatio >= CONTRAST_AA_TEXT &&
+        popupDarkRestoredRatio !== null && popupDarkRestoredRatio >= CONTRAST_AA_TEXT,
     );
 
     const galleryShot = await captureShot(cdp, ntpSession);
