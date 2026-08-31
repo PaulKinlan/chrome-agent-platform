@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.518] — 2026-08-31
+- tasks: OPTIONAL-PERMISSION-OMITTED-01 schema completed (r2 review accepted the code)
+
 ## [0.2.517] — 2026-08-31
 - Permission matrix: refresh the attestation at the final candidate (26/0 ATTESTED)
 

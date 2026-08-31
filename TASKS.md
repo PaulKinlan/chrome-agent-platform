@@ -4349,19 +4349,22 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260831-OPTIONAL-PERMISSION-OMITTED-01] Chrome omits fontSettings/proxy/tts/declarativeNetRequest from optional_permissions — rows that can never grant
 - Feedback: 2026-08-31 — owner-reported console warnings at load: "Permission 'fontSettings' cannot be listed as optional. This permission will be omitted." (same for proxy, tts, declarativeNetRequest). These four are only grantable at INSTALL; the optional+JIT model cannot serve them, so the Settings rows backed by them could never actually grant — the UI lied.
-- Updated: 2026-08-31 02:10 UTC
+- Updated: 2026-08-31 14:55 UTC
 - Status: DONE
-- Resume: worker (hub coordinator dispatch) — manifest move + orchestration set + lint test; r2 review fixes; gates: build clean, suite 2729/0, journeys 247/247, matrix 26/0 ATTESTED (attestation re-run at the final candidate)
+- Resume: r2 review fixes (94f5d527: probe stability-gates the exact source-derived row count + asserts none of the four; matrix attestation re-run AT the candidate a17f472f, 26/0; tracker finalized). r2 review: PASS-pending → this refresh closes the schema P1
+- Review: r2 review (sol) accepted the code; the sole P1 was this entry's schema completeness, closed by this refresh
 - Priority: P1
 - Owner: hub coordinator (journal session)
 - Workspace: /home/paulkinlan/worktrees/cap-optional-perm-fix
 - Branch: cap-optional-perm-fix
 - Base: origin/main 0d5f1003
-- Candidate: 94f5d527 (r2 review fixes) atop d0ad495d (the manifest move)
-- Shipping: merged forward by the hub coordinator (pending review PASS)
+- Candidate: 94f5d527 (code) — final tip 266c857c (evidence refresh; testedSourceCommit = a17f472f)
+- Gates: build clean; suite 2729/0; journeys 247/247; matrix acceptance 26/0 ATTESTED
+- Shipping: merged forward by the hub coordinator
 - Acceptance: The manifest lint test `tests/manifest-permissions.test.ts` asserts (a) optional_permissions ∩ {fontSettings, proxy, tts, declarativeNetRequest} = ∅ (RED on the pre-fix manifest, GREEN after), (b) the four are in install-time `permissions`, (c) no CAPABILITIES row mixes install-only and optional permissions. Settings renders NO row for the four (the mandatory-permission skip already exists); the revoke path already refuses install-granted capabilities honestly (`isRequiredCapability` reads the manifest dynamically). Full gates green; matrix acceptance unaffected (it exercises contextMenus/tabGroups/history/bookmarks, not the four).
   - Decision per capability (all four ACTIVELY USED — real tools in browser-tools.js + capability records in chrome-tool-capabilities.js + denial-contract tests in chrome-tools-t9/t10): move to install-time `permissions` (the ONLY honest grant Chrome allows for them). Tradeoff noted: they become always-on at install (proxy and declarativeNetRequest carry real install warnings; no runtime Turn-off) — this is the price of honesty, and it matches the existing model for alarms/storage/sidePanel/offscreen. Removing the features was rejected: they are shipped, tested product surface.
   - Consistency: `API_PERMISSIONS` in permission-orchestration.js gained the four install-only permissions plus power/search/privacy (the set previously rejected these in the plan builder even though the tools exist — part of the same truth-in-UI fix). NOTE: power/search/privacy are OPTIONAL-LISTABLE and remain optional+JIT in the manifest; only the four (proxy/tts/fontSettings/declarativeNetRequest) moved to install.
   - Removed nothing else: host_permissions <all_urls> untouched; the other optional permissions (tabs, system.*, topSites, etc.) remain optional + JIT (they ARE optional-listable).
 - History:
+  - 2026-08-31 14:55 UTC — r2 review (sol): code ACCEPTED (probe stability-gates the exact source-derived row count; attestation provenance fixed; power/search/privacy fact-check confirmed they were already optional-listable — comment corrected). Sole P1: this entry's schema completeness — closed by this refresh. Candidate 94f5d527, evidence tip 266c857c.
   - 2026-08-31 02:10 UTC — owner pasted the four load warnings; worker reproduced the mechanism (optional-listed → omitted → request can never grant), verified every reference (manifest, capabilities.js rows, permission-orchestration set, chrome-tool-capabilities records, tests t9/t10 denial paths, matrix acceptance — unaffected), moved the four to install permissions, added the lint test (RED 0/3 on old manifest → GREEN 3/3 on new), full gates pending.
