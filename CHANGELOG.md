@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.557] — 2026-08-31
+- : move fontSettings/proxy/tts/declarativeNetRequest to optional_permissions so a managed install no longer demands them
+
 ## [0.2.556] — 2026-08-31
 - Work has begun on the enterprise-permission and scheduling improvements.
 

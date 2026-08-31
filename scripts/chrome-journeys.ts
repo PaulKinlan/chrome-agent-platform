@@ -846,6 +846,11 @@ async function main() {
     // refuses the install over capability permissions.
     const MANDATORY = ["alarms", "offscreen", "sidePanel", "storage"];
     const DRIVEN_OPTIONAL = ["tabs", "activeTab", "scripting", "notifications"];
+    // CAP-FB-20260831-BOOT-PERMS-OPTIONAL-01: fontSettings/proxy/tts/
+    // declarativeNetRequest are enterprise-blockable (and some ChromeOS-only), so
+    // they must be optional — a managed install that blocks them fails closed on
+    // the tool, never on install.
+    const ENTERPRISE_BLOCKABLE = ["fontSettings", "proxy", "tts", "declarativeNetRequest"];
     check(
       "manifest: boot-critical permissions mandatory, capabilities optional, <all_urls> host",
       Array.isArray(manifest.permissions) &&
@@ -854,6 +859,14 @@ async function main() {
         manifest.permissions.every((p) => !((manifest.optional_permissions ?? []).includes(p))) &&
         Array.isArray(manifest.host_permissions) &&
         manifest.host_permissions.includes("<all_urls>"),
+    );
+    check(
+      "manifest: enterprise-blockable permissions are optional (JIT), never install-required",
+      Array.isArray(manifest.permissions) &&
+        ENTERPRISE_BLOCKABLE.every((p) => !manifest.permissions.includes(p)) &&
+        ENTERPRISE_BLOCKABLE.every((p) => (manifest.optional_permissions ?? []).includes(p)) &&
+        // the boot set is minimal: every required permission is boot-critical.
+        manifest.permissions.every((p) => MANDATORY.includes(p)),
     );
     check(
       "manifest: debugger absent everywhere",

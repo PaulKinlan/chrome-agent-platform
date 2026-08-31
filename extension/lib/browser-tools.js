@@ -5067,7 +5067,7 @@ export function browserToolset(readOnly = false, {
     // enterprise policy and is EXCLUDED).
     list_network_rules: tool({
       description:
-        "List the extension's dynamic network rules (declarativeNetRequest). Read-only; requires the declarativeNetRequest permission (granted at install).",
+        "List the extension's dynamic network rules (declarativeNetRequest). Read-only; requires the declarativeNetRequest permission (optional — granted on demand via the approval card, so an enterprise policy that blocks it never breaks install).",
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasPermission("declarativeNetRequest"))) {
