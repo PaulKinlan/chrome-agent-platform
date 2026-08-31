@@ -32,6 +32,11 @@ import { createDemoModel } from "./models/demo-model.js";
 import { createLocalAssistant, LOCAL_ASSISTANT_MODEL_ID } from "./models/local-assistant.js";
 import { defaultModelFor } from "./model-catalog.js";
 import { kvGet, kvSet } from "./kv.js";
+import { DEVELOPER_FEATURES_KEY } from "./pure.js";
+
+// Re-exported so the Settings page (which must NOT import the heavy model layer)
+// and developerFeaturesOn() share ONE key. The definition lives in pure.js.
+export { DEVELOPER_FEATURES_KEY };
 
 const DEFAULTS = {
   // "demo" | "openai" | "anthropic" | "gemini" | "deepseek" | "ollama" | "prompt-api"
@@ -280,7 +285,6 @@ export async function resolveModelFromConfig(cfg) {
  * until it lands the flag is the kv key `cap:developerFeatures === true`).
  * Read once per resolution — never cached, so a toggle takes effect on the
  * next run. */
-export const DEVELOPER_FEATURES_KEY = "cap:developerFeatures";
 export async function developerFeaturesOn() {
   try {
     const stored = await kvGet(DEVELOPER_FEATURES_KEY);

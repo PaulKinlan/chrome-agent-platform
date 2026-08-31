@@ -787,6 +787,29 @@ export const SETTINGS_SECTIONS = Object.freeze([
   "about",
 ]);
 
+// The DEVELOPER-only subset of the Settings sections. With the developer flag
+// off (the default, CAP-FB-20260830-EXEC-BUILD-FLAG-01) these nav items and
+// panels are hidden and their renderers are skipped; the ids stay valid so a
+// deep link still resolves (and shows a "turn on developer features" notice).
+// These are the platform/plumbing lanes, never a user-facing surface — Local
+// folders and Browser control stay visible because they are legitimate user
+// features (their monolith fold is owned by CAP-FB-20260827-SETTINGS-MONOLITH-01,
+// not this flag).
+export const DEVELOPER_SECTIONS = Object.freeze([
+  "tool-library",
+  "board-permissions",
+  "hooks",
+  "prompts",
+]);
+
+export const DEVELOPER_SECTIONS_SET = new Set(DEVELOPER_SECTIONS);
+
+// The kv key for the developer-features preference. Defined here (a dependency-
+// free module) so the Settings page can read/write it without importing the
+// heavy model layer; lib/provider.js re-exports it as DEVELOPER_FEATURES_KEY so
+// developerFeaturesOn() and the Settings toggle share one source of truth.
+export const DEVELOPER_FEATURES_KEY = "cap:developerFeatures";
+
 export function normalizeSettingsSectionId(hash) {
   if (typeof hash !== "string" || !hash) return null;
   const clean = hash.startsWith("#") ? hash.slice(1).trim() : hash.trim();

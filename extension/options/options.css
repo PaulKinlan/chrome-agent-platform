@@ -46,6 +46,11 @@ nav {
 .nav-item:hover {
   background: var(--bg);
 }
+/* The author `display:flex` on .nav-item and `display:grid` on .toggle-field
+   defeat the UA `[hidden]` style — restore it so the developer-features flag
+   (CAP-FB-20260830-EXEC-BUILD-FLAG-01) can hide these by toggling `hidden`. */
+.nav-item[hidden] { display: none !important; }
+.toggle-field[hidden] { display: none !important; }
 .nav-item[aria-current="true"] {
   background: var(--bg);
   color: var(--accent);

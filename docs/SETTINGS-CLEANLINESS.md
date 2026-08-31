@@ -82,6 +82,41 @@ The six groups already named in `PRODUCT.md` are the right spine. They describe 
 5. Missing install grants never offer Enable/Verify controls. They name the missing grant and the only valid remediation: reload, then reinstall if it persists.
 6. Browser control, file-system grants, hook policy and conversation approvals remain user-controlled; install-granted Chrome API state is not presented as a toggle.
 
+## Developer-features flag (CAP-FB-20260830-EXEC-BUILD-FLAG-01)
+
+A single boolean preference — kv key `cap:developerFeatures`, **off by default** —
+now gates the platform/plumbing lanes out of the DEFAULT Settings surface, so a
+first-time owner is not met with implementation inventory before the controls
+they need. The set is defined once in `extension/lib/pure.js` as
+`DEVELOPER_SECTIONS` and marked in `extension/options/options.html` with
+`data-developer="true"` on both the nav item and the `<section>`:
+
+- **Tool library** (`#tool-library`) — the Wasm diagnostics + preview host.
+- **Board permissions** (`#board-permissions`) — the deny-rule editor.
+- **Hooks** (`#hooks`) — the raw `chrome.*` event/subscriber panel.
+- **Advanced** (`#prompts`) — system prompts + observability.
+- Plus the **Provider server tools** card (`#server-tools-card`) inside Providers.
+
+With the flag off these are `hidden` and their renderers are skipped; nothing is
+deleted, the section ids stay valid, and a deep link to a hidden section shows a
+one-line "Turn on developer features in About" notice rather than a dead link.
+Turning the switch on in **About → Developer features** reveals every lane and
+renders it exactly as before. The same kv key is read by
+`developerFeaturesOn()` in `extension/lib/provider.js`, so the flag also keeps
+the demo test model + its `@demo-*` markers (KEYLESS-FIRST-RESULT-01) and the
+developer-only browser tools (COOKIE-TOOLS-CUT-01) out of a default profile.
+
+**Decision recorded (no owner confirmation available, 2026-08-31):** Local
+folders (`#local-folders`) and Browser control (`#browser`) are **not** gated by
+this flag. They are legitimate user features (managing folder grants and the
+browser-control policy), not developer plumbing; hiding them would remove real
+functionality. The acceptance's "seven-item" nav assumed those two also fold
+away, which is the separate monolith rework owned by
+`CAP-FB-20260827-SETTINGS-MONOLITH-01`, not this flag. With the flag off the
+default nav therefore shows nine items (the four developer lanes removed):
+Providers · Local folders · Agents · Browser control · Permissions · Skills ·
+Usage · Data & memory · About.
+
 ## Safe-subset evidence contract
 
 - Source gate: `tests/settings-cleanliness.test.ts` fails on the pre-change tree for the dead Appearance route, storage verifier, and missing fail-closed replacement; it passes after removal.
