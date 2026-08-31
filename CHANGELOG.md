@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.526] — 2026-08-31
+- Page interaction and timeline improvements have begun.
+
 ## [0.2.525] — 2026-08-31
 - DONE (coordinator gates 2751/0, 255/255)
 
