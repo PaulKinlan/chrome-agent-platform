@@ -400,6 +400,7 @@ const EXPECTED = [
   "SW attach returned a session id",
   "SW Runtime.enable succeeded",
   "manifest: boot-critical permissions mandatory, capabilities optional, <all_urls> host",
+  "manifest: enterprise-blockable permissions are optional (JIT), never install-required",
   "manifest: debugger absent everywhere",
   "initial SW closed for a pre-attached restart",
   "SW woken for the pre-attached restart",

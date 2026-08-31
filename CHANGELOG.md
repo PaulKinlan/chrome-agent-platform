@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.568] — 2026-08-31
+- DONE (2834/0, 273/273, mcp KAT 8/8); fix missing EXPECTED entry from the boot-perms merge
+
 ## [0.2.567] — 2026-08-31
 - Groundwork for connecting the agent to external tool servers is in place.
 
