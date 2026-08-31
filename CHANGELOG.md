@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.521] — 2026-08-31
+- DONE (coordinator gates 2734/0, 247/247)
+
 ## [0.2.520] — 2026-08-31
 - : merge — the host-access story is now told truthfully everywhere (Q18a)
 
