@@ -400,6 +400,7 @@ const EXPECTED = [
   "SW attach returned a session id",
   "SW Runtime.enable succeeded",
   "manifest: boot-critical permissions mandatory, capabilities optional, <all_urls> host",
+  "manifest: enterprise-blockable permissions are optional (JIT), never install-required",
   "manifest: debugger absent everywhere",
   "initial SW closed for a pre-attached restart",
   "SW woken for the pre-attached restart",
@@ -529,6 +530,9 @@ const EXPECTED = [
   "Provider error: preflight refusal reaches a terminal Failed row within 5 s",
   "Streaming: the assistant bubble grows across at least 5 distinct lengths",
   "Streaming: the final bubble equals the non-streamed render",
+  "Full response: a long agent response renders COLLAPSED behind Show full response (never silently truncated)",
+  "Full response: Show full response reveals the COMPLETE text (the tail string is in the DOM)",
+  "Full response: the thread STORE holds the complete response (no commit-time truncation)",
   "Claim check: a failed delegate renders one correction and one final bubble",
   "Thread view: edit approval card names the artifact and shows +n -m",
   "Thread view: edit approval card renders the diff with a '+' Opening hours line before the decision",
@@ -3093,6 +3097,75 @@ async function main() {
       "Streaming: the final bubble equals the non-streamed render",
       streamCompare?.equal === true && streamCompare?.contentAttr === DEMO_STREAM_ANSWER && streamCompare?.streamedText === DEMO_STREAM_ANSWER,
     );
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 3d1.5 — CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01: the agent's
+    // response is readable in the task view AT FULL LENGTH. A long demo answer
+    // (> 4000 chars, via @demo-long-answer) renders COLLAPSED with a
+    // Show-full-response toggle; clicking it reveals the COMPLETE text in the
+    // DOM (a tail string is asserted). Before the fix the thread store itself
+    // held only the first 300 chars (safeProviderError's boundErrorText cap).
+    // ─────────────────────────────────────────────────────────────
+    const LONG_RUN = await msgValue({ type: "agent.run", task: "@demo-long-answer write the full story" });
+    const LONG_THREAD_ID = LONG_RUN?.threadId ?? null;
+    const LONG_TAIL = "Line 300:";
+    const LONG_READ = `(() => {
+      const conv = document.getElementById('thread-conversation');
+      if (!conv) return JSON.stringify(null);
+      const bubbles = [...conv.querySelectorAll('message-bubble[role="agent"]')];
+      const last = bubbles[bubbles.length - 1];
+      if (!last) return JSON.stringify(null);
+      const root = last.shadowRoot ?? last;
+      const long = root.querySelector('.long-response');
+      return JSON.stringify({
+        hasLong: long ? long.getAttribute('data-open') : null,
+        bodyText: (root.querySelector('.body') ?? last).textContent.replace(/\\s+/g, ' ').trim(),
+      });
+    })()`;
+    const longThreadUrl = `chrome-extension://${extId}/ntp/ntp.html#omnibox=thread:${encodeURIComponent(String(LONG_THREAD_ID))}`;
+    const longDoc = await cdp.send("Target.createTarget", { url: longThreadUrl });
+    const longTargetId = longDoc?.result?.targetId;
+    await sleep(3000);
+    const longSession = await attachRuntime(cdp, longTargetId);
+    cdp.pageSessions.add(longSession);
+    let longState = null;
+    try { longState = JSON.parse(await evalIn(cdp, longSession, LONG_READ) ?? "null"); } catch { longState = null; }
+    const longBeforeShot = await captureShot(cdp, longSession).catch(() => null);
+    if (longBeforeShot) await writeEvidence("full-response-collapsed.png", longBeforeShot);
+    console.log(`full-response collapsed: ${JSON.stringify(longState).slice(0, 400)}`);
+    check(
+      "Full response: a long agent response renders COLLAPSED behind Show full response (never silently truncated)",
+      longState?.hasLong === "0" && typeof longState?.bodyText === "string" &&
+        longState.bodyText.length > 4000 &&
+        longState.bodyText.includes("Line 1:"),
+    );
+    // Click the Show-full-response toggle (REAL gesture) and assert the full
+    // tail of the response is present in the DOM after expansion.
+    const longToggleClicked = await clickShadow(cdp, longSession, 'message-bubble[role="agent"]', ".long-toggle").catch(() => false);
+    await sleep(300);
+    let longOpen = null;
+    try { longOpen = JSON.parse(await evalIn(cdp, longSession, LONG_READ) ?? "null"); } catch { longOpen = null; }
+    const longAfterShot = await captureShot(cdp, longSession).catch(() => null);
+    if (longAfterShot) await writeEvidence("full-response-expanded.png", longAfterShot);
+    console.log(`full-response expanded: ${JSON.stringify(longOpen).slice(0, 400)}`);
+    check(
+      "Full response: Show full response reveals the COMPLETE text (the tail string is in the DOM)",
+      longToggleClicked === true && longOpen?.hasLong === "1" && typeof longOpen?.bodyText === "string" &&
+        longOpen.bodyText.includes(LONG_TAIL),
+    );
+    // The thread STORE must hold the full text too (the store was the truncation
+    // point — a 300-char bound — before the fix).
+    const longPersisted = LONG_THREAD_ID ? await msgValue({ type: "thread.get", id: LONG_THREAD_ID }) : null;
+    const longStored = Array.isArray(longPersisted?.thread?.messages)
+      ? longPersisted.thread.messages.filter((m) => m?.role === "assistant").map((m) => String(m?.content ?? ""))
+      : [];
+    console.log(`full-response stored: ${longStored.length ? longStored[0].length : 0} chars`);
+    check(
+      "Full response: the thread STORE holds the complete response (no commit-time truncation)",
+      longStored.length === 1 && longStored[0].length > 4000 && longStored[0].includes(LONG_TAIL),
+    );
+    await cdp.send("Target.closeTarget", { targetId: longTargetId }).catch(() => {});
+    cdp.pageSessions.delete(longSession);
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 3d2 — CAP-FB-20260830-CLAIM-CHECK-BROWSER-TOOLS-01: delegating to

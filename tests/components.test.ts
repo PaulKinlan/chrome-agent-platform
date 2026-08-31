@@ -12,11 +12,12 @@
 const registry = new Map();
 
 class HTMLElementStub {
+  constructor() { this._attrs = new Map(); }
   attachShadow(_init) { return new ShadowRootStub(); }
-  getAttribute(_n) { return null; }
-  hasAttribute(_n) { return false; }
-  setAttribute(_n, _v) {}
-  removeAttribute(_n) {}
+  getAttribute(n) { return this._attrs.has(n) ? this._attrs.get(n) : null; }
+  hasAttribute(n) { return this._attrs.has(n); }
+  setAttribute(n, v) { this._attrs.set(n, String(v)); }
+  removeAttribute(n) { this._attrs.delete(n); }
   dispatchEvent(_e) { return true; }
   addEventListener() {}
   querySelector() { return null; }
@@ -56,6 +57,19 @@ class FakeNode {
   dispatch(t, e = {}) { e.target ??= this; e.preventDefault ??= () => {}; for (const f of this.listeners[t] ?? []) f(e); }
   getBoundingClientRect() { return { top: 0, left: 0, width: 0, height: 0, right: 0, bottom: 0 }; }
   querySelector(sel) {
+    if (sel.startsWith(".")) {
+      const cls = sel.slice(1);
+      const walk = (node) => {
+        for (const kid of node.children) {
+          const kl = String(kid.className ?? "").split(/\s+/);
+          if (kl.includes(cls)) return kid;
+          const hit = walk(kid);
+          if (hit) return hit;
+        }
+        return null;
+      };
+      return walk(this);
+    }
     const m = sel.match(/data-index="?(\d+)/);
     if (m) return this.children.find((c) => String(c.dataset.index) === String(Number(m[1]))) ?? null;
     // Descendant selector "#ap-list [data-active=true]" must be tried BEFORE the
@@ -1448,4 +1462,38 @@ Deno.test("activity-explorer: approval rows stay ≤140 even with a long sentenc
   // The verb and the first sentence survive; the trailing sentence does not.
   if (!line.endsWith("needs approval")) throw new Error("approval verb must survive");
   if (line.includes("More trailing text")) throw new Error("approval must not include past-the-first-sentence raw text");
+});
+
+Deno.test("message-bubble: a long agent response gets the Show-full-response treatment (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01)", async () => {
+  await import("../extension/shared/components.js");
+  const restoreDoc = installFakeDocument();
+  try {
+    const MB = registry.get("message-bubble");
+    const longContent = "The quick brown fox jumps over the lazy dog. ".repeat(500); // ~22.5 KiB > LONG_PREVIEW_CHARS
+    const shortContent = "A short reply.";
+    const longBubble = new MB();
+    longBubble.setAttribute("role", "agent");
+    longBubble.setAttribute("content", longContent);
+    if (!longBubble._longResponse(longContent)) {
+      throw new Error("a long agent response must be flagged for the full-response expander");
+    }
+    const shortBubble = new MB();
+    shortBubble.setAttribute("role", "agent");
+    shortBubble.setAttribute("content", shortContent);
+    if (shortBubble._longResponse(shortContent)) {
+      throw new Error("a short reply must render inline (no expander)");
+    }
+    // The expander UI wires a toggle that flips data-open and a copy action —
+    // exercised end-to-end in the browser journey (real innerHTML mount); here
+    // the gating predicate is pinned so a regression to the old clamp cannot
+    // silently remove the full-response treatment.
+    const longUser = new MB();
+    longUser.setAttribute("role", "user");
+    longUser.setAttribute("content", longContent);
+    if (longUser._longResponse(longContent)) {
+      throw new Error("the expander is for agent/system responses only, never user bubbles");
+    }
+  } finally {
+    restoreDoc();
+  }
 });

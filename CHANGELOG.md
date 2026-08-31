@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.567] — 2026-08-31
+- Task view holds the complete agent response: raise the commit-time caps (the 300-char redactor bite, 16 KiB message cap, 16 KiB durable result) to 252 KiB with a never-silent marker, and add a Show-full-response expander with copy for long bubbles
+
 ## [0.2.566] — 2026-08-31
 - Work has begun on folder tools and external tool-server support.
 

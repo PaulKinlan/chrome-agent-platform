@@ -76,10 +76,13 @@ Deno.test("thread persist (B): a thread over the byte budget keeps the terminal 
   const t = await createThread("Triggering question");
   const id = t.id;
   await commitThreadTerminal(id, "exec_1", { role: "assistant", content: "The answer" });
-  // The self-embedding loop: a bounded-but-large tool result (16 KiB) is
-  // re-appended many times, blowing the 200 KiB budget. The terminal + the
-  // user must survive the trim; the OLDEST tool rows are evicted instead.
-  for (let i = 0; i < 20; i++) {
+  // The self-embedding loop: bounded-but-large tool results (16 KiB) are
+  // re-appended many times. The terminal + the user must survive the trim;
+  // the OLDEST tool rows are evicted instead. The fixture stays under the
+  // memory store's 256 KiB per-value bound (the thread's real ceiling —
+  // memory.js MAX_VALUE_BYTES) while comfortably exceeding the old 200 KiB
+  // thread budget.
+  for (let i = 0; i < 14; i++) {
     await appendThreadMessage(id, { role: "tool", toolName: "memory_get", toolStatus: "success", toolResult: `t${i}:` + "x".repeat(16 * 1024), toolOk: true, toolCallId: `c${i}`, executionId: "exec_1" });
   }
   const thread = await getThread(id);

@@ -4658,3 +4658,21 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - 2026-08-31 19:34 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/scheduled-next-run` off `origin/main@46407794`. Other agents: pick a different entry.
   - 2026-08-31 20:11 UTC — DONE: merged forward by the coordinator and pushed as `origin/main@8e03a245`. Coordinator gates on the merged tip: production build clean, check:gallery clean, unit 2828/0. Candidate 3fa9ce33 merged forward (deduped a second entry block the worker appended). Worker verified kat-scheduled-next-run-widget 7/7 and 272/272 journeys in isolation; the coordinator journey re-run is environmentally blocked (183 concurrent Chromiums across sessions, swap exhausted) — next-run is a static UI/route change, next clean tip re-confirms.
   - 2026-08-31 19:20 UTC — filed from owner feedback: no visible next-run for scheduled tasks; wants a "next run" widget and a "routine" concept (not background agents).
+
+## [CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01] Agent response truncated in the task view — owner wants the full response readable
+- Feedback: 2026-08-31 — owner-reported (P1): "in a task view, the agent response gets truncated and I really want to be able to read it like a full resource."
+- Updated: 2026-08-31 22:30 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — candidate built; unit 2832/0, journeys 276/276, screenshots full-response-{collapsed,expanded}.png
+- Priority: P1
+- Owner: hub coordinator (journal session)
+- Workspace: /tmp/cap-full-response
+- Branch: cap-full-response
+- Base: origin/main bcb709cc
+- Candidate: pending
+- Shipping: —
+- Acceptance: The task view renders the agent's COMPLETE response. Investigation found the truncation is COMMIT-TIME, three stacked caps: (1) safeProviderError → boundErrorText capped EVERY message at **300 chars** (pure.js:979-985 — the primary bite; a secret-redaction helper meant for errors was bounding message content); (2) boundText's MAX_MESSAGE_CHARS = **16 KiB** (threads.js:27) applied at appendThreadMessage/commitThreadTerminal; (3) the durable outbox terminal result was bounded at **16 KiB** (durable-runs.js:1749). The memory store's per-value bound (256 KiB, memory.js MAX_VALUE_BYTES) is the physical ceiling.
+  - Fix: boundText now uses the UNBOUNDED redactor (redactSecretText) + raises MAX_MESSAGE_CHARS to **252 KiB** (margin for envelope + marker under the store's 256 KiB bound); the durable outbox terminal result raised to match; the legacy compatibility journal stays a 240-char bounded preview (full bytes live in the retainedPayloadRef). An over-budget (>252 KiB) message is sliced with an EXPLICIT marker ("…(response truncated to 252 KiB — the complete text is in the run log)") — never silent. UX: long agent/system responses (>4000 chars) render COLLAPSED with a Show-full-response toggle + Copy full response button (message-bubble .long-response); list surfaces stay bounded.
+  - RED→GREEN: revert the fix → the byte-complete + marker tests fail (0/3); restore → 3/3. Long-response render journey: @demo-long-answer drives a 47,318-char response; collapsed state data-open=0 asserted, real-click toggle → data-open=1 with "Line 300:" tail in the DOM, thread store holds 47,318 chars byte-complete.
+- History:
+  - 2026-08-31 22:30 UTC — investigation mapped every truncation point between the model's final text and the task view (commit-time in threads.js + durable-runs.js + pure.js's 300-char redactor; render side has NO clamp). The 300-char boundErrorText inside safeProviderError was the unseen primary bite — every response was cut to 300 chars at commit regardless of the 16 KiB ceiling.

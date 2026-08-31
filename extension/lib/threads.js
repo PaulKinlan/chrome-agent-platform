@@ -24,8 +24,8 @@ import { isPromptApiAvailable, createPromptApiModel } from "./models/prompt-api-
 const INDEX_KEY = "threads";
 const MAX_THREADS = 200; // the index cap
 const MAX_MESSAGES = 500; // per-thread message cap
-const MAX_MESSAGE_CHARS = 16 * 1024; // per-message text cap
-const MAX_THREAD_BYTES = 200 * 1024; // per-thread serialized budget
+const MAX_MESSAGE_CHARS = 252 * 1024; // per-message text cap — raised from 16 KiB (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01: the task view must hold the COMPLETE agent response). 252 KiB leaves margin for the JSON envelope + truncation marker under the memory store's 256 KiB per-value bound (memory.js MAX_VALUE_BYTES), so any response up to ~100 pages stores byte-complete; a pathological longer message is sliced with an explicit marker (never silent) and the complete text stays in the durable run journal.
+const MAX_THREAD_BYTES = 1024 * 1024; // per-thread serialized budget (raised with the message cap so a full response does not force pathological front-eviction; the tail is still protected)
 const MAX_NAME_CHARS = 80;
 // Continuation-fidelity bounds: the journaled per-run tool summary and skill
 // list are deliberately TINY (names + ok only — never args, results, or page
@@ -96,12 +96,24 @@ function previewOf(text) {
 }
 
 // SECRET-SAFE + bounded (the final review's HIGH): every string persisted
-// into a thread (messages, lastError, index rows) passes safeProviderError —
-// a credential echoed by a hostile endpoint can never reach thread storage.
-import { safeProviderError } from "./pure.js";
+// into a thread (messages, lastError, index rows) is redacted so a credential
+// echoed by a hostile endpoint can never reach thread storage. NOTE: the
+// redaction is UNBOUNDED (redactSecretText) — safeProviderError also caps at
+// 300 chars for ERROR text, which is wrong for message content
+// (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01: a response was cut to 300 chars
+// at commit). The message-content cap is applied HERE, not inside the redactor.
+import { redactSecretText } from "./pure.js";
 function boundText(text, max = MAX_MESSAGE_CHARS) {
-  const s = safeProviderError(String(text ?? ""));
-  return s.length > max ? s.slice(0, max) : s;
+  const s = redactSecretText(String(text ?? ""));
+  if (s.length <= max) return s;
+  const sliced = s.slice(0, max);
+  // Never silently truncate the human-readable content: when the DEFAULT
+  // (message-content) cap is hit, say so — the complete text is kept in the
+  // durable run journal (retainedPayloadRef) and in the run log.
+  if (max === MAX_MESSAGE_CHARS) {
+    return `${sliced}\n\n…(response truncated to ${(max / 1024).toFixed(0)} KiB — the complete text is in the run log)`;
+  }
+  return sliced;
 }
 
 /** Trim a thread's messages to the count + byte budget (drop the OLDEST),

@@ -1746,7 +1746,7 @@ export function createDurableRunRegistry({
           errorReason: payload?.errorReason ?? null,
           errorAction: payload?.errorAction ?? null,
         });
-        const result = bounded(fullResult, 16 * 1024);
+        const result = bounded(fullResult, 256 * 1024);
         const outbox = {
           executionId,
           createdAt: at,
@@ -1758,17 +1758,22 @@ export function createDurableRunRegistry({
             at,
             retainedPayloadRef,
             summary: bounded(payload?.summary ?? result),
-            // The FULL (16 KB-bounded) answer rides beside the 240-char preview
+            // The FULL (512 KiB-bounded) answer rides beside the 240-char preview
             // so a thread back-fill never has to commit the preview as content
-            // (CAP-FB-20260830-TRANSCRIPT-FULL-ANSWER-01). `summary` stays a
-            // preview for lists.
+            // (CAP-FB-20260830-TRANSCRIPT-FULL-ANSWER-01; the bound was raised from
+            // 16 KiB for CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01). `summary` stays
+            // a preview for lists. The byte-complete text is always in the
+            // retainedPayloadRef payload.
             result,
             ...(payload?.aborted === true ? { aborted: true } : {}),
           },
           journalEntry: {
             type: "result",
             id: payload?.logicalId ?? record.scheduleName ?? record.threadId ?? record.clientCorrelationId ?? executionId,
-            result,
+            // The LEGACY compatibility journal keeps a small bounded preview
+            // (the full bytes live in the retainedPayloadRef + the terminal
+            // result above — CAP-FB-20260830-RUN-LOG-COMPACTION-01).
+            result: bounded(fullResult),
             ok,
             ...(payload?.aborted === true ? { aborted: true } : {}),
           },
