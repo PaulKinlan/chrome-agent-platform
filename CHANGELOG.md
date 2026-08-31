@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.506] — 2026-08-31
+- tasks: CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01 IN_REVIEW (candidate 67b27141, gates 2682/0, 240/240)
+
 ## [0.2.505] — 2026-08-31
 - Typed-but-unpicked model saves model:'' and silently runs the demo — commit typed picker text, refuse model-less keyed providers
 

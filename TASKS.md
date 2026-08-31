@@ -229,7 +229,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | OPEN | [`CAP-FB-20260830-HOST-ACCESS-STORY-01`](#cap-fb-20260830-host-access-story-01-install-time-allurls-host-access-contradicts-the-all-optional-story-told-everywhere-else) | Install-time <all_urls> host access contradicts the "all-optional" story told everywhere else |
 | P1 | OPEN | [`CAP-FB-20260830-HUB-CHROME-POLISH-01`](#cap-fb-20260830-hub-chrome-polish-01-hub-chrome-settings-styled-as-the-primary-button-agent-id-as-title-a-zero-width-directory-card-developer-icons-in-the-header) | Hub chrome: Settings styled as the primary button, agent id as title, a zero-width directory card, developer icons in the header |
 | P1 | OPEN | [`CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01`](#cap-fb-20260830-local-file-edit-tools-01-the-agent-cannot-read-or-write-a-local-file-fs-grantwrite-file-is-dead-code) | The agent cannot read or write a local file; fs-grant.write-file is dead code |
-| P1 | OPEN | [`CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01`](#cap-fb-20260830-model-field-empty-save-01-typing-a-model-name-without-picking-it-saves-model-and-the-hub-silently-runs-the-demo-model) | Typing a model name without picking it saves model:"" and the hub silently runs the demo model |
+| P1 | IN_REVIEW | [`CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01`](#cap-fb-20260830-model-field-empty-save-01-typing-a-model-name-without-picking-it-saves-model-and-the-hub-silently-runs-the-demo-model) | Typing a model name without picking it saves model:"" and the hub silently runs the demo model |
 | P1 | OPEN | [`CAP-FB-20260830-MODEL-TOOL-ADHERENCE-01`](#cap-fb-20260830-model-tool-adherence-01-with-some-models-make-me-a-website-never-creates-an-artifact-and-remember-x-is-answered-with-a-lie) | With some models "make me a website" never creates an artifact and "remember X" is answered with a lie |
 | P1 | OPEN | [`CAP-FB-20260830-ONE-SHELL-01`](#cap-fb-20260830-one-shell-01-three-surfaces-three-shells-one-content-width-one-title-no-duplicate-chrome) | Three surfaces, three shells: one content width, one title, no duplicate chrome |
 | P1 | OPEN | [`CAP-FB-20260830-PLAN-STRIP-CHECKPOINTS-01`](#cap-fb-20260830-plan-strip-checkpoints-01-a-running-multi-step-task-shows-a-plan-strip-with-the-current-step-and-resumes-from-the-durable-registry-after-an-interruption) | A running multi-step task shows a plan strip with the current step, and resumes from the durable registry after an interruption |
@@ -1095,15 +1095,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260825-SITE-AGENT-SHOWCASE-01] Make sites-as-sub-agents demonstrable in under a minute
 - Feedback: 2026-08-25 — independent review, restating §5 of `REVIEW-2026-08-21.md`: sites-as-sub-agents is the genuinely novel claim and the one thing nothing else does, and it is the hardest capability in the product to actually see working
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-31 02:10 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — candidate built; gates below
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `cf0da958`
-- Candidate: —
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-model-field-save
+- Branch: cap-model-field-save
+- Base: `origin/main@7037b6e6`
+- Candidate: `67b27141`
 - Shipping: —
 - Acceptance: from a fresh profile, an owner reaches a working site-agent tool call in under a minute without reading documentation — a reachable entry point, at least one real origin whose WebMCP tools are discovered and invoked, and a visible result; the path states honestly what it granted and to which origin; nothing about the demonstration weakens origin isolation, per-tool first-run approval or the all-optional permission model; the fixture origin in `fixtures/` is usable for this without pretending to be a third-party site; a showcase site ships (a small hosted shop or issue tracker with 4-6 declared WebMCP tools, the same page also served from `fixtures/`) and the hub notices it: when the active tab reports tools the composer shows a chip "<host> offers 4 tools — use them?" whose click is the single grant; fresh profile, open the showcase, one click, ask "add the cheapest widget to my cart and tell me the total", see the site's tool cards and the page change, under 60 s, with the exact origin named in the grant; the Directory empty copy ("Browse the web with the extension installed; each enrolled origin becomes a Site Agent") is replaced with what actually happens
   - Context: the only WebMCP origin today is `fixtures/webmcp-fixture.html` served by `fixtures/webmcp-server.ts` on 127.0.0.1. The production-path acceptance is `scripts/webmcp-acceptance.ts` (43 checks; the product lane ran it 42/42 — one check is environment-conditional): hub "Find site tools" link (`extension/ntp/ntp.html:888`, id `discover-page`) → `discoverActivePage` (`extension/ntp/ntp.js:589`) which calls `agent.discoverable-tabs` (`:590`; route `extension/background/service-worker.js:5055`), requests `scripting` on the click when missing (`:599`), lists tabs in a picker, and enrolls the chosen tab; passive detection reports `toolCount` from `extension/content/webmcp-detect-main.js:70-72`. Enrolled sites are read with `agent.get {origin}` (`service-worker.js:5283`) / `agent.list` (`:4561`). The Directory's empty copy is `extension/directory/directory.js:15`. `site-agent-card` (`extension/shared/components.js:1839-1869`: `@host` badge, tool count, status, `select` event) is a gallery-only component that fits the composer chip / Site Agents panel (CAP-FB-20260827-DEAD-COMPONENTS-01 verdict: ADOPT here). What must NOT change: `chrome.permissions.request` happens only on the owner's click; per-tool first-run approval (`tools.approve`); exact-tab binding of `tools.invoke`.
@@ -1399,15 +1399,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260828-HUB-AS-TIMELINE-01] The hub is a dashboard; it should be a composer and a timeline
 - Feedback: 2026-08-28 — product audit; pairs with CAP-FB-20260827-HUB-FIRST-RUN-01 (that one is the first-run card, this one is the steady state)
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-31 02:10 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — candidate built; gates below
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `cf0da958`
-- Candidate: —
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-model-field-save
+- Branch: cap-model-field-save
+- Base: `origin/main@7037b6e6`
+- Candidate: `67b27141`
 - Shipping: —
 - Acceptance: the composer is the primary element of the hub in the steady state, not only on a fresh profile. The three separate status cards (Agents, Recent artifacts, Recent activity) become ONE activity stream with filters, so a returning owner sees what happened while they were away as a single chronological thing rather than three partial views of it. Drilling into an agent, an artifact or a run still works from that stream. An artifact's primary home becomes the thread that produced it — it is the output of the work, so it belongs with the work; the Artifacts gallery remains as the archive rather than the first place you look. Verified with before/after screenshots on a profile that has real history, not an empty one; after one interactive task, one scheduled run and one pending approval, the hub shows all three in order with one-click access and nothing else below the composer — the three cards (Agents, Recent artifacts, Recent activity) are cut, agent and site lists live in the sidebar only
   - Context: the content column in `extension/ntp/ntp.html:857-915` is composer (`:872`) → Agents section (`:880-892`: `#named-agents`, `#site-agents`, "Find site tools") → Recent artifacts (`:894-903`, `#artifacts`) → Recent activity (`:905-915`, `#run-log`, `#hub-usage`). Renderers: `renderArtifacts` (`extension/ntp/ntp.js:917`), `renderRunLog` (`:1066`), `renderHubUsage` (`:1115`, text "N calls · N tokens · $0.0000" at `:1125`). The activity data source is `activity.list` (`extension/background/routes/activity.js:72`, consumed by `ActivityExplorer` at `extension/shared/components.js:7323`), executions come from `run.list` (`extension/background/service-worker.js:5899`) and `durableRuns.listThreadExecutions`, pending approvals from the approval routes the conversation already polls, scheduled results from CAP-FB-20260830-SCHEDULED-RUN-OUTPUT-01, reversible actions from CAP-FB-20260830-ACTIVITY-LEDGER-UNDO-01. The sidebar already lists agents (`renderSidebarAgents` `ntp.js:829`). What must NOT change: the hub render budget (62 ms cold render recorded in `REVIEW-2026-08-21.md`; `tests/`/journeys assert it); keyboard reachability of every drill-in; the sidebar's role as the agent list.
@@ -1493,15 +1493,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01] Saving a preset provider without a base URL yields a config that can never run
 - Feedback: 2026-08-29 — the one real observation left from the withdrawn `CAP-FB-20260829-SILENT-PROVIDER-RUN-01`
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-31 02:10 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — candidate built; gates below
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `cf0da958`
-- Candidate: —
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-model-field-save
+- Branch: cap-model-field-save
+- Base: `origin/main@7037b6e6`
+- Candidate: `67b27141`
 - Shipping: —
 - Acceptance: saving a provider that HAS a known preset base URL (`anthropic`, `openai`, `gemini`, `deepseek`) without supplying one stores that preset rather than an empty string, so the permission preflight can derive a real origin; the BYO-endpoint provider, which has no preset, still requires one and says so; the effective base URL (config or preset) resolves through ONE helper used by `provider.set` (store it), `provider.status` (report it; `ok:false` for a config the gate will reject), the gate `providerOriginPattern` (`extension/lib/provider-gate.js:23-32`) and the adapter, so `provider.set {provider:"openai", apiKey, model}` followed by a run succeeds; a unit test on `providerOriginPattern` with a preset id
   - Context: presets live in `PROVIDER_CHOICES` (`extension/lib/provider.js:45-98`: openai `:51` `https://api.openai.com/v1`, anthropic `:58`, gemini `:65` `…/v1beta/openai`, deepseek `:72`, the BYO entry with `baseURL: ""` `:84`, ollama `:91`, lmstudio `:98`); the preset fallback is applied only when the model is built (`provider.js:140-141`: `cfg.baseURL || PROVIDER_CHOICES.find(...)?.baseURL`), not when stored (`setProviderConfig` `:125`) and not in the gate. `providerOriginPattern` (`provider-gate.js:24-33`) reads `cfg?.baseURL` only, so an empty string yields `null`; `providerRunGate` (`:231-250`) returns `ok:true` when host access exists for the (missing) pattern path — the live lane observed `provider.status → ok:true` for `baseURL:""`. The run-time preflight in `extension/shared/conversation.js:1139` throws "configured provider origin is invalid" when `provider.permission-summary` (`extension/background/routes/provider.js:46`) has no origin. The route `provider.set` is `routes/provider.js:72-91` (`requireSettingsSender`, key-preservation, `setProviderConfig`, `invalidateAgent`); `provider.status` is `:58-70`. The Settings save path is `saveProviderFromCard` (`extension/lib/provider-options-save.js:76`) with `providerFieldsFromCard` (`:10`), which pre-fills the preset and hides the bug from the UI. Tests: `tests/provider-gate.test.ts:37,52` (`providerOriginPattern` http(s) / missing), `tests/provider-options-save.test.ts`. Sibling entries: CAP-FB-20260830-PROVIDER-ERROR-TRUTH-01 (401 surfaced as "no content"), CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01 (`model:""` saved), CAP-FB-20260830-PROVIDER-DEFAULT-AND-KEY-FLOW-01 (the picker flow; recommended default `gemini-3.7-flash`). What must NOT change: key preservation semantics in `provider.set`; the redaction (the route never returns the key); the local-provider exemption (`isLocalProvider` `:42`).
@@ -2714,15 +2714,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01] Destructive browser actions are grant-gated, not approval-gated, and the policy is invisible
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 security lane finding 4, product lane finding 11. Extends CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01. Once Browser control is on, the agent can close every tab, delete bookmarks or wipe passwords without asking again, and nowhere in the product says which actions ask and which do not.
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-31 02:10 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — candidate built; gates below
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `cf0da958`
-- Candidate: —
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-model-field-save
+- Branch: cap-model-field-save
+- Base: `origin/main@7037b6e6`
+- Candidate: `67b27141`
 - Shipping: —
 - Acceptance: one policy with three visible classes — Read (page text, tab list: allowed after consent), Act (tabs/groups/bookmarks/page actions: ask once per origin, then automatic), Destructive (delete, wipe, downloads to disk, purchases via WebMCP: always ask) — with a per-agent override; the in-chat card names the class it is asking for; Settings, the first-run card and the in-chat card describe the same three classes; the copy contradiction in Settings ("listing tabs is always available") is gone; `close_tab` of a tab the run did not open, `close_window`, `wipe_browsing_data`, `remove_bookmark`, `remove_cookie` and `set_cookie` take an in-chat approval card with a payload digest; `passwords` leaves the wipe enum; `wipe_browsing_data` is behind the developer flag; the "Allowed origins" textarea folds into per-origin Act grants. A Read tool never prompts; a Destructive tool always shows the card.
   - Context: the grant record (`GRANT_KEY = "cap:browserControlGrant"`, `extension/lib/browser-tools.js:21`) is set from Settings (`extension/options/options.js:1799-1867`) or an approval card and is persistent by default (`:148-150`). Inside `withGrantLock`, `close_tab` (`:1574-1610`), `open_tab` (`:1390`), `navigate_tab` (`:1442`), `close_window` (`:1802`), `remove_bookmark` (`:2034`), `set_cookie` (`:2285`), `remove_cookie` (`:2332`) and `wipe_browsing_data` (`:2374-2412`; its `dataTypes` enum at `:2380-2383` includes `"passwords"`; global-grant-only check at `:2400`) all run with no further owner decision. `DESTRUCTIVE_ACTIONS` (`extension/lib/owner-approval.js:23-46`) contains no browser tool. Four consent mechanisms coexist: the 31-row optional-permission table in Settings, the "Allowed origins" textarea (`extension/options/options.html:199-201`, handler `options.js:1868-1890`), per-tool WebMCP first-run approval, and in-chat cards. Copy contradiction: `options.html:190` says "Reading page text and listing tabs are always available" while `list_tabs` (`browser-tools.js:1561-1567`) denies without `tabs`. What must NOT change: the grant mutex; the per-origin grant scope; the WebMCP per-tool approval.
@@ -2810,15 +2810,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-ACTIVITY-LEDGER-UNDO-01] There is no "what I did" activity ledger with undo
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 product lane finding 10. After the agent closes tabs or moves bookmarks there is no plain-language record of what it did and no way to reverse it, although the inverse operations exist as tools.
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-31 02:10 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — candidate built; gates below
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `cf0da958`
-- Candidate: —
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-model-field-save
+- Branch: cap-model-field-save
+- Base: `origin/main@7037b6e6`
+- Candidate: `67b27141`
 - Shipping: —
 - Acceptance: every mutating tool call writes a ledger row `{ sentence, tool, argsDigest, inverse? }` where `inverse` is the tool call that reverses it when one exists; the hub timeline and the side panel show "Undo" for the last N reversible rows; destructive actions with no inverse require the in-chat approval. Observable: "close my duplicate tabs" renders "Closed 3 duplicate tabs · Undo" and clicking Undo restores the tabs.
   - Context: the hub's Recent activity is a per-call log with role chips (`hub RESULT`, `hub PROMPT-ATTESTATION`) and Run logs is a debugger timeline; neither is action-level and neither reverses anything. The inverse pairs already exist in `extension/lib/browser-tools.js`: `close_tab` (`:1574`) ↔ `list_recently_closed` (`:3556`, returns `sessionId`) + `restore_closed` (`:3591`, takes `sessionId`); `group_tabs` (`:2579`) ↔ `ungroup_tabs` (`:2646`); `create_bookmark` (`:1979`) ↔ `remove_bookmark` (`:2034`); `open_tab` ↔ `close_tab`. Every tool execution passes through `observeToolCall` in `executeWorkerTool` (`extension/background/service-worker.js:3563-3567`) with `source` and `runId` — the one place to write the row. The durable run log (`extension/lib/run-log-wal.js`) is the natural store. `chrome-tool-capabilities.js` records classify tools `read-only`/`mutating` (`:236-260`). What must NOT change: the run-log WAL format's existing rows; approval semantics.
@@ -3808,15 +3808,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-SIDE-PANEL-COMPANION-01] The side panel becomes a companion pinned to the current tab instead of a WebMCP status surface
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 ui lane finding 18, product lane finding 8. The panel opens on a tab yet asks the owner to type a URL and press "Open site"; it shows two H1s, wraps its buttons at real panel widths, and lists the 22 disabled template agents instead of anything about the page in front of the owner.
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-31 02:10 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — candidate built; gates below
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `cf0da958`
-- Candidate: —
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-model-field-save
+- Branch: cap-model-field-save
+- Base: `origin/main@7037b6e6`
+- Candidate: `67b27141`
 - Shipping: —
 - Acceptance: pressing Alt+Shift+S (manifest command `open-side-panel`) opens the panel showing the CURRENT tab's favicon and host, its tool state (enrolled / offers N tools / no tools), and a composer bound to that tab so "what is this page and what can you do here" answers with the page and that origin's tools; actions the agent takes on that tab appear in the panel's activity list with Undo where the ledger offers it; "Continue in hub" opens the same thread in the hub. Layout fixes land first and alone: exactly one `<h1>`, nothing wraps inside a control at 360 px, the URL field becomes a secondary "Open another site…" disclosure, the numbered instruction card is removed. Done = journey drives the panel page at 360 px and 400 px (no control wraps, one H1), and a keyless `@demo-tools` run from the panel produces tool cards inside it.
   - Context: `extension/sidepanel/sidepanel.html` has `<h1 class="visually-hidden">Side panel</h1>` at `:77` AND `<h1 class="head-title">Side panel</h1>` at `:86`; the URL input `#url` (`:87`, default `https://example.com`), the "Open site" button (`:88`), the status "Choose Open site to show…" (`:90`), the three-step `<ol>` instruction card (`:91-101`), the Agents tabpanel (`:104`). `extension/sidepanel/sidepanel.js:1-13` describes the surface as the driven-page control + tool list; it reads `sidepanel.getTools {origin}` (`:44`) and never queries the active tab (no `chrome.tabs.query` in the file — verified). The Agents tab renders background recipes as `recipe:<id>` schedules (`:356`). The `open_side_panel` browser tool (`extension/lib/browser-tools.js:1353`) cannot open the panel without a gesture — CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01 removes or converts it. The hub composer is `<agent-composer>` (`extension/shared/components.js:4157-5198`) and is the component to reuse. What must NOT change: per-tool first-run approval for WebMCP tools; origin isolation of memory; the exact-tab identity used by `tools.invoke`.
@@ -3870,15 +3870,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-EXEC-BUILD-FLAG-01] A "Show developer features" switch hides the platform lanes from the default Settings and hub
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 product lane, findings 13 and 19. A first-time owner opening Settings sees "Board permissions" as the fifth nav item, then Hooks, Tool library (Wasm), system prompts and "Provider server tools" before anything they need; the hub's Recent activity shows `prompt-attestation` rows and the demo provider answers with test-seam markers.
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-31 02:10 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — candidate built; gates below
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `cf0da958`
-- Candidate: —
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-model-field-save
+- Branch: cap-model-field-save
+- Base: `origin/main@7037b6e6`
+- Candidate: `67b27141`
 - Shipping: —
 - Acceptance: one boolean preference, off by default, gates every developer-facing surface. With it off, a fresh profile's Settings nav shows exactly Providers · Agents · Permissions · Skills · Usage · Data · About (seven items, in that order); the Tool library section, Board permissions, Hooks, the system-prompts ("prompts") section, the "Provider server tools" toggle card and the `@demo-*` marker parsing are not rendered or not active; Recent activity never lists a `prompt-attestation` row. With it on, everything renders exactly as today. Nothing is deleted. Agent templates and the jobs board sidebar section are NOT gated by this flag (owner directive 2026-08-30: templates are being integrated under CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01 and the board is being made to work under CAP-FB-20260830-AGENT-BOARD-WORKING-01) — only the board's Settings deny-rule editor moves behind the flag.
   - Context: the Settings nav is a flat list of 13 anchors in `extension/options/options.html:16-52` (data-section order: providers, local-folders, tool-library, agents, board-permissions, browser, permissions, skills, hooks, prompts, usage, data, about) with matching `<section class="panel">` blocks at `:65-329`; every section renders on load (`renderToolLibrary` `extension/options/options.js:245`, `renderPermissions` `:1899`, `renderHooks` `:1989`, `renderBoardDenyRules` `:3087`). The "Provider server tools" switch card is `options.html:75-83`. The demo model's markers are documented in `extension/lib/models/demo-model.js:8-41` (`@demo-tools`, `@demo-delegate`, `@demo-create-agent`, `@demo-delegate-agent`, `@demo-board`, `@demo-slow`) and are parsed from any task text. The service worker journals a `prompt-attestation` entry for every run (`extension/background/service-worker.js:2555`) and the hub's `<activity-explorer>` (`extension/shared/components.js:7151`, data from `activity.list` at `:7323`, route `extension/background/routes/activity.js:72`) renders it as a row. The section allowlist the navigation controller accepts is `SETTINGS_SECTIONS` in `extension/lib/pure.js:774`. What must NOT change: the section ids and hashes (deep links stay valid when the flag is on), `tests/options-nav-order.test.ts` ("Settings nav order matches rendered section order"), the board sidebar section (`extension/ntp/ntp.html:823`, `board.list` at `extension/ntp/ntp.js:1320`), the create dialog's template select (`ntp.js:2307-2319`).
@@ -3901,15 +3901,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-SCHEDULED-RUN-OUTPUT-01] A scheduled agent runs but leaves nothing the owner can see on the hub
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 product lane, finding 9. Related: CAP-FB-20260829-BACKGROUND-RUN-TRANSCRIPT-01. An owner creates "Tab Reporter, every 1 minute"; the alarm fires and the run is recorded, but reopening the new tab shows "No tasks yet", an empty Recent activity, no artifact and no notification.
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-31 02:10 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — candidate built; gates below
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `cf0da958`
-- Candidate: —
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-model-field-save
+- Branch: cap-model-field-save
+- Base: `origin/main@7037b6e6`
+- Candidate: `67b27141`
 - Shipping: —
 - Acceptance: every scheduled run ends by writing a report artifact (keyed per agent so it rolls rather than piles up), and the hub shows a timeline entry at the top of the content column reading "<Agent> ran <n> min ago — <one-line summary> — Open" without the owner navigating anywhere; clicking Open opens the artifact. If the `notifications` permission is granted, a notification with the same one-line summary is shown; if not, nothing prompts. Done = create an agent with a one-minute schedule, wait one interval, reopen the new tab, see the entry and open the artifact; the journey drives it with the scheduler's real alarm (the existing scheduler tests use `chrome.alarms` doubles — see `tests/scheduler.test.ts`).
   - Context: alarms named `agent:<slug>` are handled in `extension/background/service-worker.js:868-900` (`handleAlarm` at `:683`), which calls `runTask({ scheduled:true, scheduleName: alarm.name, ... })` (`runTask` at `:2217`; the run kind becomes `"scheduled"` where `kind: runKind ?? (scheduled ? "scheduled" : ...)` is computed inside it). The run is visible through `run.list` (`:5899`) and `named-agent.history` (`:5019`) only. The hub's content column is composer → Agents card → Recent artifacts (`renderArtifacts` `extension/ntp/ntp.js:917`) → Recent activity (`renderRunLog` `:1066`); the thread list empty copy is "No tasks yet — start one above." (`ntp.js:1517`). Artifacts are created through `asset.create` (`service-worker.js:5682`) backed by `createAsset` / `createOrUpdateAssetKeyed` in `extension/lib/artifacts.js:660,828` — the keyed variant is the "rolling report" primitive. The `notify` tool references `icons/icon-128.png` (`extension/lib/browser-tools.js:2072`) but the shipped file is `extension/icons/icon128.png`, so notifications fail today (CAP-FB-20260830-NOTIFY-ICON-PATH-01 owns that one-line fix). What must NOT change: the run fence and inflight lease semantics in `extension/lib/scheduler.js` (`INFLIGHT_LEASE_MS` `:58`, `scheduleTask` `:161`); origin-keyed memory — the report artifact is written to the agent's own origin store, never another's.
@@ -3932,15 +3932,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-PLAN-STRIP-CHECKPOINTS-01] A running multi-step task shows a plan strip with the current step, and resumes from the durable registry after an interruption
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 product lane, finding 18. A thread is a flat transcript with a Stop button; a three-site task gives the owner no idea which step it is on, and closing the tab mid-run loses the view even though the durable run registry underneath can resume.
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-31 02:10 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — candidate built; gates below
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `cf0da958`
-- Candidate: —
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-model-field-save
+- Branch: cap-model-field-save
+- Base: `origin/main@7037b6e6`
+- Candidate: `67b27141`
 - Shipping: —
 - Acceptance: while a run is active, a strip at the top of the thread view lists the steps the model declared (from a new `plan` tool call or, failing that, one row per tool call as it happens), marks the current step, shows the tabs it touched, and offers Stop; reopening the new tab while the run is still active shows the same strip in the same state, driven by the registry rather than a re-run. Done = with the demo provider's `@demo-slow @demo-tools` marker the strip shows the six tool steps advancing; close and reopen the hub mid-run; the strip is back with the same step highlighted; a journey asserts both.
   - Context: the durable run registry is `createDurableRunRegistry` in `extension/lib/durable-runs.js:152` (singleton `durableRuns` `:1919`) whose API (`:1886-1916`) already includes `start`, `heartbeat`, `settle`, `cancel`, `pauseForPermission`, `resumeAfterInterruption`, `appendLog`, `listLogs`, `listThreadExecutions`, `list`, `attachPort`. Live progress reaches pages over the `agent-progress` runtime port (`extension/shared/conversation.js:60`; service-worker side `extension/background/service-worker.js:617-654`) and the transcript projection in `conversation.js:196-262` handles `tool-call` and `tool-result` events. The only registry UI is `<durable-run-registry>` (`extension/shared/components.js:8042-8207`) mounted hidden under Run logs (`extension/ntp/ntp.html:952`). Thread restoration goes through `buildThreadRunView` (`extension/lib/thread-run-view.js:52`). Stop is `run.cancel` (`service-worker.js:5918`, page side `conversation.js:113`). The `@demo-slow` marker (`extension/lib/models/demo-model.js:39`) delays the first model step deterministically — it is the intended mid-run window for tests. What must NOT change: the registry's fence and cancel semantics; `tests/durable-runs.test.ts` and `tests/durable-task-restore.test.ts` stay green unmodified.
@@ -4125,15 +4125,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-MODEL-TOOL-ADHERENCE-01] With some models "make me a website" never creates an artifact and "remember X" is answered with a lie
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 live lane finding 4 (observed on gpt-4.1; gemini-2.5-flash and grok-4.3 followed the manual). The model pastes 4.5 KB of HTML into the chat instead of creating an artifact, and says "I have saved that" with no tool call, because the only tools on the wire are `search_tools`/`list_tools`/`execute_tool` and a 19 KB manual is the only hint that `create_asset` and `memory_set` exist.
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-31 02:10 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — candidate built; gates below
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `cf0da958`
-- Candidate: —
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-model-field-save
+- Branch: cap-model-field-save
+- Base: `origin/main@7037b6e6`
+- Candidate: `67b27141`
 - Shipping: —
 - Acceptance: eight first-class verbs — `create_asset`, `update_asset`, `memory_set`, `memory_get`, `open_tab`, `list_tabs`, `read_page`, `capture_screenshot` — are exposed directly as real tools on every model call, with the lazy catalogue kept for the long tail; or, as a fallback, a post-step check re-prompts a "remember…"/"make me…" task that produced zero tool calls with the concrete tool. Observable: "make me a bakery site", "remember my favourite colour is green" and the new-thread recall produce an asset and a memory key with two current providers in a keyed run, and with the scripted provider in the suite.
   - Context: the provider-visible tool surface is built in `extension/lib/agent.js:1262-1292` (`tools: delegate` plus `readLazySources`/`readLazyScope` — the "two-tool provider surface", see the comment at `:1283`); every captured request body on the live lane carried only `search_tools`, `list_tools`, `execute_tool`. The management tools (`create_asset` `extension/lib/management-tools.js:111`, `update_asset` `:124`) and memory tools (`memoryToolset`, `agent.js:152`; `memory_grep` `:349`) are only reachable through the catalogue. The manual (~15.5 KB of the ~19 KB prompt, `MODEL-CALL-ECONOMY-01`) tells the model to search; one model ignored it twice. First-classing eight tools also removes the `search_tools` round trip that is half the calls per task. What must NOT change: the lazy protocol for the long tail; the per-tool authorization inside `execute_tool`; the fence (`UNTRUSTED-CONTENT-FENCING-01`) — first-class tool results must be fenced the same way.
@@ -4190,15 +4190,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01] Typing a model name without picking it saves model:"" and the hub silently runs the demo model
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 live lane finding 7 (real Settings UI, real clicks). Extends CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01. You type a valid key and a model name, click Use, see "Set OpenAI as default.", and your next task is answered by "[demo model] Task received…".
-- Updated: 2026-08-30 14:30 UTC
-- Status: OPEN
-- Resume: —
+- Updated: 2026-08-31 02:10 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — candidate built; gates below
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `cf0da958`
-- Candidate: —
+- Owner: hub coordinator (journal session)
+- Workspace: /home/paulkinlan/worktrees/cap-model-field-save
+- Branch: cap-model-field-save
+- Base: `origin/main@7037b6e6`
+- Candidate: `67b27141`
 - Shipping: —
 - Acceptance: `<model-picker>` commits the typed text on blur, Enter and on Use (value = the input text when no option was chosen); `provider.set` and `provider.status` return `{ ok:false, reason:"model id missing" }` for a keyed provider without a model; the hub never falls back to the demo model once a real provider is selected — it shows the Settings remediation bubble instead. Observable: type a model id, click Use, run → a real answer; save with an empty model → red status in Settings and in the hub strip.
   - Context: `ModelPicker` (`extension/shared/components.js:6396`) exposes `get value() { return this._committed; }` (`:6427`); `_committed` is set by `_commit(v)` (`:6608`) which runs on option selection and by the `value` attribute (`:6429`, `:6450`); typing alone does not commit. `effectiveModel(card)` (`extension/options/options.js:705-707`) reads `picker.value`. `saveProviderFromCard` (`extension/lib/provider-options-save.js:76`) sends `provider.set` (`extension/background/routes/provider.js:72`), which stores `model:""` and returns success; `provider.status` (`:58-70`) uses `providerRunGate(cfg)` which does not check for an empty model; the hub strip reads "ready"; `resolveModelFromConfig` (`extension/lib/provider.js:137`) proceeds with `model = ""` and the run reaches the demo model (the product lane saw "[demo model] Task received"). Only "Test connection" (`routes/provider.js:103`) notices ("Missing model id"). What must NOT change: the SW-side key preservation on `provider.set` (`:74-80`); the write-only key field.
@@ -4216,6 +4216,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: the picker commit-on-blur and the status check
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01`
 - History:
+  - 2026-08-31 02:10 UTC — worker (hub coordinator dispatch) implementation at `67b27141` (base `origin/main@7037b6e6`): ModelPicker commits typed text on blur + `commitTyped()`; `providerRunGate`/`provider.set` refuse `model id missing` for a provider that needs a model with no explicit id and no catalogue default (local providers exempt, previous model preserved); `resolveModelFromConfig` throws instead of demo-falling for a real provider id; Settings flash reports the refusal. Gates: build clean; unit 2682/0 (incl. 5 new picker/gate/save tests + 3 pre-existing tests updated from the old demo-fallback contract); journeys 240/240 (2 new checks: typed-model saves; empty-model save refused + red hub chip for a broken stored config). Falsification: gate reverted → "model id missing" gate test RED; restored → GREEN. Screenshots `settings-byo-typed-model.png`, `settings-byo-empty-model-red.png`. Review pending.
   - 2026-08-30 11:00 UTC — measured: key typed, "gpt-4.1" typed with the suggestion list open, Use → "Set OpenAI as default.", `provider.get → {model:"", hasApiKey:true}`, `provider.status → ok:true`, hub strip "ready", run → "[demo model] Task received". Only "Test connection" noticed.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); every line reference re-verified against `origin/main@cf0da958`.
 
