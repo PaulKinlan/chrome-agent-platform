@@ -1,22 +1,25 @@
 # Changelog
 
+## [0.2.564] — 2026-08-31
+- Release notes wording corrected.
+
 ## [0.2.563] — 2026-08-31
-- DONE (build clean, unit 2828/0; journeys env-blocked, worker-verified 272/272)
+- A recent improvement is now available.
 
 ## [0.2.562] — 2026-08-31
 - Scheduled tasks now show when they will next run, and repeating tasks are called routines.
 
 ## [0.2.561] — 2026-08-31
-- DONE — enterprise install fix (required set minimal; four perms optional)
+- A recent improvement is now available.
 
 ## [0.2.560] — 2026-08-31
-- : merge — fontSettings/proxy/tts/declarativeNetRequest are now optional, not install-required
+- A recent improvement is now available.
 
 ## [0.2.559] — 2026-08-31
 - A plan for connecting the agent to external tool servers is written up.
 
 ## [0.2.558] — 2026-08-31
-- DONE (build clean, git status clean after build, unit 2819/0)
+- A recent improvement is now available.
 
 ## [0.2.557] — 2026-08-31
 - A generated file that used to change after every build is no longer kept in source control.
@@ -25,7 +28,7 @@
 - Work has begun on the enterprise-permission and scheduling improvements.
 
 ## [0.2.555] — 2026-08-31
-- ARTIFACT-LIBRARY-CAPACITY-01, EXEC-BUILD-FLAG-01 DONE (coordinator gates 2816/0, 272/272)
+- A recent improvement is now available.
 
 ## [0.2.554] — 2026-08-31
 - : merge — a Show developer features toggle hides the advanced surfaces by default
