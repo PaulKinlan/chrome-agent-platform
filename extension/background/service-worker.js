@@ -259,6 +259,11 @@ import {
   updateAsset,
 } from "../lib/artifacts.js";
 import {
+  writeScheduledRunReport,
+  scheduledReportSlug,
+  buildScheduledNotification,
+} from "../lib/scheduled-run-report.js";
+import {
   createScript,
   deleteScript,
   getScript,
@@ -2908,6 +2913,32 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       await fence?.assertOwned?.();
       if (scheduled) {
         await fence?.assertOwned?.();
+        // ── Results persist (CAP-FB-20260830-SCHEDULED-RUN-OUTPUT-01) ──
+        // A scheduled run used to leave nothing the owner could see. The
+        // durable-run registry already records this run (the hub timeline
+        // surfaces it as a row on reopen), but the OUTCOME was not retrievable.
+        // Write ONE keyed report artifact to the agent's own origin store so
+        // the result persists; the stable per-agent key means it ROLLS (each
+        // fire replaces the previous, one asset per agent) rather than piling
+        // up a new artifact every minute. Origin-keyed: a Site Agent's report
+        // lands in its own web origin, everything else in the hub (master)
+        // store keyed by the agent slug. Never fails the settled run.
+        const surfaceRef = typeof agentSurfaceRef === "string" ? agentSurfaceRef : "";
+        const reportOrigin = /^https?:\/\//.test(surfaceRef) ? surfaceRef : "master";
+        const reportSlug = scheduledReportSlug(scheduleName, taskId);
+        try {
+          await writeScheduledRunReport({ createOrUpdateAssetKeyed }, {
+            origin: reportOrigin,
+            slug: reportSlug,
+            summary: String(result ?? ""),
+            at: Date.now(),
+            agentLabel: reportSlug,
+            ok: true,
+          });
+        } catch (e) {
+          console.warn("scheduled report artifact write failed", e?.message ?? e);
+        }
+        await fence?.assertOwned?.();
         // Completion lifecycle: surface the result as a notification. The
         // `notifications` permission is OPTIONAL — when absent, skip silently
         // (a missing permission is not a failure worth a console error). The
@@ -2924,21 +2955,31 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         })();
         if (canNotify && chrome.notifications?.create) {
           try {
-            const notifId = `cap:task:${taskId}`;
-            await notificationRegistry.registerNotification({
-              notificationId: notifId,
+            // A named/background agent's run has no task thread (its transcript
+            // is its agent conversation), so the click must open the AGENT
+            // surface — a `thread:` target resolves to no real thread. The spec
+            // (icon path, bounded message, click routing) is built by the
+            // unit-tested helper so the wiring is falsifiable off-browser.
+            const spec = buildScheduledNotification({
               taskId,
               executionId,
-              threadId: taskId,
-              title: "Scheduled task complete",
-              message: String(result ?? "").slice(0, 160),
-              action: { type: "default" },
+              agentSurfaceRef: surfaceRef,
+              summary: String(result ?? ""),
             });
-            await chrome.notifications.create(notifId, {
+            await notificationRegistry.registerNotification({
+              notificationId: spec.notificationId,
+              taskId: spec.taskId,
+              executionId: spec.executionId,
+              threadId: spec.threadId,
+              title: spec.title,
+              message: spec.message,
+              action: spec.action,
+            });
+            await chrome.notifications.create(spec.notificationId, {
               type: "basic",
-              iconUrl: chrome.runtime.getURL("icons/icon128.png"),
-              title: "Scheduled task complete",
-              message: String(result ?? "").slice(0, 160),
+              iconUrl: chrome.runtime.getURL(spec.iconPath),
+              title: spec.title,
+              message: spec.message,
             });
           } catch (e) {
             console.error("notification failed", e);

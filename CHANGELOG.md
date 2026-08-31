@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.538] — 2026-08-31
+- : scheduled runs leave a retrievable result on the hub
+
 ## [0.2.537] — 2026-08-31
 - The side panel is now a companion for the current tab, and the hub timeline shows a runs-today count.
 

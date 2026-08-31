@@ -206,3 +206,9 @@ creates. Right now the only grouping is by Chrome API.
 3. A site's tools should be **available on the tab**, approved in the moment — not
    pre-registered in Settings.
 4. Group tools by **what they are for**, not by which Chrome API implements them.
+5. **Results persist.** A run the owner did not watch — a scheduled agent that fired
+   while the tab was closed — must leave something behind: a row on the hub timeline
+   with its outcome, a retrievable report artifact (keyed per agent so it rolls, not
+   piles up), and, when notifications are granted, a completion notification whose
+   click opens the agent. A run that leaves no trace did not happen, as far as the
+   owner can tell.
