@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.603] — 2026-09-01
+- Task board: four defects seen in a real research run are now tracked — truncated tool results, runs stopping early, page reads failing without an Allow card, and transcript loss on reload.
+
 ## [0.2.602] — 2026-09-01
 - Task view full work — the agent's full response is stored, shown, and copyable
 
