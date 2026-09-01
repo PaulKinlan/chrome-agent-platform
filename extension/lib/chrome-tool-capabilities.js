@@ -7,9 +7,9 @@
 import { permissionUserLanguage, siteLabel } from "./permission-language.js";
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
-  browserTools: 137,
+  browserTools: 138,
   managementTools: 42,
-  totalTools: 179,
+  totalTools: 180,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -28,6 +28,7 @@ export const BROWSER_TOOL_NAMES = Object.freeze([
   "grep_files",
   // CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01: the owner-approved write.
   "write_file",
+  "delete_file",
   "open_tab",
   "navigate_tab",
   "read_page",
@@ -297,10 +298,11 @@ const rows = [
   record("find_files", "chrome-api", ["chrome.fs-grant.files.find"], [], "none", "read-only", false, "read", "browser.fs-grant"),
   record("read_file", "chrome-api", ["chrome.fs-grant.file.read"], [], "none", "read-only", false, "read", "browser.fs-grant"),
   record("grep_files", "chrome-api", ["chrome.fs-grant.content.grep"], [], "none", "read-only", false, "read", "browser.fs-grant"),
-  // The ONE mutating file tool: a model write pays an owner diff-approval card
+  // The mutating file tools: a model write pays an owner diff-approval card
   // (fs-grant.write-file-approved) before any byte lands
   // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01).
   record("write_file", "chrome-api", ["chrome.fs-grant.file.write"], [], "none", "mutating", false, "mutating", "browser.fs-grant"),
+  record("delete_file", "chrome-api", ["chrome.fs-grant.file.delete"], [], "none", "mutating", false, "mutating", "browser.fs-grant"),
   record("open_tab", "chrome-api", ["chrome.tabs.open.destination-origin"], ["tabs"], "destination-origin", "mutating", false, "mutating", "browser.tabs"),
   record("navigate_tab", "chrome-api", ["chrome.tabs.navigate.destination-origin"], ["tabs"], "destination-origin", "mutating", false, "mutating", "browser.tabs"),
   record("read_page", "chrome-api", ["chrome.host.exact-origin", "chrome.page.read"], ["activeTab", "scripting", "tabs"], "none", "read-only", false, "read", "browser.page"),

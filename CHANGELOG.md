@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.8] — 2026-09-02
+- (beads 60be): every named agent gets a persistent private workspace, beside the owner's global file grants
+
+## [0.3.7] — 2026-09-02
+- Every named agent gets a persistent private workspace, beside the owner's global file grants
+
+## [0.3.6] — 2026-09-02
+- Every named agent gets a persistent private workspace, beside the owner's global file grants.
+
 ## [0.3.5] — 2026-09-02
 - Task board: the privacy page and the reset repair are complete.
 
@@ -186,6 +195,7 @@
 
 ## [0.2.598] — 2026-09-01
 - : each agent can inherit, disable, and add its own MCP servers
+
 
 ## [0.2.597] — 2026-09-01
 - Dialog work — searchable grouped customizable select for agent templates with both-scheme contrast gates

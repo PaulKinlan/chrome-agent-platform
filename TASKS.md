@@ -2245,6 +2245,31 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - 2026-09-01 17:45 UTC — CLAIMED by the coordinator (owner asked to start it). Design-first.
   - 2026-09-01 18:15 UTC — SLICE 1 landed at `origin/main@c0021d99`. Design decided + documented (see DESIGN DECISION above + docs/DESIGN.md). The pure gated core `extension/lib/tool-pipeline.js` (validate/resolve/runPipeline) + `tests/tool-pipeline.test.ts` (7, RED-proven) landed; full suite 2937/0. No behavior change yet (module unimported) and no version bump — it is NOT model-callable until slice 2 wires `run_pipeline` (the seam is identified + specified in Next). Slice 1 was scoped deliberately: the live wiring touches the security-critical lazy protocol + the eager tool surface (3 pinned tests) + needs onProgress plumbing for plan-strip visibility, which is a focused next increment rather than a rushed change. Entry stays OPEN.
 
+## [CAP-FB-20260831-AGENT-PRIVATE-FS-01] Individual agents get a private persistent filesystem, beside the owner's global grants
+- Feedback: 2026-09-01 — owner (from the ChatGPT Work feature comparison): "individual agents might want access to the filesystem but just for them, as well as the global filesystem we can configure." ChatGPT Work gives every session a persistent scratch folder plus a shared volume; this task gives every named/background agent its own persistent OPFS workspace while the owner's fs-grants stay the shared surface.
+- Updated: 2026-09-02 19:30 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch, beads 60be) — relanded from cap-agent-fs onto origin/main@07645708 as cap-beads-60be; candidate ready
+- Priority: P1
+- Owner: hub coordinator dispatch (worker)
+- Workspace: durable worktree (local path private)
+- Branch: cap-beads-60be
+- Base: origin/main 07645708
+- Candidate: —
+- Shipping: —
+- Acceptance: every named/background agent gets a persistent private OPFS workspace (`agent-workspaces/<key>/`, lazy, origin-keyed by the run's agent stamp); the model-facing file tools (list_files/find_files/read_file/write_file/delete_file) fall back to the workspace when no fs-grant is in scope; per-agent quota (20 MiB / 200 files) with honest workspace_quota_exceeded errors; strict isolation (agent A never sees agent B's files; hub/site runs have no workspace); Settings → edit agent → Advanced shows usage + an owner-gesture Clear; AGENTS.md documents it; owner fs-grants remain the shared/global surface (explicit grantId always wins).
+  - Context: per-agent OPFS already exists for memory (namedAgentMemory) and skills; the opfs-tool-workspace wrapper is per-JOB, not per-agent. The new module mirrors ChatGPT Work's per-session scratch + shared volume split.
+  - Files: extension/lib/agent-workspace.js (new — workspace ops + quota + usage), extension/lib/browser-tools.js (fs tools fall back to the workspace via resolveFsTarget), extension/background/service-worker.js (agent-workspace.usage / agent-workspace.clear owner routes), extension/ntp/ntp.js (edit-dialog Private workspace row), AGENTS.md (docs), tests/agent-workspace.test.ts + tests/fs-tools.test.ts (unit + tool-level integration incl. run-1/run-2 persistence and A/B isolation), scripts/chrome-journeys.ts (edit-dialog workspace-row check).
+- Gates: build; full suite; chrome-journeys (new "edit dialog: the agent's Private workspace row renders with usage and a Clear button" check); RED→GREEN proven (workspace fallback removed → the two workspace tool tests go RED).
+- Blockers: none
+- Next: —
+- Recover: `git log --oneline --all --grep=CAP-FB-20260831-AGENT-PRIVATE-FS-01`
+- History:
+  - 2026-09-01 01:00 UTC — implemented + gated on cap-agent-fs; unit 11/11 + fs-tools integration 3 new (21 total), RED→GREEN falsification shown; journey check added.
+  - 2026-09-02 19:30 UTC — reland lane (beads chrome-agent-platform-60be): cherry-picked 13cb927f onto origin/main@07645708 as branch cap-beads-60be; conflicts union-resolved (changelog/package versions renumbered to 0.3.6; tool capability/test drift merged keeping both sides). Gates re-run on the new base before push.
+
+
+
 ## [CAP-FB-20260901-ONE-CARD-PER-STEP-01] Step 1 of the demo shows three in-chat permission cards plus two native Chrome prompts — the script allows one
 - Feedback: 2026-09-01 — EXEC-DEMO-01 headed rehearsal on a genuinely fresh profile with a real model: "Group my open tabs by topic" produced THREE in-chat cards (browser control, then `tabs`, then `tabGroups`) and TWO native Chrome prompts ("Read your browsing history", tab groups) with Deny as the focused default. The acceptance for the demo is at most ONE permission card per step.
 - Updated: 2026-09-02 04:06 UTC

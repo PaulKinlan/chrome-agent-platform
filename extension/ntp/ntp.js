@@ -2953,6 +2953,53 @@ async function buildAgentConfigDialog(opts) {
   advancedBody.className = "agent-config-advanced-body";
   advancedBody.style.cssText = "display:flex;flex-direction:column;gap:12px;min-width:0;max-width:100%;padding:4px 12px 12px;border-top:1px solid var(--border,#e3e0d9);box-sizing:border-box;";
   advancedBody.append(avatarRow);
+  // Private workspace (CAP-FB-20260831-AGENT-PRIVATE-FS-01): the agent's own
+  // persistent OPFS sandbox — usage + owner Clear, shown only when editing an
+  // existing named agent (create has no id yet).
+  if (opts.selfId) {
+    const wsRow = document.createElement("div");
+    wsRow.style.cssText = "display:flex;flex-direction:column;gap:6px;padding:2px 0;font-size:12px;";
+    const wsLabel = document.createElement("span");
+    wsLabel.style.fontWeight = "600";
+    wsLabel.style.fontSize = "13px";
+    wsLabel.textContent = "Private workspace";
+    const wsHint = document.createElement("span");
+    wsHint.className = "muted";
+    wsHint.style.color = "var(--muted,#635e56)";
+    wsHint.textContent = "The agent's own files — no owner permission needed inside its sandbox.";
+    const wsUsage = document.createElement("span");
+    wsUsage.style.color = "var(--muted,#635e56)";
+    wsUsage.textContent = "…";
+    const wsClear = document.createElement("button");
+    wsClear.type = "button";
+    wsClear.className = "btn small";
+    wsClear.textContent = "Clear workspace";
+    wsClear.style.alignSelf = "flex-start";
+    const refreshUsage = async () => {
+      const u = await send("agent-workspace.usage", { id: opts.selfId }).catch(() => ({ ok: false }));
+      wsUsage.textContent = u?.ok === true
+        ? `${u.filesUsed} file${u.filesUsed === 1 ? "" : "s"} · ${Math.round((u.bytesUsed || 0) / 1024)} KiB of ${Math.round((u.maxBytes || 0) / 1024)} KiB`
+        : "workspace unavailable";
+    };
+    wsClear.addEventListener("click", async () => {
+      const confirmed = await confirmActionDialog({
+        title: "Clear this agent's workspace?",
+        body: "Every file the agent wrote into its private workspace will be deleted. The agent's skills, memory and schedule are unaffected.",
+        confirmLabel: "Clear workspace",
+        destructive: true,
+      });
+      if (!confirmed) return;
+      const r = await send("agent-workspace.clear", { id: opts.selfId }).catch(() => ({ ok: false }));
+      if (r?.ok !== true) {
+        wsUsage.textContent = `clear failed: ${r?.error ?? "unknown"}`;
+        return;
+      }
+      await refreshUsage();
+    });
+    wsRow.append(wsLabel, wsHint, wsUsage, wsClear);
+    advancedBody.append(wsRow);
+    refreshUsage().catch(() => {});
+  }
   advancedDetails.append(advancedSummary, advancedBody);
   scrollBody.append(advancedDetails);
 

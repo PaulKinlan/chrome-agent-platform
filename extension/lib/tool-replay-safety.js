@@ -181,6 +181,11 @@ export function replaySafetyForTool(toolName) {
 // scripts) — used so the classifier can distinguish "known mutating built-in"
 // from "page-owned unknown". Everything else is unknown.
 const BUILT_IN_TOOLS = new Set([
+  // CAP-FB-20260831-AGENT-PRIVATE-FS-01: the agent workspace write/delete
+  // tools mutate the agent's own sandbox - mutating replay (a re-run writes
+  // again, same trust as the workspace itself).
+  "write_file",
+  "delete_file",
   "read_page", "capture_screenshot", "list_tabs", "recent_browser_events",
   "close_tab", "navigate_tab", "open_tab", "schedule_task",
   // Tranche-1 Chrome API coverage (reads are classified above; ALL are built-ins):
