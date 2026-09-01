@@ -266,9 +266,15 @@
     .side.collapsed .new-task { inline-size: 34px; block-size: 34px; margin-inline-start: 0; }
     /* The live run status renders INLINE as the conversation's pinned bottom
        row (agent-conversation .live-status) — no separate banner element. */
-    /* the provider-status warning chip (the user must know BEFORE a run) */
-    .provider-status { font: inherit; font-size: 12px; font-weight: 600; color: var(--danger, #b3261e); background: transparent; border: 1px solid var(--danger, #b3261e); border-radius: 999px; padding: 2px 10px; cursor: pointer; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .provider-status:hover { background: var(--danger, #b3261e); color: var(--btn-fg, #fff); }
+    /* the provider-status strip (the user must know BEFORE a run whether a model
+       is connected): neutral "no model yet", .ready (accent) when connected,
+       .warn (danger) when the provider is unreachable/misconfigured. */
+    .provider-status { font: inherit; font-size: 12px; font-weight: 600; color: var(--muted, #6b675f); background: transparent; border: 1px solid var(--border, #d9d4c9); border-radius: 999px; padding: 2px 10px; cursor: pointer; max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .provider-status:hover { border-color: var(--text, #1c1a17); color: var(--text, #1c1a17); }
+    .provider-status.ready { color: var(--accent, #0e6e63); border-color: var(--accent, #0e6e63); }
+    .provider-status.ready:hover { background: var(--accent, #0e6e63); color: var(--btn-fg, #fff); border-color: var(--accent, #0e6e63); }
+    .provider-status.warn { color: var(--danger, #b3261e); border-color: var(--danger, #b3261e); }
+    .provider-status.warn:hover { background: var(--danger, #b3261e); color: var(--btn-fg, #fff); border-color: var(--danger, #b3261e); }
     /* Author styles beat the UA hidden rule; a covered nub stays absent. */
     .side-toggle[hidden] { display: none; }
     .title-edit {

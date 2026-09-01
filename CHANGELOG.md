@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.593] — 2026-09-01
+- : merge — Settings leads with a recommended provider and a four-click key setup
+
 ## [0.2.592] — 2026-09-01
 - The next two steps of external tool-server support are underway.
 
@@ -256,7 +259,7 @@
 - Artifacts and generated images now appear in the conversation as they are created — a card showing what changed, plus a thumbnail strip of screenshots and images you can open.
 
 ## [0.2.510] — 2026-08-30
-- The assistant is now told to actually create an artifact or save to memory using the tools, rather than pasting a result into the chat or claiming it saved something it did not.
+- Setting up a model is now a short guided path: a recommended provider is preselected, and you pick, paste your key, test the connection, and use it - with the hub clearly showing which model is ready.
 
 ## [0.2.509] — 2026-08-30
 - A size limit on how much a skill could import has been removed.

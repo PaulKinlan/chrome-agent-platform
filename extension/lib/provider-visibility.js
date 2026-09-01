@@ -6,7 +6,7 @@
 
 export const INTERNAL_PROVIDER_IDS = Object.freeze(["demo", "prompt-api"]);
 export const INTERNAL_PROVIDER_ACTIVE_MESSAGE =
-  "Internal testing provider active. Choose a listed provider to replace it.";
+  "No model connected yet — pick one to start.";
 
 const INTERNAL_PROVIDER_ID_SET = new Set(INTERNAL_PROVIDER_IDS);
 

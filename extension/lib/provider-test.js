@@ -61,11 +61,39 @@ export function buildProbeBody({ baseURL, model } = {}) {
 }
 
 /**
+ * The `list_tabs` dry run that follows a green chat probe. A working key is only
+ * half of "a working provider" — the agent also has to be able to READ the
+ * browser (the very next thing the recommended flow does is answer "open a new
+ * tab and tell me its title"). So after the round-trip succeeds we exercise the
+ * SAME permission-safe tab read the run uses and report it as `toolCheck`, so a
+ * green Test predicts a working RUN, not just a reachable endpoint.
+ *
+ * `listTabs` is injected (the SW route passes the real `tabs.list` reader; unit
+ * tests pass a stub) so this module stays PURE and testable without chrome.*.
+ * It never throws into the result: an unavailable reader is `{ok:false}`, never
+ * a failed Test.
+ */
+async function runToolCheck(listTabs) {
+  if (typeof listTabs !== "function") return undefined;
+  try {
+    const tabs = await listTabs();
+    const count = Array.isArray(tabs) ? tabs.length : Number(tabs ?? 0);
+    return { ok: true, tabs: Number.isFinite(count) ? count : 0 };
+  } catch (e) {
+    return { ok: false, error: safeProviderError(String(e?.message ?? e)) };
+  }
+}
+
+/**
  * @param {object} p a provider preset { id, name, baseURL, needsKey, needsModel }
  * @param {object} fields { baseURL, apiKey, model }
- * @returns {Promise<{ok:boolean, latencyMs:number, detail?:string, error?:string, errorKind?:string, status?:number}>}
+ * @param {object} [deps] { fetchImpl, listTabs } — injected so the probe fetch
+ *   and the `list_tabs` dry run are unit-testable without a network or chrome.*.
+ * @returns {Promise<{ok:boolean, latencyMs:number, detail?:string, error?:string, errorKind?:string, status?:number, toolCheck?:{ok:boolean, tabs?:number, error?:string}}>}
  */
-export async function testProvider(p, fields = {}) {
+export async function testProvider(p, fields = {}, deps = {}) {
+  const fetchImpl = deps.fetchImpl ?? (typeof fetch === "function" ? fetch : null);
+  const listTabs = deps.listTabs;
   const t0 = performance.now();
   const latency = () => Math.max(0, Math.round(performance.now() - t0));
 
@@ -140,10 +168,18 @@ export async function testProvider(p, fields = {}) {
     };
   }
 
+  if (typeof fetchImpl !== "function") {
+    return {
+      ok: false,
+      latencyMs: latency(),
+      errorKind: "config",
+      error: "No network transport available to test this provider.",
+    };
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
   try {
-    const res = await fetch(`${baseURL}/chat/completions`, {
+    const res = await fetchImpl(`${baseURL}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -155,11 +191,16 @@ export async function testProvider(p, fields = {}) {
     clearTimeout(timer);
 
     if (res.ok) {
+      // A green round-trip, then the same permission-safe tab read the run uses
+      // — so "Connected" means "the model answered AND the agent can read the
+      // browser", not just "the endpoint is reachable".
+      const toolCheck = await runToolCheck(listTabs);
       return {
         ok: true,
         latencyMs: latency(),
         status: res.status,
         detail: `Model "${model}" responded (HTTP ${res.status}).`,
+        ...(toolCheck ? { toolCheck } : {}),
       };
     }
 

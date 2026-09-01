@@ -3329,19 +3329,39 @@ renderJobsBoard();
 renderHubUsage();
 renderProviderStatus();
 
-// The provider-status warning: the user must know BEFORE running a task that
-// the provider is unreachable / misconfigured (not be surprised by a failure
-// after the run). A small warning chip in the header links to Settings.
+// The provider-status strip: the user must know BEFORE running a task whether a
+// model is connected. A green keyed provider reads "Ready — <Provider> ·
+// <model>"; an unreachable/misconfigured one is a warning; no model yet is a
+// quiet invitation. All three link to Settings.
+const PROVIDER_LABELS = {
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  gemini: "Google Gemini",
+  deepseek: "DeepSeek",
+  "openai-compatible": "OpenAI-compatible",
+  ollama: "Ollama",
+  "lm-studio": "LM Studio",
+  "prompt-api": "Chrome Prompt API",
+  demo: "Demo",
+};
 async function renderProviderStatus() {
   const slot = document.getElementById("provider-status");
   if (!slot) return;
-  const st = await send("provider.status").catch(() => ({ ok: true }));
+  const st = await send("provider.status").catch(() => null);
+  slot.hidden = false;
+  slot.classList.remove("ready", "warn");
   if (st?.ok === false) {
-    slot.hidden = false;
+    slot.classList.add("warn");
     slot.textContent = "Provider issue — " + (st.reason || "check Settings");
+    slot.title = "Open Settings to fix the provider";
+  } else if (st?.ok === true && st.modelId) {
+    slot.classList.add("ready");
+    slot.textContent = `Ready — ${PROVIDER_LABELS[st.provider] || st.provider} · ${st.modelId}`;
+    slot.title = "Model connected — open Settings to change it";
   } else {
-    slot.hidden = true;
-    slot.textContent = "";
+    // No keyed model connected yet (the demo/local provider, or nothing).
+    slot.textContent = "No model connected yet — pick one to start";
+    slot.title = "Open Settings → Providers to connect a model";
   }
 }
 document.getElementById("provider-status")?.addEventListener("click", () => {
@@ -3811,6 +3831,7 @@ document.getElementById("open-settings")?.addEventListener(
   "click",
   (event) => openView("options/options.html", "Settings", event.currentTarget),
 );
+
 document.getElementById("open-directory")?.addEventListener(
   "click",
   (event) => openView("directory/directory.html", "Directory", event.currentTarget),
@@ -3941,6 +3962,18 @@ window.addEventListener("message", async (e) => {
   // asset.get + the canonical kind:"artifact" attachment + the closeView. No
   // duplicate inline get/add/close/status locals.
   await attachArtifactToComposer({ id, name, type, origin }, { closeOverlay: true });
+});
+
+// The Settings iframe (Providers → Use) asks the hub to return with the composer
+// focused — the fourth click of the four-click provider flow
+// (CAP-FB-20260830-PROVIDER-DEFAULT-AND-KEY-FLOW-01). Same-origin only. Declared
+// AFTER the cap:attach-artifact listener so that handler stays the first
+// window "message" listener (its canonical-attachment guard keys off that).
+window.addEventListener("message", (ev) => {
+  if (ev.origin !== location.origin) return;
+  if (ev.data?.type !== "cap:return-to-hub-composer") return;
+  goHome({ focusAfter: document.getElementById("composer") });
+  renderProviderStatus();
 });
 
 setStatus("ready");
