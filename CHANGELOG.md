@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.604] — 2026-09-01
+- Providers — evidence screenshots for the base-URL fix: the hub strip names the missing base URL for a custom endpoint, and a preset saved without a base URL reaches its provider
+
 ## [0.2.603] — 2026-09-01
 - Providers — a preset provider (OpenAI, Anthropic, Gemini, DeepSeek) saved without a base URL now stores its preset endpoint and runs; a custom endpoint saved without a base URL is refused before the run with a reason that names the missing base URL, and an unknown provider id is rejected
 
