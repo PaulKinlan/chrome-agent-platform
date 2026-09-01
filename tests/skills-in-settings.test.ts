@@ -107,24 +107,108 @@ Deno.test("skills-in-settings: the Skills panel mounts EAGERLY at init (import b
 // The import flow itself must accept a GitHub DIRECTORY/blob URL with a trailing
 // slash (the owner's https://github.com/mattpocock/skills/blob/main/skills/
 // productivity/teach/ — a multi-file skill the old parser could not resolve).
-Deno.test("skills-in-settings: fetchSkillFromUrl resolves a GitHub directory/blob URL with trailing slash", async () => {
+// This is OFFLINE and deterministic: a stubbed fetch serves the same
+// api.github.com tree the live walk would hit, so the suite genuinely proves
+// the directory resolution (metadata + sibling-file collection) instead of
+// accepting a rate-limit error as a pass.
+Deno.test("skills-in-settings: fetchSkillFromUrl resolves a GitHub directory/blob URL with trailing slash (offline stub)", async () => {
   const { fetchSkillFromUrl } = await import("../extension/lib/skill-import.js");
-  // The GitHub Contents API rate-limits unauthenticated (60/hr); when the
-  // budget is gone the import throws the honest rate-limit error — that is the
-  // CORRECT behavior and must not fail the suite. The resolution logic itself
-  // is proven by the browser journey + the direct Deno run (6 files, meta
-  // name teach). A full local stub of the GitHub API is out of scope here.
+
+  const tree: Record<string, any> = {
+    "skills/productivity/teach": [
+      { type: "file", name: "SKILL.md", path: "skills/productivity/teach/SKILL.md", download_url: "https://raw.githubusercontent.com/mattpocock/skills/main/skills/productivity/teach/SKILL.md" },
+      { type: "dir", name: "assets", path: "skills/productivity/teach/assets" },
+      { type: "file", name: "README.md", path: "skills/productivity/teach/README.md", download_url: "https://raw.githubusercontent.com/mattpocock/skills/main/skills/productivity/teach/README.md" },
+    ],
+    "skills/productivity/teach/assets": [
+      { type: "file", name: "prompt.txt", path: "skills/productivity/teach/assets/prompt.txt", download_url: "https://raw.githubusercontent.com/mattpocock/skills/main/skills/productivity/teach/assets/prompt.txt" },
+    ],
+  };
+  const bodies: Record<string, string> = {
+    "skills/productivity/teach/SKILL.md": "---\nname: teach\ndescription: Teach a topic to the user\n---\n\n# Teach\n\nExplain the topic step by step.\n",
+    "skills/productivity/teach/README.md": "# Teach skill\n",
+    "skills/productivity/teach/assets/prompt.txt": "teach me about this topic",
+  };
+
+  const priorFetch = globalThis.fetch;
   try {
-    const r = await fetchSkillFromUrl("https://github.com/mattpocock/skills/blob/main/skills/productivity/teach/");
-    assert(r?.meta?.name === "teach", `meta.name should be teach, got ${r?.meta?.name}`);
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      const gh = u.match(/api\.github\.com\/repos\/([^/]+)\/([^/]+)\/contents\/(.*)\?ref=([^&]+)/);
+      if (gh) {
+        const p = decodeURIComponent(gh[3]).replace(/\/$/, "");
+        return new Response(JSON.stringify(tree[p] ?? []), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      const dl = u.match(/^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/);
+      if (dl) {
+        const p = decodeURIComponent(dl[4]);
+        return new Response(bodies[p] ?? "", { status: bodies[p] ? 200 : 404 });
+      }
+      return priorFetch ? priorFetch(url) : new Response("", { status: 500 });
+    };
+
+    const r: any = await fetchSkillFromUrl("https://github.com/mattpocock/skills/blob/main/skills/productivity/teach/");
+    // The directory/blob URL resolves: metadata is parsed from the frontmatter.
+    assertEquals(r?.meta?.name, "teach", `meta.name should be teach, got ${r?.meta?.name}`);
+    assertEquals(r?.meta?.description, "Teach a topic to the user", `meta.description should be parsed, got ${r?.meta?.description}`);
+    // The multi-file walk collects SKILL.md + its siblings under the same parent.
     assert(r?.files?.["SKILL.md"], "SKILL.md must be present in the fetched files");
-    assert(Object.keys(r?.files ?? {}).length >= 2, "a multi-file skill must collect sibling files");
-  } catch (e) {
-    // @ts-expect-error — the catch binding is typed {} in this test file; e is unknown
-    const msg = String(e?.message ?? e ?? "");
-    assert(
-      /rate-limited|HTTP 403/.test(msg),
-      `expected a successful import OR an honest rate-limit error, got: ${msg.slice(0, 120)}`,
-    );
+    assertEquals(r?.files?.["SKILL.md"], bodies["skills/productivity/teach/SKILL.md"], "SKILL.md body must be the file's content");
+    assertEquals(r?.files?.["assets/prompt.txt"], "teach me about this topic", "a sibling file in a subdirectory must be collected with its relative path");
+    assertEquals(r?.files?.["README.md"], "# Teach skill\n", "a sibling file in the SKILL.md parent directory must be collected");
+  } finally {
+    globalThis.fetch = priorFetch;
+  }
+});
+
+// Falsification gate (review r1 P1): the directory test must be RED when the
+// walk is broken — stub the tree with SKILL.md but WITHOUT the sibling subdir,
+// so the first test's sibling-collection assertions (assets/prompt.txt, the
+// README.md body) cannot pass unless the walk genuinely ran and collected the
+// multi-file skill. Reverting this stub to include the siblings makes the
+// assertions GREEN; removing them makes the test RED.
+Deno.test("skills-in-settings: the directory-import test is RED when the walk fails to collect siblings (falsification)", async () => {
+  const { fetchSkillFromUrl } = await import("../extension/lib/skill-import.js");
+
+  const tree: Record<string, any> = {
+    // SKILL.md present, but the assets/ subdirectory is deliberately missing —
+    // a broken walk cannot collect the sibling file the happy-path test asserts.
+    "skills/productivity/teach": [
+      { type: "file", name: "SKILL.md", path: "skills/productivity/teach/SKILL.md", download_url: "https://raw.githubusercontent.com/mattpocock/skills/main/skills/productivity/teach/SKILL.md" },
+      { type: "file", name: "README.md", path: "skills/productivity/teach/README.md", download_url: "https://raw.githubusercontent.com/mattpocock/skills/main/skills/productivity/teach/README.md" },
+    ],
+    // "skills/productivity/teach/assets" intentionally absent.
+  };
+  const bodies: Record<string, string> = {
+    "skills/productivity/teach/SKILL.md": "---\nname: teach\ndescription: Teach a topic to the user\n---\n\n# Teach\n\nExplain the topic step by step.\n",
+    "skills/productivity/teach/README.md": "# Teach skill\n",
+  };
+
+  const priorFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      const gh = u.match(/api\.github\.com\/repos\/([^/]+)\/([^/]+)\/contents\/(.*)\?ref=([^&]+)/);
+      if (gh) {
+        const p = decodeURIComponent(gh[3]).replace(/\/$/, "");
+        return new Response(JSON.stringify(tree[p] ?? []), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      const dl = u.match(/^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/);
+      if (dl) {
+        const p = decodeURIComponent(dl[4]);
+        return new Response(bodies[p] ?? "", { status: bodies[p] ? 200 : 404 });
+      }
+      // No network: a non-stubbed URL must never reach the real GitHub HTML page.
+      return new Response("", { status: 500 });
+    };
+
+    const r: any = await fetchSkillFromUrl("https://github.com/mattpocock/skills/blob/main/skills/productivity/teach/");
+    // The walk must NOT fabricate the missing sibling: assets/prompt.txt is
+    // absent from this stub, so asserting it collects NOTHING proves the walk
+    // only collected what the tree really contained.
+    assert(!r?.files?.["assets/prompt.txt"], "a missing sibling must not be fabricated");
+    assert(r?.files?.["README.md"], "the sibling that IS in the tree must still be collected");
+  } finally {
+    globalThis.fetch = priorFetch;
   }
 });
