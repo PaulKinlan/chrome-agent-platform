@@ -1605,6 +1605,10 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       // exact origin + cookie name (CAP-FB-20260830-COOKIE-TOOLS-CUT-01),
       // through the same run-bound dispatcher.
       cookieValueGate: (payload) => modelManagementDispatch("browser.cookie-value", payload),
+      // The Destructive class (close foreign tab/window, wipe, remove bookmark,
+      // set/remove cookie) pays a per-action approval card through the same
+      // run-bound dispatcher (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
+      destructiveActionGate: (action, payload) => modelManagementDispatch("browser.destructive-action", { action, ...payload }),
       // The cookie mutators and the cookie-value reader exist only in the
       // developer build. Read the flag per run so a toggle takes effect on the
       // next run; a read failure resolves false — fail closed.
@@ -3628,6 +3632,33 @@ function payloadFields(entries) {
   return canonicalRecord(...entries.map(([name, value]) => canonicalField(name, canonicalScalar(value))));
 }
 
+// DESTRUCTIVE-ACTION POLICY (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01). The
+// browser actions in the always-ask Destructive class. The single route
+// `browser.destructive-action` accepts only these names before it will request
+// an owner approval.
+const DESTRUCTIVE_BROWSER_ACTIONS = new Set([
+  "browser.close-foreign-tab",
+  "browser.close-window",
+  "browser.wipe",
+  "browser.remove-bookmark",
+  "browser.set-cookie",
+  "browser.remove-cookie",
+]);
+const DESTRUCTIVE_POLICY_KEY = "cap:destructiveActionPolicy";
+// The owner's Settings choice for the Destructive class: "ask" (default — every
+// destructive browser action takes an approval card) or "never" (blocked
+// outright). There is deliberately NO "auto" — auto-approving a destructive
+// browser action is exactly the risk this policy removes. A read failure falls
+// back to the safe default ("ask").
+async function destructiveActionPolicy() {
+  try {
+    const got = await kvGet(DESTRUCTIVE_POLICY_KEY);
+    return got?.[DESTRUCTIVE_POLICY_KEY] === "never" ? "never" : "ask";
+  } catch {
+    return "ask";
+  }
+}
+
 /** The owner-approval gate for a script action: the payload binds the exact
  * source (digest) + the hosts the source can reach; the card shows both. */
 async function scriptApprovalGate(context, action, scope, id, source, extra) {
@@ -3839,7 +3870,14 @@ function workerBrowserTools(developerFeatures) {
 }
 // The tools whose execution needs a route-bound gate closure: they cannot come
 // from the shared cache because the gate carries THIS call's context.
-const GATED_WORKER_TOOLS = new Set(["schedule_task", "get_cookie"]);
+const GATED_WORKER_TOOLS = new Set([
+  "schedule_task", "get_cookie",
+  // The Destructive class needs the route-bound gate closure too, so a worker
+  // (agent-worker.tool) call takes the same approval card as an interactive one
+  // (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
+  "close_tab", "close_window", "wipe_browsing_data",
+  "remove_bookmark", "set_cookie", "remove_cookie",
+]);
 async function executeWorkerTool(toolName, args, context) {
   const name = String(toolName ?? "").slice(0, 128);
   const a = args && typeof args === "object" ? args : {};
@@ -3851,6 +3889,7 @@ async function executeWorkerTool(toolName, args, context) {
     ? browserToolset(false, {
       scheduleScriptGate: (scriptId) => dispatchRoute("task.schedule-script", { scriptId }, context),
       cookieValueGate: (payload) => dispatchRoute("browser.cookie-value", payload, context),
+      destructiveActionGate: (action, payload) => dispatchRoute("browser.destructive-action", { action, ...payload }, context),
       developerFeatures,
     })[name]
     : workerBrowserTools(developerFeatures)[name];
@@ -6426,6 +6465,31 @@ const handlers = mergeRouteMaps(
       ]);
     } catch { return { ok: false, error: "reading this cookie value is not approvable" }; }
     return await requireOwnerApproval(context, "browser.cookie-value", target, payload);
+  },
+  // The approval leg of the Destructive class (CAP-FB-20260830-DESTRUCTIVE-
+  // ACTION-POLICY-01). A destructive browser tool (close a foreign tab/window,
+  // wipe data, remove a bookmark, set/remove a cookie) calls this BEFORE the
+  // mutation. The payload binds the exact action + ref, so the owner's approval
+  // is digest-bound to this precise operation. The Settings policy is consulted
+  // first: the owner can set the Destructive class to "never" (block outright);
+  // the default is "ask".
+  async "browser.destructive-action"({ action, ref }, context) {
+    const act = typeof action === "string" ? action : "";
+    if (!DESTRUCTIVE_BROWSER_ACTIONS.has(act)) {
+      return { ok: false, error: "this browser action is not approvable" };
+    }
+    const policy = await destructiveActionPolicy();
+    if (policy === "never") {
+      return { ok: false, approvalDenied: true, error: `Destructive browser actions are blocked in Settings; ${act} was not performed.` };
+    }
+    const refStr = typeof ref === "string" ? ref : "";
+    const target = canonicalOperationTarget("browser-action", { action: act, ref: refStr });
+    if (!target) return { ok: false, error: "this browser action is not approvable" };
+    let payload;
+    try {
+      payload = payloadFields([["action", act], ["ref", refStr]]);
+    } catch { return { ok: false, error: "this browser action is not approvable" }; }
+    return await requireOwnerApproval(context, act, target, payload);
   },
   async "task.schedule-script"({ scriptId }, context) {
     // The approval leg of schedule_task with a scriptId: the browser tool

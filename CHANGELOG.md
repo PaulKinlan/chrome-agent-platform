@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.588] — 2026-09-01
+- The agent now asks for your approval before anything destructive in the browser — closing a window or a tab it did not open, wiping browsing data, removing a bookmark, or setting or removing a cookie. Settings gains an Action policy panel showing the three classes (Read, Act, Destructive) with a control to always ask or never allow destructive actions.
+
 ## [0.2.587] — 2026-09-01
 - Four more improvements are in progress.
 

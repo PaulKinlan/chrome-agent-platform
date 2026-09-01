@@ -232,6 +232,30 @@ const PERMISSION = /^[A-Za-z][A-Za-z0-9.]*$/u;
 const ROUTE = /^(?:browser|management)\.[a-z0-9]+(?:[.-][a-z0-9]+)*$/u;
 const bytes = (value) => new TextEncoder().encode(value).byteLength;
 
+// POLICY CLASS (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01). The three visible
+// classes the product speaks with one vocabulary:
+//   read        — page text, tab list; allowed after consent, never prompts.
+//   act         — tabs/groups/bookmarks/page actions; ask once per origin then
+//                 automatic.
+//   destructive — delete, wipe, downloads to disk; ALWAYS asks (a per-action
+//                 owner approval card).
+// The default is derived from the existing mutation column (a read-only tool is
+// Read; everything else is Act); the destructive set is the SMALL, explicit set
+// of always-ask browser actions gated in browser-tools.js — the column and the
+// gating are kept in lock-step so the label never over-promises.
+const DESTRUCTIVE_POLICY_TOOLS = new Set([
+  "close_tab",         // closing a foreign tab (one the run did not open)
+  "close_window",      // closes every tab in the window
+  "wipe_browsing_data", // browser-wide, irreversible
+  "remove_bookmark",
+  "set_cookie",
+  "remove_cookie",
+]);
+function derivePolicyClass(toolName, mutationClass) {
+  if (DESTRUCTIVE_POLICY_TOOLS.has(toolName)) return "destructive";
+  return mutationClass === "read" ? "read" : "act";
+}
+
 function record(toolName, sourceKind, capabilityTokens, optionalPermissions,
   productGrantScopeKind, replayClass, requiresOwnerGesture, mutationClass,
   routeFamily, developerOnly = false) {
@@ -251,6 +275,10 @@ function record(toolName, sourceKind, capabilityTokens, optionalPermissions,
     // unless the developer flag is on. The name stays in BROWSER_TOOL_NAMES so
     // the inventory counts remain honest about what the build contains.
     developerOnly,
+    // POLICY CLASS (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01): read | act |
+    // destructive. Data only — a label, not a gate; the gate is enforced in
+    // browser-tools.js / owner-approval.js.
+    policyClass: derivePolicyClass(toolName, mutationClass),
   };
 }
 

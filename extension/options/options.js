@@ -1903,6 +1903,32 @@ async function renderBrowser() {
   });
 }
 
+// ── Action policy (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01) ──
+// The three visible classes (Read / Act / Destructive) are described in the
+// panel; the one settable control is the Destructive class — "Always ask"
+// (default: every destructive browser action shows an approval card) or "Never
+// allow" (blocked outright). There is deliberately no "auto" for Destructive.
+const DESTRUCTIVE_POLICY_KEY = "cap:destructiveActionPolicy";
+async function renderActionPolicy() {
+  const select = $("#destructive-policy");
+  if (!select) return;
+  const s = await storage.get(DESTRUCTIVE_POLICY_KEY);
+  select.value = s?.[DESTRUCTIVE_POLICY_KEY] === "never" ? "never" : "ask";
+  select.addEventListener("change", async (e) => {
+    const value = e.target.value === "never" ? "never" : "ask";
+    const res = await storage.set({ [DESTRUCTIVE_POLICY_KEY]: value });
+    if (res?.error) {
+      saveFlash("Action policy save failed — " + res.error);
+      return;
+    }
+    saveFlash(
+      value === "never"
+        ? "Destructive browser actions are now blocked."
+        : "Destructive browser actions will always ask.",
+    );
+  });
+}
+
 // ── Permissions (OPTIONAL + JIT: three honest states per capability) ──
 // OPTIONAL + JIT model (owner directive 2026-08-29, superseding the
 // 2026-08-28 install-granted model for capabilities): capability permissions
@@ -3031,6 +3057,7 @@ if (developerFeaturesEnabled) await renderToolLibrary();
 await renderAgents();
 await renderEnroll();
 await renderBrowser();
+await renderActionPolicy();
 await renderPermissions();
 if (developerFeaturesEnabled) await renderHooks();
 if (developerFeaturesEnabled) await renderPrompts();

@@ -91,12 +91,20 @@ globalThis.chrome = {
       if (url !== undefined) t.url = url;
       return t;
     },
+    remove: async (id) => {
+      const i = tabs.findIndex((x) => x.id === id);
+      if (i >= 0) tabs.splice(i, 1);
+    },
   },
   windows: {
     create: async ({ url } = {}) => {
       windowCreates.push(url);
       const t = addTab(url ?? "chrome://newtab/");
       return { id: 100 + windowCreates.length, tabs: [t] };
+    },
+    get: async (id) => ({ id, tabs: tabs.filter((t) => t.windowId === id) }),
+    remove: async (id) => {
+      for (let i = tabs.length - 1; i >= 0; i--) if (tabs[i].windowId === id) tabs.splice(i, 1);
     },
   },
   debugger: {
@@ -598,4 +606,45 @@ Deno.test("GUARD: open_side_panel is absent from the toolset and the capability 
   for (const kept of ["get_side_panel_options", "set_side_panel_options", "set_panel_behavior"]) {
     assert(kept in browser, `${kept} stays — it does not need a gesture`);
   }
+});
+
+// ── CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01 ─────────────────────────────
+// The Destructive class always asks (an approval card) BEFORE the mutation; a
+// tab the SAME run opened via open_tab is Act (no card). The gate is the run's
+// approval dispatcher — here a recording/denying stub. When no gate is wired,
+// the tool executes as before (the other T12/T8 tests prove that path).
+Deno.test("policy: closing a tab the run opened is Act (no approval), a foreign tab is Destructive", async () => {
+  reset();
+  await setGlobalBrowserControlGrant();
+  const calls = [];
+  const gate = (action, payload) => { calls.push({ action, payload }); return { ok: true }; };
+  const t = browserToolset(false, { destructiveActionGate: gate });
+  const opened = await t.open_tab.execute({ url: "https://example.com/page" });
+  assertEquals(opened?.ok, true);
+  // A tab THIS run opened → Act: no destructive card.
+  const closedOwn = await t.close_tab.execute({ tabId: opened.tabId });
+  assertEquals(closedOwn?.ok, true);
+  assertEquals(calls.length, 0, "closing a tab the run opened must not prompt");
+  // A tab the run did NOT open → Destructive: the gate is asked, action named.
+  const foreign = addTab("https://foreign.example/");
+  const closedForeign = await t.close_tab.execute({ tabId: foreign.id });
+  assertEquals(closedForeign?.ok, true);
+  assertEquals(calls.length, 1, "closing a foreign tab must prompt exactly once");
+  assertEquals(calls[0].action, "browser.close-foreign-tab");
+});
+
+Deno.test("policy: a denied destructive approval blocks the mutation (close_window)", async () => {
+  reset();
+  await setGlobalBrowserControlGrant();
+  const win = await chrome.windows.create({ url: "https://example.com/" });
+  const before = tabs.length;
+  const denied = [];
+  const gate = (action) => { denied.push(action); return { ok: false, approvalDenied: true, error: "owner denied" }; };
+  const t = browserToolset(false, { destructiveActionGate: gate });
+  const res = await t.close_window.execute({ windowId: win.id });
+  assert(res?.ok !== true, "a denied destructive action never reports ok:true");
+  assert(res?.approvalDenied === true || /denied/.test(res?.error ?? ""), "the denial is surfaced");
+  assertEquals(denied[0], "browser.close-window");
+  // The window's tab is still there — the mutation never ran.
+  assertEquals(tabs.length, before, "a denied close_window must not remove any tab");
 });
