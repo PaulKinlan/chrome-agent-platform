@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.604] — 2026-09-01
+- A provider saved without a base URL now runs on its built-in endpoint, and a custom endpoint with no URL is refused up front with a clear reason.
+
 ## [0.2.603] — 2026-09-01
 - Task board: four defects seen in a real research run are now tracked — truncated tool results, runs stopping early, page reads failing without an Allow card, and transcript loss on reload.
 

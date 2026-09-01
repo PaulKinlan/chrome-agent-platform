@@ -549,6 +549,11 @@ const EXPECTED = [
   "Provider error: SW console recorded the real HTTP 401 from the fixture provider",
   "Provider error: a rejected key renders the 401 bubble with a Settings link",
   "Provider error: preflight refusal reaches a terminal Failed row within 5 s",
+  "Base URL: the preflight refusal names the missing base URL (the gate's reason)",
+  "Base URL: provider.status is ok:false for a BYO provider with no base URL, naming the base URL",
+  "Base URL: the hub strip shows 'Provider issue — … base URL …' for the BYO config with no base URL",
+  "Base URL: provider.set for a preset with no base URL stores the preset endpoint and provider.status is ok:true",
+  "Base URL: provider.set without baseURL then a run reaches the provider (the provider's own error, never the preflight string)",
   "Streaming: the assistant bubble grows across at least 5 distinct lengths",
   "Streaming: the final bubble equals the non-streamed render",
   "Full response: a long agent response renders COLLAPSED behind Show full response (never silently truncated)",
@@ -3660,6 +3665,82 @@ async function main() {
         !(pre.status ?? []).some((r) => r.state === "waiting-for-permission") &&
         (pre.errors ?? []).some((e) => /endpoint/i.test(e.text)),
     );
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 3c-baseurl — CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01.
+    // (1) The preflight refusal above names the GATE's reason (the missing base
+    // URL), not a bare "origin is invalid". (2) provider.status is ok:false for
+    // that BYO config BEFORE any run, and the hub strip renders the reason.
+    // (3) A PRESET provider saved WITHOUT a base URL stores the preset endpoint
+    // and a run reaches the provider — the failure is the provider's own (a
+    // rejected key or an unreachable network), never the preflight string.
+    // ─────────────────────────────────────────────────────────────
+    check(
+      "Base URL: the preflight refusal names the missing base URL (the gate's reason)",
+      (pre.errors ?? []).some((e) => /needs a base URL/.test(e.text)),
+    );
+    const byoStatus = await msgOpts({ type: "provider.status" });
+    check(
+      "Base URL: provider.status is ok:false for a BYO provider with no base URL, naming the base URL",
+      byoStatus?.ok === false && /base URL/.test(String(byoStatus?.reason ?? "")) &&
+        /Settings/.test(String(byoStatus?.reason ?? "")),
+    );
+    {
+      // The hub strip is the surface that renders provider.status's reason
+      // (Settings carries no status chip element) — a fresh hub page reads it.
+      const hubPage = await openPage(port, `chrome-extension://${extId}/ntp/ntp.html`).catch(() => null);
+      if (hubPage) {
+        await sleep(1200);
+        const hubSession = await attachRuntime(cdp, hubPage.id);
+        cdp.pageSessions.add(hubSession);
+        const chip = await evalIn(cdp, hubSession,
+          `document.getElementById('provider-status')?.textContent ?? ""`).catch(() => "");
+        check(
+          "Base URL: the hub strip shows 'Provider issue — … base URL …' for the BYO config with no base URL",
+          /Provider issue/.test(String(chip ?? "")) && /base URL/.test(String(chip ?? "")),
+        );
+        const byoShot = await captureShot(cdp, hubSession).catch(() => null);
+        if (byoShot) await writeEvidence("provider-status-byo-missing.png", byoShot);
+        await cdp.send("Target.closeTarget", { targetId: hubPage.id }).catch(() => {});
+      }
+    }
+    const presetSet = await msgOpts({
+      type: "provider.set",
+      config: { provider: "openai", apiKey: "sk-journey-invalid-0000", model: "gpt-5.6-sol" },
+    });
+    const presetStatus = await msgOpts({ type: "provider.status" });
+    check(
+      "Base URL: provider.set for a preset with no base URL stores the preset endpoint and provider.status is ok:true",
+      presetSet?.baseURL === "https://api.openai.com/v1" && presetSet?.apiKey === "" &&
+        presetSet?.hasApiKey === true && presetStatus?.ok === true,
+    );
+    const swErrorsBeforePreset = cdp.swErrors().length;
+    await driveHubTask("provider truth: preset without base URL");
+    const presetRun = await pollThreadError(
+      25000,
+      (st) => (st.errors?.length ?? 0) > 0 || (st.status ?? []).some((r) => r.state === "failed"),
+    );
+    const presetShot = await captureShot(cdp, ntpSession);
+    if (presetShot) await writeEvidence("provider-preset-no-baseurl-run.png", presetShot);
+    console.log(`base-url journey (preset run): ${JSON.stringify(presetRun).slice(0, 900)}`);
+    const presetText = (presetRun.errors ?? []).map((e) => e.text).join(" | ");
+    check(
+      "Base URL: provider.set without baseURL then a run reaches the provider (the provider's own error, never the preflight string)",
+      (presetRun.errors ?? []).length > 0 &&
+        !/endpoint is not configured|origin is invalid|needs a base URL|preflight/i.test(presetText) &&
+        !(presetRun.status ?? []).some((r) => r.state === "waiting-for-permission") &&
+        !/sk-[A-Za-z0-9]/.test(presetText),
+    );
+    // The run genuinely dispatched to the preset endpoint, so the SW logs the
+    // provider's own outcome (the HTTP status from api.openai.com, or the
+    // network failure when the suite runs offline) plus the AI SDK's own
+    // no-output collapse — the same expected set the 401 journey takes out of
+    // the no-SW-errors gate; everything else stays guarded.
+    const EXPECTED_PRESET_NOISE = /\[provider\] HTTP \d+|^AI_NoOutputGeneratedError: No output generated|^AI_APICallError|^AI_RetryError|^<redacted:structured>$|Failed to fetch/;
+    for (const e of cdp.swErrors().slice(swErrorsBeforePreset)) {
+      if (!EXPECTED_PRESET_NOISE.test(String(e.detail ?? "").trim())) continue;
+      const i = cdp.consoleErrors.indexOf(e);
+      if (i >= 0) cdp.consoleErrors.splice(i, 1);
+    }
     await msgOpts({ type: "provider.set", config: { provider: "demo", apiKey: "", baseURL: "", model: "" } });
 
     // ─────────────────────────────────────────────────────────────
