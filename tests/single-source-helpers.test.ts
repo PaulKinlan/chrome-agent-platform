@@ -28,9 +28,11 @@ const EXCLUDED_PREFIXES = ["dist/", "dist-versions/", "wasm/", "lib/terser-bound
 const FAMILIES: Array<{ canonical: string; aliases: string }> = [
   { canonical: "escapeHtml", aliases: "escapeHTML|escapeHtml\\w*" },
   { canonical: "timeAgo", aliases: "timeAgo\\w*" },
+  { canonical: "sha256Hex", aliases: "sha256\\w*|digestBytes" },
+  { canonical: "sha256HexBytes", aliases: "" },
 ];
 const CANONICAL_NAMES = FAMILIES.map((f) => f.canonical);
-const ALIAS_GROUP = FAMILIES.map((f) => f.aliases).join("|");
+const ALIAS_GROUP = FAMILIES.map((f) => f.aliases).filter(Boolean).join("|");
 const ALIAS_RE = new RegExp(`^\\s*(?:export\\s+)?(?:async\\s+)?function\\s+(${ALIAS_GROUP})\\s*\\(`, "gm");
 const ARROW_ALIAS_RE = new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+(${ALIAS_GROUP})\\s*=\\s*(?:async\\s*)?(?:\\([^)]*\\)|\\w+)\\s*=>`, "gm");
 

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.605] — 2026-09-01
+- Housekeeping: the workspace, code-diff and Wasm package digests now come from one shared SHA-256 helper instead of three private copies.
+
 ## [0.2.604] — 2026-09-01
 - Housekeeping: the hub and the shared components now share one relative-time helper instead of two identical copies.
 
