@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.603] — 2026-09-01
+- Local files: the agent can now write a text file in a folder you granted. The change shows as a diff on an approval card — the file on disk against the proposed content — and nothing is written until you approve; Deny leaves the file untouched.
+
 ## [0.2.602] — 2026-09-01
 - Task view full work — the agent's full response is stored, shown, and copyable
 

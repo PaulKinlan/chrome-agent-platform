@@ -5,9 +5,9 @@
 // dispatcher, validator, provider binding, or execution allowlist.
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
-  browserTools: 136,
+  browserTools: 137,
   managementTools: 42,
-  totalTools: 178,
+  totalTools: 179,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -24,6 +24,8 @@ export const BROWSER_TOOL_NAMES = Object.freeze([
   "find_files",
   "read_file",
   "grep_files",
+  // CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01: the owner-approved write.
+  "write_file",
   "open_tab",
   "navigate_tab",
   "read_page",
@@ -293,6 +295,10 @@ const rows = [
   record("find_files", "chrome-api", ["chrome.fs-grant.files.find"], [], "none", "read-only", false, "read", "browser.fs-grant"),
   record("read_file", "chrome-api", ["chrome.fs-grant.file.read"], [], "none", "read-only", false, "read", "browser.fs-grant"),
   record("grep_files", "chrome-api", ["chrome.fs-grant.content.grep"], [], "none", "read-only", false, "read", "browser.fs-grant"),
+  // The ONE mutating file tool: a model write pays an owner diff-approval card
+  // (fs-grant.write-file-approved) before any byte lands
+  // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01).
+  record("write_file", "chrome-api", ["chrome.fs-grant.file.write"], [], "none", "mutating", false, "mutating", "browser.fs-grant"),
   record("open_tab", "chrome-api", ["chrome.tabs.open.destination-origin"], ["tabs"], "destination-origin", "mutating", false, "mutating", "browser.tabs"),
   record("navigate_tab", "chrome-api", ["chrome.tabs.navigate.destination-origin"], ["tabs"], "destination-origin", "mutating", false, "mutating", "browser.tabs"),
   record("read_page", "chrome-api", ["chrome.host.exact-origin", "chrome.page.read"], ["activeTab", "scripting", "tabs"], "none", "read-only", false, "read", "browser.page"),

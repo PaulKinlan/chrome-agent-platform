@@ -15,15 +15,23 @@ export const TOOL_ARGUMENT_LIMITS = Object.freeze({
 });
 
 const LARGE_FIELDS = Object.freeze({
-  create_asset: Object.freeze({ field: "content", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxAssetContentUtf8Bytes }),
-  update_asset: Object.freeze({ field: "content", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxAssetContentUtf8Bytes }),
-  generate_ui: Object.freeze({ field: "html", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxAssetContentUtf8Bytes }),
-  create_script: Object.freeze({ field: "source", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxScriptSourceUtf8Bytes }),
-  update_script: Object.freeze({ field: "source", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxScriptSourceUtf8Bytes }),
+  management: Object.freeze({
+    create_asset: Object.freeze({ field: "content", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxAssetContentUtf8Bytes }),
+    update_asset: Object.freeze({ field: "content", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxAssetContentUtf8Bytes }),
+    generate_ui: Object.freeze({ field: "html", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxAssetContentUtf8Bytes }),
+    create_script: Object.freeze({ field: "source", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxScriptSourceUtf8Bytes }),
+    update_script: Object.freeze({ field: "source", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxScriptSourceUtf8Bytes }),
+  }),
+  // A local-file write carries the COMPLETE file body, so it gets the same
+  // large-content allowance an artifact body does
+  // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01).
+  "chrome-api": Object.freeze({
+    write_file: Object.freeze({ field: "content", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxAssetContentUtf8Bytes }),
+  }),
 });
 
 export function toolArgumentContract(sourceKind, toolId) {
-  const large = sourceKind === "management" ? LARGE_FIELDS[toolId] ?? null : null;
+  const large = LARGE_FIELDS[sourceKind]?.[toolId] ?? null;
   return Object.freeze({
     maxJsonUtf8Bytes: large
       ? TOOL_ARGUMENT_LIMITS.maxLargeJsonUtf8Bytes

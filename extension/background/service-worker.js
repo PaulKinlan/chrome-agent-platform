@@ -40,6 +40,7 @@ import {
   createProviderRoutes,
   createMcpRoutes,
   createSchedulerRoutes,
+  createFsGrantRoutes,
   createMemoryRoutes,
   resolveMemory,
   awaitMemoryQuiescence,
@@ -68,20 +69,6 @@ import {
 import { BUNDLED_INVENTORY } from "../lib/bundled-inventory-data.js";
 import { BUNDLED_TOOL_PACKAGE_ROWS } from "../lib/bundled-tool-packages.data.js";
 import { executeFactoryReset, enumerateStorageTargets } from "../lib/factory-reset.js";
-import {
-  saveFsGrant,
-  getFsGrant,
-  listFsGrants,
-  deleteFsGrant,
-  queryFsGrantStatus,
-  serializeFsGrantSummary,
-  listFsGrantEntries,
-  readFsGrantFile,
-  writeFsGrantFile,
-  scanFsGrantManifest,
-  searchFsGrantFiles,
-  grepFsGrant,
-} from "../lib/fs-grants.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
 import { attachmentContext, buildMultimodalTask } from "../lib/attachments.js";
 import {
@@ -1638,6 +1625,11 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       // set/remove cookie) pays a per-action approval card through the same
       // run-bound dispatcher (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
       destructiveActionGate: (action, payload) => modelManagementDispatch("browser.destructive-action", { action, ...payload }),
+      // write_file pays the owner a diff card (the on-disk bytes vs the
+      // proposed content) through the same run-bound dispatcher; the model
+      // never reaches the raw fs-grant.write-file route
+      // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01).
+      fileWriteGate: (payload) => modelManagementDispatch("fs-grant.write-file-approved", payload),
       // The cookie mutators and the cookie-value reader exist only in the
       // developer build. Read the flag per run so a toggle takes effect on the
       // next run; a read failure resolves false — fail closed.
@@ -3959,6 +3951,19 @@ const schedulerRoutes = createSchedulerRoutes({
   payloadFields,
 });
 
+// Persistent local-folder grant routes (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01)
+// extracted to routes/fs-grants.js for unit-drivability, plus the model's ONLY
+// write path `fs-grant.write-file-approved`, which pays the same diff card an
+// artifact edit does (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01). The raw
+// `fs-grant.write-file` stays owner-surface-only.
+const fsGrantRoutes = createFsGrantRoutes({
+  securityEvent,
+  requireOwnerApproval,
+  canonicalOperationTarget,
+  payloadFields,
+  lineDiffSummary,
+});
+
 // The named-agent schedule route (extracted so tests drive the REAL route with
 // synthetic principals — the approval binds id + period + the normalized
 // recurring prompt).
@@ -4011,6 +4016,9 @@ const GATED_WORKER_TOOLS = new Set([
   // (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
   "close_tab", "close_window", "wipe_browsing_data",
   "remove_bookmark", "set_cookie", "remove_cookie",
+  // write_file pays the diff approval card through the route-bound gate
+  // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01).
+  "write_file",
 ]);
 async function executeWorkerTool(toolName, args, context) {
   const name = String(toolName ?? "").slice(0, 128);
@@ -4024,6 +4032,7 @@ async function executeWorkerTool(toolName, args, context) {
       scheduleScriptGate: (scriptId) => dispatchRoute("task.schedule-script", { scriptId }, context),
       cookieValueGate: (payload) => dispatchRoute("browser.cookie-value", payload, context),
       destructiveActionGate: (action, payload) => dispatchRoute("browser.destructive-action", { action, ...payload }, context),
+      fileWriteGate: (payload) => dispatchRoute("fs-grant.write-file-approved", payload, context),
       developerFeatures,
     })[name]
     : workerBrowserTools(developerFeatures)[name];
@@ -4523,6 +4532,7 @@ boardDrainOnce().catch((e) => handleBoardDrainRejection(e, "startup drain"));
 const handlers = mergeRouteMaps(
   activityRoutes,
   schedulerRoutes,
+  fsGrantRoutes,
   boardRoutes.routes,
   createMemoryRoutes(),
   agentScheduleRoutes,
@@ -5264,117 +5274,6 @@ const handlers = mergeRouteMaps(
     // Generate a title for a task (the model when available, else truncated).
     const name = await generateThreadName(m.task);
     return { ok: true, name };
-  },
-
-  // ── Persistent File System Access Grants (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01) ──
-  async "fs-grant.list"(m, context) {
-    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
-      securityEvent(
-        "blocked-action",
-        `fs-grant list denied for principal ${context?.principal ?? "unknown"}`,
-      );
-      return { ok: false, error: "fs-grant.list is restricted to extension surfaces" };
-    }
-    const rawGrants = await listFsGrants({ scope: m?.scope });
-    const summaries = await Promise.all(
-      rawGrants.map(async (g) => {
-        const status = await queryFsGrantStatus(g);
-        return serializeFsGrantSummary(g, status);
-      }),
-    );
-    return { ok: true, grants: summaries };
-  },
-
-  async "fs-grant.get"({ grantId }, context) {
-    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
-      return { ok: false, error: "fs-grant.get is restricted to extension surfaces" };
-    }
-    const grant = await getFsGrant(grantId);
-    if (!grant) return { ok: false, error: "grant_not_found" };
-    const status = await queryFsGrantStatus(grant);
-    return { ok: true, grant: serializeFsGrantSummary(grant, status) };
-  },
-
-  async "fs-grant.remove"({ grantId }, context) {
-    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
-      securityEvent(
-        "blocked-action",
-        `fs-grant remove denied for principal ${context?.principal ?? "unknown"}`,
-      );
-      return { ok: false, error: "fs-grant.remove is restricted to extension surfaces" };
-    }
-    const result = await deleteFsGrant(grantId);
-    return { ok: true, ...result };
-  },
-
-  async "fs-grant.list-entries"({ grantId, relativePath, limit }, context) {
-    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
-      securityEvent(
-        "blocked-action",
-        `fs-grant list-entries denied for principal ${context?.principal ?? "unknown"}`,
-      );
-      return { ok: false, error: "fs-grant.list-entries is restricted to extension surfaces" };
-    }
-    const result = await listFsGrantEntries(grantId, { relativePath, limit });
-    return result;
-  },
-
-  async "fs-grant.search"({ query, limit }, context) {
-    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
-      securityEvent(
-        "blocked-action",
-        `fs-grant search denied for principal ${context?.principal ?? "unknown"}`,
-      );
-      return { ok: false, error: "fs-grant.search is restricted to extension surfaces" };
-    }
-    return await searchFsGrantFiles(query, { limit });
-  },
-
-  async "fs-grant.read-file"({ grantId, relativePath, asText, maxBytes }, context) {
-    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
-      securityEvent(
-        "blocked-action",
-        `fs-grant read-file denied for principal ${context?.principal ?? "unknown"}`,
-      );
-      return { ok: false, error: "fs-grant.read-file is restricted to extension surfaces" };
-    }
-    const result = await readFsGrantFile(grantId, { relativePath, asText, maxBytes });
-    return result;
-  },
-
-  async "fs-grant.write-file"({ grantId, relativePath, content, asBinary }, context) {
-    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
-      securityEvent(
-        "blocked-action",
-        `fs-grant write-file denied for principal ${context?.principal ?? "unknown"}`,
-      );
-      return { ok: false, error: "fs-grant.write-file is restricted to extension surfaces" };
-    }
-    const result = await writeFsGrantFile(grantId, { relativePath, content, asBinary });
-    return result;
-  },
-
-  async "fs-grant.scan"({ grantId, maxEntries, maxDepth }, context) {
-    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
-      securityEvent(
-        "blocked-action",
-        `fs-grant scan denied for principal ${context?.principal ?? "unknown"}`,
-      );
-      return { ok: false, error: "fs-grant.scan is restricted to extension surfaces" };
-    }
-    const result = await scanFsGrantManifest(grantId, { maxEntries, maxDepth });
-    return result;
-  },
-
-  async "fs-grant.grep"({ grantId, query, relativePath, regex, ignoreCase, maxMatches }, context) {
-    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
-      securityEvent(
-        "blocked-action",
-        `fs-grant grep denied for principal ${context?.principal ?? "unknown"}`,
-      );
-      return { ok: false, error: "fs-grant.grep is restricted to extension surfaces" };
-    }
-    return await grepFsGrant(grantId, { query, relativePath, regex, ignoreCase, maxMatches });
   },
 
   // ── named agents (the persistent named agents) ────────────────────────────

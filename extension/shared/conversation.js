@@ -641,6 +641,7 @@ export function approvalCardTitle(action) {
     case "script.create": return "Save this script the agent wrote?";
     case "script.run": return "Run this script now?";
     case "task.schedule-script": return "Run this script on a schedule?";
+    case "fs.write": return "Write this file?";
     default: return `Approve ${action}?`;
   }
 }
@@ -1834,9 +1835,14 @@ export async function runConversationTurn(container, { text, attachments = [], h
     const name = typeof detail.name === "string" && detail.name ? detail.name : "this artifact";
     const added = Number.isSafeInteger(detail.added) ? detail.added : 0;
     const removed = Number.isSafeInteger(detail.removed) ? detail.removed : 0;
-    const noun = detail.kind === "script.update" ? "script" : "artifact";
-    card.setAttribute("title", `Update ${name}? (+${added} -${removed})`);
-    card.setAttribute("body", `The agent wants to change this ${noun}. Review the changes, then approve or deny.`);
+    // A local-file write (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01) rides the
+    // SAME card: the file's relative path, the on-disk bytes as "before".
+    const isFileWrite = detail.kind === "fs.write";
+    const noun = detail.kind === "script.update" ? "script" : isFileWrite ? "file" : "artifact";
+    card.setAttribute("title", `${isFileWrite ? "Write" : "Update"} ${name}? (+${added} -${removed})`);
+    card.setAttribute("body", isFileWrite
+      ? "The agent wants to write this file in a folder you granted. Review the changes, then approve or deny."
+      : `The agent wants to change this ${noun}. Review the changes, then approve or deny.`);
     if (card.querySelector?.("artifact-diff")) return;
     const diff = document.createElement("artifact-diff");
     diff.setAttribute("slot", "extra");
@@ -1909,7 +1915,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
       // live behind the SW's `approval.detail` principal gate (never in the
       // model-facing envelope), so they are fetched here, once, for this card.
       const editApproval = actionApproval ? requirement.approvals[0] : null;
-      if (editApproval && (editApproval.action === "asset.update" || editApproval.action === "script.update")) {
+      if (editApproval && (editApproval.action === "asset.update" || editApproval.action === "script.update" || editApproval.action === "fs.write")) {
         augmentApprovalCardWithDiff(card, editApproval);
       }
     }

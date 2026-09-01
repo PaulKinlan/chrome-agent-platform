@@ -19,6 +19,7 @@ import {
   scanFsGrantManifest,
   grepFsGrant,
   MAX_FS_READ_BYTES,
+  MAX_FS_WRITE_BYTES,
 } from "./fs-grants.js";
 import { normalizeHostPattern } from "./permission-orchestration.js";
 import { DEVELOPER_ONLY_TOOL_NAMES } from "./chrome-tool-capabilities.js";
@@ -1805,6 +1806,14 @@ const FS_ERROR_MESSAGES = {
   fs_grep_invalid_regex: "The regular expression is invalid.",
   no_folder_granted: "No folder is available to this task. Attach one with /folder, or grant one in Settings → Local folders.",
   grant_ambiguous: "More than one folder is available — pass grantId to choose which folder to use.",
+  // write_file (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01)
+  fs_write_permission_denied: "This folder was granted read-only — write access must be granted in Settings → Local folders.",
+  fs_diff_too_large: "The file is too large to review as a diff, so the agent cannot write it.",
+  fs_file_changed: "The file changed while the owner was reviewing the write; nothing was written — read it again and retry.",
+  fs_write_gate_unavailable: "This run has no owner-approval channel, so the file cannot be written.",
+  fs_write_gate_failed: "The owner-approval request for this write failed; nothing was written.",
+  fs_write_not_approvable: "This write could not be prepared for owner approval; nothing was written.",
+  invalid_content: "content must be a UTF-8 text string.",
 };
 
 function humanizeFsError(code) {
@@ -1901,6 +1910,11 @@ export function browserToolset(readOnly = false, {
   scheduleScriptGate = null,
   cookieValueGate = null,
   destructiveActionGate = null,
+  // The owner-approval leg for write_file (CAP-FB-20260830-LOCAL-FILE-EDIT-
+  // TOOLS-01): the run-bound dispatcher to `fs-grant.write-file-approved`,
+  // which stages the diff card and writes only after Approve. With no gate
+  // bound the write fails CLOSED — a write can never skip the card.
+  fileWriteGate = null,
   developerFeatures = false,
 } = {}) {
   // DESTRUCTIVE-ACTION POLICY (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
@@ -2026,6 +2040,43 @@ export function browserToolset(readOnly = false, {
           maxMatches,
         });
         return res?.ok === false ? toFsToolError(res, path ?? "") : res;
+      },
+    }),
+    write_file: tool({
+      description:
+        "Write a UTF-8 text file inside a granted local folder (the folder must be granted with write access in Settings → Local folders). REQUIRES OWNER APPROVAL: the owner sees the exact diff between the file on disk and your content before anything is written, and a denial leaves the file untouched. Read the file first (read_file) and send the COMPLETE new content, never a fragment. A missing file is created; binary files, files over the size bound, and paths outside the folder are refused. Returns { ok, path, size, sha256, added, removed } or a bounded JSON error.",
+      inputSchema: z.object({
+        path: z.string().describe("the file path, relative to the granted folder"),
+        content: z.string().max(MAX_FS_WRITE_BYTES).describe("the COMPLETE new file content (UTF-8 text)"),
+        grantId: z.string().optional().describe("which folder, when more than one is available (see list_folders)"),
+      }),
+      execute: async ({ path, content, grantId }) => {
+        const g = await resolveRunGrantId(grantId);
+        if (g.ok === false) return g;
+        // No approval channel bound (a unit test, the metadata-only shadow
+        // catalogue, a hook run): fail closed — the model never writes a
+        // file the owner did not approve on a card.
+        if (typeof fileWriteGate !== "function") return toFsToolError({ error: "fs_write_gate_unavailable" }, path ?? "");
+        let res;
+        try {
+          res = await fileWriteGate({ grantId: g.grantId, relativePath: path ?? "", content });
+        } catch (err) {
+          return toFsToolError({ error: "fs_write_gate_failed", detail: String(err?.message ?? err) }, path ?? "");
+        }
+        if (res?.ok === true) return res;
+        // A structured requirement (the card flow) passes through untouched so
+        // the conversation can render it.
+        if (res?.waitingForPermission === true) return res;
+        // The gate's own denial / expiry carries a sentence, not a store code.
+        if (res?.approvalDenied === true || res?.approvalExpired === true) {
+          return {
+            ok: false,
+            error: String(res.error ?? "The owner did not approve the write; nothing was written."),
+            code: res.approvalExpired === true ? "fs_write_approval_expired" : "fs_write_denied",
+            path: path ?? "",
+          };
+        }
+        return toFsToolError(res ?? { error: "fs_write_failed" }, path ?? "");
       },
     }),
     open_tab: tool({

@@ -113,7 +113,7 @@ Deno.test("T10: the 8 tools are present and truthfully classified", () => {
   }
   // The shipped inventory count; the default build omits the developer-only
   // cookie tools (CAP-FB-20260830-COOKIE-TOOLS-CUT-01).
-  assertEquals(Object.keys(browserToolset(false, { developerFeatures: true })).length, 136);
+  assertEquals(Object.keys(browserToolset(false, { developerFeatures: true })).length, 137);
   for (const read of ["list_network_rules", "get_network_rule_matches", "get_navigation_frames", "get_navigation_frame", "get_request_activity"]) {
     assertEquals(replaySafetyForTool(read), "read-only", `${read} read-only`);
     assertEquals(chromeToolCapability(read, "chrome-api").mutationClass, "read");
@@ -127,7 +127,7 @@ Deno.test("T10: the 8 tools are present and truthfully classified", () => {
   assertEquals(chromeToolCapability("add_network_rule", "chrome-api").optionalPermissions, ["declarativeNetRequest"]);
   assertEquals(chromeToolCapability("get_navigation_frames", "chrome-api").optionalPermissions, ["webNavigation"]);
   assertEquals(chromeToolCapability("get_request_activity", "chrome-api").optionalPermissions, ["webRequest"]);
-  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 178);
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 179);
 });
 
 // ──────────────────────────────────────────────────────────────────────────
