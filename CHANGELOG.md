@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.613] — 2026-09-01
+- Task board: the page-access Allow card fix is complete.
+
 ## [0.2.612] — 2026-09-01
 - The generated gallery bundle is ignored by git again.
 
