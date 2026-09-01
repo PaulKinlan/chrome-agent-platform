@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.592] — 2026-09-01
+- The next two steps of external tool-server support are underway.
+
 ## [0.2.591] — 2026-09-01
 - MCP-CONFIG-STORE-01, MODEL-TOOL-ADHERENCE-01 DONE (2900/0, 294/294)
 
