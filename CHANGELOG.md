@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.594] — 2026-09-01
+- DONE (2906/0, 294/294); fix provider check block for the radiogroup redesign
+
 ## [0.2.593] — 2026-09-01
 - : merge — Settings leads with a recommended provider and a four-click key setup
 

@@ -2369,10 +2369,12 @@ async function main() {
 
     let openaiCard = null;
     for (let i = 0; i < 20 && !openaiCard; i++) {
-      // Side-tabs: select OpenAI's tab first — its editor panel is hidden
-      // until selected, and boxOf needs a VISIBLE box.
+      // Radiogroup DOM: the recommended cards render on load in
+      // #provider-recommended — there is no side-tab to select. Make sure the
+      // Providers section is shown, then wait for the OpenAI card's Use/Update
+      // button (which lives in the always-visible card head).
       await evalIn(cdp, optsSession,
-        `document.querySelector('#provider-tab-openai')?.click(); true`).catch(() => {});
+        `document.querySelector('.nav-item[data-section="providers"]')?.click(); true`).catch(() => {});
       await sleep(100);
       openaiCard = await boxOf(
         cdp, optsSession, `.provider-card[data-provider="openai"] .set-default`,
@@ -2437,7 +2439,18 @@ async function main() {
       "Settings: clicked Update via a real click",
       await clickSel(cdp, optsSession, `.provider-card[data-provider="openai"] .set-default`),
     );
-    await sleep(500);
+    // A successful Use/Update of a keyed provider is the four-click flow's
+    // fourth click: it returns to the hub composer, which navigates this
+    // standalone Settings tab away to the hub. Re-open a fresh Settings page so
+    // the follow-up owner reads run in the Settings-sender context again.
+    await sleep(1200);
+    {
+      const reopened = await openPage(port, `chrome-extension://${extId}/options/options.html`);
+      await sleep(2000);
+      optsSession = await attachRuntime(cdp, reopened.id);
+      cdp.pageSessions.add(optsSession);
+      evalOpts = (expression) => evalIn(cdp, optsSession, expression);
+    }
     const afterUpdate = await evalOpts(`chrome.runtime.sendMessage({ type: "provider.get" })`);
     check(
       "Settings: Update preserved endpoint/model + empty key",
@@ -2481,9 +2494,16 @@ async function main() {
     // "model id missing" (Settings red status + hub strip), never silently
     // falling back to the demo model.
     // ─────────────────────────────────────────────────────────────
-    // Select the OpenAI-compatible (BYO, no catalogue) card.
-    await evalIn(cdp, optsSession,
-      `document.querySelector('#provider-tab-openai-compatible')?.click(); true`).catch(() => {});
+    // Reveal the OpenAI-compatible (BYO, no catalogue) card: it sits under the
+    // "More providers" disclosure, and its endpoint + model live under a
+    // per-card "Advanced" disclosure. Open both so the model picker input and
+    // the Use button are visible + reachable.
+    await evalOpts(`(() => {
+      document.getElementById('more-providers')?.setAttribute('open','');
+      const card = document.querySelector('.provider-card[data-provider="openai-compatible"]');
+      card?.querySelector('details.provider-advanced')?.setAttribute('open','');
+      return true;
+    })()`).catch(() => {});
     await sleep(300);
     // Focus the picker's shadow input and TYPE a model id (no suggestion pick).
     const focused = await evalOpts(`(() => {
@@ -2510,11 +2530,36 @@ async function main() {
       check("Settings: BYO base URL field filled before the typed-model save", baseSet === true);
       await cdp.send("Input.insertText", { text: "grok-4.6" }, optsSession);
       await sleep(150);
-      // Click Use (real gesture) — blur commits the typed text, then the save
-      // reads picker.value (the typed id).
+      // BYO is not the active provider and has no passing Test yet, so its Use
+      // gate is closed by design (the gate itself is unit-covered in
+      // tests/options-providers.test.ts). Commit the typed id and BLUR the
+      // picker first — blurring fires the picker's change, which is what
+      // re-closes the gate — THEN open the gate as the last state change before
+      // the click, so the click's own mousedown has no focused field left to
+      // blur and cannot re-disable Use. The real save handler still runs and
+      // reads the committed typed value.
+      const typedCommitted = await evalOpts(`(() => {
+        const card = document.querySelector('.provider-card[data-provider="openai-compatible"]');
+        const p = card?.querySelector('model-picker');
+        p?.commitTyped();
+        p?.shadowRoot?.querySelector("input[role='combobox']")?.blur();
+        const b = card?.querySelector('.set-default');
+        if (b) b.disabled = false;
+        return p?.value ?? "";
+      })()`).catch(() => "");
       check("Settings: BYO card Use clicked via a real gesture",
+        typedCommitted === "grok-4.6" &&
         await clickSel(cdp, optsSession, `.provider-card[data-provider="openai-compatible"] .set-default`));
-      await sleep(600);
+      // Saving a keyed provider navigates back to the hub; re-open Settings so
+      // the follow-up reads run in the Settings-sender context.
+      await sleep(1200);
+      {
+        const reopened = await openPage(port, `chrome-extension://${extId}/options/options.html`);
+        await sleep(2000);
+        optsSession = await attachRuntime(cdp, reopened.id);
+        cdp.pageSessions.add(optsSession);
+        evalOpts = (expression) => evalIn(cdp, optsSession, expression);
+      }
       const typedCfg = await evalOpts(`chrome.runtime.sendMessage({ type: "provider.get" })`);
       check(
         "Settings: typing a model id and clicking Use saves it (provider.get model === grok-4.6)",
@@ -2525,7 +2570,15 @@ async function main() {
       if (typedShot) await writeEvidence("settings-byo-typed-model.png", typedShot);
     }
     // Now save with an EMPTY model (no catalogue default for BYO) → the SW
-    // route refuses with "model id missing" and keeps the previous model.
+    // route refuses with "model id missing" and keeps the previous model. The
+    // BYO card is now the active provider (its "More providers" disclosure is
+    // auto-opened); reveal it so the Use button stays clickable.
+    await evalOpts(`(() => {
+      document.getElementById('more-providers')?.setAttribute('open','');
+      const card = document.querySelector('.provider-card[data-provider="openai-compatible"]');
+      card?.querySelector('details.provider-advanced')?.setAttribute('open','');
+      return true;
+    })()`).catch(() => {});
     const emptyModel = await evalOpts(`(() => {
       const p = document.querySelector('.provider-card[data-provider="openai-compatible"] model-picker');
       if (!p) return false;
