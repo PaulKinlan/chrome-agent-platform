@@ -58,7 +58,7 @@ import { safeParseOnce, buildTree, subtreeJson, safeJsonStringify } from "./tool
 // SW write path): activity journals may predate write-path redaction, so the
 // explorer redacts again at render AND the tree/copy paths only ever see the
 // redacted value.
-import { redactSecrets } from "../lib/pure.js";
+import { redactSecrets, escapeHtml, timeAgo } from "../lib/pure.js";
 import { describeToolCall, redactToolResult } from "../lib/tool-summary.js";
 import {
   isTextLikeAttachment,
@@ -96,11 +96,11 @@ export const ICONS = {
 /* ──────────────────────────────────────────────────────────────────────────
  * Shared helpers
  * ────────────────────────────────────────────────────────────────────────── */
-export function escapeHtml(s) {
-  return String(s ?? "").replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  })[c]);
-}
+// escapeHtml is SINGLE-SOURCED in lib/pure.js (the strict one — it escapes the
+// single quote). Re-exported here so every page and the gallery keep importing
+// it from the components module; a second definition anywhere fails
+// tests/single-source-helpers.test.ts.
+export { escapeHtml } from "../lib/pure.js";
 
 export function prefersReducedMotion() {
   try {
@@ -9134,15 +9134,7 @@ customElements.define("security-shield", SecurityShield);
  * seed it with demo entries (no extension backend) via the `entries` property.
  * ────────────────────────────────────────────────────────────────────────── */
 
-function timeAgo(ts) {
-  const d = Date.now() - (ts ?? 0);
-  const m = Math.floor(d / 60000);
-  if (m < 1) return "just now";
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
+// timeAgo is imported from lib/pure.js (single source; the hub uses the same one).
 
 // Turn a raw tool result into a short readable one-liner. Decode + redaction
 // go through lib/tool-summary.js's redactToolResult — the canonical seam

@@ -26,6 +26,7 @@ import {
   wireHtmlFramePreference,
   currentFramePreference,
   confirmActionDialog,
+  escapeHtml,
 } from "../shared/components.js";
 import { canonicalRef, findAgentByRef } from "../shared/agent-registry.js";
 import { agentScheduleMarker, backgroundAgentsForDisplay } from "../shared/agent-display.js";
@@ -288,13 +289,6 @@ function setStatus(text, ready = true) {
   if (!idle && ready) {
     statusTimer = setTimeout(() => setStatus("ready"), 3000);
   }
-}
-
-function escapeHtml(s) {
-  return String(s).replace(
-    /[&<>"]/g,
-    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]),
-  );
 }
 
 function shortOrigin(o) {

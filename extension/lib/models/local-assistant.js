@@ -38,6 +38,10 @@
 // for older readers), it answers with the same honest paragraph — it never
 // claims the tool ran and never loops on a permission it cannot obtain.
 
+// The strict HTML escaper (single-sourced in lib/pure.js — dependency-free, so
+// it loads in the agent worker where the components module cannot).
+import { escapeHtml } from "../pure.js";
+
 export const LOCAL_ASSISTANT_MODEL_ID = "local-assistant";
 
 export const LOCAL_ASSISTANT_FALLBACK =
@@ -265,14 +269,6 @@ export function duplicateTabs(tabs) {
     seen.get(key).push(t);
   }
   return [...seen.entries()].filter(([, list]) => list.length >= 2).map(([url, list]) => ({ url, count: list.length }));
-}
-
-/** Escape untrusted text for the artifact HTML (tab titles and URLs are
- * page-controlled). Local on purpose: this file runs in the agent worker,
- * where the components module (a DOM custom-element file) cannot load. */
-function escapeHtml(s) {
-  return String(s ?? "").replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
 /** The tab-list artifact: every http(s) tab, by site. Exported for tests. */
