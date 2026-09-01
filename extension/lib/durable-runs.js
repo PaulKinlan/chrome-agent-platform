@@ -151,6 +151,53 @@ function bounded(value, max = MAX_PREVIEW_CHARS) {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
+/** Byte-aware bounded slice (the store bound is UTF-8 bytes — multi-byte
+ * content would otherwise blow it at fewer chars). Binary-search the largest
+ * char prefix that fits the byte budget (CAP-FB-20260831-TASK-VIEW-FULL-
+ * RESPONSE-01 r1 B2, r2 B5).
+ * - `escaped`: measure the JSON-escaped size (JSON.stringify expands control
+ *   chars — a pre-escape byte cap can overflow post-escape; r2 B2).
+ * - `marker`: append the never-silent truncation marker (r2 B1).
+ * The cut NEVER splits a UTF-16 surrogate pair (r2 B5). */
+function boundedBytes(value, maxBytes, opts = {}) {
+  const s = String(value ?? "");
+  const measure = opts.escaped
+    ? (t) => utf8Bytes(JSON.stringify(t))
+    : (t) => utf8Bytes(t);
+  if (measure(s) <= maxBytes) return s;
+  // The marker label is DYNAMIC — it states the ACTUAL cap applied to this
+  // copy, so a backstop shrink is never dishonest about what was stored
+  // (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r4 P1b: a fixed "240 KiB"
+  // claim is false after a smaller backstop target).
+  const marker = opts.marker
+    ? `\n\n…(response truncated to ${(maxBytes / 1024).toFixed(0)} KiB — the complete text is in the run log)`
+    : "";
+  // r4 P2: reserve the marker's TRUE storage cost — when measuring escaped
+  // bytes, the marker itself will be JSON-escaped inside the stored string, so
+  // reserve its escaped length (reserving the raw length under-reserves for
+  // the newlines, which escape to two characters each).
+  const markerBytes = opts.escaped ? utf8Bytes(JSON.stringify(marker)) : utf8Bytes(marker);
+  const budget = Math.max(0, maxBytes - markerBytes);
+  let lo = 0;
+  let hi = s.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (measure(s.slice(0, mid)) <= budget) lo = mid; else hi = mid - 1;
+  }
+  // r2 B5: a cut landing between a surrogate pair leaves a lone high
+  // surrogate — back off to the pair boundary.
+  while (lo > 0) {
+    const c = s.charCodeAt(lo - 1);
+    if (c >= 0xD800 && c <= 0xDBFF) { lo -= 1; continue; }
+    break;
+  }
+  return opts.marker ? `${s.slice(0, lo)}${marker}` : s.slice(0, lo);
+}
+
+function utf8Bytes(str) {
+  return new TextEncoder().encode(str).byteLength;
+}
+
 function redactedPreview(value) {
   // The CANONICAL redactor (the local regex missed the bare-whitespace form —
   // "apiKey sk-…" leaked into the durable log's taskPreview).
@@ -1735,7 +1782,11 @@ export function createDurableRunRegistry({
       if (!(await store.has(outboxKey))) {
         const at = Number.isFinite(payload?.at) ? payload.at : now();
         const ok = payload?.ok === true;
-        const fullResult = String(payload?.result ?? payload?.error ?? "");
+        // r2 B4: the authoritative retained copy is REDACTED like every other
+        // storage surface — a secret echoed by a hostile endpoint must never
+        // reach the durable payload (the prompt path was already redacted; the
+        // retained payload was not).
+        const fullResult = redactSecretText(String(payload?.result ?? payload?.error ?? ""));
         const retainedPayloadRef = await persistJsonPayload(executionId, "terminal", {
           ok,
           at,
@@ -1746,7 +1797,17 @@ export function createDurableRunRegistry({
           errorReason: payload?.errorReason ?? null,
           errorAction: payload?.errorAction ?? null,
         });
-        const result = bounded(fullResult, 16 * 1024);
+        // ONE authoritative full copy: the retainedPayloadRef payload (chunked
+        // at 64 KiB per key, unbounded total). The terminal's `result` is a
+        // SMALL journal preview (list surfaces stay bounded); the thread back-
+        // fill (threadTerminal.content) is the only other copy and is byte-
+        // capped so the whole serialized outbox stays under the store's
+        // 256 KiB per-value bound even for a near-bound response
+        // (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r1 B1). r2 B1: the
+        // truncation carries the same never-silent marker as the thread path.
+        // r2 B2: the cap measures the JSON-ESCAPED size (control chars expand
+        // under JSON.stringify), so the serialized outbox stays in budget.
+        const result = boundedBytes(fullResult, 240 * 1024, { marker: true, escaped: true });
         const outbox = {
           executionId,
           createdAt: at,
@@ -1758,17 +1819,20 @@ export function createDurableRunRegistry({
             at,
             retainedPayloadRef,
             summary: bounded(payload?.summary ?? result),
-            // The FULL (16 KB-bounded) answer rides beside the 240-char preview
-            // so a thread back-fill never has to commit the preview as content
-            // (CAP-FB-20260830-TRANSCRIPT-FULL-ANSWER-01). `summary` stays a
-            // preview for lists.
-            result,
+            // The journal/registry terminal result is a BOUNDED PREVIEW — the
+            // byte-complete text lives only in the retainedPayloadRef payload
+            // and the thread back-fill (CAP-FB-20260830-RUN-LOG-COMPACTION-01;
+            // r1 B1 de-duplicated the full copy from here).
+            result: bounded(fullResult),
             ...(payload?.aborted === true ? { aborted: true } : {}),
           },
           journalEntry: {
             type: "result",
             id: payload?.logicalId ?? record.scheduleName ?? record.threadId ?? record.clientCorrelationId ?? executionId,
-            result,
+            // The LEGACY compatibility journal keeps a small bounded preview
+            // (the full bytes live in the retainedPayloadRef + the thread
+            // back-fill — CAP-FB-20260830-RUN-LOG-COMPACTION-01).
+            result: bounded(fullResult),
             ok,
             ...(payload?.aborted === true ? { aborted: true } : {}),
           },
@@ -1812,7 +1876,42 @@ export function createDurableRunRegistry({
             : null,
         };
         // The full recoverable payload is durable before journal, thread, or
-        // registry terminal state is changed.
+        // registry terminal state is changed. r2 B2 backstop: JSON escaping
+        // can still expand the SERIALIZED outbox past the store's per-value
+        // bound in pathological cases (e.g. control-char floods) — verify the
+        // serialized size and shrink the full copy until it fits. r3 P1: the
+        // shrink re-runs boundedBytes (not a blind slice) so the truncation
+        // MARKER always survives and cuts stay on code-point boundaries.
+        // r4 P1a: the target is the serialized-overflow DELTA directly (so the
+        // loop strictly converges on the bound) and the loop terminates the
+        // moment the content stops shrinking (an envelope that alone exceeds
+        // the bound cannot be fixed by giving up content — fail loudly via the
+        // store write's own bound error instead of spinning).
+        let serializedOutbox = utf8Bytes(JSON.stringify(outbox));
+        let shrinkGuard = 0;
+        while (serializedOutbox > 256 * 1024 && outbox.threadTerminal?.content && shrinkGuard++ < 32) {
+          const overflow = serializedOutbox - 256 * 1024;
+          const contentEscaped = utf8Bytes(JSON.stringify(outbox.threadTerminal.content));
+          // Remove the full overflow delta from the content's escaped size
+          // (plus a small margin for the envelope) — one step toward the bound.
+          const target = Math.max(0, contentEscaped - overflow - 256);
+          const before = contentEscaped;
+          outbox.threadTerminal.content = boundedBytes(
+            outbox.threadTerminal.content,
+            target,
+            // The marker label is dynamic — it states the ACTUAL cap applied
+            // to this copy (r4 P1b).
+            { marker: true, escaped: true },
+          );
+          const after = utf8Bytes(JSON.stringify(outbox.threadTerminal.content));
+          serializedOutbox = utf8Bytes(JSON.stringify(outbox));
+          // Strict termination: once the content stops shrinking (it is at the
+          // marker floor — only the marker remains), further iterations make no
+          // progress. If the outbox still exceeds the bound, the ENVELOPE is
+          // the overflow source and cannot be fixed by giving up content — the
+          // store write below throws its own honest bound error.
+          if (after >= before) break;
+        }
         await store.setTrusted(outboxKey, outbox);
       }
       await boundary("after-outbox", executionId);

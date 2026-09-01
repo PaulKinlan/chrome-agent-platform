@@ -24,8 +24,8 @@ import { isPromptApiAvailable, createPromptApiModel } from "./models/prompt-api-
 const INDEX_KEY = "threads";
 const MAX_THREADS = 200; // the index cap
 const MAX_MESSAGES = 500; // per-thread message cap
-const MAX_MESSAGE_CHARS = 16 * 1024; // per-message text cap
-const MAX_THREAD_BYTES = 200 * 1024; // per-thread serialized budget
+const MAX_MESSAGE_BYTES = 240 * 1024; // per-message text cap in UTF-8 BYTES — raised from 16 KiB (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01: the task view must hold the COMPLETE agent response). 240 KiB leaves headroom for the JSON envelope + truncation marker under the memory store's 256 KiB per-value bound (memory.js MAX_VALUE_BYTES), so any response up to ~100 pages stores byte-complete; a pathological longer message is sliced with an explicit marker (never silent) and the complete text stays in the durable run journal (retainedPayloadRef).
+const MAX_THREAD_BYTES = 248 * 1024; // per-thread serialized budget (below the memory store's 256 KiB per-value bound so a full-size response + envelope still stores; the tail is protected from eviction)
 const MAX_NAME_CHARS = 80;
 // Continuation-fidelity bounds: the journaled per-run tool summary and skill
 // list are deliberately TINY (names + ok only — never args, results, or page
@@ -96,12 +96,45 @@ function previewOf(text) {
 }
 
 // SECRET-SAFE + bounded (the final review's HIGH): every string persisted
-// into a thread (messages, lastError, index rows) passes safeProviderError —
-// a credential echoed by a hostile endpoint can never reach thread storage.
-import { safeProviderError } from "./pure.js";
-function boundText(text, max = MAX_MESSAGE_CHARS) {
-  const s = safeProviderError(String(text ?? ""));
-  return s.length > max ? s.slice(0, max) : s;
+// into a thread (messages, lastError, index rows) is redacted so a credential
+// echoed by a hostile endpoint can never reach thread storage. NOTE: the
+// redaction is UNBOUNDED (redactSecretText) — safeProviderError also caps at
+// 300 chars for ERROR text, which is wrong for message content
+// (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01: a response was cut to 300 chars
+// at commit). The message-content cap is applied HERE, not inside the redactor.
+import { redactSecretText } from "./pure.js";
+function boundText(text, max = MAX_MESSAGE_BYTES) {
+  const s = redactSecretText(String(text ?? ""));
+  // The cap is UTF-8 BYTES (the memory store bound is byte-based): multi-byte
+  // content (emoji/CJK) would otherwise bust the store at fewer chars. Binary
+  // search the largest char prefix that fits the byte budget, reserving room
+  // for the truncation marker so slice + marker stay within the cap.
+  if (utf8Bytes(s) <= max) return s;
+  const isMessage = max === MAX_MESSAGE_BYTES;
+  const marker = isMessage
+    ? `\n\n…(response truncated to ${(max / 1024).toFixed(0)} KiB — the complete text is in the run log)`
+    : "";
+  const budget = Math.max(0, max - utf8Bytes(marker));
+  let lo = 0;
+  let hi = s.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (utf8Bytes(s.slice(0, mid)) <= budget) lo = mid; else hi = mid - 1;
+  }
+  const sliced = s.slice(0, lo);
+  // r2 B5: a cut landing between a UTF-16 surrogate pair leaves a lone high
+  // surrogate — back off to the pair boundary (an emoji straddling the byte
+  // budget must be kept whole or dropped whole, never halved).
+  while (lo > 0) {
+    const c = s.charCodeAt(lo - 1);
+    if (c >= 0xD800 && c <= 0xDBFF) { lo -= 1; continue; }
+    break;
+  }
+  const slicedFinal = s.slice(0, lo);
+  // Never silently truncate the human-readable content: when the DEFAULT
+  // (message-content) cap is hit, say so — the complete text is kept in the
+  // durable run journal (retainedPayloadRef) and in the run log.
+  return isMessage ? `${slicedFinal}${marker}` : slicedFinal;
 }
 
 /** Trim a thread's messages to the count + byte budget (drop the OLDEST),
@@ -528,8 +561,13 @@ export async function commitThreadTerminal(id, executionId, terminal) {
     if (thread.status === "done") {
       delete thread.lastError;
     } else {
+      // lastError is a DIAGNOSTIC summary surface, not the reader: it must
+      // stay a small bounded preview so the full error text (in the message
+      // row, the task view's source) is not stored twice and the thread value
+      // cannot blow the memory store's per-value bound
+      // (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r2 B3).
       thread.lastError = {
-        message: boundText(committedTerminal.content),
+        message: boundText(committedTerminal.content, 4 * 1024),
         tool: committedTerminal.tool ?? null,
         category: committedTerminal.category ?? "error",
         reason: committedTerminal.reason ?? null,
@@ -548,7 +586,10 @@ export async function commitThreadTerminal(id, executionId, terminal) {
       row.status = thread.status;
       row.count = thread.messages.length;
       if (thread.status === "done") delete row.error;
-      else row.error = boundText(committedTerminal.content);
+      // The SIDEBAR error preview stays a small bounded preview (a list
+      // surface) — the durable/terminal-commit path is covered too, like the
+      // recordThreadError path (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r2 B3).
+      else row.error = boundText(committedTerminal.content, 1024);
       await writeIndex(index);
     }
     return thread;
@@ -641,7 +682,10 @@ export async function recordThreadError(id, detail) {
     const category = detail?.category ? String(detail.category) : "error";
     const reason = detail?.reason ? boundText(String(detail.reason)) : null;
     const action = detail?.action ? boundText(String(detail.action)) : null;
-    const raw = detail?.detail ? boundText(String(detail.detail)) : null;
+    // The raw diagnostic detail is a LIST-surface too (the sidebar preview); it
+    // must stay a small bounded preview — only the task view's own bubble may
+    // carry the full message (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r1 B3).
+    const raw = detail?.detail ? boundText(String(detail.detail), 4 * 1024) : null;
     thread.messages = Array.isArray(thread.messages) ? thread.messages : [];
     thread.messages.push({
       role: "error",
@@ -661,8 +705,11 @@ export async function recordThreadError(id, detail) {
     const row = index.find((r) => r.id === id);
     if (row) {
       row.status = "error";
-      row.error = message;
-      row.preview = message;
+      // The SIDEBAR preview stays a small bounded preview (a list surface) —
+      // never the full message text (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r1 B3).
+      const sidebarPreview = boundText(message, 1024);
+      row.error = sidebarPreview;
+      row.preview = sidebarPreview;
       row.updatedAt = thread.updatedAt;
       row.count = thread.messages.length;
       await writeIndex(index);

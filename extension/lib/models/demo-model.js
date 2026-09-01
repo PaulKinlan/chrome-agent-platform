@@ -119,6 +119,12 @@ const FENCE_OPEN_RE = /^<<<UNTRUSTED run:([A-Za-z0-9]+)>>>\n/;
 // DEMO_STREAM_CHUNK_MS) so a keyless journey can watch the assistant bubble
 // grow across many samples, exactly as a hosted provider's tokens arrive.
 const STREAM_MARKER = "@demo-stream";
+// @demo-long-answer: emit a deterministic answer ABOVE the long-response
+// collapse threshold (> 4000 chars) so the full-response surface can be
+// driven end-to-end (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01). Product
+// behavior like @demo-slow/@demo-stream — not a hidden test seam.
+const LONG_ANSWER_MARKER = "@demo-long-answer";
+const LONG_ANSWER_LENGTH = 9000;
 export const DEMO_STREAM_CHUNK_MS = 30;
 export const DEMO_STREAM_ANSWER = "[demo model] Streaming answer. " + Array.from({ length: 12 }, (_, i) =>
   `Paragraph ${i + 1}: the agent hub runs on your new tab, keeps memory per origin in OPFS, drives the browser through granted tools, and streams every answer token as the provider produces it.`
@@ -224,6 +230,12 @@ function wantsStream(prompt) {
   const msgs = Array.isArray(prompt) ? prompt : [];
   const last = [...msgs].reverse().find((m) => m?.role === "user");
   return extractText([last]).toLowerCase().includes(STREAM_MARKER);
+}
+
+function wantsLongAnswer(prompt) {
+  const msgs = Array.isArray(prompt) ? prompt : [];
+  const last = [...msgs].reverse().find((m) => m?.role === "user");
+  return extractText([last]).toLowerCase().includes(LONG_ANSWER_MARKER);
 }
 
 function wantsSlow(prompt) {
@@ -1768,6 +1780,13 @@ export function createDemoModel() {
               : "[demo model] Tool calls executed in sequence: memory_set wrote the shopping list, then memory_get read it back twice.";
           } else if (wantsStream(options.prompt)) {
             response = DEMO_STREAM_ANSWER;
+          } else if (wantsLongAnswer(options.prompt)) {
+            // A deterministic answer ABOVE the long-response collapse
+            // threshold: the journey can expand it and assert the FULL text is
+            // present in the DOM (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01).
+            response = "[demo model] Long answer. " + Array.from({ length: 300 }, (_, i) =>
+              `Line ${i + 1}: the complete agent response must stay readable in the task view — this text is repeated so the response comfortably exceeds the collapse threshold. `
+            ).join("");
           } else {
             response = `[demo model] Task received (${text.length} chars). Configure a real provider in Settings ` +
               `to get real completions. This demo response proves the agent loop runs end-to-end.`;

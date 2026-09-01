@@ -4482,6 +4482,16 @@ class MessageBubble extends Component {
   static get observedAttributes() {
     return ["role", "content", "attachments", "tool-name", "tool-status", "tool-args", "tool-result", "tool-detail", "tool-duration", "step", "total-steps", "error-reason", "error-action", "error-category", "author", "author-avatar", "ts"];
   }
+  // A long agent/system response is COLLAPSED to a preview with a
+  // Show-full toggle (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01: the owner
+  // wants to read the full response like a resource — the store now holds the
+  // complete text; this makes a long one comfortable to read + copy).
+  static get LONG_PREVIEW_CHARS() { return 4000; }
+  static get LONG_COLLAPSED_PX() { return 260; }
+  _longResponse(content) {
+    return (this.getAttribute("role") === "agent" || this.getAttribute("role") === "system") &&
+      typeof content === "string" && content.length > MessageBubble.LONG_PREVIEW_CHARS;
+  }
   _attachments() {
     const raw = this.getAttribute("attachments");
     if (!raw) return [];
@@ -4492,6 +4502,34 @@ class MessageBubble extends Component {
   }
   _content() {
     return this.hasAttribute("content") ? (this.getAttribute("content") ?? "") : (this.textContent ?? "");
+  }
+  /** Wire the long-response expander + copy. Extracted from _wire so the copy
+   * source (the FULL stored content, never the DOM text) is unit-testable
+   * (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r1 B4). */
+  _wireLongResponse(long) {
+    const toggle = long.querySelector(".long-toggle");
+    const copy = long.querySelector(".long-copy");
+    toggle?.addEventListener("click", () => {
+      const open = long.getAttribute("data-open") === "1";
+      long.setAttribute("data-open", open ? "0" : "1");
+      toggle.textContent = open ? "Show full response" : "Show less";
+    });
+    copy?.addEventListener("click", async () => {
+      // Copy the COMPLETE stored response (the content attribute), never the
+      // rendered DOM text (a preview/truncated slice would leak an incomplete
+      // response to the clipboard).
+      const text = this._content();
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand("copy"); } catch { /* clipboard unavailable */ }
+        ta.remove();
+      }
+    });
   }
   /** Grow an agent bubble with streamed model text (CAP-FB-20260830-TRANSCRIPT-STREAMING-01).
    *  The deltas land in a hosted <streaming-text streaming> (text nodes only —
@@ -4564,6 +4602,16 @@ class MessageBubble extends Component {
       .body code.inline-code, .body :not(pre) > code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.9em; background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9); border-radius:4px; padding:1px 5px; }
       .body strong { font-weight:600; }
       .body em { font-style:italic; }
+      /* long-response collapse (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01) */
+      .long-response { width:100%; }
+      .long-response .body { max-height:260px; overflow:hidden; position:relative; }
+      .long-response .body::after { content:""; position:absolute; left:0; right:0; bottom:0; height:48px; pointer-events:none; background:linear-gradient(transparent, var(--panel,#ffffff)); }
+      .long-response[data-open="1"] .body { max-height:none; overflow:visible; }
+      .long-response[data-open="1"] .body::after { display:none; }
+      .long-actions { display:flex; gap:8px; margin-top:6px; }
+      .long-toggle, .long-copy { font:inherit; font-size:12px; font-weight:600; color:var(--accent,#0e6e63); background:transparent; border:1px solid var(--border,#e3e0d9); border-radius:6px; padding:3px 10px; cursor:pointer; }
+      .long-toggle:hover, .long-copy:hover { border-color:var(--accent,#0e6e63); }
+      .long-toggle:focus-visible, .long-copy:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
       /* rendered HTML output — the sandboxed iframe */
       .html-frame { margin-top:4px; width:100%; display:flex; flex-direction:column; }
       .html-frame iframe { width:100%; min-height:360px; height:480px; max-height:80vh; border:1px solid var(--border,#e3e0d9); border-radius:8px; background:#fff; resize:vertical; display:block; }
@@ -4824,13 +4872,19 @@ class MessageBubble extends Component {
         attachHtml = `<div class="attach">${pieces.join("")}</div>`;
       }
       const bubble = `<div class="msg ${role}">${attachHtml}<div class="body">${body}</div></div>`;
+      let bubbleOut = bubble;
+      if (this._longResponse(content)) {
+        bubbleOut = `<div class="long-response" data-open="0"><div class="body">${body}</div>`
+          + `<div class="long-actions"><button type="button" class="long-toggle" part="long-toggle">Show full response</button>`
+          + `<button type="button" class="long-copy" part="long-copy">Copy full response</button></div></div>`;
+      }
       if (role === "agent") {
         const author = this.getAttribute("author") || "Agent";
         const avatar = this.getAttribute("author-avatar") || "";
         const ts = this.getAttribute("ts") || "";
-        markup = `<div class="turn"><agent-identity name="${escapeHtml(author)}"${avatar ? ` avatar="${escapeHtml(avatar)}"` : ""}${ts ? ` time="${escapeHtml(ts)}"` : ""}></agent-identity>${bubble}</div>`;
+        markup = `<div class="turn"><agent-identity name="${escapeHtml(author)}"${avatar ? ` avatar="${escapeHtml(avatar)}"` : ""}${ts ? ` time="${escapeHtml(ts)}"` : ""}></agent-identity>${bubbleOut}</div>`;
       } else {
-        markup = bubble;
+        markup = bubbleOut;
       }
     }
     mountTemplate(this, style, markup);
@@ -4840,6 +4894,10 @@ class MessageBubble extends Component {
     }
   }
   _wire() {
+    // Long-response toggle: reveal the FULL text (the store holds it complete)
+    // and offer a copy of the whole response (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01).
+    const long = this._root.querySelector(".long-response");
+    if (long) this._wireLongResponse(long);
     // The "Fix in Settings" button on a provider/config error: open the options
     // page (the provider pane's Test/Use button grants the host permission +
     // tests the key — the actionable path for a provider failure).

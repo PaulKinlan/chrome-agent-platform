@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.584] — 2026-09-01
+- Task view full work — the agent's full response is stored, shown, and copyable; bounds are byte-true, escape-aware, surrogate-safe, and honest
+
+## [0.2.583] — 2026-09-01
+- Task view full work — the agent's full response is stored, shown, and copyable; bounds are byte-true, escape-aware, surrogate-safe, and honest
+
+## [0.2.582] — 2026-09-01
+- Task view full work — the agent's full response is stored, shown, and copyable; bounds are byte-true, escape-aware, surrogate-safe, and honest
+
 ## [0.2.581] — 2026-09-01
 - Skill list work — /skill and Settings read one catalog; collision-proof refIds; broken skills hidden and reported
 
