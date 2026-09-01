@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.599] — 2026-09-01
+- Dialog work — searchable grouped customizable select for agent templates; computed-style contrast gates in both schemes; headless base-select paint limitation documented
+
 ## [0.2.598] — 2026-09-01
 - : each agent can inherit, disable, and add its own MCP servers
 
