@@ -38,6 +38,19 @@ export function createMcpRoutes(deps = {}) {
       return { servers: await getGlobalMcpServersRedacted() };
     },
 
+    // The REDACTED global list for an owner surface that needs to show what an
+    // agent INHERITS — the per-agent MCP section in the agent create/edit dialog
+    // (CAP-FB-20260831-MCP-AGENT-UI-01), which runs as the "extension" principal
+    // (the hub), not "owner-options" (Settings). This is a read-only, token-free
+    // view: the raw token NEVER crosses (redacted, hasToken bit only), so the
+    // owner's own hub may read it. Writes/tests stay Settings-only above.
+    async "mcp.servers.global-redacted"(_m, context) {
+      if (context?.principal !== "owner-options" && context?.principal !== "extension") {
+        throw new Error("the global MCP list is available only to the owner surfaces");
+      }
+      return { servers: await getGlobalMcpServersRedacted() };
+    },
+
     async "mcp.servers.set"(m, context) {
       requireSettingsSender(context);
       // Blank token on the SAME server id (+ header) preserves the stored one

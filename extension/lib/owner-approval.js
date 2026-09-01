@@ -112,6 +112,12 @@ export const OWNER_DIRECT_ACTIONS = new Set([
   // The owner's own schedule edit in the agent dialog IS the approval (same
   // owner-direct principle as task.pause/resume/update below).
   "named-agent.set-schedule",
+  // The owner's own per-agent MCP-server config in the SAME agent dialog IS the
+  // approval (CAP-FB-20260831-MCP-AGENT-UI-01) — the same owner-direct principle
+  // as set-schedule above. A MODEL calling this keeps the full pending-approval
+  // flow (principal !== extension/owner-options fails isOwnerDirectApproval), so
+  // the credential-write path is never auto-approved for a non-owner caller.
+  "named-agent.set-mcp-servers",
   "recipe.delete",
   // Per-agent schedule controls (pause/resume/update): the owner's own click in
   // an extension UI document IS the approval — the same owner-direct principle

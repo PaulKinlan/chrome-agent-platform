@@ -287,3 +287,40 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   overflow: hidden;
   white-space: nowrap;
 }
+
+/* ── Shared MCP-server UI (CAP-FB-20260831-MCP-AGENT-UI-01) ──────────────────
+   The add/edit MCP-server editor + server rows are one shared control
+   (lib/mcp-server-editor.js), used by the GLOBAL "MCP servers" section in
+   Settings and the PER-AGENT section in the agent create/edit dialog. These
+   rules live here (theme.css, loaded by both surfaces) so the two never drift.
+   Also the small form primitives the editor relies on (.field, .test-status). */
+.field { display: grid; gap: 0.25rem; }
+.field-label { font-size: var(--text-xs); color: var(--muted); }
+.test-status { margin-top: 8px; font-size: var(--text-xs); display: flex; align-items: center; gap: 6px; }
+.test-status.testing { color: var(--muted); }
+.test-status.ok { color: var(--success, #0e6e63); }
+.test-status.err { color: var(--danger, #b3261e); }
+.mcp-toolbar { display: flex; gap: var(--space-2); margin: var(--space-2) 0 var(--space-3); }
+.mcp-server-list { display: grid; gap: var(--space-2); }
+.mcp-empty { padding: var(--space-4); border: 1px dashed var(--border); border-radius: var(--radius-md); margin: 0; }
+.mcp-server-card { border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-3) var(--space-4); background: var(--bg); }
+.mcp-server-card.is-disabled { opacity: 0.6; }
+.mcp-server-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.mcp-server-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.mcp-server-name { font-weight: 600; }
+.mcp-server-tag { font-weight: 600; font-size: 10px; letter-spacing: 0.02em; text-transform: uppercase; padding: 1px 6px; border-radius: var(--radius-sm); border: 1px solid var(--border); color: var(--muted); }
+.mcp-server-meta { display: flex; align-items: center; gap: 8px; font-size: var(--text-xs); min-width: 0; }
+.mcp-server-url { text-overflow: ellipsis; white-space: nowrap; overflow-x: auto; }
+.mcp-badge { flex: 0 0 auto; font-size: 10px; font-weight: 600; letter-spacing: 0.02em; padding: 1px 6px; border-radius: var(--radius-sm); border: 1px solid var(--border); color: var(--muted); }
+.mcp-server-actions { display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0; }
+.mcp-remove { color: var(--danger, #b3261e); }
+.mcp-editor { border: 1px solid var(--accent); border-radius: var(--radius-md); padding: var(--space-4); background: var(--panel); margin-bottom: var(--space-3); }
+.mcp-editor-title { margin: 0 0 var(--space-3); font-size: var(--text-sm); }
+.mcp-editor-hint { margin: 0 0 var(--space-3); font-size: var(--text-xs); color: var(--muted); }
+.mcp-editor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.mcp-editor-grid input, .mcp-editor-grid select { width: 100%; }
+.mcp-editor .test-status { margin-top: var(--space-3); }
+.mcp-editor-actions { display: flex; gap: var(--space-2); margin-top: var(--space-3); flex-wrap: wrap; }
+@media (max-width: 640px) {
+  .mcp-editor-grid { grid-template-columns: 1fr; }
+}

@@ -96,7 +96,8 @@ Deno.test("create-agent dialog: partial schedule failure is reported without hid
   ]);
 
   assert(serviceWorkerJs.includes('return { ...r, scheduleError: s?.error ?? "schedule failed" };'), "create route must expose partial schedule failure");
-  assert(/\{ ok: true, id: r\.agent\?\.id \?\? v\.name, firstTask: v\.firstTask, scheduleError: r\.scheduleError \}/.test(ntpJs), "dialog adapter must preserve scheduleError from an otherwise successful create");
+  assert(/const id = r\.agent\?\.id \?\? v\.name;/.test(ntpJs), "the created agent id is derived from the create response");
+  assert(/return \{ ok: true, id, firstTask: v\.firstTask, scheduleError: r\.scheduleError/.test(ntpJs), "dialog adapter must preserve scheduleError from an otherwise successful create");
   assert(/r\.scheduleError\s*\? `Agent “\$\{name\}” saved, but its schedule was not created: \$\{r\.scheduleError\}`/.test(ntpJs), "{ ok: true, scheduleError } must render an explicit partial-success warning");
   assert(/await opts\.onSaved\?\.\(r\);/.test(ntpJs), "partial success must still open the agent that was created");
 });

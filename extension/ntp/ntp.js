@@ -9,6 +9,8 @@ import { send } from "../lib/messages.js";
 import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, recipeAsTemplate, templatePrefill } from "../lib/agent-templates.js";
 import { buildAgentSkillRows } from "../lib/agent-skill-rows.js";
 import { projectUnifiedAgents } from "../lib/named-agents.js";
+import { buildAgentMcpList, normalizeMcpServer } from "../lib/mcp-config.js";
+import { buildMcpServerEditor, mcpServerRow } from "../lib/mcp-server-editor.js";
 import { schedulePreviewText } from "../lib/schedule-preview.js";
 import { parseEnglishSchedule } from "../shared/schedule-parser.js";
 import { selectFailedRuns } from "../lib/run-retry.js";
@@ -2406,6 +2408,7 @@ async function openAgentConfig() {
     canDelete: true,
     savedLabel: "Save",
     schedule: agent.schedule?.periodInMinutes ?? null,
+    initialMcpServers: agent.mcpServers ?? [],
     onSave: async (v) => {
       // Schedule FIRST: the owner's schedule change applies through the
       // owner-direct schedule path even when the persona edit pends an
@@ -2429,6 +2432,22 @@ async function openAgentConfig() {
         return scheduleNote
           ? { ok: true, note: `${scheduleNote}; the persona edit needs approval in Settings` }
           : { ok: false, error: r?.error ?? "unknown" };
+      }
+      // Per-agent MCP servers: persist only when they actually changed — a
+      // spurious owner-approval card on every unrelated edit would be noise. The
+      // structural signature ignores tokens, so an added/changed credential is
+      // detected separately (a redacted, unchanged server carries a blank token).
+      const mcpSig = (list) => JSON.stringify((Array.isArray(list) ? list : []).map((s) => ({
+        id: s.id, name: s.name, transport: s.transport, url: s.url,
+        enabled: s.enabled !== false, header: s.auth?.headerName ?? "",
+      })).sort((a, b) => String(a.id).localeCompare(String(b.id))));
+      const tokenTouched = (v.mcpServers ?? []).some((s) => s.auth && s.auth.token);
+      if (mcpSig(v.mcpServers) !== mcpSig(agent.mcpServers ?? []) || tokenTouched) {
+        const m = await send("named-agent.set-mcp-servers", { id: currentAgentId, servers: v.mcpServers })
+          .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+        if (m?.ok === false) {
+          return { ok: true, note: `agent saved; MCP servers were not updated: ${m?.error ?? "unknown"}` };
+        }
       }
       return { ok: true };
     },
@@ -2463,9 +2482,18 @@ function openQuickCreateAgent() {
         name: v.name, role: v.role, avatar: v.avatar, skills: v.skills, coreAssets: v.coreAssets,
         canDelegateTo: v.canDelegateTo, schedule: v.schedule,
       }).catch(() => ({ ok: false }));
-      return r?.ok
-        ? { ok: true, id: r.agent?.id ?? v.name, firstTask: v.firstTask, scheduleError: r.scheduleError }
-        : { ok: false, error: r?.error ?? "unknown" };
+      if (!r?.ok) return { ok: false, error: r?.error ?? "unknown" };
+      const id = r.agent?.id ?? v.name;
+      // Per-agent MCP servers are saved through their own owner-approval'd route
+      // (the create route does not carry them). Only when the owner configured
+      // some in the dialog.
+      let mcpNote = "";
+      if (Array.isArray(v.mcpServers) && v.mcpServers.length) {
+        const m = await send("named-agent.set-mcp-servers", { id, servers: v.mcpServers })
+          .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+        if (m?.ok === false) mcpNote = `; MCP servers were not saved: ${m?.error ?? "unknown"}`;
+      }
+      return { ok: true, id, firstTask: v.firstTask, scheduleError: r.scheduleError, note: mcpNote || undefined };
     },
     onSaved: async (result) => {
       renderNamedAgents();
@@ -2885,6 +2913,123 @@ async function buildAgentConfigDialog(opts) {
   assetsBox.append(attach, assetsList);
   advancedBody.append(assetsBox);
 
+  // ── Per-agent MCP servers (CAP-FB-20260831-MCP-AGENT-UI-01) ──────────────
+  // The agent INHERITS the global MCP set (toggle any OFF just for this agent)
+  // and can ADD its own remote servers. Tokens are handled exactly like the
+  // provider key: never pre-filled, redacted reads only (the hub reads the
+  // global list via the token-free `mcp.servers.global-redacted` route), and
+  // the per-agent list is saved through the owner-approval'd
+  // `named-agent.set-mcp-servers` route on dialog save. Test connection lives in
+  // Settings (that route is Settings-only), so the per-agent editor omits it.
+  const mcpGlobalRes = await send("mcp.servers.global-redacted").catch(() => ({ servers: [] }));
+  const mcpGlobal = Array.isArray(mcpGlobalRes?.servers) ? mcpGlobalRes.servers : [];
+  const mcpGlobalIds = new Set(mcpGlobal.map((s) => s.id));
+  const initialAgentMcp = Array.isArray(opts.initialMcpServers) ? opts.initialMcpServers : [];
+  // A per-agent entry on a global id with enabled:false is a "disabled inherited"
+  // marker; any per-agent entry NOT matching a global id is one of the agent's
+  // own servers (redacted on load — no token).
+  const mcpDisabledGlobal = new Set(
+    initialAgentMcp.filter((s) => mcpGlobalIds.has(s.id) && s.enabled === false).map((s) => s.id),
+  );
+  let mcpOwn = initialAgentMcp.filter((s) => s && !mcpGlobalIds.has(s.id));
+
+  const mcpBox = document.createElement("fieldset");
+  mcpBox.className = "agent-mcp-box";
+  mcpBox.style.border = "1px solid var(--border,#e3e0d9)";
+  mcpBox.style.borderRadius = "8px";
+  mcpBox.style.padding = "10px";
+  mcpBox.style.margin = "0";
+  const mcpLegend = document.createElement("legend");
+  mcpLegend.textContent = "MCP servers";
+  mcpLegend.style.fontWeight = "600";
+  mcpLegend.style.fontSize = "13px";
+  const mcpHint = document.createElement("p");
+  mcpHint.textContent = "Give this agent extra tools from a remote MCP server. It inherits the servers you set in Settings — turn any off just for this agent — and you can add servers only this agent uses.";
+  mcpHint.style.fontSize = "12px";
+  mcpHint.style.color = "var(--muted,#635e56)";
+  mcpHint.style.margin = "0 0 8px";
+  mcpBox.append(mcpLegend, mcpHint);
+
+  const mcpInherited = document.createElement("div");
+  mcpInherited.className = "mcp-server-list";
+  const mcpOwnList = document.createElement("div");
+  mcpOwnList.className = "mcp-server-list";
+  const mcpEditorSlot = document.createElement("div");
+
+  function renderMcpInherited() {
+    mcpInherited.replaceChildren();
+    if (mcpGlobal.length === 0) {
+      const none = document.createElement("p");
+      none.className = "muted";
+      none.style.cssText = "font-size:12px;margin:0 0 6px;";
+      none.textContent = "No global MCP servers to inherit yet — add them in Settings.";
+      mcpInherited.append(none);
+      return;
+    }
+    for (const g of mcpGlobal) {
+      const on = !mcpDisabledGlobal.has(g.id);
+      mcpInherited.append(mcpServerRow({ ...g, enabled: on }, {
+        tag: "Inherited",
+        onToggle: (checked) => {
+          if (checked) mcpDisabledGlobal.delete(g.id);
+          else mcpDisabledGlobal.add(g.id);
+        },
+      }));
+    }
+  }
+  function renderMcpOwn() {
+    mcpOwnList.replaceChildren();
+    for (const s of mcpOwn) {
+      mcpOwnList.append(mcpServerRow(s, {
+        onRemove: () => { mcpOwn = mcpOwn.filter((x) => x.id !== s.id); renderMcpOwn(); },
+      }));
+    }
+  }
+  function openMcpEditor() {
+    mcpEditorSlot.replaceChildren();
+    mcpEditorSlot.append(buildMcpServerEditor({
+      existing: null,
+      showTest: false,
+      hint: "Streamable HTTP or SSE over an https:// URL. A token stays on this device only. Test a connection from Settings → MCP servers.",
+      onSave: (server) => {
+        const norm = normalizeMcpServer(server);
+        if (!norm) {
+          return { ok: false, error: "Enter a valid remote server — an http/sse transport and an http(s) URL." };
+        }
+        if (mcpGlobalIds.has(norm.id)) {
+          return { ok: false, error: `“${norm.id}” collides with an inherited server — pick another name.` };
+        }
+        // Keep the owner-entered token in memory for this session; it is sent on
+        // dialog save through the owner-approval'd route, never before.
+        mcpOwn = [...mcpOwn.filter((x) => x.id !== norm.id), { ...server, id: norm.id }];
+        mcpEditorSlot.replaceChildren();
+        renderMcpOwn();
+        return { ok: true };
+      },
+      onCancel: () => mcpEditorSlot.replaceChildren(),
+    }));
+  }
+  const mcpAddBtn = configButton("Add a server", "secondary");
+  mcpAddBtn.addEventListener("click", openMcpEditor);
+
+  const mcpInheritedLabel = document.createElement("p");
+  mcpInheritedLabel.textContent = "Inherited from Settings";
+  mcpInheritedLabel.style.cssText = "font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted,#635e56);margin:2px 0 4px;";
+  const mcpOwnLabel = document.createElement("p");
+  mcpOwnLabel.textContent = "This agent’s own servers";
+  mcpOwnLabel.style.cssText = "font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted,#635e56);margin:10px 0 4px;";
+
+  renderMcpInherited();
+  renderMcpOwn();
+  mcpBox.append(mcpInheritedLabel, mcpInherited, mcpOwnLabel, mcpOwnList, mcpEditorSlot, mcpAddBtn);
+  advancedBody.append(mcpBox);
+  // Assemble the per-agent list the dialog persists (read by the save handler).
+  const collectAgentMcpServers = () => buildAgentMcpList({
+    globalServers: mcpGlobal,
+    disabledGlobalIds: [...mcpDisabledGlobal],
+    ownServers: mcpOwn,
+  });
+
   // Sticky footer outside the scrollable body (Create / Cancel always visible)
   const footer = document.createElement("div");
   footer.className = "agent-config-footer";
@@ -2973,6 +3118,7 @@ async function buildAgentConfigDialog(opts) {
       name, role, avatar: avatarValue, skills, coreAssets,
       firstTask: selectedTemplate?.firstTask ?? "",
       canDelegateTo, schedule,
+      mcpServers: collectAgentMcpServers(),
     });
     saveBtn.disabled = false;
     if (r?.ok) {

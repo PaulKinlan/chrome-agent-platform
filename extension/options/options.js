@@ -63,6 +63,11 @@ import { createNavigationController } from "../lib/navigation-controller.js";
 import { confirmActionDialog } from "../shared/components.js";
 import { saveFsGrant, wireLocalFolderPickers, regrantFsGrantAccess } from "../lib/fs-grants.js";
 import { mountGrantBrowser } from "../lib/folder-browser.js";
+import {
+  mcpToSavePayload,
+  buildMcpServerEditor,
+  mcpServerRow as buildMcpServerRow,
+} from "../lib/mcp-server-editor.js";
 import { mountSkillsSection } from "../skills/skills-panel.js";
 import {
   capLogReady,
@@ -2868,28 +2873,6 @@ async function renderPrompts() {
 // rendered with textContent — never innerHTML.
 let mcpServers = []; // the REDACTED list (no tokens) mirrored from the SW
 
-function mcpTransportLabel(t) {
-  return t === "sse" ? "SSE" : "HTTP";
-}
-
-// Map the redacted list back to a set/save payload. A redacted server carries
-// { auth:{headerName, hasToken} } — send it as { headerName, token:"" } so the
-// SW's blank-token preservation keeps the stored credential (the page never sees
-// or resends it). A server with no auth stays auth-less.
-function mcpToSavePayload(list, overrides = {}) {
-  return list.map((s) => {
-    const base = {
-      id: s.id,
-      name: s.name,
-      transport: s.transport,
-      url: s.url,
-      enabled: s.enabled !== false,
-    };
-    if (s.auth && s.auth.headerName) base.auth = { headerName: s.auth.headerName, token: "" };
-    return { ...base, ...(overrides[s.id] ?? {}) };
-  });
-}
-
 async function mcpPersist(payload) {
   const res = await boundedSend("mcp.servers.set", { servers: payload }).catch((e) => ({ error: String(e?.message ?? e) }));
   if (res?.error) {
@@ -2929,216 +2912,47 @@ function mcpRenderList() {
     list.append(empty);
     return;
   }
-  for (const s of mcpServers) list.append(mcpServerRow(s));
-}
-
-function mcpServerRow(server) {
-  const card = document.createElement("div");
-  card.className = "mcp-server-card";
-  if (server.enabled === false) card.classList.add("is-disabled");
-  card.dataset.id = server.id;
-
-  const head = document.createElement("div");
-  head.className = "mcp-server-head";
-
-  const idBlock = document.createElement("div");
-  idBlock.className = "mcp-server-id";
-  const nameEl = document.createElement("span");
-  nameEl.className = "mcp-server-name";
-  nameEl.textContent = server.name || server.id;
-  const meta = document.createElement("span");
-  meta.className = "muted mcp-server-meta";
-  const badge = document.createElement("span");
-  badge.className = "mcp-badge";
-  badge.textContent = mcpTransportLabel(server.transport);
-  const urlEl = document.createElement("span");
-  urlEl.className = "mcp-server-url";
-  urlEl.textContent = server.url;
-  meta.append(badge, urlEl);
-  idBlock.append(nameEl, meta);
-
-  const actions = document.createElement("div");
-  actions.className = "mcp-server-actions";
-
-  const toggle = document.createElement("switch-toggle");
-  toggle.setAttribute("label", `Enable ${server.name || server.id}`);
-  if (server.enabled !== false) toggle.setAttribute("checked", "");
-  toggle.addEventListener("toggle", async (e) => {
-    const on = e.detail?.checked === true;
-    await mcpPersist(mcpToSavePayload(mcpServers, { [server.id]: { enabled: on } }));
-    saveFlash(on ? `Enabled ${server.name || server.id}.` : `Disabled ${server.name || server.id}.`);
-  });
-
-  const edit = document.createElement("button");
-  edit.type = "button";
-  edit.className = "btn small ghost";
-  edit.textContent = "Edit";
-  edit.setAttribute("aria-label", `Edit ${server.name || server.id}`);
-  edit.addEventListener("click", () => mcpOpenEditor(server));
-
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.className = "btn small ghost mcp-remove";
-  remove.textContent = "Remove";
-  remove.setAttribute("aria-label", `Remove ${server.name || server.id}`);
-  remove.addEventListener("click", async () => {
-    const rest = mcpServers.filter((x) => x.id !== server.id);
-    if (await mcpPersist(mcpToSavePayload(rest))) saveFlash(`Removed ${server.name || server.id}.`);
-  });
-
-  actions.append(toggle, edit, remove);
-  head.append(idBlock, actions);
-  card.append(head);
-  return card;
+  for (const s of mcpServers) {
+    list.append(buildMcpServerRow(s, {
+      onToggle: async (on) => {
+        await mcpPersist(mcpToSavePayload(mcpServers, { [s.id]: { enabled: on } }));
+        saveFlash(on ? `Enabled ${s.name || s.id}.` : `Disabled ${s.name || s.id}.`);
+      },
+      onEdit: () => mcpOpenEditor(s),
+      onRemove: async () => {
+        const rest = mcpServers.filter((x) => x.id !== s.id);
+        if (await mcpPersist(mcpToSavePayload(rest))) saveFlash(`Removed ${s.name || s.id}.`);
+      },
+    }));
+  }
 }
 
 // The add/edit form. One reused editor panel above the list — no modal (the task
-// needs neither interruption nor protected focus).
+// needs neither interruption nor protected focus). The editor itself is the
+// SHARED mcp-server-editor, so Settings and the per-agent agent dialog match.
 function mcpOpenEditor(existing) {
   const editor = document.getElementById("mcp-editor");
   if (!editor) return;
   const isEdit = Boolean(existing);
+  const close = () => { editor.hidden = true; editor.textContent = ""; };
   editor.textContent = "";
   editor.hidden = false;
-
-  const heading = document.createElement("h3");
-  heading.textContent = isEdit ? "Edit MCP server" : "Add MCP server";
-  heading.className = "mcp-editor-title";
-
-  const grid = document.createElement("div");
-  grid.className = "mcp-editor-grid";
-
-  const nameField = mcpField("Name", "text", existing?.name ?? "", "e.g. My tools");
-  const transportField = mcpSelectField("Transport", existing?.transport ?? "http");
-  const urlField = mcpField("Server URL", "text", existing?.url ?? "", "https://example.com/mcp");
-  const headerField = mcpField("Auth header (optional)", "text", existing?.auth?.headerName ?? "", "Authorization");
-  const tokenField = mcpField(
-    "Auth token (optional)",
-    "password",
-    "",
-    existing?.auth?.hasToken ? "Token set — leave blank to keep" : "Bearer …",
-  );
-  tokenField.input.autocomplete = "off";
-
-  grid.append(nameField.field, transportField.field, urlField.field, headerField.field, tokenField.field);
-
-  const testStatus = document.createElement("div");
-  testStatus.className = "test-status";
-  testStatus.setAttribute("role", "status");
-  testStatus.hidden = true;
-
-  const readForm = () => {
-    const headerName = headerField.input.value.trim();
-    const token = tokenField.input.value;
-    const server = {
-      name: nameField.input.value.trim(),
-      transport: transportField.input.value,
-      url: urlField.input.value.trim(),
-      enabled: existing ? existing.enabled !== false : true,
-    };
-    if (existing?.id) server.id = existing.id;
-    if (headerName) server.auth = { headerName, token };
-    else if (existing?.auth?.hasToken && !token) server.auth = { headerName: existing.auth.headerName, token: "" };
-    return server;
-  };
-
-  const bar = document.createElement("div");
-  bar.className = "mcp-editor-actions";
-
-  const testBtn = document.createElement("button");
-  testBtn.type = "button";
-  testBtn.className = "btn ghost";
-  testBtn.textContent = "Test connection";
-  testBtn.addEventListener("click", async () => {
-    const server = readForm();
-    if (!server.url) { mcpSetStatus(testStatus, "err", "Enter a server URL first."); return; }
-    testBtn.disabled = true;
-    mcpSetStatus(testStatus, "testing", "Testing…");
-    let res;
-    try {
-      res = await boundedSend("mcp.servers.test", { server }, 20000);
-    } catch (e) {
-      res = { ok: false, error: String(e?.message ?? e) };
-    }
-    testBtn.disabled = false;
-    if (res?.ok) {
-      const n = res.toolCount ?? (res.toolNames?.length ?? 0);
-      const names = (res.toolNames ?? []).slice(0, 8).join(", ");
-      const suffix = n === 0 ? "no tools exposed" : `${n} tool${n === 1 ? "" : "s"}${names ? `: ${names}` : ""}`;
-      mcpSetStatus(testStatus, "ok", `Connected — ${suffix}`);
-    } else {
-      mcpSetStatus(testStatus, "err", `Failed — ${res?.error ?? "unknown error"}`);
-    }
-  });
-
-  const saveBtn = document.createElement("button");
-  saveBtn.type = "button";
-  saveBtn.className = "btn primary";
-  saveBtn.textContent = isEdit ? "Save changes" : "Add server";
-  saveBtn.addEventListener("click", async () => {
-    const server = readForm();
-    if (!server.name) { mcpSetStatus(testStatus, "err", "Give the server a name."); return; }
-    if (!server.url) { mcpSetStatus(testStatus, "err", "Enter a server URL."); return; }
-    // Replace by id when editing, else append; the SW normalizes + dedups.
-    const others = mcpServers.filter((x) => x.id !== (existing?.id ?? " "));
-    const payload = [...mcpToSavePayload(others), server];
-    if (await mcpPersist(payload)) {
-      editor.hidden = true;
-      editor.textContent = "";
-      saveFlash(isEdit ? `Saved ${server.name}.` : `Added ${server.name}.`);
-    }
-  });
-
-  const cancelBtn = document.createElement("button");
-  cancelBtn.type = "button";
-  cancelBtn.className = "btn ghost";
-  cancelBtn.textContent = "Cancel";
-  cancelBtn.addEventListener("click", () => { editor.hidden = true; editor.textContent = ""; });
-
-  bar.append(testBtn, saveBtn, cancelBtn);
-  editor.append(heading, grid, testStatus, bar);
-  nameField.input.focus();
+  editor.append(buildMcpServerEditor({
+    existing,
+    showTest: true,
+    onTest: (server) => boundedSend("mcp.servers.test", { server }, 20000),
+    onSave: async (server) => {
+      // Replace by id when editing, else append; the SW normalizes + dedups.
+      const others = mcpServers.filter((x) => x.id !== (existing?.id ?? " "));
+      const payload = [...mcpToSavePayload(others), server];
+      if (await mcpPersist(payload)) {
+        close();
+        saveFlash(isEdit ? `Saved ${server.name}.` : `Added ${server.name}.`);
+      }
+    },
+    onCancel: close,
+  }));
 }
-
-function mcpSetStatus(el, kind, text) {
-  el.hidden = false;
-  el.className = "test-status " + kind;
-  el.textContent = text;
-}
-
-function mcpField(label, type, value, placeholder) {
-  const field = document.createElement("label");
-  field.className = "field";
-  const span = document.createElement("span");
-  span.className = "field-label";
-  span.textContent = label;
-  const input = document.createElement("input");
-  input.type = type;
-  input.value = value;
-  if (placeholder) input.placeholder = placeholder;
-  field.append(span, input);
-  return { field, input };
-}
-
-function mcpSelectField(label, value) {
-  const field = document.createElement("label");
-  field.className = "field";
-  const span = document.createElement("span");
-  span.className = "field-label";
-  span.textContent = label;
-  const input = document.createElement("select");
-  input.className = "input-select";
-  for (const [val, text] of [["http", "Streamable HTTP"], ["sse", "SSE (legacy)"]]) {
-    const opt = document.createElement("option");
-    opt.value = val;
-    opt.textContent = text;
-    if (val === value) opt.selected = true;
-    input.append(opt);
-  }
-  field.append(span, input);
-  return { field, input };
-}
-
 // ── helpers ──
 function escapeAttr(s) {
   return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
