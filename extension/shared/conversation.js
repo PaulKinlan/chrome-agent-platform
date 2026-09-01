@@ -1693,7 +1693,15 @@ export async function runConversationTurn(container, { text, attachments = [], h
   try {
     const summary = await send("provider.permission-summary");
     if (!summary?.local) {
-      if (!summary?.origin) throw new Error("configured provider origin is invalid");
+      if (!summary?.origin) {
+        // The gate's own reason (a missing vs an invalid base URL) is the
+        // message — never a bare "origin is invalid" that blames the origin
+        // when the config simply has no base URL
+        // (CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01).
+        const configError = new Error(String(summary?.reason || "configured provider origin is invalid"));
+        configError.providerConfigProblem = true;
+        throw configError;
+      }
       const granted = await chrome.permissions.contains({ origins: [summary.origin] }).catch(() => false);
       if (!granted) {
         const err = {
@@ -1718,17 +1726,16 @@ export async function runConversationTurn(container, { text, attachments = [], h
     // PROVIDER-ERROR-TRUTH-01). An invalid/missing endpoint is a provider
     // configuration problem, not a host-permission one.
     const detail = String(e?.message ?? e ?? "unknown");
-    const configProblem = /origin is invalid/i.test(detail);
+    const configProblem = e?.providerConfigProblem === true || /origin is invalid/i.test(detail);
     const err = {
       ok: false,
       failed: true,
       error: configProblem
-        ? "the provider endpoint is not configured — the run did not start"
+        ? `the provider endpoint is not configured — ${detail} — the run did not start`
         : `provider permission preflight failed closed: ${detail}`,
       errorCategory: configProblem ? "provider-config" : "host-permission",
-      errorReason: configProblem
-        ? "the configured provider has no valid https:// endpoint"
-        : detail,
+      // The gate's reason IS the message (a missing vs an invalid base URL).
+      errorReason: detail,
       errorAction: configProblem
         ? "Set the provider endpoint in Settings → Providers (choose a preset or enter a valid base URL), then run the task again."
         : "grant the exact provider origin in Settings, then run this task again",

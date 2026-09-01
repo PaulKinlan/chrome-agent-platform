@@ -9,12 +9,13 @@ import { publicProviderChoices } from "../../lib/provider-visibility.js";
 import { keyedProviderConfigured } from "../../lib/first-run-onboarding.js";
 import {
   isLocalProvider,
+  providerEndpointProblem,
   providerOriginPattern,
   providerRunGate,
 } from "../../lib/provider-gate.js";
 import { testProvider } from "../../lib/provider-test.js";
 import { defaultModelFor } from "../../lib/model-catalog.js";
-import { withEffectiveBaseURL } from "../../lib/provider.js";
+import { effectiveBaseURL } from "../../lib/provider.js";
 import { safeProviderError } from "../../lib/pure.js";
 import { requireSettingsSender } from "./auth.js";
 
@@ -35,12 +36,13 @@ export function createProviderRoutes({ invalidateAgent = () => {} } = {}) {
 
     async "provider.summary"() {
       // A REDACTED summary for non-Settings surfaces (which provider is active,
-      // the baseURL needed for the host-permission pattern, and a boolean setup
-      // state). Neither the raw key nor the model crosses into a non-Settings DOM.
+      // the EFFECTIVE baseURL needed for the host-permission pattern, and a
+      // boolean setup state). Neither the raw key nor the model crosses into a
+      // non-Settings DOM.
       const cfg = await getProviderConfig();
       return {
         provider: cfg.provider,
-        baseURL: cfg.baseURL ?? "",
+        baseURL: effectiveBaseURL(cfg),
         configured: keyedProviderConfigured(cfg),
       };
     },
@@ -48,12 +50,19 @@ export function createProviderRoutes({ invalidateAgent = () => {} } = {}) {
     async "provider.permission-summary"() {
       // Permission preflight must not pull the provider key/model/base URL into a
       // non-settings DOM. Return only the normalized origin match needed by the
-      // owner surface; malformed network endpoints fail closed as unavailable.
+      // owner surface; a network endpoint that cannot derive an origin fails
+      // closed with the gate's own reason (a missing vs an invalid base URL),
+      // so the run bubble names the actual problem — never a bare "origin is
+      // invalid" for a config that simply has no base URL
+      // (CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01). The preset base URL is
+      // resolved inside providerOriginPattern itself.
       const cfg = await getProviderConfig();
+      const problem = providerEndpointProblem(cfg);
       return {
         provider: String(cfg.provider ?? "").slice(0, 80),
         local: isLocalProvider(cfg),
-        origin: providerOriginPattern(withEffectiveBaseURL(cfg)),
+        origin: providerOriginPattern(cfg),
+        reason: problem ? problem.reason : "",
       };
     },
 
@@ -65,14 +74,10 @@ export function createProviderRoutes({ invalidateAgent = () => {} } = {}) {
       const cfg = await getProviderConfig();
       // A network provider with no valid https:// origin cannot run — the
       // run-time preflight refuses it — so the hub strip must be red BEFORE the
-      // run, not only after (CAP-FB-20260830-PROVIDER-ERROR-TRUTH-01).
-      if (!isLocalProvider(cfg) && !providerOriginPattern(withEffectiveBaseURL(cfg))) {
-        return {
-          provider: cfg.provider ?? "",
-          ok: false,
-          reason: "the provider endpoint is not configured — set it in Settings → Providers",
-        };
-      }
+      // run, not only after (CAP-FB-20260830-PROVIDER-ERROR-TRUTH-01). The gate
+      // itself now carries that refusal (`base_url_missing` / `base_url_invalid`,
+      // CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01), so status reports the
+      // gate's reason — ONE source of truth for every surface.
       const gate = await providerRunGate(cfg);
       // An empty model id runs the catalogue default — say so (the default is
       // a public catalogue id, not user data), so the hub and the journeys can
@@ -103,11 +108,17 @@ export function createProviderRoutes({ invalidateAgent = () => {} } = {}) {
       const cfg = m?.config ?? {};
       // Local providers (demo / prompt-api) need no model id — never gate them.
       const isLocal = isLocalProvider(cfg);
+      const choice = PROVIDER_CHOICES.find((p) => p.id === cfg.provider) ?? null;
+      // An id the product does not know can never resolve a model, a preset
+      // endpoint or a catalogue default — refuse it up front and keep the
+      // previous config (CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01).
+      if (!choice) {
+        return { ok: false, error: "unknown provider", reason: "unknown provider", provider: String(cfg.provider ?? "").slice(0, 80) };
+      }
       // A provider that needs a model id must have one — an explicit id or the
       // catalogue default. An empty model with no catalogue would silently run
       // the demo model for a REAL provider id; refuse and keep the previous
       // model (CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01).
-      const choice = PROVIDER_CHOICES.find((p) => p.id === cfg.provider) ?? null;
       const needsModel = !isLocal && choice?.needsModel !== false;
       if (needsModel && !String(cfg.model ?? "").trim() && !defaultModelFor(cfg.provider)) {
         const cur = await getProviderConfig();

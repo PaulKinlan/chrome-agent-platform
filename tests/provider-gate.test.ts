@@ -793,3 +793,43 @@ Deno.test("providerRunGate: an EXPLICIT model passes for a no-catalogue provider
   // next refusal point outside a browser.
   assertEquals(g.code, "permission_required");
 });
+
+// ── CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01 ──────────────────────────────
+// The preset base URL must resolve through ONE helper everywhere the origin is
+// derived — including the gate's own pattern derivation, not only the callers
+// that remember to wrap the config first. A preset provider with no stored base
+// URL has a real origin; a BYO endpoint with no URL is refused BEFORE the host
+// check with a reason that names the missing base URL (not "origin is invalid").
+Deno.test("providerOriginPattern derives the preset origin for {provider:'openai'} with no baseURL", () => {
+  assertEquals(providerOriginPattern({ provider: "openai", baseURL: "" }), "https://api.openai.com/*");
+  assertEquals(providerOriginPattern({ provider: "anthropic" }), "https://api.anthropic.com/*");
+  assertEquals(providerOriginPattern({ provider: "gemini", baseURL: "" }), "https://generativelanguage.googleapis.com/*");
+  assertEquals(providerOriginPattern({ provider: "deepseek", baseURL: "" }), "https://api.deepseek.com/*");
+  // A stored URL still wins over the preset.
+  assertEquals(providerOriginPattern({ provider: "openai", baseURL: "https://proxy.example/v1" }), "https://proxy.example/*");
+  // The BYO entry has no preset: still nothing to derive.
+  assertEquals(providerOriginPattern({ provider: "openai-compatible", baseURL: "" }), null);
+});
+
+Deno.test("providerRunGate reports base_url_missing for a BYO provider with no baseURL", async () => {
+  recordProviderSuccess(); // clean breaker
+  const g = await providerRunGate({
+    provider: "openai-compatible",
+    baseURL: "",
+    apiKey: "k",
+    model: "grok-4.6",
+  });
+  assertEquals(g.ok, false);
+  assertEquals(g.code, "base_url_missing");
+  assert(/base URL/.test(g.reason), "the reason must name the missing base URL");
+  assert(/Settings/.test(g.reason), "the reason must point at Settings");
+});
+
+Deno.test("providerRunGate: a preset provider with no baseURL is NOT refused for its base URL", async () => {
+  recordProviderSuccess(); // clean breaker
+  const g = await providerRunGate({ provider: "openai", baseURL: "", apiKey: "k", model: "gpt-5.6-sol" });
+  // The base URL resolved to the preset, so the gate proceeds to the
+  // host-permission step (the next refusal point outside a browser).
+  assert(g.code !== "base_url_missing", `expected the preset to resolve, got ${g.code}`);
+  assertEquals(g.code, "permission_required");
+});
