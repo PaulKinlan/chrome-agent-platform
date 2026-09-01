@@ -31,15 +31,7 @@ const MAX_TOMBSTONES = 512;
 const TOMBS_FILE = "__tombs.json";
 const INTERNAL_FILE_RE = /^(?:__gen\.json|__tombs\.json|__epoch\.json|.*\.tomb)$/;
 
-/** FNV-1a 32-bit (a deterministic per-key absence seed). */
-function fnv1a32(text) {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < text.length; i++) {
-    h ^= text.charCodeAt(i);
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return h >>> 0;
-}
+// The FNV-1a 32-bit absence seed is lib/pure.js's fnv1a (single source).
 
 /** A per-key, NEGATIVE absence version — disjoint from the positive write
  * generations, distinct across keys (the low 20 bits are the key's hash), and
@@ -47,7 +39,7 @@ function fnv1a32(text) {
  * version, so a stale pre-fold token never matches a post-fold absent key). */
 function absentVersion(key, floor) {
   const f = Number.isSafeInteger(floor) && floor >= 0 ? floor : 0;
-  return -((f + 1) * 0x100000 + (fnv1a32(String(key)) & 0xfffff) + 1);
+  return -((f + 1) * 0x100000 + (fnv1a(String(key)) & 0xfffff) + 1);
 }
 
 /** Bootstrap the global generation when upgrading from the former per-key
@@ -163,6 +155,7 @@ async function currentVersion(dir, key) {
 }
 
 import { kvGet } from "./kv.js";
+import { fnv1a } from "./pure.js";
 
 const ENROLL_KEY = "cap:enrollment";
 

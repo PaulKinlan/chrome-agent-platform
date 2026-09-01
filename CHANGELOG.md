@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.606] — 2026-09-01
+- Housekeeping: the memory store's hash seed comes from the shared helper module; the single-source guard now also watches the UTF-8 truncation helper.
+
 ## [0.2.605] — 2026-09-01
 - Housekeeping: the workspace, code-diff and Wasm package digests now come from one shared SHA-256 helper instead of three private copies.
 

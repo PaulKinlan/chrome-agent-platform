@@ -30,6 +30,9 @@ const FAMILIES: Array<{ canonical: string; aliases: string }> = [
   { canonical: "timeAgo", aliases: "timeAgo\\w*" },
   { canonical: "sha256Hex", aliases: "sha256\\w*|digestBytes" },
   { canonical: "sha256HexBytes", aliases: "" },
+  { canonical: "fnv1a", aliases: "fnv1a\\w*" },
+  { canonical: "fnv1a64", aliases: "" },
+  { canonical: "truncateUtf8", aliases: "truncateUtf8\\w*" },
 ];
 const CANONICAL_NAMES = FAMILIES.map((f) => f.canonical);
 const ALIAS_GROUP = FAMILIES.map((f) => f.aliases).filter(Boolean).join("|");
@@ -40,6 +43,11 @@ const ARROW_ALIAS_RE = new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+(${A
  * (non-module) content script has no import statement to point at pure.js. */
 const ALLOWED_COPIES = new Set<string>([
   "content/bridge-auth.js:sha256Bytes", // plain script injected into both worlds — no modules there
+  // tests/tabular-diff-artifacts.test.ts asserts the tabular pure core has NO
+  // imports at all (its custody contract), so its ellipsis-truncation stays
+  // local. It is byte-budget-equivalent to pure.js's truncateUtf8 for
+  // well-formed input; the guard still fails on any THIRD copy.
+  "lib/tabular-diff-artifacts-core.js:truncateUtf8",
 ]);
 
 /** Which of the pattern guards below are armed (each lane armed its own). */
@@ -75,6 +83,7 @@ Deno.test("single-source: each shared helper is defined exactly once, in lib/pur
   for (const name of CANONICAL_NAMES) {
     const sites: string[] = [];
     for (const [rel, text] of files) {
+      if (ALLOWED_COPIES.has(`${rel}:${name}`)) continue;
       const n = definitionSites(text, name);
       for (let i = 0; i < n; i++) sites.push(rel);
     }
