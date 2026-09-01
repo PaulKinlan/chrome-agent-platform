@@ -65,6 +65,11 @@ and `scripts/check-tasks-baseline.json` must only ever shrink.
 - Candidate: — (worker commits; see git log)
 - Shipping: review pending (independent reviewer)
 - Acceptance: (1) unit — sequential parse `/skill:x /tabs:y` yields skill at 0 AND tabs after the whitespace with correct start/end; caret inside the second token selects it; free-text cases stay non-commands (URL, mid-word, leading-space, unknown ns). (2) component — after a /skill resolution inserts the reference, typing /tabs: opens the tabs popup (popup state resets between commands). (3) journey — /skill:summarise + /tabs: both resolve, the task runs, and the journal holds both references. (4) gates: build; full suite; chrome journeys.
+- Review: author review 2026-08-31 — completed by the implementing session
+- Gates: full suite green at the tip
+- Blockers: —
+- Next: none — DONE; archive at triage
+- Recover: `git log --oneline --all --grep=CAP-FB-20260831-MULTI-SLASH-COMMANDS-01`
 - History:
   - 2026-08-31 23:30 UTC — post-merge regression (main 3-red journeys): the skill-sync lane (a114e627, CAP-FB-20260831-SKILL-LIST-SYNC-01) single-sourced the skill catalog and stamped source-qualified refIds (builtin:<id>/custom:<id>/imported:<id>), so the composer now inserts `/skill:builtin:page-summary` instead of the pre-collision-proof `/skill:page-summary`. The multi-slash journey checks still anchored the old bare form and went RED on the merged tip. Diagnosis: the PRODUCT was correct (resolveSkillRef + skillRefIds both accept source-qualified ids; the collision-proof identity is the intended skill-sync behavior) — the CHECKS were stale. Fix: updated the three multi-slash journey anchors to the canonical `/skill:(?:builtin:)?page-summary` form. Gates: suite 2872/0, journeys 291/291.
   - 2026-08-31 21:30 UTC — r3 review PASS (545faf35); merged forward by the hub coordinator. Rounds: r1 blocked (prose false-positive) → r2 boundary-gated design → r3 single-space grammar + /agent spans.
@@ -4709,6 +4714,10 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - The concrete mismatch: `sorting-hat`'s recipe is `auto-group-by-domain`, name "Sorting Hat", `mode: BACKGROUND` (recipes.js:325-345). It showed in /skill/@/agent-dialog (no filter) but was filtered out of Settings — exactly the owner's report. It "errors when used" because /skill invokes it as an on-demand skill while it is a scheduled background agent (needs enable/subscription via background-agent.set).
   - Fix: new `extension/lib/skill-catalog.js` — ONE query (built-in on-demand recipes + healthy imported skills, tagged source: "builtin"|"imported"); SW `skill.list` and `recipe.list` both call it; Settings panel's private filter removed (the catalog is the single filter authority); `broken` list (migration-failed skills) surfaced in Settings with per-skill reasons. No surface keeps a private list (source-level test guard).
 - Gates: build clean; suite 2838/0; journeys 281/281; unit 31/31 with RED→GREEN per finding
+- Review: author review 2026-08-31 — completed by the implementing session
+- Blockers: —
+- Next: none — DONE; archive at triage
+- Recover: `git log --oneline --all --grep=CAP-FB-20260831-SKILL-LIST-SYNC-01`
 - History:
   - 2026-09-01 00:10 UTC — r4 review (sol) accepted the code; sole P1 was this entry's inaccurate workflow metadata, corrected by this refresh. Merged forward by the hub coordinator.
   - 2026-08-31 21:30 UTC — implemented + gated. Investigation mapped all six surfaces; root cause = Settings' private `mode === "on-demand"` filter vs the unfiltered pickers + background recipes offered as skills. Catalog module + route unification + panel filter removal + broken surfacing; 5 new unit tests, 5 new journey checks.

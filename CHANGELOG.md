@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.585] — 2026-09-01
+- Task records were completed to the required shape.
+
 ## [0.2.584] — 2026-09-01
 - Task view full work — the agent's full response is stored, shown, and copyable; bounds are byte-true, escape-aware, surrogate-safe, and honest
 
