@@ -26,7 +26,9 @@ import {
   wireHtmlFramePreference,
   currentFramePreference,
   confirmActionDialog,
+  escapeHtml,
 } from "../shared/components.js";
+import { sleep, timeAgo } from "../lib/pure.js";
 import { canonicalRef, findAgentByRef } from "../shared/agent-registry.js";
 import { agentScheduleMarker, backgroundAgentsForDisplay } from "../shared/agent-display.js";
 import { buildTemplateSelect } from "../lib/agent-template-select.js";
@@ -288,13 +290,6 @@ function setStatus(text, ready = true) {
   if (!idle && ready) {
     statusTimer = setTimeout(() => setStatus("ready"), 3000);
   }
-}
-
-function escapeHtml(s) {
-  return String(s).replace(
-    /[&<>"]/g,
-    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]),
-  );
 }
 
 function shortOrigin(o) {
@@ -602,7 +597,7 @@ async function discoverActivePage() {
     if (listing?.ok && Array.isArray(listing.tabs) && listing.tabs.length === 0) {
       const deadline = Date.now() + 5000;
       while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 500));
+        await sleep(500);
         listing = await send("agent.discoverable-tabs").catch(() => ({ ok: false }));
         if (!listing?.ok || !Array.isArray(listing.tabs) || listing.tabs.length > 0) break;
       }
@@ -1290,15 +1285,7 @@ async function renderHubUsage() {
 }
 
 // ── Tasks (the distinct task threads) ────────────────────────────────────
-function timeAgo(ts) {
-  const d = Date.now() - (ts ?? 0);
-  const m = Math.floor(d / 60000);
-  if (m < 1) return "just now";
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
+// timeAgo is imported from lib/pure.js (the same one the components use).
 
 const taskSidebarLifecycle = createTaskSidebarLifecycle({
   // A list message can wake a restarting MV3 worker before its routes are
@@ -1306,7 +1293,7 @@ const taskSidebarLifecycle = createTaskSidebarLifecycle({
   // boot grace period; every render remains event/navigation-driven.
   loadThreads: () => loadThreadsWithOneRestartRetry(
     () => send("thread.list"),
-    () => new Promise((resolve) => setTimeout(resolve, 400)),
+    () => sleep(400),
   ),
   commitThreads: renderTaskRows,
 });
@@ -2102,7 +2089,7 @@ async function openThread(id) {
   // retry the read once before settling (the run-lifecycle resilience fix).
   let res = await send("thread.get", { id }).catch(() => ({ ok: false }));
   if (!(res.ok && res.thread)) {
-    await new Promise((r) => setTimeout(r, 400)); // let a restarting SW boot
+    await sleep(400); // let a restarting SW boot
     res = await send("thread.get", { id }).catch(() => ({ ok: false }));
   }
   // Another open/run may have claimed the surface during either await. Fence

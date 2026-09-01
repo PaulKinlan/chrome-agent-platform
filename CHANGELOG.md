@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.609] — 2026-09-01
+- Every screen now escapes untrusted text the same strict way, so a name like O'Brien can never break the page.
+
 ## [0.2.608] — 2026-09-01
 - Editing files in a shared folder is now a fully supported agent action.
 

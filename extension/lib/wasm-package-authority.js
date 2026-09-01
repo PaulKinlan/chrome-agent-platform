@@ -6,7 +6,7 @@
 // permission, network, filesystem, or execution surface.
 
 import { masterMemory } from "./memory.js";
-import { sha256Hex } from "./pure.js";
+import { sha256Hex, sha256HexBytes } from "./pure.js";
 
 export const LANES = Object.freeze(["bundled"]);
 export const WASM_PACKAGE_LIMITS = Object.freeze({
@@ -344,15 +344,6 @@ function withoutSignature(manifest) {
   return clone;
 }
 
-function bytesToHex(bytes) {
-  return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
-}
-
-async function digestBytes(bytes) {
-  const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes ?? []);
-  return bytesToHex(new Uint8Array(await crypto.subtle.digest("SHA-256", data)));
-}
-
 function encodeU32(value) {
   const out = [];
   let current = BigInt(value);
@@ -613,7 +604,7 @@ export class WasmPackageAuthority {
     const verified = new Map();
     for (const [rel, entry] of declared) {
       const bytes = new Uint8Array(await inventory.readFile(rel));
-      if (bytes.byteLength !== entry.size || await digestBytes(bytes) !== entry.sha256) fail("inventory_mismatch", rel);
+      if (bytes.byteLength !== entry.size || await sha256HexBytes(bytes) !== entry.sha256) fail("inventory_mismatch", rel);
       verified.set(rel, bytes);
     }
     this._inventoryFiles = verified;
@@ -635,15 +626,15 @@ export class WasmPackageAuthority {
     for (const executable of manifest.executables) {
       const bytes = new Uint8Array(files.get(executable.sha256) ?? []);
       if (bytes.byteLength !== executable.size) fail("size_mismatch", executable.id);
-      if (await digestBytes(bytes) !== executable.sha256) fail("digest_mismatch", executable.id);
+      if (await sha256HexBytes(bytes) !== executable.sha256) fail("digest_mismatch", executable.id);
       const rel = `extension/wasm/cas/${executable.sha256}.wasm`;
       const inventoryBytes = this._inventoryFiles.get(rel);
-      if (!inventoryBytes || inventoryBytes.byteLength !== bytes.byteLength || await digestBytes(inventoryBytes) !== executable.sha256) fail("inventory_mismatch", rel);
+      if (!inventoryBytes || inventoryBytes.byteLength !== bytes.byteLength || await sha256HexBytes(inventoryBytes) !== executable.sha256) fail("inventory_mismatch", rel);
       if (!this._largeEvidence(executable)) fail("tier_blocked", executable.id);
       measured.push({ id: executable.id, ...auditWasmBinary(bytes, executable, { allowLarge: executable.memory.tier === "large" }) });
     }
     const sbom = this._inventoryFiles.get(manifest.sbom.ref);
-    if (!sbom || await digestBytes(sbom) !== manifest.sbom.sha256) fail("sbom_mismatch");
+    if (!sbom || await sha256HexBytes(sbom) !== manifest.sbom.sha256) fail("sbom_mismatch");
     if (!this._inventoryFiles.has(manifest.license.file) || (manifest.license.notices && !this._inventoryFiles.has(manifest.license.notices))) fail("provenance_incomplete");
     return measured;
   }

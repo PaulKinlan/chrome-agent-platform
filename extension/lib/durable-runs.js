@@ -18,7 +18,7 @@ import {
   siteMemory,
 } from "./memory.js";
 import { REPLAY_MUTATING, perCallIdempotencyKey, worstSafety } from "./tool-replay-safety.js";
-import { redactSecretText } from "./pure.js";
+import { newId, redactSecretText } from "./pure.js";
 import { commitThreadCancellation, commitThreadTerminal } from "./threads.js";
 import { isNativeQuotaExceededError } from "./storage-errors.js";
 import {
@@ -230,7 +230,7 @@ function storeForTarget(target) {
 }
 
 function newBootId() {
-  return `boot_${Date.now().toString(36)}_${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`;
+  return newId("boot");
 }
 
 /**

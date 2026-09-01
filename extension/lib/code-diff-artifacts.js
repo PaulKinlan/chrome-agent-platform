@@ -8,6 +8,7 @@
 // route, approval, provider, OPFS, WebAssembly, or mutation authority.
 
 import { ASSET_BOUNDS, createAssetKeyed, getAsset } from "./artifacts.js";
+import { sha256HexBytes } from "./pure.js";
 
 export const CODE_DIFF_MEDIA = "application/x-cap-code-diff@1";
 export const CODE_DIFF_LIMITS = Object.freeze({
@@ -122,12 +123,6 @@ function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   const keys = Object.keys(value).sort();
   return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
-}
-
-async function sha256Hex(bytes) {
-  const source = typeof bytes === "string" ? textEncoder.encode(bytes) : bytes;
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", source));
-  return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function compareUtf8(left, right) {
@@ -383,9 +378,9 @@ export async function buildPatchIdentity(input) {
   const changeDoc = validateChangeDocument(value.changeDoc);
   const expected = expectedBaseResult(changeDoc);
   if (canonicalJson(base) !== canonicalJson(expected.base) || canonicalJson(result) !== canonicalJson(expected.result)) fail("identity_change_mismatch");
-  const changes = await sha256Hex(canonicalJson(changeDoc));
+  const changes = await sha256HexBytes(canonicalJson(changeDoc));
   const tuple = { schemaVersion: 1, producer, context, inputs, base, result, changes, media: CODE_DIFF_MEDIA };
-  const identity = await sha256Hex(canonicalJson(tuple));
+  const identity = await sha256HexBytes(canonicalJson(tuple));
   return Object.freeze({ identity, artifactKey: `opfs:code-diff:${identity}`, tuple: Object.freeze(tuple) });
 }
 
@@ -447,7 +442,7 @@ async function preflightCas(changeDoc, casInput) {
     if (row.bytes.byteLength > MAX_RETAINED_BLOB_BYTES) fail("cas_budget_exceeded", row.sha256);
     total += row.bytes.byteLength;
     if (total > MAX_RETAINED_CAS_BYTES) fail("cas_budget_exceeded", "total bytes");
-    if (await sha256Hex(row.bytes) !== row.sha256) fail("cas_digest_mismatch", row.sha256);
+    if (await sha256HexBytes(row.bytes) !== row.sha256) fail("cas_digest_mismatch", row.sha256);
     const rule = required.get(row.sha256);
     if (rule.sizes.size > 1 || (rule.sizes.size === 1 && !rule.sizes.has(row.bytes.byteLength))) fail("cas_size_mismatch", row.sha256);
     if (rule.encodings.has("utf8")) {
@@ -545,7 +540,7 @@ export async function retainPatch(input, apiInput = null) {
     try { envelope = JSON.parse(read.asset.content); } catch { fail("cas_write_verify_failed", blob.sha256); }
     if (!envelope || envelope.schemaVersion !== 1 || envelope.encoding !== "base64" || envelope.sha256 !== blob.sha256 || envelope.size !== blob.bytes.byteLength || typeof envelope.bytes !== "string") fail("cas_write_verify_failed", blob.sha256);
     const reread = fromBase64(envelope.bytes);
-    if (reread.byteLength !== blob.bytes.byteLength || await sha256Hex(reread) !== blob.sha256) fail("cas_write_verify_failed", blob.sha256);
+    if (reread.byteLength !== blob.bytes.byteLength || await sha256HexBytes(reread) !== blob.sha256) fail("cas_write_verify_failed", blob.sha256);
     retained.push({ sha256: blob.sha256, id: created.id });
   }
   const summary = counts(changeDoc);
