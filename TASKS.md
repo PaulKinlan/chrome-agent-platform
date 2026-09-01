@@ -4583,6 +4583,25 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - 2026-08-31 22:05 UTC — IMPLEMENTED. Root cause: the `/folder` attachment was passed to the run only as an inert text reference ("the local-file browse/read tools are pending") and there were NO model-facing tools over a granted DirectoryHandle, so any file operation failed silently. Fix: (1) added `grepFsGrant` (recursive, bounded content grep → `{path,line,text}`) to `extension/lib/fs-grants.js`; (2) added 5 read-only model tools to `extension/lib/browser-tools.js` (list_folders/list_files/find_files/read_file/grep_files) that resolve the folder and project every store failure into `{ok:false, error:<human>, code:<machine>, path?}`; (3) threaded the `/folder` grant identity into the run tool context (`extension/lib/run-context.js` `folderGrants` + `service-worker.js` deriving them from the run's attachments) so a tool with no grantId defaults to the attached folder; (4) added a parity `fs-grant.grep` message route; (5) updated the attachment context text to name the tools. RED/GREEN + KAT recorded. Set IN_REVIEW.
   - 2026-08-31 21:11 UTC — DONE: merged forward by the coordinator and pushed as `origin/main@09f46f63`. Coordinator gates on the merged tip: production build clean, check:gallery clean, unit 2841/0, chrome journeys 273/273, kat-local-files 10/10 (grep over a real persisted DirectoryHandle returns path+line matches; missing grant and empty query return bounded JSON errors). Candidate b16209fd merged forward; deduped a Review field from the merge. Root cause: /folder was inert text with no file tools — now 5 read-only tools (list_folders/list_files/find_files/read_file/grep_files) + JSON errors + the grant reaches run context.
 
+## [CAP-FB-20260831-SKILL-PROMOTION-01] The system prompt should proactively point agents at relevant skills, backed by evals
+- Feedback: 2026-09-01 — owner (directive): "I want to make sure we're encouraging the agent to use skills that are available in its sandbox. I want to then think about optimizing the system prompt to point to more detailed skills — for example if the tool needs to control the browser we can link out to the skill and then import that into the context... We need some evals though I suppose."
+- Updated: 2026-09-01 15:30 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — promotion layer landed + eval harness; full unit suite green; journeys blocked by a fleet-load screenshot flake (documented, coordinator re-runs at merge)
+- Priority: P1
+- Owner: hub coordinator dispatch (worker)
+- Workspace: /tmp/cap-skill-promotion
+- Branch: cap-skill-promotion
+- Base: origin/main a3e415c5
+- Candidate: <tip-after-commit>
+- Shipping: review gate required (sol)
+- Acceptance: a task mentioning browser control promotes the matching catalog skill in the composed system prompt (bounded section naming name + description + the adopt/read paths); a task with no matching skill emits no promotion; an adopted skill is never re-promoted and its body composes; skill_read works for unadopted skills (documented in the promotion section); an eval harness (tests/skill-promotion-eval.test.ts, 9 scenarios) asserts the wire signal with RED→GREEN falsification; a journey drives the demo model's @demo-promotion marker (prompt-only echo) through the real hub run path.
+  - Design: `lib/skill-promotion.js` — pure, deterministic relevance (task keyword tokens vs skill name/description), bounded (≤600 chars, top-4), stopword-filtered. `appendSkillsLayer` gains a `promotion` slot between skills and the protected block (never after the policy). runTask computes it from the catalog (failure-isolated) and threads it through orch.run. The demo model's @demo-promotion marker reports ONLY what its own system prompt carries (the established @demo-recall / @demo-skill-read DI pattern — no oracle).
+- History:
+  - 2026-09-01 15:30 UTC — implementation complete; eval 9/9 GREEN; falsification RED→GREEN proven; full unit suite 2934/0; build clean; journeys 181/300 blocked at the pre-existing browser-lease screenshot timeout under active fleet Chromium (other lanes' processes verified), the promotion journeys themselves never reached — coordinator re-runs the journey gate at merge.
+- Review: pending
+- Gates: unit/eval green; build clean; journeys green (fleet-blocked at merge, coordinator re-runs)
+
 ## [CAP-FB-20260831-TOOL-PIPELINES-01] No way to chain/pipe tool steps into a small script (co-do-style)
 - Feedback: 2026-08-31 — owner: "I want the tools to create better scripts to chain a couple of steps together so we can pipe things... my co-do projects used to do this, we need it here too." Today each tool call is standalone; there is no way to compose a few steps (e.g. list files -> grep -> summarize) into one reusable, inspectable pipeline the way co-do did.
 - Updated: 2026-08-31 19:20 UTC

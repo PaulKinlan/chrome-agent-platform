@@ -676,6 +676,8 @@ const EXPECTED = [
   "skill sync: the colliding imported skill is offered as imported:<id>, and NO background recipe row is offered",
   "skill sync: the colliding id serves the IMPORTED skill body, never the background recipe's prompt",
   "skill sync: deleting the colliding import removes it from the catalog",
+  "skill promotion: a browser-control task's system prompt names adoptable skills (reached the wire)",
+  "skill promotion: an unrelated task carries NO promotion section on the wire",
   "no service-worker console errors",
   "no SW Runtime.enable errors (auto-attach)",
   "no NTP/Settings console errors",
@@ -5927,6 +5929,32 @@ async function main() {
     check(
       "skill sync: deleting the colliding import removes it from the catalog",
       !(collideGone?.skills ?? []).some((s: { id?: string }) => s?.id === "auto-group-by-domain" && s?.source === "imported"),
+    );
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 10.5 — skill PROMOTION (CAP-FB-20260831-SKILL-PROMOTION-01):
+    // a fresh agent (no skills attached) running a task that mentions browser
+    // control must receive the promotion section in its SYSTEM PROMPT. The
+    // demo model's @demo-promotion marker only echoes its own prompt — so a
+    // passing check is evidence about the WIRE (the promotion reached the
+    // model), not about the catalog.
+    // ─────────────────────────────────────────────────────────────
+    const promoRun = await msgValue({ type: "agent.run", task: "@demo-promotion control the browser and capture a screenshot", id: `promo-${Date.now()}` });
+    const promoText = String(promoRun?.result ?? "");
+    console.log(`skill promotion (browser task): ${promoText.slice(0, 220)}`);
+    check(
+      "skill promotion: a browser-control task's system prompt names adoptable skills (reached the wire)",
+      promoRun?.ok === true && /promotion: present/.test(promoText) &&
+        /browser-testing/.test(promoText) && promoText.includes("adopt with /skill:"),
+    );
+    // A task with no matching catalog skill must NOT promote (the section is
+    // absent from the wire — the honest negative).
+    const noPromoRun = await msgValue({ type: "agent.run", task: "@demo-promotion write a haiku about autumn", id: `nopromo-${Date.now()}` });
+    const noPromoText = String(noPromoRun?.result ?? "");
+    console.log(`skill promotion (unrelated task): ${noPromoText.slice(0, 160)}`);
+    check(
+      "skill promotion: an unrelated task carries NO promotion section on the wire",
+      noPromoRun?.ok === true && /promotion: absent/.test(noPromoText),
     );
 
     // ─────────────────────────────────────────────────────────────

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.598] — 2026-09-01
+- Skill promotion: proactively point agents at adoptable catalog skills for the task, with an eval harness
+
 ## [0.2.597] — 2026-09-01
 - Dialog work — searchable grouped customizable select for agent templates with both-scheme contrast gates
 

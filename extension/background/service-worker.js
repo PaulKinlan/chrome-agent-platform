@@ -2914,6 +2914,19 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // agent sees what came before).
       let result;
       let runOutcome = null; // raw result or a provider's explicit { text, aborted } outcome
+      // Skill PROMOTION (CAP-FB-20260831-SKILL-PROMOTION-01): when this run's
+      // agent has NO relevant skills attached, a bounded section names the
+      // catalog skills that match the current task — the model can adopt one
+      // (/skill:<id>) or read it on demand (skill_read). Failure-isolated: a
+      // catalog/read error never blocks the run (no promotion is composed).
+      let runPromotion = null;
+      try {
+        const { skillCatalog } = await import("../lib/skill-catalog.js");
+        const { promoteSkills } = await import("../lib/skill-promotion.js");
+        const catalog = await skillCatalog({ memory: mem ?? masterMemory(), fileStore: skillFileStore });
+        const adopted = new Set(runSkillIds ?? []);
+        runPromotion = promoteSkills({ task: String(task ?? ""), catalog: catalog.skills, adoptedIds: adopted });
+      } catch { runPromotion = null; }
       try {
         runOutcome = await orch.run(
           buildMultimodalTask(task, attachments),
@@ -2927,6 +2940,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
             origin: "",
             documentId: "",
           }),
+          runPromotion,
         );
         result = (runOutcome && typeof runOutcome === "object" && !Array.isArray(runOutcome) && typeof runOutcome.text === "string")
           ? runOutcome.text

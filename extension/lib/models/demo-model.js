@@ -83,6 +83,12 @@ const RUN_SCRIPT_MARKER = "@demo-run-script";
 // that a large/multi-file imported skill is loadable on demand mid-run
 // (CAP-FB-20260830-SKILLS-UNCAPPED-01).
 const SKILL_READ_MARKER = "@demo-skill-read";
+// @demo-promotion: the demo model reports whether its SYSTEM PROMPT carries the
+// skill promotion section (and which skill names it names). A DI test surface
+// exactly like @demo-recall / @demo-skill-read: the prompt is the only input,
+// so the journey proves the promotion actually reached the wire (CAP-FB-20260831-SKILL-PROMOTION-01).
+const PROMOTION_MARKER = "@demo-promotion";
+const PROMOTION_FINAL_RE = /\[demo model\] promotion:/;
 // @demo-edit-artifact: the demo model creates an HTML artifact and then EDITS
 // it through the REAL lazy protocol — search_tools(create_asset) →
 // execute_tool(create crumb.html) → search_tools(update_asset) →
@@ -340,6 +346,7 @@ function latestRunSlice(prompt) {
       patchArtifact: lastUser.includes(PATCH_ARTIFACT_MARKER),
       runScript: lastUser.includes(RUN_SCRIPT_MARKER),
       skillRead: lastUser.includes(SKILL_READ_MARKER),
+      promotion: lastUser.includes(PROMOTION_MARKER),
       obeyPage: lastUser.includes(OBEY_PAGE_MARKER),
       remember: lastUser.includes(REMEMBER_MARKER),
       recall: lastUser.includes(RECALL_MARKER),
@@ -599,6 +606,27 @@ function skillReadFinalText(prompt) {
   const body = String(last.text ?? "").slice(0, 120).replace(/\s+/g, " ").trim();
   const extra = last.truncated === true ? ` (truncated, ${last.totalBytes ?? "?"} bytes total)` : "";
   return `[demo model] Skill read completed: skill=${id} path=${String(last.path ?? "SKILL.md")} ${last.bytes ?? 0} bytes read${extra}; body starts: ${body || "(empty)"}`;
+}
+
+// ── @demo-promotion helpers (CAP-FB-20260831-SKILL-PROMOTION-01) ────────────
+// Reports what the SYSTEM PROMPT carries about adoptable skills: the promoted
+// refIds (or none), and whether the section is present at all. The demo model
+// only ever echoes its own prompt — never the catalog — so the journey proves
+// the promotion text actually reached the wire.
+function wantsPromotion(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.promotion;
+}
+function promotionFinalText(prompt) {
+  const sys = systemText(prompt);
+  const heading = sys.indexOf("## Skills you can adopt for this task");
+  if (heading < 0) return "[demo model] promotion: absent";
+  const block = sys.slice(heading).split(/\n#{1,6}\s/)[0].split("\n").slice(0, 8).join(" | ");
+  return `[demo model] promotion: present — ${block.slice(0, 220)}`;
+}
+function promotionAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" && Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && PROMOTION_FINAL_RE.test(p.text ?? "")));
 }
 
 // ── @demo-board helpers ─────────────────────────────────────────────────────
@@ -1595,6 +1623,14 @@ export function createDemoModel() {
           content: [{ type: "text", text: skillReadFinalText(options.prompt) }],
           finishReason: "stop",
           usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
+          warnings: [],
+        });
+      }
+      if (wantsPromotion(options.prompt)) {
+        return Promise.resolve({
+          content: [{ type: "text", text: promotionFinalText(options.prompt) }],
+          finishReason: "stop",
+          usage: { inputTokens: 8, outputTokens: 24, totalTokens: 32 },
           warnings: [],
         });
       }

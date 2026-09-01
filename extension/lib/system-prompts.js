@@ -877,21 +877,29 @@ function renderBoundarySkills(skills, untrustedToken = null) {
  * caller hands the agent core, the model's system message ALWAYS ends with
  * the immutable runtime policy, so no owner text, role, site-origin skill,
  * or foreign prompt can override it with a later instruction.
+ *
+ * `promotion` (CAP-FB-20260831-SKILL-PROMOTION-01) is an optional bounded
+ * section naming catalog skills relevant to the CURRENT task — the model is
+ * told it may adopt one (/skill:<id>) or read it on demand (skill_read). It
+ * sits between the skills block and the protected constraints, so promoted
+ * (catalog-derived, deterministic) text can never override the policy.
  */
-export function appendSkillsLayer(systemText, skills, registry = PROMPT_REGISTRY, untrustedToken = null) {
+export function appendSkillsLayer(systemText, skills, registry = PROMPT_REGISTRY, untrustedToken = null, promotion = null) {
   const sys = String(systemText ?? "");
   const skillsText = renderBoundarySkills(skills, untrustedToken).trim();
+  const promoText = String(promotion ?? "").trim();
   const constraints = registryEntry(CONSTRAINTS_ID, registry);
   const protectedText = constraints ? String(constraints.content ?? "") : "";
   let out = sys;
-  if (skillsText) {
+  const middle = [skillsText, promoText].filter(Boolean).join("\n\n");
+  if (middle) {
     if (protectedText && sys.endsWith(protectedText)) {
       const head = sys.slice(0, sys.length - protectedText.length).replace(/\s+$/, "");
-      out = `${head}\n\n${skillsText}\n\n${protectedText}`;
+      out = `${head}\n\n${middle}\n\n${protectedText}`;
     } else {
-      // A prompt without a trailing protected block: skills append at the end
-      // (the protected block is then (re)asserted last below).
-      out = sys ? `${sys}\n\n${skillsText}` : skillsText;
+      // A prompt without a trailing protected block: skills/promotion append
+      // at the end (the protected block is then (re)asserted last below).
+      out = sys ? `${sys}\n\n${middle}` : middle;
     }
   }
   // The structural invariant: the protected runtime policy is ALWAYS the
