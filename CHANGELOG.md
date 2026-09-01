@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.2.588] — 2026-09-01
+- The assistant now reliably creates a real artifact for "make me a website" and actually saves memory for "remember this", instead of only describing it in chat.
+
 ## [0.2.587] — 2026-09-01
-- Four more improvements are in progress.
+- Several improvements are being prepared for upcoming releases.
 
 ## [0.2.586] — 2026-09-01
 - The remaining steps for external tool-server support are written up.
