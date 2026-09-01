@@ -154,17 +154,35 @@ function bounded(value, max = MAX_PREVIEW_CHARS) {
 /** Byte-aware bounded slice (the store bound is UTF-8 bytes — multi-byte
  * content would otherwise blow it at fewer chars). Binary-search the largest
  * char prefix that fits the byte budget (CAP-FB-20260831-TASK-VIEW-FULL-
- * RESPONSE-01 r1 B2). */
-function boundedBytes(value, maxBytes) {
+ * RESPONSE-01 r1 B2, r2 B5).
+ * - `escaped`: measure the JSON-escaped size (JSON.stringify expands control
+ *   chars — a pre-escape byte cap can overflow post-escape; r2 B2).
+ * - `marker`: append the never-silent truncation marker (r2 B1).
+ * The cut NEVER splits a UTF-16 surrogate pair (r2 B5). */
+function boundedBytes(value, maxBytes, opts = {}) {
   const s = String(value ?? "");
-  if (utf8Bytes(s) <= maxBytes) return s;
+  const measure = opts.escaped
+    ? (t) => utf8Bytes(JSON.stringify(t))
+    : (t) => utf8Bytes(t);
+  if (measure(s) <= maxBytes) return s;
+  const marker = opts.marker
+    ? `\n\n…(response truncated to ${(maxBytes / 1024).toFixed(0)} KiB — the complete text is in the run log)`
+    : "";
+  const budget = Math.max(0, maxBytes - utf8Bytes(marker));
   let lo = 0;
   let hi = s.length;
   while (lo < hi) {
     const mid = (lo + hi + 1) >> 1;
-    if (utf8Bytes(s.slice(0, mid)) <= maxBytes) lo = mid; else hi = mid - 1;
+    if (measure(s.slice(0, mid)) <= budget) lo = mid; else hi = mid - 1;
   }
-  return s.slice(0, lo);
+  // r2 B5: a cut landing between a surrogate pair leaves a lone high
+  // surrogate — back off to the pair boundary.
+  while (lo > 0) {
+    const c = s.charCodeAt(lo - 1);
+    if (c >= 0xD800 && c <= 0xDBFF) { lo -= 1; continue; }
+    break;
+  }
+  return opts.marker ? `${s.slice(0, lo)}${marker}` : s.slice(0, lo);
 }
 
 function utf8Bytes(str) {
@@ -1755,7 +1773,11 @@ export function createDurableRunRegistry({
       if (!(await store.has(outboxKey))) {
         const at = Number.isFinite(payload?.at) ? payload.at : now();
         const ok = payload?.ok === true;
-        const fullResult = String(payload?.result ?? payload?.error ?? "");
+        // r2 B4: the authoritative retained copy is REDACTED like every other
+        // storage surface — a secret echoed by a hostile endpoint must never
+        // reach the durable payload (the prompt path was already redacted; the
+        // retained payload was not).
+        const fullResult = redactSecretText(String(payload?.result ?? payload?.error ?? ""));
         const retainedPayloadRef = await persistJsonPayload(executionId, "terminal", {
           ok,
           at,
@@ -1772,8 +1794,11 @@ export function createDurableRunRegistry({
         // fill (threadTerminal.content) is the only other copy and is byte-
         // capped so the whole serialized outbox stays under the store's
         // 256 KiB per-value bound even for a near-bound response
-        // (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r1 B1).
-        const result = boundedBytes(fullResult, 240 * 1024);
+        // (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r1 B1). r2 B1: the
+        // truncation carries the same never-silent marker as the thread path.
+        // r2 B2: the cap measures the JSON-ESCAPED size (control chars expand
+        // under JSON.stringify), so the serialized outbox stays in budget.
+        const result = boundedBytes(fullResult, 240 * 1024, { marker: true, escaped: true });
         const outbox = {
           executionId,
           createdAt: at,
@@ -1842,7 +1867,19 @@ export function createDurableRunRegistry({
             : null,
         };
         // The full recoverable payload is durable before journal, thread, or
-        // registry terminal state is changed.
+        // registry terminal state is changed. r2 B2 backstop: JSON escaping
+        // can still expand the SERIALIZED outbox past the store's per-value
+        // bound in pathological cases (e.g. control-char floods) — verify the
+        // serialized size and shrink the full copy until it fits (bounded
+        // multiplicative retries; the content cap already measures escaped
+        // size, so this loop is the safety net, not the primary bound).
+        let serializedOutbox = utf8Bytes(JSON.stringify(outbox));
+        let shrinkGuard = 0;
+        while (serializedOutbox > 256 * 1024 && outbox.threadTerminal?.content && shrinkGuard++ < 24) {
+          const c = outbox.threadTerminal.content;
+          outbox.threadTerminal.content = c.slice(0, Math.max(0, Math.floor(c.length * 0.8)));
+          serializedOutbox = utf8Bytes(JSON.stringify(outbox));
+        }
         await store.setTrusted(outboxKey, outbox);
       }
       await boundary("after-outbox", executionId);

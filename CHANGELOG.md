@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.569] — 2026-09-01
+- Task view full response: r2 review fixes — never-silent marker in the durable path, JSON-escape-aware outbox cap, bounded durable-error surfaces, redacted retained payload, and surrogate-safe byte cuts
+
 ## [0.2.568] — 2026-08-31
 - Task view full response: r1 review fixes — one authoritative full copy in the retained payload, byte-aware caps (UTF-8) under the store bound, bounded sidebar error preview, and Copy takes the full stored content
 

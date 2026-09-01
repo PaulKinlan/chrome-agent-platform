@@ -1762,3 +1762,77 @@ Deno.test("durable runs: multi-byte near-bound terminal keeps the outbox under t
   assert(serialized < 256 * 1024,
     `multi-byte outbox must stay under the store bound (serialized ${serialized} bytes >= 256 KiB)`);
 });
+
+Deno.test("durable runs: the outbox full copy carries the never-silent marker when truncated (r2 B1)", async () => {
+  const store = new FakeStore();
+  const captured = {};
+  const origSet = store.setTrusted.bind(store);
+  store.setTrusted = async (key, value) => {
+    if (String(key).startsWith("run-outbox:")) captured[key] = structuredClone(value);
+    return origSet(key, value);
+  };
+  const run = harness(store);
+  await begin(run.registry);
+  // Over the 240 KiB byte cap → the thread back-fill must be truncated WITH
+  // the explicit marker (the durable path must never truncate silently).
+  const huge = "y".repeat(300 * 1024);
+  await run.registry.settle(executionId, { ok: true, result: huge, logicalId: "task-b1" });
+  const outbox = captured[`run-outbox:${executionId}`];
+  assert(outbox, "outbox persisted");
+  const content = outbox.threadTerminal?.content ?? "";
+  assert(content.length > 0, "thread back-fill present");
+  assert(content.includes("truncated to 240 KiB"), "the durable truncation carries the never-silent marker");
+  assert(content.includes("complete text is in the run log"), "the marker names where the full text lives");
+  // The serialized outbox still fits the store bound.
+  const serialized = new TextEncoder().encode(JSON.stringify(outbox)).byteLength;
+  assert(serialized < 256 * 1024, `outbox over budget after marker (${serialized} bytes)`);
+});
+
+Deno.test("durable runs: a control-char flood cannot blow the outbox past the store bound via JSON escaping (r2 B2)", async () => {
+  const store = new FakeStore();
+  const captured = {};
+  const origSet = store.setTrusted.bind(store);
+  store.setTrusted = async (key, value) => {
+    if (String(key).startsWith("run-outbox:")) captured[key] = structuredClone(value);
+    return origSet(key, value);
+  };
+  const run = harness(store);
+  await begin(run.registry);
+  // NUL bytes: 1 raw byte each pre-escape, but JSON.stringify emits \\u0000
+  // (6 bytes) — a pre-escape byte cap would overflow post-escape. The escaped-
+  // aware cap + the serialized-size backstop must keep the outbox in budget.
+  const flood = "\u0000".repeat(200_000); // 200,000 raw bytes → ~1.2 MB escaped
+  await run.registry.settle(executionId, { ok: true, result: flood, logicalId: "task-b2" });
+  const outbox = captured[`run-outbox:${executionId}`];
+  assert(outbox, "outbox persisted");
+  const serialized = new TextEncoder().encode(JSON.stringify(outbox)).byteLength;
+  assert(serialized < 256 * 1024,
+    `control-char outbox must stay under the store bound (serialized ${serialized} bytes >= 256 KiB)`);
+});
+
+Deno.test("durable runs: the retained full payload is REDACTED like every other storage surface (r2 B4)", async () => {
+  const store = new FakeStore();
+  const capturedOutbox = {};
+  const origSet = store.setTrusted.bind(store);
+  store.setTrusted = async (key, value) => {
+    if (String(key).startsWith("run-outbox:")) capturedOutbox[key] = structuredClone(value);
+    return origSet(key, value);
+  };
+  const run = harness(store);
+  await begin(run.registry);
+  const secret = "apiKey=sk-r2secrettokentest123456";
+  const result = `the endpoint echoed: ${secret} and then more text`;
+  await run.registry.settle(executionId, { ok: true, result, logicalId: "task-b4" });
+  // The retained payload lives in run-payload:<executionId>:terminal:<chunk>.
+  const payloadKeys = [...store.values.keys()].filter((k) => String(k).startsWith(`run-payload:${executionId}:terminal:`));
+  assert(payloadKeys.length >= 1, "retained payload chunks exist");
+  const payloadText = payloadKeys.map((k) => JSON.stringify(store.values.get(k))).join("");
+  assert(payloadText.includes("sk-r2secrettokentest123456") === false,
+    "the retained full payload must be REDACTED (a secret echoed by a hostile endpoint must never reach durable storage)");
+  assert(payloadText.includes("[REDACTED]"), "the redaction marker is present in the retained payload");
+  // The outbox previews are redacted too (captured at write time — the outbox
+  // is deleted after processing).
+  const outbox = capturedOutbox[`run-outbox:${executionId}`];
+  assert(outbox && !JSON.stringify(outbox).includes("sk-r2secrettokentest123456"),
+    "the outbox must not carry the raw secret either");
+});

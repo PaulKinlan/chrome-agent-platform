@@ -122,10 +122,19 @@ function boundText(text, max = MAX_MESSAGE_BYTES) {
     if (utf8Bytes(s.slice(0, mid)) <= budget) lo = mid; else hi = mid - 1;
   }
   const sliced = s.slice(0, lo);
+  // r2 B5: a cut landing between a UTF-16 surrogate pair leaves a lone high
+  // surrogate — back off to the pair boundary (an emoji straddling the byte
+  // budget must be kept whole or dropped whole, never halved).
+  while (lo > 0) {
+    const c = s.charCodeAt(lo - 1);
+    if (c >= 0xD800 && c <= 0xDBFF) { lo -= 1; continue; }
+    break;
+  }
+  const slicedFinal = s.slice(0, lo);
   // Never silently truncate the human-readable content: when the DEFAULT
   // (message-content) cap is hit, say so — the complete text is kept in the
   // durable run journal (retainedPayloadRef) and in the run log.
-  return isMessage ? `${sliced}${marker}` : sliced;
+  return isMessage ? `${slicedFinal}${marker}` : slicedFinal;
 }
 
 /** Trim a thread's messages to the count + byte budget (drop the OLDEST),
@@ -552,8 +561,13 @@ export async function commitThreadTerminal(id, executionId, terminal) {
     if (thread.status === "done") {
       delete thread.lastError;
     } else {
+      // lastError is a DIAGNOSTIC summary surface, not the reader: it must
+      // stay a small bounded preview so the full error text (in the message
+      // row, the task view's source) is not stored twice and the thread value
+      // cannot blow the memory store's per-value bound
+      // (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r2 B3).
       thread.lastError = {
-        message: boundText(committedTerminal.content),
+        message: boundText(committedTerminal.content, 4 * 1024),
         tool: committedTerminal.tool ?? null,
         category: committedTerminal.category ?? "error",
         reason: committedTerminal.reason ?? null,
@@ -572,7 +586,10 @@ export async function commitThreadTerminal(id, executionId, terminal) {
       row.status = thread.status;
       row.count = thread.messages.length;
       if (thread.status === "done") delete row.error;
-      else row.error = boundText(committedTerminal.content);
+      // The SIDEBAR error preview stays a small bounded preview (a list
+      // surface) — the durable/terminal-commit path is covered too, like the
+      // recordThreadError path (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r2 B3).
+      else row.error = boundText(committedTerminal.content, 1024);
       await writeIndex(index);
     }
     return thread;
