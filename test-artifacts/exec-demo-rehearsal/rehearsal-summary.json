@@ -1,0 +1,286 @@
+{
+  "at": "2026-09-01T22:46:59.915Z",
+  "outcomes": {
+    "freshPermissions": [
+      "alarms",
+      "storage",
+      "newTabPageOverride",
+      "offscreen",
+      "sidePanel"
+    ],
+    "provider": {
+      "status": {
+        "provider": "gemini",
+        "ok": true,
+        "reason": "",
+        "usingDefaultModel": false,
+        "defaultModelId": "",
+        "modelId": "gemini-3.7-flash"
+      }
+    },
+    "scheduled": {
+      "ok": true,
+      "scheduled": true,
+      "name": "agent:reading-digest",
+      "periodInMinutes": 1
+    },
+    "step1": {
+      "ms": 63466,
+      "cards": 3,
+      "cardDetail": [
+        {
+          "state": "granted",
+          "permissions": "[\"tabs\"]",
+          "origins": null,
+          "reason": "list your open tabs"
+        },
+        {
+          "state": "granted",
+          "permissions": "[\"tabGroups\",\"tabs\"]",
+          "origins": null,
+          "reason": "group your tabs"
+        },
+        {
+          "state": "granted",
+          "permissions": null,
+          "origins": "[\"https://web.dev\",\"https://developer.chrome.com\"]",
+          "reason": "grouped tabs on https://web.dev, https://developer.chrome.com"
+        }
+      ],
+      "natives": [
+        "tabs: native bubble → granted (attempt 2)",
+        "tabGroups,tabs: native bubble → granted (attempt 2)"
+      ],
+      "groups": [
+        {
+          "collapsed": false,
+          "color": "blue",
+          "id": 406484807,
+          "shared": false,
+          "title": "Web Development",
+          "windowId": 281530079
+        }
+      ],
+      "forbidden": [
+        "search_tools"
+      ],
+      "agent": [
+        "Here is the organization of your open tabs and a summary of each group:Group: Web Development (Tabs: Fetch Priority API, Streams Guide, Chrome for Developers Blog)Summary: Focuses on modern browser APIs and frontend performance optimization, covering resource prioritization (fetchpriority) and web stream processing.Also tracks the latest releases, web platform features, and developer tooling announcements from the Chrome team.---(System and local testing tabs such as Agent Hub, WebMCP Fixture, and about:blank have been left ungrouped.)"
+      ],
+      "errors": [],
+      "tools": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "permissions": [
+        "alarms",
+        "storage",
+        "tabs",
+        "newTabPageOverride",
+        "tabGroups",
+        "offscreen",
+        "sidePanel"
+      ]
+    },
+    "step2": {
+      "picker": {
+        "open": true,
+        "rows": [
+          {
+            "name": "WebMCP Fixture",
+            "origin": "http://127.0.0.1:8934"
+          }
+        ],
+        "status": "ready"
+      },
+      "chose": true,
+      "siteAgents": {
+        "status": "ready",
+        "siteAgents": "",
+        "webmcp": null
+      },
+      "fixtureAgent": {
+        "origin": "http://127.0.0.1:8934",
+        "name": "@127.0.0.1:8934",
+        "pageUrl": "http://127.0.0.1:8934/",
+        "path": "/",
+        "title": "WebMCP Fixture",
+        "enrolled": true,
+        "gen": 1,
+        "tools": [
+          "shop.total",
+          "shop.catalog",
+          "shop.coupon",
+          "greet"
+        ],
+        "toolCount": 4,
+        "memoryKeys": [
+          "enrolled",
+          "site_identities",
+          "toolDirectory"
+        ],
+        "memoryKeyCount": 3
+      },
+      "ms": 43970,
+      "cards": 0,
+      "cardDetail": [],
+      "agent": [
+        "The cheapest widget is the Mini Widget priced at $2.50. The current cart total is $42.50 USD."
+      ],
+      "tools": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "errors": []
+    },
+    "step3": {
+      "permissionsText": "Permissions# Capability permissions are optional and requested just-in-time from your click (the chat offers the same Enable inline). Host access and the core runtime permissions are granted at install. This is the live, verified state of each grant. BookmarksNot enabledEnableRead, create and organize bookmarks. Without the grant, bookmark tools and the /bookmarks command are refused with an Enable affordance.Gates: /bookmarks and bookmark list/create/remove tools.HistoryNot enabledEnableSearch browsing history. Without the grant, history tools and the /history command are refused with an Enable affordance.Gates: /history and browsing-history tools.Context menusNot enabledEnableCreate the agent's right-click menu entries. Without the grant, menu tools are refused.Gates: context menu create/remove tools.Idle detectionNot enabledEnableDetect when the browser is idle (used by scheduled runs). Without the grant, idle tools are refused.Gates: idle query tool.Top sitesNot enabledEnableRead the most-visited sites. Without the grant, top-sites tools are refused.Gates: top sites tools.Reading listNot enabledEnableRead and manage the Chrome reading list. Without the grant, reading-list tools",
+      "keyVisible": false
+    },
+    "step4": {
+      "fired": true,
+      "phase": "terminal",
+      "terminal": {
+        "ok": true,
+        "at": 1788302719688,
+        "retainedPayloadRef": "run-payload:exec:3f1424f8-ac6f-4c04-9c4e-6f3e88d9bf20:terminal",
+        "summary": "Here is a summary of your **6 open tabs**:\n\n---\n\n### 1. **Optimize resource loading with the Fetch Priority API**\n* **URL:** `https://web.dev/articles/fetch-priority`\n* **Summary:** A web performance guide explaining how to use the `fetchp…",
+        "result": "Here is a summary of your **6 open tabs**:\n\n---\n\n### 1. **Optimize resource loading with the Fetch Priority API**\n* **URL:** `https://web.dev/articles/fetch-priority`\n* **Summary:** A web performance guide explaining how to use the `fetchp…"
+      },
+      "timeline": {
+        "hidden": false,
+        "rows": [
+          {
+            "title": "Add the cheapest widget to the cart and tell me …",
+            "outcome": "Done",
+            "time": "just now"
+          },
+          {
+            "title": "Group my open tabs by topic and give me a two-li…",
+            "outcome": "Done",
+            "time": "1m ago"
+          }
+        ]
+      },
+      "report": {
+        "name": "reading-digest — scheduled report",
+        "pk": "scheduled-report:reading-digest"
+      }
+    },
+    "step5": {
+      "ms": 15792,
+      "cards": 0,
+      "artifactCards": [
+        {
+          "name": "Web Research & Open Tabs Brief",
+          "kind": "html-frame",
+          "previewLength": 9175
+        }
+      ],
+      "forbidden": [],
+      "agent": [
+        "Here is the organization of your open tabs and a summary of each group:Group: Web Development (Tabs: Fetch Priority API, Streams Guide, Chrome for Developers Blog)Summary: Focuses on modern browser APIs and frontend performance optimization, covering resource prioritization (fetchpriority) and web stream processing.Also tracks the latest releases, web platform features, and developer tooling announcements from the Chrome team.---(System and local testing tabs such as Agent Hub, WebMCP Fixture, and about:blank have been left ungrouped.)",
+        "I have created a shareable one-page executive brief artifact for your open tabs summary.Artifact Created:Name: Web Research & Open Tabs BriefFormat: HTML (Styled for screen viewing, dark/light modes, and clean print/PDF export)ID: a_mtj9bgqf_fifv809u---Executive Brief OverviewActive Topic Focus: Web Development & Platform CapabilitiesFetch Priority API & Resource Scheduling: Techniques using fetchpriority to fine-tune asset loading, minimize render-blocking bottlenecks, and improve Largest Contentful Paint (LCP).Streams API & Progressive Processing: Architectural patterns for handling data streams in chunks to reduce memory footprint and enable progressive rendering.Chrome Developer Platform Updates: Tracking browser release cycles, DevTools additions, and web standards evolutions.Key Takeaways & Action Items:Audit critical assets for fetchpriority=\"high\" on hero elements.Evaluate streaming payloads for high-volume data downloads.Align with upcoming browser milestones to catch platform deprecations early.You can view, export, or print this brief directly from your platform artifacts view."
+      ],
+      "errors": [],
+      "tools": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ]
+    },
+    "consoleErrors": [],
+    "model": "gemini-3.7-flash",
+    "totalMs": 202161
+  },
+  "files": [
+    {
+      "name": "01-step1-new-tab.png",
+      "sha256": "af7a1eab3c65dce437c3f088c41e9cd60e14e9242a9524d7f2b39dbb5715976f"
+    },
+    {
+      "name": "01-step1-typed.png",
+      "sha256": "5b544cb6320c6c0da8c263b23d481278e89242a47009a575a7b340c3f7661093"
+    },
+    {
+      "name": "01-step1-card-1.png",
+      "sha256": "78e12a2dd47ab96b7226eb24c17c08977733cd781201048945180c366b429632"
+    },
+    {
+      "name": "01-step1-native-prompt-1.png",
+      "sha256": "0c7755b392a29dbddd61f3a6c6f21bd2138909c1860ab27fe6939f966edaea03"
+    },
+    {
+      "name": "01-step1-card-2.png",
+      "sha256": "840c462aa381004ee417bf1d9b91dc271f7566bfba78f0785dfb494dae4bf739"
+    },
+    {
+      "name": "01-step1-native-prompt-2.png",
+      "sha256": "de98f41c1ad3eefc2884490e6fd7a166249b2599f1be03efcfc852022471be57"
+    },
+    {
+      "name": "01-step1-card-3.png",
+      "sha256": "af6f58ee506d822e1d5a75a4293e7ffa2d732666f7f203a1127985e0c59b0fd3"
+    },
+    {
+      "name": "01-step1-result.png",
+      "sha256": "0ed2bf475262b8f9d1849856808f3df998465668588ee2bac0c5b4370ac6fbc7"
+    },
+    {
+      "name": "01-step1-tab-strip.png",
+      "sha256": "2663510d7c17ffbbb9cb2387449a4d3ba5e68171c7d03c0736b9ea7f9aa91c62"
+    },
+    {
+      "name": "02-step2-picker.png",
+      "sha256": "04d0e6b3ad6c4d0de253eb66095bddf1ff9ba277fe7b4f88631bf96fa77744ee"
+    },
+    {
+      "name": "02-step2-enrolled.png",
+      "sha256": "91754dc772064afca7fb641d700814ef3e135458f1c300845e34fd0bf76c53ed"
+    },
+    {
+      "name": "02-step2-result.png",
+      "sha256": "7def6323c8a1cee0e0f485c989ad9e5b086694dfce73cc50d1a744835da2ebee"
+    },
+    {
+      "name": "03-step3-permissions.png",
+      "sha256": "b035dc05a53b0cc3a3df72c3dc257e7e5195e848178736b31ddccae77e5e3586"
+    },
+    {
+      "name": "04-step4-timeline.png",
+      "sha256": "c175ec63d9ab14cd82c8be83ddafd27d3092a37434185cff54bb40211d8f658b"
+    },
+    {
+      "name": "04-step4-report-opened.png",
+      "sha256": "97051217df412f86fc13dc7ebdea3e8c3498b86b06392e302541f113ec4f718c"
+    },
+    {
+      "name": "05-step5-typed.png",
+      "sha256": "d5c3099b2bee5153d4a39ad3139e70d9390a5fa5d7d8e823ef375dbd001726ed"
+    },
+    {
+      "name": "05-step5-artifact.png",
+      "sha256": "89c62708b9b2226fe3b22a9419b2ae586a8fedea757c010bb0493a6e4c556e72"
+    },
+    {
+      "name": "06-step6-fixture-source.png",
+      "sha256": "cf79de2a7f2b20ade4e47f52f470b5c290bcc61f34b69d6a2510e2937f6d2467"
+    }
+  ]
+}

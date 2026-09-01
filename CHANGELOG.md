@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.604] — 2026-09-01
+- The five-minute demo was rehearsed end to end on a fresh install with a real model; the step-by-step screenshots are kept with the project so anyone can see what each moment looks like today.
+
 ## [0.2.603] — 2026-09-01
 - The five-minute demo is now checked automatically at three points: grouping your tabs from the composer with a single in-chat permission, a scheduled agent finishing on its own timer and appearing on the timeline, and an artifact showing up in the conversation.
 
