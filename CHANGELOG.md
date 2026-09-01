@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.612] — 2026-09-01
+- The generated gallery bundle is ignored by git again.
+
 ## [0.2.611] — 2026-09-01
 - Reading a page on a site the extension cannot access now asks you with one clear Allow card instead of failing silently.
 
