@@ -30,12 +30,21 @@ import {
   MAX_FS_SCAN_BYTES,
   MAX_FS_SEARCH_RESULTS,
   MAX_FS_SEARCH_SCANNED,
+  computeSha256,
 } from "../extension/lib/fs-grants.js";
 import {
   SETTINGS_SECTIONS,
   OPTIONS_PRODUCT_HASHES,
   normalizeSettingsSectionId,
 } from "../extension/lib/pure.js";
+import { createFsGrantRoutes } from "../extension/background/routes/fs-grants.js";
+import {
+  canonicalField,
+  canonicalOperationTarget,
+  canonicalRecord,
+  canonicalScalar,
+  payloadDigest,
+} from "../extension/lib/owner-approval.js";
 
 // A structured-cloneable handle representation (mimics native FileSystemDirectoryHandle serialization)
 function createCloneableHandle(name: string, kind = "directory") {
@@ -403,49 +412,50 @@ Deno.test("wireLocalFolderPickers: untrusted click event is rejected without use
   assertEquals(flashMsg, "Folder picker requires a genuine user click.");
 });
 
-Deno.test("service-worker.js: fs-grant routes require owner-options or extension authority", async () => {
+Deno.test("routes/fs-grants.js: every fs-grant route is registered through the module and gated to owner-options / extension; the SW keeps no inline copy", async () => {
   const sw = await Deno.readTextFile(
     new URL("../extension/background/service-worker.js", import.meta.url),
   );
-
-  assert(
-    sw.includes('async "fs-grant.list"'),
-    "service worker must register fs-grant.list route",
+  const routesSrc = await Deno.readTextFile(
+    new URL("../extension/background/routes/fs-grants.js", import.meta.url),
   );
+  for (const route of ["list", "get", "remove", "list-entries", "search", "read-file", "write-file", "scan", "grep", "write-file-approved"]) {
+    assert(
+      routesSrc.includes(`async "fs-grant.${route}"`),
+      `routes/fs-grants.js must register fs-grant.${route}`,
+    );
+    assertEquals(
+      sw.includes(`async "fs-grant.${route}"`),
+      false,
+      `service-worker.js must not keep an inline fs-grant.${route} handler (the module is the single source)`,
+    );
+  }
   assert(
-    sw.includes('async "fs-grant.get"'),
-    "service worker must register fs-grant.get route",
+    sw.includes("const fsGrantRoutes = createFsGrantRoutes({") && /mergeRouteMaps\([\s\S]*?fsGrantRoutes,/.test(sw),
+    "service worker must compose the fs-grant routes from createFsGrantRoutes",
   );
+  // Principal gating (owner-options or extension) lives in the module.
   assert(
-    sw.includes('async "fs-grant.remove"'),
-    "service worker must register fs-grant.remove route",
+    routesSrc.includes('const OWNER_SURFACES = new Set(["owner-options", "extension"]);'),
+    "routes/fs-grants.js must gate fs-grant routes against non-extension / non-owner callers",
   );
+  // The model's write path is the approved route and only that route.
   assert(
-    sw.includes('async "fs-grant.list-entries"'),
-    "service worker must register fs-grant.list-entries route",
+    routesSrc.includes('if (context?.principal !== "model") {'),
+    "fs-grant.write-file-approved must accept only the model principal",
   );
-  assert(
-    sw.includes('async "fs-grant.search"'),
-    "service worker must register the bounded composer search route",
-  );
-  assert(
-    sw.includes('async "fs-grant.read-file"'),
-    "service worker must register fs-grant.read-file route",
-  );
-  assert(
-    sw.includes('async "fs-grant.write-file"'),
-    "service worker must register fs-grant.write-file route",
-  );
-  assert(
-    sw.includes('async "fs-grant.scan"'),
-    "service worker must register fs-grant.scan route",
-  );
-
-  // Checks for principal gating (owner-options or extension)
-  assert(
-    sw.includes('context?.principal !== "owner-options" && context?.principal !== "extension"'),
-    "service worker must gate fs-grant routes against non-extension / non-owner callers",
-  );
+  const routes: any = createFsGrantRoutes({
+    securityEvent: () => {},
+    requireOwnerApproval: async () => ({ ok: false }),
+    canonicalOperationTarget: () => "",
+    payloadFields: () => ({}),
+    lineDiffSummary: () => ({ added: 0, removed: 0 }),
+  });
+  for (const route of ["list", "remove", "list-entries", "search", "read-file", "write-file", "scan", "grep"]) {
+    const res = await routes[`fs-grant.${route}`]({ grantId: "fsg_x", query: "x", relativePath: "x" }, { principal: "model" });
+    assertEquals(res?.ok, false, `fs-grant.${route} must refuse the model principal`);
+    assert(String(res?.error).includes("restricted to extension surfaces"));
+  }
 });
 
 Deno.test("cleanRelativePath: normalizes paths and rejects traversal attacks (..) and leading slash", () => {
@@ -1003,4 +1013,286 @@ Deno.test("options.js: wires renderLocalFolders and renders empty state or grant
     false,
     "options.js must NOT use window.prompt for file viewing (N-2 modernization)",
   );
+});
+
+// ── CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01: the model's ONLY write path ────
+// The model principal never reaches the raw `fs-grant.write-file` route. Its
+// write path is `fs-grant.write-file-approved`, which fails closed on every
+// boundary (grant, mode, path, size, binary) BEFORE staging the owner's diff
+// card, binds the approval digest to the exact new content, writes only after
+// Approve, and leaves the bytes untouched on Deny.
+//
+// Falsification: allow `principal:"model"` on the raw `fs-grant.write-file`
+// route and "the model principal cannot call the raw route directly" goes RED.
+
+const TYPO_TEXT = "Known local filesytem context from the browser KAT.\n";
+const FIXED_TEXT = "Known local filesystem context from the browser KAT.\n";
+
+// A functional in-memory directory handle whose files can be written through
+// the native createWritable() shape, so the routes exercise the REAL
+// readFsGrantFile / writeFsGrantFile paths end to end.
+function memoryWriteFixture(files: Record<string, Uint8Array | string>) {
+  const store = new Map<string, Uint8Array>();
+  for (const [name, body] of Object.entries(files)) {
+    store.set(name, typeof body === "string" ? new TextEncoder().encode(body) : body);
+  }
+  const writes: Array<{ name: string; bytes: Uint8Array }> = [];
+  const fileHandleFor = (name: string) => ({
+    kind: "file",
+    name,
+    getFile: async () => {
+      const bytes = store.get(name)!;
+      return {
+        name,
+        size: bytes.byteLength,
+        lastModified: 1700000000000,
+        arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+      };
+    },
+    createWritable: async () => {
+      let pending: Uint8Array | null = null;
+      return {
+        write: async (b: Uint8Array) => { pending = b; },
+        close: async () => {
+          if (pending) {
+            store.set(name, new Uint8Array(pending));
+            writes.push({ name, bytes: new Uint8Array(pending) });
+          }
+        },
+      };
+    },
+  });
+  const dir = {
+    kind: "directory",
+    name: "rw-project",
+    queryPermission: async () => "granted",
+    getDirectoryHandle: async (_name: string) => { throw new Error("NotFoundError"); },
+    getFileHandle: async (name: string, opts: { create?: boolean } = {}) => {
+      if (!store.has(name)) {
+        if (!opts.create) throw new Error("NotFoundError");
+        store.set(name, new Uint8Array(0));
+      }
+      return fileHandleFor(name);
+    },
+  };
+  const sha = async (name: string) => {
+    const b = store.get(name)!;
+    return await computeSha256(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength));
+  };
+  return { dir, store, writes, sha };
+}
+
+// A naive line diff for the stub deps: the real routes take the shipped diff
+// core; the counts here only have to be right for one-line fixtures.
+function naiveLineDiff(oldText: string, newText: string) {
+  const a = String(oldText ?? "").split("\n");
+  const b = String(newText ?? "").split("\n");
+  return {
+    added: b.filter((l) => !a.includes(l)).length,
+    removed: a.filter((l) => !b.includes(l)).length,
+    hunks: [],
+  };
+}
+
+function fsRouteDeps(overrides: Record<string, unknown> = {}) {
+  const events: Array<{ kind: string; message: string }> = [];
+  const approvals: any[] = [];
+  const deps: any = {
+    securityEvent: (kind: string, message: string) => { events.push({ kind, message }); },
+    requireOwnerApproval: async (context: any, action: string, target: string, payload: any, detail: any, stagedDetail: any) => {
+      approvals.push({ context, action, target, payload, detail, stagedDetail });
+      return { ok: true };
+    },
+    canonicalOperationTarget,
+    payloadFields: (entries: Array<[string, unknown]>) =>
+      canonicalRecord(...entries.map(([name, value]) => canonicalField(name, canonicalScalar(value)))),
+    lineDiffSummary: naiveLineDiff,
+    ...overrides,
+  };
+  return { deps, events, approvals, routes: createFsGrantRoutes(deps) as any };
+}
+
+const MODEL = { principal: "model", executionId: "exec:write-test", onApprovalEvent: () => {} };
+
+Deno.test("fs-grant.write-file-approved: refuses a path outside the grant, a binary file, a lapsed/read-only/missing grant, and content over MAX_FS_WRITE_BYTES BEFORE staging any approval", async () => {
+  const fx = memoryWriteFixture({ "notes.txt": TYPO_TEXT, "blob.bin": new Uint8Array([0x66, 0x00, 0x80]) });
+  const grantId = `fsg_wa_bounds_${crypto.randomUUID()}`;
+  await saveFsGrant({ grantId, handle: fx.dir, name: "rw-project", mode: "readwrite" });
+  const roGrant = `fsg_wa_ro_${crypto.randomUUID()}`;
+  await saveFsGrant({ grantId: roGrant, handle: fx.dir, name: "ro-project", mode: "read" });
+  const lapsed = `fsg_wa_lapsed_${crypto.randomUUID()}`;
+  await saveFsGrant({ grantId: lapsed, handle: { ...fx.dir, queryPermission: async () => "prompt" }, name: "lapsed", mode: "readwrite" });
+  const { routes, approvals } = fsRouteDeps();
+  const route = routes["fs-grant.write-file-approved"];
+  assert(typeof route === "function", "the approved write route is registered");
+  try {
+    const cases: Array<[string, any, string]> = [
+      ["traversal", { grantId, relativePath: "../escape.txt", content: "x" }, "invalid_path_traversal"],
+      ["absolute", { grantId, relativePath: "/etc/passwd", content: "x" }, "invalid_path_absolute"],
+      ["directory (no file name)", { grantId, relativePath: "", content: "x" }, "invalid_file_path"],
+      ["binary file", { grantId, relativePath: "blob.bin", content: "text over binary" }, "fs_file_not_text"],
+      ["oversized", { grantId, relativePath: "notes.txt", content: "a".repeat(MAX_FS_WRITE_BYTES + 1) }, "fs_file_too_large"],
+      ["read-only grant", { grantId: roGrant, relativePath: "notes.txt", content: FIXED_TEXT }, "fs_write_permission_denied"],
+      ["lapsed grant", { grantId: lapsed, relativePath: "notes.txt", content: FIXED_TEXT }, "fs_permission_lapsed"],
+      ["missing grant", { grantId: `fsg_absent_${crypto.randomUUID()}`, relativePath: "notes.txt", content: FIXED_TEXT }, "grant_not_found"],
+      ["non-string content", { grantId, relativePath: "notes.txt", content: 42 }, "invalid_content"],
+    ];
+    for (const [label, body, code] of cases) {
+      const res = await route(body, MODEL);
+      assertEquals(res?.ok, false, `${label}: must fail closed`);
+      assert(String(res?.error ?? "").startsWith(code), `${label}: expected ${code}, got ${JSON.stringify(res)}`);
+    }
+    assertEquals(approvals.length, 0, "no boundary failure may reach the approval gate (nothing is staged)");
+    assertEquals(fx.writes.length, 0, "nothing was written");
+    assertEquals(new TextDecoder().decode(fx.store.get("notes.txt")!), TYPO_TEXT);
+  } finally {
+    await deleteFsGrant(grantId);
+    await deleteFsGrant(roGrant);
+    await deleteFsGrant(lapsed);
+  }
+});
+
+Deno.test("fs-grant.write-file: the model principal cannot call the raw route directly (only the approved route, which pays the card)", async () => {
+  const fx = memoryWriteFixture({ "notes.txt": TYPO_TEXT });
+  const grantId = `fsg_raw_${crypto.randomUUID()}`;
+  await saveFsGrant({ grantId, handle: fx.dir, name: "rw-project", mode: "readwrite" });
+  const { routes, approvals, events } = fsRouteDeps();
+  try {
+    for (const principal of ["model", "page", "content-script", undefined]) {
+      const res = await routes["fs-grant.write-file"]({ grantId, relativePath: "notes.txt", content: "pwned" }, { principal });
+      assertEquals(res?.ok, false, `raw write-file must refuse principal ${String(principal)}`);
+      assert(String(res?.error ?? "").includes("restricted to extension surfaces"), JSON.stringify(res));
+    }
+    assertEquals(fx.writes.length, 0, "the raw route never wrote for a non-owner principal");
+    assertEquals(new TextDecoder().decode(fx.store.get("notes.txt")!), TYPO_TEXT);
+    assert(events.some((e) => e.kind === "blocked-action" && /write-file denied for principal model/.test(e.message)), "the refusal is audited");
+    // The approved route is the model's path and nobody else's: a page sender
+    // or an owner surface cannot drive it (the owner surfaces have the raw route).
+    for (const principal of ["page", "content-script", "extension", "owner-options", undefined]) {
+      const res = await routes["fs-grant.write-file-approved"]({ grantId, relativePath: "notes.txt", content: FIXED_TEXT }, { principal });
+      assertEquals(res?.ok, false, `approved route must refuse principal ${String(principal)}`);
+    }
+    assertEquals(approvals.length, 0, "a non-model principal never reaches the approval gate");
+    // Control: the owner surface's raw route still writes (Settings' own path).
+    const owner = await routes["fs-grant.write-file"]({ grantId, relativePath: "notes.txt", content: FIXED_TEXT }, { principal: "owner-options" });
+    assertEquals(owner?.ok, true);
+    assertEquals(fx.writes.length, 1);
+  } finally {
+    await deleteFsGrant(grantId);
+  }
+});
+
+Deno.test("fs-grant.write-file-approved: Deny leaves the file bytes unchanged (sha256) and the card was staged with the on-disk bytes as before", async () => {
+  const fx = memoryWriteFixture({ "notes.txt": TYPO_TEXT });
+  const grantId = `fsg_deny_${crypto.randomUUID()}`;
+  await saveFsGrant({ grantId, handle: fx.dir, name: "rw-project", mode: "readwrite" });
+  const { routes, approvals } = fsRouteDeps({
+    requireOwnerApproval: async (context: any, action: string, target: string, payload: any, detail: any, stagedDetail: any) => {
+      approvals.push({ context, action, target, payload, detail, stagedDetail });
+      return { ok: false, approvalDenied: true, error: "The owner denied fs.write; the action was not performed." };
+    },
+  });
+  try {
+    const before = await fx.sha("notes.txt");
+    const res = await routes["fs-grant.write-file-approved"]({ grantId, relativePath: "notes.txt", content: FIXED_TEXT }, MODEL);
+    assertEquals(res?.ok, false);
+    assertEquals(res?.approvalDenied, true);
+    assertEquals(await fx.sha("notes.txt"), before, "Deny: the bytes on disk are byte-identical");
+    assertEquals(fx.writes.length, 0);
+    assertEquals(approvals.length, 1, "exactly one approval was requested");
+    const a = approvals[0];
+    assertEquals(a.action, "fs.write");
+    assertEquals(a.context.principal, "model");
+    assert(a.target.startsWith("fs:"), `target is the fs kind: ${a.target}`);
+    assertEquals(a.target, canonicalOperationTarget("fs", { grantId, path: "notes.txt" }));
+    assertEquals(a.detail, undefined, "no model-facing detail (the bodies stay behind the owner gate)");
+    assertEquals(a.stagedDetail.kind, "fs.write");
+    assertEquals(a.stagedDetail.name, "notes.txt");
+    assertEquals(a.stagedDetail.oldContent, TYPO_TEXT, "before = the bytes on disk");
+    assertEquals(a.stagedDetail.newContent, FIXED_TEXT, "after = the exact proposed content");
+    assertEquals(a.stagedDetail.added, 1);
+    assertEquals(a.stagedDetail.removed, 1);
+  } finally {
+    await deleteFsGrant(grantId);
+  }
+});
+
+Deno.test("fs-grant.write-file-approved: Approve writes exactly the approved bytes and reports size, sha256, +added -removed; a new file stages an empty before", async () => {
+  const fx = memoryWriteFixture({ "notes.txt": TYPO_TEXT });
+  const grantId = `fsg_approve_${crypto.randomUUID()}`;
+  await saveFsGrant({ grantId, handle: fx.dir, name: "rw-project", mode: "readwrite" });
+  const { routes, approvals } = fsRouteDeps();
+  try {
+    const res = await routes["fs-grant.write-file-approved"]({ grantId, relativePath: "notes.txt", content: FIXED_TEXT }, MODEL);
+    assertEquals(res?.ok, true, JSON.stringify(res));
+    assertEquals(res.written, true);
+    assertEquals(res.path, "notes.txt");
+    assertEquals(res.size, new TextEncoder().encode(FIXED_TEXT).byteLength);
+    assertEquals(res.added, 1);
+    assertEquals(res.removed, 1);
+    assertEquals(res.sha256, await computeSha256(new TextEncoder().encode(FIXED_TEXT).buffer));
+    assertEquals(new TextDecoder().decode(fx.store.get("notes.txt")!), FIXED_TEXT);
+    assertEquals(fx.writes.length, 1);
+    // No file content in the model-facing result beyond what it sent.
+    assertEquals("content" in res, false);
+    assertEquals("oldContent" in res, false);
+
+    const created = await routes["fs-grant.write-file-approved"]({ grantId, relativePath: "new.txt", content: "fresh\n" }, MODEL);
+    assertEquals(created?.ok, true, JSON.stringify(created));
+    assertEquals(approvals[1].stagedDetail.oldContent, "", "a new file stages an empty before");
+    assertEquals(approvals[1].stagedDetail.added, 1);
+    assertEquals(approvals[1].stagedDetail.removed, 0);
+    assertEquals(new TextDecoder().decode(fx.store.get("new.txt")!), "fresh\n");
+  } finally {
+    await deleteFsGrant(grantId);
+  }
+});
+
+Deno.test("fs-grant.write-file-approved: the approval payload is digest-bound to the exact new content (same target, different digest)", async () => {
+  const fx = memoryWriteFixture({ "notes.txt": TYPO_TEXT });
+  const grantId = `fsg_digest_${crypto.randomUUID()}`;
+  await saveFsGrant({ grantId, handle: fx.dir, name: "rw-project", mode: "readwrite" });
+  // Deny every time so the on-disk "before" is identical across the three calls.
+  const { routes, approvals } = fsRouteDeps({
+    requireOwnerApproval: async (context: any, action: string, target: string, payload: any, detail: any, stagedDetail: any) => {
+      approvals.push({ context, action, target, payload, detail, stagedDetail });
+      return { ok: false, approvalDenied: true, error: "denied" };
+    },
+  });
+  try {
+    await routes["fs-grant.write-file-approved"]({ grantId, relativePath: "notes.txt", content: FIXED_TEXT }, MODEL);
+    await routes["fs-grant.write-file-approved"]({ grantId, relativePath: "notes.txt", content: FIXED_TEXT + "extra\n" }, MODEL);
+    await routes["fs-grant.write-file-approved"]({ grantId, relativePath: "notes.txt", content: FIXED_TEXT }, MODEL);
+    assertEquals(approvals.length, 3);
+    assertEquals(approvals[0].target, approvals[1].target, "one file = one target");
+    const d0 = await payloadDigest(approvals[0].payload);
+    const d1 = await payloadDigest(approvals[1].payload);
+    const d2 = await payloadDigest(approvals[2].payload);
+    assert(d0 !== d1, "different content must produce a different approval digest");
+    assertEquals(d0, d2, "the same content produces the same digest (an approval can be consumed by its exact retry)");
+  } finally {
+    await deleteFsGrant(grantId);
+  }
+});
+
+Deno.test("fs-grant.write-file-approved: a file that changed while the card was pending is refused after Approve (nothing written)", async () => {
+  const fx = memoryWriteFixture({ "notes.txt": TYPO_TEXT });
+  const grantId = `fsg_changed_${crypto.randomUUID()}`;
+  await saveFsGrant({ grantId, handle: fx.dir, name: "rw-project", mode: "readwrite" });
+  const { routes } = fsRouteDeps({
+    requireOwnerApproval: async () => {
+      // Another writer changes the file while the owner is looking at the card.
+      fx.store.set("notes.txt", new TextEncoder().encode("someone else wrote this\n"));
+      return { ok: true };
+    },
+  });
+  try {
+    const res = await routes["fs-grant.write-file-approved"]({ grantId, relativePath: "notes.txt", content: FIXED_TEXT }, MODEL);
+    assertEquals(res?.ok, false);
+    assertEquals(res?.error, "fs_file_changed");
+    assertEquals(fx.writes.length, 0, "the approved diff no longer matched the disk: nothing was written");
+    assertEquals(new TextDecoder().decode(fx.store.get("notes.txt")!), "someone else wrote this\n");
+  } finally {
+    await deleteFsGrant(grantId);
+  }
 });

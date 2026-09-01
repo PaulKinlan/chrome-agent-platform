@@ -38,6 +38,12 @@ export const DESTRUCTIVE_ACTIONS = new Set([
   "named-agent.update",
   "script.delete",
   "script.update",
+  // A MODEL write to a file in a folder the owner granted
+  // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01): the owner approves the exact
+  // diff (on disk vs proposed) on the same card an artifact edit shows; the
+  // digest binds the exact new content. The owner's own Settings write never
+  // takes this path (the raw fs-grant.write-file is owner-surface-only).
+  "fs.write",
   // A MODEL-created / -run / -scheduled script (CAP-FB-20260830-RUN-SCRIPT-
   // FETCH-APPROVAL-01): the script's controlled fetch is an exfiltration +
   // SSRF channel, so the owner approves the exact source (digest-bound) and
@@ -350,6 +356,15 @@ export function canonicalOperationTarget(kind, parts = Object.create(null)) {
       values = [actionName.slice(0, 64), ref.slice(0, 512)];
       break;
     }
+    case "fs": {
+      // A local-file write's identity is the grant + the CLEANED relative path
+      // (both verbatim, bounded — a path is identity, never presentation); the
+      // digest binds the content separately (LOCAL-FILE-EDIT-TOOLS-01).
+      const grantId = typeof parts.grantId === "string" ? parts.grantId.trim() : "";
+      const path = typeof parts.path === "string" ? parts.path.trim() : "";
+      values = [grantId.slice(0, 200), path.slice(0, 4096)];
+      break;
+    }
     case "hook": {
       const hookId = typeof parts.hookId === "string" ? parts.hookId.trim() : "";
       const recipeId = parts.recipeId == null ? "" : (typeof parts.recipeId === "string" ? parts.recipeId.trim() : "");
@@ -650,7 +665,7 @@ export function approvalCardDenial({ approvalId, action, targetRef, detail }) {
 // they never enter the model-facing envelope (approvalCardDenial), because the
 // current body is not necessarily model-authored. The record is staged in the
 // approval store keyed by approvalId and evicted with the approval row.
-export const STAGED_APPROVAL_DETAIL_KINDS = new Set(["asset.update", "script.update"]);
+export const STAGED_APPROVAL_DETAIL_KINDS = new Set(["asset.update", "script.update", "fs.write"]);
 export const STAGED_APPROVAL_DETAIL_BOUNDS = Object.freeze({
   maxContentChars: 1024 * 1024,
   maxNameChars: 256,

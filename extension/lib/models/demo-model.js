@@ -90,6 +90,12 @@ const SKILL_READ_MARKER = "@demo-skill-read";
 // update card must be titled with the artifact's name, not "Generated UI"
 // (CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01).
 const EDIT_ARTIFACT_MARKER = "@demo-edit-artifact";
+// @demo-write-file grant=<grantId> path=<relative path>: the demo model reads
+// a local file in a granted folder and writes it back with the typo
+// "filesytem" fixed — through the REAL lazy protocol (search_tools(read_file)
+// → execute → search_tools(write_file) → execute), so the write pays the
+// owner's diff-approval card (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01).
+const WRITE_FILE_MARKER = "@demo-write-file";
 // @demo-patch-artifact: create crumb.html then change one colour with the
 // CHEAP patch_asset tool (search/replace) instead of resending the whole body,
 // then attempt a SECOND patch with a deliberately stale expectVersion to prove
@@ -337,6 +343,7 @@ function latestRunSlice(prompt) {
       mcp: lastUser.includes(MCP_MARKER),
       enumSlip: lastUser.includes(ENUM_SLIP_MARKER),
       editArtifact: lastUser.includes(EDIT_ARTIFACT_MARKER),
+      writeFile: lastUser.includes(WRITE_FILE_MARKER),
       patchArtifact: lastUser.includes(PATCH_ARTIFACT_MARKER),
       runScript: lastUser.includes(RUN_SCRIPT_MARKER),
       skillRead: lastUser.includes(SKILL_READ_MARKER),
@@ -873,6 +880,64 @@ function editArtifactFinalText(prompt) {
   return `[demo model] Artifact edit FAILED honestly: ${why}`;
 }
 
+// ── @demo-write-file helpers (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01) ─────
+const WRITE_FILE_TYPO = "filesytem";
+const WRITE_FILE_FIX = "filesystem";
+function wantsWriteFile(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.writeFile;
+}
+function writeFileAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" &&
+    Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && /\[demo model\] File write/.test(p.text ?? "")));
+}
+/** Parse "grant=<id> path=<path>" after the marker from the CURRENT run's task
+ * (original case — a grant id and a path are case-sensitive). */
+function writeFileSpec(prompt) {
+  const msgs = latestRunSlice(prompt)?.slice ?? [];
+  const lastUserMsg = [...msgs].reverse().find((m) => m?.role === "user" && !isAgentDoContinuation(m));
+  const text = extractText(lastUserMsg ? [lastUserMsg] : []);
+  const grantId = /grant=(\S+)/.exec(text)?.[1] ?? "";
+  const path = /path=(\S+)/.exec(text)?.[1] ?? "";
+  if (!grantId || !path) return null;
+  return { grantId: grantId.slice(0, 200), path: path.slice(0, 512) };
+}
+/** The read result's content with the typo fixed: the write is derived from
+ * what the file ACTUALLY says, never a constant. */
+function writeFileFixedContent(prompt) {
+  const read = lazyExecuteOutputs(prompt).find((v) =>
+    v.ok === true && v.selectedTool === "read_file" && typeof v.result?.content === "string");
+  if (!read) return null;
+  return read.result.content.split(WRITE_FILE_TYPO).join(WRITE_FILE_FIX);
+}
+/** Honest final text: the write's result decides — approved and written, or
+ * NOT performed (denied / expired / refused), never a neutral rewrite. */
+function writeFileFinalText(prompt) {
+  const prior = runSlice(prompt)
+    .filter((m) => m?.role === "assistant" && Array.isArray(m?.content))
+    .flatMap((m) => m.content)
+    .find((p) => p?.type === "text" && /\[demo model\] File write/.test(p.text ?? ""));
+  if (prior?.text) return prior.text;
+  const spec = writeFileSpec(prompt);
+  if (!spec) return "[demo model] File write request not understood (grant=<id> path=<file>) — nothing was performed.";
+  const outputs = lazyExecuteOutputs(prompt);
+  const read = outputs.find((v) => v.selectedTool === "read_file");
+  const write = outputs.find((v) => v.selectedTool === "write_file");
+  const wrote = write && (write.result?.ok === true || (write.ok === true && write.result?.written === true));
+  if (wrote) {
+    const added = write.result?.added ?? "?";
+    const removed = write.result?.removed ?? "?";
+    return `[demo model] File write complete: read ${spec.path}, the owner approved the change, and the typo fix was written (+${added} -${removed}).`;
+  }
+  if (write) {
+    const why = String(write.result?.error ?? write.error ?? "the write did not settle").slice(0, 200);
+    return `[demo model] File write NOT performed: ${why}`;
+  }
+  const why = String(read?.result?.error ?? read?.error ?? (read ? "the file could not be read" : "read_file was never called")).slice(0, 200);
+  return `[demo model] File write NOT performed: ${why}`;
+}
+
 // ── @demo-patch-artifact helpers (CAP-FB-20260830-PATCH-ASSET-TOOL-01) ──────
 const PATCH_ARTIFACT_NAME = "crumb.html";
 // A small page with ONE brand colour to change. The whole document is ~180
@@ -1084,8 +1149,30 @@ function mcpFinalText(prompt) {
   return `[demo model] MCP tool ${spec.tool} finished without a result.`;
 }
 
-function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, browser = false, mcp = false, enumSlip = false, runScript = false, editArtifact = false, patchArtifact = false, skillRead = false, remember = false } = {}) {
+function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, browser = false, mcp = false, enumSlip = false, runScript = false, editArtifact = false, patchArtifact = false, writeFile = false, skillRead = false, remember = false } = {}) {
   const step = toolResultCount(prompt);
+  if (writeFile) {
+    // search(read_file) → execute read → search(write_file) → execute write
+    // with the read content's typo fixed → final text. The write pays the
+    // owner's diff-approval card inside its own execute.
+    const spec = writeFileSpec(prompt);
+    if (!spec) return null;
+    const toolParts = boardToolParts(prompt);
+    const searches = toolParts.filter((p) => p.toolName === "search_tools").length;
+    const executes = toolParts.filter((p) => p.toolName === "execute_tool").length;
+    if (executes >= 2) return null;
+    if (searches <= executes) {
+      return { id: `search_write_file_${searches}`, name: "search_tools", input: { query: executes === 0 ? "read_file" : "write_file", limit: 1 } };
+    }
+    const selectionRef = latestSelectionRef(prompt);
+    if (!selectionRef) return null;
+    if (executes === 0) {
+      return { id: "execute_write_file_read", name: "execute_tool", input: { selectionRef, arguments: { grantId: spec.grantId, path: spec.path } } };
+    }
+    const content = writeFileFixedContent(prompt);
+    if (content === null) return null; // honest stop: the final text reports the read failure
+    return { id: "execute_write_file_write", name: "execute_tool", input: { selectionRef, arguments: { grantId: spec.grantId, path: spec.path, content } } };
+  }
   if (remember) {
     // ONE key, through the REAL lazy protocol: search_tools(memory_set) →
     // execute_tool. Nothing else, so the recall thread reads a store the
@@ -1497,6 +1584,8 @@ export function createDemoModel() {
         ? lazyDemoCall(options.prompt, { editArtifact: true })
         : wantsPatchArtifact(options.prompt) && !patchArtifactAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { patchArtifact: true })
+        : wantsWriteFile(options.prompt) && !writeFileAlreadyFinal(options.prompt)
+        ? lazyDemoCall(options.prompt, { writeFile: true })
         : wantsRunScript(options.prompt) && !runScriptAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { runScript: true })
         : wantsSkillRead(options.prompt) && !skillReadAlreadyFinal(options.prompt)
@@ -1561,6 +1650,14 @@ export function createDemoModel() {
       if (wantsEditArtifact(options.prompt)) {
         return Promise.resolve({
           content: [{ type: "text", text: editArtifactFinalText(options.prompt) }],
+          finishReason: "stop",
+          usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
+          warnings: [],
+        });
+      }
+      if (wantsWriteFile(options.prompt)) {
+        return Promise.resolve({
+          content: [{ type: "text", text: writeFileFinalText(options.prompt) }],
           finishReason: "stop",
           usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
           warnings: [],
@@ -1692,6 +1789,8 @@ export function createDemoModel() {
             ? lazyDemoCall(options.prompt, { editArtifact: true })
             : wantsPatchArtifact(options.prompt) && !patchArtifactAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { patchArtifact: true })
+            : wantsWriteFile(options.prompt) && !writeFileAlreadyFinal(options.prompt)
+            ? lazyDemoCall(options.prompt, { writeFile: true })
             : wantsRunScript(options.prompt) && !runScriptAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { runScript: true })
             : wantsSkillRead(options.prompt) && !skillReadAlreadyFinal(options.prompt)
@@ -1845,6 +1944,10 @@ export function createDemoModel() {
           else if (wantsEditArtifact(options.prompt)) {
             // The artifact-edit final/continuation text: the update's result decides.
             response = editArtifactFinalText(options.prompt);
+          }
+          else if (wantsWriteFile(options.prompt)) {
+            // The file-write final/continuation text: the write's result decides.
+            response = writeFileFinalText(options.prompt);
           }
           else if (wantsPatchArtifact(options.prompt)) {
             // The patch final/continuation text: the first patch's +/- and the

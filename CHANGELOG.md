@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.607] — 2026-09-01
+- The agent can now edit a file in a folder you shared: you see the exact diff and approve it before anything is written.
+
 ## [0.2.606] — 2026-09-01
 - Release notes describe the provider base-URL fix in plain language
 

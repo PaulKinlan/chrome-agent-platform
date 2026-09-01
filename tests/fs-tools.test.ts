@@ -196,3 +196,90 @@ Deno.test("list_folders tool: surfaces the folder attached to the run", async ()
     await deleteFsGrant(grantId);
   }
 });
+
+// ── write_file (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01) ───────────────────
+// The write tool never writes on its own: it resolves the run's grant, then
+// hands { grantId, relativePath, content } to the run-bound fileWriteGate
+// (the SW's fs-grant.write-file-approved route, which stages the diff card and
+// writes only after Approve). With no gate bound it fails CLOSED.
+
+function writableTree() {
+  const written: Array<{ name: string; bytes: Uint8Array }> = [];
+  const notes = {
+    ...fileHandle("notes.txt", "hello\n"),
+    createWritable: async () => ({
+      write: async (b: Uint8Array) => { written.push({ name: "notes.txt", bytes: b }); },
+      close: async () => {},
+    }),
+  };
+  const dir = dirHandle("project", { "notes.txt": notes });
+  return { dir, written };
+}
+
+Deno.test("write_file tool: with no approval gate bound it fails closed (fs_write_gate_unavailable) and never touches the store", async () => {
+  const grantId = `fsg_tool_write_nogate_${crypto.randomUUID()}`;
+  const { dir, written } = writableTree();
+  await saveFsGrant({ grantId, handle: dir, name: "project", mode: "readwrite" });
+  setRunContext({ threadId: "t-write", folderGrants: [{ grantId, name: "project" }] });
+  try {
+    const tools = browserToolset(false);
+    assert(tools.write_file, "write_file tool is exposed");
+    const res = await tools.write_file.execute({ path: "notes.txt", content: "changed\n" });
+    assertEquals(res.ok, false);
+    assertEquals(res.code, "fs_write_gate_unavailable");
+    assert(typeof res.error === "string" && res.error.length > 0, "a human error, never silence");
+    assertEquals(res.path, "notes.txt");
+    assertEquals(written.length, 0, "nothing was written");
+    // The scoped (hook) toolset never offers it at all.
+    assertEquals("write_file" in browserToolset(true), false);
+  } finally {
+    clearRunContext();
+    await deleteFsGrant(grantId);
+  }
+});
+
+Deno.test("write_file tool: passes the resolved grant + path + complete content to the gate, returns its result, and projects a denial into a bounded JSON error", async () => {
+  const grantId = `fsg_tool_write_gate_${crypto.randomUUID()}`;
+  const { dir, written } = writableTree();
+  await saveFsGrant({ grantId, handle: dir, name: "project", mode: "readwrite" });
+  setRunContext({ threadId: "t-write", folderGrants: [{ grantId, name: "project" }] });
+  const calls: any[] = [];
+  try {
+    let reply: any = { ok: true, written: true, path: "notes.txt", size: 8, sha256: "f".repeat(64), added: 1, removed: 1 };
+    const tools = browserToolset(false, { fileWriteGate: async (payload: any) => { calls.push(payload); return reply; } } as any);
+    // No grantId argument — the tool picks up the folder attached to the run.
+    const ok = await tools.write_file.execute({ path: "notes.txt", content: "changed\n" });
+    assertEquals(ok, reply);
+    assertEquals(calls.length, 1);
+    assertEquals(calls[0], { grantId, relativePath: "notes.txt", content: "changed\n" });
+    assertEquals(written.length, 0, "the tool itself never writes — only the approved route does");
+
+    reply = { ok: false, approvalDenied: true, error: "The owner denied fs.write; the action was not performed." };
+    const denied = await tools.write_file.execute({ path: "notes.txt", content: "changed\n" });
+    assertEquals(denied.ok, false);
+    assertEquals(denied.code, "fs_write_denied");
+    assertEquals(denied.error, "The owner denied fs.write; the action was not performed.");
+    assertEquals(denied.path, "notes.txt");
+
+    reply = { ok: false, approvalExpired: true, error: "Approval for fs.write expired after 60 seconds; the action was not performed." };
+    const expired = await tools.write_file.execute({ path: "notes.txt", content: "changed\n" });
+    assertEquals(expired.code, "fs_write_approval_expired");
+
+    // A store boundary code from the route is humanized like every file tool error.
+    reply = { ok: false, error: "fs_file_not_text", path: "blob.bin" };
+    const binary = await tools.write_file.execute({ path: "blob.bin", content: "x" });
+    assertEquals(binary.ok, false);
+    assertEquals(binary.code, "fs_file_not_text");
+    assert(/not UTF-8 text/.test(binary.error));
+
+    // An unknown grant is refused BEFORE the gate is consulted.
+    const before = calls.length;
+    const missing = await tools.write_file.execute({ path: "notes.txt", content: "x", grantId: `fsg_absent_${crypto.randomUUID()}` });
+    assertEquals(missing.ok, false);
+    assertEquals(missing.code, "grant_not_found");
+    assertEquals(calls.length, before, "no gate call for a grant that does not exist");
+  } finally {
+    clearRunContext();
+    await deleteFsGrant(grantId);
+  }
+});

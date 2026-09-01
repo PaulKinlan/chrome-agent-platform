@@ -238,6 +238,9 @@ const BUILT_IN_TOOLS = new Set([
   // (reads are classified above; ALL are built-ins).
   "register_user_script", "update_user_script", "unregister_user_script", "list_user_scripts",
   "register_content_script", "update_content_script", "unregister_content_script", "list_content_scripts",
+  // CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01: the owner-approved local-file
+  // write (mutating by exclusion — a replay would re-ask the owner).
+  "write_file",
   // CAP-FB-20260830-PAGE-ACTION-TOOLS-01: the page-action family (reads
   // classified above; click/type/select are mutating by exclusion).
   "find_elements", "click_element", "type_text", "select_option", "scroll_page", "wait_for",
