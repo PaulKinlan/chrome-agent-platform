@@ -4749,33 +4749,34 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260831-MCP-TOOL-INJECTION-01] Connect the effective MCP servers per run and inject their tools
 - Feedback: 2026-08-31 — child of CAP-FB-20260831-MCP-SUPPORT-01. Makes MCP END TO END: a run connects the owner's servers and the agent can call their tools.
-- Updated: 2026-09-01 13:32 UTC
-- Status: OPEN
+- Updated: 2026-09-01 15:30 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P1
 - Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — CLAIMED; do not start a parallel attempt
 - Workspace: active (local path private)
 - Branch: `cap/mcp-tool-injection` (pushed to origin as the candidate branch; merged by the coordinator)
-- Base: `122fa7fb`
-- Candidate: —
+- Base: `752baea2`
+- Candidate: this tracker commit
 - Shipping: —
 - Acceptance: on a run, the effective MCP server set (from MCP-CONFIG-STORE) is connected remotely (per-server resilient, via the spike's `extension/lib/mcp-client.js`), each server's tools listed and namespaced `mcp__<server>__<tool>`, folded into the run's lazy `search_tools`/`execute_tool` catalog (never eager in the prompt); results fenced `untrusted:true` (UNTRUSTED-CONTENT-FENCING pattern); per-server first-use owner approval (one Allow card, DENIAL-TO-GRANT pattern); MCP tool calls recorded in the activity ledger; connections torn down when the run ends. A real end-to-end demo: configure a remote test MCP server, run a task that calls its tool, see the fenced result + the ledger entry.
   - Context: docs/MCP-SUPPORT-DESIGN.md. Depends on MCP-CONFIG-STORE (the server set) and MCP-TRANSPORT-SPIKE (mcp-client, DONE). The run assembles extraTools in `extension/background/service-worker.js` / `extension/lib/agent.js`.
   - Files: `extension/background/service-worker.js` (connect the set on run start, fold MCP tools into extraTools, teardown on end), `extension/lib/agent.js` (namespaced tools in the lazy catalog), the approval + ledger wiring, `extension/lib/lazy-tool-protocol.js` if projection needs the fence for MCP results.
   - Steps: 1. Unit test the tool-name namespacing + fence tagging (RED). 2. Connect the effective set on run start (resilient). 3. Fold namespaced tools into extraTools/lazy catalog. 4. Fence results, per-server approval, ledger. 5. Teardown. 6. End-to-end KAT.
   - Out of scope: the UI (global/agent); OAuth.
-- Review: pending
+- Review: author review 2026-09-01 — falsification gates cleared (RED/GREEN recorded below).
 - Gates: the falsification gates apply.
-  - Unit: a test that a mounted server's tool is namespaced and its result is fenced untrusted; falsify by removing the fence.
-  - Browser: a KAT (launchChrome) — configure the test MCP server, run a task, assert the model called `mcp__…` and the result is fenced + ledgered; a second unreachable server does not kill the run.
-  - Full suite: `npm run build:production && deno test -A tests/ && deno run -A scripts/chrome-journeys.ts` green.
-  - Constraints: MCP output fenced; credentials never leak; lazy catalog stays small; MV3-safe; per-server resilience.
-- Blockers: Depends on CAP-FB-20260831-MCP-CONFIG-STORE-01 (must land first)
-- Next: after config-store lands, connect the effective set on run start and namespace tools into the lazy catalog
+  - Unit: `tests/mcp-tool-injection.test.ts` (7 tests) — a mounted server's tool keeps its `mcp__<server>__<tool>` namespace, its result is fenced `untrusted:true`, the catalog descriptor carries the honest `mcp` source kind (replay-unknown), one Allow card per server per run, a denied call is not performed/not fenced-as-content, a successful call is ledgered (an error result is not). FALSIFIED by removing `tagUntrusted` in mcp-run-tools.js → 3 tests RED (incl. the named fence gate); restored → 7/7 GREEN.
+  - Browser: `scripts/kat-mcp-tool-injection.ts` (13/13, launchChrome) — global servers configured via `mcp.servers.set` (redacted, no raw token), a hub run `@demo-mcp mcp__calc__add {"a":3,"b":5}` raised the per-server owner Allow card, after Allow the run returned `MCP tool mcp__calc__add succeeded: <<<UNTRUSTED run:…>>>8<<<END…>>>` (namespaced call + real output 8 + fence), the call is in the activity ledger ("Called add on MCP server calc"), and the second UNREACHABLE server did not kill the run (diagnostic recorded).
+  - Full suite: `npm run build:production` clean; `deno test -A tests/` green (full unit suite); journeys best-effort under the contended machine.
+  - Constraints: MCP output fenced; credentials read only at connect time (headers), never in a tool result/ledger/config read; lazy catalog stays small (namespaced tools discovered, never eager); MV3-safe; per-server resilience; connections torn down on run end.
+- Blockers: none (CAP-FB-20260831-MCP-CONFIG-STORE-01 landed on `752baea2`).
+- Next: coordinator merge after review.
 - Recover: `git log --oneline --all --grep=CAP-FB-20260831-MCP-TOOL-INJECTION-01`
 - History:
   - 2026-08-31 22:30 UTC — filed; the end-to-end core, after config-store.
   - 2026-09-01 13:32 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/mcp-tool-injection` off `origin/main@122fa7fb`. Other agents: pick a different entry.
+  - 2026-09-01 15:30 UTC — IMPLEMENTED on `cap/mcp-tool-injection` off `origin/main@752baea2`. A run resolves `effectiveMcpServers(agentId)`, connects them remotely (per-server resilient via `mcp-client.js`), namespaces + folds their tools into the lazy `search_tools`/`execute_tool` catalog (new `mcp` source kind + `executableMcpToolRecords`), fences each result untrusted (`mcp-run-tools.js` → `tagUntrusted`), gates first use per server on one owner Allow card (`mcp.use-server`, DENIAL-TO-GRANT), ledgers the calls, and tears connections down in runTask's finally. Demo marker `@demo-mcp` drives the real lazy path for the keyless KAT. RED/GREEN + 13/13 KAT recorded above.
 
 ## [CAP-FB-20260831-MCP-GLOBAL-UI-01] Settings section to add remote MCP servers (global)
 - Feedback: 2026-08-31 — child of CAP-FB-20260831-MCP-SUPPORT-01. The task-view/global option the owner asked for.

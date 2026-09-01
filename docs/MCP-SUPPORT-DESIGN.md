@@ -191,3 +191,34 @@ resilience *and* stops importing stdio at module top.)
 - Credentials go in `transport.headers` at connect time, sourced from secure
   storage; never persist them into a logged/exported config
   (`MCP-CONFIG-STORE-01`).
+
+---
+
+## Tool-injection result (CAP-FB-20260831-MCP-TOOL-INJECTION-01) — landed 2026-09-01
+
+The run-time wiring that makes MCP work **end to end**. On a run (a real owner
+run — `approvalExecutionId` present, never a scoped/hook run), the service
+worker:
+
+1. resolves the effective set with `effectiveMcpServers(agentId)` (global ∪ the
+   named agent's, minus disabled) and `mountRemoteMcpServers(...)` — **per-server
+   resilient**: one unreachable server is recorded as a diagnostic and skipped,
+   never fatal;
+2. wraps each mounted tool with **`extension/lib/mcp-run-tools.js` →
+   `buildMcpRunTools`**, which owns the three run-time obligations the spike left
+   to the integration layer: the untrusted **fence** (`tagUntrusted` on every
+   successful result — the lazy projection then wraps its string leaves in the
+   run's boundary token), the **per-server first-use owner approval** (one Allow
+   card, `mcp.use-server`, cached per server for the run), and the **activity
+   ledger** write (`mcp__…` rows via `action-ledger.js`, no inverse);
+3. folds those tools into the lazy catalog as a NEW honest source kind **`mcp`**
+   (`tool-catalog.adaptMcpTools` + `lazy-tool-protocol.executableMcpToolRecords`),
+   so they are discovered through `search_tools`/`execute_tool` — **never eager**
+   in the prompt — and are replay-**unknown** (external side effects, never
+   auto-resumed);
+4. **tears the connections down** in `runTask`'s `finally` (`orch.closeMcp`) —
+   re-opened per run (constraint 5).
+
+The keyless end-to-end proof is `scripts/kat-mcp-tool-injection.ts` driving the
+demo marker `@demo-mcp <mcp__server__tool> [json-args]` through the real lazy
+protocol against `scripts/mcp-test-server.ts`.

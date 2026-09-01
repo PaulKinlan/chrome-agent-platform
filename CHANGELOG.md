@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.593] — 2026-09-01
+- : connect the effective MCP servers on a run and inject their namespaced tools
+
 ## [0.2.592] — 2026-09-01
 - The next two steps of external tool-server support are underway.
 

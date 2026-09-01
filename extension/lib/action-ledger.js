@@ -177,6 +177,17 @@ const INVERSE_BUILDERS = Object.freeze({
 
 // A human sentence for a mutating tool that has no dedicated builder — honest
 // and bounded, never a raw object dump. "navigate_tab" → "Navigated a tab".
+// A plain-language sentence for a remote MCP tool call: `mcp__<server>__<tool>`
+// reads as "Called <tool> on MCP server <server>".
+function mcpSentence(name) {
+  const rest = String(name).slice("mcp__".length);
+  const sep = rest.indexOf("__");
+  if (sep === -1) return `Called MCP tool ${boundedName(rest) || name}`;
+  const server = boundedName(rest.slice(0, sep));
+  const tool = boundedName(rest.slice(sep + 2));
+  return `Called ${tool || "a tool"} on MCP server ${server || "(unknown)"}`;
+}
+
 function genericSentence(toolName) {
   const words = String(toolName).replace(/_/g, " ").trim();
   if (!words) return "Ran a tool";
@@ -203,6 +214,13 @@ export function ledgerRowFor(toolName, args, result, extra = {}) {
   if (!succeeded(result)) return null;
   const a = args && typeof args === "object" ? args : {};
   const argsDigest = digestArgs(a);
+  // A remote MCP server's tool (mcp__<server>__<tool>) is an external side
+  // effect of UNKNOWN class (CAP-FB-20260831-MCP-TOOL-INJECTION-01): it is
+  // recorded so the owner sees "what the agent did", but it has no inverse (we
+  // cannot reverse an arbitrary remote call).
+  if (name.startsWith("mcp__")) {
+    return { tool: name, sentence: mcpSentence(name), argsDigest, inverse: null };
+  }
   const builder = INVERSE_BUILDERS[name];
   if (builder) {
     const { sentence, inverse } = builder(a, result ?? {}, extra ?? {});
@@ -223,6 +241,7 @@ export function ledgerRowFor(toolName, args, result, extra = {}) {
 export function isLedgerableTool(toolName) {
   const name = String(toolName ?? "");
   if (!name) return false;
+  if (name.startsWith("mcp__")) return true;
   if (INVERSE_BUILDERS[name]) return true;
   return mutationClassOf(name) === "mutating";
 }
