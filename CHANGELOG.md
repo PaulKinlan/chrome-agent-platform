@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.600] — 2026-09-01
+- check screenshots no longer cascade: a capture on a stale or backgrounded tab fails the evidence quietly instead of hanging the suite
+
 ## [0.2.599] — 2026-09-01
 - Dialog work — searchable grouped customizable select for agent templates; computed-style contrast gates in both schemes; headless base-select paint limitation documented
 

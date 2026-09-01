@@ -375,12 +375,20 @@ async function typeInto(cdp, session, selector, text) {
 
 /** Capture a PNG screenshot of a session (visible evidence for the journeys). */
 async function captureShot(cdp, session) {
-  const r = await cdp.send("Page.captureScreenshot", { format: "png" }, session);
-  const b64 = r?.result?.data;
-  if (!b64) return null;
-  return new Uint8Array(
-    atob(b64).split("").map((c) => c.charCodeAt(0)),
-  );
+  // Evidence-only: a stale/backgrounded target makes Page.captureScreenshot
+  // HANG in headless (the round-16 finding — it hung the whole suite). A
+  // single capture must never cascade 100+ checks: on any CDP error or
+  // timeout this returns null (the caller writes no evidence), never throws.
+  try {
+    const r = await cdp.send("Page.captureScreenshot", { format: "png" }, session);
+    const b64 = r?.result?.data;
+    if (!b64) return null;
+    return new Uint8Array(
+      atob(b64).split("").map((c) => c.charCodeAt(0)),
+    );
+  } catch {
+    return null;
+  }
 }
 
 // ---- fixed assertion set (every expected check is unconditional + named) ----
@@ -4389,6 +4397,11 @@ async function main() {
       revokeState?.active === false && revokeUi?.flash === "Browser control revoked." &&
         revokeUi?.checked === false,
     );
+    // A Settings re-render after the revoke can leave the options target
+    // backgrounded/stale — re-activate before the evidence capture (the same
+    // ntpShotNow pattern: Page.captureScreenshot hangs on a non-active tab).
+    await cdp.send("Target.activateTarget", { targetId: optsPageReload.id }).catch(() => {});
+    await sleep(300);
     const leaseShotOff = await captureShot(cdp, optsSession);
     if (leaseShotOff) await writeEvidence("lease-settings-after-toggle-off.png", leaseShotOff);
     await evalOpts(`chrome.storage.local.remove("cap:browser-command-lease")`);
