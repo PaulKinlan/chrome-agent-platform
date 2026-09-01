@@ -58,6 +58,11 @@ export const DESTRUCTIVE_ACTIONS = new Set([
   // model provider, so the owner approves the exact origin + cookie name
   // before the value is read at all.
   "browser.cookie-value",
+  // Using a REMOTE MCP server's tools (CAP-FB-20260831-MCP-TOOL-INJECTION-01):
+  // the model reaches OUT to an owner-configured server whose results are
+  // untrusted external content, so the owner approves the server on first use —
+  // one Allow card per server per run (mirrors WebMCP's per-tool approval).
+  "mcp.use-server",
 ]);
 
 export class CanonicalPayloadError extends Error {
@@ -299,6 +304,14 @@ export function canonicalOperationTarget(kind, parts = Object.create(null)) {
     case "capability":
       values = [typeof parts.id === "string" && /^[a-z][a-zA-Z0-9-]{0,63}$/.test(parts.id) ? parts.id : ""];
       break;
+    case "mcp": {
+      // An MCP server's identity is its config id (already the tool-namespace
+      // segment: alphanumerics / - / _, never `__`). Taken verbatim, bounded;
+      // an invalid id yields the empty identity (rejected by the caller).
+      const id = typeof parts.id === "string" && /^(?!.*__)[a-zA-Z0-9_-]{1,64}$/.test(parts.id) ? parts.id : "";
+      values = [id];
+      break;
+    }
     case "hook": {
       const hookId = typeof parts.hookId === "string" ? parts.hookId.trim() : "";
       const recipeId = parts.recipeId == null ? "" : (typeof parts.recipeId === "string" ? parts.recipeId.trim() : "");

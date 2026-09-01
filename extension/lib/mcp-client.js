@@ -1,5 +1,13 @@
+// @ts-nocheck — this is the thin binding to `@modelcontextprotocol/sdk`'s
+// deep-subpath client/transport entry points (`client/index.js`,
+// `client/streamableHttp.js`, `client/sse.js`). esbuild resolves them from
+// node_modules for the SW/worker bundle, but Deno's type-checker cannot resolve
+// the SDK's `.js`-suffixed subpath exports, so it is excluded from checking. The
+// logic-bearing half is mcp-client-core.js, which is fully type-checked and
+// unit-tested; this file only wires the real SDK Client onto that helper and is
+// proven end to end by scripts/kat-mcp-transport.ts + kat-mcp-tool-injection.ts.
 // mcp-client.js — remote MCP client for the MV3 service worker / agent worker.
-// CAP-FB-20260831-MCP-TRANSPORT-SPIKE-01
+// CAP-FB-20260831-MCP-TRANSPORT-SPIKE-01 (wired at MCP-TOOL-INJECTION-01)
 //
 // Binds the pure mount/resolve helper (mcp-client-core.js) to REAL
 // `@modelcontextprotocol/sdk` clients over the two BROWSER-SAFE transports:
@@ -17,8 +25,13 @@
 // build.mjs aliases those to browser-shim-node.js exactly as it already does
 // for the agent-worker bundle).
 
+// @ts-ignore — Deno's type-checker cannot resolve the SDK's `.js`-suffixed
+// subpath exports (esbuild resolves them for the bundle); the value import is
+// correct and KAT-proven. See the file header.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+// @ts-ignore — see above.
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+// @ts-ignore — see above.
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { mountRemoteMcpServers as mountCore, namespacedToolName, formatMcpToolResult } from "./mcp-client-core.js";
 

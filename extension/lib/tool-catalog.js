@@ -44,6 +44,10 @@ export const TOOL_SOURCE_KINDS = Object.freeze([
   "webmcp-declared",
   "webmcp-inferred",
   "bundled-package",
+  // Remote MCP servers the agent connects OUT to (Streamable HTTP / SSE). Their
+  // tools are namespaced `mcp__<server>__<tool>` and their output is untrusted
+  // external content (extension/lib/mcp-run-tools.js, MCP-TOOL-INJECTION-01).
+  "mcp",
   // Provider-EXECUTED (server-side) tools — e.g. Gemini google_search. Their
   // "dispatch" is a per-run latch, not a client execution
   // (extension/lib/provider-server-tools.js).
@@ -371,8 +375,10 @@ export function canonicalToolDescriptor(input) {
     throw new ToolCatalogValidationError("availability");
   }
   // Replay safety is trusted only when supplied by a product-owned adapter.
-  // WebMCP/page metadata is always unknown regardless of page claims.
-  const trustedReplaySafety = sourceKind.startsWith("webmcp-")
+  // WebMCP/page metadata is always unknown regardless of page claims, and a
+  // REMOTE MCP server's tool is an external side effect of unknown class — never
+  // auto-resumed after an interruption (fail closed).
+  const trustedReplaySafety = (sourceKind.startsWith("webmcp-") || sourceKind === "mcp")
     ? REPLAY_UNKNOWN
     : replaySafetyForTool(toolId);
   const capabilityDigest = sha256Hex(canonicalJson(capabilities));
@@ -628,6 +634,18 @@ export function adaptManagementTools(toolMap, context) {
     sourceKind: "management",
     packageId: context?.packageId ?? "cap.management-tools",
     dispatcherKind: "management",
+  });
+}
+
+export function adaptMcpTools(toolMap, context) {
+  return adaptAiToolMap(toolMap, {
+    ...context,
+    sourceKind: "mcp",
+    packageId: context?.packageId ?? "cap.mcp-tools",
+    dispatcherKind: "mcp",
+    // A remote server's tool can declare no host capabilities — the only
+    // capability it carries is "connect out and invoke".
+    capabilities: context?.capabilities ?? ["mcp.invoke"],
   });
 }
 

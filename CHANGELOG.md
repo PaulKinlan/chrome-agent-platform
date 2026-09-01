@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.595] — 2026-09-01
+- : merge — the agent connects and calls MCP server tools on a run
+
 ## [0.2.594] — 2026-09-01
 - DONE (2906/0, 294/294); fix provider check block for the radiogroup redesign
 
@@ -262,7 +265,7 @@
 - Artifacts and generated images now appear in the conversation as they are created — a card showing what changed, plus a thumbnail strip of screenshots and images you can open.
 
 ## [0.2.510] — 2026-08-30
-- Setting up a model is now a short guided path: a recommended provider is preselected, and you pick, paste your key, test the connection, and use it - with the hub clearly showing which model is ready.
+- MCP works end to end: on a run the agent connects to the MCP servers you have set up, can use their tools (namespaced and treated as untrusted), asks before using a server the first time, and records what it called.
 
 ## [0.2.509] — 2026-08-30
 - A size limit on how much a skill could import has been removed.

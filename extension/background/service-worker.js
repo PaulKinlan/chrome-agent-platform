@@ -192,7 +192,9 @@ import {
   updateNamedAgent,
   withNamedAgentsLock,
 } from "../lib/named-agents.js";
-import { normalizeMcpServerList, redactMcpServerList } from "../lib/mcp-config.js";
+import { effectiveMcpServers, normalizeMcpServerList, redactMcpServerList } from "../lib/mcp-config.js";
+import { mountRemoteMcpServers } from "../lib/mcp-client.js";
+import { buildMcpRunTools } from "../lib/mcp-run-tools.js";
 import {
   commitThreadTerminal,
   continueThread,
@@ -317,6 +319,7 @@ import {
   executableBrowserToolRecords,
   executableBundledToolRecords,
   executableManagementToolRecords,
+  executableMcpToolRecords,
   executableWebMcpToolRecords,
 } from "../lib/lazy-tool-protocol.js";
 
@@ -1299,7 +1302,7 @@ async function lazyPermissionDigest() {
   }
 }
 
-async function liveChromeLazyRecords({ browserTools, managementTools, executionId, scoped, providerServer = null }) {
+async function liveChromeLazyRecords({ browserTools, managementTools, mcpTools = {}, executionId, scoped, providerServer = null }) {
   const version = String(chrome.runtime.getManifest()?.version ?? "0");
   const extensionDigest = sha256Hex(`cap-extension:${version}`);
   const permissionDigest = await lazyPermissionDigest();
@@ -1382,6 +1385,23 @@ async function liveChromeLazyRecords({ browserTools, managementTools, executionI
         latchRegistry: providerServer.latchRegistry,
         sourceGeneration: `${sourceGeneration}:provider-server`,
         scope,
+      })
+      : []),
+    // Remote MCP server tools (CAP-FB-20260831-MCP-TOOL-INJECTION-01), namespaced
+    // `mcp__<server>__<tool>`. Discovered through the same lazy index; their
+    // execute closure (lib/mcp-run-tools.js) owns the per-server owner-approval
+    // card, the ledger write and the untrusted fence-tag. Availability is
+    // "ready" — the owner card gates the FIRST call, not discovery.
+    ...(Object.keys(mcpTools).length
+      ? executableMcpToolRecords(mcpTools, {
+        version,
+        sourceGeneration: `${sourceGeneration}:mcp`,
+        closureGeneration: `${sourceGeneration}:mcp:${executionId ?? "none"}`,
+        packageDigest: sha256Hex(`mcp:${sourceGeneration}`),
+        permissionDigest,
+        grantDigest: sha256Hex(`mcp:${sourceGeneration}`),
+        scope,
+        availability: "ready",
       })
       : []),
   ];
@@ -1620,6 +1640,57 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       // execution id — the route context — never a model-controlled arg.)
       callRoute: modelManagementDispatch,
     });
+    // ── Remote MCP servers (CAP-FB-20260831-MCP-TOOL-INJECTION-01) ───────────
+    // A run connects the EFFECTIVE MCP server set (global ∪ this agent's, minus
+    // disabled — mcp-config.effectiveMcpServers) over the browser-safe transports
+    // (mcp-client.js), folds each server's namespaced `mcp__<server>__<tool>`
+    // tools into the lazy catalog, and TEARS THE CONNECTIONS DOWN when the run
+    // ends (orch.closeMcp, called from runTask's finally). Per-server resilient:
+    // one unreachable server is reported and skipped, never fatal.
+    //
+    // Gated on approvalExecutionId: only a real owner run (which can show the
+    // per-server Allow card) may reach out to remote servers. A SCOPED (hook)
+    // run is driven by UNTRUSTED browser events and never connects out — the
+    // same boundary the provider-server tools use.
+    let mcpMount = null;
+    let mcpRunTools = {};
+    if (approvalExecutionId && !scoped) {
+      try {
+        const mcpAgentId = typeof providerServerAgentId === "string" &&
+            providerServerAgentId && providerServerAgentId !== "hub"
+          ? providerServerAgentId
+          : undefined;
+        const mcpConfigs = await effectiveMcpServers(mcpAgentId);
+        if (mcpConfigs.length) {
+          mcpMount = await mountRemoteMcpServers(mcpConfigs.map(mcpClientConfig));
+          for (const s of mcpMount.servers) {
+            if (!s.ok) {
+              pushDiagnostic(
+                "warn",
+                `MCP server "${s.name}" did not connect: ${s.error ?? "unknown error"}`,
+                "mcp",
+                "connect",
+              );
+            }
+          }
+          mcpRunTools = buildMcpRunTools(mcpMount, {
+            // Per-server first-use owner approval — one Allow card (the model
+            // path of requireOwnerApproval); the grant holds for the run.
+            approveServer: (serverId) =>
+              requireMcpServerApproval(approvalExecutionId, onProgress, serverId),
+            // A successful MCP call is an external side effect — record it in the
+            // activity ledger (no inverse). Fire-and-forget; never fails the call.
+            ledger: ({ name, args, result }) => {
+              writeActionLedgerRow(name, args, result, { executionId: approvalExecutionId })
+                .catch(() => {});
+            },
+          });
+        }
+      } catch (e) {
+        pushDiagnostic("warn", `MCP mount failed: ${String(e?.message ?? e).slice(0, 160)}`, "mcp", "mount");
+      }
+    }
+
     const orch = await createOrchestrator({
       model,
       masterMemory: mem,
@@ -1652,6 +1723,7 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       readMasterLazySources: () => liveChromeLazyRecords({
         browserTools: liveBrowserTools,
         managementTools: liveManagementTools,
+        mcpTools: mcpRunTools,
         executionId: approvalExecutionId,
         scoped,
         providerServer: {
@@ -1708,6 +1780,11 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       latchCount: (runId) => serverToolLatchRegistry.latchCount(runId),
       groundingFor: (runId) => serverToolGrounding.get(runId)?.snapshot() ?? null,
     };
+    // Teardown hook: close every remote MCP connection this run opened. MV3
+    // workers are ephemeral and SSE connections are long-lived, so a run must
+    // re-open per run and close on end (docs/MCP-SUPPORT-DESIGN.md constraint 5).
+    // Idempotent (mcp-client-core's close()); runTask's finally calls it.
+    orch.closeMcp = async () => { try { await mcpMount?.close?.(); } catch { /* best effort */ } };
     return orch;
 }
 
@@ -3082,6 +3159,13 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       try {
         orch?.setAttestation?.(null);
       } catch { /* best-effort */ }
+      // Tear down every remote MCP connection this run opened (SSE is long-lived
+      // and MV3 workers are ephemeral, so a run re-opens per run and closes on
+      // end — docs/MCP-SUPPORT-DESIGN.md constraint 5). Idempotent; only a fresh
+      // per-run build carries a mount (the cached shared orchestrator has none).
+      try {
+        await orch?.closeMcp?.();
+      } catch { /* best-effort */ }
       finalizeExecution(executionId);
       clearRunFence();
       if (skipRunLock) {
@@ -3629,6 +3713,42 @@ async function requireOwnerApproval(context, action, target, payload, detail = u
 
 function payloadFields(entries) {
   return canonicalRecord(...entries.map(([name, value]) => canonicalField(name, canonicalScalar(value))));
+}
+
+// ── Remote MCP run-time wiring (CAP-FB-20260831-MCP-TOOL-INJECTION-01) ────────
+
+/** Map a stored MCP server config (mcp-config.js shape) to the mcp-client mount
+ * config. The server ID doubles as the tool-namespace segment (`mcp__<id>__…`)
+ * and the auth token becomes the transport request header — the token is read
+ * from secure storage only HERE, at connect time, and never persisted into a
+ * logged/exported config or a tool result. */
+function mcpClientConfig(server) {
+  return {
+    name: server.id,
+    transport: {
+      type: server.transport,
+      url: server.url,
+      headers: server.auth?.token
+        ? { [server.auth.headerName]: server.auth.token }
+        : undefined,
+    },
+  };
+}
+
+/** The per-server first-use owner approval (one Allow card). Before the model
+ * may call ANY tool on a remote MCP server, the owner approves that server's
+ * tools through the same DENIAL-TO-GRANT in-context card the management tools
+ * use (requireOwnerApproval, model path). The grant is cached per server for
+ * the run by mcp-run-tools, so this asks at most once per server. */
+async function requireMcpServerApproval(executionId, onApprovalEvent, serverId) {
+  const context = {
+    principal: "model",
+    executionId,
+    onApprovalEvent: typeof onApprovalEvent === "function" ? onApprovalEvent : null,
+  };
+  const target = canonicalOperationTarget("mcp", { id: String(serverId ?? "") });
+  const payload = payloadFields([["server", String(serverId ?? "")]]);
+  return await requireOwnerApproval(context, "mcp.use-server", target, payload);
 }
 
 /** The owner-approval gate for a script action: the payload binds the exact

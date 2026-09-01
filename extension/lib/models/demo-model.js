@@ -45,6 +45,16 @@ const BOARD_MARKER = "@demo-board";
 // the REAL outcome — a denial reads as not performed, never as success.
 const BROWSER_MARKER = "@demo-browser";
 const BROWSER_TOOLS = new Set(["open_tab", "navigate_tab", "read_page", "capture_screenshot", "list_tabs"]);
+// @demo-mcp <mcp__server__tool> [json-args]: the demo model drives the REAL
+// remote-MCP path through the lazy protocol (search_tools → execute_tool) so the
+// end-to-end KAT (CAP-FB-20260831-MCP-TOOL-INJECTION-01) attests that a run
+// connects an owner-configured MCP server, the model calls its NAMESPACED tool,
+// the result comes back FENCED as untrusted content, and the call is ledgered.
+// The first call pauses on the per-server owner Allow card (DENIAL-TO-GRANT);
+// after Allow the same execute re-runs and returns the real result.
+const MCP_MARKER = "@demo-mcp";
+const MCP_TOOL_RE = /@demo-mcp\s+(mcp__[a-zA-Z0-9_-]+__[a-zA-Z0-9_-]+)(?:\s+(\{[\s\S]*\}))?/;
+const MCP_MAX_ROUNDS = 3;
 const BROWSER_MAX_ROUNDS = 3;
 // The board has three demo MODES (CAP-FB-20260830-AGENT-BOARD-WORKING-01):
 //   @demo-board                       — claim: board_list → claim → complete
@@ -324,6 +334,7 @@ function latestRunSlice(prompt) {
       createAgent: lastUser.includes(CREATE_AGENT_MARKER),
       board: lastUser.includes(BOARD_MARKER) || BOARD_WAKE_RE.test(extractText([msgs[lastIdx]])),
       browser: lastUser.includes(BROWSER_MARKER),
+      mcp: lastUser.includes(MCP_MARKER),
       enumSlip: lastUser.includes(ENUM_SLIP_MARKER),
       editArtifact: lastUser.includes(EDIT_ARTIFACT_MARKER),
       patchArtifact: lastUser.includes(PATCH_ARTIFACT_MARKER),
@@ -1005,7 +1016,75 @@ function browserFinalText(prompt) {
   return `[demo model] Browser tool ${spec.tool} finished without a result.`;
 }
 
-function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, browser = false, enumSlip = false, runScript = false, editArtifact = false, patchArtifact = false, skillRead = false, remember = false } = {}) {
+// ── @demo-mcp helpers (CAP-FB-20260831-MCP-TOOL-INJECTION-01) ─────────────────
+
+function wantsMcp(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.mcp;
+}
+
+/** Parse "<mcp__server__tool> [json-args]" after the marker from the CURRENT
+ * run's task (original case preserved for the args JSON). Unknown shape → null
+ * (the final text says so; nothing is called). */
+function mcpSpec(prompt) {
+  const msgs = latestRunSlice(prompt)?.slice ?? [];
+  const lastUserMsg = [...msgs].reverse().find((m) => m?.role === "user" && !isAgentDoContinuation(m));
+  const text = extractText(lastUserMsg ? [lastUserMsg] : []);
+  const m = text.match(MCP_TOOL_RE);
+  if (!m) return null;
+  let args = {};
+  if (m[2]) {
+    try { args = JSON.parse(m[2]); } catch { args = {}; }
+  }
+  return { tool: m[1], args: args && typeof args === "object" ? args : {} };
+}
+
+function mcpExecuteParts(prompt) {
+  return boardToolParts(prompt).filter((p) => p?.toolName === "execute_tool" && p?.type === "tool-result");
+}
+
+/** One more search+execute round is allowed per owner approval (the first call
+ * pauses on the per-server Allow card), bounded by MCP_MAX_ROUNDS. */
+function mcpRoundsAllowed(prompt) {
+  const approvals = mcpExecuteParts(prompt).filter((p) => {
+    try { return /Owner approved the requested capability|waitingForPermission/.test(JSON.stringify(p)); } catch { return false; }
+  }).length;
+  return Math.min(MCP_MAX_ROUNDS, 1 + approvals);
+}
+
+function mcpAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" &&
+    Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && /\[demo model\] MCP tool/.test(p.text ?? "")));
+}
+
+/** Honest final text from the LAST execute result: a denial/error is "NOT
+ * performed"; a real result names what the fenced MCP output carried. */
+function mcpFinalText(prompt) {
+  const spec = mcpSpec(prompt);
+  if (!spec) return "[demo model] MCP tool request not understood — nothing was performed.";
+  const parts = mcpExecuteParts(prompt);
+  if (!parts.length) return `[demo model] MCP tool ${spec.tool} was not called.`;
+  const last = parts[parts.length - 1];
+  if (last.output?.type === "error-text") {
+    return `[demo model] MCP tool ${spec.tool} was NOT performed: ${String(last.output.value ?? "error").slice(0, 200)}`;
+  }
+  const v = browserUnwrap(last.output);
+  if (v && typeof v === "object") {
+    if (v.waitingForPermission === true || v.ok === false || typeof v.error === "string") {
+      return `[demo model] MCP tool ${spec.tool} was NOT performed: ${String(v.error ?? "denied").slice(0, 200)}`;
+    }
+    // The fenced untrusted result: { untrusted:true, value:"<<<UNTRUSTED…>>>…" }.
+    const fenced = typeof v.value === "string" ? v.value : JSON.stringify(v).slice(0, 200);
+    return `[demo model] MCP tool ${spec.tool} succeeded: ${fenced.slice(0, 200)}`;
+  }
+  if (typeof v === "string") {
+    return `[demo model] MCP tool ${spec.tool} succeeded: ${v.slice(0, 200)}`;
+  }
+  return `[demo model] MCP tool ${spec.tool} finished without a result.`;
+}
+
+function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, browser = false, mcp = false, enumSlip = false, runScript = false, editArtifact = false, patchArtifact = false, skillRead = false, remember = false } = {}) {
   const step = toolResultCount(prompt);
   if (remember) {
     // ONE key, through the REAL lazy protocol: search_tools(memory_set) →
@@ -1089,6 +1168,24 @@ function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board =
     const selectionRef = latestSelectionRef(prompt);
     if (!selectionRef) return null;
     return { id: `execute_browser_${executes}`, name: "execute_tool", input: { selectionRef, arguments: spec.args } };
+  }
+  if (mcp) {
+    // search(<mcp__server__tool>) → execute_tool(selectionRef, args) → final.
+    // The first execute pauses on the per-server owner Allow card; after Allow
+    // a fresh search+execute round runs and returns the fenced result.
+    const spec = mcpSpec(prompt);
+    if (!spec) return null; // honest stop: the final text reports it
+    const toolParts = boardToolParts(prompt);
+    const searches = toolParts.filter((p) => p.toolName === "search_tools").length;
+    const executes = toolParts.filter((p) => p.toolName === "execute_tool").length;
+    const rounds = mcpRoundsAllowed(prompt);
+    if (executes >= rounds) return null;
+    if (searches <= executes) {
+      return { id: `search_mcp_${searches}`, name: "search_tools", input: { query: spec.tool, limit: 3 } };
+    }
+    const selectionRef = latestSelectionRef(prompt);
+    if (!selectionRef) return null;
+    return { id: `execute_mcp_${executes}`, name: "execute_tool", input: { selectionRef, arguments: spec.args } };
   }
   if (enumSlip) {
     const toolParts = boardToolParts(prompt);
@@ -1408,6 +1505,8 @@ export function createDemoModel() {
         ? lazyDemoCall(options.prompt, { board: true })
         : wantsBrowser(options.prompt) && !browserAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { browser: true })
+        : wantsMcp(options.prompt) && !mcpAlreadyFinal(options.prompt)
+        ? lazyDemoCall(options.prompt, { mcp: true })
         : wantsDelegate(options.prompt)        ? lazyDemoCall(options.prompt, { delegate: true })
         : wantsCreateAgent(options.prompt) && !createAgentDone
         ? lazyDemoCall(options.prompt)
@@ -1507,6 +1606,14 @@ export function createDemoModel() {
           warnings: [],
         });
       }
+      if (wantsMcp(options.prompt)) {
+        return Promise.resolve({
+          content: [{ type: "text", text: mcpFinalText(options.prompt) }],
+          finishReason: "stop",
+          usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
+          warnings: [],
+        });
+      }
       if (wantsObeyPage(options.prompt)) {
         return Promise.resolve({
           content: [{ type: "text", text: obeyPageFinalText(options.prompt) }],
@@ -1593,6 +1700,8 @@ export function createDemoModel() {
             ? lazyDemoCall(options.prompt, { board: true })
             : wantsBrowser(options.prompt) && !browserAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { browser: true })
+            : wantsMcp(options.prompt) && !mcpAlreadyFinal(options.prompt)
+            ? lazyDemoCall(options.prompt, { mcp: true })
             : wantsDel            ? lazyDemoCall(options.prompt, { delegate: true })
             : wantsCreateAgent(options.prompt) && !createAgentDone
             ? lazyDemoCall(options.prompt)
@@ -1766,6 +1875,16 @@ export function createDemoModel() {
               .flatMap((m) => m.content)
               .find((p2) => p2?.type === "text" && /\[demo model\] Browser tool/.test(p2.text ?? ""));
             response = prior?.text ?? browserFinalText(options.prompt);
+          }
+          else if (wantsMcp(options.prompt)) {
+            // The MCP flow's final text is the REAL outcome of the last execute
+            // (the fenced result / a denial); a continuation re-emits the exact
+            // prior final so the loop ends on the text-only step.
+            const prior = runSlice(options.prompt)
+              .filter((m) => m?.role === "assistant" && Array.isArray(m?.content))
+              .flatMap((m) => m.content)
+              .find((p2) => p2?.type === "text" && /\[demo model\] MCP tool/.test(p2.text ?? ""));
+            response = prior?.text ?? mcpFinalText(options.prompt);
           }
           else if (wantsTools && (toolResultCount(options.prompt) >= (wantsDemoToolsX2(options.prompt) ? 12 : 6) || demoAlreadyFinal(options.prompt))) {            // STEP 4 (tools): the final summary — the reads' VALUES speak for
             // themselves (the run's tool results are the assertion target). The

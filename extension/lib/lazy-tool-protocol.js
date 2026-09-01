@@ -14,6 +14,7 @@ import {
   adaptBuiltinTools,
   adaptBundledTools,
   adaptManagementTools,
+  adaptMcpTools,
   adaptWebMcpTools,
   buildToolCatalog,
   canonicalToolDescriptor,
@@ -335,7 +336,10 @@ export function sanitizeLazyToolArguments(value, descriptor) {
  * output is page-controlled by construction. */
 function isUntrustedResult(value, descriptor) {
   if (ownData(value, "untrusted") === true) return true;
-  return String(ownData(descriptor, "sourceKind") ?? "").startsWith("webmcp");
+  const kind = String(ownData(descriptor, "sourceKind") ?? "");
+  // WebMCP (page-exposed) and remote MCP (connect-out) tool output is external
+  // content by construction — fenced even if the tool forgot to tag it.
+  return kind.startsWith("webmcp") || kind === "mcp";
 }
 
 /* ── the binary side channel (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01) ────────
@@ -1103,6 +1107,15 @@ export function executableBrowserToolRecords(toolMap, context) {
 
 export function executableManagementToolRecords(toolMap, context) {
   return executableAiRecords(toolMap, adaptManagementTools, context);
+}
+
+// Remote MCP server tools (mcp__<server>__<tool>), folded into the run's lazy
+// catalog exactly like the built-in AI toolsets. Their `execute` closure (built
+// by lib/mcp-run-tools.js) owns the per-server owner-approval card, the ledger
+// write, and the untrusted fence-tag — this only supplies validation, the
+// run-ownership gate, and the dispatch closure (MCP-TOOL-INJECTION-01).
+export function executableMcpToolRecords(toolMap, context) {
+  return executableAiRecords(toolMap, adaptMcpTools, context);
 }
 
 export { buildLazyProviderCapture, LAZY_PROTOCOL_TOOL_WIRE };
