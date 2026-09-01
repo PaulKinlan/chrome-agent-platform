@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.604] — 2026-09-01
+- Tool cards show the complete result a tool returned — the full JSON is kept with the run (up to 64 KiB, with credentials redacted) instead of a 300-character stub, and renders as one collapsible, syntax-coloured tree with Copy and Show all; a failed call now headlines its error, including an error nested inside a tool envelope, and protocol codes are explained in plain words.
+
 ## [0.2.603] — 2026-09-01
 - Task board: four defects seen in a real research run are now tracked — truncated tool results, runs stopping early, page reads failing without an Allow card, and transcript loss on reload.
 

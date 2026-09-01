@@ -197,10 +197,26 @@
           <message-bubble role="thinking" content="I should list the tabs first, then group by domain, then name each group." step="1" total-steps="3"></message-bubble>
           <message-bubble role="tool" tool-name="tab_list" tool-status="success" tool-args='{"windowId": 3}' tool-result="12 tabs"></message-bubble>
           <message-bubble role="tool" tool-name="tab_group" tool-status="error" tool-args='{"title":"github.com"}' tool-result="tab already grouped"></message-bubble>
+          <!-- The full retained result (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01):
+               `tool-detail` is the COMPLETE redacted result; the card renders ONE
+               result tree from it, with a syntax-coloured pretty JSON view, Copy,
+               and Show all. -->
+          <message-bubble role="tool" tool-name="read_page" tool-status="success" tool-args='{"url":"https://example.com/research/article-1"}' tool-result="done" tool-duration="412"
+            tool-detail='{"ok":true,"selectedTool":"read_page","result":{"title":"What the open tab said about the platform","url":"https://example.com/research/article-1","headings":[{"level":1,"text":"The browser is the agent platform"},{"level":2,"text":"Memory per origin"},{"level":2,"text":"Tools through grants"},{"level":3,"text":"WebMCP and inferred tools"}],"links":[{"text":"Design notes","href":"https://example.com/design"},{"text":"Constitution","href":"https://example.com/constitution"}],"wordCount":4321,"readingMinutes":17.5,"language":"en","canonical":null,"complete":true,"text":"The page argues three things: the browser already holds the user&#39;s context, the agent should live where that context lives, and every capability should be granted at the moment of need rather than up front. It then walks through a new-tab hub, per-site sub-agents and an origin-keyed memory model, and closes with a note on receipts that never carry provider keys."}}'></message-bubble>
+          <!-- A nested error inside a lazy ok:true envelope: the error is the headline, in the error colour, and the chip flips to error. -->
+          <message-bubble role="tool" tool-name="read_page" tool-status="success" tool-args='{"url":"https://intranet.example/dashboard"}' tool-result="done" tool-duration="38"
+            tool-detail='{"ok":true,"selectedTool":"read_page","result":{"error":"Cannot access contents of the page. Extension manifest must request permission to access this host."}}'></message-bubble>
+          <!-- A bare protocol error is explained, never shown as an opaque code. -->
+          <message-bubble role="tool" tool-name="execute_tool" tool-status="error" tool-args='{"selectionRef":"sel_9","arguments":{"url":"https://example.com"}}' tool-duration="3"
+            tool-result='{"ok":false,"error":"selection-replayed"}'></message-bubble>
+          <!-- A result that hit the 64 KiB retention cap carries its never-silent note. -->
+          <message-bubble role="tool" tool-name="list_tabs" tool-status="success" tool-result="done" tool-duration="120"
+            tool-detail='{"ok":true,"selectedTool":"list_tabs","result":{"tabs":[{"id":1,"title":"Chrome Agent Platform — design","url":"https://example.com/design"},{"id":2,"title":"Constitution","url":"https://example.com/constitution"},{"id":3,"title":"Open questions","url":"https://example.com/open-questions"}],"count":3,"bounded":true}}'
+            tool-detail-note="Result truncated to 64 KiB for the run log — the tool returned 212 KiB. The model received the tool&#39;s own bounded result."></message-bubble>
           <message-bubble role="error" content="provider unreachable — retry?"></message-bubble>
           <message-bubble role="agent" content="<div class='card'><h3>Generated dashboard</h3><p>Here is the HTML the agent produced.</p></div>"></message-bubble>
         </div>
-        <p class="caption">role carried by alignment + surface — user right, agent/thinking/tool/error left; markdown + code + tool cards render inside <code>agent</code>/<code>system</code>. HTML output (a full document or a block-level fragment) renders in a SANDBOXED iframe, not as escaped text.</p>
+        <p class="caption">role carried by alignment + surface — user right, agent/thinking/tool/error left; markdown + code + tool cards render inside <code>agent</code>/<code>system</code>. HTML output (a full document or a block-level fragment) renders in a SANDBOXED iframe, not as escaped text. A tool card's <code>tool-detail</code> is the COMPLETE retained result (redacted, ≤ 64 KiB): one collapsible result tree, a syntax-coloured pretty JSON view (JSON), Copy of the full pretty text, and Show all to lift the inner scroll; a failed call — including an error nested inside a lazy <code>ok:true</code> envelope, or a bare protocol code — headlines the error in the error colour; a result that hit the cap says so in <code>tool-detail-note</code>.</p>
       </div>
 
       <div class="specimen">

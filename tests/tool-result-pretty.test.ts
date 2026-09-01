@@ -265,7 +265,12 @@ Deno.test("tool card: every JSON block offers a raw JSON view and a copy button"
     const raw = b.querySelector(".tt-raw");
     assert(raw, "each block carries the raw JSON");
     assertEquals(raw.hidden, true, "raw starts hidden — the tree is the default view");
-    assert(raw.textContent.length > 0, "and the raw text is actually the payload");
+    // The view is TOKENISED into coloured spans (CAP-FB-20260901-TOOL-RESULT-
+    // FULL-JSON-01): the concatenated span texts are the complete pretty JSON.
+    const text = (raw.children ?? []).map((s) => s.textContent).join("") + (raw.textContent ?? "");
+    assert(text.length > 0, "and the raw text is actually the payload");
+    assert(text.includes("\n  "), "pretty-printed (indented), never a one-line blob");
+    assert((raw.children ?? []).some((s) => s.className === "tt-json-key"), "keys are tokenised for colouring");
   }
 });
 

@@ -189,7 +189,11 @@ Deno.test("legibility: a live success card renders the selected tool's result â€
   const raws = findAll(card, (e) => e.className === "tt-raw");
   assert(raws.length >= 1, "a raw JSON view exists for the result block");
   for (const pre of raws) {
-    assert(!/selectedTool|schemaSummary|selectionRef|replay|authorizes/.test(pre.textContent), `raw view leaks the envelope: ${pre.textContent}`);
+    // The raw view is tokenised into spans (the pretty JSON view): read the
+    // whole text, never just the host node's own textContent.
+    const rawText = allText(pre).join("");
+    assert(rawText.length > 0, "the raw view carries text");
+    assert(!/selectedTool|schemaSummary|selectionRef|replay|authorizes/.test(rawText), `raw view leaks the envelope: ${rawText}`);
   }
   assert(texts.some((t) => t === "bytes" || t.includes("bytes")), "the inner result's own field is rendered");
 });

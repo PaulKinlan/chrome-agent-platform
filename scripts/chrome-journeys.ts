@@ -554,6 +554,10 @@ const EXPECTED = [
   "Full response: a long agent response renders COLLAPSED behind Show full response (never silently truncated)",
   "Full response: Show full response reveals the COMPLETE text (the tail string is in the DOM)",
   "Full response: the thread STORE holds the complete response (no commit-time truncation)",
+  "Tool card: the expanded tree shows the full result beyond 300 chars (one result block; the tail leaf far past the old cut is a visible row)",
+  "Tool card: the full result survives a reload — the pretty JSON view carries the tail leaf and is syntax-coloured from the theme tokens",
+  "Run log: every memory_get result row carries the complete redacted result (resultFull > 300 chars with the tail leaf), never flagged truncated",
+  "Tool card: a nested error inside an ok:true envelope is the card headline, in the error colour, with the error chip and the card open",
   "Claim check: a failed delegate renders one correction and one final bubble",
   "Thread view: edit approval card names the artifact and shows +n -m",
   "Thread view: edit approval card renders the diff with a '+' Opening hours line before the decision",
@@ -3826,6 +3830,109 @@ async function main() {
     cdp.pageSessions.delete(longSession);
 
     // ─────────────────────────────────────────────────────────────
+    // JOURNEY 3d1.6 — CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01: a tool card
+    // shows the COMPLETE result the tool returned. @demo-big-result writes and
+    // reads back a ~5 KiB nested object through the REAL lazy protocol; the
+    // reopened thread's memory_get card must carry the full result (the
+    // `tail` leaf lies far beyond byte 300), render ONE result tree from it,
+    // and its pretty JSON view must be syntax-coloured from the theme tokens.
+    // Opened twice in fresh documents: the second open IS the reload.
+    // Before the fix every tool result was cut to 300 chars at the source.
+    // ─────────────────────────────────────────────────────────────
+    const BIG_RUN = await msgValue({ type: "agent.run", task: "@demo-big-result read every article" });
+    const BIG_THREAD_ID = BIG_RUN?.threadId ?? null;
+    const BIG_TAIL = "TAIL-MARKER-END";
+    const BIG_READ = `(() => {
+      const conv = document.getElementById('thread-conversation');
+      if (!conv) return JSON.stringify(null);
+      const cards = [...conv.querySelectorAll('message-bubble[role="tool"]')];
+      const get = cards.filter((b) => b.getAttribute('tool-name') === 'memory_get').pop();
+      if (!get) return JSON.stringify({ cards: cards.map((b) => b.getAttribute('tool-name')) });
+      const root = get.shadowRoot ?? get;
+      const detail = get.getAttribute('tool-detail') ?? '';
+      const blocks = [...root.querySelectorAll('.tt-block')];
+      const resultBlocks = blocks.filter((b) => b.querySelector('.tt-block-label')?.textContent === 'result');
+      const resultBlock = resultBlocks[0] ?? null;
+      const raw = resultBlock?.querySelector('.tt-raw') ?? null;
+      const rawText = raw ? raw.textContent : '';
+      const tokenKinds = [...new Set([...(raw?.querySelectorAll('[class^="tt-json-"]') ?? [])].map((s) => s.className.replace('tt-json-', '')))];
+      const keyEl = raw?.querySelector('.tt-json-key');
+      const stringEl = raw?.querySelector('.tt-json-string');
+      const rows = [...(resultBlock?.querySelectorAll('.tt-row') ?? [])];
+      const visibleRows = rows.filter((r) => !r.hidden).length;
+      const tailRow = rows.find((r) => (r.querySelector('.tt-val')?.textContent ?? '') === ${JSON.stringify(BIG_TAIL)});
+      return JSON.stringify({
+        cards: cards.map((b) => b.getAttribute('tool-name') + ':' + b.getAttribute('tool-status')),
+        detailLen: detail.length,
+        detailHasTail: detail.includes(${JSON.stringify(BIG_TAIL)}),
+        resultBlocks: resultBlocks.length,
+        rows: rows.length, visibleRows,
+        tailRowVisible: !!tailRow && !tailRow.hidden,
+        rawLen: rawText.length,
+        rawHasTail: rawText.includes(${JSON.stringify(BIG_TAIL)}),
+        rawVisible: raw ? !raw.hidden : false,
+        tokenKinds,
+        keyColor: keyEl ? getComputedStyle(keyEl).color : null,
+        stringColor: stringEl ? getComputedStyle(stringEl).color : null,
+        maxHeight: raw ? getComputedStyle(raw).maxHeight : null,
+      });
+    })()`;
+    /** Open every tool card's <details> (the tree view) without touching the JSON toggles. */
+    const OPEN_CARDS_TREE = `(() => {
+      const conv = document.getElementById('thread-conversation');
+      for (const b of conv?.querySelectorAll('message-bubble[role="tool"]') ?? []) {
+        for (const d of (b.shadowRoot ?? b).querySelectorAll('details')) d.open = true;
+      }
+      return true;
+    })()`;
+    const bigThreadUrl = `chrome-extension://${extId}/ntp/ntp.html#omnibox=thread:${encodeURIComponent(String(BIG_THREAD_ID))}`;
+    const openBigThread = async (shotName, { json = false } = {}) => {
+      const created = await cdp.send("Target.createTarget", { url: bigThreadUrl });
+      const targetId = created?.result?.targetId;
+      await sleep(3000);
+      const session = await attachRuntime(cdp, targetId);
+      cdp.pageSessions.add(session);
+      await evalIn(cdp, session, json ? OPEN_ALL_CARDS : OPEN_CARDS_TREE);
+      await sleep(300);
+      let state = null;
+      try { state = JSON.parse(await evalIn(cdp, session, BIG_READ) ?? "null"); } catch { state = null; }
+      const shot = await captureShot(cdp, session).catch(() => null);
+      if (shot) await writeEvidence(shotName, shot);
+      await cdp.send("Target.closeTarget", { targetId }).catch(() => {});
+      cdp.pageSessions.delete(session);
+      return state;
+    };
+    const bigTree = await openBigThread("tool-result-json-tree.png");
+    console.log(`tool-result full json (tree): ${JSON.stringify(bigTree).slice(0, 700)}`);
+    check(
+      "Tool card: the expanded tree shows the full result beyond 300 chars (one result block; the tail leaf far past the old cut is a visible row)",
+      BIG_RUN?.ok === true && bigTree?.resultBlocks === 1 &&
+        bigTree.detailLen > 300 && bigTree.detailHasTail === true &&
+        bigTree.rows > 100 && bigTree.tailRowVisible === true,
+    );
+    const bigJson = await openBigThread("tool-result-after-reload.png", { json: true });
+    console.log(`tool-result full json (reload, JSON view): ${JSON.stringify(bigJson).slice(0, 700)}`);
+    check(
+      "Tool card: the full result survives a reload — the pretty JSON view carries the tail leaf and is syntax-coloured from the theme tokens",
+      bigJson?.resultBlocks === 1 && bigJson.detailHasTail === true &&
+        bigJson.rawVisible === true && bigJson.rawHasTail === true &&
+        ["key", "string", "number", "boolean", "punct"].every((k) => (bigJson.tokenKinds ?? []).includes(k)) &&
+        typeof bigJson.keyColor === "string" && bigJson.keyColor !== bigJson.stringColor &&
+        bigJson.maxHeight === "360px",
+    );
+    // The durable run log holds the full copy too (the source was the 300-char
+    // cut — the run log's rows were the owner's evidence).
+    const bigExecs = BIG_THREAD_ID ? await msgValue({ type: "run.list" }).catch(() => null) : null;
+    const bigExecId = (Array.isArray(bigExecs?.runs) ? bigExecs.runs : []).find((r) => r?.threadId === BIG_THREAD_ID)?.executionId ?? null;
+    const bigLogs = bigExecId ? await msgValue({ type: "run.logs", executionId: bigExecId }).catch(() => null) : null;
+    const bigResultRows = (Array.isArray(bigLogs?.logs) ? bigLogs.logs : []).filter((r) => r?.type === "tool-result" && r?.selectedTool === "memory_get");
+    console.log(`tool-result full json (run log): exec=${bigExecId} memory_get rows=${bigResultRows.length} resultFull=${bigResultRows.map((r) => String(r.resultFull ?? "").length).join(",")}`);
+    check(
+      "Run log: every memory_get result row carries the complete redacted result (resultFull > 300 chars with the tail leaf), never flagged truncated",
+      bigResultRows.length >= 2 && bigResultRows.every((r) => typeof r.resultFull === "string" && r.resultFull.length > 300 && r.resultFull.includes(BIG_TAIL) && r.resultFullTruncated === false),
+    );
+
+    // ─────────────────────────────────────────────────────────────
     // JOURNEY 3d2 — CAP-FB-20260830-CLAIM-CHECK-BROWSER-TOOLS-01: delegating to
     // an agent that does not exist FAILS (every delegate_task card reads
     // `error`), but the model's final text still says "Delegation succeeded".
@@ -3861,6 +3968,46 @@ async function main() {
     }
     const claimShot = await captureShot(cdp, ntpSession);
     if (claimShot) await writeEvidence("claim-check-delegate.png", claimShot);
+    // CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01: the failed delegate's result is
+    // an error NESTED inside a lazy ok:true envelope
+    // ({ok:true, selectedTool:"delegate_task", result:{error:"no agent for …"}}).
+    // The LIVE card must headline that error in the error colour with the
+    // error chip — never a success-looking card with the error buried.
+    const NESTED_ERROR_READ = `(() => {
+      const conv = document.getElementById('thread-conversation');
+      if (!conv) return JSON.stringify(null);
+      const cards = [...conv.querySelectorAll('message-bubble[role="tool"]')].filter((b) => b.getAttribute('tool-name') === 'delegate_task');
+      const card = cards[0];
+      if (!card) return JSON.stringify({ cards: cards.length });
+      const root = card.shadowRoot ?? card;
+      const lead = root.querySelector('.tool-lead');
+      const chip = root.querySelector('.tool-status');
+      const details = root.querySelector('details.tool');
+      const leadColor = lead ? getComputedStyle(lead).color : null;
+      const chipColor = chip ? getComputedStyle(chip).color : null;
+      const danger = getComputedStyle(document.documentElement).getPropertyValue('--danger').trim();
+      const probe = document.createElement('span'); probe.style.color = danger || '#b3261e'; document.body.appendChild(probe);
+      const dangerRgb = getComputedStyle(probe).color; probe.remove();
+      return JSON.stringify({
+        cards: cards.length,
+        leadText: lead ? lead.textContent : null,
+        leadClass: lead ? lead.className : null,
+        leadColor, chipText: chip ? chip.textContent : null, chipColor, dangerRgb,
+        open: details ? details.open : null,
+        detailLen: (card.getAttribute('tool-detail') ?? '').length,
+      });
+    })()`;
+    let nestedError = null;
+    try { nestedError = JSON.parse(await evalIn(cdp, ntpSession, NESTED_ERROR_READ) ?? "null"); } catch { nestedError = null; }
+    console.log(`tool-result nested error: ${JSON.stringify(nestedError).slice(0, 600)}`);
+    const nestedShot = await captureShot(cdp, ntpSession).catch(() => null);
+    if (nestedShot) await writeEvidence("tool-result-nested-error.png", nestedShot);
+    check(
+      "Tool card: a nested error inside an ok:true envelope is the card headline, in the error colour, with the error chip and the card open",
+      (nestedError?.cards ?? 0) >= 1 && typeof nestedError?.leadText === "string" && /no agent for/.test(nestedError.leadText) &&
+        /\berror\b/.test(String(nestedError.leadClass ?? "")) &&
+        nestedError.leadColor === nestedError.dangerRgb && nestedError.chipText === "error" && nestedError.open === true,
+    );
     const claimBubbles = claimState?.bubbles ?? [];
     console.log(`claim-check journey: ${JSON.stringify(claimState).slice(0, 1200)}`);
     check(

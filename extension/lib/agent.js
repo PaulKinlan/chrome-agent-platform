@@ -19,7 +19,7 @@ import { sha256Hex, utf8ByteLength, safeProviderError } from "./pure.js";
 import { capLog } from "./cap-log.js";
 import { perfSpan } from "./cap-perf.js";
 import { maskCredentialShapes } from "./error-report.js";
-import { isToolResultFailure } from "./tool-summary.js";
+import { isToolResultFailure, toolResultFullJson } from "./tool-summary.js";
 import { correctUnsupportedMutationClaims } from "./mutation-claim-check.js";
 import {
   anthropicAuthoritativeSearchRequests,
@@ -509,10 +509,12 @@ export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, 
  * Wrap agent-do's createAgent with our conventions.
  * `model` is the resolved { model: LanguageModel, modelId, providerName } from provider.js.
  */
-// A safe, bounded summary of a tool result for the LIVE progress stream. Full
-// tool results can be huge (file contents, page HTML); the progress events must
-// never leak large bodies into logs/ports. Truncate strings, stringify + cap
-// objects, and never surface secrets.
+// A safe, bounded summary of a tool result for the LIVE progress stream's LIST
+// surfaces (the 300-char `result`). The COMPLETE result rides beside it as
+// `resultFull` — decoded, redacted and byte-bounded to 64 KiB by
+// toolResultFullJson (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01): this summary
+// used to be the ONLY copy, so the card, the run log and the reopened thread
+// could never show what a tool returned.
 function summarizeToolResult(result) {
   try {
     if (result == null) return "";
@@ -1082,6 +1084,11 @@ export function createAgent({
           result: e.result,
         });
         try {
+          // The retained full copy (redacted, valid JSON, ≤ 64 KiB, flagged
+          // when the cap bit) — computed once here so every downstream surface
+          // (the live card, the durable run log, the reopened thread) reads the
+          // same bytes the model received.
+          const full = toolResultFullJson(e.result);
           progressCb?.({
             type: "tool-result",
             toolName: e.toolName,
@@ -1089,6 +1096,9 @@ export function createAgent({
             step: e.step,
             durationMs: e.durationMs,
             result: summarizeToolResult(e.result),
+            resultFull: full.json,
+            resultFullTruncated: full.truncated,
+            resultFullBytes: full.bytes,
             ok: toolOk,
             ...(permissionRequirement ? { permissionRequirement, permissionDecision } : {}),
           });
