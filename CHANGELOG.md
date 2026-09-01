@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.557] — 2026-09-01
+- Template select r5: harden the dark picker styling with explicit scheme blocks, suppress the duplicate chevron, and measure the live open picker (computed-style gate + informational pixel sample; headless base-select paint quirk documented)
+
 ## [0.2.556] — 2026-08-31
 - Template select r4: the open-picker readability check now waits for the picker to actually open and refuses to measure a closed one
 

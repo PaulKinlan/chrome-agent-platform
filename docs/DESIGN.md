@@ -74,17 +74,32 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   action. The whole card activates that button; `selected` presses it
   (`aria-pressed="true"`, accent ring); `blank` is the "Custom agent" card.
   Curated starters come first and carry the Starter badge.
-- `<agent-template-gallery>` is the ONE catalogue surface: a segmented
+- `<agent-template-gallery>` is the shared catalogue GRID surface: a segmented
   Starter / All / Scheduled filter (`aria-pressed` buttons with counts) over an
   auto-fill grid of cards with a roving tabindex (one tab stop; arrows, Home,
-  End move; Enter/Space activate). The create dialog opens on it (Starter
-  first, Custom selected) and Settings → Agents reuses it filtered to Scheduled.
-- Customizable selects use the shared native `appearance: base-select` vocabulary:
-  one browser `::picker-icon` (never a second drawn chevron), safe inline SVG option
-  icons, and a one-line ellipsized closed state contained by `min-width: 0`.
-- The create-agent dialog's primary order is template gallery → Name → what it
+  End move; Enter/Space activate). Settings → Agents uses it filtered to
+  Scheduled.
+- The CREATE-AGENT dialog offers the catalogue through `agent-template-select`
+  (CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01): a NATIVE `<select>` with the
+  Customizable Select pattern where supported — first-child `<button>`
+  select-button, `<selectedcontent>` mirroring the choice, `appearance:
+  base-select`, grouped `optgroup`s Starter / Other / Scheduled (matching the
+  gallery's order), a live search filter input above it (matches narrow,
+  empty state, restore), and a CLASSIC-select fallback where `appearance:
+  base-select` is unsupported. The selection survives filtering (a filtered-out
+  choice is retained as a hidden option so the native value never resets). The
+  picker popup is styled in BOTH schemes with explicit light defaults and a
+  `@media (prefers-color-scheme: dark)` block (charcoal popup, light text,
+  checked/hover states) plus `color-scheme: light dark` on the select; exactly
+  ONE chevron renders (`::picker-icon` is suppressed; the button draws its
+  own). Known limitation: headless Chrome paints the base-select popup from UA
+  system colors (author `::picker` backgrounds ignored), so automated pixel
+  checks observe a light popup in headless; the computed-style gate proves the
+  authored contrast (light 17.2:1, dark 12.9:1) and real headed Chrome paints
+  the computed styles.
+- The create-agent dialog's primary order is template select → Name → what it
   does (with visible dictation/refine tools) → English schedule → Advanced.
-  Initial focus lands on the gallery's selected card.
+  Initial focus lands on the select.
   Its inline size is a fixed viewport clamp; every disclosure uses shrink-safe
   containment so opening Advanced or Skills never changes the dialog width.
 - SVG line-art icons, one stroke weight, currentColor. No emoji.

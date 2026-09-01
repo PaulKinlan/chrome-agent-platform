@@ -113,13 +113,19 @@ Deno.test("template select module: selection survives filtering (retained hidden
   assertStringIncludes(picker, 'retained.hidden = true', "a filtered-out selection is retained as a hidden option");
   assertStringIncludes(picker, 'const keep = select.value;', "the current value is preserved across re-renders");
   assertStringIncludes(picker, 'select.value = keep || "";', "the preserved value is re-applied after the rebuild");
-  // P1b (sol r1): the customizable picker popup is styled with light-dark()
-  // tokens in BOTH schemes (::picker(select) + option states), never a
-  // white-on-white popup in dark mode.
+  // P1b (sol r1, hardened r5): the customizable picker popup is styled with
+  // EXPLICIT scheme blocks (light defaults + a prefers-color-scheme dark
+  // override) so the open popup is never a white-on-white/low-contrast popup
+  // in dark mode even where light-dark() doesn't resolve in the picker pseudo.
   assertStringIncludes(picker, "::picker(select)", "the picker popup is styled");
-  assertStringIncludes(picker, "light-dark(#ffffff, #23211d)", "the popup background uses the light-dark panel tokens");
+  assertStringIncludes(picker, "prefers-color-scheme: dark", "an explicit dark scheme block styles the popup");
+  assertStringIncludes(picker, "#23211d", "the dark popup background is the charcoal panel token");
+  assertStringIncludes(picker, "#eae6de", "the dark popup text is the light text token");
   assertStringIncludes(picker, "option:hover", "picker option hover state is styled");
   assertStringIncludes(picker, "option:checked", "picker option checked state is styled");
+  // r5 P2: exactly one chevron — the browser default ::picker-icon is
+  // suppressed so only the custom button icon renders.
+  assertStringIncludes(picker, "::picker-icon { display: none; }", "the duplicate default chevron is suppressed");
 });
 
 Deno.test("Settings offers the same scheduled catalogue through the same gallery component", () => {

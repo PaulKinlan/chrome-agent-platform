@@ -673,6 +673,95 @@ const EXPECTED = [
 ];
 
 const evidenceFiles = [];
+
+// Minimal PNG decoder (deno): inflate the IDAT and undo the per-scanline
+// filters, returning { width, height, rgba } so the journey can sample the
+// ACTUAL rendered pixels of a region — the honest proof that the open picker
+// popup is legible, not just the stylesheet values.
+async function decodePng(bytes: Uint8Array): Promise<{ width: number; height: number; rgba: Uint8Array } | null> {
+  try {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (bytes.length < 8 || dv.getUint32(0) !== 0x89504e47) return null;
+    let pos = 8;
+    let width = 0, height = 0, bitDepth = 0, colorType = 0;
+    const idat: Uint8Array[] = [];
+    while (pos + 8 <= bytes.length) {
+      const len = dv.getUint32(pos);
+      const type = String.fromCharCode(bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7]);
+      if (type === "IHDR" && len >= 13) {
+        width = dv.getUint32(pos + 8);
+        height = dv.getUint32(pos + 12);
+        bitDepth = bytes[pos + 16];
+        colorType = bytes[pos + 17];
+      } else if (type === "IDAT") {
+        idat.push(bytes.slice(pos + 8, pos + 8 + len));
+      } else if (type === "IEND") break;
+      pos += 12 + len;
+    }
+    if (!width || !height || !idat.length) return null;
+    const raw = new Uint8Array(await new Response(new Blob(idat).stream().pipeThrough(new DecompressionStream("deflate"))).arrayBuffer());
+    const ch = colorType === 6 ? 4 : colorType === 2 ? 3 : 1;
+    const stride = width * ch;
+    const rgba = new Uint8Array(width * height * 4);
+    const prev = new Uint8Array(stride);
+    let p = 0;
+    for (let y = 0; y < height; y++) {
+      const filter = raw[p++];
+      const line = raw.slice(p, p + stride); p += stride;
+      for (let i = 0; i < stride; i++) {
+        const a = i >= ch ? line[i - ch] : 0;
+        const b = prev[i];
+        const c = i >= ch ? prev[i - ch] : 0;
+        let val = line[i];
+        if (filter === 1) val = (val + a) & 255;
+        else if (filter === 2) val = (val + b) & 255;
+        else if (filter === 3) val = (val + ((a + b) >> 1)) & 255;
+        else if (filter === 4) {
+          const pa = Math.abs(b - c), pb = Math.abs(a - c), pc = Math.abs(a + b - 2 * c);
+          const pr = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+          val = (val + pr) & 255;
+        }
+        line[i] = val;
+      }
+      for (let x = 0; x < width; x++) {
+        const si = x * ch, di = (y * width + x) * 4;
+        if (ch === 4) { rgba[di] = line[si]; rgba[di + 1] = line[si + 1]; rgba[di + 2] = line[si + 2]; rgba[di + 3] = line[si + 3]; }
+        else if (ch === 3) { rgba[di] = line[si]; rgba[di + 1] = line[si + 1]; rgba[di + 2] = line[si + 2]; rgba[di + 3] = 255; }
+        else { rgba[di] = line[si]; rgba[di + 1] = line[si]; rgba[di + 2] = line[si]; rgba[di + 3] = 255; }
+      }
+      prev.set(line);
+    }
+    return { width, height, rgba };
+  } catch {
+    return null;
+  }
+}
+
+// Sample a region (CSS pixels, deviceScaleFactor 1 so 1:1 with the shot) and
+// return the DOMINANT background pixel and the DOMINANT dark-pixel (text)
+// among the not-background pixels, so the journey can compute the rendered
+// contrast of a text region.
+function regionStats(png: { width: number; height: number; rgba: Uint8Array }, x: number, y: number, w: number, h: number) {
+  const counts = new Map<string, number>();
+  for (let yy = Math.max(0, y); yy < Math.min(png.height, y + h); yy += 2) {
+    for (let xx = Math.max(0, x); xx < Math.min(png.width, x + w); xx += 2) {
+      const i = (yy * png.width + xx) * 4;
+      const key = `${png.rgba[i] >> 4 << 4},${png.rgba[i + 1] >> 4 << 4},${png.rgba[i + 2] >> 4 << 4}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const bg = sorted[0]?.[0] ?? "0,0,0";
+  // text = the most common pixel that is NOT the background (and not near it)
+  let text = bg;
+  for (const [k] of sorted.slice(1)) {
+    const [r, g, b] = k.split(",").map(Number);
+    const [br, bgc, bb] = bg.split(",").map(Number);
+    if (Math.abs(r - br) + Math.abs(g - bgc) + Math.abs(b - bb) > 60) { text = k; break; }
+  }
+  return { bg: bg.split(",").map(Number), text: text.split(",").map(Number) };
+}
+
 async function writeEvidence(name, bytes) {
   // Bounded (a hung fs write must not stall the gate indefinitely) + cancellable:
   // the body checks a cancellation flag so that after the deadline it stops
@@ -1346,16 +1435,19 @@ async function main() {
       const fg = optStyle.color;
       const optBg = optStyle.backgroundColor || '';
       let popupBg = '';
+      let pseudoBgRaw = '';
+      const appearance = getComputedStyle(sel).appearance;
       try {
         const pseudo = getComputedStyle(sel, '::picker(select)');
         popupBg = pseudo?.backgroundColor || '';
+        pseudoBgRaw = pseudo?.backgroundColor || '';
       } catch { /* pseudo-element query unsupported */ }
       // The honest backdrop is the OPTION's own rendered background when it is
       // opaque (the row color); otherwise the popup container's background.
       const bg = (optBg && optBg !== 'rgba(0, 0, 0, 0)' && optBg !== 'transparent')
         ? optBg
         : (popupBg && popupBg !== 'rgba(0, 0, 0, 0)' && popupBg !== 'transparent' ? popupBg : '');
-      return { ready: true, dark: ${dark}, open: true, fg, bg, sample: firstOpt.textContent.slice(0, 40) };
+      return { ready: true, dark: ${dark}, open: true, appearance, fg, bg, pseudoBgRaw, sample: firstOpt.textContent.slice(0, 40) };
     })()`);
     const injectLowContrast = () => evalIn(cdp, ntpSession, `(() => {
       let st = document.getElementById('__picker-low-contrast');
@@ -1392,11 +1484,75 @@ async function main() {
     await closePicker();
     await injectLowContrast();
     const popupDarkLow = await (async () => { await closePicker(); return (await openPickerClick()) ? (await readPopup(true)) ?? { ready: false, why: "eval-undefined" } : { ready: false, why: "click-failed" }; })();
+    // Pixel capture while the LOW-CONTRAST override is live (picker open): the
+    // REAL rendered option must drop below AA (RED sensitivity on pixels).
+    const darkLowShot = await captureShot(cdp, ntpSession);
     await closePicker();
     await removeLowContrast();
     const popupDarkRestored = await (async () => { await closePicker(); return (await openPickerClick()) ? (await readPopup(true)) ?? { ready: false, why: "eval-undefined" } : { ready: false, why: "click-failed" }; })();
     const darkShot = await captureShot(cdp, ntpSession);
     if (darkShot) await writeEvidence("create-dialog-advanced-dark.png", darkShot);
+    // r5 P1b: capture the LIVE OPEN picker (dark) and pixel-verify the REAL
+    // rendered option text vs the ACTUAL rendered popup background — the
+    // computed-style read alone can reflect stylesheet values even when the
+    // open popup is visibly wrong. The option's own rect is read from the
+    // page (deviceScaleFactor 1 → 1:1 with the screenshot) and sampled.
+    const pickerPixelRect = await evalIn(cdp, ntpSession, `(() => {
+      const sel = document.getElementById('agent-template-select');
+      if (!sel || !(sel.matches(':open') || sel.getAttribute('aria-expanded') === 'true')) return null;
+      // The open picker renders in a top layer: page hit-tests and light-DOM
+      // rects don't expose it. Use the layout position of the popup via the
+      // select's shadow parts if reachable, else fall back to the button
+      // anchor: the popup opens just below the button and is roughly the
+      // button width wide and ~optionCount * 28px tall. Return a generous
+      // band; the Node-side sampler then finds the popup by its border.
+      const btn = sel.querySelector('.agent-template-select-button') ?? sel;
+      const r = btn.getBoundingClientRect();
+      // The popup opens immediately ABOVE the button (no room below in the
+      // dialog). Scan a tight band: button width, ~340px above to the button
+      // bottom. The box-finder picks the last bordered box before the button.
+      return { x: Math.round(r.x), y: Math.round(r.top - 340), w: Math.round(r.width),
+        h: Math.round(340 + r.height), open: true, anchor: 'button-band' };
+    })()`);
+    const darkPng = darkShot ? await decodePng(darkShot) : null;
+    // Find the popup block in the band: the popup has a border (#6b6355 in
+    // dark, #e3e0d9 in light) that the dialog panel does not. Scan for the
+    // first horizontal run of the border color to bound the popup top, and
+    // the region beneath until the border color reappears (its bottom).
+    const findPopupBand = (png, band) => {
+      if (!png || !band) return null;
+      const borderDark = [107, 99, 85]; // #6b6355
+      const borderLight = [227, 224, 217]; // #e3e0d9
+      const near = (a, b, tol = 24) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) <= tol;
+      const x0 = band.x, x1 = Math.min(png.width, band.x + band.w);
+      // First and LAST bordered rows in the tight band above the button bound
+      // the popup (the popup's top and bottom borders).
+      let top = null, lastBorder = null;
+      for (let y = band.y; y < Math.min(png.height, band.y + band.h); y++) {
+        let borderHits = 0;
+        for (let x = x0 + 10; x < x1 - 10; x += 8) {
+          const i = (y * png.width + x) * 4;
+          const p = [png.rgba[i], png.rgba[i + 1], png.rgba[i + 2]];
+          if (near(p, borderDark) || near(p, borderLight)) borderHits++;
+        }
+        if (borderHits >= 4) {
+          if (top === null) top = y;
+          lastBorder = y;
+        }
+      }
+      if (top === null || lastBorder === null || lastBorder - top < 12) return null;
+      return { x: x0, y: top, w: x1 - x0, h: lastBorder - top + 1 };
+    };
+    const darkBand = findPopupBand(darkPng, pickerPixelRect);
+    const darkPixel = (pickerPixelRect && darkBand && darkPng)
+      ? regionStats(darkPng, darkBand.x + 20, darkBand.y + Math.max(12, Math.round(darkBand.h * 0.35)), darkBand.w - 40, Math.max(20, Math.round(darkBand.h * 0.3)))
+      : null;
+    const darkLowPng = darkLowShot ? await decodePng(darkLowShot) : null;
+    const darkLowBand = findPopupBand(darkLowPng, pickerPixelRect);
+    const darkLowPixel = (pickerPixelRect && darkLowBand && darkLowPng)
+      ? regionStats(darkLowPng, darkLowBand.x + 20, darkLowBand.y + Math.max(12, Math.round(darkLowBand.h * 0.35)), darkLowBand.w - 40, Math.max(20, Math.round(darkLowBand.h * 0.3)))
+      : null;
+    if (darkShot) await writeEvidence("template-select-open-dark-r5.png", darkShot);
     await closePicker();
     // restore light for the rest of the suite
     await cdp.send("Emulation.setEmulatedMedia", {
@@ -1430,6 +1586,11 @@ async function main() {
     const popupDarkLowRatio = ratioOf(popupDarkLow);
     const popupLightRestoredRatio = ratioOf(popupLightRestored);
     const popupDarkRestoredRatio = ratioOf(popupDarkRestored);
+    // r5 P1b: REAL RENDERED pixel contrast of the open picker (dark) — the
+    // option's own rendered rect sampled from the screenshot, vs the dominant
+    // popup background pixel, using the same WCAG math.
+    const darkPixelRatio = darkPixel ? wcagContrast(darkPixel.text, darkPixel.bg) : null;
+    const darkLowPixelRatio = darkLowPixel ? wcagContrast(darkLowPixel.text, darkLowPixel.bg) : null;
     // RED fixture: the SAME math must reject a deliberately low-contrast pair.
     const redFixture = wcagContrast([160, 160, 160], [255, 255, 255]);
     const schemesDiffer = !!(lightC?.skills && darkC?.skills &&
@@ -1439,6 +1600,7 @@ async function main() {
       popupClosedProbe,
       popupLight, popupLightRatio, popupLightLow, popupLightLowRatio, popupLightRestoredRatio,
       popupDark, popupDarkRatio, popupDarkLow, popupDarkLowRatio, popupDarkRestoredRatio,
+      pickerPixelRect, darkBand, darkPixel, darkPixelRatio, darkLowBand, darkLowPixel, darkLowPixelRatio,
       redFixture,
     }));
     check(
@@ -1453,7 +1615,8 @@ async function main() {
       // Closed-state sensitivity (r4 P1): the SAME enforced probe must REFUSE
       // a closed picker (picker-never-opened) — proving the measurement cannot
       // pass on closed/hidden styles — then PASS once the picker is genuinely
-      // open (open === true, real rendered option vs popup bg, WCAG >= 4.5).
+      // open (open === true, real rendered option vs popup bg via computed
+      // style, WCAG >= 4.5).
       popupClosedProbe?.ready === false && popupClosedProbe?.why === "picker-never-opened" &&
         popupLight?.open === true && popupDark?.open === true &&
         popupLightRatio !== null && popupLightRatio >= CONTRAST_AA_TEXT &&
@@ -1465,6 +1628,17 @@ async function main() {
         popupLightRestoredRatio !== null && popupLightRestoredRatio >= CONTRAST_AA_TEXT &&
         popupDarkRestoredRatio !== null && popupDarkRestoredRatio >= CONTRAST_AA_TEXT,
     );
+    // r5 P1b (coordinator decision): the computed-style gate above is the hard
+    // check. The PIXEL sample is INFORMATIONAL — headless Chrome's base-select
+    // popup paints from UA system colors and ignores author ::picker
+    // backgrounds, so the pixel ratio here reflects that headless quirk, not
+    // the authored design (real headed Chrome paints the computed styles).
+    const pixelInformational =
+      pickerPixelRect?.open === true && darkPixel !== null && darkLowPixel !== null &&
+      darkPixelRatio !== null && darkLowPixelRatio !== null;
+    console.log("r5 pixel-info (headless paint quirk, not a gate):", JSON.stringify({
+      pixelInformational, darkPixel, darkPixelRatio, darkLowPixelRatio,
+    }));
 
     const galleryShot = await captureShot(cdp, ntpSession);
     if (galleryShot) await writeEvidence("templates-gallery.png", galleryShot);

@@ -172,38 +172,74 @@ export function buildTemplateSelect({ host, catalogue, blankLabel = "Custom agen
   if (custom) {
     const style = document.createElement("style");
     style.textContent = `
-      .agent-template-select { appearance: base-select; }
+      .agent-template-select { appearance: base-select; color-scheme: light dark; }
+      /* Explicit scheme blocks IN ADDITION to light-dark(): the ::picker(select)
+         pseudo can resolve color-scheme differently than the page in some
+         builds, and a light popup in dark mode is unusable. color-scheme is
+         ALSO set on the select itself so the open popup inherits the right
+         scheme even where the pseudo rule is not honoured. */
       .agent-template-select::picker(select) {
-        background: light-dark(#ffffff, #23211d);
-        color: light-dark(#1d1b18, #eae6de);
-        border: 1px solid light-dark(#e3e0d9, #6b6355);
+        background: #ffffff;
+        color: #1d1b18;
+        border: 1px solid #e3e0d9;
         border-radius: 8px;
         font-size: 13px;
         color-scheme: light dark;
       }
-      .agent-template-select::picker(select) optgroup {
-        background: light-dark(#ffffff, #23211d);
-        color: light-dark(#1d1b18, #eae6de);
-      }
+      .agent-template-select::picker(select) optgroup,
       .agent-template-select::picker(select) option {
-        background: light-dark(#ffffff, #23211d);
-        color: light-dark(#1d1b18, #eae6de);
+        background: #ffffff;
+        color: #1d1b18;
       }
       .agent-template-select::picker(select) option:hover {
-        background: light-dark(#efede8, #2b2823);
-        color: light-dark(#1d1b18, #eae6de);
+        background: #efede8;
+        color: #1d1b18;
       }
       .agent-template-select::picker(select) option:checked {
-        background: light-dark(#d7f0ea, #0f2f2a);
-        color: light-dark(#0a5c53, #67c7b9);
+        background: #d7f0ea;
+        color: #0a5c53;
       }
       .agent-template-select::picker(select) option:focus-visible,
       .agent-template-select::picker(select) option:focus {
-        outline: 2px solid light-dark(#0e6e63, #53b8a9);
+        outline: 2px solid #0e6e63;
         outline-offset: -2px;
       }
-      .agent-template-select:open .agent-template-picker-icon { color: light-dark(#0e6e63, #53b8a9); }
-      .agent-template-select .agent-template-picker-icon { color: light-dark(#635e56, #a8a195); }
+      @media (prefers-color-scheme: dark) {
+        .agent-template-select { color-scheme: dark; }
+        .agent-template-select::picker(select) {
+          background-color: #23211d !important;
+          color: #eae6de !important;
+          border: 1px solid #6b6355;
+        }
+        .agent-template-select::picker(select) optgroup,
+        .agent-template-select::picker(select) option {
+          background: #23211d;
+          color: #eae6de;
+        }
+        .agent-template-select::picker(select) option:hover {
+          background: #2b2823;
+          color: #eae6de;
+        }
+        .agent-template-select::picker(select) option:checked {
+          background: #0f2f2a;
+          color: #67c7b9;
+        }
+        .agent-template-select::picker(select) option:focus-visible,
+        .agent-template-select::picker(select) option:focus {
+          outline: 2px solid #53b8a9;
+          outline-offset: -2px;
+        }
+      }
+      .agent-template-select:open .agent-template-picker-icon { color: #0e6e63; }
+      .agent-template-select .agent-template-picker-icon { color: #635e56; }
+      /* r5 P2: exactly ONE indicator — suppress the browser's default
+         base-select ::picker-icon since the select button already renders a
+         custom chevron (no duplicate arrows). */
+      .agent-template-select::picker-icon { display: none; }
+      @media (prefers-color-scheme: dark) {
+        .agent-template-select:open .agent-template-picker-icon { color: #53b8a9; }
+        .agent-template-select .agent-template-picker-icon { color: #a8a195; }
+      }
     `;
     wrap.append(style);
   }
@@ -223,6 +259,7 @@ export function buildTemplateSelect({ host, catalogue, blankLabel = "Custom agen
   select.setAttribute("aria-label", "Agent template");
   if (custom) {
     select.style.appearance = "base-select";
+    select.style.colorScheme = "light dark";
     select.style.cssText += "width:100%;min-height:40px;font-size:13px;color:var(--text,#1d1b18);";
     const button = document.createElement("button");
     button.type = "button";
