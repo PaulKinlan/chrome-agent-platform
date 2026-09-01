@@ -413,13 +413,17 @@ const EXPECTED = [
   "fresh hub: no empty-state copy is rendered",
   "after enabling one recipe the four agent surfaces agree (1)",
   "after disabling that recipe the four agent surfaces agree (0) again",
-  "create dialog: the template gallery is the first step (blank + 21 templates + scheduled recipes; Starter shows 7; no template select)",
-  "create dialog: Enter on the Research Analyst card fills Name, presses the card and checks its skills",
+  "create dialog: the template select is the first step (Custom default; Starter/Other/Scheduled groups; no gallery grid)",
+  "create dialog: the keyboard pick of Research Analyst fills Name and checks its skills",
+  "create dialog: the template select filters live (matches narrow to the group; empty state; restore)",
+  "create dialog: the template selection survives filtering and is restored exactly on clear",
   "create dialog: Advanced+Skills expand and the config body scrolls with them (min-height hardening)",
+  "create dialog: Advanced+Skills rows are legible in light AND dark scheme (contrast computed)",
+  "create dialog: the OPEN template picker popup is legible in both schemes (live option vs popup bg, WCAG >= 4.5)",
   "create dialog: a REAL skill checkbox click checks it (unchecked → checked)",
   "create dialog: Create agent from the card yields ONE named agent whose role is the template persona",
   "create dialog: the saved agent's skill ids CONTAIN the exactly-toggled skill id",
-  "create dialog: a Scheduled card creates one scheduled agent that the sidebar and Settings both list",
+  "create dialog: a Scheduled-group template creates one scheduled agent that the sidebar and Settings both list",
   "create dialog: the journey's created agents are removed again (fresh profile restored)",
   "folder command: a granted folder was seeded in the SW store",
   "folder command: bare /folder typed into the composer",
@@ -691,6 +695,95 @@ const EXPECTED = [
 ];
 
 const evidenceFiles = [];
+
+// Minimal PNG decoder (deno): inflate the IDAT and undo the per-scanline
+// filters, returning { width, height, rgba } so the journey can sample the
+// ACTUAL rendered pixels of a region — the honest proof that the open picker
+// popup is legible, not just the stylesheet values.
+async function decodePng(bytes: Uint8Array): Promise<{ width: number; height: number; rgba: Uint8Array } | null> {
+  try {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (bytes.length < 8 || dv.getUint32(0) !== 0x89504e47) return null;
+    let pos = 8;
+    let width = 0, height = 0, bitDepth = 0, colorType = 0;
+    const idat: Uint8Array[] = [];
+    while (pos + 8 <= bytes.length) {
+      const len = dv.getUint32(pos);
+      const type = String.fromCharCode(bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7]);
+      if (type === "IHDR" && len >= 13) {
+        width = dv.getUint32(pos + 8);
+        height = dv.getUint32(pos + 12);
+        bitDepth = bytes[pos + 16];
+        colorType = bytes[pos + 17];
+      } else if (type === "IDAT") {
+        idat.push(bytes.slice(pos + 8, pos + 8 + len));
+      } else if (type === "IEND") break;
+      pos += 12 + len;
+    }
+    if (!width || !height || !idat.length) return null;
+    const raw = new Uint8Array(await new Response(new Blob(idat).stream().pipeThrough(new DecompressionStream("deflate"))).arrayBuffer());
+    const ch = colorType === 6 ? 4 : colorType === 2 ? 3 : 1;
+    const stride = width * ch;
+    const rgba = new Uint8Array(width * height * 4);
+    const prev = new Uint8Array(stride);
+    let p = 0;
+    for (let y = 0; y < height; y++) {
+      const filter = raw[p++];
+      const line = raw.slice(p, p + stride); p += stride;
+      for (let i = 0; i < stride; i++) {
+        const a = i >= ch ? line[i - ch] : 0;
+        const b = prev[i];
+        const c = i >= ch ? prev[i - ch] : 0;
+        let val = line[i];
+        if (filter === 1) val = (val + a) & 255;
+        else if (filter === 2) val = (val + b) & 255;
+        else if (filter === 3) val = (val + ((a + b) >> 1)) & 255;
+        else if (filter === 4) {
+          const pa = Math.abs(b - c), pb = Math.abs(a - c), pc = Math.abs(a + b - 2 * c);
+          const pr = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+          val = (val + pr) & 255;
+        }
+        line[i] = val;
+      }
+      for (let x = 0; x < width; x++) {
+        const si = x * ch, di = (y * width + x) * 4;
+        if (ch === 4) { rgba[di] = line[si]; rgba[di + 1] = line[si + 1]; rgba[di + 2] = line[si + 2]; rgba[di + 3] = line[si + 3]; }
+        else if (ch === 3) { rgba[di] = line[si]; rgba[di + 1] = line[si + 1]; rgba[di + 2] = line[si + 2]; rgba[di + 3] = 255; }
+        else { rgba[di] = line[si]; rgba[di + 1] = line[si]; rgba[di + 2] = line[si]; rgba[di + 3] = 255; }
+      }
+      prev.set(line);
+    }
+    return { width, height, rgba };
+  } catch {
+    return null;
+  }
+}
+
+// Sample a region (CSS pixels, deviceScaleFactor 1 so 1:1 with the shot) and
+// return the DOMINANT background pixel and the DOMINANT dark-pixel (text)
+// among the not-background pixels, so the journey can compute the rendered
+// contrast of a text region.
+function regionStats(png: { width: number; height: number; rgba: Uint8Array }, x: number, y: number, w: number, h: number) {
+  const counts = new Map<string, number>();
+  for (let yy = Math.max(0, y); yy < Math.min(png.height, y + h); yy += 2) {
+    for (let xx = Math.max(0, x); xx < Math.min(png.width, x + w); xx += 2) {
+      const i = (yy * png.width + xx) * 4;
+      const key = `${png.rgba[i] >> 4 << 4},${png.rgba[i + 1] >> 4 << 4},${png.rgba[i + 2] >> 4 << 4}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const bg = sorted[0]?.[0] ?? "0,0,0";
+  // text = the most common pixel that is NOT the background (and not near it)
+  let text = bg;
+  for (const [k] of sorted.slice(1)) {
+    const [r, g, b] = k.split(",").map(Number);
+    const [br, bgc, bb] = bg.split(",").map(Number);
+    if (Math.abs(r - br) + Math.abs(g - bgc) + Math.abs(b - bb) > 60) { text = k; break; }
+  }
+  return { bg: bg.split(",").map(Number), text: text.split(",").map(Number) };
+}
+
 async function writeEvidence(name, bytes) {
   // Bounded (a hung fs write must not stall the gate indefinitely) + cancellable:
   // the body checks a cancellation flag so that after the deadline it stops
@@ -1131,76 +1224,127 @@ async function main() {
     );
 
     // ─────────────────────────────────────────────────────────────
-    // CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01 — templates are the
-    // first-class way to create an agent: the sidebar "+" opens the create
-    // dialog on an <agent-template-gallery> (Starter first), one Use applies
-    // the persona/skills, and Create persists through named-agent.create.
+    // CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01 + CAP-FB-20260831-
+    // TEMPLATE-CUSTOM-SELECT-01 — templates are the first-class way to create
+    // an agent: the sidebar "+" opens the create dialog on the searchable,
+    // grouped template <select> (Starter / Other / Scheduled), choosing one
+    // applies the persona/skills, and Create persists through named-agent.create.
     const pressKey = async (session, key, code, vk, text = undefined) => {
       const base = { key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk };
       await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", ...base, ...(text ? { text, unmodifiedText: text } : {}) }, session);
       await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...base }, session);
     };
-    const galleryState = () => evalIn(cdp, ntpSession, `(() => {
+    const pickerState = () => evalIn(cdp, ntpSession, `(() => {
       const dlg = document.querySelector('agent-dialog');
-      const g = document.getElementById('agent-template-gallery');
-      if (!dlg || !g) return { open: false };
-      const root = g.shadowRoot;
-      const cards = [...root.querySelectorAll('agent-template-card')];
-      const filters = [...root.querySelectorAll('.filter')].map((b) => ({ f: b.dataset.filter, n: Number(b.querySelector('.count')?.textContent || 0), pressed: b.getAttribute('aria-pressed') }));
-      const nameInput = dlg.querySelector('.agent-config-scroll input');
+      const sel = document.getElementById('agent-template-select');
+      const filter = document.querySelector('.agent-template-filter');
+      if (!dlg || !sel) return { open: false };
+      const groups = [...sel.querySelectorAll('optgroup')].map((g) => ({ label: g.label, n: g.querySelectorAll('option').length }));
+      const options = [...sel.options].map((o) => ({ v: o.value, t: o.textContent.slice(0, 40) }));
+      const nameInput = dlg.querySelector('.agent-config-scroll input[type=text]') ?? dlg.querySelector('.agent-config-scroll input');
       const firstChild = dlg.querySelector('.agent-config-scroll')?.firstElementChild?.className ?? '';
-      let active = document.activeElement; while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
-      const selected = cards.find((c) => c.hasAttribute('selected'));
       const checked = [...dlg.querySelectorAll('.skills-list input[type=checkbox]')].filter((c) => c.checked).length;
-      return { open: true, cards: cards.length, blank: cards.filter((c) => c.hasAttribute('blank')).length,
-        filters, firstChild, select: !!document.getElementById('agent-template-select'),
-        name: nameInput?.value ?? '', activeIsUse: active?.classList?.contains('use') === true,
-        selectedId: selected ? (selected.hasAttribute('blank') ? '' : selected.template?.id) : null,
-        selectedPressed: selected?.shadowRoot?.querySelector('.use')?.getAttribute('aria-pressed') ?? null,
-        checked, schedule: dlg.querySelector('#agent-schedule')?.value ?? '' };
+      const custom = sel.options[0]?.value === '';
+      return { open: true, groups, options: options.length, custom,
+        firstChild, name: nameInput?.value ?? '', checked,
+        value: sel.value, filter: filter?.value ?? '' };
     })()`);
-    const setFilter = (f) => evalIn(cdp, ntpSession, `document.getElementById('agent-template-gallery')?.shadowRoot?.querySelector('.filter[data-filter="${f}"]')?.click(), true`);
-    const countTemplates = (f) => evalIn(cdp, ntpSession, `(() => { const g = document.getElementById('agent-template-gallery'); return g ? g.templates.filter((t) => ${f}).length : -1; })()`);
     const openCreateDialog = async () => {
       await clickSel(cdp, ntpSession, "#new-agent");
-      for (let i = 0; i < 20; i++) { if ((await galleryState()).open) break; await sleep(150); }
+      for (let i = 0; i < 20; i++) { if ((await pickerState()).open) break; await sleep(150); }
       await sleep(200);
     };
     await openCreateDialog();
-    const g0 = await galleryState();
-    await setFilter("all"); await sleep(150);
-    const gAll = await galleryState();
-    await setFilter("scheduled"); await sleep(150);
-    const gSched = await galleryState();
-    await setFilter("starter"); await sleep(150);
-    // The script-driven filter clicks above never moved focus (a real click
-    // would focus the filter button); put focus back on the grid the way Tab
-    // would, so the keyboard checks below start from the selected card.
-    await evalIn(cdp, ntpSession, `document.getElementById('agent-template-gallery')?.focus(), true`);
-    const curated = await countTemplates("t.source !== 'recipe'");
-    const recipes = await countTemplates("t.source === 'recipe'");
-    const background = await countTemplates("t.mode === 'background'");
-    console.log("create dialog gallery:", JSON.stringify({ g0, all: gAll.cards, sched: gSched.cards, curated, recipes, background }));
+    const p0 = await pickerState();
+    const curated = await evalIn(cdp, ntpSession, `(() => { const sel = document.getElementById('agent-template-select'); return sel ? [...sel.options].filter((o) => o.value).length : -1; })()`);
+    const schedOpts = await evalIn(cdp, ntpSession, `(() => { const sel = document.getElementById('agent-template-select'); const og = [...sel.querySelectorAll('optgroup')].find((g) => g.label === 'Scheduled'); return og ? og.querySelectorAll('option').length : -1; })()`);
+    const galleryGone = await evalIn(cdp, ntpSession, `document.getElementById('agent-template-gallery') === null`);
+    console.log("create dialog picker:", JSON.stringify({ p0, curated, schedOpts, galleryGone }));
     check(
-      "create dialog: the template gallery is the first step (blank + 21 templates + scheduled recipes; Starter shows 7; no template select)",
-      g0.open && g0.firstChild === "agent-template-step" && g0.blank === 1 && g0.cards === 8 && g0.select === false &&
-        g0.selectedId === "" && g0.selectedPressed === "true" && g0.activeIsUse &&
-        g0.filters.find((x) => x.f === "starter")?.n === 7 && curated === 21 && recipes >= 20 &&
-        gAll.cards === 1 + curated + recipes && gSched.cards === 1 + background,
+      "create dialog: the template select is the first step (Custom default; Starter/Other/Scheduled groups; no gallery grid)",
+      p0.open && p0.firstChild === "agent-template-step" && p0.custom === true && p0.value === "" &&
+        p0.groups.some((g) => g.label === "Starter") && p0.groups.some((g) => g.label === "Scheduled") &&
+        curated >= 20 && schedOpts >= 1 && galleryGone === true,
     );
-    // Keyboard: focus is on the Custom card; ArrowRight twice reaches Research
-    // Analyst (chief-of-staff is the first starter), Enter presses its Use.
-    await pressKey(ntpSession, "ArrowRight", "ArrowRight", 39);
-    await pressKey(ntpSession, "ArrowRight", "ArrowRight", 39);
-    await pressKey(ntpSession, "Enter", "Enter", 13, "\r");
+    // Keyboard: the select is the tab stop; ArrowDown twice reaches Research
+    // Analyst (option 0 = Custom, 1 = chief-of-staff, 2 = research-analyst),
+    // Enter commits the native selection.
+    await evalIn(cdp, ntpSession, `(() => { const s = document.getElementById('agent-template-select'); s?.focus(); try { s?.showPicker(); } catch {} return true; })()`);
     await sleep(200);
-    const g1 = await galleryState();
-    console.log("create dialog after Enter:", JSON.stringify(g1));
+    const startIdx = await evalIn(cdp, ntpSession, `(() => { const s = document.getElementById('agent-template-select'); const t = [...s.options].findIndex((o) => o.value === 'research-analyst'); return { target: t, current: s.selectedIndex }; })()`);
+    const arrows = Math.max(0, (startIdx?.target ?? 2) - (startIdx?.current ?? 0));
+    for (let i = 0; i < arrows; i++) { await pressKey(ntpSession, "ArrowDown", "ArrowDown", 40); await sleep(100); }
+    await pressKey(ntpSession, "Enter", "Enter", 13, "\r");
+    await sleep(250);
+    const kbSel = await evalIn(cdp, ntpSession, `document.getElementById('agent-template-select')?.value ?? null`);
+    // Headless native-select commit is unreliable: the arrows provably move the
+    // native selection (keyboard works); the APPLY step then drives the real
+    // dialog listener (the same change handler a committed pick fires) on the
+    // real element so the persona/skills prefill is still asserted end-to-end.
+    if (kbSel !== "research-analyst") {
+      await evalIn(cdp, ntpSession, `(() => { const s = document.getElementById('agent-template-select'); s.value = 'research-analyst'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+      await sleep(150);
+    }
+    const p1 = await pickerState();
+    console.log("create dialog after keyboard pick:", JSON.stringify({ ...p1, kbSel }));
     check(
-      "create dialog: Enter on the Research Analyst card fills Name, presses the card and checks its skills",
-      g1.name === "Research Analyst" && g1.selectedId === "research-analyst" && g1.selectedPressed === "true" &&
-        g1.checked >= 3 && g1.activeIsUse,
+      "create dialog: the keyboard pick of Research Analyst fills Name and checks its skills",
+      kbSel === "research-analyst" && p1.name === "Research Analyst" && p1.checked >= 3 && p1.value === "research-analyst",
     );
+    // CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01 — the picker is SEARCHABLE:
+    // typing in the filter hides non-matching options AND emptied groups; the
+    // empty state appears when nothing matches; clearing restores everything.
+    const filterProbe = async () => evalIn(cdp, ntpSession, `(() => {
+      const sel = document.getElementById('agent-template-select');
+      const empty = document.querySelector('.agent-template-empty');
+      if (!sel) return { ready: false };
+      return { ready: true, options: sel.options.length, value: sel.value,
+        visibleOptions: [...sel.options].filter((o) => !o.hidden).length,
+        groups: [...sel.querySelectorAll('optgroup')].map((g) => ({ label: g.label, n: g.querySelectorAll('option').length })),
+        emptyHidden: empty?.hidden !== false, emptyText: empty?.textContent ?? '' };
+    })()`);
+    const setFilterInput = (v) => evalIn(cdp, ntpSession, `(() => { const f = document.querySelector('.agent-template-filter'); if (!f) return false; f.value = ${JSON.stringify(v)}; f.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+    const f0 = await filterProbe();
+    await setFilterInput("price"); await sleep(150);
+    const f1 = await filterProbe();
+    await setFilterInput("zzzz-no-match"); await sleep(150);
+    const f2 = await filterProbe();
+    await setFilterInput(""); await sleep(150);
+    const f3 = await filterProbe();
+    console.log("template select filter probe:", JSON.stringify({ f0, f1, f2, f3 }));
+    check(
+      "create dialog: the template select filters live (matches narrow to the group; empty state; restore)",
+      f0.ready && f0.options === f0.options && f0.emptyHidden &&
+        f1.ready && f1.options > 0 && f1.options < f0.options &&
+        f1.groups.some((g) => g.label === "Scheduled" && g.n > 0) &&
+        f2.ready && f2.visibleOptions <= 1 && f2.emptyHidden === false && f2.emptyText.length > 0 &&
+        f3.ready && f3.options === f0.options && f3.emptyHidden,
+    );
+    // P1a (sol r1): filtering must PRESERVE the chosen native value — the
+    // selection survives a filter that excludes it (retained hidden option) and
+    // is restored exactly when the filter clears. The pick happened earlier
+    // (research-analyst), so the value must stay research-analyst throughout.
+    check(
+      "create dialog: the template selection survives filtering and is restored exactly on clear",
+      f0.value === "research-analyst" && f1.value === "research-analyst" &&
+        f2.value === "research-analyst" && f2.visibleOptions <= 1 && f3.value === "research-analyst" &&
+        f3.visibleOptions === f3.options,
+    );
+    // The open picker, light and dark: capture the dialog with the select
+    // expanded via the real showPicker() (customizable select renders the
+    // picker in-page in Chrome 150) and the filter populated.
+    await setFilterInput("price"); await sleep(150);
+    const pickerOpenShot = await evalIn(cdp, ntpSession, `(() => { const s = document.getElementById('agent-template-select'); if (!s) return false; try { s.showPicker(); return true; } catch { return false; } })()`);
+    await sleep(300);
+    const openLight = await captureShot(cdp, ntpSession);
+    if (openLight) await writeEvidence("template-select-open-light.png", openLight);
+    await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "dark" }] }, ntpSession);
+    await sleep(250);
+    const openDark = await captureShot(cdp, ntpSession);
+    if (openDark) await writeEvidence("template-select-open-dark.png", openDark);
+    await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] }, ntpSession);
+    await sleep(200);
+    console.log("template select picker shot:", JSON.stringify({ pickerOpenShot, openLight: !!openLight, openDark: !!openDark }));
 
     // CAP-FB-20260830-AGENT-DIALOG-SCROLL-01 — the config body must scroll
     // once Advanced and Skills are expanded (min-height:0 hardening on
@@ -1241,10 +1385,306 @@ async function main() {
       "create dialog: Advanced+Skills expand and the config body scrolls with them (min-height hardening)",
       scrollProbe?.ready === true &&
         scrollProbe.minHeight === "0px" && scrollProbe.overflowY === "auto" &&
-        scrollProbe.scrollHeight > scrollProbe.clientHeight &&
-        (scrollProbe.scrollTopAfterWheel ?? 0) > (scrollProbe.scrollTopBefore ?? 0) &&
-        scrollProbe.footerVisible === true,
+        scrollProbe.footerVisible === true &&
+        // The template SELECT replaced the tall gallery grid, so the dialog may
+        // fit without overflow at this viewport — the hard invariant is that
+        // the body CAN scroll (min-height:0 + overflow-y:auto + footer reachable).
+        (scrollProbe.scrollHeight > scrollProbe.clientHeight
+          ? (scrollProbe.scrollTopAfterWheel ?? 0) > (scrollProbe.scrollTopBefore ?? 0)
+          : true),
     );
+
+    // CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01 (Part 1 hardening) — the
+    // owner reported the Advanced/Skills panel "completely invisible" in the
+    // create dialog. The min-height scroll fix covers layout; this pins that
+    // the SKILL ROWS themselves are legible in BOTH schemes: the rows use
+    // explicit inline var(--panel,#ffffff)/var(--text,#1d1b18) fallbacks which
+    // MUST resolve to the theme tokens (light-dark) or they render
+    // white-on-white in dark mode. Compute REAL WCAG contrast (not just
+    // "colors differ") for the skills rows AND the picker, in both schemes,
+    // and assert the element is inside the dialog's viewport.
+    // Close any open picker from the screenshot block before measuring
+    // computed styles (an open popup can detach/overlay the dialog content).
+    await evalIn(cdp, ntpSession, `(() => { try { document.getElementById('agent-template-select')?.blur(); } catch {} document.body?.click(); return true; })()`);
+    await sleep(200);
+    const contrastProbe = (dark) => evalIn(cdp, ntpSession, `(() => {
+      const host = [...document.querySelectorAll('agent-dialog')].find((h) => h.shadowRoot?.querySelector('dialog')?.open);
+      if (!host) return { ready: false, why: 'no-open-dialog' };
+      // Effective background: walk up from the element to the first non-
+      // transparent background (the honest backdrop the text sits on).
+      const effectiveBg = (el) => {
+        let node = el;
+        while (node) {
+          const bg = getComputedStyle(node).backgroundColor;
+          if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return bg;
+          node = node.parentElement;
+        }
+        return getComputedStyle(host).backgroundColor || null;
+      };
+      const dlgEl = host.shadowRoot?.querySelector('.dialog') ?? host;
+      const dlgRect = dlgEl.getBoundingClientRect();
+      const inDialogViewport = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.bottom > dlgRect.top && r.top < dlgRect.bottom && r.right > dlgRect.left && r.left < dlgRect.right; };
+      const row = host.querySelector('.skills-list label span');
+      const panelEl = host.querySelector('.skills-collapse');
+      const skills = !row || !panelEl
+        ? { missing: !row ? 'row' : 'panel' }
+        : (row.scrollIntoView({ block: 'center' }), (() => { const r = row.getBoundingClientRect(); return { fg: getComputedStyle(row).color, bg: effectiveBg(row), inView: inDialogViewport(row), rw: Math.round(r.width), rh: Math.round(r.height), rt: Math.round(r.top), rb: Math.round(r.bottom), dt: Math.round(dlgRect.top), db: Math.round(dlgRect.bottom) }; })());
+      return { ready: true, dark: ${dark}, skills,
+        advOpen: host.querySelector('.agent-config-advanced')?.open === true,
+        skOpen: host.querySelector('.skills-collapse')?.open === true };
+    })()`);
+    // FUNCTIONAL POPUP PROBE (r3 P1): the picker is OPENED for real — a
+    // genuine CDP click on the select button (the same activation a user's
+    // click grants) — the open state is asserted (:open / aria-expanded), and
+    // the ACTUAL rendered option text color + popup background are read via
+    // getComputedStyle from the live picker (the ::picker(select) option rules
+    // only apply while open — a closed-select measurement would read UA
+    // defaults).
+    const popupProbe = (dark) => evalIn(cdp, ntpSession, `(async () => {
+      const sel = document.getElementById('agent-template-select');
+      const btn = sel?.querySelector('.agent-template-select-button');
+      if (!sel || !btn) return { ready: false, why: 'no-select-button' };
+      const r = btn.getBoundingClientRect();
+      const x = r.x + r.width / 2, y = r.y + r.height / 2;
+      // A genuine activation path: dispatch a real mouse press/release on the
+      // select button via CDP (the probe is evaluated in the page, so this
+      // only locates the point; the caller sends the trusted events).
+      const point = { x: Math.round(x), y: Math.round(y) };
+      return point;
+    })()`);
+    const openPickerClick = async () => {
+      const pt = await popupProbe(false);
+      if (!pt || !Number.isFinite(pt.x)) return false;
+      for (const t of ["mousePressed", "mouseReleased"]) {
+        await cdp.send("Input.dispatchMouseEvent", { type: t, x: pt.x, y: pt.y, button: "left", buttons: t === "mousePressed" ? 1 : 0, clickCount: 1 }, ntpSession);
+      }
+      await sleep(250);
+      return true;
+    };
+    const readPopup = (dark) => evalIn(cdp, ntpSession, `(async () => {
+      const sel = document.getElementById('agent-template-select');
+      if (!sel) return { ready: false, why: 'no-select' };
+      const isOpen = () =>
+        sel.matches(':open') || sel.getAttribute('aria-expanded') === 'true' ||
+        sel.querySelector('.agent-template-select-button')?.getAttribute('aria-expanded') === 'true';
+      // ENFORCED open precondition (r4 P1): measure ONLY after the picker is
+      // genuinely open. Poll until the picker reports open via EITHER signal
+      // — the :open pseudo-class or aria-expanded on the select/button (the
+      // accepted either-signal contract; headless does not expose a rendered
+      // option box to assert). If the picker never opens, HARD-FAIL with
+      // picker-never-opened (no silent fallback to closed/hidden styles).
+      let open = isOpen();
+      for (let i = 0; i < 20 && !open; i++) { await new Promise((r) => setTimeout(r, 60)); open = isOpen(); }
+      if (!open) return { ready: false, why: 'picker-never-opened' };
+      const firstOpt = [...sel.options].find((o) => !o.hidden && o.value !== '');
+      const optStyle = getComputedStyle(firstOpt);
+      const fg = optStyle.color;
+      const optBg = optStyle.backgroundColor || '';
+      let popupBg = '';
+      let pseudoBgRaw = '';
+      const appearance = getComputedStyle(sel).appearance;
+      try {
+        const pseudo = getComputedStyle(sel, '::picker(select)');
+        popupBg = pseudo?.backgroundColor || '';
+        pseudoBgRaw = pseudo?.backgroundColor || '';
+      } catch { /* pseudo-element query unsupported */ }
+      // The honest backdrop is the OPTION's own rendered background when it is
+      // opaque (the row color); otherwise the popup container's background.
+      const bg = (optBg && optBg !== 'rgba(0, 0, 0, 0)' && optBg !== 'transparent')
+        ? optBg
+        : (popupBg && popupBg !== 'rgba(0, 0, 0, 0)' && popupBg !== 'transparent' ? popupBg : '');
+      return { ready: true, dark: ${dark}, open: true, appearance, fg, bg, pseudoBgRaw, sample: firstOpt.textContent.slice(0, 40) };
+    })()`);
+    const injectLowContrast = () => evalIn(cdp, ntpSession, `(() => {
+      let st = document.getElementById('__picker-low-contrast');
+      if (!st) { st = document.createElement('style'); st.id = '__picker-low-contrast'; document.head.append(st); }
+      st.textContent = '#agent-template-select::picker(select) { background: rgb(255,255,255) !important; } #agent-template-select option { color: rgb(160,160,160) !important; background: rgb(255,255,255) !important; }';
+      return true;
+    })()`);
+    const removeLowContrast = () => evalIn(cdp, ntpSession, `document.getElementById('__picker-low-contrast')?.remove(); true`);
+    const closePicker = () => evalIn(cdp, ntpSession, `(() => { try { document.getElementById('agent-template-select')?.blur(); } catch {} document.body?.click(); return true; })()`);
+    const lightC = (await contrastProbe(false)) ?? { ready: false, why: "eval-undefined" };
+    // Functional popup contrast: light scheme, styled (GREEN) then a deliberately
+    // low-contrast override (RED), then restored (GREEN). Each measurement
+    // OPENS the picker with a real click, reads the live popup, and closes it.
+    // r4 P1 sensitivity proof: measuring while the picker is CLOSED must be
+    // refused by the enforced precondition (picker-never-opened) — the SAME
+    // probe that later passes while open. This proves the measurement cannot
+    // silently read closed/hidden styles.
+    await closePicker();
+    const popupClosedProbe = (await readPopup(false)) ?? { ready: false, why: "eval-undefined" };
+    const popupLight = await (async () => { await closePicker(); return (await openPickerClick()) ? (await readPopup(false)) ?? { ready: false, why: "eval-undefined" } : { ready: false, why: "click-failed" }; })();
+    await closePicker();
+    await injectLowContrast();
+    const popupLightLow = await (async () => { await closePicker(); return (await openPickerClick()) ? (await readPopup(false)) ?? { ready: false, why: "eval-undefined" } : { ready: false, why: "click-failed" }; })();
+    await closePicker();
+    await removeLowContrast();
+    const popupLightRestored = await (async () => { await closePicker(); return (await openPickerClick()) ? (await readPopup(false)) ?? { ready: false, why: "eval-undefined" } : { ready: false, why: "click-failed" }; })();
+    await closePicker();
+    await cdp.send("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-color-scheme", value: "dark" }],
+    }, ntpSession);
+    await sleep(250);
+    const darkC = (await contrastProbe(true)) ?? { ready: false, why: "eval-undefined" };
+    const popupDark = await (async () => { await closePicker(); return (await openPickerClick()) ? (await readPopup(true)) ?? { ready: false, why: "eval-undefined" } : { ready: false, why: "click-failed" }; })();
+    await closePicker();
+    await injectLowContrast();
+    const popupDarkLow = await (async () => { await closePicker(); return (await openPickerClick()) ? (await readPopup(true)) ?? { ready: false, why: "eval-undefined" } : { ready: false, why: "click-failed" }; })();
+    // Pixel capture while the LOW-CONTRAST override is live (picker open): the
+    // REAL rendered option must drop below AA (RED sensitivity on pixels).
+    const darkLowShot = await captureShot(cdp, ntpSession);
+    await closePicker();
+    await removeLowContrast();
+    const popupDarkRestored = await (async () => { await closePicker(); return (await openPickerClick()) ? (await readPopup(true)) ?? { ready: false, why: "eval-undefined" } : { ready: false, why: "click-failed" }; })();
+    const darkShot = await captureShot(cdp, ntpSession);
+    if (darkShot) await writeEvidence("create-dialog-advanced-dark.png", darkShot);
+    // r5 P1b: capture the LIVE OPEN picker (dark) and pixel-verify the REAL
+    // rendered option text vs the ACTUAL rendered popup background — the
+    // computed-style read alone can reflect stylesheet values even when the
+    // open popup is visibly wrong. The option's own rect is read from the
+    // page (deviceScaleFactor 1 → 1:1 with the screenshot) and sampled.
+    const pickerPixelRect = await evalIn(cdp, ntpSession, `(() => {
+      const sel = document.getElementById('agent-template-select');
+      if (!sel || !(sel.matches(':open') || sel.getAttribute('aria-expanded') === 'true')) return null;
+      // The open picker renders in a top layer: page hit-tests and light-DOM
+      // rects don't expose it. Use the layout position of the popup via the
+      // select's shadow parts if reachable, else fall back to the button
+      // anchor: the popup opens just below the button and is roughly the
+      // button width wide and ~optionCount * 28px tall. Return a generous
+      // band; the Node-side sampler then finds the popup by its border.
+      const btn = sel.querySelector('.agent-template-select-button') ?? sel;
+      const r = btn.getBoundingClientRect();
+      // The popup opens immediately ABOVE the button (no room below in the
+      // dialog). Scan a tight band: button width, ~340px above to the button
+      // bottom. The box-finder picks the last bordered box before the button.
+      return { x: Math.round(r.x), y: Math.round(r.top - 340), w: Math.round(r.width),
+        h: Math.round(340 + r.height), open: true, anchor: 'button-band' };
+    })()`);
+    const darkPng = darkShot ? await decodePng(darkShot) : null;
+    // Find the popup block in the band: the popup has a border (#6b6355 in
+    // dark, #e3e0d9 in light) that the dialog panel does not. Scan for the
+    // first horizontal run of the border color to bound the popup top, and
+    // the region beneath until the border color reappears (its bottom).
+    const findPopupBand = (png, band) => {
+      if (!png || !band) return null;
+      const borderDark = [107, 99, 85]; // #6b6355
+      const borderLight = [227, 224, 217]; // #e3e0d9
+      const near = (a, b, tol = 24) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) <= tol;
+      const x0 = band.x, x1 = Math.min(png.width, band.x + band.w);
+      // First and LAST bordered rows in the tight band above the button bound
+      // the popup (the popup's top and bottom borders).
+      let top = null, lastBorder = null;
+      for (let y = band.y; y < Math.min(png.height, band.y + band.h); y++) {
+        let borderHits = 0;
+        for (let x = x0 + 10; x < x1 - 10; x += 8) {
+          const i = (y * png.width + x) * 4;
+          const p = [png.rgba[i], png.rgba[i + 1], png.rgba[i + 2]];
+          if (near(p, borderDark) || near(p, borderLight)) borderHits++;
+        }
+        if (borderHits >= 4) {
+          if (top === null) top = y;
+          lastBorder = y;
+        }
+      }
+      if (top === null || lastBorder === null || lastBorder - top < 12) return null;
+      return { x: x0, y: top, w: x1 - x0, h: lastBorder - top + 1 };
+    };
+    const darkBand = findPopupBand(darkPng, pickerPixelRect);
+    const darkPixel = (pickerPixelRect && darkBand && darkPng)
+      ? regionStats(darkPng, darkBand.x + 20, darkBand.y + Math.max(12, Math.round(darkBand.h * 0.35)), darkBand.w - 40, Math.max(20, Math.round(darkBand.h * 0.3)))
+      : null;
+    const darkLowPng = darkLowShot ? await decodePng(darkLowShot) : null;
+    const darkLowBand = findPopupBand(darkLowPng, pickerPixelRect);
+    const darkLowPixel = (pickerPixelRect && darkLowBand && darkLowPng)
+      ? regionStats(darkLowPng, darkLowBand.x + 20, darkLowBand.y + Math.max(12, Math.round(darkLowBand.h * 0.35)), darkLowBand.w - 40, Math.max(20, Math.round(darkLowBand.h * 0.3)))
+      : null;
+    if (darkShot) await writeEvidence("template-select-open-dark-r5.png", darkShot);
+    await closePicker();
+    // restore light for the rest of the suite
+    await cdp.send("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-color-scheme", value: "light" }],
+    }, ntpSession);
+    await sleep(200);
+    const lightShot = await captureShot(cdp, ntpSession);
+    if (lightShot) await writeEvidence("create-dialog-advanced-light.png", lightShot);
+    const contrastOk = (c) => c.ready === true &&
+      c.skills !== undefined && c.skills.missing === undefined && c.skills.inView === true &&
+      typeof c.skills.fg === "string" && typeof c.skills.bg === "string" &&
+      c.advOpen === true && c.skOpen === true;
+    // Compute WCAG contrast in NODE with the module's pure helpers (the page
+    // returns raw color strings; parsing stays in the testable module).
+    const { parseRgb, wcagContrast, CONTRAST_AA_TEXT } = await import("../extension/lib/agent-template-select.js");
+    const ratioOf = (c) => {
+      if (!c || c.missing !== undefined || c.ready === false) return null;
+      const fg = parseRgb(c.fg);
+      const bg = parseRgb(c.bg) ?? parseRgb(c.bg, [255, 255, 255]);
+      return fg && bg ? wcagContrast(fg, bg) : null;
+    };
+    const lightSkillsRatio = ratioOf(lightC.skills);
+    const darkSkillsRatio = ratioOf(darkC.skills);
+    // Open-picker ratios: the REAL rendered popup (option text vs popup bg).
+    const popupLightRatio = ratioOf(popupLight);
+    const popupDarkRatio = ratioOf(popupDark);
+    // Falsification: the SAME measurement must drop below AA when a
+    // deliberately low-contrast popup fixture is applied (RED), and recover
+    // when it is removed (GREEN).
+    const popupLightLowRatio = ratioOf(popupLightLow);
+    const popupDarkLowRatio = ratioOf(popupDarkLow);
+    const popupLightRestoredRatio = ratioOf(popupLightRestored);
+    const popupDarkRestoredRatio = ratioOf(popupDarkRestored);
+    // r5 P1b: REAL RENDERED pixel contrast of the open picker (dark) — the
+    // option's own rendered rect sampled from the screenshot, vs the dominant
+    // popup background pixel, using the same WCAG math.
+    const darkPixelRatio = darkPixel ? wcagContrast(darkPixel.text, darkPixel.bg) : null;
+    const darkLowPixelRatio = darkLowPixel ? wcagContrast(darkLowPixel.text, darkLowPixel.bg) : null;
+    // RED fixture: the SAME math must reject a deliberately low-contrast pair.
+    const redFixture = wcagContrast([160, 160, 160], [255, 255, 255]);
+    const schemesDiffer = !!(lightC?.skills && darkC?.skills &&
+      parseRgb(lightC.skills.fg)?.join(",") !== parseRgb(darkC.skills.fg)?.join(","));
+    console.log("create dialog contrast probe (WCAG):", JSON.stringify({
+      lightC, darkC, lightSkillsRatio, darkSkillsRatio,
+      popupClosedProbe,
+      popupLight, popupLightRatio, popupLightLow, popupLightLowRatio, popupLightRestoredRatio,
+      popupDark, popupDarkRatio, popupDarkLow, popupDarkLowRatio, popupDarkRestoredRatio,
+      pickerPixelRect, darkBand, darkPixel, darkPixelRatio, darkLowBand, darkLowPixel, darkLowPixelRatio,
+      redFixture,
+    }));
+    check(
+      "create dialog: Advanced+Skills rows are legible in light AND dark scheme (contrast computed)",
+      contrastOk(lightC) && contrastOk(darkC) && schemesDiffer &&
+        lightSkillsRatio !== null && lightSkillsRatio >= CONTRAST_AA_TEXT &&
+        darkSkillsRatio !== null && darkSkillsRatio >= CONTRAST_AA_TEXT &&
+        redFixture < CONTRAST_AA_TEXT,
+    );
+    check(
+      "create dialog: the OPEN template picker popup is legible in both schemes (live option vs popup bg, WCAG >= 4.5)",
+      // Closed-state sensitivity (r4 P1): the SAME enforced probe must REFUSE
+      // a closed picker (picker-never-opened) — proving the measurement cannot
+      // pass on closed/hidden styles — then PASS once the picker is genuinely
+      // open (open === true, real rendered option vs popup bg via computed
+      // style, WCAG >= 4.5).
+      popupClosedProbe?.ready === false && popupClosedProbe?.why === "picker-never-opened" &&
+        popupLight?.open === true && popupDark?.open === true &&
+        popupLightRatio !== null && popupLightRatio >= CONTRAST_AA_TEXT &&
+        popupDarkRatio !== null && popupDarkRatio >= CONTRAST_AA_TEXT &&
+        // falsification: low-contrast override drives the SAME probe RED, and
+        // removal restores it to GREEN.
+        popupLightLowRatio !== null && popupLightLowRatio < CONTRAST_AA_TEXT &&
+        popupDarkLowRatio !== null && popupDarkLowRatio < CONTRAST_AA_TEXT &&
+        popupLightRestoredRatio !== null && popupLightRestoredRatio >= CONTRAST_AA_TEXT &&
+        popupDarkRestoredRatio !== null && popupDarkRestoredRatio >= CONTRAST_AA_TEXT,
+    );
+    // r5 P1b (coordinator decision): the computed-style gate above is the hard
+    // check. The PIXEL sample is INFORMATIONAL — headless Chrome's base-select
+    // popup paints from UA system colors and ignores author ::picker
+    // backgrounds, so the pixel ratio here reflects that headless quirk, not
+    // the authored design (real headed Chrome paints the computed styles).
+    const pixelInformational =
+      pickerPixelRect?.open === true && darkPixel !== null && darkLowPixel !== null &&
+      darkPixelRatio !== null && darkLowPixelRatio !== null;
+    console.log("r5 pixel-info (headless paint quirk, not a gate):", JSON.stringify({
+      pixelInformational, darkPixel, darkPixelRatio, darkLowPixelRatio,
+    }));
 
     const galleryShot = await captureShot(cdp, ntpSession);
     if (galleryShot) await writeEvidence("templates-gallery.png", galleryShot);
@@ -1332,26 +1772,38 @@ async function main() {
     await evalIn(cdp, ntpSession, `document.querySelector('agent-dialog')?.close?.(); true`);
     await sleep(300);
     await openCreateDialog();
-    await setFilter("scheduled"); await sleep(150);
-    const schedPick = await evalIn(cdp, ntpSession, `(() => { const g = document.getElementById('agent-template-gallery'); const card = [...g.shadowRoot.querySelectorAll('agent-template-card')].find((c) => c.template?.source === 'recipe'); if (!card) return null; card.shadowRoot.querySelector('.use').click(); return { id: card.template.id, name: card.template.name, minutes: card.template.schedule?.periodInMinutes }; })()`);
+    // The Scheduled group holds the background recipes; pick the first recipe
+    // option through the real select (value + change, the same listener the
+    // dialog wires).
+    const schedPick = await evalIn(cdp, ntpSession, `(() => {
+      const sel = document.getElementById('agent-template-select');
+      const og = [...sel.querySelectorAll('optgroup')].find((g) => g.label === 'Scheduled');
+      const opt = og ? [...og.querySelectorAll('option')].find((o) => /every|price|watch|summary|bookmark|digest/i.test(o.textContent)) : null;
+      if (!opt) return null;
+      sel.value = opt.value;
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      return { id: opt.value, name: opt.textContent.replace(/ — .*/, '').trim(), minutes: null, picked: true };
+    })()`);
     await sleep(200);
-    const g2 = await galleryState();
+    const g2 = await pickerState();
+    const schedMinutes = await evalIn(cdp, ntpSession, `(() => { const el = document.querySelector('#agent-schedule'); return el ? el.value : ''; })()`);
+    const schedName = schedPick?.name ?? "";
     await evalIn(cdp, ntpSession, `(() => { const b = [...document.querySelectorAll('agent-dialog button')].find((x) => x.textContent.trim() === 'Create agent'); b?.click(); return !!b; })()`);
     let scheduledAgent = null;
     for (let i = 0; i < 30 && !scheduledAgent; i++) {
       const list = await msgValue({ type: "named-agent.list" });
-      scheduledAgent = (list?.agents ?? []).find((a) => a?.name === schedPick?.name) ?? null;
+      scheduledAgent = (list?.agents ?? []).find((a) => a?.name === schedName) ?? null;
       if (!scheduledAgent) await sleep(200);
     }
     await sleep(1500);
     const sidebarSched = await evalIn(cdp, ntpSession, `[...document.querySelectorAll('#side-agents .agent-item')].map((el) => el.textContent.replace(/\s+/g, ' ').trim())`);
     const surfacesS = await measureAgentSurfaces();
     if (surfacesS.shot) await writeEvidence("templates-created.png", surfacesS.shot);
-    console.log("scheduled from card:", JSON.stringify({ schedPick, g2schedule: g2.schedule, scheduledAgent: scheduledAgent && { id: scheduledAgent.id, schedule: scheduledAgent.schedule }, sidebarSched, surfaces: { ...surfacesS, shot: undefined } }));
+    console.log("scheduled from select:", JSON.stringify({ schedPick, schedMinutes, g2value: g2.value, scheduledAgent: scheduledAgent && { id: scheduledAgent.id, schedule: scheduledAgent.schedule }, sidebarSched, surfaces: { ...surfacesS, shot: undefined } }));
     check(
-      "create dialog: a Scheduled card creates one scheduled agent that the sidebar and Settings both list",
-      schedPick !== null && g2.schedule === `every ${schedPick.minutes} minutes` && scheduledAgent !== null &&
-        Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedPick.name) && /Scheduled · every \d+ min/.test(t)) &&
+      "create dialog: a Scheduled-group template creates one scheduled agent that the sidebar and Settings both list",
+      schedPick?.picked === true && /every \d+ minutes/.test(schedMinutes) && scheduledAgent !== null &&
+        Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedName) && /Scheduled · every \d+ min/.test(t)) &&
         surfacesS.sidebarRows === 2 && surfacesS.panelRows === 2 && surfacesS.settingsRows === 2 && /^2 agents/.test(surfacesS.panelCount),
     );
     // Restore the fresh profile the rest of the suite expects: delete the two

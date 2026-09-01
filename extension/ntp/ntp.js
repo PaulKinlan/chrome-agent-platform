@@ -27,6 +27,7 @@ import {
 } from "../shared/components.js";
 import { canonicalRef, findAgentByRef } from "../shared/agent-registry.js";
 import { agentScheduleMarker, backgroundAgentsForDisplay } from "../shared/agent-display.js";
+import { buildTemplateSelect } from "../lib/agent-template-select.js";
 import { handleScriptRunMessage } from "../lib/script-host.js";
 import { initialAvatar } from "../lib/avatar.js";
 import { renderDurabilityState } from "../lib/durability-ui.js";
@@ -2443,10 +2444,10 @@ async function openAgentConfig() {
 // the owner picks it and presses "Create agent"; never seven at once, never
 // silently.
 function addStarterAgents() {
-  return openQuickCreateAgent({ templateFilter: "starter" });
+  return openQuickCreateAgent();
 }
 
-function openQuickCreateAgent({ templateFilter = "starter" } = {}) {
+function openQuickCreateAgent() {
   buildAgentConfigDialog({
     title: "Create an agent",
     name: "",
@@ -2456,7 +2457,6 @@ function openQuickCreateAgent({ templateFilter = "starter" } = {}) {
     initialCoreAssets: [],
     canRegenerateAvatar: false,
     showTemplates: true,
-    templateFilter,
     savedLabel: "Create agent",
     onSave: async (v) => {
       const r = await send("named-agent.create", {
@@ -2636,19 +2636,15 @@ async function buildAgentConfigDialog(opts) {
       skillSection.checkTemplate(pre.skills);
       updateSkillCount();
     };
-    const gallery = document.createElement("agent-template-gallery");
-    gallery.id = "agent-template-gallery";
-    gallery.setAttribute("blank", "");
-    gallery.setAttribute("filters", "starter,all,scheduled");
-    gallery.setAttribute("filter", opts.templateFilter ?? "starter");
-    gallery.setAttribute("selected", "");
-    gallery.templates = catalogue;
-    gallery.skillNames = new Map(available.map((s) => [s?.id ?? s?.name ?? String(s), s?.name ?? s?.id]));
-    gallery.addEventListener("use", (event) => {
-      const id = String(event.detail?.id ?? "");
-      applyTemplate(id ? templateById.get(id) ?? null : null);
+    const templateSelect = buildTemplateSelect({
+      host: document.createElement("div"),
+      catalogue,
+      blankLabel: "Custom agent — start from a blank agent.",
+      selected: "",
+      filterLabel: "Search templates",
+      onChange: (id) => applyTemplate(id ? templateById.get(id) ?? null : null),
     });
-    templateGallery = gallery;
+    templateGallery = templateSelect.select;
     const section = document.createElement("div");
     section.className = "agent-template-step";
     section.style.cssText = "display:flex;flex-direction:column;gap:8px;min-width:0;";
@@ -2661,7 +2657,7 @@ async function buildAgentConfigDialog(opts) {
     lead.style.cssText = "margin:0;font-size:12px;line-height:1.4;color:var(--muted,#635e56);";
     section.setAttribute("role", "group");
     section.setAttribute("aria-labelledby", heading.id);
-    section.append(heading, lead, gallery);
+    section.append(heading, lead, templateSelect.select.parentElement);
     templateSection = section;
   }
 

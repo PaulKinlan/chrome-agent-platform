@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.597] — 2026-09-01
+- Dialog work — searchable grouped customizable select for agent templates with both-scheme contrast gates
+
 ## [0.2.596] — 2026-09-01
 - You can now add and test remote MCP servers in Settings, and destructive browser actions always ask before they run
 

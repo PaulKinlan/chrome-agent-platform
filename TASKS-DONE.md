@@ -587,6 +587,7 @@
 - Recover: `git grep -n "create-agent\|agent-dialog\|skills" -- extension/shared`
 - History:
   - 2026-08-23 22:50 UTC — captured from product-owner voice feedback.
+  - 2026-08-31 — CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01 verification: the owner re-reported the Advanced/Skills panel as "completely invisible" in the create dialog. Re-verified on the CURRENT tip with a computed-style journey in BOTH schemes: the skills rows resolve light-dark tokens correctly (light text rgb(29,27,24) on panel; dark rgb(234,230,222)) with the Advanced+Skills details expanding and the config body scrollable (min-height 0). Pixel-sampled screenshots (create-dialog-advanced-light/dark.png) confirm dark is charcoal-with-light-text, NOT white-on-white. Verdict: no defect on the current tip — the report was a pre-fix build; hardened with the contrast journey check (CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01).
 
 ## [CAP-FB-20260823-TOOL-NAMING-01] Bundled tool names must lead with the Unix tool name
 

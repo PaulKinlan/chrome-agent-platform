@@ -37,14 +37,6 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 - Every section and control remains present at 500px and 360px. The document reflows rather than clipping; intentionally scrollable data tables retain local `overflow: auto` without widening the Settings iframe.
 - Advanced → Observability keeps the verbosity selector and full-local-detail switch adjacent. The warning names exactly what full detail exposes locally and states that dumps, exports, shared bundles, and reports remain redacted.
 
-## Providers — one recommended path (Settings → Providers)
-- The panel LEADS with a recommended card block, not seven equal presets. OpenAI (`Recommended` pill, pre-filled `gpt-5.6-luna`) leads; Google Gemini (`Alternative` pill, `gemini-3.7-flash`) is second; every other preset sits under a `<details>` **More providers** disclosure. The measured winner is the default (Q12 in `docs/OPEN-QUESTIONS.md`).
-- The card set is a `role=radiogroup` of `role=radio` cards (roving `tabindex`, arrow/Home/End move the selection, the current default carries `aria-checked=true` and a `Current` pill). The card is the tab stop; there is no separate tabpanel tab stop.
-- The four-click flow: **pick a provider → paste the key → Test connection → Use**. The key field is `type=password`; a **Get a key** link (`rel="noopener"`, new tab, "opens in a new tab" in its accessible name) points at the provider's own key page. **Use is disabled until Test passes** for the current key+model; editing the key or model resets the gate. A keyless/local provider and the already-active default are exempt.
-- **Test connection** runs the SAME request shape the hub uses (`max_completion_tokens`, `reasoning_effort:"none"` for OpenAI gpt-5.x) and then a permission-safe `list_tabs` dry run, so a green Test predicts a working RUN, not just a reachable endpoint. Errors are secret-safe (`safeProviderError`).
-- **Advanced** (`<details>` per card) holds the Base URL and the `<model-picker>` (catalogue suggestions + the live `/models` list). The model pre-fills the catalogue default so a blank never silently runs the demo model.
-- A successful Use of a keyed provider returns to the hub with the composer focused; the hub strip then reads **Ready — &lt;Provider&gt; · &lt;model&gt;**. With no model connected the strip reads **No model connected yet — pick one to start** (never "Internal testing provider active"). User copy never names `chrome.storage`.
-
 ## Run-log affordance
 - A task or agent surface keeps a plainly labelled **Run logs** action after a run settles. Its existing durable registry pages ten retained runs at a time so every run remains reachable without unbounded DOM growth; each row has **View log** and displays at most the latest 200 retained timeline entries with an honest truncation note.
 
@@ -82,31 +74,32 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   action. The whole card activates that button; `selected` presses it
   (`aria-pressed="true"`, accent ring); `blank` is the "Custom agent" card.
   Curated starters come first and carry the Starter badge.
-- `<agent-template-gallery>` is the ONE catalogue surface: a segmented
+- `<agent-template-gallery>` is the shared catalogue GRID surface: a segmented
   Starter / All / Scheduled filter (`aria-pressed` buttons with counts) over an
   auto-fill grid of cards with a roving tabindex (one tab stop; arrows, Home,
-  End move; Enter/Space activate). The create dialog opens on it (Starter
-  first, Custom selected) and Settings → Agents reuses it filtered to Scheduled.
-- A scheduled or recurring task is a **routine** (not a "background agent" — that
-  naming is retired on the hub). A routine is discoverable *with its schedule*:
-  the hub's per-agent **Routines** section lists each one with a forward-looking
-  `<next-run>` widget so the owner can see the alarm fired correctly and when it
-  runs next. `<next-run at period last label>` renders `Next run <relative> ·
-  <absolute>` — an emphasized relative countdown ("in 1 hour") joined to the
-  exact clock time — from the routine's REAL alarm `scheduledTime` (read via
-  `lib/scheduler.js`; the `nextRunLabel` projector is the single source both this
-  widget and the row share). It re-computes on a bounded interval so the
-  countdown stays honest as the fire approaches, marks a recurring routine with a
-  repeat glyph, shows `Last run <ago>` once it has fired, and — with no armed
-  fire (paused, needs-attention) — shows the `label` fallback rather than
-  inventing a time. A routine's next fire is never rendered by hand-formatting a
-  timestamp; it always goes through `<next-run>` / `nextRunLabel`.
-- Customizable selects use the shared native `appearance: base-select` vocabulary:
-  one browser `::picker-icon` (never a second drawn chevron), safe inline SVG option
-  icons, and a one-line ellipsized closed state contained by `min-width: 0`.
-- The create-agent dialog's primary order is template gallery → Name → what it
+  End move; Enter/Space activate). Settings → Agents uses it filtered to
+  Scheduled.
+- The CREATE-AGENT dialog offers the catalogue through `agent-template-select`
+  (CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01): a NATIVE `<select>` with the
+  Customizable Select pattern where supported — first-child `<button>`
+  select-button, `<selectedcontent>` mirroring the choice, `appearance:
+  base-select`, grouped `optgroup`s Starter / Other / Scheduled (matching the
+  gallery's order), a live search filter input above it (matches narrow,
+  empty state, restore), and a CLASSIC-select fallback where `appearance:
+  base-select` is unsupported. The selection survives filtering (a filtered-out
+  choice is retained as a hidden option so the native value never resets). The
+  picker popup is styled in BOTH schemes with explicit light defaults and a
+  `@media (prefers-color-scheme: dark)` block (charcoal popup, light text,
+  checked/hover states) plus `color-scheme: light dark` on the select; exactly
+  ONE chevron renders (`::picker-icon` is suppressed; the button draws its
+  own). Known limitation: headless Chrome paints the base-select popup from UA
+  system colors (author `::picker` backgrounds ignored), so automated pixel
+  checks observe a light popup in headless; the computed-style gate proves the
+  authored contrast (light 17.2:1, dark 12.9:1) and real headed Chrome paints
+  the computed styles.
+- The create-agent dialog's primary order is template select → Name → what it
   does (with visible dictation/refine tools) → English schedule → Advanced.
-  Initial focus lands on the gallery's selected card.
+  Initial focus lands on the select.
   Its inline size is a fixed viewport clamp; every disclosure uses shrink-safe
   containment so opening Advanced or Skills never changes the dialog width.
 - SVG line-art icons, one stroke weight, currentColor. No emoji.
