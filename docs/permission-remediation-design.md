@@ -217,6 +217,34 @@ workstream separate and labels it truthfully as unshipped.
   origin card and Allow opens the tab (verified in a scratch harness). What
   headless cannot show: Chrome's own warning prompt for `tabs` — that Allow half
   is a HEADED check (`CAP-FB-20260825-HEADED-ACCEPTANCE-LANE-01`).
+- **Site access is a card too** (`CAP-FB-20260901-READ-PAGE-HOST-GRANT-01`). The
+  requirement carries a fourth field, `hostOrigins[]`: the exact canonical
+  http(s) origins whose Chrome site access (`<origin>/*`) the tool needs. It is
+  a different decision from `grantOrigins` (reading a page needs site access +
+  `scripting`; acting on it needs the browser-control grant too), so it is its
+  own key segment, its own line on the card ("Site access to this site: …"),
+  and its own step on Allow: the `<origin>/*` patterns ride in the SAME
+  `chrome.permissions.request` as `permissions` (one prompt from one gesture)
+  and are never written as a browser-control grant. Every tool that reaches
+  into a page — `read_page`, the page-action family, `capture_screenshot`,
+  `save_page_as_mhtml` — checks site access BEFORE injecting (the shared
+  `pageAccessGate` in `browser-tools.js` for the first two): a hidden tab
+  address asks for `tabs` (without it the site cannot be named), a privileged
+  page is a plain refusal, and whatever is missing for the origin is ONE card.
+  Chrome's raw "Cannot access contents of the page…" string is mapped by the
+  catch backstop to the same card (site access withdrawn mid-flight) or to a
+  readable line (a page Chrome refuses regardless), never forwarded. Declining
+  a site-access card reads "Not allowed to read the page on <site> — you
+  declined." Verified in `scripts/read-page-host-grant-acceptance.ts`
+  (`npm run test:read-page-host-grant`): site access withheld the way an
+  owner's Chrome does it (Site access → "On click", via `chrome.developerPrivate`
+  from `chrome://extensions`), one card naming the site, Allow → the retried
+  read succeeds in the same run, Not now → the declined line. Headless cannot
+  show Chrome's own site-access prompt, so the harness grants the one origin
+  the prompt would have (the product's `permissions.request` then returns true
+  from the click without a prompt), and runs a `tabs`-pre-held manifest variant
+  so the withheld tab's address stays visible (the owner's state after
+  `list_tabs`).
 - **Still open (later increments):** the three-class Read / Act / Destructive
   vocabulary on the card and in Settings (`CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01`),
   the Settings rewrite and revoke-via-SW (`CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`

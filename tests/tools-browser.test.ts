@@ -252,6 +252,9 @@ Deno.test("browser list_tabs: DENIES without the tabs permission", async () => {
 
 Deno.test("browser read_page: reads the page via scripting", async () => {
   reset();
+  // Reading needs site access for the tab's exact origin, checked BEFORE the
+  // injection (CAP-FB-20260901-READ-PAGE-HOST-GRANT-01).
+  grantedOrigins.add("https://example.com/*");
   const tab = await chrome.tabs.create({ url: "https://example.com/doc" });
   const r = await toolset().read_page.execute({ tabId: tab.id });
   assert(r.title, `read_page should return a title, got ${JSON.stringify(r)}`);

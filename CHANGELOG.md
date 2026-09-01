@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.611] — 2026-09-01
+- Reading a page on a site the extension cannot access now asks you with one clear Allow card instead of failing silently.
+
 ## [0.2.610] — 2026-09-01
 - Task board: three defects found while rehearsing the demo are now tracked — a tool that stalls after you click Allow, too many permission prompts in one step, and when a site tool should ask first.
 

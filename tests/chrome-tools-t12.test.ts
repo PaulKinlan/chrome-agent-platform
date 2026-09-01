@@ -569,7 +569,12 @@ Deno.test("destinations: an http(s) destination still reaches Chrome under a glo
 Deno.test("fence: read_page result carries untrusted === true (page text is data, never instructions)", async () => {
   reset();
   grantedPermissions.add("scripting");
-  const r = await tools().read_page.execute({ tabId: 7 }, {});
+  // Reading needs site access for the tab's exact origin, checked BEFORE the
+  // injection (CAP-FB-20260901-READ-PAGE-HOST-GRANT-01) — a real tab with a
+  // granted origin is the state this fence test is about.
+  const notes = addTab("https://example.com/notes");
+  grantedOrigins.add("https://example.com/*");
+  const r = await tools().read_page.execute({ tabId: notes.id }, {});
   assertEquals(r.untrusted, true, `read_page must tag its result untrusted: ${JSON.stringify(r)}`);
   assertEquals(r.title, "Quarterly planning notes");
   assert(typeof r.text === "string" && r.text.includes("close_tab"), "the page text is still returned in full (the fence is applied by the lazy projection)");
