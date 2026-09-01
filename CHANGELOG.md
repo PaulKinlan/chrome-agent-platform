@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.600] — 2026-09-01
+- WORKFLOWS-TO-MEMORY-01 r1 REVISE round recorded with candidate SHA
+
 ## [0.2.599] — 2026-09-01
 - Workflows r1 review fixes: workflow.run is approvable, workflow tools are fenced like memory tools, the run path is the production code, and prompt interpolation is injection-safe
 
