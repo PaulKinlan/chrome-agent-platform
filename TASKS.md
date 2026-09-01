@@ -4779,33 +4779,32 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260831-MCP-GLOBAL-UI-01] Settings section to add remote MCP servers (global)
 - Feedback: 2026-08-31 — child of CAP-FB-20260831-MCP-SUPPORT-01. The task-view/global option the owner asked for.
-- Updated: 2026-09-01 13:32 UTC
-- Status: OPEN
+- Updated: 2026-09-01 16:20 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P1
-- Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — CLAIMED; do not start a parallel attempt
+- Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — candidate pushed
 - Workspace: active (local path private)
 - Branch: `cap/mcp-global-ui` (pushed to origin as the candidate branch; merged by the coordinator)
-- Base: `122fa7fb`
-- Candidate: —
+- Base: `752baea2` (origin/main tip; config-store + transport-spike already merged)
+- Candidate: this tracker commit
 - Shipping: —
-- Acceptance: a Settings "MCP servers" section to add/edit/enable/remove a REMOTE MCP server (name, transport http/sse, url, auth token handled like the provider key) with a "Test connection" that connects and lists tools, and honest errors; no stdio/command server type is offered. Load the impeccable design skill. Depends on MCP-CONFIG-STORE.
-  - Context: docs/MCP-SUPPORT-DESIGN.md. Coordinate with EXEC-BUILD-FLAG (whether MCP is standard or developer). Reuse the provider-key field pattern in options.
-  - Files: `extension/options/options.html` + `options.js` (the section + Test connection via the mcp-client), gallery if a component is added.
-  - Steps: 1. Journey check first (RED). 2. The section UI over mcp.servers.get/set. 3. Test connection. 4. Errors.
-  - Out of scope: per-agent UI (MCP-AGENT-UI); tool injection.
-- Review: pending
+- Acceptance: a Settings "MCP servers" section to add/edit/enable/remove a REMOTE MCP server (name, transport http/sse, url, auth token handled like the provider key) with a "Test connection" that connects and lists tools, and honest errors; no stdio/command server type is offered. Load the impeccable design skill. Depends on MCP-CONFIG-STORE. DONE: new standard Settings section (nav + panel) added between Providers and Local folders — add/edit/enable(remove via a per-row switch-toggle + Edit/Remove), one reused add/edit editor (name, transport http/sse select, url, optional auth header + password token), a Test connection that connects in the SW via the injected remote mount and lists the server's tools (count + names) or an honest error, and NO stdio/command type offered. Token handled exactly like the provider key: written via `mcp.servers.set`, read REDACTED via `mcp.servers.get` (hasToken bit only), never pre-filled on edit, blank-on-save/test reuses the stored one.
+  - Context: docs/MCP-SUPPORT-DESIGN.md. EXEC-BUILD-FLAG coordination: placed in the STANDARD set (no `data-developer` marker) — the design doc calls it "a developer-or-standard section", and the brief says standard unless the doc mandates developer.
+  - Files: `extension/options/options.html` + `options.js` (section + Test connection), `extension/options/options.css` (section styles), `extension/lib/pure.js` (SETTINGS_SECTIONS + product hashes), `extension/background/routes/mcp.js` (new `mcp.servers.test` route, dependency-injected mount), `extension/background/service-worker.js` (wires the mount from the registry), `extension/lib/mcp-mount-registry.js` (new SDK-free seam) + `scripts/mcp-client-sw-inject.js` + `build.mjs` (SW-bundle inject so lib/mcp-client.js stays out of Deno's type-check graph while the mount ships in every build). No new component (inline DOM, textContent — no gallery change).
+- Review: author review 2026-09-01 — falsification gates cleared. RED/GREEN recorded: `tests/mcp-servers-test-route.test.ts` (5) went 5/5 RED with the route absent ("routes.mcp.servers.test is not a function") and 5/5 GREEN with it, covering the Settings-only gate, tool listing, honest per-server failure, invalid-server rejection before any connection, and blank-token→stored-credential reuse. A real loaded-extension KAT drives the production UI + route.
 - Gates: the falsification gates apply.
-  - Unit: options section render test if applicable.
-  - Browser: a KAT — add a server in Settings, Test connection succeeds against the test MCP server, a bad url shows an honest error; screenshots.
-  - Full suite: green at the tip.
+  - Unit: `tests/mcp-servers-test-route.test.ts` 5/5 (RED-first proven); `tests/sw-route-modularization.test.ts` updated for the new route and green; full unit suite `deno test -A tests/` 2905 passed / 0 failed at the tip; `check:gallery` + `check:vocabulary` clean; `build:production` clean (seam scan clean, no eval/new Function in shipped source, dev probe absent from the store bundle).
+  - Browser: KAT `scripts/kat-mcp-global-ui.ts` 10/10 GREEN against `scripts/mcp-test-server.ts` — add a server, Test connection connects and lists `add, echo`; the saved server lists; `mcp.servers.get` returns it REDACTED (hasToken, raw token absent); edit never pre-fills the token; a bad url shows "Failed — Failed to fetch". Screenshots 01–04 captured.
+  - Full suite: green at the tip (journeys best-effort under load).
   - Constraints: token handled like the provider key (never shown after save/redacted); a11y-clean; MV3-safe.
-- Blockers: Depends on CAP-FB-20260831-MCP-CONFIG-STORE-01 (must land first)
-- Next: after config-store, build the Settings MCP servers section + Test connection
+- Blockers: none (CAP-FB-20260831-MCP-CONFIG-STORE-01 + MCP-TRANSPORT-SPIKE-01 landed on main).
+- Next: coordinator merge; then MCP-TOOL-INJECTION-01 (per-run injection) and MCP-AGENT-UI-01 build on this.
 - Recover: `git log --oneline --all --grep=CAP-FB-20260831-MCP-GLOBAL-UI-01`
 - History:
   - 2026-08-31 22:30 UTC — filed; the global Settings surface.
   - 2026-09-01 13:32 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/mcp-global-ui` off `origin/main@122fa7fb`. Other agents: pick a different entry.
+  - 2026-09-01 16:20 UTC — candidate implemented on `origin/main@752baea2` (config-store + transport-spike already merged). New standard "MCP servers" Settings section + `mcp.servers.test` route (dependency-injected remote mount, kept out of Deno's SW type-check graph via a build-time inject + an SDK-free registry seam). RED/GREEN recorded (route test 5/5); loaded-extension KAT 10/10 with screenshots; token redaction proven end to end; full unit suite green; build:production + seam scan clean. Status → IN_REVIEW.
 
 ## [CAP-FB-20260831-MCP-AGENT-UI-01] Per-agent MCP servers in the create/edit dialog
 - Feedback: 2026-08-31 — child of CAP-FB-20260831-MCP-SUPPORT-01. Each agent its own servers/config.

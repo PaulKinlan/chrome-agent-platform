@@ -193,6 +193,12 @@ import {
   withNamedAgentsLock,
 } from "../lib/named-agents.js";
 import { normalizeMcpServerList, redactMcpServerList } from "../lib/mcp-config.js";
+// The remote-MCP mount seam (SDK-free, Deno-safe). The real SDK-backed mount is
+// registered here by the SW-bundle inject (build.mjs → scripts/mcp-client-sw-
+// inject.js); the SW source never imports lib/mcp-client.js. See the registry
+// module for why (Deno cannot resolve the SDK transport subpaths in the combined
+// unit-test graph). CAP-FB-20260831-MCP-GLOBAL-UI-01.
+import { getMcpMount } from "../lib/mcp-mount-registry.js";
 import {
   commitThreadTerminal,
   continueThread,
@@ -3779,7 +3785,14 @@ function dispatchRoute(type, body, context) {
 // (a conversation page, a compromised renderer surface) can drive them.
 
 const providerRoutes = createProviderRoutes({ invalidateAgent });
-const mcpRoutes = createMcpRoutes();
+// "Test connection" (Settings MCP servers) connects via the SDK-backed remote
+// mount registered by the SW-bundle inject. In a non-bundle context (Deno unit
+// tests, no inject) getMcpMount() is null and the route reports "unavailable"
+// honestly — the unit test injects its own fake mount; the real path is the KAT.
+const mcpMount = getMcpMount();
+const mcpRoutes = createMcpRoutes({
+  mountRemoteMcpServers: typeof mcpMount === "function" ? mcpMount : undefined,
+});
 
 // Per-agent schedule routes (schedules.list / task.pause / task.resume / task
 // .update) — extracted for unit-drivability. The card flag turns a model-

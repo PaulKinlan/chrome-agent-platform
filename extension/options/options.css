@@ -1083,6 +1083,52 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
 @media (max-width: 720px) { .approval-row { align-items: stretch; flex-direction: column; } .approval-controls { justify-content: flex-end; } }
 .set-agent-provider, .clear-agent-key { height: var(--input-h, 36px); }
 
+/* MCP servers (CAP-FB-20260831-MCP-GLOBAL-UI-01) — the global remote-MCP list.
+   Same control vocabulary as the provider cards: hairline card, one accent for
+   state, no second elevation, tabular-clean rows. */
+.mcp-toolbar { display: flex; gap: var(--space-2); margin: var(--space-2) 0 var(--space-3); }
+.mcp-server-list { display: grid; gap: var(--space-2); }
+.mcp-empty { padding: var(--space-4); border: 1px dashed var(--border); border-radius: var(--radius-md); margin: 0; }
+.mcp-server-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg);
+}
+.mcp-server-card.is-disabled { opacity: 0.6; }
+.mcp-server-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.mcp-server-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.mcp-server-name { font-weight: 600; }
+.mcp-server-meta { display: flex; align-items: center; gap: 8px; font-size: var(--text-xs); min-width: 0; }
+.mcp-server-url { text-overflow: ellipsis; white-space: nowrap; overflow-x: auto; }
+.mcp-badge {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.mcp-server-actions { display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0; }
+.mcp-remove { color: var(--danger, #b3261e); }
+.mcp-editor {
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  background: var(--panel);
+  margin-bottom: var(--space-3);
+}
+.mcp-editor-title { margin: 0 0 var(--space-3); font-size: var(--text-sm); }
+.mcp-editor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.mcp-editor-grid input, .mcp-editor-grid select { width: 100%; }
+.mcp-editor .test-status { margin-top: var(--space-3); }
+.mcp-editor-actions { display: flex; gap: var(--space-2); margin-top: var(--space-3); flex-wrap: wrap; }
+@media (max-width: 640px) {
+  .mcp-editor-grid { grid-template-columns: 1fr; }
+}
+
 /* Settings also renders inside the NTP's covered-view iframe. At the first
    content-driven break (680px), reflow rather than clipping or introducing a
    document-level horizontal scrollbar. Every section and control stays present. */

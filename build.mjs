@@ -350,6 +350,12 @@ try {
     // the probe must be part of the bundle). It is injected ONLY for the
     // developer target and is absent from every store build.
     const swInject = [path.join(ROOT, "browser-shim-process.js")];
+    // Remote-MCP mount for "Test connection" + per-run tool injection
+    // (CAP-FB-20260831-MCP-GLOBAL-UI-01). Injected in EVERY build so the SW
+    // bundle carries the browser-safe StreamableHTTP/SSE client without a
+    // Deno-visible source import; installs globalThis.__capMcpMount. NEVER pulls
+    // the stdio path. See scripts/mcp-client-sw-inject.js.
+    swInject.push(path.join(ROOT, "scripts/mcp-client-sw-inject.js"));
     if (DEBUG_BUILD) swInject.push(path.join(ROOT, "scripts/mcp-probe-entry.js"));
     await build({
       ...shared,

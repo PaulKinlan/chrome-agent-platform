@@ -16,6 +16,9 @@
         <a href="#providers" class="nav-item" data-section="providers">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M12 2a10 10 0 0 0-10 10c0 5.5 4.5 10 10 10s10-4.5 10-10A10 10 0 0 0 12 2z"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
         Providers</a>
+        <a href="#mcp-servers" class="nav-item" data-section="mcp-servers">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+        MCP servers</a>
         <a href="#local-folders" class="nav-item" data-section="local-folders">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
         Local folders</a>
@@ -85,6 +88,19 @@
           <p class="muted">Each enabled agent can run provider-side web searches during its tasks. Usage is billed by the provider; estimates appear below.</p>
           <div id="server-tools-agent-list"></div>
         </div>
+      </section>
+
+      <section id="mcp-servers" class="panel">
+        <h2>MCP servers</h2>
+        <p class="muted">Connect a remote <abbr title="Model Context Protocol">MCP</abbr> server so agents can call its tools. Only remote servers are supported — Streamable HTTP or SSE over an <code>https://</code> URL. An auth token is stored locally in <code>chrome.storage</code>, never in the bundle, logs, or receipts, and is never shown again after you save it.</p>
+        <div class="mcp-toolbar">
+          <button type="button" class="btn primary" id="mcp-add-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add server
+          </button>
+        </div>
+        <div id="mcp-editor" class="mcp-editor" hidden></div>
+        <div id="mcp-server-list" class="mcp-server-list" aria-live="polite"></div>
       </section>
 
       <section id="local-folders" class="panel">

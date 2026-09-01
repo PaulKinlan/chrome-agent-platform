@@ -45,6 +45,7 @@ const BASELINE_ROUTES = [
   "provider.models",
   "mcp.servers.get",
   "mcp.servers.set",
+  "mcp.servers.test",
   "invalidate-agent",
   "agent.orchestrator",
   "tool-catalog.shadow",
