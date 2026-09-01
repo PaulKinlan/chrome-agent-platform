@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.588] — 2026-09-01
+- Groundwork for MCP: remote MCP servers can now be configured globally and per agent, with their credentials kept private.
+
 ## [0.2.587] — 2026-09-01
 - Four more improvements are in progress.
 

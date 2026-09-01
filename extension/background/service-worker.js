@@ -38,6 +38,7 @@ import {
   createAgentWorkerRoutes,
   reconcileAgentWorkers,
   createProviderRoutes,
+  createMcpRoutes,
   createSchedulerRoutes,
   createMemoryRoutes,
   resolveMemory,
@@ -186,10 +187,12 @@ import {
   resolveAgentInstanceId,
   resolveNamedAgentStore,
   setNamedAgentProvider,
+  setNamedAgentMcpServers,
   slugifyAgentId,
   updateNamedAgent,
   withNamedAgentsLock,
 } from "../lib/named-agents.js";
+import { normalizeMcpServerList, redactMcpServerList } from "../lib/mcp-config.js";
 import {
   commitThreadTerminal,
   continueThread,
@@ -3776,6 +3779,7 @@ function dispatchRoute(type, body, context) {
 // (a conversation page, a compromised renderer surface) can drive them.
 
 const providerRoutes = createProviderRoutes({ invalidateAgent });
+const mcpRoutes = createMcpRoutes();
 
 // Per-agent schedule routes (schedules.list / task.pause / task.resume / task
 // .update) — extracted for unit-drivability. The card flag turns a model-
@@ -4654,6 +4658,7 @@ const handlers = mergeRouteMaps(
   kvRoutes,
   permLeaseRoutes,
   providerRoutes,
+  mcpRoutes,
   {
   async "invalidate-agent"() {
     // The options page calls this after toggling agent mode (multi-agent) so the
@@ -5341,6 +5346,36 @@ const handlers = mergeRouteMaps(
       // it (the override is threaded per-run via runTask's modelOverride).
       broadcastProgress({ type: "named-agent-changed" });
     broadcastRegistryChanged();
+    }
+    return r;
+  },
+  async "named-agent.set-mcp-servers"({ id, servers }, context) {
+    // Set (or clear) a named agent's per-agent MCP server list. The auth tokens
+    // flow ONLY from the Settings/agent UI → storage → the SW MCP resolution
+    // path; they are NEVER surfaced back (the returned agent is REDACTED) and
+    // NEVER placed in the owner-approval payload (only a redacted summary is).
+    const slug = slugifyAgentId(id);
+    const normalized = servers == null ? [] : normalizeMcpServerList(servers);
+    const r = await setNamedAgentMcpServers(slug, normalized, {
+      gateBeforeMutation: async ({ slug: s, existing }) => {
+        let request;
+        try {
+          // Redacted, deterministic summary — no token ever enters the payload.
+          const summary = JSON.stringify(redactMcpServerList(normalized));
+          request = payloadFields([["id", s], ["mcpServers", summary]]);
+          request = namedBoundMutationPayload(request, existing);
+        } catch { return { ok: false, error: "mcp servers payload is not approvable" }; }
+        return await requireOwnerApproval(
+          context,
+          "named-agent.set-mcp-servers",
+          canonicalOperationTarget("named", { id: s }),
+          request,
+        );
+      },
+    });
+    if (r?.ok !== false) {
+      broadcastProgress({ type: "named-agent-changed" });
+      broadcastRegistryChanged();
     }
     return r;
   },
