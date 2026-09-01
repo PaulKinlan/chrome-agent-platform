@@ -1139,7 +1139,11 @@ const latestExecutionByTask = new Map(); // logical taskId → execId (latest)
 const activeExecutions = new Set(); // execIds currently allowed to record
 const MAX_RUN_ATTESTATIONS = 100;
 function newExecutionId() {
-  return `exec:${newId()}`;
+  // A GENUINE v4 UUID, never newId(): validExecutionId (lib/durable-runs.js)
+  // and memory.js's EXECUTION_ID_SOURCE check the version/variant nibbles, so
+  // the id must come from crypto.randomUUID itself (fail closed without it —
+  // the old Date/Math fallback could never have passed that validator).
+  return `exec:${crypto.randomUUID()}`;
 }
 function beginExecution(execId, taskId) {
   activeExecutions.add(execId);

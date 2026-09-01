@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.609] — 2026-09-01
+- Security: an agent name containing quotes and angle brackets now renders as plain text on both the hub and Settings (verified by the browser journey suite), and internal identifiers keep the exact shapes the extension validates.
+
 ## [0.2.608] — 2026-09-01
 - Housekeeping: the nine inline timed waits scattered across the hub, agent loop and service worker now use one shared helper, and the single-source test guards every shared helper.
 

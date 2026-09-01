@@ -58,7 +58,9 @@ import { safeParseOnce, buildTree, subtreeJson, safeJsonStringify } from "./tool
 // SW write path): activity journals may predate write-path redaction, so the
 // explorer redacts again at render AND the tree/copy paths only ever see the
 // redacted value.
-import { redactSecrets, escapeHtml, timeAgo, sleep } from "../lib/pure.js";
+import { redactSecrets } from "../lib/pure.js";
+// The single-sourced shared helpers (CAP-FB-20260830-ESCAPEHTML-SINGLE-SOURCE-01).
+import { escapeHtml, timeAgo, sleep } from "../lib/pure.js";
 import { describeToolCall, redactToolResult } from "../lib/tool-summary.js";
 import {
   isTextLikeAttachment,
@@ -3844,7 +3846,7 @@ export function screenshotFromToolPayload(payload) {
   // slice at 300 characters, so any envelope larger than that arrives as a
   // truncated JSON fragment — the id is right there in the text and no parser
   // will ever reach it. Read it out of the text instead, from a pattern the
-  // product itself minted: `shot_<digits>_<base36>`. Bounded (8 KiB scanned,
+  // product itself minted: `shot_<hex>` (lib/pure.js newId). Bounded (8 KiB scanned,
   // fixed-width captures), read-only, and used for nothing but the id of a file
   // this extension wrote (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01).
   const text = typeof payload === "string" ? payload.slice(0, 8192) : "";

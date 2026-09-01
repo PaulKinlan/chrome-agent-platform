@@ -1452,17 +1452,20 @@ export async function sha256HexBytes(input) {
   return bytesToHex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)));
 }
 
-/** A unique id: `${prefix}_${uuid}`, or the bare UUID with no prefix. Every
+/** A unique id: `${prefix}_${hex}` (or the bare hex with no prefix), where
+ * hex is a v4 UUID with its hyphens stripped — 32 lowercase `[0-9a-f]`. Every
  * store-facing id (threads, tasks, screenshots, assets, scripts, board jobs,
- * grants, lock tokens) mints here; the UUID charset (`[0-9a-f-]`) satisfies
- * every id validator in the tree (thread ids are `[A-Za-z0-9_-]{1,200}`). The
- * Date/Math fallback exists ONLY for a realm without crypto.randomUUID and is
- * the one place that pattern is allowed to live. */
+ * grants, lock tokens) mints here, and the charset is the STRICTEST any
+ * consumer in the tree validates: the screenshot-id extractor reads
+ * `shot_[A-Za-z0-9_]{1,64}` out of truncated text (a hyphen would cut the id
+ * short), thread ids are `[A-Za-z0-9_-]{1,200}`. The Date/Math fallback exists
+ * ONLY for a realm without crypto.randomUUID and is the one place that pattern
+ * is allowed to live. */
 export function newId(prefix = "") {
-  const uuid = typeof globalThis.crypto?.randomUUID === "function"
-    ? globalThis.crypto.randomUUID()
-    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}-${Math.random().toString(36).slice(2, 6)}`;
-  return prefix ? `${prefix}_${uuid}` : uuid;
+  const hex = typeof globalThis.crypto?.randomUUID === "function"
+    ? globalThis.crypto.randomUUID().replaceAll("-", "")
+    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}${Math.random().toString(36).slice(2, 10)}`;
+  return prefix ? `${prefix}_${hex}` : hex;
 }
 
 /** Resolve after `ms` milliseconds. */

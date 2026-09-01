@@ -191,12 +191,15 @@ Deno.test("single-source: the collapsed helpers keep their semantics", async () 
     assertEquals(pure.truncateUtf8("héllo", 3), "hé");
   }
   if (landed.has("newId")) {
-    // newId — `${prefix}_${uuid}`; dot-free and within the thread-id charset.
+    // newId — `${prefix}_${hex32}`: hyphen-free, so the screenshot-id text
+    // extractor (`shot_[A-Za-z0-9_]{1,64}`) and the thread-id charset both accept it.
     const id = pure.newId("t");
-    assert(/^t_[0-9a-f-]{36}$/.test(id), id);
+    assert(/^t_[0-9a-f]{32}$/.test(id), id);
     assert(/^[A-Za-z0-9_-]{1,200}$/.test(id), id);
     assert(pure.newId("t") !== id, "ids are unique");
-    assert(/^[0-9a-f-]{36}$/.test(pure.newId()), "no prefix → bare uuid");
+    assert(/^[0-9a-f]{32}$/.test(pure.newId()), "no prefix → bare hex");
+    const shot = pure.newId("shot");
+    assertEquals(/(shot_[A-Za-z0-9_]{1,64})/.exec(`"screenshotId":"${shot}"`)?.[1], shot, "the extractor reads the whole id");
   }
   if (landed.has("sleep")) {
     const t0 = performance.now();

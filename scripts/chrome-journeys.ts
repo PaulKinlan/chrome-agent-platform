@@ -671,6 +671,10 @@ const EXPECTED = [
   "Scripts: the approved run executes only after Allow",
   "mgmt: delete_agent removed the agent",
   "mgmt: agent gone from the directory after delete",
+  "escaper: created an agent whose name carries a single quote, double quotes and angle brackets",
+  "escaper: the hub renders the quoted name as literal text (no injected element)",
+  "escaper: Settings renders the quoted name as literal text (no injected element)",
+  "escaper: retained the hub + Settings quoted-name screenshots",
   "skills: the real import UI accepts a >64KiB SKILL.md (no arbitrary cap)",
   "skills: the imported skill keeps its full >64KiB body (never truncated)",
   "skills: a named agent with the large skill reads its body mid-run via skill_read",
@@ -5743,6 +5747,76 @@ async function main() {
       Array.isArray(dirAfter?.agents) &&
         !dirAfter.agents.some((a) => a?.origin === "https://mgmt.example"),
     );
+
+    // ─────────────────────────────────────────────────────────────
+    // CAP-FB-20260830-ESCAPEHTML-SINGLE-SOURCE-01 — the hub and Settings each
+    // carried a page-local escapeHtml that skipped the single quote. Both now
+    // import the ONE strict escaper (lib/pure.js via components.js). Proof: an
+    // agent whose name carries every character the weak copies mishandled
+    // renders as literal TEXT on both surfaces — a leaf element whose text is
+    // exactly the name exists (an unescaped `<b>` would split the text and
+    // create an element instead). Shadow roots are walked: the hub lists
+    // agents through custom elements.
+    // ─────────────────────────────────────────────────────────────
+    const quotedName = `O'Brien "test" <b>`;
+    const quotedAgent = await msgValue({ type: "named-agent.create", name: quotedName, role: "escaper journey fixture" });
+    const quotedAgentId = quotedAgent?.agent?.id ?? null;
+    check(
+      "escaper: created an agent whose name carries a single quote, double quotes and angle brackets",
+      quotedAgent?.ok === true && typeof quotedAgentId === "string" && quotedAgent.agent?.name === quotedName,
+    );
+    const quotedProbe = `(() => {
+      const want = ${JSON.stringify(quotedName)};
+      let exact = 0, injected = 0;
+      const walk = (root) => {
+        for (const el of root.querySelectorAll("*")) {
+          if (el.shadowRoot) walk(el.shadowRoot);
+          if (el.tagName === "B" && el.textContent.trim() === "") injected++;
+          if (el.children.length === 0 && el.textContent.trim() === want) exact++;
+        }
+      };
+      walk(document);
+      return { exact, injected };
+    })()`;
+    {
+      const pages = [];
+      const openSurface = async (path) => {
+        const page = await openPage(port, `chrome-extension://${extId}/${path}`);
+        pages.push(page);
+        await sleep(1800);
+        const session = await attachRuntime(cdp, page.id);
+        cdp.pageSessions.add(session);
+        return session;
+      };
+      try {
+        const hub = await openSurface("ntp/ntp.html");
+        const opts = await openSurface("options/options.html#agents");
+        const hubProbe = await evalIn(cdp, hub, quotedProbe);
+        const optsProbe = await evalIn(cdp, opts, quotedProbe);
+        console.log(`[debug] escaper probe hub=${JSON.stringify(hubProbe)} settings=${JSON.stringify(optsProbe)}`);
+        check(
+          "escaper: the hub renders the quoted name as literal text (no injected element)",
+          hubProbe?.exact >= 1 && hubProbe?.injected === 0,
+        );
+        check(
+          "escaper: Settings renders the quoted name as literal text (no injected element)",
+          optsProbe?.exact >= 1 && optsProbe?.injected === 0,
+        );
+        const hubQuotedShot = await captureShot(cdp, hub);
+        if (hubQuotedShot) await writeEvidence("hub-quoted-name-escaped.png", hubQuotedShot);
+        const optsQuotedShot = await captureShot(cdp, opts);
+        if (optsQuotedShot) await writeEvidence("settings-quoted-name-escaped.png", optsQuotedShot);
+        check(
+          "escaper: retained the hub + Settings quoted-name screenshots",
+          hubQuotedShot !== null && hubQuotedShot.length > 200 && optsQuotedShot !== null && optsQuotedShot.length > 200,
+        );
+      } finally {
+        for (const page of pages) {
+          await fetch(`http://127.0.0.1:${port}/json/close/${page.id}`).catch(() => {});
+        }
+        if (quotedAgentId) await msgValue({ type: "named-agent.delete", id: quotedAgentId }).catch(() => {});
+      }
+    }
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 9b — CAP-FB-20260830-SKILLS-UNCAPPED-01: no arbitrary size cap
