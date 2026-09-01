@@ -18,6 +18,11 @@ import { GEMINI_IMAGE_MODEL } from "./model-catalog.js";
 import { namedAgentMemory, purgeStoreDir } from "./memory.js";
 import { deleteAgentPromptOverride } from "./system-prompts.js";
 import { normalizeCanDelegateTo } from "./agent-delegation.js";
+import {
+  normalizeMcpServerList,
+  preserveExistingMcpTokens,
+  redactMcpServerList,
+} from "./mcp-config.js";
 
 const AGENTS_KEY = "cap:namedAgents";
 
@@ -172,6 +177,26 @@ export function redactAgentProvider(provider) {
   };
 }
 
+// A per-agent MCP server list is stored EXACTLY like the provider override: a
+// self-contained, validated list on the agent record. It INHERITS the global
+// set (see mcp-config.js resolveEffectiveMcpServers) and may add its own or
+// disable an inherited one. Credentials (the auth token) are handled like the
+// provider key: stored on the record, REDACTED before any list/get crosses out,
+// and read back in full ONLY by the SW resolution path (getNamedAgentMcpServers).
+
+/** Redact an agent record for any non-Settings surface: the provider override
+ * AND the MCP server list drop their credentials (only presence bits survive). */
+function redactAgentRecord(agent) {
+  if (!agent || typeof agent !== "object") return agent;
+  const out = agent.provider
+    ? { ...agent, provider: redactAgentProvider(agent.provider) }
+    : agent;
+  if (Array.isArray(agent.mcpServers) && agent.mcpServers.length) {
+    return { ...out, mcpServers: redactMcpServerList(agent.mcpServers) };
+  }
+  return out;
+}
+
 async function agentsMap() {
   const s = await kvGet(AGENTS_KEY);
   return s[AGENTS_KEY] ?? {};
@@ -187,7 +212,7 @@ export async function listNamedAgents() {
   const map = await agentsMap();
   return Object.values(map)
     .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
-    .map((a) => a.provider ? { ...a, provider: redactAgentProvider(a.provider) } : a);
+    .map(redactAgentRecord);
 }
 
 /** Fetch one named agent by id (or name). Returns null when absent. The
@@ -197,7 +222,7 @@ export async function getNamedAgent(id) {
   const slug = slugifyAgentId(id);
   const agent = map[slug] ?? null;
   if (!agent) return null;
-  return agent.provider ? { ...agent, provider: redactAgentProvider(agent.provider) } : agent;
+  return redactAgentRecord(agent);
 }
 
 /** Fetch a named agent's FULL provider override (WITH the apiKey) — the SW
@@ -208,6 +233,19 @@ export async function getNamedAgentProvider(id) {
   return map[slug]?.provider ?? null;
 }
 
+/** Fetch a named agent's FULL per-agent MCP server list (WITH tokens) — the SW
+ * MCP resolution / tool-injection path ONLY. Never surfaced to the UI/model. */
+export async function getNamedAgentMcpServers(id) {
+  const map = await agentsMap();
+  const slug = slugifyAgentId(id);
+  return normalizeMcpServerList(map[slug]?.mcpServers ?? []);
+}
+
+/** Validate + normalize a per-agent MCP server list (self-contained, bounded). */
+export function normalizeAgentMcpServers(value) {
+  return normalizeMcpServerList(value);
+}
+
 /**
  * Create (or replace) a named agent. `id` is optional — when omitted a slug is
  * derived from the name. Returns `{ ok, agent }` or `{ ok:false, error }`.
@@ -216,7 +254,7 @@ export async function getNamedAgentProvider(id) {
  * sandbox (its `agents.md` operating instructions).
  */
 export async function createNamedAgent(
-  { id, name, role = "", avatar = null, skills = [], coreAssets = [], profileGrants = [], agentsMd = null, provider = null, canDelegateTo = [] },
+  { id, name, role = "", avatar = null, skills = [], coreAssets = [], profileGrants = [], agentsMd = null, provider = null, canDelegateTo = [], mcpServers = null },
   { gateOnReplace = null } = {},
 ) {
   const cleanName = String(name ?? "").trim();
@@ -257,6 +295,11 @@ export async function createNamedAgent(
         ? cleanProfileGrants
         : (existing?.profileGrants ?? []),
       provider: normalizeAgentProvider(provider) ?? (existing?.provider ?? null),
+      // Per-agent MCP servers (self-contained + validated, like the provider
+      // override). `null`/absent keeps the existing list; a list replaces it.
+      mcpServers: mcpServers != null
+        ? normalizeMcpServerList(mcpServers)
+        : (Array.isArray(existing?.mcpServers) ? existing.mcpServers : []),
       // Agent→agent delegation (G5): the owner-configured allow-list of agent
       // ids this agent may delegate to. Empty = cannot delegate. Normalized by
       // the shared guard module so the record and the route can never disagree.
@@ -324,6 +367,11 @@ export async function updateNamedAgent(id, patch = {}, { gateBeforeMutation = nu
       // `null` clears the override (inherit the global); a complete config sets it.
       next.provider = normalizeAgentProvider(patch.provider);
     }
+    if (patch.mcpServers !== undefined) {
+      // `null`/[] clears the per-agent list (inherit only the global set); a list
+      // replaces it. Always normalized + bounded (self-contained per server).
+      next.mcpServers = normalizeMcpServerList(patch.mcpServers);
+    }
     if (patch.canDelegateTo !== undefined) next.canDelegateTo = normalizeCanDelegateTo(patch.canDelegateTo);
     next.instanceId = existing.instanceId ?? crypto.randomUUID();
     next.revision = (Number.isSafeInteger(existing.revision) ? existing.revision : 0) + 1;
@@ -373,6 +421,20 @@ export async function setNamedAgentProvider(id, config, { gateBeforeMutation = n
       ? { ...r.agent, provider: redactAgentProvider(r.agent.provider) }
       : r.agent,
   };
+}
+
+/** Set (or clear) a named agent's per-agent MCP server list. `list` is a full
+ * list (self-contained servers) or null/[] to inherit only the global set. Each
+ * server's auth token is preserved on a blank-save (same id + header name), the
+ * same key-preservation the provider override uses. Returns { ok, agent } with
+ * the agent REDACTED (no tokens). */
+export async function setNamedAgentMcpServers(id, list, { gateBeforeMutation = null } = {}) {
+  const existing = await getNamedAgentMcpServers(id);
+  const preserved = list == null ? [] : preserveExistingMcpTokens(list, existing);
+  const r = await updateNamedAgent(id, { mcpServers: preserved }, { gateBeforeMutation });
+  if (r?.ok === false) return r;
+  // REDACTED result: a token never crosses back out of the resolution path.
+  return { ok: true, agent: redactAgentRecord(r.agent) };
 }
 
 /** Delete a named agent + its OPFS sandbox + its system-prompt override

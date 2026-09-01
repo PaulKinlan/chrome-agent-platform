@@ -5,8 +5,13 @@ import { redactSecrets } from "../../lib/pure.js";
 import { ATTESTATION_KEY_STORE, PROMPT_OWNED_KEYS } from "../../lib/system-prompts.js";
 import { securityEvent } from "../../lib/diagnostics.js";
 
-const SECRET_KV_KEYS = new Set(["cap:namedAgents", "providerConfig"]);
-const SECRET_CONTROLLED = ["providerConfig", "cap:namedAgents"];
+// cap:mcpServers holds the global MCP server list; a server's auth token is a
+// credential (like the provider key + the per-agent overrides in the registry).
+// It is deep-redacted on read-alls and mutation-gated to the Settings surface
+// (mcp.servers.set) — a generic kv write/remove from a non-owner principal is
+// refused (CAP-FB-20260831-MCP-CONFIG-STORE-01).
+const SECRET_KV_KEYS = new Set(["cap:namedAgents", "providerConfig", "cap:mcpServers"]);
+const SECRET_CONTROLLED = ["providerConfig", "cap:namedAgents", "cap:mcpServers"];
 
 export const kvRoutes = Object.freeze({
   // Shared key-value access, EXTENSION-ONLY. Page surfaces route their key-value

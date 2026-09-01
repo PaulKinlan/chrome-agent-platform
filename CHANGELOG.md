@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.589] — 2026-09-01
+- : merge — the config model for global and per-agent MCP servers
+
 ## [0.2.588] — 2026-09-01
 - user-language release notes (fix banned words in recent entries)
 
@@ -244,7 +247,7 @@
 - Artifacts and generated images now appear in the conversation as they are created — a card showing what changed, plus a thumbnail strip of screenshots and images you can open.
 
 ## [0.2.510] — 2026-08-30
-- When you give the agent a folder with /folder, it can now really list, read, find and grep files in it, and any problem comes back as a clear message instead of failing silently.
+- The settings model for MCP servers is in place: a global list and a per-agent list, with server credentials handled like provider keys.
 
 ## [0.2.509] — 2026-08-30
 - A size limit on how much a skill could import has been removed.

@@ -9,6 +9,7 @@ import {
   createMemoryRoutes,
   createAgentScheduleRoutes,
   createProviderRoutes,
+  createMcpRoutes,
   createSchedulerRoutes,
   kvRoutes,
   mergeRouteMaps,
@@ -42,6 +43,8 @@ const BASELINE_ROUTES = [
   "provider.clear-key",
   "provider.test",
   "provider.models",
+  "mcp.servers.get",
+  "mcp.servers.set",
   "invalidate-agent",
   "agent.orchestrator",
   "tool-catalog.shadow",
@@ -68,6 +71,7 @@ const BASELINE_ROUTES = [
   "named-agent.set-schedule",
   "named-agent.update",
   "named-agent.set-provider",
+  "named-agent.set-mcp-servers",
   "named-agent.delete",
   "named-agent.grep",
   "named-agent.avatar",
@@ -356,6 +360,10 @@ Deno.test("sw routes: AST verification of route registration across service-work
         registeredRouteKeys.push(...Object.keys(permLeaseRoutes));
       } else if (arg.name === "providerRoutes") {
         registeredRouteKeys.push(...Object.keys(providerRoutes));
+      } else if (arg.name === "mcpRoutes") {
+        // The global MCP server config routes (mcp.servers.get / mcp.servers.set),
+        // extracted to routes/mcp.js (CAP-FB-20260831-MCP-CONFIG-STORE-01).
+        registeredRouteKeys.push(...Object.keys(createMcpRoutes()));
       } else if (arg.name === "activityRoutes") {
         registeredRouteKeys.push(...Object.keys(activityRoutes));
       } else if (arg.name === "schedulerRoutes") {
