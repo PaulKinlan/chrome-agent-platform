@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.558] — 2026-09-01
+- Template select r6: final polish — tracker refreshed to the final state and the open-state contract comment aligned with the probe
+
 ## [0.2.557] — 2026-09-01
 - Template select r5: harden the dark picker styling with explicit scheme blocks, suppress the duplicate chevron, and measure the live open picker (computed-style gate + informational pixel sample; headless base-select paint quirk documented)
 

@@ -1424,8 +1424,10 @@ async function main() {
         sel.matches(':open') || sel.getAttribute('aria-expanded') === 'true' ||
         sel.querySelector('.agent-template-select-button')?.getAttribute('aria-expanded') === 'true';
       // ENFORCED open precondition (r4 P1): measure ONLY after the picker is
-      // genuinely open. Poll until the open attribute AND a rendered option
-      // box are present; if the picker never opens, HARD-FAIL with
+      // genuinely open. Poll until the picker reports open via EITHER signal
+      // — the :open pseudo-class or aria-expanded on the select/button (the
+      // accepted either-signal contract; headless does not expose a rendered
+      // option box to assert). If the picker never opens, HARD-FAIL with
       // picker-never-opened (no silent fallback to closed/hidden styles).
       let open = isOpen();
       for (let i = 0; i < 20 && !open; i++) { await new Promise((r) => setTimeout(r, 60)); open = isOpen(); }
