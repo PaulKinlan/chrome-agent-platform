@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.557] — 2026-09-01
+- SKILL-LIST-SYNC-01 DONE — r4 review accepted the code; metadata corrected
+
 ## [0.2.556] — 2026-08-31
 - Skills: r4 — real dialog render path (agent-skill-rows.js) with dialog-level collision + count tests; real resolver (skill-resolve.js) with faked-store tests
 
