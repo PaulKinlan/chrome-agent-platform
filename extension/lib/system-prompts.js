@@ -152,7 +152,13 @@ export const PROMPT_REGISTRY = [
     // own, a posted job's result returns to the posting thread) so agents hand
     // work off proactively instead of discovering the board tools cold
     // (CAP-FB-20260831-BOARD-SYSTEM-PROMPT-01).
-    version: "1.5.0",
+    // 1.6.0: the tool-adherence doctrine (USE the platform tools, never simulate
+    // them) — "make me a website/page/artifact" calls create_asset (not a chat
+    // code block) and "remember X" calls memory_set, with a plain statement that
+    // producing an artifact or saving a memory REQUIRES the tool call, so a
+    // capable model stops pasting HTML into chat or claiming "saved" with zero
+    // tool calls (CAP-FB-20260830-MODEL-TOOL-ADHERENCE-01).
+    version: "1.6.0",
     release: "0.2.408",
     protected: false,
     content: MASTER_SKILL,

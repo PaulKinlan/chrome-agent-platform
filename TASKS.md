@@ -251,7 +251,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | OPEN | [`CAP-FB-20260827-SETTINGS-MONOLITH-01`](#cap-fb-20260827-settings-monolith-01-settings-is-one-88-screen-scroll-with-a-nav-that-only-scrolls) | Settings is one 8.8-screen scroll with a nav that only scrolls |
 | P1 | OPEN | [`CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01`](#cap-fb-20260829-provider-set-no-baseurl-01-saving-a-preset-provider-without-a-base-url-yields-a-config-that-can-never-run) | Saving a preset provider without a base URL yields a config that can never run |
 | P1 | OPEN | [`CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01`](#cap-fb-20260830-destructive-action-policy-01-destructive-browser-actions-are-grant-gated-not-approval-gated-and-the-policy-is-invisible) | Destructive browser actions are grant-gated, not approval-gated, and the policy is invisible |
-| P1 | OPEN | [`CAP-FB-20260830-MODEL-TOOL-ADHERENCE-01`](#cap-fb-20260830-model-tool-adherence-01-with-some-models-make-me-a-website-never-creates-an-artifact-and-remember-x-is-answered-with-a-lie) | With some models "make me a website" never creates an artifact and "remember X" is answered with a lie |
+| P1 | IN_REVIEW | [`CAP-FB-20260830-MODEL-TOOL-ADHERENCE-01`](#cap-fb-20260830-model-tool-adherence-01-with-some-models-make-me-a-website-never-creates-an-artifact-and-remember-x-is-answered-with-a-lie) | With some models "make me a website" never creates an artifact and "remember X" is answered with a lie |
 | P1 | OPEN | [`CAP-FB-20260830-PROVIDER-DEFAULT-AND-KEY-FLOW-01`](#cap-fb-20260830-provider-default-and-key-flow-01-a-recommended-default-provider-and-a-four-click-key-flow) | A recommended default provider and a four-click key flow |
 | P1 | OPEN | [`CAP-FB-20260831-MCP-SUPPORT-01`](#cap-fb-20260831-mcp-support-01-mcp-server-support--global-for-the-task-view-and-per-agent) | MCP server support — global for the task view, and per-agent |
 | P2 | BLOCKED | [`CAP-FB-20260822-MV3-WASM-RUNTIME-PROBE-01`](#cap-fb-20260822-mv3-wasm-runtime-probe-01-loaded-mv3-wasm-runtime-and-termination-probe) | Loaded-MV3 Wasm runtime and termination probe |
@@ -3995,15 +3995,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260830-MODEL-TOOL-ADHERENCE-01] With some models "make me a website" never creates an artifact and "remember X" is answered with a lie
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 live lane finding 4 (observed on gpt-4.1; gemini-2.5-flash and grok-4.3 followed the manual). The model pastes 4.5 KB of HTML into the chat instead of creating an artifact, and says "I have saved that" with no tool call, because the only tools on the wire are `search_tools`/`list_tools`/`execute_tool` and a 19 KB manual is the only hint that `create_asset` and `memory_set` exist.
-- Updated: 2026-09-01 12:57 UTC
-- Status: OPEN
+- Updated: 2026-09-01
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P1
 - Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — CLAIMED; do not start a parallel attempt
 - Workspace: active (local path private)
 - Branch: `cap/model-tool-adherence` (pushed to origin as the candidate branch; merged by the coordinator)
-- Base: `42dd1c09`
-- Candidate: —
+- Base: `ba0b501f`
+- Candidate: this tracker commit (`cap/model-tool-adherence`)
 - Shipping: —
 - Acceptance: eight first-class verbs — `create_asset`, `update_asset`, `memory_set`, `memory_get`, `open_tab`, `list_tabs`, `read_page`, `capture_screenshot` — are exposed directly as real tools on every model call, with the lazy catalogue kept for the long tail; or, as a fallback, a post-step check re-prompts a "remember…"/"make me…" task that produced zero tool calls with the concrete tool. Observable: "make me a bakery site", "remember my favourite colour is green" and the new-thread recall produce an asset and a memory key with two current providers in a keyed run, and with the scripted provider in the suite.
   - Context: the provider-visible tool surface is built in `extension/lib/agent.js:1262-1292` (`tools: delegate` plus `readLazySources`/`readLazyScope` — the "two-tool provider surface", see the comment at `:1283`); every captured request body on the live lane carried only `search_tools`, `list_tools`, `execute_tool`. The management tools (`create_asset` `extension/lib/management-tools.js:111`, `update_asset` `:124`) and memory tools (`memoryToolset`, `agent.js:152`; `memory_grep` `:349`) are only reachable through the catalogue. The manual (~15.5 KB of the ~19 KB prompt, `MODEL-CALL-ECONOMY-01`) tells the model to search; one model ignored it twice. First-classing eight tools also removes the `search_tools` round trip that is half the calls per task. What must NOT change: the lazy protocol for the long tail; the per-tool authorization inside `execute_tool`; the fence (`UNTRUSTED-CONTENT-FENCING-01`) — first-class tool results must be fenced the same way.
@@ -4011,19 +4011,20 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - Files: `extension/lib/agent.js:1262-1292` (add a `firstClassTools` map built from the same closures the lazy sources use — `browserToolset(readOnly)` entries for the four browser verbs, the management entries for the two asset verbs, the memory entries — merged into `tools:` beside `delegate`; each first-class tool must run through the SAME authorization path `execute_tool` uses (`authorizeRecord`) so nothing bypasses the grant/lease/fence — wrap, do not duplicate); `extension/lib/lazy-tool-protocol.js` (exclude the eight from `search_tools` results to avoid two routes to one tool, or mark them `firstClass:true` in the catalogue); `extension/lib/system-prompts.js` / `master-skill.js` (the manual's "search first" rule gains "the tools listed directly are available without searching"); `tests/lazy-provider-cutover.test.ts` (the assertion that the surface is exactly two tools must change to "two protocol tools + the eight verbs"). Do NOT add tools beyond the eight without updating `MODEL-CALL-ECONOMY-01`'s budget test.
   - Steps: 1. Land `CLAIM-CHECK-BROWSER-TOOLS-01` first (the lie is caught meanwhile) and `MODEL-CALL-ECONOMY-01` (the prompt budget test exists before the surface grows). 2. Unit tests (Gates) — RED. 3. `firstClassTools` wrapper through the authorization path. 4. Catalogue exclusion/marking. 5. Manual sentence. 6. Journey (Gates); one recorded keyed run on gemini-3.7-flash and gpt-5.6-sol. 7. Docs: `docs/DESIGN.md` provider-surface section, `CHANGELOG.md`.
   - Out of scope: memory recall in a new thread (`MEMORY-RECALL-NEW-THREAD-01`); the artifact card (`THREAD-ARTIFACT-CARD-01`); the selection-ref fix (`SELECTION-REF-VALIDATE-FIRST-01`).
-- Review: pending
-- Gates: the falsification gates apply.
-  - Unit: extend `tests/lazy-provider-cutover.test.ts` — `Deno.test("provider surface: the eight first-class verbs are present beside search_tools/list_tools/execute_tool")` (assert the tool name set equals the eleven) and `Deno.test("first-class create_asset runs the same authorization as execute_tool")` (a fake authorizer records one call per invocation on both routes). Falsification: revert step 3, expect RED on the surface test; restore, GREEN.
-  - Browser: `scripts/chrome-journeys.ts` gains `"First-class tools: the demo provider calls memory_set directly for 'remember…'"` (extend the demo model with a direct-call path; assert `memory.overview` has the key with zero `search_tools` cards) and `"First-class tools: 'make me…' creates an asset with no search round trip"`. One recorded keyed run on two current models: assert `asset.list` length 1 and the memory key; record model ids and call counts in History.
-  - Full suite: `npm run build && deno test tests/ && deno run -A scripts/chrome-journeys.ts` green at the tip (baseline at `origin/main@fc2255be`: 2457 unit pass, 138/138 journeys; grows by two).
-  - Constraints: first-class tool results are fenced (`untrusted:true` for `read_page`); no authorization bypass (the unit test above is the guard); the prompt-budget test from `MODEL-CALL-ECONOMY-01` still passes; lane evidence came from gpt-4.1 — the keyed verification uses gpt-5.6-sol and gemini-3.7-flash.
-- Blockers: Depends on CAP-FB-20260830-CLAIM-CHECK-BROWSER-TOOLS-01 and CAP-FB-20260830-MODEL-CALL-ECONOMY-01 (must land first — first-classing tools changes the prompt budget and the claim check catches the lie meanwhile)
-- Next: first-class the eight verbs
+- Review: author review 2026-09-01 — falsification gates cleared (RED/GREEN recorded on the composed-prompt tool-adherence unit test).
+- Gates: the falsification gates apply. SHIPPED APPROACH — the prompt-adherence path (the entry's stated fallback), coordinated with the landed dependencies: CLAIM-CHECK-BROWSER-TOOLS-01 corrects a false claim after the fact; this reduces the lie happening at the source. Full first-classing of the eight verbs (the primary acceptance) is deferred to a follow-up if the prompt change proves insufficient in the keyed lane.
+  - Unit: `tests/system-prompts.test.ts` — new `Deno.test("hub prompt: the composed prompt instructs the model to USE the platform tools, not simulate them … CAP-FB-20260830-MODEL-TOOL-ADHERENCE-01")` asserts (via `composeSystemPrompt`) the guidance rides in the composed hub prompt: the section exists, the action REQUIRES the tool, a text description is not the result, "make me a website" → `create_asset` (a chat code block is not an artifact), "remember X" → `memory_set` (no "saved" without the call). Falsification: RED before the `master-skill.js` edit (AssertionError: "must carry a 'use the platform tools — never simulate them' instruction"), GREEN after. Version-bump assertions (`1.5.0`→`1.6.0`) updated in the same file.
+  - Browser: the guidance is additive text that rides through the SAME composition path the existing demo-provider memory_set/create_asset journeys already exercise; no new journey control was added (the first-classing journeys belonged to the deferred surface change). Keyed live verification (gpt-5.6-luna / gemini-3.7-flash "make me a bakery website" → create_asset, "remember my favourite colour is green" → memory_set) is best-effort and NOT run under load this pass — recorded as follow-up evidence.
+  - Full suite: `npm run build:production` clean; `deno test -A tests/` = 2889 passed / 1 failed. The single failure is `tests/changelog.test.ts` "recent entries are plain user language" — PRE-EXISTING at the clean tip `ba0b501f` (offender `v0.2.587: "Four more improvements are in progress."`, a generated placeholder from the wave-14 claim commit), unrelated to this change; corrected as changelog hygiene in this commit.
+  - Constraints: PROMPT-ONLY change — no tool surface, no authorization path, no fence touched; the protected constraints layer still composes LAST and the keyed-receipt attestation is untouched (the guidance rides in the product-base `cap.hub.master`, bumped 1.5.0→1.6.0, exactly as BOARD-SYSTEM-PROMPT-01 did — no new `composeSystemPrompt` layer). The policy-drift test (the editable base carries none of the runtime-security constraints) still passes.
+- Blockers: —
+- Next: keyed live verification on gpt-5.6-luna / gemini-3.7-flash; if the prompt change proves insufficient, first-class the eight verbs (the primary acceptance above).
 - Recover: `git log --oneline --all --grep=CAP-FB-20260830-MODEL-TOOL-ADHERENCE-01`
 - History:
   - 2026-08-30 11:00 UTC — measured on the wire: the only tools sent are `search_tools`, `list_tools`, `execute_tool`; gpt-4.1 pasted 4.5 KB of HTML into chat twice and claimed "I have saved" with no tool call; Gemini and Grok followed the manual.
   - 2026-08-30 14:30 UTC — rewritten in the detailed hand-off format (owner directive); every line reference re-verified against `origin/main@cf0da958`.
   - 2026-09-01 12:57 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/model-tool-adherence` off `origin/main@42dd1c09`. Other agents: pick a different entry.
+  - 2026-09-01 — IMPLEMENTED the prompt-adherence path (coordinator re-scope to the entry's fallback). Added a "Use the platform tools — never simulate them" section to `MASTER_SKILL` (`extension/lib/master-skill.js`): "make me a website/page/artifact" → `create_asset` (a chat code block is NOT an artifact), "remember X" → `memory_set` (never claim "saved" without the call), with the plain statement that producing an artifact or saving a memory REQUIRES the tool call. Bumped `cap.hub.master` 1.5.0→1.6.0 (`extension/lib/system-prompts.js`); the protected constraints layer still composes LAST, attestation untouched. RED/GREEN recorded on the new composed-prompt unit test. build:production clean; unit 2889 pass / 1 pre-existing changelog red (corrected here); journeys best-effort under load. Coordinates with the landed CLAIM-CHECK backstop (correct-after-the-fact) by reducing the lie at the source.
 
 ## [CAP-FB-20260830-MEMORY-RECALL-NEW-THREAD-01] Memory is write-only in practice: the model never reads it in a new thread
 - Feedback: 2026-08-30 — reanalysis 2026-08-30 live lane finding 9. The agent saves "favourite colour: green" and, in the next thread, says it does not know your favourite colour — nothing in the request carried any memory.
@@ -4668,35 +4669,6 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - 2026-08-31 20:25 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/mcp-transport-spike` off `origin/main@add13ca0`. Other agents: pick a different entry.
   - 2026-08-31 20:59 UTC — DONE: merged forward by the coordinator and pushed as `origin/main@cba1124e`. Coordinator gates on the merged tip: production build clean (no node builtins/eval in the SW; dev probe absent from store build), unit 2834/0, chrome journeys 273/273, kat-mcp-transport 8/8 (SW connects over Streamable-HTTP, calls mcp__calc__add=8, a second unreachable server fails gracefully). Candidate 88420fda fast-forwarded. Also re-added a missing EXPECTED entry from the boot-perms merge (the enterprise-permissions manifest check ran but wasn't declared) — this run re-confirms boot-perms + next-run + bundle-gitignore too. Decision recorded in docs/MCP-SUPPORT-DESIGN.md: mount the SDK's HTTP/SSE transports directly, per-server resilience, never agent-do's stdio path.
 
-## [CAP-FB-20260831-MCP-CONFIG-STORE-01] The MCP server config model + storage (global and per-agent)
-- Feedback: 2026-08-31 — second child of CAP-FB-20260831-MCP-SUPPORT-01. The foundation for end-to-end MCP: the pure config model + validation + storage for remote MCP servers, a global list and a per-agent list (extended in named-agents.js exactly like the per-agent provider override), credentials handled like provider keys, and an inherit/override resolver. UI (GLOBAL-UI/AGENT-UI) and connection/tool-injection (TOOL-INJECTION) are separate children.
-- Updated: 2026-09-01 14:20 UTC
-- Status: IN_REVIEW
-- Resume: —
-- Priority: P1
-- Owner: model worker under the reanalysis coordinator session — CLAIMED
-- Workspace: active (local path private)
-- Branch: `cap/mcp-config-store` (pushed to origin as the candidate branch; merged by the coordinator)
-- Base: `origin/main@ba0b501f`
-- Candidate: this tracker commit on `cap/mcp-config-store`
-- Shipping: —
-- Acceptance: a pure, unit-tested config layer. `extension/lib/mcp-config.js` validates/normalizes a server `{id, name, transport:"http"|"sse", url, auth?:{headerName,token}, enabled}` — rejecting stdio/command transports, bad transports, and non-http(s) urls (remote MCP only, MV3 has no subprocess); a global list in chrome.storage (`cap:mcpServers`); a per-agent list on the named-agent record (added like the provider override); a resolver `effectiveMcpServers(agentId?)` = global ∪ agent minus disabled, deduped by id. Credentials are handled like provider keys: the auth token is never returned to a page/model — a redacted read (`hasToken`) only. Routes `mcp.servers.get`/`mcp.servers.set` (global, redacted) and the per-agent path via `named-agent.set-mcp-servers`. NO UI, NO connection.
-  - Context: `docs/MCP-SUPPORT-DESIGN.md` "The model" + the transport-spike result. The per-agent provider override in `extension/lib/named-agents.js` (`normalizeAgentProvider`/`redactAgentProvider`/`setNamedAgentProvider`) is the exact pattern copied. The server id doubles as the tool-namespace segment (`mcp__<server>__<tool>`), so it must match the spike's `NAMESPACE_RE` (no `__`).
-  - Files: `extension/lib/mcp-config.js` (new), `extension/lib/named-agents.js` (per-agent list + redaction + setter/getter), `extension/background/routes/mcp.js` (new, global routes), `extension/background/routes/index.js` (export), `extension/background/service-worker.js` (register routes + `named-agent.set-mcp-servers`), `extension/background/routes/kv.js` (cap:mcpServers added to the secret-controlled/redacted stores), `tests/mcp-config.test.ts` (new).
-  - Steps: 1. RED-first test. 2. `mcp-config.js` (normalize/redact/resolve + global storage + `effectiveMcpServers`). 3. per-agent list in `named-agents.js`. 4. the routes. 5. secret-store hardening in kv.js. 6. GREEN + falsify the resolver.
-  - Out of scope: any UI (MCP-GLOBAL-UI-01 / MCP-AGENT-UI-01); connecting/injecting/fencing tools (MCP-TOOL-INJECTION-01); OAuth (MCP-OAUTH-01).
-- Review: author review 2026-09-01 — falsification gates cleared (RED/GREEN recorded below); a fresh-session review on the diff is welcome for taste/architecture.
-- Gates: the falsification gates apply.
-  - Unit: `tests/mcp-config.test.ts` (10 tests) — validates a good http/sse server, rejects stdio/command transports and non-http(s) urls, rejects a bad id, redacts the token (presence bit only), resolves global ∪ agent minus disabled + dedups by id, a storage round-trip (full read keeps the token, redacted read hides it), and `effectiveMcpServers(agentId)` merges the stored global + per-agent lists. Falsified by dropping the resolver's disabled-filter: `resolveEffectiveMcpServers` test observed RED (`9 passed | 1 failed`); restored → GREEN (`10 passed | 0 failed`).
-  - Browser: none needed — this is a pure config/store layer with no UI and no connection (both are separate children). The unit suite + production build are this lane's evidence; the loaded-extension demo lands with MCP-TOOL-INJECTION/GLOBAL-UI.
-  - Full suite: `npm run build:production` clean (no eval/new Function, no node builtins reach the SW; the circular mcp-config↔named-agents import resolves — usage is runtime-only). `deno test tests/` = 2898 passed / 1 failed; the single failure is PRE-EXISTING and unrelated — `tests/changelog.test.ts` flags `v0.2.587` ("Four more improvements are in progress."), a non-user-facing line committed by the wave-14 claim commit `origin/main@ba0b501f` before this lane. No test was weakened; the route-registration baseline was updated for the three new routes and observed RED→GREEN.
-  - Constraints: MV3-CSP-safe; remote transports only (stdio/command rejected); credentials never in bundle/logs/receipts (token redacted on every read-out, secret-controlled in kv.js); the config layer is pure + bounded.
-- Blockers: —
-- Next: MCP-TOOL-INJECTION-01 (connect the effective set per run) and MCP-GLOBAL-UI-01 / MCP-AGENT-UI-01 (the surfaces) build on this.
-- Recover: `git log --oneline --all --grep=CAP-FB-20260831-MCP-CONFIG-STORE-01`
-- History:
-  - 2026-09-01 14:20 UTC — CONFIG-STORE IN_REVIEW (this tracker commit on `cap/mcp-config-store`). New `extension/lib/mcp-config.js` (pure validate/normalize/redact/resolve + global `cap:mcpServers` storage + `effectiveMcpServers(agentId?)`); per-agent `mcpServers` list added to `named-agents.js` like the provider override (`getNamedAgentMcpServers`/`setNamedAgentMcpServers`, redacted in list/get); global routes `mcp.servers.get`/`mcp.servers.set` in new `routes/mcp.js`; per-agent route `named-agent.set-mcp-servers`; `cap:mcpServers` hardened as a secret-controlled/redacted store in `routes/kv.js`. RED (`9 passed | 1 failed` without the disabled-filter) → GREEN (`10/10`); `build:production` clean; unit suite 2898 pass / 1 pre-existing unrelated fail (changelog `v0.2.587` non-user line "Four more improvements are in progress." from the wave-14 claim commit `origin/main@ba0b501f`, not this lane). Pushed `cap/mcp-config-store`.
-
 ## [CAP-FB-20260831-SCHEDULED-NEXT-RUN-WIDGET-01] A task that schedules an alarm shows no "next run" — no way to see it will fire (call them routines, not background agents)
 - Feedback: 2026-08-31 — owner: "if a task schedules an alarm, there's no way to see that or know it's going to work. The task should have a 'next run' widget or something. In the past these were made 'background agents' which I don't want, but it makes me think these might be 'routines' or something similar." A scheduled task gives no visible confirmation it is scheduled or when it will next fire.
 - Updated: 2026-08-31 20:11 UTC
@@ -4772,36 +4744,6 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
     2. P2 (initial count): the summary count computed `savedIds.filter(id => available.some(s => s.id === id))` — a refId-keyed saved selection counted 0. The module's count() reflects rows ACTUALLY checked (skillRowChecked handles refId + legacy raw); the summary is bound to it. Tested: refId-keyed saved selections render the correct "N selected".
     3. P2 (real resolver): extracted the SW's resolveRecipe into `extension/lib/skill-resolve.js` (resolveSkillRef with injected stores — getRecipe real, custom/imported/OPFS faked); the SW is now a thin adapter. Tests drive the REAL resolver: custom:<id> colliding with a built-in id resolves the custom row; custom:<id> absent → null (no fall-through); imported:<id> reads the OPFS body; builtin:<id> locked; raw ids keep built-in → custom → imported (duplicated-agent contract).
     Gates: unit RED→GREEN for the dialog-level collision test — 31/31 unit tests (25 catalog + 6 settings); full suite 2838 passed / 0 failed; `nice -n 10 deno run -A scripts/chrome-journeys.ts --retain` = 281/281 passed. Final tip: see the commit below.
-
-## [CAP-FB-20260831-MCP-CONFIG-STORE-01] MCP config model — global and per-agent server lists
-- Feedback: 2026-08-31 — child of CAP-FB-20260831-MCP-SUPPORT-01 (see docs/MCP-SUPPORT-DESIGN.md). Foundation for end-to-end MCP: the config the owner edits and a run resolves.
-- Updated: 2026-09-01 12:57 UTC
-- Status: OPEN
-- Resume: —
-- Priority: P1
-- Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — CLAIMED; do not start a parallel attempt
-- Workspace: active (local path private)
-- Branch: `cap/mcp-config-store` (pushed to origin as the candidate branch; merged by the coordinator)
-- Base: `42dd1c09`
-- Candidate: —
-- Shipping: —
-- Acceptance: a pure, validated config model + storage for MCP servers, global and per-agent. A global server list in chrome.storage; a per-agent server list on the named-agent config (extend `extension/lib/named-agents.js` exactly like the per-agent provider override — self-contained, validated). Each server: `{ id, name, transport: "http"|"sse", url, auth?: {headerName, token}, enabled }`. A resolver `effectiveMcpServers(agentId?)` = global ∪ agent, minus disabled, dedup by id. Credentials handled like provider keys (never returned to a page/model; a redacted read for the UI). Routes `mcp.servers.get/set` (global) and the per-agent path through the existing named-agent mutation route. Pure and unit-tested; NO UI (that is MCP-GLOBAL-UI/MCP-AGENT-UI), NO connection (that is MCP-TOOL-INJECTION — but reuse the spike's `extension/lib/mcp-client-core.js` types).
-  - Context: docs/MCP-SUPPORT-DESIGN.md "The model". The per-agent provider override in named-agents.js (`normalize…override`) is the pattern to copy for the per-agent server list.
-  - Files: new `extension/lib/mcp-config.js` (validate/normalize/resolve, pure), `extension/lib/named-agents.js` (per-agent mcpServers field + validation), `extension/background/service-worker.js` or a route module (`mcp.servers.get/set`, redacted), the kv/storage for the global list.
-  - Steps: 1. Unit test the validator/resolver first (RED). 2. mcp-config.js. 3. named-agents per-agent field. 4. routes with redaction. 5. resolver.
-  - Out of scope: UI, connecting to servers, tool injection.
-- Review: pending
-- Gates: the falsification gates apply.
-  - Unit: `tests/mcp-config.test.ts` — validates a good server, rejects a bad transport/url, resolves global∪agent minus disabled, dedups by id, redacts the token on read; falsify by breaking the resolver.
-  - Browser: none (config only) — or a route smoke via an existing harness.
-  - Full suite: `npm run build:production && deno test -A tests/ && deno run -A scripts/chrome-journeys.ts` green.
-  - Constraints: credentials never to page/model/logs/receipts; one name per concept; MV3-safe.
-- Blockers: —
-- Next: write tests/mcp-config.test.ts (RED), then extension/lib/mcp-config.js
-- Recover: `git log --oneline --all --grep=CAP-FB-20260831-MCP-CONFIG-STORE-01`
-- History:
-  - 2026-08-31 22:30 UTC — filed as the MCP config foundation.
-  - 2026-09-01 12:57 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/mcp-config-store` off `origin/main@42dd1c09`. Other agents: pick a different entry.
 
 ## [CAP-FB-20260831-MCP-TOOL-INJECTION-01] Connect the effective MCP servers per run and inject their tools
 - Feedback: 2026-08-31 — child of CAP-FB-20260831-MCP-SUPPORT-01. Makes MCP END TO END: a run connects the owner's servers and the agent can call their tools.
@@ -4889,3 +4831,32 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Recover: `git log --oneline --all --grep=CAP-FB-20260831-MCP-AGENT-UI-01`
 - History:
   - 2026-08-31 22:30 UTC — filed; the per-agent surface.
+
+## [CAP-FB-20260831-MCP-CONFIG-STORE-01] The MCP server config model + storage (global and per-agent)
+- Feedback: 2026-08-31 — second child of CAP-FB-20260831-MCP-SUPPORT-01. The foundation for end-to-end MCP: the pure config model + validation + storage for remote MCP servers, a global list and a per-agent list (extended in named-agents.js exactly like the per-agent provider override), credentials handled like provider keys, and an inherit/override resolver. UI (GLOBAL-UI/AGENT-UI) and connection/tool-injection (TOOL-INJECTION) are separate children.
+- Updated: 2026-09-01 14:20 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P1
+- Owner: model worker under the reanalysis coordinator session — CLAIMED
+- Workspace: active (local path private)
+- Branch: `cap/mcp-config-store` (pushed to origin as the candidate branch; merged by the coordinator)
+- Base: `origin/main@ba0b501f`
+- Candidate: this tracker commit on `cap/mcp-config-store`
+- Shipping: —
+- Acceptance: a pure, unit-tested config layer. `extension/lib/mcp-config.js` validates/normalizes a server `{id, name, transport:"http"|"sse", url, auth?:{headerName,token}, enabled}` — rejecting stdio/command transports, bad transports, and non-http(s) urls (remote MCP only, MV3 has no subprocess); a global list in chrome.storage (`cap:mcpServers`); a per-agent list on the named-agent record (added like the provider override); a resolver `effectiveMcpServers(agentId?)` = global ∪ agent minus disabled, deduped by id. Credentials are handled like provider keys: the auth token is never returned to a page/model — a redacted read (`hasToken`) only. Routes `mcp.servers.get`/`mcp.servers.set` (global, redacted) and the per-agent path via `named-agent.set-mcp-servers`. NO UI, NO connection.
+  - Context: `docs/MCP-SUPPORT-DESIGN.md` "The model" + the transport-spike result. The per-agent provider override in `extension/lib/named-agents.js` (`normalizeAgentProvider`/`redactAgentProvider`/`setNamedAgentProvider`) is the exact pattern copied. The server id doubles as the tool-namespace segment (`mcp__<server>__<tool>`), so it must match the spike's `NAMESPACE_RE` (no `__`).
+  - Files: `extension/lib/mcp-config.js` (new), `extension/lib/named-agents.js` (per-agent list + redaction + setter/getter), `extension/background/routes/mcp.js` (new, global routes), `extension/background/routes/index.js` (export), `extension/background/service-worker.js` (register routes + `named-agent.set-mcp-servers`), `extension/background/routes/kv.js` (cap:mcpServers added to the secret-controlled/redacted stores), `tests/mcp-config.test.ts` (new).
+  - Steps: 1. RED-first test. 2. `mcp-config.js` (normalize/redact/resolve + global storage + `effectiveMcpServers`). 3. per-agent list in `named-agents.js`. 4. the routes. 5. secret-store hardening in kv.js. 6. GREEN + falsify the resolver.
+  - Out of scope: any UI (MCP-GLOBAL-UI-01 / MCP-AGENT-UI-01); connecting/injecting/fencing tools (MCP-TOOL-INJECTION-01); OAuth (MCP-OAUTH-01).
+- Review: author review 2026-09-01 — falsification gates cleared (RED/GREEN recorded below); a fresh-session review on the diff is welcome for taste/architecture.
+- Gates: the falsification gates apply.
+  - Unit: `tests/mcp-config.test.ts` (10 tests) — validates a good http/sse server, rejects stdio/command transports and non-http(s) urls, rejects a bad id, redacts the token (presence bit only), resolves global ∪ agent minus disabled + dedups by id, a storage round-trip (full read keeps the token, redacted read hides it), and `effectiveMcpServers(agentId)` merges the stored global + per-agent lists. Falsified by dropping the resolver's disabled-filter: `resolveEffectiveMcpServers` test observed RED (`9 passed | 1 failed`); restored → GREEN (`10 passed | 0 failed`).
+  - Browser: none needed — this is a pure config/store layer with no UI and no connection (both are separate children). The unit suite + production build are this lane's evidence; the loaded-extension demo lands with MCP-TOOL-INJECTION/GLOBAL-UI.
+  - Full suite: `npm run build:production` clean (no eval/new Function, no node builtins reach the SW; the circular mcp-config↔named-agents import resolves — usage is runtime-only). `deno test tests/` = 2898 passed / 1 failed; the single failure is PRE-EXISTING and unrelated — `tests/changelog.test.ts` flags `v0.2.587` ("Four more improvements are in progress."), a non-user-facing line committed by the wave-14 claim commit `origin/main@ba0b501f` before this lane. No test was weakened; the route-registration baseline was updated for the three new routes and observed RED→GREEN.
+  - Constraints: MV3-CSP-safe; remote transports only (stdio/command rejected); credentials never in bundle/logs/receipts (token redacted on every read-out, secret-controlled in kv.js); the config layer is pure + bounded.
+- Blockers: —
+- Next: MCP-TOOL-INJECTION-01 (connect the effective set per run) and MCP-GLOBAL-UI-01 / MCP-AGENT-UI-01 (the surfaces) build on this.
+- Recover: `git log --oneline --all --grep=CAP-FB-20260831-MCP-CONFIG-STORE-01`
+- History:
+  - 2026-09-01 14:20 UTC — CONFIG-STORE IN_REVIEW (this tracker commit on `cap/mcp-config-store`). New `extension/lib/mcp-config.js` (pure validate/normalize/redact/resolve + global `cap:mcpServers` storage + `effectiveMcpServers(agentId?)`); per-agent `mcpServers` list added to `named-agents.js` like the provider override (`getNamedAgentMcpServers`/`setNamedAgentMcpServers`, redacted in list/get); global routes `mcp.servers.get`/`mcp.servers.set` in new `routes/mcp.js`; per-agent route `named-agent.set-mcp-servers`; `cap:mcpServers` hardened as a secret-controlled/redacted store in `routes/kv.js`. RED (`9 passed | 1 failed` without the disabled-filter) → GREEN (`10/10`); `build:production` clean; unit suite 2898 pass / 1 pre-existing unrelated fail (changelog `v0.2.587` non-user line "Four more improvements are in progress." from the wave-14 claim commit `origin/main@ba0b501f`, not this lane). Pushed `cap/mcp-config-store`.

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.590] — 2026-09-01
+- : merge — the assistant is told to use the real tools, not simulate them
+
 ## [0.2.589] — 2026-09-01
 - : merge — the config model for global and per-agent MCP servers
 
@@ -247,7 +250,7 @@
 - Artifacts and generated images now appear in the conversation as they are created — a card showing what changed, plus a thumbnail strip of screenshots and images you can open.
 
 ## [0.2.510] — 2026-08-30
-- The settings model for MCP servers is in place: a global list and a per-agent list, with server credentials handled like provider keys.
+- The assistant is now told to actually create an artifact or save to memory using the tools, rather than pasting a result into the chat or claiming it saved something it did not.
 
 ## [0.2.509] — 2026-08-30
 - A size limit on how much a skill could import has been removed.

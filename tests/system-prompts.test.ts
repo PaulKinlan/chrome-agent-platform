@@ -245,6 +245,46 @@ Deno.test("hub prompt: the composed prompt teaches the SHARED JOBS BOARD (post/c
   );
 });
 
+Deno.test("hub prompt: the composed prompt instructs the model to USE the platform tools, not simulate them — create_asset for a website/page/artifact, memory_set for remember, and that the action REQUIRES the tool call — CAP-FB-20260830-MODEL-TOOL-ADHERENCE-01", () => {
+  // The tool-adherence guidance rides in the product-base (cap.hub.master), so
+  // the COMPOSED hub prompt — and every named agent that inherits it — carries
+  // it. Some capable models paste HTML into chat for "make me a website" and
+  // claim "saved" for "remember X" with ZERO tool calls; the manual must state
+  // plainly that producing an artifact or saving a memory REQUIRES the tool.
+  const composed = composeSystemPrompt({ baseId: "cap.hub.master" });
+  // Wrap-robust: flatten runs of whitespace so the assertions do not depend on
+  // where the paragraph happens to line-wrap.
+  const flat = composed.text.replace(/\s+/g, " ");
+  const flatLower = flat.toLowerCase();
+  // (a) there is a dedicated section telling the model to use the tools, not
+  //     simulate them.
+  assert(
+    flatLower.includes("use the platform tools") && flatLower.includes("never simulate them"),
+    "the prompt must carry a 'use the platform tools — never simulate them' instruction",
+  );
+  // (b) producing an artifact / saving a memory REQUIRES the tool call — text
+  //     describing the result is not the result.
+  assert(flat.includes("REQUIRES the tool"), "the prompt must say the action REQUIRES the tool call");
+  assert(
+    flatLower.includes("is not the result"),
+    "the prompt must say a text description of the result is not the result",
+  );
+  // (c) the "make me a website / page / artifact" case maps to create_asset and
+  //     forbids pasting a chat code block as the deliverable.
+  assert(flatLower.includes("make me a website"), "the prompt must name the 'make me a website' case");
+  assert(
+    flat.includes("create_asset") && flatLower.includes("code block in chat is not an artifact"),
+    "the make-a-website case must route to create_asset and reject a chat code block as the artifact",
+  );
+  // (d) the "remember X" case maps to memory_set and forbids claiming 'saved'
+  //     with no tool call.
+  assert(flatLower.includes("remember x") || flatLower.includes('"remember x"'), "the prompt must name the 'remember X' case");
+  assert(
+    flat.includes("memory_set") && flatLower.includes("without the call"),
+    "the remember case must route to memory_set and reject claiming saved without the call",
+  );
+});
+
 Deno.test("policy drift: the EDITABLE base carries NONE of the runtime-security constraints", () => {
   // No rule text may live in the replaceable product base — a "replace"
   // override must not be able to suppress any runtime-security instruction.
@@ -810,7 +850,7 @@ Deno.test("upgrade WITH override: flagged, the override still applies, and the d
   const reg = upgradedRegistry();
   const d = await describePrompt("hub", { registry: reg });
   assertEquals(d.builtinChanged, true, "the release-update state is detected");
-  assertEquals(d.override.baseVersion, "1.5.0");
+  assertEquals(d.override.baseVersion, "1.6.0");
   assertEquals(d.base.version, "2.0.0");
   assertStringIncludes(d.effective.text, "MY-CUSTOM");
   assertStringIncludes(d.effective.text, "Always name artifacts clearly.");
@@ -1407,7 +1447,7 @@ Deno.test("prompt registry versions carry the latest built-in grounding", () => 
   // preview surface these versions so existing customizations show the update.
   const hub = PROMPT_REGISTRY.find((p) => p.id === "cap.hub.master");
   const worker = PROMPT_REGISTRY.find((p) => p.id === "cap.worker.base");
-  assertEquals(hub?.version, "1.5.0", "cap.hub.master carries the shared-jobs-board doctrine bump");
+  assertEquals(hub?.version, "1.6.0", "cap.hub.master carries the tool-adherence doctrine bump");
   assertEquals(worker?.version, "1.2.0", "cap.worker.base carries the environment grounding bump");
 });
 
