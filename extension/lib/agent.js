@@ -514,8 +514,23 @@ export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, 
 // Defined HERE (not in workflows.js) because they need the ai/zod bare
 // specifiers, which are only resolvable in the SW bundle — workflows.js stays
 // browser-safe for the NTP's raw ES-module graph.
-export function workflowsToolset({ memory, runRoute = null } = {}) {
+export function workflowsToolset({ memory, runRoute = null, enrollmentGuard = null, getRunGen = null, readOnly = false } = {}) {
   if (!memory) return {};
+  // The same enrollment-generation + read-only fencing as memoryToolset (review
+  // blocker 2): a stale deleted worker must never write into a re-enrolled
+  // origin's workflow store, and SCOPED hook runs (readOnly) must not be able
+  // to persist workflows. Reads revalidate the immutable run-start generation
+  // BEFORE and AFTER the awaited read (the round-26 pattern).
+  const enrolledGuard = async () => {
+    if (!enrollmentGuard) return null;
+    const g = await enrollmentGuard();
+    const runGen = getRunGen?.() ?? null;
+    if (!g?.ok) return { error: g?.error ?? "origin not enrolled" };
+    if (runGen != null && (g.gen ?? 0) !== runGen) {
+      return { error: "origin re-enrolled during run — workflow access rejected" };
+    }
+    return null;
+  };
   const tools = {
     save_workflow: tool({
       description:
@@ -527,9 +542,16 @@ export function workflowsToolset({ memory, runRoute = null } = {}) {
         content: z.string().max(64 * 1024).describe("the workflow body (JS function body, Python source, pipeline step list, or instructions)"),
       }),
       execute: async ({ name, description, kind, content }) => {
+        // readOnly (SCOPED hook runs): the same boundary as memory_set omission
+        // — untrusted hooks must never persist workflows (review blocker 2).
+        if (readOnly) return { ok: false, error: "workflow save is not available in this context" };
         const v = validateWorkflow({ name, description, kind, content });
         if (!v.ok) return { ok: false, error: v.error };
         const key = workflowKey(v.record.name);
+        // Enrollment-generation fence BEFORE the write (the round-22 ABA
+        // blocker: a re-enrolled origin's fresh gen must reject a stale run).
+        const err = await enrolledGuard();
+        if (err) return err;
         try {
           await memory.set(key, v.record);
         } catch (e) {
@@ -542,6 +564,8 @@ export function workflowsToolset({ memory, runRoute = null } = {}) {
       description: "List YOUR saved workflows (name, kind, description only — never the full body).",
       inputSchema: z.object({}),
       execute: async () => {
+        const err = await enrolledGuard();
+        if (err) return err;
         let keys = [];
         try {
           keys = typeof memory.keys === "function" ? await memory.keys() : [];
@@ -559,6 +583,8 @@ export function workflowsToolset({ memory, runRoute = null } = {}) {
             }
           } catch { /* skip unreadable */ }
         }
+        const err2 = await enrolledGuard();
+        if (err2) return err2;
         return { ok: true, workflows };
       },
     }),
@@ -566,10 +592,14 @@ export function workflowsToolset({ memory, runRoute = null } = {}) {
       description: "Read ONE of YOUR saved workflows in full (name, kind, description, content).",
       inputSchema: z.object({ name: z.string().min(1).max(64) }),
       execute: async ({ name }) => {
+        const err = await enrolledGuard();
+        if (err) return err;
         let rec = null;
         try {
           rec = await memory.get(workflowKey(name));
         } catch { /* absent */ }
+        const err2 = await enrolledGuard();
+        if (err2) return err2;
         if (!rec || typeof rec !== "object") return { ok: false, error: `workflow "${name}" not found` };
         return { ok: true, workflow: rec };
       },
@@ -582,10 +612,14 @@ export function workflowsToolset({ memory, runRoute = null } = {}) {
         if (typeof runRoute !== "function") {
           return { ok: false, error: "workflow run is not available in this context" };
         }
+        const err = await enrolledGuard();
+        if (err) return err;
         let rec = null;
         try {
           rec = await memory.get(workflowKey(name));
         } catch { /* absent */ }
+        const err2 = await enrolledGuard();
+        if (err2) return err2;
         if (!rec || typeof rec !== "object" || typeof rec.name !== "string") {
           return { ok: false, error: `workflow "${name}" not found` };
         }
@@ -937,7 +971,7 @@ export function createAgent({
   const sourceTools = {
     ...memoryToolset(memory, enrollmentGuard, getRunGen, readOnlyMemory),
     ...skillReadToolset(skillStore),
-    ...workflowsToolset({ memory, runRoute: workflowRunRoute }),
+    ...workflowsToolset({ memory, runRoute: workflowRunRoute, enrollmentGuard, getRunGen, readOnly: readOnlyMemory }),
     ...tools,
   };
   const instanceGeneration = `agent-instance:${crypto.randomUUID()}`;

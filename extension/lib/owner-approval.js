@@ -46,6 +46,12 @@ export const DESTRUCTIVE_ACTIONS = new Set([
   "script.create",
   "script.run",
   "task.schedule-script",
+  // A MODEL-run saved workflow (CAP-FB-20260831-WORKFLOWS-TO-MEMORY-01):
+  // workflow_run executes the workflow's script body, which is the same
+  // controlled-fetch + SSRF channel as script.run, so the owner approves the
+  // exact source (digest-bound) + hosts before it runs. The owner's own run
+  // from an extension surface is owner-direct (below).
+  "workflow.run",
   // Per-agent schedule controls are approvable mutations: a MODEL-initiated
   // pause/resume/update creates a pending approval (the in-context card flow,
   // per-agent alarms P1-3). Without membership here createPendingApproval
@@ -124,6 +130,9 @@ export const OWNER_DIRECT_ACTIONS = new Set([
   // approval; only a model-initiated create/run pays the card.
   "script.create",
   "script.run",
+  // The owner running a saved workflow from an extension surface IS the
+  // approval (same owner-direct principle as script.run).
+  "workflow.run",
 ]);
 
 export function isOwnerDirectApproval(context, action) {
@@ -607,7 +616,7 @@ export function approvalPendingCount(store) {
 // The actions whose card discloses the exact script source + the hosts it
 // fetches. The owner cannot approve code they have not seen, so for these
 // (and only these) the card carries the bounded source and host list.
-export const SOURCE_DISCLOSING_ACTIONS = new Set(["script.create", "script.run", "task.schedule-script"]);
+export const SOURCE_DISCLOSING_ACTIONS = new Set(["script.create", "script.run", "task.schedule-script", "workflow.run"]);
 export const APPROVAL_DETAIL_BOUNDS = Object.freeze({ maxSourceChars: 64 * 1024, maxHosts: 64, maxHostChars: 253 });
 
 /** Bound a script-approval detail ({ source, hosts, dynamic }) for the card;

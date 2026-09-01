@@ -32,6 +32,7 @@ import {
   serverToolSpecForProvider,
 } from "../lib/provider-server-tools.js";
 import { dispatchDurableProviderRun } from "../lib/durable-provider-dispatch.js";
+import { runWorkflowRoute } from "../lib/workflows.js";
 import {
   closeAgentWorkerFor,
   createActivityRoutes,
@@ -6770,33 +6771,20 @@ const handlers = mergeRouteMaps(
   // not present.
   async "workflow.run"({ name, kind, source, description }, context) {
     const scope = "master"; // workflows live in the agent's own origin memory; the sandbox host is master-scoped like run_script
-    const src = typeof source === "string" ? source : "";
     const wfName = String(name ?? "").slice(0, 64);
-    const wfKind = String(kind ?? "").slice(0, 32);
     if (!wfName) return { ok: false, error: "workflow name is required" };
-    if (wfKind === "pipeline") {
-      return { ok: false, error: "pipeline workflows need the pipe runner (TOOL-PIPELINES-01) — save it as script-js or instructions for now" };
-    }
-    if (wfKind === "script-python") {
-      return { ok: false, error: "script-python workflows need the Python runtime, which is not admitted yet — save it as script-js or instructions" };
-    }
-    if (wfKind !== "script-js") {
-      // instructions kind: nothing to execute — tell the agent to follow the
-      // content in its next run (read it with workflow_get).
-      return { ok: false, error: `workflow "${wfName}" is kind ${wfKind} — read it with workflow_get and follow the instructions; only script-js workflows can run now` };
-    }
-    const gate = await scriptApprovalGate(context, "workflow.run", scope, wfName, src, { name: wfName, description });
-    if (!gate.ok) return gate;
-    const run = await runScriptSandboxed(src);
-    // Bound the returned result so a workflow can't balloon the telemetry.
-    let result = run?.result ?? null;
-    if (result != null) {
-      try {
-        const s = JSON.stringify(result);
-        if (s && s.length > 256 * 1024) result = String(result).slice(0, 256 * 1024);
-      } catch { result = String(result).slice(0, 256 * 1024); }
-    }
-    return { ok: run?.ok ?? false, result, error: run?.error, logs: run?.logs ?? [] };
+    // The production run path (decision → approval gate → sandbox) lives in
+    // lib/workflows.js so tests exercise the SAME code (review blocker 3).
+    return await runWorkflowRoute({
+      name: wfName,
+      kind,
+      source,
+      description,
+      scope,
+      gate: async ({ name: n, description: d }) =>
+        scriptApprovalGate(context, "workflow.run", scope, n, typeof source === "string" ? source : "", { name: n, description: d }),
+      runSandboxed: runScriptSandboxed,
+    });
   },
 
   // ---- capability check (the SW CANNOT request: chrome.permissions.request

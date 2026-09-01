@@ -5,7 +5,7 @@
 // @ts-nocheck — the in-memory store shim is intentionally dynamic.
 
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
-import { validateWorkflow, buildWorkflowsPrompt, workflowKey, WORKFLOW_KINDS } from "../extension/lib/workflows.js";
+import { validateWorkflow, buildWorkflowsPrompt, workflowKey, WORKFLOW_KINDS, sanitizePromptText, workflowRunPlan, runWorkflowRoute } from "../extension/lib/workflows.js";
 import { workflowsToolset } from "../extension/lib/agent.js";
 
 // A tiny in-memory memory store (mirrors the OPFS store's set→version contract).
@@ -169,4 +169,97 @@ Deno.test("buildWorkflowsPrompt: lists name+kind+description, empty → empty st
   assertStringIncludes(p, "## Saved workflows");
   assertStringIncludes(p, "summ (script-js: Summarise)");
   assert(!p.includes("function body"), "prompt never carries the body");
+});
+
+Deno.test("sanitizePromptText: newline/control chars cannot inject prompt lines (blocker 4)", () => {
+  assertEquals(sanitizePromptText("clean name"), "clean name");
+  assertEquals(sanitizePromptText("line1\nline2"), "line1 line2");
+  assertEquals(sanitizePromptText("a\r\nb"), "a b");
+  assertEquals(sanitizePromptText("tab\there"), "tab here");
+  assertEquals(sanitizePromptText("\u0000ctrl\u001f"), "ctrl");
+  // The prompt layer itself must be injection-free end to end.
+  const p = buildWorkflowsPrompt([{ name: "evil\n## Injected", kind: "script-js", description: "desc\n- sneaky" }]);
+  assert(!p.includes("\n## Injected"), "a newline-bearing name must not open a new prompt section");
+  assert(!p.includes("\n- sneaky"), "a newline-bearing description must not add a bullet");
+  assertStringIncludes(p, "evil ## Injected (script-js: desc - sneaky)");
+});
+
+Deno.test("workflowRunPlan: decides kinds exactly like the production route (blocker 3)", () => {
+  const js = workflowRunPlan({ name: "x", kind: "script-js", content: "return 1" });
+  assert(js.ok && js.runScript);
+  assertEquals(js.source, "return 1");
+  assert(!workflowRunPlan({ kind: "pipeline" }).ok, "pipeline fails closed (runner not admitted)");
+  assert(!workflowRunPlan({ kind: "script-python" }).ok, "script-python fails closed (runtime not admitted)");
+  assert(!workflowRunPlan({ kind: "instructions" }).ok, "instructions kind is never executed");
+  const err = workflowRunPlan({ name: "n", kind: "bogus", content: "" });
+  assert(!err.ok && String(err.error).includes("bogus"), "unknown kind names the kind");
+});
+
+Deno.test("runWorkflowRoute: drives the production path through an approval gate + sandbox (blocker 3)", async () => {
+  let gateCalled = 0;
+  let sandboxCalled = 0;
+  const res = await runWorkflowRoute({
+    name: "runme",
+    kind: "script-js",
+    source: "return 42",
+    description: "d",
+    scope: "master",
+    gate: async ({ name, description }) => {
+      gateCalled += 1;
+      assert(name === "runme" && description === "d", "gate receives the workflow identity");
+      return { ok: true, approvalId: "ap-1" };
+    },
+    runSandboxed: async (src) => {
+      sandboxCalled += 1;
+      assertEquals(src, "return 42", "sandbox receives the workflow body");
+      return { ok: true, result: 42, logs: [] };
+    },
+  });
+  assert(res.ok && res.result === 42);
+  assertEquals(gateCalled, 1, "the approval gate is invoked (approvable action)");
+  assertEquals(sandboxCalled, 1, "the sandbox executes the body");
+});
+
+Deno.test("runWorkflowRoute: a DENIED approval never reaches the sandbox (fail closed)", async () => {
+  let sandboxCalled = 0;
+  const res = await runWorkflowRoute({
+    name: "denied",
+    kind: "script-js",
+    source: "return 1",
+    scope: "master",
+    gate: async () => ({ ok: false, error: "operation is not approvable" }),
+    runSandboxed: async () => { sandboxCalled += 1; return { ok: true, result: 1 }; },
+  });
+  assert(!res.ok);
+  assertStringIncludes(String(res.error), "not approvable");
+  assertEquals(sandboxCalled, 0, "the sandbox must never run after a denied gate");
+});
+
+Deno.test("save_workflow: refused in read-only (SCOPED hook) contexts (blocker 2)", async () => {
+  const mem = makeMemory();
+  const t = workflowsToolset({ memory: mem, readOnly: true });
+  const r = await t.save_workflow.execute({ name: "x", kind: "script-js", content: "y" });
+  assert(!r.ok, "readOnly contexts cannot persist workflows");
+  assertStringIncludes(String(r.error), "not available");
+  assertEquals(mem._map.size, 0, "nothing was written");
+});
+
+Deno.test("save_workflow: enrollment-generation fence rejects a stale run (blocker 2)", async () => {
+  const mem = makeMemory();
+  let gen = 1;
+  const t = workflowsToolset({
+    memory: mem,
+    enrollmentGuard: async () => ({ ok: true, gen }),
+    getRunGen: () => 1, // the run STARTED at gen 1
+  });
+  gen = 2; // origin re-enrolled mid-run (the round-22 ABA)
+  const r = await t.save_workflow.execute({ name: "x", kind: "script-js", content: "y" });
+  assert(!r.ok);
+  assertStringIncludes(String(r.error), "re-enrolled");
+  assertEquals(mem._map.size, 0, "the stale run's write must not land");
+  // And a matching generation writes fine.
+  const mem2 = makeMemory();
+  const t2 = workflowsToolset({ memory: mem2, enrollmentGuard: async () => ({ ok: true, gen: 5 }), getRunGen: () => 5 });
+  const ok2 = await t2.save_workflow.execute({ name: "x", kind: "script-js", content: "y" });
+  assert(ok2.ok);
 });

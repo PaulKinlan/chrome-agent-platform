@@ -23,6 +23,7 @@ import {
   opaqueTargetRefWithKey,
   payloadDigest,
   resolvePendingApproval,
+  SOURCE_DISCLOSING_ACTIONS,
   waitForApprovalDecision,
   boundStagedApprovalDetail,
   getStagedApprovalDetail,
@@ -87,7 +88,10 @@ Deno.test("owner-direct scope is exactly the audited action set (no silent widen
   // VERSION RESTORE WIDENING (CAP-FB-20260830-ARTIFACT-VERSIONS-01): the
   // owner's own Restore click in the artifact viewer IS the approval (the
   // asset.delete precedent); a model-initiated asset.restore pays the card.
-  assertEquals([...OWNER_DIRECT_ACTIONS].sort(), ["agent.delete", "asset.delete", "asset.restore", "named-agent.delete", "named-agent.set-schedule", "recipe.delete", "script.create", "script.run", "task.pause", "task.resume", "task.update"].sort());
+  // WORKFLOW WIDENING (CAP-FB-20260831-WORKFLOWS-TO-MEMORY-01): the owner's
+  // own workflow run from an extension surface IS the approval (script.run
+  // precedent); a model-initiated workflow.run pays the source-disclosing card.
+  assertEquals([...OWNER_DIRECT_ACTIONS].sort(), ["agent.delete", "asset.delete", "asset.restore", "named-agent.delete", "named-agent.set-schedule", "recipe.delete", "script.create", "script.run", "task.pause", "task.resume", "task.update", "workflow.run"].sort());
   // Every owner-direct action passes the audit grammar; widening this set
   // requires a new permission-model review.
   for (const direct of OWNER_DIRECT_ACTIONS) {
@@ -361,6 +365,20 @@ Deno.test("script.create / script.run / task.schedule-script are approvable dest
   assertEquals(withDetail.permissionRequirement.approvals[0].detail, { source: "return 1", hosts: ["example.com"], dynamic: false });
   const other = approvalCardDenial({ approvalId: "a1", action: "asset.delete", targetRef: "ref", detail: { source: "x", hosts: [], dynamic: false } });
   assertEquals(other.permissionRequirement.approvals[0].detail, undefined);
+});
+
+// CAP-FB-20260831-WORKFLOWS-TO-MEMORY-01 (review blocker 1): a model-run saved
+// workflow executes a script body — the same controlled-fetch + SSRF channel as
+// script.run — so it must be an approvable destructive action (the card shows
+// the exact source + hosts), and the owner's own run from an extension surface
+// is owner-direct.
+Deno.test("workflow.run is an approvable destructive action (owner approval is reachable)", () => {
+  assert(DESTRUCTIVE_ACTIONS.has("workflow.run"), "workflow.run must be in DESTRUCTIVE_ACTIONS");
+  assert(SOURCE_DISCLOSING_ACTIONS.has("workflow.run"), "workflow.run must disclose the source on the card");
+  // A MODEL-initiated run pays the approval card; the owner's own run is direct.
+  assertEquals(isOwnerDirectApproval({ principal: "model", executionId: "exec-1" }, "workflow.run"), false);
+  assertEquals(isOwnerDirectApproval({ principal: "owner-options", documentId: "doc-1" }, "workflow.run"), true);
+  assertEquals(isOwnerDirectApproval({ principal: "page", documentId: "doc-1" }, "workflow.run"), false);
 });
 
 // CAP-FB-20260830-EDIT-APPROVAL-SHOWS-DIFF-01: a model-initiated asset.update /
