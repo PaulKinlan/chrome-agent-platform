@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.608] — 2026-09-01
+- Housekeeping: the nine inline timed waits scattered across the hub, agent loop and service worker now use one shared helper, and the single-source test guards every shared helper.
+
 ## [0.2.607] — 2026-09-01
 - Housekeeping: every identifier the extension mints (threads, tasks, screenshots, artifacts, scripts, board jobs, grants, run instances) now comes from one shared random-id helper built on the browser's cryptographic UUID instead of thirteen hand-rolled timestamp+random strings.
 

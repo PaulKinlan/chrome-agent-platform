@@ -15,7 +15,7 @@ import { grepAgentMemory } from "./named-agents.js";
 import { assertRunOwned } from "./run-fence.js";
 import { MODEL_PRICING } from "./model-prices.js";
 import { appendSkillsLayer, baselineSystemPrompt } from "./system-prompts.js";
-import { sha256Hex, utf8ByteLength, safeProviderError } from "./pure.js";
+import { sha256Hex, utf8ByteLength, safeProviderError, sleep } from "./pure.js";
 import { capLog } from "./cap-log.js";
 import { perfSpan } from "./cap-perf.js";
 import { maskCredentialShapes } from "./error-report.js";
@@ -992,7 +992,7 @@ export function createAgent({
         // persists it, and it is never the run's result.
         // Every forwarded delta precedes its step's text event: wait (bounded)
         // for the observed stream branch to drain before emitting the text.
-        await Promise.race([streamDrain, new Promise((r) => setTimeout(r, 250))]);
+        await Promise.race([streamDrain, sleep(250)]);
         const classified = runText.step({ step: e.step, hasToolCalls: e.hasToolCalls === true, text: e.text });
         if (classified.hidden) agentDoLog.debug(`step ${e.step} is the continuation reply — hidden`);
         try {

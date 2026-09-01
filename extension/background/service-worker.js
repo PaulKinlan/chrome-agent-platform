@@ -610,7 +610,8 @@ import {
   isExactOptionsSender,
   KEYBOARD_COMMANDS,
   hubUrlForCommand,
-  newId
+  newId,
+  sleep
 } from "../lib/pure.js";
 import { redactToolResult } from "../lib/tool-summary.js";
 import {
@@ -2398,7 +2399,7 @@ async function waitForSnapshotBinding(canonical, tabId, { budgetMs = 15_000, int
       // A fresh tools.upsert was accepted for this document (seq advanced).
       if (Number.isInteger(binding.seq) && binding.seq >= 0) return binding;
     }
-    await new Promise((r) => setTimeout(r, intervalMs));
+    await sleep(intervalMs);
   }
   return null;
 }
@@ -4289,7 +4290,7 @@ async function runDelegatedChild(callerExecutionId, state, targetRef, task, brie
   broadcastProgress({ type: "delegation-admission", parentRunId: callerExecutionId, executionId: childExecutionId, childRunId, agentId: targetAgent.id });
   // Yield before durable admission so an owner cancellation triggered by the
   // observable allocation event can fence the child before any work starts.
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await sleep(0);
   let result = null;
   let thrown = null;
   try {

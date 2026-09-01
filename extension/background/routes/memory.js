@@ -12,6 +12,7 @@ import {
   siteMemory,
 } from "../../lib/memory.js";
 import { readOnlyAgentMemorySelector } from "../../lib/named-agents.js";
+import { sleep } from "../../lib/pure.js";
 
 /** Resolve an `origin` label (the memory route's selector) to its OPFS store.
  * `master` → the hub's store; `background:<slug>` → a background/scheduled
@@ -77,7 +78,7 @@ export async function awaitMemoryQuiescence(origins, timeoutMs = 5000) {
       if (!set || set.size === 0) break;
       await Promise.race([
         Promise.allSettled([...set]),
-        new Promise((r) => setTimeout(r, 100)),
+        sleep(100),
       ]);
     }
     if (memoryWritesInflight.get(key)?.size) {

@@ -34,6 +34,7 @@ const FAMILIES: Array<{ canonical: string; aliases: string }> = [
   { canonical: "fnv1a64", aliases: "" },
   { canonical: "truncateUtf8", aliases: "truncateUtf8\\w*" },
   { canonical: "newId", aliases: "newId\\w*" },
+  { canonical: "sleep", aliases: "sleep" },
 ];
 const CANONICAL_NAMES = FAMILIES.map((f) => f.canonical);
 const ALIAS_GROUP = FAMILIES.map((f) => f.aliases).filter(Boolean).join("|");
@@ -53,7 +54,7 @@ const ALLOWED_COPIES = new Set<string>([
 
 /** Which of the pattern guards below are armed (each lane armed its own). */
 const GUARD_ID_GENERATORS = true;
-const GUARD_INLINE_SLEEPS = false;
+const GUARD_INLINE_SLEEPS = true;
 
 async function* walk(dir: URL, rel = ""): AsyncGenerator<[string, string]> {
   for await (const entry of Deno.readDir(dir)) {

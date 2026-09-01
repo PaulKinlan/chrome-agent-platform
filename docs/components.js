@@ -58,7 +58,7 @@ import { safeParseOnce, buildTree, subtreeJson, safeJsonStringify } from "./tool
 // SW write path): activity journals may predate write-path redaction, so the
 // explorer redacts again at render AND the tree/copy paths only ever see the
 // redacted value.
-import { redactSecrets, escapeHtml, timeAgo } from "./pure.js";
+import { redactSecrets, escapeHtml, timeAgo, sleep } from "./pure.js";
 import { describeToolCall, redactToolResult } from "./tool-summary.js";
 import {
   isTextLikeAttachment,
@@ -6429,7 +6429,7 @@ class AgentComposer extends Component {
           video.muted = true;
           video.playsInline = true;
           await video.play();
-          await new Promise((resolve) => setTimeout(resolve, 400)); // let the frame settle
+          await sleep(400); // let the frame settle
           const canvas = document.createElement("canvas");
           canvas.width = video.videoWidth || 640;
           canvas.height = video.videoHeight || 480;
