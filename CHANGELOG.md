@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.599] — 2026-09-01
+- the skill promotion layer (5.4) in the system-prompt composition order
+
 ## [0.2.598] — 2026-09-01
 - Skill promotion: proactively point agents at adoptable catalog skills for the task, with an eval harness
 
