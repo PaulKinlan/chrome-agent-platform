@@ -101,8 +101,11 @@
         <div class="stage column" style="max-width:420px">
           <site-agent-card origin="https://github.com" tools="[{},{}]"></site-agent-card>
           <site-agent-card origin="https://aifoc.us" tools="[{}]" status="3 tools inferred"></site-agent-card>
+          <site-agent-card check></site-agent-card>
+          <site-agent-card origin="https://shop.example" tool-count="5" tab-id="12" offer></site-agent-card>
+          <site-agent-card origin="https://shop.example" tool-count="5" using></site-agent-card>
         </div>
-        <p class="caption">emits <code>select</code> on click/keyboard.</p>
+        <p class="caption">emits <code>select</code> on click/keyboard (with the exact <code>tabId</code> in the <code>offer</code> variant — the hub's "offers N tools — use them?" chip; <code>check</code> is the chip before the one-time scripting grant, emitting <code>{ check: true }</code>; <code>using</code> is the same chip after the grant).</p>
       </div>
 
       <div class="specimen">

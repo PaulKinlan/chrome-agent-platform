@@ -60,6 +60,9 @@ import { safeParseOnce, buildTree, subtreeJson, safeJsonStringify } from "./tool
 // redacted value.
 import { redactSecrets } from "./pure.js";
 import { describeToolCall, redactToolResult } from "./tool-summary.js";
+// The Site Agent vocabulary: the composer chip's "offers N tools" wording is
+// shared with the hub so the copy cannot drift between the chip and the hub.
+import { SITE_AGENT_COPY, siteOfferHost, siteOfferLabel, siteUsingLabel } from "./site-agent-copy.js";
 import {
   isTextLikeAttachment,
   MAX_LOCAL_TEXT_BYTES,
@@ -1844,34 +1847,99 @@ class PermissionRow extends Component {
 }
 customElements.define("permission-row", PermissionRow);
 
-/* <site-agent-card origin="https://x" tools="[]"> */
+/* <site-agent-card origin="https://x" tools="[]">
+ *
+ * Three variants (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01):
+ *   (default)  "@host · N tools [status]" — a Site Agent row.
+ *   offer      "<host> offers N tools — use them?" — the hub's composer chip
+ *              for an OPEN tab whose page reports tools and is not yet a Site
+ *              Agent. `tab-id` names the exact tab; `select` carries it so the
+ *              one click enrolls that tab and nothing else.
+ *   using      "Using <host> · N tools" — the same chip after the grant.
+ *   check      "Check open pages for site tools" — before the one-time
+ *              `scripting` grant nothing can be detected; this click grants
+ *              exactly that (silent: no install warning) and nothing else.
+ *              `select` carries { check: true }.
+ * `tool-count` sets the count directly (the offer rows carry a count, not a
+ * tool list); `tools` (a JSON array) still works for the row variant. Host
+ * text comes from the page's URL — escaped, never markup. */
 class SiteAgentCard extends Component {
-  static get observedAttributes() { return ["origin", "tools", "status"]; }
+  static get observedAttributes() { return ["origin", "tools", "tool-count", "status", "offer", "using", "check", "tab-id"]; }
+  _toolCount() {
+    const direct = Number(this.getAttribute("tool-count"));
+    if (this.hasAttribute("tool-count") && Number.isFinite(direct)) return Math.max(0, Math.floor(direct));
+    return parseJSONAttr(this.getAttribute("tools"), []).length;
+  }
   _render() {
     const origin = this.getAttribute("origin") || "";
-    const tools = parseJSONAttr(this.getAttribute("tools"), []);
+    const count = this._toolCount();
     const status = this.getAttribute("status") || "";
-    const short = origin.replace(/^https?:\/\//, "").replace(/\/.*/, "");
-    mountTemplate(this, `
+    const short = siteOfferHost(origin);
+    const offer = this.hasAttribute("offer");
+    const using = this.hasAttribute("using");
+    const check = this.hasAttribute("check");
+    const style = `
       :host { display:block; }
+      :host([hidden]) { display:none; }
       .card { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border,#e3e0d9); border-radius:10px; background:var(--panel,#ffffff); cursor:pointer; }
       .card:hover, .card:focus-visible { border-color:var(--accent,#0e6e63); outline:none; }
-      .badge { width:32px; height:32px; border-radius:8px; background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); display:inline-flex; align-items:center; justify-content:center; font-weight:700; }
+      .card[aria-busy="true"] { cursor:progress; opacity:.7; }
+      :host([using]) .card { cursor:default; border-color:var(--accent,#0e6e63); }
+      .badge { width:32px; height:32px; border-radius:8px; background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); display:inline-flex; align-items:center; justify-content:center; font-weight:700; flex:none; }
       .who { flex:1; min-width:0; }
       .name { font-weight:600; }
       .tools { font-size:12px; color:var(--muted,#635e56); }
       .status { font-size:11px; color:var(--muted,#635e56); }
-    `, `<div class="card" role="button" tabindex="0" aria-label="Use Site Agent ${escapeHtml(short)}">
+      .offer-text { font-weight:500; overflow-wrap:anywhere; }
+      .offer-cta { font-size:12px; color:var(--accent,#0e6e63); font-weight:600; white-space:nowrap; }
+    `;
+    if (check) {
+      mountTemplate(this, style, `<div class="card" role="button" tabindex="0" aria-label="${escapeHtml(SITE_AGENT_COPY.checkOpenPagesName)}">
+        <span class="badge" aria-hidden="true">@</span>
+        <span class="who"><span class="offer-text">${escapeHtml(SITE_AGENT_COPY.checkOpenPages)}</span></span>
+        <span class="offer-cta" aria-hidden="true">Check</span>
+      </div>`);
+      return;
+    }
+    if (offer || using) {
+      const label = using
+        ? siteUsingLabel({ origin, toolCount: count })
+        : siteOfferLabel({ origin, toolCount: count });
+      const name = using
+        ? `Using the ${count} ${count === 1 ? "tool" : "tools"} ${short} offers`
+        : `Use the ${count} ${count === 1 ? "tool" : "tools"} ${short} offers — adds ${short} as a Site Agent`;
+      mountTemplate(this, style, using
+        ? `<div class="card" aria-label="${escapeHtml(name)}">
+        <span class="badge" aria-hidden="true">@</span>
+        <span class="who"><span class="offer-text">${escapeHtml(label)}</span></span>
+      </div>`
+        : `<div class="card" role="button" tabindex="0" aria-label="${escapeHtml(name)}">
+        <span class="badge" aria-hidden="true">@</span>
+        <span class="who"><span class="offer-text">${escapeHtml(label)}</span></span>
+        <span class="offer-cta" aria-hidden="true">Use them</span>
+      </div>`);
+      return;
+    }
+    mountTemplate(this, style, `<div class="card" role="button" tabindex="0" aria-label="Use Site Agent ${escapeHtml(short)}">
       <span class="badge" aria-hidden="true">@</span>
-      <span class="who"><span class="name">@${escapeHtml(short)}</span><span class="tools"> · ${tools.length} tools</span></span>
+      <span class="who"><span class="name">@${escapeHtml(short)}</span><span class="tools"> · ${count} tools</span></span>
       ${status ? `<span class="status">${escapeHtml(status)}</span>` : ""}
     </div>`);
   }
+  _detail() {
+    if (this.hasAttribute("check")) return { check: true };
+    const tabId = Number(this.getAttribute("tab-id"));
+    return {
+      origin: this.getAttribute("origin"),
+      ...(this.hasAttribute("tab-id") && Number.isInteger(tabId) ? { tabId } : {}),
+    };
+  }
   _wire() {
+    if (this.hasAttribute("using")) return;
     const card = this._root.querySelector(".card");
-    card?.addEventListener("click", () => this._emit("select", { origin: this.getAttribute("origin") }));
+    card?.addEventListener("click", () => this._emit("select", this._detail()));
     card?.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this._emit("select", { origin: this.getAttribute("origin") }); }
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this._emit("select", this._detail()); }
     });
   }
 }

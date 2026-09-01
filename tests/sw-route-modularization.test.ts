@@ -88,6 +88,9 @@ const BASELINE_ROUTES = [
   "actions.list",
   "actions.undo",
   "agent.discoverable-tabs",
+  // The hub's composer chip reads this permission-free offer listing
+  // (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01).
+  "agent.tool-offers",
   "agent.directory",
   "system.factoryReset",
   "system.factoryResetEnumerate",

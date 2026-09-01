@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.603] — 2026-09-01
+- Sites as sub-agents in under a minute: when a page you have open offers tools, the hub shows a chip above the composer ("shop.example offers 5 tools — use them?") and one click adds the site as a Site Agent, naming the exact site it granted; a first-ever use asks once to check open pages. @mentioning a site now really routes the task to that site's tools. A Showcase Shop demo site ships with the fixtures.
+
 ## [0.2.602] — 2026-09-01
 - Task view full work — the agent's full response is stored, shown, and copyable
 

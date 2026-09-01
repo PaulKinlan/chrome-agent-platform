@@ -363,6 +363,40 @@ with that registry for every caller, including the explicit **Find site tools** 
 Only after the owner chooses a detected tab does the existing MAC-authenticated,
 exact-document enrollment/invocation bridge run.
 
+### The site-offer chip (sites as sub-agents in under a minute)
+*(CAP-FB-20260825-SITE-AGENT-SHOWCASE-01.)* The hub does not wait to be asked. When a
+page the owner has open reports tools through the passive detector and that site is not
+yet a Site Agent, a chip appears directly above the composer: **"shop.example offers 5
+tools — use them?"**. It is the reusable `<site-agent-card>` in its `offer` variant — a
+`role="button"` whose accessible name names the host ("Use the 5 tools shop.example
+offers — adds shop.example as a Site Agent"), keyboard-operable, host and count set as
+escaped text (both come from the page). It follows the composer in the DOM so Tab #1 is
+still the task input, and sits above it by CSS `order`. Its rows come from
+`agent.tool-offers`, which needs no optional permission to READ (tab URLs come from
+install-granted host access) and is an offer, not an authority: nothing is requested
+before a click. The one click is the whole grant — the chip's `select` carries the exact
+tab id, the hub requests `scripting` plus that exact origin on the gesture (silent: no
+install warning), and the same owner-gesture enrollment the picker uses binds that tab.
+The status line names the origin ("Site Agent added for http://…"), and the chip becomes
+**"Using shop.example · 5 tools"** (the `using` variant). An enrolled origin is never
+offered again (`selectSiteOffer`, pure and falsified in `tests/site-agent-chip.test.ts`).
+
+One honest wrinkle: ARMING a page's detector needs the optional `scripting` permission
+(the MAIN-world probe receives its per-document key through `chrome.scripting`), so a
+profile that has never granted it cannot be told what any page offers. The chip then reads
+**"Check open pages for site tools"** (the `check` variant; accessible name "… lets the
+extension look for tools on pages you have open") whenever http(s) pages are open, and
+that click grants exactly `scripting` — nothing else — after which the already-open pages
+report within a second and the chip flips to the offer. Every profile after its first use
+sees the offer directly. Both states re-project live: the service worker pushes
+`site-tools-detected` on each page report and a debounced `open-tabs-changed` when tabs
+open, navigate, close or switch. A site is addressed from the composer by `@`-mentioning
+it; the run is routed to that site's own worker, whose catalog is the page's tools (the
+hub's master carries browser/management/MCP sources only). The showcase asset is
+`fixtures/showcase-shop.html` (served at `/shop` by `fixtures/webmcp-server.ts`): a small
+shop declaring five tools with a visible cart, labelled on the page as a demo site from
+this repository — it never pretends to be a third party.
+
 ## Page actions (the fallback for sites without WebMCP)
 
 When a site ships WebMCP tools, that consented, typed bridge is the preferred way
