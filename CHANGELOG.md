@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.2.606] — 2026-09-01
+- Release notes describe the provider base-URL fix in plain language
+
 ## [0.2.605] — 2026-09-01
-- DONE at origin/main@d5a0217d (coordinator gates 2944/0, 303/303)
+- Providers without a base URL now use their built-in endpoint.
 
 ## [0.2.604] — 2026-09-01
 - A provider saved without a base URL now runs on its built-in endpoint, and a custom endpoint with no URL is refused up front with a clear reason.
