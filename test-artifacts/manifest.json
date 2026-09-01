@@ -1,22 +1,13 @@
 {
-  "testedSourceCommit": "cd803411749d59b311de2a5b8cd9b2977b2d4a14",
+  "testedSourceCommit": "43de802ae4e9b1cb4b6bd3787d8b7bac15a54b5e",
   "evidenceCommitNote": "committed AFTER this run — a tracked manifest cannot contain its own commit hash",
   "worktreeClean": true,
   "worktreeDirtyFiles": [],
-  "runId": "cap-1788124219616",
+  "runId": "cap-1788304414079",
   "retain": true,
-  "ts": "2026-08-30T21:13:12.891Z",
-  "evidenceDir": "/home/paulkinlan/worktrees/cap-whatsnew-copy/test-artifacts",
-  "passed": 212,
-  "testedSourceCommit": "9f401755550281f796b50c1a4b0e82873d1274e5",
-  "evidenceCommitNote": "committed AFTER this run — a tracked manifest cannot contain its own commit hash",
-  "worktreeClean": true,
-  "worktreeDirtyFiles": [],
-  "runId": "cap-1788133041152",
-  "retain": true,
-  "ts": "2026-08-30T23:40:55.909Z",
-  "evidenceDir": "/home/paulkinlan/worktrees/cap-recent-activity-user/test-artifacts",
-  "passed": 234,
+  "ts": "2026-09-01T23:18:36.747Z",
+  "evidenceDir": "/home/paulkinlan/worktrees/tool-result-full-json/test-artifacts",
+  "passed": 302,
   "failed": 0,
   "checks": [
     {
@@ -37,6 +28,10 @@
     },
     {
       "name": "manifest: boot-critical permissions mandatory, capabilities optional, <all_urls> host",
+      "pass": true
+    },
+    {
+      "name": "manifest: enterprise-blockable permissions are optional (JIT), never install-required",
       "pass": true
     },
     {
@@ -88,15 +83,31 @@
       "pass": true
     },
     {
-      "name": "create dialog: the template gallery is the first step (blank + 21 templates + scheduled recipes; Starter shows 7; no template select)",
+      "name": "create dialog: the template select is the first step (Custom default; Starter/Other/Scheduled groups; no gallery grid)",
       "pass": true
     },
     {
-      "name": "create dialog: Enter on the Research Analyst card fills Name, presses the card and checks its skills",
+      "name": "create dialog: the keyboard pick of Research Analyst fills Name and checks its skills",
+      "pass": true
+    },
+    {
+      "name": "create dialog: the template select filters live (matches narrow to the group; empty state; restore)",
+      "pass": true
+    },
+    {
+      "name": "create dialog: the template selection survives filtering and is restored exactly on clear",
       "pass": true
     },
     {
       "name": "create dialog: Advanced+Skills expand and the config body scrolls with them (min-height hardening)",
+      "pass": true
+    },
+    {
+      "name": "create dialog: Advanced+Skills rows are legible in light AND dark scheme (contrast computed)",
+      "pass": true
+    },
+    {
+      "name": "create dialog: the OPEN template picker popup is legible in both schemes (live option vs popup bg, WCAG >= 4.5)",
       "pass": true
     },
     {
@@ -112,11 +123,67 @@
       "pass": true
     },
     {
-      "name": "create dialog: a Scheduled card creates one scheduled agent that the sidebar and Settings both list",
+      "name": "create dialog: a Scheduled-group template creates one scheduled agent that the sidebar and Settings both list",
       "pass": true
     },
     {
       "name": "create dialog: the journey's created agents are removed again (fresh profile restored)",
+      "pass": true
+    },
+    {
+      "name": "folder command: a granted folder was seeded in the SW store",
+      "pass": true
+    },
+    {
+      "name": "folder command: bare /folder typed into the composer",
+      "pass": true
+    },
+    {
+      "name": "folder command: the popup lists the granted folder",
+      "pass": true
+    },
+    {
+      "name": "folder command: the granted folder attaches as a local-folder chip with its grant id",
+      "pass": true
+    },
+    {
+      "name": "folder command: retained the attached-chip screenshot",
+      "pass": true
+    },
+    {
+      "name": "multi-slash: typed the first /skill:summarise command",
+      "pass": true
+    },
+    {
+      "name": "multi-slash: the /skill popup lists the matching recipe",
+      "pass": true
+    },
+    {
+      "name": "multi-slash: the skill reference is inserted and the popup closes",
+      "pass": true
+    },
+    {
+      "name": "multi-slash: typing /tabs: after a resolved reference opens the tabs popup",
+      "pass": true
+    },
+    {
+      "name": "multi-slash: retained the second-command popup screenshot",
+      "pass": true
+    },
+    {
+      "name": "multi-slash: the final input holds BOTH the skill and the tab reference",
+      "pass": true
+    },
+    {
+      "name": "multi-slash: clicked Run task",
+      "pass": true
+    },
+    {
+      "name": "multi-slash: returned to the hub (Home) after the run",
+      "pass": true
+    },
+    {
+      "name": "multi-slash: the two-command task reached the agent journal with both references",
       "pass": true
     },
     {
@@ -189,6 +256,30 @@
     },
     {
       "name": "jobs panel: retained the settled-state screenshot",
+      "pass": true
+    },
+    {
+      "name": "Activity ledger: a real create_named_agent writes a ledger row with an undo",
+      "pass": true
+    },
+    {
+      "name": "Activity ledger: the hub sidebar renders the sentence and an Undo button",
+      "pass": true
+    },
+    {
+      "name": "Activity ledger: retained the activity-surface screenshot",
+      "pass": true
+    },
+    {
+      "name": "Activity ledger: a real Undo deletes the agent and marks the row undone",
+      "pass": true
+    },
+    {
+      "name": "Activity ledger: retained the after-undo screenshot",
+      "pass": true
+    },
+    {
+      "name": "Activity ledger: a seeded close_tab row renders 'Closed …' with Undo",
       "pass": true
     },
     {
@@ -344,6 +435,42 @@
       "pass": true
     },
     {
+      "name": "Settings: BYO picker input reachable for typing",
+      "pass": true
+    },
+    {
+      "name": "Settings: BYO base URL field filled before the typed-model save",
+      "pass": true
+    },
+    {
+      "name": "Settings: BYO card Use clicked via a real gesture",
+      "pass": true
+    },
+    {
+      "name": "Settings: typing a model id and clicking Use saves it (provider.get model === grok-4.6)",
+      "pass": true
+    },
+    {
+      "name": "Settings: BYO picker can be cleared to an empty model",
+      "pass": true
+    },
+    {
+      "name": "Settings: BYO card Use clicked for the empty-model save",
+      "pass": true
+    },
+    {
+      "name": "Settings: saving with an empty BYO model is refused and keeps the previous model",
+      "pass": true
+    },
+    {
+      "name": "Settings: the refusal is reported in the flash, not 'Set … as default.'",
+      "pass": true
+    },
+    {
+      "name": "Settings: the hub strip shows the red provider issue chip for a broken stored config",
+      "pass": true
+    },
+    {
       "name": "Settings: Enroll input present",
       "pass": true
     },
@@ -476,11 +603,51 @@
       "pass": true
     },
     {
+      "name": "Full response: a long agent response renders COLLAPSED behind Show full response (never silently truncated)",
+      "pass": true
+    },
+    {
+      "name": "Full response: Show full response reveals the COMPLETE text (the tail string is in the DOM)",
+      "pass": true
+    },
+    {
+      "name": "Full response: the thread STORE holds the complete response (no commit-time truncation)",
+      "pass": true
+    },
+    {
+      "name": "Tool card: the expanded tree shows the full result beyond 300 chars (one result block; the tail leaf far past the old cut is a visible row)",
+      "pass": true
+    },
+    {
+      "name": "Tool card: the full result survives a reload — the pretty JSON view carries the tail leaf and is syntax-coloured from the theme tokens",
+      "pass": true
+    },
+    {
+      "name": "Run log: every memory_get result row carries the complete redacted result (resultFull > 300 chars with the tail leaf), never flagged truncated",
+      "pass": true
+    },
+    {
+      "name": "Tool card: a nested error inside an ok:true envelope is the card headline, in the error colour, with the error chip and the card open",
+      "pass": true
+    },
+    {
       "name": "Claim check: a failed delegate renders one correction and one final bubble",
       "pass": true
     },
     {
+      "name": "Thread view: edit approval card names the artifact and shows +n -m",
+      "pass": true
+    },
+    {
+      "name": "Thread view: edit approval card renders the diff with a '+' Opening hours line before the decision",
+      "pass": true
+    },
+    {
       "name": "Thread view: update card is titled with the artifact name",
+      "pass": true
+    },
+    {
+      "name": "Thread view: artifact card preview renders from the store, not a blank frame",
       "pass": true
     },
     {
@@ -493,6 +660,14 @@
     },
     {
       "name": "Thread view: conversation scrolled to bottom after an edit turn",
+      "pass": true
+    },
+    {
+      "name": "Plan strip: a running multi-step task shows an advancing checklist pinned to the top of the thread",
+      "pass": true
+    },
+    {
+      "name": "Plan strip: on done it settles into a collapsed 'N steps' summary with every step checked",
       "pass": true
     },
     {
@@ -597,6 +772,10 @@
     },
     {
       "name": "Screenshot: tool card shows a thumbnail",
+      "pass": true
+    },
+    {
+      "name": "Generated-image strip: the run's screenshot renders in a strip resolved from the store",
       "pass": true
     },
     {
@@ -920,6 +1099,58 @@
       "pass": true
     },
     {
+      "name": "skills: the real import UI accepts a >64KiB SKILL.md (no arbitrary cap)",
+      "pass": true
+    },
+    {
+      "name": "skills: the imported skill keeps its full >64KiB body (never truncated)",
+      "pass": true
+    },
+    {
+      "name": "skills: a named agent with the large skill reads its body mid-run via skill_read",
+      "pass": true
+    },
+    {
+      "name": "hub: @demo-skill-read drives search → execute → a body-excerpt final (large skill)",
+      "pass": true
+    },
+    {
+      "name": "skill sync: retained the /skill popup screenshot",
+      "pass": true
+    },
+    {
+      "name": "skill sync: an imported skill appears in /skill (skill.list) AND Settings (recipe.list) — same catalog",
+      "pass": true
+    },
+    {
+      "name": "skill sync: the background Sorting Hat recipe is in NEITHER surface (it is a scheduled agent, not an on-demand skill)",
+      "pass": true
+    },
+    {
+      "name": "skill sync: skill.list and recipe.list return the IDENTICAL set (single source of truth)",
+      "pass": true
+    },
+    {
+      "name": "skill sync: deleting a skill removes it from BOTH surfaces instantly (one store write)",
+      "pass": true
+    },
+    {
+      "name": "skill sync: a colliding import lands in the imported store under the built-in's id",
+      "pass": true
+    },
+    {
+      "name": "skill sync: the colliding imported skill is offered as imported:<id>, and NO background recipe row is offered",
+      "pass": true
+    },
+    {
+      "name": "skill sync: the colliding id serves the IMPORTED skill body, never the background recipe's prompt",
+      "pass": true
+    },
+    {
+      "name": "skill sync: deleting the colliding import removes it from the catalog",
+      "pass": true
+    },
+    {
       "name": "no service-worker console errors",
       "pass": true
     },
@@ -960,6 +1191,10 @@
       "pass": true
     },
     {
+      "name": "about: Show all complements the visible five (no duplicated versions)",
+      "pass": true
+    },
+    {
       "name": "about: retained a what's-new screenshot",
       "pass": true
     },
@@ -987,379 +1222,323 @@
   "files": [
     {
       "name": "fresh-profile-sidebar.png",
-      "sha256": "2c0949db17dd90dca7b38c77ae89a0145741695fa061066b974d047b72b69e24",
-      "bytes": 55558
+      "sha256": "922f3aec7b2852c89d2eefd6572dd62cc2a87e5052547a990b854d254a525923",
+      "bytes": 64047
     },
     {
       "name": "hub-fresh-1440-after.png",
-      "sha256": "53393a315a665d54642ec9936d52f21bab8252692389960086664a28d5bf131a",
-      "bytes": 46185
-      "sha256": "2f42ba47d33ee4015315ccb70149c4ca6fed483522bccce58c6e600581bdcb16",
-      "bytes": 46159
+      "sha256": "133b6f9e78c6a2a96528853f48615e21167f96da834427a25a7d2b8bfc3158b1",
+      "bytes": 55057
     },
     {
       "name": "hub-fresh-1024-after.png",
-      "sha256": "58235d0f62ef9ed12501718cf750d5efea5edf5bae8823ecf98f8c292faba664",
-      "bytes": 43122
+      "sha256": "d8273488e49088abae615104f7cd31395261d462575678ecaf6dc4ee1eeffb3d",
+      "bytes": 51593
     },
     {
       "name": "one-recipe-enabled-sidebar.png",
-      "sha256": "8c15647fbedf7091fdb4f59f32a865fddc26388ee8f07a373e5f52c2ff5b0b73",
-      "bytes": 84427
+      "sha256": "f675478dd3fbabe8ddde05c7c8a356a9ff508579d25a1ccf6fbbb6ffcdef0120",
+      "bytes": 93204
+    },
+    {
+      "name": "template-select-open-light.png",
+      "sha256": "29afba51ce6e746c4cebe9b7fc17c0e6d46788a4a5071f652b636c29db6048ee",
+      "bytes": 131550
+    },
+    {
+      "name": "template-select-open-dark.png",
+      "sha256": "7035367ab81912884957b21f3264b9eb994da0ddc92f528e01b81fd64ce54abc",
+      "bytes": 120704
+    },
+    {
+      "name": "create-dialog-advanced-dark.png",
+      "sha256": "a31ad0ed24075646f32909fdc40365a7bd14360b6a2be0012c0e7d181bbb0f62",
+      "bytes": 144890
+    },
+    {
+      "name": "template-select-open-dark-r5.png",
+      "sha256": "a31ad0ed24075646f32909fdc40365a7bd14360b6a2be0012c0e7d181bbb0f62",
+      "bytes": 144890
+    },
+    {
+      "name": "create-dialog-advanced-light.png",
+      "sha256": "21af006ea27d3134be0010fc62e8f3a7cb580ac8dbb8d37dece7954bce905372",
+      "bytes": 130848
     },
     {
       "name": "templates-gallery.png",
-      "sha256": "36cc7fade7f2cfa5e44779ec4718b8dea0f939ce74093e3b2d0e93cb30a005a0",
-      "bytes": 144127
-      "sha256": "8617931598d8e42c9eb52026ada5f4104d2019e1247e0f6ed243b225b397773f",
-      "bytes": 110534
+      "sha256": "21af006ea27d3134be0010fc62e8f3a7cb580ac8dbb8d37dece7954bce905372",
+      "bytes": 130848
     },
     {
       "name": "templates-created.png",
-      "sha256": "0c041ac663a3653eb3033f89db311c73a76c9926deb70d43fa41a81a026995fc",
-      "bytes": 101209
+      "sha256": "7f0d522cb433b4d2ef3d71a629bad8e06c6945dbd7a02861ab471220ea30d492",
+      "bytes": 113442
+    },
+    {
+      "name": "folder-command-chip.png",
+      "sha256": "d01f8068bafc8f260b224c3a24c2c08bc9689e7884f6b76490b6d174b422486b",
+      "bytes": 123780
+    },
+    {
+      "name": "multi-slash-tabs-popup.png",
+      "sha256": "1aedd0c6a1f450b01e0dfb30688448614d4fbd68eaf2e4817c0ae53ce8870553",
+      "bytes": 117463
     },
     {
       "name": "ntp-driven.png",
-      "sha256": "c0a7d405170020f10e9f3c6fb2b419a9d8a4082c50fdabe6f034aaec95d811bc",
-      "bytes": 72655
+      "sha256": "5de493d28457c6c1f42a72e325bd0ec27038bf6f584d4f68f36453c0201e724b",
+      "bytes": 79070
     },
     {
       "name": "lazy-enum-slip-recovered.png",
-      "sha256": "73466c4595b9a2214030e8211d9f90df9a0fce025347a2b52b9677f3ccd050a1",
-      "bytes": 93003
+      "sha256": "63a3ec7319d4282bfe2df123be28a5420370338685920d8a578d2b38315fbc44",
+      "bytes": 127828
     },
     {
       "name": "ntp-jobs-empty.png",
-      "sha256": "906a93480b4d7f70424963f193f569d3d1057c6baf49e72904d7fdccf69683c1",
-      "bytes": 153206
+      "sha256": "d4e8a094d84becfd26b897cabb7aa09ecb80acc8ea9d2f2cbf294c60533ff8ce",
+      "bytes": 158790
     },
     {
       "name": "ntp-jobs-populated.png",
-      "sha256": "f9a527a32c137a5929332ffad0407ad640de11ae63141d58ef31ad0e0674ed1a",
-      "bytes": 183643
+      "sha256": "653df4efbd2db3463367f64881fdf0818a5f86166d4fa08c89c9e746b37dd160",
+      "bytes": 185941
     },
     {
       "name": "ntp-jobs-settled.png",
-      "sha256": "f64e4fdbc1329406f7d27230443c16d4b7a3f8797bc6b245c58c28bdfc4e3e18",
-      "bytes": 187731
+      "sha256": "6ae74cc3d8e4e0e652b9782393ed08fce15cf9b1caeeb7c50994065ba42e886b",
+      "bytes": 188125
+    },
+    {
+      "name": "ntp-activity-ledger.png",
+      "sha256": "91a95c2370ca94e649fdfc57763480a23409f47734cfe61b63d866d82d987204",
+      "bytes": 194531
+    },
+    {
+      "name": "ntp-activity-ledger-undone.png",
+      "sha256": "ae7cb712bb987c219117b434844d28d183452698a293e4b864ceeeab6b926f79",
+      "bytes": 193963
     },
     {
       "name": "settings-turn-off-owner-dialog.png",
-      "sha256": "94840ea98fb47f4ac137129274f3ea1d6836debec8edf236ed5e0af594c61be9",
-      "bytes": 292965
+      "sha256": "db8ddc700903980e3a8f5909539db340900993ab1b96dc612bb488398cf94dc1",
+      "bytes": 296730
     },
     {
       "name": "board-deny-added.png",
-      "sha256": "e53bc50e612b822ea7741e090a7a739e31a580a7044ae210754d1365de04701f",
-      "bytes": 272800
+      "sha256": "3e4031549f3f9774a22a5c534f35e6a33f648aebbb5ea5dd5332fabb944dda6e",
+      "bytes": 270549
     },
     {
       "name": "settings-openai-picker-after.png",
-      "sha256": "d52d18ec14b074f202495971000c1e78e3dc70fffabdb069c99c6ea56e35fbf0",
-      "bytes": 230911
+      "sha256": "5c92e4f1829959e05bf53fe78039b3404a117c4673d9ec81f50def2eb78e1624",
+      "bytes": 235040
+    },
+    {
+      "name": "settings-byo-typed-model.png",
+      "sha256": "d87a10c2fa0d93614e8896ede01636e0b9ea16492ef09d48a64a839f35420328",
+      "bytes": 209833
+    },
+    {
+      "name": "settings-byo-empty-model-red.png",
+      "sha256": "31baa9f05649709d32e7d5cb4ff8813161d920fb21f5da5d1cd2c423cd5cb94b",
+      "bytes": 216866
     },
     {
       "name": "options-driven.png",
-      "sha256": "d384c4a9eb846dd82de47ae0731a051e90af9e5674dbb7f92214119769b6a692",
-      "bytes": 252215
+      "sha256": "ea68e8ec276f4919c09fabfc4bec592dcefaf92fd69d77fae9bc91d4c5c37dc3",
+      "bytes": 244363
     },
     {
       "name": "keyless-first-result-card.png",
-      "sha256": "d9634dd79896ef0d58395700e7d5ab3200531eb7be9ff3d17f0aa08b64d4575d",
-      "bytes": 100391
+      "sha256": "800a1b77d636d9fd9b8bc5010d886b3d2832dddac7d9f049c06746b6ae1df306",
+      "bytes": 111505
     },
     {
       "name": "keyless-first-result-no-permission.png",
-      "sha256": "ed7bfb47bfd6f2ec521d2b40ca26cd86bedbe0fadb48f25343590ba4a567881f",
-      "bytes": 111878
+      "sha256": "3d2fa2257e844307c867620bf64e0e27087a465c72b21e1564f9d3618f0e46a2",
+      "bytes": 126369
     },
     {
       "name": "tool-cards-no-leak-live-denial.png",
-      "sha256": "ed7bfb47bfd6f2ec521d2b40ca26cd86bedbe0fadb48f25343590ba4a567881f",
-      "bytes": 111878
+      "sha256": "3d2fa2257e844307c867620bf64e0e27087a465c72b21e1564f9d3618f0e46a2",
+      "bytes": 126369
     },
     {
       "name": "grant-card-reopened-thread.png",
-      "sha256": "52e4c7241dea5c9da90beb33bd6eabff9219eea9e8c497bc412f96dd008c6ee6",
-      "bytes": 110776
-    },
-    {
-      "name": "transcript-before-reload.png",
-      "sha256": "ef827803c20e06dcf8578e7d9e25ae2f2f607b79d47bef7a970215383b1a628f",
-      "bytes": 124946
-    },
-    {
-      "name": "transcript-after-reload.png",
-      "sha256": "ef827803c20e06dcf8578e7d9e25ae2f2f607b79d47bef7a970215383b1a628f",
-      "bytes": 124946
-    },
-    {
-      "name": "tool-cards-no-leak-reopened.png",
-      "sha256": "8447656234ac6819b9e640fff77b3f54b8c103cc7b1c00a587d0a747688ec5f9",
-      "bytes": 153307
-    },
-    {
-      "name": "provider-401-bubble.png",
-      "sha256": "ae131556bcd8fcf65fc7bd4f09c2c4212dc44f13ab127a6cadf377134c310836",
-      "bytes": 134446
-    },
-    {
-      "name": "provider-preflight-failed.png",
-      "sha256": "b3079d1f1248ead104b0dccfacc194876af95dcb3a71fddc667cff9a2cd1672e",
-      "bytes": 122998
-    },
-    {
-      "name": "streaming-mid.png",
-      "sha256": "c802770c733aaead2ca7ba62fb83d277c677659f831d1f88159da20a19b650dc",
-      "bytes": 119248
-    },
-    {
-      "name": "streaming-final.png",
-      "sha256": "3515f1f27d0916a3021f6ca539726d8d808339cb8e92ea838d193a30ed7af529",
-      "bytes": 276751
-    },
-    {
-      "name": "lease-settings-after-toggle-on.png",
-      "sha256": "ccdbe0dd06f982a427c15ac8e3998e522fbb3c7f3c39ec1474570b4044bf48d3",
-      "bytes": 271339
-    },
-    {
-      "name": "lease-settings-after-toggle-off.png",
-      "sha256": "adf4c6a46bd8181a44d3ac9fe644e549a379303c63960da30d1e9b2d08b2877e",
-      "bytes": 287389
-    },
-    {
-      "name": "permission-card-open-tab.png",
-      "sha256": "764535638805c4f416b55d86c2727f409dcc10e3962963289c830d0fc498ee2a",
-      "bytes": 308256
-    },
-    {
-      "name": "permission-card-read-page-allowed.png",
-      "sha256": "199ade6612f28402a77cf509cf064a74b9119c57efaa006c0cf39e5fefda0f9f",
-      "bytes": 224303
-    },
-    {
-      "name": "permission-card-capture-allowed.png",
-      "sha256": "f2a7b11b9a78033c3c6feef2221fa37ed5d304e257bb52e80e6e18b8089ee085",
-      "bytes": 264306
-    },
-    {
-      "name": "settings-site-agents-after-turn-off.png",
-      "sha256": "f3d74c0805484a71981958459aac5574605c3cac298648d72ed2a57ef48417ce",
-      "bytes": 384561
-    },
-    {
-      "name": "approval-iframe-denied.png",
-      "sha256": "fc151f25267773c4bb22ee1e00960d6f27e67391c8d505b52980f863e4a9d5f8",
-      "bytes": 220389
-    },
-    {
-      "name": "approval-deny-pending.png",
-      "sha256": "dcc0d317b249948425d586cb1b9263f3e5e90bfccc814cf5a85dacc93008cb6d",
-      "bytes": 246954
-    },
-    {
-      "name": "approval-deny-resolved.png",
-      "sha256": "989e2edb66f193b3600b4ecc45f8933495e43e80391fdbeff230479d9a5d6211",
-      "bytes": 248946
-    },
-    {
-      "name": "script-approval-card.png",
-      "sha256": "e5357f401653973f070e596fcc8b07f3c522b932fe949c04e80ed9ada5afbd3a",
-      "bytes": 154868
-    },
-    {
-      "name": "about-whats-new.png",
-      "sha256": "412345ffa56f71af4ee26c9ad49cba58f38659945b8326625b261e35ce2ca8bc",
-      "bytes": 198980
-      "sha256": "9615ede2343644449d556c87a76c6fe0c48e36690e93344c1003b36be2de507b",
-      "bytes": 73905
-    },
-    {
-      "name": "lazy-enum-slip-recovered.png",
-      "sha256": "ec865a458190666c1db55e51e28fe6981287b972f15ca2370ed5b60f1578c7fc",
-      "bytes": 94192
-    },
-    {
-      "name": "ntp-jobs-empty.png",
-      "sha256": "33f1eee5b8bd7e2a451b097ffbca866b2d78616e44889e8f7a3019b0e55db65b",
-      "bytes": 145498
-    },
-    {
-      "name": "ntp-jobs-populated.png",
-      "sha256": "859f7e9c1c59940164601a1361870ec894e714a884d144c4a4dcba871a2df321",
-      "bytes": 176124
-    },
-    {
-      "name": "ntp-jobs-settled.png",
-      "sha256": "34bb639ca28e5ce2dee8b12a0839935562f4c13021d6cb25614fb39b6829d9e7",
-      "bytes": 180242
-    },
-    {
-      "name": "settings-turn-off-owner-dialog.png",
-      "sha256": "0b7f0e2ca60641c94a1aa64eb449b64df12ddb25a9e43d75c2616b568ce5cfd2",
-      "bytes": 292948
-    },
-    {
-      "name": "board-deny-added.png",
-      "sha256": "df00cab600dac360c40b673a702d278b368777ac9cc01615ab5269b105600da1",
-      "bytes": 272787
-    },
-    {
-      "name": "settings-openai-picker-after.png",
-      "sha256": "d55c600939c0dcc9bf6bf8dd88fa81dfe699e30f4d954f16f75b303d32bc97c8",
-      "bytes": 231190
-    },
-    {
-      "name": "options-driven.png",
-      "sha256": "f4023c50e6f93f9a2355deaefa9e67fcc6e9c86b5daf423f4835f4155be028ee",
-      "bytes": 252163
-    },
-    {
-      "name": "keyless-first-result-card.png",
-      "sha256": "272ca79bca2c74229c94a7a92d41ea55bfaed7270654d632034a81bf86fead6b",
-      "bytes": 99747
-    },
-    {
-      "name": "keyless-first-result-no-permission.png",
-      "sha256": "6a583a9b00b31fcb88b39f8213d2f48ce8ce2495d70f7b1dccbe1ca1771cd18d",
-      "bytes": 113563
-    },
-    {
-      "name": "tool-cards-no-leak-live-denial.png",
-      "sha256": "6a583a9b00b31fcb88b39f8213d2f48ce8ce2495d70f7b1dccbe1ca1771cd18d",
-      "bytes": 113563
-    },
-    {
-      "name": "grant-card-reopened-thread.png",
-      "sha256": "cf414537303be3ce3937b1940fcef25eb31ab70373b798127c35d8baf6246f65",
-      "bytes": 112588
+      "sha256": "18941c9a804beb1701b72945796b43ae3ec5be3721c60d9deecb3786c5a4edaa",
+      "bytes": 126700
     },
     {
       "name": "hub-activity-two-rows-1440.png",
-      "sha256": "1d8f7994917d55a4c1c547bd80262add83ba8cc71df4aab57d80ee70738e6f00",
-      "bytes": 142820
+      "sha256": "bd82a4df2980f240a2f4d022a70d72e42715cd0f1a3feec65c1a3243a64fb228",
+      "bytes": 138473
     },
     {
       "name": "hub-activity-two-rows-1024.png",
-      "sha256": "0cb966c40a4c44c3a86c1d24cd8b53d9c53884bca26d7343a1e15a51f7c2b828",
-      "bytes": 81529
+      "sha256": "066b916fba722f324f03e548293d757b06d17fd6156f1a8e7cb7e4a61480d88f",
+      "bytes": 93162
     },
     {
       "name": "transcript-before-reload.png",
-      "sha256": "1c1897e0d16d4f703b8b05cb07d110f957fd88306e29ea9c45a3af01ba6bfa13",
-      "bytes": 125874
+      "sha256": "e7dad4a55026fbb4f3b390ad4320d4b67e6dcde990d324c50cb347cd39aba223",
+      "bytes": 130434
     },
     {
       "name": "transcript-after-reload.png",
-      "sha256": "1c1897e0d16d4f703b8b05cb07d110f957fd88306e29ea9c45a3af01ba6bfa13",
-      "bytes": 125874
+      "sha256": "e7dad4a55026fbb4f3b390ad4320d4b67e6dcde990d324c50cb347cd39aba223",
+      "bytes": 130434
     },
     {
       "name": "tool-cards-no-leak-reopened.png",
-      "sha256": "3a7a28e0ba9c4417eaa497a4ddd634d7f652bb02825582590cbcf6cb2847f87e",
-      "bytes": 154107
+      "sha256": "3125a9f8dae621268982f4405c79ab7ad67aadd8523df455a393c929791f0f7b",
+      "bytes": 213780
     },
     {
       "name": "provider-401-bubble.png",
-      "sha256": "379c4957d7c60ddcb52124a2d599b5fc05b23aaa853c5c0dba741cb65204a42f",
-      "bytes": 149218
+      "sha256": "a504252b092a5dd41ca8c376ed53afaec6feabf82d2b40f76d4b30e2393c3678",
+      "bytes": 149513
     },
     {
       "name": "provider-preflight-failed.png",
-      "sha256": "2ed362a1442514ecf9430ca9e760cffdf6f53638b8c1642a179e2c225d19436d",
-      "bytes": 136802
+      "sha256": "e55d9dfa807c17cdb0449be7011df69fe27d789d6fba1443116d03c771f8a7c3",
+      "bytes": 137087
     },
     {
       "name": "streaming-mid.png",
-      "sha256": "bacc332980b8f25cfe042c1229f70a00e105977f89605972b6e9dd3b3914f05b",
-      "bytes": 139620
+      "sha256": "18bcc8597cd74dac294c1d0ad8552c84b8a423c2529e4a65693b94739a0decf7",
+      "bytes": 139892
     },
     {
       "name": "streaming-final.png",
-      "sha256": "4efc30e46f32299df024687de458fc84d6ab7a3816318b263f02dba429c8d1c4",
-      "bytes": 288766
+      "sha256": "f4c8c78336ca27b0de16dd05d3ee44ff9610f935ad9ab27ac7159c29882b6dd3",
+      "bytes": 289093
+    },
+    {
+      "name": "full-response-collapsed.png",
+      "sha256": "a363275c9649223df408947af1d863e9c3193f7ca65bf5544c54802e32889af1",
+      "bytes": 204494
+    },
+    {
+      "name": "full-response-expanded.png",
+      "sha256": "e8a32309ce7d9974d8ab90726c04ca1da4677a0bcd08438ae37b13c937b1c801",
+      "bytes": 630062
+    },
+    {
+      "name": "tool-result-json-tree.png",
+      "sha256": "a406490d4df34c29df410fc7642e4ede53bff5920053f77a0a8c401a0df37aed",
+      "bytes": 247378
+    },
+    {
+      "name": "tool-result-after-reload.png",
+      "sha256": "f3d694b945cf94d840aba7236c4873028e67efe7470ab3c1f5e513958ee68601",
+      "bytes": 302948
     },
     {
       "name": "claim-check-delegate.png",
-      "sha256": "144283aaaf3216b3076509ce7733daea70ac5553d58af51afa53a9adbc7375f4",
-      "bytes": 317372
+      "sha256": "7ec39e90a8c4d13336ebb9cd480ec58c63ac97fe0a97cb20b6032f82127bd9da",
+      "bytes": 357396
+    },
+    {
+      "name": "tool-result-nested-error.png",
+      "sha256": "7ec39e90a8c4d13336ebb9cd480ec58c63ac97fe0a97cb20b6032f82127bd9da",
+      "bytes": 357396
+    },
+    {
+      "name": "thread-edit-approval-diff.png",
+      "sha256": "dcf69771c0050c0b0292a4581606f163cc8325464817da5674b7c29b5bf1d8e4",
+      "bytes": 104140
     },
     {
       "name": "thread-view-1440-turn1.png",
-      "sha256": "7c8bbc62dc599c55bae115371890917582c8b6cbcad04408a00bda8e86962c5b",
-      "bytes": 95715
+      "sha256": "29f1e385722302044e8ecc692b33abb04c99e34766d7cc2cd1f2dcab8f8d72e7",
+      "bytes": 130559
+    },
+    {
+      "name": "thread-two-artifact-cards.png",
+      "sha256": "1d7bba934d012b6d66e21c2ae42a9e8940b90e7bd6b4f688e62109f43b7c82ad",
+      "bytes": 120587
     },
     {
       "name": "thread-view-1440-running-300ms.png",
-      "sha256": "7e9482b913ae24d7eba2c45e3166470047aebf244e16a7c1fe03e64a1663c171",
-      "bytes": 124962
+      "sha256": "8ffd6184b3eb7f0b6c990f5f2b22db2125897d00e1f91577919585a701be7762",
+      "bytes": 124668
     },
     {
       "name": "thread-view-1440-turn2.png",
-      "sha256": "eda08751393b6b025e8b3e83d5bfe9c488af3165aaa09a8db49e7eda1369bc6c",
-      "bytes": 112262
+      "sha256": "9f9b4b8199894ce837ef624891b8e024a57db45f6701e11dcf9045f1e9d0bb4e",
+      "bytes": 234165
     },
     {
       "name": "thread-view-1024-turn2.png",
-      "sha256": "7b796039183a3356647c6e0f2443813bc05ba7f1b2376a99b041c1d31b946153",
-      "bytes": 95070
+      "sha256": "8526dff29d6b66647d7c1df640c4a1bbe2593d9c7becccd1ef1d4a1acccfc823",
+      "bytes": 165530
+    },
+    {
+      "name": "plan-strip-mid-run.png",
+      "sha256": "cab22b41421de3b6b7a4262e2f802b8c2ea90dc748112d59a3c091ef21d3dd9a",
+      "bytes": 142969
+    },
+    {
+      "name": "plan-strip-settled.png",
+      "sha256": "4d60ffbd4c43a57ffbac65e60051161c85954e0ff82395b5a740c5489609b974",
+      "bytes": 155774
     },
     {
       "name": "lease-settings-after-toggle-on.png",
-      "sha256": "688a6f2164d45106f24f6907bc2de3d0775dd1e6962cdb61c7fe7fbc7f2db9ec",
-      "bytes": 271334
-    },
-    {
-      "name": "lease-settings-after-toggle-off.png",
-      "sha256": "89e660298f22997c87ae33c8fc2a6e1a9dd107a8ace8e8d23b3f166f2e24d5f6",
-      "bytes": 287367
+      "sha256": "a534b2b1cfec39662e80e4a150037548626476277a49d391d752fc32c789a28a",
+      "bytes": 264015
     },
     {
       "name": "permission-card-open-tab.png",
-      "sha256": "85f372d2f3ad14837132baeeaae60d7da8962baf0395efcadc383673dbcf0903",
-      "bytes": 210832
+      "sha256": "b046fc9b6e89f15398fffb4f82c2333f4326097ea190173d2d7db92110038b3d",
+      "bytes": 191239
     },
     {
       "name": "permission-card-read-page-allowed.png",
-      "sha256": "2198a7ed4de50eaab7ab1deb5113da2db61fd9db6fea63a86edf6987833a42c2",
-      "bytes": 263708
+      "sha256": "01bb94a87a6d53079b1be47adef7b517fbaf6a6d06a398c29b8d3e0c4b0ab5a7",
+      "bytes": 277802
     },
     {
       "name": "permission-card-capture-allowed.png",
-      "sha256": "639d2d3ea6392a291a8454ee9663fe41999397358e521acffdc88ae0a82510a0",
-      "bytes": 301762
+      "sha256": "3f356093fe82ebc14749a56f3913b61bec6752c923176f87abbd46363ecff051",
+      "bytes": 336362
     },
     {
       "name": "screenshot-tool-card-thumbnail.png",
-      "sha256": "2af959c8306182365058a3c4105903532e0dbbffa98c95736ce492970313f266",
-      "bytes": 310108
+      "sha256": "0f8ac9d028b76c6354d95a83371b0f12f7c61ef097a1af134feda0b6a3c1437d",
+      "bytes": 317420
+    },
+    {
+      "name": "image-strip-thread.png",
+      "sha256": "c332e289babf667e68d0cab227e5db33cc173a632f6f6b59b369c73ace5a1d75",
+      "bytes": 339189
     },
     {
       "name": "settings-data-retention.png",
-      "sha256": "a49db0f70143a1de559c0675c5ac083a4477da830ce2ce1b38f37ec8b1537dd6",
-      "bytes": 209975
+      "sha256": "dacbbc84186a3a195a70b39359e00601df559f577de546e1349ebae0da303ef6",
+      "bytes": 219144
     },
     {
       "name": "settings-site-agents-after-turn-off.png",
-      "sha256": "b5be884c8e6baece693ffdf8e2de5a61f90c683966ccb494838a90c80a521305",
-      "bytes": 384562
+      "sha256": "bbb77734cbc77c3e3920639c5626419f6214ab06464073c47e482991947fb2b3",
+      "bytes": 386110
     },
     {
       "name": "approval-iframe-denied.png",
-      "sha256": "d9bfed1300e156e38c5188f31660239aecb018fff066e29da1c9b611da893aa8",
-      "bytes": 220670
+      "sha256": "3cfe1b4865cd9fcc897d4a029ca7fb7c9a8edb1d218e113357bf600500a87bc8",
+      "bytes": 224502
     },
     {
       "name": "approval-deny-pending.png",
-      "sha256": "c8aab1b5892667c0d26b42a5d973a4f445efc395d06c9f6dc8841751aae7788e",
-      "bytes": 249206
+      "sha256": "e6357f84dbff1921b33109c559a762249edf20ee1d5a4a2eee1f7e830ff58e5a",
+      "bytes": 248556
     },
     {
       "name": "approval-deny-resolved.png",
-      "sha256": "c8aab1b5892667c0d26b42a5d973a4f445efc395d06c9f6dc8841751aae7788e",
-      "bytes": 249206
+      "sha256": "d669c1ba4f8a9ea0eff77e65e28ca4c8529e7f0c63cfa2a7bff780ef1ca0e139",
+      "bytes": 248558
     },
     {
       "name": "viewer-source-highlighted.png",
@@ -1368,18 +1547,38 @@
     },
     {
       "name": "viewer-diff-versions.png",
-      "sha256": "6fa922abf728752d5288aa41270216601382b8c6c9b68725bce94a8c33649228",
-      "bytes": 44355
+      "sha256": "e231c65303aa37e1d07cbfde98a139df7d2a0cfcea27988c413517f13075caf8",
+      "bytes": 44642
     },
     {
       "name": "artifact-newtab-single.png",
-      "sha256": "5a987d39d8756845221e8e05eb2745638ad74135ed955055cc99adaa291aa17b",
-      "bytes": 55316
+      "sha256": "dff0a2be6b67dde068e4e5cda373d88d7ec533a5ad1ee4c3ad44efc005bd389b",
+      "bytes": 103828
     },
     {
       "name": "script-approval-card.png",
-      "sha256": "5dbb908ea224780d99778537c95c7fc83b543d79fe9e24210b085f6a85488c38",
-      "bytes": 157216
+      "sha256": "00091c989f9440e723a6374ff7091dcaa9e2dd1dedd0e8ec503ec6bedfa423bd",
+      "bytes": 162389
+    },
+    {
+      "name": "skills-import-large.png",
+      "sha256": "d2b4f7e8265cf64f2ca76f5c58e45298d4e8b845869bf39597f15859131b5d1f",
+      "bytes": 248465
+    },
+    {
+      "name": "skills-run-read.png",
+      "sha256": "ddd80cf7ba266967e16e62aead316b51de02320f1857157a543eecf8d5ba1015",
+      "bytes": 169480
+    },
+    {
+      "name": "skill-popup-sync.png",
+      "sha256": "0a52024f1689a97f15feabd9b11dc188185408d617fd79f712482fc89f86d24e",
+      "bytes": 389110
+    },
+    {
+      "name": "about-whats-new.png",
+      "sha256": "cdddb39e805096727ece7d01d926c3f2afc9f8250ec67c28edfcd681d68799bd",
+      "bytes": 239075
     }
   ]
 }

@@ -600,7 +600,7 @@ import {
   newId,
   sleep
 } from "../lib/pure.js";
-import { redactToolResult } from "../lib/tool-summary.js";
+import { redactToolResult, toolResultFullJson } from "../lib/tool-summary.js";
 import {
   canonicalArray,
   canonicalField,
@@ -2591,6 +2591,21 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
             ...event,
             ...(event.type === "tool-call" ? { toolArgs: redactDeep(event.toolArgs) } : { result: redactDeep(event.result) }),
           };
+          // The retained FULL result (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01)
+          // is redacted AGAIN at this boundary — the write path never trusts
+          // the emitter: the canonical decode+redact seam re-runs on the copy
+          // (idempotent on an already-clean payload), and the emitter's
+          // truncation flag is preserved (this re-run sees a copy that already
+          // fits the cap).
+          if (event.type === "tool-result" && typeof event.resultFull === "string" && event.resultFull) {
+            const again = toolResultFullJson(event.resultFull);
+            event = {
+              ...event,
+              resultFull: again.json,
+              resultFullTruncated: event.resultFullTruncated === true || again.truncated,
+              resultFullBytes: Math.max(Number(event.resultFullBytes) || 0, again.bytes),
+            };
+          }
         } catch { /* redaction failure must never break the run */ }  }
       // Live budget tracking for the delegation guard: each model step emits a
       // thinking event carrying the loop's step counter; the caller's REMAINING
@@ -2688,8 +2703,18 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
           }
           : {};
         const log = { type: "tool-result", id: taskId, executionId, run: runInstance, callId, tool: event.toolName ?? "tool", result, ok: event.ok ?? null, ...(typeof event.selectedTool === "string" && event.selectedTool ? { selectedTool: event.selectedTool } : {}), ...permissionReq };
+        // The per-agent journal is the LIST surface (bounded at 200 KiB for
+        // the whole agent) — it keeps the small row. The durable run log is
+        // the authority the cards read: it carries the retained FULL result
+        // (≤ 64 KiB, already redacted at the chokepoint above; a near-cap row
+        // spills into the run's retained payload store and is lifted back on
+        // read) with its never-silent truncation flag
+        // (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01).
         journalAppend(mem, log).catch(() => {});
-        durableRuns.appendLog(executionId, log, `tool-result:${callId}`).catch(() => {});
+        const durableLog = typeof event.resultFull === "string" && event.resultFull
+          ? { ...log, resultFull: event.resultFull, resultFullTruncated: event.resultFullTruncated === true, resultFullBytes: Number(event.resultFullBytes) || 0 }
+          : log;
+        durableRuns.appendLog(executionId, durableLog, `tool-result:${callId}`).catch(() => {});
         durableRuns.heartbeat(executionId, { progressed: true }).catch(() => {
           heartbeatFailed = true;
           try { orch?.abort?.(); } catch { /* already stopped */ }

@@ -15,7 +15,7 @@
 
 import { newId } from "../lib/pure.js";
 import { send } from "../lib/messages.js";
-import { summarizeToolResult } from "../lib/tool-summary.js";
+import { summarizeToolResult, toolResultTruncationNote } from "../lib/tool-summary.js";
 import { safeJsonStringify } from "./tool-tree.js";
 import { artifactIdentityFromPayloads } from "./thread-view.js";
 import { isAuthoritativeThreadResultProjected } from "./thread-projection-authority.js";
@@ -361,13 +361,18 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
         const card = toolCards.take(ev.toolName);
         if (card?.protocol === true || (!card && isProtocolTool(ev.toolName))) break;
         // The card shows the SELECTED tool's own result — summary and raw —
-        // never the lazy envelope around it (§9/§10).
-        const inner = lazyInnerResult(ev.result);
-        const shown = inner !== undefined ? inner : ev.result;
-        const resEff = effectiveToolCall(ev.toolName, ev.toolArgs, ev.result);
-        const raw = safeToolResult(shown);
+        // never the lazy envelope around it (§9/§10). The RETAINED FULL copy
+        // (`resultFull`, redacted + bounded to 64 KiB) is the source; the
+        // 300-char `result` summary is only the fallback for an older emitter
+        // (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01).
+        const src = liveToolResultSource(ev);
+        const inner = lazyInnerResult(src);
+        const shown = inner !== undefined ? inner : src;
+        const resEff = effectiveToolCall(ev.toolName, ev.toolArgs, src);
+        const raw = safeToolResultFull(shown);
         const summary = shown != null ? summarizeToolResult(resEff.name, shown) : "";
         const status = isToolErrorEvent(ev) ? "error" : "success";
+        const note = liveToolResultNote(ev);
         // Resolve this call's plan step — and adopt the tool's REAL name, now
         // known from the result, as the corrected checklist label.
         const doneName = (typeof ev.selectedTool === "string" && ev.selectedTool) || resEff.name || ev.toolName;
@@ -376,7 +381,7 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
         // re-renders, so the card (and a later update card) can be titled
         // with the artifact's name (CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01).
         if (status === "success" && typeof c.rememberArtifact === "function") {
-          const known = artifactIdentityFromPayloads([ev.result]);
+          const known = artifactIdentityFromPayloads([src]);
           if (known) c.rememberArtifact(known.id, known.name);
         }
         if (card) {
@@ -396,8 +401,9 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
           if (ev.durationMs != null) card.setAttribute?.("tool-duration", String(ev.durationMs));
           if (summary) card.setAttribute?.("tool-result", summary);
           if (raw && raw !== summary) card.setAttribute?.("tool-detail", raw);
+          if (note) card.setAttribute?.("tool-detail-note", note);
         } else if (typeof c.appendTool === "function") {
-          c.appendTool({ name: ev.toolName, status, result: summary, detail: raw !== summary ? raw : null, durationMs: ev.durationMs });
+          c.appendTool({ name: ev.toolName, status, result: summary, detail: raw !== summary ? raw : null, detailNote: note, durationMs: ev.durationMs });
         }
         break;
       }
@@ -471,6 +477,32 @@ export function safeToolResult(value) {
   } catch {
     return '"[unserializable value]"';
   }
+}
+
+/** The live card's DETAIL: the selected tool's own result at FULL length
+ * (the retained copy is already redacted + bounded to 64 KiB upstream — this
+ * serialisation must not cut it again to the 2 KB list bound). A string passes
+ * through; a value serialises whole, with the bounded serializer only as the
+ * never-throws fallback (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01). */
+export function safeToolResultFull(value) {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  try {
+    const s = JSON.stringify(value);
+    if (typeof s === "string") return s;
+  } catch { /* cyclic / hostile — fall through to the bounded serializer */ }
+  return safeToolResult(value);
+}
+
+/** The result a live tool-result event carries for the card: the retained
+ * full copy when the runtime emitted one, else the 300-char summary. */
+export function liveToolResultSource(ev) {
+  return typeof ev?.resultFull === "string" && ev.resultFull ? ev.resultFull : ev?.result;
+}
+
+/** The never-silent note for a live event whose retained copy hit the cap. */
+export function liveToolResultNote(ev) {
+  return ev?.resultFullTruncated === true ? toolResultTruncationNote(Number(ev.resultFullBytes) || 0) : null;
 }
 
 /** A per-run client id so the live progress listener renders ONLY its own run
@@ -916,6 +948,12 @@ export function pairToolJournal(entries) {
         try { return typeof eff.args === "string" ? eff.args : safeJsonStringify(eff.args); } catch { return rawArgs; }
       })(),
       result: result?.result ?? null,
+      // The retained FULL result (redacted, ≤ 64 KiB) the durable row carries
+      // beside the list summary, with its never-silent truncation flag
+      // (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01).
+      resultFull: typeof result?.resultFull === "string" && result.resultFull ? result.resultFull : null,
+      resultFullTruncated: result?.resultFullTruncated === true,
+      resultFullBytes: Number.isFinite(result?.resultFullBytes) ? result.resultFullBytes : null,
       ok: result?.ok ?? null,
       // The structured denial persisted on the result row (§2b), when any.
       permissionRequirement: result?.permissionRequirement ?? null,
@@ -1255,6 +1293,9 @@ export function toolRowsFromRunLog(executionId, logs) {
       tool: r.tool ?? "tool",
       args: r.args ?? null,
       result: r.result ?? null,
+      resultFull: typeof r.resultFull === "string" && r.resultFull ? r.resultFull : null,
+      resultFullTruncated: r.resultFullTruncated === true,
+      resultFullBytes: Number.isFinite(r.resultFullBytes) ? r.resultFullBytes : null,
       ok: r.ok ?? null,
       // The tool that ACTUALLY ran (the SW persists it on the result row) —
       // pairToolJournal prefers it over the envelope unwrap, and without this
@@ -1267,14 +1308,23 @@ export function toolRowsFromRunLog(executionId, logs) {
   const seenApprovals = new Set();
   const imageCards = []; // {status, result, artifact} in tool order, for the strip
   const derived = pairToolJournal(rows).flatMap((p) => {
+    // The retained FULL result is what every derivation reads (the artifact
+    // id, the approval requirement, the screenshot id, the selected tool):
+    // the 300-char summary is the fallback for rows persisted before the full
+    // copy existed (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01).
+    const fullResult = p.resultFull ?? p.result;
     // Show the tool that RAN, not the lazy protocol's envelope.
-    const eff = effectiveToolCall(p.tool, p.args, p.result);
+    const eff = effectiveToolCall(p.tool, p.args, fullResult);
     const toolRow = {
       role: "tool",
       toolName: eff.name,
       toolStatus: p.status === "success" ? "done" : p.status === "error" ? "error" : "done",
       toolArgs: eff.args ?? null,
       toolResult: p.result ?? null,
+      // The card's detail: the complete (redacted, bounded) result, and the
+      // never-silent note when the 64 KiB cap bit.
+      toolDetail: p.resultFull ?? null,
+      toolDetailNote: p.resultFullTruncated ? toolResultTruncationNote(p.resultFullBytes) : null,
       toolOk: p.ok ?? null,
       toolDuration: p.durationMs ?? null,
       toolCallId: p.callId ?? null,
@@ -1293,7 +1343,7 @@ export function toolRowsFromRunLog(executionId, logs) {
     // fallback for a tool that denied without pausing.
     const requirement = (p.permissionRequirement
       ? normalizePermissionRequirement({ waitingForPermission: true, permissionRequirement: p.permissionRequirement })
-      : null) ?? approvalRequirementFromToolResult(p.result);
+      : null) ?? approvalRequirementFromToolResult(fullResult);
     if (requirement && !requirement.approvals.length && !seenApprovals.has(requirement.key)) {
       seenApprovals.add(requirement.key);
       // The owner's recorded decision is the card's state — approved reopens
@@ -1321,7 +1371,7 @@ export function toolRowsFromRunLog(executionId, logs) {
     }
     // The artifact this call produced renders straight after it, so reopening
     // a thread shows the deliverable in the context that created it.
-    const artifact = p.status === "error" ? null : artifactFromToolResult(p.tool, p.result, p.selectedTool, eff.args);
+    const artifact = p.status === "error" ? null : artifactFromToolResult(p.tool, fullResult, p.selectedTool, eff.args);
     if (artifact) {
       out.push({
         role: "artifact",
@@ -1333,7 +1383,7 @@ export function toolRowsFromRunLog(executionId, logs) {
       });
     }
     // Feed the generated-image strip (screenshots + image assets) in tool order.
-    imageCards.push({ status: p.status, result: p.result, artifact });
+    imageCards.push({ status: p.status, result: fullResult, artifact });
     return out;
   });
   // ONE images row per execution, after its tool rows: every screenshot the run
@@ -1506,11 +1556,16 @@ export function projectThreadMessages(thread) {
       selectedTool: m.selectedTool ?? null,
       args: m.toolArgs ?? null,
       result: m.toolResult ?? null,
+      // The derived row's retained full result rides the pairing as
+      // `resultFull`; its note is carried verbatim (already worded).
+      resultFull: typeof m.toolDetail === "string" && m.toolDetail ? m.toolDetail : null,
       ok: m.toolOk ?? null,
       ts: typeof m.ts === "number" ? m.ts : null,
       executionId: m.executionId ?? null,
     })),
   );
+  const noteByCall = new Map();
+  for (const m of rawTools) if (m.toolCallId && typeof m.toolDetailNote === "string" && m.toolDetailNote) noteByCall.set(m.toolCallId, m.toolDetailNote);
 
   const toolCards = pairedTools.map((t) => {
     const orig = rawTools.find((m) =>
@@ -1523,6 +1578,10 @@ export function projectThreadMessages(thread) {
       status: t.status,
       args: t.args ?? null,
       result: t.result ?? null,
+      // The card's detail is the COMPLETE retained result
+      // (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01).
+      detail: t.resultFull ?? null,
+      detailNote: (t.callId && noteByCall.get(t.callId)) || null,
       // The runtime-authoritative selected tool, so the artifact derivation
       // below keys on the tool that RAN even when a prose summary shadows it.
       selectedTool: t.selectedTool ?? null,
@@ -1656,7 +1715,7 @@ export function projectThreadMessages(thread) {
         // derive from the bounded tool result when the run persisted none.
         const persisted = tc.callId ? bodyArtifactsByCall.get(tc.callId) : null;
         const artifact = persisted?.artifact
-          ?? (tc.status === "error" ? null : artifactFromToolResult(tc.name, tc.result, tc.selectedTool, tc.args));
+          ?? (tc.status === "error" ? null : artifactFromToolResult(tc.name, tc.detail ?? tc.result, tc.selectedTool, tc.args));
         if (artifact) {
           output.push({
             role: "artifact",
@@ -1667,7 +1726,7 @@ export function projectThreadMessages(thread) {
             derived: true,
           });
         }
-        imageCards.push({ status: tc.status === "error" ? "error" : "success", result: tc.result, artifact });
+        imageCards.push({ status: tc.status === "error" ? "error" : "success", result: tc.detail ?? tc.result, artifact });
       }
       // The generated-image strip under this turn: the screenshots it captured
       // and the image assets it produced (CAP-FB-20260830-GENERATED-IMAGE-STRIP-01).
@@ -2088,14 +2147,17 @@ export async function runConversationTurn(container, { text, attachments = [], h
         const card = toolCards.take(ev.toolName);
         if (card?.protocol === true || (!card && isProtocolTool(ev.toolName))) break;
         // The card shows the SELECTED tool's own result — summary and raw —
-        // never the lazy envelope around it (§9/§10).
-        const inner = lazyInnerResult(ev.result);
-        const shown = inner !== undefined ? inner : ev.result;
-        const resEff = effectiveToolCall(ev.toolName, ev.toolArgs, ev.result);
-        const raw = safeToolResult(shown);
+        // never the lazy envelope around it (§9/§10). The retained FULL copy
+        // is the source (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01).
+        const src = liveToolResultSource(ev);
+        const inner = lazyInnerResult(src);
+        const shown = inner !== undefined ? inner : src;
+        const resEff = effectiveToolCall(ev.toolName, ev.toolArgs, src);
+        const raw = safeToolResultFull(shown);
         const summary = shown != null ? summarizeToolResult(resEff.name, shown) : "";
         const err = isToolErrorEvent(ev);
         const status = err ? "error" : "success";
+        const note = liveToolResultNote(ev);
         // Resolve this call's plan step, adopting the tool's REAL name (known
         // now from the result) as the corrected checklist label.
         {
@@ -2119,8 +2181,9 @@ export async function runConversationTurn(container, { text, attachments = [], h
           if (ev.durationMs != null) card.setAttribute?.("tool-duration", String(ev.durationMs));
           if (summary) card.setAttribute?.("tool-result", summary);
           if (raw && raw !== summary) card.setAttribute?.("tool-detail", raw);
+          if (note) card.setAttribute?.("tool-detail-note", note);
         } else if (typeof c.appendTool === "function") {
-          c.appendTool({ name: ev.toolName, status, result: summary, detail: raw !== summary ? raw : null, durationMs: ev.durationMs });
+          c.appendTool({ name: ev.toolName, status, result: summary, detail: raw !== summary ? raw : null, detailNote: note, durationMs: ev.durationMs });
         } else {
           appendBubble(c, "tool", `✓ ${ev.toolName}${summary ? ` — ${summary}` : ""}`);
         }
@@ -2128,7 +2191,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
         // (the same derivation the durable-log replay uses, so the live view
         // and the reopened view cannot disagree).
         if (!err && typeof c.appendArtifact === "function") {
-          const artifact = artifactFromToolResult(ev.toolName, ev.result, ev.selectedTool, resEff.args ?? ev.toolArgs);
+          const artifact = artifactFromToolResult(ev.toolName, src, ev.selectedTool, resEff.args ?? ev.toolArgs);
           if (artifact) c.appendArtifact({ artifact });
         }
         // The conversation remembers id → name from the UNTRUNCATED live result
@@ -2136,12 +2199,12 @@ export async function runConversationTurn(container, { text, attachments = [], h
         // just "done"), so an update card can be titled with the artifact's
         // name (CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01).
         if (!err && typeof c.rememberArtifact === "function") {
-          const known = artifactIdentityFromPayloads([ev.result]);
+          const known = artifactIdentityFromPayloads([src]);
           if (known) c.rememberArtifact(known.id, known.name);
         }
         // A structured permission/grant denial surfaces an IN-CONTEXT approval
         // card (one per distinct requirement) instead of only an error card.
-        maybeRenderApproval(ev.result);
+        maybeRenderApproval(src);
         break;
       }
       case "text-delta":

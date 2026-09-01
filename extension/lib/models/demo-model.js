@@ -141,6 +141,15 @@ const STREAM_MARKER = "@demo-stream";
 // behavior like @demo-slow/@demo-stream — not a hidden test seam.
 const LONG_ANSWER_MARKER = "@demo-long-answer";
 const LONG_ANSWER_LENGTH = 9000;
+// @demo-big-result: the @demo-tools sequence (search → memory_set → search →
+// memory_get → search → memory_get → final) writing and reading back a
+// ~5 KiB nested object, so the tool card's COMPLETE result can be driven
+// end-to-end: a leaf that lies far beyond the old 300-char cut must render in
+// the live card, in the reopened thread and after a reload
+// (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01). Product behaviour like
+// @demo-long-answer — not a hidden test seam. Its own key, so the memory
+// recall journey's `demo` key is untouched.
+const BIG_RESULT_MARKER = "@demo-big-result";
 export const DEMO_STREAM_CHUNK_MS = 30;
 export const DEMO_STREAM_ANSWER = "[demo model] Streaming answer. " + Array.from({ length: 12 }, (_, i) =>
   `Paragraph ${i + 1}: the agent hub runs on your new tab, keeps memory per origin in OPFS, drives the browser through granted tools, and streams every answer token as the provider produces it.`
@@ -288,6 +297,10 @@ function wantsCreateAgent(prompt) {
   return !!latestRunSlice(prompt)?.marker?.createAgent;
 }
 
+function wantsBigResult(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.bigResult;
+}
+
 /** Parse the deterministic name/role out of the marker turn (bounded). */
 function createAgentSpec(prompt) {
   const msgs = latestRunSlice(prompt)?.slice ?? [];
@@ -334,7 +347,8 @@ function latestRunSlice(prompt) {
   return {
     slice: msgs.slice(lastIdx),
     marker: {
-      tools: lastUser.includes(TOOLS_MARKER),
+      tools: lastUser.includes(TOOLS_MARKER) || lastUser.includes(BIG_RESULT_MARKER),
+      bigResult: lastUser.includes(BIG_RESULT_MARKER),
       delegate: lastUser.includes(DELEGATE_MARKER) && !lastUser.includes(AGENT_DELEGATE_MARKER),
       delegateAgent: lastUser.includes(AGENT_DELEGATE_MARKER),
       createAgent: lastUser.includes(CREATE_AGENT_MARKER),
@@ -1443,13 +1457,16 @@ function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board =
     }
     return null;
   }
+  // @demo-big-result runs the same sequence on the ~5 KiB payload under its
+  // own key (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01).
+  const setArgs = wantsBigResult(prompt) ? DEMO_BIG_ARGS : DEMO_ARGS;
   const plan = [
     { type: "search", tool: "memory_set" },
-    { type: "execute", args: DEMO_ARGS },
+    { type: "execute", args: setArgs },
     { type: "search", tool: "memory_get" },
-    { type: "execute", args: { key: "demo" } },
+    { type: "execute", args: { key: setArgs.key } },
     { type: "search", tool: "memory_get" },
-    { type: "execute", args: { key: "demo" } },
+    { type: "execute", args: { key: setArgs.key } },
   ];
   const fullPlan = wantsDemoToolsX2(prompt) ? [...plan, ...plan] : plan;
   const action = fullPlan[step];
@@ -1558,6 +1575,27 @@ const DEMO_ARGS = {
     total: 3.5,
     active: true,
     meta: { nested: { deep: [1, [2, [3]]], ratio: 0.75 } },
+  },
+};
+
+// The @demo-big-result payload: ~5 KiB of nested data whose LAST leaf
+// ("tail") lies far beyond the old 300-char cut — the journey asserts that
+// leaf in the rendered card (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01).
+// 32 articles × 5 nodes stays under the lazy protocol's argument node bound.
+export const DEMO_BIG_RESULT_TAIL = "TAIL-MARKER-END";
+const DEMO_BIG_ARGS = {
+  key: "demo-big-result",
+  value: {
+    articles: Array.from({ length: 32 }, (_, i) => ({
+      id: i + 1,
+      title: `Article ${i + 1}: what the open tab said about the platform`,
+      url: `https://example.com/research/article-${i + 1}`,
+      summary: `Summary ${i + 1}: the page argues the browser is the agent platform, keeps memory per origin, and drives tools through grants.`,
+      words: 400 + i * 7,
+    })),
+    count: 32,
+    complete: true,
+    tail: DEMO_BIG_RESULT_TAIL,
   },
 };
 

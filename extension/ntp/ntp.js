@@ -16,7 +16,7 @@ import { parseEnglishSchedule } from "../shared/schedule-parser.js";
 import { selectFailedRuns } from "../lib/run-retry.js";
 import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript, wireReplayApprovals, isProtocolTool } from "../shared/conversation.js";
 import { createRunSurfaceOwner } from "../shared/run-surface-owner.js";
-import { summarizeToolResult } from "../lib/tool-summary.js";
+import { summarizeToolResult, toolResultTruncationNote } from "../lib/tool-summary.js";
 import { cancelRunFromRenderedStop, projectConversationRunStatus } from "../shared/run-status.js";
 import { safeJsonStringify } from "../shared/tool-tree.js";
 import {
@@ -2149,9 +2149,10 @@ async function openBackgroundAgentChat(id, name) {
   syncComposerScope();
   threadConversation?.resetPlan?.(); // clear the prior surface's plan strip
   const hRes = await send("background-agent.history", { id }).catch(() => ({ entries: [] }));
+  const hydrated = await hydrateToolResultsFromRunLogs(Array.isArray(hRes.entries) ? hRes.entries : []);
   if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== "background") return;
   threadTitle.textContent = name || id || "Background agent";
-  renderAgentHistory(threadConversation, Array.isArray(hRes.entries) ? hRes.entries : []);
+  renderAgentHistory(threadConversation, hydrated);
   projectSurfaceRunTranscript();
   showThreadView({ focusAfter: threadComposer });
   renderRunStatus({ state: "idle" });
@@ -2179,6 +2180,40 @@ async function loadAgentHistoryEntries(kind, id) {
     return Array.isArray(journal) ? journal.slice(-200).reverse() : [];
   }
   return [];
+}
+
+/** Hydrate an agent's journal tool rows with the RETAINED FULL results from
+ * the durable run log (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01). The journal
+ * is the bounded list surface (200 KiB for the whole agent) and keeps only the
+ * 300-char summary; the run log is the authority the cards read. Rows are
+ * matched by (executionId, callId); the most recent HYDRATE_MAX_EXECUTIONS
+ * executions are read (one bounded log read each, concurrently). A read
+ * failure leaves that row on its summary — never an empty card. */
+const HYDRATE_MAX_EXECUTIONS = 12;
+async function hydrateToolResultsFromRunLogs(entries) {
+  const rows = Array.isArray(entries) ? entries : [];
+  const execIds = [];
+  for (const r of rows) {
+    if (r?.type !== "tool-result" || typeof r.executionId !== "string" || !r.executionId || typeof r.callId !== "string") continue;
+    if (!execIds.includes(r.executionId)) execIds.push(r.executionId);
+    if (execIds.length >= HYDRATE_MAX_EXECUTIONS) break;
+  }
+  if (!execIds.length) return rows;
+  const logs = await Promise.all(execIds.map((id) => loadDurableRunLogs(id).catch(() => null)));
+  const byKey = new Map();
+  for (const res of logs) {
+    for (const row of Array.isArray(res?.logs) ? res.logs : []) {
+      if (row?.type !== "tool-result" || typeof row.resultFull !== "string" || !row.resultFull || typeof row.callId !== "string") continue;
+      byKey.set(`${row.executionId}::${row.callId}`, row);
+    }
+  }
+  if (!byKey.size) return rows;
+  return rows.map((r) => {
+    const hit = r?.type === "tool-result" ? byKey.get(`${r.executionId}::${r.callId}`) : null;
+    return hit
+      ? { ...r, resultFull: hit.resultFull, resultFullTruncated: hit.resultFullTruncated === true, resultFullBytes: Number.isFinite(hit.resultFullBytes) ? hit.resultFullBytes : null }
+      : r;
+  });
 }
 
 /** Open the thread surface scoped to ONE agent of ANY kind (the unified agent
@@ -2223,7 +2258,7 @@ async function openAgentSurface({ kind, id, name }) {
   threadTitle.removeAttribute("aria-label");
   syncComposerScope();
   threadConversation?.resetPlan?.(); // clear the prior surface's plan strip
-  const entries = await loadAgentHistoryEntries(kind, id);
+  const entries = await hydrateToolResultsFromRunLogs(await loadAgentHistoryEntries(kind, id));
   if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== kind) return;
   threadTitle.textContent = name || id || "Agent";
   renderAgentHistory(threadConversation, entries);
@@ -2281,14 +2316,21 @@ function renderAgentHistory(container, entries) {
       const t = item.t;
       if (typeof container.appendTool !== "function") continue;
       if (isProtocolTool(t.tool)) continue; // protocol plumbing, never a card (§9)
-      const raw = t.result == null ? "" : typeof t.result === "string" ? t.result : safeJsonStringify(t.result);
-      const summary = t.result == null ? "" : summarizeToolResult(t.tool, t.result);
+      // The card's detail is the RETAINED FULL result (hydrated from the
+      // durable run log — the journal row itself is the bounded list surface);
+      // the journal's summary string is the fallback for rows persisted before
+      // the full copy existed (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01).
+      const full = typeof t.resultFull === "string" && t.resultFull ? t.resultFull : null;
+      const source = full ?? t.result;
+      const raw = full ?? (t.result == null ? "" : typeof t.result === "string" ? t.result : safeJsonStringify(t.result));
+      const summary = source == null ? "" : summarizeToolResult(t.tool, source);
       container.appendTool({
         name: t.tool ?? "tool",
         status: t.status ?? "done",
         args: t.args ?? null,
         result: summary || null,
         detail: raw && raw !== summary ? raw : null,
+        detailNote: t.resultFullTruncated ? toolResultTruncationNote(t.resultFullBytes) : null,
         ts: t.ts ?? null,
       });
     }

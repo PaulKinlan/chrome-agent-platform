@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.614] — 2026-09-01
+- Tool results now show the complete formatted JSON with a Copy button, errors are shown plainly, and nothing is lost when you reload.
+
 ## [0.2.613] — 2026-09-01
 - Task board: the page-access Allow card fix is complete.
 

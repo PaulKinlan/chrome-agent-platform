@@ -498,6 +498,82 @@ function boundSubtree(v, containerCap, depth = 0, cappedRef = { v: false }) {
   return { value: v, capped: cappedRef.v };
 }
 
+/* ── the pretty JSON view (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01) ───────
+ * The owner asked for "a nice JSON formatted result". The tree is the
+ * structured view; the raw view is the COMPLETE pretty-printed document,
+ * syntax-tokenised so the renderer can colour keys, strings, numbers,
+ * booleans, null and punctuation from the theme tokens — building spans with
+ * textContent only. Pure + bounded: a tokenised document above
+ * PRETTY_JSON_TOKENISE_MAX_CHARS renders as plain (still complete) text. */
+export const PRETTY_JSON_TOKENISE_MAX_CHARS = 96 * 1024;
+
+/** The complete pretty-printed JSON of a parsed value (2-space indent). Never
+ * throws: a cyclic/hostile value degrades to the bounded serializer. */
+export function prettyJson(value) {
+  try {
+    const s = JSON.stringify(value, null, 2);
+    if (typeof s === "string") return s;
+  } catch { /* cyclic / BigInt — fall through */ }
+  try { return safeJsonStringify(value, { maxBytes: 256 * 1024, maxNodes: 20000, maxString: 16384, maxDepth: 16 }); } catch { return '"[unserializable value]"'; }
+}
+
+/** Tokenise a pretty-printed JSON document into [{ kind, text }] where kind is
+ * one of key | string | number | boolean | null | punct | ws. Any text a
+ * well-formed JSON.stringify output cannot contain is emitted as `ws` so the
+ * concatenated token texts ALWAYS equal the input (never a dropped byte). */
+export function tokenizeJson(text) {
+  const s = String(text ?? "");
+  const out = [];
+  let i = 0;
+  const n = s.length;
+  const push = (kind, from, to) => { if (to > from) out.push({ kind, text: s.slice(from, to) }); };
+  while (i < n) {
+    const c = s[i];
+    if (c === " " || c === "\n" || c === "\r" || c === "\t") {
+      let j = i + 1;
+      while (j < n && (s[j] === " " || s[j] === "\n" || s[j] === "\r" || s[j] === "\t")) j++;
+      push("ws", i, j);
+      i = j;
+      continue;
+    }
+    if (c === '"') {
+      let j = i + 1;
+      while (j < n) {
+        if (s[j] === "\\") { j += 2; continue; }
+        if (s[j] === '"') { j++; break; }
+        j++;
+      }
+      // A key is a string followed (after optional whitespace) by a colon.
+      let k = j;
+      while (k < n && (s[k] === " " || s[k] === "\t")) k++;
+      push(k < n && s[k] === ":" ? "key" : "string", i, Math.min(j, n));
+      i = Math.min(j, n);
+      continue;
+    }
+    if (c === "{" || c === "}" || c === "[" || c === "]" || c === "," || c === ":") {
+      push("punct", i, i + 1);
+      i += 1;
+      continue;
+    }
+    if (c === "-" || (c >= "0" && c <= "9")) {
+      let j = i + 1;
+      while (j < n && /[0-9eE+.-]/.test(s[j])) j++;
+      push("number", i, j);
+      i = j;
+      continue;
+    }
+    if (s.startsWith("true", i)) { push("boolean", i, i + 4); i += 4; continue; }
+    if (s.startsWith("false", i)) { push("boolean", i, i + 5); i += 5; continue; }
+    if (s.startsWith("null", i)) { push("null", i, i + 4); i += 4; continue; }
+    // Anything else (never produced by JSON.stringify) passes through as text.
+    let j = i + 1;
+    while (j < n && !/[\s"{}\[\],:\-0-9tfn]/.test(s[j])) j++;
+    push("ws", i, j);
+    i = j;
+  }
+  return out;
+}
+
 /**
  * journalJson — the ONE serializer for persisted/broadcast tool-call payloads
  * (the tool-call clarity fix). The old journal path did

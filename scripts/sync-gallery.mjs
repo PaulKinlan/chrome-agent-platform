@@ -93,6 +93,8 @@ export async function syncGallery({ check = false } = {}) {
     }
     if (dst === "docs/tool-summary.js") {
       expected = Buffer.from(expected.toString("utf8").replace('../lib/pure.js', './pure.js'));
+      // The bounded serializer sits in shared/; the gallery copy is beside tool-summary.js.
+      expected = Buffer.from(expected.toString("utf8").replace('../shared/tool-tree.js', './tool-tree.js'));
     }
     if (check) {
       let actual;
