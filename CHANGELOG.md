@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.605] — 2026-09-01
+- DONE at origin/main@d5a0217d (coordinator gates 2944/0, 303/303)
+
 ## [0.2.604] — 2026-09-01
 - A provider saved without a base URL now runs on its built-in endpoint, and a custom endpoint with no URL is refused up front with a clear reason.
 
