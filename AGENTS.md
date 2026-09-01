@@ -71,6 +71,32 @@ an exception. These rules make that safe:
 - skills/web-resilience-audit + skills/web-resilience-fix — the project's
   resilience checks. Run them on the surfaces where applicable.
 
+## Agent private workspaces (CAP-FB-20260831-AGENT-PRIVATE-FS-01)
+
+Every **named and background agent has its own persistent private workspace** — an
+OPFS directory (`agent-workspaces/<key>/`) that only that agent can read or write.
+It is the agent's sandbox, the same trust level as its origin-keyed memory: no
+owner fs-grant is required, no approval card is paid, and no other agent (or the
+hub) can see inside it. Files persist across the agent's runs — write in run 1,
+read in run 2.
+
+- The model-facing file tools (`list_files`, `find_files`, `read_file`,
+  `write_file`, `delete_file`) fall back to the agent's private workspace when
+  no local folder is attached to the task. Explicit `grantId` always wins when
+  given; the workspace is the default for agent runs without a grant.
+- Bounds: 20 MiB / 200 files per agent (honest `workspace_quota_exceeded`
+  errors, never silent truncation). `grep_files` does not yet cover the
+  workspace (name search via `find_files`, content via `read_file`).
+- **Owner fs-grants remain the way to reach shared/global files.** A granted
+  folder (via `/folder` or Settings → Local folders) is the shared surface;
+  the private workspace is per-agent. When a task attaches a folder, the tools
+  operate on the folder; without one, they operate on the agent's workspace.
+- Settings → edit an agent → Advanced → **Private workspace** shows usage and
+  an owner-gesture Clear button.
+- Isolation is by run identity: the workspace key derives from the run's agent
+  stamp (`named:<slug>` / `background:<slug>`), so a hub or site run has no
+  workspace at all, and agent A's files are never visible to agent B.
+
 ## Working conventions (Paul, 2026-08-16)
 - **Track every ask.** Every product issue/request gets a stable entry in root
   `TASKS.md`; UI detail also lives in `docs/UI-FIXES-TRACKER.md`, and review/system

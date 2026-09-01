@@ -196,3 +196,108 @@ Deno.test("list_folders tool: surfaces the folder attached to the run", async ()
     await deleteFsGrant(grantId);
   }
 });
+
+// ── agent private workspaces (CAP-FB-20260831-AGENT-PRIVATE-FS-01) ─────────
+// The file tools fall back to the CURRENT AGENT's private OPFS workspace when
+// no folder is attached to the run and the run belongs to a named/background
+// agent. RED before the routing change: without the agent surface ref the tools
+// returned no_folder_granted (they never reached a workspace).
+
+// An in-memory OPFS root for the workspace (navigator.storage.getDirectory).
+class WsShimFile {
+  name: string; kind: string; bytes: Uint8Array;
+  constructor(name: string) { this.name = name; this.kind = "file"; this.bytes = new Uint8Array(0); }
+  async getFile() { return { name: this.name, size: this.bytes.byteLength, arrayBuffer: async () => this.bytes.slice().buffer }; }
+  createWritable() {
+    const self = this; const parts: (Uint8Array)[] = [];
+    return {
+      async write(data: string | Uint8Array) { parts.push(typeof data === "string" ? new TextEncoder().encode(data) : new Uint8Array(data)); },
+      async close() { self.bytes = new Uint8Array(parts.flatMap((c) => [...c])); },
+    };
+  }
+}
+class WsShimDir {
+  kids: Map<string, any>; name: string; kind: string;
+  constructor(name: string) { this.name = name; this.kind = "directory"; this.kids = new Map(); }
+  async getDirectoryHandle(n: string, { create }: { create?: boolean } = {}) {
+    const k = String(n); const kid = this.kids.get(k);
+    if (kid) return kid;
+    if (!create) throw Object.assign(new Error("nf"), { name: "NotFoundError" });
+    const d = new WsShimDir(k); this.kids.set(k, d); return d;
+  }
+  async getFileHandle(n: string, { create }: { create?: boolean } = {}) {
+    const k = String(n); const kid = this.kids.get(k);
+    if (kid) return kid;
+    if (!create) throw Object.assign(new Error("nf"), { name: "NotFoundError" });
+    const f = new WsShimFile(k); this.kids.set(k, f); return f;
+  }
+  async removeEntry(n: string) { this.kids.delete(String(n)); }
+  async *values() { for (const kid of this.kids.values()) yield kid; }
+}
+const wsRoot = new WsShimDir("root");
+Object.defineProperty(globalThis, "navigator", {
+  value: { storage: { getDirectory: async () => wsRoot, estimate: async () => ({ quota: Number.MAX_SAFE_INTEGER, usage: 0 }) } },
+  configurable: true, writable: true,
+});
+
+function resetWs() { wsRoot.kids.clear(); }
+
+Deno.test("workspace tools: a named agent with NO folder writes into its private workspace", async () => {
+  resetWs();
+  setRunContext({ threadId: "t1", agentSurfaceRef: "named:writer-agent" });
+  try {
+    const tools = browserToolset(false);
+    assert(tools.write_file, "write_file tool is exposed");
+    const w = await tools.write_file.execute({ path: "notes/plan.md", content: "plan v1" });
+    assertEquals(w.ok, true, `write into the private workspace failed: ${JSON.stringify(w)}`);
+    assertEquals(w.workspace, "named-writer-agent");
+    const r = await tools.read_file.execute({ path: "notes/plan.md" });
+    assertEquals(r.ok, true, `read back failed: ${JSON.stringify(r)}`);
+    assertEquals(r.content, "plan v1");
+    const l = await tools.list_files.execute({ path: "notes" });
+    assertEquals(l.ok, true);
+    assert(l.entries.some((e: any) => e.name === "plan.md"), "the file is listed");
+  } finally {
+    clearRunContext();
+  }
+});
+
+Deno.test("workspace tools: isolation — a second agent cannot read the first's file", async () => {
+  resetWs();
+  setRunContext({ threadId: "t1", agentSurfaceRef: "named:writer-agent" });
+  try {
+    const tools = browserToolset(false);
+    await tools.write_file.execute({ path: "secret.txt", content: "only A" });
+  } finally {
+    clearRunContext();
+  }
+  setRunContext({ threadId: "t2", agentSurfaceRef: "named:reader-agent" });
+  try {
+    const tools = browserToolset(false);
+    const r = await tools.read_file.execute({ path: "secret.txt" });
+    assert(r.ok === false, "agent B must NOT read agent A's workspace file");
+    assertEquals(r.code, "file_not_found");
+  } finally {
+    clearRunContext();
+  }
+});
+
+Deno.test("workspace tools: an explicit grantId still wins over the workspace", async () => {
+  const grantId = `fsg_ws_prio_${crypto.randomUUID()}`;
+  await saveFsGrant({ grantId, handle: sampleTree(), name: "project" });
+  setRunContext({ agentSurfaceRef: "named:writer-agent", folderGrants: [{ grantId, name: "project" }] });
+  try {
+    const tools = browserToolset(false);
+    // Both a grant AND an agent workspace are in scope; the attached folder wins.
+    const r = await tools.read_file.execute({ path: "readme.md" });
+    assertEquals(r.ok, true, `grant path must win: ${JSON.stringify(r)}`);
+    assert(String(r.content).includes("needle"), "reads from the granted folder, not the workspace");
+    // Explicit grantId on a missing grant never silently falls back.
+    const bad = await tools.read_file.execute({ path: "x", grantId: "fsg_definitely_absent_zzz" });
+    assert(bad.ok === false);
+    assertEquals(bad.code, "grant_not_found");
+  } finally {
+    clearRunContext();
+    await deleteFsGrant(grantId);
+  }
+});

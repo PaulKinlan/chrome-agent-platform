@@ -4611,6 +4611,28 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Recover: `git log --oneline --all --grep=CAP-FB-20260831-TOOL-PIPELINES-01`
 - History:
   - 2026-08-31 19:20 UTC — filed from owner feedback (co-do-style piped tool chains); design-first.
+## [CAP-FB-20260831-AGENT-PRIVATE-FS-01] Individual agents get a private persistent filesystem, beside the owner's global grants
+- Feedback: 2026-09-01 — owner (from the ChatGPT Work feature comparison): "individual agents might want access to the filesystem but just for them, as well as the global filesystem we can configure." ChatGPT Work gives every session a persistent scratch folder plus a shared volume; this task gives every named/background agent its own persistent OPFS workspace while the owner's fs-grants stay the shared surface.
+- Updated: 2026-09-01 01:00 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — implemented + gated on cap-agent-fs; candidate ready
+- Priority: P1
+- Owner: hub coordinator dispatch (worker)
+- Workspace: /tmp/cap-agent-fs
+- Branch: cap-agent-fs
+- Base: origin/main a3e415c5
+- Candidate: —
+- Shipping: —
+- Acceptance: every named/background agent gets a persistent private OPFS workspace (`agent-workspaces/<key>/`, lazy, origin-keyed by the run's agent stamp); the model-facing file tools (list_files/find_files/read_file/write_file/delete_file) fall back to the workspace when no fs-grant is in scope; per-agent quota (20 MiB / 200 files) with honest workspace_quota_exceeded errors; strict isolation (agent A never sees agent B's files; hub/site runs have no workspace); Settings → edit agent → Advanced shows usage + an owner-gesture Clear; AGENTS.md documents it; owner fs-grants remain the shared/global surface (explicit grantId always wins).
+  - Context: per-agent OPFS already exists for memory (namedAgentMemory) and skills; the opfs-tool-workspace wrapper is per-JOB, not per-agent. The new module mirrors ChatGPT Work's per-session scratch + shared volume split.
+  - Files: extension/lib/agent-workspace.js (new — workspace ops + quota + usage), extension/lib/browser-tools.js (fs tools fall back to the workspace via resolveFsTarget), extension/background/service-worker.js (agent-workspace.usage / agent-workspace.clear owner routes), extension/ntp/ntp.js (edit-dialog Private workspace row), AGENTS.md (docs), tests/agent-workspace.test.ts + tests/fs-tools.test.ts (unit + tool-level integration incl. run-1/run-2 persistence and A/B isolation), scripts/chrome-journeys.ts (edit-dialog workspace-row check).
+- Gates: build; full suite; chrome-journeys (new "edit dialog: the agent's Private workspace row renders with usage and a Clear button" check); RED→GREEN proven (workspace fallback removed → the two workspace tool tests go RED).
+- Blockers: none
+- Next: —
+- Recover: `git log --oneline --all --grep=CAP-FB-20260831-AGENT-PRIVATE-FS-01`
+- History:
+  - 2026-09-01 01:00 UTC — implemented + gated on cap-agent-fs; unit 11/11 + fs-tools integration 3 new (21 total), RED→GREEN falsification shown; journey check added.
+
 
 ## [CAP-FB-20260831-MCP-SUPPORT-01] MCP server support — global for the task view, and per-agent
 - Feedback: 2026-08-31 — owner: "I need to plan to add MCP support. MCP will be a global option for the task view, but then each agent should have its own MCP servers that might have their own configurations. Also the agent-do harness doesn't support the latest MCP spec iirc, we might need to update that." Investigation: agent-do 0.7 ALREADY supports MCP (`mountMcpServers`, `@modelcontextprotocol/sdk@1.30.0` = LATEST_PROTOCOL_VERSION 2025-11-25) — the harness is current, not behind. Plan of record: `docs/MCP-SUPPORT-DESIGN.md`.

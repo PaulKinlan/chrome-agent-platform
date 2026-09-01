@@ -18,8 +18,16 @@ import {
   readFsGrantFile,
   scanFsGrantManifest,
   grepFsGrant,
+  writeFsGrantFile,
   MAX_FS_READ_BYTES,
 } from "./fs-grants.js";
+import {
+  listWorkspaceEntries,
+  readWorkspaceFile,
+  writeWorkspaceFile,
+  deleteWorkspaceFile,
+  searchWorkspaceFiles,
+} from "./agent-workspace.js";
 import { normalizeHostPattern } from "./permission-orchestration.js";
 import { DEVELOPER_ONLY_TOOL_NAMES } from "./chrome-tool-capabilities.js";
 import { capLog } from "./cap-log.js";
@@ -1897,6 +1905,22 @@ async function resolveRunGrantId(grantId) {
   };
 }
 
+// Resolve the file target for a tool call: an explicit grant (or the single
+// available folder) when in scope, otherwise the current agent's PRIVATE
+// workspace when the run belongs to a named/background agent (owner-directed,
+// CAP-FB-20260831-AGENT-PRIVATE-FS-01). A hub/site run with no grant and no
+// workspace gets the honest no_folder_granted error.
+async function resolveFsTarget(grantId) {
+  const g = await resolveRunGrantId(grantId);
+  if (g.ok === true) return { kind: "grant", grantId: g.grantId };
+  if (g.code === "no_folder_granted") {
+    // No grant in scope — fall back to this run's agent workspace when it has
+    // one (the run is a named/background agent).
+    return { kind: "workspace" };
+  }
+  return g; // grant_not_found / fs_permission_lapsed / grant_ambiguous / other
+}
+
 export function browserToolset(readOnly = false, {
   scheduleScriptGate = null,
   cookieValueGate = null,
@@ -1954,31 +1978,39 @@ export function browserToolset(readOnly = false, {
     }),
     list_files: tool({
       description:
-        "List files and subfolders inside a granted local folder. Optional path (relative to the folder) lists a subdirectory. Returns { ok, entries:[{name,kind}] } or a bounded JSON error.",
+        "List files and subfolders inside a granted local folder. Optional path (relative to the folder) lists a subdirectory. When no local folder is available to this task, lists this agent's private workspace instead (if the run belongs to a named or background agent). Returns { ok, entries:[{name,kind}] } or a bounded JSON error.",
       inputSchema: z.object({
         grantId: z.string().optional(),
         path: z.string().optional(),
         limit: z.number().int().min(1).max(500).optional(),
       }),
       execute: async ({ grantId, path, limit }) => {
-        const g = await resolveRunGrantId(grantId);
-        if (g.ok === false) return g;
-        const res = await listFsGrantEntries(g.grantId, { relativePath: path ?? "", limit });
+        const target = await resolveFsTarget(grantId);
+        if (target.kind === "workspace") {
+          const res = await listWorkspaceEntries(path ?? "", { limit });
+          return res?.ok === false ? toFsToolError(res, path ?? "") : res;
+        }
+        if (target.ok === false) return target;
+        const res = await listFsGrantEntries(target.grantId, { relativePath: path ?? "", limit });
         return res?.ok === false ? toFsToolError(res, path ?? "") : res;
       },
     }),
     find_files: tool({
       description:
-        "Find files by name inside a granted local folder (recursive, bounded). Returns { ok, files:[{path,name,size}] } for names containing the query, or a bounded JSON error.",
+        "Find files by name inside a granted local folder (recursive, bounded). When no local folder is available to this task, searches this agent's private workspace instead. Returns { ok, files:[{path,name,size}] } or a bounded JSON error.",
       inputSchema: z.object({
         query: z.string(),
         grantId: z.string().optional(),
         limit: z.number().int().min(1).max(500).optional(),
       }),
       execute: async ({ query, grantId, limit }) => {
-        const g = await resolveRunGrantId(grantId);
-        if (g.ok === false) return g;
-        const scan = await scanFsGrantManifest(g.grantId, {});
+        const target = await resolveFsTarget(grantId);
+        if (target.kind === "workspace") {
+          const res = await searchWorkspaceFiles(query ?? "", { limit });
+          return res?.ok === false ? toFsToolError(res) : res;
+        }
+        if (target.ok === false) return target;
+        const scan = await scanFsGrantManifest(target.grantId, {});
         if (scan?.ok === false) return toFsToolError(scan);
         const needle = String(query ?? "").trim().toLowerCase();
         const cap = Math.min(Math.max(1, Number(limit) || 200), 500);
@@ -1986,27 +2018,31 @@ export function browserToolset(readOnly = false, {
           .filter((e) => e.kind === "file" && (!needle || String(e.name).toLowerCase().includes(needle)))
           .slice(0, cap)
           .map((e) => ({ path: e.path, name: e.name, size: e.size }));
-        return { ok: true, grantId: g.grantId, query: String(query ?? ""), files, matchCount: files.length, truncated: scan.truncated === true };
+        return { ok: true, grantId: target.grantId, query: String(query ?? ""), files, matchCount: files.length, truncated: scan.truncated === true };
       },
     }),
     read_file: tool({
       description:
-        "Read a text file inside a granted local folder. `path` is relative to the folder. Returns { ok, content, size, sha256 } or a bounded JSON error (file_not_found, fs_file_too_large, fs_file_not_text, …).",
+        "Read a text file inside a granted local folder. `path` is relative to the folder. When no local folder is available to this task, reads from this agent's private workspace instead. Returns { ok, content, size, sha256 } or a bounded JSON error (file_not_found, fs_file_too_large, fs_file_not_text, …).",
       inputSchema: z.object({
         path: z.string(),
         grantId: z.string().optional(),
         maxBytes: z.number().int().min(1).max(MAX_FS_READ_BYTES).optional(),
       }),
       execute: async ({ path, grantId, maxBytes }) => {
-        const g = await resolveRunGrantId(grantId);
-        if (g.ok === false) return g;
-        const res = await readFsGrantFile(g.grantId, { relativePath: path ?? "", asText: true, maxBytes });
+        const target = await resolveFsTarget(grantId);
+        if (target.kind === "workspace") {
+          const res = await readWorkspaceFile(path ?? "", { maxBytes });
+          return res?.ok === false ? toFsToolError(res, path ?? "") : res;
+        }
+        if (target.ok === false) return target;
+        const res = await readFsGrantFile(target.grantId, { relativePath: path ?? "", asText: true, maxBytes });
         return res?.ok === false ? toFsToolError(res, path ?? "") : res;
       },
     }),
     grep_files: tool({
       description:
-        "Search the CONTENT of files inside a granted local folder (recursive, bounded). Returns { ok, matches:[{path,line,text}] }. Literal substring by default; set regex:true for a regular expression, ignoreCase:true to fold case. Errors are bounded JSON.",
+        "Search the CONTENT of files inside a granted local folder (recursive, bounded). When no local folder is available to this task, searches this agent's private workspace instead. Returns { ok, matches:[{path,line,text}] }. Literal substring by default; set regex:true for a regular expression, ignoreCase:true to fold case. Errors are bounded JSON.",
       inputSchema: z.object({
         query: z.string(),
         grantId: z.string().optional(),
@@ -2016,9 +2052,14 @@ export function browserToolset(readOnly = false, {
         maxMatches: z.number().int().min(1).max(200).optional(),
       }),
       execute: async ({ query, grantId, path, regex, ignoreCase, maxMatches }) => {
-        const g = await resolveRunGrantId(grantId);
-        if (g.ok === false) return g;
-        const res = await grepFsGrant(g.grantId, {
+        const target = await resolveFsTarget(grantId);
+        if (target.kind === "workspace") {
+          // No content-grep on the workspace in this slice: name search covers
+          // find_files; a content grep is a later slice. Honest bounded error.
+          return { ok: false, error: "workspace_grep_not_supported", message: "Content grep is not yet available in an agent's private workspace; use find_files for name search or read_file for a known path." };
+        }
+        if (target.ok === false) return target;
+        const res = await grepFsGrant(target.grantId, {
           query,
           relativePath: path ?? "",
           regex: regex === true,
@@ -2026,6 +2067,44 @@ export function browserToolset(readOnly = false, {
           maxMatches,
         });
         return res?.ok === false ? toFsToolError(res, path ?? "") : res;
+      },
+    }),
+    write_file: tool({
+      description:
+        "Write a text file. When a local folder is attached to this task (via /folder or Settings), writes inside that folder (requires a read-write grant). When no local folder is available and this run belongs to a named or background agent, writes into that agent's PRIVATE workspace (its own sandbox — no owner permission needed, same trust as the agent's memory; quota 20 MiB / 200 files). Returns { ok, bytes, sha256 } or a bounded JSON error.",
+      inputSchema: z.object({
+        path: z.string(),
+        content: z.string(),
+        grantId: z.string().optional(),
+      }),
+      execute: async ({ path, content, grantId }) => {
+        const target = await resolveFsTarget(grantId);
+        if (target.kind === "workspace") {
+          const res = await writeWorkspaceFile(path ?? "", content ?? "");
+          return res?.ok === false ? toFsToolError(res, path ?? "") : res;
+        }
+        if (target.ok === false) return target;
+        const res = await writeFsGrantFile(target.grantId, { relativePath: path ?? "", content: content ?? "", asBinary: false });
+        return res?.ok === false ? toFsToolError(res, path ?? "") : res;
+      },
+    }),
+    delete_file: tool({
+      description:
+        "Delete a file (or empty subdirectory) inside a granted local folder or the current agent's private workspace. Requires a read-write grant when deleting in a folder; the private workspace needs no owner permission. Returns { ok } or a bounded JSON error.",
+      inputSchema: z.object({
+        path: z.string(),
+        grantId: z.string().optional(),
+      }),
+      execute: async ({ path, grantId }) => {
+        const target = await resolveFsTarget(grantId);
+        if (target.kind === "workspace") {
+          const res = await deleteWorkspaceFile(path ?? "");
+          return res?.ok === false ? toFsToolError(res, path ?? "") : res;
+        }
+        if (target.ok === false) return target;
+        // No delete on an fs-grant in this slice: fs-grants.delete is not a
+        // model-facing surface; the workspace is where agents organize files.
+        return { ok: false, error: "fs_grant_delete_not_supported", message: "Deleting files inside an owner-granted folder is not available; use the agent's private workspace for organizing files." };
       },
     }),
     open_tab: tool({

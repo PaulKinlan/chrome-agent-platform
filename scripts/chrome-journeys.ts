@@ -423,6 +423,7 @@ const EXPECTED = [
   "create dialog: a REAL skill checkbox click checks it (unchecked → checked)",
   "create dialog: Create agent from the card yields ONE named agent whose role is the template persona",
   "create dialog: the saved agent's skill ids CONTAIN the exactly-toggled skill id",
+  "edit dialog: the agent's Private workspace row renders with usage and a Clear button",
   "create dialog: a Scheduled-group template creates one scheduled agent that the sidebar and Settings both list",
   "create dialog: the journey's created agents are removed again (fresh profile restored)",
   "folder command: a granted folder was seeded in the SW store",
@@ -1767,6 +1768,28 @@ async function main() {
       "create dialog: the saved agent's skill ids CONTAIN the exactly-toggled skill id",
       typeof toggledSkillId === "string" && savedSkillIds.includes(toggledSkillId),
     );
+    // CAP-FB-20260831-AGENT-PRIVATE-FS-01 — the edit dialog shows the agent's
+    // PRIVATE WORKSPACE row (usage + owner Clear). Creating an agent opens its
+    // thread, where the Edit button lives.
+    const wsRowSeen = await evalIn(cdp, ntpSession, `(async () => {
+      const edit = document.getElementById('edit-agent');
+      if (!edit || edit.hidden) return { ready: false, why: 'no-edit-button' };
+      edit.click();
+      await new Promise((r) => setTimeout(r, 400));
+      const host = [...document.querySelectorAll('agent-dialog')].find((h) => h.shadowRoot?.querySelector('dialog')?.open);
+      if (!host) return { ready: false, why: 'no-open-dialog' };
+      const row = [...host.querySelectorAll('.agent-config-advanced-body > div')].find((d) => d.textContent.includes('Private workspace'));
+      if (!row) return { ready: true, hasRow: false };
+      const text = row.textContent.replace(/\s+/g, ' ').trim();
+      return { ready: true, hasRow: true, hasClear: !!row.querySelector('button'), text: text.slice(0, 120) };
+    })()`);
+    console.log("edit dialog workspace row:", JSON.stringify(wsRowSeen));
+    check(
+      "edit dialog: the agent's Private workspace row renders with usage and a Clear button",
+      wsRowSeen?.ready === true && wsRowSeen?.hasRow === true && wsRowSeen?.hasClear === true,
+    );
+    await evalIn(cdp, ntpSession, `document.querySelector('agent-dialog')?.close?.(); true`);
+    await sleep(200);
     // A Scheduled card: the recipe becomes ONE scheduled named agent through
     // the same create path (the schedule text "every N minutes" is prefilled).
     await evalIn(cdp, ntpSession, `document.querySelector('agent-dialog')?.close?.(); true`);

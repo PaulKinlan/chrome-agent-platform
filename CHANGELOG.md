@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.598] — 2026-09-01
+- Every named agent gets a persistent private workspace, beside the owner's global file grants
+
 ## [0.2.597] — 2026-09-01
 - Dialog work — searchable grouped customizable select for agent templates with both-scheme contrast gates
 
