@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.608] — 2026-09-01
+- Editing files in a shared folder is now a fully supported agent action.
+
 ## [0.2.607] — 2026-09-01
 - The agent can now edit a file in a folder you shared: you see the exact diff and approve it before anything is written.
 
