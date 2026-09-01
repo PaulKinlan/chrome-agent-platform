@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.571] — 2026-09-01
+- Task view full response: r4 fixes — the backstop target is the true overflow delta with strict termination, the marker label states the actual cap, and the marker byte budget is reserved at its escaped length
+
 ## [0.2.570] — 2026-09-01
 - Task view full response: r3 fixes — the serialized-size backstop shrink is marker-safe and surrogate-safe (fixed 240 KiB marker label survives any shrink), and the tracker reflects the final bounds
 

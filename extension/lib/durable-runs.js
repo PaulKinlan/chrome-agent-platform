@@ -165,15 +165,19 @@ function boundedBytes(value, maxBytes, opts = {}) {
     ? (t) => utf8Bytes(JSON.stringify(t))
     : (t) => utf8Bytes(t);
   if (measure(s) <= maxBytes) return s;
-  // The marker label is FIXED at the message cap (240 KiB) when the caller
-  // says so — a backstop shrink must not change what the user is told (the
-  // semantic is "your response exceeded the message cap; the complete text is
-  // in the run log", and the label must match the thread path).
-  const labelKiB = opts.markerKiB ?? (maxBytes / 1024).toFixed(0);
+  // The marker label is DYNAMIC — it states the ACTUAL cap applied to this
+  // copy, so a backstop shrink is never dishonest about what was stored
+  // (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r4 P1b: a fixed "240 KiB"
+  // claim is false after a smaller backstop target).
   const marker = opts.marker
-    ? `\n\n…(response truncated to ${labelKiB} KiB — the complete text is in the run log)`
+    ? `\n\n…(response truncated to ${(maxBytes / 1024).toFixed(0)} KiB — the complete text is in the run log)`
     : "";
-  const budget = Math.max(0, maxBytes - utf8Bytes(marker));
+  // r4 P2: reserve the marker's TRUE storage cost — when measuring escaped
+  // bytes, the marker itself will be JSON-escaped inside the stored string, so
+  // reserve its escaped length (reserving the raw length under-reserves for
+  // the newlines, which escape to two characters each).
+  const markerBytes = opts.escaped ? utf8Bytes(JSON.stringify(marker)) : utf8Bytes(marker);
+  const budget = Math.max(0, maxBytes - markerBytes);
   let lo = 0;
   let hi = s.length;
   while (lo < hi) {
@@ -1877,24 +1881,36 @@ export function createDurableRunRegistry({
         // bound in pathological cases (e.g. control-char floods) — verify the
         // serialized size and shrink the full copy until it fits. r3 P1: the
         // shrink re-runs boundedBytes (not a blind slice) so the truncation
-        // MARKER always survives (its byte budget is reserved) and cuts stay
-        // on code-point boundaries (no split surrogate pair).
+        // MARKER always survives and cuts stay on code-point boundaries.
+        // r4 P1a: the target is the serialized-overflow DELTA directly (so the
+        // loop strictly converges on the bound) and the loop terminates the
+        // moment the content stops shrinking (an envelope that alone exceeds
+        // the bound cannot be fixed by giving up content — fail loudly via the
+        // store write's own bound error instead of spinning).
         let serializedOutbox = utf8Bytes(JSON.stringify(outbox));
         let shrinkGuard = 0;
-        while (serializedOutbox > 256 * 1024 && outbox.threadTerminal?.content && shrinkGuard++ < 24) {
-          // Shrink to remove the overflow (minus a margin for the envelope):
-          // boundedBytes re-slices with the marker + code-point guarantees.
+        while (serializedOutbox > 256 * 1024 && outbox.threadTerminal?.content && shrinkGuard++ < 32) {
           const overflow = serializedOutbox - 256 * 1024;
           const contentEscaped = utf8Bytes(JSON.stringify(outbox.threadTerminal.content));
-          const target = Math.max(0, contentEscaped - overflow - 1024);
+          // Remove the full overflow delta from the content's escaped size
+          // (plus a small margin for the envelope) — one step toward the bound.
+          const target = Math.max(0, contentEscaped - overflow - 256);
+          const before = contentEscaped;
           outbox.threadTerminal.content = boundedBytes(
             outbox.threadTerminal.content,
             target,
-            // The marker label stays fixed at the message cap (240 KiB) so a
-            // shrink never changes the user-facing truncation message.
-            { marker: true, escaped: true, markerKiB: 240 },
+            // The marker label is dynamic — it states the ACTUAL cap applied
+            // to this copy (r4 P1b).
+            { marker: true, escaped: true },
           );
+          const after = utf8Bytes(JSON.stringify(outbox.threadTerminal.content));
           serializedOutbox = utf8Bytes(JSON.stringify(outbox));
+          // Strict termination: once the content stops shrinking (it is at the
+          // marker floor — only the marker remains), further iterations make no
+          // progress. If the outbox still exceeds the bound, the ENVELOPE is
+          // the overflow source and cannot be fixed by giving up content — the
+          // store write below throws its own honest bound error.
+          if (after >= before) break;
         }
         await store.setTrusted(outboxKey, outbox);
       }

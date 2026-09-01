@@ -1863,9 +1863,15 @@ Deno.test("durable runs: the backstop shrink keeps the marker and never splits a
   const outbox = captured[`run-outbox:${executionId}`];
   assert(outbox, "outbox persisted");
   const content = outbox.threadTerminal?.content ?? "";
-  // The marker must survive the backstop shrink (never-silent truncation).
-  assert(content.includes("truncated to 240 KiB"), "the truncation marker survived the backstop shrink");
+  // The marker must survive the backstop shrink (never-silent truncation) and
+  // its label must state the ACTUAL cap applied (r4 P1b: dynamic, honest).
+  const markerMatch = content.match(/truncated to (\d+) KiB/);
+  assert(markerMatch, "the truncation marker survived the backstop shrink: " + content.slice(-90));
   assert(content.includes("complete text is in the run log"), "the marker names where the full text lives");
+  const storedEscapedKiB = Math.floor(new TextEncoder().encode(JSON.stringify(content)).byteLength / 1024);
+  const claimedKiB = Number(markerMatch[1]);
+  assert(Math.abs(storedEscapedKiB - claimedKiB) <= 1,
+    `the marker label must match the actual stored cap (claims ${claimedKiB} KiB, stored ${storedEscapedKiB} KiB)`);
   // No lone high surrogate at the cut (code-point boundary preserved).
   const lastChar = content.charCodeAt(content.length - 1);
   assert(!(lastChar >= 0xD800 && lastChar <= 0xDBFF),
@@ -1877,4 +1883,62 @@ Deno.test("durable runs: the backstop shrink keeps the marker and never splits a
   assert(serialized < 256 * 1024, `serialized outbox must fit the store bound after shrink (${serialized} bytes)`);
   assertEquals(Array.isArray(outbox.threadTerminal?.skills) ? outbox.threadTerminal.skills.length : 0, 400,
     "the shrink only touches the full copy, never the envelope");
+});
+
+Deno.test("durable runs: the backstop shrink strictly terminates with the outbox FITTING when content can absorb the overflow (r4 P1a)", async () => {
+  const store = new FakeStore();
+  const captured = {};
+  const origSet = store.setTrusted.bind(store);
+  store.setTrusted = async (key, value) => {
+    if (String(key).startsWith("run-outbox:")) captured[key] = structuredClone(value);
+    return origSet(key, value);
+  };
+  const run = harness(store);
+  await begin(run.registry);
+  // Adversarial: content near the 240 KiB escaped cap PLUS an envelope big
+  // enough that the FIRST serialized outbox is over the 256 KiB bound, but
+  // small enough that giving up content CAN fit it. The loop must converge on
+  // a fitting outbox (strictly, no floor stall) with an honest dynamic marker.
+  const content = "a".repeat(240_000) + "\u{1F600}".repeat(500);
+  const skills = Array.from({ length: 120 }, (_, i) => `skill-${i}-` + "x".repeat(400)); // ~60 KB envelope
+  await run.registry.settle(executionId, { ok: true, result: content, logicalId: "task-p1a", skills });
+  const outbox = captured[`run-outbox:${executionId}`];
+  assert(outbox, "outbox persisted (settle did not hang or throw)");
+  const serialized = new TextEncoder().encode(JSON.stringify(outbox)).byteLength;
+  assert(serialized < 256 * 1024, `outbox must FIT the store bound after shrink (${serialized} bytes)`);
+  const stored = outbox.threadTerminal?.content ?? "";
+  assert(stored.includes("truncated to"), "the marker is present after the shrink");
+  assert(stored.includes("complete text is in the run log"), "the marker names where the full text lives");
+  const lastChar = stored.charCodeAt(stored.length - 1);
+  assert(!(lastChar >= 0xD800 && lastChar <= 0xDBFF), "no lone high surrogate at the cut");
+});
+
+Deno.test("durable runs: an envelope that alone exceeds the store bound fails LOUDLY, never spins (r4 P1a)", async () => {
+  // A bound-enforcing store mirrors the real memory store (MAX_VALUE_BYTES):
+  // an outbox that cannot fit after the content is fully given up must reject
+  // the settle with an honest error rather than loop forever or silently write
+  // an over-bound value.
+  const store = new FakeStore();
+  const origSet = store.setTrusted.bind(store);
+  store.setTrusted = async (key, value) => {
+    const bytes = new TextEncoder().encode(JSON.stringify(value)).byteLength;
+    if (String(key).startsWith("run-outbox:") && bytes > 256 * 1024) {
+      throw new Error(`value for "${key}" exceeds the 262144-byte bound`);
+    }
+    return origSet(key, value);
+  };
+  const run = harness(store);
+  await begin(run.registry);
+  // Envelope ~300 KB — larger than the entire 256 KiB bound; no content give-up
+  // can fit it. The loop must terminate at the marker floor and the settle must
+  // reject with the honest bound error (no infinite spin).
+  const hugeSkills = Array.from({ length: 700 }, (_, i) => `skill-${i}-` + "x".repeat(400));
+  let rejected = null;
+  try {
+    await run.registry.settle(executionId, { ok: true, result: "reply", logicalId: "task-p1a-big", skills: hugeSkills });
+  } catch (e) {
+    rejected = String(e?.message ?? e);
+  }
+  assert(rejected !== null, "an unfittable envelope must reject the settle");
+  assert(rejected.includes("bound"), `the rejection must be the honest store-bound error (got: ${rejected.slice(0, 80)})`);
 });
