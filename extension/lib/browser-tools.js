@@ -3,6 +3,7 @@
 // explicit user grant (a chrome.storage flag the hub sets when the user opts
 // in), so a page's untrusted text can never drive arbitrary tab control.
 
+import { newId } from "./pure.js";
 import { tool } from "ai";
 import { z } from "zod";
 import { scheduleTask } from "./scheduler.js";
@@ -68,13 +69,11 @@ async function readGrantFor(origin) {
   return validateGrantFor(grant, origin);
 }
 
-let grantSeq = 0;
 /** A unique, non-predictable grant identity. Revoke→regrant always produces a
  * DIFFERENT id, so a capture can detect that authorization was absent during
  * the capture interval (not just that a grant exists before/after). */
 function newGrantId() {
-  if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
-  return `grant_${Date.now()}_${Math.random().toString(36).slice(2)}_${grantSeq++}`;
+  return newId();
 }
 
 /** The current grant's identity id, or null when no grant exists. */

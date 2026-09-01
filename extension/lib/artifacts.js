@@ -42,7 +42,7 @@
 
 import { masterMemory, siteMemory, canonicalOrigin } from "./memory.js";
 import { TOOL_ARGUMENT_LIMITS } from "./tool-argument-contract.js";
-import { sha256Hex } from "./pure.js";
+import { newId, sha256Hex } from "./pure.js";
 // The ONE diff core (jsdiff via ./shared/diff-core.js → dist bundle). The build
 // rewrites this dist import to the source wrapper for every bundle (build.mjs
 // `cap-diff-core-from-source`), so no second diff implementation ships and the
@@ -693,10 +693,6 @@ function canonical(origin) {
   return origin === "master" ? "master" : (canonicalOrigin(origin) ?? "master");
 }
 
-function newId() {
-  return `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
 /** STRICT index read: a real read/corruption failure OR a malformed non-array
  * value THROWS — never treated as an empty index. */
 async function readIndexStrict(store) {
@@ -727,7 +723,7 @@ function boundAssetMeta({ type, name, content }) {
 async function createAssetLocked(store, origin, o, { type, name, content, meta, pk, by, summary }) {
   const bounded = boundAssetMeta({ type, name, content });
   if (bounded.error) return { ok: false, error: bounded.error };
-  const id = newId();
+  const id = newId("a");
   const now = Date.now();
   const asset = {
     id, type: bounded.type, name: bounded.name, origin: o,

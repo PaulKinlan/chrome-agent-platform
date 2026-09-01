@@ -155,7 +155,7 @@ async function currentVersion(dir, key) {
 }
 
 import { kvGet } from "./kv.js";
-import { fnv1a } from "./pure.js";
+import { fnv1a, newId } from "./pure.js";
 
 const ENROLL_KEY = "cap:enrollment";
 
@@ -1681,7 +1681,7 @@ export async function saveScreenshot(mem, { url, dataURL }) {
     throw new Error(`screenshot exceeds the ${MAX_SCREENSHOT_BYTES}-byte bound`);
   }
   return withWriteLock(async () => {
-    const id = `shot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const id = newId("shot");
     const dir = await openDir([ROOT, MASTER, "screenshots"]);
     // The metadata index lives on the same store `mem` points at (master). The
     // index write must NOT re-acquire the global write mutex (it is already held

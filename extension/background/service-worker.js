@@ -394,7 +394,7 @@ async function runScriptSandboxed(source) {
   // unavailable (e.g. headless Chrome), the NTP page — the on-demand host —
   // answers the claim instead.
   await ensureOffscreen().catch(() => {});
-  const runId = `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  const runId = newId("run");
   registerScriptRunPolicy(runId, source);
   // Phase 1 — announce + claim: the FIRST host to respond wins (the runtime
   // sendMessage resolves with the first sendResponse).
@@ -609,7 +609,8 @@ import {
   summarizeInjection,
   isExactOptionsSender,
   KEYBOARD_COMMANDS,
-  hubUrlForCommand
+  hubUrlForCommand,
+  newId
 } from "../lib/pure.js";
 import { redactToolResult } from "../lib/tool-summary.js";
 import {
@@ -928,7 +929,7 @@ async function handleAlarm(alarm) {
     if (task.scriptId) {
       await fence.assertOwned();
       const got = await getScript("master", task.scriptId);
-      const runInstance = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const runInstance = newId();
       if (got.ok) {
         const run = await runScriptSandboxed(got.script.source);
         let result = run?.result ?? null;
@@ -1137,9 +1138,7 @@ const latestExecutionByTask = new Map(); // logical taskId → execId (latest)
 const activeExecutions = new Set(); // execIds currently allowed to record
 const MAX_RUN_ATTESTATIONS = 100;
 function newExecutionId() {
-  const uuid = globalThis.crypto?.randomUUID?.() ??
-    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-  return `exec:${uuid}`;
+  return `exec:${newId()}`;
 }
 function beginExecution(execId, taskId) {
   activeExecutions.add(execId);
@@ -2578,7 +2577,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     // what an agent did — even a background agent with no live UI. The journal
     // is bounded (count + bytes); a journal failure never kills the run
     // (best-effort telemetry), and the live broadcast still flows through.
-    const runInstance = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const runInstance = newId();
     const callSeq = new Map(); // per-run: toolName -> counter (tool-call side)
     const callQueue = new Map(); // per-run: toolName -> pending callId FIFO (tool-result side)
     const orphanSeq = new Map(); // per-run: toolName -> orphan-result counter (unique ids)
@@ -4088,7 +4087,7 @@ async function writeActionLedgerRow(name, args, result, context) {
   const row = ledgerRowFor(name, args, result, extra);
   if (!row) return;
   const record = {
-    id: `act-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    id: `act-${newId()}`,
     ts: Date.now(),
     source: context?.runId ?? context?.executionId ? "agent" : "hub",
     runId: context?.runId ?? context?.executionId ?? null,
@@ -7188,10 +7187,10 @@ const handlers = mergeRouteMaps(
     const src = await resolveRecipe(id);
     if (!src) return { ok: false, error: `no recipe ${id}` };
     const custom = await getCustomRecipes();
-    const newId = `${src.id}-custom-${Date.now()}`;
+    const customId = `${src.id}-custom-${Date.now()}`;
     const copy = {
       ...src,
-      id: newId,
+      id: customId,
       name: `${src.name} (copy)`,
       mode: "background",
       custom: true,

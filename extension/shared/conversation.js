@@ -13,6 +13,7 @@
 // The container is an <agent-conversation> element (the Web Component that owns
 // the message rendering: markdown, code blocks, tool cards, thinking traces).
 
+import { newId } from "../lib/pure.js";
 import { send } from "../lib/messages.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
 import { safeJsonStringify } from "./tool-tree.js";
@@ -476,7 +477,7 @@ export function safeToolResult(value) {
  * (the SW tags events with it; the global port otherwise leaks other threads'
  * tool data). */
 function newRunId() {
-  try { return crypto.randomUUID(); } catch { return `r_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`; }
+  return newId();
 }
 
 /** A human activity label for a tool call, so the live status reads "Working…

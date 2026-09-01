@@ -16,6 +16,7 @@
 // under `script:<id>`; a lightweight reserved INDEX `scripts` lists the metadata
 // so list_scripts never reads every body.
 
+import { newId } from "./pure.js";
 import { masterMemory, siteMemory, canonicalOrigin } from "./memory.js";
 import { TOOL_ARGUMENT_LIMITS } from "./tool-argument-contract.js";
 
@@ -37,9 +38,6 @@ function scriptStore(origin) {
 }
 function canonical(origin) {
   return origin === "master" ? "master" : (canonicalOrigin(origin) ?? "master");
-}
-function newId() {
-  return `s_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function boundScript({ name, source }) {
@@ -73,7 +71,7 @@ export async function createScript(origin, { name, source }) {
   } catch (e) {
     return { ok: false, error: e?.message ?? String(e) };
   }
-  const id = newId();
+  const id = newId("s");
   const body = {
     id,
     name: meta.name,

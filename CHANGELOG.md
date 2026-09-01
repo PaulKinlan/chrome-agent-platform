@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.607] — 2026-09-01
+- Housekeeping: every identifier the extension mints (threads, tasks, screenshots, artifacts, scripts, board jobs, grants, run instances) now comes from one shared random-id helper built on the browser's cryptographic UUID instead of thirteen hand-rolled timestamp+random strings.
+
 ## [0.2.606] — 2026-09-01
 - Housekeeping: the memory store's hash seed comes from the shared helper module; the single-source guard now also watches the UTF-8 truncation helper.
 

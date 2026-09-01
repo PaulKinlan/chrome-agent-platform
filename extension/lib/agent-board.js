@@ -26,7 +26,7 @@
 // (redactSecretText, pure.js — the string-level redactor; redactSecrets only
 // covers object keys).
 
-import { redactSecretText } from "./pure.js";
+import { newId, redactSecretText } from "./pure.js";
 import { resolveTargetAgent } from "./agent-delegation.js";
 
 export const BOARD_JOBS_KEY = "cap:board-jobs";
@@ -147,7 +147,7 @@ export function boardText(value, max) {
 }
 
 function newJobId() {
-  return `job_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  return newId("job");
 }
 
 /**
@@ -1094,7 +1094,7 @@ export function createAgentBoardRoutes({ memory, withLock, listAgents, resolveCa
         const { rules, corrupt } = await loadDenyRules();
         if (corrupt) return CORRUPT_DENY;
         if (rules.length >= BOARD_MAX_DENY_RULES) return { ok: false, code: "board-deny-full", error: "deny rule list is full (200 max)" };
-        const id = `deny_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+        const id = newId("deny");
         rules.push({ id, action, agentId, peerId });
         await saveDenyRules(rules);
         return { ok: true, rule: { id, action, agentId, peerId } };

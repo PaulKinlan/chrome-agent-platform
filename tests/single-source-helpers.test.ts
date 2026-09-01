@@ -33,6 +33,7 @@ const FAMILIES: Array<{ canonical: string; aliases: string }> = [
   { canonical: "fnv1a", aliases: "fnv1a\\w*" },
   { canonical: "fnv1a64", aliases: "" },
   { canonical: "truncateUtf8", aliases: "truncateUtf8\\w*" },
+  { canonical: "newId", aliases: "newId\\w*" },
 ];
 const CANONICAL_NAMES = FAMILIES.map((f) => f.canonical);
 const ALIAS_GROUP = FAMILIES.map((f) => f.aliases).filter(Boolean).join("|");
@@ -51,7 +52,7 @@ const ALLOWED_COPIES = new Set<string>([
 ]);
 
 /** Which of the pattern guards below are armed (each lane armed its own). */
-const GUARD_ID_GENERATORS = false;
+const GUARD_ID_GENERATORS = true;
 const GUARD_INLINE_SLEEPS = false;
 
 async function* walk(dir: URL, rel = ""): AsyncGenerator<[string, string]> {
