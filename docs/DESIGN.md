@@ -37,6 +37,14 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 - Every section and control remains present at 500px and 360px. The document reflows rather than clipping; intentionally scrollable data tables retain local `overflow: auto` without widening the Settings iframe.
 - Advanced → Observability keeps the verbosity selector and full-local-detail switch adjacent. The warning names exactly what full detail exposes locally and states that dumps, exports, shared bundles, and reports remain redacted.
 
+## Providers — one recommended path (Settings → Providers)
+- The panel LEADS with a recommended card block, not seven equal presets. OpenAI (`Recommended` pill, pre-filled `gpt-5.6-luna`) leads; Google Gemini (`Alternative` pill, `gemini-3.7-flash`) is second; every other preset sits under a `<details>` **More providers** disclosure. The measured winner is the default (Q12 in `docs/OPEN-QUESTIONS.md`).
+- The card set is a `role=radiogroup` of `role=radio` cards (roving `tabindex`, arrow/Home/End move the selection, the current default carries `aria-checked=true` and a `Current` pill). The card is the tab stop; there is no separate tabpanel tab stop.
+- The four-click flow: **pick a provider → paste the key → Test connection → Use**. The key field is `type=password`; a **Get a key** link (`rel="noopener"`, new tab, "opens in a new tab" in its accessible name) points at the provider's own key page. **Use is disabled until Test passes** for the current key+model; editing the key or model resets the gate. A keyless/local provider and the already-active default are exempt.
+- **Test connection** runs the SAME request shape the hub uses (`max_completion_tokens`, `reasoning_effort:"none"` for OpenAI gpt-5.x) and then a permission-safe `list_tabs` dry run, so a green Test predicts a working RUN, not just a reachable endpoint. Errors are secret-safe (`safeProviderError`).
+- **Advanced** (`<details>` per card) holds the Base URL and the `<model-picker>` (catalogue suggestions + the live `/models` list). The model pre-fills the catalogue default so a blank never silently runs the demo model.
+- A successful Use of a keyed provider returns to the hub with the composer focused; the hub strip then reads **Ready — &lt;Provider&gt; · &lt;model&gt;**. With no model connected the strip reads **No model connected yet — pick one to start** (never "Internal testing provider active"). User copy never names `chrome.storage`.
+
 ## Run-log affordance
 - A task or agent surface keeps a plainly labelled **Run logs** action after a run settles. Its existing durable registry pages ten retained runs at a time so every run remains reachable without unbounded DOM growth; each row has **View log** and displays at most the latest 200 retained timeline entries with an honest truncation note.
 

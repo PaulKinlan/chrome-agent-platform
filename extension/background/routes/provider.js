@@ -77,13 +77,19 @@ export function createProviderRoutes({ invalidateAgent = () => {} } = {}) {
       // An empty model id runs the catalogue default — say so (the default is
       // a public catalogue id, not user data), so the hub and the journeys can
       // see that the run will NOT fall back to the demo model.
-      const usingDefaultModel = !String(cfg.model ?? "").trim() && Boolean(defaultModelFor(cfg.provider));
+      const explicitModel = String(cfg.model ?? "").trim();
+      const usingDefaultModel = !explicitModel && Boolean(defaultModelFor(cfg.provider));
+      // The effective model id the run will use — an explicit id or the
+      // catalogue default. A local/demo provider has none. Public catalogue id
+      // (not a credential): the hub strip reads "Ready — <provider> · <model>".
+      const modelId = isLocalProvider(cfg) ? "" : (explicitModel || defaultModelFor(cfg.provider) || "");
       return {
         provider: cfg.provider ?? "",
         ok: gate.ok,
         reason: gate.ok ? "" : gate.reason,
         usingDefaultModel,
         defaultModelId: usingDefaultModel ? defaultModelFor(cfg.provider) : "",
+        modelId,
       };
     },
 
@@ -157,7 +163,16 @@ export function createProviderRoutes({ invalidateAgent = () => {} } = {}) {
       };
       const preset = PROVIDER_CHOICES.find((p) => p.id === (m?.provider ?? cur.provider)) ??
         { id: m?.provider ?? cur.provider, name: m?.provider ?? cur.provider, baseURL: fields.baseURL, needsKey: true };
-      const res = await testProvider(preset, fields);
+      // The `list_tabs` dry run: after a green round-trip, exercise the SAME
+      // permission-safe browser read the run uses, so a green Test predicts a
+      // working RUN (not just a reachable endpoint). Reads the count only — no
+      // tab url/title crosses back to the page.
+      const listTabs = async () => {
+        if (typeof chrome === "undefined" || !chrome.tabs?.query) return 0;
+        const tabs = await chrome.tabs.query({}).catch(() => []);
+        return Array.isArray(tabs) ? tabs.length : 0;
+      };
+      const res = await testProvider(preset, fields, { listTabs });
       return { ...res, error: res?.error ? safeProviderError(res.error, fields.apiKey ? [fields.apiKey] : []) : res?.error };
     },
 

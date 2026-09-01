@@ -94,3 +94,46 @@ Deno.test("the OpenAI probe body uses max_completion_tokens and reasoning_effort
   const grok = buildProbeBody({ baseURL: "https://api.x.ai/v1", model: "grok-4.6" });
   assertEquals("reasoning_effort" in grok, false);
 });
+
+// CAP-FB-20260830-PROVIDER-DEFAULT-AND-KEY-FLOW-01 — a green round-trip is only
+// half of "a working provider": the Test also runs the SAME permission-safe
+// list_tabs read the run uses and reports it as toolCheck, so a green Test
+// predicts a working RUN.
+Deno.test("Test probe posts max_completion_tokens and no max_tokens (injected fetch)", async () => {
+  let sentBody: any = null;
+  const fetchImpl = async (_url: string, init: any) => {
+    sentBody = JSON.parse(init.body);
+    return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: "ok" } }] }) };
+  };
+  const openai = { id: "openai", name: "OpenAI", baseURL: "https://api.openai.com/v1", needsKey: true, needsModel: true };
+  const res = await testProvider(openai, { baseURL: openai.baseURL, apiKey: "k", model: "gpt-5.6-luna" }, { fetchImpl });
+  assertEquals(res.ok, true);
+  assertEquals(sentBody.max_completion_tokens, 8);
+  assertEquals("max_tokens" in sentBody, false);
+  assertEquals(sentBody.reasoning_effort, "none");
+});
+
+Deno.test("Test runs the list_tabs dry run and reports toolCheck", async () => {
+  const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content: "ok" } }] }) });
+  const openai = { id: "openai", name: "OpenAI", baseURL: "https://api.openai.com/v1", needsKey: true, needsModel: true };
+  const res = await testProvider(
+    openai,
+    { baseURL: openai.baseURL, apiKey: "k", model: "gpt-5.6-luna" },
+    { fetchImpl, listTabs: async () => [{ id: 1 }, { id: 2 }, { id: 3 }] },
+  );
+  assertEquals(res.ok, true);
+  assertEquals(res.toolCheck?.ok, true);
+  assertEquals(res.toolCheck?.tabs, 3);
+});
+
+Deno.test("toolCheck failure never fails the Test itself", async () => {
+  const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({}) });
+  const openai = { id: "openai", name: "OpenAI", baseURL: "https://api.openai.com/v1", needsKey: true, needsModel: true };
+  const res = await testProvider(
+    openai,
+    { baseURL: openai.baseURL, apiKey: "k", model: "gpt-5.6-luna" },
+    { fetchImpl, listTabs: async () => { throw new Error("tabs unavailable"); } },
+  );
+  assertEquals(res.ok, true);
+  assertEquals(res.toolCheck?.ok, false);
+});

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.588] — 2026-09-01
+- Settings → Providers now leads with one recommended provider (OpenAI, with the model pre-filled) and a four-click flow — pick a provider, paste your key, test the connection, and click Use — that drops you back in the hub ready to run. The hub header now shows which model is connected.
+
 ## [0.2.587] — 2026-09-01
 - Four more improvements are in progress.
 

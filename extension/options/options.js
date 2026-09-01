@@ -41,6 +41,13 @@ import {
   providerSelectionPresentation,
   renderInternalProviderStatus,
 } from "../lib/provider-visibility.js";
+import {
+  keyPageFor,
+  leadingProviders,
+  moreProviders,
+  prefilledModelFor,
+  useEnabled,
+} from "../lib/providers-view.js";
 import { runOwnerApprovedMutation } from "../lib/owner-approved-mutation.js";
 import { credentialNeedsDurableStorage } from "../lib/first-run-onboarding.js";
 import {
@@ -129,11 +136,12 @@ const PROVIDERS = [
   {
     id: "openai",
     name: "OpenAI",
-    hint: "Your OpenAI key + model.",
+    hint: "Your OpenAI key. Runs gpt-5.6-luna — fast, one tool call per intent.",
     baseURL: "https://api.openai.com/v1",
     needsKey: true,
     needsModel: true,
     onDevice: false,
+    recommended: true,
     models: suggestedModelsFor("openai"),
   },
   {
@@ -149,11 +157,12 @@ const PROVIDERS = [
   {
     id: "gemini",
     name: "Google Gemini",
-    hint: "Your Gemini API key (OpenAI-compatible endpoint).",
+    hint: "Your Gemini API key. Runs gemini-3.7-flash — passes every journey, slower per turn.",
     baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
     needsKey: true,
     needsModel: true,
     onDevice: false,
+    alternative: true,
     models: suggestedModelsFor("gemini"),
   },
   {
@@ -678,20 +687,36 @@ async function refreshLiveModels(card, p) {
   }
 }
 
-// Providers side-tabs: the SELECTED tab is view state (which editor is open);
-// the DEFAULT is the persisted cfg.provider. Selection survives re-renders.
-let selectedProviderId = null;
+// The card the panel LEADS with is the recommended default; selection state is
+// the persisted cfg.provider. The rendered card carries role=radio in a
+// radiogroup — a fresh user reads ONE recommended path, not seven equal presets.
 
 function modelFieldHtml(p, cfg) {
-  // An EMPTY stored model pre-fills the catalogue default (the recommended,
+  // The model field pre-fills the catalogue default (the recommended,
   // verified-callable id) so the user never saves a blank that would run the
-  // demo model (CAP-FB-20260830-MODEL-CATALOG-CURRENT-01).
-  const current = (cfg.provider === p.id ? (cfg.model || "") : "") || defaultModelFor(p.id);
+  // demo model (CAP-FB-20260830-MODEL-CATALOG-CURRENT-01 / -PROVIDER-DEFAULT-01).
+  const current = prefilledModelFor(p, cfg);
   const models = providerCatalogue(p);
   const ph = models.length ? "Search or type a model id…" : (p.id === "ollama" ? "e.g. llama3.1" : "model id");
   // The component is SELF-LABELED (its shadow .field carries the label) — no
   // outer wrapper, or two "Model" captions stack (k3 MEDIUM-2).
   return `<model-picker class="model" data-provider="${escapeAttr(p.id)}" placeholder="${escapeAttr(ph)}" models="${escapeAttr(JSON.stringify(models))}" recommended="${escapeAttr(JSON.stringify(models))}" value="${escapeAttr(current)}" label="Model"></model-picker>`;
+}
+
+// Return to the hub with the composer focused after a successful Use. Settings
+// runs inside an in-page iframe on the hub (openView) OR as a standalone options
+// tab; both are handled — postMessage to the hub parent, or navigate the
+// standalone tab to the hub's #compose focus route.
+function returnToHubComposer() {
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type: "cap:return-to-hub-composer" }, window.location.origin);
+      return;
+    }
+  } catch { /* cross-origin parent — fall through to a full navigation */ }
+  if (typeof chrome !== "undefined" && chrome.runtime?.getURL) {
+    window.location.href = chrome.runtime.getURL("ntp/ntp.html#compose");
+  }
 }
 
 // The effective model: the shared component's committed value, or the
@@ -716,22 +741,190 @@ function effectiveModel(card) {
   return card.querySelector(".model")?.value || "";
 }
 
+// Build ONE provider card — a role=radio in a radiogroup. The recommended and
+// alternative cards LEAD; the rest sit under "More providers". The four-click
+// flow lives here: paste the key, Test connection (which gates), Use.
+function buildProviderCard(p, cfg) {
+  const isActive = cfg.provider === p.id;
+  const badge = p.recommended
+    ? `<span class="provider-badge recommended">Recommended</span>`
+    : p.alternative
+    ? `<span class="provider-badge">Alternative</span>`
+    : "";
+  const keyPage = keyPageFor(p.id);
+  const getKeyLink = (p.needsKey && keyPage)
+    ? `<a class="get-key" href="${escapeAttr(keyPage)}" target="_blank" rel="noopener" aria-label="Get a ${escapeAttr(p.name)} API key (opens in a new tab)">Get a key<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg></a>`
+    : "";
+  const card = document.createElement("div");
+  card.className = "provider-card" + (isActive ? " active" : "");
+  card.dataset.provider = p.id;
+  card.setAttribute("role", "radio");
+  card.setAttribute("aria-checked", String(isActive));
+  card.tabIndex = isActive ? 0 : -1;
+  card.setAttribute("aria-label", `${p.name}${isActive ? " (current default)" : ""}`);
+
+  const hasFields = p.needsKey || p.onDevice || p.id === "ollama" || p.id === "lm-studio";
+  card.innerHTML = `
+    <div class="provider-head">
+      <div class="provider-id">
+        <span class="provider-name">${p.name}${badge}${
+    isActive ? `<span class="provider-badge current" title="Current default">Current</span>` : ""
+  }</span>
+        <span class="muted provider-hint">${p.hint}</span>
+      </div>
+      <div class="provider-actions">
+        <button class="btn small set-default" type="button" aria-label="${
+    isActive ? `Update ${p.name}` : `Use ${p.name}`
+  }">${isActive ? "Update" : "Use"}</button>
+        <button class="btn small ghost test-connection" type="button" aria-label="Test connection for ${p.name}">Test connection</button>
+      </div>
+    </div>
+    ${
+    hasFields
+      ? `
+    <fieldset class="fields">
+      <legend class="sr-only">${p.name} credentials</legend>
+      ${
+        p.needsKey
+          ? `<label class="field key-field"><span class="field-label">API key</span><input class="api-key" type="password" placeholder="Paste your key" autocomplete="off">${getKeyLink}</label>`
+          : ""
+      }
+      <details class="provider-advanced">
+        <summary>Advanced</summary>
+        <div class="advanced-body">
+          <label class="field"><span class="field-label">Base URL</span><input class="base-url" type="text" placeholder="https://…" value="${
+        escapeAttr(isActive ? (cfg.baseURL || p.baseURL) : p.baseURL)
+      }"></label>
+          ${p.needsModel ? modelFieldHtml(p, cfg) : ""}
+        </div>
+      </details>`
+      : ""
+  }
+    <div class="test-status" role="status" hidden></div>
+  `;
+
+  // ── The Use gate: Use is disabled until Test passes for the CURRENT key +
+  // model; any edit to either resets it. A keyless provider and the currently-
+  // active default are exempt (they can Use/Update without a fresh test).
+  const useBtn = card.querySelector(".set-default");
+  const refreshUseState = () => {
+    if (!useBtn) return;
+    const enabled = useEnabled({ testPassed: card._testPassed === true, isActive, needsKey: p.needsKey !== false });
+    useBtn.disabled = !enabled;
+    useBtn.title = enabled ? "" : "Test the connection first";
+  };
+  card._testPassed = false;
+  refreshUseState();
+
+  const credentialInput = card.querySelector(".api-key");
+  // Editing the key resets the test gate (a passed test no longer describes the
+  // current key) and refetches the live model list on commit.
+  credentialInput?.addEventListener("input", () => { card._testPassed = false; refreshUseState(); });
+  credentialInput?.addEventListener("change", () => { refreshLiveModels(card, p); });
+  // Editing the model likewise resets the gate.
+  card.querySelector("model-picker")?.addEventListener("change", () => { card._testPassed = false; refreshUseState(); });
+  card.querySelector(".base-url")?.addEventListener("input", () => { card._testPassed = false; refreshUseState(); });
+
+  bindProviderSetDefault({
+    card,
+    provider: p,
+    currentConfig: cfg,
+    shouldBlock: () => blockSessionOnlyCredentialSave(credentialInput),
+    requestHostAccess: requestProviderHostAccess,
+    sendMessage: (message) => chrome.runtime.sendMessage(message),
+    onAccess(access, outcome) {
+      // A provider.set refusal (e.g. "model id missing") is a failure, not a
+      // success flash (CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01).
+      if (outcome?.saved && outcome.saved.ok === false) {
+        saveFlash(`${p.name} was not updated — ${outcome.saved.reason || outcome.saved.error || "check the provider settings"}.`);
+        card._saveFailed = true;
+      } else if (access.status === "pending") {
+        saveFlash(`Saved ${p.name}. Chrome's network-access decision is still pending; provider requests remain blocked until access is granted.`);
+      } else if (access.status === "denied") {
+        saveFlash(`Saved ${p.name}, but network access was not granted — provider requests remain blocked. Re-enable it when Chrome asks.`);
+      } else {
+        saveFlash(isActive ? `Updated ${p.name}.` : `Set ${p.name} as default.`);
+      }
+    },
+    onSaved(outcome) {
+      const failed = outcome?.saved && outcome.saved.ok === false;
+      // A successful Use of a real keyed provider returns to the hub with the
+      // composer focused (the four-click flow's fourth click). A refusal, or a
+      // local/demo provider, just re-renders in place.
+      if (!failed && p.needsKey) {
+        returnToHubComposer();
+        return;
+      }
+      renderProviders(true);
+    },
+  });
+
+  card.querySelector(".test-connection")?.addEventListener("click", async () => {
+    const testBtn = card.querySelector(".test-connection");
+    const testStatus = card.querySelector(".test-status");
+    const enteredKey = card.querySelector(".api-key")?.value ?? "";
+    const fields = {
+      provider: p.id,
+      baseURL: card.querySelector(".base-url")?.value ?? p.baseURL,
+      apiKey: enteredKey, // "" → the SW merges the stored key
+      model: effectiveModel(card),
+    };
+    testStatus.hidden = false;
+    testStatus.className = "test-status testing";
+    testStatus.textContent = "Testing…";
+    testBtn.disabled = true;
+    await requestProviderHostAccess({ baseURL: fields.baseURL });
+    const res = await chrome.runtime.sendMessage({ type: "provider.test", ...fields });
+    testBtn.disabled = false;
+    testStatus.className = "test-status " + (res?.ok ? "ok" : "err");
+    if (res?.ok) {
+      const toolNote = res.toolCheck
+        ? (res.toolCheck.ok ? ` — browser read ok (${res.toolCheck.tabs} tab${res.toolCheck.tabs === 1 ? "" : "s"})` : " — browser read unavailable")
+        : "";
+      testStatus.textContent = `Connected — ${res.detail ?? "ok"} (${res.latencyMs}ms)${toolNote}`;
+      card._testPassed = true;
+      refreshLiveModels(card, p);
+    } else {
+      testStatus.textContent = `Failed — ${res?.error ?? "unknown error"}`;
+      card._testPassed = false;
+    }
+    refreshUseState();
+  });
+
+  // The active card offers Clear key + shows the stored-key placeholder.
+  if (isActive && cfg.hasApiKey) {
+    const k = card.querySelector(".api-key");
+    if (k) k.placeholder = "Key set — leave blank to keep";
+    const clear = document.createElement("button");
+    clear.className = "btn ghost small clear-key";
+    clear.type = "button";
+    clear.textContent = "Clear key";
+    clear.setAttribute("aria-label", `Clear API key for ${p.name}`);
+    clear.addEventListener("click", async () => {
+      await chrome.runtime.sendMessage({ type: "provider.clear-key" });
+      saveFlash("API key cleared.");
+      renderProviders(true);
+    });
+    card.querySelector(".provider-actions")?.appendChild(clear);
+  }
+  return card;
+}
+
 async function renderProviders(restoreFocus = false) {
   // Route the provider read through the SERVICE WORKER (single authority) — never
   // call lib/provider.js's kv* directly in this page realm (the round-16 split-
-  // authority finding: with storage absent the page's session Map contradicts the
-  // SW's).
-  // BOUNDED: a killed/suspended worker must not leave Providers blank — settle
-  // with an honest error + Retry instead of an unsettled await.
+  // authority finding). BOUNDED: a killed/suspended worker must not leave
+  // Providers blank — settle with an honest error + Retry.
+  const recRoot = $("#provider-recommended");
+  const moreRoot = $("#provider-more");
   let cfg;
   try {
     cfg = await boundedSend("provider.get");
   } catch (e) {
-    const panelsRoot = $("#provider-panels");
-    if (panelsRoot) {
-      panelsRoot.innerHTML = `<div class="muted">Couldn't load providers — the agent worker didn't answer (${escapeHtml(String(e?.message ?? e))}).</div>` +
+    if (recRoot) {
+      recRoot.innerHTML = `<div class="muted">Couldn't load providers — the agent worker didn't answer (${escapeHtml(String(e?.message ?? e))}).</div>` +
         `<button class="btn small" type="button" id="retry-providers">Retry</button>`;
-      panelsRoot.querySelector("#retry-providers")?.addEventListener("click", () => renderProviders(restoreFocus));
+      recRoot.querySelector("#retry-providers")?.addEventListener("click", () => renderProviders(restoreFocus));
     }
     return;
   }
@@ -741,225 +934,53 @@ async function renderProviders(restoreFocus = false) {
     $("#provider-selection-status"),
     providerSelectionPresentation(cfg, PROVIDERS),
   );
-  const panelsRoot = $("#provider-panels");
-  const tabsRail = $("#provider-tabs");
-  panelsRoot.innerHTML = "";
-  tabsRail.innerHTML = "";
-  // Resolve the selected tab: the caller's persisted choice, else the DEFAULT
-  // provider, else the first catalogue entry.
-  if (!selectedProviderId || !PROVIDERS.some((p) => p.id === selectedProviderId)) {
-    selectedProviderId = PROVIDERS.some((p) => p.id === cfg.provider)
-      ? cfg.provider
-      : PROVIDERS[0]?.id ?? null;
-  }
-  // Roving-tabindex tab switch: exactly one aria-selected tab, its panel shown.
-  const selectProviderTab = (id, { focus = false } = {}) => {
-    if (!id) return;
-    selectedProviderId = id;
-    for (const tab of tabsRail.querySelectorAll("[role='tab']")) {
-      const selected = tab.dataset.provider === id;
-      tab.setAttribute("aria-selected", String(selected));
-      tab.tabIndex = selected ? 0 : -1;
-      const panel = panelsRoot.querySelector(`#${CSS.escape(tab.getAttribute("aria-controls") ?? "")}`);
-      if (panel) panel.hidden = !selected;
-      if (selected && focus) tab.focus();
-    }
-  };
-  tabsRail.addEventListener("keydown", (e) => {
-    const ids = PROVIDERS.map((p) => p.id);
-    const current = Math.max(0, ids.indexOf(selectedProviderId));
-    let next = null;
-    if (e.key === "ArrowDown" || e.key === "ArrowRight") next = ids[(current + 1) % ids.length];
-    else if (e.key === "ArrowUp" || e.key === "ArrowLeft") next = ids[(current - 1 + ids.length) % ids.length];
-    else if (e.key === "Home") next = ids[0];
-    else if (e.key === "End") next = ids[ids.length - 1];
-    else return;
-    e.preventDefault();
-    selectProviderTab(next, { focus: true });
-  });
-  for (const p of PROVIDERS) {
-    // RAIL TAB: name + hint, with the pinned DEFAULT badge on the provider
-    // that owns cfg.provider (visible without opening anything).
-    const isDefault = cfg.provider === p.id;
-    const tab = document.createElement("button");
-    tab.type = "button";
-    tab.id = `provider-tab-${p.id}`;
-    tab.dataset.provider = p.id;
-    tab.className = "provider-tab" + (isDefault ? " is-default" : "");
-    tab.setAttribute("role", "tab");
-    tab.setAttribute("aria-selected", String(p.id === selectedProviderId));
-    tab.setAttribute("aria-controls", `provider-panel-${p.id}`);
-    tab.tabIndex = p.id === selectedProviderId ? 0 : -1;
-    tab.innerHTML = `
-      <span class="pt-copy">
-        <span class="provider-name">${p.name}${
-      isDefault ? `<span class="pt-default-badge" title="Default provider" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none" width="12" height="12" aria-hidden="true"><path d="M12 2l2.9 6.26 6.6.56-5 4.36 1.5 6.45L12 16.9 5.99 19.63l1.5-6.45-5-4.36 6.6-.56z"/></svg></span><span class="visually-hidden"> (default)</span>` : ""
-    }</span>
-        <span class="muted pt-hint">${p.hint}</span>
-      </span>`;
-    tab.addEventListener("click", () => selectProviderTab(p.id));
-    tabsRail.appendChild(tab);
+  if (!recRoot || !moreRoot) return;
+  recRoot.innerHTML = "";
+  moreRoot.innerHTML = "";
 
-    // EDITOR PANEL: the existing per-provider card markup, unchanged.
-    const panel = document.createElement("div");
-    panel.className = "provider-panel";
-    panel.id = `provider-panel-${p.id}`;
-    panel.setAttribute("role", "tabpanel");
-    panel.setAttribute("aria-labelledby", `provider-tab-${p.id}`);
-    panel.tabIndex = 0;
-    panel.hidden = p.id !== selectedProviderId;
-    panelsRoot.appendChild(panel);
-    const card = document.createElement("div");
-    card.className = "provider-card" + (isDefault ? " active" : "");
-    card.dataset.provider = p.id;
-    panel.appendChild(card);
-    card.innerHTML = `
-      <div class="provider-head">
-        <div class="provider-id">
-          <span class="provider-name">${p.name}</span>
-          <span class="muted">${p.hint}</span>
-        </div>
-        <div class="provider-actions">
-          <button class="btn small set-default" type="button" aria-label="${
-      cfg.provider === p.id ? `Update ${p.name}` : `Use ${p.name}`
-    }">${
-      cfg.provider === p.id ? "Update" : "Use"
-    }</button>
-          <button class="btn small ghost test-connection" type="button" aria-label="Test connection for ${p.name}">Test connection</button>
-        </div>
-      </div>
-      ${
-      p.needsKey || p.onDevice || p.id === "openai" || p.id === "ollama" || p.id === "lm-studio"
-        ? `
-      <fieldset class="fields">
-        <legend class="sr-only">${p.name} credentials</legend>
-        ${
-          p.needsKey || p.needsModel || p.baseURL || p.needsModel
-            ? `<label class="field"><span class="field-label">Base URL</span><input class="base-url" type="text" placeholder="https://…" value="${
-              // The ACTIVE card shows the STORED endpoint (not the preset) so an
-              // Update never silently resets a custom base URL.
-              escapeAttr(cfg.provider === p.id ? (cfg.baseURL || p.baseURL) : p.baseURL)
-            }"></label>`
-            : ""
-        }
-        ${
-          p.needsKey || p.needsModel
-            ? `<label class="field"><span class="field-label">API key</span><input class="api-key" type="password" placeholder="…" autocomplete="off"></label>`
-            : ""
-        }
-        ${
-          p.needsKey || p.needsModel
-            ? modelFieldHtml(p, cfg)
-            : ""
-        }
-      </fieldset>`
-        : ""
-    }
-      <div class="test-status" role="status" hidden></div>
-    `;
-    const credentialInput = card.querySelector(".api-key");
-    // A committed key (change = blur/Enter) fetches the provider's live model
-    // list and merges it below the catalogue suggestions. Failure is silent by
-    // design (the suggestions stand; Test connection reports the real error).
-    credentialInput?.addEventListener("change", () => { refreshLiveModels(card, p); });
-    // The synchronous durability guard MUST run before the replacement save
-    // path starts either the host request or provider.set. Once allowed, the
-    // existing owner click coordinates the host-access check and provider
-    // persistence without awaiting native permission settlement.
-    bindProviderSetDefault({
-      card,
-      provider: p,
-      currentConfig: cfg,
-      shouldBlock: () => blockSessionOnlyCredentialSave(credentialInput),
-      requestHostAccess: requestProviderHostAccess,
-      sendMessage: (message) => chrome.runtime.sendMessage(message),
-      onAccess(access, outcome) {
-        const isActive = cfg.provider === p.id;
-        // A provider.set refusal (e.g. "model id missing" — the empty-model
-        // save) must be reported as a failure, not a success flash
-        // (CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01).
-        if (outcome?.saved && outcome.saved.ok === false) {
-          saveFlash(`${p.name} was not updated — ${outcome.saved.reason || outcome.saved.error || "check the provider settings"}.`);
-        } else if (access.status === "pending") {
-          saveFlash(`Saved ${p.name}. Chrome's network-access decision is still pending; provider requests remain blocked until access is granted.`);
-        } else if (access.status === "denied") {
-          saveFlash(`Saved ${p.name}, but network access was not granted — provider requests remain blocked. Re-enable it when Chrome asks.`);
-        } else {
-          saveFlash(isActive ? `Updated ${p.name}.` : `Set ${p.name} as default.`);
-        }
-      },
-      onSaved() {
-        renderProviders(true);
-      },
+  const lead = leadingProviders(PROVIDERS);
+  const rest = moreProviders(PROVIDERS);
+  for (const p of lead) recRoot.appendChild(buildProviderCard(p, cfg));
+  for (const p of rest) moreRoot.appendChild(buildProviderCard(p, cfg));
+
+  // If the active default is one of the "More providers", open the disclosure
+  // so the user can see their current selection without hunting for it.
+  const more = $("#more-providers");
+  if (more && rest.some((p) => p.id === cfg.provider)) more.open = true;
+
+  // ── radiogroup keyboard: arrow/Home/End move the checked selection + focus
+  // within each group (cards only; an arrow inside a text input is left alone).
+  for (const group of [recRoot, moreRoot]) {
+    group.addEventListener("keydown", (e) => {
+      const target = e.target;
+      if (!target?.classList?.contains?.("provider-card")) return; // typing in a field
+      const cards = [...group.querySelectorAll(".provider-card")];
+      const cur = cards.indexOf(target);
+      if (cur < 0) return;
+      let next = null;
+      if (e.key === "ArrowDown" || e.key === "ArrowRight") next = cards[(cur + 1) % cards.length];
+      else if (e.key === "ArrowUp" || e.key === "ArrowLeft") next = cards[(cur - 1 + cards.length) % cards.length];
+      else if (e.key === "Home") next = cards[0];
+      else if (e.key === "End") next = cards[cards.length - 1];
+      else if (e.key === " " || e.key === "Enter") {
+        e.preventDefault();
+        target.querySelector(".api-key, .set-default")?.focus();
+        return;
+      } else return;
+      e.preventDefault();
+      for (const c of cards) c.tabIndex = c === next ? 0 : -1;
+      next.focus();
     });
-    card.querySelector(".test-connection")?.addEventListener("click", async () => {
-      const testBtn = card.querySelector(".test-connection");
-      const testStatus = card.querySelector(".test-status");
-      // The test runs INSIDE the SW (provider.test): an entered key is passed
-      // through; a BLANK key field means "use the stored one", which the page
-      // never sees. The response's error text is already secret-safe.
-      const enteredKey = card.querySelector(".api-key")?.value ?? "";
-      const fields = {
-        provider: p.id,
-        baseURL: card.querySelector(".base-url")?.value ?? p.baseURL,
-        apiKey: enteredKey, // "" → the SW merges the stored key
-        model: effectiveModel(card),
-      };
-      // Loading state (the button is disabled + a live region announces it).
-      testStatus.hidden = false;
-      testStatus.className = "test-status testing";
-      testStatus.textContent = "Testing…";
-      testBtn.disabled = true;
-      // Coordinate the provider host-access check before the test fetch.
-      await requestProviderHostAccess({ baseURL: fields.baseURL });
-      const res = await chrome.runtime.sendMessage({ type: "provider.test", ...fields });
-      testBtn.disabled = false;
-      testStatus.className = "test-status " + (res?.ok ? "ok" : "err");
-      testStatus.textContent = res?.ok
-        ? `Connected — ${res.detail ?? "ok"} (${res.latencyMs}ms)`
-        : `Failed — ${res?.error ?? "unknown error"}`;
-      // The host permission was just granted on this gesture — the live list
-      // can load now even if the key was pasted before the grant.
-      if (res?.ok) refreshLiveModels(card, p);
-    });
-    // (the card lives in its hidden-by-default tabpanel — appended above)
   }
-  // populate the active card's current key/model + an explicit clear-key control
-  const active = panelsRoot.querySelector(
-    `.provider-card[data-provider="${cfg.provider}"]`,
-  );
-  if (active) {
-    if (cfg.hasApiKey) {
-      const k = active.querySelector(".api-key");
-      if (k) k.placeholder = "API key (set — leave blank to keep)";
-    }
-    // A keyless provider (Demo / Prompt API) has nothing to clear — only offer
-    // the Clear key control when a key is actually configured (never the
-    // contradictory "Clear key" on a keyless provider). The clear routes to
-    // the dedicated provider.clear-key (an owner gesture; the ONLY removal
-    // path — provider.set can no longer erase a key from the page).
-    if (cfg.hasApiKey) {
-      const clear = document.createElement("button");
-      clear.className = "btn ghost small clear-key";
-      clear.type = "button";
-      clear.textContent = "Clear key";
-      clear.setAttribute("aria-label", `Clear API key for ${cfg.provider}`);
-      clear.addEventListener("click", async () => {
-        await chrome.runtime.sendMessage({ type: "provider.clear-key" });
-        saveFlash("API key cleared.");
-        renderProviders(true);
-      });
-      active.querySelector(".provider-head")?.appendChild(clear);
-    }
-  }
+
   if (restoreFocus) {
-    // Rerender replaces the focused subtree — re-focus a STABLE anchor so a
-    // keyboard/AT user is not stranded: the selected provider's tab (its
-    // editor may be hidden if selection and default diverge).
-    const selectedTab = tabsRail.querySelector(
-      `[role='tab'][data-provider="${selectedProviderId}"]`,
-    );
-    selectedTab?.focus();
+    // Rerender replaces the focused subtree — re-focus a STABLE anchor (the
+    // active/checked card, else the first card) so a keyboard/AT user is not
+    // stranded.
+    const anchor = recRoot.querySelector('.provider-card[aria-checked="true"]') ||
+      moreRoot.querySelector('.provider-card[aria-checked="true"]') ||
+      recRoot.querySelector(".provider-card");
+    anchor?.focus();
   }
 }
 

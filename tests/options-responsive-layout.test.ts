@@ -65,8 +65,8 @@ Deno.test("settings responsive layout: flexible tracks can shrink below intrinsi
   assert(rule(css, ".panel").includes("min-inline-size: 0"));
   assert(rule(css, ".provider-card").includes("min-inline-size: 0"));
   assert(
-    rule(css, ".provider-card .fields").includes("repeat(2, minmax(0, 1fr))"),
-    "wide provider columns use shrink-safe grid tracks",
+    rule(css, ".provider-card .fields").includes("minmax(0, 1fr)"),
+    "the provider fields use a shrink-safe grid track (single column: API key + Advanced disclosure)",
   );
   assert(
     rule(css, ".toggle-field").includes(

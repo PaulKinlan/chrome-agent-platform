@@ -5,6 +5,23 @@ Discipline: every Paul ask → an entry here → a subagent fixes + VERIFIES in 
 **Reconciled 2026-08-27 against the current code (`0.2.319` / `origin/main@139b6f92`).**
 Items below are grouped; each is verified against the committed code, not the worker's claim.
 
+## 2026-09-01 — Settings → Providers: one recommended path (CAP-FB-20260830-PROVIDER-DEFAULT-AND-KEY-FLOW-01)
+
+- **Seven equal presets → one recommended path.** The Providers panel now LEADS with a
+  recommended card (OpenAI, `gpt-5.6-luna` pre-filled, `Recommended` pill) and an
+  alternative (Gemini, `gemini-3.7-flash`); the rest fold under a **More providers**
+  disclosure. Cards are a `role=radiogroup` (arrow-key navigation, `aria-checked` on the
+  current default).
+- **Four-click flow.** Pick → paste key → **Test connection** → **Use**. Use is disabled
+  until Test passes for the current key+model; a **Get a key** link points at the
+  provider's key page. Base URL + the model picker moved into an **Advanced** disclosure.
+- **Honest Test.** Test sends the SAME shape the hub uses and a `list_tabs` dry run, so a
+  green Test predicts a working RUN.
+- **Hub strip.** Reads **Ready — OpenAI · gpt-5.6-luna** when connected, **No model
+  connected yet — pick one to start** otherwise (was "Internal testing provider active").
+  A successful Use returns to the hub with the composer focused.
+- **Copy.** The Providers blurb no longer names `chrome.storage` ("stays on this device only").
+
 ## Fixed since the 2026-08-21 revision
 
 The 2026-08-26 owner batch (Telegram, 12 items) and its follow-ons all landed. Full
