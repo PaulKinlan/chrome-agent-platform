@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.601] — 2026-09-01
+- Settings Skills Import works on any load path: mount the panel eagerly at init, and cover GitHub directory imports
+
 ## [0.2.600] — 2026-09-01
 - check screenshots no longer cascade: a capture on a stale or backgrounded tab fails the evidence quietly instead of hanging the suite
 

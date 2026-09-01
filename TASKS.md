@@ -52,6 +52,23 @@ and `scripts/check-tasks-baseline.json` must only ever shrink.
 
 
 
+## [CAP-FB-20260901-SKILLS-IMPORT-BUTTON-01] Settings → Skills Import does nothing (and GitHub directory URLs fail to resolve)
+- Feedback: 2026-09-01 — owner-reported (P1): "The import button on Settings for Skills doesn't seem to do anything. I want to try and import https://github.com/mattpocock/skills/blob/main/skills/productivity/teach/ and the skill.md but it doesn't fetch this or any of the meta data."
+- Updated: 2026-09-01 19:30 UTC
+- Status: IN_REVIEW
+- Resume: worker (hub coordinator dispatch) — root cause: the Skills panel's mount was NAV-EVENT-ONLY. Reaching the panel by SCROLLING or a direct #skills deep link never fired handleSettingsHashNavigation, so the Import button rendered with NO click handler (the existing journey even documents this: "a direct #skills deep link renders the panel but does not mount the import handlers on load"). Fixed: mountSkillsSection(document.getElementById("skills")) now runs EAGERLY in the init block, exactly like renderMcpServers/renderLocalFolders — the dataset.skillsMounted guard keeps the nav-handler call a no-op. The GitHub directory/blob URL with a trailing slash was already resolvable by parseGitHubUrl + the Contents-API walk (proven in a real browser: "Imported \"teach\" (6 files)"). Imported skills land in BOTH /skill (skill.list) and Settings (same catalog).
+- Priority: P1
+- Owner: hub coordinator dispatch (worker)
+- Workspace: /tmp/cap-skill-import-fix
+- Branch: cap-skill-import-fix
+- Base: origin/main 93531db2
+- Candidate: <tip>
+- Shipping: —
+- Gates: build clean; suite 2932/0; journeys 298/298; falsification proven (removing the eager mount turns the new test RED)
+- Review: pending independent review
+- History:
+  - 2026-09-01 19:30 UTC — root cause found by tracing the mount path: createNavigationController only fires on navigation EVENTS, never on initial load; the eager section renders (mcp/local-folders) did NOT include skills. Browser probe (CDP, real extension): pre-fix deep-link → mounted:false; post-fix → mounted:true and the owner's exact URL imports "teach" (6 files). Two tests added: init-segment eager-mount pin (falsification RED/GREEN) + GitHub directory-URL resolution (rate-limit tolerant; the Contents API 403s at 0/60 remaining in the test env).
+
 ## [CAP-FB-20260831-MULTI-SLASH-COMMANDS-01] Only the first /command in an input works — sequential commands fail
 - Feedback: 2026-08-31 — owner: "/skill:screenshot-annotate /tabs:<tab> works for the FIRST command, but after it completes the SECOND /command never opens. I want to make sure that we're able to use multiple /commands inside the input method."
 - Updated: 2026-08-31 22:30 UTC
@@ -289,6 +306,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P3 | OPEN | [`CAP-FB-20260830-CODE-HEALTH-01`](#cap-fb-20260830-code-health-01-route-raw-console-calls-through-cap-log-annotate-the-41-bare-catches) | Route raw console calls through cap-log; annotate the 41 bare catches |
 | P3 | OPEN | [`CAP-FB-20260830-ICONOGRAPHY-GAPS-01`](#cap-fb-20260830-iconography-gaps-01-skills-without-icons-menus-without-icons-38-uppercase-kickers-in-the-gallery) | Skills without icons, menus without icons, 38 uppercase kickers in the gallery |
 | P3 | OPEN | [`CAP-FB-20260830-PRIVACY-STATEMENT-01`](#cap-fb-20260830-privacy-statement-01-one-screen-that-says-what-the-extension-sends-and-stores-and-a-factory-reset-journey) | One screen that says what the extension sends and stores, and a factory-reset journey |
+| P1 | IN_REVIEW | [`CAP-FB-20260901-SKILLS-IMPORT-BUTTON-01`](#cap-fb-20260901-skills-import-button-01-settings--skills-import-does-nothing-and-github-directory-urls-fail-to-resolve) | Settings → Skills Import does nothing (and GitHub directory URLs fail to resolve) |
 
 **The demo path is the only P0 lane (owner decision, 2026-08-27; reaffirmed by the 2026-08-30 reanalysis).** There are 19 P0 entries. `CAP-FB-20260830-EXEC-DEMO-01` is the umbrella for the five-minute exec demo and lists its blockers; the new P0s from the reanalysis are the tool-gating pair (`BROWSER-LEASE-DEADLOCK-01`, `DENIAL-TO-GRANT-CARD-01`), the first screen (`KEYLESS-FIRST-RESULT-01`, `FRESH-PROFILE-TEMPLATE-AGENTS-01`), the transcript (`TRANSCRIPT-FULL-ANSWER-01`, `SELECTION-REF-VALIDATE-FIRST-01`), the two security items a leadership audience will probe (`RUN-SCRIPT-FETCH-APPROVAL-01`, `UNTRUSTED-CONTENT-FENCING-01`) and the page-action decision (`PAGE-ACTION-TOOLS-01`). The Wasm lane stays at P2 until after the demo. `REVIEW-2026-08-30.md` section 5 is the dependency-ordered queue.
 

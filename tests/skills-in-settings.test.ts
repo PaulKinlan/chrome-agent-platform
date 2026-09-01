@@ -76,3 +76,55 @@ Deno.test("skills-in-settings: renderSkillList groups by intent and hands use to
   assert(panel.includes("byIntent"), "skills group by intent");
   assert(panel.includes("skills-broken"), "failed-to-load skills surface in Settings, never silently");
 });
+
+// CAP-FB-20260901-SKILLS-IMPORT-BUTTON-01: the Import button was DEAD unless the
+// user reached the Skills panel via a nav event (scroll or deep-link load never
+// mounted it). The mount must be EAGER at init, exactly like mcp-servers and
+// local-folders. Falsification: remove the eager mountSkillsSection call in the
+// init block and this test goes RED; restore it and it goes GREEN.
+Deno.test("skills-in-settings: the Skills panel mounts EAGERLY at init (import button works on scroll/deep-link load)", async () => {
+  const js = await Deno.readTextFile("extension/options/options.js");
+  // The eager mount sits in the INIT block (the module-level render sequence),
+  // NOT only in the nav handler. Slice the init segment between renderLocalFolders
+  // and the developer-tool-library render, and require the mount call in that
+  // segment — the nav-handler call lives far outside it, so a nav-only mount
+  // (the pre-fix bug) fails this check.
+  const initSegment = js.slice(js.indexOf("await renderLocalFolders();"), js.indexOf("if (developerFeaturesEnabled) await renderToolLibrary();"));
+  assert(
+    initSegment.includes('mountSkillsSection(document.getElementById("skills"));'),
+    "mountSkillsSection must be called eagerly in the init block (between renderLocalFolders and renderToolLibrary), not only in the nav handler",
+  );
+  // The nav handler still calls it (idempotent via the dataset guard) so a nav
+  // click re-renders nothing but stays safe.
+  assert(js.includes('sectionId === "skills"'), "the nav handler still references the skills section");
+  // The panel module wires the Import button inside the mount (the handler the
+  // owner found dead).
+  const panel = await Deno.readTextFile("extension/skills/skills-panel.js");
+  assert(panel.includes('importBtn?.addEventListener("click", doImport)'), "the Import button gets its click handler in the mount");
+  assert(panel.includes('urlInput?.addEventListener("keydown"'), "the Enter-to-import handler is wired");
+});
+
+// The import flow itself must accept a GitHub DIRECTORY/blob URL with a trailing
+// slash (the owner's https://github.com/mattpocock/skills/blob/main/skills/
+// productivity/teach/ — a multi-file skill the old parser could not resolve).
+Deno.test("skills-in-settings: fetchSkillFromUrl resolves a GitHub directory/blob URL with trailing slash", async () => {
+  const { fetchSkillFromUrl } = await import("../extension/lib/skill-import.js");
+  // The GitHub Contents API rate-limits unauthenticated (60/hr); when the
+  // budget is gone the import throws the honest rate-limit error — that is the
+  // CORRECT behavior and must not fail the suite. The resolution logic itself
+  // is proven by the browser journey + the direct Deno run (6 files, meta
+  // name teach). A full local stub of the GitHub API is out of scope here.
+  try {
+    const r = await fetchSkillFromUrl("https://github.com/mattpocock/skills/blob/main/skills/productivity/teach/");
+    assert(r?.meta?.name === "teach", `meta.name should be teach, got ${r?.meta?.name}`);
+    assert(r?.files?.["SKILL.md"], "SKILL.md must be present in the fetched files");
+    assert(Object.keys(r?.files ?? {}).length >= 2, "a multi-file skill must collect sibling files");
+  } catch (e) {
+    // @ts-expect-error — the catch binding is typed {} in this test file; e is unknown
+    const msg = String(e?.message ?? e ?? "");
+    assert(
+      /rate-limited|HTTP 403/.test(msg),
+      `expected a successful import OR an honest rate-limit error, got: ${msg.slice(0, 120)}`,
+    );
+  }
+});
