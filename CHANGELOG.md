@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.615] — 2026-09-01
+- Task board: the full JSON tool-result view is complete.
+
 ## [0.2.614] — 2026-09-01
 - Tool results now show the complete formatted JSON with a Copy button, errors are shown plainly, and nothing is lost when you reload.
 
