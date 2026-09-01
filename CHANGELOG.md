@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.603] — 2026-09-01
+- The five-minute demo is now checked automatically at three points: grouping your tabs from the composer with a single in-chat permission, a scheduled agent finishing on its own timer and appearing on the timeline, and an artifact showing up in the conversation.
+
 ## [0.2.602] — 2026-09-01
 - Task view full work — the agent's full response is stored, shown, and copyable
 
