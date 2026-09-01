@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.602] — 2026-09-01
+- Task view full work — the agent's full response is stored, shown, and copyable
+
 ## [0.2.601] — 2026-09-01
 - Housekeeping release: the task board now reflects what has actually shipped, and stale in-progress markers were cleared.
 
