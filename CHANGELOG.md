@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.581] — 2026-09-01
+- Skill list work — /skill and Settings read one catalog; collision-proof refIds; broken skills hidden and reported
+
 ## [0.2.580] — 2026-08-31
 - Release notes entries are in plain language, and the version bump keeps them that way
 

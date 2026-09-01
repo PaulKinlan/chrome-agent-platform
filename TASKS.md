@@ -4689,14 +4689,14 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260831-SKILL-LIST-SYNC-01] /skill and Settings → Skills read different data sources — lists are out of sync
 - Feedback: 2026-08-31 — owner-reported (P1): typing /skill and searching for the Sorting Hat offers a skill that is NOT listed in Settings → Skills, and some of the out-of-sync skills error when used. Owner directive: "they need to be tallied from the same data source."
-- Updated: 2026-08-31 21:30 UTC
+- Updated: 2026-09-01 00:10 UTC
 - Status: DONE
 - Priority: P1
 - Owner: hub coordinator dispatch (worker)
 - Workspace: /tmp/cap-skill-sync
 - Branch: cap-skill-sync
 - Base: origin/main e9bd59c9
-- Candidate: c32460d0 (r1) → 10dafedd (r2) → 1172cc9d (r3) → r4 tip (see History)
+- Candidate: a114e627 (r4: real dialog render path + real resolver extracted; collision-proof refIds end to end)
 - Shipping: pending merge by the hub coordinator
 - Acceptance: /skill, the @-mention popup, the agent-config dialog skills section and Settings → Skills all render the SAME catalog. A skill imported through Settings appears in /skill immediately; deleting removes it from both instantly. Background (scheduled) recipes such as the Sorting Hat (`auto-group-by-domain`) appear in NEITHER surface — they are scheduled agents surfaced via background-agent.list, never on-demand /skill invocations (invoking one via /skill is what errored for the owner). A skill that fails to load (migrationFailed / corrupt) is hidden from every picker and reported in Settings with a reason — never silently offered.
   - Investigation (every skill surface + source):
@@ -4708,8 +4708,9 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
     6. Custom recipes → `recipe.custom-list` (user-duplicated background agents; separate — correct).
   - The concrete mismatch: `sorting-hat`'s recipe is `auto-group-by-domain`, name "Sorting Hat", `mode: BACKGROUND` (recipes.js:325-345). It showed in /skill/@/agent-dialog (no filter) but was filtered out of Settings — exactly the owner's report. It "errors when used" because /skill invokes it as an on-demand skill while it is a scheduled background agent (needs enable/subscription via background-agent.set).
   - Fix: new `extension/lib/skill-catalog.js` — ONE query (built-in on-demand recipes + healthy imported skills, tagged source: "builtin"|"imported"); SW `skill.list` and `recipe.list` both call it; Settings panel's private filter removed (the catalog is the single filter authority); `broken` list (migration-failed skills) surfaced in Settings with per-skill reasons. No surface keeps a private list (source-level test guard).
-- Gates: `tests/skill-catalog.test.ts` (5 tests: union+source labels; background excluded; corrupt hidden+reported; delete propagation; no-private-list source guard) RED→GREEN; full suite `nice -n 10 deno test --allow-all tests/` green (2818/0 on the lane); `nice -n 10 deno run -A scripts/chrome-journeys.ts` green (276/276) incl. 4 new skill-sync checks; RED journey run (old behavior) shows the 4 checks FAIL.
+- Gates: build clean; suite 2838/0; journeys 281/281; unit 31/31 with RED→GREEN per finding
 - History:
+  - 2026-09-01 00:10 UTC — r4 review (sol) accepted the code; sole P1 was this entry's inaccurate workflow metadata, corrected by this refresh. Merged forward by the hub coordinator.
   - 2026-08-31 21:30 UTC — implemented + gated. Investigation mapped all six surfaces; root cause = Settings' private `mode === "on-demand"` filter vs the unfiltered pickers + background recipes offered as skills. Catalog module + route unification + panel filter removal + broken surfacing; 5 new unit tests, 5 new journey checks.
   - 2026-08-31 22:30 UTC — r1 final gates: build clean; `nice -n 10 deno test --allow-all tests/` = 2818 passed / 0 failed; `nice -n 10 deno run -A scripts/chrome-journeys.ts --retain` = 277/277 passed (incl. 5 skill-sync checks). RED→GREEN proven at the unit level (removing the background/migration exclusions fails 3 catalog tests: background-exclusion, corrupt-hiding, source-labels) and at the journey level (GREEN 277/277; journey-level RED attempted twice, killed by environment at ~check 134 before reaching the skill checks at ~#250 — the identical suite completed GREEN in 9 minutes, so the truncation is environmental, not the change). Evidence: test-artifacts/skill-popup-sync.png (1400x2256 PNG — the hub composer /skill popup), test-artifacts/skills-import-large.png (Settings → Skills with the imported Big Fixture Skill). Screenshot pixel verification is flagged for the vision-capable reviewer (this worker has no vision tool).
   - 2026-08-31 23:20 UTC — r2 review (sol) found 2 P1s; fixed + re-gated:
