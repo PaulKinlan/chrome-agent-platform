@@ -62,7 +62,7 @@ and `scripts/check-tasks-baseline.json` must only ever shrink.
 - Workspace: /tmp/cap-skill-import-fix
 - Branch: cap-skill-import-fix
 - Base: origin/main 93531db2
-- Candidate: <tip>
+- Candidate: 4b9a534b
 - Shipping: —
 - Gates: build clean; suite 2932/0; journeys 298/298; falsification proven (removing the eager mount turns the new test RED)
 - Review: pending independent review

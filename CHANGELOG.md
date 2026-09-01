@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.602] — 2026-09-01
+- record the skill-import candidate SHA in the tracker
+
 ## [0.2.601] — 2026-09-01
 - Settings Skills Import works on any load path: mount the panel eagerly at init, and cover GitHub directory imports
 
