@@ -765,6 +765,40 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   width: 100%;
   box-sizing: border-box;
 }
+/* Action policy panel (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01): the three
+   visible classes + the settable Destructive control. */
+.action-policy {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.action-policy h3 {
+  font-size: 14px;
+  margin: 0 0 4px;
+}
+.policy-classes {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.policy-classes li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.policy-name {
+  font-weight: 600;
+}
+.policy-control {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 320px;
+}
 /* Site enrollment row. */
 .enroll {
   margin-top: 14px;

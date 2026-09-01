@@ -63,7 +63,29 @@ export const DESTRUCTIVE_ACTIONS = new Set([
   // untrusted external content, so the owner approves the server on first use —
   // one Allow card per server per run (mirrors WebMCP's per-tool approval).
   "mcp.use-server",
+  // Destructive browser actions (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
+  // Once Browser control is granted, these were previously irreversible with no
+  // further owner decision; the three-class policy makes the Destructive class
+  // always take a per-action approval card with a payload digest. Membership
+  // here is load-bearing: createPendingApproval refuses any action not in this
+  // set, so an approval could never be requested without it (the falsification
+  // gate reverts one of these and the destructive tool can no longer prompt).
+  "browser.close-foreign-tab",
+  "browser.close-window",
+  "browser.wipe",
+  "browser.remove-bookmark",
+  "browser.set-cookie",
+  "browser.remove-cookie",
 ]);
+
+// The three visible policy classes (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
+// One shared vocabulary the capability table, the in-chat card and Settings all
+// speak. Read is allowed after consent and never prompts; Act asks once per
+// origin then runs automatically; Destructive always asks.
+export const POLICY_CLASSES = Object.freeze(["read", "act", "destructive"]);
+export function isPolicyClass(value) {
+  return typeof value === "string" && POLICY_CLASSES.includes(value);
+}
 
 export class CanonicalPayloadError extends Error {
   constructor(message = "invalid canonical approval payload") {
@@ -310,6 +332,16 @@ export function canonicalOperationTarget(kind, parts = Object.create(null)) {
       // an invalid id yields the empty identity (rejected by the caller).
       const id = typeof parts.id === "string" && /^(?!.*__)[a-zA-Z0-9_-]{1,64}$/.test(parts.id) ? parts.id : "";
       values = [id];
+      break;
+    }
+    case "browser-action": {
+      // A destructive browser action's identity is the action name plus a
+      // bounded ref that names exactly what it acts on — a tab/window id, a
+      // bookmark id, an origin+cookie name, or the enumerated wipe types. Taken
+      // verbatim (bounded); the digest binds the full payload separately.
+      const actionName = typeof parts.action === "string" ? parts.action.trim() : "";
+      const ref = typeof parts.ref === "string" ? parts.ref.trim() : "";
+      values = [actionName.slice(0, 64), ref.slice(0, 512)];
       break;
     }
     case "hook": {

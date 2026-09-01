@@ -108,6 +108,31 @@ Deno.test("chrome capability metadata is bounded, canonical data only, and names
   for (const forbidden of ["execute", "dispatch", "validator", "callRoute", "selectionRef"]) assert(!serialized.includes(`\"${forbidden}\"`));
 });
 
+Deno.test("policy: every browser tool has a policyClass and every read-only tool is 'read'", () => {
+  // CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01: the three visible classes.
+  // Read (page text, tab list) never prompts; Act (tabs/groups/bookmarks/page
+  // actions) asks once per origin then automatic; Destructive (delete, wipe,
+  // downloads to disk) always asks. Every browser tool carries the column.
+  const DESTRUCTIVE_BROWSER_TOOLS = new Set([
+    "close_tab", "close_window", "wipe_browsing_data",
+    "remove_bookmark", "set_cookie", "remove_cookie",
+  ]);
+  const browserRows = CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "chrome-api");
+  assert(browserRows.length > 0, "there must be browser tools to classify");
+  for (const row of browserRows) {
+    assert(["read", "act", "destructive"].includes(row.policyClass), `${row.toolName} has no valid policyClass (got ${row.policyClass})`);
+    // A read-only tool can never be Act or Destructive — a read never prompts.
+    if (row.replayClass === "read-only") assertEquals(row.policyClass, "read", `${row.toolName} is read-only but not policyClass read`);
+    // The destructive set is exactly the always-ask browser actions.
+    if (DESTRUCTIVE_BROWSER_TOOLS.has(row.toolName)) assertEquals(row.policyClass, "destructive", `${row.toolName} must be policyClass destructive`);
+    // A Destructive tool is never read-only (it mutates).
+    if (row.policyClass === "destructive") assert(row.replayClass !== "read-only", `${row.toolName} is destructive but read-only`);
+  }
+  // The frozen serialized table carries the column (data only, no functions).
+  const serialized = JSON.stringify(CHROME_TOOL_CAPABILITY_TABLE);
+  assert(serialized.includes("\"policyClass\""), "policyClass must be a serialized column");
+});
+
 Deno.test("canonical replay metadata cannot drift from the existing trusted replay authority", () => {
   for (const row of CHROME_TOOL_CAPABILITY_TABLE) {
     assertEquals(row.replayClass, replaySafetyForTool(row.toolName), row.toolName);

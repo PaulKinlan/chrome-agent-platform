@@ -1900,8 +1900,35 @@ async function resolveRunGrantId(grantId) {
 export function browserToolset(readOnly = false, {
   scheduleScriptGate = null,
   cookieValueGate = null,
+  destructiveActionGate = null,
   developerFeatures = false,
 } = {}) {
+  // DESTRUCTIVE-ACTION POLICY (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
+  // The Destructive class always asks: close a foreign tab/window, wipe data,
+  // remove a bookmark, set/remove a cookie each take a per-action owner
+  // approval BEFORE the mutation. The gate is the run's approval dispatcher; it
+  // returns { ok:true } once the owner approves and a bounded error otherwise.
+  // When no gate is wired (unit tests, the metadata-only shadow catalogue),
+  // the tool executes as before — every LIVE model run supplies the gate at the
+  // browserToolset() call site, so a real run can never bypass it.
+  //
+  // "Foreign tab" tracking: a tab this same run opened via open_tab is Act (no
+  // second card); a tab the run did not open is Destructive. The set is scoped
+  // to THIS toolset instance (one per run), so it cannot leak across runs.
+  const openedTabIds = new Set();
+  async function requireDestructiveApproval(action, ref, display) {
+    if (typeof destructiveActionGate !== "function") return { ok: true };
+    let gate;
+    try {
+      gate = await destructiveActionGate(action, { ref, ...(display && typeof display === "object" ? display : {}) });
+    } catch {
+      return { ok: false, error: `${action} could not request owner approval` };
+    }
+    if (!gate || gate.ok !== true) {
+      return gate ?? { ok: false, error: `${action} was not approved` };
+    }
+    return { ok: true };
+  }
   // SCOPED (hook) runs are side-effect-free: untrusted browser event data must
   // never drive a browser mutation (open/navigate/close a tab) or a durable
   // schedule. When readOnly, expose only the READ tools (read_page,
@@ -2049,6 +2076,10 @@ export function browserToolset(readOnly = false, {
             } catch { /* best-effort compensation */ }
             return { error: "run aborted — tab opened then closed" };
           }
+          // Record the tab this run opened so a later close_tab of it stays in
+          // the Act class (no destructive card); a tab the run did NOT open is
+          // Destructive (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
+          if (typeof tab?.id === "number") openedTabIds.add(tab.id);
           return { ok: true, tabId: tab.id, url };
         });
       },
@@ -2188,6 +2219,15 @@ export function browserToolset(readOnly = false, {
       execute: async ({ tabId }) => {
         if (!(await hasTabsPermission())) {
           return permissionDeniedResult("tabs", { reason: "close a tab" });
+        }
+        // DESTRUCTIVE policy: closing a tab this run did NOT open always asks
+        // (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01). A tab the run opened
+        // via open_tab is Act (no card).
+        if (!openedTabIds.has(tabId)) {
+          const approved = await requireDestructiveApproval(
+            "browser.close-foreign-tab", String(tabId), { kind: "tab", tabId },
+          );
+          if (approved.ok !== true) return approved;
         }
         // Check the grant + perform the mutation under the SAME grant lock (a
         // revoke can no longer interleave with the checked tabs.remove).
@@ -2421,11 +2461,18 @@ export function browserToolset(readOnly = false, {
       description:
         "Close a window by id (closing every tab in it). Requires browser-control permission (scoped + expiring) covering every tab origin in the window.",
       inputSchema: z.object({ windowId: z.number().int() }),
-      execute: async ({ windowId }) =>
-        await mutateWindowWithGrant(windowId, "closed", async () => {
+      execute: async ({ windowId }) => {
+        // DESTRUCTIVE policy: closing a window closes every tab in it — always
+        // asks (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
+        const approved = await requireDestructiveApproval(
+          "browser.close-window", String(windowId), { kind: "window", windowId },
+        );
+        if (approved.ok !== true) return approved;
+        return await mutateWindowWithGrant(windowId, "closed", async () => {
           await chrome.windows.remove(windowId);
           return { ok: true, windowId, closed: true };
-        }),
+        });
+      },
     }),
     move_window: tool({
       description:
@@ -2659,6 +2706,12 @@ export function browserToolset(readOnly = false, {
         if (!(await hasPermission("bookmarks"))) {
           return permissionDeniedResult("bookmarks");
         }
+        // DESTRUCTIVE policy: removing a bookmark/folder always asks
+        // (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
+        const approved = await requireDestructiveApproval(
+          "browser.remove-bookmark", String(id), { kind: "bookmark", id },
+        );
+        if (approved.ok !== true) return approved;
         try {
           await assertRunOwned();
         } catch {
@@ -2946,6 +2999,12 @@ export function browserToolset(readOnly = false, {
         if (!(await hasOriginHostPermission(origin))) {
           return { error: `host permission for ${origin} not granted — broad host access is granted at install (<all_urls>); if it is missing, reinstall the extension` };
         }
+        // DESTRUCTIVE policy: writing a cookie always asks
+        // (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
+        const approvedSet = await requireDestructiveApproval(
+          "browser.set-cookie", `${origin} ${name}`, { kind: "cookie", origin, name },
+        );
+        if (approvedSet.ok !== true) return approvedSet;
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(origin))) {
             return permissionDenial(
@@ -2992,6 +3051,12 @@ export function browserToolset(readOnly = false, {
         if (!(await hasOriginHostPermission(origin))) {
           return { error: `host permission for ${origin} not granted — broad host access is granted at install (<all_urls>); if it is missing, reinstall the extension` };
         }
+        // DESTRUCTIVE policy: removing a cookie always asks
+        // (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
+        const approvedRemove = await requireDestructiveApproval(
+          "browser.remove-cookie", `${origin} ${name}`, { kind: "cookie", origin, name },
+        );
+        if (approvedRemove.ok !== true) return approvedRemove;
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(origin))) {
             return permissionDenial(
@@ -3042,6 +3107,13 @@ export function browserToolset(readOnly = false, {
         // the schema and there is NO implicit "everything" path: passing the
         // full list is the caller's explicit choice, recorded in the result.
         const unique = [...new Set(dataTypes)];
+        // DESTRUCTIVE policy: a browser-wide, irreversible wipe always asks; the
+        // card names the exact data types (CAP-FB-20260830-DESTRUCTIVE-ACTION-
+        // POLICY-01).
+        const approvedWipe = await requireDestructiveApproval(
+          "browser.wipe", [...unique].sort().join(","), { kind: "wipe", dataTypes: [...unique].sort() },
+        );
+        if (approvedWipe.ok !== true) return approvedWipe;
         return await withGrantLock(async () => {
           // Browser-wide scope: ONLY a global grant authorizes a wipe
           // (undefined origin never matches an origin-scoped grant).

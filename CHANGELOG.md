@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.596] — 2026-09-01
+- You can now add and test remote MCP servers in Settings, and destructive browser actions always ask before they run
+
 ## [0.2.595] — 2026-09-01
 - : merge — the agent connects and calls MCP server tools on a run
 

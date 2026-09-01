@@ -92,7 +92,7 @@
 
       <section id="mcp-servers" class="panel">
         <h2>MCP servers</h2>
-        <p class="muted">Connect a remote <abbr title="Model Context Protocol">MCP</abbr> server so agents can call its tools. Only remote servers are supported — Streamable HTTP or SSE over an <code>https://</code> URL. An auth token is stored locally in <code>chrome.storage</code>, never in the bundle, logs, or receipts, and is never shown again after you save it.</p>
+        <p class="muted">Connect a remote <abbr title="Model Context Protocol">MCP</abbr> server so agents can call its tools. Only remote servers are supported — Streamable HTTP or SSE over an <code>https://</code> URL. An auth token stays on this device only — never in the bundle, logs, or receipts — and is never shown again after you save it.</p>
         <div class="mcp-toolbar">
           <button type="button" class="btn primary" id="mcp-add-btn">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -208,6 +208,31 @@
           <textarea id="grant-origin-list" rows="4"
             placeholder="https://github.com"></textarea>
           <p class="muted">Empty = a global (all-origins) grant.</p>
+        </div>
+        <div id="action-policy" class="action-policy">
+          <h3>Action policy</h3>
+          <p class="muted">What the agent may do once Browser control is on, in three classes.</p>
+          <ul class="policy-classes">
+            <li>
+              <span class="policy-name">Read</span>
+              <span class="muted">Read page text, list tabs. Allowed after consent — never interrupts.</span>
+            </li>
+            <li>
+              <span class="policy-name">Act</span>
+              <span class="muted">Open, navigate and manage tabs, groups, bookmarks and page actions. Asks once per site, then runs automatically.</span>
+            </li>
+            <li>
+              <span class="policy-name">Destructive</span>
+              <span class="muted">Close a tab it didn't open, close a window, wipe browsing data, remove a bookmark, or set/remove a cookie. Always asks — each action shows an approval card.</span>
+            </li>
+          </ul>
+          <div class="policy-control">
+            <label for="destructive-policy" class="policy-name">Destructive actions</label>
+            <select id="destructive-policy" class="input-select">
+              <option value="ask" selected>Always ask (recommended)</option>
+              <option value="never">Never allow</option>
+            </select>
+          </div>
         </div>
       </section>
 

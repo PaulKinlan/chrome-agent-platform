@@ -174,6 +174,10 @@ const BASELINE_ROUTES = [
   // The owner-approval leg of get_cookie revealValue
   // (CAP-FB-20260830-COOKIE-TOOLS-CUT-01).
   "browser.cookie-value",
+  // The owner-approval leg of the Destructive class: close a foreign tab/window,
+  // wipe data, remove a bookmark, set/remove a cookie
+  // (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
+  "browser.destructive-action",
   "task.schedule-script",
   "schedules.list",
   "recipe.list",

@@ -95,6 +95,26 @@ Deno.test("owner-direct scope is exactly the audited action set (no silent widen
   }
 });
 
+Deno.test("policy: the six destructive browser actions are approvable (in DESTRUCTIVE_ACTIONS)", () => {
+  // CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01: once Browser control is on,
+  // a destructive browser action (close a foreign tab/window, wipe data,
+  // remove a bookmark, set/remove a cookie) must take a per-action owner
+  // approval. createPendingApproval refuses any action not in this set, so the
+  // approval path cannot even be requested without membership.
+  for (const action of [
+    "browser.close-foreign-tab",
+    "browser.close-window",
+    "browser.wipe",
+    "browser.remove-bookmark",
+    "browser.set-cookie",
+    "browser.remove-cookie",
+  ]) {
+    assert(DESTRUCTIVE_ACTIONS.has(action), `${action} must be an approvable destructive action`);
+    // The action name passes the same audit grammar every approvable action does.
+    assert(/^[a-z][a-z.-]{0,63}$/.test(action), action);
+  }
+});
+
 Deno.test("approval payload: raw structures/prototypes/accessors/proxies/cycles fail closed without observation", async () => {
   let getter = 0;
   const accessor = {};
