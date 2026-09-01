@@ -74,9 +74,37 @@ Writing outside the repository keeps the post-commit worktree clean, allowing
 the manifest's `testedSourceCommit` + empty `worktreeDirtyFiles` to identify the
 exact tested bytes.
 
-Automated mode runs in two phases:
+Automated mode runs in three phases:
 
-1. **Fresh-profile, SHIPPED manifest (no pregrants).** ONE real **Discover
+0. **The showcase, fresh profile, SHIPPED manifest, no API key**
+   (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01). The hub is opened first, then the
+   Showcase Shop (`/shop`, five declared tools + a visible cart). On a fresh
+   profile no page can report its tools before the one-time `scripting` grant
+   (arming the MAIN-world probe needs it), so the composer chip must first read
+   "Check open pages for site tools" within 3 s with nothing granted; its real
+   click must grant exactly `scripting` (tabs stays ungranted, nothing
+   enrolled), after which the offer chip "127.0.0.1:8934 offers 5 tools — use
+   them?" must appear within 3 s. Before the offer click the site's tools cannot
+   be invoked. ONE real click must enroll that exact tab, name the origin in the
+   status line and flip the chip to "Using … · 5 tools". The composer task is
+   addressed to the site by a real `@` mention pick (routed to the site's own
+   worker) on the developer-flag demo model
+   (`@demo-site-tool add_to_cart {"sku":"widget-basic"}`) and must change the
+   page's cart (1 item, $4.50) in under 60 s from hub load, with the
+   transcript's tool card naming `add_to_cart` and the final answer carrying
+   the total. The service worker is then closed and re-woken (a fresh execution
+   context is asserted): the origin is reported enrolled (never re-offered) and
+   `cart_total` / a second `add_to_cart` still run without re-enrollment.
+   Screenshots: `showcase-check.png`, `showcase-chip.png`, `showcase-grant.png`,
+   `showcase-cart-changed.png`, `showcase-tool-card.png`.
+1. **Fresh-profile, SHIPPED manifest (no pregrants).** Today's hub hides the
+   Agents section until it has data, so on a fresh profile the first reachable
+   gesture is the composer's "Check open pages for site tools" chip: its real
+   click settles the JIT `scripting` grant (warningless, no prompt), the SW's
+   `permissions.onAdded` nudge re-arms the already-open fixture tab's passive
+   detector, its count lands, the Agents section appears, and ONE real **Find
+   site tools** click opens the picker listing that tab. The older form of this
+   phase (**Discover
    this page** click must carry the whole chain: the JIT `scripting` request
    settles granted (warningless — provable headless), the SW's
    `permissions.onAdded` nudge re-arms the already-open fixture tab's passive

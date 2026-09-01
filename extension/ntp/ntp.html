@@ -566,8 +566,14 @@
       grid-template-columns: minmax(0, 1fr);
       align-items: start;
     }
-    .main-wrap > header { order: -3; }
-    .main-wrap > first-run-guide { order: -2; }
+    .main-wrap > header { order: -4; }
+    .main-wrap > first-run-guide { order: -3; }
+    /* The site-offer chip ("<host> offers N tools — use them?") sits directly
+       above the composer visually while FOLLOWING it in the DOM, so Tab #1 is
+       still the task input (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01). */
+    .main-wrap > site-agent-card { order: -2; }
+    .main-wrap > site-agent-card { margin-bottom: 12px; }
+    .main-wrap > site-agent-card[hidden] { display: none; }
     .main-wrap > agent-composer { order: -1; }
     .main-wrap > section[hidden] { display: none; }
     /* Wide form factor: the hub uses the available width instead of leaving
@@ -583,6 +589,7 @@
       }
       .main-wrap > header,
       .main-wrap > first-run-guide,
+      .main-wrap > site-agent-card,
       .main-wrap > agent-composer,
       .main-wrap > example-chips,
       .main-wrap > #timeline-section {
@@ -901,6 +908,13 @@
              the header's status controls. The visual stack (header, banner,
              composer, chips) is restored with CSS `order` on the grid. -->
         <agent-composer id="composer" placeholder="Ask anything, or @mention an agent…" send-label="Run task"></agent-composer>
+        <!-- The site-offer chip (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01): when
+             an open tab's page reports tools and that site is not yet a Site
+             Agent, this reads "<host> offers N tools — use them?"; the one
+             click is the grant (scripting + that exact origin) and enrolls
+             that exact tab. Hidden until there is something honest to offer.
+             Rendered ABOVE the composer by CSS order; after it in the DOM. -->
+        <site-agent-card id="site-offer" offer hidden></site-agent-card>
         <example-chips id="example-chips" label="Try one of these" chips="Group my tabs by topic|Summarise this page|Watch this price"></example-chips>
         <first-run-guide id="first-run-guide" hidden></first-run-guide>
         <header class="top">

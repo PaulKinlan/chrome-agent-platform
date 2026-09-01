@@ -44,6 +44,9 @@ const FILES = [
   ["extension/lib/board-view-model.js", "docs/board-view-model.js"],
   // The "Next run" projector for a routine (components.js imports it — the gallery must resolve it).
   ["extension/lib/next-run-label.js", "docs/next-run-label.js"],
+  // The Site Agent vocabulary + the composer chip's offer projection
+  // (components.js imports it — the gallery must resolve it).
+  ["extension/shared/site-agent-copy.js", "docs/site-agent-copy.js"],
 ];
 
 export async function syncGallery({ check = false } = {}) {

@@ -3477,6 +3477,25 @@ async function armDetectionProbe(tabId, documentId) {
 // was absent when the page loaded. Without this, a fresh profile's first
 // Discover click could never see the page it was looking at (arm only runs at
 // document_start). Messaging a tab without the relay simply rejects (caught).
+// The open tabs changed (a page opened/navigated/closed, or the owner
+// switched tabs): what the hub may honestly offer above its composer may have
+// changed with them (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01). Tell the open
+// hub(s) once, debounced — they re-read `agent.tool-offers`; this carries no
+// URL or title. Registered at top level so a restarted worker keeps it.
+let openTabsChangedTimer = null;
+function noteOpenTabsChanged() {
+  clearTimeout(openTabsChangedTimer);
+  openTabsChangedTimer = setTimeout(() => {
+    openTabsChangedTimer = null;
+    broadcastProgress({ type: "open-tabs-changed" });
+  }, 300);
+}
+chrome.tabs?.onUpdated?.addListener((_tabId, info) => {
+  if (info?.status === "complete" || typeof info?.url === "string") noteOpenTabsChanged();
+});
+chrome.tabs?.onRemoved?.addListener(() => noteOpenTabsChanged());
+chrome.tabs?.onActivated?.addListener(() => noteOpenTabsChanged());
+
 chrome.permissions?.onAdded?.addListener((granted) => {
   if (!granted?.permissions?.includes("scripting")) return;
   (async () => {
@@ -5772,6 +5791,70 @@ const handlers = mergeRouteMaps(
     return { ok: true, tabs: out };
   },
 
+  // `agent.tool-offers` — the OPEN tabs whose page reported tools through the
+  // PASSIVE detector, for the hub's composer chip ("<host> offers N tools —
+  // use them?"; CAP-FB-20260825-SITE-AGENT-SHOWCASE-01). Unlike
+  // `agent.discoverable-tabs` this needs NO optional permission: the detector
+  // is a statically registered content script and tab URLs come from the
+  // install-granted host access, so a FRESH profile can be offered a site
+  // before any grant. It is an OFFER, not an authority: the row is matched on
+  // the browser-attested sender tab id + the tab's CURRENT origin, and the
+  // click still goes through the owner-gesture enrollment, which reattests the
+  // exact tab/document with `scripting` before anything acts on the page.
+  async "agent.tool-offers"() {
+    let tabs = null;
+    try {
+      tabs = await chrome.tabs.query({});
+    } catch {
+      tabs = null;
+    }
+    if (!tabs) return { ok: false, error: "open tabs are not readable" };
+    // Arming the MAIN-world probe needs the optional `scripting` permission
+    // (armDetectionProbe): until the owner grants it once, no page can report
+    // a count. Say so — with how many open http(s) pages could be checked —
+    // so the hub can offer that ONE named click instead of silence.
+    const hasScripting = await chrome.permissions
+      .contains({ permissions: ["scripting"] })
+      .catch(() => false);
+    const known = new Map(
+      (await listKnownWebmcpOrigins().catch(() => [])).map((entry) => [entry.origin, entry]),
+    );
+    const enrolledOrigins = new Set(await listOrigins().catch(() => []));
+    const offers = [];
+    let candidateTabs = 0;
+    for (const t of tabs) {
+      if (t.id == null || !t.url) continue;
+      let origin;
+      try {
+        origin = canonicalOrigin(new URL(t.url).origin);
+      } catch {
+        continue;
+      }
+      if (!origin || !/^https?:/.test(origin)) continue;
+      candidateTabs += 1;
+      const detected = known.get(origin);
+      if (!detected) continue;
+      // The report must come from THIS tab (the sender-attested tab id) and
+      // the tab must still show that origin — another same-origin tab cannot
+      // lend this one its report.
+      const document = detected.documents.find((item) => item.tabId === t.id);
+      if (!document || !(document.toolCount > 0)) continue;
+      offers.push({
+        id: t.id,
+        title: String(t.title ?? "").slice(0, 200),
+        url: String(t.url).slice(0, 500),
+        origin,
+        toolCount: document.toolCount,
+        enrolled: enrolledOrigins.has(origin),
+        active: t.active === true,
+        lastAccessed: typeof t.lastAccessed === "number" ? t.lastAccessed : 0,
+      });
+      if (offers.length >= 50) break;
+    }
+    offers.sort((a, b) => b.lastAccessed - a.lastAccessed);
+    return { ok: true, offers, needScripting: !hasScripting, candidateTabs };
+  },
+
   // `agent.directory` returns the RICH listing (name + tools + memory + enrollment
   // state) the management `list_agents` tool uses, without breaking `agent.list`
   // (the bare origin array the fan-out journeys depend on).
@@ -5876,7 +5959,13 @@ const handlers = mergeRouteMaps(
     for (const o of origins) {
       const info = await agentInfo(o).catch(() => null);
       if (!info?.enrolled) continue; // only the ENROLLED Site Agents are callable
-      const ref = info.path && info.path !== "/" ? `site:${info.origin}${info.path}` : `site:${info.origin}`;
+      // The ref is the CANONICAL `site:<origin>` — never the page path. The
+      // composer's selection contract (selectionFromAgentCandidate) fails
+      // closed when the ref's id disagrees with `id`, so a path-suffixed ref
+      // silently dropped every site @mention (the task ran on the hub, which
+      // has no site tools). The page path stays in the display name.
+      // (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01.)
+      const ref = `site:${info.origin}`;
       site.push({
         ref,
         id: info.origin,
@@ -6038,13 +6127,15 @@ const handlers = mergeRouteMaps(
       typeof __sender.documentId !== "string" ||
       typeof __sender.url !== "string"
     ) return { ok: false, error: "invalid detection document" };
-    return {
-      ok: true,
-      ...(await reportWebmcpDetection(canonical, __sender.url, toolCount, {
-        tabId: __sender.tabId,
-        documentId: __sender.documentId,
-      })),
-    };
+    const report = await reportWebmcpDetection(canonical, __sender.url, toolCount, {
+      tabId: __sender.tabId,
+      documentId: __sender.documentId,
+    });
+    // Tell the open hub(s) a page's tool count changed so the composer chip
+    // re-projects live (the offer appears while the owner is looking at the
+    // hub). Carries only the origin + count — never the URL or the tools.
+    broadcastProgress({ type: "site-tools-detected", origin: canonical, toolCount: report?.toolCount ?? 0 });
+    return { ok: true, ...report };
   },
   async "tools.upsert"({ origin, tools, seq, epoch, pageUrl, title, __sender }) {
     const canonical = canonicalOrigin(origin);

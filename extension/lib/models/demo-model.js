@@ -54,6 +54,16 @@ const BROWSER_TOOLS = new Set(["open_tab", "navigate_tab", "read_page", "capture
 // after Allow the same execute re-runs and returns the real result.
 const MCP_MARKER = "@demo-mcp";
 const MCP_TOOL_RE = /@demo-mcp\s+(mcp__[a-zA-Z0-9_-]+__[a-zA-Z0-9_-]+)(?:\s+(\{[\s\S]*\}))?/;
+// @demo-site-tool <tool> [json-args]: the demo model calls ONE tool a SITE
+// AGENT offers (a WebMCP tool the page declared) through the REAL lazy
+// protocol (search_tools → execute_tool), so the sites-as-sub-agents showcase
+// (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01) is demonstrable with no API key:
+// the page's own function runs in the enrolled tab, its visible side effect
+// (the cart) changes, and the transcript's tool card names the site's tool.
+// The final text is the REAL outcome — a denial (not enrolled, not
+// approved) reads as not performed, never as success.
+const SITE_TOOL_MARKER = "@demo-site-tool";
+const SITE_TOOL_RE = /@demo-site-tool\s+([a-zA-Z0-9_.-]+)(?:\s+(\{[\s\S]*\}))?/;
 const MCP_MAX_ROUNDS = 3;
 const BROWSER_MAX_ROUNDS = 3;
 // The board has three demo MODES (CAP-FB-20260830-AGENT-BOARD-WORKING-01):
@@ -355,6 +365,7 @@ function latestRunSlice(prompt) {
       board: lastUser.includes(BOARD_MARKER) || BOARD_WAKE_RE.test(extractText([msgs[lastIdx]])),
       browser: lastUser.includes(BROWSER_MARKER),
       mcp: lastUser.includes(MCP_MARKER),
+      siteTool: lastUser.includes(SITE_TOOL_MARKER),
       enumSlip: lastUser.includes(ENUM_SLIP_MARKER),
       editArtifact: lastUser.includes(EDIT_ARTIFACT_MARKER),
       writeFile: lastUser.includes(WRITE_FILE_MARKER),
@@ -1163,8 +1174,94 @@ function mcpFinalText(prompt) {
   return `[demo model] MCP tool ${spec.tool} finished without a result.`;
 }
 
-function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, browser = false, mcp = false, enumSlip = false, runScript = false, editArtifact = false, patchArtifact = false, writeFile = false, skillRead = false, remember = false } = {}) {
+// ── @demo-site-tool helpers (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01) ─────────
+
+function wantsSiteTool(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.siteTool;
+}
+
+/** Parse "<tool> [json-args]" after the marker from the CURRENT run's task
+ * (original case preserved for the args JSON). Unknown shape → null (the
+ * final text says so; nothing is called). */
+function siteToolSpec(prompt) {
+  const msgs = latestRunSlice(prompt)?.slice ?? [];
+  const lastUserMsg = [...msgs].reverse().find((m) => m?.role === "user" && !isAgentDoContinuation(m));
+  const text = extractText(lastUserMsg ? [lastUserMsg] : []);
+  const m = text.match(SITE_TOOL_RE);
+  if (!m) return null;
+  let args = {};
+  if (m[2]) {
+    try { args = JSON.parse(m[2]); } catch { args = {}; }
+  }
+  return { tool: m[1], args: args && typeof args === "object" ? args : {} };
+}
+
+function siteToolExecuteParts(prompt) {
+  return boardToolParts(prompt).filter((p) => p?.toolName === "execute_tool" && p?.type === "tool-result");
+}
+
+function siteToolAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" &&
+    Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && /\[demo model\] Site tool/.test(p.text ?? "")));
+}
+
+/** Honest final text from the execute result: a denial/error is "NOT
+ * performed"; a real result reports what the site's tool returned (a cart
+ * total when it carried one). */
+function siteToolFinalText(prompt) {
+  const spec = siteToolSpec(prompt);
+  if (!spec) return "[demo model] Site tool request not understood — nothing was performed.";
+  const parts = siteToolExecuteParts(prompt);
+  if (!parts.length) return `[demo model] Site tool ${spec.tool} was not called — the site may not be a Site Agent yet.`;
+  const last = parts[parts.length - 1];
+  if (last.output?.type === "error-text") {
+    return `[demo model] Site tool ${spec.tool} was NOT performed: ${String(last.output.value ?? "error").slice(0, 200)}`;
+  }
+  const v = browserUnwrap(last.output);
+  if (v && typeof v === "object") {
+    if (v.waitingForPermission === true || v.ok === false || typeof v.error === "string") {
+      return `[demo model] Site tool ${spec.tool} was NOT performed: ${String(v.error ?? "denied").slice(0, 200)}`;
+    }
+    // A site result comes back FENCED as untrusted content ({untrusted, value})
+    // or as the tool's own object. Report what a person wants to hear — the
+    // total and what was added — with the fence markers stripped from the
+    // quoted page strings (they are data, not part of the answer).
+    const inner = typeof v.value === "string" ? v.value : JSON.stringify(v);
+    const unfenced = inner.replace(/<<<UNTRUSTED run:[A-Za-z0-9]+>>>\\?n?/g, "").replace(/\\?n?<<<END run:[A-Za-z0-9]+>>>/g, "");
+    const totalMatch = unfenced.match(/"total"\s*:\s*([0-9.]+)/);
+    const total = totalMatch ? ` Cart total: $${Number(totalMatch[1]).toFixed(2)}.` : "";
+    const addedName = unfenced.match(/"added"\s*:\s*\{[^}]*"name"\s*:\s*"([^"]{1,80})"/);
+    const addedQty = unfenced.match(/"added"\s*:\s*\{[^}]*"quantity"\s*:\s*(\d+)/);
+    const added = addedName ? ` Added ${addedName[1]}${addedQty ? ` × ${addedQty[1]}` : ""}.` : "";
+    return `[demo model] Site tool ${spec.tool} succeeded.${total}${added}${total || added ? "" : ` ${unfenced.slice(0, 200)}`}`;
+  }
+  if (typeof v === "string") {
+    return `[demo model] Site tool ${spec.tool} succeeded: ${v.slice(0, 200)}`;
+  }
+  return `[demo model] Site tool ${spec.tool} finished without a result.`;
+}
+
+function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, browser = false, mcp = false, siteTool = false, writeFile = false, enumSlip = false, runScript = false, editArtifact = false, patchArtifact = false, skillRead = false, remember = false } = {}) {
   const step = toolResultCount(prompt);
+  if (siteTool) {
+    // search(<site tool>) → execute_tool(selectionRef, args) → final. ONE
+    // round: enrollment is the owner's consent for the site's tools, so no
+    // approval card pauses the call; a denial is reported honestly.
+    const spec = siteToolSpec(prompt);
+    if (!spec) return null;
+    const toolParts = boardToolParts(prompt);
+    const searches = toolParts.filter((p) => p.toolName === "search_tools").length;
+    const executes = toolParts.filter((p) => p.toolName === "execute_tool").length;
+    if (executes >= 1) return null;
+    if (searches <= executes) {
+      return { id: `search_site_${searches}`, name: "search_tools", input: { query: spec.tool, limit: 3 } };
+    }
+    const selectionRef = latestSelectionRef(prompt);
+    if (!selectionRef) return null;
+    return { id: `execute_site_${executes}`, name: "execute_tool", input: { selectionRef, arguments: spec.args } };
+  }
   if (writeFile) {
     // search(read_file) → execute read → search(write_file) → execute write
     // with the read content's typo fixed → final text. The write pays the
@@ -1634,6 +1731,8 @@ export function createDemoModel() {
         ? lazyDemoCall(options.prompt, { browser: true })
         : wantsMcp(options.prompt) && !mcpAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { mcp: true })
+        : wantsSiteTool(options.prompt) && !siteToolAlreadyFinal(options.prompt)
+        ? lazyDemoCall(options.prompt, { siteTool: true })
         : wantsDelegate(options.prompt)        ? lazyDemoCall(options.prompt, { delegate: true })
         : wantsCreateAgent(options.prompt) && !createAgentDone
         ? lazyDemoCall(options.prompt)
@@ -1749,6 +1848,14 @@ export function createDemoModel() {
           warnings: [],
         });
       }
+      if (wantsSiteTool(options.prompt)) {
+        return Promise.resolve({
+          content: [{ type: "text", text: siteToolFinalText(options.prompt) }],
+          finishReason: "stop",
+          usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
+          warnings: [],
+        });
+      }
       if (wantsObeyPage(options.prompt)) {
         return Promise.resolve({
           content: [{ type: "text", text: obeyPageFinalText(options.prompt) }],
@@ -1839,6 +1946,8 @@ export function createDemoModel() {
             ? lazyDemoCall(options.prompt, { browser: true })
             : wantsMcp(options.prompt) && !mcpAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { mcp: true })
+            : wantsSiteTool(options.prompt) && !siteToolAlreadyFinal(options.prompt)
+            ? lazyDemoCall(options.prompt, { siteTool: true })
             : wantsDel            ? lazyDemoCall(options.prompt, { delegate: true })
             : wantsCreateAgent(options.prompt) && !createAgentDone
             ? lazyDemoCall(options.prompt)
@@ -2026,6 +2135,16 @@ export function createDemoModel() {
               .flatMap((m) => m.content)
               .find((p2) => p2?.type === "text" && /\[demo model\] MCP tool/.test(p2.text ?? ""));
             response = prior?.text ?? mcpFinalText(options.prompt);
+          }
+          else if (wantsSiteTool(options.prompt)) {
+            // The site-tool flow's final text is the REAL outcome of the
+            // execute (the page's result / a denial); a continuation re-emits
+            // the exact prior final so the loop ends on the text-only step.
+            const prior = runSlice(options.prompt)
+              .filter((m) => m?.role === "assistant" && Array.isArray(m?.content))
+              .flatMap((m) => m.content)
+              .find((p2) => p2?.type === "text" && /\[demo model\] Site tool/.test(p2.text ?? ""));
+            response = prior?.text ?? siteToolFinalText(options.prompt);
           }
           else if (wantsTools && (toolResultCount(options.prompt) >= (wantsDemoToolsX2(options.prompt) ? 12 : 6) || demoAlreadyFinal(options.prompt))) {            // STEP 4 (tools): the final summary — the reads' VALUES speak for
             // themselves (the run's tool results are the assertion target). The

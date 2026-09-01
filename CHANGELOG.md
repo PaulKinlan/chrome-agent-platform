@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.616] — 2026-09-01
+- When an open page offers tools, a chip next to the composer now lets you use them in one click; a demo shop is included to try it.
+
 ## [0.2.615] — 2026-09-01
 - Task board: the full JSON tool-result view is complete.
 

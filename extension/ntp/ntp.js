@@ -63,6 +63,7 @@ import {
   SITE_AGENT_COPY,
   enrollOutcomeState,
   formatWebmcpHubStatus,
+  selectSiteOfferState,
   siteAgentSetupMessage,
 } from "../shared/site-agent-copy.js";
 // The visible find-tools action consumes the centralized authority at runtime
@@ -426,11 +427,18 @@ async function renderSiteAgents() {
   el.replaceChildren();
 
   // Proactive discovery (CAP-FB-20260825-SITE-DISCOVERABILITY-01): check for
-  // open browser tabs that can be enrolled with one click.
+  // open browser tabs that can be enrolled with one click. Read through the
+  // PERMISSION-FREE offers route (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01):
+  // `agent.discoverable-tabs` needs the optional `scripting` permission to
+  // reattest tabs, so on a fresh profile it answered needScripting and this
+  // banner — and with it the whole Agents section and its "Find site tools"
+  // link — never appeared. The offers are the passive detector's reports
+  // intersected with the open tabs; the click still walks the owner-gesture
+  // enrollment that reattests the exact tab before acting on it.
   const enrolledOrigins = new Set((Array.isArray(res.agents) ? res.agents : []).map((a) => a.origin));
-  const discoverable = await send("agent.discoverable-tabs", { toolsOnly: true }).catch(() => ({ ok: false }));
-  const unenrolledTabs = (discoverable?.ok && Array.isArray(discoverable.tabs))
-    ? discoverable.tabs.filter((t) => !enrolledOrigins.has(t.origin))
+  const discoverable = await send("agent.tool-offers").catch(() => ({ ok: false }));
+  const unenrolledTabs = (discoverable?.ok && Array.isArray(discoverable.offers))
+    ? discoverable.offers.filter((t) => t.enrolled !== true && !enrolledOrigins.has(t.origin))
     : [];
 
   if (agents.length > 0) {
@@ -656,6 +664,8 @@ function openDiscoverPicker(tabs) {
   dialog.addEventListener("close", () => dialog.remove(), { once: true });
 }
 
+/** Enroll the EXACT picked tab from the owner's click. Returns true when the
+ * site became a Site Agent (the chip flips to "Using …"), false otherwise. */
 async function discoverTab(tab) {
   // OPTIONAL + JIT model: the discover click IS the user gesture — request
   // the scripting permission + the site's origin here (chrome.permissions
@@ -668,11 +678,11 @@ async function discoverTab(tab) {
     })) === true;
   } catch (e) {
     setStatus(siteAgentSetupMessage("permission-error", tab.origin), false);
-    return;
+    return false;
   }
   if (!granted) {
     setStatus(siteAgentSetupMessage("permission-denied", tab.origin), false);
-    return;
+    return false;
   }
   const res = await send("agent.enroll-origin", {
     origin: tab.origin,
@@ -695,10 +705,125 @@ async function discoverTab(tab) {
     };
     refresh();
     for (const delay of [1200, 3200]) setTimeout(refresh, delay);
-  } else {
-    setStatus(siteAgentSetupMessage("failed", tab.origin), false);
+    return state !== "failed";
+  }
+  setStatus(siteAgentSetupMessage("failed", tab.origin), false);
+  return false;
+}
+
+// ── The site-offer chip above the composer ───────────────────────────────────
+// (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01.) A page the owner has open reports
+// tools through the passive detector; the SW's `agent.tool-offers` (no
+// optional permission needed to READ it) intersects those reports with the
+// open tabs, and the hub offers ONE unenrolled site as "<host> offers N tools
+// — use them?". The click is the single grant: the chip's `select` carries the
+// EXACT tab id, and discoverTab requests scripting + that origin on the
+// gesture, then enrolls that tab — the same path the Find-site-tools picker
+// uses. One honest wrinkle: ARMING a page's detector needs the optional
+// `scripting` permission (armDetectionProbe), so on a profile that never
+// granted it no page can report a count yet. The chip then reads "Check open
+// pages for site tools" and that click grants exactly scripting (warningless,
+// no prompt) — the SW's permissions.onAdded nudge re-arms the already-open
+// pages and their counts arrive within a second, flipping the chip to the
+// offer. Nothing here broadens access quietly: every permission is requested
+// from a named click, and the SW still verifies the picked tab shows the
+// origin before acting on it.
+const siteOffer = document.getElementById("site-offer");
+// The origin the owner just enrolled from the chip — kept as "Using <host>"
+// until the hub is reloaded, so the grant's result stays visible.
+let siteOfferUsing = null;
+let siteOfferBusy = false;
+function setSiteOfferVariant(variant) {
+  for (const v of ["offer", "using", "check"]) {
+    if (v === variant) siteOffer.setAttribute(v, "");
+    else siteOffer.removeAttribute(v);
   }
 }
+async function renderSiteOffer() {
+  if (!siteOffer || siteOfferBusy) return;
+  const [offers, directory] = await Promise.all([
+    send("agent.tool-offers").catch(() => ({ ok: false })),
+    send("agent.directory").catch(() => ({ agents: [] })),
+  ]);
+  const rows = offers?.ok && Array.isArray(offers.offers) ? offers.offers : [];
+  const enrolled = (Array.isArray(directory?.agents) ? directory.agents : []).map((a) => a.origin);
+  if (siteOfferUsing) {
+    // The site the owner just added: show "Using <host> · N tools" while its
+    // tab is still open; drop the chip once that tab is gone.
+    const stillOpen = rows.find((r) => r.origin === siteOfferUsing.origin);
+    if (stillOpen) {
+      setSiteOfferVariant("using");
+      siteOffer.setAttribute("origin", siteOfferUsing.origin);
+      siteOffer.setAttribute("tool-count", String(stillOpen.toolCount ?? siteOfferUsing.toolCount ?? 0));
+      siteOffer.removeAttribute("tab-id");
+      siteOffer.hidden = false;
+      return;
+    }
+    siteOfferUsing = null;
+  }
+  const state = selectSiteOfferState(offers, enrolled);
+  if (!state) {
+    siteOffer.hidden = true;
+    return;
+  }
+  if (state.kind === "check") {
+    setSiteOfferVariant("check");
+    siteOffer.removeAttribute("origin");
+    siteOffer.removeAttribute("tool-count");
+    siteOffer.removeAttribute("tab-id");
+    siteOffer.hidden = false;
+    return;
+  }
+  const offer = state.offer;
+  setSiteOfferVariant("offer");
+  siteOffer.setAttribute("origin", offer.origin);
+  siteOffer.setAttribute("tool-count", String(offer.toolCount));
+  siteOffer.setAttribute("tab-id", String(offer.id));
+  siteOffer.hidden = false;
+}
+siteOffer?.addEventListener("select", async (e) => {
+  if (siteOfferBusy) return;
+  const card = siteOffer.shadowRoot?.querySelector(".card");
+  if (e.detail?.check === true) {
+    // The one-time scripting grant, from THIS click. Nothing else is
+    // requested here — the page's origin is granted only from the offer click.
+    siteOfferBusy = true;
+    card?.setAttribute("aria-busy", "true");
+    let granted = false;
+    try {
+      granted = (await chrome.permissions.request({ permissions: ["scripting"] })) === true;
+    } catch {
+      granted = false;
+    } finally {
+      siteOfferBusy = false;
+      card?.removeAttribute("aria-busy");
+    }
+    if (!granted) {
+      setStatus(siteAgentSetupMessage("scripting-denied"), false);
+      return;
+    }
+    // The grant re-arms the already-open pages; their first counts land
+    // within a second or two. Re-project a few times (the SW also pushes
+    // site-tools-detected as each report arrives).
+    renderSiteOffer();
+    for (const delay of [600, 1500, 3000]) setTimeout(renderSiteOffer, delay);
+    return;
+  }
+  const origin = e.detail?.origin;
+  const tabId = e.detail?.tabId;
+  if (!origin || !Number.isInteger(tabId)) return;
+  siteOfferBusy = true;
+  card?.setAttribute("aria-busy", "true");
+  try {
+    const toolCount = Number(siteOffer.getAttribute("tool-count")) || 0;
+    const ok = await discoverTab({ id: tabId, origin, title: "" });
+    if (ok) siteOfferUsing = { origin, toolCount };
+  } finally {
+    siteOfferBusy = false;
+    card?.removeAttribute("aria-busy");
+  }
+  renderSiteOffer();
+});
 
 // ── named agents (the persistent named agents) ──────────────────────────────
 async function renderNamedAgents() {
@@ -3489,6 +3614,7 @@ threadTitle.addEventListener("keydown", (e) => {
 });
 
 renderSiteAgents();
+renderSiteOffer();
 renderWebmcpHubStatus();
 renderNamedAgents();
 renderBackgroundAgents();
@@ -3554,7 +3680,17 @@ subscribeRunRegistry((snapshot) => {
 // chrome.storage.onChanged may never fire).
 subscribeProgress((ev) => {
   if (ev?.type === "named-agent-changed") renderNamedAgents();
+  // A page's passive detector just reported tools, or the open tabs changed
+  // (a page opened/closed/navigated) — re-project the composer chip AND the
+  // Site Agents panel (its discovered-pages banner and the section's
+  // visibility) so the offer appears while the owner is looking at the hub,
+  // without polling.
+  if (ev?.type === "site-tools-detected" || ev?.type === "open-tabs-changed") {
+    renderSiteOffer();
+    renderSiteAgents();
+  }
   if (ev?.type === "agent-registry-changed") {
+    renderSiteOffer();
     // The unified registry changed (named/background/site) — refresh every
     // agent surface + revalidate any composer's selected-agent chip live
     // (a deleted/disabled agent clears its chip; a rename updates it).
