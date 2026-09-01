@@ -289,9 +289,15 @@ async function hasPermission(perm) {
  *   - `grantGlobal` is true ONLY where the tool's existing semantics already
  *     require the global grant (an origin-less tab scope, a browser-wide
  *     mutation) — the approval card states "all sites" plainly in that case.
+ *   - `hostOrigins` (CAP-FB-20260901-READ-PAGE-HOST-GRANT-01) is the EXACT
+ *     canonical origin list whose Chrome SITE ACCESS (`<origin>/*`) the tool
+ *     needs and the owner's click requests via chrome.permissions.request
+ *     ({ origins }). It is a different decision from `grantOrigins`: reading a
+ *     page needs site access + `scripting`, acting on it needs the browser-
+ *     control grant too. Both may ride on ONE card for one origin.
  *   - Nothing here grants anything: this is a DESCRIPTION of what a real owner
  *     gesture must approve. The denial path is byte-identical otherwise. */
-function permissionDenial(error, { reason, permissions = [], grantOrigins = [], grantGlobal = false } = {}) {
+function permissionDenial(error, { reason, permissions = [], grantOrigins = [], grantGlobal = false, hostOrigins = [] } = {}) {
   return {
     error,
     waitingForPermission: true,
@@ -300,8 +306,96 @@ function permissionDenial(error, { reason, permissions = [], grantOrigins = [], 
       permissions: [...new Set(permissions)].slice(0, 8),
       grantOrigins: [...new Set(grantOrigins)].slice(0, 50),
       grantGlobal: grantGlobal === true,
+      ...(hostOrigins.length ? { hostOrigins: [...new Set(hostOrigins)].slice(0, 50) } : {}),
     },
   };
+}
+
+// ── CAP-FB-20260901-READ-PAGE-HOST-GRANT-01: the page-access gate ──────────
+/** The raw message Chrome throws from scripting.executeScript /
+ * captureVisibleTab when the extension has no host access for the tab. It
+ * must never reach the model or the owner — it is mapped to the structured
+ * denial the conversation renders as an Allow card naming the site. */
+const CHROME_NO_HOST_ACCESS_RE = /cannot access contents of the page|must request permission to access the respective host|cannot access a chrome(?:-extension)?:\/\/ url|extensions gallery cannot be scripted/i;
+function isChromeHostAccessError(e) {
+  return CHROME_NO_HOST_ACCESS_RE.test(String(e?.message ?? e ?? ""));
+}
+
+/** Resolve the tab a page-reaching tool targets (an explicit id or the
+ * active tab) and decide, BEFORE any injection, whether the owner must be
+ * asked for something. Returns `{ target, origin }` when the tool may
+ * proceed, or the result to return instead:
+ *   - no tab → a plain "no tab" error;
+ *   - the tab's address is hidden (Chrome scrubs `tab.url` when neither the
+ *     `tabs` permission nor site access covers it) → ONE card naming `tabs`,
+ *     because without it the site cannot even be named;
+ *   - a privileged / non-web page (chrome://, file://, the new-tab page) → a
+ *     plain refusal, fail closed (PRIVILEGED-URL-BLOCK-01), never a card;
+ *   - the `scripting` permission and/or the exact site access are missing →
+ *     ONE card naming what is missing (`permissions` + `hostOrigins`), plus
+ *     the browser-control grant (`grantOrigins`) when the caller needs it and
+ *     it is absent — so an origin needs at most one decision per run.
+ * The card is a DESCRIPTION; the grant itself happens on the owner's click. */
+async function pageAccessGate(tabId, verb, { needScripting = true, needBrowserControl = false } = {}) {
+  const target = tabId
+    ? await chrome.tabs.get(tabId).catch(() => null)
+    : await activeTab();
+  if (!target?.id) {
+    // The permission is knowable without a tab: a missing `scripting` is
+    // still ONE card (the pre-existing contract), otherwise there is nothing.
+    if (needScripting && !(await hasScriptingPermission())) {
+      return { result: permissionDeniedResult("scripting", { reason: verb }) };
+    }
+    return { result: { error: "no tab" } };
+  }
+  if (typeof target.url !== "string" || target.url.length === 0) {
+    if (!(await hasTabsPermission())) {
+      return {
+        result: permissionDenial(
+          "the tab's address is hidden until the tabs permission is granted — allow it in the approval card here",
+          { reason: `${verb} (the tab's address is hidden until tabs access is granted)`, permissions: ["tabs"] },
+        ),
+      };
+    }
+    return { result: { error: `cannot ${verb}: the tab's address could not be read` } };
+  }
+  const origin = pageActionOrigin(target.url);
+  if (!origin) {
+    return { result: { error: `${verb}: only available on http(s) pages (not chrome://, file:// or other privileged pages)` } };
+  }
+  const permissions = needScripting && !(await hasScriptingPermission()) ? ["scripting"] : [];
+  const hostOrigins = (await hasOriginHostPermission(origin)) ? [] : [origin];
+  const grantOrigins = needBrowserControl && !(await isBrowserControlGranted(origin)) ? [origin] : [];
+  if (permissions.length || hostOrigins.length || grantOrigins.length) {
+    const missing = [
+      ...(hostOrigins.length ? [`site access to ${origin}/*`] : []),
+      ...(permissions.length ? ["scripting permission"] : []),
+      ...(grantOrigins.length ? [`browser control of ${origin}`] : []),
+    ].join(" and ");
+    return {
+      result: permissionDenial(
+        `${missing} not granted — allow it in the approval card here`,
+        { reason: `${verb} on ${origin}`, permissions, hostOrigins, grantOrigins },
+      ),
+    };
+  }
+  return { target, origin };
+}
+
+/** The catch-side backstop for a page-reaching call: site access withdrawn
+ * between the gate and the injection still yields the SAME card (never the
+ * raw Chrome string); any other refusal Chrome makes regardless of site
+ * access (an extension page, the Web Store, a policy-blocked host) is a plain,
+ * readable line that does not pretend a grant would help. */
+async function pageAccessFailure(e, origin, verb) {
+  if (!isChromeHostAccessError(e)) return { error: String(e?.message ?? e) };
+  if (origin && !(await hasOriginHostPermission(origin))) {
+    return permissionDenial(
+      `site access to ${origin}/* not granted — allow it in the approval card here`,
+      { reason: `${verb} on ${origin}`, hostOrigins: [origin] },
+    );
+  }
+  return { error: `Chrome does not allow extensions to ${verb}${origin ? ` on ${origin}` : ""} — this page cannot be read by an extension` };
 }
 
 // ── CAP-FB-20260830-PRIVILEGED-URL-BLOCK-01: destination scheme guard ──
@@ -758,10 +852,16 @@ export async function captureTabScreenshot(tabId, { ownerInvoked = false } = {})
       })()
       : undefined;
     if (!origin) {
-      return {
-        error: "cannot read the tab's exact origin — screenshot is waiting for an owner-selected site permission",
-        waitingForPermission: true,
-      };
+      // Chrome scrubs `tab.url` when neither `tabs` nor site access covers the
+      // tab: without `tabs` the site cannot even be named, so that is the ONE
+      // thing to ask for (READ-PAGE-HOST-GRANT-01) — never a dead-end wait.
+      if (!target.url && !ownerInvoked && !(await hasTabsPermission())) {
+        return permissionDenial(
+          "the tab's address is hidden until the tabs permission is granted — allow it in the approval card here",
+          { reason: "capture a screenshot (the tab's address is hidden until tabs access is granted)", permissions: ["tabs"] },
+        );
+      }
+      return { error: "capture a screenshot: only available on http(s) pages (not chrome://, file:// or other privileged pages)" };
     }
     const originPattern = `${origin}/*`;
     // The owner-invoked path carries Chrome's transient activeTab authority
@@ -770,13 +870,15 @@ export async function captureTabScreenshot(tabId, { ownerInvoked = false } = {})
       ? true
       : await chrome.permissions.contains({ origins: [originPattern] }).catch(() => false);
     if (!hasExactHost) {
-      // Site access for the exact origin is missing (host access is normally
-      // install-granted). The card names the site; approving it sets the
-      // exact-origin browser-control grant — host access itself is only ever
-      // (re)granted from Settings, and the error text says so.
+      // Site access for the exact origin is missing. The card names the site
+      // under hostOrigins — the owner's Allow requests `<origin>/*` from
+      // Chrome on that click (READ-PAGE-HOST-GRANT-01) — and, when the
+      // browser-control grant is missing too, names it on the SAME card so the
+      // origin needs one decision, not two.
+      const needsGrant = !(await isBrowserControlGranted(origin));
       return permissionDenial(
-        `screenshot is waiting for site access to ${originPattern} — grant it in Settings → Permissions`,
-        { reason: `capture a screenshot of ${origin} (site access to ${originPattern} is missing)`, permissions: [], grantOrigins: [origin] },
+        `site access to ${originPattern} not granted — allow it in the approval card here`,
+        { reason: `capture a screenshot of ${origin}`, permissions: [], hostOrigins: [origin], grantOrigins: needsGrant ? [origin] : [] },
       );
     }
 
@@ -919,18 +1021,21 @@ export async function captureTabScreenshot(tabId, { ownerInvoked = false } = {})
   });
 }
 
-/** Read the visible text of a tab (or the active tab) via scripting. */
+/** Read the visible text of a tab (or the active tab) via scripting.
+ * Reading needs the `scripting` permission + site access for the tab's exact
+ * origin (NOT the browser-control grant — reading is not acting). Both are
+ * checked BEFORE the injection so a missing one is ONE Allow card naming the
+ * site, never Chrome's raw "Cannot access contents of the page" string
+ * (CAP-FB-20260901-READ-PAGE-HOST-GRANT-01). */
 export async function readPage(tabId) {
+  const verb = "read the page";
+  let origin = null;
   try {
-    if (!(await hasScriptingPermission())) {
-      return permissionDeniedResult("scripting", { reason: "read the page's title, URL and visible text" });
-    }
-    const target = tabId
-      ? { tabId }
-      : await activeTab().then((t) => (t?.id ? { tabId: t.id } : null));
-    if (!target) return { error: "no tab" };
+    const gate = await pageAccessGate(tabId, verb, { needScripting: true });
+    if (gate.result) return gate.result;
+    origin = gate.origin;
     const results = await chrome.scripting.executeScript({
-      target,
+      target: { tabId: gate.target.id },
       func: () => ({
         title: document.title,
         url: location.href,
@@ -944,7 +1049,7 @@ export async function readPage(tabId) {
     // (lib/untrusted-fence.js, CAP-FB-20260830-UNTRUSTED-CONTENT-FENCING-01).
     return { untrusted: true, ...page };
   } catch (e) {
-    return { error: String(e?.message ?? e) };
+    return await pageAccessFailure(e, origin, verb);
   }
 }
 
@@ -1232,24 +1337,14 @@ function pageActionOrigin(url) {
  * per-origin browser-control grant is required (the ONE Allow card naming the
  * exact origin), and durable run ownership is asserted around the injection. */
 async function withPageActionGrant(tabId, verb, run) {
-  if (!(await hasScriptingPermission())) {
-    return permissionDeniedResult("scripting", { reason: verb });
-  }
   return await withGrantLock(async () => {
-    const target = tabId
-      ? await chrome.tabs.get(tabId).catch(() => null)
-      : await activeTab();
-    if (!target?.id) return { error: "no tab" };
-    const origin = pageActionOrigin(target.url);
-    if (!origin) {
-      return { error: "page actions are only available on http(s) pages (not chrome://, file:// or other privileged pages)" };
-    }
-    if (!(await isBrowserControlGranted(origin))) {
-      return permissionDenial(
-        "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
-        { reason: `${verb} on ${origin}`, grantOrigins: [origin] },
-      );
-    }
+    // The shared page-access gate (READ-PAGE-HOST-GRANT-01): `scripting`, the
+    // exact site access AND the per-origin browser-control grant are all
+    // checked before any injection, so whatever is missing is ONE card for
+    // this origin; a privileged page is refused before anything else.
+    const gate = await pageAccessGate(tabId, verb, { needScripting: true, needBrowserControl: true });
+    if (gate.result) return gate.result;
+    const { target, origin } = gate;
     try {
       await assertRunOwned();
     } catch {
@@ -1259,6 +1354,7 @@ async function withPageActionGrant(tabId, verb, run) {
     try {
       out = await run(target.id);
     } catch (e) {
+      if (isChromeHostAccessError(e)) return await pageAccessFailure(e, origin, verb);
       return { error: `${verb} failed: ${String(e?.message ?? e).slice(0, 200)}` };
     }
     try {
@@ -4239,9 +4335,13 @@ export function browserToolset(readOnly = false, {
         const originPattern = `${origin}/*`;
         const hasExactHost = await chrome.permissions.contains({ origins: [originPattern] }).catch(() => false);
         if (!hasExactHost) {
+          // Site access is a hostOrigins ask (the owner's click requests it
+          // from Chrome — READ-PAGE-HOST-GRANT-01); the browser-control grant
+          // rides on the same card when it is missing too.
+          const needsGrant = !(await isBrowserControlGranted(origin));
           return permissionDenial(
-            `page capture is waiting for site access to ${originPattern} — grant it in Settings → Permissions`,
-            { reason: `save ${origin} as MHTML (site access to ${originPattern} is missing)`, permissions: [], grantOrigins: [origin] },
+            `site access to ${originPattern} not granted — allow it in the approval card here`,
+            { reason: `save ${origin} as MHTML`, permissions: [], hostOrigins: [origin], grantOrigins: needsGrant ? [origin] : [] },
           );
         }
         return await withGrantLock(async () => {

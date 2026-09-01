@@ -50,6 +50,15 @@ an exception. These rules make that safe:
    If you find another session's uncommitted or unpushed work in a shared
    place, preserve it and coordinate — never delete it to unblock yourself.
 
+## Beads Issue Tracker
+
+This project uses bd (beads) for issue tracking.
+
+- Run `bd prime` for workflow context and command guidance.
+- Use `bd ready`, `bd show <id>`, `bd update <id> --claim`, and `bd close <id>`.
+- Use `bd remember "insight"` for persistent project memory; do not create MEMORY.md files.
+- Do not use markdown TODO lists for task tracking.
+
 ## Hard rules
 - **TASKS.md is the source of truth for task state — update it after EVERY completion.** Whenever a task lands, is reviewed, changes state, or a bug is captured, update its TASKS.md entry in the SAME commit cycle (status, Shipping `origin/main@<sha>`, a dated History line). A completion that does not update TASKS.md is not complete. Mark landed work DONE with the exact public commit and archive it to `TASKS-DONE.md` at triage; never leave landed work marked OPEN/IN_REVIEW.
 - Never accept "it serves" as "it works" — drive the real behavior in a browser

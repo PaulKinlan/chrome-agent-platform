@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "chrome_agent_platform",
+  "project_id": "985e15c9-d90c-489c-8da3-62f8f6093fe0"
+}
