@@ -197,6 +197,37 @@ export function resolveEffectiveMcpServersRedacted(globalList, agentList) {
   return resolveEffectiveMcpServers(globalList, agentList).map(redactMcpServer);
 }
 
+/**
+ * Assemble the PER-AGENT server list the agent create/edit dialog persists
+ * (CAP-FB-20260831-MCP-AGENT-UI-01), from three UI inputs:
+ *   - `globalServers`      the REDACTED global set the agent inherits,
+ *   - `disabledGlobalIds`  the ids the owner toggled OFF for this agent,
+ *   - `ownServers`         the servers the owner added just for this agent.
+ *
+ * Disabling an inherited global becomes a valid per-agent entry of the SAME id
+ * with `enabled:false` (no auth — a disabled server never connects, so it needs
+ * no token); the resolver (`resolveEffectiveMcpServers`) then drops it. Own
+ * servers are appended; `normalizeMcpServerList` dedups by id (an own server on a
+ * global's id deliberately overrides it). The result feeds
+ * `named-agent.set-mcp-servers` — re-enabling an inherited server just means it
+ * is no longer in `disabledGlobalIds`, so no per-agent entry is emitted and the
+ * global is inherited again (with its stored token).
+ *
+ * @param {{globalServers?: object[], disabledGlobalIds?: string[], ownServers?: object[]}} [args]
+ */
+export function buildAgentMcpList({ globalServers = [], disabledGlobalIds = [], ownServers = [] } = {}) {
+  const disabled = new Set(disabledGlobalIds);
+  const globalById = new Map(normalizeMcpServerList(globalServers).map((s) => [s.id, s]));
+  const out = [];
+  for (const id of disabled) {
+    const g = globalById.get(id);
+    if (!g) continue; // cannot disable a global that no longer exists
+    out.push({ id: g.id, name: g.name, transport: g.transport, url: g.url, enabled: false });
+  }
+  for (const s of Array.isArray(ownServers) ? ownServers : []) out.push(s);
+  return normalizeMcpServerList(out);
+}
+
 // ── Global-list storage ─────────────────────────────────────────────────────
 
 /** The FULL global server list (WITH tokens). SW-only — the tool-injection /

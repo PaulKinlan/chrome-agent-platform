@@ -87,7 +87,13 @@ Deno.test("owner-direct scope is exactly the audited action set (no silent widen
   // VERSION RESTORE WIDENING (CAP-FB-20260830-ARTIFACT-VERSIONS-01): the
   // owner's own Restore click in the artifact viewer IS the approval (the
   // asset.delete precedent); a model-initiated asset.restore pays the card.
-  assertEquals([...OWNER_DIRECT_ACTIONS].sort(), ["agent.delete", "asset.delete", "asset.restore", "named-agent.delete", "named-agent.set-schedule", "recipe.delete", "script.create", "script.run", "task.pause", "task.resume", "task.update"].sort());
+  // PER-AGENT MCP WIDENING (CAP-FB-20260831-MCP-AGENT-UI-01): the owner's own
+  // per-agent MCP-server config in the SAME agent dialog IS the approval — the
+  // set-schedule precedent; a model-initiated named-agent.set-mcp-servers keeps
+  // the full pending-approval flow (isOwnerDirectApproval requires an
+  // extension/owner-options principal on a real UI document). FLAGGED for the
+  // independent permission-model review.
+  assertEquals([...OWNER_DIRECT_ACTIONS].sort(), ["agent.delete", "asset.delete", "asset.restore", "named-agent.delete", "named-agent.set-mcp-servers", "named-agent.set-schedule", "recipe.delete", "script.create", "script.run", "task.pause", "task.resume", "task.update"].sort());
   // Every owner-direct action passes the audit grammar; widening this set
   // requires a new permission-model review.
   for (const direct of OWNER_DIRECT_ACTIONS) {

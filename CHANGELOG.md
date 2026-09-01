@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.597] — 2026-09-01
+- : each agent can inherit, disable, and add its own MCP servers
+
 ## [0.2.596] — 2026-09-01
 - You can now add and test remote MCP servers in Settings, and destructive browser actions always ask before they run
 
