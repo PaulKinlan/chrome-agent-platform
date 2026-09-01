@@ -4736,3 +4736,119 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
     2. P2 (initial count): the summary count computed `savedIds.filter(id => available.some(s => s.id === id))` — a refId-keyed saved selection counted 0. The module's count() reflects rows ACTUALLY checked (skillRowChecked handles refId + legacy raw); the summary is bound to it. Tested: refId-keyed saved selections render the correct "N selected".
     3. P2 (real resolver): extracted the SW's resolveRecipe into `extension/lib/skill-resolve.js` (resolveSkillRef with injected stores — getRecipe real, custom/imported/OPFS faked); the SW is now a thin adapter. Tests drive the REAL resolver: custom:<id> colliding with a built-in id resolves the custom row; custom:<id> absent → null (no fall-through); imported:<id> reads the OPFS body; builtin:<id> locked; raw ids keep built-in → custom → imported (duplicated-agent contract).
     Gates: unit RED→GREEN for the dialog-level collision test — 31/31 unit tests (25 catalog + 6 settings); full suite 2838 passed / 0 failed; `nice -n 10 deno run -A scripts/chrome-journeys.ts --retain` = 281/281 passed. Final tip: see the commit below.
+
+## [CAP-FB-20260831-MCP-CONFIG-STORE-01] MCP config model — global and per-agent server lists
+- Feedback: 2026-08-31 — child of CAP-FB-20260831-MCP-SUPPORT-01 (see docs/MCP-SUPPORT-DESIGN.md). Foundation for end-to-end MCP: the config the owner edits and a run resolves.
+- Updated: 2026-08-31 22:30 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: —
+- Candidate: —
+- Shipping: —
+- Acceptance: a pure, validated config model + storage for MCP servers, global and per-agent. A global server list in chrome.storage; a per-agent server list on the named-agent config (extend `extension/lib/named-agents.js` exactly like the per-agent provider override — self-contained, validated). Each server: `{ id, name, transport: "http"|"sse", url, auth?: {headerName, token}, enabled }`. A resolver `effectiveMcpServers(agentId?)` = global ∪ agent, minus disabled, dedup by id. Credentials handled like provider keys (never returned to a page/model; a redacted read for the UI). Routes `mcp.servers.get/set` (global) and the per-agent path through the existing named-agent mutation route. Pure and unit-tested; NO UI (that is MCP-GLOBAL-UI/MCP-AGENT-UI), NO connection (that is MCP-TOOL-INJECTION — but reuse the spike's `extension/lib/mcp-client-core.js` types).
+  - Context: docs/MCP-SUPPORT-DESIGN.md "The model". The per-agent provider override in named-agents.js (`normalize…override`) is the pattern to copy for the per-agent server list.
+  - Files: new `extension/lib/mcp-config.js` (validate/normalize/resolve, pure), `extension/lib/named-agents.js` (per-agent mcpServers field + validation), `extension/background/service-worker.js` or a route module (`mcp.servers.get/set`, redacted), the kv/storage for the global list.
+  - Steps: 1. Unit test the validator/resolver first (RED). 2. mcp-config.js. 3. named-agents per-agent field. 4. routes with redaction. 5. resolver.
+  - Out of scope: UI, connecting to servers, tool injection.
+- Review: pending
+- Gates: the falsification gates apply.
+  - Unit: `tests/mcp-config.test.ts` — validates a good server, rejects a bad transport/url, resolves global∪agent minus disabled, dedups by id, redacts the token on read; falsify by breaking the resolver.
+  - Browser: none (config only) — or a route smoke via an existing harness.
+  - Full suite: `npm run build:production && deno test -A tests/ && deno run -A scripts/chrome-journeys.ts` green.
+  - Constraints: credentials never to page/model/logs/receipts; one name per concept; MV3-safe.
+- Blockers: —
+- Next: write tests/mcp-config.test.ts (RED), then extension/lib/mcp-config.js
+- Recover: `git log --oneline --all --grep=CAP-FB-20260831-MCP-CONFIG-STORE-01`
+- History:
+  - 2026-08-31 22:30 UTC — filed as the MCP config foundation.
+
+## [CAP-FB-20260831-MCP-TOOL-INJECTION-01] Connect the effective MCP servers per run and inject their tools
+- Feedback: 2026-08-31 — child of CAP-FB-20260831-MCP-SUPPORT-01. Makes MCP END TO END: a run connects the owner's servers and the agent can call their tools.
+- Updated: 2026-08-31 22:30 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: —
+- Candidate: —
+- Shipping: —
+- Acceptance: on a run, the effective MCP server set (from MCP-CONFIG-STORE) is connected remotely (per-server resilient, via the spike's `extension/lib/mcp-client.js`), each server's tools listed and namespaced `mcp__<server>__<tool>`, folded into the run's lazy `search_tools`/`execute_tool` catalog (never eager in the prompt); results fenced `untrusted:true` (UNTRUSTED-CONTENT-FENCING pattern); per-server first-use owner approval (one Allow card, DENIAL-TO-GRANT pattern); MCP tool calls recorded in the activity ledger; connections torn down when the run ends. A real end-to-end demo: configure a remote test MCP server, run a task that calls its tool, see the fenced result + the ledger entry.
+  - Context: docs/MCP-SUPPORT-DESIGN.md. Depends on MCP-CONFIG-STORE (the server set) and MCP-TRANSPORT-SPIKE (mcp-client, DONE). The run assembles extraTools in `extension/background/service-worker.js` / `extension/lib/agent.js`.
+  - Files: `extension/background/service-worker.js` (connect the set on run start, fold MCP tools into extraTools, teardown on end), `extension/lib/agent.js` (namespaced tools in the lazy catalog), the approval + ledger wiring, `extension/lib/lazy-tool-protocol.js` if projection needs the fence for MCP results.
+  - Steps: 1. Unit test the tool-name namespacing + fence tagging (RED). 2. Connect the effective set on run start (resilient). 3. Fold namespaced tools into extraTools/lazy catalog. 4. Fence results, per-server approval, ledger. 5. Teardown. 6. End-to-end KAT.
+  - Out of scope: the UI (global/agent); OAuth.
+- Review: pending
+- Gates: the falsification gates apply.
+  - Unit: a test that a mounted server's tool is namespaced and its result is fenced untrusted; falsify by removing the fence.
+  - Browser: a KAT (launchChrome) — configure the test MCP server, run a task, assert the model called `mcp__…` and the result is fenced + ledgered; a second unreachable server does not kill the run.
+  - Full suite: `npm run build:production && deno test -A tests/ && deno run -A scripts/chrome-journeys.ts` green.
+  - Constraints: MCP output fenced; credentials never leak; lazy catalog stays small; MV3-safe; per-server resilience.
+- Blockers: Depends on CAP-FB-20260831-MCP-CONFIG-STORE-01 (must land first)
+- Next: after config-store lands, connect the effective set on run start and namespace tools into the lazy catalog
+- Recover: `git log --oneline --all --grep=CAP-FB-20260831-MCP-TOOL-INJECTION-01`
+- History:
+  - 2026-08-31 22:30 UTC — filed; the end-to-end core, after config-store.
+
+## [CAP-FB-20260831-MCP-GLOBAL-UI-01] Settings section to add remote MCP servers (global)
+- Feedback: 2026-08-31 — child of CAP-FB-20260831-MCP-SUPPORT-01. The task-view/global option the owner asked for.
+- Updated: 2026-08-31 22:30 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: —
+- Candidate: —
+- Shipping: —
+- Acceptance: a Settings "MCP servers" section to add/edit/enable/remove a REMOTE MCP server (name, transport http/sse, url, auth token handled like the provider key) with a "Test connection" that connects and lists tools, and honest errors; no stdio/command server type is offered. Load the impeccable design skill. Depends on MCP-CONFIG-STORE.
+  - Context: docs/MCP-SUPPORT-DESIGN.md. Coordinate with EXEC-BUILD-FLAG (whether MCP is standard or developer). Reuse the provider-key field pattern in options.
+  - Files: `extension/options/options.html` + `options.js` (the section + Test connection via the mcp-client), gallery if a component is added.
+  - Steps: 1. Journey check first (RED). 2. The section UI over mcp.servers.get/set. 3. Test connection. 4. Errors.
+  - Out of scope: per-agent UI (MCP-AGENT-UI); tool injection.
+- Review: pending
+- Gates: the falsification gates apply.
+  - Unit: options section render test if applicable.
+  - Browser: a KAT — add a server in Settings, Test connection succeeds against the test MCP server, a bad url shows an honest error; screenshots.
+  - Full suite: green at the tip.
+  - Constraints: token handled like the provider key (never shown after save/redacted); a11y-clean; MV3-safe.
+- Blockers: Depends on CAP-FB-20260831-MCP-CONFIG-STORE-01 (must land first)
+- Next: after config-store, build the Settings MCP servers section + Test connection
+- Recover: `git log --oneline --all --grep=CAP-FB-20260831-MCP-GLOBAL-UI-01`
+- History:
+  - 2026-08-31 22:30 UTC — filed; the global Settings surface.
+
+## [CAP-FB-20260831-MCP-AGENT-UI-01] Per-agent MCP servers in the create/edit dialog
+- Feedback: 2026-08-31 — child of CAP-FB-20260831-MCP-SUPPORT-01. Each agent its own servers/config.
+- Updated: 2026-08-31 22:30 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: —
+- Candidate: —
+- Shipping: —
+- Acceptance: the create/edit agent dialog gains an "MCP servers" section: the agent inherits the global set (shown, toggleable off for this agent) and can add its own remote servers with their own config; persisted through the named-agent route; visible per agent later. Load the impeccable skill. Depends on MCP-CONFIG-STORE and MCP-GLOBAL-UI.
+  - Context: docs/MCP-SUPPORT-DESIGN.md. The create/edit dialog is in extension/ntp/ntp.js; the per-agent field is on the named-agent config (MCP-CONFIG-STORE).
+  - Files: `extension/ntp/ntp.js` (the dialog section), `extension/shared/components.js` if a shared control is reused.
+  - Steps: 1. Journey check first (RED). 2. The dialog section (inherit + add/disable). 3. Persist through named-agent route.
+  - Out of scope: global UI; tool injection.
+- Review: pending
+- Gates: the falsification gates apply.
+  - Unit: applicable dialog test.
+  - Browser: a KAT — create an agent with an extra MCP server + a disabled inherited one, run it, assert the effective set; screenshot.
+  - Full suite: green at the tip.
+  - Constraints: token handled like the provider key; a11y-clean; MV3-safe.
+- Blockers: Depends on CAP-FB-20260831-MCP-CONFIG-STORE-01 and CAP-FB-20260831-MCP-GLOBAL-UI-01 (must land first)
+- Next: after config-store + global UI, add the per-agent MCP section to the create/edit dialog
+- Recover: `git log --oneline --all --grep=CAP-FB-20260831-MCP-AGENT-UI-01`
+- History:
+  - 2026-08-31 22:30 UTC — filed; the per-agent surface.
