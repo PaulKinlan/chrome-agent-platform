@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.598] — 2026-09-01
+- Workflows to memory: agents save, recall, and run reusable workflows
+
 ## [0.2.597] — 2026-09-01
 - Dialog work — searchable grouped customizable select for agent templates with both-scheme contrast gates
 

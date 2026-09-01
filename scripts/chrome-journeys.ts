@@ -538,6 +538,8 @@ const EXPECTED = [
   "Transcript: no lazy-protocol text leaks into the reopened thread (modelContent/catalogGeneration/stableId/schemaSummary/search_tools/execute_tool)",
   "Memory recall: a new thread's prompt carries the digest of a key written earlier",
   "Memory recall: a new thread answers 'green' from the digest, never 'I do not know'",
+  "Workflows: an agent saves a reusable workflow with save_workflow",
+  "Workflows: a SECOND run recalls the saved workflow (workflow_list)",
   "Provider error: SW console recorded the real HTTP 401 from the fixture provider",
   "Provider error: a rejected key renders the 401 bubble with a Settings link",
   "Provider error: preflight refusal reaches a terminal Failed row within 5 s",
@@ -3535,6 +3537,26 @@ async function main() {
         String(recallRun?.threadId ?? "") !== String(rememberRun?.threadId ?? "") &&
         /recall: owner-favourite-colour is green/.test(recallText) &&
         !/I do not know/.test(recallText),
+    );
+    // JOURNEY 3b-workflows — CAP-FB-20260831-WORKFLOWS-TO-MEMORY-01: an agent
+    // CREATES a reusable workflow with save_workflow through the REAL lazy
+    // protocol, and a SECOND run RECALLS it (workflow_list) — the workflow
+    // lives in the agent's origin memory, not the run.
+    const saveWfRun = await msgValue({ type: "agent.run", task: "@demo-workflow save name=\"demo-wf\" kind=\"script-js\"" });
+    const saveWfText = String(saveWfRun?.result ?? "");
+    console.log(`workflow save: ${saveWfText.slice(0, 200)}`);
+    check(
+      "Workflows: an agent saves a reusable workflow with save_workflow",
+      saveWfRun?.ok === true && /Workflow save completed: demo-wf/.test(saveWfText),
+    );
+    const listWfRun = await msgValue({ type: "agent.run", task: "@demo-workflow list" });
+    const listWfText = String(listWfRun?.result ?? "");
+    console.log(`workflow list: ${listWfText.slice(0, 200)}`);
+    check(
+      "Workflows: a SECOND run recalls the saved workflow (workflow_list)",
+      listWfRun?.ok === true &&
+        String(listWfRun?.threadId ?? "") !== String(saveWfRun?.threadId ?? "") &&
+        /Workflow list: demo-wf \(script-js\)/.test(listWfText),
     );
     // JOURNEY 3c — provider error truth (CAP-FB-20260830-PROVIDER-ERROR-TRUTH-01).
     // A provider HTTP failure must be reported by its real status, never as

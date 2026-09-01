@@ -96,6 +96,12 @@ const EDIT_ARTIFACT_MARKER = "@demo-edit-artifact";
 // the version guard refuses without mutating
 // (CAP-FB-20260830-PATCH-ASSET-TOOL-01).
 const PATCH_ARTIFACT_MARKER = "@demo-patch-artifact";
+// @demo-workflow <save name="…" kind="script-js"|list|run name="…">: the demo
+// model drives the REAL workflow tools through the lazy protocol
+// (search_tools → execute_tool). save: ONE save_workflow write; list: ONE
+// workflow_list; run: ONE workflow_run. The final text reports the outcome
+// (CAP-FB-20260831-WORKFLOWS-TO-MEMORY-01).
+const WORKFLOW_MARKER = "@demo-workflow";
 // @demo-remember <key>=<value>: ONE real memory_set through the lazy protocol
 // (search_tools → execute_tool). The write half of the recall journey
 // (CAP-FB-20260830-MEMORY-RECALL-NEW-THREAD-01).
@@ -340,6 +346,7 @@ function latestRunSlice(prompt) {
       patchArtifact: lastUser.includes(PATCH_ARTIFACT_MARKER),
       runScript: lastUser.includes(RUN_SCRIPT_MARKER),
       skillRead: lastUser.includes(SKILL_READ_MARKER),
+      workflow: lastUser.includes(WORKFLOW_MARKER),
       obeyPage: lastUser.includes(OBEY_PAGE_MARKER),
       remember: lastUser.includes(REMEMBER_MARKER),
       recall: lastUser.includes(RECALL_MARKER),
@@ -562,6 +569,42 @@ function runScriptFinalText(prompt) {
   if (!last) return "[demo model] Script run finished without a result.";
   if (last.ok === false) return `[demo model] Script run DENIED/FAILED honestly: ${String(last.error ?? "unknown").slice(0, 160)}`;
   return `[demo model] Script run completed: ${JSON.stringify(last.result ?? null).slice(0, 160)}`;
+}
+
+// ── @demo-workflow helpers ─────────────────────────────────────────────────
+function wantsWorkflow(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.workflow;
+}
+function workflowSpec(prompt) {
+  const slice = latestRunSlice(prompt);
+  if (!slice) return null;
+  const text = extractText([slice.slice[0]]);
+  const m = text.match(/@demo-workflow\s+(save|list|run)\s*(?:name="([^"]{1,64})"\s*(?:kind="([^"]{1,32})")?)?/);
+  if (!m) return null;
+  const action = m[1];
+  return action === "list"
+    ? { action: "list", tool: "workflow_list", args: {} }
+    : { action, tool: action === "save" ? "save_workflow" : "workflow_run", name: m[2] ?? "demo-workflow", kind: m[3] ?? "script-js" };
+}
+function workflowAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" && Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && /\[demo model\] Workflow/.test(p.text ?? "")));
+}
+function workflowFinalText(prompt) {
+  const results = boardToolParts(prompt)
+    .filter((p) => p?.type === "tool-result")
+    .map((p) => lazyUnwrap(p.output?.value ?? p.output));
+  const last = results.filter((v) => v && typeof v === "object" && ("ok" in v || "workflows" in v || "error" in v)).at(-1);
+  const spec = workflowSpec(prompt);
+  const action = spec?.action ?? "";
+  if (!last) return "[demo model] Workflow operation finished without a result.";
+  if (action === "list") {
+    const list = Array.isArray(last.workflows) ? last.workflows : [];
+    return `[demo model] Workflow list: ${list.length === 0 ? "no saved workflows" : list.map((w) => `${w.name} (${w.kind})`).join(", ")}`;
+  }
+  if (last.ok === false) return `[demo model] Workflow ${action} DENIED/FAILED honestly: ${String(last.error ?? "unknown").slice(0, 160)}`;
+  return `[demo model] Workflow ${action} completed: ${action === "save" ? spec?.name : JSON.stringify(last.result ?? null).slice(0, 160)}`;
 }
 
 // ── @demo-skill-read helpers ────────────────────────────────────────────────
@@ -1084,8 +1127,24 @@ function mcpFinalText(prompt) {
   return `[demo model] MCP tool ${spec.tool} finished without a result.`;
 }
 
-function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, browser = false, mcp = false, enumSlip = false, runScript = false, editArtifact = false, patchArtifact = false, skillRead = false, remember = false } = {}) {
+function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, browser = false, mcp = false, enumSlip = false, runScript = false, editArtifact = false, patchArtifact = false, skillRead = false, remember = false, workflow = false } = {}) {
   const step = toolResultCount(prompt);
+  if (workflow) {
+    // search(<tool>) → execute_tool(args) → final. ONE execute per run.
+    const spec = workflowSpec(prompt);
+    if (!spec) return null; // honest stop: the final text reports it
+    const toolParts = boardToolParts(prompt);
+    const searches = toolParts.filter((p) => p.toolName === "search_tools").length;
+    const executes = toolParts.filter((p) => p.toolName === "execute_tool").length;
+    if (executes >= 1) return null;
+    if (searches === 0) return { id: "search_workflow", name: "search_tools", input: { query: spec.tool, limit: 1 } };
+    const selectionRef = latestSelectionRef(prompt);
+    if (!selectionRef) return null;
+    if (spec.action === "save") {
+      return { id: "execute_workflow_save", name: "execute_tool", input: { selectionRef, arguments: { name: spec.name, kind: spec.kind, description: `demo-created ${spec.kind} workflow`, content: "return { ok: true, from: 'workflow' };" } } };
+    }
+    return { id: "execute_workflow", name: "execute_tool", input: { selectionRef, arguments: spec.action === "list" ? {} : { name: spec.name } } };
+  }
   if (remember) {
     // ONE key, through the REAL lazy protocol: search_tools(memory_set) →
     // execute_tool. Nothing else, so the recall thread reads a store the
@@ -1501,6 +1560,8 @@ export function createDemoModel() {
         ? lazyDemoCall(options.prompt, { runScript: true })
         : wantsSkillRead(options.prompt) && !skillReadAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { skillRead: true })
+        : wantsWorkflow(options.prompt) && !workflowAlreadyFinal(options.prompt)
+        ? lazyDemoCall(options.prompt, { workflow: true })
         : wantsBoard(options.prompt) && !boardAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { board: true })
         : wantsBrowser(options.prompt) && !browserAlreadyFinal(options.prompt)
@@ -1593,6 +1654,18 @@ export function createDemoModel() {
       if (wantsSkillRead(options.prompt)) {
         return Promise.resolve({
           content: [{ type: "text", text: skillReadFinalText(options.prompt) }],
+          finishReason: "stop",
+          usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
+          warnings: [],
+        });
+      }
+      if (wantsWorkflow(options.prompt)) {
+        const prior = runSlice(options.prompt)
+          .filter((m) => m?.role === "assistant" && Array.isArray(m?.content))
+          .flatMap((m) => m.content)
+          .find((p2) => p2?.type === "text" && /\[demo model\] Workflow/.test(p2.text ?? ""));
+        return Promise.resolve({
+          content: [{ type: "text", text: prior?.text ?? workflowFinalText(options.prompt) }],
           finishReason: "stop",
           usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
           warnings: [],
@@ -1696,6 +1769,8 @@ export function createDemoModel() {
             ? lazyDemoCall(options.prompt, { runScript: true })
             : wantsSkillRead(options.prompt) && !skillReadAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { skillRead: true })
+            : wantsWorkflow(options.prompt) && !workflowAlreadyFinal(options.prompt)
+            ? lazyDemoCall(options.prompt, { workflow: true })
             : wantsBoard(options.prompt) && !boardAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { board: true })
             : wantsBrowser(options.prompt) && !browserAlreadyFinal(options.prompt)
@@ -1860,6 +1935,11 @@ export function createDemoModel() {
             // The skill-read final/continuation text: the execute result
             // decides (a missing skill/file reads as a failure, never a success).
             response = skillReadFinalText(options.prompt);
+          }
+          else if (wantsWorkflow(options.prompt)) {
+            // The workflow final/continuation text: the execute result
+            // decides (a denied save/run reads as a failure, never a success).
+            response = workflowFinalText(options.prompt);
           }
           else if (wantsBoard(options.prompt)) {
             // The board flow's final/continuation text: the claim + complete

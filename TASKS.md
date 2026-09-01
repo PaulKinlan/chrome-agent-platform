@@ -282,6 +282,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P2 | OPEN | [`CAP-FB-20260830-USER-VOICE-COPY-01`](#cap-fb-20260830-user-voice-copy-01-copy-system-language-throughout-the-empty-states-toggles-and-delete-dialogs) | Copy: system language throughout the empty states, toggles and delete dialogs |
 | P2 | OPEN | [`CAP-FB-20260831-TOOL-PIPELINES-01`](#cap-fb-20260831-tool-pipelines-01-no-way-to-chainpipe-tool-steps-into-a-small-script-co-do-style) | No way to chain/pipe tool steps into a small script (co-do-style) |
 | P2 | DONE | [`CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01`](#cap-fb-20260831-template-custom-select-01-agent-templates-in-a-customizable-select-searchable-grouped-incl-scheduled) | Agent templates in a customizable select (searchable, grouped incl. Scheduled) |
+| P1 | DONE | [`CAP-FB-20260831-WORKFLOWS-TO-MEMORY-01`](#cap-fb-20260831-workflows-to-memory-01-agents-should-create-reusable-workflows-and-save-them-to-memory) | Agents create reusable workflows and save them to memory |
 | P3 | BLOCKED | [`CAP-FB-20260818-WIDER-REVIEW-01`](#cap-fb-20260818-wider-review-01-wider-goal-review-remediation-umbrella) | Wider-goal review remediation umbrella |
 | P3 | OPEN | [`CAP-FB-20260821-RECIPES-SKILLS-RENAME-01`](#cap-fb-20260821-recipes-skills-rename-01-finish-the-recipes-to-skills-rename) | Finish the recipes to skills rename |
 | P3 | OPEN | [`CAP-FB-20260825-AGENT-PICKER-HUB-ROWS-01`](#cap-fb-20260825-agent-picker-hub-rows-01-hub-agent-summary-rows-predate-the-shared-picker) | Hub agent summary rows predate the shared picker |
@@ -4870,6 +4871,26 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - History:
   - 2026-09-01 13:32 UTC — DONE: merged forward by the coordinator and pushed as `origin/main@a15d0e9c`. Coordinator gates on the merged tip: production build clean, unit 2900/0, chrome journeys 294/294. Candidate 5820d10f merged forward (deduped a claim-stub block). Pure config foundation for MCP; mcp-client-core already on main from the spike — tool-injection should import its NAMESPACE_RE rather than the local re-declaration.
   - 2026-09-01 14:20 UTC — CONFIG-STORE IN_REVIEW (this tracker commit on `cap/mcp-config-store`). New `extension/lib/mcp-config.js` (pure validate/normalize/redact/resolve + global `cap:mcpServers` storage + `effectiveMcpServers(agentId?)`); per-agent `mcpServers` list added to `named-agents.js` like the provider override (`getNamedAgentMcpServers`/`setNamedAgentMcpServers`, redacted in list/get); global routes `mcp.servers.get`/`mcp.servers.set` in new `routes/mcp.js`; per-agent route `named-agent.set-mcp-servers`; `cap:mcpServers` hardened as a secret-controlled/redacted store in `routes/kv.js`. RED (`9 passed | 1 failed` without the disabled-filter) → GREEN (`10/10`); `build:production` clean; unit suite 2898 pass / 1 pre-existing unrelated fail (changelog `v0.2.587` non-user line "Four more improvements are in progress." from the wave-14 claim commit `origin/main@ba0b501f`, not this lane). Pushed `cap/mcp-config-store`.
+## [CAP-FB-20260831-WORKFLOWS-TO-MEMORY-01] Agents should create reusable workflows and save them to memory
+- Feedback: 2026-08-31 — owner directive: "I want to encourage the agents to create repeatable and useable workflows. These could be scripts or even new tools. These can then be added to the memory so it knows it can do it. It might be JS scripts, python scripts, or even instructions to pipe tool calls and optimize that."
+- Updated: 2026-09-01
+- Status: DONE
+- Resume: worker (hub coordinator dispatch) — save_workflow / workflow_list / workflow_get / workflow_run lazy-protocol tools (origin-keyed memory, bounded), the workflow.run SW route (owner-approved sandboxed host, mirroring run_script), the system-prompt "Saved workflows" layer, AGENTS.md section, demo-model journey. Gates: build clean; suite 2938/0 (one pre-existing environmental flake in cdp-client.test.ts verified on base); chrome journeys 300/300 incl. the two new workflow checks.
+- Priority: P1
+- Owner: hub coordinator (journal session)
+- Workspace: /tmp/cap-workflows-memory
+- Branch: cap-workflows-memory
+- Base: origin/main a3e415c5
+- Candidate: (commit on cap-workflows-memory)
+- Shipping: merged forward by the hub coordinator (pending review PASS)
+- Acceptance: the agent can save a reusable workflow (script-js / script-python / pipeline / instructions) to its origin-keyed memory, list/read them, run a script-js one through the sandboxed host with the run_script owner-approval contract, and its system prompt lists the saved workflows so it knows they exist. Kinds whose runtime is absent (python, pipeline) fail closed with a clear message. The demo model drives save→recall across two runs as a journey.
+- Gates: build clean; suite green; chrome journeys 300/300 (incl. "Workflows: an agent saves a reusable workflow with save_workflow" and "Workflows: a SECOND run recalls the saved workflow (workflow_list)"); unit tests 14/14 in tests/workflows.test.ts (save/list/get/run per kind, bounds, origin isolation, prompt line).
+- History:
+  - 2026-08-31 — filed from the owner's workflows-to-memory directive (with TOOL-PIPELINES-01 as the saved-pipeline runner dependency).
+  - 2026-09-01 — implemented + gated: 4 lazy-protocol tools (origin-keyed memory under `workflows:<name>`, ≤64 KiB content, kind-validated), the SW `workflow.run` route (scriptApprovalGate + runScriptSandboxed, exactly like run_script; pipeline/python/instructions fail closed), the bounded "## Saved workflows" system-prompt layer (name + kind), AGENTS.md section. Root-cause fix during gating: workflows.js must stay free of bare "ai"/"zod" specifiers — it is reachable from the NTP's raw ES-module graph via lib/named-agents.js → lib/system-prompts.js, and a bare import broke every NTP surface (agent rows + create dialog). Moved the tool definitions into lib/agent.js (SW-bundled); workflows.js now exports only pure helpers. Verified: kat-bgagent-delete 11/11 on the fixed build (was 4/11 with the broken graph); journeys 300/300; unit 14/14.
+- Review: pending
+- Next: — (closed)
+
 ## [CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01] Agent templates in a customizable select (searchable, grouped incl. Scheduled)
 - Feedback: 2026-08-31 — owner: "I also said all the agent templates listed in a <select> using the new Customizable select elements… you can keep a similar type of UI to the current templates because that info is useful, I just want it searchable, and nice looking inside a select (I also like the current grouping including scheduled)."
 - Updated: 2026-09-01 15:35 UTC

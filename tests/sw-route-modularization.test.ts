@@ -145,6 +145,7 @@ const BASELINE_ROUTES = [
   "script.list",
   "script.get",
   "script.run",
+  "workflow.run",
   "capability.request",
   "memory.overview",
   "memory.stores",

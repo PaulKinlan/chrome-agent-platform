@@ -96,6 +96,7 @@ import {
 } from "./pure.js";
 import { kvGet, kvSet, storageAvailable } from "./kv.js";
 import { buildSkillsPrompt } from "./skills.js";
+import { buildWorkflowsPrompt } from "./workflows.js";
 import { RUNTIME_CONTEXT_PLACEHOLDER } from "./runtime-context.js";
 import { isUntrustedToken, renderUntrustedPolicy, UNTRUSTED_POLICY_PLACEHOLDER, fenceUntrustedText, UNTRUSTED_TOKEN_PLACEHOLDER } from "./untrusted-fence.js";
 import { renderRuntimePolicy } from "./runtime-policy.js";
@@ -655,6 +656,7 @@ export function composeSystemPrompt({
   role = "",
   skills = [],
   runtimeContext = null,
+  workflows = [], // [{name, kind, description}] — the agent's saved workflows (CAP-FB-20260831-WORKFLOWS-TO-MEMORY-01)
   registry = PROMPT_REGISTRY,
 }) {
   const base = registryEntry(baseId, registry);
@@ -734,6 +736,21 @@ export function composeSystemPrompt({
       editable: false,
       protected: false,
       text: skillsText,
+    });
+  }
+
+  // 5.1 saved workflows (the agent's own reusable procedures — CAP-FB-20260831-
+  // WORKFLOWS-TO-MEMORY-01). Name + kind + description only; the full body is
+  // read on demand with workflow_get.
+  const workflowsText = buildWorkflowsPrompt(workflows).trim();
+  if (workflowsText) {
+    layers.push({
+      id: "workflows",
+      label: "Saved workflows",
+      source: "workflows",
+      editable: false,
+      protected: false,
+      text: workflowsText,
     });
   }
 
@@ -908,7 +925,7 @@ export function appendSkillsLayer(systemText, skills, registry = PROMPT_REGISTRY
  * Fail-closed: an unknown scope composes the protected constraints ONLY —
  * never an unprotected empty prompt.
  */
-export async function resolveSystemPrompt(scope, { role = "", skills = [], runtimeContext = null, registry } = {}) {
+export async function resolveSystemPrompt(scope, { role = "", skills = [], runtimeContext = null, workflows = [], registry } = {}) {
   const s = normalizeScope(scope);
   if (!s) {
     return composeSystemPrompt({ baseId: null, registry });
@@ -920,6 +937,7 @@ export async function resolveSystemPrompt(scope, { role = "", skills = [], runti
     role,
     skills,
     runtimeContext,
+    workflows,
     registry,
   });
 }

@@ -71,6 +71,23 @@ an exception. These rules make that safe:
 - skills/web-resilience-audit + skills/web-resilience-fix — the project's
   resilience checks. Run them on the surfaces where applicable.
 
+## Reusable workflows (CAP-FB-20260831-WORKFLOWS-TO-MEMORY-01)
+Agents can create, save, recall, and run their OWN reusable workflows:
+- **save_workflow** ({name, description, kind, content}) — save a procedure the
+  agent can repeat: `script-js` (a JS async function body that runs sandboxed,
+  same host + owner-approval contract as `run_script`), `script-python` (needs
+  the Python runtime; fails closed until it is admitted), `pipeline` (a
+  declarative step list; the runner lands with TOOL-PIPELINES-01), or
+  `instructions` (step-by-step text the agent follows). Stored in the agent's
+  ORIGIN-keyed memory under `workflows:<name>` (content ≤64 KiB, name ≤64 chars).
+- **workflow_list** — names + kinds + one-line descriptions (never the body).
+- **workflow_get** — the full record (read the body on demand).
+- **workflow_run** — run a `script-js` workflow NOW through the sandboxed host
+  (owner approval card shows the source digest + fetch hosts, exactly like
+  `run_script`); other kinds fail closed with a clear message.
+The system prompt lists the agent's saved workflows (name + kind) so the agent
+knows they exist and can reuse them instead of redoing work.
+
 ## Working conventions (Paul, 2026-08-16)
 - **Track every ask.** Every product issue/request gets a stable entry in root
   `TASKS.md`; UI detail also lives in `docs/UI-FIXES-TRACKER.md`, and review/system

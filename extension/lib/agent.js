@@ -12,6 +12,7 @@ import { recordUsage } from "./usage.js";
 import { createRunTextTracker } from "./run-text-steps.js";
 import { createTextDeltaCoalescer } from "./text-delta-coalescer.js";
 import { grepAgentMemory } from "./named-agents.js";
+import { workflowKey, workflowNameFromKey, WORKFLOW_KINDS, validateWorkflow } from "./workflows.js";
 import { assertRunOwned } from "./run-fence.js";
 import { MODEL_PRICING } from "./model-prices.js";
 import { appendSkillsLayer, baselineSystemPrompt } from "./system-prompts.js";
@@ -509,6 +510,97 @@ export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, 
  * Wrap agent-do's createAgent with our conventions.
  * `model` is the resolved { model: LanguageModel, modelId, providerName } from provider.js.
  */
+// The lazy-protocol workflow tools (CAP-FB-20260831-WORKFLOWS-TO-MEMORY-01).
+// Defined HERE (not in workflows.js) because they need the ai/zod bare
+// specifiers, which are only resolvable in the SW bundle — workflows.js stays
+// browser-safe for the NTP's raw ES-module graph.
+export function workflowsToolset({ memory, runRoute = null } = {}) {
+  if (!memory) return {};
+  const tools = {
+    save_workflow: tool({
+      description:
+        "Save a reusable workflow to YOUR memory so you can run it again: a JS script body (runs sandboxed), a Python script, a saved tool pipeline (step list), or step-by-step instructions. Later runs can list (workflow_list), read (workflow_get) and run (workflow_run) it. Bounded: content <=64 KiB.",
+      inputSchema: z.object({
+        name: z.string().min(1).max(64).describe("a short, clear name for the workflow"),
+        description: z.string().max(256).optional().describe("one line about what it does"),
+        kind: z.enum(WORKFLOW_KINDS).describe("script-js | script-python | pipeline | instructions"),
+        content: z.string().max(64 * 1024).describe("the workflow body (JS function body, Python source, pipeline step list, or instructions)"),
+      }),
+      execute: async ({ name, description, kind, content }) => {
+        const v = validateWorkflow({ name, description, kind, content });
+        if (!v.ok) return { ok: false, error: v.error };
+        const key = workflowKey(v.record.name);
+        try {
+          await memory.set(key, v.record);
+        } catch (e) {
+          return { ok: false, error: `workflow save failed: ${e?.message ?? e}` };
+        }
+        return { ok: true, name: v.record.name, kind: v.record.kind };
+      },
+    }),
+    workflow_list: tool({
+      description: "List YOUR saved workflows (name, kind, description only — never the full body).",
+      inputSchema: z.object({}),
+      execute: async () => {
+        let keys = [];
+        try {
+          keys = typeof memory.keys === "function" ? await memory.keys() : [];
+        } catch { /* best-effort */ }
+        const names = (Array.isArray(keys) ? keys : [])
+          .map((k) => workflowNameFromKey(String(k)))
+          .filter(Boolean)
+          .slice(0, 128);
+        const workflows = [];
+        for (const name of names) {
+          try {
+            const rec = await memory.get(workflowKey(name));
+            if (rec && typeof rec === "object" && typeof rec.name === "string") {
+              workflows.push({ name: rec.name, kind: String(rec.kind ?? ""), description: String(rec.description ?? "") });
+            }
+          } catch { /* skip unreadable */ }
+        }
+        return { ok: true, workflows };
+      },
+    }),
+    workflow_get: tool({
+      description: "Read ONE of YOUR saved workflows in full (name, kind, description, content).",
+      inputSchema: z.object({ name: z.string().min(1).max(64) }),
+      execute: async ({ name }) => {
+        let rec = null;
+        try {
+          rec = await memory.get(workflowKey(name));
+        } catch { /* absent */ }
+        if (!rec || typeof rec !== "object") return { ok: false, error: `workflow "${name}" not found` };
+        return { ok: true, workflow: rec };
+      },
+    }),
+    workflow_run: tool({
+      description:
+        "Run ONE of YOUR saved workflows NOW. script-js workflows run sandboxed (no DOM/extension/network of its own; fetch is host-listed and owner-approved). REQUIRES OWNER APPROVAL like run_script. pipeline kind needs the pipeline runner; script-python needs the Python runtime — each fails closed with a clear message when unavailable.",
+      inputSchema: z.object({ name: z.string().min(1).max(64) }),
+      execute: async ({ name }) => {
+        if (typeof runRoute !== "function") {
+          return { ok: false, error: "workflow run is not available in this context" };
+        }
+        let rec = null;
+        try {
+          rec = await memory.get(workflowKey(name));
+        } catch { /* absent */ }
+        if (!rec || typeof rec !== "object" || typeof rec.name !== "string") {
+          return { ok: false, error: `workflow "${name}" not found` };
+        }
+        return await runRoute({
+          name: rec.name,
+          kind: String(rec.kind ?? ""),
+          source: String(rec.content ?? ""),
+          description: String(rec.description ?? ""),
+        });
+      },
+    }),
+  };
+  return tools;
+}
+
 // A safe, bounded summary of a tool result for the LIVE progress stream. Full
 // tool results can be huge (file contents, page HTML); the progress events must
 // never leak large bodies into logs/ports. Truncate strings, stringify + cap
@@ -558,6 +650,11 @@ export function createAgent({
   // large/multi-file imported skill's SKILL.md body or any stored file
   // (CAP-FB-20260830-SKILLS-UNCAPPED-01). Absent → no skill_read tool.
   skillStore = null,
+  // Async dispatcher for `workflow_run` → the service worker's `workflow.run`
+  // route (owner-approved sandboxed execution, mirroring script.run). Absent →
+  // workflow_run fails closed with a clear message (CAP-FB-20260831-WORKFLOWS-
+  // TO-MEMORY-01).
+  workflowRunRoute = null,
   // Additional LIVE source records (WebMCP, Chrome/management, bundled
   // catalog-only rows). Called for every search and every execute fence.
   readLazySources = async () => [],
@@ -840,6 +937,7 @@ export function createAgent({
   const sourceTools = {
     ...memoryToolset(memory, enrollmentGuard, getRunGen, readOnlyMemory),
     ...skillReadToolset(skillStore),
+    ...workflowsToolset({ memory, runRoute: workflowRunRoute }),
     ...tools,
   };
   const instanceGeneration = `agent-instance:${crypto.randomUUID()}`;
@@ -1346,6 +1444,8 @@ export function createOrchestrator({
   skillStore = null, // async () => imported-skill records — enables skill_read
                      // (CAP-FB-20260830-SKILLS-UNCAPPED-01) on the master AND
                      // every worker (skills are a shared master store)
+  workflowRunRoute = null, // async ({name}) => the SW's workflow.run dispatcher
+                          // (CAP-FB-20260831-WORKFLOWS-TO-MEMORY-01)
 }) {
   const workerAgents = new Map();
   let currentRunIdentity = null;
@@ -1384,6 +1484,7 @@ export function createOrchestrator({
       // otherwise an untrusted hook payload could delegate into a worker that
       // writes site memory / invokes page tools, defeating the scoping.
       readOnlyMemory: scoped,
+      workflowRunRoute,
       onProgress,
       onPermissionRequest,
     });
@@ -1527,6 +1628,7 @@ export function createOrchestrator({
     // SCOPED (hook) runs: the master's memory is READ-ONLY (no memory_set) —
     // untrusted event data must never persist hub state.
     readOnlyMemory: scoped,
+    workflowRunRoute,
   });
 
   return {
@@ -1591,6 +1693,7 @@ export function createOrchestrator({
           ? async () => delegateGuard(config.origin)
           : null,
         disposable: true,
+        workflowRunRoute,
         onProgress,
         onPermissionRequest,
       });

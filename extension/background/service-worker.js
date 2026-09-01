@@ -1534,7 +1534,7 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       chromeApi: globalThis.chrome ?? null,
       now: new Date(),
     });
-    const masterComposed = await resolveSystemPrompt(promptScope ?? "hub", { role: agentRole, runtimeContext });
+    const masterComposed = await resolveSystemPrompt(promptScope ?? "hub", { role: agentRole, runtimeContext, workflows: await listWorkflowsForPrompt(mem ?? masterMemory()) });
     // Workers = enrolled site origins, each with its own memory + skills.
     const origins = await listOrigins();
     // BUILD-LOCAL run-generation cells (the round-27 blocker 4): the cells are
@@ -1558,7 +1558,7 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
         chromeApi: globalThis.chrome ?? null,
         now: new Date(),
       });
-      const workerText = await resolveSystemPrompt("worker", { skills, runtimeContext: workerRuntimeContext });
+      const workerText = await resolveSystemPrompt("worker", { skills, runtimeContext: workerRuntimeContext, workflows: await listWorkflowsForPrompt(siteMemory(origin)) });
       workerComposed.set(origin, workerText);
       return {
         origin,
@@ -1724,6 +1724,10 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
         list: async () => loadAllImported(),
         read: async (id, path) => readSkillFile(id, path),
       },
+      // workflow_run dispatches to the SW's owner-approved workflow.run route
+      // (CAP-FB-20260831-WORKFLOWS-TO-MEMORY-01).
+      workflowRunRoute: async (args) =>
+        modelManagementDispatch("workflow.run", args ?? {}),
       // SCOPED (hook) runs: the read-only browser set (no open/navigate/close/schedule)
       // + read-only memory — untrusted browser event data must never drive a
       // browser mutation, a durable schedule, or a memory write (the wider-goal
@@ -3226,6 +3230,33 @@ async function memoryOverview(store) {
     } catch { /* skip unreadable */ }
   }
   return { keyCount: keys.length, totalBytes, keys };
+}
+
+// The bounded [{name, kind, description}] projection of a memory store's
+// saved workflows for the system prompt (CAP-FB-20260831-WORKFLOWS-TO-MEMORY-01).
+// Reads are failure-isolated: a store error yields an empty list, never a
+// broken build.
+const MAX_PROMPT_WORKFLOWS = 128;
+async function listWorkflowsForPrompt(store) {
+  try {
+    const keys = await store.keys();
+    const names = (Array.isArray(keys) ? keys : [])
+      .map((k) => String(k).startsWith("workflows:") ? String(k).slice("workflows:".length) : null)
+      .filter(Boolean)
+      .slice(0, MAX_PROMPT_WORKFLOWS);
+    const out = [];
+    for (const name of names) {
+      try {
+        const rec = await store.get(`workflows:${name}`);
+        if (rec && typeof rec === "object" && typeof rec.name === "string") {
+          out.push({ name: rec.name, kind: String(rec.kind ?? ""), description: String(rec.description ?? "") });
+        }
+      } catch { /* skip unreadable */ }
+    }
+    return out;
+  } catch {
+    return [];
+  }
 }
 
 /** Inspect one Site Agent: name, tools, memory keys, enrollment state. The
@@ -6727,6 +6758,44 @@ const handlers = mergeRouteMaps(
       } catch { result = String(result).slice(0, 256 * 1024); }
     }
     await recordScriptRun(origin ?? "master", id, { ok: run?.ok, result, error: run?.error }).catch(() => {});
+    return { ok: run?.ok ?? false, result, error: run?.error, logs: run?.logs ?? [] };
+  },
+
+  // ---- workflows (CAP-FB-20260831-WORKFLOWS-TO-MEMORY-01) ----
+  // Run a saved workflow. The agent's workflow_run tool reads the record from
+  // its OWN origin-keyed memory and dispatches {name, kind, source,
+  // description}; this route RE-GATES with the same owner-approval + sandbox
+  // contract as script.run (source digest + fetch hosts on the card, sandboxed
+  // host, no model re-invocation) and fails closed for kinds whose runtime is
+  // not present.
+  async "workflow.run"({ name, kind, source, description }, context) {
+    const scope = "master"; // workflows live in the agent's own origin memory; the sandbox host is master-scoped like run_script
+    const src = typeof source === "string" ? source : "";
+    const wfName = String(name ?? "").slice(0, 64);
+    const wfKind = String(kind ?? "").slice(0, 32);
+    if (!wfName) return { ok: false, error: "workflow name is required" };
+    if (wfKind === "pipeline") {
+      return { ok: false, error: "pipeline workflows need the pipe runner (TOOL-PIPELINES-01) — save it as script-js or instructions for now" };
+    }
+    if (wfKind === "script-python") {
+      return { ok: false, error: "script-python workflows need the Python runtime, which is not admitted yet — save it as script-js or instructions" };
+    }
+    if (wfKind !== "script-js") {
+      // instructions kind: nothing to execute — tell the agent to follow the
+      // content in its next run (read it with workflow_get).
+      return { ok: false, error: `workflow "${wfName}" is kind ${wfKind} — read it with workflow_get and follow the instructions; only script-js workflows can run now` };
+    }
+    const gate = await scriptApprovalGate(context, "workflow.run", scope, wfName, src, { name: wfName, description });
+    if (!gate.ok) return gate;
+    const run = await runScriptSandboxed(src);
+    // Bound the returned result so a workflow can't balloon the telemetry.
+    let result = run?.result ?? null;
+    if (result != null) {
+      try {
+        const s = JSON.stringify(result);
+        if (s && s.length > 256 * 1024) result = String(result).slice(0, 256 * 1024);
+      } catch { result = String(result).slice(0, 256 * 1024); }
+    }
     return { ok: run?.ok ?? false, result, error: run?.error, logs: run?.logs ?? [] };
   },
 
