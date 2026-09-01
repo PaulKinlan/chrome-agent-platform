@@ -178,6 +178,11 @@ export function buildTemplateSelect({ host, catalogue, blankLabel = "Custom agen
          builds, and a light popup in dark mode is unusable. color-scheme is
          ALSO set on the select itself so the open popup inherits the right
          scheme even where the pseudo rule is not honoured. */
+      /* Both forms: explicit light defaults + explicit @media dark block
+         (concrete values — the picker pseudo may not resolve light-dark()
+         without color-scheme reaching it), PLUS light-dark() on the same
+         tokens so engines that resolve it get the identical scheme. Whichever
+         the engine honours, the popup is legible in both schemes. */
       .agent-template-select::picker(select) {
         background: #ffffff;
         color: #1d1b18;
@@ -185,11 +190,16 @@ export function buildTemplateSelect({ host, catalogue, blankLabel = "Custom agen
         border-radius: 8px;
         font-size: 13px;
         color-scheme: light dark;
+        background-color: light-dark(#ffffff, #23211d);
+        color: light-dark(#1d1b18, #eae6de);
+        border-color: light-dark(#e3e0d9, #6b6355);
       }
       .agent-template-select::picker(select) optgroup,
       .agent-template-select::picker(select) option {
         background: #ffffff;
         color: #1d1b18;
+        background-color: light-dark(#ffffff, #23211d);
+        color: light-dark(#1d1b18, #eae6de);
       }
       .agent-template-select::picker(select) option:hover {
         background: #efede8;

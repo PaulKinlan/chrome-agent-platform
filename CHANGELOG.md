@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.2.559] — 2026-09-01
+- Template select r6 revise: add light-dark() picker tokens alongside the explicit dark scheme block, and gate the dark picker on a genuine-dark luminance check so the scheme styling cannot false-pass
+
 ## [0.2.558] — 2026-09-01
-- Template select r6: final polish — tracker refreshed to the final state and the open-state contract comment aligned with the probe
+- The template picker's final polish is in: release notes and the reviewer's notes are up to date.
 
 ## [0.2.557] — 2026-09-01
 - Template select r5: harden the dark picker styling with explicit scheme blocks, suppress the duplicate chevron, and measure the live open picker (computed-style gate + informational pixel sample; headless base-select paint quirk documented)

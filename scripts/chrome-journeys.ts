@@ -1578,9 +1578,25 @@ async function main() {
     };
     const lightSkillsRatio = ratioOf(lightC.skills);
     const darkSkillsRatio = ratioOf(darkC.skills);
-    // Open-picker ratios: the REAL rendered popup (option text vs popup bg).
+    // Open-picker ratios: the REAL rendered popup (option text vs popup bg via
+    // computed style of the LIVE open picker).
     const popupLightRatio = ratioOf(popupLight);
     const popupDarkRatio = ratioOf(popupDark);
+    // LUMINANCE GATE (r6 REVISE): an AA pass alone can false-pass — a WHITE
+    // popup with dark text is ~17:1 AA. The dark scheme must be GENUINELY
+    // dark (popup bg luminance low) and the light scheme GENUINELY light
+    // (popup bg luminance high). This is what detects "the dark styling did
+    // not land" even when the contrast ratio happens to pass.
+    const { relativeLuminance } = await import("../extension/lib/agent-template-select.js");
+    const lumOf = (c) => {
+      if (!c || !c.ready || !c.bg) return null;
+      const bg = parseRgb(c.bg) ?? parseRgb(c.bg, [255, 255, 255]);
+      return bg ? relativeLuminance(bg) : null;
+    };
+    const popupLightLum = lumOf(popupLight);
+    const popupDarkLum = lumOf(popupDark);
+    const darkIsDark = popupDarkLum !== null && popupDarkLum < 0.35;
+    const lightIsLight = popupLightLum !== null && popupLightLum > 0.7;
     // Falsification: the SAME measurement must drop below AA when a
     // deliberately low-contrast popup fixture is applied (RED), and recover
     // when it is removed (GREEN).
@@ -1603,6 +1619,7 @@ async function main() {
       popupLight, popupLightRatio, popupLightLow, popupLightLowRatio, popupLightRestoredRatio,
       popupDark, popupDarkRatio, popupDarkLow, popupDarkLowRatio, popupDarkRestoredRatio,
       pickerPixelRect, darkBand, darkPixel, darkPixelRatio, darkLowBand, darkLowPixel, darkLowPixelRatio,
+      popupLightLum, popupDarkLum, darkIsDark, lightIsLight,
       redFixture,
     }));
     check(
@@ -1623,6 +1640,10 @@ async function main() {
         popupLight?.open === true && popupDark?.open === true &&
         popupLightRatio !== null && popupLightRatio >= CONTRAST_AA_TEXT &&
         popupDarkRatio !== null && popupDarkRatio >= CONTRAST_AA_TEXT &&
+        // LUMINANCE GATE (r6 REVISE): the dark popup must be GENUINELY dark
+        // and the light popup GENUINELY light — an AA pass alone cannot prove
+        // the scheme styling landed (white-with-dark-text also passes AA).
+        darkIsDark === true && lightIsLight === true &&
         // falsification: low-contrast override drives the SAME probe RED, and
         // removal restores it to GREEN.
         popupLightLowRatio !== null && popupLightLowRatio < CONTRAST_AA_TEXT &&

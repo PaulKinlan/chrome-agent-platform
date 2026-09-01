@@ -121,6 +121,11 @@ Deno.test("template select module: selection survives filtering (retained hidden
   assertStringIncludes(picker, "prefers-color-scheme: dark", "an explicit dark scheme block styles the popup");
   assertStringIncludes(picker, "#23211d", "the dark popup background is the charcoal panel token");
   assertStringIncludes(picker, "#eae6de", "the dark popup text is the light text token");
+  // The light-dark() tokens are ALSO present (alongside the explicit blocks) so
+  // engines that resolve them get the identical scheme (r6 REVISE: the
+  // reviewer flagged light-dark() absence — both forms are now declared).
+  assertStringIncludes(picker, "light-dark(#ffffff, #23211d)", "light-dark() popup background is declared alongside the explicit block");
+  assertStringIncludes(picker, "light-dark(#1d1b18, #eae6de)", "light-dark() popup text is declared");
   assertStringIncludes(picker, "option:hover", "picker option hover state is styled");
   assertStringIncludes(picker, "option:checked", "picker option checked state is styled");
   // r5 P2: exactly one chevron — the browser default ::picker-icon is
