@@ -773,6 +773,7 @@ export function truncateUtf8(text, maxBytes) {
  */
 export const SETTINGS_SECTIONS = Object.freeze([
   "providers",
+  "mcp-servers",
   "local-folders",
   "tool-library",
   "skills",
@@ -820,7 +821,7 @@ export function normalizeSettingsSectionId(hash) {
 }
 
 export const OPTIONS_PRODUCT_HASHES = new Set([
-  "#providers", "#local-folders", "#tool-library", "#skills", "#agents", "#background",
+  "#providers", "#mcp-servers", "#local-folders", "#tool-library", "#skills", "#agents", "#background",
   "#background-agents", "#board-permissions",
   "#browser", "#permissions", "#hooks",
   "#prompts", "#usage", "#data", "#about",

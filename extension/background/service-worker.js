@@ -193,6 +193,12 @@ import {
   withNamedAgentsLock,
 } from "../lib/named-agents.js";
 import { effectiveMcpServers, normalizeMcpServerList, redactMcpServerList } from "../lib/mcp-config.js";
+// The SDK-backed remote-MCP mount. tool-injection (MCP-TOOL-INJECTION-01) proved
+// this direct import is Deno-unit-test-safe (the `deno test` gate runs without
+// --check), so the SW binds ONE mount for both paths: the per-run tool injection
+// AND the Settings "Test connection" route (MCP-GLOBAL-UI-01). The earlier
+// build-time registry/inject seam is gone — redundant once the source imports the
+// client directly.
 import { mountRemoteMcpServers } from "../lib/mcp-client.js";
 import { buildMcpRunTools } from "../lib/mcp-run-tools.js";
 import {
@@ -3899,7 +3905,11 @@ function dispatchRoute(type, body, context) {
 // (a conversation page, a compromised renderer surface) can drive them.
 
 const providerRoutes = createProviderRoutes({ invalidateAgent });
-const mcpRoutes = createMcpRoutes();
+// "Test connection" (Settings MCP servers) connects via the same SDK-backed
+// remote mount the per-run tool injection uses (imported directly above). The
+// unit test injects its own fake mount into createMcpRoutes; the real path is
+// the KAT.
+const mcpRoutes = createMcpRoutes({ mountRemoteMcpServers });
 
 // Per-agent schedule routes (schedules.list / task.pause / task.resume / task
 // .update) — extracted for unit-drivability. The card flag turns a model-
