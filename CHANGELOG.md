@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.604] — 2026-09-01
+- Housekeeping: the hub and the shared components now share one relative-time helper instead of two identical copies.
+
 ## [0.2.603] — 2026-09-01
 - Security: one HTML escaper across the extension — the hub, Settings, the memory explorer and the local assistant now share the strict escaper (single quotes included) instead of carrying their own weaker copies, and a test fails if a second copy ever appears.
 

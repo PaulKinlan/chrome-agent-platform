@@ -28,6 +28,7 @@ import {
   confirmActionDialog,
   escapeHtml,
 } from "../shared/components.js";
+import { timeAgo } from "../lib/pure.js";
 import { canonicalRef, findAgentByRef } from "../shared/agent-registry.js";
 import { agentScheduleMarker, backgroundAgentsForDisplay } from "../shared/agent-display.js";
 import { buildTemplateSelect } from "../lib/agent-template-select.js";
@@ -1284,15 +1285,7 @@ async function renderHubUsage() {
 }
 
 // ── Tasks (the distinct task threads) ────────────────────────────────────
-function timeAgo(ts) {
-  const d = Date.now() - (ts ?? 0);
-  const m = Math.floor(d / 60000);
-  if (m < 1) return "just now";
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
+// timeAgo is imported from lib/pure.js (the same one the components use).
 
 const taskSidebarLifecycle = createTaskSidebarLifecycle({
   // A list message can wake a restarting MV3 worker before its routes are

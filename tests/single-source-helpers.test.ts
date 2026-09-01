@@ -27,6 +27,7 @@ const EXCLUDED_PREFIXES = ["dist/", "dist-versions/", "wasm/", "lib/terser-bound
  * fnv1a → truncateUtf8 → ids → sleeps), so the guard grew with the tree. */
 const FAMILIES: Array<{ canonical: string; aliases: string }> = [
   { canonical: "escapeHtml", aliases: "escapeHTML|escapeHtml\\w*" },
+  { canonical: "timeAgo", aliases: "timeAgo\\w*" },
 ];
 const CANONICAL_NAMES = FAMILIES.map((f) => f.canonical);
 const ALIAS_GROUP = FAMILIES.map((f) => f.aliases).join("|");
