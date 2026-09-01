@@ -2683,6 +2683,10 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
               permissions: (Array.isArray(event.permissionRequirement.permissions) ? event.permissionRequirement.permissions : []).filter((x) => typeof x === "string").slice(0, 8),
               grantOrigins: (Array.isArray(event.permissionRequirement.grantOrigins) ? event.permissionRequirement.grantOrigins : []).filter((x) => typeof x === "string").slice(0, 50),
               grantGlobal: event.permissionRequirement.grantGlobal === true,
+              // Site access asks survive the reload too (READ-PAGE-HOST-GRANT-01).
+              ...(Array.isArray(event.permissionRequirement.hostOrigins) && event.permissionRequirement.hostOrigins.length
+                ? { hostOrigins: event.permissionRequirement.hostOrigins.filter((x) => typeof x === "string").slice(0, 50) }
+                : {}),
             },
             permissionDecision: typeof event.permissionDecision === "string" ? event.permissionDecision.slice(0, 16) : null,
           }

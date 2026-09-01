@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.604] — 2026-09-01
+- Site access: reading a page on a site the extension cannot access now pauses on one Allow card naming the site (page reads, page actions, screenshots and page saves all check site access first). Allow grants that site from your click and the run continues and reads the page; Not now leaves a line saying which site was not read. Chrome's raw "Cannot access contents of the page" error no longer reaches the model or the transcript.
+
 ## [0.2.603] — 2026-09-01
 - Task board: four defects seen in a real research run are now tracked — truncated tool results, runs stopping early, page reads failing without an Allow card, and transcript loss on reload.
 

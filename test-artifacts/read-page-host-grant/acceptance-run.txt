@@ -1,0 +1,12 @@
+PASS  variant: only `tabs` moved from optional to required; everything else matches the shipped manifest
+PASS  setup: the demo model is the provider and scripting is granted silently from a real click
+PASS  setup: site access is withheld for the fixture origin while its tab address stays visible
+PASS  read_page without site access: ONE pending Allow card names the fixture site (host-origins), asks for nothing else
+PASS  read_page without site access: the raw Chrome string never reaches the owner
+PASS  Allow: the retried read_page succeeds in the same run and the transcript carries the page title
+PASS  Allow: site access is now granted for exactly the fixture origin
+PASS  Deny: with site access withheld again, ONE card pauses the second run
+PASS  Deny: Not now leaves the declined line naming the site on the card
+PASS  Deny: the model's final text says the page was not read
+PASS  no service-worker console errors during the runs
+RESULT: 11/11 passed

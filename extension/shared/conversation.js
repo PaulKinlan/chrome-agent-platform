@@ -595,6 +595,11 @@ export function normalizePermissionRequirement(result) {
   const permissions = [...new Set(cleanStrings(req.permissions, 8))];
   const grantOrigins = [...new Set(cleanStrings(req.grantOrigins, 50))]
     .filter((origin) => /^https?:\/\//.test(origin));
+  // Chrome SITE ACCESS for exact http(s) origins (CAP-FB-20260901-READ-PAGE-
+  // HOST-GRANT-01): the owner's Allow requests `<origin>/*` from Chrome. A
+  // forged non-web origin can never be requested, so it is dropped here.
+  const hostOrigins = [...new Set(cleanStrings(req.hostOrigins, 50))]
+    .filter((origin) => /^https?:\/\//.test(origin));
   const grantGlobal = req.grantGlobal === true;
   // Owner-approval card requirements (schedule mutations et al.): a bounded
   // list of pending-approval ids the owner's Allow resolves — a DESCRIPTION
@@ -618,7 +623,7 @@ export function normalizePermissionRequirement(result) {
       }))
     : [];
   if (Array.isArray(req.approvals) && req.approvals.length > 0 && approvals.length === 0) return null;
-  if (!permissions.length && !grantOrigins.length && !grantGlobal && !approvals.length) return null;
+  if (!permissions.length && !grantOrigins.length && !grantGlobal && !approvals.length && !hostOrigins.length) return null;
   const reason = typeof req.reason === "string" && req.reason.trim()
     ? req.reason.trim().slice(0, 240)
     : "perform this action";
@@ -627,10 +632,16 @@ export function normalizePermissionRequirement(result) {
     permissions,
     grantOrigins,
     grantGlobal,
+    hostOrigins,
     approvals,
+    // Site access is its own decision, so it is its own key segment: a site-
+    // access card and a browser-control card for the same origin never
+    // collapse into one, while the SAME ask (re-denied after a grant that did
+    // not take) reopens the SAME card.
     key: approvals.length
       ? "approvals|" + approvals.map((a) => a.approvalId).sort().join(",")
-      : [...permissions].sort().join(",") + "|" + (grantGlobal ? "<global>" : [...grantOrigins].sort().join(",")),
+      : [...permissions].sort().join(",") + "|" + (grantGlobal ? "<global>" : [...grantOrigins].sort().join(",")) +
+        (hostOrigins.length ? "|host:" + [...hostOrigins].sort().join(",") : ""),
   };
 }
 
@@ -672,14 +683,20 @@ export async function resolveApprovalRequirement(requirement, approve, { sendFn 
  * policy grant through the service worker (the single grant authority). Scope
  * is exactly what the tool computed: grantOrigins set an origin-scoped grant;
  * grantGlobal (only when the tool's own semantics already required the global
- * grant) sets the global grant; nothing is silently broadened. If storage is
- * among the requested permissions the grant persists; otherwise it is
- * reported session-only. Returns an honest outcome; every failure is
- * surfaced, never swallowed. */
+ * grant) sets the global grant; nothing is silently broadened. hostOrigins
+ * (CAP-FB-20260901-READ-PAGE-HOST-GRANT-01) are Chrome SITE ACCESS: the exact
+ * `<origin>/*` patterns ride in the SAME chrome.permissions.request as the
+ * permissions — one prompt from one gesture — and are never a browser-control
+ * grant. If storage is among the requested permissions the grant persists;
+ * otherwise it is reported session-only. Returns an honest outcome; every
+ * failure is surfaced, never swallowed. */
 export async function approvePermissionRequirement(requirement, {
   sendFn = send,
-  requestPermissions = async (permissions) => {
-    try { return (await chrome.permissions.request({ permissions })) === true; }
+  requestPermissions = async (permissions, origins = []) => {
+    const query = {};
+    if (permissions.length) query.permissions = permissions;
+    if (origins.length) query.origins = origins;
+    try { return (await chrome.permissions.request(query)) === true; }
     catch { return false; }
   },
 } = {}) {
@@ -694,16 +711,27 @@ export async function approvePermissionRequirement(requirement, {
     out.errors.push(...resolved.errors);
     return out;
   }
-  if (requirement?.permissions?.length) {
+  // The exact site-access patterns the tool named — `<origin>/*` for each
+  // canonical http(s) origin, never a wildcard host. Requested in the SAME
+  // call as the permissions: this must stay the first asynchronous step from
+  // the owner's click (a preflight ahead of it loses Chrome's activation).
+  const hostPatterns = (Array.isArray(requirement?.hostOrigins) ? requirement.hostOrigins : [])
+    .filter((origin) => typeof origin === "string" && /^https?:\/\/[^/]+$/.test(origin))
+    .map((origin) => `${origin}/*`);
+  if (requirement?.permissions?.length || hostPatterns.length) {
     try {
-      out.permissionsGranted = (await requestPermissions([...requirement.permissions])) === true;
+      out.permissionsGranted = (await requestPermissions([...(requirement?.permissions ?? [])], hostPatterns)) === true;
     } catch (e) {
       out.permissionsGranted = false;
       out.errors.push(String(e?.message ?? e));
     }
     if (!out.permissionsGranted) {
       out.ok = false;
-      if (!out.errors.length) out.errors.push("the owner did not grant the permission");
+      if (!out.errors.length) {
+        out.errors.push(hostPatterns.length && !requirement?.permissions?.length
+          ? `site access to ${requirement.hostOrigins.join(", ")} was not granted`
+          : "the owner did not grant the permission");
+      }
       return out;
     }
   }
@@ -712,7 +740,7 @@ export async function approvePermissionRequirement(requirement, {
     // session-only and the retry would deny again after a worker restart. A
     // failed verify is reported, not hidden.
     try {
-      out.storagePersisted = requirement.permissions.includes("storage")
+      out.storagePersisted = (requirement.permissions ?? []).includes("storage")
         ? true // granted in the JIT request above
         : (await chrome.permissions.contains({ permissions: ["storage"] })) === true;
     } catch {
@@ -1878,6 +1906,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
         card.setAttribute("reason", requirement.reason);
         if (requirement.permissions.length) card.setAttribute("permissions", JSON.stringify(requirement.permissions));
         if (requirement.grantOrigins.length) card.setAttribute("origins", JSON.stringify(requirement.grantOrigins));
+        if (requirement.hostOrigins?.length) card.setAttribute("host-origins", JSON.stringify(requirement.hostOrigins));
         if (requirement.grantGlobal) card.setAttribute("global", "true");
       }
       card.addEventListener("approve", (ev) => handleApprovalDecision(requirement, card, ev?.detail?.sourceEvent, true));

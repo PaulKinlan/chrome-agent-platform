@@ -5424,13 +5424,14 @@ class AgentConversation extends Component {
     if (!req || typeof req !== "object" || Array.isArray(req)) return null;
     const key = typeof req.key === "string" && req.key
       ? req.key
-      : JSON.stringify([req.permissions ?? [], req.grantOrigins ?? [], req.grantGlobal === true]);
+      : JSON.stringify([req.permissions ?? [], req.grantOrigins ?? [], req.grantGlobal === true, req.hostOrigins ?? []]);
     if (!this._approvalKeys) this._approvalKeys = new Map();
     if (this._approvalKeys.has(key)) return this._approvalKeys.get(key);
     const card = document.createElement("permission-approval-card");
     card.setAttribute("reason", String(req.reason ?? "perform this action").slice(0, 240));
     if (Array.isArray(req.permissions) && req.permissions.length) card.setAttribute("permissions", JSON.stringify(req.permissions.slice(0, 8)));
     if (Array.isArray(req.grantOrigins) && req.grantOrigins.length) card.setAttribute("origins", JSON.stringify(req.grantOrigins.slice(0, 50)));
+    if (Array.isArray(req.hostOrigins) && req.hostOrigins.length) card.setAttribute("host-origins", JSON.stringify(req.hostOrigins.slice(0, 50)));
     if (req.grantGlobal === true) card.setAttribute("global", "true");
     if (typeof m.state === "string" && m.state) card.setAttribute("state", m.state);
     if (typeof m.detail === "string" && m.detail) card.setAttribute("detail", m.detail);
@@ -7161,11 +7162,14 @@ class PlanStrip extends Component {
 customElements.define("plan-strip", PlanStrip);
 
 /* <permission-approval-card reason="…" permissions='["tabs"]' origins='["https://a.com"]'
- * global="true" state="pending|granted|denied|error" detail="…"> — the IN-CONTEXT
+ * host-origins='["https://a.com"]' global="true"
+ * state="pending|granted|denied|error" detail="…"> — the IN-CONTEXT
  * owner approval for a tool's permission/grant denial (owner P0
  * CAP-FB-20260826-PERMISSIONS-SIMPLIFY-01). It DESCRIBES exactly what a click
- * approves (plain-English reason + the exact permissions + the exact sites, or
- * "all sites" only when the tool genuinely needs the global grant) and emits
+ * approves (plain-English reason + the exact permissions + the exact sites
+ * whose Chrome site access is requested (`host-origins`, CAP-FB-20260901-
+ * READ-PAGE-HOST-GRANT-01) + the exact sites for browser control, or "all
+ * sites" only when the tool genuinely needs the global grant) and emits
  * "approve" / "deny" with the real click event — granting happens in the
  * conversation's click handler (a genuine owner gesture), never here.
  * Security: this element grants NOTHING itself; it is a labelled choice. */
@@ -7193,7 +7197,7 @@ const PERMISSION_APPROVAL_LABELS = Object.freeze({
 
 class PermissionApprovalCard extends Component {
   static get observedAttributes() {
-    return ["reason", "permissions", "origins", "global", "state", "detail"];
+    return ["reason", "permissions", "origins", "host-origins", "global", "state", "detail"];
   }
   _jsonList(name) {
     const raw = this.getAttribute(name);
@@ -7207,6 +7211,7 @@ class PermissionApprovalCard extends Component {
     const reason = (this.getAttribute("reason") ?? "perform this action").slice(0, 240);
     const permissions = this._jsonList("permissions");
     const origins = this._jsonList("origins");
+    const hostOrigins = this._jsonList("host-origins");
     const isGlobal = this.getAttribute("global") === "true";
     const state = ["granted", "denied", "expired", "error"].includes(this.getAttribute("state")) ? this.getAttribute("state") : "pending";
     const detail = (this.getAttribute("detail") ?? "").slice(0, 240);
@@ -7214,16 +7219,26 @@ class PermissionApprovalCard extends Component {
     for (const permission of permissions) {
       needs.push(`<li>${escapeHtml(PERMISSION_APPROVAL_LABELS[permission] ?? permission)} permission</li>`);
     }
+    if (hostOrigins.length) {
+      // Chrome site access — Chrome confirms it with its own prompt on Allow.
+      const shown = hostOrigins.slice(0, 6).map((origin) => `<code>${escapeHtml(origin)}</code>`).join(", ");
+      needs.push(`<li>Site access to ${hostOrigins.length === 1 ? "this site" : "these sites"}: ${shown}${hostOrigins.length > 6 ? ` and ${hostOrigins.length - 6} more` : ""} (Chrome will ask you to confirm)</li>`);
+    }
     if (isGlobal) {
       needs.push(`<li>Browser control of <strong>all sites</strong> (one of the tabs has no single site)</li>`);
     } else if (origins.length) {
       const shown = origins.slice(0, 6).map((origin) => `<code>${escapeHtml(origin)}</code>`).join(", ");
       needs.push(`<li>Browser control of ${origins.length === 1 ? "this site" : "these sites"}: ${shown}${origins.length > 6 ? ` and ${origins.length - 6} more` : ""}</li>`);
     }
+    // A declined site-access ask says WHICH site was not read and why (the
+    // owner declined), not a generic line (READ-PAGE-HOST-GRANT-01).
+    const declinedText = hostOrigins.length
+      ? `Not allowed to ${reason} — you declined. The action was not performed.`
+      : "Declined. The action was not performed.";
     const stateText = state === "granted"
       ? (detail || "Approved — continuing…")
       : state === "denied"
-        ? "Declined. The action was not performed."
+        ? declinedText
         : state === "expired"
           ? (detail || "The request expired. The action was not performed.")
         : state === "error"
