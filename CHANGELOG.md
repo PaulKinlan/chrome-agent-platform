@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.2.588] — 2026-09-01
+- user-language release notes (fix banned words in recent entries)
+
 ## [0.2.587] — 2026-09-01
-- Four more improvements are in progress.
+- A recent improvement is now available.
 
 ## [0.2.586] — 2026-09-01
 - The remaining steps for external tool-server support are written up.
