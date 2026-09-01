@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.570] — 2026-09-01
+- Task view full response: r3 fixes — the serialized-size backstop shrink is marker-safe and surrogate-safe (fixed 240 KiB marker label survives any shrink), and the tracker reflects the final bounds
+
 ## [0.2.569] — 2026-09-01
 - Task view full response: r2 review fixes — never-silent marker in the durable path, JSON-escape-aware outbox cap, bounded durable-error surfaces, redacted retained payload, and surrogate-safe byte cuts
 

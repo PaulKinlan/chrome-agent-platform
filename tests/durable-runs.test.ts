@@ -1836,3 +1836,45 @@ Deno.test("durable runs: the retained full payload is REDACTED like every other 
   assert(outbox && !JSON.stringify(outbox).includes("sk-r2secrettokentest123456"),
     "the outbox must not carry the raw secret either");
 });
+
+Deno.test("durable runs: the backstop shrink keeps the marker and never splits a surrogate (r3 P1)", async () => {
+  const store = new FakeStore();
+  const captured = {};
+  const origSet = store.setTrusted.bind(store);
+  store.setTrusted = async (key, value) => {
+    if (String(key).startsWith("run-outbox:")) captured[key] = structuredClone(value);
+    return origSet(key, value);
+  };
+  const run = harness(store);
+  await begin(run.registry);
+  // Force the SERIALIZED-size backstop to fire: content that byte-caps to the
+  // 240 KiB escaped budget (with marker) PLUS a large skills envelope pushes
+  // the serialized outbox past the 256 KiB store bound. The shrink loop must
+  // then re-slice the content — and the truncation marker must SURVIVE the
+  // shrink, with cuts on code-point boundaries (no lone surrogate).
+  const emojiNearBoundary = "a".repeat(200_000) + "\u{1F600}".repeat(5_000) + "b".repeat(100_000);
+  const bigSkills = Array.from({ length: 400 }, (_, i) => `skill-${i}-` + "x".repeat(300));
+  await run.registry.settle(executionId, {
+    ok: true,
+    result: emojiNearBoundary,
+    logicalId: "task-p1",
+    skills: bigSkills,
+  });
+  const outbox = captured[`run-outbox:${executionId}`];
+  assert(outbox, "outbox persisted");
+  const content = outbox.threadTerminal?.content ?? "";
+  // The marker must survive the backstop shrink (never-silent truncation).
+  assert(content.includes("truncated to 240 KiB"), "the truncation marker survived the backstop shrink");
+  assert(content.includes("complete text is in the run log"), "the marker names where the full text lives");
+  // No lone high surrogate at the cut (code-point boundary preserved).
+  const lastChar = content.charCodeAt(content.length - 1);
+  assert(!(lastChar >= 0xD800 && lastChar <= 0xDBFF),
+    `the shrink cut left a lone high surrogate (0x${lastChar.toString(16)})`);
+  const decoded = new TextDecoder().decode(new TextEncoder().encode(content));
+  assert(!decoded.includes("\uFFFD"), "no replacement character — no split surrogate pair survived");
+  // The serialized outbox fits the store bound, and the envelope (skills) is intact.
+  const serialized = new TextEncoder().encode(JSON.stringify(outbox)).byteLength;
+  assert(serialized < 256 * 1024, `serialized outbox must fit the store bound after shrink (${serialized} bytes)`);
+  assertEquals(Array.isArray(outbox.threadTerminal?.skills) ? outbox.threadTerminal.skills.length : 0, 400,
+    "the shrink only touches the full copy, never the envelope");
+});

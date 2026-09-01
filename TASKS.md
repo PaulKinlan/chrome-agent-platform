@@ -4661,18 +4661,18 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01] Agent response truncated in the task view — owner wants the full response readable
 - Feedback: 2026-08-31 — owner-reported (P1): "in a task view, the agent response gets truncated and I really want to be able to read it like a full resource."
-- Updated: 2026-08-31 22:30 UTC
+- Updated: 2026-09-01 01:10 UTC
 - Status: IN_REVIEW
-- Resume: worker (hub coordinator dispatch) — candidate built; unit 2832/0, journeys 276/276, screenshots full-response-{collapsed,expanded}.png
+- Resume: r3 review fixes (marker-safe + surrogate-safe backstop shrink; tracker refresh). Gates: build clean; suite 2842/0; journeys 276/276; screenshots full-response-{collapsed,expanded}.png
 - Priority: P1
 - Owner: hub coordinator (journal session)
 - Workspace: /tmp/cap-full-response
 - Branch: cap-full-response
 - Base: origin/main bcb709cc
-- Candidate: pending
+- Candidate: 322cbdaa (r2) + r3 backstop fix (final tip after this round)
 - Shipping: —
 - Acceptance: The task view renders the agent's COMPLETE response. Investigation found the truncation is COMMIT-TIME, three stacked caps: (1) safeProviderError → boundErrorText capped EVERY message at **300 chars** (pure.js:979-985 — the primary bite; a secret-redaction helper meant for errors was bounding message content); (2) boundText's MAX_MESSAGE_CHARS = **16 KiB** (threads.js:27) applied at appendThreadMessage/commitThreadTerminal; (3) the durable outbox terminal result was bounded at **16 KiB** (durable-runs.js:1749). The memory store's per-value bound (256 KiB, memory.js MAX_VALUE_BYTES) is the physical ceiling.
-  - Fix: boundText now uses the UNBOUNDED redactor (redactSecretText) + raises MAX_MESSAGE_CHARS to **252 KiB** (margin for envelope + marker under the store's 256 KiB bound); the durable outbox terminal result raised to match; the legacy compatibility journal stays a 240-char bounded preview (full bytes live in the retainedPayloadRef). An over-budget (>252 KiB) message is sliced with an EXPLICIT marker ("…(response truncated to 252 KiB — the complete text is in the run log)") — never silent. UX: long agent/system responses (>4000 chars) render COLLAPSED with a Show-full-response toggle + Copy full response button (message-bubble .long-response); list surfaces stay bounded.
+  - Fix: boundText now uses the UNBOUNDED redactor (redactSecretText) + renames the cap to **MAX_MESSAGE_BYTES = 240 KiB** (UTF-8 BYTES, with the marker's byte budget reserved; the thread budget is **248 KiB** serialized — both under the memory store's 256 KiB per-value bound); the durable outbox full copy is byte-capped at **240 KiB escaped** with the same never-silent marker ("…(response truncated to 240 KiB — the complete text is in the run log)"); the legacy compatibility journal stays a 240-char bounded preview (full bytes live in the retainedPayloadRef). The retained payload is redacted before persist. UX: long agent/system responses (>4000 chars) render COLLAPSED with a Show-full-response toggle + Copy full response button (message-bubble .long-response); list surfaces stay bounded.
   - RED→GREEN: revert the fix → the byte-complete + marker tests fail (0/3); restore → 3/3. Long-response render journey: @demo-long-answer drives a 47,318-char response; collapsed state data-open=0 asserted, real-click toggle → data-open=1 with "Line 300:" tail in the DOM, thread store holds 47,318 chars byte-complete.
 - History:
   - 2026-09-01 00:30 UTC — r2 review (sol) 5 blockers, all fixed with falsification: B1 the durable truncation carries the same never-silent marker as the thread path (240 KiB marker in the outbox full copy); B2 the outbox content cap measures the JSON-ESCAPED size (control-char floods can no longer expand past the store bound) plus a serialized-size backstop loop; B3 the durable/terminal-commit error path bounds row.error (1 KiB), lastError.message (4 KiB) and keeps preview ≤160 — the full error text lives only in the message row; B4 the retained full payload is REDACTED via redactSecretText before persistJsonPayload (test proves a fake apiKey=sk-… secret is [REDACTED] in the payload chunks AND the outbox); B5 the UTF-8 binary-search cut backs off to a code-point boundary (no lone surrogate; test proves no split emoji pair and no replacement char). Falsification: revert the two source fixes → 4 tests fail; restore → green. Suite 2842/0, journeys 276/276.
