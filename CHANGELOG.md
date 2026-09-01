@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.610] — 2026-09-01
+- Task board: three defects found while rehearsing the demo are now tracked — a tool that stalls after you click Allow, too many permission prompts in one step, and when a site tool should ask first.
+
 ## [0.2.609] — 2026-09-01
 - Every screen now escapes untrusted text the same strict way, so a name like O'Brien can never break the page.
 
