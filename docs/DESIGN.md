@@ -383,6 +383,41 @@ round-trip. Every click/type/select is written to the activity ledger as a plain
 sentence ("Clicked 'Add to cart'"); page actions have no inverse, so the ledger
 records them without an Undo.
 
+## Tool pipelines (declarative step chains)
+
+The owner asked for co-do-style piping: chain a few tool steps into one run where
+a step's output feeds the next (`CAP-FB-20260831-TOOL-PIPELINES-01`). The model is
+**declarative, not an expression language** — MV3 CSP forbids `eval`/`new
+Function`, and a declarative form is also more legible and serialisable. A
+pipeline is an ordered list of steps; each step names an EXISTING tool and its
+args; an arg may carry a binding token `{ $ref: "<earlierStepId>", path?:
+"a.b.0.c" }` that a pure path-lookup (no eval) replaces with the referenced
+step's result (or a sub-path). The core lives in `extension/lib/tool-pipeline.js`
+(`validatePipeline` / `resolveStepArgs` / `runPipeline`).
+
+Three properties make it safe to compose tools this way:
+- **The tool NAME is fixed in the step, never bindable.** Untrusted content from an
+  earlier step can only ever land in a later step's DATA position — it can never
+  choose which tool runs.
+- **Each step keeps its own gates.** The executor dispatches every step through the
+  run's normal tool seam (`LazyToolProtocol.execute`), so a step's owner-approval
+  card and untrusted-content fence apply exactly as if the model had called that
+  tool directly; the card shows the RESOLVED args. The fence is preserved as data
+  flows forward (a bound value that was fenced stays fenced).
+- **It fails closed.** `$ref` may reference only an EARLIER step (a linear pipe, no
+  cycles by construction); a binding whose path does not resolve halts the
+  pipeline with a structured error rather than running a step against a missing
+  input; step count and args size are bounded.
+
+Visually, a pipeline is meant to read as a checklist in the **plan strip** — one
+checkpoint per step (`step-start` → `step-end`), the same vocabulary a single
+run already uses — so the owner watches the pipe advance step by step, and the
+transcript pairs each step's call and result into one card. Contrast with
+`run_script`: that runs one opaque sandboxed-JS blob approved by a source digest;
+a pipeline is a legible chain of NAMED existing tools, each re-gated and each
+visible on its own row. Use `run_script` for arbitrary logic, a pipeline to chain
+tools safely and inspectably.
+
 ## Distribution archive boundary
 The production ZIP is a projection, not a copy of the developer's local
 `extension/` directory. Its only authorities are Git-tracked regular extension
