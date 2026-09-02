@@ -1,12 +1,15 @@
 # Changelog
 
+## [0.3.9] — 2026-09-02
+- (beads 60be): align versions to the 0.3.8 build and keep the stock lockfile
+
 ## [0.3.8] — 2026-09-02
 - (beads 60be): every named agent gets a persistent private workspace, beside the owner's global file grants
 
 ## [0.3.7] — 2026-09-02
 - Every named agent gets a persistent private workspace, beside the owner's global file grants
 
-## [0.3.6] — 2026-09-02
+## [0.3.8] — 2026-09-02
 - Every named agent gets a persistent private workspace, beside the owner's global file grants.
 
 ## [0.3.5] — 2026-09-02
