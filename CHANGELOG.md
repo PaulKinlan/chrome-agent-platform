@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.648] — 2026-09-02
+- Task board: the test-suite honesty work is complete; one regression was opened and four more items are being worked on.
+
 ## [0.2.647] — 2026-09-02
 - The test suite now tells the truth: security checks run against the real extension, browser checks no longer collide, and every known failure is named.
 
