@@ -44,10 +44,25 @@ Deno.test("settings cleanliness: real owner controls and install-grant diagnosti
   ]) assertStringIncludes(html, marker);
   assertStringIncludes(options, "async function renderPermissions()");
   // OPTIONAL + JIT model: the Permissions section is a live three-state
-  // display (granted / requestable with an Enable affordance /
-  // platform-unavailable) plus the fixed mandatory boot rows.
-  assertStringIncludes(options, 'state.textContent = "Granted"');
-  assertStringIncludes(options, 'state.textContent = "Not enabled"');
-  assertStringIncludes(options, 'state.textContent = "Not available on this platform"');
-  assertStringIncludes(options, 'state.textContent = "Granted at install (required)"');
+  // display (granted = the switch / requestable = the ghost Turn on button /
+  // platform-unavailable = text) plus the fixed mandatory "Always on" group,
+  // every row a shared <capability-row>
+  // (CAP-FB-20260830-SETTINGS-HOOKS-PERMISSIONS-TABLES-01).
+  assertStringIncludes(options, 'document.createElement("capability-row")');
+  assertStringIncludes(options, 'row.dataset.state = "granted"');
+  assertStringIncludes(options, 'row.setAttribute("action-state", "on")');
+  assertStringIncludes(options, 'row.dataset.state = "requestable"');
+  assertStringIncludes(options, 'row.setAttribute("action-label", "Turn on")');
+  assertStringIncludes(options, 'row.dataset.state = "unavailable"');
+  assertStringIncludes(options, 'row.setAttribute("action-label", "Not available on this platform")');
+  assertStringIncludes(options, 'row.dataset.state = "required"');
+  assertStringIncludes(options, 'row.setAttribute("action-label", "Always on")');
+  // The hand-rolled card row is gone from both sections (the board deny list
+  // is the only remaining .perm-row user).
+  const permissionsFn = options.slice(options.indexOf("async function renderPermissions()"), options.indexOf("async function renderHooks()"));
+  assert(!permissionsFn.includes('"perm-row"'), "Permissions no longer hand-rolls .perm-row cards");
+  const hooksFn = options.slice(options.indexOf("async function renderHooks()"), options.indexOf("// vocab:advanced:end"));
+  assert(!hooksFn.includes('"perm-row"') && !hooksFn.includes("danger"), "Hooks is a table of switches, not danger-button cards");
+  assertStringIncludes(hooksFn, 'document.createElement("switch-toggle")');
+  assertStringIncludes(html, '<table id="hook-list" class="hooks-table">');
 });

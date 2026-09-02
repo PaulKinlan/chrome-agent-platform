@@ -1544,3 +1544,42 @@ Deno.test("message-bubble: Copy always takes the FULL stored response, never the
     restoreDoc();
   }
 });
+
+// CAP-FB-20260830-SETTINGS-HOOKS-PERMISSIONS-TABLES-01: Settings → Permissions
+// renders one <capability-row> per capability. A granted capability shows the
+// shared <switch-toggle> (on); a requestable one shows a ghost "Turn on"
+// button (the click IS the user gesture chrome.permissions.request needs); a
+// fixed state ("Always on" / "Not available on this platform") shows text and
+// NO control. The "Gates: …" sentence sits behind a disclosure, never inline.
+Deno.test("capability-row renders a switch-toggle when action-state is on and a ghost button otherwise", async () => {
+  await import("../extension/shared/components.js");
+  const Klass = globalThis.customElements.get("capability-row");
+  if (!Klass) throw new Error("capability-row must be registered");
+  const render = (attrs: Record<string, string>) => {
+    const el: any = Object.create(Klass.prototype);
+    el._attrs = new Map(Object.entries(attrs));
+    el._root = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+    el._render();
+    return String(el._root.innerHTML);
+  };
+  const on = render({ name: "Bookmarks", description: "Read bookmarks.", "action-state": "on", detail: "Gates: /bookmarks.", "detail-label": "What it allows" });
+  if (!/<switch-toggle[^>]*\bchecked\b[^>]*label="Bookmarks"/.test(on)) {
+    throw new Error(`action-state=on must render a CHECKED switch-toggle labelled with the capability name — got ${on.slice(-400)}`);
+  }
+  if (/class="run"/.test(on)) throw new Error("action-state=on must not also render the Turn on button");
+  if (!/<details[^>]*class="detail"[\s\S]*<summary>What it allows<\/summary>[\s\S]*Gates: \/bookmarks\./.test(on)) {
+    throw new Error("the detail sentence must sit behind a <details> disclosure");
+  }
+  const off = render({ name: "Bookmarks", description: "Read bookmarks.", action: "run", "action-label": "Turn on" });
+  if (/<switch-toggle/.test(off)) throw new Error("a requestable capability must not render a switch");
+  if (!/<button[^>]*class="run"[^>]*aria-label="Turn on Bookmarks"[^>]*>Turn on<\/button>/.test(off)) {
+    throw new Error(`a requestable capability renders the ghost Turn on button — got ${off.slice(-300)}`);
+  }
+  if (/<details/.test(off)) throw new Error("no detail attribute → no disclosure");
+  const fixed = render({ name: "Memory & settings", action: "state", "action-label": "Always on" });
+  if (/<switch-toggle|<button/.test(fixed)) throw new Error("a fixed state renders no control");
+  if (!/<span[^>]*class="state"[^>]*>Always on<\/span>/.test(fixed)) throw new Error("a fixed state renders its label as text");
+  // The name is text, never markup.
+  const hostile = render({ name: "<img src=x onerror=alert(1)>", "action-state": "on" });
+  if (hostile.includes("<img")) throw new Error("the name must be escaped");
+});

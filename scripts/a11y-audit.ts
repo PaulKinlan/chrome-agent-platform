@@ -501,7 +501,7 @@ async function main() {
 
     // the settings must expose every optional capability (the permission rows)
     const capRows = await cdp.evl(page.sessionId,
-      `document.querySelectorAll('#permission-list [class*=perm], #permission-list .perm-row, #permission-list > *').length`);
+      `document.querySelectorAll('#permission-list capability-row, #permission-list .perm-row').length`);
     check("settings: the permission list renders the capability rows", Number(capRows) >= 6, capRows);
 
     // ── the component gallery: the <artifact-diff> specimen, both schemes ──

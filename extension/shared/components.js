@@ -2416,13 +2416,21 @@ class ToolDirectoryCard extends Component {
 }
 customElements.define("tool-directory-card", ToolDirectoryCard);
 
-/* <capability-row name description icon action="run|open|open-delete|use" last-run>
+/* <capability-row name description icon action="run|open|open-delete|use|state" action-state="on" detail detail-label last-run>
  * The reusable capability/recipe row. A strict grid — icon (fixed) | label
  * column (name + description STACKED, never run together) | action
- * (right-aligned) — so every capability list is aligned by construction. */
+ * (right-aligned) — so every capability list is aligned by construction.
+ *
+ * Settings → Permissions (CAP-FB-20260830-SETTINGS-HOOKS-PERMISSIONS-TABLES-01)
+ * uses three further shapes: `action-state="on"` puts the shared <switch-toggle>
+ * (checked, labelled with the name) in the action column and re-emits its
+ * `toggle { checked }`; `action="state"` shows `action-label` as plain text with
+ * NO control ("Always on", "Not available on this platform"); `detail` puts a
+ * sentence behind a <details> disclosure under the description (`detail-label`
+ * is the summary, default "Details"). */
 class CapabilityRow extends Component {
   static get observedAttributes() {
-    return ["name", "description", "icon", "action", "action-label", "last-run"];
+    return ["name", "description", "icon", "action", "action-label", "action-state", "detail", "detail-label", "last-run"];
   }
   _render() {
     const name = this.getAttribute("name") || "";
@@ -2430,13 +2438,22 @@ class CapabilityRow extends Component {
     const icon = this.getAttribute("icon") || "";
     const action = this.getAttribute("action") || "run";
     const actionLabel = this.getAttribute("action-label") || "Run";
+    const actionState = this.getAttribute("action-state") || "";
+    const detail = this.getAttribute("detail") || "";
+    const detailLabel = this.getAttribute("detail-label") || "Details";
     const lastRun = this.getAttribute("last-run") || "";
     // "open" = the WHOLE row is clickable (an agent → open its chat/view) with a
     // chevron affordance instead of a "Run" button; "open-delete" = a chevron to
     // open the agent's view AND a destructive Delete button — for background
     // agents (an enabled background agent exists and runs; the owner removes it
-    // with Delete, not an enable/disable switch); "run" = a small Run button.
-    const actionHtml = action === "open-delete"
+    // with Delete, not an enable/disable switch); "run" = a small Run button;
+    // action-state="on" = the switch (a granted, revocable capability);
+    // "state" = text only (nothing the owner can change from this row).
+    const actionHtml = actionState === "on"
+      ? `<switch-toggle part="switch" checked label="${escapeHtml(name)}"></switch-toggle>`
+      : action === "state"
+        ? `<span part="state" class="state">${escapeHtml(actionLabel)}</span>`
+        : action === "open-delete"
       ? `<button part="open" class="open" type="button" aria-label="Open ${escapeHtml(name)}">${ICONS.chevron}</button>
          <button part="delete" class="delete" type="button" aria-label="Delete ${escapeHtml(name)}">Delete</button>`
       : action === "open"
@@ -2444,6 +2461,9 @@ class CapabilityRow extends Component {
         : action === "use"
             ? `<button part="use" class="run" type="button">Use</button>`
             : `<button part="run" class="run" type="button" aria-label="${escapeHtml(actionLabel)} ${escapeHtml(name)}">${escapeHtml(actionLabel)}</button>`;
+    const detailHtml = detail
+      ? `<details part="detail" class="detail"><summary>${escapeHtml(detailLabel)}</summary><p>${escapeHtml(detail)}</p></details>`
+      : "";
     const rowAttrs = action === "open"
       ? ` part="row" class="row clickable" role="button" tabindex="0" aria-label="Open ${escapeHtml(name)}"`
       : ` part="row" class="row"`;
@@ -2486,18 +2506,38 @@ class CapabilityRow extends Component {
         white-space:nowrap; }
       .delete:hover, .delete:focus-visible { border-color:var(--danger,#b3261e); outline:none; }
       .meta { display:flex; align-items:center; gap:6px; }
+      .state { font-size:var(--text-xs,12px); color:var(--muted,#8b949e); white-space:nowrap; }
+      /* The disclosure is a text-sized control in the label column: the
+         summary reads as a quiet link, the body as one muted sentence. */
+      .detail { margin-top:2px; font-size:var(--text-xs,12px); color:var(--muted,#8b949e); }
+      .detail summary { display:inline-flex; align-items:center; gap:4px; cursor:pointer;
+        color:var(--muted,#8b949e); min-height:24px; list-style:none; }
+      .detail summary::-webkit-details-marker { display:none; }
+      .detail summary::before { content:""; width:6px; height:6px; border-right:1.5px solid currentColor;
+        border-bottom:1.5px solid currentColor; transform:rotate(-45deg); transition:transform 150ms ease; }
+      .detail[open] summary::before { transform:rotate(45deg); }
+      .detail summary:hover, .detail summary:focus-visible { color:var(--accent,#0e6e63); outline:none; }
+      .detail summary:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; border-radius:4px; }
+      .detail p { margin:4px 0 0; line-height:1.4; overflow-wrap:anywhere; }
+      @media (prefers-reduced-motion: reduce) { .detail summary::before { transition:none; } }
     `, `<div${rowAttrs}>
       <span class="icon" aria-hidden="true">${icon}</span>
       <span class="label"><span class="name">${escapeHtml(name)}</span>
         <span class="desc"${description ? ` title="${escapeHtml(description)}"` : ""}>${escapeHtml(description)}</span>${
           lastRun ? `<span class="lastrun">${escapeHtml(lastRun)}</span>` : ""
-        }</span>
+        }${detailHtml}</span>
       <span class="meta">${actionHtml}</span>
     </div>`);
   }
   _wire() {
     const run = this._root.querySelector(".run");
     run?.addEventListener("click", () => this._emit("run"));
+    // The switch manages its own checked attribute; the row re-emits so a page
+    // listens on the row it built, never inside the shadow tree.
+    this._root.querySelector("switch-toggle")?.addEventListener("toggle", (e) => {
+      e.stopPropagation();
+      this._emit("toggle", { checked: Boolean(e.detail?.checked) });
+    });
     const use = this._root.querySelector("[part=use]");
     use?.addEventListener("click", () => this._emit("use"));
     const open = this._root.querySelector(".open");

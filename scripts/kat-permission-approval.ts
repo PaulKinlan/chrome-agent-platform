@@ -258,7 +258,7 @@ const evOpt = async (expr: string) =>
     ?.result?.result?.value;
 
 // Verify permissions section rendered with capability rows
-const permRowsCount = await evOpt(`document.querySelectorAll(".capability-row, .perm-row").length`);
+const permRowsCount = await evOpt(`document.querySelectorAll("#permission-list capability-row, .capability-row, .perm-row").length`);
 check("Permissions section lists capability rows with labels and gates", permRowsCount > 0, { permRowsCount });
 
 await captureScreenshot(optSessionId, "03-permissions-settings-list.png");

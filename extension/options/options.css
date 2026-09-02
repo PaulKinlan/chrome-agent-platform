@@ -931,13 +931,154 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
 .background-agent-row > switch-toggle,
 .background-agent-controls > switch-toggle { grid-area: toggle; }
 
-/* Optional-permission capability panel. */
-.permission-list,
-.hook-list {
+/* Optional-permission capability panel — a grouped list of <capability-row>s
+   (CAP-FB-20260830-SETTINGS-HOOKS-PERMISSIONS-TABLES-01). Each group is a
+   native <details>: the heading and an "N of M on" count are readable closed;
+   open, the rows sit in one bordered panel with hairlines between them. */
+.permission-list {
   display: grid;
-  gap: 0.5rem;
-  margin-top: 0.75rem;
+  gap: 8px;
+  margin-top: 12px;
 }
+.perm-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+.perm-group > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "name count"
+    "hint count";
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 2px;
+  padding: 10px 14px 10px 36px;
+  position: relative;
+  cursor: pointer;
+  list-style: none;
+  border-radius: var(--radius-md);
+  min-height: 44px;
+}
+.perm-group > summary::-webkit-details-marker { display: none; }
+.perm-group > summary::before {
+  content: "";
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  margin-top: -5px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(-45deg);
+  transition: transform 150ms ease;
+}
+.perm-group[open] > summary::before { transform: rotate(45deg); margin-top: -6px; }
+.perm-group[open] > summary { border-bottom: 1px solid var(--border); border-radius: var(--radius-md) var(--radius-md) 0 0; }
+.perm-group > summary:hover { background: var(--bg); }
+.perm-group > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.perm-group > summary h3 { grid-area: name; margin: 0; font-size: 14px; }
+.perm-group-hint { grid-area: hint; font-size: var(--text-xs, 12px); }
+.perm-group-count {
+  grid-area: count;
+  font-size: var(--text-xs, 12px);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.perm-group-rows { padding: 2px 0; }
+.perm-group-rows capability-row { display: block; }
+@media (prefers-reduced-motion: reduce) {
+  .perm-group > summary::before { transition: none; }
+}
+
+/* System hooks — one table, one <tbody> per chrome.* API. The group row is a
+   button that expands its events; the Allowed column is the shared switch. The
+   only red control in the section is the Deny-all confirmation dialog. */
+.hooks-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.hooks-table-wrap {
+  container-type: inline-size;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  overflow-x: auto;
+}
+.hooks-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm, 13px);
+  font-variant-numeric: tabular-nums;
+}
+.hooks-table th,
+.hooks-table td {
+  text-align: left;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  vertical-align: middle;
+}
+.hooks-table thead th {
+  border-top: 0;
+  font-size: var(--text-xs, 12px);
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--panel-2);
+  padding-block: 8px;
+}
+.hooks-table .col-state { width: 1%; white-space: nowrap; text-align: right; }
+.hooks-table .col-api code { font-size: var(--text-xs, 12px); }
+.hooks-table tbody[data-open="false"] .hook-row { display: none; }
+.hook-group th { padding: 0; }
+.hook-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.hook-group-toggle:hover { background: var(--bg); }
+.hook-group-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.hook-group-chevron {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  margin: 0 4px 3px 2px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(-45deg);
+  transition: transform 150ms ease;
+}
+.hook-group-toggle[aria-expanded="true"] .hook-group-chevron { transform: rotate(45deg); margin-bottom: 5px; }
+.hook-group-meta { font-weight: 400; font-size: var(--text-xs, 12px); }
+.hook-event { display: flex; flex-direction: column; gap: 2px; }
+.hook-row td { padding-left: 33px; }
+.hook-row td.col-api, .hook-row td.col-state { padding-left: 12px; }
+.hook-subs { font-size: var(--text-xs, 12px); }
+@container (max-width: 719px) {
+  .hooks-table .col-api { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hook-group-chevron { transition: none; }
+}
+
+/* The board deny list still uses the plain row below. */
 .perm-row {
   display: grid;
   grid-template-columns: 1fr auto;

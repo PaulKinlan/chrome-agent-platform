@@ -17,9 +17,20 @@ import { exactOriginPattern } from "./permission-orchestration.js";
 // wondering what an entry silently controls (the ARTIFACT-DELETE finding:
 // artifact deletion itself needs NO permission; it lives in the extension's
 // own OPFS space).
+// Settings → Permissions renders CAPABILITIES as a grouped list
+// (CAP-FB-20260830-SETTINGS-HOOKS-PERMISSIONS-TABLES-01). Every capability
+// declares its `group` from THIS set (tests/options-permissions-groups.test.ts
+// fails on a missing or unknown group); the order here is the order on screen.
+export const CAPABILITY_GROUPS = [
+  { id: "browsing", label: "Browsing", hint: "Tabs, history, bookmarks and the rest of the browser itself." },
+  { id: "content", label: "Content", hint: "What the agent can read from and do on the pages you open." },
+  { id: "system", label: "System", hint: "Notifications, Chrome settings and what your computer reports about itself." },
+];
+
 export const CAPABILITIES = [
   {
     id: "bookmarks",
+    group: "browsing",
     permissions: ["bookmarks"],
     label: "Bookmarks",
     hint: "Read, create and organize bookmarks. Without the grant, bookmark tools and the /bookmarks command are refused with an Enable affordance.",
@@ -28,6 +39,7 @@ export const CAPABILITIES = [
   },
   {
     id: "history",
+    group: "browsing",
     permissions: ["history"],
     label: "History",
     hint: "Search browsing history. Without the grant, history tools and the /history command are refused with an Enable affordance.",
@@ -36,6 +48,7 @@ export const CAPABILITIES = [
   },
   {
     id: "contextMenus",
+    group: "browsing",
     permissions: ["contextMenus"],
     label: "Context menus",
     hint: "Create the agent's right-click menu entries. Without the grant, menu tools are refused.",
@@ -44,6 +57,7 @@ export const CAPABILITIES = [
   },
   {
     id: "idle",
+    group: "system",
     permissions: ["idle"],
     label: "Idle detection",
     hint: "Detect when the browser is idle (used by scheduled runs). Without the grant, idle tools are refused.",
@@ -52,6 +66,7 @@ export const CAPABILITIES = [
   },
   {
     id: "topSites",
+    group: "browsing",
     permissions: ["topSites"],
     label: "Top sites",
     hint: "Read the most-visited sites. Without the grant, top-sites tools are refused.",
@@ -60,6 +75,7 @@ export const CAPABILITIES = [
   },
   {
     id: "readingList",
+    group: "browsing",
     permissions: ["readingList"],
     label: "Reading list",
     hint: "Read and manage the Chrome reading list. Without the grant, reading-list tools are refused.",
@@ -68,6 +84,7 @@ export const CAPABILITIES = [
   },
   {
     id: "pageCapture",
+    group: "content",
     permissions: ["pageCapture"],
     label: "Page capture (MHTML)",
     hint: "Capture a page as MHTML. Without the grant, page-capture tools are refused.",
@@ -76,6 +93,7 @@ export const CAPABILITIES = [
   },
   {
     id: "privacy",
+    group: "system",
     permissions: ["privacy"],
     label: "Privacy controls",
     hint: "Read and set Chrome privacy features (e.g. safe browsing). Without the grant, privacy tools are refused.",
@@ -84,6 +102,7 @@ export const CAPABILITIES = [
   },
   {
     id: "proxy",
+    group: "system",
     permissions: ["proxy"],
     label: "Proxy settings",
     hint: "Configure Chrome proxy settings. Without the grant, proxy tools are refused.",
@@ -92,6 +111,7 @@ export const CAPABILITIES = [
   },
   {
     id: "fontSettings",
+    group: "system",
     permissions: ["fontSettings"],
     label: "Font settings",
     hint: "Read and set Chrome font settings. Without the grant, font tools are refused.",
@@ -100,6 +120,7 @@ export const CAPABILITIES = [
   },
   {
     id: "power",
+    group: "system",
     permissions: ["power"],
     label: "Power management",
     hint: "Keep the system awake during long runs. Without the grant, power tools are refused.",
@@ -108,6 +129,7 @@ export const CAPABILITIES = [
   },
   {
     id: "search",
+    group: "browsing",
     permissions: ["search"],
     label: "Web search",
     hint: "Query the default search engine. Without the grant, search tools are refused.",
@@ -116,6 +138,7 @@ export const CAPABILITIES = [
   },
   {
     id: "tts",
+    group: "system",
     permissions: ["tts"],
     label: "Text to speech",
     hint: "Speak text aloud and list voices. Without the grant, TTS tools are refused.",
@@ -124,6 +147,7 @@ export const CAPABILITIES = [
   },
   {
     id: "system.cpu",
+    group: "system",
     permissions: ["system.cpu"],
     label: "System CPU info",
     hint: "Read CPU diagnostics. Without the grant, CPU tools are refused.",
@@ -132,6 +156,7 @@ export const CAPABILITIES = [
   },
   {
     id: "system.memory",
+    group: "system",
     permissions: ["system.memory"],
     label: "System memory info",
     hint: "Read memory diagnostics. Without the grant, memory tools are refused.",
@@ -140,6 +165,7 @@ export const CAPABILITIES = [
   },
   {
     id: "system.storage",
+    group: "system",
     permissions: ["system.storage"],
     label: "System storage info",
     hint: "Read storage device diagnostics. Without the grant, storage tools are refused.",
@@ -148,6 +174,7 @@ export const CAPABILITIES = [
   },
   {
     id: "system.display",
+    group: "system",
     permissions: ["system.display"],
     label: "System display info",
     hint: "Read display diagnostics. Without the grant, display tools are refused.",
@@ -156,6 +183,7 @@ export const CAPABILITIES = [
   },
   {
     id: "storage",
+    group: "system",
     permissions: ["storage"],
     label: "Memory & settings",
     hint: "Persist settings, tasks, usage and enrollment across restarts. Without it the hub still runs, but nothing survives a restart.",
@@ -163,6 +191,7 @@ export const CAPABILITIES = [
   },
   {
     id: "alarms",
+    group: "system",
     permissions: ["alarms"],
     label: "Scheduled tasks",
     hint: "Run the agent on a schedule (or after a delay). Without it, scheduled tasks are unavailable.",
@@ -170,6 +199,7 @@ export const CAPABILITIES = [
   },
   {
     id: "tabs",
+    group: "browsing",
     permissions: ["tabs"],
     label: "Browser control",
     hint: "Open/navigate/close/list tabs. This permission reads the browsing history (Chrome warns) and is granted from a headed browser; screenshots use the separate Screenshots capability instead.",
@@ -177,6 +207,7 @@ export const CAPABILITIES = [
   },
   {
     id: "tabGroups",
+    group: "browsing",
     permissions: ["tabGroups"],
     label: "Tab groups",
     hint: "Create, rename, recolor, collapse and manage tab groups, and move tabs between them. Without it the tabGroups API isn't injected, so the group tools return 'not available'.",
@@ -184,6 +215,7 @@ export const CAPABILITIES = [
   },
   {
     id: "activeTab",
+    group: "content",
     permissions: ["activeTab"],
     label: "Screenshots",
     hint: "Enables Chrome's TRANSIENT owner-invoked capture: click the extension icon while viewing a page to capture that page. It never authorizes a background or model-selected capture (those need exact site access). Silent (no Chrome warning).",
@@ -191,6 +223,7 @@ export const CAPABILITIES = [
   },
   {
     id: "scripting",
+    group: "content",
     permissions: ["scripting"],
     label: "Site Agents",
     hint: "Find and use tools made available by sites you add. Chrome asks for access only to those sites.",
@@ -198,6 +231,7 @@ export const CAPABILITIES = [
   },
   {
     id: "notifications",
+    group: "system",
     permissions: ["notifications"],
     label: "Notifications",
     hint: "Surface scheduled-task completions as system notifications.",
@@ -205,6 +239,7 @@ export const CAPABILITIES = [
   },
   {
     id: "sidePanel",
+    group: "browsing",
     permissions: ["sidePanel"],
     label: "Side panel",
     hint: "Open the hub in Chrome's side panel alongside a page.",
@@ -212,6 +247,7 @@ export const CAPABILITIES = [
   },
   {
     id: "cookies",
+    group: "content",
     permissions: ["cookies"],
     label: "Cookies",
     hint: "List/read/set/remove site cookies. Cookie tools ALSO need the exact-origin host permission for the target site (granted per site, never for all sites).",
@@ -219,6 +255,7 @@ export const CAPABILITIES = [
   },
   {
     id: "browsingData",
+    group: "content",
     permissions: ["browsingData"],
     label: "Browsing data",
     hint: "Wipe explicitly chosen browsing data types (cache, cookies, history, downloads, passwords, …). Browser-wide: every wipe also needs the global browser-control grant.",
@@ -226,6 +263,7 @@ export const CAPABILITIES = [
   },
   {
     id: "contentSettings",
+    group: "content",
     permissions: ["contentSettings"],
     label: "Content settings",
     hint: "Read/set/clear per-site content rules (JavaScript, images, cookies, location, notifications, popups) for one exact origin at a time — broad patterns are refused.",
@@ -233,6 +271,7 @@ export const CAPABILITIES = [
   },
   {
     id: "userScripts",
+    group: "content",
     permissions: ["userScripts"],
     label: "User scripts",
     hint: "Register user scripts (USER_SCRIPT world) on specific sites. Only single exact-origin matches are accepted (broad patterns are refused) and each site's host access is granted separately in Settings; mutations ALSO need the browser-control grant for every matched origin.",
@@ -240,6 +279,7 @@ export const CAPABILITIES = [
   },
   {
     id: "downloads",
+    group: "content",
     permissions: ["downloads"],
     label: "Downloads",
     hint: "Download files (http/https only) and manage the browser's download history. Mutations stay behind the Browser control grant.",
@@ -252,6 +292,7 @@ export const CAPABILITIES = [
   // and this extension can never toggle or uninstall ITSELF.
   {
     id: "management",
+    group: "system",
     permissions: ["management"],
     label: "Extension management",
     hint: "List the installed extensions and enable/disable or uninstall them. Enabling/disabling/uninstalling is browser-wide and ALSO needs the global Browser control grant; this extension can never change or remove itself.",
@@ -259,6 +300,7 @@ export const CAPABILITIES = [
   },
   {
     id: "declarativeNetRequest",
+    group: "system",
     permissions: ["declarativeNetRequest"],
     label: "Network rules",
     hint: "Manage the extension's dynamic network rules (block/allow/redirect/upgradeScheme). Rules apply browser-wide: every rule change ALSO needs the global Browser control grant.",
@@ -266,6 +308,7 @@ export const CAPABILITIES = [
   },
   {
     id: "webNavigation",
+    group: "browsing",
     permissions: ["webNavigation"],
     label: "Navigation frames",
     hint: "Read a tab's frame tree and see top-frame navigation start/complete in the recent browser events log.",
@@ -273,6 +316,7 @@ export const CAPABILITIES = [
   },
   {
     id: "webRequest",
+    group: "content",
     permissions: ["webRequest"],
     label: "Request observation",
     hint: "Observe (never block or modify) web requests for sites you already granted host access to. Blocking webRequest is not available without enterprise policy.",

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.645] — 2026-09-02
+- Settings → Permissions and Hooks are now compact grouped lists with a switch per item instead of hundreds of identical cards.
+
 ## [0.2.644] — 2026-09-02
 - Task board: the finished-on-the-last-step fix is complete.
 
