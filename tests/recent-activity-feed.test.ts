@@ -205,7 +205,7 @@ Deno.test("recent-activity: CSS rules for .tl-row and .aex-entry summary specifi
 
   function extractRule(source, selector) {
     const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const match = source.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
+    const match = source.match(new RegExp(`(?:^|\\n)\\s*${escaped}\\s*\\{([^}]*)\\}`, "m"));
     assert(match, `missing CSS rule for selector: ${selector}`);
     return match[1].replace(/\s+/g, " ").trim();
   }
