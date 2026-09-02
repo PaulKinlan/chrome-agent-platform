@@ -1,6 +1,10 @@
 {
   "name": "chrome-agent-platform",
+<<<<<<< HEAD
   "version": "0.2.653",
+=======
+  "version": "0.2.649",
+>>>>>>> cc40f290 (Reachability gate skips generated *.bundle.js artifacts: a stale pre-dist-era bundle under extension/ (gitignored, never a source) no longer fails the build)
   "private": true,
   "type": "module",
   "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",

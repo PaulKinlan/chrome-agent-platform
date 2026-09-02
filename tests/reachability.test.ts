@@ -73,6 +73,27 @@ Deno.test("reachability: a planted unreferenced module fails the check", async (
   assertEquals(after.violations, [], "removing the planted file turns the check green again");
 });
 
+Deno.test("reachability: a stale generated *.bundle.js artifact under extension/ is not shipped (gitignore parity)", async () => {
+  // A pre-dist-era build left `options/options.bundle.js` on some machines; it is
+  // gitignored (extension/**/*.bundle.js) and must not fail the gate. Real dead
+  // sources are still caught (the probe above) — only generated bundle outputs
+  // are excluded from the shipped walk.
+  const stale = `${REPO}/extension/options/zz-stale-options.bundle.js`;
+  await Deno.writeTextFile(stale, "// stale generated output, never a source\n");
+  try {
+    const result = await run();
+    assertEquals(
+      result.violations.filter((v) => v.includes("zz-stale-options.bundle.js")),
+      [],
+      `a generated *.bundle.js artifact must be ignored; got ${JSON.stringify(result.violations)}`,
+    );
+    assert(!result.shipped.includes("options/zz-stale-options.bundle.js"), "bundle artifacts are not in the shipped set");
+    assertEquals(result.violations, [], "the rest of the tree stays green with the stale artifact present");
+  } finally {
+    await Deno.remove(stale).catch(() => {});
+  }
+});
+
 Deno.test("reachability: stale RETAINED lines are reported (missing file, reached file, empty reason)", async () => {
   const result = await run(`${REPO}/extension`, {
     ...RETAINED,

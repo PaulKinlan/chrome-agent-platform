@@ -2,7 +2,11 @@
 // Rebuild: node scripts/build-bundled-tool-packages.mjs --evidence-root <dir>
 export const BUNDLED_INVENTORY = Object.freeze({
  "schemaVersion": 1,
+<<<<<<< HEAD
  "release": "0.2.653",
+=======
+ "release": "0.2.649",
+>>>>>>> cc40f290 (Reachability gate skips generated *.bundle.js artifacts: a stale pre-dist-era bundle under extension/ (gitignored, never a source) no longer fails the build)
  "signer": {
   "lane": "bundled",
   "keyId": "cap-bundled-release"
