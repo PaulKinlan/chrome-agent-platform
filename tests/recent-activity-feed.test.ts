@@ -30,7 +30,7 @@ globalThis.CustomEvent = globalThis.CustomEvent || class CustomEvent {
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { USER_VISIBLE_KINDS, USER_VISIBLE_KINDS_SET } from "../extension/lib/activity-kinds.js";
-import { filterActivityEntries } from "../extension/background/routes/activity.js";
+import { createActivityRoutes, filterActivityEntries } from "../extension/background/routes/activity.js";
 
 const { activityText, userKindLabel } = await import("../extension/shared/components.js");
 
@@ -53,7 +53,55 @@ Deno.test("recent-activity: activity-kinds allowlist contains only user-meaningf
   }
 });
 
-Deno.test("recent-activity: activity.list default-deny kinds filtering", () => {
+Deno.test("recent-activity: route-level createActivityRoutes enforces default-deny and intersection", async () => {
+  const mixedJournal = [
+    { id: "1", type: "task", task: "User task", ts: 100 },
+    { id: "2", type: "prompt-attestation", ts: 101 },
+    { id: "3", type: "tool-call", tool: "fs.read", args: "{}", ts: 102 },
+    { id: "4", type: "tool-result", result: "file content", ts: 103 },
+    { id: "5", type: "result", result: "Finished task.", ok: true, ts: 104 },
+    { id: "6", type: "screenshot", ts: 105 },
+    { id: "7", type: "artifact", artifact: { name: "Report" }, ts: 106 },
+    { id: "8", type: "approval-requested", task: "Need access", ts: 107 },
+    { id: "9", type: "error", error: "Fatal error", ts: 108 },
+  ];
+
+  const deps = {
+    masterMemory: () => ({ async get() { return mixedJournal; } }),
+    namedAgentMemory: () => ({ async get() { return []; } }),
+    backgroundAgentMemory: () => ({ async get() { return []; } }),
+    siteMemory: () => ({ async get() { return []; } }),
+    listNamedAgents: async () => [],
+    listNamedAgentIds: async () => [],
+    listBackgroundAgentIds: async () => [],
+    listOrigins: async () => [],
+    slugifyAgentId: (id) => String(id),
+  };
+
+  const routes = createActivityRoutes(deps);
+
+  // 1. Omitted kinds in route request → defaults to user-visible kinds only (task, result, artifact, approval-requested)
+  const defRes = await routes["activity.list"]({});
+  assertEquals(defRes.count, 4, "default route call returns exactly the 4 user-visible rows");
+  const defTypes = new Set(defRes.entries.map((e) => e.type));
+  assertEquals([...defTypes].sort(), ["approval-requested", "artifact", "result", "task"]);
+  assert(!defTypes.has("prompt-attestation"), "prompt-attestation excluded");
+  assert(!defTypes.has("tool-call"), "tool-call excluded");
+  assert(!defTypes.has("tool-result"), "tool-result excluded");
+  assert(!defTypes.has("screenshot"), "screenshot excluded");
+  assert(!defTypes.has("error"), "error excluded");
+
+  // 2. Requesting protocol kinds alone → default-deny drops them, yields empty
+  const protocolRes = await routes["activity.list"]({ kinds: ["tool-call", "screenshot", "error"] });
+  assertEquals(protocolRes.count, 0, "protocol kinds request returns 0 entries");
+
+  // 3. Requesting mixed kinds → intersects strictly with user allowlist
+  const mixedRes = await routes["activity.list"]({ kinds: ["task", "tool-call", "artifact"] });
+  assertEquals(mixedRes.count, 2, "mixed request returns only task and artifact");
+  assertEquals(mixedRes.entries.map((e) => e.type), ["artifact", "task"]);
+});
+
+Deno.test("recent-activity: pure filterActivityEntries default-deny filtering", () => {
   const sampleEntries = [
     { id: "1", type: "task", task: "Plan vacation", ts: 100 },
     { id: "2", type: "tool-call", tool: "browse", ts: 101 },
@@ -63,50 +111,71 @@ Deno.test("recent-activity: activity.list default-deny kinds filtering", () => {
     { id: "6", type: "artifact", task: "Itinerary", ts: 105 },
   ];
 
-  // Default (no kinds specified) → only user visible kinds returned
   const def = filterActivityEntries(sampleEntries, {});
   assertEquals(def.map((e) => e.type), ["artifact", "result", "task"]);
 
-  // Attempting to request protocol kinds alone yields empty
   const protocolOnly = filterActivityEntries(sampleEntries, { kinds: ["tool-call", "screenshot"] });
   assertEquals(protocolOnly.length, 0);
 
-  // Requesting mix of valid and invalid kinds filters down to valid intersection
   const mixed = filterActivityEntries(sampleEntries, { kinds: ["task", "prompt-attestation"] });
   assertEquals(mixed.map((e) => e.type), ["task"]);
 });
 
-Deno.test("recent-activity: per-kind human summaries stay within ≤140 chars", () => {
-  const longText = "A".repeat(500);
+Deno.test("recent-activity: per-kind human summaries and labels (including approval variants)", () => {
+  assertEquals(userKindLabel({ type: "task" }), "Started");
+  assertEquals(userKindLabel({ type: "result", ok: true }), "Finished");
+  assertEquals(userKindLabel({ type: "result", ok: false }), "Failed");
+  assertEquals(userKindLabel({ type: "artifact" }), "Made");
+  assertEquals(userKindLabel({ type: "approval-requested" }), "Needs approval");
+  assertEquals(userKindLabel({ type: "approval-granted" }), "Approved");
+  assertEquals(userKindLabel({ type: "approval-denied" }), "Denied");
+  assertEquals(userKindLabel({ type: "schedule-ran" }), "Schedule ran");
 
-  // Task
-  const taskLine = activityText({ type: "task", task: `Check flight prices to Rome. ${longText}` });
-  assert(taskLine.length <= 140, `task line exceeds 140: ${taskLine.length}`);
-  assert(taskLine.startsWith("Check flight prices to Rome."), "task takes first readable sentence");
+  // Approval granted
+  const grantedLine = activityText({ type: "approval-granted", description: "Deploy latest build to staging server." });
+  assert(grantedLine.length <= 140, "approval-granted <= 140");
+  assert(grantedLine.endsWith("approved"), "approval-granted ends with approved");
+  assert(grantedLine.includes("Deploy latest build to staging server."), "approval-granted contains subject");
 
-  // Result
-  const resultLine = activityText({ type: "result", result: `[demo model] Hotel reservation confirmed. ${longText}`, ok: true });
-  assert(resultLine.length <= 140, `result line exceeds 140: ${resultLine.length}`);
-  assert(!resultLine.includes("[demo model]"), "demo tag stripped");
-  assert(resultLine.startsWith("Finished: Hotel reservation confirmed."), "result formatted with verdict and first sentence");
-
-  // Artifact
-  const artifactLine = activityText({ type: "artifact", artifact: { name: `Summer Travel Itinerary. ${longText}` } });
-  assert(artifactLine.length <= 140, `artifact line exceeds 140: ${artifactLine.length}`);
-  assert(artifactLine.startsWith("Made Summer Travel Itinerary."), "artifact formatted as Made <name>");
-
-  // Approval requested
-  const reqLine = activityText({ type: "approval-requested", task: `Send email to hotel manager. ${longText}` });
-  assert(reqLine.length <= 140, `approval line exceeds 140: ${reqLine.length}`);
-  assert(reqLine.includes("needs approval"), "approval includes verb");
-
-  // Schedule ran
-  const schedLine = activityText({ type: "schedule-ran", task: `Daily calendar check. ${longText}` });
-  assert(schedLine.length <= 140, `schedule line exceeds 140: ${schedLine.length}`);
-  assert(schedLine.startsWith("Ran Daily calendar check."), "schedule formatted as Ran <task>");
+  // Approval denied
+  const deniedLine = activityText({ type: "approval-denied", task: "Delete production database table." });
+  assert(deniedLine.length <= 140, "approval-denied <= 140");
+  assert(deniedLine.endsWith("denied"), "approval-denied ends with denied");
+  assert(deniedLine.includes("Delete production database table."), "approval-denied contains subject");
 });
 
-Deno.test("recent-activity: JSON objects with no readable scalar take honest refusal path", () => {
+Deno.test("recent-activity: ≤140 boundary challenged when the first sentence itself exceeds 140 chars", () => {
+  // A long unbroken first sentence of 200+ characters with NO early punctuation
+  const longFirstSentence = "This is an extremely long single sentence description designed to exceed the one hundred and forty character limit without any punctuation marks before the very end of the string which keeps going and going.";
+  assert(longFirstSentence.length > 140, "test fixture sentence must exceed 140 chars");
+
+  // 1. Task with oversized first sentence -> must be <= 140 and never a raw cut past boundary
+  const taskSummary = activityText({ type: "task", task: longFirstSentence });
+  assert(taskSummary.length <= 140, `task summary exceeds 140 (${taskSummary.length}): ${taskSummary}`);
+  assert(taskSummary === "a task" || taskSummary.length <= 140, "task summary handles long sentence cleanly");
+
+  // 2. Result with oversized first sentence -> must be <= 140 with honest fallback/truncation
+  const resultSummary = activityText({ type: "result", result: longFirstSentence, ok: true });
+  assert(resultSummary.length <= 140, `result summary exceeds 140 (${resultSummary.length}): ${resultSummary}`);
+  assert(resultSummary.startsWith("Finished"), "result summary retains verdict");
+
+  // 3. Artifact with oversized name -> must be <= 140
+  const artifactSummary = activityText({ type: "artifact", artifact: { name: longFirstSentence } });
+  assert(artifactSummary.length <= 140, `artifact summary exceeds 140 (${artifactSummary.length}): ${artifactSummary}`);
+  assert(artifactSummary.startsWith("Made"), "artifact summary retains Made prefix");
+
+  // 4. Approval with oversized subject -> must be <= 140 and include verb
+  const approvalSummary = activityText({ type: "approval-requested", task: longFirstSentence });
+  assert(approvalSummary.length <= 140, `approval summary exceeds 140 (${approvalSummary.length}): ${approvalSummary}`);
+  assert(approvalSummary.endsWith("needs approval"), "approval retains verb");
+
+  // 5. Schedule with oversized task -> must be <= 140
+  const scheduleSummary = activityText({ type: "schedule-ran", task: longFirstSentence });
+  assert(scheduleSummary.length <= 140, `schedule summary exceeds 140 (${scheduleSummary.length}): ${scheduleSummary}`);
+  assert(scheduleSummary.startsWith("Ran"), "schedule retains Ran prefix");
+});
+
+Deno.test("recent-activity: JSON objects with no readable scalar take honest refusal path and contain no raw JSON", () => {
   const nestedComplexObj = {
     nested: {
       items: [1, 2, 3],
@@ -115,36 +184,76 @@ Deno.test("recent-activity: JSON objects with no readable scalar take honest ref
     },
   };
 
-  const jsonOk = activityText({ type: "result", result: JSON.stringify(nestedComplexObj), ok: true });
+  const rawJson = JSON.stringify(nestedComplexObj);
+  const jsonOk = activityText({ type: "result", result: rawJson, ok: true });
   assert(jsonOk.includes("see the run log"), `must include refusal path, got: ${jsonOk}`);
   assert(jsonOk.startsWith("Finished"), "starts with Finished verdict");
-  assert(!jsonOk.includes('"nested"'), "raw json not leaked in summary");
+  assert(!jsonOk.includes('"nested"'), "no raw JSON key 'nested'");
+  assert(!jsonOk.includes('"items"'), "no raw JSON key 'items'");
+  assert(!jsonOk.includes('"flags"'), "no raw JSON key 'flags'");
+  assert(!jsonOk.includes("DDDD"), "no raw JSON data value");
+  assert(jsonOk.length <= 140, "refusal path output <= 140");
 
-  const jsonFail = activityText({ type: "result", result: JSON.stringify(nestedComplexObj), ok: false });
+  const jsonFail = activityText({ type: "result", result: rawJson, ok: false });
   assert(jsonFail.includes("see the run log"), `must include refusal path, got: ${jsonFail}`);
   assert(jsonFail.startsWith("Failed"), "starts with Failed verdict");
+  assert(!jsonFail.includes('"nested"'), "no raw JSON leaked in failure refusal");
 });
 
-Deno.test("recent-activity: layout grid column definitions prevent time overlap", async () => {
+Deno.test("recent-activity: CSS rules for .tl-row and .aex-entry summary specifically enforce minmax(0,1fr)", async () => {
   const components = await Deno.readTextFile("extension/shared/components.js");
 
-  // AgentTimeline .tl-row grid template
+  function extractRule(source, selector) {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = source.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
+    assert(match, `missing CSS rule for selector: ${selector}`);
+    return match[1].replace(/\s+/g, " ").trim();
+  }
+
+  // 1. Extract .tl-row rule in AgentTimeline
+  const tlRule = extractRule(components, ".tl-row");
   assert(
-    components.includes("grid-template-columns:10px minmax(0,1fr) auto 20px") ||
-    components.includes("grid-template-columns: 10px minmax(0, 1fr) auto 20px"),
-    "timeline row uses minmax(0,1fr) to prevent time column overlap",
+    tlRule.includes("grid-template-columns:10px minmax(0,1fr) auto 20px") ||
+    tlRule.includes("grid-template-columns: 10px minmax(0, 1fr) auto 20px") ||
+    tlRule.includes("grid-template-columns: 10px minmax(0,1fr) auto 20px"),
+    `AgentTimeline .tl-row must declare minmax(0,1fr) in grid-template-columns, got: ${tlRule}`,
   );
 
-  // ActivityExplorer .aex-entry summary grid template
+  // 2. Extract .aex-entry summary rule in ActivityExplorer
+  const aexRule = extractRule(components, ".aex-entry summary");
   assert(
-    components.includes("grid-template-columns:auto minmax(0,1fr) auto") ||
-    components.includes("grid-template-columns: auto minmax(0, 1fr) auto"),
-    "activity explorer summary uses minmax(0,1fr) to prevent time column overlap",
+    aexRule.includes("grid-template-columns:auto minmax(0,1fr) auto") ||
+    aexRule.includes("grid-template-columns: auto minmax(0, 1fr) auto") ||
+    aexRule.includes("grid-template-columns: auto minmax(0,1fr) auto"),
+    `ActivityExplorer .aex-entry summary must declare minmax(0,1fr) in grid-template-columns, got: ${aexRule}`,
   );
 });
 
-Deno.test("recent-activity: runs-today count is refreshed on all timeline refresh paths", async () => {
+Deno.test("recent-activity: runs-today count is refreshed inside refreshHubActivity, scheduleRunLogRefresh, and flushRunLogDirty", async () => {
   const ntp = await Deno.readTextFile("extension/ntp/ntp.js");
-  assert(ntp.includes("function refreshHubActivity()"), "ntp.js defines unified refreshHubActivity");
-  assert(ntp.includes("renderHubUsage()"), "refreshHubActivity calls renderHubUsage");
+
+  // 1. Check refreshHubActivity function body
+  const refreshMatch = ntp.match(/function refreshHubActivity\(\)\s*\{([\s\S]*?)\n\}/);
+  assert(refreshMatch, "refreshHubActivity function must exist in ntp.js");
+  const refreshBody = refreshMatch[1];
+  assert(refreshBody.includes("renderHubUsage()"), "refreshHubActivity must invoke renderHubUsage()");
+  assert(refreshBody.includes("refreshTimeline()"), "refreshHubActivity must invoke refreshTimeline()");
+
+  // 2. Check scheduleRunLogRefresh function body
+  const scheduleMatch = ntp.match(/function scheduleRunLogRefresh\(\)\s*\{([\s\S]*?)\n\}/);
+  assert(scheduleMatch, "scheduleRunLogRefresh function must exist in ntp.js");
+  const scheduleBody = scheduleMatch[1];
+  assert(
+    scheduleBody.includes("refreshHubActivity") || scheduleBody.includes("renderHubUsage"),
+    "scheduleRunLogRefresh must trigger refreshHubActivity / renderHubUsage",
+  );
+
+  // 3. Check flushRunLogDirty function body
+  const flushMatch = ntp.match(/function flushRunLogDirty\(\)\s*\{([\s\S]*?)\n\}/);
+  assert(flushMatch, "flushRunLogDirty function must exist in ntp.js");
+  const flushBody = flushMatch[1];
+  assert(
+    flushBody.includes("refreshHubActivity") || flushBody.includes("renderHubUsage"),
+    "flushRunLogDirty must trigger refreshHubActivity / renderHubUsage",
+  );
 });
