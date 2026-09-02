@@ -25,11 +25,11 @@ export const MODEL_CATALOG = Object.freeze({
   },
   gemini: {
     default: "gemini-3.7-flash",
-    suggested: ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.1-pro-preview", "gemini-flash-latest"],
+    suggested: ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.1-pro-preview", "gemini-flash-latest"],
   },
   anthropic: {
     default: "claude-sonnet-5",
-    suggested: ["claude-sonnet-5", "claude-opus-5", "claude-fable-5"],
+    suggested: ["claude-sonnet-5", "claude-opus-5", "claude-fable-5-1", "claude-fable-5"],
   },
   deepseek: {
     default: "deepseek-v4-flash",

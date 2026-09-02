@@ -45,9 +45,23 @@ for (const p of prices) {
   const input = p?.input;
   const output = p?.output;
   if (!id || input == null || output == null) continue;
-  table[id] = { input: Number(input), output: Number(output) };
+  const row = { input: Number(input), output: Number(output) };
+  // Cache-read pricing is published per row upstream (input_cached); carry it
+  // so a refresh preserves the audited cache fields instead of clobbering them.
+  if (p.input_cached != null) row.cacheRead = Number(p.input_cached);
+  table[id] = row;
 }
 for (const f of FREE_MODELS) table[f] ??= { input: 0, output: 0 };
+
+// Picker rows the pricing source does not list, verified against the
+// providers' own pricing pages (docs/MODEL-PRICE-AUDIT-2026-09-02.md). A
+// refresh must not drop them.
+const MANUAL_ROWS = {
+  "claude-opus-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "gemini-3.1-pro-preview": { input: 2, output: 12, cacheRead: 0.2 },
+  "gemini-flash-latest": { input: 0.75, output: 3.75, cacheRead: 0.075 },
+};
+for (const [id, row] of Object.entries(MANUAL_ROWS)) table[id] ??= row;
 
 const L = [];
 L.push("// lib/model-prices.js — bundled model pricing (per 1M tokens, USD).");
@@ -56,11 +70,19 @@ L.push("// Source: https://www.llm-prices.com/current-v1.json (model id -> {inpu
 L.push("// per-1M-token USD). Plus zero-cost entries for the on-device models");
 L.push("// (gemini-nano / the Chrome Prompt API).");
 L.push("//");
-L.push("// REFRESH: node scripts/refresh-model-prices.mjs");
+L.push("// Rows may add cacheRead/cacheWrite (per-1M USD) where a published source was");
+L.push("// verified — additive documentation-in-data; agent-do's cost math reads only");
+L.push("// {input, output}. Audit trail: docs/MODEL-PRICE-AUDIT-2026-09-02.md.");
+L.push("//");
+L.push("// REFRESH: node scripts/refresh-model-prices.mjs (carries cacheRead through;");
+L.push("// MANUAL_ROWS there preserves picker rows the pricing source does not list).");
 L.push("// An unknown model falls back to agent-do 0-cost estimate (best-effort).");
 L.push("export const MODEL_PRICING = {");
 for (const [k, v] of Object.entries(table).sort()) {
-  L.push(`  ${JSON.stringify(k)}: { input: ${v.input}, output: ${v.output} },`);
+  const fields = [`input: ${v.input}`, `output: ${v.output}`];
+  if (v.cacheRead != null) fields.push(`cacheRead: ${v.cacheRead}`);
+  if (v.cacheWrite != null) fields.push(`cacheWrite: ${v.cacheWrite}`);
+  L.push(`  ${JSON.stringify(k)}: { ${fields.join(", ")} },`);
 }
 L.push("};");
 

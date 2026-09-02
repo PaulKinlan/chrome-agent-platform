@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.2] — 2026-09-02
+- pf0k: the model picker gains Gemini 3.8 Flash and Fable 5.1, with every picker's price audited against published sources
+
+## [0.4.1] — 2026-09-02
+- pf0k: the model picker gains Gemini 3.8 Flash and Fable 5.1, with every picker's price audited against published sources
+
+## [0.4.0] — 2026-09-02
+- The model picker offers Gemini 3.8 Flash and Fable 5.1 (with its cheaper cached-token price), and every picker model's pricing was audited against published sources — one stale price corrected, the audit trail is in docs/MODEL-PRICE-AUDIT-2026-09-02.md
+
 ## [0.3.9] — 2026-09-02
 - AGENTS.md: beads is the only tracker, the fleet is the default way to work, and beads best practices (epics, dependencies, lifecycle) are the standard. TASKS.md and KNOWN-ISSUES.md retired. New beads-flow skill: the pick-up-and-ship loop.
 
