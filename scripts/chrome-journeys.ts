@@ -1436,14 +1436,17 @@ async function main() {
     await sleep(900);
     const artifactsLeft1440 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
-      const el = frame?.contentDocument?.querySelector('.wrap, .grid, .sub, header');
+      const el = frame?.contentDocument?.querySelector('.sub, .grid, .empty');
       return el ? Math.round(el.getBoundingClientRect().left) : null;
     })()`);
     const artifactsTitleCount = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
-      if (!frame?.contentDocument) return 0;
-      const h1s = Array.from(frame.contentDocument.querySelectorAll('h1, .logo, [role="heading"]')).filter(e => /artifacts/i.test(e.textContent || '') && getComputedStyle(e).display !== 'none');
-      return h1s.length;
+      if (!frame?.contentDocument) return null;
+      const parentTitle = document.getElementById('view-title');
+      const isParentVisible = parentTitle && getComputedStyle(parentTitle).display !== 'none' && /artifacts/i.test(parentTitle.textContent || '');
+      const iframeHeadings = Array.from(frame.contentDocument.querySelectorAll('h1, .logo, [role="heading"]'))
+        .filter(e => /artifacts/i.test(e.textContent || '') && getComputedStyle(e).display !== 'none');
+      return (isParentVisible ? 1 : 0) + iframeHeadings.length;
     })()`);
     const artShot1440 = await captureShot(cdp, ntpSession);
     if (artShot1440) await writeEvidence("hub-view-artifacts-1440.png", artShot1440);
@@ -1453,7 +1456,7 @@ async function main() {
     await sleep(900);
     const dirLeft1440 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="directory/directory.html"]');
-      const el = frame?.contentDocument?.querySelector('.wrap, main, .sub, #rows');
+      const el = frame?.contentDocument?.querySelector('.sub, #rows, .site-group');
       return el ? Math.round(el.getBoundingClientRect().left) : null;
     })()`);
     const dirShot1440 = await captureShot(cdp, ntpSession);
@@ -1464,7 +1467,7 @@ async function main() {
     await sleep(900);
     const settingsLeft1440 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="options/options.html"]');
-      const el = frame?.contentDocument?.querySelector('.options-shell, .side');
+      const el = frame?.contentDocument?.querySelector('.side');
       return el ? Math.round(el.getBoundingClientRect().left) : null;
     })()`);
     const setShot1440 = await captureShot(cdp, ntpSession);
@@ -1481,7 +1484,7 @@ async function main() {
 
     const settingsLeft1024 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="options/options.html"]');
-      const el = frame?.contentDocument?.querySelector('.options-shell, .side');
+      const el = frame?.contentDocument?.querySelector('.side');
       return el ? Math.round(el.getBoundingClientRect().left) : null;
     })()`);
 
@@ -1489,7 +1492,7 @@ async function main() {
     await sleep(900);
     const dirLeft1024 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="directory/directory.html"]');
-      const el = frame?.contentDocument?.querySelector('.wrap, main, .sub, #rows');
+      const el = frame?.contentDocument?.querySelector('.sub, #rows, .site-group');
       return el ? Math.round(el.getBoundingClientRect().left) : null;
     })()`);
 
@@ -1497,7 +1500,7 @@ async function main() {
     await sleep(900);
     const artifactsLeft1024 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
-      const el = frame?.contentDocument?.querySelector('.wrap, .grid, .sub, header');
+      const el = frame?.contentDocument?.querySelector('.sub, .grid, .empty');
       return el ? Math.round(el.getBoundingClientRect().left) : null;
     })()`);
 
@@ -1506,7 +1509,7 @@ async function main() {
       Math.abs(artifactsLeft1024 - dirLeft1024) <= 1 && Math.abs(artifactsLeft1024 - settingsLeft1024) <= 1;
     check("embedded views share one content left edge at 1024", match1024);
 
-    check("embedded Artifacts view shows its name exactly once", artifactsTitleCount === 0);
+    check("embedded Artifacts view shows its name exactly once", artifactsTitleCount === 1);
 
     await cdp.send("Emulation.clearDeviceMetricsOverride", {}, ntpSession);
     await evalIn(cdp, ntpSession, `document.getElementById('view-back')?.click(); true`);

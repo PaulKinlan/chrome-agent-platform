@@ -1299,6 +1299,9 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   body {
     flex-direction: column;
   }
+  .options-shell {
+    flex-direction: column;
+  }
 
   .side {
     position: static;

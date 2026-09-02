@@ -25,6 +25,7 @@ Deno.test("settings responsive layout: the content breakpoint covers 500px and 3
   }
 
   assert(rule(narrow, "body").includes("flex-direction: column"));
+  assert(rule(narrow, ".options-shell").includes("flex-direction: column"));
   const side = rule(narrow, ".side");
   assert(side.includes("width: 100%"));
   assert(side.includes("flex: 0 0 auto"));

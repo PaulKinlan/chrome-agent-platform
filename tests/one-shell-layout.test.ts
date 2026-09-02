@@ -54,6 +54,14 @@ Deno.test("one-shell layout: chrome-journeys.ts carries the 3 required journey a
   assert(journeys.includes('"embedded views share one content left edge at 1440"'), "1440px check in EXPECTED");
   assert(journeys.includes('"embedded views share one content left edge at 1024"'), "1024px check in EXPECTED");
   assert(journeys.includes('"embedded Artifacts view shows its name exactly once"'), "Artifacts title check in EXPECTED");
+
+  // Verify probes target visible content edges, not unpadded wrappers
+  assert(journeys.includes("frame?.contentDocument?.querySelector('.sub, .grid, .empty')"), "Artifacts probes visible content");
+  assert(journeys.includes("frame?.contentDocument?.querySelector('.sub, #rows, .site-group')"), "Directory probes visible content");
+  assert(journeys.includes("frame?.contentDocument?.querySelector('.side')"), "Settings probes visible content");
+
+  // Verify title check includes both parent #view-title and iframe headings
+  assert(journeys.includes("document.getElementById('view-title')"), "Title probe checks parent #view-title");
 });
 
 Deno.test("one-shell layout: RETIRED_FILES in check-vocabulary.mjs covers all deleted dead files", async () => {
