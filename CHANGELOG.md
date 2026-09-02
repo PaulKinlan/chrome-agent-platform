@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.627] — 2026-09-02
+- The product speaks to you, not about itself: one shared delete-agent dialog on the hub, Settings and the side panel ("Its memory and history are removed. Artifacts it made are kept."), empty states and toggles in your words ("Open a site and I'll look for tools you can use."), the built-in demo answers in a real sentence, and the vocabulary check now bans the system's words outside Settings → Advanced (docs/COPY.md).
+
 ## [0.2.626] — 2026-09-02
 - Task board: the reopen-a-conversation fix is complete.
 

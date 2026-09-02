@@ -2167,8 +2167,11 @@ export function createDemoModel() {
               `Line ${i + 1}: the complete agent response must stay readable in the task view — this text is repeated so the response comfortably exceeds the collapse threshold. `
             ).join("");
           } else {
-            response = `[demo model] Task received (${text.length} chars). Configure a real provider in Settings ` +
-              `to get real completions. This demo response proves the agent loop runs end-to-end.`;
+            // A real sentence in the reader's words (CAP-FB-20260830-USER-VOICE-
+            // COPY-01). The "[demo model]" marker stays: it is how every harness
+            // tells the test seam's answer from a real provider's, and the thread
+            // preview strips it before a person sees it.
+            response = "[demo model] I'm the built-in demo, so I can't do this yet. Connect a model in Settings and ask again.";
           }
           controller.enqueue({ type: "text-start", id });
           const chunks = response.match(/.{1,24}/g) ?? [response];

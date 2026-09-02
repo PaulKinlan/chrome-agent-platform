@@ -42,7 +42,7 @@ Deno.test("contract §2: the thread composer always continues (never nulls the t
 Deno.test("contract §7: the orphaned-alarm cleanup route + UI affordance exist", () => {
   assertStringIncludes(sw, 'async "schedule.cancelOrphans"()');
   assertStringIncludes(sw, 'cancelled.push(t.name)');
-  assertStringIncludes(ntp, "Cancel orphaned alarms");
+  assertStringIncludes(ntp, "Stop schedules for deleted agents");
 });
 
 Deno.test("contract: host access is permanent and capability permissions are OPTIONAL (JIT)", () => {
