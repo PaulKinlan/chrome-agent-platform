@@ -69,7 +69,7 @@ export function managementToolset({ callRoute }) {
     // ---- sub-agent management ----
     create_agent: tool({
       description:
-        "Enroll a new per-site sub-agent for an origin. Registers the origin so its WebMCP/site tools can be discovered. Host access is a separate owner-approved step in Settings.",
+        "Enroll a new per-site sub-agent for an origin. Registers the origin so its WebMCP/site tools can be discovered. Host access is a separate owner-approved step in Settings. NOTE: this is a SITE enrollment — it does NOT create a teammate in the owner's Agents list; when the owner asks to 'create an agent' (a researcher, a critic, a chief of staff) call create_named_agent instead.",
       inputSchema: z.object({
         origin: z.string().describe("the https origin, e.g. https://example.com"),
         name: z.string().optional().describe("a display name for the sub-agent"),
@@ -125,7 +125,7 @@ export function managementToolset({ callRoute }) {
         call("asset.create", { origin, assetType: type, key, name, content }),
     }),
     update_asset: tool({
-      description: "Update an artifact's name/type/content. type: \"html\" | \"text\" | \"json\" | \"image\" | \"data\" (exactly one of these literals — never a MIME type).",
+      description: "Replace an artifact's whole name/type/content (resends the entire body — for a small change prefer patch_asset, which sends only the changed text). type: \"html\" | \"text\" | \"json\" | \"image\" | \"data\" (exactly one of these literals — never a MIME type).",
       inputSchema: z.object({
         origin: z.string().default("master"),
         id: z.string(),
@@ -167,7 +167,7 @@ export function managementToolset({ callRoute }) {
       execute: ({ origin, id }) => call("asset.delete", { origin, id }),
     }),
     list_assets: tool({
-      description: "List an origin's artifacts (use 'master' for all hub artifacts).",
+      description: "List an origin's artifacts (use 'master' for all hub artifacts). Artifacts are how you hand work back to the owner — a generated page, a report, a data file — so the owner can view and reuse them.",
       inputSchema: z.object({ origin: z.string().default("master") }),
       execute: ({ origin }) => call("asset.list", { origin }),
     }),
@@ -187,7 +187,7 @@ export function managementToolset({ callRoute }) {
     // ---- named agents (the persistent teammates) ----
     create_named_agent: tool({
       description:
-        "Create a persistent NAMED agent (a teammate with its own memory + history + skills, like a 'PR reviewer' or 'my reader'). You give it a name + role; it gets its own sandbox. The user can then delegate tasks to it.",
+        "Create a persistent NAMED agent (a teammate with its own memory + history + skills, like a 'PR reviewer' or 'my reader'). You give it a name + role; it gets its own sandbox and appears in the owner's Agents list IMMEDIATELY. When the owner asks you to 'create an agent' / 'make an agent', THIS is the tool — never create_agent (that is a per-site WebMCP enrollment, a different thing entirely).",
       inputSchema: z.object({
         name: z.string().describe("a name for the agent"),
         role: z.string().optional().describe("what the agent does, e.g. 'reviews my GitHub PRs'"),

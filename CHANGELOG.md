@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.649] — 2026-09-02
+- Tasks now use fewer model calls and a much smaller prompt: the agent no longer pays for an extra call that only repeats what it just said, and a model that keeps calling tools without answering stops with a clear message you can continue from.
+
 ## [0.2.648] — 2026-09-02
 - Task board: the test-suite honesty work is complete; one regression was opened and four more items are being worked on.
 

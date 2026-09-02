@@ -16,7 +16,7 @@
 import { newId } from "../lib/pure.js";
 import { send } from "../lib/messages.js";
 import { summarizeToolResult, toolResultTruncationNote } from "../lib/tool-summary.js";
-import { formatBudgetProgress } from "../lib/run-budget.js";
+import { formatBudgetProgress, formatContinuationStop } from "../lib/run-budget.js";
 import { safeJsonStringify } from "./tool-tree.js";
 import { artifactIdentityFromPayloads } from "./thread-view.js";
 import { isAuthoritativeThreadResultProjected } from "./thread-projection-authority.js";
@@ -2146,6 +2146,23 @@ export async function runConversationTurn(container, { text, attachments = [], h
         }
         if (ev.exhausted === true) break; // the terminal carries the verdict
         status({ state: attempt > 1 ? "retrying" : "running", activity: withBudget(lastActivity || "Thinking") });
+        break;
+      }
+      case "stopped": {
+        // The continuation cap stopped the loop (CAP-FB-20260830-MODEL-CALL-
+        // ECONOMY-01): the model answered every continuation with tool calls
+        // and no text. ONE muted status line through the run-status surface —
+        // never another agent bubble. The terminal that follows carries the
+        // same words plus the Continue action.
+        const marker = formatContinuationStop(ev);
+        lastActivity = "";
+        status({
+          state: "failed",
+          message: marker,
+          errorReason: `${marker} — the model kept calling tools without answering`,
+          errorAction: "Continue",
+          errorCategory: "budget",
+        });
         break;
       }
       case "thinking": {

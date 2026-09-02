@@ -601,10 +601,12 @@ const EXPECTED = [
   "Thread view: run banner visible 300 ms after send",
   "Thread view: no empty panel space below a two-turn thread at 1440x900",
   "Thread view: conversation scrolled to bottom after an edit turn",
-  "Scripted provider: turn 1 creates the artifact through the real provider path (4 model calls incl. the nudge reply, selectionRef round trip)",
+  "Scripted provider: artifact create turn is exactly 3 provider calls (search, execute, answer — no continuation call), selectionRef round trip",
   "Scripted provider: turn 2 pauses on the approval card naming the artifact with a diff",
   "Scripted provider: the approved edit lands as version 2 with the final text",
   "Scripted provider: the sandboxed artifact frame never reaches the provider origin (zero leak hits)",
+  "Runaway tool loop: stops after 3 silent continuations — exactly 6 provider calls, no continuation after the third silence",
+  "Runaway tool loop: the thread shows one muted 'Stopped after 6 steps' status line with Continue, no repeated agent bubbles, never 'Budget reached'",
   "Plan strip: a running multi-step task shows an advancing checklist pinned to the top of the thread",
   "Plan strip: on done it settles into a collapsed 'N steps' summary with every step checked",
   "Every item: 12 fixture tabs are read with ONE read_page search — 12 execute_tool reads, 0 selection-replayed",
@@ -4705,20 +4707,19 @@ async function main() {
     const crumbV1 = await Deno.readTextFile(`${ROOT}tests/fixtures/crumb-v1.html`);
     const crumbV2 = await Deno.readTextFile(`${ROOT}tests/fixtures/crumb-v2.html`);
     let scriptedAssetId = "";
-    // Four model calls per turn: search → execute → the answer → the reply to
-    // agent-do's synthetic "Continue working on the task…" nudge (hidden by
-    // the run-text tracker, never persisted). The script mirrors that exactly
-    // so an extra or missing call shows up as an overflow / a short count.
+    // THREE model calls per turn: search → execute → the answer. agent-do's
+    // synthetic "Continue working on the task…" turn is no longer sent after
+    // a step that already answered (CAP-FB-20260830-MODEL-CALL-ECONOMY-01),
+    // so the script has exactly the steps that do the work — an extra call
+    // shows up as an overflow, a missing one as a short count.
     const scripted = await startScriptedProvider({
       steps: [
         { tool: "search_tools", args: { query: "create_asset", limit: 1 } },
         { tool: "execute_tool", args: (req) => ({ selectionRef: selectionRefOf(req), arguments: { origin: "master", name: "crumb-scripted.html", type: "html", content: crumbV1 } }) },
         { text: "Created crumb-scripted.html." },
-        { text: "Created crumb-scripted.html." }, // the nudge reply
         { tool: "search_tools", args: { query: "update_asset", limit: 1 } },
         { tool: "execute_tool", args: (req) => ({ selectionRef: selectionRefOf(req), arguments: { origin: "master", id: scriptedAssetId, content: crumbV2.replace("</main>", `<img src="${scripted.baseURL}/leak?d=crumb" alt=""><script>fetch("${scripted.baseURL}/leak-fetch").catch(() => {});</script></main>`) } }) },
         { text: "Updated crumb-scripted.html with opening hours." },
-        { text: "Updated crumb-scripted.html with opening hours." }, // the nudge reply
       ],
     });
     try {
@@ -4736,8 +4737,8 @@ async function main() {
       if (t1Shot) await writeEvidence("journey-crumb-turn1.png", t1Shot);
       console.log(`scripted provider (turn 1): requests=${scripted.requests.length} tools=${JSON.stringify(scripted.requests.map((r) => r.toolNames))} overflow=${scripted.overflow} asset=${scriptedAssetId} cards=${JSON.stringify(turn1?.artifactCards)}`);
       check(
-        "Scripted provider: turn 1 creates the artifact through the real provider path (4 model calls incl. the nudge reply, selectionRef round trip)",
-        scripted.requests.length === 4 && scripted.overflow === 0 &&
+        "Scripted provider: artifact create turn is exactly 3 provider calls (search, execute, answer — no continuation call), selectionRef round trip",
+        scripted.requests.length === 3 && scripted.overflow === 0 &&
           scripted.requests.every((r) => r.stream === true && r.toolNames.includes("search_tools") && r.toolNames.includes("execute_tool")) &&
           !!scriptedAssetId && Array.isArray(turn1?.artifactCards) && turn1.artifactCards.some((c) => c.name === "crumb-scripted.html" && c.kind === "html-frame"),
       );
@@ -4774,11 +4775,9 @@ async function main() {
           scriptedApproval.hasDiff === true && scriptedApproval.addRows.some((t) => /Opening hours/.test(String(t))) && scriptedApproved,
       );
       const turn2 = await settledThread(45000);
-      // The hidden nudge reply is the loop's last call and lands a beat after
-      // the visible answer settles the thread — and while it is in flight the
-      // run banner shows "Working — thinking…" again. Wait for the call
-      // (bounded), then for the thread to settle a second time.
-      for (let i = 0; i < 40 && scripted.requests.length < 8; i++) await sleep(250);
+      // The answer is the loop's last call (no continuation follows it); wait
+      // (bounded) for the sixth request, then for the thread to settle.
+      for (let i = 0; i < 40 && scripted.requests.length < 6; i++) await sleep(250);
       await settledThread(20000);
       const scriptedVersions = scriptedAssetId ? await msgValue({ type: "asset.versions", origin: "master", id: scriptedAssetId }) : null;
       // The answer is re-projected into the thread from the durable log a beat
@@ -4793,7 +4792,7 @@ async function main() {
       console.log(`scripted provider (turn 2 settled): requests=${scripted.requests.length} versions=${(scriptedVersions?.versions ?? []).length} overflow=${scripted.overflow} leaks=${JSON.stringify(scripted.leakHits)} status=${JSON.stringify(turn2After?.status)} text=${JSON.stringify(String(finalText).slice(-260))}`);
       check(
         "Scripted provider: the approved edit lands as version 2 with the final text",
-        scripted.requests.length === 8 && scripted.overflow === 0 && scriptedVersions?.ok === true &&
+        scripted.requests.length === 6 && scripted.overflow === 0 && scriptedVersions?.ok === true &&
           (scriptedVersions.versions ?? []).length === 2 && /Updated crumb-scripted\.html with opening hours/.test(String(finalText)) &&
           turn2After != null && !(turn2After.status ?? []).some((r) => ["queued", "running", "retrying"].includes(r.state)),
       );
@@ -4803,7 +4802,7 @@ async function main() {
       await sleep(2500);
       check(
         "Scripted provider: the sandboxed artifact frame never reaches the provider origin (zero leak hits)",
-        scripted.leakHits.length === 0 && scripted.requests.length === 8,
+        scripted.leakHits.length === 0 && scripted.requests.length === 6,
       );
       // Leave the store the way the later journeys expect it.
       for (const row of ((await msgOpts({ type: "management.pending-approvals" }).catch(() => null))?.approvals ?? [])) {
@@ -4813,6 +4812,67 @@ async function main() {
     } finally {
       await msgOpts({ type: "provider.set", config: { provider: "demo", apiKey: "" } }).catch(() => null);
       await scripted.close();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 3e3 — CAP-FB-20260830-MODEL-CALL-ECONOMY-01: a RUNAWAY tool
+    // loop. The scripted model answers every continuation with a tool call
+    // and then silence (no text, finish "stop"). Unchecked, agent-do nudges it
+    // until the whole step budget is spent (measured: 26 calls / 784 KB for a
+    // 25-step script). The loop now stops after three silent continuations
+    // through agent-do's own stop hook, and the thread shows ONE muted
+    // status line "Stopped after 6 steps" with the Continue action — never a
+    // string of repeated agent bubbles.
+    // ─────────────────────────────────────────────────────────────
+    const runaway = await startScriptedProvider({
+      steps: [
+        { tool: "search_tools", args: { query: "memory_get", limit: 1 } },
+        ...Array.from({ length: 6 }, () => [
+          { text: "" },
+          { tool: "execute_tool", args: (req) => ({ selectionRef: selectionRefOf(req), arguments: { key: "probe" } }) },
+        ]).flat(),
+      ],
+    });
+    try {
+      await msgOpts({
+        type: "provider.set",
+        config: { provider: "openai-compatible", baseURL: runaway.baseURL, apiKey: SCRIPTED_DUMMY_KEY, model: "scripted" },
+      });
+      await driveHubTask("read my probe memory and keep going");
+      // Poll for the stop marker on the run-status row (the thread has no
+      // agent bubble to settle on — the model never wrote any text).
+      let stoppedRow = null;
+      let runawayState = null;
+      {
+        const t0 = Date.now();
+        while (Date.now() - t0 < 45000) {
+          runawayState = await threadState();
+          stoppedRow = (runawayState?.status ?? []).find((r) => /Stopped after \d+ steps/.test(String(r.label))) ?? null;
+          if (stoppedRow) break;
+          await sleep(250);
+        }
+      }
+      await sleep(600);
+      runawayState = await threadState() ?? runawayState;
+      const stoppedShot = await captureShot(cdp, ntpSession);
+      if (stoppedShot) await writeEvidence("thread-stopped-after-steps.png", stoppedShot);
+      const runawayText = String(await evalIn(cdp, ntpSession, THREAD_TEXT("#thread-conversation")).catch(() => ""));
+      console.log(`runaway loop: requests=${runaway.requests.length} overflow=${runaway.overflow} status=${JSON.stringify(runawayState?.status)} agentBubbles=${runawayState?.agentBubbles}`);
+      check(
+        "Runaway tool loop: stops after 3 silent continuations — exactly 6 provider calls, no continuation after the third silence",
+        runaway.requests.length === 6 && runaway.overflow === 0,
+      );
+      check(
+        "Runaway tool loop: the thread shows one muted 'Stopped after 6 steps' status line with Continue, no repeated agent bubbles, never 'Budget reached'",
+        !!stoppedRow && /Stopped after 6 steps/.test(String(stoppedRow.label)) && stoppedRow.state === "failed" &&
+          (runawayState?.status ?? []).filter((r) => /Stopped after/.test(String(r.label))).length === 1 &&
+          /Continue/.test(runawayText) && !/Budget reached/.test(runawayText) &&
+          Number(runawayState?.agentBubbles ?? 0) <= 1 &&
+          !(runawayState?.status ?? []).some((r) => ["queued", "running", "retrying"].includes(r.state)),
+      );
+    } finally {
+      await msgOpts({ type: "provider.set", config: { provider: "demo", apiKey: "" } }).catch(() => null);
+      await runaway.close();
     }
 
     // ─────────────────────────────────────────────────────────────

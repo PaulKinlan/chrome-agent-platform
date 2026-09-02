@@ -17,6 +17,9 @@
 import { createAgent as agentDoCreateAgent } from "agent-do";
 import { tool } from "ai";
 import { z } from "zod";
+// Pure loop-control rule (no authority, no chrome.*): the same continuation
+// decision the SW-side loop makes (CAP-FB-20260830-MODEL-CALL-ECONOMY-01).
+import { continuationStopDecision, isSilentIteration } from "./run-budget.js";
 
 /** Normalize an agent-do hook event into a redacted progress record. */
 function redactProgress(record) {
@@ -47,6 +50,9 @@ export async function runAgentLoop({
   signal = null,
   maxIterations = 12,
 }) {
+  let lastIteration = null; // { hasToolCalls, text, finishedWithToolCalls }
+  let silentContinuations = 0;
+  let modelSteps = 0; // one onUsage record per model step
   const agent = agentDoCreateAgent({
     id: "worker-agent",
     name: "worker-agent",
@@ -57,11 +63,27 @@ export async function runAgentLoop({
     signal: signal ?? undefined,
     hooks: {
       onStepStart: async (e) => {
+        // The continuation economy, mirrored for the worker path so both
+        // loops agree (CAP-FB-20260830-MODEL-CALL-ECONOMY-01): no continuation
+        // call after an iteration that already answered; a silent tool loop
+        // stops at the cap. The worker has no provider boundary, so the
+        // inner-step-limit finish reason is unknown here (treated as "finished
+        // on its own", the entry's stated predicate).
+        if (e.step > 0) {
+          const decision = continuationStopDecision({ lastIteration, silentContinuations });
+          if (decision === "silent-cap") {
+            try { onProgress?.({ type: "stopped", reason: "iteration-cap", iterations: silentContinuations, steps: modelSteps }); } catch { /* ignore */ }
+            return { decision: "stop" };
+          }
+          if (decision === "answered") return { decision: "stop" };
+        }
         try {
           onProgress?.({ type: "thinking", step: e.step, totalSteps: e.totalSteps ?? null, tokensSoFar: e.tokensSoFar ?? 0 });
         } catch { /* progress is best-effort */ }
       },
       onStepComplete: async (e) => {
+        lastIteration = { hasToolCalls: e.hasToolCalls === true, text: String(e.text ?? "").trim(), finishedWithToolCalls: false };
+        silentContinuations = isSilentIteration(lastIteration) ? silentContinuations + 1 : 0;
         try {
           // text is the model's step output — redact: only hasToolCalls + step.
           onProgress?.({ type: "step-complete", step: e.step, hasToolCalls: e.hasToolCalls === true });
@@ -85,6 +107,7 @@ export async function runAgentLoop({
         } catch { /* ignore */ }
       },
       onUsage: async (record) => {
+        modelSteps += 1;
         try {
           onProgress?.({
             type: "usage",

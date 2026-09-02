@@ -19,6 +19,15 @@
 //     answer (the model needed the tool results before answering);
 //   - a text-only first step (no tools at all) is simply the answer.
 // Only whitespace-trimmed non-empty text counts.
+//
+// CAP-FB-20260830-MODEL-CALL-ECONOMY-01: the loop no longer sends the nudge
+// after a tool step that answered AND finished on its own, so the only
+// continuation a text-bearing tool step can be followed by is an INNER-STEP-
+// LIMIT boundary (the step finished "tool-calls" with work still queued and
+// the runtime digest carried it forward). A text-only step after THAT is the
+// model's real answer, never a nudge reply — a step reports
+// `finishedWithToolCalls: true` to say so, and the tracker never hides what
+// follows it.
 
 export function createRunTextTracker() {
   let lastStep = null; // { step, hasToolCalls, text }
@@ -33,13 +42,14 @@ export function createRunTextTracker() {
       const step = Number.isFinite(e?.step) ? e.step : (lastStep ? lastStep.step + 1 : 0);
       const hasToolCalls = e?.hasToolCalls === true;
       const text = trimmed(e?.text);
+      const finishedWithToolCalls = e?.finishedWithToolCalls === true;
       const prev = lastStep;
-      lastStep = { step, hasToolCalls, text };
+      lastStep = { step, hasToolCalls, text, finishedWithToolCalls };
       if (!text) {
         hiddenLast = false;
         return { text: "", hidden: false, persist: false };
       }
-      const nudgeReply = !hasToolCalls && prev != null && prev.hasToolCalls && prev.text.length > 0 && step === prev.step + 1;
+      const nudgeReply = !hasToolCalls && prev != null && prev.hasToolCalls && prev.text.length > 0 && !prev.finishedWithToolCalls && step === prev.step + 1;
       if (nudgeReply) {
         hiddenLast = true;
         return { text, hidden: true, persist: false };
@@ -67,7 +77,7 @@ export function createRunTextTracker() {
      *  deltas back (a hidden step must never stream; a step that then makes a
      *  tool call is not the nudge and its text still lands at step end). */
     nextStepMayBeNudge() {
-      return lastStep != null && lastStep.hasToolCalls && lastStep.text.length > 0;
+      return lastStep != null && lastStep.hasToolCalls && lastStep.text.length > 0 && !lastStep.finishedWithToolCalls;
     },
   };
 }

@@ -53,7 +53,7 @@ import {
   requireSettingsSender,
 } from "./routes/index.js";
 import { describeError, formatError, errorDetail } from "../lib/error-report.js";
-import { BUDGET_CONTINUE_TASK, boundedIterations, budgetExhaustedTerminal, isBudgetTerminal } from "../lib/run-budget.js";
+import { BUDGET_CONTINUE_TASK, boundedIterations, budgetExhaustedTerminal, continuationStopTerminal, isBudgetTerminal } from "../lib/run-budget.js";
 import { buildRetryDispatch, retryRunId } from "../lib/run-retry.js";
 import { isMemoryKeyQuotaError, isNativeQuotaExceededError } from "../lib/storage-errors.js";
 import {
@@ -2621,7 +2621,12 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         runBudget = { used: event.step, total: event.total, exhausted: event.exhausted === true || runBudget?.exhausted === true };
       }
       if (event?.type === "done" && event.budget && typeof event.budget === "object") {
-        runBudget = { used: Number(event.budget.used) || 0, total: Number(event.budget.total) || 0, exhausted: event.budget.exhausted === true };
+        // `stopped` is the continuation-cap verdict (CAP-FB-20260830-MODEL-
+        // CALL-ECONOMY-01): the loop stopped a silent tool loop on its own.
+        const stopped = event.budget.stopped && typeof event.budget.stopped === "object"
+          ? { reason: String(event.budget.stopped.reason ?? "iteration-cap"), steps: Number(event.budget.stopped.steps) || 0, iterations: Number(event.budget.stopped.iterations) || 0 }
+          : null;
+        runBudget = { used: Number(event.budget.used) || 0, total: Number(event.budget.total) || 0, exhausted: event.budget.exhausted === true, ...(stopped ? { stopped } : {}) };
       }
       // Redact credentials at the SINGLE progress chokepoint so BOTH the live
       // broadcast and the persisted journal never carry them (the tool-call
@@ -3051,8 +3056,12 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // text landed. A run that answered on its last allowed step arrives
       // here with exhausted:false and settles as a success below
       // (CAP-FB-20260902-BUDGET-VERDICT-ANSWERED-01).
-      if (runBudget?.exhausted === true) {
-        const budgetStop = budgetExhaustedTerminal(runBudget);
+      // A CONTINUATION-CAP stop (CAP-FB-20260830-MODEL-CALL-ECONOMY-01) settles
+      // the same way with its own words ("Stopped after N steps — …"): the
+      // model kept answering continuations with tool calls and no text, so
+      // the task is not finished and Continue is the one action.
+      if (runBudget?.exhausted === true || runBudget?.stopped) {
+        const budgetStop = runBudget.stopped ? continuationStopTerminal(runBudget) : budgetExhaustedTerminal(runBudget);
         const terminal = await durableRuns.settle(executionId, {
           ...budgetStop,
           logicalId: taskId,

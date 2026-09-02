@@ -21,7 +21,7 @@ import { perfSpan } from "./cap-perf.js";
 import { maskCredentialShapes } from "./error-report.js";
 import { isToolResultFailure, toolResultFullJson } from "./tool-summary.js";
 import { correctUnsupportedMutationClaims } from "./mutation-claim-check.js";
-import { RUN_BUDGET_DEFAULTS, budgetExhaustedVerdict } from "./run-budget.js";
+import { RUN_BUDGET_DEFAULTS, budgetExhaustedVerdict, continuationStopDecision, isSilentIteration } from "./run-budget.js";
 import { createRunDigest } from "./run-digest.js";
 import {
   anthropicAuthoritativeSearchRequests,
@@ -776,6 +776,85 @@ export function createAgent({
   const emitBudget = (extra = {}) => {
     try { progressCb?.({ type: "budget", step: budgetStep, total: budgetTotal, results: runDigest.counts(), ...extra }); } catch { /* ignore */ }
   };
+  // THE CONTINUATION ECONOMY (CAP-FB-20260830-MODEL-CALL-ECONOMY-01): agent-do
+  // sends "Continue working on the task…" after ANY outer iteration that
+  // called tools — even one that already ended in the model's final answer,
+  // where the extra call (the whole transcript again) can only produce a
+  // repeat. The stop is agent-do's own `onStepStart → {decision:"stop"}` hook
+  // (lib/run-budget.js `continuationStopDecision` holds the rule):
+  //   - the previous iteration called tools AND wrote its answer AND its last
+  //     model call finished on its own (not on the inner step limit, which
+  //     finishes "tool-calls" with work still queued) → no continuation call;
+  //   - CONTINUATION_SILENT_CAP consecutive iterations that called tools and
+  //     then ended in silence (no text, finished on their own) → stop, with a
+  //     visible {type:"stopped"} event and a stop verdict on `done` — a model
+  //     answering every nudge with the same tool call is looping, not working.
+  // A continuation that DOES go out still carries the run digest above; the
+  // inner-step-limit boundary the digest exists for is untouched.
+  // Did the previous iteration end with work still queued? TWO signals, because
+  // one of them is not always available in time: the provider-boundary finish
+  // reason ("tool-calls" = the inner step limit cut the iteration off, not the
+  // model), observed from the tee'd stream and therefore subject to the same
+  // bounded drain race as the text deltas; and the EXACT count of model calls
+  // the iteration made, which is synchronous. An iteration that consumed the
+  // whole innerStepLimit hit the inner cap by definition — that is a boundary
+  // whatever the drain managed to report (a real-HTTP journey caught the drain
+  // losing the race and the run stopping a step early).
+  let lastFinishReason = null; // the most recent model call's finish reason
+  let finishDrain = Promise.resolve();
+  let iterationCalls = 0; // model calls made inside the CURRENT outer iteration
+  let lastIteration = null; // { hasToolCalls, text, finishedWithToolCalls }
+  let silentContinuations = 0;
+  let stoppedBy = null; // { reason, steps, iterations } once the cap stops the run
+  const observeFinish = (value) => {
+    lastFinishReason = null;
+    if (!value || typeof value !== "object") return value;
+    if (!(value.stream instanceof ReadableStream)) {
+      if (typeof value.finishReason === "string") lastFinishReason = value.finishReason;
+      return value;
+    }
+    let consumed;
+    let observed;
+    try { [consumed, observed] = value.stream.tee(); } catch { return value; }
+    finishDrain = (async () => {
+      const reader = observed.getReader();
+      try {
+        for (;;) {
+          const { done, value: part } = await reader.read();
+          if (done) break;
+          if (part && part.type === "finish" && typeof part.finishReason === "string") lastFinishReason = part.finishReason;
+        }
+      } catch { /* the consumed branch reports the failure */ } finally {
+        try { reader.releaseLock(); } catch { /* ignore */ }
+      }
+    })();
+    return { ...value, stream: consumed };
+  };
+  // PROVIDER CACHING: the composed system prompt is byte-stable for a run
+  // (the attestation's prefixMatch proves it), so on Anthropic's native lane
+  // it is marked as a prompt-cache breakpoint — every call after the first
+  // reads it from the cache. OpenAI-compatible endpoints cache the stable
+  // prefix on their own; the marker is a no-op for them.
+  const markSystemCacheable = (options) => {
+    if (model.providerName !== "anthropic") return options;
+    const prompt = ownData(options, "prompt");
+    if (!Array.isArray(prompt)) return options;
+    const at = prompt.findIndex((m) => ownData(m, "role") === "system");
+    if (at < 0) return options;
+    const message = prompt[at];
+    const providerOptions = ownData(message, "providerOptions");
+    const anthropic = providerOptions && typeof providerOptions === "object" ? ownData(providerOptions, "anthropic") : null;
+    if (anthropic && typeof anthropic === "object" && ownData(anthropic, "cacheControl")) return options;
+    const next = prompt.slice();
+    next[at] = {
+      ...message,
+      providerOptions: {
+        ...(providerOptions && typeof providerOptions === "object" ? providerOptions : {}),
+        anthropic: { ...(anthropic && typeof anthropic === "object" ? anthropic : {}), cacheControl: { type: "ephemeral" } },
+      },
+    };
+    return { ...options, prompt: next };
+  };
   // Exhausted = the LAST allowed outer iteration still ended in tool calls
   // (the loop stopped because the budget ran out, not because the model
   // finished — agent-do breaks the loop only on a no-tool-call step) AND no
@@ -844,7 +923,7 @@ export function createAgent({
         // (agent-do's own history is never touched). Bytes are counted so the
         // model-call economy of the carry-forward is measurable.
         const carried = runDigest.attach(options, currentOuterStep);
-        options = carried.options;
+        options = markSystemCacheable(carried.options);
         if (carried.bytes > digestBytesMax) digestBytesMax = carried.bytes;
         if (carried.turns > digestTurnsLogged) {
           digestTurnsLogged = carried.turns;
@@ -858,11 +937,13 @@ export function createAgent({
         // One model call = one budget step (dropped again if the call fails
         // and the SDK retries it).
         budgetStep = Math.min(budgetTotal, budgetStep + 1);
+        iterationCalls += 1;
         emitBudget({ digestBytes: carried.bytes });
         const drop = () => {
           const i = attemptQueue.indexOf(entry);
           if (i >= 0) attemptQueue.splice(i, 1);
           budgetStep = Math.max(0, budgetStep - 1);
+          iterationCalls = Math.max(0, iterationCalls - 1);
         };
         let result;
         try {
@@ -884,7 +965,7 @@ export function createAgent({
             span.end("ok");
             lastProviderError = null;
             modelLog.debug(`attempt ${entry.ordinal} response`, method);
-            return teeTextDeltas(harvestGrounding(value, runIdForLatch));
+            return observeFinish(teeTextDeltas(harvestGrounding(value, runIdForLatch)));
           },
           (err) => {
             drop();
@@ -1052,8 +1133,30 @@ export function createAgent({
           runDigest.reset();
           digestTurnsLogged = 0;
           digestBytesMax = 0;
+          lastIteration = null;
+          silentContinuations = 0;
+          stoppedBy = null;
+        } else {
+          // The continuation decision — agent-do's own stop hook, never a
+          // patched loop (CAP-FB-20260830-MODEL-CALL-ECONOMY-01).
+          const decision = continuationStopDecision({ lastIteration, silentContinuations });
+          if (decision === "answered") {
+            agentDoLog.info(`step ${e.step} not started — the previous step answered after its tool calls; no continuation call`);
+            span.end("skipped");
+            stepSpans.delete(e.step);
+            return { decision: "stop" };
+          }
+          if (decision === "silent-cap") {
+            stoppedBy = { reason: "iteration-cap", steps: budgetStep, iterations: silentContinuations };
+            agentDoLog.warn(`stopped after ${budgetStep} steps — ${silentContinuations} continuations answered with tool calls and no text`);
+            span.end("stopped");
+            stepSpans.delete(e.step);
+            try { progressCb?.({ type: "stopped", ...stoppedBy }); } catch { /* ignore */ }
+            return { decision: "stop" };
+          }
         }
         currentOuterStep = Number.isFinite(e.step) ? e.step : currentOuterStep;
+        iterationCalls = 0;
         streamStep = e.step;
         streamHold = runText.nextStepMayBeNudge();
         streamDrain = Promise.resolve();
@@ -1070,10 +1173,24 @@ export function createAgent({
         // persists it, and it is never the run's result.
         // Every forwarded delta precedes its step's text event: wait (bounded)
         // for the observed stream branch to drain before emitting the text.
-        await Promise.race([streamDrain, sleep(250)]);
-        const classified = runText.step({ step: e.step, hasToolCalls: e.hasToolCalls === true, text: e.text });
+        await Promise.race([Promise.all([streamDrain, finishDrain]), sleep(250)]);
+        // The iteration ended with work still queued when the provider said so
+        // OR when it used every inner step it was allowed (the inner cap, not
+        // the model, ended it).
+        const hitInnerCap = iterationCalls >= innerStepLimit;
+        const workStillQueued = lastFinishReason === "tool-calls" || hitInnerCap;
+        const classified = runText.step({ step: e.step, hasToolCalls: e.hasToolCalls === true, text: e.text, finishedWithToolCalls: workStillQueued });
         budgetLastStepHadTools = e.hasToolCalls === true;
         budgetLastStepIndex = Number.isFinite(e.step) ? e.step : budgetLastStepIndex;
+        // What the NEXT onStepStart decides on: did this iteration answer, or
+        // go silent, after its tool calls — and did its last model call
+        // finish on its own or on the inner step limit ("tool-calls").
+        lastIteration = {
+          hasToolCalls: e.hasToolCalls === true,
+          text: String(e.text ?? "").trim(),
+          finishedWithToolCalls: workStillQueued,
+        };
+        silentContinuations = isSilentIteration(lastIteration) ? silentContinuations + 1 : 0;
         if (classified.hidden) agentDoLog.debug(`step ${e.step} is the continuation reply — hidden`);
         try {
           progressCb?.({
@@ -1244,7 +1361,7 @@ export function createAgent({
           // (CAP-FB-20260902-BUDGET-VERDICT-ANSWERED-01).
           const hasFinalText = typeof e.result === "string" && e.result.trim().length > 0;
           const exhausted = budgetExhausted(e.aborted, hasFinalText);
-          const budget = { used: budgetStep, total: budgetTotal, exhausted, results: runDigest.counts(), digestTurns: digestTurnsLogged, digestBytesMax };
+          const budget = { used: budgetStep, total: budgetTotal, exhausted, results: runDigest.counts(), digestTurns: digestTurnsLogged, digestBytesMax, ...(stoppedBy ? { stopped: { ...stoppedBy } } : {}) };
           if (exhausted) agentDoLog.warn(`step budget exhausted (${budgetStep}/${budgetTotal}) with tool calls still pending and no final answer`);
           else if (budgetExhausted(e.aborted, false)) agentDoLog.info(`step budget reached (${budgetStep}/${budgetTotal}) on a step that also wrote the final answer — settled as finished`);
           emitBudget({ exhausted });
@@ -1451,7 +1568,7 @@ export function delegationToolMetadata() {
       inputSchema: z.object({}),
     },
     delegate_task: {
-      description: "Delegate a task to a site sub-agent and return its result.",
+      description: "Delegate a task to a site sub-agent and return its result. The sub-agent runs it in ITS OWN context — its own memory, its own discovered tools, its own skills. Use it for site-specific work; handle cross-site or hub-level work yourself. list_agents shows who you can delegate to.",
       inputSchema: z.object({ agentId: z.string(), task: z.string() }),
     },
   };
