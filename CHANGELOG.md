@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.620] — 2026-09-02
+- Task board: two new defects — allowing a second site forgets the first, and long read loops forget their earliest pages.
+
 ## [0.2.619] — 2026-09-02
 - After you click Allow, the paused action now runs by itself — no retry, no protocol words in the conversation.
 
