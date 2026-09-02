@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>What this extension sends and stores — Chrome Agent Platform</title>
+    <link rel="icon" href="../icons/icon16.png">
+    <link rel="stylesheet" href="../shared/theme.css">
+    <link rel="stylesheet" href="privacy.css">
+    <script type="module" src="../shared/components.js"></script>
+  </head>
+  <body>
+    <main class="page">
+      <header class="head">
+        <p class="brand">Chrome <span>Agent</span> Platform</p>
+        <h1>What this extension sends and stores</h1>
+        <p class="lede">Everything below is read from the extension's own lists, so it changes when the extension does.</p>
+      </header>
+      <privacy-statement id="statement"></privacy-statement>
+      <p id="status" class="status" role="status" aria-live="polite" hidden></p>
+      <footer class="foot">
+        <a class="btn" href="../options/options.html#data" id="open-data-memory">Open Data &amp; memory</a>
+        <a class="btn ghost" href="../options/options.html#about" id="open-about">Back to Settings</a>
+      </footer>
+    </main>
+    <script type="module" src="privacy.js"></script>
+  </body>
+</html>

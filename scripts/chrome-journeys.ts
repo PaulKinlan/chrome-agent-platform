@@ -763,6 +763,14 @@ const EXPECTED = [
   "demo-path: step 1 shows exactly one permission card",
   "demo-path: step 4 hub shows the scheduled run summary",
   "demo-path: step 5 artifact renders in the thread",
+  "privacy page: renders the lists and the host-access sentence",
+  "privacy page: names every outbound host and every storage class the code declares",
+  "privacy page: linked from Settings → About",
+  "factory reset: every storage class is populated before the reset",
+  "factory reset: the Settings button raises the destructive confirm dialog",
+  "factory reset: after the genuine confirm every storage class is empty",
+  "factory reset: the hub shows the first-run guide again",
+  "factory reset: the seeded markers are gone and the run and thread lists are empty",
   "profile removed (no leak)",
   "cleanup hard-failed on descendants (none survived)",
   "no leftover temporary evidence dir",
@@ -7436,6 +7444,15 @@ async function main() {
     // ─────────────────────────────────────────────────────────────
     await demoPathJourney();
 
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY factory-reset + privacy page — CAP-FB-20260830-PRIVACY-
+    // STATEMENT-01. A THIRD fresh profile (its own Chrome): the privacy page
+    // is read against the code's own lists, then every storage class is
+    // seeded and the Settings reset is driven with genuine clicks through the
+    // real destructive dialog. See factoryResetJourney.
+    // ─────────────────────────────────────────────────────────────
+    await factoryResetJourney();
+
     cdp.intentionalClose = true;
     ws.close();
     await withTimeout(fixture.shutdown(), 8000, "fixture.shutdown").catch((e) => {
@@ -7614,7 +7631,7 @@ async function main() {
 
     Deno.exit(
       failed > 0 || !removed || !clean || !tempEvidenceGone || !manifestOk ||
-          fixtureShutdownFailed || demoPathLeak
+          fixtureShutdownFailed || demoPathLeak || factoryResetLeak
         ? 1
         : 0,
     );
@@ -8005,6 +8022,271 @@ async function demoPathJourney() {
     } catch (e) {
       demoPathLeak = true;
       console.error("demo-path cleanup failure:", String(e?.message ?? e));
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CAP-FB-20260830-PRIVACY-STATEMENT-01 — the `factory-reset` group.
+//
+// Two things the product promised on paper and never proved in a browser:
+//   privacy page  "What this extension sends and stores" (Settings → About →
+//                 Privacy) renders its lists FROM the code's own constants: the
+//                 hosts come from the SW's `privacy.statement` route
+//                 (lib/provider.js OUTBOUND_HOSTS) and the storage classes from
+//                 lib/factory-reset.js FACTORY_RESET_STORAGE_CLASSES. The
+//                 journey reads both back from the loaded extension and checks
+//                 every host and every class is on the page.
+//   factory reset every storage class is SEEDED on a fresh profile — the demo
+//                 provider config (no real key), a run + its thread (the demo
+//                 model), an artifact, a real local-folder grant record (an OPFS
+//                 handle saved through lib/fs-grants.js into IndexedDB), a hook
+//                 deny, an alarm, a session key and a cache entry — then the
+//                 Settings "Reset all data…" button is clicked with a GENUINE
+//                 CDP click, the product's own destructive <dialog> is accepted
+//                 with another, and `enumerateStorageTargets()` (the SW's
+//                 `system.factoryResetEnumerate` route, from a second Settings
+//                 document) is read the instant the provider key disappears:
+//                 every class must be empty in that first snapshot. The run and
+//                 thread lists must be empty too (the SW forgot its cached run
+//                 state without restarting), the seeded markers must be gone,
+//                 and the hub must show the first-run guide again.
+//
+// Why its own Chrome: the reset wipes the profile the main journey depends on.
+// Nothing is seeded into the profile before launch; every store is written by
+// the running product.
+// ─────────────────────────────────────────────────────────────────────────────
+let factoryResetLeak = false;
+
+async function factoryResetJourney() {
+  const profile = `/home/paulkinlan/.cache/cap-review/j3-reset-${Date.now()}`;
+  const extId = await unpackedExtensionId(EXT);
+  let proc: Deno.ChildProcess | null = null;
+  let ws = null;
+  let cdp = null;
+  const reported = new Set();
+  const report = (name, cond) => { reported.add(name); check(name, cond); };
+  const PRIVACY_RENDERS = "privacy page: renders the lists and the host-access sentence";
+  const PRIVACY_COMPLETE = "privacy page: names every outbound host and every storage class the code declares";
+  const PRIVACY_LINKED = "privacy page: linked from Settings → About";
+  const SEEDED = "factory reset: every storage class is populated before the reset";
+  const DIALOG = "factory reset: the Settings button raises the destructive confirm dialog";
+  const EMPTY = "factory reset: after the genuine confirm every storage class is empty";
+  const MARKERS = "factory reset: the seeded markers are gone and the run and thread lists are empty";
+  const FIRST_RUN = "factory reset: the hub shows the first-run guide again";
+  const NAMES = [PRIVACY_RENDERS, PRIVACY_COMPLETE, PRIVACY_LINKED, SEEDED, DIALOG, EMPTY, MARKERS, FIRST_RUN];
+  try {
+    const launched = await launchJourneyChrome(profile);
+    proc = launched.proc;
+    const port = launched.port;
+    const version = await fetchJson(`http://127.0.0.1:${port}/json/version`);
+    ws = new WebSocket(version.webSocketDebuggerUrl);
+    await withTimeout(new Promise((r) => ws.onopen = r), 5000, "factory-reset: ws open");
+    cdp = new Cdp(ws);
+    let sw = null;
+    for (let i = 0; i < 60 && !sw; i++) {
+      const targets = await fetchJson(`http://127.0.0.1:${port}/json/list`);
+      sw = targets.find((t) => t.type === "service_worker" && String(t.url).includes(extId));
+      if (!sw) await sleep(200);
+    }
+    if (!sw) throw new Error(`factory-reset: the extension (${extId}) never registered its service worker`);
+    const swSession = await attachRuntime(cdp, sw.id);
+    cdp.swSessions.add(swSession);
+
+    const msgOn = (session) => async (payload) => {
+      const r = await withTimeout(
+        cdp.send("Runtime.evaluate", {
+          expression: `chrome.runtime.sendMessage(${JSON.stringify(payload)}).then(v => ({v}), e => ({err: e.message}))`,
+          returnByValue: true,
+          awaitPromise: true,
+        }, session),
+        payload.type === "agent.run" ? 120000 : 15000,
+        `factory-reset msg ${payload.type}`,
+      );
+      const inner = r?.result?.result?.value;
+      return inner && typeof inner === "object" && "v" in inner ? inner.v : inner?.err ?? inner;
+    };
+
+    // ── the privacy page, on the fresh profile ──
+    const privacyPage = await openPage(port, `chrome-extension://${extId}/privacy/privacy.html`);
+    await sleep(1500);
+    const privacy = await attachRuntime(cdp, privacyPage.id);
+    cdp.pageSessions.add(privacy);
+    const PRIVACY_STATE = `(() => {
+      const host = document.getElementById("statement");
+      const root = host?.shadowRoot;
+      if (!root) return JSON.stringify({ ok: false });
+      const sections = [...root.querySelectorAll("section")].map((s) => ({ id: s.id, heading: s.querySelector("h2")?.textContent ?? "", rows: s.querySelectorAll("ul > li[data-row]").length }));
+      const hostAccess = root.querySelector("#host-access p.host")?.textContent ?? "";
+      const classIds = [...root.querySelectorAll("details code")].map((c) => c.textContent);
+      const text = root.textContent.replace(/\\s+/g, " ");
+      return JSON.stringify({ ok: true, sections, hostAccess, classIds, text, h1: document.querySelectorAll("h1").length, dataLink: !!document.querySelector('#open-data-memory[href*="options.html#data"]'), status: document.getElementById("status")?.hidden });
+    })()`;
+    let pstate = {};
+    for (let i = 0; i < 20; i++) {
+      try { pstate = JSON.parse(await evalIn(cdp, privacy, PRIVACY_STATE) ?? "{}"); } catch { pstate = {}; }
+      if (pstate.ok && /api\./.test(pstate.text ?? "")) break;
+      await sleep(250);
+    }
+    const shotPrivacy = await captureShot(cdp, privacy);
+    if (shotPrivacy) await writeEvidence("privacy-page.png", shotPrivacy);
+    const sectionIds = (pstate.sections ?? []).map((s) => s.id);
+    const rowsOf = (id) => (pstate.sections ?? []).find((s) => s.id === id)?.rows ?? 0;
+    console.log(`privacy page: sections=${JSON.stringify(pstate.sections)} h1=${pstate.h1} classIds=${JSON.stringify(pstate.classIds)} statusHidden=${pstate.status}`);
+    report(
+      PRIVACY_RENDERS,
+      pstate.ok === true && ["sent", "host-access", "stored", "key-handling", "wipe"].every((id) => sectionIds.includes(id)) &&
+        rowsOf("sent") >= 5 && rowsOf("stored") >= 5 && rowsOf("wipe") >= 2 &&
+        /read every page/.test(pstate.hostAccess ?? "") && /acts on a site only after you allow it/.test(pstate.hostAccess ?? "") &&
+        pstate.h1 === 1 && pstate.dataLink === true && pstate.status === true,
+    );
+    // The code's own lists, read back from the loaded extension.
+    const declared = await msgOn(privacy)({ type: "privacy.statement" });
+    const hosts = (declared?.outboundHosts ?? []).map((h) => h.host);
+    const classes = await evalIn(cdp, privacy, `import(chrome.runtime.getURL("lib/factory-reset.js")).then((m) => [...m.FACTORY_RESET_STORAGE_CLASSES])`);
+    console.log(`privacy page: declared hosts=${JSON.stringify(hosts)} classes=${JSON.stringify(classes)}`);
+    report(
+      PRIVACY_COMPLETE,
+      declared?.ok === true && hosts.length >= 4 && hosts.every((h) => (pstate.text ?? "").includes(h)) &&
+        Array.isArray(classes) && classes.length >= 7 && classes.every((c) => (pstate.classIds ?? []).includes(c)) &&
+        rowsOf("stored") === classes.length,
+    );
+
+    // ── Settings: the link, then the seed ──
+    const optsPage = await openPage(port, `chrome-extension://${extId}/options/options.html`);
+    await sleep(2000);
+    const opts = await attachRuntime(cdp, optsPage.id);
+    cdp.pageSessions.add(opts);
+    const msg = msgOn(opts);
+    const linked = await evalIn(cdp, opts, `!!document.querySelector('#about a[href$="privacy/privacy.html"]')`);
+    report(PRIVACY_LINKED, linked === true);
+
+    const providerSet = await msg({ type: "provider.set", config: { provider: "demo", apiKey: "", baseURL: "", model: "" } });
+    const run = await msg({ type: "agent.run", task: "ping reset" });
+    const artifact = await msg({ type: "asset.create", origin: "master", assetType: "text", name: "reset-seed.txt", content: "seed" });
+    const hooks = await msg({ type: "hooks.status" });
+    const hookId = (hooks?.hooks ?? [])[0]?.id ?? null;
+    const denied = hookId ? await msg({ type: "hooks.deny", hookId, denied: true }) : null;
+    // A REAL local-folder grant record: an OPFS directory handle saved through
+    // lib/fs-grants.js into IndexedDB (the same store Settings → Local folders
+    // writes), plus the alarm, the session key and the cache entry the reset
+    // must also clear.
+    const seededPage = await evalIn(cdp, opts, `(async () => {
+      const m = await import(chrome.runtime.getURL("lib/fs-grants.js"));
+      const root = await navigator.storage.getDirectory();
+      const dir = await root.getDirectoryHandle("journey-seed", { create: true });
+      const grant = await m.saveFsGrant({ handle: dir, name: "journey-seed", mode: "read" });
+      await chrome.alarms.create("journey-seed", { delayInMinutes: 30 });
+      await chrome.storage.session.set({ "journey-seed": 1 });
+      const cache = await caches.open("journey-seed");
+      await cache.put(new Request("https://example.com/journey-seed"), new Response("seed"));
+      return { grantId: grant?.grantId ?? null };
+    })().then((v) => JSON.stringify(v), (e) => JSON.stringify({ err: String(e?.message ?? e) }))`);
+    const before = await msg({ type: "system.factoryResetEnumerate" });
+    const t0 = before?.targets ?? {};
+    console.log(`factory-reset seed: provider=${providerSet?.ok} run=${run?.ok ?? run?.error ?? "?"} artifact=${artifact?.ok} hook=${hookId}:${denied?.ok} page=${seededPage} before=${JSON.stringify({ kv: t0.chromeStorageKeys?.length, session: t0.sessionStorageKeys, opfs: t0.opfsEntries, idb: t0.indexedDbDatabases, cache: t0.cacheKeys, alarms: t0.alarmCount })}`);
+    report(
+      SEEDED,
+      before?.ok === true && (t0.chromeStorageKeys ?? []).includes("providerConfig") &&
+        (t0.sessionStorageKeys ?? []).includes("journey-seed") &&
+        (t0.opfsEntries ?? []).some((e) => e.name === "journey-seed") && (t0.opfsEntries ?? []).some((e) => e.name === "memory") &&
+        (t0.indexedDbDatabases ?? []).includes("cap_fs_grants") &&
+        (t0.cacheKeys ?? []).includes("journey-seed") && Number(t0.alarmCount) >= 1,
+    );
+
+    // ── the reset: a second Settings document watches the stores ──
+    const watchPage = await openPage(port, `chrome-extension://${extId}/options/options.html`);
+    await sleep(1500);
+    const watch = await attachRuntime(cdp, watchPage.id);
+    cdp.pageSessions.add(watch);
+    const msgWatch = msgOn(watch);
+
+    await cdp.send("Target.activateTarget", { targetId: optsPage.id }).catch(() => {});
+    await cdp.send("Page.bringToFront", {}, opts).catch(() => {});
+    await clickSel(cdp, opts, 'a.nav-item[data-section="data"]');
+    await sleep(400);
+    const clicked = await clickSel(cdp, opts, "#factory-reset-btn");
+    let accept = null;
+    for (let i = 0; i < 25 && !accept; i++) {
+      accept = await boxOf(cdp, opts, ".cap-confirm-dialog .cap-confirm-accept");
+      if (!accept) await sleep(200);
+    }
+    const dialogText = await evalIn(cdp, opts, `document.querySelector(".cap-confirm-dialog")?.textContent?.replace(/\\s+/g, " ") ?? ""`);
+    const shotDialog = await captureShot(cdp, opts);
+    if (shotDialog) await writeEvidence("settings-factory-reset-dialog.png", shotDialog);
+    report(DIALOG, clicked === true && accept !== null && /Delete everything/.test(dialogText ?? "") && /permanent/i.test(dialogText ?? ""));
+
+    // The genuine accept, then the settled state. The wipe's last step is
+    // chrome.storage.local, so the provider key disappearing marks the wipe;
+    // the store sweep that follows removes anything an in-flight write
+    // recreated (lib/factory-reset.js), and only THEN is the profile the thing
+    // to assert on. Polled from the second Settings document, bounded — a class
+    // that is not empty within the bound fails.
+    if (accept) await clickSel(cdp, opts, ".cap-confirm-dialog .cap-confirm-accept");
+    const allEmpty = (t) =>
+      t && t.chromeStorageKeys.length === 0 && t.sessionStorageKeys.length === 0 &&
+      t.opfsEntries.length === 0 && t.indexedDbDatabases.length === 0 &&
+      t.cacheKeys.length === 0 && t.alarmCount === 0;
+    let wiped = null;
+    let settled = null;
+    for (let i = 0; i < 300 && !settled; i++) {
+      const snap = await msgWatch({ type: "system.factoryResetEnumerate" });
+      const t = snap?.targets;
+      if (snap?.ok === true && t && !(t.chromeStorageKeys ?? []).includes("providerConfig")) {
+        wiped = wiped ?? t;
+        if (allEmpty(t)) settled = t;
+      }
+      if (!settled) await sleep(50);
+    }
+    console.log(`factory-reset snapshots: wiped=${JSON.stringify(wiped)} settled=${JSON.stringify(settled)}`);
+    report(EMPTY, settled !== null);
+
+    // The hub, back at first run (the Settings document navigates itself).
+    let hub = null;
+    for (let i = 0; i < 60 && !hub; i++) {
+      try {
+        const v = await evalIn(cdp, opts, `(() => { if (!/ntp\\/ntp\\.html/.test(location.href)) return null; const g = document.getElementById("first-run-guide"); if (!g || g.hidden) return null; return { hidden: g.hidden, actions: (g.shadowRoot ?? g).querySelectorAll("button").length }; })()`);
+        if (v && typeof v === "object") hub = v;
+      } catch { /* mid-navigation */ }
+      if (!hub) await sleep(250);
+    }
+    await sleep(500);
+    const shotAfter = await captureShot(cdp, opts);
+    if (shotAfter) await writeEvidence("settings-factory-reset-after.png", shotAfter);
+    console.log(`factory-reset hub: ${JSON.stringify(hub)}`);
+    report(FIRST_RUN, hub !== null && hub.hidden === false && hub.actions >= 1);
+
+    // The markers, the run list and the thread list — after the hub has booted.
+    const runs = await msgWatch({ type: "run.list" });
+    const threads = await msgWatch({ type: "thread.list" });
+    const later = await msgWatch({ type: "system.factoryResetEnumerate" });
+    const seedAlarm = await evalIn(cdp, watch, `chrome.alarms.get("journey-seed").then((a) => a ?? null)`);
+    const tl = later?.targets ?? {};
+    console.log(`factory-reset later: runs=${(runs?.runs ?? []).length} threads=${(threads?.threads ?? []).length} alarm=${JSON.stringify(seedAlarm)} targets=${JSON.stringify({ kv: tl.chromeStorageKeys, session: tl.sessionStorageKeys, opfs: tl.opfsEntries, idb: tl.indexedDbDatabases, cache: tl.cacheKeys, alarms: tl.alarmCount })}`);
+    report(
+      MARKERS,
+      Array.isArray(runs?.runs) && runs.runs.length === 0 && Array.isArray(threads?.threads) && threads.threads.length === 0 &&
+        later?.ok === true && !(tl.chromeStorageKeys ?? []).includes("providerConfig") &&
+        !(tl.sessionStorageKeys ?? []).includes("journey-seed") &&
+        !(tl.opfsEntries ?? []).some((e) => e.name === "journey-seed") &&
+        !(tl.indexedDbDatabases ?? []).includes("cap_fs_grants") &&
+        !(tl.cacheKeys ?? []).includes("journey-seed") && seedAlarm === null,
+    );
+    cdp.intentionalClose = true;
+  } catch (e) {
+    console.error("factory-reset journey failure:", String(e?.message ?? e));
+  } finally {
+    for (const name of NAMES) {
+      if (!reported.has(name)) report(name, false);
+    }
+    try { if (cdp) cdp.intentionalClose = true; ws?.close(); } catch { /* ignore */ }
+    try {
+      if (proc) await killChromiumTree(proc, profile);
+      await runBounded(RM, ["-rf", profile]);
+      if (await Deno.stat(profile).then(() => true).catch(() => false)) factoryResetLeak = true;
+    } catch (e) {
+      factoryResetLeak = true;
+      console.error("factory-reset cleanup failure:", String(e?.message ?? e));
     }
   }
 }

@@ -10,6 +10,7 @@
 //   - Pure and verifiable: testable with mock or real storage backends.
 
 import { kvClear, kvGet, storageAvailable } from "./kv.js";
+import { sleep } from "./pure.js";
 
 export const FACTORY_RESET_STORAGE_CLASSES = Object.freeze([
   "chrome.storage.local",
@@ -104,6 +105,14 @@ export async function enumerateStorageTargets({
 export async function executeFactoryReset({
   opfsRoot = null,
   now = () => Date.now(),
+  // How long a deleteDatabase that reports `blocked` is given to complete
+  // once the open connections have seen their versionchange and closed.
+  idbBlockedWaitMs = 3000,
+  // How many extra passes sweep databases that an in-flight write recreated
+  // while the wipe was running, and how long the wipe settles before its
+  // verification reads the stores back.
+  idbSweepPasses = 3,
+  idbSettleMs = 50,
 } = {}) {
   const report = {
     wipedAt: now(),
@@ -142,25 +151,37 @@ export async function executeFactoryReset({
   }
 
   // 3. Clear IndexedDB
+  /** Delete ONE database and wait for the delete to actually finish.
+   *  `blocked` is not `done`: an open connection (the worker's cached usage
+   *  store, a Settings page's grants store) fires versionchange, closes, and
+   *  only THEN does the delete complete. Resolving on `onblocked` let
+   *  `cap-usage` and `cap_fs_grants` survive every reset
+   *  (CAP-FB-20260830-PRIVACY-STATEMENT-01). Bounded, so a connection that
+   *  never lets go cannot hang the reset — the verification then reports it. */
+  const deleteDatabase = (name) =>
+    new Promise((resolve) => {
+      let timer = null;
+      const done = () => { if (timer) clearTimeout(timer); resolve(); };
+      const req = indexedDB.deleteDatabase(name);
+      req.onsuccess = done;
+      req.onerror = done;
+      req.onblocked = () => { if (!timer) timer = setTimeout(done, idbBlockedWaitMs); };
+    });
+
+  const listDatabases = async () => {
+    if (typeof indexedDB === "undefined" || !indexedDB.databases) return [];
+    try {
+      return (await indexedDB.databases()).map((d) => d?.name).filter(Boolean);
+    } catch {
+      return [];
+    }
+  };
+
   try {
     if (typeof indexedDB !== "undefined") {
       const dbNames = new Set(["cap-usage", "cap_usage_v1", "keyval-store"]);
-      if (indexedDB.databases) {
-        try {
-          const dbs = await indexedDB.databases();
-          for (const db of dbs) {
-            if (db?.name) dbNames.add(db.name);
-          }
-        } catch {}
-      }
-      for (const name of dbNames) {
-        await new Promise((resolve) => {
-          const req = indexedDB.deleteDatabase(name);
-          req.onsuccess = () => resolve();
-          req.onerror = () => resolve();
-          req.onblocked = () => resolve();
-        });
-      }
+      for (const name of await listDatabases()) dbNames.add(name);
+      for (const name of dbNames) await deleteDatabase(name);
       report.storageClassesWiped.push("indexed-db");
     }
   } catch (err) {
@@ -197,8 +218,26 @@ export async function executeFactoryReset({
     report.errors.push(`kv_clear_failed: ${err?.message || err}`);
   }
 
-  // 7. Complete Post-Wipe Verification Across ALL Storage Classes (N-2)
-  const remainingTargets = await enumerateStorageTargets({ opfsRoot });
+  // 7. Complete Post-Wipe Verification Across ALL Storage Classes (N-2).
+  // The worker keeps running through the wipe, so a write that was already
+  // queued can reopen a database moments after its delete succeeded (`cap-usage`
+  // from an in-flight usage row). What the verification SEES is therefore swept
+  // and re-verified, bounded; whatever still survives is reported as a remnant
+  // below (fail-closed, never silently kept).
+  // A short settle first: a verification that runs in the same microtask queue
+  // as the wipe would read the stores BEFORE an already-queued write lands, and
+  // report a cleanliness that the profile does not have a tick later.
+  if (idbSettleMs > 0) await sleep(idbSettleMs);
+  let remainingTargets = await enumerateStorageTargets({ opfsRoot });
+  for (let pass = 0; pass < idbSweepPasses && remainingTargets.indexedDbDatabases.length > 0; pass++) {
+    try {
+      for (const name of remainingTargets.indexedDbDatabases) await deleteDatabase(name);
+    } catch (err) {
+      report.errors.push(`idb_sweep_failed: ${err?.message || err}`);
+      break;
+    }
+    remainingTargets = await enumerateStorageTargets({ opfsRoot });
+  }
   report.verification = {
     chromeStorageRemaining: remainingTargets.chromeStorageKeys.length,
     sessionStorageRemaining: remainingTargets.sessionStorageKeys.length,
@@ -210,6 +249,7 @@ export async function executeFactoryReset({
 
   if (remainingTargets.chromeStorageKeys.length > 0) report.errors.push("kv_remnants_detected");
   if (remainingTargets.opfsEntries.length > 0) report.errors.push("opfs_remnants_detected");
+  if (remainingTargets.indexedDbDatabases.length > 0) report.errors.push("idb_remnants_detected");
   if (remainingTargets.cacheKeys.length > 0) report.errors.push("cache_remnants_detected");
   if (remainingTargets.alarmCount > 0) report.errors.push("alarm_remnants_detected");
 

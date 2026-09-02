@@ -166,6 +166,122 @@ Deno.test("Cancel mutates nothing: rejecting confirmation dialog never invokes w
   assertEquals(stored["cap:firstRunStatus"]?.completed, true, "onboarding state stays intact");
 });
 
+// ── CAP-FB-20260830-PRIVACY-STATEMENT-01: what the browser-driven reset found ──
+// (1) A page or the worker holding an IndexedDB connection BLOCKS
+//     deleteDatabase; the wipe resolved on `onblocked` and moved on, so
+//     `cap-usage` and `cap_fs_grants` survived every reset while the
+//     verification (which never counted IndexedDB) still said clean.
+// (2) The service-worker route called `invalidateOrchestrator()`, which does
+//     not exist, so the route reported failure AFTER wiping and Settings never
+//     returned to first run.
+class MockIdb {
+  constructor(names, { blockUntilClosed = false } = {}) {
+    this.names = new Set(names);
+    this.blockUntilClosed = blockUntilClosed;
+    this.deleted = [];
+    this.closeHandlers = [];
+  }
+  async databases() { return [...this.names].map((name) => ({ name, version: 1 })); }
+  deleteDatabase(name) {
+    const req = {};
+    queueMicrotask(() => {
+      if (this.blockUntilClosed && this.names.has(name)) {
+        // The open connection sees `versionchange`, closes, and only THEN
+        // does the delete complete — well after `onblocked` fired.
+        req.onblocked?.();
+        setTimeout(() => { this.names.delete(name); this.deleted.push(name); req.onsuccess?.(); }, 40);
+        return;
+      }
+      this.names.delete(name);
+      this.deleted.push(name);
+      req.onsuccess?.();
+    });
+    return req;
+  }
+}
+
+async function withMockIdb(mock, fn) {
+  const had = Object.getOwnPropertyDescriptor(globalThis, "indexedDB");
+  Object.defineProperty(globalThis, "indexedDB", { value: mock, configurable: true, writable: true });
+  try { return await fn(); } finally {
+    if (had) Object.defineProperty(globalThis, "indexedDB", had);
+    else delete globalThis.indexedDB;
+  }
+}
+
+Deno.test("executeFactoryReset: a deleteDatabase blocked by an open connection is WAITED for, and the verification counts IndexedDB", async () => {
+  const idb = new MockIdb(["cap-usage", "cap_fs_grants"], { blockUntilClosed: true });
+  await withMockIdb(idb, async () => {
+    const result = await executeFactoryReset({ opfsRoot: new MockDirectoryHandle() });
+    assertEquals(result.verified, true);
+    assertEquals(result.verification.indexedDbRemaining, 0, "no database survives the reset");
+    assert(idb.deleted.includes("cap-usage") && idb.deleted.includes("cap_fs_grants"), `both blocked deletes completed: ${idb.deleted}`);
+  });
+});
+
+Deno.test("executeFactoryReset: a database that never lets go is reported as a remnant (fail-closed), not silently kept", async () => {
+  const stuck = new MockIdb(["cap_fs_grants"]);
+  stuck.deleteDatabase = (name) => {
+    const req = {};
+    queueMicrotask(() => req.onblocked?.()); // blocked forever — no onsuccess ever
+    return req;
+  };
+  await withMockIdb(stuck, async () => {
+    let threw = null;
+    try {
+      await executeFactoryReset({ opfsRoot: new MockDirectoryHandle(), idbBlockedWaitMs: 60 });
+    } catch (err) {
+      threw = err;
+    }
+    assert(threw, "a surviving database fails the reset closed");
+    assertEquals(threw.code, "factory_reset_incomplete");
+    assert(threw.report.errors.includes("idb_remnants_detected"), `errors: ${threw.report.errors}`);
+    assertEquals(threw.report.verification.indexedDbRemaining, 1);
+  });
+});
+
+Deno.test("executeFactoryReset: a database an in-flight write recreates after the delete is swept before the report", async () => {
+  // The live worker keeps running during the wipe: a usage write that was
+  // already in flight reopens `cap-usage` microseconds after deleteDatabase
+  // succeeded. Observed in a real loaded extension — the wipe was correct and
+  // the profile still had the database.
+  const idb = new MockIdb(["cap-usage"]);
+  let recreated = false;
+  const del = idb.deleteDatabase.bind(idb);
+  idb.deleteDatabase = (name) => {
+    const req = del(name);
+    if (name === "cap-usage" && !recreated) {
+      recreated = true;
+      setTimeout(() => idb.names.add("cap-usage"), 5); // the in-flight write reopens it
+    }
+    return req;
+  };
+  await withMockIdb(idb, async () => {
+    const result = await executeFactoryReset({ opfsRoot: new MockDirectoryHandle() });
+    assertEquals(result.verified, true);
+    assertEquals(result.verification.indexedDbRemaining, 0, "the recreated database is swept");
+    assertEquals(idb.deleted.filter((n) => n === "cap-usage").length, 2, "deleted once, then swept once");
+  });
+});
+
+Deno.test("system.factoryReset route: every function it calls is one the service worker defines or imports", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const start = sw.indexOf('async "system.factoryReset"(');
+  assert(start > 0, "the route exists");
+  const body = sw.slice(start, sw.indexOf('async "system.factoryResetEnumerate"(', start))
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/\/\/[^\n]*/g, " ");
+  const called = new Set();
+  for (const m of body.matchAll(/(?<![.\w])([A-Za-z_$][\w$]*)\s*\(/g)) called.add(m[1]);
+  for (const keyword of ["if", "return", "catch", "async", "await", "for", "while", "switch", "function"]) called.delete(keyword);
+  const defined = (name) =>
+    new RegExp(`(?:^|\\n)\\s*(?:async\\s+)?function\\s+${name}\\b`).test(sw) ||
+    new RegExp(`(?:^|\\n)\\s*(?:const|let|var)\\s+${name}\\b`).test(sw) ||
+    new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from`).test(sw);
+  const missing = [...called].filter((name) => !defined(name));
+  assertEquals(missing, [], `the reset route calls functions the worker never defines: ${missing.join(", ")}`);
+});
+
 Deno.test("B-1 first-run restore: ntp.js #factory-reset boot handler wipes localStorage dismissed keys", async () => {
   const ntpJs = await Deno.readTextFile(
     new URL("../extension/ntp/ntp.js", import.meta.url),

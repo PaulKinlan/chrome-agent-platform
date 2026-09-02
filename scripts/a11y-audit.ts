@@ -467,6 +467,21 @@ async function main() {
       `document.querySelectorAll('#permission-list capability-row, #permission-list .perm-row').length`);
     check("settings: the permission list renders the capability rows", Number(capRows) >= 6, capRows);
 
+    // ── the privacy page (CAP-FB-20260830-PRIVACY-STATEMENT-01) ──
+    // "What this extension sends and stores": one h1, headed lists, two links.
+    page = await openPage(cdp, `chrome-extension://${id}/privacy/privacy.html`);
+    a = await analyze(cdp, page.sessionId, "privacy");
+    check("privacy: no unlabeled interactive controls", (a.unlabeled || []).length === 0, a.unlabeled);
+    check("privacy: main landmark present", a.landmarks.main === true, a.landmarks);
+    check("privacy: at least one heading present", a.landmarks.heading === true, a.landmarks);
+    check("privacy: contrast — no AA failures", (a.contrastFails || []).length === 0, a.contrastFails);
+    check("privacy: has focusable elements + first is not body", a.focus.total > 0 && a.focus.first !== "none", a.focus);
+    check("privacy: no interactive element under 24x24 px", (a.smallTargets || []).length === 0, a.smallTargets);
+    const privacyShape = await cdp.evl(page.sessionId,
+      `JSON.stringify({ h1: document.querySelectorAll("h1").length, sections: document.getElementById("statement")?.shadowRoot?.querySelectorAll("section[aria-labelledby]").length ?? 0 })`);
+    const shape = JSON.parse(String(privacyShape ?? "{}"));
+    check("privacy: exactly one h1 and every list section is labelled by its heading", shape.h1 === 1 && shape.sections >= 5, shape);
+
     // ── the component gallery: the <artifact-diff> specimen, both schemes ──
     // (CAP-FB-20260830-ARTIFACT-DIFF-COMPONENT-01) zero unlabeled controls and
     // zero AA contrast failures inside the specimen under light AND dark.

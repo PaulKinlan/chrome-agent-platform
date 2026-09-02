@@ -47,7 +47,16 @@ function openDb() {
         if (!db.objectStoreNames.contains(STORE_META)) db.createObjectStore(STORE_META, { keyPath: "id" });
         if (!db.objectStoreNames.contains(STORE_QUARANTINE)) db.createObjectStore(STORE_QUARANTINE, { autoIncrement: true });
       };
-      req.onsuccess = () => resolve(req.result);
+      req.onsuccess = () => {
+        const db = req.result;
+        // The worker keeps this connection for its lifetime, which blocked the
+        // factory reset's deleteDatabase forever (CAP-FB-20260830-PRIVACY-
+        // STATEMENT-01 found `cap-usage` surviving every reset). On a
+        // versionchange (a delete in flight) close and forget the cached
+        // promise so the next write reopens a fresh database.
+        db.onversionchange = () => { try { db.close(); } catch { /* closed */ } dbPromise = null; };
+        resolve(db);
+      };
       req.onerror = () => reject(req.error);
       req.onblocked = () => reject(new Error("usage IDB blocked"));
     });

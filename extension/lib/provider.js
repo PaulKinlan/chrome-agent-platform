@@ -127,6 +127,31 @@ export const PROVIDER_CHOICES = [
  * URL, the dimensions) and nothing else. */
 const IMAGE_TOOL_RESULT_LANES = new Set(["gemini-native", "anthropic-native"]);
 
+/** The reader-facing name of each hosted preset, for the privacy statement. */
+const PROVIDER_PUBLIC_NAMES = Object.freeze({
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  gemini: "Google Gemini",
+  deepseek: "DeepSeek",
+});
+
+/** Every host a hosted preset sends a request to, DERIVED from the presets
+ * above so the "What this extension sends and stores" page can never drift
+ * from the endpoints this file actually resolves
+ * (CAP-FB-20260830-PRIVACY-STATEMENT-01). Local presets (http://localhost)
+ * and the on-device models are deliberately absent: nothing leaves the
+ * machine on those lanes. `tests/privacy-statement.test.ts` fails the moment a
+ * new https:// literal appears here without being listed. */
+export const OUTBOUND_HOSTS = Object.freeze(
+  PROVIDER_CHOICES
+    .filter((c) => /^https:\/\//.test(c.baseURL ?? ""))
+    .map((c) => Object.freeze({
+      id: c.id,
+      name: PROVIDER_PUBLIC_NAMES[c.id] ?? c.id,
+      host: new URL(c.baseURL).host,
+    })),
+);
+
 /** Can this RESOLVED model be shown an image in a tool result? Both halves must
  * hold: the provider's models can see images at all (the `vision` flag above),
  * and the lane it resolved on transports an image part. */

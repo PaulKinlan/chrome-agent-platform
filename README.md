@@ -95,6 +95,12 @@ isolated OPFS memory, run history, skills, and avatar.
   a deliberate, settled posture for a private tool (owner decision Q18, 2026-08-31, option (a)
   in `docs/OPEN-QUESTIONS.md`): the broad read is what lets the hub notice tools passively, and
   every mutation still waits on your grant. Screenshots go via `captureVisibleTab`/`activeTab`.
+- **One privacy page** — Settings → About → "What this extension sends and stores"
+  (`extension/privacy/privacy.html`) lists every host a request can go to (derived from the
+  provider presets), every storage class the factory reset wipes (with what each holds, including
+  that the provider key is stored unencrypted in the profile), the host-access posture above, and
+  how to remove it all. Its lists are built from the same constants the code runs on, and
+  `tests/privacy-statement.test.ts` fails when they drift.
 - **No `debugger`.** It was re-declared as an optional permission at `0.2.286` for the
   CDP power tools and **removed again on 2026-08-27** (owner decision): it carries
   Chrome's all-sites permission warning and a persistent "started debugging this

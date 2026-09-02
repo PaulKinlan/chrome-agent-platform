@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.656] — 2026-09-02
+- A new Privacy page says exactly what the extension sends and stores, and Reset everything now really does clear everything.
+
 ## [0.2.655] — 2026-09-02
 - Task board: the running-cost work is complete.
 

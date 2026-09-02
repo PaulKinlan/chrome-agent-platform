@@ -6,7 +6,7 @@ import {
   getModel,
   getModelForAgent,
   getProviderConfig,
-  resolveModelFromConfig, withEffectiveBaseURL, developerFeaturesOn } from "../lib/provider.js";
+  resolveModelFromConfig, withEffectiveBaseURL, developerFeaturesOn, OUTBOUND_HOSTS } from "../lib/provider.js";
 import {
   NotificationRegistry,
   handleNotificationClick,
@@ -6004,7 +6004,13 @@ const handlers = mergeRouteMaps(
       // registry's in-memory record cache would still describe runs that no
       // longer exist. Go cold (CAP-FB-20260830-RUN-LOG-COMPACTION-01).
       durableRuns.forgetCachedState?.();
-      await invalidateOrchestrator();
+      // The cached model + orchestrators were built from the provider config
+      // that no longer exists; drop them the way a provider save does. (This
+      // called an undefined `invalidateOrchestrator` from the day the reset
+      // shipped, so the route reported failure AFTER wiping and Settings never
+      // returned to first run — found by the browser-driven reset,
+      // CAP-FB-20260830-PRIVACY-STATEMENT-01.)
+      invalidateAgent();
       return { ok: true, ...result };
     } catch (err) {
       return { ok: false, error: `factory_reset_failed: ${err?.message || err}` };
@@ -6017,6 +6023,21 @@ const handlers = mergeRouteMaps(
     }
     const targets = await enumerateStorageTargets();
     return { ok: true, targets };
+  },
+
+  /** The privacy page's inputs (CAP-FB-20260830-PRIVACY-STATEMENT-01): the
+   * hosts the provider layer really resolves (derived from the presets) and
+   * the run-log policy in force. Read-only, no secrets — any extension page
+   * may ask. */
+  async "privacy.statement"(_m, context) {
+    if (context?.principal !== "extension" && context?.principal !== "owner-options") {
+      return { ok: false, error: "unauthorized_principal" };
+    }
+    let retentionPolicy = null;
+    try {
+      retentionPolicy = (await handlers["run.list"]())?.retentionPolicy ?? null;
+    } catch { retentionPolicy = null; }
+    return { ok: true, outboundHosts: OUTBOUND_HOSTS, retentionPolicy };
   },
 
   /** Owner-reported leftover fix: purge agent journals (per-agent or global)

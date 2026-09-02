@@ -97,6 +97,9 @@ const BASELINE_ROUTES = [
   "agent.directory",
   "system.factoryReset",
   "system.factoryResetEnumerate",
+  // The privacy page's inputs (CAP-FB-20260830-PRIVACY-STATEMENT-01): the
+  // provider hosts the code really resolves + the run-log policy in force.
+  "privacy.statement",
   "memory.purgeJournals",
   "memory.sweepOrphans",
   "agent.registry",

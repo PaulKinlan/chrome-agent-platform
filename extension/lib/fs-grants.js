@@ -97,7 +97,15 @@ async function openDatabase(customIdb = null) {
         store.createIndex("by_scope", "scopeKey", { unique: false });
       }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      // A factory reset deletes this database; an open connection would block
+      // that delete forever (CAP-FB-20260830-PRIVACY-STATEMENT-01 found
+      // `cap_fs_grants` surviving every reset). Let go the moment a
+      // versionchange arrives — the next call opens afresh.
+      if (db && typeof db.close === "function") db.onversionchange = () => db.close();
+      resolve(db);
+    };
     req.onerror = () => reject(req.error || new Error("IDB open failed"));
     req.onblocked = () => reject(new Error("IDB open blocked"));
   });
