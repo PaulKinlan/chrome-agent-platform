@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.643] — 2026-09-02
+- A task that finishes its answer on its final step is now shown as finished instead of asking you to continue.
+
 ## [0.2.642] — 2026-09-02
 - Task board: the artifact quick fixes are complete.
 

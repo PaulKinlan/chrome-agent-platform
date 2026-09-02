@@ -21,7 +21,7 @@ import { perfSpan } from "./cap-perf.js";
 import { maskCredentialShapes } from "./error-report.js";
 import { isToolResultFailure, toolResultFullJson } from "./tool-summary.js";
 import { correctUnsupportedMutationClaims } from "./mutation-claim-check.js";
-import { RUN_BUDGET_DEFAULTS } from "./run-budget.js";
+import { RUN_BUDGET_DEFAULTS, budgetExhaustedVerdict } from "./run-budget.js";
 import { createRunDigest } from "./run-digest.js";
 import {
   anthropicAuthoritativeSearchRequests,
@@ -776,11 +776,14 @@ export function createAgent({
   const emitBudget = (extra = {}) => {
     try { progressCb?.({ type: "budget", step: budgetStep, total: budgetTotal, results: runDigest.counts(), ...extra }); } catch { /* ignore */ }
   };
-  // Exhausted = the LAST allowed outer iteration still ended in tool calls:
-  // the loop stopped because the budget ran out, not because the model
-  // finished (agent-do breaks the loop only on a no-tool-call step).
-  const budgetExhausted = (aborted) =>
-    aborted !== true && budgetLastStepHadTools === true && budgetLastStepIndex >= Math.trunc(maxIterations) - 1;
+  // Exhausted = the LAST allowed outer iteration still ended in tool calls
+  // (the loop stopped because the budget ran out, not because the model
+  // finished — agent-do breaks the loop only on a no-tool-call step) AND no
+  // substantive final text landed. A run that wrote its answer on its last
+  // allowed step answered (CAP-FB-20260902-BUDGET-VERDICT-ANSWERED-01); the
+  // rule itself lives in lib/run-budget.js.
+  const budgetExhausted = (aborted, hasFinalText) =>
+    budgetExhaustedVerdict({ aborted, lastStepHadTools: budgetLastStepHadTools, lastStepIndex: budgetLastStepIndex, maxIterations, hasFinalText });
   const teeTextDeltas = (value) => {
     if (streamHold || !value || typeof value !== "object" || !(value.stream instanceof ReadableStream)) return value;
     const step = streamStep;
@@ -1235,9 +1238,15 @@ export function createAgent({
           // The budget verdict rides BOTH the final budget event and `done`:
           // the SW settles a "budget reached — Continue" terminal from it
           // instead of a silent finish (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01).
-          const exhausted = budgetExhausted(e.aborted);
+          // "Budget reached" only when the budget ran out with NO substantive
+          // final text — the SAME text the claim check above just read; a run
+          // that answered on its last allowed step settles ok
+          // (CAP-FB-20260902-BUDGET-VERDICT-ANSWERED-01).
+          const hasFinalText = typeof e.result === "string" && e.result.trim().length > 0;
+          const exhausted = budgetExhausted(e.aborted, hasFinalText);
           const budget = { used: budgetStep, total: budgetTotal, exhausted, results: runDigest.counts(), digestTurns: digestTurnsLogged, digestBytesMax };
-          if (exhausted) agentDoLog.warn(`step budget exhausted (${budgetStep}/${budgetTotal}) with tool calls still pending`);
+          if (exhausted) agentDoLog.warn(`step budget exhausted (${budgetStep}/${budgetTotal}) with tool calls still pending and no final answer`);
+          else if (budgetExhausted(e.aborted, false)) agentDoLog.info(`step budget reached (${budgetStep}/${budgetTotal}) on a step that also wrote the final answer — settled as finished`);
           emitBudget({ exhausted });
           progressCb?.({ type: "done", text: checked.text, totalSteps: e.totalSteps, aborted: e.aborted, budget });
         } catch { /* ignore */ }

@@ -3046,6 +3046,11 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // whose action is Continue (the status row's button runs the
       // continuation turn on the same thread). The partial answer is already
       // in the thread as interim rows; the terminal row states the stop.
+      // `exhausted` is the loop's VERDICT (lib/run-budget.js
+      // budgetExhaustedVerdict): the budget ran out AND no substantive final
+      // text landed. A run that answered on its last allowed step arrives
+      // here with exhausted:false and settles as a success below
+      // (CAP-FB-20260902-BUDGET-VERDICT-ANSWERED-01).
       if (runBudget?.exhausted === true) {
         const budgetStop = budgetExhaustedTerminal(runBudget);
         const terminal = await durableRuns.settle(executionId, {
