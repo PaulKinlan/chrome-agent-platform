@@ -46,6 +46,12 @@ const SURFACES = [
   "extension/sidepanel/sidepanel.js",
   "extension/shared/components.js",
   "extension/skills/skills-panel.js",
+  // The privacy page and the pure statement it renders
+  // (CAP-FB-20260830-PRIVACY-STATEMENT-01): every `description:` line there is
+  // read by a person.
+  "extension/privacy/privacy.html",
+  "extension/privacy/privacy.js",
+  "extension/lib/privacy-statement.js",
 ];
 
 // ── rule 1: banned user-facing terms ──────────────────────────────────────

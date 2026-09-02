@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.649] — 2026-09-02
+- Settings → About → Privacy opens one page that says what this extension sends, what it keeps on this computer, what it can read, and how to remove it all. Resetting everything now finishes cleanly and puts you back at the first run.
+
 ## [0.2.648] — 2026-09-02
 - Task board: the test-suite honesty work is complete; one regression was opened and four more items are being worked on.
 

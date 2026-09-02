@@ -289,6 +289,14 @@
         <p class="caption">a shield icon + the security posture: granted optional permissions + CSP/denied-hook/blocked-action violations. An <code>attention</code> attribute flags violations.</p>
       </div>
 
+      <div class="card">
+        <h3 class="spec"><code class="tag">&lt;privacy-statement&gt;</code> — "What this extension sends and stores"</h3>
+        <div class="stage" style="max-width:720px">
+          <privacy-statement id="privacy-statement-demo"></privacy-statement>
+        </div>
+        <p class="caption">the one privacy page (Settings → About → Privacy). One property, <code>statement</code>, in the shape <code>buildPrivacyStatement()</code> returns; every row is data rendered with textContent. The storage names sit behind a closed disclosure.</p>
+      </div>
+
       <!-- ── BeautifulUI-inspired AI-native primitives ───────────── -->
       <h2 class="section">BeautifulUI-inspired primitives</h2>
 
@@ -561,6 +569,30 @@
       // the script approval specimen: the source + hosts are a PROPERTY
       const scriptCard = document.getElementById("approval-script");
       if (scriptCard) scriptCard.detail = { source: 'const page = await fetch("https://example.com/feed");\nreturn page.text.length;', hosts: ["example.com"], dynamic: false };
+
+      // the privacy statement specimen: the statement is a PROPERTY in the
+      // shape lib/privacy-statement.js buildPrivacyStatement() returns
+      const privacy = document.getElementById("privacy-statement-demo");
+      if (privacy) privacy.statement = {
+        sent: [
+          { id: "provider", text: "Your messages, the page text you share and any screenshot you ask an agent to look at go to the model you chose in Settings, together with your key. The choices that leave this computer: OpenAI (api.openai.com), Anthropic (api.anthropic.com), Google Gemini (generativelanguage.googleapis.com), DeepSeek (api.deepseek.com), or an address you typed yourself." },
+          { id: "local-models", text: "Ollama, LM Studio and Chrome's built-in model run on this computer. With one of those chosen, nothing leaves it." },
+          { id: "nothing-else", text: "Nothing else leaves this computer. There is no analytics and no usage reporting." },
+        ],
+        hostAccess: "This extension can read every page in order to notice when a site offers tools; it acts on a site only after you allow it.",
+        stored: [
+          { id: "chrome.storage.local", text: "Your settings: the model you chose and its key — kept as you typed it, not encrypted — plus the sites and servers you allowed, your agents, tasks and schedules." },
+          { id: "origin-private-file-system", text: "Each agent's memory, kept apart per site; the run logs; artifacts; screenshots; models you downloaded." },
+          { id: "chrome.alarms", text: "The timers behind your schedules." },
+        ],
+        keyHandling: [
+          { id: "write-only", text: "The key box in Settings is write-only: a saved key is never shown back." },
+        ],
+        wipe: [
+          { id: "per-agent", text: "Settings → Data & memory shows what each agent holds and clears one at a time." },
+          { id: "factory-reset", text: "Reset all data removes everything listed above and puts the extension back to its first run." },
+        ],
+      };
 
       // theme picker → re-theme the whole page
       const themer = document.getElementById("themer");
