@@ -2700,6 +2700,9 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
                 : {}),
             },
             permissionDecision: typeof event.permissionDecision === "string" ? event.permissionDecision.slice(0, 16) : null,
+            // Approved, then re-run by the runtime — the reopened card says so
+            // (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01).
+            ...(event.reexecuted === true ? { reexecuted: true } : {}),
           }
           : {};
         const log = { type: "tool-result", id: taskId, executionId, run: runInstance, callId, tool: event.toolName ?? "tool", result, ok: event.ok ?? null, ...(typeof event.selectedTool === "string" && event.selectedTool ? { selectedTool: event.selectedTool } : {}), ...permissionReq };

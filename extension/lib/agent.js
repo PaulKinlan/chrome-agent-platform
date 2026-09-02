@@ -526,6 +526,17 @@ function summarizeToolResult(result) {
   }
 }
 
+/** A tool's raw return as the model-facing text agent-do itself would have
+ * produced for it (its normaliser JSON-stringifies non-string returns). */
+function summarizeForModel(result) {
+  if (typeof result === "string") return result;
+  try {
+    const s = JSON.stringify(result);
+    if (typeof s === "string") return s;
+  } catch { /* fall through */ }
+  return String(result);
+}
+
 export function createAgent({
   model,
   id = "hub",
@@ -1043,33 +1054,69 @@ export function createAgent({
         // replaces the envelope text (after it, the name is unrecoverable and
         // the card would be headed "tool call").
         const selectedBeforeRewrite = selectedToolFromResult(e.result);
-        const permissionDenial = permissionDenialFromToolResult(e.result);
+        let permissionDenial = permissionDenialFromToolResult(e.result);
         // The STRUCTURED requirement survives on the progress event (the run
         // log persists it) even though the model-facing modelContent is
         // rewritten below — a reopened thread derives its grant card from it
         // (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 §2b).
-        const permissionRequirement = permissionDenial?.permissionRequirement ?? null;
+        let permissionRequirement = permissionDenial?.permissionRequirement ?? null;
         let permissionDecision = null;
-        if (permissionDenial && typeof onPermissionRequest === "function") {
+        // Approved, then RE-RUN by the runtime with the original arguments —
+        // the model receives the tool's real result, never a retry instruction
+        // (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01). The card records
+        // "approved, then ran" from this flag.
+        let reexecuted = false;
+        // A re-run can pause on a FURTHER requirement (a second capability the
+        // same tool needs): each pause is one card and one decision, bounded.
+        for (let round = 0; permissionDenial && typeof onPermissionRequest === "function" && round < 4; round++) {
           const decision = await onPermissionRequest(permissionDenial);
           permissionDecision = decision;
           // agent-do records this same normalized object after the awaited hook.
-          // Tell the model exactly what happened: deny/timeout is terminal for
-          // this action; approve requires a fresh lazy selection because the
-          // grant digest intentionally changed while the call was paused.
           const selected = selectedToolFromResult(e.result) ?? e.toolName;
-          if (e.result && typeof e.result === "object") {
-            e.result.modelContent = decision === "approved"
-              ? `Error: Owner approved the requested capability, but this attempt did not run. Retry ${selected} now with a fresh search_tools selection.`
-              : decision === "expired"
-                ? `Approval expired. ${selected} was not performed; do not claim it succeeded.`
-                : `Owner denied the requested capability. ${selected} was not performed; do not retry it.`;
-            e.result.userSummary = decision === "approved"
-              ? `[${selected}] BLOCKED — approved; retry required`
-              : decision === "expired"
-                ? `[${selected}] DENIED — approval expired`
-                : `[${selected}] DENIED by owner`;
+          const pausedRef = ownData(lazyEnvelope(e.result), "selectionRef");
+          if (!(e.result && typeof e.result === "object")) break;
+          if (decision !== "approved") {
+            // Deny/timeout is terminal for this action: the call is forgotten
+            // and never executed.
+            if (typeof pausedRef === "string") { try { lazy.settlePausedCall(pausedRef); } catch { /* nothing recorded */ } }
+            e.result.modelContent = decision === "expired"
+              ? `Approval expired. ${selected} was not performed; do not claim it succeeded.`
+              : `Owner denied the requested capability. ${selected} was not performed; do not retry it.`;
+            e.result.userSummary = decision === "expired"
+              ? `[${selected}] DENIED — approval expired`
+              : `[${selected}] DENIED by owner`;
+            break;
           }
+          // Approved: the runtime re-runs the SAME call (same tool, the
+          // original validated arguments, the same run fence, every live
+          // authority check) through the lazy protocol — a runtime-only path
+          // the model cannot reach — and the result REPLACES the denial as if
+          // the call had succeeded first time.
+          let resumed = null;
+          if (typeof pausedRef === "string") {
+            try { resumed = await lazy.resumeApprovedCall(pausedRef); } catch (error) {
+              if (error?.name === "RunAbortedError" || error?.name === "AbortError") throw error;
+              resumed = null;
+            }
+          }
+          const protocolFailure = !resumed || (resumed.ok !== true && typeof resumed.selectedTool !== "string");
+          if (protocolFailure) {
+            // The re-run itself could not be set up (the tool vanished from
+            // the catalog, the run moved on). Plain language, no protocol
+            // vocabulary; the model may call the tool again.
+            agentDoLog.warn("approved call could not be re-run", { tool: selected, error: resumed?.error ?? "unavailable" });
+            e.result.modelContent = `Owner approved the requested capability, but ${selected} could not be run again automatically. Call ${selected} again.`;
+            e.result.userSummary = `[${selected}] approved — not run`;
+            break;
+          }
+          // The tool's REAL outcome (success, or its own ordinary failure) is
+          // what agent-do would have recorded for a first-time success.
+          const text = summarizeForModel(resumed);
+          e.result.modelContent = text;
+          e.result.userSummary = text;
+          reexecuted = true;
+          permissionDenial = permissionDenialFromToolResult(e.result);
+          if (permissionDenial) permissionRequirement = permissionDenial.permissionRequirement ?? permissionRequirement;
         }
         const toolOk = !isToolResultFailure(e.result) && !lazyNestedFailure(e.result);
         if (toolOk) { try { okToolNames.add(selectedToolFromResult(e.result) ?? e.toolName); } catch { /* ignore */ } }
@@ -1100,7 +1147,7 @@ export function createAgent({
             resultFullTruncated: full.truncated,
             resultFullBytes: full.bytes,
             ok: toolOk,
-            ...(permissionRequirement ? { permissionRequirement, permissionDecision } : {}),
+            ...(permissionRequirement ? { permissionRequirement, permissionDecision, ...(reexecuted ? { reexecuted: true } : {}) } : {}),
           });
         } catch { /* ignore */ }
       },

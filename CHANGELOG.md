@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.619] — 2026-09-02
+- After you click Allow, the paused action now runs by itself — no retry, no protocol words in the conversation.
+
 ## [0.2.618] — 2026-09-02
 - Task board: three more items are being worked on.
 
