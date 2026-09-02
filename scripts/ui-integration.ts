@@ -298,29 +298,16 @@ try {
     check("the + menu stays in-bounds", inBounds(menuRect.rect, menuRect.vw, menuRect.vh), menuRect.rect);
   }
 
-  // 4. The error console opens AND stays in-bounds.
-  const consoleOpen = await cdp.eval(hub, `(() => {
-    const ec = document.querySelector('error-console');
-    if (!ec) return false;
-    const btn = ec.shadowRoot ? ec.shadowRoot.querySelector('button') : ec.querySelector('button');
-    if (btn) btn.click();
-    return true;
+  // 4. The idle hub header carries no developer icons: the console moved to
+  //    Settings → Advanced → Diagnostics (checked there, below) and the shield
+  //    renders only while it has a security event to show
+  //    (CAP-FB-20260830-HUB-CHROME-POLISH-01).
+  const idleHeader = await cdp.eval(hub, `(() => {
+    const shield = document.querySelector('security-shield');
+    const r = shield?.getBoundingClientRect();
+    return { console: !!document.querySelector('error-console'), shieldVisible: !!(r && r.width > 0 && r.height > 0) };
   })()`);
-  await sleep(400);
-  const consoleRect = await cdp.eval(hub, `(() => {
-    const ec = document.querySelector('error-console');
-    const panels = Array.from(ec && ec.shadowRoot ? ec.shadowRoot.querySelectorAll('[popover]:popover-open,[class*=panel],[class*=console]') : []);
-    const p = panels.find(el => /console|errors/i.test(el.textContent?.slice(0,40)));
-    const r = p ? p.getBoundingClientRect() : null;
-    return { found: !!p, rect: r ? { left:r.left, top:r.top, right:r.right, bottom:r.bottom } : null, vw: innerWidth, vh: innerHeight };
-  })()`);
-  check("the error console opens", consoleOpen && consoleRect?.found, consoleRect);
-  if (consoleRect?.found && consoleRect.rect) {
-    check("the error console stays in-bounds", inBounds(consoleRect.rect, consoleRect.vw, consoleRect.vh), consoleRect.rect);
-  }
-  // Close any open diagnostics panels so they don't cover later interactions.
-  await cdp.eval(hub, `(() => { for (const tag of ['error-console','security-shield']) { const el = document.querySelector(tag); const panel = el?.shadowRoot?.querySelector('.panel'); const btn = el?.shadowRoot?.querySelector('button'); if (panel && !panel.hidden && btn) btn.click(); } })()`);
-  await sleep(300);
+  check("the idle hub header has no console and no visible shield", idleHeader?.console === false && idleHeader?.shieldVisible === false, idleHeader);
 
   // 5. The recent-activity rows have horizontal padding + real entry content,
   //    loaded through the PRODUCTION activity.list path (not the demo entries
@@ -467,6 +454,33 @@ try {
     return !!b;
   })()`);
   check("the provider Test-connection button renders", testBtn);
+
+  // 8b. The error console (Advanced → Diagnostics) opens AND stays in-bounds.
+  //     Advanced is developer-gated; reveal the section for the probe.
+  const consoleOpen = await cdp.eval(settings, `(() => {
+    const sect = document.getElementById('prompts');
+    if (sect) sect.hidden = false;
+    location.hash = '#prompts';
+    const ec = document.querySelector('#prompts error-console');
+    if (!ec) return false;
+    const btn = ec.shadowRoot ? ec.shadowRoot.querySelector('button') : ec.querySelector('button');
+    if (btn) btn.click();
+    return true;
+  })()`);
+  await sleep(400);
+  const consoleRect = await cdp.eval(settings, `(() => {
+    const ec = document.querySelector('#prompts error-console');
+    const panels = Array.from(ec && ec.shadowRoot ? ec.shadowRoot.querySelectorAll('[popover]:popover-open,[class*=panel],[class*=console]') : []);
+    const p = panels.find(el => /console|errors/i.test(el.textContent?.slice(0,40)));
+    const r = p ? p.getBoundingClientRect() : null;
+    return { found: !!p, rect: r ? { left:r.left, top:r.top, right:r.right, bottom:r.bottom } : null, vw: innerWidth, vh: innerHeight };
+  })()`);
+  check("the error console opens from Settings → Advanced → Diagnostics", consoleOpen && consoleRect?.found, consoleRect);
+  if (consoleRect?.found && consoleRect.rect) {
+    check("the error console stays in-bounds", inBounds(consoleRect.rect, consoleRect.vw, consoleRect.vh), consoleRect.rect);
+  }
+  await cdp.eval(settings, `(() => { const el = document.querySelector('#prompts error-console'); const panel = el?.shadowRoot?.querySelector('.panel'); const btn = el?.shadowRoot?.querySelector('button'); if (panel && !panel.hidden && btn) btn.click(); })()`);
+  await sleep(300);
 
   // ---- Chat ----
   const chat = await openPage(`chrome-extension://${extId}/chat/chat.html`);

@@ -524,6 +524,16 @@
       width: 100%;
     }
     .foot-btn svg { flex: 0 0 auto; display: block; }
+    /* The three footer entries are navigation, not actions: none is the filled
+       primary (the accent marks primary actions and the current selection only —
+       DESIGN.md). The open view's entry carries aria-current="page" and reads as
+       the current place with a quiet panel fill (CAP-FB-20260830-HUB-CHROME-POLISH-01). */
+    .side-foot .btn.foot-btn[aria-current="page"],
+    .side-foot .btn.foot-btn[aria-current="page"]:hover {
+      background: var(--panel-2);
+      border-color: var(--border);
+      color: var(--text);
+    }
     /* Artifacts is a split row: the main, familiar action opens the full browser;
        the adjacent disclosure opens the metadata-only quick drawer. Both stay
        visible and independently operable in the collapsed rail. */
@@ -615,21 +625,32 @@
       align-items: center;
       gap: 8px;
     }
+    /* The status pill: one transient state at a time (working / feedback /
+       error), the same shape as the provider pill beside it, and GONE when idle
+       — an idle hub has no status text and no dot. The `[hidden]` rule must
+       beat the display below or the UA hidden rule loses and "ready" renders
+       (CAP-FB-20260830-HUB-CHROME-POLISH-01). */
     .status {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      font-size: var(--text-sm);
+      font-size: 12px;
+      font-weight: 600;
       color: var(--muted);
-      margin-right: 4px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 2px 10px;
+      max-width: 420px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
-    .status .dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--accent2);
-      flex: 0 0 auto;
-    }
+    .status[hidden] { display: none; }
+    .status[data-state="working"] { color: var(--accent); border-color: var(--accent); }
+    .status[data-state="error"] { color: var(--danger); border-color: var(--danger); }
+    /* The shield is the attention signal, not a permanent icon: it renders
+       only while there is a security event to see (count > 0). The granted
+       permissions it lists live in Settings → Permissions the rest of the time. */
+    .top-actions security-shield:not([attention]) { display: none; }
     .top-actions .icon-btn { color: var(--muted); }
     .top-actions .icon-btn:hover {
       color: var(--text);
@@ -921,8 +942,10 @@
           <div class="top-actions">
             <span class="status" id="status" role="status" aria-live="polite" hidden></span>
             <button type="button" class="provider-status" id="provider-status" hidden title="Open Settings to fix the provider"></button>
+            <!-- The shield renders only in its attention state (a security event
+                 to see); the console moved to Settings → Advanced → Diagnostics.
+                 The hub still captures its own errors (installPageDiagnostics). -->
             <security-shield count="0" label="Security + permissions"></security-shield>
-            <error-console count="0" label="Console (errors + warnings)"></error-console>
           </div>
         </header>
 
@@ -1034,7 +1057,7 @@
           </button>
           <artifact-quick-drawer id="artifact-quick-drawer" auto origin="master" label="Quick access artifacts"></artifact-quick-drawer>
         </div>
-        <button class="btn foot-btn" id="open-settings" type="button" title="Settings">
+        <button class="btn ghost foot-btn" id="open-settings" type="button" title="Settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           <span class="btn-label">Settings</span>
         </button>

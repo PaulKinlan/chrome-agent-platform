@@ -276,16 +276,18 @@ if (runDebugToggle && runDebugPanel) {
 }
 
 function setStatus(text, ready = true) {
-  statusEl.innerHTML =
-    `<span class="dot"></span>${escapeHtml(text || "ready")}`;
-  statusEl.querySelector(".dot").style.background = ready
-    ? "var(--accent2)"
-    : "var(--danger)";
-  document.querySelector(".composer")?.classList.toggle("glow", !ready);
-  // The idle "ready" state is redundant with the clean header + the
-  // diagnostics badges — hide it; show only transient states (running / error /
-  // enabled), and auto-revert success feedback to the idle state.
+  // One status pill, text only (no dot): hidden when idle, `working` while a
+  // run is in flight, `error` for a failure, plain feedback otherwise. The
+  // element keeps role="status" so every transition is announced
+  // (CAP-FB-20260830-HUB-CHROME-POLISH-01).
   const idle = !text || text === "ready";
+  statusEl.textContent = idle ? "" : String(text);
+  if (idle) statusEl.removeAttribute("data-state");
+  else statusEl.setAttribute("data-state", !ready && text === "running…" ? "working" : !ready ? "error" : "ok");
+  document.querySelector(".composer")?.classList.toggle("glow", !ready);
+  // The idle "ready" state is redundant with the clean header — hide it; show
+  // only transient states (running / error / enabled), and auto-revert success
+  // feedback to the idle state.
   statusEl.hidden = idle;
   clearTimeout(statusTimer);
   if (!idle && ready) {
@@ -2041,6 +2043,23 @@ function syncViewOpen() {
     sideToggle,
     fullViewOpen ? "full" : !threadView.hidden ? "conversation" : "hub",
   );
+  syncFooterCurrent(fullViewOpen ? activeViewRoute : null);
+}
+// The sidebar footer is navigation: the open full view's entry carries
+// aria-current="page" (and the quiet current fill); nothing is marked when the
+// hub or a conversation is showing (CAP-FB-20260830-HUB-CHROME-POLISH-01).
+const FOOTER_ROUTES = [
+  ["open-directory", VIEW_ROUTE.DIRECTORY],
+  ["open-artifacts", VIEW_ROUTE.ARTIFACTS],
+  ["open-settings", VIEW_ROUTE.SETTINGS],
+];
+function syncFooterCurrent(currentRoute) {
+  for (const [id, route] of FOOTER_ROUTES) {
+    const btn = document.getElementById(id);
+    if (!btn) continue;
+    if (currentRoute === route) btn.setAttribute("aria-current", "page");
+    else btn.removeAttribute("aria-current");
+  }
 }
 function hideThreadViewInner() {
   runSurfaceOwner.claim(); // leaving fences any in-flight run (its outcome still journals)
@@ -2291,7 +2310,7 @@ async function openBackgroundAgentChat(id, name) {
   threadConversation?.resetPlan?.(); // clear the prior surface's plan strip
   const history = await loadAgentSurfaceHistory("background", id);
   if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== "background") return;
-  threadTitle.textContent = name || id || "Background agent";
+  threadTitle.textContent = name || "Background agent"; // the name, never the slug
   renderAgentSurfaceHistory(history);
   projectSurfaceRunTranscript();
   showThreadView({ focusAfter: threadComposer });
@@ -2428,7 +2447,10 @@ async function openAgentSurface({ kind, id, name }) {
   threadConversation?.resetPlan?.(); // clear the prior surface's plan strip
   const history = await loadAgentSurfaceHistory(kind, id);
   if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== kind) return;
-  threadTitle.textContent = name || id || "Agent";
+  // The title is the agent's NAME, never its slug: a caller without the name
+  // (a hash entry) resolves it first; until then the surface reads "Agent"
+  // (CAP-FB-20260830-HUB-CHROME-POLISH-01).
+  threadTitle.textContent = name || "Agent";
   renderAgentSurfaceHistory(history);
   projectSurfaceRunTranscript();
   showThreadView({ focusAfter: threadComposer });
@@ -2438,7 +2460,14 @@ async function openAgentSurface({ kind, id, name }) {
 async function openAgentChat(id) {
   const aRes = await send("named-agent.get", { id }).catch(() => ({ ok: false }));
   const agent = aRes.ok ? aRes.agent : null;
-  await openAgentSurface({ kind: "named", id, name: agent?.name || id });
+  await openAgentSurface({ kind: "named", id, name: agent?.name || null });
+}
+
+/** The display name of a background agent (its registry row), or null. */
+async function resolveBackgroundAgentName(id) {
+  const r = await send("background-agent.list").catch(() => null);
+  const a = (Array.isArray(r?.agents) ? r.agents : []).find((x) => x?.id === id);
+  return typeof a?.name === "string" && a.name ? a.name : null;
 }
 
 // Render an agent's run history (its journal) as a conversation: task → user
@@ -4090,11 +4119,18 @@ async function applyCurrentHashRoute(isTraverse = false) {
       if (!viewOverlay?.hidden) hideViewInner();
       if (parsed.kind === "background") {
         if (currentAgentId !== parsed.id || currentAgentKind !== "background" || threadView?.hidden) {
-          await openBackgroundAgentChat(parsed.id, meta.name ?? null, { pushHistory: false });
+          // A reload/deep link carries no name in history.state: resolve it
+          // from the registry so the header never reads the slug.
+          const name = meta.name ?? await resolveBackgroundAgentName(parsed.id);
+          await openBackgroundAgentChat(parsed.id, name, { pushHistory: false });
         }
       } else {
         if (currentAgentId !== parsed.id || currentAgentKind !== parsed.kind || threadView?.hidden) {
-          await openAgentSurface({ kind: parsed.kind, id: parsed.id, name: meta.name ?? null }, { pushHistory: false });
+          if (parsed.kind === "named" && !meta.name) {
+            await openAgentChat(parsed.id); // resolves named-agent.get → the name
+          } else {
+            await openAgentSurface({ kind: parsed.kind, id: parsed.id, name: meta.name ?? null }, { pushHistory: false });
+          }
         }
         // A standalone Settings tab cannot postMessage to the NTP parent frame.
         // Its explicit edit route still opens the one maintained persona dialog.

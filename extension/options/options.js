@@ -62,7 +62,7 @@ import { createNavigationController } from "../lib/navigation-controller.js";
 // design-system components as the hub + the docs showcase (one component,
 // everywhere — no hand-rolled duplicates).
 import { confirmActionDialog, deleteAgentDialog, escapeHtml } from "../shared/components.js";
-import { subscribeDiagnosticsRevision } from "../shared/diagnostics-client.js";
+import { refreshDiagnostics, subscribeDiagnosticsRevision } from "../shared/diagnostics-client.js";
 import { saveFsGrant, wireLocalFolderPickers, regrantFsGrantAccess } from "../lib/fs-grants.js";
 import { mountGrantBrowser } from "../lib/folder-browser.js";
 import {
@@ -3403,7 +3403,14 @@ await renderUsage();
 // return to visible). The 1.5 s poll this replaces sent `usage.get` 40 times
 // a minute for the life of the Settings tab. Section activation still
 // re-renders via the nav handler above.
-subscribeDiagnosticsRevision(() => renderUsage());
+// The console badge (Advanced → Diagnostics) rides the same revision: one
+// read on load, then only when the worker records something new
+// (CAP-FB-20260830-HUB-CHROME-POLISH-01 moved the console here from the hub).
+refreshDiagnostics().catch(() => {});
+subscribeDiagnosticsRevision(() => {
+  renderUsage();
+  refreshDiagnostics().catch(() => {});
+});
 // The detail-toggle is a STATIC control — wire its click EXACTLY ONCE (outside
 // renderUsage, which runs per page-load + nav + poll), so repeated renders never
 // stack listeners and never produce parity-dependent dead/inverted toggles.

@@ -2358,7 +2358,10 @@ class ToolDirectoryCard extends Component {
     const titleId = `tool-title-${Math.random().toString(36).slice(2)}`;
     const descriptionId = `${titleId}-description`;
     mountTemplate(this, `
-      :host { display:block; min-inline-size:0; container-type:inline-size; }
+      /* inline-size:100% beside container-type — a block container host with
+         no explicit inline size resolves to 0 px wide in a column flex parent
+         (CAP-FB-20260830-HUB-CHROME-POLISH-01). */
+      :host { display:block; inline-size:100%; min-inline-size:0; container-type:inline-size; }
       article { display:grid; grid-template-columns:minmax(0,1fr); gap:8px;
         min-inline-size:0; padding:14px 16px; border:1px solid var(--border,#e3e0d9);
         border-radius:var(--radius-md,12px); background:var(--panel,#fff); }

@@ -404,6 +404,29 @@ async function main() {
     })()`);
     check("artifact-diff keyboard walk ] ] [ ] focuses the hunk + announces 'Change 2 of 2'", walk.activeIsHunk === true && walk.activeIndex === "1" && walk.current === "1" && walk.status === "Change 2 of 2", walk);
 
+    // CAP-FB-20260830-HUB-CHROME-POLISH-01: no visible specimen renders at ZERO
+    // width. A block host with `container-type: inline-size` and no explicit
+    // inline size collapses to 0 px inside a column stage (the directory card
+    // measured 0 px wide and 3,599 px tall — one character per line). Every
+    // custom-element specimen placed directly on a stage must take real width,
+    // and the directory card specifically must be wider than 200 px.
+    const widths = await evl(s.sessionId, `(()=>{
+      const out = [];
+      for (const stage of document.querySelectorAll('.stage')) {
+        for (const el of stage.children) {
+          if (!el.tagName.includes('-') || el.hidden) continue;
+          const r = el.getBoundingClientRect();
+          if (r.height <= 0) continue; // an empty/lazy specimen has no box to measure
+          out.push({ tag: el.tagName.toLowerCase(), id: el.id || null, w: Math.round(r.width), h: Math.round(r.height) });
+        }
+      }
+      const card = document.getElementById('tool-directory-demo')?.getBoundingClientRect();
+      return { specimens: out, card: card ? { w: Math.round(card.width), h: Math.round(card.height) } : null };
+    })()`);
+    const zeroWidth = (widths?.specimens ?? []).filter((x: { w: number }) => x.w <= 0);
+    check("gallery: no visible specimen renders at zero width", widths?.specimens?.length > 0 && zeroWidth.length === 0, zeroWidth);
+    check("tool-directory-card specimen renders wider than 200px", widths?.card !== null && widths.card.w > 200, widths?.card);
+
     // The BeautifulUI-inspired primitives render their shadow content (not
     // empty/blank) + expose the key affordances.
     const bui = await evl(s.sessionId, `(()=>{

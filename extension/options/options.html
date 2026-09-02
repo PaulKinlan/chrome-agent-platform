@@ -307,6 +307,15 @@
             <span class="muted">Shows unredacted prompts, page content, tool arguments, results, and errors in DevTools on this machine. Trace dumps, exports, shared bundles, and reports stay redacted.</span>
           </div>
         </div>
+        <h3>Diagnostics</h3>
+        <p class="muted">Errors, warnings, and unhandled rejections the extension captured on this machine. The badge counts what is waiting; the hub keeps capturing while you work there.</p>
+        <div class="toggle-field" id="diagnostics-console">
+          <error-console count="0" label="Console (errors + warnings)"></error-console>
+          <div class="toggle-text">
+            <span class="toggle-name">Console</span>
+            <span class="muted">Open the captured entries, copy them for a bug report, or clear them.</span>
+          </div>
+        </div>
         <h3>System prompts</h3>
         <p
           class="muted">The system prompt each agent runs with, layer by layer: the versioned built-in prompt, your customization, and the protected runtime policy (never editable, always applied last). The preview is the exact platform composition; every run also records a run-bound attestation of the exact provider-bound system message (digest + bytes, never content).</p>

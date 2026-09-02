@@ -440,6 +440,9 @@ const EXPECTED = [
   "hub: idle 60 s produces zero diagnostics/security/usage routes",
   "hub: the shield badge updates within 1 s of a security event",
   "hub: retained the shield-badge screenshot",
+  "hub: idle header has no status text, no dot, at most one icon button",
+  "hub: no footer button is filled when idle; the open view's button has aria-current=page",
+  "hub: #agent=named:writer reload shows Writer",
   "after enabling one recipe the four agent surfaces agree (1)",
   "after disabling that recipe the four agent surfaces agree (0) again",
   "create dialog: the template select is the first step (Custom default; Starter/Other/Scheduled groups; no gallery grid)",
@@ -1361,6 +1364,84 @@ async function main() {
     // Restore the fresh transparency state for the journeys that follow.
     await msgValue({ type: "security.clear" });
     await msgValue({ type: "diagnostics.clear" });
+
+    // ─────────────────────────────────────────────────────────────
+    // CAP-FB-20260830-HUB-CHROME-POLISH-01 — the hub chrome at rest.
+    // (4) The idle header: no status text, no dot, no developer icons — the
+    // shield renders only in its attention state (cleared just above) and the
+    // console lives in Settings → Advanced → Diagnostics. The provider pill is
+    // the one thing allowed to stay ("Connect a model" is a not-ready state).
+    await sleep(300); // the cleared revision reaches the badge
+    const idleHeader = await evalIn(cdp, ntpSession, `(() => {
+      const vis = (el) => { if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+      const st = document.getElementById('status');
+      const statusVisible = vis(st) && getComputedStyle(st).display !== 'none';
+      const icons = [...document.querySelectorAll('.top-actions *')].filter((el) => el.shadowRoot?.querySelector('.trigger')).filter(vis).map((el) => el.tagName.toLowerCase());
+      return { statusVisible, statusText: statusVisible ? st.textContent : '', dot: !!st?.querySelector('.dot'), icons, console: !!document.querySelector('error-console') };
+    })()`);
+    console.log("idle hub header:", JSON.stringify(idleHeader));
+    const idleHeaderShot = await captureShot(cdp, ntpSession);
+    if (idleHeaderShot) await writeEvidence("hub-idle-header.png", idleHeaderShot);
+    check(
+      "hub: idle header has no status text, no dot, at most one icon button",
+      idleHeader?.statusVisible === false && idleHeader?.dot === false && idleHeader?.console === false &&
+        Array.isArray(idleHeader?.icons) && idleHeader.icons.length <= 1,
+    );
+
+    // (1) The footer is navigation, not actions: no entry is the filled primary
+    // while idle; opening Settings marks its entry aria-current="page" and
+    // Back clears it again.
+    const footerState = () => evalIn(cdp, ntpSession, `(() => {
+      const one = (id) => { const e = document.getElementById(id); return e ? { bg: getComputedStyle(e).backgroundColor, ghost: e.classList.contains('ghost'), current: e.getAttribute('aria-current') } : null; };
+      return { directory: one('open-directory'), artifacts: one('open-artifacts'), settings: one('open-settings') };
+    })()`);
+    const footerIdle = await footerState();
+    await clickSel(cdp, ntpSession, "#open-settings");
+    await sleep(900);
+    const footerSettings = await footerState();
+    const footerSettingsShot = await captureShot(cdp, ntpSession);
+    if (footerSettingsShot) await writeEvidence("hub-footer-settings-current.png", footerSettingsShot);
+    await evalIn(cdp, ntpSession, `document.getElementById('view-back')?.click(); true`);
+    await sleep(900);
+    const footerBack = await footerState();
+    console.log("footer states:", JSON.stringify({ footerIdle, footerSettings, footerBack }));
+    const noneFilled = (s) => s && ["directory", "artifacts", "settings"].every((k) => s[k]?.ghost === true && s[k]?.bg === "rgba(0, 0, 0, 0)");
+    check(
+      "hub: no footer button is filled when idle; the open view's button has aria-current=page",
+      noneFilled(footerIdle) && ["directory", "artifacts", "settings"].every((k) => footerIdle[k]?.current === null) &&
+        footerSettings?.settings?.current === "page" && footerSettings?.directory?.current === null && footerSettings?.artifacts?.current === null &&
+        ["directory", "artifacts", "settings"].every((k) => footerBack?.[k]?.current === null) && noneFilled(footerBack),
+    );
+
+    // (2) An agent opened by URL is titled by its NAME: create "Writer", open a
+    // fresh hub page at #agent=named:writer (no history.state carries the
+    // name), read the header, then remove the agent again.
+    const writerCreated = await msgValue({ type: "named-agent.create", id: "writer", name: "Writer", role: "Drafts and edits prose." });
+    // (Target.createTarget — the /json/new endpoint drops the #agent= hash.)
+    const writerCreatedTarget = await cdp.send("Target.createTarget", {
+      url: `chrome-extension://${extId}/ntp/ntp.html#agent=named:writer`,
+    });
+    const writerPage = { id: writerCreatedTarget?.result?.targetId };
+    await sleep(1500);
+    const writerSession = await attachRuntime(cdp, writerPage.id);
+    cdp.pageSessions.add(writerSession);
+    // The boot route resolves the name through the worker before it opens the
+    // surface — poll (bounded) for the agent view rather than trusting one delay.
+    let writerTitle = null;
+    for (let i = 0; i < 60; i++) {
+      writerTitle = await evalIn(cdp, writerSession, `({ title: document.getElementById('thread-title')?.textContent ?? '', open: document.getElementById('thread-view')?.hidden === false })`);
+      if (writerTitle?.open === true && writerTitle.title !== "Agent") break;
+      await sleep(200);
+    }
+    const writerShot = await captureShot(cdp, writerSession);
+    if (writerShot) await writeEvidence("agent-view-title-writer.png", writerShot);
+    await cdp.send("Target.closeTarget", { targetId: writerPage.id }).catch(() => {});
+    const writerDeleted = await msgValue({ type: "named-agent.delete", id: "writer" });
+    console.log("agent title by URL:", JSON.stringify({ writerCreated: writerCreated?.ok, writerTitle, writerDeleted: writerDeleted?.ok }));
+    check(
+      "hub: #agent=named:writer reload shows Writer",
+      writerCreated?.ok === true && writerTitle?.open === true && writerTitle?.title === "Writer" && writerDeleted?.ok === true,
+    );
 
     // Enable ONE recipe. Headless Chrome auto-denies chrome.permissions.request,
     // so background-agent.set fails closed here (by design); seed the enabled

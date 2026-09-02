@@ -1583,3 +1583,21 @@ Deno.test("capability-row renders a switch-toggle when action-state is on and a 
   const hostile = render({ name: "<img src=x onerror=alert(1)>", "action-state": "on" });
   if (hostile.includes("<img")) throw new Error("the name must be escaped");
 });
+
+// ── <tool-directory-card> host sizing (CAP-FB-20260830-HUB-CHROME-POLISH-01) ──
+// A block host with `container-type: inline-size` and NO explicit inline size
+// resolves to 0 px wide inside a column flex parent (the gallery specimen
+// measured 0 px wide and 3,599 px tall). The host rule must declare an
+// inline-size beside the container-type so the card always takes its row.
+Deno.test("tool-directory-card host declares inline-size 100% alongside container-type", async () => {
+  const src = await Deno.readTextFile(ARTIFACT_DIFF_SRC);
+  const start = src.indexOf("class ToolDirectoryCard extends Component");
+  const end = src.indexOf('customElements.define("tool-directory-card"');
+  if (start < 0 || end < 0 || end < start) throw new Error("ToolDirectoryCard class not found in components.js");
+  const slice = src.slice(start, end);
+  const host = /:host\s*\{([^}]*)\}/.exec(slice)?.[1] ?? "";
+  if (!/container-type\s*:\s*inline-size/.test(host)) throw new Error("the :host rule must keep container-type: inline-size");
+  if (!/(?:^|[;\s])inline-size\s*:\s*100%/.test(host)) {
+    throw new Error(`the :host rule must declare inline-size: 100% beside container-type (got "${host.trim()}")`);
+  }
+});
