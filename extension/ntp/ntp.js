@@ -18,6 +18,7 @@ import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDur
 import { createRunSurfaceOwner } from "../shared/run-surface-owner.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
 import { cancelRunFromRenderedStop, projectConversationRunStatus } from "../shared/run-status.js";
+import { BUDGET_CONTINUE_TASK } from "../lib/run-budget.js";
 import { safeJsonStringify } from "../shared/tool-tree.js";
 import {
   renderHtmlFrame,
@@ -2124,9 +2125,30 @@ async function openThread(id) {
   showThreadView();
   const live = restoredRun != null
     && actionableRunsForSurface(latestDurableRuns, { threadId: id }).length > 0;
-  renderRunStatus(live ? { state: "running", activity: "run in progress" } : { state: "idle" });
+  // A thread whose latest turn stopped on its step budget reopens with the
+  // "Budget reached — Continue" row, so the owner can carry on from a reopened
+  // thread exactly as from the live one (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01).
+  const budgetStop = live ? null : budgetStopOfThread(thread);
+  renderRunStatus(live
+    ? { state: "running", activity: "run in progress" }
+    : budgetStop
+      ? { state: "failed", errorCategory: "budget", errorReason: budgetStop.reason, message: budgetStop.content, ...(budgetStop.executionId ? { executionId: budgetStop.executionId } : {}) }
+      : { state: "idle" });
   renderTasks(id);
   openSpan.end("ok");
+}
+
+/** The thread's LAST persisted row when it is a budget stop (the durable
+ * terminal row: role "error", category "budget"); null otherwise. */
+function budgetStopOfThread(thread) {
+  const messages = Array.isArray(thread?.messages) ? thread.messages : [];
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== "error" || last.category !== "budget") return null;
+  return {
+    reason: typeof last.reason === "string" ? last.reason : "",
+    content: typeof last.content === "string" ? last.content : "",
+    executionId: typeof last.executionId === "string" ? last.executionId : null,
+  };
 }
 
 // ── the BACKGROUND-agent chat surface (item 61): a background agent is an
@@ -3153,6 +3175,14 @@ function renderRunStatus(s) {
 // to the status row itself — message bubbles can also emit "action".
 threadConversation?.addEventListener("action", (ev) => {
   if (!ev.target?.classList?.contains?.("live-status")) return;
+  // "Budget reached — Continue" (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01):
+  // the continuation is a NEW TURN on the SAME thread, so the model sees every
+  // prior turn (its own partial answer included) and carries on from there.
+  // The turn text is the shared constant the SW's run.continue route uses.
+  if (ev.detail?.kind === "continue" || ev.target.getAttribute?.("action-kind") === "continue") {
+    runThreadTurn(BUDGET_CONTINUE_TASK, []).catch((error) => setStatus(`Continue failed — ${error?.message ?? error}`, false));
+    return;
+  }
   // The run-status action is an NTP surface: route IN-CONTEXT like every other
   // Settings entry. chrome.runtime.openOptionsPage() creates no new target from
   // the NTP (it IS the new-tab page) and would strand the user outside the

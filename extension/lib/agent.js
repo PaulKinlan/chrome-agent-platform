@@ -21,6 +21,7 @@ import { perfSpan } from "./cap-perf.js";
 import { maskCredentialShapes } from "./error-report.js";
 import { isToolResultFailure } from "./tool-summary.js";
 import { correctUnsupportedMutationClaims } from "./mutation-claim-check.js";
+import { RUN_BUDGET_DEFAULTS } from "./run-budget.js";
 import {
   anthropicAuthoritativeSearchRequests,
   createAnthropicCallReconciler,
@@ -524,6 +525,11 @@ function summarizeToolResult(result) {
   }
 }
 
+// The run's step budget (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01) — the
+// defaults and every bound live in lib/run-budget.js; re-exported here for
+// the callers that size a run.
+export { RUN_BUDGET_DEFAULTS };
+
 export function createAgent({
   model,
   id = "hub",
@@ -533,7 +539,7 @@ export function createAgent({
   memory = null,
   skills = [],
   taskId = "adhoc",
-  maxIterations = 12,
+  maxIterations = RUN_BUDGET_DEFAULTS.maxIterations,
   iterationGuard = null,
   enrollmentGuard = null,
   // `onProgress` receives normalized progress events (thinking / tool-call /
@@ -732,6 +738,25 @@ export function createAgent({
   let streamStep = -1;
   let streamHold = false;
   let streamDrain = Promise.resolve();
+
+  // THE VISIBLE BUDGET (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01): one model
+  // call = one step. Counted at the provider boundary (the Proxy below), so
+  // the count is exact — a failed attempt that the SDK retries is dropped
+  // again. `budgetTotal` = maxIterations × innerStepLimit; every model call
+  // emits {type:"budget", step, total} so the surface shows "Step N of M".
+  const innerStepLimit = RUN_BUDGET_DEFAULTS.innerStepLimit(maxIterations);
+  const budgetTotal = Math.max(1, Math.trunc(maxIterations)) * innerStepLimit;
+  let budgetStep = 0;
+  let budgetLastStepHadTools = false;
+  let budgetLastStepIndex = -1;
+  const emitBudget = (extra = {}) => {
+    try { progressCb?.({ type: "budget", step: budgetStep, total: budgetTotal, ...extra }); } catch { /* ignore */ }
+  };
+  // Exhausted = the LAST allowed outer iteration still ended in tool calls:
+  // the loop stopped because the budget ran out, not because the model
+  // finished (agent-do breaks the loop only on a no-tool-call step).
+  const budgetExhausted = (aborted) =>
+    aborted !== true && budgetLastStepHadTools === true && budgetLastStepIndex >= Math.trunc(maxIterations) - 1;
   const teeTextDeltas = (value) => {
     if (streamHold || !value || typeof value !== "object" || !(value.stream instanceof ReadableStream)) return value;
     const step = streamStep;
@@ -792,9 +817,14 @@ export function createAgent({
         // continues after). NEVER log options/content (prompts, messages).
         const span = perfSpan(`model:${method}`);
         modelLog.debug(`call attempt ${entry.ordinal}`, method);
+        // One model call = one budget step (dropped again if the call fails
+        // and the SDK retries it).
+        budgetStep = Math.min(budgetTotal, budgetStep + 1);
+        emitBudget();
         const drop = () => {
           const i = attemptQueue.indexOf(entry);
           if (i >= 0) attemptQueue.splice(i, 1);
+          budgetStep = Math.max(0, budgetStep - 1);
         };
         let result;
         try {
@@ -941,10 +971,10 @@ export function createAgent({
     systemPrompt: sysPrompt,
     tools: allTools,
     maxIterations,
-    // The fixed lazy protocol needs two dependent provider steps per logical
-    // tool action. Keep one bounded inner turn large enough for the demo's
-    // write + two reads without dropping its run-local selection sequence.
-    innerStepLimit: Math.max(2, Math.min(maxIterations, 8)),
+    // One inner turn holds up to 24 model steps: with a reusable selection ref
+    // that is one search + ~22 executes — a 30-tab loop in two inner turns
+    // (agent-do keeps the previous turn's tool outputs for one iteration).
+    innerStepLimit,
     usage: { pricing: MODEL_PRICING },
     // Lifecycle bookkeeping for the agent-do logs (bounded: entries are deleted
     // on completion; at most innerStepLimit steps + in-flight tools).
@@ -975,7 +1005,12 @@ export function createAgent({
         const span = perfSpan(`agent-do:step:${e.step}`, { ns: "agent-do" });
         stepSpans.set(e.step, span);
         if (runStartedAt == null) runStartedAt = Date.now();
-        if (!(e.step > 0)) runText = createRunTextTracker();
+        if (!(e.step > 0)) {
+          runText = createRunTextTracker();
+          budgetStep = 0;
+          budgetLastStepHadTools = false;
+          budgetLastStepIndex = -1;
+        }
         streamStep = e.step;
         streamHold = runText.nextStepMayBeNudge();
         streamDrain = Promise.resolve();
@@ -994,6 +1029,8 @@ export function createAgent({
         // for the observed stream branch to drain before emitting the text.
         await Promise.race([streamDrain, new Promise((r) => setTimeout(r, 250))]);
         const classified = runText.step({ step: e.step, hasToolCalls: e.hasToolCalls === true, text: e.text });
+        budgetLastStepHadTools = e.hasToolCalls === true;
+        budgetLastStepIndex = Number.isFinite(e.step) ? e.step : budgetLastStepIndex;
         if (classified.hidden) agentDoLog.debug(`step ${e.step} is the continuation reply — hidden`);
         try {
           progressCb?.({
@@ -1106,7 +1143,14 @@ export function createAgent({
           e = { ...e, result: runText.finalText(e.result) };
           const checked = correctUnsupportedMutationClaims(e.result, okToolNames);
           if (checked.corrections.length > 0) agentDoLog.warn(`mutation-claim correction appended (${checked.corrections.length})`);
-          progressCb?.({ type: "done", text: checked.text, totalSteps: e.totalSteps, aborted: e.aborted });
+          // The budget verdict rides BOTH the final budget event and `done`:
+          // the SW settles a "budget reached — Continue" terminal from it
+          // instead of a silent finish (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01).
+          const exhausted = budgetExhausted(e.aborted);
+          const budget = { used: budgetStep, total: budgetTotal, exhausted };
+          if (exhausted) agentDoLog.warn(`step budget exhausted (${budgetStep}/${budgetTotal}) with tool calls still pending`);
+          emitBudget({ exhausted });
+          progressCb?.({ type: "done", text: checked.text, totalSteps: e.totalSteps, aborted: e.aborted, budget });
         } catch { /* ignore */ }
       },
       onUsage: async (record) => {
@@ -1274,6 +1318,9 @@ export function createAgent({
       return result;
     },
     lazyDiagnostics: () => lazy.diagnostics(),
+    // The finite step budget this agent runs under (the run log records it;
+    // the surface counts against it).
+    budget: () => ({ maxIterations, innerStepLimit, total: budgetTotal }),
     abort: () => {
       if (disposable) aborted = true;
       activeRun?.controller.abort();
@@ -1558,6 +1605,8 @@ export function createOrchestrator({
     // Whether the CURRENT run was aborted (the master's controller) — the SW
     // propagates it in the run response.
     isAborted: () => (typeof master.isAborted === "function" ? master.isAborted() : false),
+    // The master's finite step budget (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01).
+    budget: () => (typeof master.budget === "function" ? master.budget() : null),
     // Rebind the live progress callback on the master + every worker. The SW
     // calls this per-run; the cached orchestrator's agents are reused.
     setProgress(cb) {

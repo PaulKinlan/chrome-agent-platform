@@ -187,6 +187,26 @@ Deno.test("denial contract: list_tabs with tabs granted needs no browser-control
   assertEquals(result.tabs.length, 1);
 });
 
+// CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01 — "list_tabs, I'm not sure it gets
+// all the tabs": the listing carries a count plus window/group/active/index
+// per tab so the model AND the owner can verify completeness across windows.
+Deno.test("list_tabs: completeness fields — count, windowId, groupId, active, index for every window", async () => {
+  reset();
+  grantedPermissions.add("tabs");
+  const a = addTab(`${EXAMPLE}/a`);
+  const b = addTab(`${EXAMPLE}/b`);
+  Object.assign(a, { windowId: 1, index: 0, active: true, groupId: -1 });
+  Object.assign(b, { windowId: 2, index: 0, active: false, groupId: 7 });
+  const result = await tools().list_tabs.execute({});
+  assertEquals(result.count, 2, "the total is stated, not inferred");
+  assertEquals(result.windows, 2, "tabs from every window are included");
+  assertEquals(result.tabs.map((t) => t.windowId), [1, 2]);
+  assertEquals(result.tabs.map((t) => t.index), [0, 0]);
+  assertEquals(result.tabs.map((t) => t.active), [true, false]);
+  assertEquals(result.tabs.map((t) => t.groupId), [-1, 7]);
+  assertEquals(result.tabs[0].id, a.id);
+});
+
 Deno.test("denial contract: granting exactly what the card asked for makes the retried open_tab succeed", async () => {
   reset();
   addTab(`${EXAMPLE}/`);

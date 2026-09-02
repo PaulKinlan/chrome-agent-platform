@@ -4,18 +4,65 @@
 // executable authority. Future execution must re-resolve every live source and
 // perform its existing authorization/dispatch checks. This slice deliberately
 // has no execute operation.
+//
+// BOUNDED REUSE (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01): a ref works for
+// EVERY call of its tool within its run until it expires or reaches
+// maxUsesPerSelection. Single-use bought no security — a ref authorizes
+// nothing and every execute re-authorizes live — but it forced a search_tools
+// round-trip before every call (two model steps per action) and turned the
+// model's retry after a failed tool call into `selection-replayed`. A claim
+// counts one use; a call that never dispatched, or dispatched and failed, hands
+// its use back (release). The run/task/agent/origin/document/generation fences
+// and the catalog/source staleness checks are unchanged.
 
 import { hasLoneSurrogates, truncateUtf8, utf8ByteLength } from "./pure.js";
 
 export const TOOL_SELECTION_BOUNDS = Object.freeze({
-  defaultTtlMs: 60 * 1000,
-  maxTtlMs: 5 * 60 * 1000,
-  maxSelectionsPerRun: 32,
+  // A 30-tab loop takes longer than a minute: refs live 10 min (max 15).
+  defaultTtlMs: 10 * 60 * 1000,
+  maxTtlMs: 15 * 60 * 1000,
+  maxSelectionsPerRun: 128,
   maxTotalSelections: 512,
   maxResultsPerSearch: 12,
   maxResponseBytes: 32 * 1024,
   maxFenceBytes: 256,
+  // How many execute calls one ref may serve (a use is given back when the
+  // call never ran or failed).
+  maxUsesPerSelection: 64,
 });
+
+/** Plain-English sibling for every error token — the sentence the model and
+ * the owner read, with the next action. The token stays for tests/logs. */
+const SELECTION_ERROR_MESSAGES = Object.freeze({
+  "selection-replayed":
+    `This selection reference has been used ${TOOL_SELECTION_BOUNDS.maxUsesPerSelection} times; call search_tools once more for a fresh one and continue.`,
+  "selection-missing-or-expired":
+    `This selection reference is unknown or has expired (a reference lasts ${Math.round(TOOL_SELECTION_BOUNDS.defaultTtlMs / 60000)} minutes); call search_tools again for a fresh one.`,
+  "selection-scope-mismatch":
+    "This selection reference belongs to a different run, agent, or page; call search_tools in this run for a fresh one.",
+  "selection-catalog-stale":
+    "The tool catalog changed since this reference was issued; call search_tools again for a fresh one.",
+  "selection-source-stale":
+    "The tool behind this reference changed or is no longer available; call search_tools again to see whether it is still offered.",
+  "missing-selection-fence":
+    "This run has no selection fence (no run, task, agent or catalog identity), so no reference can be issued; retry search_tools from inside a run.",
+  "stale-catalog-generation":
+    "The tool catalog changed while searching; call search_tools again.",
+});
+
+export function selectionErrorMessage(code) {
+  return SELECTION_ERROR_MESSAGES[code] ?? "This selection reference cannot be used; call search_tools again for a fresh one.";
+}
+
+/** The failure shape every selection path returns: the token AND a sentence. */
+export function selectionError(code, extra = null) {
+  return Object.freeze({
+    ok: false,
+    error: code,
+    message: selectionErrorMessage(code),
+    ...(extra && typeof extra === "object" ? extra : {}),
+  });
+}
 
 function ownData(value, key) {
   try {
@@ -124,21 +171,13 @@ export class ToolSelectionAuthority {
       !context.runId || !context.taskId || !context.agentId ||
       !context.runGeneration || !context.catalogGeneration
     ) {
-      return Object.freeze({
-        ok: false,
-        error: "missing-selection-fence",
-        results: [],
-      });
+      return selectionError("missing-selection-fence", { results: [] });
     }
     if (
       context.catalogGeneration !== catalog?.generation ||
       searchOutput?.catalogGeneration !== catalog?.generation
     ) {
-      return Object.freeze({
-        ok: false,
-        error: "stale-catalog-generation",
-        results: [],
-      });
+      return selectionError("stale-catalog-generation", { results: [] });
     }
     const existingForRun =
       [...this.#records.values()].filter((record) =>
@@ -211,6 +250,7 @@ export class ToolSelectionAuthority {
           context,
           issuedAt: now,
           expiresAt,
+          uses: 0,
         }),
       );
       responseBytes += bytes;
@@ -237,18 +277,17 @@ export class ToolSelectionAuthority {
     const context = scopeContext(contextInput);
     const record = this.#records.get(selectionRef);
     if (!record) {
-      return Object.freeze({
-        ok: false,
-        error: this.#consumed.has(selectionRef)
+      return selectionError(
+        this.#consumed.has(selectionRef)
           ? "selection-replayed"
           : "selection-missing-or-expired",
-      });
+      );
     }
     if (!sameContext(record.context, context)) {
-      return Object.freeze({ ok: false, error: "selection-scope-mismatch" });
+      return selectionError("selection-scope-mismatch");
     }
     if (catalog?.generation !== context.catalogGeneration) {
-      return Object.freeze({ ok: false, error: "selection-catalog-stale" });
+      return selectionError("selection-catalog-stale");
     }
     const descriptor = catalog.byStableId?.[record.stableId];
     if (
@@ -256,28 +295,40 @@ export class ToolSelectionAuthority {
       packageIdentity(descriptor) !== record.packageIdentity ||
       descriptor.availability !== "ready" || !scopeMatches(descriptor, context)
     ) {
-      return Object.freeze({ ok: false, error: "selection-source-stale" });
+      return selectionError("selection-source-stale");
     }
     return Object.freeze({
       ok: true,
       descriptor,
       selectionRef,
       expiresAt: record.expiresAt,
+      uses: record.uses,
       authorizes: false,
       requiresLiveAuthorization: true,
     });
   }
 
+  /** Count one use of a live reference. The ref STAYS live for the same tool
+   * (bounded reuse); the claim records which use it was so release() can hand
+   * exactly that use back. The maxUsesPerSelection-th use is the last: the next
+   * claim retires the ref into #consumed so the error stays honest
+   * (`selection-replayed`, "used 64 times"), never "missing". */
   claim(selectionRefInput, contextInput, catalog) {
     const resolved = this.resolve(selectionRefInput, contextInput, catalog);
     if (!resolved.ok) return resolved;
     const selectionRef = resolved.selectionRef;
     const record = this.#records.get(selectionRef);
-    if (!record) return Object.freeze({ ok: false, error: "selection-replayed" });
-    this.#records.delete(selectionRef);
-    this.#consumed.set(selectionRef, record.expiresAt);
+    if (!record) return selectionError("selection-replayed");
+    if (record.uses >= TOOL_SELECTION_BOUNDS.maxUsesPerSelection) {
+      this.#records.delete(selectionRef);
+      this.#consumed.set(selectionRef, record.expiresAt);
+      return selectionError("selection-replayed");
+    }
+    const use = record.uses + 1;
+    this.#records.set(selectionRef, Object.freeze({ ...record, uses: use }));
     return Object.freeze({
       ...resolved,
+      uses: use,
       claim: Object.freeze({
         selectionRef,
         stableId: record.stableId,
@@ -285,27 +336,39 @@ export class ToolSelectionAuthority {
         packageIdentity: record.packageIdentity,
         context: record.context,
         expiresAt: record.expiresAt,
+        use,
       }),
     });
   }
 
-  /** Hand a claimed reference back when the claim never reached dispatch
-   * (argument validation failed — CAP-FB-20260830-SELECTION-REF-VALIDATE-FIRST-01).
-   * The model repairs its arguments and retries with the SAME ref; the
-   * operating manual forbids a second search. Restores the identical record
-   * exactly once, never after expiry, never for a ref that was not claimed
-   * from this authority. Returns true when the ref is live again. */
+  /** Hand a claimed USE back when the call never reached dispatch (argument
+   * validation failed — CAP-FB-20260830-SELECTION-REF-VALIDATE-FIRST-01) or
+   * dispatched and FAILED (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01): a loop
+   * that fails on 29 of 30 items must not burn its ref on the failures. Only
+   * the LATEST use can come back (a concurrent later claim keeps its count),
+   * exactly once, never after expiry, never for a ref this authority did not
+   * claim. A ref retired at the use bound is restored to its last use when its
+   * final claim is released. Returns true when a use was handed back. */
   release(claimInput) {
     const now = this.#clock();
     this.#purge(now);
     const claim = claimInput && typeof claimInput === "object" ? claimInput : {};
     const selectionRef = safeFence(ownData(claim, "selectionRef"));
     const expiresAt = Number(ownData(claim, "expiresAt"));
+    const use = Number(ownData(claim, "use"));
     if (!/^sel_[a-f0-9]{36}$/u.test(selectionRef)) return false;
     if (!(expiresAt > now)) return false;
-    if (this.#records.has(selectionRef)) return false;
-    // Only a ref this authority consumed with this exact expiry comes back.
+    if (!Number.isInteger(use) || use < 1 || use > TOOL_SELECTION_BOUNDS.maxUsesPerSelection) return false;
+    const live = this.#records.get(selectionRef);
+    if (live) {
+      // Only this exact record (same expiry) and only its latest use.
+      if (live.expiresAt !== expiresAt || live.uses !== use) return false;
+      this.#records.set(selectionRef, Object.freeze({ ...live, uses: use - 1 }));
+      return true;
+    }
+    // Only a ref this authority retired with this exact expiry comes back.
     if (this.#consumed.get(selectionRef) !== expiresAt) return false;
+    if (use !== TOOL_SELECTION_BOUNDS.maxUsesPerSelection) return false;
     const context = scopeContext(ownData(claim, "context"));
     const stableId = ownData(claim, "stableId");
     const sourceGeneration = ownData(claim, "sourceGeneration");
@@ -323,6 +386,7 @@ export class ToolSelectionAuthority {
         context,
         issuedAt: now,
         expiresAt,
+        uses: use - 1,
       }),
     );
     return true;
@@ -334,13 +398,13 @@ export class ToolSelectionAuthority {
     const claim = claimInput && typeof claimInput === "object" ? claimInput : {};
     const context = scopeContext(contextInput);
     if (Number(ownData(claim, "expiresAt")) <= now) {
-      return Object.freeze({ ok: false, error: "selection-missing-or-expired" });
+      return selectionError("selection-missing-or-expired");
     }
     if (!sameContext(ownData(claim, "context"), context)) {
-      return Object.freeze({ ok: false, error: "selection-scope-mismatch" });
+      return selectionError("selection-scope-mismatch");
     }
     if (catalog?.generation !== context.catalogGeneration) {
-      return Object.freeze({ ok: false, error: "selection-catalog-stale" });
+      return selectionError("selection-catalog-stale");
     }
     const descriptor = catalog.byStableId?.[safeFence(ownData(claim, "stableId"))];
     if (
@@ -349,7 +413,7 @@ export class ToolSelectionAuthority {
       packageIdentity(descriptor) !== ownData(claim, "packageIdentity") ||
       descriptor.availability !== "ready" || !scopeMatches(descriptor, context)
     ) {
-      return Object.freeze({ ok: false, error: "selection-source-stale" });
+      return selectionError("selection-source-stale");
     }
     return Object.freeze({
       ok: true,

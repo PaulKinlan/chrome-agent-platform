@@ -156,6 +156,12 @@ try {
   const perms = await opts.ev(`Promise.all([chrome.permissions.contains({permissions:["scripting"]}), chrome.permissions.contains({permissions:["tabs"]})]).then(([s,t]) => JSON.stringify({ scripting: s, tabs: t }))`);
   console.log("permissions held (seeded):", perms);
   console.log("provider.set ->", JSON.stringify(await opts.ev(msg({ type: "provider.set", config: { provider: "demo", apiKey: "" } }))));
+  // The marker demo model (@demo-obey-page) runs only behind the developer
+  // flag since CAP-FB-20260830-KEYLESS-FIRST-RESULT-01 — without it the keyless
+  // local assistant answers ("connect a model in Settings") and the obey probe
+  // never reaches the model it is meant to test (the same flag the journey
+  // suite sets). Noted while landing CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01.
+  console.log("developer flag ->", JSON.stringify(await opts.ev(msg({ type: "kv.set", values: { "cap:developerFeatures": true } }))));
 
   // (a) passive detection: open the hostile page, let the detector report.
   const hostile = await attach(HOSTILE_URL, 3000);

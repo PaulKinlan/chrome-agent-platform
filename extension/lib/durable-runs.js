@@ -1825,6 +1825,19 @@ export function createDurableRunRegistry({
             // r1 B1 de-duplicated the full copy from here).
             result: bounded(fullResult),
             ...(payload?.aborted === true ? { aborted: true } : {}),
+            // The failure classification rides the registry record too, so a
+            // reopened surface can offer the right recovery (Fix in Settings,
+            // or Continue for a budget stop — CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01).
+            ...(!ok && typeof payload?.errorCategory === "string" && payload.errorCategory
+              ? {
+                errorCategory: bounded(payload.errorCategory, 64),
+                ...(payload?.errorReason ? { errorReason: bounded(payload.errorReason, 2 * 1024) } : {}),
+                ...(payload?.errorAction ? { errorAction: bounded(payload.errorAction, 2 * 1024) } : {}),
+              }
+              : {}),
+            ...(payload?.budget && typeof payload.budget === "object"
+              ? { budget: { used: Number(payload.budget.used) || 0, total: Number(payload.budget.total) || 0, exhausted: payload.budget.exhausted === true } }
+              : {}),
           },
           journalEntry: {
             type: "result",

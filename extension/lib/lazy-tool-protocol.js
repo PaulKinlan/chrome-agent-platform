@@ -846,14 +846,19 @@ export class LazyToolProtocol {
       first.catalog,
     );
     if (!firstResolved.ok) return firstResolved;
-    // An argument-validation failure never reaches dispatch, so it must not
-    // burn the single-use ref: hand it back and tell the model the SAME ref
-    // works on the corrected retry (CAP-FB-20260830-SELECTION-REF-VALIDATE-FIRST-01
-    // — a MIME-type enum slip used to end the whole run as selection-replayed).
-    const retryable = (failure) => {
+    // A claim counts ONE use of a reusable ref (CAP-FB-20260901-RUN-BUDGET-
+    // EVERY-ITEM-01). Any failure after the claim — an argument slip that
+    // never reaches dispatch (CAP-FB-20260830-SELECTION-REF-VALIDATE-FIRST-01),
+    // a stale fence, or a tool that ran and FAILED — hands that use back, so a
+    // failed call never burns the ref and the model's retry on the SAME ref is
+    // never `selection-replayed` (the owner's log: "No tab with id" → retry →
+    // replayed → the run gave up).
+    const released = (failure) => {
       this.#selections.release(firstResolved.claim);
-      return retryableArgumentFailure(failure, firstResolved.selectionRef);
+      return failure;
     };
+    const retryable = (failure) =>
+      released(retryableArgumentFailure(failure, firstResolved.selectionRef));
     let args;
     try {
       args = sanitizeLazyToolArguments(ownData(request, "arguments"), firstResolved.descriptor);
@@ -868,10 +873,10 @@ export class LazyToolProtocol {
       firstResolved.descriptor,
       "before-validation",
     );
-    if (!firstAuthority.ok) return firstAuthority;
+    if (!firstAuthority.ok) return released(firstAuthority);
     const validated = await validateRecordArguments(firstRecord, args, firstResolved.descriptor);
     if (!validated.ok) return retryable(validated);
-    if (isAborted(signal)) return fixedError("lazy-run-aborted");
+    if (isAborted(signal)) return released(fixedError("lazy-run-aborted"));
 
     // Validation is an async boundary. Rebuild and re-resolve every live
     // scope/source/package/capability/permission/grant fence before dispatch.
@@ -879,14 +884,14 @@ export class LazyToolProtocol {
     try {
       dispatchSnapshot = await liveSnapshot(this.#readSources);
     } catch {
-      return fixedError("lazy-source-unavailable");
+      return released(fixedError("lazy-source-unavailable"));
     }
     const dispatchResolved = this.#selections.revalidateClaim(
       firstResolved.claim,
       sourceContext(context, dispatchSnapshot.catalog.generation),
       dispatchSnapshot.catalog,
     );
-    if (!dispatchResolved.ok) return dispatchResolved;
+    if (!dispatchResolved.ok) return released(dispatchResolved);
     const dispatchRecord = dispatchSnapshot.byStableId.get(
       dispatchResolved.descriptor.stableId,
     );
@@ -897,7 +902,7 @@ export class LazyToolProtocol {
       dispatchResolved.descriptor,
       "before-dispatch",
     );
-    if (!beforeDispatchAuthority.ok) return beforeDispatchAuthority;
+    if (!beforeDispatchAuthority.ok) return released(beforeDispatchAuthority);
     // Validate through the SAME live record whose closure will dispatch. A
     // same-label closure/validator ABA cannot borrow an earlier validation.
     const dispatchValidated = await validateRecordArguments(
@@ -905,12 +910,12 @@ export class LazyToolProtocol {
       validated.data,
       dispatchResolved.descriptor,
     );
-    if (!dispatchValidated.ok) return dispatchValidated;
+    if (!dispatchValidated.ok) return released(dispatchValidated);
     const dispatch = ownData(dispatchRecord, "dispatch");
     if (typeof dispatch !== "function") {
-      return fixedError("lazy-dispatch-unavailable");
+      return released(fixedError("lazy-dispatch-unavailable"));
     }
-    if (isAborted(signal)) return fixedError("lazy-run-aborted");
+    if (isAborted(signal)) return released(fixedError("lazy-run-aborted"));
 
     let rawResult;
     let dispatchError = null;
@@ -951,7 +956,7 @@ export class LazyToolProtocol {
       }
       dispatchError = error;
     }
-    if (isAborted(signal)) return fixedError("lazy-run-aborted");
+    if (isAborted(signal)) return released(fixedError("lazy-run-aborted"));
 
     // Discard both success and failure output if any live authority changed
     // during dispatch. A relay/provider-style completion is never authority.
@@ -959,16 +964,16 @@ export class LazyToolProtocol {
     try {
       after = await liveSnapshot(this.#readSources);
     } catch {
-      return fixedError("lazy-source-unavailable");
+      return released(fixedError("lazy-source-unavailable"));
     }
     const afterResolved = this.#selections.revalidateClaim(
       firstResolved.claim,
       sourceContext(context, after.catalog.generation),
       after.catalog,
     );
-    if (!afterResolved.ok) return afterResolved;
+    if (!afterResolved.ok) return released(afterResolved);
     const afterRecord = after.byStableId.get(afterResolved.descriptor.stableId);
-    if (!afterRecord) return fixedError("lazy-dispatch-source-stale");
+    if (!afterRecord) return released(fixedError("lazy-dispatch-source-stale"));
     const afterAuthority = await authorizeRecord(
       afterRecord,
       dispatchValidated.data,
@@ -976,20 +981,40 @@ export class LazyToolProtocol {
       afterResolved.descriptor,
       "after-dispatch",
     );
-    if (!afterAuthority.ok) return afterAuthority;
+    if (!afterAuthority.ok) return released(afterAuthority);
     if (dispatchError) {
-      return Object.freeze({
-        ok: false,
-        selectedTool: afterResolved.descriptor.name,
-        error: truncateUtf8(
-          safeProviderError(
-            typeof dispatchError === "string"
-              ? dispatchError
+      const toolName = afterResolved.descriptor.name;
+      const detail = truncateUtf8(
+        safeProviderError(
+          typeof dispatchError === "string"
+            ? dispatchError
+            : (typeof ownData(dispatchError, "message") === "string" && ownData(dispatchError, "message"))
+              ? ownData(dispatchError, "message")
               : "lazy dispatcher failed",
-          ),
+        ),
+        LAZY_TOOL_PROTOCOL_BOUNDS.maxErrorBytes,
+      );
+      // The failed call's use goes back to the ref: the SAME selectionRef is
+      // valid for the next item, and the sentence says so (no bare token).
+      return released(Object.freeze({
+        ok: false,
+        selectedTool: toolName,
+        error: detail,
+        selectionRef,
+        message: truncateUtf8(
+          `${toolName} failed: ${detail}. The same selectionRef is still valid — fix the arguments or move on to the next item and call execute_tool again; do not search again.`,
           LAZY_TOOL_PROTOCOL_BOUNDS.maxErrorBytes,
         ),
-      });
+      }));
+    }
+    // A tool that reports its own failure ({error} / ok:false) ran but did no
+    // work: give the use back the same way, so a loop that fails on most of
+    // its items keeps one ref for all of them.
+    if (
+      rawResult && typeof rawResult === "object" && !Array.isArray(rawResult) &&
+      (ownData(rawResult, "ok") === false || typeof ownData(rawResult, "error") === "string")
+    ) {
+      this.#selections.release(firstResolved.claim);
     }
     // The image bytes are lifted OUT of the model JSON here and remembered for
     // the provider toolset to re-attach as a real image content part

@@ -564,6 +564,10 @@ const EXPECTED = [
   "Thread view: conversation scrolled to bottom after an edit turn",
   "Plan strip: a running multi-step task shows an advancing checklist pinned to the top of the thread",
   "Plan strip: on done it settles into a collapsed 'N steps' summary with every step checked",
+  "Every item: 12 fixture tabs are read with ONE read_page search — 12 execute_tool reads, 0 selection-replayed",
+  "Every item: the status row counts Step N of M while working",
+  "Budget: a run with budget 2 stops on 'Budget reached — Continue' (never a silent finish)",
+  "Budget: Continue runs a second execution on the same thread",
   "real red tab resolved (active tab id)",
   "screenshot: denied after revoke (secondary probe)",
   "screenshot: capture SUCCEEDS for the granted origin",
@@ -3721,7 +3725,9 @@ async function main() {
     const distinctLens = new Set(streamSamples.map((s) => s.len).filter((n) => n > 0));
     const sawStreamingAttr = streamSamples.some((s) => s.streaming && s.len > 0);
     const textNodesOnly = streamSamples.filter((s) => s.streaming && s.textNodesOnly != null).every((s) => s.textNodesOnly === true);
-    const sawWriting = streamSamples.some((s) => (s.status ?? []).some((r) => r.activity === "Writing the answer…"));
+    // The activity carries the step counter since CAP-FB-20260901-RUN-BUDGET-
+    // EVERY-ITEM-01 ("Writing the answer · Step 2 of 1152"): match the phrase.
+    const sawWriting = streamSamples.some((s) => (s.status ?? []).some((r) => /^Writing the answer\b/.test(String(r.activity ?? ""))));
     const lastSample = streamSamples.at(-1) ?? {};
     const worstLongTask = Math.max(0, ...(lastSample.longTasks ?? []));
     const firstVisibleMs = streamSamples.find((s) => s.len > 0)?.t ?? null;
@@ -4186,6 +4192,179 @@ async function main() {
         planFinal.rows.some((r) => /Writing memory/i.test(r.label)) &&
         planFinal.rows.some((r) => /Reading memory/i.test(r.label)),
     );
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 3g — CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01: "it should go
+    // through every tab". (1) Twelve fixture tabs; the demo model lists them and
+    // reads EVERY one through the real lazy protocol with ONE read_page search —
+    // the run log shows 12 read_page executes, 0 `selection-replayed` — while
+    // the status row counts "Step N of M". (2) A run whose budget is two
+    // iterations stops on "Budget reached — Continue" (never a silent finish);
+    // clicking Continue runs a second execution on the SAME thread.
+    // ─────────────────────────────────────────────────────────────
+    {
+      const RUN_STATUS_STATE = `(() => {
+        const conv = document.getElementById('thread-conversation');
+        const row = conv ? conv.querySelector('conversation-run-status.live-status') : null;
+        if (!row) return JSON.stringify(null);
+        const sr = row.shadowRoot;
+        return JSON.stringify({
+          state: row.getAttribute('state'),
+          category: row.getAttribute('error-category'),
+          actionKind: row.getAttribute('action-kind'),
+          actionLabel: row.getAttribute('action-label'),
+          label: sr ? (sr.querySelector('.label')?.textContent ?? '').trim() : '',
+          hasAction: !!(sr && sr.querySelector('.action')),
+        });
+      })()`;
+      const runStatus = async () => { try { return JSON.parse(await evalIn(cdp, ntpSession, RUN_STATUS_STATE) ?? "null"); } catch { return null; } };
+      const latestRun = async (threadId = null) => {
+        const runs = await msgValue({ type: "run.list" }).catch(() => null);
+        const rows = (Array.isArray(runs?.runs) ? runs.runs : [])
+          .filter((r) => (threadId ? r?.threadId === threadId : /demo-every-tab/.test(String(r?.taskPreview ?? ""))));
+        rows.sort((a, b) => (a?.updatedAt ?? a?.createdAt ?? 0) - (b?.updatedAt ?? b?.createdAt ?? 0));
+        return rows[rows.length - 1] ?? null;
+      };
+      // read_page needs the silent `scripting` permission (the journey manifest
+      // already carries <all_urls>); grant it under a CDP user gesture.
+      const scriptingReady = await evalIn(cdp, ntpSession, `chrome.permissions.contains({ permissions: ["scripting"] })`);
+      if (scriptingReady !== true) {
+        await cdp.send("Runtime.evaluate", {
+          expression: `chrome.permissions.request({ permissions: ["scripting"] }).catch(() => false)`,
+          awaitPromise: true, returnByValue: true, userGesture: true,
+        }, ntpSession).catch(() => null);
+      }
+      console.log(`every-tab journey: scripting granted=${await evalIn(cdp, ntpSession, `chrome.permissions.contains({ permissions: ["scripting"] })`)}`);
+      // The journey profile cannot hold the `tabs` permission (headless
+      // auto-denies its prompt), so the demo loop is given the fixture tab ids
+      // explicitly (the ids are visible to an extension page without `tabs`;
+      // list_tabs itself is covered by the unit test + the live harness).
+      const tabIdsBefore = new Set(await evalIn(cdp, ntpSession, `chrome.tabs.query({}).then((t) => t.map((x) => x.id))`) ?? []);
+      const fixtureTabs = [];
+      for (let i = 1; i <= 12; i++) fixtureTabs.push(await openPage(port, `${RED_ORIGIN}/tab/${i}`));
+      await sleep(1500);
+      const tabIdsAfter = await evalIn(cdp, ntpSession, `chrome.tabs.query({}).then((t) => t.map((x) => x.id))`) ?? [];
+      const fixtureTabIds = tabIdsAfter.filter((id) => !tabIdsBefore.has(id));
+      const everyTask = `@demo-every-tab tabs=${fixtureTabIds.join(",")}`;
+      const runsBeforeEvery = ((await msgValue({ type: "run.list" }).catch(() => null))?.runs ?? []).length;
+      await driveHubTask(everyTask);
+      let stepCounterSeen = null;
+      let stepShot = null;
+      let everyRun = null;
+      {
+        const t0 = Date.now();
+        while (Date.now() - t0 < 180000) {
+          const st = await runStatus();
+          if (st && ["running", "retrying", "queued"].includes(st.state) && /Step \d+ of \d+/.test(st.label)) {
+            stepCounterSeen = st.label;
+            if (!stepShot) { stepShot = await captureShot(cdp, ntpSession); if (stepShot) await writeEvidence("run-budget-step-counter.png", stepShot); }
+          }
+          // The durable registry is the authority for "settled" (the live row
+          // is re-projected when the thread reloads at the terminal).
+          const runs = (await msgValue({ type: "run.list" }).catch(() => null))?.runs ?? [];
+          const mine = runs.filter((r) => /demo-every-tab/.test(String(r?.taskPreview ?? "")));
+          const newest = mine.sort((a, b) => (a?.updatedAt ?? a?.createdAt ?? 0) - (b?.updatedAt ?? b?.createdAt ?? 0))[mine.length - 1];
+          if (runs.length > runsBeforeEvery && newest && ["terminal", "cancelled"].includes(newest.phase)) { everyRun = newest; break; }
+          await sleep(200);
+        }
+      }
+      await sleep(600);
+      const everyLogs = everyRun?.executionId ? await msgValue({ type: "run.logs", executionId: everyRun.executionId }).catch(() => null) : null;
+      const logRows = (Array.isArray(everyLogs?.logs) ? everyLogs.logs : []).map((r) => { try { return JSON.stringify(r); } catch { return ""; } });
+      const executeCalls = logRows.filter((s) => /"type":"tool-call"/.test(s) && /"tool":"execute_tool"/.test(s)).length;
+      const searchCalls = logRows.filter((s) => /"type":"tool-call"/.test(s) && /"tool":"search_tools"/.test(s)).length;
+      const readPageResults = logRows.filter((s) => /"type":"tool-result"/.test(s) && /"tool":"execute_tool"/.test(s) && /read_page/.test(s)).length;
+      const replayed = logRows.filter((s) => /selection-replayed/.test(s)).length;
+      const summary = String(everyRun?.terminal?.summary ?? "");
+      console.log(`every-tab journey: fixtureTabs=${fixtureTabIds.length} run=${JSON.stringify({ phase: everyRun?.phase, ok: everyRun?.terminal?.ok })} step=${JSON.stringify(stepCounterSeen)} rows=${logRows.length} search=${searchCalls} execute=${executeCalls} read_page=${readPageResults} replayed=${replayed} summary=${summary.slice(0, 200)}`);
+      const everyShot = await captureShot(cdp, ntpSession);
+      if (everyShot) await writeEvidence("every-tab-demo-12.png", everyShot);
+      check(
+        "Every item: 12 fixture tabs are read with ONE read_page search — 12 execute_tool reads, 0 selection-replayed",
+        fixtureTabIds.length === 12 && everyRun?.phase === "terminal" && everyRun?.terminal?.ok === true &&
+          // ONE search (never one per item); the search_tools row itself is a
+          // best-effort journal write, so "at most one" is the falsifiable bound.
+          searchCalls <= 1 && readPageResults === 12 && executeCalls === 12 && replayed === 0 &&
+          /Every tab: listed 12, read 12 of 12\./.test(summary),
+      );
+      check(
+        "Every item: the status row counts Step N of M while working",
+        typeof stepCounterSeen === "string" && /Step \d+ of \d+/.test(stepCounterSeen),
+      );
+
+      // (2) The budget stop + Continue. Two iterations × two inner steps = four
+      // model steps: search read_page, execute one read, (history stripped)
+      // search, execute — then the loop is out of steps with reads pending.
+      // The run outlives a CDP evaluate: fire it, then poll for its reply.
+      await evalIn(cdp, ntpSession, `(() => { window.__capBudgetRun = null; chrome.runtime.sendMessage(${JSON.stringify({ type: "agent.run", task: everyTask, maxIterations: 2 })}).then((v) => { window.__capBudgetRun = v; }, (e) => { window.__capBudgetRun = { ok: false, error: String(e?.message ?? e) }; }); return true; })()`);
+      let budgeted = null;
+      {
+        const t0 = Date.now();
+        while (Date.now() - t0 < 180000) {
+          budgeted = await evalIn(cdp, ntpSession, `window.__capBudgetRun`).catch(() => null);
+          if (budgeted) break;
+          await sleep(300);
+        }
+      }
+      console.log(`budget journey: run=${JSON.stringify(budgeted).slice(0, 400)}`);
+      const budgetThreadId = budgeted?.threadId ?? null;
+      const budgetRun = await latestRun(budgetThreadId);
+      check(
+        "Budget: a run with budget 2 stops on 'Budget reached — Continue' (never a silent finish)",
+        budgeted?.ok === false && budgeted?.errorCategory === "budget" && budgeted?.errorAction === "Continue" &&
+          /Step budget reached \(4 of 4\)/.test(String(budgeted?.error)) &&
+          budgetRun?.phase === "terminal" && budgetRun?.terminal?.errorCategory === "budget" && budgetRun?.terminal?.ok === false,
+      );
+      // Reopen the thread in a NEW target (the suite's NTP stays untouched):
+      // the status row derives "Budget reached — Continue" from the durable
+      // record (not from a live event).
+      const reopened = await cdp.send("Target.createTarget", {
+        url: `chrome-extension://${extId}/ntp/ntp.html#thread=${encodeURIComponent(String(budgetThreadId ?? ""))}`,
+      });
+      const reopenedId = reopened?.result?.targetId ?? null;
+      await sleep(1500);
+      const reopenedSession = reopenedId ? await attachRuntime(cdp, reopenedId) : null;
+      if (reopenedSession) cdp.pageSessions.add(reopenedSession);
+      const reopenedStatus = async () => { try { return JSON.parse(await evalIn(cdp, reopenedSession, RUN_STATUS_STATE) ?? "null"); } catch { return null; } };
+      let budgetStatus = null;
+      {
+        const t0 = Date.now();
+        while (reopenedSession && Date.now() - t0 < 20000) {
+          const st = await reopenedStatus();
+          if (st && st.state === "failed" && st.actionKind === "continue") { budgetStatus = st; break; }
+          await sleep(200);
+        }
+      }
+      console.log(`budget journey: reopened status=${JSON.stringify(budgetStatus)}`);
+      const budgetShot = reopenedSession ? await captureShot(cdp, reopenedSession) : null;
+      if (budgetShot) await writeEvidence("run-budget-continue-card.png", budgetShot);
+      const executionsBefore = (await msgValue({ type: "run.list" }).catch(() => null))?.runs?.filter((r) => r?.threadId === budgetThreadId).length ?? 0;
+      const clickedContinue = budgetStatus ? await clickShadow(cdp, reopenedSession, "conversation-run-status.live-status", ".action") : false;
+      let continued = null;
+      {
+        const t0 = Date.now();
+        while (Date.now() - t0 < 60000) {
+          const runs = (await msgValue({ type: "run.list" }).catch(() => null))?.runs ?? [];
+          const mine = runs.filter((r) => r?.threadId === budgetThreadId);
+          // The continuation is the thread's run that is NOT the budget stop.
+          const newest = mine.find((r) => r?.executionId !== budgetRun?.executionId) ?? null;
+          if (mine.length > executionsBefore && newest && ["terminal", "cancelled"].includes(newest.phase)) { continued = { count: mine.length, newest }; break; }
+          await sleep(300);
+        }
+      }
+      console.log(`budget journey: clicked=${clickedContinue} before=${executionsBefore} after=${JSON.stringify({ count: continued?.count, phase: continued?.newest?.phase, ok: continued?.newest?.terminal?.ok, task: String(continued?.newest?.taskPreview ?? "").slice(0, 80), budget: continued?.newest?.terminal?.budget ?? null, summary: String(continued?.newest?.terminal?.summary ?? "").slice(0, 120) })}`);
+      check(
+        "Budget: Continue runs a second execution on the same thread",
+        !!budgetStatus && /Budget reached/.test(budgetStatus.label) && budgetStatus.actionLabel === "Continue" && clickedContinue === true &&
+          !!continued && continued.count === executionsBefore + 1 && continued.newest.executionId !== budgetRun?.executionId &&
+          continued.newest.terminal?.ok === true,
+      );
+      // Leave the suite as it was: close the fixture tabs and the reopened view
+      // (the NTP stays on the thread view the next journey's composer expects).
+      for (const t of fixtureTabs) await cdp.send("Target.closeTarget", { targetId: t.id }).catch(() => {});
+      if (reopenedId) await cdp.send("Target.closeTarget", { targetId: reopenedId }).catch(() => {});
+      await sleep(800);
+    }
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 4 — screenshot matrix. Owner grant/scope/revoke is driven via the

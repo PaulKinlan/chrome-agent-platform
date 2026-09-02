@@ -15,6 +15,7 @@
 
 import { send } from "../lib/messages.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
+import { formatBudgetProgress } from "../lib/run-budget.js";
 import { safeJsonStringify } from "./tool-tree.js";
 import { artifactIdentityFromPayloads } from "./thread-view.js";
 import { isAuthoritativeThreadResultProjected } from "./thread-projection-authority.js";
@@ -1958,6 +1959,14 @@ export async function runConversationTurn(container, { text, attachments = [], h
   // TOOLS-01); and the authoritative result is that same text with the claim-
   // check correction appended, which belongs IN the bubble, not beside it.
   let streamedAgentBubble = null;
+  // The step counter the budget events feed ("Step N of M") and the last
+  // activity phrase it decorates (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01).
+  let budget = null;
+  let lastActivity = "";
+  const withBudget = (activity) => {
+    const counter = formatBudgetProgress(budget);
+    return counter ? `${activity} · ${counter}` : activity;
+  };
   // The terminal arbiter: settles the queue + unsubscribes EXACTLY ONCE on the
   // first authoritative terminal (the port's done/error or the run response —
   // which carries the final outcome incl. aborted). No timing dependency.
@@ -1990,17 +1999,30 @@ export async function runConversationTurn(container, { text, attachments = [], h
       return;
     }
     switch (ev.type) {
+      case "budget": {
+        // THE VISIBLE BUDGET (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01): one
+        // event per model step; the counter rides every running label from
+        // here on ("Working — reading the page… · Step 12 of 96").
+        if (Number.isFinite(ev.step) && Number.isFinite(ev.total)) budget = { step: ev.step, total: ev.total };
+        if (ev.exhausted === true) break; // the terminal carries the verdict
+        status({ state: attempt > 1 ? "retrying" : "running", activity: withBudget(lastActivity || "Thinking") });
+        break;
+      }
       case "thinking": {
+        // The loop's own iteration counter until the first budget event
+        // arrives; from then on the model-step counter ("Step N of M") wins.
         const step = ev.step != null ? ev.step + 1 : null;
         const total = ev.totalSteps != null ? ` of ${ev.totalSteps}` : "";
+        lastActivity = "Thinking";
         status({
           state: attempt > 1 ? "retrying" : "running",
-          activity: step != null ? `Thinking · step ${step}${total}` : "Thinking…",
+          activity: budget ? withBudget(lastActivity) : (step != null ? `Thinking · step ${step}${total}` : "Thinking…"),
         });
         break;
       }
       case "tool-call": {
-        status({ state: attempt > 1 ? "retrying" : "running", activity: friendlyActivityLabel(ev.toolName, ev.toolArgs) });
+        lastActivity = friendlyActivityLabel(ev.toolName, ev.toolArgs);
+        status({ state: attempt > 1 ? "retrying" : "running", activity: withBudget(lastActivity) });
         // A tool call is a plan step — append it to the top-of-thread checklist
         // (protocol plumbing is never a step).
         if (!isProtocolTool(ev.toolName)) {
@@ -2104,7 +2126,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
       case "text-delta":
         // The first visible token replaces "Thinking…" in the live-status row;
         // later deltas only grow the bubble (no per-delta announcement).
-        if (streamer.onDelta(ev)) status({ state: attempt > 1 ? "retrying" : "running", activity: "Writing the answer…" });
+        if (streamer.onDelta(ev)) { lastActivity = "Writing the answer"; status({ state: attempt > 1 ? "retrying" : "running", activity: withBudget(lastActivity) }); }
         break;
       case "text":
         if (ev.hidden === true) { streamer.finalize(ev.step, ""); break; }
@@ -2288,13 +2310,17 @@ export async function runConversationTurn(container, { text, attachments = [], h
     const action = res?.errorAction ?? (res?.aborted ? "the run stopped before completing" : null);
     const category = res?.errorCategory ?? (res?.aborted ? "aborted" : null);
     const msg = res?.error ?? (res?.aborted ? "run aborted" : "unknown error");
-    c.planEvent?.({ type: "fail" });
+    // A budget stop settles the plan strip (the steps that ran are done) and
+    // renders as "Budget reached — Continue" on the status row; the thread's
+    // own terminal row (from the durable log) carries the same sentence.
+    c.planEvent?.({ type: category === "budget" ? "settle" : "fail" });
     status({
       state: res?.aborted ? "cancelled" : "failed",
       message: reason ?? msg,
       errorReason: reason,
       errorAction: action,
       errorCategory: category,
+      ...(res?.executionId ? { executionId: res.executionId } : {}),
     });
     if (typeof c.appendError === "function") {
       c.appendError(msg, { reason, action, category });

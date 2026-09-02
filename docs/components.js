@@ -5474,6 +5474,8 @@ class AgentConversation extends Component {
       message: typeof status?.message === "string" && status.message.trim() ? status.message.trim() : null,
       errorReason: typeof status?.errorReason === "string" && status.errorReason.trim() ? status.errorReason.trim() : null,
       actionLabel: typeof status?.actionLabel === "string" && status.actionLabel.trim() ? status.actionLabel.trim() : null,
+      actionKind: typeof status?.actionKind === "string" && status.actionKind.trim() ? status.actionKind.trim() : null,
+      errorCategory: typeof status?.errorCategory === "string" && status.errorCategory.trim() ? status.errorCategory.trim() : null,
       executionId: Object.hasOwn(status ?? {}, "executionId")
         ? (typeof status.executionId === "string" && status.executionId.trim() ? status.executionId.trim() : null)
         : (this._liveStatusRow?.getAttribute("execution-id") || null),
@@ -5489,7 +5491,7 @@ class AgentConversation extends Component {
     }
     row.removeAttribute("hidden");
     row.setAttribute("state", next.state);
-    for (const [name, value] of [["activity", next.activity], ["message", next.message], ["error-reason", next.errorReason], ["action-label", next.actionLabel], ["execution-id", next.executionId]]) {
+    for (const [name, value] of [["activity", next.activity], ["message", next.message], ["error-reason", next.errorReason], ["error-category", next.errorCategory], ["action-label", next.actionLabel], ["action-kind", next.actionKind], ["execution-id", next.executionId]]) {
       if (value) row.setAttribute(name, value);
       else row.removeAttribute(name);
     }
@@ -7001,10 +7003,13 @@ customElements.define("loading-state", LoadingState);
 /* <conversation-run-status state="queued|running|retrying|waiting-for-permission|completed|failed|cancelled">
  * is the ONE lifecycle surface in every task/agent conversation. It uses the
  * preferred pixel grid for every state (animated only while active), one atomic
- * live region, and an optional recovery action. No nested spinner/live region. */
+ * live region, and an optional recovery action. No nested spinner/live region.
+ * `error-category="budget"` + `action-kind="continue"` is the "Budget reached —
+ * Continue" card (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01): the same chrome,
+ * one Continue button; the page routes the `action` event by action-kind. */
 class ConversationRunStatus extends Component {
   static get observedAttributes() {
-    return ["state", "activity", "message", "error-reason", "action-label", "execution-id"];
+    return ["state", "activity", "message", "error-reason", "error-category", "action-label", "action-kind", "execution-id"];
   }
   _render() {
     const status = normalizeConversationRunStatus({
@@ -7012,6 +7017,7 @@ class ConversationRunStatus extends Component {
       activity: this.getAttribute("activity"),
       message: this.getAttribute("message"),
       errorReason: this.getAttribute("error-reason"),
+      errorCategory: this.getAttribute("error-category"),
     });
     if (!status) {
       mountTemplate(this, ":host { display:none; }", "");
@@ -7049,7 +7055,8 @@ class ConversationRunStatus extends Component {
     const executionId = this.getAttribute("execution-id")?.trim() || "";
     this._root.querySelector(".stop")?.addEventListener("click", (sourceEvent) =>
       this._emit("stop", { sourceEvent, executionId }));
-    this._root.querySelector(".action")?.addEventListener("click", () => this._emit("action"));
+    this._root.querySelector(".action")?.addEventListener("click", () =>
+      this._emit("action", { kind: this.getAttribute("action-kind") || "settings", executionId }));
     // The elapsed readout ticks once a second while the run is active — it
     // updates the loader's attribute only (no re-render of the live region,
     // so the announcement is never repeated).

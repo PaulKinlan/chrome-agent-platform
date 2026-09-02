@@ -273,13 +273,18 @@ Deno.test("LazyToolProtocol end-to-end: search -> claim selectionRef -> execute 
     assertEquals(execResult.ok, true);
     assert(JSON.stringify(execResult).includes("Executed base64 with stdin: hello"));
 
-    // Step 3: Replay with same selectionRef must fail closed (single-use token)
-    const replayResult = await protocol.execute({
+    // Step 3: the same selectionRef runs the same tool again (bounded reuse,
+    // CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01) — still re-authorized live.
+    const reuseResult = await protocol.execute({
       selectionRef,
       arguments: { stdin: "hello again" },
     }, context);
 
-    assertEquals(replayResult.ok, false, "replaying claimed selectionRef must fail");
+    assertEquals(reuseResult.ok, true, "a reused selectionRef dispatches the same tool again");
+    assert(JSON.stringify(reuseResult).includes("Executed base64 with stdin: hello again"));
+    // A ref from another run's scope still fails closed.
+    const foreign = await protocol.execute({ selectionRef, arguments: { stdin: "x" } }, { ...context, runId: "run-other" });
+    assertEquals(foreign.ok, false, "scope fences survive reuse");
   } finally {
     clearRunFence();
   }

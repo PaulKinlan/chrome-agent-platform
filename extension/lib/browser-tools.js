@@ -2200,15 +2200,31 @@ export function browserToolset(readOnly = false, {
       execute: async ({ tabId }) => captureTabScreenshot(tabId),
     }),
     list_tabs: tool({
-      description: "List the open tabs.",
+      description: "List EVERY open tab across every window, with a count so completeness can be checked.",
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasTabsPermission())) {
           return permissionDeniedResult("tabs", { reason: "list your open tabs" });
         }
+        // chrome.tabs.query({}) spans every window of the profile (not just
+        // the current one). The completeness fields — count, window count,
+        // windowId/index/active/groupId per tab — let the model and the owner
+        // verify nothing was skipped (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01:
+        // "list_tabs, I'm not sure it gets all the tabs").
         const tabs = await chrome.tabs.query({});
+        const windows = new Set(tabs.map((t) => t.windowId).filter((w) => Number.isFinite(w)));
         return {
-          tabs: tabs.map((t) => ({ id: t.id, title: t.title, url: t.url })),
+          count: tabs.length,
+          windows: windows.size,
+          tabs: tabs.map((t) => ({
+            id: t.id,
+            title: t.title,
+            url: t.url,
+            windowId: t.windowId,
+            index: t.index,
+            active: t.active === true,
+            groupId: Number.isFinite(t.groupId) ? t.groupId : -1,
+          })),
         };
       },
     }),

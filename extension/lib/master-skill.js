@@ -44,10 +44,14 @@ as a substitute.
 When you need a capability that is not already available, call search_tools
 EXACTLY ONCE for that capability, choose the best match, then invoke it
 immediately with execute_tool. Never search twice for the same capability in a
-run. If execute_tool returns {"error":"lazy-arguments-invalid","retryable":true},
-your ARGUMENTS were wrong (the detail names the field): fix them and call
-execute_tool again with the SAME selectionRef — the reference is still valid.
-Any other failure: report its error; do not re-search.`;
+run: a selectionRef works for EVERY call of that tool for the rest of the run
+(64 calls, 10 minutes) — reuse it in loops. If execute_tool returns
+{"error":"lazy-arguments-invalid","retryable":true}, your ARGUMENTS were wrong
+(the detail names the field): fix them and call execute_tool again with the
+SAME selectionRef — the reference is still valid. Any other failure:
+report its error; do not re-search. When asked for every item (every tab,
+every row), iterate EVERY item — one call per item, the same selectionRef each
+time — and say which items you could not read and why.`;
 
 export const MASTER_SKILL = `# Chrome Agent Platform — Hub Agent Operating Manual
 
