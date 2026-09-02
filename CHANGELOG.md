@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.630] — 2026-09-02
+- Task board: finished items moved to the archive so the open list is easier to read.
+
 ## [0.2.629] — 2026-09-02
 - Task board: one more item is being worked on.
 
