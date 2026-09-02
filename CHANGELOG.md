@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.626] — 2026-09-02
+- Task board: the reopen-a-conversation fix is complete.
+
 ## [0.2.625] — 2026-09-02
 - Reopening a conversation now shows everything from its last 50 runs — every tool card, approval and full answer — and says plainly if older details were folded.
 
