@@ -2991,6 +2991,19 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // source-qualified refId when present so a colliding imported skill is
       // re-resolved to the imported row, never the built-in.
       runSkillIds = runSkills.map((r) => r?.refId ?? r?.id).filter((x) => typeof x === "string" && x).slice(0, 24);
+      // Skill PROMOTION (chrome-agent-platform-ve67): when the run's agent has
+      // NO relevant skills attached, a bounded section names the catalog
+      // skills that match the current task — the model can adopt one
+      // (/skill:<id>) or read it on demand (skill_read). Failure-isolated: a
+      // catalog/read error never blocks the run (no promotion is composed).
+      let runPromotion = null;
+      try {
+        const { skillCatalog } = await import("../lib/skill-catalog.js");
+        const { promoteSkills } = await import("../lib/skill-promotion.js");
+        const catalog = await skillCatalog({ memory: mem ?? masterMemory(), fileStore: skillFileStore });
+        const adopted = new Set(runSkillIds ?? []);
+        runPromotion = promoteSkills({ task: String(task ?? ""), catalog: catalog.skills, adoptedIds: adopted });
+      } catch { runPromotion = null; }
       // agent-do's run(task, context, history) -> result text; context is a STRING.
       // `history` carries the prior conversation turns (the unified surface: a
       // follow-up / nudge is a new turn in the SAME persistent thread, so the
@@ -3010,6 +3023,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
             origin: "",
             documentId: "",
           }),
+          runPromotion,
         );
         result = (runOutcome && typeof runOutcome === "object" && !Array.isArray(runOutcome) && typeof runOutcome.text === "string")
           ? runOutcome.text

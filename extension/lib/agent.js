@@ -1412,7 +1412,7 @@ export function createAgent({
     // prompt bodies recompose into the system prompt BEFORE the protected
     // block (a fresh agent for this run), so referenced-skill instructions
     // never sit after the runtime policy.
-    run: async (task, context, history, runGen, runSkills, runIdentity = null) => {
+    run: async (task, context, history, runGen, runSkills, runIdentity = null, runPromotion = null) => {
       // Serialize the run behind any prior run of THIS worker (see runQueue above).
       // `execute` carries the full original body; the queue always advances even
       // if a run rejects, so a failed run can never poison later runs.
@@ -1456,13 +1456,26 @@ export function createAgent({
       // started). The listener is removed in finally so a post-run abort can
       // never leak into a queued next run (the round-16 cross-run abort blocker).
       // A run carrying per-run skills runs on a FRESH agent whose system prompt
-      // recomposes those skills before the protected block.
+      // recomposes those skills before the protected block. `runPromotion`
+      // (chrome-agent-platform-ve67) is the task-relevant catalog promotion
+      // section, composed between the skills block and the policy — it is
+      // deterministic text computed by the caller (the service worker) from
+      // the run's task + the skill catalog, and rides the same fresh-agent
+      // boundary so it can never sit after the protected policy.
       const hasRunSkills = Array.isArray(runSkills) && runSkills.length > 0;
-      const runAgent = hasRunSkills
-        ? makeAgent(appendSkillsLayer(system, [...(skills ?? []), ...runSkills], undefined, untrustedToken))
+      const promotionText = String(runPromotion ?? "").trim() || null;
+      const composeRunPrompt = () => appendSkillsLayer(
+        system,
+        [...(skills ?? []), ...(hasRunSkills ? runSkills : [])],
+        undefined,
+        untrustedToken,
+        promotionText,
+      );
+      const runAgent = (hasRunSkills || promotionText)
+        ? makeAgent(composeRunPrompt())
         : agent;
-      activeSystemPrompt = hasRunSkills
-        ? appendSkillsLayer(system, [...(skills ?? []), ...runSkills], undefined, untrustedToken)
+      activeSystemPrompt = (hasRunSkills || promotionText)
+        ? composeRunPrompt()
         : systemPrompt;
       const onAbort = () => {
         try {
@@ -1794,7 +1807,7 @@ export function createOrchestrator({
   return {
     master,
     workers: workerAgents,
-    async run(task, context, history, runSkills, runIdentity = null) {
+    async run(task, context, history, runSkills, runIdentity = null, runPromotion = null) {
       // Solo/multi-agent runs expose the same two-tool provider surface. The
       // logical/durable identity is held only for this serialized run and is
       // inherited by delegated workers.
@@ -1809,6 +1822,7 @@ export function createOrchestrator({
           undefined,
           runSkills,
           currentRunIdentity,
+          runPromotion,
         );
       } finally {
         currentRunIdentity = null;

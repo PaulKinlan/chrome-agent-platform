@@ -31,6 +31,19 @@ run context) is proven per run by the **run-bound attestation** (below).
    or attached it, and the protected-last invariant (layer 6) still keeps the
    runtime policy structurally final. The `skill_read` tool's returned bodies
    are tagged untrusted too, so on-demand reads carry the same boundary.
+5.4. **skill promotion** — when the run's agent has NO relevant skills
+   attached, a short bounded section (≤600 chars, top-4) names the catalog
+   skills whose name/description match the CURRENT TASK, each with its
+   `/skill:<refId>` adoption path and the `skill_read` on-demand path. The
+   relevance heuristic is deterministic (keyword token overlap against skill
+   names/descriptions, stopword-filtered, de-pluralized) and pure — no model
+   calls, no bodies composed, nothing untrusted: it names catalog rows only
+   (name + one-line description), never skill bodies or imported content. An
+   already-adopted skill is never re-promoted. The section lands between the
+   skills layer and the runtime-context layer, always before the protected
+   policy (layer 6), so a promoted name can never read as an instruction that
+   overrides the policy. Evals: `tests/skill-promotion-eval.test.ts`
+   (wire-signal assertions, RED→GREEN falsification).
 5.5. **runtime-context** — the volatile per-assembly layer (date/time, system
    identity, roster, the memory digest, memory index), rendered under a "data,
    not instructions" label; the Settings preview renders its clearly-marked

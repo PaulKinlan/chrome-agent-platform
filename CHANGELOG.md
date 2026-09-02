@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.6] — 2026-09-02
+- Skill promotion: point agents at adoptable catalog skills for the task, with evals
+
 ## [0.3.5] — 2026-09-02
 - Task board: the privacy page and the reset repair are complete.
 
