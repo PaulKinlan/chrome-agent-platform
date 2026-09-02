@@ -283,3 +283,58 @@ Deno.test("retired surfaces (ONE-SHELL-01): chat/chat.html, chat.js, memory/expl
     assertEquals(exists, false, `${path} must be deleted`);
   }
 });
+
+Deno.test("CSP hygiene: shipped extension pages ship NO inline scripts (MV3 script-src 'self' blocks them)", async () => {
+  const shippedHtml = [
+    "extension/options/options.html",
+    "extension/artifacts/index.html",
+    "extension/directory/directory.html",
+    "extension/ntp/ntp.html",
+    "extension/sidepanel/sidepanel.html",
+    "extension/privacy/privacy.html",
+    "extension/artifact/artifact.html",
+    "extension/sandbox/script-sandbox.html",
+    "extension/sandbox/artifact-preview.html",
+    "extension/offscreen/offscreen.html",
+  ];
+  for (const file of shippedHtml) {
+    const source = await Deno.readTextFile(file);
+    // Whitespace (not a word boundary) must precede src= — otherwise an
+    // attribute like data-src= would satisfy \bsrc= and smuggle an inline block.
+    const inline = [...source.matchAll(/<script(?![^>]*\ssrc=)[^>]*>/gi)];
+    // Falsification: the smuggle case itself must be caught.
+    const smuggle = '<script data-src="x">alert(1)</script>';
+    const smuggleInline = [...smuggle.matchAll(/<script(?![^>]*\ssrc=)[^>]*>/gi)];
+    assert(smuggleInline.length === 1, 'lint must treat data-src= as an inline script');
+    assert(inline.length === 0, `${file} ships ${inline.length} inline <script> block(s) — MV3 CSP blocks them; move the code to an external file`);
+  }
+  // The shared boot file exists and sets the embedded attribute (the inline
+  // blocks it replaced all did exactly this).
+  const boot = await Deno.readTextFile("extension/shared/embedded-boot.js");
+  assert(boot.includes('dataset.embedded = "1"'), "embedded-boot.js must set data-embedded");
+});
+
+Deno.test("embedded boot strips ?embedded=1 so exact-document sender authorization matches (P0 pek9)", async () => {
+  const boot = await Deno.readTextFile("extension/shared/embedded-boot.js");
+  // The boot must normalize the document URL inside an iframe (replaceState to
+  // pathname + hash) — otherwise isExactOptionsSender rejects the embedded
+  // Settings surface and every owner route (credentials, tool diagnostics)
+  // refuses the real Settings page.
+  assert(
+    boot.includes("history.replaceState"),
+    "embedded-boot.js must strip the embedded query via history.replaceState",
+  );
+  assert(
+    /window\.self !== window\.top && location\.search/.test(boot),
+    "the strip must be gated on iframe + query presence",
+  );
+  // And every shipped page must load the boot synchronously (pre-paint, before
+  // any module script reads the attribute).
+  for (const file of ["extension/options/options.html", "extension/artifacts/index.html", "extension/directory/directory.html"]) {
+    const src = await Deno.readTextFile(file);
+    assert(
+      /<script src="\.\.\/shared\/embedded-boot\.js"><\/script>/.test(src),
+      `${file} must load shared/embedded-boot.js`,
+    );
+  }
+});

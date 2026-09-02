@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.8] — 2026-09-02
+- Embedded views keep their owner identity: the boot strips ?embedded=1 after marking the document, so exact-document authorization matches the real Settings surface again
+
+## [0.3.7] — 2026-09-02
+- CSP lint: require whitespace before src so data-src cannot smuggle an inline script
+
+## [0.3.6] — 2026-09-02
+- No shipped page runs an inline script: the embedded boot moves to a shared external file and a lint pins CSP hygiene
+
 ## [0.3.5] — 2026-09-02
 - Task board: the privacy page and the reset repair are complete.
 
