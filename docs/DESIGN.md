@@ -269,6 +269,25 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   answered — expired says so, and only a denial that never paused the run
   reopens grantable. Run-bound action approvals (script.run et al.) are never
   replayed as cards — their ids died with the run.
+- **One card per tool call, in the owner's words** (CAP-FB-20260901-ONE-CARD-PER-
+  STEP-01). A tool derives its FULL requirement before its first denial
+  (`requirementFor(toolName, { origins })` in `extension/lib/chrome-tool-
+  capabilities.js`: the optional permissions from the tool's table row, the
+  sites' Chrome site access for a page-reaching tool, the browser-control grant
+  for a tab-, destination- or browser-wide mutation) and raises ONE structured
+  denial for whatever is still missing (`missingRequirement` in `browser-
+  tools.js`), so `group_tabs` on a fresh profile pays one card and one native
+  prompt — never browser control, then `tabs`, then `tabGroups` in sequence.
+  The card lists each thing under "Allowing this lets the agent:" in user
+  language from `extension/lib/permission-language.js` ("See your open tabs",
+  "Group tabs", "Control the browser on this site: docs.example") and says
+  once that Chrome will confirm in one prompt; a Chrome permission token never
+  reaches the copy. Two honesty rules: a tab whose address is hidden because
+  `tabs` is not held is unknown, not privileged (the card asks for `tabs` and
+  names only the sites it can see — never widened to all sites); and when any
+  of a tool's sites lacks browser control the ask names ALL of that tool's
+  sites, so the owner's Allow sets one grant covering the set and an earlier
+  site is never dropped by a narrower record.
 - **A reply that claims an action it never performed is corrected in place**
   (`extension/lib/mutation-claim-check.js`, applied in `agent.js` on both the
   `done` progress event and the authoritative returned result). The prompt's

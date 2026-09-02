@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.627] — 2026-09-02
+- : one permission card per tool call — grouping tabs asks for tab access, tab groups and browser control together, in your words
+
 ## [0.2.626] — 2026-09-02
 - Task board: the reopen-a-conversation fix is complete.
 

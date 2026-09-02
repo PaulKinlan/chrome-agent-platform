@@ -65,6 +65,9 @@ import { describeToolCall, redactToolResult, toolResultErrorText } from "./tool-
 // The Site Agent vocabulary: the composer chip's "offers N tools" wording is
 // shared with the hub so the copy cannot drift between the chip and the hub.
 import { SITE_AGENT_COPY, siteOfferHost, siteOfferLabel, siteUsingLabel } from "./site-agent-copy.js";
+// The user-language permission names the approval card lists (never a Chrome
+// token) — CAP-FB-20260901-ONE-CARD-PER-STEP-01.
+import { permissionUserLanguage, siteLabel } from "./permission-language.js";
 import {
   isTextLikeAttachment,
   MAX_LOCAL_TEXT_BYTES,
@@ -7357,27 +7360,11 @@ customElements.define("plan-strip", PlanStrip);
  * "approve" / "deny" with the real click event — granting happens in the
  * conversation's click handler (a genuine owner gesture), never here.
  * Security: this element grants NOTHING itself; it is a labelled choice. */
-const PERMISSION_APPROVAL_LABELS = Object.freeze({
-  tabs: "Browser control (tabs)",
-  tabGroups: "Tab groups",
-  storage: "Memory & settings",
-  activeTab: "Screenshots",
-  scripting: "Site Agents",
-  downloads: "Downloads",
-  notifications: "Notifications",
-  alarms: "Scheduled tasks",
-  cookies: "Cookies",
-  browsingData: "Browsing data",
-  contentSettings: "Content settings",
-  bookmarks: "Bookmarks",
-  history: "History",
-  sidePanel: "Side panel",
-  management: "Extension management",
-  userScripts: "User scripts",
-  declarativeNetRequest: "Network rules",
-  webNavigation: "Navigation frames",
-  webRequest: "Request observation",
-});
+/** A user-language line, capitalised for the list. */
+function approvalLine(text) {
+  const t = String(text ?? "");
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
 
 class PermissionApprovalCard extends Component {
   static get observedAttributes() {
@@ -7399,21 +7386,28 @@ class PermissionApprovalCard extends Component {
     const isGlobal = this.getAttribute("global") === "true";
     const state = ["granted", "denied", "expired", "error"].includes(this.getAttribute("state")) ? this.getAttribute("state") : "pending";
     const detail = (this.getAttribute("detail") ?? "").slice(0, 240);
+    // ONE card lists EVERYTHING the click allows, each in the owner's words
+    // (what the agent will be able to do — never a Chrome permission token):
+    // "See your open tabs", "Group tabs", "Control the browser on this site".
+    // Chrome batches the permissions + site access of one request into ONE
+    // native prompt, and the card says so once (ONE-CARD-PER-STEP-01).
     const needs = [];
     for (const permission of permissions) {
-      needs.push(`<li>${escapeHtml(PERMISSION_APPROVAL_LABELS[permission] ?? permission)} permission</li>`);
+      needs.push(`<li>${escapeHtml(approvalLine(permissionUserLanguage(permission)))}</li>`);
     }
+    const sites = (list) => list.slice(0, 6).map((origin) => `<code>${escapeHtml(siteLabel(origin))}</code>`).join(", ") + (list.length > 6 ? ` and ${list.length - 6} more` : "");
     if (hostOrigins.length) {
-      // Chrome site access — Chrome confirms it with its own prompt on Allow.
-      const shown = hostOrigins.slice(0, 6).map((origin) => `<code>${escapeHtml(origin)}</code>`).join(", ");
-      needs.push(`<li>Site access to ${hostOrigins.length === 1 ? "this site" : "these sites"}: ${shown}${hostOrigins.length > 6 ? ` and ${hostOrigins.length - 6} more` : ""} (Chrome will ask you to confirm)</li>`);
+      // Chrome site access — part of the same native prompt on Allow.
+      needs.push(`<li>Access ${hostOrigins.length === 1 ? "this site" : "these sites"}: ${sites(hostOrigins)}</li>`);
     }
     if (isGlobal) {
-      needs.push(`<li>Browser control of <strong>all sites</strong> (one of the tabs has no single site)</li>`);
+      needs.push(`<li>Control the browser on <strong>all sites</strong> (one of the tabs has no single site)</li>`);
     } else if (origins.length) {
-      const shown = origins.slice(0, 6).map((origin) => `<code>${escapeHtml(origin)}</code>`).join(", ");
-      needs.push(`<li>Browser control of ${origins.length === 1 ? "this site" : "these sites"}: ${shown}${origins.length > 6 ? ` and ${origins.length - 6} more` : ""}</li>`);
+      needs.push(`<li>Control the browser on ${origins.length === 1 ? "this site" : "these sites"}: ${sites(origins)}</li>`);
     }
+    const chromeNote = state === "pending" && (permissions.length || hostOrigins.length)
+      ? "Chrome will ask you to confirm in one prompt."
+      : "";
     // A declined site-access ask says WHICH site was not read and why (the
     // owner declined), not a generic line (READ-PAGE-HOST-GRANT-01).
     const declinedText = hostOrigins.length
@@ -7433,7 +7427,9 @@ class PermissionApprovalCard extends Component {
       .card { max-width:88%; border-radius:12px; padding:12px 14px; background:var(--panel,#fff); border:1px solid var(--accent,#0e6e63); box-shadow:0 1px 2px rgba(0,0,0,.05); }
       .title { font-size:13px; font-weight:700; color:var(--ink,#1d1b18); margin:0 0 4px; }
       .reason { font-size:13.5px; color:var(--ink,#1d1b18); margin:0 0 6px; line-height:1.45; }
-      .needs { margin:0 0 10px; padding-left:18px; font-size:12.5px; color:var(--muted,#635e56); line-height:1.5; }
+      .needs-title { margin:0 0 2px; font-size:12.5px; font-weight:600; color:var(--muted,#635e56); }
+      .needs { margin:0 0 8px; padding-left:18px; font-size:12.5px; color:var(--ink,#1d1b18); line-height:1.5; }
+      .note { margin:0 0 10px; font-size:12px; color:var(--muted,#635e56); }
       .needs code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.92em; background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9); border-radius:4px; padding:0 4px; }
       .controls { display:flex; gap:8px; }
       .btn { font:inherit; font-size:12.5px; font-weight:650; border-radius:8px; padding:6px 14px; cursor:pointer; min-height:34px; }
@@ -7457,7 +7453,8 @@ class PermissionApprovalCard extends Component {
     `, `<div class="card" role="group" aria-label="Permission request">
       <p class="title">Permission request</p>
       <p class="reason">The agent wants to ${escapeHtml(reason)}.</p>
-      ${needs.length ? `<ul class="needs">${needs.join("")}</ul>` : ""}
+      ${needs.length ? `<p class="needs-title">Allowing this lets the agent:</p><ul class="needs">${needs.join("")}</ul>` : ""}
+      ${chromeNote ? `<p class="note">${escapeHtml(chromeNote)}</p>` : ""}
       ${state === "pending"
         ? `<div class="controls"><button type="button" class="btn allow">Allow</button><button type="button" class="btn deny">Not now</button></div>`
         : `<p class="state ${state}">${escapeHtml(stateText)}</p>`}

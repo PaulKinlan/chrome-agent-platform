@@ -114,7 +114,10 @@ Deno.test("P0 demo path: group_tabs without the tabGroups permission denies with
   const req = normalizePermissionRequirement(out);
   assert(req, "the structured requirement normalizes");
   assertEquals(req.permissions.sort(), ["tabGroups", "tabs"], "one approval covers BOTH Chrome permissions the tool needs");
-  assertEquals(req.grantOrigins, []);
+  // The tab's site is readable here (this shim shows every address), so the
+  // browser-control ask rides the SAME card — one card, one decision
+  // (CAP-FB-20260901-ONE-CARD-PER-STEP-01); before, it was a second card.
+  assertEquals(req.grantOrigins, ["https://a.example"]);
   assertEquals(req.grantGlobal, false);
 });
 

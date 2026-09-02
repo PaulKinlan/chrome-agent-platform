@@ -730,6 +730,7 @@ const EXPECTED = [
   "about: Show all complements the visible five (no duplicated versions)",
   "about: retained a what's-new screenshot",
   "demo-path: step 1 groups tabs and renders sentences",
+  "demo-path: step 1 shows exactly one permission card",
   "demo-path: step 4 hub shows the scheduled run summary",
   "demo-path: step 5 artifact renders in the thread",
   "profile removed (no leak)",
@@ -6957,6 +6958,7 @@ async function demoPathJourney() {
   const reported = new Set();
   const report = (name, cond) => { reported.add(name); check(name, cond); };
   const STEP1_NAME = "demo-path: step 1 groups tabs and renders sentences";
+  const ONE_CARD_NAME = "demo-path: step 1 shows exactly one permission card";
   const STEP4_NAME = "demo-path: step 4 hub shows the scheduled run summary";
   const STEP5_NAME = "demo-path: step 5 artifact renders in the thread";
   try {
@@ -7078,6 +7080,82 @@ async function demoPathJourney() {
         (st.pending ?? 0) === 0,
     );
 
+    // ── step 1, the card count (CAP-FB-20260901-ONE-CARD-PER-STEP-01) ──
+    // Step 1 ran with `tabs` + `tabGroups` seeded (headless cannot settle a
+    // native prompt), so its card asked for browser control alone. Now
+    // withdraw `tabGroups` and the browser-control grant and ask again on a
+    // fresh thread: the local assistant's group_tabs lacks BOTH the tabGroups
+    // permission and the sites' browser control, and the run must show ONE
+    // card naming both in the owner's words (no permission token), then
+    // "Not now" must be ONE terminal decision — no second card follows.
+    const tabGroupsRemoved = await evalIn(cdp, swSession, `chrome.permissions.remove({ permissions: ["tabGroups"] })`).catch(() => null);
+    const grantRevoked = await msg({ type: "browser-control.set", granted: false });
+    await clickSel(cdp, ntp, "#home").catch(() => false);
+    await sleep(500);
+    const typed1b = await typeInto(cdp, ntp, "#task-input", DEMO_STEP1);
+    const ran1b = typed1b && await clickSel(cdp, ntp, "#run-task");
+    const CARDS = `(() => {
+      const conv = document.getElementById('thread-conversation');
+      const forbidden = ["tabGroups", "browsingData", "activeTab"];
+      return JSON.stringify([...(conv?.querySelectorAll('permission-approval-card') ?? [])].map((c) => {
+        const text = (c.shadowRoot?.textContent ?? '').replace(/\\s+/g, ' ').trim();
+        return {
+          state: c.getAttribute('state'),
+          permissions: c.getAttribute('permissions'),
+          origins: c.getAttribute('origins'),
+          items: [...(c.shadowRoot?.querySelectorAll('.needs li') ?? [])].map((li) => li.textContent.replace(/\\s+/g, ' ').trim()),
+          tokens: forbidden.filter((t) => text.includes(t)),
+          note: c.shadowRoot?.querySelector('.note')?.textContent ?? null,
+        };
+      }));
+    })()`;
+    const readCards = async () => { try { return JSON.parse(await evalIn(cdp, ntp, CARDS) ?? "[]"); } catch { return []; } };
+    let cards1b = [];
+    t0 = Date.now();
+    while (Date.now() - t0 < 60000) {
+      cards1b = await readCards();
+      st = await readState(ntp);
+      if (cards1b.some((c) => c.state === null)) break;
+      if ((st.agent ?? []).length > 0 && !busy(st)) break;
+      await sleep(250);
+    }
+    await sleep(400);
+    cards1b = await readCards();
+    const shot1b = await captureShot(cdp, ntp);
+    if (shot1b) await writeEvidence("one-card-per-step.png", shot1b);
+    const card = cards1b[0] ?? null;
+    let permissions1b = [];
+    let origins1b = [];
+    try { permissions1b = JSON.parse(card?.permissions ?? "[]"); } catch { permissions1b = []; }
+    try { origins1b = JSON.parse(card?.origins ?? "[]"); } catch { origins1b = []; }
+    // ONE terminal decision: "Not now" (a real click) settles the run without
+    // a second card.
+    const declined = card ? await clickShadow(cdp, ntp, "#thread-conversation permission-approval-card", ".deny") : false;
+    t0 = Date.now();
+    while (Date.now() - t0 < 60000) {
+      st = await readState(ntp);
+      if ((st.agent ?? []).length > 0 && (st.pending ?? 0) === 0 && !busy(st) && !(st.status ?? []).includes("waiting-for-permission")) break;
+      await sleep(250);
+    }
+    await sleep(400);
+    const cardsAfter = await readCards();
+    console.log(`demo-path one card: tabGroupsRemoved=${tabGroupsRemoved} grantRevoked=${grantRevoked?.grant?.revoked === true} ran=${ran1b} cards=${JSON.stringify(cards1b)} declined=${declined} after=${JSON.stringify(cardsAfter.map((c) => c.state))}`);
+    report(
+      ONE_CARD_NAME,
+      tabGroupsRemoved === true && ran1b === true && cards1b.length === 1 && card.state === null &&
+        // the ONE card carries the permission AND the sites' browser control
+        permissions1b.length === 1 && permissions1b[0] === "tabGroups" &&
+        origins1b.includes(DOCS) &&
+        // in the owner's words: no permission token anywhere in the card
+        card.tokens.length === 0 &&
+        card.items.some((line) => /^Group tabs$/.test(line)) &&
+        card.items.some((line) => /^Control the browser on this site: /.test(line)) &&
+        typeof card.note === "string" && /one prompt/.test(card.note) &&
+        // "Not now" is one terminal decision: still one card, now declined
+        declined === true && cardsAfter.length === 1 && cardsAfter[0].state === "denied" &&
+        (st.pending ?? 0) === 0,
+    );
+
     // ── step 4 ──
     // The real alarm: periodInMinutes 1 → first fire ~60 s after set-schedule.
     let fired = null;
@@ -7173,7 +7251,7 @@ async function demoPathJourney() {
   } catch (e) {
     console.error("demo-path journey failure:", String(e?.message ?? e));
   } finally {
-    for (const name of [STEP1_NAME, STEP4_NAME, STEP5_NAME]) {
+    for (const name of [STEP1_NAME, ONE_CARD_NAME, STEP4_NAME, STEP5_NAME]) {
       if (!reported.has(name)) report(name, false);
     }
     try { if (cdp) cdp.intentionalClose = true; ws?.close(); } catch { /* ignore */ }
