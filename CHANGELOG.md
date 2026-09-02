@@ -1,7 +1,7 @@
 # Changelog
 
 ## [0.2.604] — 2026-09-02
-- : a run now goes through every item — a selection reference works for every call of its tool (64 uses, 10 min) and a failed call hands its use back, every selection error is a sentence with the next action, the step budget is 48×24 model steps shown as "Step N of M" with a "Budget reached — Continue" row that runs on from the same thread, list_tabs states its count across windows, and the live 30-tab gemini run reads 30/30 and cites 30/30
+- A run now goes through every item — a selection reference works for every call of its tool (64 uses, 10 min) and a failed call hands its use back, every selection error is a sentence with the next action, the step budget is 48×24 model steps shown as "Step N of M" with a "Budget reached — Continue" row that runs on from the same thread, list_tabs states its count across windows, and the live 30-tab gemini run reads 30/30 and cites 30/30
 
 ## [0.2.603] — 2026-09-01
 - Task board: four defects seen in a real research run are now tracked — truncated tool results, runs stopping early, page reads failing without an Allow card, and transcript loss on reload.
