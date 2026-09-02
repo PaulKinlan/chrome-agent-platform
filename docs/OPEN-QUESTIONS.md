@@ -91,3 +91,21 @@ Resolved answers are recorded here (Paul confirmed each over the course of the b
     would be inventing a feature. If first-class worker runs become thread-backed (a durable agent-run
     surface), the fix is to accept `history`/`threadId` in `agent-worker.run` and pass it into
     `runAgentLoop`. Until then, worker runs are stateless single-shot executions by design.
+
+22. **One permission card per demo step, or one per tool?** — After `CAP-FB-20260901-ONE-CARD-PER-STEP-01`
+    a tool asks for everything it needs on ONE card (permissions + site access + browser control, in
+    user language, one Chrome prompt). But with a real model the "group my tabs" step calls `list_tabs`
+    first (needs only `tabs`), then `group_tabs` (needs `tabGroups` + browser control), so a genuinely
+    fresh profile still sees TWO cards for that step under the "never widen beyond the selected tool"
+    rule. **Recommended default (coordinator, 2026-09-02; OPEN):** keep per-tool asks as the safety
+    floor, and add a task-level "tab tools" bundle the model can select once when a task is about the
+    owner's tabs (one card: see tabs, group tabs, control the browser on the listed sites). Owner call
+    needed before `CAP-FB-20260830-EXEC-DEMO-01`'s final recording, which asserts at most one card per step.
+
+23. **When does a site's WebMCP tool ask for consent?** — Enrolment (the picker's Add) is the only
+    consent today; a read or a mutation on the site runs with no card
+    (`CAP-FB-20260901-WEBMCP-CALL-CONSENT-01`). **Recommended default (coordinator, 2026-09-02; OPEN):**
+    enrolment covers the site's READ tools for the profile; the first call of a tool the site marks as
+    mutating (or any tool when the site marks none) shows one "Use <site>'s <tool>?" card per run;
+    Settings → Site tools shows and revokes the decision. The demo script's step 2 is updated to match
+    whichever way this lands.

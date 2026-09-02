@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.640] — 2026-09-02
+- Task board: the single-permission-card fix is complete; two product questions were written up for a decision.
+
 ## [0.2.639] — 2026-09-02
 - When the agent needs several permissions for one action, you now see a single card in plain words and one Chrome prompt.
 
