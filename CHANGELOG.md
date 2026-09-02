@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.7] — 2026-09-02
+- Skill import: GitHub blob/tree URLs resolve via the Contents API, never the HTML page
+
 ## [0.3.6] — 2026-09-02
 - Settings Skills Import works on any load path: mount the panel eagerly at init
 

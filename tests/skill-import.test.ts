@@ -196,6 +196,67 @@ Deno.test("fetchSkillFromUrl walks a GitHub skill tree and collects every file w
   }
 });
 
+// ── 2qy0: a github.com URL with NO SKILL.md must REFUSE honestly, never ──
+// import the repo's HTML page as a skill body (the pre-fix fall-through to
+// fetchDirectSkill fetched the github.com blob/tree page — an HTML doc — and
+// silently installed it as SKILL.md).
+Deno.test("fetchSkillFromUrl refuses a github.com page that has no SKILL.md (never imports the HTML page)", async () => {
+  const priorFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      // Any API contents call → an empty directory listing (no SKILL.md).
+      if (u.includes("api.github.com")) {
+        return new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      // Raw fallback → 404. The github.com PAGE itself would answer 200 with
+      // HTML — the test asserts the importer never fetches it.
+      if (u.includes("raw.githubusercontent.com")) return new Response("", { status: 404 });
+      if (u.includes("github.com")) {
+        return new Response("<!DOCTYPE html><html><body>GitHub page</body></html>", { status: 200 });
+      }
+      return new Response("", { status: 404 });
+    };
+    let threw = null;
+    try {
+      await fetchSkillFromUrl("https://github.com/cloudflare/skills/tree/main/no-skill-here");
+    } catch (e) {
+      threw = String(e?.message ?? e);
+    }
+    assert(threw !== null, "a github.com URL without SKILL.md must throw, not import the page");
+    assertStringIncludes(threw, "no SKILL.md found");
+  } finally {
+    globalThis.fetch = priorFetch;
+  }
+});
+
+// ── 2qy0: a blob URL pointing DIRECTLY at SKILL.md (file, not directory) ──
+// resolves via the Contents API's single-file response. Pre-fix this URL was
+// ALSO treated as a page (or fell through to the HTML import).
+Deno.test("fetchSkillFromUrl resolves a github.com blob URL that points directly at SKILL.md", async () => {
+  const priorFetch = globalThis.fetch;
+  const body = "---\nname: Direct File\n---\n\n# Instructions\nDo the thing.\n";
+  try {
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes("api.github.com")) {
+        // A FILE path returns a single file object, not an array.
+        return new Response(
+          JSON.stringify({ name: "SKILL.md", path: "skills/direct/SKILL.md", type: "file", download_url: "https://raw.githubusercontent.com/o/r/main/skills/direct/SKILL.md" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (u.includes("raw.githubusercontent.com")) return new Response(body, { status: 200 });
+      return new Response("", { status: 404 });
+    };
+    const fetched = await fetchSkillFromUrl("https://github.com/o/r/blob/main/skills/direct/SKILL.md");
+    assertEquals(fetched.meta.name, "Direct File");
+    assertEquals(fetched.files["SKILL.md"], body);
+  } finally {
+    globalThis.fetch = priorFetch;
+  }
+});
+
 // ── review P1: a supporting-file BUDGET rejection must FAIL the import ─────
 // (the walk previously swallowed budget errors and silently returned a
 // partial skill — honest errors, never silent)

@@ -97,15 +97,28 @@ export async function fetchSkillFromUrl(url) {
     throw new Error("skill URL must be http(s)");
   }
 
-  // Direct markdown URL first (raw.githubusercontent.com / a .md file).
-  if (/\.md(?:\?.*)?$/.test(u) || u.includes("raw.githubusercontent.com")) {
+  // Direct markdown URL first — but NEVER a github.com blob/tree PAGE. A
+  // github.com blob/tree URL is an HTML page even when the path ends in .md;
+  // fetching it directly would install the page itself as a skill body. Those
+  // URLs MUST resolve through the Contents API below (never the page).
+  // github.com/.../raw/... URLs DO serve the file content and stay direct.
+  const isGithubPage = /github\.com\/[^/]+\/[^/]+\/(blob|tree)\//.test(u);
+  const isGithubRaw =
+    u.includes("raw.githubusercontent.com") || /github\.com\/[^/]+\/[^/]+\/raw\//.test(u);
+  if (isGithubRaw) return fetchDirectSkill(u);
+  if (!isGithubPage && /\.md(?:\?.*)?$/.test(u)) {
     return fetchDirectSkill(u);
   }
 
-  // GitHub repo URL → resolve the SKILL.md via the Contents API, fall back to raw.
   if (/github\.com\//.test(u)) {
     const gh = await fetchGitHubSkill(u);
     if (gh) return gh;
+    // No SKILL.md anywhere under this GitHub URL. HONEST refusal — never
+    // fall through to fetchDirectSkill, which would import the repo's HTML
+    // page as a skill body (a silent garbage import).
+    throw new Error(
+      `no SKILL.md found at ${u} — point at a GitHub directory or repo that contains SKILL.md, or a raw markdown URL`,
+    );
   }
 
   return fetchDirectSkill(u);
@@ -168,7 +181,14 @@ async function fetchGitHubSkill(url) {
     }
     if (!resp.ok) return null;
     const data = await resp.json();
-    return Array.isArray(data) ? data : [];
+    // A directory listing is an array. A FILE path (a blob URL pointing
+    // straight at SKILL.md) returns a single file object — normalize it so
+    // the SKILL.md lookup below sees it.
+    if (Array.isArray(data)) return data;
+    if (data && typeof data === "object" && data.type === "file" && data.download_url) {
+      return [data];
+    }
+    return [];
   };
 
   const fetchFileBody = async (file) => {
