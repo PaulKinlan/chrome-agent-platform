@@ -74,8 +74,7 @@ if (discoverPage) discoverPage.textContent = SITE_AGENT_COPY.findToolsAction;
 
 import {
   installPageDiagnostics,
-  refreshDiagnostics,
-  startDiagnosticPolling,
+  startDiagnosticSubscription,
 } from "../shared/diagnostics-client.js";
 import { capLog } from "../lib/cap-log.js";
 import { perfSpan } from "../lib/cap-perf.js";
@@ -4286,10 +4285,12 @@ window.addEventListener("message", (ev) => {
 setStatus("ready");
 
 // Transparency surface: capture the page's own errors/CSP violations into the
-// shared console + keep the shield/console badges live.
+// shared console + keep the shield/console badges live. Push-driven: the SW
+// bumps `cap:diagnosticsRevision` in session storage on every change and the
+// subscription refreshes on it (once now, then per change while visible) — no
+// timer, so an idle hub never wakes the worker (CAP-FB-20260830-HUB-POLLING-01).
 installPageDiagnostics();
-refreshDiagnostics().catch(() => {});
-startDiagnosticPolling();
+startDiagnosticSubscription();
 
 // ---- omnibox entry (keyword → a task) --------------------------------
 // The SW opens the hub with `#omnibox=<mode>:<query>`; on load we run the task

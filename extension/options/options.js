@@ -61,6 +61,7 @@ import { createNavigationController } from "../lib/navigation-controller.js";
 // design-system components as the hub + the docs showcase (one component,
 // everywhere — no hand-rolled duplicates).
 import { confirmActionDialog, escapeHtml } from "../shared/components.js";
+import { subscribeDiagnosticsRevision } from "../shared/diagnostics-client.js";
 import { saveFsGrant, wireLocalFolderPickers, regrantFsGrantAccess } from "../lib/fs-grants.js";
 import { mountGrantBrowser } from "../lib/folder-browser.js";
 import {
@@ -3179,9 +3180,13 @@ if (developerFeaturesEnabled) await renderPrompts();
 await renderUsage();
 // The OPEN Usage panel must reflect a record/clear the moment it happens (a run
 // completing, or the owner clearing), not show a stale count until a manual
-// reload — poll while the page is visible (the same pattern as Approvals), and
-// re-render on section activation via the nav handler above.
-setInterval(() => { if (document.visibilityState === "visible") renderUsage(); }, 1500);
+// reload. PUSH-driven (CAP-FB-20260830-HUB-POLLING-01): the SW bumps
+// `cap:diagnosticsRevision` in session storage after every usage write/clear
+// and this re-renders on that change (deferred while hidden, delivered once on
+// return to visible). The 1.5 s poll this replaces sent `usage.get` 40 times
+// a minute for the life of the Settings tab. Section activation still
+// re-renders via the nav handler above.
+subscribeDiagnosticsRevision(() => renderUsage());
 // The detail-toggle is a STATIC control — wire its click EXACTLY ONCE (outside
 // renderUsage, which runs per page-load + nav + poll), so repeated renders never
 // stack listeners and never produce parity-dependent dead/inverted toggles.

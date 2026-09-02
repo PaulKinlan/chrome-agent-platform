@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.623] — 2026-09-02
+- Open tabs no longer poll in the background; the extension's worker can go idle and badges still update the moment something happens.
+
 ## [0.2.622] — 2026-09-02
 - Task board: the generated-document preview checks are complete.
 

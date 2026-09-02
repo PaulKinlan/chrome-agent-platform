@@ -9,6 +9,21 @@ import { usageRead, usageWrite, usageClear, usageRemoveRow } from "./usage-store
 import { assertRunOwned } from "./run-fence.js";
 import { kvGet, kvSet } from "./kv.js";
 
+// One optional change listener (the SW registers it) — fired after every
+// usage record/clear so the Settings Usage panel can be push-driven instead
+// of polling `usage.get` every 1.5 s (CAP-FB-20260830-HUB-POLLING-01).
+let usageChangeListener = null;
+
+/** Register the single "usage changed" callback (null to clear). */
+export function onUsageChanged(fn) {
+  usageChangeListener = typeof fn === "function" ? fn : null;
+}
+
+function notifyUsageChanged() {
+  if (!usageChangeListener) return;
+  try { usageChangeListener(); } catch { /* a listener never breaks a write */ }
+}
+
 // ── Per-tool call counters (the Usage panel's tool-usage chart) ─────────────
 // Bounded per-day per-tool counts over the same 7-day horizon as the ledger.
 // Stored OUTSIDE the IndexedDB ledger (the ledger rows are validated token
@@ -48,6 +63,7 @@ export async function recordServerToolUsage(entry, nowMs = Date.now()) {
     }
     days[day] = rows;
     await kvSet({ [SERVER_TOOL_USAGE_KEY]: { v: 1, days: trimToolUsageDays(days) } });
+    notifyUsageChanged();
   });
   serverToolUsageMutex = run.then(() => {}, () => {});
   return run;
@@ -90,6 +106,7 @@ export async function recordToolCall(toolName, nowMs = Date.now()) {
     today[name] = (Number(today[name]) || 0) + 1;
     days[day] = today;
     await kvSet({ [TOOL_USAGE_KEY]: { v: 1, days: trimToolUsageDays(days) } });
+    notifyUsageChanged();
   });
   toolUsageMutex = run.then(() => {}, () => {});
   return run;
@@ -236,6 +253,7 @@ export async function recordUsage(p, guard = null) {
       }
       return; // stale owner / re-enrolled — the row is not reported
     }
+    notifyUsageChanged();
     return record;
   });
 }
@@ -365,5 +383,6 @@ export async function clearUsage() {
     });
     serverToolUsageMutex = clearServerTools.then(() => {}, () => {});
     await clearServerTools;
+    notifyUsageChanged();
   });
 }

@@ -430,6 +430,9 @@ const EXPECTED = [
   "fresh hub: the first-run banner offers exactly one action",
   "fresh hub at 1024x700: the composer is fully within the viewport",
   "fresh hub: no empty-state copy is rendered",
+  "hub: idle 60 s produces zero diagnostics/security/usage routes",
+  "hub: the shield badge updates within 1 s of a security event",
+  "hub: retained the shield-badge screenshot",
   "after enabling one recipe the four agent surfaces agree (1)",
   "after disabling that recipe the four agent surfaces agree (0) again",
   "create dialog: the template select is the first step (Custom default; Starter/Other/Scheduled groups; no gallery grid)",
@@ -1225,6 +1228,68 @@ async function main() {
       .filter((s) => String(hubText ?? "").includes(s));
     console.log("fresh hub empty copy:", JSON.stringify(emptyCopy));
     check("fresh hub: no empty-state copy is rendered", typeof hubText === "string" && emptyCopy.length === 0);
+
+    // ─────────────────────────────────────────────────────────────
+    // CAP-FB-20260830-HUB-POLLING-01 — an idle hub tab (plus an idle Settings
+    // tab on Usage) sends the worker ZERO diagnostics/security/usage routes:
+    // the shield/console badges and the Usage panel are push-driven off the
+    // SW's session-storage revision, never a timer. Counted from the SW's own
+    // trace ring over a 60 s window. The ring lives in the worker, so a worker
+    // restart inside the window would empty it — the count is only trusted
+    // when the SW session set is unchanged across the window.
+    const idleOptsPage = await openPage(port, `chrome-extension://${extId}/options/options.html#usage`);
+    await sleep(3000); // both pages finish their load-time work
+    const swSessionsBeforeIdle = cdp.swSessions.size;
+    const idleCleared = await msgValue({ type: "observability.clearTrace" });
+    await sleep(60000);
+    const idleTrace = await msgValue({ type: "observability.dumpTrace" });
+    const idleRoutes = (idleTrace?.logs?.entries ?? [])
+      .filter((e) => e?.ns === "sw:route")
+      .map((e) => String(e?.msg ?? ""));
+    const idlePolled = idleRoutes.filter((m) => /route (diagnostics\.list|security\.state|usage\.get)\b/.test(m));
+    const swRestartsInIdle = cdp.swSessions.size - swSessionsBeforeIdle;
+    console.log("idle hub 60 s:", JSON.stringify({ routes: idleRoutes, polled: idlePolled.length, swRestartsInIdle }));
+    check(
+      "hub: idle 60 s produces zero diagnostics/security/usage routes",
+      idleCleared?.ok === true && idleTrace?.ok === true && idlePolled.length === 0 && swRestartsInIdle === 0,
+    );
+    await fetch(`http://127.0.0.1:${port}/json/close/${idleOptsPage.id}`).catch(() => {});
+
+    // The shield badge still updates within 1 s of a REAL security event —
+    // the page reports a CSP violation through the existing diagnostics.report
+    // route (exactly what the hub's own securitypolicyviolation listener
+    // sends), and the SW's revision bump pushes the new count to the badge.
+    await cdp.send("Page.bringToFront", {}, ntpSession).catch(() => {});
+    await sleep(200);
+    const shieldCount = () => evalIn(cdp, ntpSession, `Number(document.querySelector('security-shield')?.getAttribute('count') ?? -1)`);
+    const shieldCountBefore = await shieldCount();
+    const shieldVisibility = await evalIn(cdp, ntpSession, `document.visibilityState`);
+    const shieldT0 = Date.now();
+    await msgValue({ type: "diagnostics.report", entries: [{ kind: "csp", message: "script-src: probe" }] });
+    let shieldCountAfter = shieldCountBefore;
+    let shieldUpdatedMs = -1;
+    for (let i = 0; i < 40; i++) {
+      await sleep(50);
+      const c = await shieldCount();
+      if (c > shieldCountBefore) {
+        shieldCountAfter = c;
+        shieldUpdatedMs = Date.now() - shieldT0;
+        break;
+      }
+    }
+    const shieldAttention = await evalIn(cdp, ntpSession, `document.querySelector('security-shield')?.hasAttribute('attention') === true`);
+    console.log("shield badge:", JSON.stringify({ shieldVisibility, shieldCountBefore, shieldCountAfter, shieldUpdatedMs, shieldAttention }));
+    check(
+      "hub: the shield badge updates within 1 s of a security event",
+      shieldCountBefore >= 0 && shieldCountAfter === shieldCountBefore + 1 &&
+        shieldUpdatedMs >= 0 && shieldUpdatedMs <= 1000 && shieldAttention === true,
+    );
+    const shieldShot = await captureShot(cdp, ntpSession);
+    if (shieldShot) await writeEvidence("hub-shield-badge-updated.png", shieldShot);
+    check("hub: retained the shield-badge screenshot", shieldShot !== null);
+    // Restore the fresh transparency state for the journeys that follow.
+    await msgValue({ type: "security.clear" });
+    await msgValue({ type: "diagnostics.clear" });
 
     // Enable ONE recipe. Headless Chrome auto-denies chrome.permissions.request,
     // so background-agent.set fails closed here (by design); seed the enabled
