@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.650] — 2026-09-02
+- Task board: the hub chrome polish is complete; one counting defect was written up.
+
 ## [0.2.649] — 2026-09-02
 - A calmer hub: Settings now sits beside Directory and Artifacts instead of looking selected, and whichever one you open is marked as the page you are on. An agent opened from a link shows its name rather than its address. The header lost its permanent status dot and its two developer icons — the status appears only while something is happening, the security shield only when it has something to show, and the console moved into Settings under Advanced. A tool in the Directory can no longer squeeze down to one letter per line.
 
