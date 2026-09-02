@@ -12,6 +12,7 @@ import { createAgent, RUN_BUDGET_DEFAULTS } from "../extension/lib/agent.js";
 import {
   BUDGET_CONTINUE_TASK,
   budgetExhaustedTerminal,
+  budgetExhaustedVerdict,
   isBudgetTerminal,
   formatBudgetProgress,
   RUN_BUDGET_BOUNDS,
@@ -41,6 +42,36 @@ function toolsForeverModel() {
       const stream = new ReadableStream({
         start(c) {
           c.enqueue({ type: "stream-start", warnings: [] });
+          c.enqueue({ type: "tool-call", toolCallId: `call_${calls}`, toolName: "search_tools", input: JSON.stringify({ query: "memory_get", limit: 1 }) });
+          c.enqueue({ type: "finish", usage, finishReason: "tool-calls" });
+          c.close();
+        },
+      });
+      return { stream };
+    },
+  };
+}
+
+/** A model that ANSWERS while still working: every step writes text AND
+ * issues one tool call, so the loop only ends when the step budget runs out —
+ * but the answer has already landed on the last allowed step. */
+function answersWhileWorkingModel(answer = "Digest: FACT-01 on page 1; FACT-02 on page 2.") {
+  let calls = 0;
+  return {
+    specificationVersion: "v2",
+    provider: "test",
+    modelId: "answers-while-working",
+    supportedUrls: {},
+    calls: () => calls,
+    async doStream() {
+      calls += 1;
+      const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
+      const stream = new ReadableStream({
+        start(c) {
+          c.enqueue({ type: "stream-start", warnings: [] });
+          c.enqueue({ type: "text-start", id: "t" });
+          c.enqueue({ type: "text-delta", id: "t", delta: answer });
+          c.enqueue({ type: "text-end", id: "t" });
           c.enqueue({ type: "tool-call", toolCallId: `call_${calls}`, toolName: "search_tools", input: JSON.stringify({ query: "memory_get", limit: 1 }) });
           c.enqueue({ type: "finish", usage, finishReason: "tool-calls" });
           c.close();
@@ -105,6 +136,64 @@ Deno.test("run budget: the agent emits Step N of M progress and flags exhaustion
   const done = events.find((e) => e?.type === "done");
   assertEquals(done?.budget?.exhausted, true);
   assertEquals(typeof result, "string", "the partial text is still returned");
+});
+
+// CAP-FB-20260902-BUDGET-VERDICT-ANSWERED-01: "Budget reached" is the verdict
+// ONLY when the budget ran out with NO substantive final text. A run that
+// wrote its answer on its last allowed step — even while still calling tools —
+// answered, and settles as finished.
+Deno.test("run budget: exhausted WITH final text settles ok (the answer landed on the last allowed step)", async () => {
+  __reset();
+  const model = answersWhileWorkingModel();
+  const events = [];
+  const agent = createAgent({
+    model: { model, modelId: "answers-while-working", providerName: "test" },
+    id: "budget-answered",
+    name: "budget-answered",
+    system: "you are a test agent",
+    memory: fakeMemory(),
+    taskId: "t-budget-answered",
+    maxIterations: 2,
+    onProgress: (ev) => events.push(ev),
+  });
+  const result = await agent.run("read every tab", "", []);
+  assertEquals(model.calls(), 4, "the budget itself is unchanged: every allowed step ran");
+  const budget = events.filter((e) => e?.type === "budget");
+  const last = budget[budget.length - 1];
+  assertEquals(last.step, 4);
+  assertEquals(last.total, 4);
+  assert(budget.every((e) => e.exhausted !== true), `a run that answered never claims exhaustion: ${JSON.stringify(budget.map((e) => e.exhausted))}`);
+  const done = events.find((e) => e?.type === "done");
+  assertEquals(done?.budget?.exhausted, false, "the done event settles ok — the answer landed");
+  assertEquals(done?.budget?.used, 4);
+  assertStringIncludes(String(done?.text), "FACT-01", "the done text IS the answer");
+  assertStringIncludes(String(result), "FACT-02", "the returned result IS the answer");
+});
+
+Deno.test("run budget: exhausted WITHOUT final text settles budget (never ok for a run with no substantive text)", async () => {
+  __reset();
+  // Tool calls every step, no text at all: the honest verdict is a budget stop.
+  const model = toolsForeverModel();
+  const events = [];
+  const agent = createAgent({
+    model: { model, modelId: "tools-forever", providerName: "test" },
+    id: "budget-silent", name: "budget-silent", system: "x", memory: fakeMemory(), taskId: "t-budget-silent",
+    maxIterations: 2, onProgress: (ev) => events.push(ev),
+  });
+  const result = await agent.run("read every tab", "", []);
+  assertEquals(String(result ?? "").trim(), "", "no substantive text was produced");
+  const budget = events.filter((e) => e?.type === "budget");
+  assertEquals(budget[budget.length - 1]?.exhausted, true);
+  assertEquals(events.find((e) => e?.type === "done")?.budget?.exhausted, true);
+  // The pure verdict, every branch: exhausted only when the LAST allowed
+  // iteration still had tool calls AND no final text landed.
+  const base = { aborted: false, lastStepHadTools: true, lastStepIndex: 1, maxIterations: 2 };
+  assertEquals(budgetExhaustedVerdict({ ...base, hasFinalText: false }), true, "no text → budget");
+  assertEquals(budgetExhaustedVerdict({ ...base, hasFinalText: true }), false, "answered → ok");
+  assertEquals(budgetExhaustedVerdict({ ...base, aborted: true, hasFinalText: false }), false, "an abort is not a budget stop");
+  assertEquals(budgetExhaustedVerdict({ ...base, lastStepHadTools: false, hasFinalText: false }), false, "the loop finished on its own");
+  assertEquals(budgetExhaustedVerdict({ ...base, lastStepIndex: 0, hasFinalText: false }), false, "not the last allowed iteration");
+  assertEquals(budgetExhaustedVerdict({}), false, "nothing known → not a budget stop");
 });
 
 Deno.test("run budget: a run that finishes early is NOT flagged exhausted", async () => {

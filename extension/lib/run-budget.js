@@ -63,6 +63,25 @@ export function formatBudgetProgress(budget) {
   return text;
 }
 
+/** THE BUDGET VERDICT (CAP-FB-20260902-BUDGET-VERDICT-ANSWERED-01). A run is
+ * "Budget reached" only when BOTH hold:
+ *   - the loop stopped because the budget ran out — the LAST allowed outer
+ *     iteration still ended in tool calls (agent-do breaks the loop only on a
+ *     no-tool-call step), and the run was not aborted; AND
+ *   - NO substantive final text landed (`run-text-steps.js` `finalText`,
+ *     whitespace-trimmed).
+ * A run that wrote its answer on its last allowed step — even while still
+ * calling tools — answered: it settles as finished, never as a budget stop.
+ * A run with no substantive text is never claimed ok. */
+export function budgetExhaustedVerdict({ aborted, lastStepHadTools, lastStepIndex, maxIterations, hasFinalText } = {}) {
+  if (aborted === true) return false;
+  if (lastStepHadTools !== true) return false;
+  const last = Number(lastStepIndex);
+  const max = Math.trunc(Number(maxIterations));
+  if (!Number.isFinite(last) || !Number.isFinite(max) || last < max - 1) return false;
+  return hasFinalText !== true;
+}
+
 /** The terminal a run settles with when its step budget ran out with work
  * still to do. `ok:false` because the task is NOT finished; the category and
  * action drive the status row's Continue button and the thread's error row. */

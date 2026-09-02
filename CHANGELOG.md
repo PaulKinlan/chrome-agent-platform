@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.639] — 2026-09-02
+- Runs: a run that writes its answer on its last allowed step now finishes normally instead of stopping with "Budget reached"; the Continue card appears only when the budget ran out with no answer written.
+
 ## [0.2.638] — 2026-09-02
 - Task board: the long-task memory fix is complete; three more items are being worked on.
 

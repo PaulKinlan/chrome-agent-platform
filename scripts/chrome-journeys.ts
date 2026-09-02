@@ -599,6 +599,7 @@ const EXPECTED = [
   "Every item: the status row counts Step N of M while working",
   "Budget: a run with budget 2 stops on 'Budget reached — Continue' (never a silent finish)",
   "Budget: Continue runs a second execution on the same thread",
+  "Budget verdict: a run that writes its answer on its last allowed step (while still calling tools) settles ok, never 'Budget reached'",
   "real red tab resolved (active tab id)",
   "screenshot: denied after revoke (secondary probe)",
   "screenshot: capture SUCCEEDS for the granted origin",
@@ -882,6 +883,10 @@ async function main() {
   // Every request the fixture receives (the script-fetch journey asserts a
   // refused loopback fetch never reaches it).
   const fixtureHits = [];
+  // The /answered provider lane's answer text (the budget-verdict journey
+  // asserts it is the run's result) and its call counter (unique ids per step).
+  const ANSWERED_TEXT = "Every tab is read. Digest: FACT-01 on page 1 reports 37 units (journey answer).";
+  let answeredCalls = 0;
   const fixture = Deno.serve({ port: 0, hostname: "127.0.0.1" }, (req) => {
     const u = new URL(req.url);
     fixtureHits.push(u.pathname + u.search);
@@ -890,6 +895,21 @@ async function main() {
         `<html><body style="margin:0;background:#ff0000;width:400px;height:300px"></body></html>`,
         { headers: { "content-type": "text/html" } },
       );
+    }
+    if (u.pathname === "/answered/v1/chat/completions") {
+      // CAP-FB-20260902-BUDGET-VERDICT-ANSWERED-01: a provider that ANSWERS
+      // while still working — every step streams the answer text AND one tool
+      // call (finish_reason tool_calls), so a bounded run ends only when its
+      // budget runs out, with the answer already written on its last allowed
+      // step. The run's verdict must be ok, never "Budget reached".
+      answeredCalls += 1;
+      const chunk = (delta, finish = null, usage = null) =>
+        `data: ${JSON.stringify({ id: `chatcmpl-answered-${answeredCalls}`, object: "chat.completion.chunk", created: 0, model: "answers-while-working", choices: [{ index: 0, delta, finish_reason: finish }], ...(usage ? { usage } : {}) })}\n\n`;
+      const body = chunk({ role: "assistant", content: ANSWERED_TEXT }) +
+        chunk({ tool_calls: [{ index: 0, id: `call_answered_${answeredCalls}`, type: "function", function: { name: "search_tools", arguments: JSON.stringify({ query: "memory_get", limit: 1 }) } }] }) +
+        chunk({}, "tool_calls", { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }) +
+        "data: [DONE]\n\n";
+      return new Response(body, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } });
     }
     if (u.pathname.endsWith("/chat/completions")) {
       // An OpenAI-shaped 401 for the provider-error-truth journey: the body
@@ -4864,6 +4884,37 @@ async function main() {
         !!budgetStatus && /Budget reached/.test(budgetStatus.label) && budgetStatus.actionLabel === "Continue" && clickedContinue === true &&
           !!continued && continued.count === executionsBefore.size + 1 && continued.newest.executionId !== budgetRun?.executionId &&
           continued.newest.terminal?.ok === true,
+      );
+      // CAP-FB-20260902-BUDGET-VERDICT-ANSWERED-01: "Budget reached" is the
+      // verdict ONLY when the budget ran out with NO substantive final text.
+      // The fixture's /answered provider streams the answer AND a tool call on
+      // every step, so this budget-2 run ends on its last allowed step (4 of 4)
+      // with the answer already written: it settles ok:true with no Continue
+      // card, and the answer is the run's result. Before the fix this settled
+      // as "Step budget reached (4 of 4) before the task finished". It runs as
+      // one more turn of the budget thread (never a new thread — see above).
+      await msgOpts({ type: "provider.set", config: { provider: "openai", baseURL: `${RED_ORIGIN}/answered/v1`, apiKey: "sk-journey-answered-0000", model: "answers-while-working" } });
+      const answeredBefore = new Set(((await msgValue({ type: "run.list" }).catch(() => null))?.runs ?? []).filter((r) => r?.threadId === budgetThreadId).map((r) => r.executionId));
+      const answeredCallsBefore = answeredCalls;
+      await evalIn(cdp, ntpSession, `(() => { window.__capAnsweredRun = null; chrome.runtime.sendMessage(${JSON.stringify({ type: "agent.run", task: "answer while still working (budget verdict)", maxIterations: 2, threadId: budgetThreadId })}).then((v) => { window.__capAnsweredRun = v; }, (e) => { window.__capAnsweredRun = { ok: false, error: String(e?.message ?? e) }; }); return true; })()`);
+      let answered = null;
+      {
+        const t0 = Date.now();
+        while (Date.now() - t0 < 120000) {
+          answered = await evalIn(cdp, ntpSession, `window.__capAnsweredRun`).catch(() => null);
+          if (answered) break;
+          await sleep(300);
+        }
+      }
+      const answeredRun = ((await msgValue({ type: "run.list" }).catch(() => null))?.runs ?? [])
+        .find((r) => r?.threadId === budgetThreadId && !answeredBefore.has(r?.executionId)) ?? null;
+      await msgOpts({ type: "provider.set", config: { provider: "demo", apiKey: "", baseURL: "", model: "" } });
+      const answeredSteps = answeredCalls - answeredCallsBefore;
+      console.log(`budget verdict journey: steps=${answeredSteps} run=${JSON.stringify(answered).slice(0, 400)} record=${JSON.stringify({ phase: answeredRun?.phase, ok: answeredRun?.terminal?.ok, category: answeredRun?.terminal?.errorCategory ?? null, budget: answeredRun?.terminal?.budget ?? null })}`);
+      check(
+        "Budget verdict: a run that writes its answer on its last allowed step (while still calling tools) settles ok, never 'Budget reached'",
+        answeredSteps === 4 && answered?.ok === true && answered?.errorCategory == null && /FACT-01 on page 1/.test(String(answered?.result ?? "")) &&
+          answeredRun?.phase === "terminal" && answeredRun?.terminal?.ok === true && answeredRun?.terminal?.errorCategory !== "budget",
       );
       // Leave the suite as it was: close the fixture tabs and the reopened view
       // (the NTP stays on the thread view the next journey's composer expects).

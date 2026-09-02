@@ -16,6 +16,13 @@
 //                    own agent.run message carries it (the route accepts an
 //                    explicit bounded budget); the screenshot is then named
 //                    every-tab-three-turns.png.
+//   CAP_LIVE_SHOT    the final screenshot's file name (overrides the two
+//                    defaults above — e.g. budget-verdict-answered.png for
+//                    CAP-FB-20260902-BUDGET-VERDICT-ANSWERED-01).
+//
+// The check passes only when every tab was read, nothing was replayed, every
+// fact is cited AND the run settled ok: a run whose answer landed must never
+// be reported as "Budget reached" (CAP-FB-20260902-BUDGET-VERDICT-ANSWERED-01).
 //
 // Port discipline: Chrome is launched through launchChrome() (kernel-assigned
 // port, endpoint read from this process's own stderr). The extension is the
@@ -30,6 +37,7 @@ const MODEL_ID = Deno.env.get("CAP_LIVE_MODEL") ?? "gemini-3.7-flash";
 const TAB_COUNT = Math.max(1, Math.min(64, Number(Deno.env.get("CAP_LIVE_TABS") ?? 30) || 30));
 const OUT = Deno.env.get("CAP_LIVE_OUT") ?? `${ROOT}test-artifacts/live-every-tab`;
 const MAX_ITERATIONS = (() => { const n = Number(Deno.env.get("CAP_LIVE_MAX_ITERATIONS") ?? ""); return Number.isFinite(n) && n >= 1 ? Math.trunc(n) : null; })();
+const SHOT = (Deno.env.get("CAP_LIVE_SHOT") ?? "").replace(/[^A-Za-z0-9._-]/g, "") || (MAX_ITERATIONS != null ? "every-tab-three-turns.png" : "every-tab-digest.png");
 const KEY = Deno.env.get("GEMINI_API_KEY") ?? "";
 if (!KEY) {
   console.error("GEMINI_API_KEY is required (read from the environment, never printed).");
@@ -285,7 +293,7 @@ try {
   const citedUrls = new Set<number>();
   for (const m of digest.matchAll(/\/page\/(\d+)/g)) citedUrls.add(Number(m[1]));
   await Deno.writeTextFile(`${OUT}/live-digest.txt`, digest);
-  await ntp.shot(MAX_ITERATIONS != null ? "every-tab-three-turns.png" : "every-tab-digest.png");
+  await ntp.shot(SHOT);
 
   const report = {
     model: MODEL_ID,
@@ -309,7 +317,12 @@ try {
   };
   console.log("LIVE REPORT", JSON.stringify(report));
   await Deno.writeTextFile(`${OUT}/live-report.json`, JSON.stringify(report, null, 2));
-  exitCode = readPageOk >= TAB_COUNT && replayed === 0 && cited.size >= TAB_COUNT ? 0 : 1;
+  // The digest itself is the substantive final text: a run that wrote it has
+  // answered and must settle ok:true, whether or not its last step also
+  // called tools. A run with no digest is never claimed ok.
+  const settledOk = run.terminal?.ok === true && digest.trim().length > 0;
+  exitCode = readPageOk >= TAB_COUNT && replayed === 0 && cited.size >= TAB_COUNT && settledOk ? 0 : 1;
+  console.log(`LIVE VERDICT ${exitCode === 0 ? "PASS" : "FAIL"}: read ${readPageOk}/${TAB_COUNT}, cited ${cited.size}/${TAB_COUNT}, replayed ${replayed}, terminal ok=${run.terminal?.ok} category=${run.terminal?.errorCategory ?? "-"}, screenshot ${SHOT}`);
   for (const t of tabTargets) await send("Target.closeTarget", { targetId: t });
 } catch (e) {
   console.error("live-every-tab failed:", redact(String((e as Error)?.message ?? e)));

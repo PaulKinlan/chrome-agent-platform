@@ -2354,15 +2354,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260902-BUDGET-VERDICT-ANSWERED-01] A run that calls tools AND writes its answer on its last allowed step is settled as "Budget reached" although the answer landed
 - Feedback: 2026-09-02 — LOOP-CONTEXT-WINDOW-01 worker, live 30-tab run at `maxIterations=3`: the digest was written and persisted, yet the terminal read "Budget reached (9 of 9)" and the Continue card appeared, because the budget verdict rule is "the last step had tool calls".
-- Updated: 2026-09-02 03:38 UTC
-- Status: OPEN
+- Updated: 2026-09-02 04:16 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P2
-- Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — CLAIMED; do not start a parallel attempt
+- Owner: model worker (Fable 5 subagent) under the reanalysis coordinator session — candidate pushed; the coordinator merges
 - Workspace: active (local path private)
 - Branch: `cap/budget-verdict-answered` (pushed to origin as the candidate branch; merged by the coordinator)
-- Base: `9ec6c3fe`
-- Candidate: —
+- Base: `a36da436`
+- Candidate: this tracker commit (the `CAP-FB-20260902-BUDGET-VERDICT-ANSWERED-01:` commit on `cap/budget-verdict-answered`)
 - Shipping: —
 - Acceptance: A run whose final model step produced substantive final text (per `extension/lib/run-text-steps.js` `finalText`) settles `ok:true` regardless of whether that step also called tools; "Budget reached — Continue" appears only when the budget ran out with NO substantive final text. The live check `scripts/live-every-tab.ts` at `CAP_LIVE_MAX_ITERATIONS=3` settles ok with 30/30 cited. The status row's counter and the Continue card are otherwise unchanged.
   - Context: `extension/lib/run-budget.js` (RUN-BUDGET-EVERY-ITEM-01) sets `exhausted:true` on the last `budget` event when the last iteration still had tool calls; `extension/lib/agent.js` `onComplete` / the SW terminal settle read that flag and write `errorCategory:"budget"`. The honest rule is "exhausted AND no substantive answer".
@@ -2370,16 +2370,18 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - Files: `extension/lib/run-budget.js` (the verdict takes `hasFinalText`), `extension/lib/agent.js` (pass `runText.finalText(e.result)` non-empty into the verdict), `extension/background/service-worker.js` (settle reads the verdict), `tests/run-budget*.test.ts`, the live check.
   - Steps: (1) unit RED-first: "exhausted with final text settles ok", "exhausted without final text settles budget". (2) implement. (3) live check at 3 iterations → ok; screenshot `budget-verdict-answered.png`.
   - Out of scope: the digest itself (landed); the Continue flow.
-- Review: pending
+- Review: author review 2026-09-02 — falsification gates cleared (RED/GREEN recorded below for BOTH the unit test and the new journey check; the fix proven in a real loaded extension)
 - Gates: the falsification gates apply
-  - Unit: as Steps (1); falsification by reverting the verdict → "settles ok" RED → restore → GREEN.
-  - Browser: the existing budget journey checks stay green; the live-check output recorded in History.
-  - Full suite: green at the tip.
-  - Constraints: never claim ok for a run with no substantive text; the mutation-claim correction (`correctUnsupportedMutationClaims`) still applies to that text.
+  - Unit: `tests/run-budget.test.ts` — "exhausted WITH final text settles ok" and "exhausted WITHOUT final text settles budget" (+ every branch of the pure `budgetExhaustedVerdict`). RED against the old rule (verdict unwired): `AssertionError: a run that answered never claims exhaustion: [null,null,null,null,true]` → `FAILED | 8 passed | 1 failed`. GREEN after wiring: `ok | 9 passed | 0 failed`.
+  - Browser: new check "Budget verdict: a run that writes its answer on its last allowed step (while still calling tools) settles ok, never 'Budget reached'" — the suite's fixture gained an `/answered/v1/chat/completions` provider that streams the answer AND a tool call on every step, driven as a budget-2 turn of the budget thread through the real SW. RED with the agent.js wiring reverted: `run={"ok":false,"error":"Step budget reached (4 of 4) before the task finished","errorCategory":"budget",…,"result":"Every tab is read. Digest: FACT-01 on page 1 …"}` → `chrome journeys: 335/336 passed` (the only FAIL). GREEN restored: `run={"ok":true,"result":"Every tab is read. Digest: FACT-01 on page 1 …"} record={"phase":"terminal","ok":true,"category":null}` → `chrome journeys: 336/336 passed`. The existing "Budget: …" checks stay green (the demo model's tool steps carry no text, so that stop is still a genuine budget stop).
+  - Live: `CAP_LIVE_MAX_ITERATIONS=3 CAP_LIVE_SHOT=budget-verdict-answered.png deno run -A scripts/live-every-tab.ts` (gemini-3.7-flash) → `LIVE VERDICT PASS: read 30/30, cited 30/30, replayed 0, terminal ok=true category=-`; `test-artifacts/live-every-tab/budget-verdict-answered.png` + `budget-verdict-answered-report.json`. The live check now passes ONLY when the run also settled ok with a non-empty digest (`settledOk`), and `CAP_LIVE_SHOT` names the screenshot.
+  - Full suite: `deno test -A tests/` → `ok | 3041 passed (14 steps) | 0 failed (5m53s)` (security-suite-custody included, green); `scripts/chrome-journeys.ts` → `336/336 passed`; production build clean.
+  - Constraints: kept — `hasFinalText` is the whitespace-trimmed `runText.finalText(e.result)` (the substantive text, never the hidden nudge reply), read AFTER `correctUnsupportedMutationClaims` runs on the same text; the tools-forever run (no text) still settles budget; an aborted run is never a budget stop.
 - Blockers: —
-- Next: the two unit tests + the verdict change in run-budget.js.
+- Next: coordinator merge; the live reproduction note below is honest evidence, not a blocker.
 - Recover: `git log --oneline --all --grep=CAP-FB-20260902-BUDGET-VERDICT-ANSWERED-01`
 - History:
+  - 2026-09-02 04:16 UTC — candidate on `cap/budget-verdict-answered` (this tracker commit). The verdict is now a pure rule in `extension/lib/run-budget.js` (`budgetExhaustedVerdict`: exhausted = last allowed iteration still had tool calls AND not aborted AND no substantive final text); `extension/lib/agent.js` feeds it the trimmed `runText.finalText(e.result)` and logs "settled as finished" when the budget was reached on an answered step; the SW settle is unchanged (it reads the verdict flag). Live reproduction at the pre-fix tree was attempted twice at `maxIterations=3`: both runs settled ok because gemini-3.7-flash happened to finish on a no-tool step (6 of 9, 7 of 9) — the reported outcome depends on the model still calling tools on its final allowed step, so it is nondeterministic live; the deterministic real-browser reproduction is the new journey check (RED/GREEN in Gates). Post-fix live run: ok, 30/30 read, 30/30 cited, answer at step 8 of 9.
   - 2026-09-02 05:10 UTC — opened from the LOOP-CONTEXT-WINDOW-01 worker's adjacent observation 1.
   - 2026-09-02 03:38 UTC — CLAIMED by the reanalysis coordinator; worker started in its own worktree on `cap/budget-verdict-answered` off `origin/main@9ec6c3fe`. Other agents: pick a different entry.
 
