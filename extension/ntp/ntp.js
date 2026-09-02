@@ -4003,24 +4003,33 @@ function openView(path, title, trigger) {
     path = "options/options.html#skills";
     title = "Settings";
   }
+  // Normalize any legacy ?embedded=1 marker out of a stored route path (an old
+  // #view= history entry predating the P0 fix). The marker must never ride the
+  // committed URL again (see below); a route that still carries it boots at the
+  // same canonical path with the marker dropped.
+  if (typeof path === "string") {
+    const qi = path.indexOf("?");
+    const hi = path.indexOf("#");
+    const end = hi < 0 ? path.length : hi;
+    if (qi >= 0) {
+      const params = path.slice(qi + 1, end).split("&").filter((p) => p && p !== "embedded=1");
+      path = path.slice(0, qi) + (params.length ? `?${params.join("&")}` : "") + path.slice(end);
+    }
+  }
   const targetRoute = embeddedViewRoute(path);
-  // Boot the embedded document before the route update so the destination
-  // CAP-FB-20260826-BACK-STACK-02: a plain `viewFrame.src = url` is a
-  // cross-document navigation that APPENDS a joint session-history entry —
-  // combined with the pushState below that produced TWO entries per open (the
-  // "press Back twice" bug). Navigate an ALREADY-loaded iframe with a REPLACE
-  // (location.replace) so the pushState below is the SINGLE history entry; the
-  // very first load (empty iframe) still uses src= (which replaces the initial
-  // about:blank and adds nothing).
   const frame = panelFrameFor(path);
-  const basePath = String(path ?? "").split(/[?#]/, 1)[0];
-  const queryPart = path.includes("?") ? path.slice(path.indexOf("?")).split("#")[0] : "";
-  const hashPart = path.includes("#") ? path.slice(path.indexOf("#")) : "";
-  const embeddedQuery = queryPart
-    ? (queryPart.includes("embedded=1") ? queryPart : `${queryPart}&embedded=1`)
-    : "?embedded=1";
-  const frameUrl = chrome.runtime.getURL(`${basePath}${embeddedQuery}${hashPart}`);
-  // Boot the panel document exactly once; later opens reuse the live document.
+  // Embedded panel documents boot at their exact canonical URL — NO query. The
+  // old approach appended ?embedded=1 as an embeddedness marker and then had
+  // the child strip it with history.replaceState, but Chrome reports a frame's
+  // COMMITTED url (query included) as sender.url on runtime messages, so the
+  // service worker still saw options/options.html?embedded=1 and the real
+  // Settings document failed isExactOptionsSender — every owner route
+  // (provider credentials, tool diagnostics) refused with a misleading key
+  // error (P0, 2026-09-02). Embeddedness self-detects in the child
+  // (window.self !== window.top, shared/embedded-boot.js), so the URL stays
+  // clean and exact-document authorization matches. The frame boots once per
+  // canonical path; later opens reuse the live document.
+  const frameUrl = chrome.runtime.getURL(String(path ?? ""));
   if (!frame.src || frame.src === "about:blank" || frame.src === location.href) {
     frame.src = frameUrl;
   }

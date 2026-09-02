@@ -314,19 +314,19 @@ Deno.test("CSP hygiene: shipped extension pages ship NO inline scripts (MV3 scri
   assert(boot.includes('dataset.embedded = "1"'), "embedded-boot.js must set data-embedded");
 });
 
-Deno.test("embedded boot strips ?embedded=1 so exact-document sender authorization matches (P0 pek9)", async () => {
+Deno.test("embedded boot marks the document and does NOT rely on rewriting the URL for sender authorization (P0 pek9)", async () => {
   const boot = await Deno.readTextFile("extension/shared/embedded-boot.js");
-  // The boot must normalize the document URL inside an iframe (replaceState to
-  // pathname + hash) — otherwise isExactOptionsSender rejects the embedded
-  // Settings surface and every owner route (credentials, tool diagnostics)
-  // refuses the real Settings page.
+  // The boot's ONLY duty is marking the embedded attribute. The old
+  // history.replaceState query-strip could not restore owner authorization:
+  // Chrome reports the frame's COMMITTED url (query included) as sender.url
+  // on runtime messages, so a child-side URL rewrite never reaches the SW. The
+  // fix lives in the hub's openView, which now boots embedded views at their
+  // exact canonical URL. Assert the boot no longer claims otherwise.
+  assert(boot.includes('dataset.embedded = "1"'), "embedded-boot.js must set data-embedded");
+  assert(!boot.includes("history.replaceState("), "embedded-boot.js must not invoke replaceState as an authorization fix");
   assert(
-    boot.includes("history.replaceState"),
-    "embedded-boot.js must strip the embedded query via history.replaceState",
-  );
-  assert(
-    /window\.self !== window\.top && location\.search/.test(boot),
-    "the strip must be gated on iframe + query presence",
+    /window\.self !== window\.top/.test(boot),
+    "embeddedness must be self-detected in the child (iframe test)",
   );
   // And every shipped page must load the boot synchronously (pre-paint, before
   // any module script reads the attribute).

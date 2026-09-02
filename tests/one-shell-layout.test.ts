@@ -3,7 +3,8 @@
 // Verifies:
 // 1. Shared content layout tokens (--content-max and --content-gutter) in theme.css.
 // 2. All view surfaces (Artifacts, Directory, Settings) adopt the shared token pair.
-// 3. Embedded mode support: openView appends embedded=1 and surfaces hide duplicate headers.
+// 3. Embedded mode support: embedded views self-detect (window.self !== window.top)
+//    and hide duplicate headers; the hub boots them at their exact canonical URL.
 // 4. Retired surfaces (chat/chat.html and memory/explorer.html) are permanently deleted.
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
@@ -43,10 +44,20 @@ Deno.test("one-shell layout: Settings adopts shared layout and embedded rule", a
   assert(css.includes("[data-embedded] .head h1"), "Settings must hide h1 under [data-embedded]");
 });
 
-Deno.test("one-shell layout: openView in ntp.js passes embedded=1 to panel views", async () => {
+Deno.test("one-shell layout: openView boots panel views at their exact canonical URL (no embedded=1 query)", async () => {
   const ntp = await Deno.readTextFile("extension/ntp/ntp.js");
-  assert(ntp.includes("embeddedQuery"), "openView must construct embeddedQuery");
-  assert(ntp.includes("embedded=1"), "openView must append embedded=1 parameter");
+  // P0 pek9 (2026-09-02): ?embedded=1 used to be appended as an embeddedness
+  // marker, but Chrome reports a frame's COMMITTED url (query included) as
+  // sender.url on runtime messages — the real Settings document lost its
+  // owner-options principal and every owner route refused. Embeddedness
+  // self-detects in the child (window.self !== window.top), so openView must
+  // boot the frame at the exact canonical URL and strip any legacy marker.
+  assert(
+    ntp.includes('const frameUrl = chrome.runtime.getURL(String(path ?? ""))'),
+    "openView must boot the frame at the canonical path with no query appended",
+  );
+  assert(!ntp.includes("embeddedQuery"), "openView must not construct an embedded query");
+  assert(ntp.includes('p !== "embedded=1"'), "openView must strip legacy embedded=1 markers from stored routes");
 });
 
 Deno.test("one-shell layout: chrome-journeys.ts carries the 3 required journey assertions in EXPECTED", async () => {

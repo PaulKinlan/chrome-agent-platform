@@ -3,22 +3,21 @@
 // before any module script. Inline scripts are blocked by the MV3 CSP
 // ('script-src 'self'), which left these duties undone in embedded views:
 //
-// 1. Mark the document as embedded when this view is loaded inside the hub's
-//    view frame (openView appends ?embedded=1) or is otherwise iframed.
-// 2. Restore EXACT-document sender authorization. openView appends ?embedded=1
-//    to the frame URL, but the owner-surface authorization
-//    (isExactOptionsSender, extension/lib/pure.js) accepts only the bare
-//    options URL or a #fragment from the closed product set — a query string
-//    never matches, so the embedded Settings page lost its owner-options
-//    principal and every owner route (provider credentials, tool-catalog
-//    diagnostics, tool preview, factory reset) refused the REAL Settings
-//    surface (P0, 2026-09-02). With the attribute set, the query is stripped
-//    via history.replaceState so the document URL returns to the exact
-//    authorized form. Later embedded-readers are unaffected: they test
-//    window.self !== window.top, which an iframe always satisfies.
+// Mark the document as embedded when this view is loaded inside the hub's
+// view frame or is otherwise iframed, so the [data-embedded] CSS hides the
+// standalone chrome (sidebar brand, page h1) that would double up inside the
+// hub shell.
+//
+// P0 2026-09-02 (pek9): this boot does NOT try to fix sender authorization by
+// rewriting the document URL. Chrome reports a frame's COMMITTED url (query
+// included) as sender.url on runtime messages, so history.replaceState inside
+// the child cannot change what the service worker sees — the previous boot
+// stripped ?embedded=1 from location.href yet provider routes still refused
+// the real Settings document. The fix is upstream: the hub's openView
+// (extension/ntp/ntp.js) loads embedded views at their exact canonical URL
+// with no ?embedded=1 marker, so the committed url itself matches
+// isExactOptionsSender. Embeddedness is self-detected here
+// (window.self !== window.top) and never depends on a query the hub appends.
 if (new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top) {
   document.documentElement.dataset.embedded = "1";
-}
-if (window.self !== window.top && location.search) {
-  history.replaceState(null, "", location.pathname + location.hash);
 }

@@ -1,7 +1,15 @@
 # Changelog
 
+## [0.3.12] — 2026-09-03
+- embedded Settings Test connection fixed at the root — embedded views boot at their canonical URL (owner-options binds again), and a surface refusal never blames the API key
+
+## [0.3.11] — 2026-09-02
+- embedded Settings Test connection fixed at the root — embedded views boot at their canonical URL (owner-options binds again), and a surface refusal never blames the API key
+
+## [0.3.10] — 2026-09-02
+- embedded Settings Test connection fixed at the root — embedded views boot at their canonical URL (owner-options binds again), and a surface refusal never blames the API key
+
 ## [0.3.9] — 2026-09-02
-- AGENTS.md: beads is the only tracker, the fleet is the default way to work, and beads best practices (epics, dependencies, lifecycle) are the standard. TASKS.md and KNOWN-ISSUES.md retired. New beads-flow skill: the pick-up-and-ship loop.
 
 ## [0.3.8] — 2026-09-02
 - Embedded views keep their owner identity: the boot strips ?embedded=1 after marking the document, so exact-document authorization matches the real Settings surface again
