@@ -24,8 +24,8 @@ import { isPromptApiAvailable, createPromptApiModel } from "./models/prompt-api-
 const INDEX_KEY = "threads";
 const MAX_THREADS = 200; // the index cap
 const MAX_MESSAGES = 500; // per-thread message cap
-const MAX_MESSAGE_BYTES = 240 * 1024; // per-message text cap in UTF-8 BYTES — raised from 16 KiB (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01: the task view must hold the COMPLETE agent response). 240 KiB leaves headroom for the JSON envelope + truncation marker under the memory store's 256 KiB per-value bound (memory.js MAX_VALUE_BYTES), so any response up to ~100 pages stores byte-complete; a pathological longer message is sliced with an explicit marker (never silent) and the complete text stays in the durable run journal (retainedPayloadRef).
-const MAX_THREAD_BYTES = 248 * 1024; // per-thread serialized budget (below the memory store's 256 KiB per-value bound so a full-size response + envelope still stores; the tail is protected from eviction)
+export const MAX_MESSAGE_BYTES = 240 * 1024; // per-message text cap in UTF-8 BYTES — raised from 16 KiB (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01: the task view must hold the COMPLETE agent response). 240 KiB leaves headroom for the JSON envelope + truncation marker under the memory store's 256 KiB per-value bound (memory.js MAX_VALUE_BYTES), so any response up to ~100 pages stores byte-complete; a pathological longer message is sliced with an explicit marker (never silent) and the complete text stays in the durable run journal (retainedPayloadRef).
+export const MAX_THREAD_BYTES = 248 * 1024; // per-thread serialized budget (below the memory store's 256 KiB per-value bound so a full-size response + envelope still stores; the tail is protected from eviction)
 const MAX_NAME_CHARS = 80;
 // Continuation-fidelity bounds: the journaled per-run tool summary and skill
 // list are deliberately TINY (names + ok only — never args, results, or page
