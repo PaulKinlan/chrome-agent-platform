@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.632] — 2026-09-02
+- Task board: the unused-code cleanup is complete.
+
 ## [0.2.631] — 2026-09-02
 - The extension's build now checks that every shipped file is actually used, and two unused modules are gone.
 
