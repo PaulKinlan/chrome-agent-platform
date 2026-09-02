@@ -4,12 +4,12 @@
 // deep-link redirect. Evidence → /tmp/cap-skills-evidence/.
 
 import { parse } from "https://deno.land/std/flags/mod.ts";
+import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
 
 const args = parse(Deno.args, { string: ["out"], default: { out: "/tmp/cap-skills-evidence" } });
 const OUT = args.out;
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
-const CHROMIUM = "/usr/bin/chromium";
 await Deno.mkdir(OUT, { recursive: true });
 
 let pass = 0, fail = 0;
@@ -32,60 +32,35 @@ const srv = Deno.serve({ port: 0, hostname: "127.0.0.1" }, () => new Response(SK
 await sleep(150);
 const skillUrl = `http://127.0.0.1:${srv.addr.port}/SKILL.md`;
 
-// ── launch + CDP wiring (the retained a11y-audit pattern) ──────────────────
+// ── launch + CDP wiring (the shared launcher: kernel-assigned port, endpoint
+// read from this child's own stderr, honest failure when the browser prints
+// none) ─────────────────────────────────────────────────────────────────────
 const tmp = await Deno.makeTempDir({ prefix: "cap-skills-ev-" });
-const proc = new Deno.Command(CHROMIUM, {
-  args: [
-    "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
-    "--silent-debugger-extension-api",
-    `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-    "--remote-debugging-port=0", "--remote-allow-origins=*", "--window-size=1440,900",
-    `--user-data-dir=${tmp}`, "about:blank",
-  ],
-  stdout: "null",
-  stderr: "piped",
-}).spawn();
-
-let wsUrl = "";
-{
-  const reader = proc.stderr.getReader();
-  const deadline = Date.now() + 15000;
-  let acc = "";
-  while (Date.now() < deadline && !wsUrl) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    acc += new TextDecoder().decode(value);
-    const m = acc.match(/DevTools listening on (ws:\/\/\S+)/);
-    if (m) wsUrl = m[1];
-  }
+let chrome;
+try {
+  chrome = await launchChrome({ extension: EXT, profile: tmp, windowSize: "1440,900", timeoutMs: 15000 });
+} catch (e) {
+  console.log(`FAIL: no DevTools URL — ${String((e as Error)?.message ?? e)}`);
+  await Deno.remove(tmp, { recursive: true }).catch(() => {});
+  Deno.exit(1);
 }
-if (!wsUrl) { console.log("FAIL: no DevTools URL"); Deno.exit(1); }
-const port = Number(new URL(wsUrl).port);
+const proc = chrome.proc;
+const port = chrome.port;
+const cdp = await openCdp(chrome.wsUrl);
 
-let id = 0;
-const pend = new Map<number, (v: unknown) => void>();
-const ws = new WebSocket(wsUrl);
-await new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = rej; });
-const contexts = new Map<string, { url: string; frameId?: string }>(); // executionContext id → info
-ws.onmessage = (ev) => {
-  const m = JSON.parse(ev.data);
-  if (m.method === "Runtime.executionContextCreated") {
-    const c = m.params.context;
-    contexts.set(String(c.id), { url: c.url ?? c.origin ?? "", frameId: c.auxData?.frameId });
-  }
-  if (m.method === "Runtime.executionContextDestroyed") {
-    contexts.delete(String(m.params.executionContextId));
-  }
-  if (m.id && pend.has(m.id)) {
-    const resolve = pend.get(m.id)!;
-    pend.delete(m.id);
-    resolve(m.error ? Promise.reject(new Error(m.error.message)) : m.result);
-  }
-};
-const send = (method: string, params: unknown, sessionId?: string): Promise<any> => {
-  const mid = ++id;
-  return new Promise((resolve) => { pend.set(mid, resolve); ws.send(JSON.stringify({ id: mid, method, params, sessionId })); });
-};
+// executionContext id → info (the options iframe is located by its frame id)
+const contexts = new Map<string, { url: string; frameId?: string }>();
+cdp.on("Runtime.executionContextCreated", (params) => {
+  const c = params.context;
+  contexts.set(String(c.id), { url: c.url ?? c.origin ?? "", frameId: c.auxData?.frameId });
+});
+cdp.on("Runtime.executionContextDestroyed", (params) => {
+  contexts.delete(String(params.executionContextId));
+});
+// Resolves the CDP result directly (the shape this harness reads); a protocol
+// error rejects.
+const send = async (method: string, params: unknown, sessionId?: string): Promise<any> =>
+  (await cdp.send(method, params, sessionId)).result;
 const evl = async (s: string, expr: string, contextId?: string): Promise<any> => {
   const r = await send("Runtime.evaluate", {
     expression: expr, returnByValue: true, awaitPromise: true,
@@ -175,7 +150,7 @@ try {
   framesUrls = frames.map((f) => f.url);
 } catch { /* diagnostics only */ }
 ok("options iframe booted", !!cid, framesUrls ?? [...contexts.values()]);
-await evl(ntp, `(() => { const a = document.querySelector('a[data-section="skills"]'); a.click(); return true; })()`, cid);
+await evl(ntp, `(() => { const a = document.querySelector('a[data-section="skills"]'); a.click(); return true; })()`, cid ?? undefined);
 await sleep(1200);
 const section = await evalInOptions(ntp, `(() => {
   const sec = document.getElementById("skills");
@@ -187,7 +162,7 @@ const section = await evalInOptions(ntp, `(() => {
     listRows: sec.querySelectorAll(".recipe").length,
     empty: sec.querySelector(".skills-list .empty")?.textContent ?? null,
   };
-})()`, cid);
+})()`);
 ok("Skills section visible in Settings", section.visible === true, section);
 ok("Skills section has the import form", section.importForm === true, section);
 ok("Skills list renders built-in skills", section.listRows > 0, section);
@@ -236,6 +211,9 @@ ok("redirect targets the skills section", JSON.stringify(redir).includes("#skill
 await shot(old, "04-old-deeplink-redirect.png");
 
 await srv.shutdown();
+cdp.close();
 try { proc.kill("SIGKILL"); } catch { /* dead */ }
+await proc.status.catch(() => {});
+await Deno.remove(tmp, { recursive: true }).catch(() => {});
 console.log(`\n${pass} passed, ${fail} failed`);
 Deno.exit(fail ? 1 : 0);

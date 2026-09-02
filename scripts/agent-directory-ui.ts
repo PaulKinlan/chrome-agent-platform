@@ -3,12 +3,13 @@
 // retains screenshots + geometry/AX evidence outside the source tree when
 // AGENT_DIRECTORY_ARTIFACT_DIR is set.
 
+import { launchChrome } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.env.get("AGENT_DIRECTORY_EXTENSION_DIR") || `${ROOT}extension`;
 const OUT = Deno.env.get("AGENT_DIRECTORY_ARTIFACT_DIR") ||
   await Deno.makeTempDir({ prefix: "cap-agent-directory-artifacts-" });
 const BASELINE = Deno.args.includes("--baseline");
-const CHROMIUM = "/usr/bin/chromium";
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 await Deno.mkdir(OUT, { recursive: true });
 const profile = await Deno.makeTempDir({ prefix: "cap-agent-directory-profile-" });
@@ -51,25 +52,15 @@ function check(name: string, pass: boolean, detail?: unknown) {
   else { failed++; console.error(`FAIL: ${name} — ${JSON.stringify(detail)}`); }
 }
 
-const proc = new Deno.Command(CHROMIUM, {
-  args: ["--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
-    "--silent-debugger-extension-api", `--disable-extensions-except=${EXT}`,
-    `--load-extension=${EXT}`, "--remote-debugging-port=0", "--remote-allow-origins=*",
-    "--window-size=1280,900", `--user-data-dir=${profile}`, "about:blank"],
-  stdout: "null", stderr: "piped",
-}).spawn();
-
-let stderr = "";
-let wsUrl = "";
-const reader = proc.stderr.getReader();
-while (!wsUrl) {
-  const { value, done } = await reader.read();
-  if (done) break;
-  stderr += new TextDecoder().decode(value);
-  wsUrl = stderr.match(/DevTools listening on (ws:\/\/\S+)/)?.[1] || "";
-}
-if (!wsUrl) throw new Error(`Chrome did not expose CDP: ${stderr}`);
-const port = Number(new URL(wsUrl).port);
+// The shared launcher: kernel-assigned debugging port, the DevTools endpoint
+// read from THIS child's own stderr (drained in the background afterwards),
+// an honest throw when the browser prints none.
+const chrome = await launchChrome({ extension: EXT, profile, windowSize: "1280,900" });
+const proc = chrome.proc;
+const wsUrl = chrome.wsUrl;
+const port = chrome.port;
+// This harness keeps its own CDP socket: it records console/runtime/network/
+// log diagnostics per session for the "no errors" gate.
 let id = 0;
 const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
 const ws = new WebSocket(wsUrl);
@@ -228,8 +219,6 @@ try {
   ws.close();
   try { proc.kill("SIGKILL"); } catch { /* already exited */ }
   await proc.status.catch(() => null);
-  await reader.cancel().catch(() => {});
-  try { reader.releaseLock(); } catch { /* already released */ }
   await removeProfile();
 }
 console.log(`RESULT: ${passed} passed, ${failed} failed; artifacts: ${OUT}`);

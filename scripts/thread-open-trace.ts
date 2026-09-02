@@ -20,7 +20,8 @@
 // thread-view:project), and the OPFS read count, so the redesign argues from
 // measurements rather than from reading the code.
 
-const CHROMIUM = "/usr/bin/chromium";
+import { CHROMIUM, launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
 
@@ -47,30 +48,22 @@ const MATRIX = Deno.args.some((a) => a.startsWith("--runs="))
 // Pass --runs=25 --logs=250 to run it.
 
 const profile = await Deno.makeTempDir({ prefix: "thread-trace-" });
-const proc = new Deno.Command(CHROMIUM, {
+// The spawn goes through the shared launcher: the debugging port is
+// kernel-assigned and the endpoint is read back from THIS child's own stderr
+// (the launcher fails honestly when the browser prints none).
+const { proc, wsUrl } = await launchChrome({
+  binary: CHROMIUM,
   args: [
     "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
     "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-    "--remote-debugging-port=0", "--window-size=1400,1200",
+    "--window-size=1400,1200",
     `--user-data-dir=${profile}`, "about:blank",
   ],
-  stdout: "piped", stderr: "piped", clearEnv: true,
-}).spawn();
+  clearEnv: true,
+});
 
-let port = 0;
-for (let i = 0; i < 80 && !port; i++) {
-  await sleep(250);
-  const reader = proc.stderr.getReader();
-  const { value, done } = await reader.read();
-  reader.releaseLock();
-  const line = done ? null : new TextDecoder().decode(value);
-  if (line?.includes("DevTools listening")) port = Number(line.match(/ws:\/\/127\.0\.0\.1:(\d+)/)?.[1] ?? 0);
-}
-if (!port) { console.error("chrome did not expose a DevTools port"); Deno.exit(1); }
-
-const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
-const ws = new WebSocket(version.webSocketDebuggerUrl);
+const ws = new WebSocket(wsUrl);
 await new Promise((r) => { ws.onopen = r; });
 let msgId = 0;
 const pending = new Map<number, (v: any) => void>();
@@ -81,8 +74,12 @@ ws.onmessage = (e) => {
 const send = (method: string, params: Record<string, unknown> = {}, sessionId?: string) =>
   new Promise<any>((res) => { const id = ++msgId; pending.set(id, res); ws.send(JSON.stringify({ id, method, params, sessionId })); });
 
-const targets = await send("Target.getTargets");
-const sw = targets.result.targetInfos.find((t: any) => t.type === "service_worker" && t.url.startsWith("chrome-extension://"));
+// MV3 registers the worker a beat after the endpoint is reachable — wait for it
+// explicitly rather than reading Target.getTargets once and hoping.
+const sw = await waitForServiceWorker(send, {
+  timeoutMs: 20000,
+  match: (t: any) => t.type === "service_worker" && t.url.startsWith("chrome-extension://"),
+});
 if (!sw) { console.error("extension service worker not found"); Deno.exit(1); }
 const extId = new URL(sw.url).host;
 
@@ -104,6 +101,9 @@ console.log(`\nextension ${extId}`);
 console.log("seeding through the REAL durable-run API (no provider, no keys)\n");
 
 const rows: any[] = [];
+// A seed or thread.get failure breaks out of the matrix; the exit code below
+// reflects it (a trace that silently stopped short must not read as green).
+let failed = 0;
 for (const { runs, logs } of MATRIX) {
   const seeded = await evalIn(`(async () => {
     const { durableRuns } = await import("/lib/durable-runs.js");
@@ -131,7 +131,7 @@ for (const { runs, logs } of MATRIX) {
     }
     return { ok: true, ms: Date.now() - started, threadId };
   })()`);
-  if (seeded?.__error) { console.error("seed failed:", seeded.__error); break; }
+  if (seeded?.__error) { console.error("seed failed:", seeded.__error); failed++; break; }
   console.log(`seeded ${String(runs).padStart(2)} runs x ${String(logs).padStart(3)} logs  (${seeded.ms} ms to write)`);
 
   // Time the EXACT route the UI calls, cold-ish, three times.
@@ -160,7 +160,7 @@ for (const { runs, logs } of MATRIX) {
     }
     return { out, stages };
   })()`);
-  if (timed?.__error) { console.error("thread.get failed:", timed.__error); break; }
+  if (timed?.__error) { console.error("thread.get failed:", timed.__error); failed++; break; }
   const out = timed.out ?? [];
   const ms = out.map((x: any) => x.ms);
   rows.push({ runs, logs, ms, seedMs: seeded.ms, messages: out[0]?.messages ?? 0, stages: timed.stages });
@@ -190,4 +190,6 @@ console.log("─".repeat(72));
 
 try { proc.kill("SIGKILL"); } catch { /* already gone */ }
 await Deno.remove(profile, { recursive: true }).catch(() => {});
-Deno.exit(0);
+if (rows.length !== MATRIX.length) failed++;
+console.log(`\nRESULT: ${rows.length} of ${MATRIX.length} matrix rows traced, ${failed} failed`);
+Deno.exit(failed > 0 ? 1 : 0);

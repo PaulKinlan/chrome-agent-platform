@@ -1,9 +1,9 @@
 {
   "name": "chrome-agent-platform",
-  "version": "0.2.646",
+  "version": "0.2.647",
   "private": true,
   "type": "module",
-  "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
+  "description": "Chrome as the agent platform \u2014 agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
   "scripts": {
     "build": "node build.mjs --target=developer",
     "build:debug": "node build.mjs --target=developer",
@@ -22,7 +22,7 @@
     "test:a11y": "deno run -A scripts/a11y-audit.ts",
     "test:perf": "deno run -A scripts/perf-leak-trace.ts",
     "test:capabilities": "deno run -A scripts/capability-lifecycle.ts",
-    "test:all": "node scripts/check-tasks.mjs && npm run check:vocabulary && npm run check:reachability && npm test && npm run test:security && npm run test:security:injection && npm run test:chrome && npm run test:local-files",
+    "test:all": "node scripts/check-tasks.mjs && npm run check:vocabulary && npm run check:reachability && npm test && npm run build && npm run test:security && npm run test:security:injection && npm run test:chrome && npm run test:components && npm run test:a11y && npm run test:kat",
     "version:patch": "node scripts/bump-version.mjs patch",
     "version:minor": "node scripts/bump-version.mjs minor",
     "version:major": "node scripts/bump-version.mjs major",
@@ -43,7 +43,8 @@
     "test:perf:seeded": "deno run -A scripts/perf-seeded-scale.ts 120",
     "test:local-files": "deno run -A scripts/kat-local-files.ts",
     "test:read-page-host-grant": "deno run -A scripts/read-page-host-grant-acceptance.ts",
-    "check:reachability": "node scripts/check-reachability.mjs"
+    "check:reachability": "node scripts/check-reachability.mjs",
+    "test:kat": "npm run build && deno run -A scripts/kat-runner.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.45",

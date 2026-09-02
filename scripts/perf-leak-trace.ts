@@ -10,9 +10,10 @@
 //
 //   deno run -A scripts/perf-leak-trace.ts
 
+import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
-const CHROMIUM = "/usr/bin/chromium";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let pass = 0;
@@ -28,66 +29,29 @@ type Cdp = {
   port: number;
 };
 
-async function launch(): Promise<{ proc: Deno.ChildProcess; cdp: Cdp }> {
+async function launch(): Promise<{ proc: Deno.ChildProcess; cdp: Cdp; close: () => void; tmp: string }> {
   const tmp = await Deno.makeTempDir({ prefix: "cap-perf-" });
-  const proc = new Deno.Command(CHROMIUM, {
-    args: [
-      "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
-      "--silent-debugger-extension-api",
-      `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-      "--remote-debugging-port=0", "--remote-allow-origins=*", "--window-size=1440,900",
-      `--user-data-dir=${tmp}`, "about:blank",
-    ],
-    stdout: "null",
-    stderr: "piped",
-  }).spawn();
-
-  const t0 = Date.now();
-  let wsUrl = "";
-  let port = 0;
-  const reader = proc.stderr.getReader();
-  const deadline = Date.now() + 15000;
-  let acc = "";
-  while (Date.now() < deadline && !wsUrl) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    acc += new TextDecoder().decode(value);
-    const m2 = acc.match(/DevTools listening on (ws:\/\/\S+)/);
-    if (m2) {
-      wsUrl = m2[1];
-      const pm = wsUrl.match(/^ws:\/\/[^/:]+:(\d+)\//);
-      if (pm) port = Number(pm[1]);
-    }
-  }
-  if (!wsUrl) {
-    console.log("FAIL: could not find the Chrome DevTools URL");
-    try { proc.kill("SIGKILL"); } catch { /* dead */ }
+  // The shared launcher: kernel-assigned port, endpoint read from this child's
+  // own stderr, honest failure when the browser prints none.
+  let chrome;
+  try {
+    chrome = await launchChrome({ extension: EXT, profile: tmp, windowSize: "1440,900", timeoutMs: 15000 });
+  } catch (e) {
+    console.log(`FAIL: could not find the Chrome DevTools URL — ${String((e as Error)?.message ?? e)}`);
+    await Deno.remove(tmp, { recursive: true }).catch(() => {});
     Deno.exit(1);
   }
-
-  let id = 0;
-  const pend = new Map<number, (v: unknown) => void>();
-  const ws = new WebSocket(wsUrl);
-  await new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = rej; });
-  ws.onmessage = (ev) => {
-    const m = JSON.parse(ev.data);
-    if (m.id && pend.has(m.id)) {
-      const resolve = pend.get(m.id)!;
-      pend.delete(m.id);
-      resolve(m.error ? Promise.reject(new Error(m.error.message)) : m.result);
-    }
-  };
-  const send = (method: string, params: unknown, sessionId?: string): Promise<any> => {
-    const mid = ++id;
-    return new Promise((resolve) => { pend.set(mid, resolve); ws.send(JSON.stringify({ id: mid, method, params, sessionId })); });
-  };
+  const client = await openCdp(chrome.wsUrl);
+  // Resolves the CDP result directly (the shape this trace reads); a protocol
+  // error rejects.
+  const send = async (method: string, params: unknown, sessionId?: string): Promise<any> =>
+    (await client.send(method, params, sessionId)).result;
   const evl = async (s: string, expr: string): Promise<any> => {
     const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, s);
     return r?.result?.value;
   };
-  const cdp: Cdp = { send, evl, port };
-  void t0;
-  return { proc, cdp };
+  const cdp: Cdp = { send, evl, port: chrome.port };
+  return { proc: chrome.proc, cdp, close: client.close, tmp };
 }
 
 async function findSw(cdp: Cdp): Promise<{ id: string; extId: string }> {
@@ -119,7 +83,7 @@ async function pageLoad(cdp: Cdp, url: string): Promise<{ ms: number; sessionId:
 }
 
 async function main() {
-  const { proc, cdp } = await launch();
+  const { proc, cdp, close, tmp } = await launch();
   try {
     // ── 1. SW register time (< 500ms budget) ──
     const t0 = Date.now();
@@ -197,7 +161,10 @@ async function main() {
     check("hub DOM: a render loop leaves the DOM bounded (no leak)", dom1 <= dom0 + 200, { dom0, dom1 });
     void domHtml0;
   } finally {
+    close();
     try { proc.kill("SIGKILL"); } catch { /* dead */ }
+    await proc.status.catch(() => {});
+    await Deno.remove(tmp, { recursive: true }).catch(() => {});
   }
 
   console.log(`\nRESULT: ${pass} passed, ${fail} failed`);

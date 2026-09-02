@@ -17,13 +17,14 @@
 //   deno run -A scripts/system-prompts-integration.ts            # temporary evidence
 //   deno run -A scripts/system-prompts-integration.ts --retain   # retain to test-artifacts/
 
+import { CHROMIUM, launchChrome } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 // The preview↔run comparator (the single source of truth lives in the
 // extension lib): static layers match by exact receipt; the dynamic
 // runtime-context layer matches by its template receipt.
 const { layerReceiptsMatch } = await import(`${ROOT}extension/lib/system-prompts.js`);
 const EXT = `${ROOT}extension`;
-const CHROMIUM = "/usr/bin/chromium";
 const RETAIN = Deno.args.includes("--retain");
 const EVIDENCE_DIR = RETAIN
   ? `${ROOT}test-artifacts/system-prompts`
@@ -43,8 +44,12 @@ function check(name: string, cond: boolean, detail?: unknown) {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function launchChrome(profile: string) {
-  return new Deno.Command(CHROMIUM, {
+// The spawn goes through the shared launcher: the debugging port is
+// kernel-assigned and the endpoint is read back from THIS child's own stderr
+// (never a probe of a shared port). The argv below is the harness's own.
+function launch(profile: string) {
+  return launchChrome({
+    binary: CHROMIUM,
     args: [
       "--headless=new",
       "--no-sandbox",
@@ -52,29 +57,12 @@ function launchChrome(profile: string) {
       "--disable-gpu",
       `--disable-extensions-except=${EXT}`,
       `--load-extension=${EXT}`,
-      "--remote-debugging-port=0",
       "--window-size=1400,1600",
       `--user-data-dir=${profile}`,
       "about:blank",
     ],
-    stdout: "piped",
-    stderr: "piped",
     clearEnv: true,
-  }).spawn();
-}
-
-async function waitForPort(proc: Deno.ChildProcess): Promise<number> {
-  for (let i = 0; i < 80; i++) {
-    await sleep(250);
-    const reader = proc.stderr.getReader();
-    const { value, done } = await reader.read();
-    reader.releaseLock();
-    const line = done ? null : new TextDecoder().decode(value);
-    if (line?.includes("DevTools listening")) {
-      return Number(line.match(/ws:\/\/127\.0\.0\.1:(\d+)/)?.[1] ?? 0);
-    }
-  }
-  throw new Error("chrome did not expose a DevTools port");
+  });
 }
 
 class Cdp {
@@ -173,12 +161,12 @@ const ED = `document.querySelector('#prompt-editor')`;
 
 const profile = await Deno.makeTempDir({ prefix: "cap-prompts-" });
 await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
-const proc = launchChrome(profile);
+const chrome = await launch(profile);
+const proc = chrome.proc;
 let exitCode = 1;
 try {
-  const port = await waitForPort(proc);
-  const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
-  const ws = new WebSocket(version.webSocketDebuggerUrl);
+  const port = chrome.port;
+  const ws = new WebSocket(chrome.wsUrl);
   await new Promise((r) => (ws.onopen = r));
   const cdp = new Cdp(ws);
 

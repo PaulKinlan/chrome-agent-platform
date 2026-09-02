@@ -12,42 +12,46 @@
 // WAL would be unworkable in the service worker. It does not.
 //
 //   deno run -A scripts/opfs-wal-probe.ts
-const CHROMIUM = "/usr/bin/chromium";
-const EXT = "/home/paulkinlan/chrome-agent-platform/extension";
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+import { launchChrome, openCdp, waitForServiceWorker } from "./lib/chrome-launch.ts";
+
+// The extension under test is THIS tree's (never a hard-coded checkout — a
+// probe that loads another tree's bundle reports facts about a tree it never
+// built).
+const ROOT = new URL("..", import.meta.url).pathname;
+const EXT = `${ROOT}extension`;
 
 const profile = await Deno.makeTempDir({ prefix: "wal-probe-" });
-const proc = new Deno.Command(CHROMIUM, {
+// The shared launcher: kernel-assigned port, endpoint read from this child's
+// own stderr, honest failure when the browser prints none.
+const chrome = await launchChrome({
   args: [
     "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
     "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-    "--remote-debugging-port=0", "--window-size=1200,900",
+    "--window-size=1200,900",
     `--user-data-dir=${profile}`, "about:blank",
   ],
-  stdout: "piped", stderr: "piped", clearEnv: true,
-}).spawn();
+  clearEnv: true,
+});
+const proc = chrome.proc;
+const cdp = await openCdp(chrome.wsUrl);
+// Resolves the `{ result }` envelope (the shape this probe reads); rejects on a
+// protocol error instead of resolving it as success.
+const send = cdp.send;
 
-let port = 0;
-for (let i = 0; i < 80 && !port; i++) {
-  await sleep(250);
-  const reader = proc.stderr.getReader();
-  const { value, done } = await reader.read();
-  reader.releaseLock();
-  const line = done ? null : new TextDecoder().decode(value);
-  if (line?.includes("DevTools listening")) port = Number(line.match(/ws:\/\/127\.0\.0\.1:(\d+)/)?.[1] ?? 0);
+// MV3 registers the worker a beat after the endpoint is reachable — wait for
+// it explicitly rather than reading Target.getTargets once and hoping.
+const sw = await waitForServiceWorker(send, {
+  timeoutMs: 20000,
+  match: (t: any) => t.type === "service_worker" && String(t.url).startsWith("chrome-extension://"),
+});
+if (!sw) {
+  console.error("no service worker");
+  cdp.close();
+  try { proc.kill("SIGKILL"); } catch { /* gone */ }
+  await Deno.remove(profile, { recursive: true }).catch(() => {});
+  Deno.exit(1);
 }
-const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
-const ws = new WebSocket(version.webSocketDebuggerUrl);
-await new Promise((r) => { ws.onopen = r; });
-let id = 0;
-const pending = new Map<number, (v: any) => void>();
-ws.onmessage = (e) => { const d = JSON.parse(e.data as string); if (d.id && pending.has(d.id)) { pending.get(d.id)!(d); pending.delete(d.id); } };
-const send = (m: string, p: any = {}, s?: string) => new Promise<any>((res) => { const i = ++id; pending.set(i, res); ws.send(JSON.stringify({ id: i, method: m, params: p, sessionId: s })); });
-
-const targets = await send("Target.getTargets");
-const sw = targets.result.targetInfos.find((t: any) => t.type === "service_worker" && t.url.startsWith("chrome-extension://"));
-if (!sw) { console.error("no service worker"); Deno.exit(1); }
 const att = await send("Target.attachToTarget", { targetId: sw.targetId, flatten: true });
 const s = att.result.sessionId;
 await send("Runtime.enable", {}, s);
@@ -59,7 +63,7 @@ const run = async (expr: string) => {
 };
 
 console.log("\n=== OPFS capability in the extension SERVICE WORKER ===\n");
-console.log(await run(`(async () => {
+const report = await run(`(async () => {
   const root = await navigator.storage.getDirectory();
   const dir = await root.getDirectoryHandle("wal-probe", { create: true });
   const enc = new TextEncoder();
@@ -116,8 +120,30 @@ console.log(await run(`(async () => {
   return JSON.stringify({ ...out, appendCostAsFileGrows: marks, finalSizeBytes: finalSize,
     batchedAppend1000Ms: batchMs, tailReadMs: tailMs, tailRowsParsed: rows.length,
     wholeFileReadMs: wholeMs, wholeFileRows: wholeText.split(NLC).filter(Boolean).length }, null, 2);
-})()`));
+})()`);
+console.log(typeof report === "string" ? report : JSON.stringify(report, null, 2));
 
+// The honest pass condition: the probe RAN TO COMPLETION inside the extension
+// service worker and produced every measurement it exists to take (an eval
+// that threw, a non-worker context, or an empty tail/whole read is a failure
+// of the probe, not a storage fact). The exit code is derived from that — a
+// probe that printed an error and exited 0 read as green to any aggregate.
+let parsed: any = null;
+try { parsed = typeof report === "string" ? JSON.parse(report) : report; } catch { parsed = null; }
+const marks = parsed?.appendCostAsFileGrows ?? {};
+const probeOk = parsed != null && !parsed.__error &&
+  parsed.context === "service-worker" &&
+  Object.keys(marks).length === 5 && Object.values(marks).every((v) => Number.isFinite(v)) &&
+  Number.isFinite(parsed.batchedAppend1000Ms) && Number.isFinite(parsed.tailReadMs) &&
+  Number.isFinite(parsed.wholeFileReadMs) &&
+  parsed.tailRowsParsed > 0 && parsed.wholeFileRows > 0;
+console.log(`\nRESULT: ${probeOk ? "PASS" : "FAIL"} — OPFS WAL probe ${
+  probeOk
+    ? "completed in the extension service worker (append-cost marks, batched append, tail + whole-file reads all measured)"
+    : `did not complete: ${parsed?.__error ?? "missing measurements"}`
+}`);
+
+cdp.close();
 try { proc.kill("SIGKILL"); } catch { /* gone */ }
 await Deno.remove(profile, { recursive: true }).catch(() => {});
-Deno.exit(0);
+Deno.exit(probeOk ? 0 : 1);

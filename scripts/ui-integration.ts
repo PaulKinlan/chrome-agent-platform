@@ -6,9 +6,10 @@
 //
 //   deno run -A scripts/ui-integration.ts
 
+import { CHROMIUM, launchChrome } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
-const CHROMIUM = "/usr/bin/chromium";
 
 let pass = 0;
 let fail = 0;
@@ -24,8 +25,12 @@ function check(name: string, cond: boolean, detail?: unknown) {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function launchChrome(profile: string) {
-  return new Deno.Command(CHROMIUM, {
+// The spawn goes through the shared launcher: the debugging port is
+// kernel-assigned and the endpoint is read back from THIS child's own stderr
+// (never a probe of a shared port). The argv below is the harness's own.
+function launch(profile: string) {
+  return launchChrome({
+    binary: CHROMIUM,
     args: [
       "--headless=new",
       "--no-sandbox",
@@ -33,30 +38,12 @@ function launchChrome(profile: string) {
       "--disable-gpu",
       `--disable-extensions-except=${EXT}`,
       `--load-extension=${EXT}`,
-      "--remote-debugging-port=0",
       "--window-size=1400,900",
       `--user-data-dir=${profile}`,
       "about:blank",
     ],
-    stdout: "piped",
-    stderr: "piped",
     clearEnv: true,
-  }).spawn();
-}
-
-async function waitForPort(proc: Deno.ChildProcess): Promise<number> {
-  for (let i = 0; i < 80; i++) {
-    await sleep(250);
-    const reader = proc.stderr.getReader();
-    const { value, done } = await reader.read();
-    reader.releaseLock();
-    const line = done ? null : new TextDecoder().decode(value);
-    if (line?.includes("DevTools listening")) {
-      const port = Number(line.match(/ws:\/\/127\.0\.0\.1:(\d+)/)?.[1] ?? 0);
-      if (port) return port;
-    }
-  }
-  throw new Error("chrome did not expose a DevTools port");
+  });
 }
 
 class Cdp {
@@ -102,12 +89,12 @@ function inBounds(rect: { left: number; top: number; right: number; bottom: numb
 }
 
 const profile = await Deno.makeTempDir({ prefix: "cap-ui-" });
-const proc = launchChrome(profile);
+const chrome = await launch(profile);
+const proc = chrome.proc;
 let exitCode = 1;
 try {
-  const port = await waitForPort(proc);
-  const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
-  const ws = new WebSocket(version.webSocketDebuggerUrl);
+  const port = chrome.port;
+  const ws = new WebSocket(chrome.wsUrl);
   await new Promise((r) => (ws.onopen = r));
   const cdp = new Cdp(ws);
 
@@ -193,7 +180,7 @@ try {
   await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); if (!side.classList.contains('collapsed')) document.querySelector('#side-toggle').click(); })()`);
   await sleep(400);
   const shotCollapsed = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
-  await Deno.writeFile(`${ROOT}test-artifacts/sidebar-collapsed.png`, Uint8Array.from(atob(shotCollapsed.data), (c: number) => c.charCodeAt(0)));
+  await Deno.writeFile(`${ROOT}test-artifacts/sidebar-collapsed.png`, Uint8Array.from(atob(shotCollapsed.data), (c: string) => c.charCodeAt(0)));
 
   // 2c. Keyboard Enter toggles + aria-expanded/label/title track the state.
   //     First prove the nub is TAB-REACHABLE (focus the last sidebar control
@@ -218,7 +205,7 @@ try {
   await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); if (side.classList.contains('collapsed')) document.querySelector('#side-toggle').click(); })()`);
   await sleep(400);
   const shotExpanded = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
-  await Deno.writeFile(`${ROOT}test-artifacts/sidebar-expanded.png`, Uint8Array.from(atob(shotExpanded.data), (c: number) => c.charCodeAt(0)));
+  await Deno.writeFile(`${ROOT}test-artifacts/sidebar-expanded.png`, Uint8Array.from(atob(shotExpanded.data), (c: string) => c.charCodeAt(0)));
 
   // 2d. Space toggles too (native button activation).
   await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); t.focus(); })()`);
@@ -460,7 +447,7 @@ try {
     return nav.map(b => b.textContent.trim()).filter(Boolean);
   })()`);
   const expected = ["Providers", "Agents", "Appearance", "Browser control", "Permissions", "Hooks", "Usage", "Data & memory"];
-  const missing = expected.filter((s) => !(sections ?? []).some((x) => x.includes(s)));
+  const missing = expected.filter((s) => !(sections ?? []).some((x: string) => x.includes(s)));
   check("all settings sections render", missing.length === 0, { sections, missing });
 
   // 7. The toggles RENDER (a visible switch, not blank) + toggle.
@@ -502,7 +489,7 @@ try {
     const g = (sel) => getComputedStyle(document.querySelector(sel)).transition;
     return { nub: g('#side-toggle'), side: g('#side'), overlay: g('#thread-view') };
   })()`);
-  const noMotion = (t) => t === "none" || t.includes("0s") || t === "all 0s ease 0s";
+  const noMotion = (t: string) => t === "none" || t.includes("0s") || t === "all 0s ease 0s";
   check("prefers-reduced-motion disables the nub transition", reducedMotion && noMotion(reducedMotion.nub), reducedMotion);
   check("prefers-reduced-motion disables the sidebar transition", reducedMotion && noMotion(reducedMotion.side), reducedMotion);
   check("prefers-reduced-motion disables the overlay transition", reducedMotion && noMotion(reducedMotion.overlay), reducedMotion);
@@ -554,7 +541,7 @@ try {
 
   // Baseline overlay-open evidence.
   const shotOverlay = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
-  await Deno.writeFile(`${ROOT}test-artifacts/overlay-open.png`, Uint8Array.from(atob(shotOverlay.data), (c: number) => c.charCodeAt(0)));
+  await Deno.writeFile(`${ROOT}test-artifacts/overlay-open.png`, Uint8Array.from(atob(shotOverlay.data), (c: string) => c.charCodeAt(0)));
 
   const overlayGeom = await cdp.eval(hub, `(() => {
     const r = (el) => { if (!el) return null; const b = el.getBoundingClientRect(); return { left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top), bottom: Math.round(b.bottom), w: Math.round(b.width), h: Math.round(b.height), cx: Math.round(b.left + b.width/2) }; };
@@ -576,7 +563,7 @@ try {
   check("overlay-open RTL: overlay stays in-bounds", overlayRtl?.overlayInBounds === true, overlayRtl);
   check("overlay-open RTL: overlay does NOT cover the sidebar/nub (no overlap)", overlayRtl?.noOverlap === true, overlayRtl);
   const shotOverlayRtl = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
-  await Deno.writeFile(`${ROOT}test-artifacts/overlay-rtl.png`, Uint8Array.from(atob(shotOverlayRtl.data), (c: number) => c.charCodeAt(0)));
+  await Deno.writeFile(`${ROOT}test-artifacts/overlay-rtl.png`, Uint8Array.from(atob(shotOverlayRtl.data), (c: string) => c.charCodeAt(0)));
   await cdp.eval(hub, `document.documentElement.removeAttribute('dir')`);
   await sleep(1000);
 
@@ -608,7 +595,7 @@ try {
   await cdp.eval(hub, `document.documentElement.dataset.theme = 'midnight'`);
   await sleep(300);
   const shotOverlayDark = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
-  await Deno.writeFile(`${ROOT}test-artifacts/overlay-dark.png`, Uint8Array.from(atob(shotOverlayDark.data), (c: number) => c.charCodeAt(0)));
+  await Deno.writeFile(`${ROOT}test-artifacts/overlay-dark.png`, Uint8Array.from(atob(shotOverlayDark.data), (c: string) => c.charCodeAt(0)));
   await cdp.eval(hub, `document.documentElement.dataset.theme = 'sunlit'`);
   await sleep(300);
 

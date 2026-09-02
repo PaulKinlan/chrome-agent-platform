@@ -13,9 +13,10 @@
 //
 //   deno run -A scripts/capability-lifecycle.ts
 
+import { launchChrome } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
-const CHROMIUM = "/usr/bin/chromium";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // mirrors lib/capabilities.js CAPABILITIES + the warned flags
@@ -44,35 +45,19 @@ type Cdp = {
 
 async function launch(): Promise<{ proc: Deno.ChildProcess; cdp: Cdp }> {
   const tmp = await Deno.makeTempDir({ prefix: "cap-lifecycle-" });
-  const proc = new Deno.Command(CHROMIUM, {
-    args: [
-      "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
-      "--silent-debugger-extension-api",
-      `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-      "--remote-debugging-port=0", "--remote-allow-origins=*", "--window-size=1440,900",
-      `--user-data-dir=${tmp}`, "about:blank",
-    ],
-    stdout: "null",
-    stderr: "piped",
-  }).spawn();
-
-  let wsUrl = "";
-  let port = 0;
-  const reader = proc.stderr.getReader();
-  const deadline = Date.now() + 15000;
-  let acc = "";
-  while (Date.now() < deadline && !wsUrl) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    acc += new TextDecoder().decode(value);
-    const m2 = acc.match(/DevTools listening on (ws:\/\/\S+)/);
-    if (m2) { wsUrl = m2[1]; const pm = wsUrl.match(/^ws:\/\/[^/:]+:(\d+)\//); if (pm) port = Number(pm[1]); }
-  }
-  if (!wsUrl) {
-    console.log("FAIL: could not find the Chrome DevTools URL");
-    try { proc.kill("SIGKILL"); } catch { /* dead */ }
+  // The shared launcher: kernel-assigned debugging port, the endpoint read
+  // from this child's own stderr. A browser that prints none is an honest
+  // FAIL here (the launcher already killed it), never a probe of a named port.
+  let chrome: Awaited<ReturnType<typeof launchChrome>>;
+  try {
+    chrome = await launchChrome({ extension: EXT, profile: tmp, windowSize: "1440,900", timeoutMs: 15000 });
+  } catch (e) {
+    console.log(`FAIL: could not find the Chrome DevTools URL — ${String((e as Error)?.message ?? e)}`);
     Deno.exit(1);
   }
+  const proc = chrome.proc;
+  const wsUrl = chrome.wsUrl;
+  const port = chrome.port;
 
   let id = 0;
   const pend = new Map<number, (v: unknown) => void>();

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.647] — 2026-09-02
+- The test suite now tells the truth: security checks run against the real extension, browser checks no longer collide, and every known failure is named.
+
 ## [0.2.646] — 2026-09-02
 - Task board: the compact Permissions and Hooks settings are complete.
 

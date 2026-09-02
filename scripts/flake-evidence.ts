@@ -85,4 +85,10 @@ const identical = JSON.stringify(branchFails) === JSON.stringify(baseFails) && b
 const summary = { identicalFailuresOnBothSides: identical, branch: branchFails, base: baseFails };
 await Deno.writeTextFile(`${OUT}/summary.json`, JSON.stringify({ ...summary, index: `${OUT}/index.json` }, null, 2));
 console.log("\nsummary:", JSON.stringify(summary, null, 2));
-Deno.exit(0);
+// A real exit code (CAP-FB-20260830-SUITE-HONESTY-01): 0 only when the branch
+// introduced no failure — every branch run was clean, or the branch's failure
+// set is identical to the base's (a pre-existing flake, which is what this
+// tool exists to prove). Anything else — a branch-only failure, or no runs —
+// is 1. It used to exit 0 unconditionally.
+const branchClean = branchFails.length > 0 && branchFails.every((f) => f === "");
+Deno.exit(branchClean || identical ? 0 : 1);

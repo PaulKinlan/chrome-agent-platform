@@ -3,9 +3,10 @@
 // pointer + keyboard interactions, and retains screenshots/geometry outside the
 // source tree when SIDEBAR_PARITY_ARTIFACT_DIR is set.
 
+import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
-const CHROMIUM = "/usr/bin/chromium";
 const OUT = Deno.env.get("SIDEBAR_PARITY_ARTIFACT_DIR") ||
   await Deno.makeTempDir({ prefix: "cap-sidebar-parity-artifacts-" });
 await Deno.mkdir(OUT, { recursive: true });
@@ -27,64 +28,24 @@ function check(name: string, condition: boolean, detail?: unknown) {
   }
 }
 
-const proc = new Deno.Command(CHROMIUM, {
-  args: [
-    "--headless=new",
-    "--no-sandbox",
-    "--disable-dev-shm-usage",
-    "--disable-gpu",
-    "--silent-debugger-extension-api",
-    `--disable-extensions-except=${EXT}`,
-    `--load-extension=${EXT}`,
-    "--remote-debugging-port=0",
-    "--remote-allow-origins=*",
-    "--window-size=1280,900",
-    `--user-data-dir=${profile}`,
-    "about:blank",
-  ],
-  stdout: "null",
-  stderr: "piped",
-}).spawn();
-
-let wsUrl = "";
-let stderr = "";
-const reader = proc.stderr.getReader();
-while (!wsUrl) {
-  const { value, done } = await reader.read();
-  if (done) break;
-  stderr += new TextDecoder().decode(value);
-  wsUrl = stderr.match(/DevTools listening on (ws:\/\/\S+)/)?.[1] || "";
-}
-if (!wsUrl) throw new Error(`Chrome did not expose CDP: ${stderr}`);
-const port = Number(new URL(wsUrl).port);
-let id = 0;
-const pending = new Map<
-  number,
-  { resolve: (v: any) => void; reject: (e: Error) => void }
->();
-const ws = new WebSocket(wsUrl);
-await new Promise<void>((resolve, reject) => {
-  ws.onopen = () => resolve();
-  ws.onerror = () => reject(new Error("CDP websocket failed"));
+// The shared launcher: kernel-assigned port, endpoint read from this child's
+// own stderr, honest (bounded) failure when the browser prints none.
+const chrome = await launchChrome({
+  extension: EXT,
+  profile,
+  windowSize: "1280,900",
 });
-ws.onmessage = (event) => {
-  const message = JSON.parse(event.data);
-  if (!message.id || !pending.has(message.id)) return;
-  const promise = pending.get(message.id)!;
-  pending.delete(message.id);
-  if (message.error) promise.reject(new Error(message.error.message));
-  else promise.resolve(message.result);
-};
-function send(
+const proc = chrome.proc;
+const port = chrome.port;
+const cdp = await openCdp(chrome.wsUrl);
+// Resolves the CDP result directly (the shape this harness reads); a protocol
+// error rejects.
+async function send(
   method: string,
   params: unknown = {},
   sessionId?: string,
 ): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const messageId = ++id;
-    pending.set(messageId, { resolve, reject });
-    ws.send(JSON.stringify({ id: messageId, method, params, sessionId }));
-  });
+  return (await cdp.send(method, params, sessionId)).result;
 }
 
 let extensionId = "";
@@ -434,7 +395,7 @@ try {
     `SIDEBAR PARITY: ${passed} passed, ${failed} failed; artifacts=${OUT}`,
   );
 } finally {
-  ws.close();
+  cdp.close();
   try {
     proc.kill("SIGKILL");
   } catch { /* already exited */ }

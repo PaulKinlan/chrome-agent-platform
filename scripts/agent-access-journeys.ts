@@ -17,10 +17,15 @@
 // committed tree.
 //
 //   deno run -A scripts/agent-access-journeys.ts
+//
+// @ts-nocheck — this journey is untyped CDP scripting (the same pattern as
+// agent-provider-picker.ts); the assertions are exercised at runtime by the
+// exact-assertion-set gate below, not by the type checker.
+
+import { launchChrome } from "./lib/chrome-launch.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
-const CHROMIUM = "/usr/bin/chromium";
 const GIT = "/usr/bin/git";
 const EVIDENCE_DIR = `/tmp/cap-agent-access-evidence-${Date.now()}`;
 const RUN_ID = `cap-agent-access-${Date.now()}`;
@@ -149,42 +154,20 @@ async function fetchJson(url, opts) {
   return await res.json();
 }
 
-function launchChrome(profile) {
-  return new Deno.Command(CHROMIUM, {
-    args: [
-      "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
-      "--silent-debugger-extension-api",
-      `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-      "--remote-debugging-port=0", "--remote-allow-origins=*",
-      "--window-size=1400,2000", `--user-data-dir=${profile}`, "about:blank",
-    ],
-    stdout: "null", stderr: "piped", clearEnv: true,
-  }).spawn();
-}
-
 async function main() {
   await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
   const profile = `/tmp/cap-agent-access-profile-${Date.now()}`;
-  const proc = launchChrome(profile);
+  // The shared launcher: kernel-assigned debugging port, the endpoint read
+  // from THIS child's own stderr (never a probe of a named port), the same
+  // headless argv every harness uses, and a cleared environment so Chrome
+  // inherits none of the runner's variables.
+  const chrome = await launchChrome({ extension: EXT, profile, windowSize: "1400,2000", clearEnv: true });
+  const proc = chrome.proc;
+  const port = chrome.port;
 
-  let port = 0;
-  {
-    const reader = proc.stderr.getReader();
-    const deadline = Date.now() + 20000;
-    let acc = "";
-    while (Date.now() < deadline && !port) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      acc += new TextDecoder().decode(value);
-      const m = acc.match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)/);
-      if (m) port = Number(m[1]);
-    }
-    try { reader.releaseLock(); } catch { /* already released */ }
-  }
-  if (!port) throw new Error("chrome did not expose a DevTools port");
-
-  const version = await fetchJson(`http://127.0.0.1:${port}/json/version`);
-  const ws = new WebSocket(version.webSocketDebuggerUrl);
+  // This journey keeps its OWN CDP socket: it captures Runtime.exceptionThrown
+  // + console errors per session for the "no console errors" gates.
+  const ws = new WebSocket(chrome.wsUrl);
   await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
 
   let idc = 0;

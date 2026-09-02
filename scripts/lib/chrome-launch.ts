@@ -33,35 +33,181 @@ export interface LaunchedChrome {
   port: number;
   /** The last few KB of Chrome's stderr — for honest failure messages. */
   stderrTail(): string;
+  /** How long this launch queued behind another lane's browser (0 when it did not). */
+  lockWaitMs: number;
 }
 
 const TAIL_LIMIT = 8192;
+
+/** The browser every harness drives. */
+export const CHROMIUM = "/usr/bin/chromium";
+
+// ── the serialized-Chrome lock ──────────────────────────────────────────────
+// CAP-FB-20260830-SUITE-HONESTY-01. Two lanes driving headless Chromes at the
+// same time produce CDP timeouts (Runtime.evaluate / Target.attachToTarget)
+// in whichever suite loses the CPU — a red that says nothing about the tree.
+// The canonical lock the security supervisor already takes is now taken HERE,
+// for the lifetime of the browser, so every harness serializes by construction:
+//   - bounded: the wait is capped (CAP_CHROME_LOCK_WAIT_MS, default 20 min) and
+//     a lane that never gets the lock FAILS loudly — it is never turned green;
+//   - honest: the wait is printed when it happens, with its length;
+//   - reentrant within one process (a harness that launches two browsers);
+//   - skipped inside the security supervisor, which already holds the lock
+//     (CAP_SECURITY_NONCE), or when a runner says it holds it (CAP_CHROME_LOCK_HELD);
+//   - released when the last browser this process launched exits, and by the
+//     holder itself within a second of this process dying (no orphaned lock).
+export const CHROME_LOCK_PATH = Deno.env.get("CAP_CHROME_LOCK_PATH") ?? "/tmp/cap-serialized-chrome-acceptance.lock";
+
+let lockHolder: Deno.ChildProcess | null = null;
+let lockRefs = 0;
+
+async function acquireChromeLock(): Promise<{ waitedMs: number; release: () => void }> {
+  const noop = () => {};
+  if (Deno.env.get("CAP_SECURITY_NONCE") || Deno.env.get("CAP_CHROME_LOCK_HELD") === "1") {
+    return { waitedMs: 0, release: noop };
+  }
+  const release = () => {
+    lockRefs = Math.max(0, lockRefs - 1);
+    if (lockRefs === 0 && lockHolder) {
+      // Closing the holder's stdin is the release: `cat` sees EOF, the shell
+      // exits, flock exits, the kernel drops the lock. The same EOF happens
+      // by itself when this process dies, so a crashed harness never leaves
+      // the lock held.
+      const h = lockHolder;
+      lockHolder = null;
+      try { h.stdin.close().catch(() => {}); } catch { /* already closed */ }
+    }
+  };
+  if (lockHolder) {
+    lockRefs++;
+    return { waitedMs: 0, release };
+  }
+  const waitMs = Number(Deno.env.get("CAP_CHROME_LOCK_WAIT_MS") ?? 20 * 60_000);
+  const t0 = Date.now();
+  // flock -w gives a bounded wait natively; the holder prints once it has the
+  // lock and then holds it exactly until its stdin closes.
+  const holder = new Deno.Command("flock", {
+    args: [
+      "-w", String(Math.max(1, Math.ceil(waitMs / 1000))),
+      CHROME_LOCK_PATH,
+      "sh", "-c",
+      "echo CAP_CHROME_LOCK_ACQUIRED; exec cat >/dev/null",
+    ],
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "null",
+  }).spawn();
+  const reader = holder.stdout.getReader();
+  const decoder = new TextDecoder();
+  let seen = "";
+  let notice: ReturnType<typeof setTimeout> | undefined;
+  const deadline = t0 + waitMs + 2000;
+  while (!seen.includes("CAP_CHROME_LOCK_ACQUIRED") && Date.now() < deadline) {
+    if (notice === undefined) {
+      notice = setTimeout(() => console.error(`launchChrome: waiting for the serialized-Chrome lock (${CHROME_LOCK_PATH}) — another lane is driving a browser`), 1500);
+    }
+    let chunk: ReadableStreamReadResult<Uint8Array>;
+    try { chunk = await withTimeout(reader.read(), deadline - Date.now()); } catch { break; }
+    if (chunk.done) break;
+    seen += decoder.decode(chunk.value, { stream: true });
+  }
+  clearTimeout(notice);
+  try { reader.releaseLock(); } catch { /* released */ }
+  const waitedMs = Date.now() - t0;
+  if (!seen.includes("CAP_CHROME_LOCK_ACQUIRED")) {
+    try { await holder.stdin.close(); } catch { /* already closed */ }
+    try { holder.kill("SIGKILL"); } catch { /* gone */ }
+    try { await holder.status; } catch { /* reaped */ }
+    throw new Error(
+      `launchChrome: could not take the serialized-Chrome lock within ${waitMs} ms (${CHROME_LOCK_PATH} is held by another lane's browser). ` +
+        "Not started — a run that cannot get the browser is a failed run, not a skipped one.",
+    );
+  }
+  if (waitedMs > 1500) console.error(`launchChrome: took the serialized-Chrome lock after ${waitedMs} ms`);
+  // Drain the holder's stdout in the background (it prints nothing more).
+  (async () => { try { for await (const _ of holder.stdout) { /* drain */ } } catch { /* gone */ } })();
+  lockHolder = holder;
+  lockRefs = 1;
+  holder.status.then(() => { if (lockHolder === holder) { lockHolder = null; lockRefs = 0; } }).catch(() => {});
+  return { waitedMs, release };
+}
+
+/**
+ * The flags every headless harness passes. Exported so a harness that builds
+ * its own argv (a custom window size, an extra page) still shares one source
+ * for the boring part instead of a private copy that drifts.
+ */
+export function chromeBaseArgs(opts: {
+  profile?: string;
+  extension?: string;
+  windowSize?: string;
+} = {}): string[] {
+  const args = [
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--remote-allow-origins=*",
+    `--window-size=${opts.windowSize ?? "1440,900"}`,
+  ];
+  if (opts.extension) {
+    args.push("--silent-debugger-extension-api");
+    args.push(`--disable-extensions-except=${opts.extension}`);
+    args.push(`--load-extension=${opts.extension}`);
+  }
+  if (opts.profile) args.push(`--user-data-dir=${opts.profile}`);
+  return args;
+}
 
 /**
  * Spawn Chrome with a kernel-assigned debugging port and return its real
  * DevTools endpoint. `args` must NOT contain `--remote-debugging-port`; a
  * fixed port is the defect this module exists to remove, so passing one is a
  * hard error rather than a silent override.
+ *
+ * Two ways to call it:
+ *   - `args` only: the caller owns the full argv (the launcher appends the port).
+ *   - `extension` / `profile` (+ optional `args` extras): the launcher builds the
+ *     standard headless argv with `chromeBaseArgs()` and loads the extension.
  */
 export async function launchChrome(opts: {
-  binary: string;
-  args: string[];
+  binary?: string;
+  args?: string[];
+  extension?: string;
+  profile?: string;
+  windowSize?: string;
   timeoutMs?: number;
-  stdout?: "null" | "inherit";
+  stdout?: "null" | "inherit" | "piped";
+  clearEnv?: boolean;
+  /** Environment for the browser (with clearEnv: the whole environment — an allowlist). */
+  env?: Record<string, string>;
 }): Promise<LaunchedChrome> {
-  const fixed = opts.args.find((a) => a.startsWith("--remote-debugging-port"));
+  const extras = opts.args ?? [];
+  const fixed = extras.find((a) => a.startsWith("--remote-debugging-port"));
   if (fixed) {
     throw new Error(
       `launchChrome: refusing a caller-chosen debugging port (${fixed}). ` +
         "The port is assigned by the kernel and read back from Chrome's own stderr.",
     );
   }
+  const args = (opts.extension || opts.profile)
+    ? [
+      ...chromeBaseArgs({ profile: opts.profile, extension: opts.extension, windowSize: opts.windowSize }),
+      ...extras,
+      ...(extras.some((a) => !a.startsWith("--")) ? [] : ["about:blank"]),
+    ]
+    : extras;
 
-  const proc = new Deno.Command(opts.binary, {
-    args: [...opts.args, "--remote-debugging-port=0"],
+  const lock = await acquireChromeLock();
+  const proc = new Deno.Command(opts.binary ?? CHROMIUM, {
+    args: [...args, "--remote-debugging-port=0"],
     stdout: opts.stdout ?? "null",
     stderr: "piped",
+    ...(opts.clearEnv ? { clearEnv: true } : {}),
+    ...(opts.env ? { env: opts.env } : {}),
   }).spawn();
+  // The lock lives as long as this browser does.
+  proc.status.then(() => lock.release()).catch(() => lock.release());
 
   let tail = "";
   const append = (chunk: string) => {
@@ -92,6 +238,7 @@ export async function launchChrome(opts: {
     try { reader.releaseLock(); } catch { /* already released */ }
     try { proc.kill("SIGKILL"); } catch { /* already dead */ }
     try { await proc.status; } catch { /* already reaped */ }
+    lock.release();
     throw new Error(
       `launchChrome: Chrome never printed a DevTools endpoint (${opts.binary}). stderr tail: ${tail.slice(-600)}`,
     );
@@ -109,10 +256,109 @@ export async function launchChrome(opts: {
     } catch { /* the process went away; nothing to drain */ }
   })();
 
-  return { proc, wsUrl, port: Number(new URL(wsUrl).port), stderrTail: () => tail };
+  return { proc, wsUrl, port: Number(new URL(wsUrl).port), stderrTail: () => tail, lockWaitMs: lock.waitedMs };
 }
 
 export type CdpSend = (method: string, params?: any, sessionId?: string) => Promise<any>;
+
+export interface CdpClient {
+  /** Raw CDP send. Resolves with the full `{ result }` envelope; rejects on a protocol error. */
+  send: CdpSend;
+  /** Attach to a target (flatten) and enable Runtime + Page; returns the session id. */
+  attach(targetId: string): Promise<string>;
+  /** Open a URL in a new target and attach to it; returns the session id. */
+  open(url: string): Promise<{ targetId: string; sessionId: string }>;
+  /** `Runtime.evaluate` with awaitPromise + returnByValue; throws on a page exception. */
+  eval(sessionId: string, expression: string): Promise<any>;
+  /** Wait (bounded) for the extension's service-worker target; returns its info or null. */
+  serviceWorker(opts?: { timeoutMs?: number }): Promise<any | null>;
+  /** Subscribe to a CDP event (e.g. Runtime.executionContextCreated). Returns an unsubscribe. */
+  on(method: string, handler: (params: any, sessionId?: string) => void): () => void;
+  close(): void;
+}
+
+/**
+ * The minimal CDP client the harnesses used to each carry a private copy of.
+ * One WebSocket over the browser endpoint `launchChrome()` returned; every
+ * method is bounded and a protocol error REJECTS (never resolves as success).
+ */
+export async function openCdp(wsUrl: string, opts: { timeoutMs?: number } = {}): Promise<CdpClient> {
+  const ws = new WebSocket(wsUrl);
+  await withTimeout(
+    new Promise<void>((res, rej) => {
+      ws.onopen = () => res();
+      ws.onerror = () => rej(new Error("cdp websocket error"));
+    }),
+    opts.timeoutMs ?? 10000,
+  );
+  let id = 0;
+  const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
+  const listeners = new Map<string, Set<(params: any, sessionId?: string) => void>>();
+  ws.onmessage = (ev) => {
+    let m: any;
+    try { m = JSON.parse(String(ev.data)); } catch { return; }
+    if (m.id && pending.has(m.id)) {
+      const p = pending.get(m.id)!;
+      pending.delete(m.id);
+      if (m.error) p.reject(new Error(`${m.error.message ?? "cdp error"}`));
+      else p.resolve({ result: m.result });
+      return;
+    }
+    if (typeof m.method === "string") {
+      for (const fn of listeners.get(m.method) ?? []) {
+        try { fn(m.params, m.sessionId); } catch { /* a listener must not break the socket */ }
+      }
+    }
+  };
+  ws.onclose = () => {
+    for (const p of pending.values()) p.reject(new Error("cdp websocket closed"));
+    pending.clear();
+  };
+  const send: CdpSend = (method, params = {}, sessionId) => {
+    const mid = ++id;
+    return withTimeout(
+      new Promise((resolve, reject) => {
+        pending.set(mid, { resolve, reject });
+        ws.send(JSON.stringify({ id: mid, method, params, sessionId }));
+      }),
+      opts.timeoutMs ?? 30000,
+    ).catch((e) => {
+      pending.delete(mid);
+      throw new Error(`${method}: ${e?.message ?? e}`);
+    });
+  };
+  const attach = async (targetId: string) => {
+    const a = await send("Target.attachToTarget", { targetId, flatten: true });
+    const sessionId = a?.result?.sessionId as string;
+    await send("Runtime.enable", {}, sessionId);
+    await send("Page.enable", {}, sessionId).catch(() => {});
+    return sessionId;
+  };
+  return {
+    send,
+    attach,
+    async open(url: string) {
+      const t = await send("Target.createTarget", { url });
+      const targetId = t?.result?.targetId as string;
+      return { targetId, sessionId: await attach(targetId) };
+    },
+    async eval(sessionId: string, expression: string) {
+      const r = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId);
+      const res = r?.result;
+      if (res?.exceptionDetails) {
+        throw new Error(res.exceptionDetails.exception?.description ?? res.exceptionDetails.text ?? "evaluate threw");
+      }
+      return res?.result?.value;
+    },
+    serviceWorker: (o = {}) => waitForServiceWorker(send, o),
+    on(method, handler) {
+      if (!listeners.has(method)) listeners.set(method, new Set());
+      listeners.get(method)!.add(handler);
+      return () => { listeners.get(method)?.delete(handler); };
+    },
+    close() { try { ws.close(); } catch { /* already closed */ } },
+  };
+}
 
 /**
  * Wait for the loaded extension's service-worker target to appear.

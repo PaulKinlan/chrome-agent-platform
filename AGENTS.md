@@ -158,9 +158,25 @@ This project uses bd (beads) for issue tracking.
   harness to a zombie or to another lane's browser, and it then prints confident
   PASS/FAIL results about a tree it never loaded — green against the wrong tree
   reads as evidence, which is worse than red. `tests/harness-debug-port.test.ts`
-  fails on any fixed port. MV3 registers its service worker a beat after the
-  browser is reachable, so wait for it with `waitForServiceWorker()` rather than
-  relying on how long a handshake happens to take.
+  fails on any fixed port — and, since CAP-FB-20260830-SUITE-HONESTY-01, on any
+  spawn path other than `launchChrome()` (it is the ONLY writer of the flag). MV3
+  registers its service worker a beat after the browser is reachable, so wait
+  for it with `waitForServiceWorker()` rather than relying on how long a
+  handshake happens to take.
+- **One browser at a time, by construction.** `launchChrome()` takes the
+  canonical serialized-Chrome lock (`/tmp/cap-serialized-chrome-acceptance.lock`)
+  for the browser's lifetime: two lanes driving headless Chromes together produce
+  CDP timeouts that say nothing about the tree. The wait is bounded
+  (`CAP_CHROME_LOCK_WAIT_MS`, 20 min default) and printed when it happens; a lane
+  that never gets the lock FAILS — it is never turned green. The security
+  supervisor already holds the lock, so inside it the launcher skips the take.
+  Never wrap a harness in an outer `flock` on that file (it deadlocks the
+  harness's own launch). A known failure owned by another entry is carried as
+  `EXPECTED-RED` with its owner (`scripts/lib/expected-red.ts`; the KAT
+  registry's `expectedRed`), never skipped; the run fails the moment it turns
+  green. Every `scripts/*.ts` has exactly one class in
+  `scripts/lib/harness-registry.ts` (`tests/harness-registry.test.ts`), and
+  every harness exits on its own failures (`tests/scripts-exit-codes.test.ts`).
 
 ## The current review (2026-08-30) — read before picking up work
 

@@ -13,9 +13,10 @@
 //
 //   deno run -A scripts/opfs-real-browser.ts
 
+import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
-const CHROMIUM = "/usr/bin/chromium";
 
 let pass = 0;
 let fail = 0;
@@ -36,70 +37,20 @@ async function fetchJson(url: string) {
   return r.json();
 }
 
-function launchChrome(profile: string) {
-  return new Deno.Command(CHROMIUM, {
-    args: [
-      "--headless=new",
-      "--no-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--silent-debugger-extension-api",
-      `--disable-extensions-except=${EXT}`,
-      `--load-extension=${EXT}`,
-      "--remote-debugging-port=0",
-      "--remote-allow-origins=*",
-      "--window-size=1400,1200",
-      `--user-data-dir=${profile}`,
-      "about:blank",
-    ],
-    stdout: "null",
-    stderr: "piped",
-  }).spawn();
-}
-
-async function waitForPort(proc: Deno.ChildProcess): Promise<number> {
-  for (let i = 0; i < 80; i++) {
-    await sleep(250);
-    const reader = proc.stderr.getReader();
-    const { value, done } = await reader.read();
-    reader.releaseLock();
-    const line = done ? null : new TextDecoder().decode(value);
-    if (line?.includes("DevTools listening")) {
-      const port = Number(line.match(/ws:\/\/127\.0\.0\.1:(\d+)/)?.[1] ?? 0);
-      if (port) return port;
-    }
-  }
-  throw new Error("chrome did not expose a DevTools port");
-}
-
 async function main() {
   const profile = `/tmp/cap-opfs-${Date.now()}`;
   await Deno.mkdir(profile, { recursive: true });
-  const proc = launchChrome(profile);
+  // The shared launcher: kernel-assigned port, endpoint read from this child's
+  // own stderr, honest failure when the browser prints none
+  // (CAP-FB-20260829-FIXED-DEBUG-PORTS-01).
+  const chrome = await launchChrome({ extension: EXT, profile, windowSize: "1400,1200" });
+  const proc = chrome.proc;
 
   try {
-    const port = await waitForPort(proc);
-    const version = await fetchJson(`http://127.0.0.1:${port}/json/version`);
-    const ws = new WebSocket(version.webSocketDebuggerUrl);
-    await new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = rej; });
-
-    let id = 0;
-    const pend = new Map<number, (v: unknown) => void>();
-    ws.onmessage = (ev) => {
-      const m = JSON.parse(ev.data);
-      if (m.id && pend.has(m.id)) {
-        const resolve = pend.get(m.id)!;
-        pend.delete(m.id);
-        resolve(m.error ? Promise.reject(new Error(m.error.message)) : m.result);
-      }
-    };
-    const send = (method: string, params: unknown, sessionId?: string): Promise<any> => {
-      const mid = ++id;
-      return new Promise((resolve) => {
-        pend.set(mid, resolve);
-        ws.send(JSON.stringify({ id: mid, method, params, sessionId }));
-      });
-    };
+    const port = chrome.port;
+    const ws = await openCdp(chrome.wsUrl);
+    const send = async (method: string, params: unknown, sessionId?: string): Promise<any> =>
+      (await ws.send(method, params, sessionId)).result;
     const evl = async (s: string, expr: string): Promise<any> => {
       const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, s);
       if (r?.exceptionDetails) {
@@ -186,7 +137,7 @@ async function main() {
   }
 
   console.log(`\nRESULT: ${pass} passed, ${fail} failed`);
-  if (fail > 0) Deno.exit(1);
+  Deno.exit(fail > 0 ? 1 : 0);
 }
 
 await main();

