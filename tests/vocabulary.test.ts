@@ -313,3 +313,28 @@ Deno.test("CSP hygiene: shipped extension pages ship NO inline scripts (MV3 scri
   const boot = await Deno.readTextFile("extension/shared/embedded-boot.js");
   assert(boot.includes('dataset.embedded = "1"'), "embedded-boot.js must set data-embedded");
 });
+
+Deno.test("embedded boot strips ?embedded=1 so exact-document sender authorization matches (P0 pek9)", async () => {
+  const boot = await Deno.readTextFile("extension/shared/embedded-boot.js");
+  // The boot must normalize the document URL inside an iframe (replaceState to
+  // pathname + hash) — otherwise isExactOptionsSender rejects the embedded
+  // Settings surface and every owner route (credentials, tool diagnostics)
+  // refuses the real Settings page.
+  assert(
+    boot.includes("history.replaceState"),
+    "embedded-boot.js must strip the embedded query via history.replaceState",
+  );
+  assert(
+    /window\.self !== window\.top && location\.search/.test(boot),
+    "the strip must be gated on iframe + query presence",
+  );
+  // And every shipped page must load the boot synchronously (pre-paint, before
+  // any module script reads the attribute).
+  for (const file of ["extension/options/options.html", "extension/artifacts/index.html", "extension/directory/directory.html"]) {
+    const src = await Deno.readTextFile(file);
+    assert(
+      /<script src="\.\.\/shared\/embedded-boot\.js"><\/script>/.test(src),
+      `${file} must load shared/embedded-boot.js`,
+    );
+  }
+});
