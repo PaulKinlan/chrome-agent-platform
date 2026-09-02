@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.9] — 2026-09-02
+- AGENTS.md: beads is the only tracker, the fleet is the default way to work, and beads best practices (epics, dependencies, lifecycle) are the standard. TASKS.md and KNOWN-ISSUES.md retired. New beads-flow skill: the pick-up-and-ship loop.
+
 ## [0.3.8] — 2026-09-02
 - Embedded views keep their owner identity: the boot strips ?embedded=1 after marking the document, so exact-document authorization matches the real Settings surface again
 
