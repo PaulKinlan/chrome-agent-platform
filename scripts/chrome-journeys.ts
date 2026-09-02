@@ -442,6 +442,9 @@ const EXPECTED = [
   "hub: retained the shield-badge screenshot",
   "hub: idle header has no status text, no dot, at most one icon button",
   "hub: no footer button is filled when idle; the open view's button has aria-current=page",
+  "embedded views share one content left edge at 1440",
+  "embedded views share one content left edge at 1024",
+  "embedded Artifacts view shows its name exactly once",
   "hub: #agent=named:writer reload shows Writer",
   "after enabling one recipe the four agent surfaces agree (1)",
   "after disabling that recipe the four agent surfaces agree (0) again",
@@ -1422,6 +1425,92 @@ async function main() {
         footerSettings?.settings?.current === "page" && footerSettings?.directory?.current === null && footerSettings?.artifacts?.current === null &&
         ["directory", "artifacts", "settings"].every((k) => footerBack?.[k]?.current === null) && noneFilled(footerBack),
     );
+
+    // ── CAP-FB-20260830-ONE-SHELL-01: one content width and gutter across views ──
+    // 1440px viewport measurement
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false }, ntpSession);
+    await sleep(300);
+
+    // Open Artifacts
+    await clickSel(cdp, ntpSession, "#open-artifacts");
+    await sleep(900);
+    const artifactsLeft1440 = await evalIn(cdp, ntpSession, `(() => {
+      const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
+      const el = frame?.contentDocument?.querySelector('.wrap, .grid, .sub, header');
+      return el ? Math.round(el.getBoundingClientRect().left) : null;
+    })()`);
+    const artifactsTitleCount = await evalIn(cdp, ntpSession, `(() => {
+      const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
+      if (!frame?.contentDocument) return 0;
+      const h1s = Array.from(frame.contentDocument.querySelectorAll('h1, .logo, [role="heading"]')).filter(e => /artifacts/i.test(e.textContent || '') && getComputedStyle(e).display !== 'none');
+      return h1s.length;
+    })()`);
+    const artShot1440 = await captureShot(cdp, ntpSession);
+    if (artShot1440) await writeEvidence("hub-view-artifacts-1440.png", artShot1440);
+
+    // Open Directory
+    await clickSel(cdp, ntpSession, "#open-directory");
+    await sleep(900);
+    const dirLeft1440 = await evalIn(cdp, ntpSession, `(() => {
+      const frame = document.querySelector('iframe[data-panel-path="directory/directory.html"]');
+      const el = frame?.contentDocument?.querySelector('.wrap, main, .sub, #rows');
+      return el ? Math.round(el.getBoundingClientRect().left) : null;
+    })()`);
+    const dirShot1440 = await captureShot(cdp, ntpSession);
+    if (dirShot1440) await writeEvidence("hub-view-directory-1440.png", dirShot1440);
+
+    // Open Settings
+    await clickSel(cdp, ntpSession, "#open-settings");
+    await sleep(900);
+    const settingsLeft1440 = await evalIn(cdp, ntpSession, `(() => {
+      const frame = document.querySelector('iframe[data-panel-path="options/options.html"]');
+      const el = frame?.contentDocument?.querySelector('.options-shell, .side');
+      return el ? Math.round(el.getBoundingClientRect().left) : null;
+    })()`);
+    const setShot1440 = await captureShot(cdp, ntpSession);
+    if (setShot1440) await writeEvidence("hub-view-settings-1440.png", setShot1440);
+
+    console.log("1440px content left edges:", { artifactsLeft1440, dirLeft1440, settingsLeft1440, artifactsTitleCount });
+    const match1440 = artifactsLeft1440 !== null && dirLeft1440 !== null && settingsLeft1440 !== null &&
+      Math.abs(artifactsLeft1440 - dirLeft1440) <= 1 && Math.abs(artifactsLeft1440 - settingsLeft1440) <= 1;
+    check("embedded views share one content left edge at 1440", match1440);
+
+    // 1024px viewport measurement
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 768, deviceScaleFactor: 1, mobile: false }, ntpSession);
+    await sleep(300);
+
+    const settingsLeft1024 = await evalIn(cdp, ntpSession, `(() => {
+      const frame = document.querySelector('iframe[data-panel-path="options/options.html"]');
+      const el = frame?.contentDocument?.querySelector('.options-shell, .side');
+      return el ? Math.round(el.getBoundingClientRect().left) : null;
+    })()`);
+
+    await clickSel(cdp, ntpSession, "#open-directory");
+    await sleep(900);
+    const dirLeft1024 = await evalIn(cdp, ntpSession, `(() => {
+      const frame = document.querySelector('iframe[data-panel-path="directory/directory.html"]');
+      const el = frame?.contentDocument?.querySelector('.wrap, main, .sub, #rows');
+      return el ? Math.round(el.getBoundingClientRect().left) : null;
+    })()`);
+
+    await clickSel(cdp, ntpSession, "#open-artifacts");
+    await sleep(900);
+    const artifactsLeft1024 = await evalIn(cdp, ntpSession, `(() => {
+      const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
+      const el = frame?.contentDocument?.querySelector('.wrap, .grid, .sub, header');
+      return el ? Math.round(el.getBoundingClientRect().left) : null;
+    })()`);
+
+    console.log("1024px content left edges:", { artifactsLeft1024, dirLeft1024, settingsLeft1024 });
+    const match1024 = artifactsLeft1024 !== null && dirLeft1024 !== null && settingsLeft1024 !== null &&
+      Math.abs(artifactsLeft1024 - dirLeft1024) <= 1 && Math.abs(artifactsLeft1024 - settingsLeft1024) <= 1;
+    check("embedded views share one content left edge at 1024", match1024);
+
+    check("embedded Artifacts view shows its name exactly once", artifactsTitleCount === 0);
+
+    await cdp.send("Emulation.clearDeviceMetricsOverride", {}, ntpSession);
+    await evalIn(cdp, ntpSession, `document.getElementById('view-back')?.click(); true`);
+    await sleep(500);
 
     // (2) An agent opened by URL is titled by its NAME: create "Writer", open a
     // fresh hub page at #agent=named:writer (no history.state carries the

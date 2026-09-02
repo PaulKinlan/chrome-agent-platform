@@ -32,9 +32,13 @@ Deno.test("one-shell layout: Directory view adopts shared layout and embedded ru
 });
 
 Deno.test("one-shell layout: Settings adopts shared layout and embedded rule", async () => {
+  const html = await Deno.readTextFile("extension/options/options.html");
+  assert(html.includes('class="options-shell"'), "options.html must have options-shell wrapping side and content");
+
   const css = await Deno.readTextFile("extension/options/options.css");
-  assert(css.includes("max-inline-size: var(--content-max);"), "Settings must use --content-max");
-  assert(css.includes("padding-inline: var(--content-gutter);"), "Settings must use --content-gutter");
+  assert(css.includes(".options-shell"), "options.css must style .options-shell");
+  assert(css.includes("max-inline-size: var(--content-max);"), "options-shell must use --content-max");
+  assert(css.includes("padding-inline: var(--content-gutter);"), "options-shell must use --content-gutter");
   assert(css.includes("[data-embedded] .side .brand"), "Settings must hide .brand under [data-embedded]");
   assert(css.includes("[data-embedded] .head h1"), "Settings must hide h1 under [data-embedded]");
 });
@@ -45,8 +49,36 @@ Deno.test("one-shell layout: openView in ntp.js passes embedded=1 to panel views
   assert(ntp.includes("embedded=1"), "openView must append embedded=1 parameter");
 });
 
+Deno.test("one-shell layout: chrome-journeys.ts carries the 3 required journey assertions in EXPECTED", async () => {
+  const journeys = await Deno.readTextFile("scripts/chrome-journeys.ts");
+  assert(journeys.includes('"embedded views share one content left edge at 1440"'), "1440px check in EXPECTED");
+  assert(journeys.includes('"embedded views share one content left edge at 1024"'), "1024px check in EXPECTED");
+  assert(journeys.includes('"embedded Artifacts view shows its name exactly once"'), "Artifacts title check in EXPECTED");
+});
+
+Deno.test("one-shell layout: RETIRED_FILES in check-vocabulary.mjs covers all deleted dead files", async () => {
+  const vocab = await Deno.readTextFile("scripts/check-vocabulary.mjs");
+  for (const path of [
+    "extension/recipes/index.html",
+    "extension/chat/chat.html",
+    "extension/chat/chat.js",
+    "extension/memory/explorer.html",
+    "extension/memory/explorer.js",
+    "extension/shared/composer.css",
+  ]) {
+    assert(vocab.includes(`"${path}"`), `check-vocabulary.mjs must list ${path} in RETIRED_FILES`);
+  }
+});
+
 Deno.test("one-shell layout: retired surfaces do not exist", async () => {
-  for (const path of ["extension/chat/chat.html", "extension/chat/chat.js", "extension/memory/explorer.html", "extension/memory/explorer.js"]) {
+  for (const path of [
+    "extension/recipes/index.html",
+    "extension/chat/chat.html",
+    "extension/chat/chat.js",
+    "extension/memory/explorer.html",
+    "extension/memory/explorer.js",
+    "extension/shared/composer.css",
+  ]) {
     let exists = true;
     try {
       await Deno.stat(path);

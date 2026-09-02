@@ -132,7 +132,10 @@ const NO_SKILLS_DESTINATION = [
 const RETIRED_FILES = [
   "extension/recipes/index.html",
   "extension/chat/chat.html",
+  "extension/chat/chat.js",
   "extension/memory/explorer.html",
+  "extension/memory/explorer.js",
+  "extension/shared/composer.css",
 ];
 
 // ── rules 3 + 4: one noun per view ────────────────────────────────────────
