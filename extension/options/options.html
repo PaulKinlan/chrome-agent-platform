@@ -148,7 +148,7 @@
           <switch-toggle id="multi-agent" label="Multiple agents"></switch-toggle>
           <div class="toggle-text">
             <span class="toggle-name">Multiple agents</span>
-            <span class="muted">When off, the hub is a single agent. When on, the hub fans out to Site Agents.</span>
+            <span class="muted">Let the hub hand parts of a task to your Site Agents.</span>
           </div>
         </div>
         <div class="enroll">
@@ -164,15 +164,15 @@
           </div>
           <div id="enrolled-sites" class="origin-list"></div>
         </div>
-        <div class="webmcp-status">
+        <div class="webmcp-status" data-vocab="advanced">
           <h3>Site Agent diagnostics</h3>
           <p
-            class="muted">Technical details for tool discovery on enrolled sites. Runtime lifecycle, tab setup, and page-reported tool counts stay here rather than in ordinary Site Agent rows.</p>
+            class="muted">Check what each enrolled site reports when a tool you expect is missing.</p>
           <div class="toggle-field">
             <switch-toggle id="webmcp-diagnostics" label="Diagnostics logs"></switch-toggle>
             <div class="toggle-text">
               <span class="toggle-name">Diagnostics logs</span>
-              <span class="muted">Emit structured <code>[WebMCP]</code> logs from the discovery content scripts into the page DevTools console.</span>
+              <span class="muted">Write a <code>[WebMCP]</code> line to the page's DevTools console each time a site's tools are checked.</span>
             </div>
           </div>
           <div id="webmcp-status-body" class="origin-list" aria-live="polite"></div>
@@ -204,10 +204,12 @@
         </div>
         <div id="grant-origins" class="grant-origins" hidden>
           <h3>Allowed origins</h3>
-          <label for="grant-origin-list" class="muted">Restrict control to these origins (one per line):</label>
+          <p id="grant-origin-summary" class="muted">Every site you allow keeps its own grant; turn one off without touching the others.</p>
+          <div id="grant-origin-rows" class="grant-origin-rows" aria-live="polite"></div>
+          <label for="grant-origin-list" class="muted">Allow more origins (one per line):</label>
           <textarea id="grant-origin-list" rows="4"
             placeholder="https://github.com"></textarea>
-          <p class="muted">Empty = a global (all-origins) grant.</p>
+          <p class="muted">Adding origins scopes control to the listed sites. To allow every site again, turn the switch off and back on.</p>
         </div>
         <div id="action-policy" class="action-policy">
           <h3>Action policy</h3>
@@ -239,7 +241,7 @@
       <section id="permissions" class="panel">
         <h2>Permissions</h2>
         <p
-          class="muted">Capability permissions are optional and requested just-in-time from your click (the chat offers the same Enable inline). Host access and the core runtime permissions are granted at install. This is the live, verified state of each grant.</p>
+          class="muted">Capability permissions are optional and requested just-in-time from your click (the chat offers the same Enable inline). Host access and the permissions the extension needs to run are granted at install. This is the live, verified state of each grant.</p>
         <div id="permission-list" class="permission-list"></div>
       </section>
 
@@ -365,7 +367,7 @@
         <div class="danger-zone" style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border,#e3e0d9);">
           <h3 style="color: var(--danger,#b3261e); margin: 0 0 6px;">Factory reset</h3>
           <p class="muted" style="margin: 0 0 12px; font-size: 13px;">
-            Permanently delete all extension data — agents, tasks, artifacts, memory, alarms, downloaded models, provider settings, and permissions. Restores the clean first-run onboarding state.
+            Permanently delete all extension data — agents, tasks, artifacts, memory, schedules, downloaded models, provider settings, and permissions. Restores the clean first-run onboarding state.
           </p>
           <button type="button" class="btn danger" id="factory-reset-btn">Reset all data…</button>
           <p id="factory-reset-status" class="hint" role="status" aria-live="polite" hidden></p>

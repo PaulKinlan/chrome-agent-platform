@@ -160,6 +160,9 @@ const BASELINE_ROUTES = [
   "run.list",
   "run.cancel",
   "run.resume",
+  // CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01: "Budget reached — Continue"
+  // runs the continuation turn on the stopped run's thread.
+  "run.continue",
   "run.resolve-inline-approval",
   "run.dismissFailed",
   "run.dismissedFailed",
@@ -212,6 +215,7 @@ const BASELINE_ROUTES = [
   "hooks.subscribe",
   "hooks.unsubscribe",
   "browser-control.get",
+  "browser-control.revoke",
   "browser-control.set",
   "agent.create",
   "agent.enroll-origin",

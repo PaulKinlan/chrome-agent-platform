@@ -259,8 +259,11 @@ Deno.test("lazy provider cutover: concurrent replay plus revoke/regrant ABA and 
     const request = { selectionRef: searched.results[0].selectionRef, arguments: {} };
     const first = protocol.execute(request, run);
     await dispatchStarted;
-    const replay = await protocol.execute(request, run);
-    assertEquals(replay, { ok: false, error: "selection-replayed" });
+    // Bounded reuse (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01): a concurrent
+    // second call on the same ref is a counted use, not a replay — it passes
+    // through the SAME live fences, so the mutation below discards its output
+    // exactly like the first call's (never a second authority).
+    const second = protocol.execute(request, run);
     if (mutation === "aba") {
       sourceGeneration = "source-2-revoked";
       closureGeneration = "closure-2-revoked";
@@ -274,7 +277,10 @@ Deno.test("lazy provider cutover: concurrent replay plus revoke/regrant ABA and 
     const result = await first;
     assertEquals(result.ok, false);
     assert(!JSON.stringify(result).includes("staleOutput"));
-    assertEquals(dispatches, 1);
+    const concurrent = await second;
+    assertEquals(concurrent.ok, false, "the concurrent use is fenced by the same live checks");
+    assert(!JSON.stringify(concurrent).includes("staleOutput"));
+    assert(dispatches <= 2, "at most one dispatch per counted use");
   }
 });
 

@@ -30,6 +30,14 @@ export function normalizeConversationRunStatus(input) {
     : typeof input.message === "string" && input.message.trim()
       ? input.message.trim()
       : "";
+  const category = typeof input.errorCategory === "string" ? input.errorCategory.trim() : "";
+
+  // A budget stop is not a failure of anything (CAP-FB-20260901-RUN-BUDGET-
+  // EVERY-ITEM-01): the run used its steps with work left. Say so, in the
+  // accent tone, and let the Continue action carry on.
+  if (state === "failed" && category === "budget") {
+    return { state, label: `Budget reached${reason ? ` — ${reason}` : ""}`, active: false, stoppable: false, tone: "accent" };
+  }
 
   switch (state) {
     case "queued":
@@ -59,12 +67,23 @@ export function normalizeConversationRunStatus(input) {
 // sidepanel dropping this logic was review P1-b (2026-08-28).
 const RECOVERABLE_CATEGORY = /host-permission|provider-auth|provider-config|model-config|network/i;
 
-export function runStatusActionLabel(input) {
+/** Which recovery the action button performs: "settings" opens Settings;
+ * "continue" runs the budget continuation turn on the same thread
+ * (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01). null = no action. */
+export function runStatusActionKind(input) {
   const raw = typeof input?.state === "string" ? input.state.trim().toLowerCase() : "";
   const state = STATE_ALIASES[raw] ?? raw;
   if (state !== "failed" && state !== "waiting-for-permission") return null;
   const category = typeof input?.errorCategory === "string" ? input.errorCategory : "";
-  return RECOVERABLE_CATEGORY.test(category) ? "Fix in Settings" : null;
+  if (category === "budget") return state === "failed" ? "continue" : null;
+  return RECOVERABLE_CATEGORY.test(category) ? "settings" : null;
+}
+
+export function runStatusActionLabel(input) {
+  const kind = runStatusActionKind(input);
+  if (kind === "continue") return "Continue";
+  if (kind === "settings") return "Fix in Settings";
+  return null;
 }
 
 /** Cancel only the immutable execution named by a genuine rendered Stop click. */
@@ -95,7 +114,9 @@ export function projectConversationRunStatus(conversation, input) {
     activity: input?.activity,
     message: input?.message,
     errorReason: input?.errorReason,
+    errorCategory: typeof input?.errorCategory === "string" ? input.errorCategory : null,
     actionLabel: runStatusActionLabel(input),
+    actionKind: runStatusActionKind(input),
     ...(Object.hasOwn(input ?? {}, "executionId") ? { executionId: input.executionId } : {}),
   });
 }

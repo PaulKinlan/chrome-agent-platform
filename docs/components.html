@@ -78,6 +78,12 @@
       </div>
 
       <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;origin-grant-row&gt;</code> — one allowed origin of the browser-control set</h3>
+        <div class="stage column" id="origin-grant-rows"></div>
+        <p class="caption">Settings → Browser control lists every allowed origin with its own remaining time; Turn off emits <code>revoke</code> with <code>{ origin }</code> and leaves the other rows alone.</p>
+      </div>
+
+      <div class="specimen">
         <h3 class="spec"><code class="tag">&lt;capability-row&gt;</code> — a recipe/capability (icon | name+desc | action)</h3>
         <div class="stage column" style="max-width:560px">
           <capability-row name="Tab hygiene" description="Find duplicate/stale tabs and close or group them." icon="&lt;svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' width='18' height='18'&gt;&lt;path d='M21 3l-9 9-3-3 9-9z'/&gt;&lt;/svg&gt;" action="run"></capability-row>
@@ -574,6 +580,19 @@
           row.addEventListener("enable", () => { row.setAttribute("granted", ""); log("#hub-log", `enable: ${p.id}`); });
           row.addEventListener("disable", () => { row.removeAttribute("granted"); log("#hub-log", `disable: ${p.id}`); });
           permRoot.appendChild(row);
+        });
+      }
+
+      // origin grant rows (the per-origin browser-control SET: a persistent
+      // grant and a timed one; Turn off removes only its own row)
+      const originGrantRoot = document.getElementById("origin-grant-rows");
+      if (originGrantRoot) {
+        [["https://github.com", null], ["https://news.ycombinator.com", 9 * 60_000]].forEach(([origin, expiresInMs]) => {
+          const row = document.createElement("origin-grant-row");
+          row.setAttribute("origin", origin);
+          if (expiresInMs !== null) row.setAttribute("expires-in-ms", String(expiresInMs));
+          row.addEventListener("revoke", (e) => { row.remove(); log("#hub-log", `revoke: ${e.detail.origin}`); });
+          originGrantRoot.appendChild(row);
         });
       }
 

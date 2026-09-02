@@ -232,6 +232,11 @@ try {
   check("Ledger: the click and the type were recorded as sentences", /Clicked/.test(sentences) && /Typed into/.test(sentences), sentences || ledger);
 
   // ── a wrong-origin grant does not authorize a page action here ──
+  // Per-origin grants are a SET (CAP-FB-20260902-ORIGIN-GRANT-UNION-01): allowing
+  // another origin keeps the fixture origin granted, so it is revoked on its own
+  // first and only the wrong origin is left allowed.
+  const fixtureRevoke = await msg({ type: "browser-control.revoke", origin: ORIGIN });
+  check("Security: revoking the fixture origin on its own reports it gone", fixtureRevoke?.grant?.revoked === true, fixtureRevoke);
   await msg({ type: "browser-control.set", origins: ["http://127.0.0.1:1"], expiryMs: 60000 });
   const wrong = await tool("click_element", { tabId: fixtureTabId, ref: addEl.ref });
   check("Security: a wrong-origin grant does not authorize a page action here", wrong?.waitingForPermission === true, wrong);

@@ -1,7 +1,37 @@
 # Changelog
 
+## [0.2.637] — 2026-09-02
+- Merge remote-tracking branch 'origin/main' into cap/one-card-per-step
+
+## [0.2.636] — 2026-09-02
+- Task board: the multi-site permission fix is complete; two small follow-ups were opened.
+
+## [0.2.635] — 2026-09-02
+- Allowing the agent on a second site no longer forgets the first; Settings lists every allowed site and each can be turned off on its own.
+
+## [0.2.634] — 2026-09-02
+- Task board: the plain-language copy pass is complete.
+
+## [0.2.633] — 2026-09-02
+- Messages, toggles and delete confirmations now use plain language throughout.
+
+## [0.2.632] — 2026-09-02
+- Task board: the unused-code cleanup is complete.
+
+## [0.2.631] — 2026-09-02
+- The extension's build now checks that every shipped file is actually used, and two unused modules are gone.
+
+## [0.2.630] — 2026-09-02
+- Task board: finished items moved to the archive so the open list is easier to read.
+
+## [0.2.629] — 2026-09-02
+- Task board: one more item is being worked on.
+
+## [0.2.628] — 2026-09-02
+- Task board: the every-item run fix is complete; four more items are being worked on.
+
 ## [0.2.627] — 2026-09-02
-- : one permission card per tool call — grouping tabs asks for tab access, tab groups and browser control together, in your words
+- Long tasks now go through every item: the agent reuses its tool selections, shows Step N of M while working, and offers Continue when it runs out of steps.
 
 ## [0.2.626] — 2026-09-02
 - Task board: the reopen-a-conversation fix is complete.

@@ -203,3 +203,62 @@ Deno.test("noun discipline: agent context files do not borrow the artifact noun"
   // part of a vocabulary change.
   assert(js.includes("coreAssets"), "the persisted coreAssets field is untouched");
 });
+
+// ── CAP-FB-20260830-USER-VOICE-COPY-01: the system's words ────────────────
+
+Deno.test("falsification (USER-VOICE-COPY-01): system words in a user-facing paragraph are REPORTED", () => {
+  // The exact bodies the product shipped (ntp.js delete dialog + hub status).
+  const before = `<section id="agents"><p class="muted">This will permanently remove the agent registry entry, its memory store, system prompt override, and custom provider configuration.</p></section>`;
+  assert(
+    ruleIds(scanSource("extension/options/options.html", before)).includes("banned-term:system-words"),
+    "a paragraph naming a registry entry / override must be reported",
+  );
+  const js = 'el.textContent = "Discovery has not run yet.";\nbody: `This will cancel its scheduled task and remove the recurring alarm.`,';
+  const found = scanSource("extension/ntp/ntp.js", js);
+  assert(
+    ruleIds(found).filter((r) => r === "banned-term:system-words").length >= 2,
+    `both the status line and the dialog body must be reported, got ${JSON.stringify(found)}`,
+  );
+  // The user-voice replacements report nothing.
+  const after = `<section id="agents"><p class="muted">Its memory and history are removed. Artifacts it made are kept.</p></section>`;
+  assertEquals(scanSource("extension/options/options.html", after), []);
+  assertEquals(scanSource("extension/ntp/ntp.js", 'el.textContent = "Open a site and I\'ll look for tools you can use.";'), []);
+});
+
+Deno.test("falsification (USER-VOICE-COPY-01): Advanced keeps its technical words — and only Advanced", () => {
+  // A developer-only section (Settings → Advanced) may say the system's words.
+  const advanced = `<section id="prompts" class="panel" data-developer="true"><h2>Advanced</h2><p>The runtime adds its attestation to the catalog generation.</p></section>`;
+  assertEquals(scanSource("extension/options/options.html", advanced), [], "Advanced is exempt");
+  // …but the SAME words in a sibling user-facing section are reported.
+  const sibling = advanced + `<section id="agents" class="panel"><p>The runtime adds its attestation to the catalog generation.</p></section>`;
+  assertEquals(ruleIds(scanSource("extension/options/options.html", sibling)), ["banned-term:system-words"], "the sibling is NOT exempt");
+  // An element marked data-vocab="advanced" is exempt as a subtree (depth-aware).
+  const marked = `<div class="webmcp-status" data-vocab="advanced"><h3>Site Agent diagnostics</h3><div><p>Runtime lifecycle</p></div></div><p>Diagnostics for you</p>`;
+  const markedFound = scanSource("extension/options/options.html", marked);
+  assertEquals(markedFound.length, 1, `only the paragraph OUTSIDE the marked element is reported, got ${JSON.stringify(markedFound)}`);
+  assert(markedFound[0].detail.includes("Diagnostics for you"));
+  // JS: a marked line and a marked region are exempt; the rest of the file is not.
+  const jsSrc = [
+    'a.textContent = "catalog generation"; // vocab:advanced',
+    "/* vocab:advanced:start */",
+    'b.textContent = "runtime lifecycle";',
+    "/* vocab:advanced:end */",
+    'c.textContent = "Discovery has not run yet.";',
+  ].join("\n");
+  const jsFound = scanSource("extension/shared/components.js", jsSrc);
+  assertEquals(jsFound.length, 1, `only the unmarked sink is reported, got ${JSON.stringify(jsFound)}`);
+  assertEquals(jsFound[0].line, 5);
+  // The exemption is scoped to the system-words rule: "asset" stays wrong inside Advanced.
+  const assetInAdvanced = `<section id="prompts" data-developer="true"><p>Recent assets</p></section>`;
+  assertEquals(ruleIds(scanSource("extension/options/options.html", assetInAdvanced)), ["banned-term:assets"]);
+});
+
+Deno.test("user voice (USER-VOICE-COPY-01): the shipped surfaces no longer speak the system's words", async () => {
+  const violations = await checkVocabulary();
+  assertEquals(violations.filter((v) => v.rule === "banned-term:system-words"), [], "no shipped surface may carry a system word outside Advanced");
+  const ntp = await Deno.readTextFile("extension/ntp/ntp.js");
+  assert(ntp.includes("Open a site and I'll look for tools you can use."), "the hub's site-tools empty state says what to do next");
+  assert(!ntp.includes("Discovery has not run yet."), "the system's status line is gone");
+  const options = await Deno.readTextFile("extension/options/options.html");
+  assert(!/When off, the hub is a single agent/.test(options), "the Multiple agents toggle explains what turning it on does");
+});

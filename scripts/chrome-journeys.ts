@@ -446,6 +446,8 @@ const EXPECTED = [
   "create dialog: Create agent from the card yields ONE named agent whose role is the template persona",
   "create dialog: the saved agent's skill ids CONTAIN the exactly-toggled skill id",
   "create dialog: a Scheduled-group template creates one scheduled agent that the sidebar and Settings both list",
+  "hub + Settings: the delete-agent dialogs share one body in the reader's words",
+  "Settings: the Providers page never speaks the system's words",
   "create dialog: the journey's created agents are removed again (fresh profile restored)",
   "folder command: a granted folder was seeded in the SW store",
   "folder command: bare /folder typed into the composer",
@@ -552,6 +554,8 @@ const EXPECTED = [
   "Cookies: the developer build exposes them again, and no cookie value ever reaches the model",
   "warm run 1 returns a concrete demo result",
   "warm run 2 (after re-save) returns a concrete demo result",
+  "hub: demo reply is a sentence without a bracketed model tag",
+  "hub: sidebar preview has no bracketed model tag",
   "hub: two demo turns produce two user activity rows (no attestation/tool rows)",
   "hub: header reads N runs today with no $ or tokens",
   "hub: no activity row text overlaps the time column at 1440 and 1024",
@@ -591,9 +595,14 @@ const EXPECTED = [
   "Thread view: conversation scrolled to bottom after an edit turn",
   "Plan strip: a running multi-step task shows an advancing checklist pinned to the top of the thread",
   "Plan strip: on done it settles into a collapsed 'N steps' summary with every step checked",
+  "Every item: 12 fixture tabs are read with ONE read_page search — 12 execute_tool reads, 0 selection-replayed",
+  "Every item: the status row counts Step N of M while working",
+  "Budget: a run with budget 2 stops on 'Budget reached — Continue' (never a silent finish)",
+  "Budget: Continue runs a second execution on the same thread",
   "real red tab resolved (active tab id)",
   "screenshot: denied after revoke (secondary probe)",
   "screenshot: capture SUCCEEDS for the granted origin",
+  "Browser control: revoking one origin through the service worker reports it gone",
   "screenshot: wrong-origin grant is denied (secondary probe)",
   "screenshot: expired grant is denied (secondary probe)",
   "Settings: browser-grant checkbox present",
@@ -605,6 +614,9 @@ const EXPECTED = [
   "Side panel: open_side_panel is absent from the model toolset",
   "screenshot: typed the red origin into the allowed-origins field",
   "screenshot: grant scoped to the red origin via the UI",
+  "Browser control: allowing a second origin keeps the first origin granted",
+  "Browser control: Settings lists every allowed origin with its own Turn off",
+  "Browser control: turning off one origin leaves the other origin granted",
   "screenshot: UI-granted capture SUCCEEDS for the scoped origin",
   "screenshot: revoked via a real checkbox click",
   "Browser control: toggle OFF succeeds while a run holds the lease",
@@ -1229,7 +1241,7 @@ async function main() {
       rect1024 !== null && rect1024.top >= 0 && rect1024.bottom <= 700,
     );
     const hubText = await evalIn(cdp, ntpSession, `document.body.innerText`);
-    const emptyCopy = ["No activity matches", "No artifacts yet", "No Site Agents yet", "Discovery has not run yet", "Nothing has happened yet"]
+    const emptyCopy = ["No activity matches", "No artifacts yet", "No Site Agents yet", "look for tools you can use", "Nothing has happened yet"]
       .filter((s) => String(hubText ?? "").includes(s));
     console.log("fresh hub empty copy:", JSON.stringify(emptyCopy));
     check("fresh hub: no empty-state copy is rendered", typeof hubText === "string" && emptyCopy.length === 0);
@@ -1943,6 +1955,50 @@ async function main() {
         Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedName) && /Scheduled · every \d+ min/.test(t)) &&
         surfacesS.sidebarRows === 2 && surfacesS.panelRows === 2 && surfacesS.settingsRows === 2 && /^2 agents/.test(surfacesS.panelCount),
     );
+    // CAP-FB-20260830-USER-VOICE-COPY-01: the hub's and Settings' delete
+    // confirmations are ONE shared dialog whose body says what the person
+    // loses, in their words. Open each with a genuine click, read it, cancel —
+    // nothing is deleted here (the restore below does that through the route).
+    const READ_CONFIRM = `(() => { const d = document.querySelector('.cap-confirm-dialog'); return d ? JSON.stringify({ title: d.querySelector('.cap-confirm-title')?.textContent ?? '', body: d.querySelector('.cap-confirm-body')?.textContent ?? '', accept: d.querySelector('.cap-confirm-accept')?.textContent ?? '' }) : null; })()`;
+    const readConfirm = async (session) => { try { return JSON.parse((await evalIn(cdp, session, READ_CONFIRM)) ?? "null"); } catch { return null; } };
+    // Creating the scheduled agent opened its thread, so the hub's Delete is up.
+    const hubDeleteClicked = await clickSel(cdp, ntpSession, "#delete-agent");
+    await sleep(500);
+    const hubDialog = await readConfirm(ntpSession);
+    const hubDialogShot = await captureShot(cdp, ntpSession);
+    if (hubDialogShot) await writeEvidence("dialog-delete-agent-shared.png", hubDialogShot);
+    await clickSel(cdp, ntpSession, ".cap-confirm-dialog .cap-confirm-cancel");
+    await sleep(300);
+    const voicePage = await openPage(port, `chrome-extension://${extId}/options/options.html#agents`);
+    const voiceSession = await attachRuntime(cdp, voicePage.id);
+    await sleep(1500);
+    const settingsDeleteClicked = await clickSel(cdp, voiceSession, ".delete-named-agent");
+    await sleep(500);
+    const settingsDialog = await readConfirm(voiceSession);
+    await clickSel(cdp, voiceSession, ".cap-confirm-dialog .cap-confirm-cancel");
+    await sleep(300);
+    console.log("delete dialogs:", JSON.stringify({ hubDeleteClicked, hubDialog, settingsDeleteClicked, settingsDialog }));
+    const SHARED_DELETE_BODY = "Its memory and history are removed. Artifacts it made are kept.";
+    check(
+      "hub + Settings: the delete-agent dialogs share one body in the reader's words",
+      hubDeleteClicked && settingsDeleteClicked &&
+        hubDialog?.body === SHARED_DELETE_BODY && settingsDialog?.body === SHARED_DELETE_BODY &&
+        hubDialog.accept === "Delete" && settingsDialog.accept === "Delete" &&
+        /^Delete .+\?$/.test(hubDialog.title) && /^Delete .+\?$/.test(settingsDialog.title),
+    );
+    // The Providers page: the same page, on the section a new person reads first.
+    await evalIn(cdp, voiceSession, `location.hash = '#providers'; true`);
+    await sleep(800);
+    const providersText = String((await evalIn(cdp, voiceSession, `document.querySelector('#providers')?.innerText ?? ''`)) ?? "");
+    const providersShot = await captureShot(cdp, voiceSession);
+    if (providersShot) await writeEvidence("options-providers-no-model-copy.png", providersShot);
+    console.log("providers copy:", JSON.stringify(providersText.slice(0, 300)));
+    check(
+      "Settings: the Providers page never speaks the system's words",
+      providersText.length > 0 && !/Internal testing provider|has not run|registry|catalog generation|\d+ chars\b/i.test(providersText),
+    );
+    await cdp.send("Target.closeTarget", { targetId: voicePage.id }).catch(() => {});
+    await sleep(300);
     // Restore the fresh profile the rest of the suite expects: delete the two
     // agents through the real owner-direct route (a click in an extension page
     // IS the approval), which also cancels the scheduled one's alarm.
@@ -3477,6 +3533,34 @@ async function main() {
     await msgValue({ type: "provider.set", config: { provider: "demo", apiKey: "" } });
     const warmRun2 = await msgValue({ type: "agent.run", task: "ping two" });
     check("warm run 2 (after re-save) returns a concrete demo result", concrete(warmRun2));
+    // CAP-FB-20260830-USER-VOICE-COPY-01: the demo's plain reply is a real
+    // sentence after its marker, and the thread previews a person reads in
+    // the sidebar never carry the bracketed transport tag. The warm runs are
+    // the positive control: their stored assistant turns DO start with the
+    // marker, so a preview that also started with it would be the leak.
+    const demoSentence = String(warmRun1?.result ?? "").replace(/^\[demo model\]\s*/u, "");
+    check(
+      "hub: demo reply is a sentence without a bracketed model tag",
+      demoSentence === "I'm the built-in demo, so I can't do this yet. Connect a model in Settings and ask again.",
+    );
+    const voiceThreads = await msgValue({ type: "thread.list" });
+    const voiceRows = Array.isArray(voiceThreads?.threads) ? voiceThreads.threads : [];
+    let taggedStoredTurns = 0;
+    for (const t of voiceRows.slice(0, 6)) {
+      const full = await msgValue({ type: "thread.get", id: t?.id });
+      if ((full?.thread?.messages ?? []).some((m) => m?.role === "assistant" && /^\[demo model\]/u.test(String(m?.content ?? "")))) taggedStoredTurns++;
+    }
+    await sleep(500);
+    const domPreviews = (await evalIn(cdp, ntpSession, `[...document.querySelectorAll('#thread-sidebar .t-preview')].map((el) => el.textContent.trim())`)) ?? [];
+    const indexPreviews = voiceRows.map((t) => String(t?.preview ?? ""));
+    const voiceShot = await captureShot(cdp, ntpSession);
+    if (voiceShot) await writeEvidence("hub-demo-reply-voice.png", voiceShot);
+    console.log("sidebar previews:", JSON.stringify({ taggedStoredTurns, indexPreviews: indexPreviews.slice(0, 6), domPreviews: (Array.isArray(domPreviews) ? domPreviews : []).slice(0, 6) }));
+    check(
+      "hub: sidebar preview has no bracketed model tag",
+      taggedStoredTurns >= 1 && indexPreviews.length >= 1 &&
+        indexPreviews.every((p) => !/^\[/u.test(p)) && Array.isArray(domPreviews) && domPreviews.every((p) => !/^\[/u.test(p)),
+    );
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 3a2 — CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01, folded into
@@ -3905,7 +3989,9 @@ async function main() {
     const distinctLens = new Set(streamSamples.map((s) => s.len).filter((n) => n > 0));
     const sawStreamingAttr = streamSamples.some((s) => s.streaming && s.len > 0);
     const textNodesOnly = streamSamples.filter((s) => s.streaming && s.textNodesOnly != null).every((s) => s.textNodesOnly === true);
-    const sawWriting = streamSamples.some((s) => (s.status ?? []).some((r) => r.activity === "Writing the answer…"));
+    // The activity carries the step counter since CAP-FB-20260901-RUN-BUDGET-
+    // EVERY-ITEM-01 ("Writing the answer · Step 2 of 1152"): match the phrase.
+    const sawWriting = streamSamples.some((s) => (s.status ?? []).some((r) => /^Writing the answer\b/.test(String(r.activity ?? ""))));
     const lastSample = streamSamples.at(-1) ?? {};
     const worstLongTask = Math.max(0, ...(lastSample.longTasks ?? []));
     const firstVisibleMs = streamSamples.find((s) => s.len > 0)?.t ?? null;
@@ -4610,6 +4696,184 @@ async function main() {
     );
 
     // ─────────────────────────────────────────────────────────────
+    // JOURNEY 3g — CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01: "it should go
+    // through every tab". (1) Twelve fixture tabs; the demo model lists them and
+    // reads EVERY one through the real lazy protocol with ONE read_page search —
+    // the run log shows 12 read_page executes, 0 `selection-replayed` — while
+    // the status row counts "Step N of M". (2) A run whose budget is two
+    // iterations stops on "Budget reached — Continue" (never a silent finish);
+    // clicking Continue runs a second execution on the SAME thread.
+    // ─────────────────────────────────────────────────────────────
+    {
+      const RUN_STATUS_STATE = `(() => {
+        const conv = document.getElementById('thread-conversation');
+        const row = conv ? conv.querySelector('conversation-run-status.live-status') : null;
+        if (!row) return JSON.stringify(null);
+        const sr = row.shadowRoot;
+        return JSON.stringify({
+          state: row.getAttribute('state'),
+          category: row.getAttribute('error-category'),
+          actionKind: row.getAttribute('action-kind'),
+          actionLabel: row.getAttribute('action-label'),
+          label: sr ? (sr.querySelector('.label')?.textContent ?? '').trim() : '',
+          hasAction: !!(sr && sr.querySelector('.action')),
+        });
+      })()`;
+      const runStatus = async () => { try { return JSON.parse(await evalIn(cdp, ntpSession, RUN_STATUS_STATE) ?? "null"); } catch { return null; } };
+      const latestRun = async (threadId = null) => {
+        const runs = await msgValue({ type: "run.list" }).catch(() => null);
+        const rows = (Array.isArray(runs?.runs) ? runs.runs : [])
+          .filter((r) => (threadId ? r?.threadId === threadId : /demo-every-tab/.test(String(r?.taskPreview ?? ""))));
+        rows.sort((a, b) => (a?.updatedAt ?? a?.createdAt ?? 0) - (b?.updatedAt ?? b?.createdAt ?? 0));
+        return rows[rows.length - 1] ?? null;
+      };
+      // read_page needs the silent `scripting` permission (the journey manifest
+      // already carries <all_urls>); grant it under a CDP user gesture.
+      const scriptingReady = await evalIn(cdp, ntpSession, `chrome.permissions.contains({ permissions: ["scripting"] })`);
+      if (scriptingReady !== true) {
+        await cdp.send("Runtime.evaluate", {
+          expression: `chrome.permissions.request({ permissions: ["scripting"] }).catch(() => false)`,
+          awaitPromise: true, returnByValue: true, userGesture: true,
+        }, ntpSession).catch(() => null);
+      }
+      console.log(`every-tab journey: scripting granted=${await evalIn(cdp, ntpSession, `chrome.permissions.contains({ permissions: ["scripting"] })`)}`);
+      // The journey profile cannot hold the `tabs` permission (headless
+      // auto-denies its prompt), so the demo loop is given the fixture tab ids
+      // explicitly (the ids are visible to an extension page without `tabs`;
+      // list_tabs itself is covered by the unit test + the live harness).
+      const tabIdsBefore = new Set(await evalIn(cdp, ntpSession, `chrome.tabs.query({}).then((t) => t.map((x) => x.id))`) ?? []);
+      const fixtureTabs = [];
+      for (let i = 1; i <= 12; i++) fixtureTabs.push(await openPage(port, `${RED_ORIGIN}/tab/${i}`));
+      await sleep(1500);
+      const tabIdsAfter = await evalIn(cdp, ntpSession, `chrome.tabs.query({}).then((t) => t.map((x) => x.id))`) ?? [];
+      const fixtureTabIds = tabIdsAfter.filter((id) => !tabIdsBefore.has(id));
+      const everyTask = `@demo-every-tab tabs=${fixtureTabIds.join(",")}`;
+      const runsBeforeEvery = ((await msgValue({ type: "run.list" }).catch(() => null))?.runs ?? []).length;
+      await driveHubTask(everyTask);
+      let stepCounterSeen = null;
+      let stepShot = null;
+      let everyRun = null;
+      {
+        const t0 = Date.now();
+        while (Date.now() - t0 < 180000) {
+          const st = await runStatus();
+          if (st && ["running", "retrying", "queued"].includes(st.state) && /Step \d+ of \d+/.test(st.label)) {
+            stepCounterSeen = st.label;
+            if (!stepShot) { stepShot = await captureShot(cdp, ntpSession); if (stepShot) await writeEvidence("run-budget-step-counter.png", stepShot); }
+          }
+          // The durable registry is the authority for "settled" (the live row
+          // is re-projected when the thread reloads at the terminal).
+          const runs = (await msgValue({ type: "run.list" }).catch(() => null))?.runs ?? [];
+          const mine = runs.filter((r) => /demo-every-tab/.test(String(r?.taskPreview ?? "")));
+          const newest = mine.sort((a, b) => (a?.updatedAt ?? a?.createdAt ?? 0) - (b?.updatedAt ?? b?.createdAt ?? 0))[mine.length - 1];
+          if (runs.length > runsBeforeEvery && newest && ["terminal", "cancelled"].includes(newest.phase)) { everyRun = newest; break; }
+          await sleep(200);
+        }
+      }
+      await sleep(600);
+      const everyLogs = everyRun?.executionId ? await msgValue({ type: "run.logs", executionId: everyRun.executionId }).catch(() => null) : null;
+      const logRows = (Array.isArray(everyLogs?.logs) ? everyLogs.logs : []).map((r) => { try { return JSON.stringify(r); } catch { return ""; } });
+      const executeCalls = logRows.filter((s) => /"type":"tool-call"/.test(s) && /"tool":"execute_tool"/.test(s)).length;
+      const searchCalls = logRows.filter((s) => /"type":"tool-call"/.test(s) && /"tool":"search_tools"/.test(s)).length;
+      const readPageResults = logRows.filter((s) => /"type":"tool-result"/.test(s) && /"tool":"execute_tool"/.test(s) && /read_page/.test(s)).length;
+      const replayed = logRows.filter((s) => /selection-replayed/.test(s)).length;
+      const summary = String(everyRun?.terminal?.summary ?? "");
+      console.log(`every-tab journey: fixtureTabs=${fixtureTabIds.length} run=${JSON.stringify({ phase: everyRun?.phase, ok: everyRun?.terminal?.ok })} step=${JSON.stringify(stepCounterSeen)} rows=${logRows.length} search=${searchCalls} execute=${executeCalls} read_page=${readPageResults} replayed=${replayed} summary=${summary.slice(0, 200)}`);
+      const everyShot = await captureShot(cdp, ntpSession);
+      if (everyShot) await writeEvidence("every-tab-demo-12.png", everyShot);
+      check(
+        "Every item: 12 fixture tabs are read with ONE read_page search — 12 execute_tool reads, 0 selection-replayed",
+        fixtureTabIds.length === 12 && everyRun?.phase === "terminal" && everyRun?.terminal?.ok === true &&
+          // ONE search (never one per item); the search_tools row itself is a
+          // best-effort journal write, so "at most one" is the falsifiable bound.
+          searchCalls <= 1 && readPageResults === 12 && executeCalls === 12 && replayed === 0 &&
+          /Every tab: listed 12, read 12 of 12\./.test(summary),
+      );
+      check(
+        "Every item: the status row counts Step N of M while working",
+        typeof stepCounterSeen === "string" && /Step \d+ of \d+/.test(stepCounterSeen),
+      );
+
+      // (2) The budget stop + Continue. Two iterations × two inner steps = four
+      // model steps: search read_page, execute one read, (history stripped)
+      // search, execute — then the loop is out of steps with reads pending.
+      // The run outlives a CDP evaluate: fire it, then poll for its reply. It
+      // runs as a NEW TURN of the every-tab thread (never a new thread): the
+      // Tasks rail lists threads newest-first and later journeys reopen the
+      // FIRST row expecting the thread their own turns landed in.
+      const everyThreadId = everyRun?.threadId ?? null;
+      await evalIn(cdp, ntpSession, `(() => { window.__capBudgetRun = null; chrome.runtime.sendMessage(${JSON.stringify({ type: "agent.run", task: everyTask, maxIterations: 2, threadId: everyThreadId })}).then((v) => { window.__capBudgetRun = v; }, (e) => { window.__capBudgetRun = { ok: false, error: String(e?.message ?? e) }; }); return true; })()`);
+      let budgeted = null;
+      {
+        const t0 = Date.now();
+        while (Date.now() - t0 < 180000) {
+          budgeted = await evalIn(cdp, ntpSession, `window.__capBudgetRun`).catch(() => null);
+          if (budgeted) break;
+          await sleep(300);
+        }
+      }
+      console.log(`budget journey: run=${JSON.stringify(budgeted).slice(0, 400)}`);
+      const budgetThreadId = budgeted?.threadId ?? everyThreadId;
+      const budgetRun = ((await msgValue({ type: "run.list" }).catch(() => null))?.runs ?? [])
+        .find((r) => r?.threadId === budgetThreadId && r?.terminal?.errorCategory === "budget") ?? null;
+      check(
+        "Budget: a run with budget 2 stops on 'Budget reached — Continue' (never a silent finish)",
+        budgeted?.ok === false && budgeted?.errorCategory === "budget" && budgeted?.errorAction === "Continue" &&
+          /Step budget reached \(4 of 4\)/.test(String(budgeted?.error)) &&
+          budgetRun?.phase === "terminal" && budgetRun?.terminal?.errorCategory === "budget" && budgetRun?.terminal?.ok === false,
+      );
+      // Reopen the thread in a NEW target (the suite's NTP stays untouched):
+      // the status row derives "Budget reached — Continue" from the durable
+      // record (not from a live event).
+      const reopened = await cdp.send("Target.createTarget", {
+        url: `chrome-extension://${extId}/ntp/ntp.html#thread=${encodeURIComponent(String(budgetThreadId ?? ""))}`,
+      });
+      const reopenedId = reopened?.result?.targetId ?? null;
+      await sleep(1500);
+      const reopenedSession = reopenedId ? await attachRuntime(cdp, reopenedId) : null;
+      if (reopenedSession) cdp.pageSessions.add(reopenedSession);
+      const reopenedStatus = async () => { try { return JSON.parse(await evalIn(cdp, reopenedSession, RUN_STATUS_STATE) ?? "null"); } catch { return null; } };
+      let budgetStatus = null;
+      {
+        const t0 = Date.now();
+        while (reopenedSession && Date.now() - t0 < 20000) {
+          const st = await reopenedStatus();
+          if (st && st.state === "failed" && st.actionKind === "continue") { budgetStatus = st; break; }
+          await sleep(200);
+        }
+      }
+      console.log(`budget journey: reopened status=${JSON.stringify(budgetStatus)}`);
+      const budgetShot = reopenedSession ? await captureShot(cdp, reopenedSession) : null;
+      if (budgetShot) await writeEvidence("run-budget-continue-card.png", budgetShot);
+      const executionsBefore = new Set(((await msgValue({ type: "run.list" }).catch(() => null))?.runs ?? []).filter((r) => r?.threadId === budgetThreadId).map((r) => r.executionId));
+      const clickedContinue = budgetStatus ? await clickShadow(cdp, reopenedSession, "conversation-run-status.live-status", ".action") : false;
+      let continued = null;
+      {
+        const t0 = Date.now();
+        while (Date.now() - t0 < 60000) {
+          const runs = (await msgValue({ type: "run.list" }).catch(() => null))?.runs ?? [];
+          const mine = runs.filter((r) => r?.threadId === budgetThreadId);
+          // The continuation is the thread's run that did not exist before the click.
+          const newest = mine.find((r) => !executionsBefore.has(r?.executionId)) ?? null;
+          if (newest && ["terminal", "cancelled"].includes(newest.phase)) { continued = { count: mine.length, newest }; break; }
+          await sleep(300);
+        }
+      }
+      console.log(`budget journey: clicked=${clickedContinue} before=${executionsBefore.size} after=${JSON.stringify({ count: continued?.count, phase: continued?.newest?.phase, ok: continued?.newest?.terminal?.ok, task: String(continued?.newest?.taskPreview ?? "").slice(0, 80), budget: continued?.newest?.terminal?.budget ?? null, summary: String(continued?.newest?.terminal?.summary ?? "").slice(0, 120) })}`);
+      check(
+        "Budget: Continue runs a second execution on the same thread",
+        !!budgetStatus && /Budget reached/.test(budgetStatus.label) && budgetStatus.actionLabel === "Continue" && clickedContinue === true &&
+          !!continued && continued.count === executionsBefore.size + 1 && continued.newest.executionId !== budgetRun?.executionId &&
+          continued.newest.terminal?.ok === true,
+      );
+      // Leave the suite as it was: close the fixture tabs and the reopened view
+      // (the NTP stays on the thread view the next journey's composer expects).
+      for (const t of fixtureTabs) await cdp.send("Target.closeTarget", { targetId: t.id }).catch(() => {});
+      if (reopenedId) await cdp.send("Target.closeTarget", { targetId: reopenedId }).catch(() => {});
+      await sleep(800);
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // JOURNEY 4 — screenshot matrix. Owner grant/scope/revoke is driven via the
     // genuine Settings UI; wrong-origin + expiry remain SECONDARY message probes.
     // ─────────────────────────────────────────────────────────────
@@ -4663,7 +4927,15 @@ async function main() {
       allowedShot?.error === undefined && typeof allowedShot?.screenshot === "string" &&
         allowedShot.screenshot.length > 0,
     );
-    // (c) wrong-origin (secondary probe).
+    // (c) wrong-origin (secondary probe). Per-origin grants are a SET
+    // (CAP-FB-20260902-ORIGIN-GRANT-UNION-01): allowing another origin no
+    // longer removes the red one, so the red grant is revoked ON ITS OWN first
+    // and only the wrong origin is left allowed.
+    const redRevoke = await msgValue({ type: "browser-control.revoke", origin: RED_ORIGIN });
+    check(
+      "Browser control: revoking one origin through the service worker reports it gone",
+      redRevoke?.grant?.revoked === true && redRevoke?.grant?.origin === RED_ORIGIN,
+    );
     await msgValue({
       type: "browser-control.set",
       origins: ["http://127.0.0.1:1"],
@@ -4686,6 +4958,26 @@ async function main() {
       "screenshot: expired grant is denied (secondary probe)",
       expiredShot?.error !== undefined || expiredShot?.ok === false,
     );
+    // Under the set contract the wrong-origin grant from (c) is STILL live
+    // (the expired red entry sits beside it), and the Settings switch follows
+    // the true state live — so clear every grant before the GENUINE UI grant
+    // below, which must start from off, and wait for the switch to show off.
+    const pollUntil = async (fn, ms = 8000) => {
+      const deadline = Date.now() + ms;
+      while (Date.now() < deadline) {
+        const v = await fn();
+        if (v) return v;
+        await sleep(150);
+      }
+      return null;
+    };
+    const listedOrigins = () =>
+      evalOpts(`[...document.querySelectorAll("#grant-origin-rows origin-grant-row")].map((r) => r.getAttribute("origin"))`);
+    await msgValue({ type: "browser-control.set", granted: false });
+    const switchOff = await pollUntil(async () =>
+      (await evalOpts(`document.querySelector("#browser-grant")?.checked === false`)) === true
+    );
+    console.log(`[debug] browser-control switch before the UI grant ${JSON.stringify({ switchOff, live: await msgValue({ type: "browser-control.get" }) })}`);
 
     // ─────────────────────────────────────────────────────────────
     // GENUINE UI grant: checkbox click + origin textarea typing (the primary
@@ -4788,6 +5080,63 @@ async function main() {
       scopedGrant?.scope === "origins" &&
         Array.isArray(scopedGrant?.origins) &&
         scopedGrant.origins.includes(RED_ORIGIN),
+    );
+    // CAP-FB-20260902-ORIGIN-GRANT-UNION-01: a second site's Allow ADDS to the
+    // set. The Allow handler on an approval card calls the same
+    // browser-control.set route with that card's origin, so allowing a second
+    // origin through it must keep the red origin granted, Settings must list
+    // both with their own Turn off, and turning one off must leave the other.
+    const SECOND_ORIGIN = "http://127.0.0.1:1";
+    await msgValue({ type: "browser-control.set", origins: [SECOND_ORIGIN] });
+    const unionGrant = await msgValue({ type: "browser-control.get" });
+    check(
+      "Browser control: allowing a second origin keeps the first origin granted",
+      unionGrant?.scope === "origins" && Array.isArray(unionGrant?.origins) &&
+        unionGrant.origins.includes(RED_ORIGIN) && unionGrant.origins.includes(SECOND_ORIGIN) &&
+        Array.isArray(unionGrant?.grants) && unionGrant.grants.length === 2,
+    );
+    // The Settings listing follows the storage change without a reload.
+    const listedRows = await pollUntil(async () => {
+      const rows = await listedOrigins();
+      return Array.isArray(rows) && rows.includes(RED_ORIGIN) && rows.includes(SECOND_ORIGIN) ? rows : null;
+    });
+    const everyRowHasTurnOff = await evalOpts(
+      `[...document.querySelectorAll("#grant-origin-rows origin-grant-row")].every((r) => r.shadowRoot?.querySelector("button")?.textContent.trim() === "Turn off")`,
+    );
+    check(
+      "Browser control: Settings lists every allowed origin with its own Turn off",
+      Array.isArray(listedRows) && listedRows.length === 2 && everyRowHasTurnOff === true,
+    );
+    await evalOpts(`document.querySelector("#grant-origin-rows")?.scrollIntoView({ block: "center" })`);
+    await sleep(200);
+    const twoOriginsShot = await captureShot(cdp, optsSession);
+    if (twoOriginsShot) await writeEvidence("browser-control-two-origins.png", twoOriginsShot);
+    // A GENUINE click on the second origin's Turn off (inside the row's shadow tree).
+    const secondRowIndex = Array.isArray(listedRows) ? listedRows.indexOf(SECOND_ORIGIN) : -1;
+    let turnedOff = false;
+    if (secondRowIndex >= 0) {
+      const b = await evalOpts(
+        `(() => { const row = document.querySelectorAll("#grant-origin-rows origin-grant-row")[${secondRowIndex}]; const el = row?.shadowRoot?.querySelector("button"); if (!el) return null; el.scrollIntoView({ block: "center" }); const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
+      );
+      if (b && typeof b.x === "number") {
+        await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: b.x, y: b.y, button: "left", buttons: 1, clickCount: 1 }, optsSession);
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: b.x, y: b.y, button: "left", buttons: 0, clickCount: 1 }, optsSession);
+        turnedOff = true;
+      }
+    }
+    const afterOneOff = await pollUntil(async () => {
+      const g = await msgValue({ type: "browser-control.get" });
+      return Array.isArray(g?.origins) && !g.origins.includes(SECOND_ORIGIN) ? g : null;
+    });
+    const rowsAfterOneOff = await pollUntil(async () => {
+      const rows = await listedOrigins();
+      return Array.isArray(rows) && !rows.includes(SECOND_ORIGIN) ? rows : null;
+    });
+    check(
+      "Browser control: turning off one origin leaves the other origin granted",
+      turnedOff && afterOneOff?.scope === "origins" && afterOneOff.origins.includes(RED_ORIGIN) &&
+        !afterOneOff.origins.includes(SECOND_ORIGIN) && afterOneOff.active === true &&
+        Array.isArray(rowsAfterOneOff) && rowsAfterOneOff.length === 1 && rowsAfterOneOff[0] === RED_ORIGIN,
     );
     const uiGrantShot = await msgValue({ type: "capture.tab", tabId: redTabId });
     // The UI grant flow (checkbox + scoped origin) is genuinely driven above;

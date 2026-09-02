@@ -18,6 +18,7 @@ import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDur
 import { createRunSurfaceOwner } from "../shared/run-surface-owner.js";
 import { summarizeToolResult, toolResultTruncationNote } from "../lib/tool-summary.js";
 import { cancelRunFromRenderedStop, projectConversationRunStatus } from "../shared/run-status.js";
+import { BUDGET_CONTINUE_TASK } from "../lib/run-budget.js";
 import { safeJsonStringify } from "../shared/tool-tree.js";
 import {
   renderHtmlFrame,
@@ -25,7 +26,7 @@ import {
   wireHtmlFrameContent,
   wireHtmlFramePreference,
   currentFramePreference,
-  confirmActionDialog,
+  deleteAgentDialog,
   escapeHtml,
 } from "../shared/components.js";
 import { sleep, timeAgo } from "../lib/pure.js";
@@ -511,12 +512,12 @@ async function renderWebmcpHubStatus() {
   const s = status?.status;
   el.replaceChildren();
   if (!s) {
-    el.textContent = "Discovery has not run yet.";
+    el.textContent = "Open a site and I'll look for tools you can use.";
     return;
   }
   const vm = formatWebmcpHubStatus(s);
   if (!vm) {
-    el.textContent = "Discovery has not run yet.";
+    el.textContent = "Open a site and I'll look for tools you can use.";
     return;
   }
   const addTime = (parent, at) => {
@@ -531,7 +532,7 @@ async function renderWebmcpHubStatus() {
   const title = document.createElement("div");
   title.className = "webmcp-card-title";
   const titleText = document.createElement("span");
-  titleText.textContent = `WebMCP discovery: ${vm.origin}`;
+  titleText.textContent = `Tools on ${vm.origin}`;
   const badge = document.createElement("span");
   badge.className = `webmcp-card-badge webmcp-card-badge-${vm.state}`;
   badge.textContent = vm.stateLabel;
@@ -898,12 +899,7 @@ async function renderNamedAgents() {
         if (a.kind !== "named") {
           row.addEventListener("delete", async () => {
           const name = a.name || a.id;
-          const confirmed = await confirmActionDialog({
-            title: `Delete “${name}”?`,
-            body: `Are you sure you want to delete ${name}?\n\nThis will cancel its scheduled task and remove the recurring alarm.`,
-            confirmLabel: "Delete agent",
-            destructive: true,
-          });
+          const confirmed = await deleteAgentDialog({ name, kind: "background" });
           if (!confirmed) return;
           // Background agents schedule deterministically as `recipe:<id>` — the
           // enabled state DERIVES from the scheduled-task store, so the cancel
@@ -1781,14 +1777,14 @@ async function refreshFailedRuns() {
     const orphanBtn = document.createElement("button");
     orphanBtn.type = "button";
     orphanBtn.className = "fr-retry fr-orphan-cleanup";
-    orphanBtn.textContent = "Cancel orphaned alarms";
-    orphanBtn.setAttribute("aria-label", "Cancel alarms whose agent was deleted");
+    orphanBtn.textContent = "Stop schedules for deleted agents";
+    orphanBtn.setAttribute("aria-label", "Stop the schedules whose agent was deleted");
     orphanBtn.addEventListener("click", async () => {
       orphanBtn.disabled = true;
       orphanBtn.textContent = "…";
       const r = await send("schedule.cancelOrphans").catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
       if (r?.ok) {
-        orphanBtn.textContent = r.count > 0 ? `Cancelled ${r.count} orphaned alarm${r.count === 1 ? "" : "s"}.` : "No orphaned alarms found.";
+        orphanBtn.textContent = r.count > 0 ? `Stopped ${r.count} leftover schedule${r.count === 1 ? "" : "s"}.` : "No leftover schedules found.";
         await refreshFailedRuns();
       } else {
         orphanBtn.textContent = "Cancel failed";
@@ -2235,9 +2231,30 @@ async function openThread(id) {
   showThreadView();
   const live = restoredRun != null
     && actionableRunsForSurface(latestDurableRuns, { threadId: id }).length > 0;
-  renderRunStatus(live ? { state: "running", activity: "run in progress" } : { state: "idle" });
+  // A thread whose latest turn stopped on its step budget reopens with the
+  // "Budget reached — Continue" row, so the owner can carry on from a reopened
+  // thread exactly as from the live one (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01).
+  const budgetStop = live ? null : budgetStopOfThread(thread);
+  renderRunStatus(live
+    ? { state: "running", activity: "run in progress" }
+    : budgetStop
+      ? { state: "failed", errorCategory: "budget", errorReason: budgetStop.reason, message: budgetStop.content, ...(budgetStop.executionId ? { executionId: budgetStop.executionId } : {}) }
+      : { state: "idle" });
   renderTasks(id);
   openSpan.end("ok");
+}
+
+/** The thread's LAST persisted row when it is a budget stop (the durable
+ * terminal row: role "error", category "budget"); null otherwise. */
+function budgetStopOfThread(thread) {
+  const messages = Array.isArray(thread?.messages) ? thread.messages : [];
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== "error" || last.category !== "budget") return null;
+  return {
+    reason: typeof last.reason === "string" ? last.reason : "",
+    content: typeof last.content === "string" ? last.content : "",
+    executionId: typeof last.executionId === "string" ? last.executionId : null,
+  };
 }
 
 // ── the BACKGROUND-agent chat surface (item 61): a background agent is an
@@ -3333,6 +3350,14 @@ function renderRunStatus(s) {
 // to the status row itself — message bubbles can also emit "action".
 threadConversation?.addEventListener("action", (ev) => {
   if (!ev.target?.classList?.contains?.("live-status")) return;
+  // "Budget reached — Continue" (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01):
+  // the continuation is a NEW TURN on the SAME thread, so the model sees every
+  // prior turn (its own partial answer included) and carries on from there.
+  // The turn text is the shared constant the SW's run.continue route uses.
+  if (ev.detail?.kind === "continue" || ev.target.getAttribute?.("action-kind") === "continue") {
+    runThreadTurn(BUDGET_CONTINUE_TASK, []).catch((error) => setStatus(`Continue failed — ${error?.message ?? error}`, false));
+    return;
+  }
   // The run-status action is an NTP surface: route IN-CONTEXT like every other
   // Settings entry. chrome.runtime.openOptionsPage() creates no new target from
   // the NTP (it IS the new-tab page) and would strand the user outside the
@@ -3534,33 +3559,14 @@ deleteAgentBtn?.addEventListener("click", async () => {
   const kind = currentAgentKind;
   const id = currentAgentId;
   let agentName = id;
-  let previewDetails = "";
-
   if (kind === "named") {
     const res = await send("named-agent.get", { id }).catch(() => null);
-    const agent = res?.agent;
-    agentName = agent?.name || id;
-    const skillsCount = agent?.skills?.length ?? 0;
-    const assetsCount = agent?.coreAssets?.length ?? 0;
-    previewDetails = `This will permanently remove the agent registry entry, its memory store, system prompt override, and custom provider configuration.\n\n` +
-      `• Skills configured: ${skillsCount}\n` +
-      `• Context files: ${assetsCount}\n\n` +
-      `Note: Any artifacts created by this agent will be retained.`;
-  } else if (kind === "site" || kind === "origin") {
-    const res = await send("list-tools", { origin: id }).catch(() => ({ tools: [] }));
-    const toolsCount = res?.tools?.length ?? 0;
-    previewDetails = `This will disenroll the site, unregister its ${toolsCount} tools, revoke dynamic scripts, and remove host permissions.\n\n` +
-      `Note: Any artifacts created by this agent will be retained.`;
-  } else if (kind === "background") {
-    previewDetails = `This will cancel the scheduled task and remove its recurring alarm.`;
+    agentName = res?.agent?.name || id;
   }
 
-  const confirmed = await confirmActionDialog({
-    title: `Delete “${agentName}”?`,
-    body: `Are you sure you want to delete ${agentName}?\n\n${previewDetails}`,
-    confirmLabel: "Delete agent",
-    destructive: true,
-  });
+  // ONE shared delete confirmation across the hub, Settings and the side panel
+  // (CAP-FB-20260830-USER-VOICE-COPY-01).
+  const confirmed = await deleteAgentDialog({ name: agentName, kind, returnFocusTo: deleteAgentBtn });
 
   if (!confirmed) return;
 

@@ -104,6 +104,86 @@ function grantExpired(grant) {
   return grant.expiresAt <= Date.now();
 }
 
+// CAP-FB-20260902-ORIGIN-GRANT-UNION-01: the "origins" scope is a SET of
+// per-origin grants, each with its OWN id + expiry, kept in `grant.grants`
+// (`grant.origins` stays as the derived list every existing reader uses). A
+// second site's Allow ADDS to the set instead of overwriting the first site's
+// grant. The set is bounded; when it is full the oldest grant is evicted first.
+const MAX_ORIGIN_GRANTS = 64;
+
+/** The LIVE (unexpired, well-formed) per-origin entries of an origins-scope
+ * record. A legacy record (an origin list with one record-level expiry) reads
+ * as one entry per origin carrying the record's id + expiry, so a grant made
+ * before the set existed is honoured exactly as it was. Any other record (a
+ * global grant, a deny-all record, junk) has no entries. */
+function liveOriginGrantEntries(grant) {
+  if (!grant || typeof grant !== "object" || grant.scope !== "origins") return [];
+  const raw = Array.isArray(grant.grants)
+    ? grant.grants
+    : Array.isArray(grant.origins)
+    ? grant.origins.map((origin) => ({
+      origin,
+      id: grant.id,
+      expiresAt: grant.expiresAt ?? null,
+      grantedAt: grant.grantedAt ?? 0,
+    }))
+    : [];
+  const seen = new Set();
+  const out = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    if (typeof entry.origin !== "string" || entry.origin.length === 0) continue;
+    if (typeof entry.id !== "string" || entry.id.length === 0) continue;
+    if (grantExpired(entry)) continue; // per-entry expiry, fail closed on junk
+    if (seen.has(entry.origin)) continue;
+    seen.add(entry.origin);
+    out.push({
+      origin: entry.origin,
+      id: entry.id,
+      expiresAt: typeof entry.expiresAt === "number" ? entry.expiresAt : null,
+      grantedAt: typeof entry.grantedAt === "number" ? entry.grantedAt : 0,
+    });
+  }
+  return out;
+}
+
+/** The record-level expiry of a set: null while ANY entry is persistent,
+ * otherwise the latest entry expiry (the record is expired only when every
+ * entry is). */
+function setExpiry(entries) {
+  let latest = null;
+  for (const e of entries) {
+    if (e.expiresAt === null) return null;
+    if (latest === null || e.expiresAt > latest) latest = e.expiresAt;
+  }
+  return latest;
+}
+
+/** Build the origins-scope record for a set of entries. The record id is fresh
+ * on EVERY mutation so `getBrowserControlGrantIdentity` still changes whenever
+ * the authority changes. */
+function originSetRecord(entries) {
+  return {
+    id: newGrantId(),
+    scope: "origins",
+    origins: entries.map((e) => e.origin),
+    grants: entries,
+    expiresAt: setExpiry(entries),
+    grantedAt: Date.now(),
+  };
+}
+
+/** The live per-origin grants, for the Settings listing: `{origin, expiresAt,
+ * grantedAt}` each — never the grant ids. Empty under a global grant. */
+export async function listOriginBrowserControlGrants() {
+  const grant = (await kvGet(GRANT_KEY))[GRANT_KEY];
+  return liveOriginGrantEntries(grant).map(({ origin, expiresAt, grantedAt }) => ({
+    origin,
+    expiresAt,
+    grantedAt,
+  }));
+}
+
 export async function isBrowserControlGranted(origin) {
   const s = await kvGet(GRANT_KEY);
   const grant = s[GRANT_KEY];
@@ -111,13 +191,13 @@ export async function isBrowserControlGranted(origin) {
     if (!grant || typeof grant !== "object") return false;
     if (grantExpired(grant)) return false;
     if (grant.scope === "global") return true;
-    if (
-      grant.scope === "origins" && Array.isArray(grant.origins) &&
-      grant.origins.length > 0
-    ) {
-      return typeof origin === "string" && grant.origins.includes(origin);
+    if (grant.scope === "origins") {
+      // Membership in the SET, each entry on its own expiry. An empty set is
+      // DENIED, never unrestricted.
+      return typeof origin === "string" &&
+        liveOriginGrantEntries(grant).some((e) => e.origin === origin);
     }
-    return false; // an empty/unknown origin list is DENIED, never unrestricted
+    return false; // an unknown scope is DENIED, never unrestricted
   })();
   // Grant observability: scope + outcome ONLY — never the grant id or the full
   // origin list (cap-log masks token-shaped runs, but we don't even emit them).
@@ -172,17 +252,64 @@ export async function setOriginBrowserControlGrant(
     if (canonical.length === 0) {
       throw new Error("origin grant needs at least one valid origin");
     }
-    const grant = {
-      id: newGrantId(),
-      scope: "origins",
-      origins: canonical,
-      // PERSISTENT by default (null → revoked explicitly); an explicit expiryMs
-      // still produces a timed grant.
-      expiresAt: expiryMs == null ? null : Date.now() + clampExpiryMs(expiryMs),
-      grantedAt: Date.now(),
-    };
+    const now = Date.now();
+    // PERSISTENT by default (null → revoked explicitly); an explicit expiryMs
+    // still produces a timed grant — and the expiry belongs to THIS origin's
+    // entry only, never to the other origins already in the set.
+    const expiresAt = expiryMs == null ? null : now + clampExpiryMs(expiryMs);
+    // UNION with the live set (a global grant is scoped DOWN to these origins,
+    // as before; a legacy list is carried over entry by entry). Re-allowing an
+    // origin replaces its own entry — the latest grant for that origin wins.
+    const existing = (await kvGet(GRANT_KEY))[GRANT_KEY];
+    const kept = liveOriginGrantEntries(existing).filter((e) => !canonical.includes(e.origin));
+    const added = canonical.map((origin) => ({ origin, id: newGrantId(), expiresAt, grantedAt: now }));
+    let entries = [...kept, ...added];
+    if (entries.length > MAX_ORIGIN_GRANTS) {
+      // Bounded: evict the OLDEST grants first (never the ones just made).
+      entries.sort((a, b) => a.grantedAt - b.grantedAt);
+      entries = entries.slice(entries.length - MAX_ORIGIN_GRANTS);
+    }
+    const grant = originSetRecord(entries);
     await kvSet({ [GRANT_KEY]: grant });
     return grant;
+  });
+}
+
+/** Revoke ONE origin's grant and leave every other origin's grant (and its
+ * expiry) untouched. Refused under a global grant — the owner turns that off
+ * as a whole. Holds the grant lock like every other mutation, and CONFIRMS the
+ * origin is gone before reporting success. When the last origin goes, the
+ * record goes with it (an empty set authorises nothing and would only leave
+ * the Settings switch looking on). */
+export async function revokeOriginBrowserControlGrant(origin) {
+  let canonical = null;
+  try {
+    canonical = canonicalOrigin(String(origin));
+  } catch {
+    canonical = null;
+  }
+  if (!canonical) return { revoked: false, error: "invalid origin" };
+  return await withGrantLock(async () => {
+    const existing = (await kvGet(GRANT_KEY))[GRANT_KEY];
+    if (existing && typeof existing === "object" && existing.scope === "global" && !grantExpired(existing)) {
+      return {
+        revoked: false,
+        error: "browser control is granted for every site — turn the switch off to revoke it",
+      };
+    }
+    const remaining = liveOriginGrantEntries(existing).filter((e) => e.origin !== canonical);
+    if (remaining.length === 0) {
+      await kvRemove(GRANT_KEY);
+    } else {
+      await kvSet({ [GRANT_KEY]: originSetRecord(remaining) });
+    }
+    const after = (await kvGet(GRANT_KEY))[GRANT_KEY];
+    const stillThere = liveOriginGrantEntries(after).some((e) => e.origin === canonical) ||
+      (remaining.length === 0 && after !== undefined && after !== null);
+    if (stillThere) {
+      return { revoked: false, origin: canonical, error: "grant still present after removal" };
+    }
+    return { revoked: true, origin: canonical, remaining: remaining.map((e) => e.origin) };
   });
 }
 
@@ -200,6 +327,7 @@ export async function setDenyAllBrowserControlGrant(
       id: newGrantId(),
       scope: "origins",
       origins: [],
+      grants: [],
       expiresAt: Date.now() + clampExpiryMs(expiryMs),
       grantedAt: Date.now(),
     };
@@ -693,18 +821,18 @@ function withTabCaptureLock(tabId, fn) {
 function validateGrantFor(grant, origin) {
   if (!grant || typeof grant !== "object") return null;
   if (grantExpired(grant)) return null;
-  let authorized = false;
   if (grant.scope === "global") {
-    authorized = true;
-  } else if (
-    grant.scope === "origins" && Array.isArray(grant.origins) &&
-    grant.origins.length > 0
-  ) {
-    authorized = typeof origin === "string" && grant.origins.includes(origin);
+    if (typeof grant.id !== "string" || grant.id.length === 0) return null;
+    return grant.id;
   }
-  if (!authorized) return null;
-  if (typeof grant.id !== "string" || grant.id.length === 0) return null;
-  return grant.id;
+  if (grant.scope === "origins" && typeof origin === "string") {
+    // The ENTRY's id: it changes when this origin is re-granted or revoked,
+    // and stays put when a different origin is added or removed — so a capture
+    // of A is discarded only when A's own authority changed underneath it.
+    const entry = liveOriginGrantEntries(grant).find((e) => e.origin === origin);
+    return entry ? entry.id : null;
+  }
+  return null;
 }
 
 /** The base64 payload of a `data:<mediaType>;base64,<payload>` URL, or null.
@@ -2377,15 +2505,31 @@ export function browserToolset(readOnly = false, {
       execute: async ({ tabId }) => captureTabScreenshot(tabId),
     }),
     list_tabs: tool({
-      description: "List the open tabs.",
+      description: "List EVERY open tab across every window, with a count so completeness can be checked.",
       inputSchema: z.object({}),
       execute: async () => {
         if (!(await hasTabsPermission())) {
           return permissionDeniedResult("tabs", { reason: "list your open tabs" });
         }
+        // chrome.tabs.query({}) spans every window of the profile (not just
+        // the current one). The completeness fields — count, window count,
+        // windowId/index/active/groupId per tab — let the model and the owner
+        // verify nothing was skipped (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01:
+        // "list_tabs, I'm not sure it gets all the tabs").
         const tabs = await chrome.tabs.query({});
+        const windows = new Set(tabs.map((t) => t.windowId).filter((w) => Number.isFinite(w)));
         return {
-          tabs: tabs.map((t) => ({ id: t.id, title: t.title, url: t.url })),
+          count: tabs.length,
+          windows: windows.size,
+          tabs: tabs.map((t) => ({
+            id: t.id,
+            title: t.title,
+            url: t.url,
+            windowId: t.windowId,
+            index: t.index,
+            active: t.active === true,
+            groupId: Number.isFinite(t.groupId) ? t.groupId : -1,
+          })),
         };
       },
     }),

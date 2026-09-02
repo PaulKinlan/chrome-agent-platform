@@ -30,8 +30,9 @@ import {
   projectThreadMessages,
 } from "../shared/conversation.js";
 import { cancelRunFromRenderedStop, projectConversationRunStatus } from "../shared/run-status.js";
+import { BUDGET_CONTINUE_TASK } from "../lib/run-budget.js";
 import { findAgentByRef } from "../shared/agent-registry.js";
-import { confirmActionDialog } from "../shared/components.js"; // registers <agent-picker>, <agent-composer>, <agent-conversation>, <task-row>
+import { deleteAgentDialog } from "../shared/components.js"; // registers <agent-picker>, <agent-composer>, <agent-conversation>, <task-row>
 import { capLog } from "../lib/cap-log.js";
 import { actionableRunsForSurface } from "../lib/run-scope.js";
 
@@ -245,8 +246,17 @@ async function refreshActiveTab() {
 // conversation (same pattern as the agent detail conversation below).
 pageHistory?.addEventListener("action", (ev) => {
   if (!ev.target?.classList?.contains?.("live-status")) return;
+  // "Budget reached — Continue": a new turn on the same page thread
+  // (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01).
+  if (ev.detail?.kind === "continue") {
+    runPageTurn(BUDGET_CONTINUE_TASK, [], null).catch(ignoreTurnFailure);
+    return;
+  }
   chrome.runtime.openOptionsPage();
 });
+// A continuation turn reports its own outcome on the status row; the click
+// handler has nothing further to do with a rejection.
+function ignoreTurnFailure() {}
 pageHistory?.addEventListener("stop", async (ev) => {
   if (!ev.target?.classList?.contains?.("live-status")) return;
   const row = ev.target;
@@ -271,6 +281,12 @@ pageHistory?.addEventListener("stop", async (ev) => {
 pageComposer?.addEventListener("send", async (ev) => {
   const { text, attachments, agent } = ev.detail ?? {};
   const mention = agent?.ref ? { kind: agent.kind, id: agent.id, name: agent.name || agent.id } : null;
+  await runPageTurn(text, attachments, mention);
+});
+
+/** One turn of the page conversation (the composer's send, or the budget
+ * Continue action) — the page thread continues across turns. */
+async function runPageTurn(text, attachments, mention) {
   pageHistory?.bindLiveStatusExecution?.(null);
   const res = await runConversationTurn(pageHistory, {
     text,
@@ -289,7 +305,8 @@ pageComposer?.addEventListener("send", async (ev) => {
   // A run may have mutated this tab — refresh the ledger + the tool list.
   actionLedgerEl?.refresh?.().catch(() => {});
   if (currentTabOrigin) renderTools(currentTabOrigin);
-});
+  return res;
+}
 
 // "Continue in hub": reopen the exact tab thread on the new-tab hub.
 continueHubBtn?.addEventListener("click", () => {
@@ -349,6 +366,12 @@ let liveClientRunId = null;
 // right route here (review P1-b: the sidepanel had no action listener at all).
 historyEl.addEventListener("action", (ev) => {
   if (!ev.target?.classList?.contains?.("live-status")) return;
+  // "Budget reached — Continue": a new turn in the open agent's conversation
+  // (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01).
+  if (ev.detail?.kind === "continue") {
+    if (openAgent) runAgentTurn(openAgent, BUDGET_CONTINUE_TASK, []).catch(ignoreTurnFailure);
+    return;
+  }
   chrome.runtime.openOptionsPage();
 });
 
@@ -508,18 +531,9 @@ agentDeleteBtn?.addEventListener("click", async () => {
   if (!openAgent) return;
   const { kind, id, name } = openAgent;
   const agentName = name || id;
-  let preview = "This will permanently remove the agent and its custom configuration.\n\nNote: Any created artifacts will be retained.";
-  if (kind === "site") {
-    preview = "This will disenroll the site, unregister its tools, and revoke its permissions.\n\nNote: Any created artifacts will be retained.";
-  } else if (kind === "background") {
-    preview = "This will cancel the scheduled task and remove its recurring alarm.";
-  }
-  const confirmed = await confirmActionDialog({
-    title: `Delete “${agentName}”?`,
-    body: `Are you sure you want to delete ${agentName}?\n\n${preview}`,
-    confirmLabel: "Delete agent",
-    destructive: true,
-  });
+  // ONE shared delete confirmation across the hub, Settings and the side panel
+  // (CAP-FB-20260830-USER-VOICE-COPY-01).
+  const confirmed = await deleteAgentDialog({ name: agentName, kind, returnFocusTo: agentDeleteBtn });
   if (!confirmed) return;
   let out;
   if (kind === "named") {
@@ -716,9 +730,15 @@ agentComposer.addEventListener("send", async (ev) => {
     // Switch the open conversation to the chip's agent so the run shows in context.
     await openAgentDetail(agent);
   }
+  await runAgentTurn(target, text, attachments);
+});
+
+/** One turn of the open agent's conversation (the composer's send, or the
+ * budget Continue action). */
+async function runAgentTurn(target, text, attachments) {
   historyEl.bindLiveStatusExecution?.(null);
   setDetailStatus("Working…");
-  await runConversationTurn(historyEl, {
+  return await runConversationTurn(historyEl, {
     text,
     attachments,
     agentId: target.id,
@@ -732,7 +752,7 @@ agentComposer.addEventListener("send", async (ev) => {
       historyEl.bindLiveStatusExecution?.(null);
     },
   });
-});
+}
 
 // Live registry updates: the picker re-fetches; an open conversation on a
 // deleted (or freshly-disabled) agent closes honestly; a rename re-titles it.

@@ -288,3 +288,14 @@ Deno.test("a terminal equal to the last interim text replaces that interim row (
   assertEquals(thread.messages[1].executionId, exec);
   assertEquals(thread.messages[1].step, undefined, "the surviving row is the terminal");
 });
+
+Deno.test("the index preview never carries a bracketed model tag (USER-VOICE-COPY-01)", async () => {
+  const t = await createThread("Summarise the page");
+  await appendThreadMessage(t.id, { role: "assistant", content: "[demo model] I'm the built-in demo, so I can't do this yet. Connect a model in Settings and ask again." });
+  const index = await listThreads();
+  assertEquals(index[0].preview, "I'm the built-in demo, so I can't do this yet. Connect a model in Settings and ask again.", "the sidebar preview is the sentence, never the transport tag");
+  // A person's own bracketed prefix is theirs to keep.
+  const u = await createThread("[urgent] fix the build");
+  const index2 = await listThreads();
+  assertEquals(index2.find((r) => r.id === u.id).preview, "[urgent] fix the build");
+});
