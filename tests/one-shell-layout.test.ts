@@ -1,0 +1,58 @@
+// tests/one-shell-layout.test.ts — CAP-FB-20260830-ONE-SHELL-01.
+//
+// Verifies:
+// 1. Shared content layout tokens (--content-max and --content-gutter) in theme.css.
+// 2. All view surfaces (Artifacts, Directory, Settings) adopt the shared token pair.
+// 3. Embedded mode support: openView appends embedded=1 and surfaces hide duplicate headers.
+// 4. Retired surfaces (chat/chat.html and memory/explorer.html) are permanently deleted.
+
+import { assert, assertEquals } from "jsr:@std/assert@1";
+
+Deno.test("one-shell layout: shared tokens defined in theme.css", async () => {
+  const theme = await Deno.readTextFile("extension/shared/theme.css");
+  assert(theme.includes("--content-max: 1040px;"), "theme.css must define --content-max: 1040px");
+  assert(
+    theme.includes("--content-gutter: clamp(16px, 4vw, 40px);"),
+    "theme.css must define --content-gutter: clamp(16px, 4vw, 40px)",
+  );
+});
+
+Deno.test("one-shell layout: Artifacts view adopts shared layout and embedded rule", async () => {
+  const html = await Deno.readTextFile("extension/artifacts/index.html");
+  assert(html.includes("max-inline-size: var(--content-max)"), "Artifacts must use --content-max");
+  assert(html.includes("padding-inline: var(--content-gutter)"), "Artifacts must use --content-gutter");
+  assert(html.includes("[data-embedded] .head"), "Artifacts must hide .head under [data-embedded]");
+});
+
+Deno.test("one-shell layout: Directory view adopts shared layout and embedded rule", async () => {
+  const html = await Deno.readTextFile("extension/directory/directory.html");
+  assert(html.includes("max-inline-size:var(--content-max)"), "Directory must use --content-max");
+  assert(html.includes("padding-inline:var(--content-gutter)"), "Directory must use --content-gutter");
+  assert(html.includes("[data-embedded] #directory-title"), "Directory must hide title under [data-embedded]");
+});
+
+Deno.test("one-shell layout: Settings adopts shared layout and embedded rule", async () => {
+  const css = await Deno.readTextFile("extension/options/options.css");
+  assert(css.includes("max-inline-size: var(--content-max);"), "Settings must use --content-max");
+  assert(css.includes("padding-inline: var(--content-gutter);"), "Settings must use --content-gutter");
+  assert(css.includes("[data-embedded] .side .brand"), "Settings must hide .brand under [data-embedded]");
+  assert(css.includes("[data-embedded] .head h1"), "Settings must hide h1 under [data-embedded]");
+});
+
+Deno.test("one-shell layout: openView in ntp.js passes embedded=1 to panel views", async () => {
+  const ntp = await Deno.readTextFile("extension/ntp/ntp.js");
+  assert(ntp.includes("embeddedQuery"), "openView must construct embeddedQuery");
+  assert(ntp.includes("embedded=1"), "openView must append embedded=1 parameter");
+});
+
+Deno.test("one-shell layout: retired surfaces do not exist", async () => {
+  for (const path of ["extension/chat/chat.html", "extension/chat/chat.js", "extension/memory/explorer.html", "extension/memory/explorer.js"]) {
+    let exists = true;
+    try {
+      await Deno.stat(path);
+    } catch {
+      exists = false;
+    }
+    assertEquals(exists, false, `${path} must be deleted`);
+  }
+});

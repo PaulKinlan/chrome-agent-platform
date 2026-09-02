@@ -129,7 +129,11 @@ const NO_SKILLS_DESTINATION = [
     why: "nothing may open the retired standalone Skills view",
   },
 ];
-const RETIRED_FILES = ["extension/recipes/index.html"];
+const RETIRED_FILES = [
+  "extension/recipes/index.html",
+  "extension/chat/chat.html",
+  "extension/memory/explorer.html",
+];
 
 // ── rules 3 + 4: one noun per view ────────────────────────────────────────
 // A governed noun may name a section ONCE. It may not also label a row inside

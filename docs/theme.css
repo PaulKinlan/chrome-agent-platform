@@ -71,6 +71,10 @@
   --bg-subtle: var(--panel-2);
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
+  /* ── Content layout (consistent width & gutters across hub views) ── */
+  --content-max: 1040px;
+  --content-gutter: clamp(16px, 4vw, 40px);
+
   /* ── Spacing scale (8px grid) ── */
   --space-1: 4px;
   --space-2: 8px;

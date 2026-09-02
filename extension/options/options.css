@@ -66,14 +66,16 @@ nav {
 .content {
   flex: 1 1 auto;
   min-inline-size: 0;
-  padding: var(--space-5) var(--space-6);
-  /* was 760px: inside the full-viewport settings view half the dialog was
-     dead margin (UX-AUDIT-2026-08-28 UX-010). Wide layouts use the space;
-     narrow layouts keep the cap via the media query below. */
-  max-width: none;
+  max-inline-size: var(--content-max);
+  margin-inline: auto;
+  padding-inline: var(--content-gutter);
+  padding-block: var(--space-5);
 }
-@media (min-width: 720px) {
-  .content { max-width: 1080px; }
+[data-embedded] .side .brand {
+  display: none;
+}
+[data-embedded] .head h1 {
+  display: none;
 }
 .head {
   margin-bottom: 24px;

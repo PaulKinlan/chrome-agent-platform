@@ -262,3 +262,17 @@ Deno.test("user voice (USER-VOICE-COPY-01): the shipped surfaces no longer speak
   const options = await Deno.readTextFile("extension/options/options.html");
   assert(!/When off, the hub is a single agent/.test(options), "the Multiple agents toggle explains what turning it on does");
 });
+
+Deno.test("retired surfaces (ONE-SHELL-01): chat/chat.html and memory/explorer.html do not exist", async () => {
+  const violations = await checkVocabulary();
+  assertEquals(violations.filter((v) => v.rule === "retired-surface"), [], "no retired surfaces may exist on disk");
+  for (const path of ["extension/recipes/index.html", "extension/chat/chat.html", "extension/memory/explorer.html"]) {
+    let exists = true;
+    try {
+      await Deno.stat(path);
+    } catch {
+      exists = false;
+    }
+    assertEquals(exists, false, `${path} must be deleted`);
+  }
+});

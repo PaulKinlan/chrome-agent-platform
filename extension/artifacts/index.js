@@ -8,6 +8,10 @@
 import { send } from "../lib/messages.js";
 import { renderHtmlFrame, isHtmlDocument, wireHtmlFrameContent, confirmActionDialog } from "../shared/components.js";
 
+if (new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top) {
+  document.documentElement.dataset.embedded = "1";
+}
+
 const grid = document.getElementById("grid");
 const status = document.getElementById("status");
 const foot = document.getElementById("foot");

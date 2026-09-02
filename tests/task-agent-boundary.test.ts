@@ -83,7 +83,6 @@ Deno.test("boundary WIRING (source pins): the composer keeps the hub task; the S
   const ntp = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
   const conv = await Deno.readTextFile(new URL("../extension/shared/conversation.js", import.meta.url));
   const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
-  const chat = await Deno.readTextFile(new URL("../extension/chat/chat.js", import.meta.url));
 
   // (1) The hub composer no longer abandons the thread for a mention.
   const composerSend = ntp.split('composer.addEventListener("send"')[1] ?? "";
@@ -121,10 +120,6 @@ Deno.test("boundary WIRING (source pins): the composer keeps the hub task; the S
   const view = await Deno.readTextFile(new URL("../extension/lib/thread-run-view.js", import.meta.url));
   assert(sw.includes("finalizeUnadmittedThreadRun({"), "agent.run finalizes unadmitted failures via the helper");
   assert(view.includes("run-refusal:") && view.includes("commitTerminal(threadId,"), "a pre-admission refusal commits an error terminal");
-
-  // (4) chat.js: a mention keeps the thread (the old strand line is gone).
-  assert(chat.includes("mention: agent?.ref ? { kind: agent.kind"), "chat routes a mention as a delegation");
-  assert(!chat.includes("threadId: agent?.ref ? null"), "chat no longer strands mentioned tasks");
 });
 
 Deno.test("boundary WIRING on the BROKEN shape (the pins discriminate): the old abandon-the-thread pattern is absent", async () => {

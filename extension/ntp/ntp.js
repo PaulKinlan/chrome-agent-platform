@@ -4013,7 +4013,13 @@ function openView(path, title, trigger) {
   // very first load (empty iframe) still uses src= (which replaces the initial
   // about:blank and adds nothing).
   const frame = panelFrameFor(path);
-  const frameUrl = chrome.runtime.getURL(path);
+  const basePath = String(path ?? "").split(/[?#]/, 1)[0];
+  const queryPart = path.includes("?") ? path.slice(path.indexOf("?")).split("#")[0] : "";
+  const hashPart = path.includes("#") ? path.slice(path.indexOf("#")) : "";
+  const embeddedQuery = queryPart
+    ? (queryPart.includes("embedded=1") ? queryPart : `${queryPart}&embedded=1`)
+    : "?embedded=1";
+  const frameUrl = chrome.runtime.getURL(`${basePath}${embeddedQuery}${hashPart}`);
   // Boot the panel document exactly once; later opens reuse the live document.
   if (!frame.src || frame.src === "about:blank" || frame.src === location.href) {
     frame.src = frameUrl;

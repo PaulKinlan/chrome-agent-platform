@@ -482,15 +482,6 @@ try {
   await cdp.eval(settings, `(() => { const el = document.querySelector('#prompts error-console'); const panel = el?.shadowRoot?.querySelector('.panel'); const btn = el?.shadowRoot?.querySelector('button'); if (panel && !panel.hidden && btn) btn.click(); })()`);
   await sleep(300);
 
-  // ---- Chat ----
-  const chat = await openPage(`chrome-extension://${extId}/chat/chat.html`);
-  const chatComposer = await cdp.eval(chat, `(() => {
-    const inp = document.querySelector('#input,textarea,input[type=text]');
-    const send = Array.from(document.querySelectorAll('button')).some(b => /send/i.test(b.textContent||b.getAttribute('aria-label')||''));
-    return { hasInput: !!inp, hasSend: send };
-  })()`);
-  check("chat composer renders (input + send)", chatComposer?.hasInput && chatComposer?.hasSend, chatComposer);
-
   // 8. Responsive + theme + reduced-motion matrix (the nub must hold up beyond
   //    the default 1400×900 light LTR run).
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 500, height: 800, deviceScaleFactor: 1, mobile: false }, hub);

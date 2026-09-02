@@ -6,6 +6,11 @@
     <meta name="color-scheme" content="light dark">
     <title>Settings — Chrome Agent Platform</title>
     <link rel="icon" href="../icons/icon16.png">
+    <script>
+      if (new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top) {
+        document.documentElement.dataset.embedded = "1";
+      }
+    </script>
     <link rel="stylesheet" href="../shared/theme.css">
     <link rel="stylesheet" href="options.css">
   </head>

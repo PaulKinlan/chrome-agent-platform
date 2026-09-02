@@ -76,16 +76,12 @@ Deno.test("shipped composer copy and accessible description promise any agent, n
   const root = new URL("../", import.meta.url);
   const components = await Deno.readTextFile(new URL("extension/shared/components.js", root));
   const ntp = await Deno.readTextFile(new URL("extension/ntp/ntp.html", root));
-  const chat = await Deno.readTextFile(new URL("extension/chat/chat.html", root));
-  const chatJs = await Deno.readTextFile(new URL("extension/chat/chat.js", root));
-  const shipped = [components, ntp, chat, chatJs].join("\n");
+  const shipped = [components, ntp].join("\n");
 
   assertNotMatch(shipped, /@mention a site agent/i);
   assertMatch(ntp, /placeholder="Ask anything, or @mention an agent…"/);
   assertMatch(ntp, /placeholder="Reply, or @mention an agent…"/);
-  assertMatch(chat, /placeholder="Reply, or @mention an agent…"/);
   assertMatch(components, /Type @ to mention any named, background, or (?:site agent|Site Agent)\./i);
-  assertMatch(chatJs, /Ask a task, @mention an agent, or attach media\./);
 
   // The @ picker uses the redacted canonical registry, and committing an agent
   // mention selects the same canonical routing chip consumed by send().

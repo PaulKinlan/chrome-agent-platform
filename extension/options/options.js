@@ -1,5 +1,9 @@
 // options.js — the dedicated settings/configuration page.
 
+if (new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top) {
+  document.documentElement.dataset.embedded = "1";
+}
+
 import {
   RECIPES,
 } from "../lib/recipes.js";

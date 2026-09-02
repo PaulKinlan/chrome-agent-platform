@@ -221,8 +221,8 @@ Deno.test("side panel companion: live region semantics + the Open/Enter transiti
 
 Deno.test("site-agent copy: the centralized vocabulary is the ACTUAL consumer authority across every visible surface", async () => {
   const surfaces = ["extension/options/options.html", "extension/options/options.js", "extension/sidepanel/sidepanel.html",
-    "extension/sidepanel/sidepanel.js", "extension/chat/chat.html", "extension/chat/chat.js",
-    "extension/directory/directory.js", "extension/memory/explorer.html", "extension/memory/explorer.js",
+    "extension/sidepanel/sidepanel.js",
+    "extension/directory/directory.js",
     "extension/ntp/ntp.html", "extension/ntp/ntp.js", "extension/shared/conversation.js",
     "extension/shared/components.js", "extension/shared/agent-candidates.js",
     "extension/lib/capabilities.js", "extension/lib/browser-tools.js",

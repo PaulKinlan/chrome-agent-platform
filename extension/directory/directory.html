@@ -6,11 +6,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent directory — sites as agents</title>
   <link rel="stylesheet" href="../shared/theme.css">
+  <script>
+    if (new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top) {
+      document.documentElement.dataset.embedded = "1";
+    }
+  </script>
   <script type="module" src="../shared/components.js"></script>
   <style>
     body { min-inline-size:0; overflow-x:clip; }
-    .wrap { inline-size:min(100%, 960px); min-inline-size:0; margin-inline:auto;
-      padding:clamp(16px, 4cqi, 32px); }
+    .wrap { max-inline-size:var(--content-max); min-inline-size:0; margin-inline:auto;
+      padding-inline:var(--content-gutter); padding-block:24px; }
+    [data-embedded] #directory-title { display:none; }
     h1 { margin:0 0 6px; font-size:var(--text-xl); }
     .sub { margin:0 0 24px; max-inline-size:72ch; color:var(--muted); }
     #rows { display:grid; gap:20px; min-inline-size:0; }
