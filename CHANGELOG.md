@@ -1,10 +1,7 @@
 # Changelog
 
-## [0.3.11] — 2026-09-02
-- tidy the release notes and repair the test tail after the workspace reland
-
-## [0.3.10] — 2026-09-02
-- : repair the test tail and release notes after the branch reland
+## [0.3.12] — 2026-09-02
+- tidy the release notes after the workspace reland
 
 ## [0.3.9] — 2026-09-02
 - Every named agent gets a persistent private workspace of its own, beside the owner's shared folders: agents can keep and organize files between runs, and Settings shows each agent's workspace usage with a Clear button.
