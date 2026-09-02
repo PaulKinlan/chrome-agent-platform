@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.639] — 2026-09-02
+- Artifacts: one click on New tab opens one viewer, and an edit with a missing artifact id now says to list the artifacts first instead of asking for approval; a test guards the single-open behaviour.
+
 ## [0.2.638] — 2026-09-02
 - Task board: the long-task memory fix is complete; three more items are being worked on.
 
