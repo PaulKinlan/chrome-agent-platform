@@ -274,6 +274,7 @@ import {
   recordScriptRun,
   updateScript,
 } from "../lib/scripts.js";
+import { runWorkflowRoute } from "../lib/workflows.js";
 import {
   browserToolset,
   captureTabScreenshot,
@@ -1759,6 +1760,11 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       // browser mutation, a durable schedule, or a memory write (the wider-goal
       // review's "scoped != side-effect-free" finding).
       scoped,
+      // workflow_run → the owner-approved `workflow.run` route (sandboxed host
+      // for script-js workflows). Bound only on real management-capable runs —
+      // SCOPED (hook) runs get NO route, so their workflow_run fails closed
+      // (mirroring the management tools, which scoped runs also lack).
+      workflowRunRoute: scoped ? null : (args) => modelManagementDispatch("workflow.run", args ?? {}),
       extraTools: { ...liveBrowserTools, ...liveManagementTools },
       readMasterLazySources: () => liveChromeLazyRecords({
         browserTools: liveBrowserTools,
@@ -6894,6 +6900,34 @@ const handlers = mergeRouteMaps(
     }
     await recordScriptRun(origin ?? "master", id, { ok: run?.ok, result, error: run?.error }).catch(() => {});
     return { ok: run?.ok ?? false, result, error: run?.error, logs: run?.logs ?? [] };
+  },
+
+  // ---- saved workflows (workflows-to-memory) ----
+  // Run a saved workflow's script-js body. The agent's workflow_run tool reads
+  // the record from ITS OWN origin-keyed memory and dispatches {name, kind,
+  // source, description}; this route RE-GATES with the same owner-approval +
+  // sandbox contract as script.run (source digest + fetch hosts on the card,
+  // sandboxed host, no model re-invocation) and fails closed for kinds whose
+  // runtime is not this route's (pipeline workflows run inside the agent
+  // through the run's live lazy catalog). The production path lives in
+  // lib/workflows.js so tests exercise the SAME code.
+  async "workflow.run"({ name, kind, source, description }, context) {
+    const wfName = String(name ?? "").slice(0, 64);
+    if (!wfName) return { ok: false, error: "workflow name is required" };
+    const src = typeof source === "string" ? source : "";
+    // The approval gate is the script-shaped card (source digest + fetch
+    // hosts); the sandbox host is master-scoped like run_script — the
+    // workflow's STORE is the agent's own origin memory, which the agent-side
+    // tool already read.
+    return await runWorkflowRoute({
+      name: wfName,
+      kind,
+      source: src,
+      description,
+      gate: async ({ name: n, description: d }) =>
+        scriptApprovalGate(context, "workflow.run", "master", n, src, { name: n, description: d }),
+      runSandboxed: runScriptSandboxed,
+    });
   },
 
   // ---- capability check (the SW CANNOT request: chrome.permissions.request

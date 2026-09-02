@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.6] — 2026-09-02
+- Agents save, recall, and run reusable workflows from their own memory
+
 ## [0.3.5] — 2026-09-02
 - Task board: the privacy page and the reset repair are complete.
 

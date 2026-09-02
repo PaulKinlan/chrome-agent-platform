@@ -74,8 +74,6 @@ export const RETAINED = {
     "Only tests/opfs-tool-workspace.test.ts imports it.",
   "lib/profile-store.js":
     "Only tests/profile-store.test.ts imports it.",
-  "lib/tool-pipeline.js":
-    "Only tests/tool-pipeline.test.ts imports it.",
   "lib/run-log-wal-memory.js":
     "An in-memory WAL double: eight tests import it (durable-runs, memory, failed-runs-lifecycle, thread-log-redesign, thread-reload-fidelity, tool-result-full-json, ux008-failed-dispatch, agent-worker-durability); it belongs under tests/ and moves there with them.",
   "lib/preference-bridge.js":
