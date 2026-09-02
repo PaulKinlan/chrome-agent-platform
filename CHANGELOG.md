@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.622] — 2026-09-02
+- Reopening your latest task after a run that stopped on its step budget shows everything that run produced — screenshots included — with Continue right there.
+
 ## [0.2.621] — 2026-09-02
 - Every-item runs now work alongside the newest changes: a paused action that you Allow runs by itself, page-access asks with one clear card, tool results show their full JSON, and the site-tools showcase — and a run that stops on its step budget keeps its Continue in the same task.
 
