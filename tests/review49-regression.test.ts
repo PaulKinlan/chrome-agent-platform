@@ -10,8 +10,8 @@ class W{constructor(n){this.n=n;this.p=[];} async write(s){this.p.push(String(s)
 class F{constructor(n){this.n=n;this.name=null;} get kind(){return "file";} async getFile(){const n=this.n;return {size:(n.content??"").length,async text(){return n.content??"";}};} async createWritable(){const nth=globalThis.failNth?.get(this.name);if(typeof nth==="number"){if(nth<=1){globalThis.failNth.delete(this.name);throw new Error("createWritable failed");}globalThis.failNth.set(this.name,nth-1);}const w=new W(this.n);w.n.name=this.name;return w;}}
 class D{constructor(n){this.n=n;}get kind(){return "directory";}async getDirectoryHandle(name,o={}){if(!this.n.children.has(name)){if(!o.create)throw Object.assign(new Error("not found"),{name:"NotFoundError"});this.n.children.set(name,dirNode());}return new D(this.n.children.get(name));}async getFileHandle(name,o={}){if(globalThis.failGet?.has(name))throw new Error("I/O read failure");if(!this.n.children.has(name)){if(!o.create)throw Object.assign(new Error("not found"),{name:"NotFoundError"});this.n.children.set(name,fileNode(""));}const f=new F(this.n.children.get(name));f.name=name;return f;}async removeEntry(name){this.n.children.delete(name);}async *entries(){for(const [name,n] of this.n.children){const h=n.kind==="file"?new F(n):new D(n);if(h instanceof F)h.name=name;yield [name,h];}}}
 const root=dirNode();Object.defineProperty(globalThis,"navigator",{value:{storage:{async getDirectory(){return new D(root);}}},configurable:true});
-const memUrl="file:///tmp/cap-artifact-tx-current-main/extension/lib/memory.js";
-const artUrl="file:///tmp/cap-artifact-tx-current-main/extension/lib/artifacts.js";
+const memUrl = new URL("../extension/lib/memory.js", import.meta.url).href;
+const artUrl = new URL("../extension/lib/artifacts.js", import.meta.url).href;
 function reset(){root.children.clear();globalThis.failClose=new Set();globalThis.failNth=new Map();globalThis.failGet=new Set();}
 function md(){return root.children.get("memory")?.children?.get("master");}
 function bodies(){return [...(md()?.children.keys()??[])].filter(n=>n.startsWith("asset:")&&n.endsWith(".json")).length;}

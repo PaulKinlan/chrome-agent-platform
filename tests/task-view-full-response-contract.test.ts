@@ -2,12 +2,43 @@
 // @ts-nocheck
 //
 // Verifies:
-// 1. Thread store capacity: response stored up to 252 KiB / 240 KiB in UTF-8 bytes (not UTF-16 chars).
-// 2. Never-silent dynamic truncation marker states the actual cap and points to the run log.
-// 3. Serialized outbox fits within the 256 KiB store bound with escape-aware sizing and backstop shrink.
-// 4. Surrogate-safe slicing: byte-cap cuts never split a UTF-16 surrogate pair.
-// 5. Redaction: applied BEFORE storage and persistence on the outbox and thread.
-// 6. UI: responses >4000 chars collapsed behind Show-full-response toggle; Copy takes full stored content.
+// 1. Thread store capacity: response stored up to 240 KiB UTF-8 bytes (not UTF-16 chars) with surrogate-safe code-point slicing.
+// 2. Dynamic truncation marker states the actual cap and points to the run log.
+// 3. Serialized outbox fits within the 256 KiB store bound with escape-aware sizing and backstop shrink reporting reduced cap.
+// 4. Redaction: applied BEFORE storage across outbox, retained payload chunks, journal, and thread terminal.
+// 5. UI: real <message-bubble> execution at 4000/4001 boundary, toggle expands, and Copy copies complete stored content.
+
+const registry = new Map();
+class HTMLElementStub {
+  constructor() { this._attrs = new Map(); }
+  attachShadow(_init) { return new ShadowRootStub(); }
+  getAttribute(n) { return this._attrs.has(n) ? this._attrs.get(n) : null; }
+  hasAttribute(n) { return this._attrs.has(n); }
+  setAttribute(n, v) { this._attrs.set(n, String(v)); }
+  removeAttribute(n) { this._attrs.delete(n); }
+  dispatchEvent(_e) { return true; }
+  addEventListener() {}
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+}
+class ShadowRootStub {
+  get innerHTML() { return ""; }
+  set innerHTML(_v) {}
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+  appendChild() {}
+}
+
+globalThis.HTMLElement = HTMLElementStub;
+globalThis.customElements = {
+  define(name, cls) { registry.set(name, cls); },
+  get(name) { return registry.get(name); },
+};
+globalThis.window = globalThis;
+globalThis.CustomEvent = class CustomEvent {
+  constructor(type, init = {}) { this.type = type; this.detail = init.detail ?? {}; }
+};
+globalThis.matchMedia = () => ({ matches: false });
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
@@ -17,11 +48,13 @@ import {
   getThread,
   listThreads,
   MAX_MESSAGE_BYTES,
+  MAX_THREAD_BYTES,
 } from "../extension/lib/threads.js";
 import {
   createDurableRunRegistry,
   DURABLE_RUN_POLICY,
 } from "../extension/lib/durable-runs.js";
+import { createMemoryRunLogHandles } from "../extension/lib/run-log-wal-memory.js";
 
 // ---- in-memory OPFS fake ----
 function dirNode() { return { kind: "directory", children: new Map() }; }
@@ -63,7 +96,10 @@ class FakeDirHandle {
 }
 const root = dirNode();
 Object.defineProperty(globalThis, "navigator", {
-  value: { storage: { async getDirectory() { return new FakeDirHandle(root); } } },
+  value: {
+    storage: { async getDirectory() { return new FakeDirHandle(root); } },
+    clipboard: { async writeText() {} },
+  },
   configurable: true,
   writable: true,
 });
@@ -103,27 +139,6 @@ class MockMemoryStore {
   }
 }
 
-function makeLogHandles() {
-  const files = new Map();
-  return (executionId, { create = false } = {}) => {
-    let node = files.get(executionId);
-    if (!node) {
-      if (!create) return Promise.resolve(null);
-      node = { content: "" };
-      files.set(executionId, node);
-    }
-    return Promise.resolve({
-      async getFile() { return { size: node.content.length, async text() { return node.content; } }; },
-      async createWritable() {
-        return {
-          async write(chunk) { node.content += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk); },
-          async close() {},
-        };
-      },
-    });
-  };
-}
-
 function makeHarness(store) {
   const journal = [];
   const thread = [];
@@ -131,7 +146,7 @@ function makeHarness(store) {
     store,
     bootId: "boot-znx9",
     now: () => 1000,
-    logHandleFor: makeLogHandles(),
+    logHandleFor: (store.__logHandles ??= createMemoryRunLogHandles()),
     resolveJournalStore: async () => ({ journal }),
     appendJournal: async (target, entry) => { target.journal.push(structuredClone(entry)); },
     commitThread: async (threadId, executionId, terminal) => {
@@ -141,38 +156,38 @@ function makeHarness(store) {
   return { registry, journal, thread };
 }
 
-Deno.test("znx9: thread store capacity is 240 KiB UTF-8 bytes and preserves below-cap payloads complete", async () => {
+// ── 1. Multibyte near-cap preservation & surrogate-safe code-point slicing ──
+
+Deno.test("znx9: thread store capacity (240 KiB UTF-8 bytes) preserves near-cap multibyte payloads byte-complete", async () => {
   assertEquals(MAX_MESSAGE_BYTES, 240 * 1024, "MAX_MESSAGE_BYTES is 240 KiB");
+  assertEquals(MAX_THREAD_BYTES, 248 * 1024, "MAX_THREAD_BYTES is 248 KiB");
 
-  // 120 KiB payload (~half cap)
-  const halfCap = "a".repeat(120 * 1024);
+  // Near-cap multibyte payload: 45,000 4-byte emoji (\u{1F600}) = 180,000 UTF-8 bytes (90,000 UTF-16 code units)
+  // This is well above 120 KiB ASCII and tests that multi-byte content < 240 KiB stores 100% byte-complete.
+  const okEmoji = "\u{1F600}".repeat(45_000);
   const thread = await createThread("seed");
-  await appendThreadMessage(thread.id, { role: "assistant", content: halfCap });
-
-  const stored = await getThread(thread.id);
-  const last = stored.messages.at(-1);
-  assertEquals(last.content.length, halfCap.length, "below-cap payload stored byte-complete");
-  assertEquals(new TextEncoder().encode(last.content).byteLength, 120 * 1024);
-});
-
-Deno.test("znx9: over-cap messages carry dynamic non-silent truncation marker stating actual cap", async () => {
-  const overCap = "x".repeat((240 * 1024) + 5000);
-  const thread = await createThread("seed");
-  await appendThreadMessage(thread.id, { role: "assistant", content: overCap });
+  await appendThreadMessage(thread.id, { role: "assistant", content: okEmoji });
 
   const stored = await getThread(thread.id);
   const last = stored.messages.at(-1);
   const bytes = new TextEncoder().encode(last.content).byteLength;
-  assert(bytes <= 240 * 1024, `content must stay <= 240 KiB, got ${bytes}`);
-  assert(last.content.includes("truncated to 240 KiB"), "marker specifies 240 KiB cap");
-  assert(last.content.includes("complete text is in the run log"), "points to run log");
+  assertEquals(bytes, 180_000, "180,000 UTF-8 bytes stored byte-complete");
+  assertEquals(last.content.length, 90_000, "90,000 UTF-16 units intact");
+  assert(!last.content.includes("truncated"), "no truncation marker for below-cap multibyte payload");
+
+  // Check that serialized thread fits under MAX_THREAD_BYTES
+  const serialized = new TextEncoder().encode(JSON.stringify(stored.messages)).byteLength;
+  assert(serialized <= MAX_THREAD_BYTES, `thread messages must stay under MAX_THREAD_BYTES (${serialized} <= ${MAX_THREAD_BYTES})`);
 });
 
-Deno.test("znx9: surrogate-safe code-point slicing never leaves split high surrogates", async () => {
-  // Boundary filled with 4-byte emoji (surrogate pairs in UTF-16)
-  const fill = "b".repeat(240 * 1024 - 20);
-  const emojis = "\u{1F600}".repeat(20);
-  const content = fill + emojis;
+Deno.test("znx9: surrogate-safe code-point slicing never splits surrogate pair at the 240 KiB boundary", async () => {
+  // Construct content where the UTF-8 byte boundary falls precisely inside a 4-byte emoji (\u{1F600}).
+  // In threads.js, budget is (240 * 1024 - markerBytes). We place ASCII up to the boundary, followed by emoji.
+  // A naive byte slice would cut through the 4-byte emoji (splitting the surrogate pair).
+  const prefixLen = 240 * 1024 - 100;
+  const fill = "a".repeat(prefixLen);
+  const emojiStraddle = "\u{1F600}".repeat(40); // 40 * 4 = 160 bytes of emoji
+  const content = fill + emojiStraddle;
 
   const thread = await createThread("seed");
   await appendThreadMessage(thread.id, { role: "assistant", content });
@@ -180,16 +195,24 @@ Deno.test("znx9: surrogate-safe code-point slicing never leaves split high surro
   const stored = await getThread(thread.id);
   const last = stored.messages.at(-1);
 
-  // Validate that the last code unit is NOT a lone high surrogate
-  const lastCode = last.content.charCodeAt(last.content.length - 1);
-  assert(!(lastCode >= 0xD800 && lastCode <= 0xDBFF), "must not end in high surrogate");
+  // The slice must be code-point safe:
+  // 1. The last character must NOT be a lone high surrogate (0xD800..0xDBFF)
+  const lastChar = last.content.charCodeAt(last.content.length - 1);
+  assert(!(lastChar >= 0xD800 && lastChar <= 0xDBFF),
+    `slice left lone high surrogate (0x${lastChar.toString(16)})`);
 
-  // Verify full round-trip decode without Unicode replacement character
+  // 2. Decoding the re-encoded slice must produce zero Unicode replacement characters (\uFFFD)
   const reDecoded = new TextDecoder().decode(new TextEncoder().encode(last.content));
-  assert(!reDecoded.includes("\uFFFD"), "no replacement character from broken surrogate pairs");
+  assert(!reDecoded.includes("\uFFFD"), "no replacement character from split surrogate pairs");
+
+  // 3. Dynamic truncation marker states the actual cap
+  assert(last.content.includes("truncated to 240 KiB"), "truncation marker specifies 240 KiB cap");
+  assert(last.content.includes("complete text is in the run log"), "points to run log");
 });
 
-Deno.test("znx9: serialized outbox fits under 256 KiB store bound with escape-aware sizing", async () => {
+// ── 2. Outbox escape-aware sizing and backstop shrink ──
+
+Deno.test("znx9: control-character flood triggers escape-aware sizing to keep outbox under 256 KiB", async () => {
   const mockStore = new MockMemoryStore();
   const captured = {};
   const origSetTrusted = mockStore.setTrusted.bind(mockStore);
@@ -199,41 +222,41 @@ Deno.test("znx9: serialized outbox fits under 256 KiB store bound with escape-aw
   };
 
   const { registry } = makeHarness(mockStore);
-  const executionId = "exec_znx9_test";
+  const executionId = "exec_ctrl_escape";
   await registry.start({
     executionId,
-    clientCorrelationId: "page-znx9-1",
-    threadId: "thread-znx9",
+    clientCorrelationId: "page-ctrl-1",
+    threadId: "thread-ctrl",
     kind: "task",
-    taskPreview: "Big Task",
+    taskPreview: "Control Char Task",
     journalTarget: "master",
     resumeRequest: {
-      id: "task-1",
-      task: "Big Task",
+      id: "task-ctrl",
+      task: "Control Char Task",
       memoryOrigin: "master",
       providerBinding: { schemaVersion: 1, provider: "demo", model: "demo", requestedScope: null, local: true },
       idempotencyKey: executionId,
     },
   });
 
-  // Large content payload (~220 KiB)
-  const largeOutput = "Super large output content block with data. ".repeat(5000);
+  // 45,000 \u0001 control chars: 45 KB raw UTF-8, but expands 6x in JSON (\u0001 -> 6 bytes = 270 KB!).
+  // Escape-aware budget calculation must scale down the budget to keep the serialized outbox under 256 KiB.
+  const ctrlFlood = "\u0001".repeat(45_000);
   await registry.settle(executionId, {
     ok: true,
-    result: largeOutput,
+    result: ctrlFlood,
     summary: "done",
-    logicalId: "task-1",
+    logicalId: "task-ctrl",
   });
 
   const outbox = captured[`run-outbox:${executionId}`];
-  assert(outbox, "outbox record was created");
+  assert(outbox, "outbox record created");
 
-  // Serialized byte length must strictly fit under the 256 KiB store bound
   const serialized = new TextEncoder().encode(JSON.stringify(outbox)).byteLength;
-  assert(serialized <= 256 * 1024, `outbox must fit in 256 KiB, got ${serialized} bytes`);
+  assert(serialized <= 256 * 1024, `control-char outbox must fit in 256 KiB, got ${serialized} bytes`);
 });
 
-Deno.test("znx9: redaction occurs before outbox and thread storage", async () => {
+Deno.test("znx9: backstop shrink shrinks content and reports the reduced cap in dynamic marker when envelope is large", async () => {
   const mockStore = new MockMemoryStore();
   const captured = {};
   const origSetTrusted = mockStore.setTrusted.bind(mockStore);
@@ -243,47 +266,192 @@ Deno.test("znx9: redaction occurs before outbox and thread storage", async () =>
   };
 
   const { registry } = makeHarness(mockStore);
-  const executionId = "exec_redact_test";
+  const executionId = "exec_backstop_shrink";
   await registry.start({
     executionId,
-    clientCorrelationId: "page-redact-1",
-    threadId: "thread-redact",
+    clientCorrelationId: "page-shrink-1",
+    threadId: "thread-shrink",
     kind: "task",
-    taskPreview: "Secret task",
+    taskPreview: "Backstop Shrink Task",
     journalTarget: "master",
     resumeRequest: {
-      id: "task-2",
-      task: "Secret task",
+      id: "task-shrink",
+      task: "Backstop Shrink Task",
       memoryOrigin: "master",
       providerBinding: { schemaVersion: 1, provider: "demo", model: "demo", requestedScope: null, local: true },
       idempotencyKey: executionId,
     },
   });
 
-  const secretKey = "sk-r2secrettokentest123456";
-  const secretString = `apiKey=${secretKey}`;
+  // Large envelope with 400 skill items (~25 KiB of envelope metadata) + 240 KiB result payload
+  const largeSkills = Array.from({ length: 400 }, (_, i) => `skill_namespace_identifier_module_${i}`);
+  const largePayload = "Data payload block for testing backstop shrink. ".repeat(6000); // ~280 KiB
+
   await registry.settle(executionId, {
     ok: true,
-    result: `The secret key generated is ${secretString}`,
+    result: largePayload,
     summary: "done",
-    logicalId: "task-2",
+    logicalId: "task-shrink",
+    skills: largeSkills,
   });
 
   const outbox = captured[`run-outbox:${executionId}`];
-  assert(outbox, "outbox written");
-  const outboxJson = JSON.stringify(outbox);
-  assert(!outboxJson.includes(secretKey), "secret token must be redacted in outbox before storage");
-  assert(outboxJson.includes("[REDACTED]"), "redaction marker must be present in outbox");
+  assert(outbox, "outbox record created");
+
+  // 1. Serialized outbox must strictly fit under the 256 KiB store bound
+  const serialized = new TextEncoder().encode(JSON.stringify(outbox)).byteLength;
+  assert(serialized < 256 * 1024, `outbox must fit in 256 KiB after backstop shrink (${serialized} bytes)`);
+
+  // 2. The dynamic marker in content must state the REDUCED cap (< 240 KiB)
+  const storedContent = outbox.threadTerminal?.content ?? "";
+  const markerMatch = storedContent.match(/truncated to (\d+)\s*KiB/);
+  assert(markerMatch, `marker must be present in content: ${storedContent.slice(-120)}`);
+  const reportedCap = Number(markerMatch[1]);
+  assert(reportedCap < 240, `marker must report reduced cap (< 240 KiB), got ${reportedCap} KiB`);
+
+  // 3. Envelope data (skills array) remains intact
+  assertEquals(outbox.threadTerminal?.skills?.length, 400, "skills envelope preserved");
 });
 
-Deno.test("znx9: message bubble long-response collapsing threshold and copy fidelity", async () => {
-  const components = await Deno.readTextFile("extension/shared/components.js");
+// ── 3. Comprehensive Redaction Coverage ──
 
-  // Threshold check: 4000 characters
-  assert(components.includes("LONG_PREVIEW_CHARS = 4000") || components.includes("4000"), "threshold is 4000 chars");
-  assert(components.includes("Show full response"), "Show full response button label exists");
-  assert(components.includes("Copy full response") || components.includes("copy-full"), "Copy button exists");
+Deno.test("znx9: secret token is redacted before outbox, retained payload, journal, and thread storage", async () => {
+  const mockStore = new MockMemoryStore();
+  const capturedOutbox = {};
+  const origSetTrusted = mockStore.setTrusted.bind(mockStore);
+  mockStore.setTrusted = async (key, val) => {
+    if (String(key).startsWith("run-outbox:")) capturedOutbox[key] = structuredClone(val);
+    return origSetTrusted(key, val);
+  };
 
-  // Copy behavior copies complete content attribute, not sliced DOM text
-  assert(components.includes('this.getAttribute("content")'), "Copy reads full content attribute");
+  const { registry, journal, thread } = makeHarness(mockStore);
+  const executionId = "exec_redact_complete";
+  await registry.start({
+    executionId,
+    clientCorrelationId: "page-redact-all",
+    threadId: "thread-redact-all",
+    kind: "task",
+    taskPreview: "Secret Processing Task",
+    journalTarget: "master",
+    resumeRequest: {
+      id: "task-redact",
+      task: "Secret Processing Task",
+      memoryOrigin: "master",
+      providerBinding: { schemaVersion: 1, provider: "demo", model: "demo", requestedScope: null, local: true },
+      idempotencyKey: executionId,
+    },
+  });
+
+  const rawSecret = "sk-r2secrettokentest9876543210";
+  const secretEcho = `apiKey=${rawSecret}`;
+  const resultText = `The endpoint response returned: ${secretEcho} in the output.`;
+
+  await registry.settle(executionId, {
+    ok: true,
+    result: resultText,
+    summary: "done",
+    logicalId: "task-redact",
+  });
+
+  // A. Outbox verification
+  const outbox = capturedOutbox[`run-outbox:${executionId}`];
+  assert(outbox, "outbox was written");
+  const outboxJson = JSON.stringify(outbox);
+  assert(!outboxJson.includes(rawSecret), "secret must be absent from outbox JSON");
+  assert(outboxJson.includes("[REDACTED]"), "outbox JSON must carry [REDACTED]");
+
+  // B. Retained payload chunks verification
+  const payloadKeys = (await mockStore.keys()).filter((k) => String(k).startsWith(`run-payload:${executionId}:terminal:`));
+  assert(payloadKeys.length >= 1, "retained payload chunk exists");
+  const payloadJson = JSON.stringify(await Promise.all(payloadKeys.map((k) => mockStore.get(k))));
+  assert(!payloadJson.includes(rawSecret), "secret must be absent from retained payload chunks");
+  assert(payloadJson.includes("[REDACTED]"), "retained payload must carry [REDACTED]");
+
+  // C. Journal verification
+  const journalJson = JSON.stringify(journal);
+  assert(!journalJson.includes(rawSecret), "secret must be absent from journal");
+  assert(journalJson.includes("[REDACTED]"), "journal must carry [REDACTED]");
+
+  // D. Thread terminal verification
+  const threadJson = JSON.stringify(thread);
+  assert(!threadJson.includes(rawSecret), "secret must be absent from thread terminal");
+  assert(threadJson.includes("[REDACTED]"), "thread terminal must carry [REDACTED]");
+});
+
+// ── 4. Real <message-bubble> execution, 4000/4001 boundary, and Copy fidelity ──
+
+Deno.test("znx9: real <message-bubble> executes collapsing at 4000/4001 boundary and Copy copies full content", async () => {
+  // Load components module
+  await import("../extension/shared/components.js");
+
+  let clipboardCopied = null;
+  globalThis.navigator = globalThis.navigator || {};
+  globalThis.navigator.clipboard = {
+    async writeText(text) {
+      clipboardCopied = text;
+    },
+  };
+
+  const MB = customElements.get("message-bubble");
+  assert(MB, "message-bubble custom element is registered");
+
+  // 1. Exact 4000 chars -> NOT collapsed (no full-response expander)
+  const content4000 = "x".repeat(4000);
+  const bubble4000 = new MB();
+  bubble4000.setAttribute("role", "agent");
+  bubble4000.setAttribute("content", content4000);
+  assertEquals(bubble4000._longResponse(content4000), false, "4000 chars is within preview limit (not long)");
+
+  // 2. 4001 chars -> COLLAPSED (flags long-response expander)
+  const content4001 = "y".repeat(4001);
+  const bubble4001 = new MB();
+  bubble4001.setAttribute("role", "agent");
+  bubble4001.setAttribute("content", content4001);
+  assertEquals(bubble4001._longResponse(content4001), true, "4001 chars activates long-response expander");
+
+  // 3. Test Toggle and Copy helpers on message bubble
+  let toggleHandler = null;
+  let copyHandler = null;
+  const fakeToggle = {
+    addEventListener(evt, handler) {
+      if (evt === "click") toggleHandler = handler;
+    },
+    textContent: "Show full response",
+  };
+  const fakeBtn = {
+    addEventListener(evt, handler) {
+      if (evt === "click") copyHandler = handler;
+    },
+    textContent: "Copy full response",
+  };
+  const fakeContainer = {
+    _attrs: { "data-open": "0" },
+    getAttribute(name) { return this._attrs[name] ?? null; },
+    setAttribute(name, val) { this._attrs[name] = String(val); },
+    querySelector(sel) {
+      if (sel === ".long-copy") return fakeBtn;
+      if (sel === ".long-toggle") return fakeToggle;
+      return null;
+    },
+  };
+
+  // Wire long response container on bubble4001
+  bubble4001._wireLongResponse(fakeContainer);
+  assert(toggleHandler, "toggle click handler was registered");
+  assert(copyHandler, "copy click handler was registered");
+
+  // A. Test toggle expands and updates label
+  assertEquals(fakeContainer.getAttribute("data-open"), "0", "initial state is collapsed");
+  toggleHandler();
+  assertEquals(fakeContainer.getAttribute("data-open"), "1", "data-open becomes 1 on toggle");
+  assertEquals(fakeToggle.textContent, "Show less", "toggle label updates to Show less");
+
+  toggleHandler();
+  assertEquals(fakeContainer.getAttribute("data-open"), "0", "data-open returns to 0 on second toggle");
+  assertEquals(fakeToggle.textContent, "Show full response", "toggle label updates to Show full response");
+
+  // B. Test copy writes complete stored content attribute
+  await copyHandler();
+  assertEquals(clipboardCopied, content4001, "Copy must copy the exact complete stored content attribute");
+  assertEquals(clipboardCopied.length, 4001);
 });
