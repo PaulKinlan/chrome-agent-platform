@@ -195,6 +195,12 @@ export async function walkShipped(root, { readdir }) {
         if (SKIPPED_DIRS.has(name)) continue;
         await walk(`${dir}/${name}`, rel);
       } else if (SHIPPED_EXTENSIONS.has(name.slice(name.lastIndexOf(".")))) {
+        // Generated esbuild outputs are never shipped sources: the bundles in
+        // `dist/` are skipped via SKIPPED_DIRS above, and stale copies that a
+        // pre-dist-era build left under an old path (e.g. options/options.bundle.js)
+        // must not fail the reachability gate. They match the gitignore rule
+        // `extension/**/*.bundle.js` and are never entry points.
+        if (name.endsWith(".bundle.js")) continue;
         out.push(rel);
       }
     }

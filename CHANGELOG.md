@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.657] — 2026-09-02
+- The build no longer stops on a leftover generated file.
+
 ## [0.2.656] — 2026-09-02
 - A new Privacy page says exactly what the extension sends and stores, and Reset everything now really does clear everything.
 
