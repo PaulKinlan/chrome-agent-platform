@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.629] — 2026-09-02
+- Task board: one more item is being worked on.
+
 ## [0.2.628] — 2026-09-02
 - Task board: the every-item run fix is complete; four more items are being worked on.
 
