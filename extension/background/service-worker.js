@@ -204,6 +204,7 @@ import {
 } from "../lib/threads.js";
 import {
   buildThreadRunView,
+  buildAgentRunView,
   finalizeUnadmittedThreadRun,
 } from "../lib/thread-run-view.js";
 import { managementToolset, MANAGEMENT_TOOL_NAMES } from "../lib/management-tools.js";
@@ -5726,6 +5727,38 @@ const handlers = mergeRouteMaps(
     const journal = (await mem.get("journal").catch(() => null)) ?? [];
     const entries = Array.isArray(journal) ? journal.slice(-200).reverse() : [];
     return { entries, count: entries.length };
+  },
+
+  // The agent surface's REOPEN view (CAP-FB-20260901-THREAD-RELOAD-FIDELITY-01):
+  // a named/background agent's conversation is a VIEW over the same
+  // per-execution durable run logs a task thread reads — every non-protocol
+  // tool card, every approval card in its decided state and the COMPLETE
+  // final answer (the retained terminal payload) for the agent's last 50
+  // runs, with an in-line notice for anything older or compacted. The
+  // journal routes above stay the LIST surface (and the fallback for runs
+  // that predate the durable log).
+  async "agent.history-view"({ kind, id }) {
+    let agentId = null;
+    if (kind === "named") {
+      const agent = await getNamedAgent(id);
+      if (!agent) return { ok: false, error: `no agent ${id}` };
+      agentId = `named:${slugifyAgentId(id)}`;
+    } else if (kind === "background") {
+      const recipe = await resolveRecipe(id);
+      if (!recipe) return { ok: false, error: `no background agent ${id}` };
+      agentId = `background:${recipe.id}`;
+    } else {
+      return { ok: false, error: "unsupported agent kind" };
+    }
+    await durableRecoveryReady;
+    const viewSpan = perfSpan("agent.history-view");
+    const view = await buildAgentRunView({ agentId }, {
+      listRuns: async () => (await durableRuns.list()).runs,
+      listLogs: (executionId, limit) => durableRuns.listLogs(executionId, limit),
+      recordFailure: (k, detail) => pushDiagnostic("error", `[agent-view] ${k}: ${detail}`),
+    });
+    viewSpan.end("ok");
+    return { ok: true, view };
   },
 
   // The agent run log (item 16): every journaled task/result/tool-call/screenshot
