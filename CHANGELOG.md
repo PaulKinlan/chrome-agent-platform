@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.621] — 2026-09-02
+- The generated-document preview is now checked for its language and for script errors on every run.
+
 ## [0.2.620] — 2026-09-02
 - Task board: two new defects — allowing a second site forgets the first, and long read loops forget their earliest pages.
 

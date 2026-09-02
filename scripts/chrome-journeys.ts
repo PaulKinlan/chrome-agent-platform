@@ -129,6 +129,12 @@ class Cdp {
   swSessions = new Set();
   swTargetSessions = new Map(); // targetId → pre-attached sessionId
   pageSessions = new Set();
+  // Sandboxed generated-UI frames: the manifest-sandbox host is an out-of-
+  // process iframe TARGET (its nested about:srcdoc document runs in-process
+  // with it), so exceptions inside a generated document only reach the
+  // harness through a session attached to that host (CAP-FB-20260830-
+  // GENERATED-UI-BOOTSTRAP-SYNTAX-01).
+  frameSessions = new Set();
   swAttachErrors = [];
   executionContextEvents = []; // { sessionId, kind: "created"|"cleared", ts }
   fatalEvents = []; // malformed protocol, target crash, unexpected socket close
@@ -209,7 +215,12 @@ class Cdp {
         const detail = d.params?.exceptionDetails?.exception?.description ??
           d.params?.args?.map((a) => a?.value ?? a?.description).join(" ") ??
           JSON.stringify(d.params).slice(0, 200);
-        this.consoleErrors.push({ sessionId: d.sessionId, detail });
+        this.consoleErrors.push({
+          sessionId: d.sessionId, detail,
+          // The script URL an exception was thrown from (about:srcdoc for a
+          // generated document); absent for console.error calls.
+          url: d.params?.exceptionDetails?.url ?? null,
+        });
       }
     };
   }
@@ -657,6 +668,8 @@ const EXPECTED = [
   "mgmt: list_assets lists the asset (no content)",
   "mgmt: get_asset round-trips content",
   "frame-guards: generated frame announces cap:preference-ready (bootstrap parses)",
+  "frame-guards: generated UI frame lang equals the owner locale",
+  "frame-guards: no SyntaxError exceptions on any about:srcdoc target during the artifact journey",
   "approval: primary NTP Settings iframe can deny an exact request",
   "approval: deny row is singular and capability material absent from the payload",
   "approval: NTP cannot programmatically resolve an owner approval",
@@ -912,6 +925,15 @@ async function main() {
     // + resume it, so module-eval/recoverOnBoot errors are genuinely observed.
     let attachSettled = Promise.resolve();
     cdp.onAttach = (sessionId, targetInfo, waitingForDebugger) => {
+      if (targetInfo?.type === "iframe") {
+        // An out-of-process child frame of a page we opted into (the artifact
+        // journey enables auto-attach on the NTP session so the sandboxed
+        // generated-UI host is observable). Enable Runtime so its exceptions
+        // are recorded; never pause it.
+        cdp.frameSessions.add(sessionId);
+        cdp.send("Runtime.enable", {}, sessionId).catch(() => {});
+        return;
+      }
       if (targetInfo?.type !== "service_worker") return;
       cdp.swSessions.add(sessionId);
       if (typeof targetInfo?.targetId === "string") {
@@ -5468,10 +5490,19 @@ async function main() {
     // is an end-to-end proof that the injected bootstrap parsed and ran — the
     // exact regression this task fixes (before: SyntaxError, no ready post, no
     // attribute). The locale-application half (apply() setting
-    // document.documentElement.lang) is asserted behaviourally in
-    // tests/frame-guards.test.ts — the srcdoc DOM is intentionally opaque to
-    // every parent realm (double sandbox), so a browser read of the nested
-    // document is not possible by design.
+    // document.documentElement.lang) is then read INSIDE the generated
+    // document: the srcdoc DOM is opaque to every parent realm (double
+    // sandbox), but the debugger is not a parent realm — the manifest-sandbox
+    // host is an out-of-process iframe target, and the nested about:srcdoc
+    // frame is in-process with it, so an isolated world created in that frame
+    // via the host's session reads the real attribute. Auto-attach on the NTP
+    // session is what makes the host observable (frame exceptions included).
+    await cdp.send("Target.setAutoAttach", {
+      autoAttach: true, waitForDebuggerOnStart: false, flatten: true,
+    }, ntpSession);
+    const ownerLocale = await evalIn(
+      cdp, ntpSession, `document.documentElement.lang || navigator.language || ""`,
+    );
     await evalIn(cdp, ntpSession, `(() => {
       const drawer = document.getElementById("artifact-quick-drawer");
       if (!drawer) return false;
@@ -5490,6 +5521,63 @@ async function main() {
       "frame-guards: generated frame announces cap:preference-ready (bootstrap parses)",
       readyAttr === "ready",
     );
+    // Read documentElement.lang from the generated document's own realm.
+    let srcdocLang = null;
+    let srcdocSeen = 0;
+    for (const frameSession of cdp.frameSessions) {
+      let tree = null;
+      try {
+        tree = (await cdp.send("Page.getFrameTree", {}, frameSession))?.result?.frameTree;
+      } catch {
+        continue; // the host already went away (an earlier detached frame)
+      }
+      const walk = (n, out = []) => {
+        out.push(n.frame);
+        for (const c of n.childFrames ?? []) walk(c, out);
+        return out;
+      };
+      for (const frame of walk(tree ?? { frame: {}, childFrames: [] })) {
+        if (frame?.url !== "about:srcdoc") continue;
+        srcdocSeen++;
+        try {
+          const world = await cdp.send("Page.createIsolatedWorld", {
+            frameId: frame.id, worldName: "cap-journey-frame-guards",
+          }, frameSession);
+          const r = await cdp.send("Runtime.evaluate", {
+            expression: "document.documentElement.lang",
+            returnByValue: true, contextId: world?.result?.executionContextId,
+          }, frameSession);
+          srcdocLang = r?.result?.result?.value ?? null;
+        } catch (e) {
+          console.log(`[debug] srcdoc realm read failed: ${String(e?.message ?? e)}`);
+        }
+      }
+    }
+    console.log(`[frame-guards] owner locale=${JSON.stringify(ownerLocale)} srcdoc frames=${srcdocSeen} srcdoc lang=${JSON.stringify(srcdocLang)}`);
+    check(
+      "frame-guards: generated UI frame lang equals the owner locale",
+      typeof ownerLocale === "string" && ownerLocale.length > 0 &&
+        srcdocSeen === 1 && srcdocLang === ownerLocale,
+    );
+    const srcdocExceptions = cdp.consoleErrors.filter((e) =>
+      cdp.frameSessions.has(e.sessionId) && e.url === "about:srcdoc"
+    );
+    for (const e of srcdocExceptions) console.log(`[frame-guards] about:srcdoc exception: ${e.detail.split("\n")[0]}`);
+    check(
+      "frame-guards: no SyntaxError exceptions on any about:srcdoc target during the artifact journey",
+      srcdocExceptions.every((e) => !/SyntaxError/.test(e.detail)),
+    );
+    // Evidence: the rendered artifact with its ready wrapper in the DOM
+    // snapshot log (the screenshot cannot show an attribute).
+    const readyWrapper = await evalIn(cdp, ntpSession, `(() => {
+      const wrap = document.querySelector('.frame[data-cap-preference]');
+      return wrap ? wrap.outerHTML.slice(0, wrap.outerHTML.indexOf(">") + 1) : null;
+    })()`);
+    console.log(`[frame-guards] DOM snapshot: ${readyWrapper}`);
+    await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});
+    await sleep(300);
+    const frameReadyShot = await captureShot(cdp, ntpSession);
+    if (frameReadyShot) await writeEvidence("artifact-frame-ready.png", frameReadyShot);
     await evalIn(cdp, ntpSession, `document.querySelector("agent-dialog")?.close?.()`);
 
     // The PRIMARY Settings entry is the NTP's embedded options iframe. Drive
