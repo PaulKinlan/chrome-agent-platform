@@ -60,7 +60,7 @@ import { createNavigationController } from "../lib/navigation-controller.js";
 // permission-row, capability-row, …) so the settings page uses the SAME
 // design-system components as the hub + the docs showcase (one component,
 // everywhere — no hand-rolled duplicates).
-import { confirmActionDialog, escapeHtml } from "../shared/components.js";
+import { confirmActionDialog, deleteAgentDialog, escapeHtml } from "../shared/components.js";
 import { subscribeDiagnosticsRevision } from "../shared/diagnostics-client.js";
 import { saveFsGrant, wireLocalFolderPickers, regrantFsGrantAccess } from "../lib/fs-grants.js";
 import { mountGrantBrowser } from "../lib/folder-browser.js";
@@ -1509,12 +1509,7 @@ async function renderAgentProviders(list, projectedAgents, globalCfg) {
       }
     });
     row.querySelector(".delete-named-agent")?.addEventListener("click", async () => {
-      const confirmed = await confirmActionDialog({
-        title: `Delete “${a.name}”?`,
-        body: `Are you sure you want to delete ${a.name}? This will remove the agent and its custom configuration.\n\nNote: Any created artifacts will be retained.`,
-        confirmLabel: "Delete agent",
-        destructive: true,
-      });
+      const confirmed = await deleteAgentDialog({ name: a.name, kind: "named" });
       if (!confirmed) return;
       const res = await chrome.runtime
         .sendMessage({ type: "named-agent.delete", id: a.id })
@@ -2075,7 +2070,7 @@ async function renderPermissions() {
     state.textContent = "Granted at install (required)";
     const hint = document.createElement("span");
     hint.className = "muted";
-    hint.textContent = "Core runtime permission — the hub cannot boot without it.";
+    hint.textContent = "The hub cannot start without it.";
     row.append(name, state, hint);
     list.appendChild(row);
   }

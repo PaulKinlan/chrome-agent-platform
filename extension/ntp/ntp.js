@@ -26,7 +26,7 @@ import {
   wireHtmlFrameContent,
   wireHtmlFramePreference,
   currentFramePreference,
-  confirmActionDialog,
+  deleteAgentDialog,
   escapeHtml,
 } from "../shared/components.js";
 import { sleep, timeAgo } from "../lib/pure.js";
@@ -512,12 +512,12 @@ async function renderWebmcpHubStatus() {
   const s = status?.status;
   el.replaceChildren();
   if (!s) {
-    el.textContent = "Discovery has not run yet.";
+    el.textContent = "Open a site and I'll look for tools you can use.";
     return;
   }
   const vm = formatWebmcpHubStatus(s);
   if (!vm) {
-    el.textContent = "Discovery has not run yet.";
+    el.textContent = "Open a site and I'll look for tools you can use.";
     return;
   }
   const addTime = (parent, at) => {
@@ -532,7 +532,7 @@ async function renderWebmcpHubStatus() {
   const title = document.createElement("div");
   title.className = "webmcp-card-title";
   const titleText = document.createElement("span");
-  titleText.textContent = `WebMCP discovery: ${vm.origin}`;
+  titleText.textContent = `Tools on ${vm.origin}`;
   const badge = document.createElement("span");
   badge.className = `webmcp-card-badge webmcp-card-badge-${vm.state}`;
   badge.textContent = vm.stateLabel;
@@ -899,12 +899,7 @@ async function renderNamedAgents() {
         if (a.kind !== "named") {
           row.addEventListener("delete", async () => {
           const name = a.name || a.id;
-          const confirmed = await confirmActionDialog({
-            title: `Delete “${name}”?`,
-            body: `Are you sure you want to delete ${name}?\n\nThis will cancel its scheduled task and remove the recurring alarm.`,
-            confirmLabel: "Delete agent",
-            destructive: true,
-          });
+          const confirmed = await deleteAgentDialog({ name, kind: "background" });
           if (!confirmed) return;
           // Background agents schedule deterministically as `recipe:<id>` — the
           // enabled state DERIVES from the scheduled-task store, so the cancel
@@ -1782,14 +1777,14 @@ async function refreshFailedRuns() {
     const orphanBtn = document.createElement("button");
     orphanBtn.type = "button";
     orphanBtn.className = "fr-retry fr-orphan-cleanup";
-    orphanBtn.textContent = "Cancel orphaned alarms";
-    orphanBtn.setAttribute("aria-label", "Cancel alarms whose agent was deleted");
+    orphanBtn.textContent = "Stop schedules for deleted agents";
+    orphanBtn.setAttribute("aria-label", "Stop the schedules whose agent was deleted");
     orphanBtn.addEventListener("click", async () => {
       orphanBtn.disabled = true;
       orphanBtn.textContent = "…";
       const r = await send("schedule.cancelOrphans").catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
       if (r?.ok) {
-        orphanBtn.textContent = r.count > 0 ? `Cancelled ${r.count} orphaned alarm${r.count === 1 ? "" : "s"}.` : "No orphaned alarms found.";
+        orphanBtn.textContent = r.count > 0 ? `Stopped ${r.count} leftover schedule${r.count === 1 ? "" : "s"}.` : "No leftover schedules found.";
         await refreshFailedRuns();
       } else {
         orphanBtn.textContent = "Cancel failed";
@@ -3564,33 +3559,14 @@ deleteAgentBtn?.addEventListener("click", async () => {
   const kind = currentAgentKind;
   const id = currentAgentId;
   let agentName = id;
-  let previewDetails = "";
-
   if (kind === "named") {
     const res = await send("named-agent.get", { id }).catch(() => null);
-    const agent = res?.agent;
-    agentName = agent?.name || id;
-    const skillsCount = agent?.skills?.length ?? 0;
-    const assetsCount = agent?.coreAssets?.length ?? 0;
-    previewDetails = `This will permanently remove the agent registry entry, its memory store, system prompt override, and custom provider configuration.\n\n` +
-      `• Skills configured: ${skillsCount}\n` +
-      `• Context files: ${assetsCount}\n\n` +
-      `Note: Any artifacts created by this agent will be retained.`;
-  } else if (kind === "site" || kind === "origin") {
-    const res = await send("list-tools", { origin: id }).catch(() => ({ tools: [] }));
-    const toolsCount = res?.tools?.length ?? 0;
-    previewDetails = `This will disenroll the site, unregister its ${toolsCount} tools, revoke dynamic scripts, and remove host permissions.\n\n` +
-      `Note: Any artifacts created by this agent will be retained.`;
-  } else if (kind === "background") {
-    previewDetails = `This will cancel the scheduled task and remove its recurring alarm.`;
+    agentName = res?.agent?.name || id;
   }
 
-  const confirmed = await confirmActionDialog({
-    title: `Delete “${agentName}”?`,
-    body: `Are you sure you want to delete ${agentName}?\n\n${previewDetails}`,
-    confirmLabel: "Delete agent",
-    destructive: true,
-  });
+  // ONE shared delete confirmation across the hub, Settings and the side panel
+  // (CAP-FB-20260830-USER-VOICE-COPY-01).
+  const confirmed = await deleteAgentDialog({ name: agentName, kind, returnFocusTo: deleteAgentBtn });
 
   if (!confirmed) return;
 

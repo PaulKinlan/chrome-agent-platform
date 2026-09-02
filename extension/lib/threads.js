@@ -90,7 +90,10 @@ function utf8Bytes(str) {
 
 /** A short preview for the index (first line, bounded). */
 function previewOf(text) {
-  const first = String(text ?? "").split(/\n+/)[0].trim();
+  // A leading "[… model]" transport tag (the demo model's marker) is never
+  // something a person should read in the sidebar; a person's own bracketed
+  // prefix ("[urgent] …") is theirs and stays (CAP-FB-20260830-USER-VOICE-COPY-01).
+  const first = String(text ?? "").split(/\n+/)[0].trim().replace(/^\[[^\]\n]*\bmodel\b[^\]\n]*\]\s*/i, "");
   const s = first.length > 160 ? first.slice(0, 160) + "…" : first;
   return s;
 }

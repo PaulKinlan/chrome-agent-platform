@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.633] — 2026-09-02
+- Messages, toggles and delete confirmations now use plain language throughout.
+
 ## [0.2.632] — 2026-09-02
 - Task board: the unused-code cleanup is complete.
 

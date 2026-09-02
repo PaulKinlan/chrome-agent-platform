@@ -32,7 +32,7 @@ import {
 import { cancelRunFromRenderedStop, projectConversationRunStatus } from "../shared/run-status.js";
 import { BUDGET_CONTINUE_TASK } from "../lib/run-budget.js";
 import { findAgentByRef } from "../shared/agent-registry.js";
-import { confirmActionDialog } from "../shared/components.js"; // registers <agent-picker>, <agent-composer>, <agent-conversation>, <task-row>
+import { deleteAgentDialog } from "../shared/components.js"; // registers <agent-picker>, <agent-composer>, <agent-conversation>, <task-row>
 import { capLog } from "../lib/cap-log.js";
 import { actionableRunsForSurface } from "../lib/run-scope.js";
 
@@ -531,18 +531,9 @@ agentDeleteBtn?.addEventListener("click", async () => {
   if (!openAgent) return;
   const { kind, id, name } = openAgent;
   const agentName = name || id;
-  let preview = "This will permanently remove the agent and its custom configuration.\n\nNote: Any created artifacts will be retained.";
-  if (kind === "site") {
-    preview = "This will disenroll the site, unregister its tools, and revoke its permissions.\n\nNote: Any created artifacts will be retained.";
-  } else if (kind === "background") {
-    preview = "This will cancel the scheduled task and remove its recurring alarm.";
-  }
-  const confirmed = await confirmActionDialog({
-    title: `Delete “${agentName}”?`,
-    body: `Are you sure you want to delete ${agentName}?\n\n${preview}`,
-    confirmLabel: "Delete agent",
-    destructive: true,
-  });
+  // ONE shared delete confirmation across the hub, Settings and the side panel
+  // (CAP-FB-20260830-USER-VOICE-COPY-01).
+  const confirmed = await deleteAgentDialog({ name: agentName, kind, returnFocusTo: agentDeleteBtn });
   if (!confirmed) return;
   let out;
   if (kind === "named") {

@@ -8091,6 +8091,34 @@ export function confirmActionDialog({ title = "Confirm", body = "", confirmLabel
   });
 }
 
+/** ONE delete-agent confirmation for every surface (the hub, Settings, the
+ * side panel) — CAP-FB-20260830-USER-VOICE-COPY-01. Three call sites used to
+ * hand-roll three bodies in the system's words ("registry entry", "system
+ * prompt override", "recurring alarm"). The body says what the person loses,
+ * in their words, and is destructive + genuine-gesture-only like every other
+ * delete. `kind` is the agent kind ("named" | "background" | "site"/"origin").
+ * Resolves true only on a real click on Delete. */
+export const DELETE_AGENT_COPY = Object.freeze({
+  named: "Its memory and history are removed. Artifacts it made are kept.",
+  background: "Its schedule stops and its history is removed.",
+  site: "It stops working on this site and its page tools are removed. Artifacts it made are kept.",
+});
+export function deleteAgentDialog({ name = "", kind = "named", returnFocusTo = null } = {}) {
+  const body = kind === "background"
+    ? DELETE_AGENT_COPY.background
+    : kind === "site" || kind === "origin"
+      ? DELETE_AGENT_COPY.site
+      : DELETE_AGENT_COPY.named;
+  return confirmActionDialog({
+    title: `Delete ${String(name || "this agent")}?`,
+    body,
+    confirmLabel: "Delete",
+    destructive: true,
+    requireGenuineGesture: true,
+    returnFocusTo,
+  });
+}
+
 /* <agent-picker> — THE ONE unified agent picker (CAP-FB-20260818-AGENT-ACCESS-01).
  * Every agent-choosing surface uses THIS component: the side panel's Agents
  * view, every composer's + menu "Choose agent" action, AND the /agent slash
@@ -9584,7 +9612,7 @@ function plainDetailBlock(label, text) {
     const more = document.createElement("button");
     more.type = "button";
     more.className = "aex-plain-more";
-    more.textContent = `show more (${(text.length - AEX_PLAIN_DETAIL_INLINE).toLocaleString()} more chars)`;
+    more.textContent = `show more (${(text.length - AEX_PLAIN_DETAIL_INLINE).toLocaleString()} more characters)`;
     more.addEventListener("click", (ev) => {
       ev.stopPropagation();
       pre.textContent = text;
@@ -10564,6 +10592,9 @@ class JobsBoard extends Component {
 customElements.define("jobs-board", JobsBoard);
 
 
+/* vocab:advanced:start — <system-prompt-editor> renders ONLY inside Settings →
+ * Advanced (options.html#prompts, data-developer), so it may use the system's
+ * words (scripts/check-vocabulary.mjs, docs/COPY.md). */
 /* <system-prompt-editor> — the layered system-prompt viewer + owner-override
  * editor (Settings → Advanced). ONE reusable component: the read-only built-in
  * viewer (id + version + hash), the persistent override editor (append /
@@ -11110,6 +11141,7 @@ class SystemPromptEditor extends Component {
   }
 }
 customElements.define("system-prompt-editor", SystemPromptEditor);
+/* vocab:advanced:end */
 
 export function durableRunActionsForPhase(phase) {
   return {
@@ -11325,6 +11357,9 @@ const TOOL_LIBRARY_AVAILABILITY = Object.freeze({
   disabled: "Disabled",
 });
 
+/* vocab:advanced:start — <tool-library> renders ONLY inside the developer-only
+ * Tool library section (options.html#tool-library, data-developer), so it may
+ * use the system's words (scripts/check-vocabulary.mjs, docs/COPY.md). */
 class ToolLibrary extends Component {
   constructor() {
     super();
@@ -11793,8 +11828,8 @@ class ToolLibrary extends Component {
       const total = document.createElement("p");
       total.className = "meta";
       const gen = typeof s.catalogGeneration === "string" && s.catalogGeneration
-        ? ` · catalog generation ${s.catalogGeneration.slice(0, 12)}` : "";
-      total.textContent = `${s.descriptorCount ?? 0} tools visible to diagnostics${gen}`;
+        ? ` · tool list version ${s.catalogGeneration.slice(0, 12)}` : "";
+      total.textContent = `${s.descriptorCount ?? 0} tools available${gen}`;
       host.append(total);
 
       const packagesMeta = this._root.querySelector(".packages .meta");
@@ -11930,6 +11965,7 @@ class ToolLibrary extends Component {
   // buttons, no actions. The native <details> disclosure works without script.
 }
 customElements.define("tool-library", ToolLibrary);
+/* vocab:advanced:end */
 
 /* ──────────────────────────────────────────────────────────────────────────
  * One call registers everything (idempotent). Extension pages + the docs

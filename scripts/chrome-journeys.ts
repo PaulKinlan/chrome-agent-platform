@@ -446,6 +446,8 @@ const EXPECTED = [
   "create dialog: Create agent from the card yields ONE named agent whose role is the template persona",
   "create dialog: the saved agent's skill ids CONTAIN the exactly-toggled skill id",
   "create dialog: a Scheduled-group template creates one scheduled agent that the sidebar and Settings both list",
+  "hub + Settings: the delete-agent dialogs share one body in the reader's words",
+  "Settings: the Providers page never speaks the system's words",
   "create dialog: the journey's created agents are removed again (fresh profile restored)",
   "folder command: a granted folder was seeded in the SW store",
   "folder command: bare /folder typed into the composer",
@@ -552,6 +554,8 @@ const EXPECTED = [
   "Cookies: the developer build exposes them again, and no cookie value ever reaches the model",
   "warm run 1 returns a concrete demo result",
   "warm run 2 (after re-save) returns a concrete demo result",
+  "hub: demo reply is a sentence without a bracketed model tag",
+  "hub: sidebar preview has no bracketed model tag",
   "hub: two demo turns produce two user activity rows (no attestation/tool rows)",
   "hub: header reads N runs today with no $ or tokens",
   "hub: no activity row text overlaps the time column at 1440 and 1024",
@@ -1232,7 +1236,7 @@ async function main() {
       rect1024 !== null && rect1024.top >= 0 && rect1024.bottom <= 700,
     );
     const hubText = await evalIn(cdp, ntpSession, `document.body.innerText`);
-    const emptyCopy = ["No activity matches", "No artifacts yet", "No Site Agents yet", "Discovery has not run yet", "Nothing has happened yet"]
+    const emptyCopy = ["No activity matches", "No artifacts yet", "No Site Agents yet", "look for tools you can use", "Nothing has happened yet"]
       .filter((s) => String(hubText ?? "").includes(s));
     console.log("fresh hub empty copy:", JSON.stringify(emptyCopy));
     check("fresh hub: no empty-state copy is rendered", typeof hubText === "string" && emptyCopy.length === 0);
@@ -1946,6 +1950,50 @@ async function main() {
         Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedName) && /Scheduled · every \d+ min/.test(t)) &&
         surfacesS.sidebarRows === 2 && surfacesS.panelRows === 2 && surfacesS.settingsRows === 2 && /^2 agents/.test(surfacesS.panelCount),
     );
+    // CAP-FB-20260830-USER-VOICE-COPY-01: the hub's and Settings' delete
+    // confirmations are ONE shared dialog whose body says what the person
+    // loses, in their words. Open each with a genuine click, read it, cancel —
+    // nothing is deleted here (the restore below does that through the route).
+    const READ_CONFIRM = `(() => { const d = document.querySelector('.cap-confirm-dialog'); return d ? JSON.stringify({ title: d.querySelector('.cap-confirm-title')?.textContent ?? '', body: d.querySelector('.cap-confirm-body')?.textContent ?? '', accept: d.querySelector('.cap-confirm-accept')?.textContent ?? '' }) : null; })()`;
+    const readConfirm = async (session) => { try { return JSON.parse((await evalIn(cdp, session, READ_CONFIRM)) ?? "null"); } catch { return null; } };
+    // Creating the scheduled agent opened its thread, so the hub's Delete is up.
+    const hubDeleteClicked = await clickSel(cdp, ntpSession, "#delete-agent");
+    await sleep(500);
+    const hubDialog = await readConfirm(ntpSession);
+    const hubDialogShot = await captureShot(cdp, ntpSession);
+    if (hubDialogShot) await writeEvidence("dialog-delete-agent-shared.png", hubDialogShot);
+    await clickSel(cdp, ntpSession, ".cap-confirm-dialog .cap-confirm-cancel");
+    await sleep(300);
+    const voicePage = await openPage(port, `chrome-extension://${extId}/options/options.html#agents`);
+    const voiceSession = await attachRuntime(cdp, voicePage.id);
+    await sleep(1500);
+    const settingsDeleteClicked = await clickSel(cdp, voiceSession, ".delete-named-agent");
+    await sleep(500);
+    const settingsDialog = await readConfirm(voiceSession);
+    await clickSel(cdp, voiceSession, ".cap-confirm-dialog .cap-confirm-cancel");
+    await sleep(300);
+    console.log("delete dialogs:", JSON.stringify({ hubDeleteClicked, hubDialog, settingsDeleteClicked, settingsDialog }));
+    const SHARED_DELETE_BODY = "Its memory and history are removed. Artifacts it made are kept.";
+    check(
+      "hub + Settings: the delete-agent dialogs share one body in the reader's words",
+      hubDeleteClicked && settingsDeleteClicked &&
+        hubDialog?.body === SHARED_DELETE_BODY && settingsDialog?.body === SHARED_DELETE_BODY &&
+        hubDialog.accept === "Delete" && settingsDialog.accept === "Delete" &&
+        /^Delete .+\?$/.test(hubDialog.title) && /^Delete .+\?$/.test(settingsDialog.title),
+    );
+    // The Providers page: the same page, on the section a new person reads first.
+    await evalIn(cdp, voiceSession, `location.hash = '#providers'; true`);
+    await sleep(800);
+    const providersText = String((await evalIn(cdp, voiceSession, `document.querySelector('#providers')?.innerText ?? ''`)) ?? "");
+    const providersShot = await captureShot(cdp, voiceSession);
+    if (providersShot) await writeEvidence("options-providers-no-model-copy.png", providersShot);
+    console.log("providers copy:", JSON.stringify(providersText.slice(0, 300)));
+    check(
+      "Settings: the Providers page never speaks the system's words",
+      providersText.length > 0 && !/Internal testing provider|has not run|registry|catalog generation|\d+ chars\b/i.test(providersText),
+    );
+    await cdp.send("Target.closeTarget", { targetId: voicePage.id }).catch(() => {});
+    await sleep(300);
     // Restore the fresh profile the rest of the suite expects: delete the two
     // agents through the real owner-direct route (a click in an extension page
     // IS the approval), which also cancels the scheduled one's alarm.
@@ -3480,6 +3528,34 @@ async function main() {
     await msgValue({ type: "provider.set", config: { provider: "demo", apiKey: "" } });
     const warmRun2 = await msgValue({ type: "agent.run", task: "ping two" });
     check("warm run 2 (after re-save) returns a concrete demo result", concrete(warmRun2));
+    // CAP-FB-20260830-USER-VOICE-COPY-01: the demo's plain reply is a real
+    // sentence after its marker, and the thread previews a person reads in
+    // the sidebar never carry the bracketed transport tag. The warm runs are
+    // the positive control: their stored assistant turns DO start with the
+    // marker, so a preview that also started with it would be the leak.
+    const demoSentence = String(warmRun1?.result ?? "").replace(/^\[demo model\]\s*/u, "");
+    check(
+      "hub: demo reply is a sentence without a bracketed model tag",
+      demoSentence === "I'm the built-in demo, so I can't do this yet. Connect a model in Settings and ask again.",
+    );
+    const voiceThreads = await msgValue({ type: "thread.list" });
+    const voiceRows = Array.isArray(voiceThreads?.threads) ? voiceThreads.threads : [];
+    let taggedStoredTurns = 0;
+    for (const t of voiceRows.slice(0, 6)) {
+      const full = await msgValue({ type: "thread.get", id: t?.id });
+      if ((full?.thread?.messages ?? []).some((m) => m?.role === "assistant" && /^\[demo model\]/u.test(String(m?.content ?? "")))) taggedStoredTurns++;
+    }
+    await sleep(500);
+    const domPreviews = (await evalIn(cdp, ntpSession, `[...document.querySelectorAll('#thread-sidebar .t-preview')].map((el) => el.textContent.trim())`)) ?? [];
+    const indexPreviews = voiceRows.map((t) => String(t?.preview ?? ""));
+    const voiceShot = await captureShot(cdp, ntpSession);
+    if (voiceShot) await writeEvidence("hub-demo-reply-voice.png", voiceShot);
+    console.log("sidebar previews:", JSON.stringify({ taggedStoredTurns, indexPreviews: indexPreviews.slice(0, 6), domPreviews: (Array.isArray(domPreviews) ? domPreviews : []).slice(0, 6) }));
+    check(
+      "hub: sidebar preview has no bracketed model tag",
+      taggedStoredTurns >= 1 && indexPreviews.length >= 1 &&
+        indexPreviews.every((p) => !/^\[/u.test(p)) && Array.isArray(domPreviews) && domPreviews.every((p) => !/^\[/u.test(p)),
+    );
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 3a2 — CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01, folded into

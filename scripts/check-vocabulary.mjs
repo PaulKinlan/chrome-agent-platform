@@ -89,6 +89,21 @@ const BANNED_TERMS = [
     test: /host (?:access|permissions?) (?:is|are) (?:all[-\s]?)?optional|no <all_urls>|without <all_urls>/i,
     why: 'host access is install-granted <all_urls> (Q18 (a)) — never say host access is optional or that there is no <all_urls>',
   },
+  {
+    id: "system-words",
+    // CAP-FB-20260830-USER-VOICE-COPY-01: the product spoke the system's
+    // language to the person using it ("Discovery has not run yet.", "catalog
+    // generation e0b8…", "remove the agent registry entry, its memory store,
+    // system prompt override, and custom provider configuration"). A person
+    // reads what THEY can do next; these are the words of the machinery. The
+    // rule is scoped to the user-facing surfaces — Settings → Advanced and
+    // the other developer-only sections (`data-developer="true"`) may keep
+    // technical words, as may any element marked `data-vocab="advanced"` and
+    // any JS line or region marked `vocab:advanced` (see docs/COPY.md).
+    test: /\b(?:discovery|diagnostics|catalog|generation|registry|attestation|alarms?|runtime|lifecycle|chars|overrides?)\b|\bhas not run\b/i,
+    why: 'the system\'s word, not the reader\'s — say what the person can do next (docs/COPY.md lists the banned words and the voice rule)',
+    advancedExempt: true,
+  },
 ];
 
 // ── rule 2: Skills is not a destination ───────────────────────────────────
@@ -133,8 +148,10 @@ const JS_VISIBLE_SINKS = [
   // openView(path, TITLE) — the exact bug this task exists for: one view, two
   // titles, from two call sites in one file.
   new RegExp(String.raw`openView\(\s*(?:"[^"]*"|'[^']*')\s*,\s*${STR}`, "g"),
-  // Picker/menu rows: { label: "…", description: "…", group: "…" }.
-  new RegExp(String.raw`\b(?:label|group|description|legend)\s*:\s*${STR}`, "g"),
+  // Picker/menu rows: { label: "…", description: "…", group: "…" } — and
+  // dialog copy: confirmActionDialog({ title: "…", body: "…" }) is where the
+  // three "registry entry"/"recurring alarm" delete bodies hid.
+  new RegExp(String.raw`\b(?:label|group|description|legend|body|title)\s*:\s*${STR}`, "g"),
 ];
 
 const unquote = (lit) => lit.slice(1, -1).replace(/\\(.)/g, "$1");
@@ -239,6 +256,51 @@ function sections(html) {
   return out;
 }
 
+// ── the Advanced exemption ────────────────────────────────────────────────
+// Settings → Advanced and the other developer-only sections are ALLOWED the
+// system's words: they exist to show the machinery. The exemption is declared
+// in the markup/source, never in this file, so a surface cannot be exempted
+// by editing the checker:
+//   HTML  — any element carrying data-developer="true" or data-vocab="advanced"
+//           (the whole subtree, depth-aware on the element's own tag name)
+//   JS    — any line carrying `vocab:advanced`, and any region between
+//           `vocab:advanced:start` and `vocab:advanced:end`
+// Only rules flagged `advancedExempt` honour these ranges — "asset"/"recipe"
+// are wrong everywhere and stay reported inside Advanced too.
+const ADVANCED_TAG_RE = /<([a-z][a-z0-9-]*)\b[^>]*\bdata-(?:developer\s*=\s*"true"|vocab\s*=\s*"advanced")[^>]*>/gi;
+
+/** [start, end) source ranges that the Advanced exemption covers. */
+export function advancedRanges(src) {
+  const ranges = [];
+  // Marked elements (works on .html files AND on HTML written inside JS
+  // template literals — the tag scan does not care what surrounds it).
+  ADVANCED_TAG_RE.lastIndex = 0;
+  let m;
+  while ((m = ADVANCED_TAG_RE.exec(src))) {
+    const tag = m[1].toLowerCase();
+    const tagRe = new RegExp(String.raw`<(\/?)${tag}\b[^>]*>`, "gi");
+    tagRe.lastIndex = m.index + m[0].length;
+    let depth = 1;
+    let end = src.length;
+    let t;
+    while ((t = tagRe.exec(src))) {
+      if (t[0].endsWith("/>")) continue;
+      depth += t[1] === "/" ? -1 : 1;
+      if (depth === 0) { end = t.index + t[0].length; break; }
+    }
+    ranges.push([m.index, end]);
+  }
+  // Marked JS lines.
+  const lineRe = /^.*\bvocab:advanced\b(?!:start|:end).*$/gm;
+  while ((m = lineRe.exec(src))) ranges.push([m.index, m.index + m[0].length]);
+  // Marked JS regions.
+  const regionRe = /vocab:advanced:start[\s\S]*?vocab:advanced:end/g;
+  while ((m = regionRe.exec(src))) ranges.push([m.index, m.index + m[0].length]);
+  return ranges;
+}
+
+const inRanges = (ranges, index) => ranges.some(([a, b]) => index >= a && index < b);
+
 /** The section body WITHOUT the bodies of any nested sections. */
 function ownBody(inner) {
   let depth = 0;
@@ -270,8 +332,11 @@ export function scanSource(file, src) {
 
   // ── rule 1: banned user-facing terms ───────────────────────────────────
   const strings = file.endsWith(".html") ? visibleFromHtml(src) : visibleFromJs(src);
+  const advanced = advancedRanges(src);
   for (const { text, index } of strings) {
+    const exempt = inRanges(advanced, index);
     for (const rule of BANNED_TERMS) {
+      if (exempt && rule.advancedExempt) continue;
       if (rule.test.test(text)) {
         report(lineOf(src, index), `banned-term:${rule.id}`, `${JSON.stringify(text)} — ${rule.why}`);
       }

@@ -246,3 +246,51 @@ Deno.test("inventory: NO window.confirm/alert/prompt call expressions remain in 
   assert(files.length > 100, `scan covers the shipped tree (got ${files.length})`);
   assertEquals(offenders, [], "no confirm/alert/prompt call expressions may remain in shipped extension scripts");
 });
+
+// ── CAP-FB-20260830-USER-VOICE-COPY-01: ONE delete-agent dialog ───────────
+Deno.test("deleteAgentDialog produces one body for named agents and one for background agents, and requires a genuine gesture", async () => {
+  const { deleteAgentDialog } = await import("../extension/shared/components.js");
+  assert(typeof deleteAgentDialog === "function", "deleteAgentDialog is exported beside confirmActionDialog");
+  const open = (opts) => {
+    let settledWith = null;
+    const p = deleteAgentDialog(opts).then((v) => { settledWith = v; });
+    const dialog = FakeDoc.body.children.filter((c) => c.tagName === "dialog").pop();
+    const [heading, message, actions] = dialog.children;
+    const [cancel, accept] = actions.children;
+    return { p, dialog, heading, message, cancel, accept, settled: () => settledWith };
+  };
+  // Named agent: the shared body, in the reader's words.
+  const named = open({ name: "Research", kind: "named" });
+  assertEquals(named.heading.textContent, "Delete Research?");
+  assertEquals(named.message.textContent, "Its memory and history are removed. Artifacts it made are kept.");
+  assertEquals(named.accept.textContent, "Delete");
+  assertStringIncludes(named.accept.className, "destructive");
+  assertEquals(FakeDoc.activeElement, named.cancel, "destructive: Cancel holds focus");
+  // A scripted click never approves a delete.
+  named.accept.scriptedClick();
+  await tick();
+  assertEquals(named.settled(), null, "a scripted click must not mint the deletion");
+  assertEquals(named.dialog.open, true);
+  named.cancel.click();
+  await tick();
+  assertEquals(named.settled(), false);
+  // Background agent: its schedule is the thing that stops.
+  const background = open({ name: "Reading digest", kind: "background" });
+  assertEquals(background.message.textContent, "Its schedule stops and its history is removed.");
+  background.cancel.click();
+  await tick();
+  // Site agent: the site and its page tools.
+  const site = open({ name: "github.com", kind: "site" });
+  assertEquals(site.message.textContent, "It stops working on this site and its page tools are removed. Artifacts it made are kept.");
+  site.accept.click();
+  await tick();
+  assertEquals(site.settled(), true, "a genuine click deletes");
+  // Every delete-agent call site goes through the helper — no hand-rolled body.
+  for (const file of ["extension/ntp/ntp.js", "extension/options/options.js", "extension/sidepanel/sidepanel.js"]) {
+    const src = await Deno.readTextFile(new URL(`../${file}`, import.meta.url));
+    assertStringIncludes(src, "deleteAgentDialog(", `${file} uses the shared delete-agent dialog`);
+    for (const stale of ["registry entry", "recurring alarm", "system prompt override", "Are you sure you want to delete ${"]) {
+      assert(!src.includes(stale), `${file} must not still say "${stale}"`);
+    }
+  }
+});
