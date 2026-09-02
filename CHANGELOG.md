@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.655] — 2026-09-02
+- Task board: the running-cost work is complete.
+
 ## [0.2.654] — 2026-09-02
 - Tasks now cost less to run: the instructions sent with every message are a quarter of their old size, and a task that stops making progress is stopped instead of looping.
 
