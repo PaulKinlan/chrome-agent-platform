@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.658] — 2026-09-02
+- Task board: the privacy page and the reset repair are complete.
+
 ## [0.2.657] — 2026-09-02
 - The build no longer stops on a leftover generated file.
 
