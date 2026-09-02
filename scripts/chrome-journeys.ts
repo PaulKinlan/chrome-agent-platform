@@ -1442,10 +1442,17 @@ async function main() {
     const artifactsTitleCount = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
       if (!frame?.contentDocument) return null;
+      const isRendered = (el) => {
+        if (!el) return false;
+        if (typeof el.checkVisibility === 'function') {
+          return el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) && el.getClientRects().length > 0;
+        }
+        return el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+      };
       const parentTitle = document.getElementById('view-title');
-      const isParentVisible = parentTitle && getComputedStyle(parentTitle).display !== 'none' && /artifacts/i.test(parentTitle.textContent || '');
+      const isParentVisible = isRendered(parentTitle) && /artifacts/i.test(parentTitle.textContent || '');
       const iframeHeadings = Array.from(frame.contentDocument.querySelectorAll('h1, .logo, [role="heading"]'))
-        .filter(e => /artifacts/i.test(e.textContent || '') && getComputedStyle(e).display !== 'none');
+        .filter(e => /artifacts/i.test(e.textContent || '') && isRendered(e));
       return (isParentVisible ? 1 : 0) + iframeHeadings.length;
     })()`);
     const artShot1440 = await captureShot(cdp, ntpSession);

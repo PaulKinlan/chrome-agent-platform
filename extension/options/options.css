@@ -1296,9 +1296,6 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
    content-driven break (680px), reflow rather than clipping or introducing a
    document-level horizontal scrollbar. Every section and control stays present. */
 @media (max-width: 680px) {
-  body {
-    flex-direction: column;
-  }
   .options-shell {
     flex-direction: column;
   }

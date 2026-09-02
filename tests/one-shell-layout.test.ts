@@ -60,8 +60,9 @@ Deno.test("one-shell layout: chrome-journeys.ts carries the 3 required journey a
   assert(journeys.includes("frame?.contentDocument?.querySelector('.sub, #rows, .site-group')"), "Directory probes visible content");
   assert(journeys.includes("frame?.contentDocument?.querySelector('.side')"), "Settings probes visible content");
 
-  // Verify title check includes both parent #view-title and iframe headings
+  // Verify title check includes both parent #view-title and iframe headings with rendered visibility
   assert(journeys.includes("document.getElementById('view-title')"), "Title probe checks parent #view-title");
+  assert(journeys.includes("isRendered"), "Title probe checks rendered visibility");
 });
 
 Deno.test("one-shell layout: RETIRED_FILES in check-vocabulary.mjs covers all deleted dead files", async () => {
