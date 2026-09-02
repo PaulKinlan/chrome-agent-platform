@@ -2064,7 +2064,7 @@ const FS_ERROR_MESSAGES = {
   directory_path_is_not_file: "That path is a folder, not a file — pass a file path to read.",
   file_grant_cannot_have_subpath: "This grant is a single file; it has no sub-paths.",
   invalid_file_path: "That is not a valid file path within the grant.",
-  fs_file_too_large: "The file is too large to read within the bounded limit.",
+  fs_file_too_large: "The file is too large for this bounded operation (writes carry a size limit); reads are never refused on size — read large files in chunks with offset/length.",
   fs_file_not_text: "The file is not UTF-8 text, so it cannot be read as text.",
   max_depth_exceeded: "The path is nested too deeply to traverse.",
   invalid_path_absolute: "Absolute paths are not allowed — use a path relative to the granted folder.",
@@ -2272,16 +2272,21 @@ export function browserToolset(readOnly = false, {
     }),
     read_file: tool({
       description:
-        "Read a text file inside a granted local folder. `path` is relative to the folder. Returns { ok, content, size, sha256 } or a bounded JSON error (file_not_found, fs_file_too_large, fs_file_not_text, …).",
+        "Read a text file inside a granted local folder. `path` is relative to the folder. Reads are NEVER refused because the file is large: the complete content is returned (or, above the single-read text window, actionable guidance naming the size and the paging path). Large files are read in chunks with `offset`/`length` (byte window; `size` reports the whole file, `start`/`end` the window). Returns { ok, content, size, sha256 } or a bounded JSON error (file_not_found, fs_file_not_text, …).",
       inputSchema: z.object({
-        path: z.string(),
-        grantId: z.string().optional(),
+        path: z.string().describe("the file path, relative to the granted folder"),
+        grantId: z.string().optional().describe("which folder, when more than one is available (see list_folders)"),
+        offset: z.number().int().min(0).optional().describe("byte offset of the read window (0 = start of file). Use with `length` to page through a large file in chunks."),
+        length: z.number().int().min(1).max(MAX_FS_READ_BYTES).optional().describe("byte length of the read window (omitting it reads to the end of the file from `offset`)"),
+        // Legacy transport knob kept for schema compatibility: it no longer
+        // bounds or refuses reads (a 2000-byte default once refused whole
+        // files). Ask for a partial read with offset/length instead.
         maxBytes: z.number().int().min(1).max(MAX_FS_READ_BYTES).optional(),
       }),
-      execute: async ({ path, grantId, maxBytes }) => {
+      execute: async ({ path, grantId, maxBytes, offset, length }) => {
         const g = await resolveRunGrantId(grantId);
         if (g.ok === false) return g;
-        const res = await readFsGrantFile(g.grantId, { relativePath: path ?? "", asText: true, maxBytes });
+        const res = await readFsGrantFile(g.grantId, { relativePath: path ?? "", asText: true, maxBytes, offset, length });
         return res?.ok === false ? toFsToolError(res, path ?? "") : res;
       },
     }),

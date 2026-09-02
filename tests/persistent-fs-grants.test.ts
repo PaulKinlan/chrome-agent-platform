@@ -665,7 +665,7 @@ Deno.test("searchFsGrantFiles: recursively matches names, bounds results, and re
   assertEquals(capped.truncated, true);
 });
 
-Deno.test("readFsGrantFile: reads text with SHA-256 digest and enforces maxBytes bound", async () => {
+Deno.test("readFsGrantFile: reads text with SHA-256 digest — complete content whatever the size (no fs_file_too_large read refusal)", async () => {
   const fileContent = "Hello from local persistent filesystem!";
   const fileBytes = new TextEncoder().encode(fileContent);
 
@@ -692,10 +692,91 @@ Deno.test("readFsGrantFile: reads text with SHA-256 digest and enforces maxBytes
   assertEquals(res.content, fileContent);
   assert(typeof res.sha256 === "string" && res.sha256.length === 64, "must include 64-char SHA-256 hex digest");
 
-  // Test size cap refusal
-  const cappedRes = await readFsGrantFile("fsg_read_test", { maxBytes: 10 });
-  assertEquals(cappedRes.ok, false);
-  assertEquals(cappedRes.error, "fs_file_too_large");
+  // A read is never refused on size alone (the legacy maxBytes bound was a
+  // caller-side transport knob — a 2000-byte default once refused a 9080-byte
+  // README with fs_file_too_large). A tiny bound must not truncate or refuse:
+  // the complete content comes back and the caller pages with offset/length.
+  const notCapped: any = await readFsGrantFile("fsg_read_test", { asText: true, maxBytes: 2 });
+  assertEquals(notCapped.ok, true, `size alone must never refuse a handle-backed read: ${JSON.stringify(notCapped)}`);
+  assertEquals(notCapped.content, fileContent);
+});
+
+Deno.test("readFsGrantFile: the owner repro shape — a 9080-byte file reads completely even past maxBytes 2000", async () => {
+  // chrome-agent-platform-jb0a: read_file on cairn-gateway/README.md (9080
+  // bytes) was refused with fs_file_too_large at maxBytes 2000. The read is
+  // local; size is irrelevant to it, so the COMPLETE file must come back.
+  const head = "cairn-gateway/README.md\n";
+  const reproText = head + "x".repeat(9080 - head.length);
+  const reproBytes = new TextEncoder().encode(reproText);
+  assertEquals(reproBytes.byteLength, 9080, "fixture must reproduce the exact 9080-byte shape");
+
+  const mockFileHandle = {
+    kind: "file",
+    name: "README.md",
+    queryPermission: async () => "granted",
+    getFile: async () => ({
+      name: "README.md",
+      size: reproBytes.byteLength,
+      lastModified: 1700000000000,
+      arrayBuffer: async () => reproBytes.buffer.slice(reproBytes.byteOffset, reproBytes.byteOffset + reproBytes.byteLength),
+    }),
+  };
+  await saveFsGrant({ grantId: "fsg_read_repro", handle: mockFileHandle, name: "README.md", kind: "file" });
+
+  const whole: any = await readFsGrantFile("fsg_read_repro", { asText: true, maxBytes: 2000 });
+  assertEquals(whole.ok, true, `the 9080-byte README must read, not be refused: ${JSON.stringify(whole)}`);
+  assertEquals(whole.size, 9080);
+  assertEquals(whole.content, reproText, "the COMPLETE 9080 bytes come back — no truncation, no fs_file_too_large");
+  assert(typeof whole.sha256 === "string" && whole.sha256.length === 64, "whole-file read stays digest-pinned");
+  assertEquals(whole.start, undefined, "a whole-file read carries no window markers");
+  assertEquals(whole.end, undefined);
+});
+
+Deno.test("readFsGrantFile: a multi-MB file reads fully via offset/length chunking — windowed reads are never size-refused", async () => {
+  // A >10 MiB file pages through offset/length windows of any size; each
+  // window is digest-pinned and reports { start, end, size } so the caller can
+  // walk to EOF. size alone must never produce a refusal.
+  const chunk = 1024 * 1024;
+  const total = 10 * 1024 * 1024 + 123; // just past the single-read ceiling
+  const bigBytes = new TextEncoder().encode("y".repeat(total));
+  const view = (b: Uint8Array, s: number, e: number) => ({
+    arrayBuffer: async () => b.subarray(s, e).slice().buffer,
+  });
+  const mockFileHandle = {
+    kind: "file",
+    name: "big.log",
+    queryPermission: async () => "granted",
+    getFile: async () => ({
+      name: "big.log",
+      size: bigBytes.byteLength,
+      lastModified: 1700000000000,
+      arrayBuffer: async () => bigBytes.subarray(0, bigBytes.byteLength).slice().buffer,
+      slice: (s: number, e: number) => view(bigBytes, s, e),
+    }),
+  };
+  await saveFsGrant({ grantId: "fsg_read_big", handle: mockFileHandle, name: "big.log", kind: "file" });
+
+  const wholeFileRead: any = await readFsGrantFile("fsg_read_big", { asText: true });
+  assertEquals(wholeFileRead.ok, true, "even a whole-file read above the single-read ceiling is not a refusal");
+  assert(
+    typeof wholeFileRead.content === "string" && wholeFileRead.content.includes("offset/length"),
+    "over-ceiling whole reads carry actionable paging guidance",
+  );
+  assertEquals(wholeFileRead.size, total);
+  assertEquals(wholeFileRead.sha256, null);
+
+  const pieces: string[] = [];
+  for (let offset = 0; offset < total; offset += chunk) {
+    const res: any = await readFsGrantFile("fsg_read_big", { asText: true, offset, length: chunk });
+    assertEquals(res.ok, true, `window at ${offset} must read: ${JSON.stringify(res)}`);
+    assertEquals(res.start, offset);
+    assertEquals(res.end, Math.min(total, offset + chunk));
+    assertEquals(res.size, total);
+    assertEquals(res.content, "y".repeat(res.end - offset), "window content matches the byte range");
+    assert(typeof res.sha256 === "string" && res.sha256.length === 64, "every window is digest-pinned");
+    pieces.push(res.content);
+  }
+  assertEquals(pieces.join("").length, total, "chunked reads reassemble the whole file");
 });
 
 Deno.test("readFsGrantFile: mislabelled .txt binary bytes fail closed instead of becoming replacement text", async () => {
@@ -718,7 +799,7 @@ Deno.test("readFsGrantFile: mislabelled .txt binary bytes fail closed instead of
         }),
       },
     });
-    const res = await readFsGrantFile(grantId, { asText: true });
+    const res: any = await readFsGrantFile(grantId, { asText: true });
     assertEquals(res.ok, false);
     assertEquals(res.error, "fs_file_not_text");
   }

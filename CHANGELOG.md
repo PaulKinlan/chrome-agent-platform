@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.10] — 2026-09-02
+- read_file reads any file: no size cap refusal, offset/length chunking
+
 ## [0.3.9] — 2026-09-02
 - AGENTS.md: beads is the only tracker, the fleet is the default way to work, and beads best practices (epics, dependencies, lifecycle) are the standard. TASKS.md and KNOWN-ISSUES.md retired. New beads-flow skill: the pick-up-and-ship loop.
 
