@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.617] — 2026-09-02
+- Task board: the site-tools demo is complete.
+
 ## [0.2.616] — 2026-09-01
 - When an open page offers tools, a chip next to the composer now lets you use them in one click; a demo shop is included to try it.
 
