@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.7] — 2026-09-02
+- CSP lint: require whitespace before src so data-src cannot smuggle an inline script
+
 ## [0.3.6] — 2026-09-02
 - No shipped page runs an inline script: the embedded boot moves to a shared external file and a lint pins CSP hygiene
 

@@ -299,7 +299,13 @@ Deno.test("CSP hygiene: shipped extension pages ship NO inline scripts (MV3 scri
   ];
   for (const file of shippedHtml) {
     const source = await Deno.readTextFile(file);
-    const inline = [...source.matchAll(/<script(?![^>]*\bsrc=)[^>]*>/gi)];
+    // Whitespace (not a word boundary) must precede src= — otherwise an
+    // attribute like data-src= would satisfy \bsrc= and smuggle an inline block.
+    const inline = [...source.matchAll(/<script(?![^>]*\ssrc=)[^>]*>/gi)];
+    // Falsification: the smuggle case itself must be caught.
+    const smuggle = '<script data-src="x">alert(1)</script>';
+    const smuggleInline = [...smuggle.matchAll(/<script(?![^>]*\ssrc=)[^>]*>/gi)];
+    assert(smuggleInline.length === 1, 'lint must treat data-src= as an inline script');
     assert(inline.length === 0, `${file} ships ${inline.length} inline <script> block(s) — MV3 CSP blocks them; move the code to an external file`);
   }
   // The shared boot file exists and sets the embedded attribute (the inline
