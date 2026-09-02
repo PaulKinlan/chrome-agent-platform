@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.2.638] — 2026-09-02
+- Task board: the one-permission-card change is complete, with its evidence.
+
 ## [0.2.637] — 2026-09-02
-- Merge remote-tracking branch 'origin/main' into cap/one-card-per-step
+- Grouping your tabs now asks once: a single card lists tab access, tab groups and browser control for the sites in your words, and Chrome confirms in one prompt — no more three cards in a row.
 
 ## [0.2.636] — 2026-09-02
 - Task board: the multi-site permission fix is complete; two small follow-ups were opened.
