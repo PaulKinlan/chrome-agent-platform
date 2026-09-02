@@ -291,6 +291,7 @@ import { getRecipe, RECIPES, backgroundRecipes, intentOf, agentSkillIds, mergeRu
 import { resolveSkillRef } from "../lib/skill-resolve.js";
 import { fetchSkillFromUrl, installImportedSkill, removeImportedSkill, loadAllImportedSkills } from "../lib/skill-import.js";
 import { readSkillFile, writeSkillFiles, removeSkillFiles } from "../lib/skill-files.js";
+import { attachedSkillRefs, JOURNALED_SKILLS_CAP } from "../lib/skill-promotion.js";
 import { durableRuns, sweepOrphanAgentData } from "../lib/durable-runs.js";
 import { replaySafetyForTool } from "../lib/tool-replay-safety.js";
 import { createAlarmPermissionLifecycle } from "../lib/alarm-permission-lifecycle.js";
@@ -1813,6 +1814,11 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       workerLayers[origin] = (await attestComposition(composed, "worker")).layers;
     }
     if (Object.keys(workerLayers).length) orch.promptInfo.workerLayers = workerLayers;
+    // Expose the run's untrusted-content boundary token (lib/untrusted-fence.js)
+    // on the orchestrator so runTask can fence imported skill PROMOTION
+    // metadata with the SAME token the master agent's untrusted-content policy
+    // layer and boundary-skills layer name (chrome-agent-platform-ve67 r2 P1).
+    orch.untrustedToken = runtimeContext.untrustedToken ?? null;
     // Expose the build-local provider-server observations so the run's settle
     // path can attach citations to the terminal message + record the usage
     // line. Read-only view; the maps themselves stay private to this build.
@@ -2989,20 +2995,37 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // continuation re-applies them (the same union the caller of a fresh
       // continuation reads from the thread). The journal stores the
       // source-qualified refId when present so a colliding imported skill is
-      // re-resolved to the imported row, never the built-in.
-      runSkillIds = runSkills.map((r) => r?.refId ?? r?.id).filter((x) => typeof x === "string" && x).slice(0, 24);
+      // re-resolved to the imported row, never the built-in. The journaled list
+      // stays capped at JOURNALED_SKILLS_CAP so resume rows remain small; the
+      // PROMOTION exclusion set below is derived from ALL runSkills instead — an
+      // agent may attach up to 128 skills (agent-cards.js MAX_CARD_SKILLS), and
+      // an attached skill's body already composes, so a skill past the 24th must
+      // never be re-promoted (chrome-agent-platform-ve67 r2 P1).
+      runSkillIds = attachedSkillRefs(runSkills).slice(0, JOURNALED_SKILLS_CAP);
       // Skill PROMOTION (chrome-agent-platform-ve67): when the run's agent has
       // NO relevant skills attached, a bounded section names the catalog
       // skills that match the current task — the model can adopt one
-      // (/skill:<id>) or read it on demand (skill_read). Failure-isolated: a
-      // catalog/read error never blocks the run (no promotion is composed).
+      // (/skill:<id>) or read an imported one on demand (skill_read).
+      // Failure-isolated: a catalog/read error never blocks the run (no
+      // promotion is composed). Imported rows' name/description are REMOTE
+      // (untrusted) frontmatter — promotion fences them with THIS run
+      // orchestrator's boundary token (the same token the run's
+      // untrusted-content policy layer and boundary-skills layer name), so the
+      // model reads them as data, never instructions (r2 P1).
       let runPromotion = null;
       try {
         const { skillCatalog } = await import("../lib/skill-catalog.js");
         const { promoteSkills } = await import("../lib/skill-promotion.js");
         const catalog = await skillCatalog({ memory: mem ?? masterMemory(), fileStore: skillFileStore });
-        const adopted = new Set(runSkillIds ?? []);
-        runPromotion = promoteSkills({ task: String(task ?? ""), catalog: catalog.skills, adoptedIds: adopted });
+        // The exclusion set is EVERY attached run-skill ref — never the
+        // journal-capped subset (a 25th+ attached skill is still excluded).
+        const adopted = new Set(attachedSkillRefs(runSkills));
+        runPromotion = promoteSkills({
+          task: String(task ?? ""),
+          catalog: catalog.skills,
+          adoptedIds: adopted,
+          untrustedToken: orch?.untrustedToken ?? null,
+        });
       } catch { runPromotion = null; }
       // agent-do's run(task, context, history) -> result text; context is a STRING.
       // `history` carries the prior conversation turns (the unified surface: a

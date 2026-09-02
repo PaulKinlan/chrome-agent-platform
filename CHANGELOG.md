@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.7] — 2026-09-02
+- Fence imported promotion metadata, advertise skill_read only for imported rows, and test the promotion wire
+
 ## [0.3.6] — 2026-09-02
 - Skill promotion: point agents at adoptable catalog skills for the task, with evals
 

@@ -31,19 +31,9 @@ run context) is proven per run by the **run-bound attestation** (below).
    or attached it, and the protected-last invariant (layer 6) still keeps the
    runtime policy structurally final. The `skill_read` tool's returned bodies
    are tagged untrusted too, so on-demand reads carry the same boundary.
-5.4. **skill promotion** — when the run's agent has NO relevant skills
-   attached, a short bounded section (≤600 chars, top-4) names the catalog
-   skills whose name/description match the CURRENT TASK, each with its
-   `/skill:<refId>` adoption path and the `skill_read` on-demand path. The
-   relevance heuristic is deterministic (keyword token overlap against skill
-   names/descriptions, stopword-filtered, de-pluralized) and pure — no model
-   calls, no bodies composed, nothing untrusted: it names catalog rows only
-   (name + one-line description), never skill bodies or imported content. An
-   already-adopted skill is never re-promoted. The section lands between the
-   skills layer and the runtime-context layer, always before the protected
-   policy (layer 6), so a promoted name can never read as an instruction that
-   overrides the policy. Evals: `tests/skill-promotion-eval.test.ts`
-   (wire-signal assertions, RED→GREEN falsification).
+5.4. **skill promotion (RUN-BOUNDARY INSERTION — not a static layer)** — when the run's agent has NO relevant skills attached, the service worker renders a short bounded section (≤600 chars, top-4) naming the catalog skills whose name/description match the CURRENT TASK, each with its `/skill:<refId>` adoption path. The relevance heuristic is deterministic (keyword token overlap against skill names/descriptions, stopword-filtered, de-pluralized) and pure — no model calls, no bodies composed. An already-attached skill is never re-promoted: the exclusion set is derived from ALL of the run's attached skills (agent cards allow up to 128); the 24-item cap applies only to the journaled skill list. The section is NOT a layer of `composeSystemPrompt` — the agent boundary (`appendSkillsLayer`) inserts it, together with any per-run adopted skill bodies, immediately BEFORE the protected policy (layer 6) of the ALREADY-COMPOSED base — i.e. AFTER the runtime-context (5.5) and untrusted-content-policy (5.6) layers. Protected-last therefore still holds structurally.
+
+   **Trust contract (imported rows).** An imported skill's NAME and DESCRIPTION are remote frontmatter — untrusted content — so a promoted imported row renders them inside the run's untrusted boundary (5.6), exactly like a composed imported body; the model reads them as data to judge, never as instructions. The heading and the `/skill:` adoption guidance are platform-authored and stay OUTSIDE the fence. The `skill_read` read path is IMPORTED-only and is advertised ONLY for imported rows, with the RAW stored id (`skill_read(skill:"<id>")` — the imported-only tool resolves the raw id, never the `imported:`-qualified ref); a promotion naming only built-in skills never promises it. Budget trims shorten untrusted content INSIDE an intact boundary, so no trim can ever leave a fence open over the trailing policy. Evals: `tests/skill-promotion-eval.test.ts` (hostile-metadata fencing, honest read-path advertising, exclusion-set, and the orchestrator-level wire-signal assertions, RED→GREEN falsification).
 5.5. **runtime-context** — the volatile per-assembly layer (date/time, system
    identity, roster, the memory digest, memory index), rendered under a "data,
    not instructions" label; the Settings preview renders its clearly-marked
