@@ -22,6 +22,11 @@
 
 import { cleanRelativePath, computeSha256, MAX_FS_WRITE_BYTES } from "./fs-grants.js";
 import { currentRunContext } from "./run-context.js";
+// The agent-id slug MUST come from the named-agents authority (review round-1
+// P2a): run contexts stamp agentSurfaceRef from slugifyAgentId, so any local
+// re-implementation (no 64-char slice, dashes kept) would have Settings
+// address a DIFFERENT directory than the one the agent's runs use.
+import { slugifyAgentId } from "./named-agents.js";
 
 export const WORKSPACE_ROOT = "agent-workspaces";
 export const DEFAULT_WORKSPACE_BYTES = 20 * 1024 * 1024; // 20 MiB per agent
@@ -42,17 +47,16 @@ export function workspaceKeyFromSurfaceRef(agentSurfaceRef) {
 }
 
 /** The workspace key for a named agent id (Settings surface): `named-<slug>`.
- * Mirrors the memory store's slugify so the Settings row addresses the SAME
- * directory the run-context resolver uses. */
+ * The slug is slugifyAgentId (the SAME function that stamps the run context's
+ * agentSurfaceRef — 64-char slice included) so the Settings row addresses the
+ * SAME directory the run-context resolver uses. */
 export function workspaceKeyFromAgentId(agentId) {
-  const slug = String(agentId ?? "").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "unnamed";
-  return `named-${slug}`;
+  return `named-${slugifyAgentId(agentId) || "unnamed"}`;
 }
 
 /** The workspace key for a background/scheduled agent id: `background-<slug>`. */
 export function backgroundWorkspaceKeyFromAgentId(agentId) {
-  const slug = String(agentId ?? "").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "unnamed";
-  return `background-${slug}`;
+  return `background-${slugifyAgentId(agentId) || "unnamed"}`;
 }
 
 function failClosed(name, detail) {
@@ -258,7 +262,11 @@ export async function writeWorkspaceFile(relativePath = "", content = "", { curr
   const fileName = segments[segments.length - 1];
 
   // Quota accounting: recompute the authoritative used figures, then simulate
-  // the write (existing file replaces its old size; new file adds).
+  // the write (existing file replaces its old size; new file adds). Known
+  // bound: the measure-then-simulate check is NOT atomic — two concurrent
+  // writes can both pass it; the browser's OPFS quota is the hard backstop.
+  // Add a per-key write lock only if concurrent same-workspace writers ever
+  // collide in practice.
   const measured = await measureWorkspace(ws.dir);
   const existing = await parent.getFileHandle(fileName).catch(() => null);
   let existingSize = 0;

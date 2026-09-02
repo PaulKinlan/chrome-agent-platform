@@ -24,6 +24,8 @@ import {
   DEFAULT_WORKSPACE_FILES,
 } from "../extension/lib/agent-workspace.js";
 import * as ws from "../extension/lib/agent-workspace.js";
+import { createAgentWorkspaceRoutes } from "../extension/background/routes/agent-workspace.js";
+import { slugifyAgentId } from "../extension/lib/named-agents.js";
 
 // ── OPFS shim (values() + getFile() + createWritable) ──────────────────────
 class ShimFile {
@@ -106,6 +108,13 @@ Deno.test("workspace keys derive from the agent identity", () => {
   assertEquals(workspaceKeyFromSurfaceRef("named:upper-1"), "named-upper-1");
   assertEquals(workspaceKeyFromAgentId("Agent A!"), "named-agent-a");
   assertEquals(backgroundWorkspaceKeyFromAgentId("Recipe: Sort"), "background-recipe-sort");
+  // Review round-1 P2a: the Settings id→key mapping reuses slugifyAgentId (the
+  // run-context authority) — a long id must slice to the SAME 64-char slug the
+  // run stamp uses, or Settings addresses a different directory.
+  const longId = `agent-${"x".repeat(100)}`;
+  assertEquals(workspaceKeyFromAgentId(longId), `named-${slugifyAgentId(longId)}`);
+  assertEquals(backgroundWorkspaceKeyFromAgentId(longId), `background-${slugifyAgentId(longId)}`);
+  assert(slugifyAgentId(longId).length === 64, "slugifyAgentId slices to 64");
 });
 
 // ── lazy creation + persistence + isolation ─────────────────────────────────
@@ -230,6 +239,65 @@ Deno.test("owner Clear empties the workspace and usage reports it", async () => 
   const l = await listWorkspaceEntries("", { currentRunContext: namedCtxA });
   assert(l.ok === true);
   assertEquals(l.entries.filter((e) => e.name !== ".quota.json").length, 0);
+});
+
+// ── the Settings routes (review round-1 P1) ────────────────────────────────
+// ntp.js's edit dialog sends agent-workspace.usage / agent-workspace.clear;
+// these tests drive the REAL route handlers (not just the lib) so a missing
+// registration fails here instead of rendering "workspace unavailable".
+Deno.test("agent-workspace routes: usage + clear address the run-context directory by agent id", async () => {
+  resetStore();
+  const routes = createAgentWorkspaceRoutes();
+  // Falsification anchor: without the handlers registered this is undefined
+  // and every assertion below RED.
+  assertEquals(typeof routes["agent-workspace.usage"], "function", "agent-workspace.usage handler must be registered");
+  assertEquals(typeof routes["agent-workspace.clear"], "function", "agent-workspace.clear handler must be registered");
+  assert(Object.isFrozen(routes), "route map is frozen like every other route module");
+
+  // The agent writes through the run-context seam...
+  const ctx = () => ({ agentSurfaceRef: "named:settings-check" });
+  const w = await writeWorkspaceFile("note.md", "route-check", { currentRunContext: ctx });
+  assert(w.ok === true, `seed write failed: ${w.error ?? ""}`);
+
+  // ...and Settings sees the SAME directory through the route, by agent id.
+  const u = await routes["agent-workspace.usage"]({ id: "settings-check" }, { principal: "owner-options" });
+  assert(u.ok === true, `usage failed: ${u.error ?? ""}`);
+  assertEquals(u.workspace, "named-settings-check");
+  assertEquals(u.filesUsed, 1);
+  assert(u.bytesUsed > 0);
+  assertEquals(u.maxBytes, DEFAULT_WORKSPACE_BYTES);
+
+  const c = await routes["agent-workspace.clear"]({ id: "settings-check" }, { principal: "extension" });
+  assert(c.ok === true, `clear failed: ${c.error ?? ""}`);
+  const after = await routes["agent-workspace.usage"]({ id: "settings-check" }, { principal: "owner-options" });
+  assertEquals(after.filesUsed, 0);
+  assertEquals(after.bytesUsed, 0);
+});
+
+Deno.test("agent-workspace routes: the background-key variant and the owner gate", async () => {
+  resetStore();
+  const routes = createAgentWorkspaceRoutes();
+  // kind:"background" maps to the background-<slug> directory.
+  await writeWorkspaceFile("run.log", "bg", { currentRunContext: () => ({ agentSurfaceRef: "background:digest" }) });
+  const u = await routes["agent-workspace.usage"]({ id: "digest", kind: "background" }, { principal: "owner-options" });
+  assert(u.ok === true);
+  assertEquals(u.workspace, "background-digest");
+  assertEquals(u.filesUsed, 1);
+  // ...and it never crosses into the named agent's directory of the same slug.
+  const namedView = await routes["agent-workspace.usage"]({ id: "digest" }, { principal: "owner-options" });
+  assertEquals(namedView.filesUsed, 0);
+
+  // The model principal (and any non-owner surface) is refused — clear-by-id
+  // is an owner gesture, never a tool-call shortcut.
+  for (const principal of ["model", "page", undefined]) {
+    const denied = await routes["agent-workspace.clear"]({ id: "digest", kind: "background" }, { principal });
+    assert(denied.ok === false, `principal ${principal} must be refused`);
+    const deniedU = await routes["agent-workspace.usage"]({ id: "digest", kind: "background" }, { principal });
+    assert(deniedU.ok === false, `usage for principal ${principal} must be refused`);
+  }
+  // The workspace survived the refused clears.
+  const still = await routes["agent-workspace.usage"]({ id: "digest", kind: "background" }, { principal: "owner-options" });
+  assertEquals(still.filesUsed, 1);
 });
 
 // ── delete + search ─────────────────────────────────────────────────────────

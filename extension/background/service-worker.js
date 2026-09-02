@@ -41,6 +41,7 @@ import {
   createMcpRoutes,
   createSchedulerRoutes,
   createFsGrantRoutes,
+  createAgentWorkspaceRoutes,
   createMemoryRoutes,
   resolveMemory,
   awaitMemoryQuiescence,
@@ -4672,6 +4673,9 @@ const handlers = mergeRouteMaps(
   activityRoutes,
   schedulerRoutes,
   fsGrantRoutes,
+  // The owner surface's window into an agent's private workspace (usage +
+  // Clear in Settings; CAP-FB-20260831-AGENT-PRIVATE-FS-01, review round-1 P1).
+  createAgentWorkspaceRoutes(),
   boardRoutes.routes,
   createMemoryRoutes(),
   agentScheduleRoutes,

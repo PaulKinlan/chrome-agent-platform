@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.15] — 2026-09-02
+- review round 1: register the agent-workspace Settings routes and derive workspace keys from slugifyAgentId
+
 ## [0.3.14] — 2026-09-02
 - restore the stock lockfile with only the release version fields bumped
 
