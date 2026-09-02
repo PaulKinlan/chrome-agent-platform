@@ -224,7 +224,7 @@ try {
   check(
     "empty Site tools copy is concise and non-duplicated",
     expanded.copy.siteEmpty === "No site agents yet." &&
-      expanded.copy.siteStatus === "Discovery has not run yet." &&
+      expanded.copy.siteStatus === "Open a site and I'll look for tools you can use." &&
       expanded.copy.siteAction === "Discover this page",
     expanded.copy,
   );

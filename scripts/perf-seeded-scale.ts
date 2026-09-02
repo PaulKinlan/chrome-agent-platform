@@ -116,7 +116,7 @@ try {
   // bounded policy, and the run logs on disk stay under the global byte cap.
   const runList = await msg({ type: "run.list" });
   const policy = runList?.retentionPolicy;
-  check("seeded: run.list reports the bounded run-log retention policy", policy?.mode === "bounded" && policy?.perThread === 10 && policy?.globalExecutions === 500 && policy?.globalBytes === RUN_LOG_BYTE_CAP, policy);
+  check("seeded: run.list reports the bounded run-log retention policy", policy?.mode === "bounded" && policy?.perThread === 50 && policy?.globalExecutions === 500 && policy?.globalBytes === RUN_LOG_BYTE_CAP, policy);
   const runLogs = await evalIn(optS, `(async () => {
     const root = await navigator.storage.getDirectory();
     let dir; try { dir = await (await (await root.getDirectoryHandle("memory")).getDirectoryHandle("durable-runs")).getDirectoryHandle("executions"); } catch { return { executions: 0, files: 0, bytes: 0, logBytes: 0 }; }

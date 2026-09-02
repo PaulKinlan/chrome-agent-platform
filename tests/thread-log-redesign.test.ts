@@ -307,14 +307,17 @@ Deno.test("KAT 9: pure projection ordering + pause marker semantics (projectThre
 // recent MAX_VIEW_EXECUTIONS, reports totals honestly, and the recent cards +
 // terminal self-heal still work.
 // ──────────────────────────────────────────────────────────────────────────
-Deno.test("bounded replay: a 30-run thread reads only the 25 recent executions, totals honest", async () => {
+// The bound is 50 since CAP-FB-20260901-THREAD-RELOAD-FIDELITY-01 (the last 50
+// runs of a surface reopen with their full visible history); what lies beyond
+// it is stated in-line, never silently dropped.
+Deno.test("bounded replay: a 55-run thread reads only the 50 recent executions, totals honest and stated", async () => {
   const store = new FakeStore();
   const registry = makeRegistry(store);
   const t = await createThread("many-run task");
   let listLogsCalls = 0;
   const spyListLogs = async (id, limit) => { listLogsCalls += 1; return await registry.listLogs(id, limit); };
 
-  for (let i = 1; i <= 30; i++) {
+  for (let i = 1; i <= 55; i++) {
     await seedRun(registry, `exec_bounded_${String(i).padStart(4, "0")}`, t.id, 1, { result: `answer ${i}` });
   }
 
@@ -326,11 +329,15 @@ Deno.test("bounded replay: a 30-run thread reads only the 25 recent executions, 
     recordFailure: () => {},
   });
 
-  assertEquals(view.totalExecutions, 30, "total executions reported honestly");
-  assertEquals(view.truncatedExecutions, 5, "the 5 oldest executions are omitted (30 - 25)");
-  assertEquals(listLogsCalls, 25, "listLogs is called only for the bounded recent executions, not all 30");
+  assertEquals(view.totalExecutions, 55, "total executions reported honestly");
+  assertEquals(view.truncatedExecutions, 5, "the 5 oldest executions are omitted (55 - 50)");
+  assertEquals(listLogsCalls, 50, "listLogs is called only for the bounded recent executions, not all 55");
+  // What is outside the bound is STATED in-line (never a silent drop).
+  const bound = view.messages.find((m) => m.role === "system" && m.viewBound);
+  assert(bound && /last 50 of 55 runs/.test(bound.content), `the view states its bound: ${bound?.content}`);
+  assertEquals(view.messages.indexOf(bound), 0, "the notice leads the view");
   // The MOST RECENT execution's tool card is present; the OLDEST (run 1) is not.
-  const hasRecent = toolCards(view).some((m) => m.executionId === "exec_bounded_0030");
+  const hasRecent = toolCards(view).some((m) => m.executionId === "exec_bounded_0055");
   const hasOldest = toolCards(view).some((m) => m.executionId === "exec_bounded_0001");
   assert(hasRecent, "the most recent execution's card is rendered");
   assert(!hasOldest, "the oldest execution (beyond the bound) is not re-read/rendered");

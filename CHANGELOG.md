@@ -1,7 +1,61 @@
 # Changelog
 
+## [0.2.637] — 2026-09-02
+- Merge remote-tracking branch 'origin/main' into cap/suite-honesty
+
+## [0.2.636] — 2026-09-02
+- Task board: the multi-site permission fix is complete; two small follow-ups were opened.
+
+## [0.2.635] — 2026-09-02
+- Allowing the agent on a second site no longer forgets the first; Settings lists every allowed site and each can be turned off on its own.
+
+## [0.2.634] — 2026-09-02
+- Task board: the plain-language copy pass is complete.
+
+## [0.2.633] — 2026-09-02
+- Messages, toggles and delete confirmations now use plain language throughout.
+
+## [0.2.632] — 2026-09-02
+- Task board: the unused-code cleanup is complete.
+
+## [0.2.631] — 2026-09-02
+- The extension's build now checks that every shipped file is actually used, and two unused modules are gone.
+
+## [0.2.630] — 2026-09-02
+- Task board: finished items moved to the archive so the open list is easier to read.
+
+## [0.2.629] — 2026-09-02
+- Task board: one more item is being worked on.
+
+## [0.2.628] — 2026-09-02
+- Task board: the every-item run fix is complete; four more items are being worked on.
+
+## [0.2.627] — 2026-09-02
+- Long tasks now go through every item: the agent reuses its tool selections, shows Step N of M while working, and offers Continue when it runs out of steps.
+
+## [0.2.626] — 2026-09-02
+- Task board: the reopen-a-conversation fix is complete.
+
+## [0.2.625] — 2026-09-02
+- Reopening a conversation now shows everything from its last 50 runs — every tool card, approval and full answer — and says plainly if older details were folded.
+
+## [0.2.624] — 2026-09-02
+- Task board: the background-polling fix is complete.
+
+## [0.2.623] — 2026-09-02
+- Open tabs no longer poll in the background; the extension's worker can go idle and badges still update the moment something happens.
+
+## [0.2.622] — 2026-09-02
+- Task board: the generated-document preview checks are complete.
+
+## [0.2.621] — 2026-09-02
+- The generated-document preview is now checked for its language and for script errors on every run.
+
+## [0.2.620] — 2026-09-02
+- Task board: two new defects — allowing a second site forgets the first, and long read loops forget their earliest pages.
+
 ## [0.2.619] — 2026-09-02
-- Quality checks: the security checks now run against the real extension, browser checks take turns instead of colliding, and a known problem is shown with its owner rather than hidden.
+- After you click Allow, the paused action now runs by itself — no retry, no protocol words in the conversation.
 
 ## [0.2.618] — 2026-09-02
 - Task board: three more items are being worked on.

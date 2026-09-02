@@ -96,13 +96,13 @@ Deno.test("lazy protocol: search is non-authorizing and execute delegates throug
   const context = runContext();
   const ref = await searchedRef(protocol, context);
   assertEquals(calls, 0, "retrieval must not execute or grant");
-  assertEquals(
-    await protocol.execute({
-      selectionRef: "sel_ffffffffffffffffffffffffffffffffffff",
-      arguments: { value: "forged" },
-    }, context),
-    { ok: false, error: "selection-missing-or-expired" },
-  );
+  const forged = await protocol.execute({
+    selectionRef: "sel_ffffffffffffffffffffffffffffffffffff",
+    arguments: { value: "forged" },
+  }, context) as Record<string, unknown>;
+  assertEquals(forged.ok, false);
+  assertEquals(forged.error, "selection-missing-or-expired");
+  assertStringIncludes(String(forged.message), "search_tools", "the failure names the next action");
   assertEquals(calls, 0, "a forged or non-selected reference is uncallable");
   const result = await protocol.execute({
     selectionRef: ref,
@@ -120,14 +120,16 @@ Deno.test("lazy protocol: search is non-authorizing and execute delegates throug
     "unknown",
   );
   assertEquals(calls, 1);
-  assertEquals(
-    await protocol.execute({
-      selectionRef: ref,
-      arguments: { value: "replayed" },
-    }, context),
-    { ok: false, error: "selection-replayed" },
-  );
-  assertEquals(calls, 1, "a consumed ref cannot dispatch twice");
+  // Bounded reuse (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01): the SAME ref
+  // executes the same tool again without a second search — every call still
+  // re-resolves and re-authorizes live.
+  const again = await protocol.execute({
+    selectionRef: ref,
+    arguments: { value: "again" },
+  }, context);
+  assertEquals(again.ok, true, `a second execute on the same ref must succeed, got ${JSON.stringify(again)}`);
+  assertEquals(again.result, { echoed: "again" });
+  assertEquals(calls, 2, "the second call dispatched");
   assertEquals(protocol.diagnostics().providerBound, false);
   assertEquals(protocol.diagnostics().grantsCreated, 0);
 });
@@ -195,21 +197,89 @@ Deno.test("lazy protocol: expiry and service-worker restart lose every reference
   const searched = await protocol.search({ query: "echo", ttlMs: 10 }, context);
   const ref = searched.results[0].selectionRef;
   now += 11;
-  assertEquals(
-    await protocol.execute(
-      { selectionRef: ref, arguments: { value: "x" } },
-      context,
-    ),
-    { ok: false, error: "selection-missing-or-expired" },
-  );
+  const expired = await protocol.execute(
+    { selectionRef: ref, arguments: { value: "x" } },
+    context,
+  ) as Record<string, unknown>;
+  assertEquals(expired.ok, false);
+  assertEquals(expired.error, "selection-missing-or-expired");
+  assertStringIncludes(String(expired.message), "search_tools");
   const restarted = new LazyToolProtocol({ readSources: () => records });
-  assertEquals(
-    await restarted.execute(
-      { selectionRef: ref, arguments: { value: "x" } },
-      context,
-    ),
-    { ok: false, error: "selection-missing-or-expired" },
-  );
+  const lost = await restarted.execute(
+    { selectionRef: ref, arguments: { value: "x" } },
+    context,
+  ) as Record<string, unknown>;
+  assertEquals(lost.ok, false);
+  assertEquals(lost.error, "selection-missing-or-expired");
+});
+
+// ── CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01 — reuse + release on failure ────
+Deno.test("lazy protocol: a tool-level failure releases the ref and the error carries a message", async () => {
+  let calls = 0;
+  const records = builtinRecords(() => {
+    calls++;
+    if (calls === 1) throw new Error("No tab with id: 1840671856.");
+    return { ok: true, read: calls };
+  });
+  const protocol = new LazyToolProtocol({
+    readSources: () => records,
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+  });
+  const context = runContext();
+  const ref = await searchedRef(protocol, context);
+  const failed = await protocol.execute({ selectionRef: ref, arguments: { value: "a" } }, context) as Record<string, unknown>;
+  assertEquals(failed.ok, false);
+  assertEquals(failed.selectedTool, "echo");
+  assertStringIncludes(String(failed.error), "No tab with id");
+  assertEquals(failed.selectionRef, ref, "the error hands the SAME ref back");
+  assertStringIncludes(String(failed.message), "still valid", "the message says the ref survives the failure");
+  assert(!/selection-replayed/.test(JSON.stringify(failed)), "no bare protocol token reaches the model");
+  assert(utf8Bytes(JSON.stringify(failed)) <= LAZY_TOOL_PROTOCOL_BOUNDS.maxErrorBytes + 512, "the error stays bounded");
+  // The owner's log: the model retried the same ref after "No tab with id" and
+  // got selection-replayed. Now the retry with the SAME ref dispatches.
+  const retried = await protocol.execute({ selectionRef: ref, arguments: { value: "b" } }, context) as Record<string, unknown>;
+  assertEquals(retried.ok, true, `the retry on the same ref must run, got ${JSON.stringify(retried)}`);
+  assertEquals(calls, 2);
+});
+
+Deno.test("lazy protocol: a tool result that reports its own error also releases the use", async () => {
+  // A browser tool returns {error:"…"} instead of throwing; the use must be
+  // handed back the same way so a loop over 30 items can fail on 29 of them
+  // and still keep one ref (the 64-use bound would otherwise be hit by errors).
+  const records = builtinRecords(() => ({ error: "Cannot access contents of the page." }));
+  const authority = new ToolSelectionAuthority({ newRef: refFactory() });
+  const protocol = new LazyToolProtocol({ readSources: () => records, selectionAuthority: authority });
+  const context = runContext();
+  const ref = await searchedRef(protocol, context);
+  for (let i = 0; i < 100; i++) {
+    const result = await protocol.execute({ selectionRef: ref, arguments: { value: `t${i}` } }, context) as Record<string, unknown>;
+    assertEquals(result.ok, true, `call ${i}: the envelope still delivers the tool's own error`);
+    assertEquals((result.result as Record<string, unknown>).error, "Cannot access contents of the page.");
+  }
+  // 100 failed calls never exhausted the 64-use bound.
+  const live = await protocol.execute({ selectionRef: ref, arguments: { value: "z" } }, context) as Record<string, unknown>;
+  assertEquals(live.ok, true);
+});
+
+Deno.test("lazy protocol: one ref drives a 30-item loop with ONE search and no replay", async () => {
+  const seen: string[] = [];
+  const records = builtinRecords((args) => {
+    seen.push(String(args.value));
+    return { read: args.value };
+  });
+  const protocol = new LazyToolProtocol({
+    readSources: () => records,
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+  });
+  const context = runContext();
+  const ref = await searchedRef(protocol, context);
+  for (let tab = 1; tab <= 30; tab++) {
+    const result = await protocol.execute({ selectionRef: ref, arguments: { value: `tab-${tab}` } }, context) as Record<string, unknown>;
+    assertEquals(result.ok, true, `tab ${tab}: ${JSON.stringify(result)}`);
+    assertEquals(result.selectionRef, ref);
+  }
+  assertEquals(seen.length, 30);
+  assertEquals(new Set(seen).size, 30, "every item was read exactly once");
 });
 
 Deno.test("lazy protocol: catalog/source/package identity changes fail closed before dispatch", async () => {
@@ -625,11 +695,11 @@ Deno.test("lazy protocol: hostile structured dispatcher errors never invoke gett
     selectionRef: ref,
     arguments: { value: "x" },
   }, context);
-  assertEquals(result, {
-    ok: false,
-    selectedTool: "echo",
-    error: "lazy dispatcher failed",
-  });
+  assertEquals(result.ok, false);
+  assertEquals(result.selectedTool, "echo");
+  assertEquals(result.error, "lazy dispatcher failed", "a hostile thrown object never contributes text");
+  assertEquals(result.selectionRef, ref, "the failed call's use went back to the ref");
+  assertStringIncludes(String(result.message), "still valid");
   assertEquals(getterCalls, 0);
 });
 
@@ -921,14 +991,15 @@ Deno.test("selection: invalid arguments do not consume the ref; the corrected re
   assertEquals(fixed.result, { created: "html" });
   assertEquals(calls, 1);
 
-  // 4. A successful execution still consumes the ref: replay stays refused,
-  //    and the replay error is NOT marked retryable.
-  const replay = await protocol.execute({
+  // 4. A successful execution keeps the ref live for the same tool (bounded
+  //    reuse, CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01): a second corrected
+  //    call dispatches again without a second search.
+  const reuse = await protocol.execute({
     selectionRef: ref,
     arguments: { type: "html", name: "bakery" },
   }, context) as Record<string, unknown>;
-  assertEquals(replay, { ok: false, error: "selection-replayed" });
-  assertEquals(calls, 1, "a consumed ref cannot dispatch twice");
+  assertEquals(reuse.ok, true, `reuse must dispatch, got ${JSON.stringify(reuse)}`);
+  assertEquals(calls, 2, "the reused ref dispatched a second time");
 });
 
 Deno.test("selection: a validation failure after expiry does not resurrect the ref", async () => {

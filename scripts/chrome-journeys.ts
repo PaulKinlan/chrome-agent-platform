@@ -120,6 +120,12 @@ class Cdp {
   swSessions = new Set();
   swTargetSessions = new Map(); // targetId → pre-attached sessionId
   pageSessions = new Set();
+  // Sandboxed generated-UI frames: the manifest-sandbox host is an out-of-
+  // process iframe TARGET (its nested about:srcdoc document runs in-process
+  // with it), so exceptions inside a generated document only reach the
+  // harness through a session attached to that host (CAP-FB-20260830-
+  // GENERATED-UI-BOOTSTRAP-SYNTAX-01).
+  frameSessions = new Set();
   swAttachErrors = [];
   executionContextEvents = []; // { sessionId, kind: "created"|"cleared", ts }
   fatalEvents = []; // malformed protocol, target crash, unexpected socket close
@@ -200,7 +206,12 @@ class Cdp {
         const detail = d.params?.exceptionDetails?.exception?.description ??
           d.params?.args?.map((a) => a?.value ?? a?.description).join(" ") ??
           JSON.stringify(d.params).slice(0, 200);
-        this.consoleErrors.push({ sessionId: d.sessionId, detail });
+        this.consoleErrors.push({
+          sessionId: d.sessionId, detail,
+          // The script URL an exception was thrown from (about:srcdoc for a
+          // generated document); absent for console.error calls.
+          url: d.params?.exceptionDetails?.url ?? null,
+        });
       }
     };
   }
@@ -426,6 +437,9 @@ const EXPECTED = [
   "fresh hub: the first-run banner offers exactly one action",
   "fresh hub at 1024x700: the composer is fully within the viewport",
   "fresh hub: no empty-state copy is rendered",
+  "hub: idle 60 s produces zero diagnostics/security/usage routes",
+  "hub: the shield badge updates within 1 s of a security event",
+  "hub: retained the shield-badge screenshot",
   "after enabling one recipe the four agent surfaces agree (1)",
   "after disabling that recipe the four agent surfaces agree (0) again",
   "create dialog: the template select is the first step (Custom default; Starter/Other/Scheduled groups; no gallery grid)",
@@ -439,6 +453,8 @@ const EXPECTED = [
   "create dialog: Create agent from the card yields ONE named agent whose role is the template persona",
   "create dialog: the saved agent's skill ids CONTAIN the exactly-toggled skill id",
   "create dialog: a Scheduled-group template creates one scheduled agent that the sidebar and Settings both list",
+  "hub + Settings: the delete-agent dialogs share one body in the reader's words",
+  "Settings: the Providers page never speaks the system's words",
   "create dialog: the journey's created agents are removed again (fresh profile restored)",
   "folder command: a granted folder was seeded in the SW store",
   "folder command: bare /folder typed into the composer",
@@ -545,6 +561,8 @@ const EXPECTED = [
   "Cookies: the developer build exposes them again, and no cookie value ever reaches the model",
   "warm run 1 returns a concrete demo result",
   "warm run 2 (after re-save) returns a concrete demo result",
+  "hub: demo reply is a sentence without a bracketed model tag",
+  "hub: sidebar preview has no bracketed model tag",
   "hub: two demo turns produce two user activity rows (no attestation/tool rows)",
   "hub: header reads N runs today with no $ or tokens",
   "hub: no activity row text overlaps the time column at 1440 and 1024",
@@ -569,6 +587,10 @@ const EXPECTED = [
   "Tool card: the expanded tree shows the full result beyond 300 chars (one result block; the tail leaf far past the old cut is a visible row)",
   "Tool card: the full result survives a reload — the pretty JSON view carries the tail leaf and is syntax-coloured from the theme tokens",
   "Run log: every memory_get result row carries the complete redacted result (resultFull > 300 chars with the tail leaf), never flagged truncated",
+  "thread: card count survives reload",
+  "thread: final answer expandable after reload",
+  "agent view: card count survives reload (the run-log view, never the journal's slice)",
+  "agent view: final answer expandable after reload (the retained full answer, never the 240-char preview)",
   "Tool card: a nested error inside an ok:true envelope is the card headline, in the error colour, with the error chip and the card open",
   "Claim check: a failed delegate renders one correction and one final bubble",
   "Thread view: edit approval card names the artifact and shows +n -m",
@@ -584,9 +606,14 @@ const EXPECTED = [
   "Scripted provider: the sandboxed artifact frame never reaches the provider origin (zero leak hits)",
   "Plan strip: a running multi-step task shows an advancing checklist pinned to the top of the thread",
   "Plan strip: on done it settles into a collapsed 'N steps' summary with every step checked",
+  "Every item: 12 fixture tabs are read with ONE read_page search — 12 execute_tool reads, 0 selection-replayed",
+  "Every item: the status row counts Step N of M while working",
+  "Budget: a run with budget 2 stops on 'Budget reached — Continue' (never a silent finish)",
+  "Budget: Continue runs a second execution on the same thread",
   "real red tab resolved (active tab id)",
   "screenshot: denied after revoke (secondary probe)",
   "screenshot: capture SUCCEEDS for the granted origin",
+  "Browser control: revoking one origin through the service worker reports it gone",
   "screenshot: wrong-origin grant is denied (secondary probe)",
   "screenshot: expired grant is denied (secondary probe)",
   "Settings: browser-grant checkbox present",
@@ -598,6 +625,9 @@ const EXPECTED = [
   "Side panel: open_side_panel is absent from the model toolset",
   "screenshot: typed the red origin into the allowed-origins field",
   "screenshot: grant scoped to the red origin via the UI",
+  "Browser control: allowing a second origin keeps the first origin granted",
+  "Browser control: Settings lists every allowed origin with its own Turn off",
+  "Browser control: turning off one origin leaves the other origin granted",
   "screenshot: UI-granted capture SUCCEEDS for the scoped origin",
   "screenshot: revoked via a real checkbox click",
   "Browser control: toggle OFF succeeds while a run holds the lease",
@@ -668,6 +698,8 @@ const EXPECTED = [
   "mgmt: list_assets lists the asset (no content)",
   "mgmt: get_asset round-trips content",
   "frame-guards: generated frame announces cap:preference-ready (bootstrap parses)",
+  "frame-guards: generated UI frame lang equals the owner locale",
+  "frame-guards: no SyntaxError exceptions on any about:srcdoc target during the artifact journey",
   "approval: primary NTP Settings iframe can deny an exact request",
   "approval: deny row is singular and capability material absent from the payload",
   "approval: NTP cannot programmatically resolve an owner approval",
@@ -720,6 +752,9 @@ const EXPECTED = [
   "about: the full history builds only when the disclosure opens",
   "about: Show all complements the visible five (no duplicated versions)",
   "about: retained a what's-new screenshot",
+  "demo-path: step 1 groups tabs and renders sentences",
+  "demo-path: step 4 hub shows the scheduled run summary",
+  "demo-path: step 5 artifact renders in the thread",
   "profile removed (no leak)",
   "cleanup hard-failed on descendants (none survived)",
   "no leftover temporary evidence dir",
@@ -926,6 +961,15 @@ async function main() {
     // + resume it, so module-eval/recoverOnBoot errors are genuinely observed.
     let attachSettled = Promise.resolve();
     cdp.onAttach = (sessionId, targetInfo, waitingForDebugger) => {
+      if (targetInfo?.type === "iframe") {
+        // An out-of-process child frame of a page we opted into (the artifact
+        // journey enables auto-attach on the NTP session so the sandboxed
+        // generated-UI host is observable). Enable Runtime so its exceptions
+        // are recorded; never pause it.
+        cdp.frameSessions.add(sessionId);
+        cdp.send("Runtime.enable", {}, sessionId).catch(() => {});
+        return;
+      }
       if (targetInfo?.type !== "service_worker") return;
       cdp.swSessions.add(sessionId);
       if (typeof targetInfo?.targetId === "string") {
@@ -1229,10 +1273,72 @@ async function main() {
       rect1024 !== null && rect1024.top >= 0 && rect1024.bottom <= 700,
     );
     const hubText = await evalIn(cdp, ntpSession, `document.body.innerText`);
-    const emptyCopy = ["No activity matches", "No artifacts yet", "No Site Agents yet", "Discovery has not run yet", "Nothing has happened yet"]
+    const emptyCopy = ["No activity matches", "No artifacts yet", "No Site Agents yet", "look for tools you can use", "Nothing has happened yet"]
       .filter((s) => String(hubText ?? "").includes(s));
     console.log("fresh hub empty copy:", JSON.stringify(emptyCopy));
     check("fresh hub: no empty-state copy is rendered", typeof hubText === "string" && emptyCopy.length === 0);
+
+    // ─────────────────────────────────────────────────────────────
+    // CAP-FB-20260830-HUB-POLLING-01 — an idle hub tab (plus an idle Settings
+    // tab on Usage) sends the worker ZERO diagnostics/security/usage routes:
+    // the shield/console badges and the Usage panel are push-driven off the
+    // SW's session-storage revision, never a timer. Counted from the SW's own
+    // trace ring over a 60 s window. The ring lives in the worker, so a worker
+    // restart inside the window would empty it — the count is only trusted
+    // when the SW session set is unchanged across the window.
+    const idleOptsPage = await openPage(port, `chrome-extension://${extId}/options/options.html#usage`);
+    await sleep(3000); // both pages finish their load-time work
+    const swSessionsBeforeIdle = cdp.swSessions.size;
+    const idleCleared = await msgValue({ type: "observability.clearTrace" });
+    await sleep(60000);
+    const idleTrace = await msgValue({ type: "observability.dumpTrace" });
+    const idleRoutes = (idleTrace?.logs?.entries ?? [])
+      .filter((e) => e?.ns === "sw:route")
+      .map((e) => String(e?.msg ?? ""));
+    const idlePolled = idleRoutes.filter((m) => /route (diagnostics\.list|security\.state|usage\.get)\b/.test(m));
+    const swRestartsInIdle = cdp.swSessions.size - swSessionsBeforeIdle;
+    console.log("idle hub 60 s:", JSON.stringify({ routes: idleRoutes, polled: idlePolled.length, swRestartsInIdle }));
+    check(
+      "hub: idle 60 s produces zero diagnostics/security/usage routes",
+      idleCleared?.ok === true && idleTrace?.ok === true && idlePolled.length === 0 && swRestartsInIdle === 0,
+    );
+    await fetch(`http://127.0.0.1:${port}/json/close/${idleOptsPage.id}`).catch(() => {});
+
+    // The shield badge still updates within 1 s of a REAL security event —
+    // the page reports a CSP violation through the existing diagnostics.report
+    // route (exactly what the hub's own securitypolicyviolation listener
+    // sends), and the SW's revision bump pushes the new count to the badge.
+    await cdp.send("Page.bringToFront", {}, ntpSession).catch(() => {});
+    await sleep(200);
+    const shieldCount = () => evalIn(cdp, ntpSession, `Number(document.querySelector('security-shield')?.getAttribute('count') ?? -1)`);
+    const shieldCountBefore = await shieldCount();
+    const shieldVisibility = await evalIn(cdp, ntpSession, `document.visibilityState`);
+    const shieldT0 = Date.now();
+    await msgValue({ type: "diagnostics.report", entries: [{ kind: "csp", message: "script-src: probe" }] });
+    let shieldCountAfter = shieldCountBefore;
+    let shieldUpdatedMs = -1;
+    for (let i = 0; i < 40; i++) {
+      await sleep(50);
+      const c = await shieldCount();
+      if (c > shieldCountBefore) {
+        shieldCountAfter = c;
+        shieldUpdatedMs = Date.now() - shieldT0;
+        break;
+      }
+    }
+    const shieldAttention = await evalIn(cdp, ntpSession, `document.querySelector('security-shield')?.hasAttribute('attention') === true`);
+    console.log("shield badge:", JSON.stringify({ shieldVisibility, shieldCountBefore, shieldCountAfter, shieldUpdatedMs, shieldAttention }));
+    check(
+      "hub: the shield badge updates within 1 s of a security event",
+      shieldCountBefore >= 0 && shieldCountAfter === shieldCountBefore + 1 &&
+        shieldUpdatedMs >= 0 && shieldUpdatedMs <= 1000 && shieldAttention === true,
+    );
+    const shieldShot = await captureShot(cdp, ntpSession);
+    if (shieldShot) await writeEvidence("hub-shield-badge-updated.png", shieldShot);
+    check("hub: retained the shield-badge screenshot", shieldShot !== null);
+    // Restore the fresh transparency state for the journeys that follow.
+    await msgValue({ type: "security.clear" });
+    await msgValue({ type: "diagnostics.clear" });
 
     // Enable ONE recipe. Headless Chrome auto-denies chrome.permissions.request,
     // so background-agent.set fails closed here (by design); seed the enabled
@@ -1881,6 +1987,50 @@ async function main() {
         Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedName) && /Scheduled · every \d+ min/.test(t)) &&
         surfacesS.sidebarRows === 2 && surfacesS.panelRows === 2 && surfacesS.settingsRows === 2 && /^2 agents/.test(surfacesS.panelCount),
     );
+    // CAP-FB-20260830-USER-VOICE-COPY-01: the hub's and Settings' delete
+    // confirmations are ONE shared dialog whose body says what the person
+    // loses, in their words. Open each with a genuine click, read it, cancel —
+    // nothing is deleted here (the restore below does that through the route).
+    const READ_CONFIRM = `(() => { const d = document.querySelector('.cap-confirm-dialog'); return d ? JSON.stringify({ title: d.querySelector('.cap-confirm-title')?.textContent ?? '', body: d.querySelector('.cap-confirm-body')?.textContent ?? '', accept: d.querySelector('.cap-confirm-accept')?.textContent ?? '' }) : null; })()`;
+    const readConfirm = async (session) => { try { return JSON.parse((await evalIn(cdp, session, READ_CONFIRM)) ?? "null"); } catch { return null; } };
+    // Creating the scheduled agent opened its thread, so the hub's Delete is up.
+    const hubDeleteClicked = await clickSel(cdp, ntpSession, "#delete-agent");
+    await sleep(500);
+    const hubDialog = await readConfirm(ntpSession);
+    const hubDialogShot = await captureShot(cdp, ntpSession);
+    if (hubDialogShot) await writeEvidence("dialog-delete-agent-shared.png", hubDialogShot);
+    await clickSel(cdp, ntpSession, ".cap-confirm-dialog .cap-confirm-cancel");
+    await sleep(300);
+    const voicePage = await openPage(port, `chrome-extension://${extId}/options/options.html#agents`);
+    const voiceSession = await attachRuntime(cdp, voicePage.id);
+    await sleep(1500);
+    const settingsDeleteClicked = await clickSel(cdp, voiceSession, ".delete-named-agent");
+    await sleep(500);
+    const settingsDialog = await readConfirm(voiceSession);
+    await clickSel(cdp, voiceSession, ".cap-confirm-dialog .cap-confirm-cancel");
+    await sleep(300);
+    console.log("delete dialogs:", JSON.stringify({ hubDeleteClicked, hubDialog, settingsDeleteClicked, settingsDialog }));
+    const SHARED_DELETE_BODY = "Its memory and history are removed. Artifacts it made are kept.";
+    check(
+      "hub + Settings: the delete-agent dialogs share one body in the reader's words",
+      hubDeleteClicked && settingsDeleteClicked &&
+        hubDialog?.body === SHARED_DELETE_BODY && settingsDialog?.body === SHARED_DELETE_BODY &&
+        hubDialog.accept === "Delete" && settingsDialog.accept === "Delete" &&
+        /^Delete .+\?$/.test(hubDialog.title) && /^Delete .+\?$/.test(settingsDialog.title),
+    );
+    // The Providers page: the same page, on the section a new person reads first.
+    await evalIn(cdp, voiceSession, `location.hash = '#providers'; true`);
+    await sleep(800);
+    const providersText = String((await evalIn(cdp, voiceSession, `document.querySelector('#providers')?.innerText ?? ''`)) ?? "");
+    const providersShot = await captureShot(cdp, voiceSession);
+    if (providersShot) await writeEvidence("options-providers-no-model-copy.png", providersShot);
+    console.log("providers copy:", JSON.stringify(providersText.slice(0, 300)));
+    check(
+      "Settings: the Providers page never speaks the system's words",
+      providersText.length > 0 && !/Internal testing provider|has not run|registry|catalog generation|\d+ chars\b/i.test(providersText),
+    );
+    await cdp.send("Target.closeTarget", { targetId: voicePage.id }).catch(() => {});
+    await sleep(300);
     // Restore the fresh profile the rest of the suite expects: delete the two
     // agents through the real owner-direct route (a click in an extension page
     // IS the approval), which also cancels the scheduled one's alarm.
@@ -3415,6 +3565,34 @@ async function main() {
     await msgValue({ type: "provider.set", config: { provider: "demo", apiKey: "" } });
     const warmRun2 = await msgValue({ type: "agent.run", task: "ping two" });
     check("warm run 2 (after re-save) returns a concrete demo result", concrete(warmRun2));
+    // CAP-FB-20260830-USER-VOICE-COPY-01: the demo's plain reply is a real
+    // sentence after its marker, and the thread previews a person reads in
+    // the sidebar never carry the bracketed transport tag. The warm runs are
+    // the positive control: their stored assistant turns DO start with the
+    // marker, so a preview that also started with it would be the leak.
+    const demoSentence = String(warmRun1?.result ?? "").replace(/^\[demo model\]\s*/u, "");
+    check(
+      "hub: demo reply is a sentence without a bracketed model tag",
+      demoSentence === "I'm the built-in demo, so I can't do this yet. Connect a model in Settings and ask again.",
+    );
+    const voiceThreads = await msgValue({ type: "thread.list" });
+    const voiceRows = Array.isArray(voiceThreads?.threads) ? voiceThreads.threads : [];
+    let taggedStoredTurns = 0;
+    for (const t of voiceRows.slice(0, 6)) {
+      const full = await msgValue({ type: "thread.get", id: t?.id });
+      if ((full?.thread?.messages ?? []).some((m) => m?.role === "assistant" && /^\[demo model\]/u.test(String(m?.content ?? "")))) taggedStoredTurns++;
+    }
+    await sleep(500);
+    const domPreviews = (await evalIn(cdp, ntpSession, `[...document.querySelectorAll('#thread-sidebar .t-preview')].map((el) => el.textContent.trim())`)) ?? [];
+    const indexPreviews = voiceRows.map((t) => String(t?.preview ?? ""));
+    const voiceShot = await captureShot(cdp, ntpSession);
+    if (voiceShot) await writeEvidence("hub-demo-reply-voice.png", voiceShot);
+    console.log("sidebar previews:", JSON.stringify({ taggedStoredTurns, indexPreviews: indexPreviews.slice(0, 6), domPreviews: (Array.isArray(domPreviews) ? domPreviews : []).slice(0, 6) }));
+    check(
+      "hub: sidebar preview has no bracketed model tag",
+      taggedStoredTurns >= 1 && indexPreviews.length >= 1 &&
+        indexPreviews.every((p) => !/^\[/u.test(p)) && Array.isArray(domPreviews) && domPreviews.every((p) => !/^\[/u.test(p)),
+    );
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 3a2 — CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01, folded into
@@ -3843,7 +4021,9 @@ async function main() {
     const distinctLens = new Set(streamSamples.map((s) => s.len).filter((n) => n > 0));
     const sawStreamingAttr = streamSamples.some((s) => s.streaming && s.len > 0);
     const textNodesOnly = streamSamples.filter((s) => s.streaming && s.textNodesOnly != null).every((s) => s.textNodesOnly === true);
-    const sawWriting = streamSamples.some((s) => (s.status ?? []).some((r) => r.activity === "Writing the answer…"));
+    // The activity carries the step counter since CAP-FB-20260901-RUN-BUDGET-
+    // EVERY-ITEM-01 ("Writing the answer · Step 2 of 1152"): match the phrase.
+    const sawWriting = streamSamples.some((s) => (s.status ?? []).some((r) => /^Writing the answer\b/.test(String(r.activity ?? ""))));
     const lastSample = streamSamples.at(-1) ?? {};
     const worstLongTask = Math.max(0, ...(lastSample.longTasks ?? []));
     const firstVisibleMs = streamSamples.find((s) => s.len > 0)?.t ?? null;
@@ -4048,6 +4228,101 @@ async function main() {
     check(
       "Run log: every memory_get result row carries the complete redacted result (resultFull > 300 chars with the tail leaf), never flagged truncated",
       bigResultRows.length >= 2 && bigResultRows.every((r) => typeof r.resultFull === "string" && r.resultFull.length > 300 && r.resultFull.includes(BIG_TAIL) && r.resultFullTruncated === false),
+    );
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 3d1.7 — CAP-FB-20260901-THREAD-RELOAD-FIDELITY-01: reopening a
+    // surface in a FRESH document (the reload) shows the same sequence the
+    // live runs showed — every non-protocol tool card and the final answer
+    // with its Show-full-response expander — on BOTH surfaces the owner
+    // reopens: a task thread (thread.get) and a named agent's view (the
+    // run-log view; the journal's 240-char answer preview and 200-row slice
+    // were what lost the transcript). The expected card count is read from
+    // the durable run logs, so the check never assumes a demo-model shape.
+    // ─────────────────────────────────────────────────────────────
+    const PROTOCOL_TOOLS = new Set(["search_tools", "execute_tool", "list_tools"]);
+    const expectedCardsFor = async (executionIds) => {
+      let n = 0;
+      for (const executionId of executionIds) {
+        const res = await msgValue({ type: "run.logs", executionId }).catch(() => null);
+        for (const r of Array.isArray(res?.logs) ? res.logs : []) {
+          if (r?.type === "tool-result" && !PROTOCOL_TOOLS.has(r.selectedTool ?? r.tool)) n += 1;
+        }
+      }
+      return n;
+    };
+    const RELOAD_READ = `(() => {
+      const conv = document.getElementById('thread-conversation');
+      if (!conv) return JSON.stringify(null);
+      const all = [...conv.querySelectorAll('message-bubble')];
+      const tools = all.filter((b) => b.getAttribute('role') === 'tool').map((b) => b.getAttribute('tool-name'));
+      const agents = all.filter((b) => b.getAttribute('role') === 'agent');
+      const last = agents[agents.length - 1] ?? null;
+      const root = last ? (last.shadowRoot ?? last) : null;
+      const toggle = root?.querySelector('.long-toggle') ?? null;
+      if (toggle) toggle.click();
+      const body = root?.querySelector('.long-response .body') ?? root?.querySelector('.body') ?? null;
+      return JSON.stringify({
+        toolCards: tools.length, toolNames: tools,
+        users: all.filter((b) => b.getAttribute('role') === 'user').length,
+        agents: agents.length,
+        lastLen: last ? (last.getAttribute('content') ?? '').length : 0,
+        hasExpander: !!toggle,
+        opened: toggle ? (root.querySelector('.long-response')?.getAttribute('data-open') === '1') : false,
+        bodyHasTail: !!body && body.textContent.includes(${JSON.stringify(LONG_TAIL)}),
+        systems: all.filter((b) => b.getAttribute('role') === 'system').map((b) => (b.getAttribute('content') ?? '').slice(0, 80)),
+      });
+    })()`;
+    const reopenAndRead = async (url, shotName) => {
+      const created = await cdp.send("Target.createTarget", { url });
+      const targetId = created?.result?.targetId;
+      await sleep(3000);
+      const session = await attachRuntime(cdp, targetId);
+      cdp.pageSessions.add(session);
+      let state = null;
+      try { state = JSON.parse(await evalIn(cdp, session, RELOAD_READ) ?? "null"); } catch { state = null; }
+      await sleep(200);
+      const shot = shotName ? await captureShot(cdp, session).catch(() => null) : null;
+      if (shot) await writeEvidence(shotName, shot);
+      await cdp.send("Target.closeTarget", { targetId }).catch(() => {});
+      cdp.pageSessions.delete(session);
+      return state;
+    };
+    // (a) the task thread: two tool runs + a long answer on ONE thread.
+    const rf1 = await msgValue({ type: "agent.run", task: "@demo-tools reload fidelity run one" });
+    const RF_THREAD_ID = rf1?.threadId ?? null;
+    const rf2 = RF_THREAD_ID ? await msgValue({ type: "agent.run", task: "@demo-tools reload fidelity run two", threadId: RF_THREAD_ID }) : null;
+    const rf3 = RF_THREAD_ID ? await msgValue({ type: "agent.run", task: "@demo-long-answer reload fidelity final", threadId: RF_THREAD_ID }) : null;
+    const rfThreadExpected = await expectedCardsFor([rf1?.executionId, rf2?.executionId, rf3?.executionId].filter(Boolean));
+    const rfThread = RF_THREAD_ID ? await reopenAndRead(`chrome-extension://${extId}/ntp/ntp.html#thread=${encodeURIComponent(RF_THREAD_ID)}`, "thread-after-reload.png") : null;
+    console.log(`reload fidelity (thread): expected ${rfThreadExpected} cards; reopened ${JSON.stringify(rfThread).slice(0, 500)}`);
+    check(
+      "thread: card count survives reload",
+      rf1?.ok === true && rf2?.ok === true && rf3?.ok === true && rfThreadExpected >= 6 &&
+        rfThread?.toolCards === rfThreadExpected && rfThread.users === 3 && rfThread.agents === 3,
+    );
+    check(
+      "thread: final answer expandable after reload",
+      rfThread?.hasExpander === true && rfThread.opened === true && rfThread.bodyHasTail === true && rfThread.lastLen > 4000,
+    );
+    // (b) the named agent's view (the owner's "agent view"): the same three
+    // runs in the agent's own sandbox, reopened at #agent=named:<id>.
+    const rfAgent = await msgValue({ type: "named-agent.create", name: "Reload Fidelity", role: "You are a reload-fidelity fixture." });
+    const RF_AGENT_ID = rfAgent?.agent?.id ?? null;
+    const ra1 = RF_AGENT_ID ? await msgValue({ type: "named-agent.run", id: RF_AGENT_ID, task: "@demo-tools agent reload fidelity run one" }) : null;
+    const ra2 = RF_AGENT_ID ? await msgValue({ type: "named-agent.run", id: RF_AGENT_ID, task: "@demo-tools agent reload fidelity run two" }) : null;
+    const ra3 = RF_AGENT_ID ? await msgValue({ type: "named-agent.run", id: RF_AGENT_ID, task: "@demo-long-answer agent reload fidelity final" }) : null;
+    const rfAgentExpected = await expectedCardsFor([ra1?.executionId, ra2?.executionId, ra3?.executionId].filter(Boolean));
+    const rfAgentView = RF_AGENT_ID ? await reopenAndRead(`chrome-extension://${extId}/ntp/ntp.html#agent=named:${encodeURIComponent(RF_AGENT_ID)}`, "agent-view-after-reload.png") : null;
+    console.log(`reload fidelity (agent view): expected ${rfAgentExpected} cards; reopened ${JSON.stringify(rfAgentView).slice(0, 500)}`);
+    check(
+      "agent view: card count survives reload (the run-log view, never the journal's slice)",
+      ra1?.ok === true && ra2?.ok === true && ra3?.ok === true && rfAgentExpected >= 6 &&
+        rfAgentView?.toolCards === rfAgentExpected && rfAgentView.users === 3 && rfAgentView.agents === 3,
+    );
+    check(
+      "agent view: final answer expandable after reload (the retained full answer, never the 240-char preview)",
+      rfAgentView?.hasExpander === true && rfAgentView.opened === true && rfAgentView.bodyHasTail === true && rfAgentView.lastLen > 4000,
     );
 
     // ─────────────────────────────────────────────────────────────
@@ -4578,6 +4853,184 @@ async function main() {
     );
 
     // ─────────────────────────────────────────────────────────────
+    // JOURNEY 3g — CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01: "it should go
+    // through every tab". (1) Twelve fixture tabs; the demo model lists them and
+    // reads EVERY one through the real lazy protocol with ONE read_page search —
+    // the run log shows 12 read_page executes, 0 `selection-replayed` — while
+    // the status row counts "Step N of M". (2) A run whose budget is two
+    // iterations stops on "Budget reached — Continue" (never a silent finish);
+    // clicking Continue runs a second execution on the SAME thread.
+    // ─────────────────────────────────────────────────────────────
+    {
+      const RUN_STATUS_STATE = `(() => {
+        const conv = document.getElementById('thread-conversation');
+        const row = conv ? conv.querySelector('conversation-run-status.live-status') : null;
+        if (!row) return JSON.stringify(null);
+        const sr = row.shadowRoot;
+        return JSON.stringify({
+          state: row.getAttribute('state'),
+          category: row.getAttribute('error-category'),
+          actionKind: row.getAttribute('action-kind'),
+          actionLabel: row.getAttribute('action-label'),
+          label: sr ? (sr.querySelector('.label')?.textContent ?? '').trim() : '',
+          hasAction: !!(sr && sr.querySelector('.action')),
+        });
+      })()`;
+      const runStatus = async () => { try { return JSON.parse(await evalIn(cdp, ntpSession, RUN_STATUS_STATE) ?? "null"); } catch { return null; } };
+      const latestRun = async (threadId = null) => {
+        const runs = await msgValue({ type: "run.list" }).catch(() => null);
+        const rows = (Array.isArray(runs?.runs) ? runs.runs : [])
+          .filter((r) => (threadId ? r?.threadId === threadId : /demo-every-tab/.test(String(r?.taskPreview ?? ""))));
+        rows.sort((a, b) => (a?.updatedAt ?? a?.createdAt ?? 0) - (b?.updatedAt ?? b?.createdAt ?? 0));
+        return rows[rows.length - 1] ?? null;
+      };
+      // read_page needs the silent `scripting` permission (the journey manifest
+      // already carries <all_urls>); grant it under a CDP user gesture.
+      const scriptingReady = await evalIn(cdp, ntpSession, `chrome.permissions.contains({ permissions: ["scripting"] })`);
+      if (scriptingReady !== true) {
+        await cdp.send("Runtime.evaluate", {
+          expression: `chrome.permissions.request({ permissions: ["scripting"] }).catch(() => false)`,
+          awaitPromise: true, returnByValue: true, userGesture: true,
+        }, ntpSession).catch(() => null);
+      }
+      console.log(`every-tab journey: scripting granted=${await evalIn(cdp, ntpSession, `chrome.permissions.contains({ permissions: ["scripting"] })`)}`);
+      // The journey profile cannot hold the `tabs` permission (headless
+      // auto-denies its prompt), so the demo loop is given the fixture tab ids
+      // explicitly (the ids are visible to an extension page without `tabs`;
+      // list_tabs itself is covered by the unit test + the live harness).
+      const tabIdsBefore = new Set(await evalIn(cdp, ntpSession, `chrome.tabs.query({}).then((t) => t.map((x) => x.id))`) ?? []);
+      const fixtureTabs = [];
+      for (let i = 1; i <= 12; i++) fixtureTabs.push(await openPage(port, `${RED_ORIGIN}/tab/${i}`));
+      await sleep(1500);
+      const tabIdsAfter = await evalIn(cdp, ntpSession, `chrome.tabs.query({}).then((t) => t.map((x) => x.id))`) ?? [];
+      const fixtureTabIds = tabIdsAfter.filter((id) => !tabIdsBefore.has(id));
+      const everyTask = `@demo-every-tab tabs=${fixtureTabIds.join(",")}`;
+      const runsBeforeEvery = ((await msgValue({ type: "run.list" }).catch(() => null))?.runs ?? []).length;
+      await driveHubTask(everyTask);
+      let stepCounterSeen = null;
+      let stepShot = null;
+      let everyRun = null;
+      {
+        const t0 = Date.now();
+        while (Date.now() - t0 < 180000) {
+          const st = await runStatus();
+          if (st && ["running", "retrying", "queued"].includes(st.state) && /Step \d+ of \d+/.test(st.label)) {
+            stepCounterSeen = st.label;
+            if (!stepShot) { stepShot = await captureShot(cdp, ntpSession); if (stepShot) await writeEvidence("run-budget-step-counter.png", stepShot); }
+          }
+          // The durable registry is the authority for "settled" (the live row
+          // is re-projected when the thread reloads at the terminal).
+          const runs = (await msgValue({ type: "run.list" }).catch(() => null))?.runs ?? [];
+          const mine = runs.filter((r) => /demo-every-tab/.test(String(r?.taskPreview ?? "")));
+          const newest = mine.sort((a, b) => (a?.updatedAt ?? a?.createdAt ?? 0) - (b?.updatedAt ?? b?.createdAt ?? 0))[mine.length - 1];
+          if (runs.length > runsBeforeEvery && newest && ["terminal", "cancelled"].includes(newest.phase)) { everyRun = newest; break; }
+          await sleep(200);
+        }
+      }
+      await sleep(600);
+      const everyLogs = everyRun?.executionId ? await msgValue({ type: "run.logs", executionId: everyRun.executionId }).catch(() => null) : null;
+      const logRows = (Array.isArray(everyLogs?.logs) ? everyLogs.logs : []).map((r) => { try { return JSON.stringify(r); } catch { return ""; } });
+      const executeCalls = logRows.filter((s) => /"type":"tool-call"/.test(s) && /"tool":"execute_tool"/.test(s)).length;
+      const searchCalls = logRows.filter((s) => /"type":"tool-call"/.test(s) && /"tool":"search_tools"/.test(s)).length;
+      const readPageResults = logRows.filter((s) => /"type":"tool-result"/.test(s) && /"tool":"execute_tool"/.test(s) && /read_page/.test(s)).length;
+      const replayed = logRows.filter((s) => /selection-replayed/.test(s)).length;
+      const summary = String(everyRun?.terminal?.summary ?? "");
+      console.log(`every-tab journey: fixtureTabs=${fixtureTabIds.length} run=${JSON.stringify({ phase: everyRun?.phase, ok: everyRun?.terminal?.ok })} step=${JSON.stringify(stepCounterSeen)} rows=${logRows.length} search=${searchCalls} execute=${executeCalls} read_page=${readPageResults} replayed=${replayed} summary=${summary.slice(0, 200)}`);
+      const everyShot = await captureShot(cdp, ntpSession);
+      if (everyShot) await writeEvidence("every-tab-demo-12.png", everyShot);
+      check(
+        "Every item: 12 fixture tabs are read with ONE read_page search — 12 execute_tool reads, 0 selection-replayed",
+        fixtureTabIds.length === 12 && everyRun?.phase === "terminal" && everyRun?.terminal?.ok === true &&
+          // ONE search (never one per item); the search_tools row itself is a
+          // best-effort journal write, so "at most one" is the falsifiable bound.
+          searchCalls <= 1 && readPageResults === 12 && executeCalls === 12 && replayed === 0 &&
+          /Every tab: listed 12, read 12 of 12\./.test(summary),
+      );
+      check(
+        "Every item: the status row counts Step N of M while working",
+        typeof stepCounterSeen === "string" && /Step \d+ of \d+/.test(stepCounterSeen),
+      );
+
+      // (2) The budget stop + Continue. Two iterations × two inner steps = four
+      // model steps: search read_page, execute one read, (history stripped)
+      // search, execute — then the loop is out of steps with reads pending.
+      // The run outlives a CDP evaluate: fire it, then poll for its reply. It
+      // runs as a NEW TURN of the every-tab thread (never a new thread): the
+      // Tasks rail lists threads newest-first and later journeys reopen the
+      // FIRST row expecting the thread their own turns landed in.
+      const everyThreadId = everyRun?.threadId ?? null;
+      await evalIn(cdp, ntpSession, `(() => { window.__capBudgetRun = null; chrome.runtime.sendMessage(${JSON.stringify({ type: "agent.run", task: everyTask, maxIterations: 2, threadId: everyThreadId })}).then((v) => { window.__capBudgetRun = v; }, (e) => { window.__capBudgetRun = { ok: false, error: String(e?.message ?? e) }; }); return true; })()`);
+      let budgeted = null;
+      {
+        const t0 = Date.now();
+        while (Date.now() - t0 < 180000) {
+          budgeted = await evalIn(cdp, ntpSession, `window.__capBudgetRun`).catch(() => null);
+          if (budgeted) break;
+          await sleep(300);
+        }
+      }
+      console.log(`budget journey: run=${JSON.stringify(budgeted).slice(0, 400)}`);
+      const budgetThreadId = budgeted?.threadId ?? everyThreadId;
+      const budgetRun = ((await msgValue({ type: "run.list" }).catch(() => null))?.runs ?? [])
+        .find((r) => r?.threadId === budgetThreadId && r?.terminal?.errorCategory === "budget") ?? null;
+      check(
+        "Budget: a run with budget 2 stops on 'Budget reached — Continue' (never a silent finish)",
+        budgeted?.ok === false && budgeted?.errorCategory === "budget" && budgeted?.errorAction === "Continue" &&
+          /Step budget reached \(4 of 4\)/.test(String(budgeted?.error)) &&
+          budgetRun?.phase === "terminal" && budgetRun?.terminal?.errorCategory === "budget" && budgetRun?.terminal?.ok === false,
+      );
+      // Reopen the thread in a NEW target (the suite's NTP stays untouched):
+      // the status row derives "Budget reached — Continue" from the durable
+      // record (not from a live event).
+      const reopened = await cdp.send("Target.createTarget", {
+        url: `chrome-extension://${extId}/ntp/ntp.html#thread=${encodeURIComponent(String(budgetThreadId ?? ""))}`,
+      });
+      const reopenedId = reopened?.result?.targetId ?? null;
+      await sleep(1500);
+      const reopenedSession = reopenedId ? await attachRuntime(cdp, reopenedId) : null;
+      if (reopenedSession) cdp.pageSessions.add(reopenedSession);
+      const reopenedStatus = async () => { try { return JSON.parse(await evalIn(cdp, reopenedSession, RUN_STATUS_STATE) ?? "null"); } catch { return null; } };
+      let budgetStatus = null;
+      {
+        const t0 = Date.now();
+        while (reopenedSession && Date.now() - t0 < 20000) {
+          const st = await reopenedStatus();
+          if (st && st.state === "failed" && st.actionKind === "continue") { budgetStatus = st; break; }
+          await sleep(200);
+        }
+      }
+      console.log(`budget journey: reopened status=${JSON.stringify(budgetStatus)}`);
+      const budgetShot = reopenedSession ? await captureShot(cdp, reopenedSession) : null;
+      if (budgetShot) await writeEvidence("run-budget-continue-card.png", budgetShot);
+      const executionsBefore = new Set(((await msgValue({ type: "run.list" }).catch(() => null))?.runs ?? []).filter((r) => r?.threadId === budgetThreadId).map((r) => r.executionId));
+      const clickedContinue = budgetStatus ? await clickShadow(cdp, reopenedSession, "conversation-run-status.live-status", ".action") : false;
+      let continued = null;
+      {
+        const t0 = Date.now();
+        while (Date.now() - t0 < 60000) {
+          const runs = (await msgValue({ type: "run.list" }).catch(() => null))?.runs ?? [];
+          const mine = runs.filter((r) => r?.threadId === budgetThreadId);
+          // The continuation is the thread's run that did not exist before the click.
+          const newest = mine.find((r) => !executionsBefore.has(r?.executionId)) ?? null;
+          if (newest && ["terminal", "cancelled"].includes(newest.phase)) { continued = { count: mine.length, newest }; break; }
+          await sleep(300);
+        }
+      }
+      console.log(`budget journey: clicked=${clickedContinue} before=${executionsBefore.size} after=${JSON.stringify({ count: continued?.count, phase: continued?.newest?.phase, ok: continued?.newest?.terminal?.ok, task: String(continued?.newest?.taskPreview ?? "").slice(0, 80), budget: continued?.newest?.terminal?.budget ?? null, summary: String(continued?.newest?.terminal?.summary ?? "").slice(0, 120) })}`);
+      check(
+        "Budget: Continue runs a second execution on the same thread",
+        !!budgetStatus && /Budget reached/.test(budgetStatus.label) && budgetStatus.actionLabel === "Continue" && clickedContinue === true &&
+          !!continued && continued.count === executionsBefore.size + 1 && continued.newest.executionId !== budgetRun?.executionId &&
+          continued.newest.terminal?.ok === true,
+      );
+      // Leave the suite as it was: close the fixture tabs and the reopened view
+      // (the NTP stays on the thread view the next journey's composer expects).
+      for (const t of fixtureTabs) await cdp.send("Target.closeTarget", { targetId: t.id }).catch(() => {});
+      if (reopenedId) await cdp.send("Target.closeTarget", { targetId: reopenedId }).catch(() => {});
+      await sleep(800);
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // JOURNEY 4 — screenshot matrix. Owner grant/scope/revoke is driven via the
     // genuine Settings UI; wrong-origin + expiry remain SECONDARY message probes.
     // ─────────────────────────────────────────────────────────────
@@ -4631,7 +5084,15 @@ async function main() {
       allowedShot?.error === undefined && typeof allowedShot?.screenshot === "string" &&
         allowedShot.screenshot.length > 0,
     );
-    // (c) wrong-origin (secondary probe).
+    // (c) wrong-origin (secondary probe). Per-origin grants are a SET
+    // (CAP-FB-20260902-ORIGIN-GRANT-UNION-01): allowing another origin no
+    // longer removes the red one, so the red grant is revoked ON ITS OWN first
+    // and only the wrong origin is left allowed.
+    const redRevoke = await msgValue({ type: "browser-control.revoke", origin: RED_ORIGIN });
+    check(
+      "Browser control: revoking one origin through the service worker reports it gone",
+      redRevoke?.grant?.revoked === true && redRevoke?.grant?.origin === RED_ORIGIN,
+    );
     await msgValue({
       type: "browser-control.set",
       origins: ["http://127.0.0.1:1"],
@@ -4654,6 +5115,26 @@ async function main() {
       "screenshot: expired grant is denied (secondary probe)",
       expiredShot?.error !== undefined || expiredShot?.ok === false,
     );
+    // Under the set contract the wrong-origin grant from (c) is STILL live
+    // (the expired red entry sits beside it), and the Settings switch follows
+    // the true state live — so clear every grant before the GENUINE UI grant
+    // below, which must start from off, and wait for the switch to show off.
+    const pollUntil = async (fn, ms = 8000) => {
+      const deadline = Date.now() + ms;
+      while (Date.now() < deadline) {
+        const v = await fn();
+        if (v) return v;
+        await sleep(150);
+      }
+      return null;
+    };
+    const listedOrigins = () =>
+      evalOpts(`[...document.querySelectorAll("#grant-origin-rows origin-grant-row")].map((r) => r.getAttribute("origin"))`);
+    await msgValue({ type: "browser-control.set", granted: false });
+    const switchOff = await pollUntil(async () =>
+      (await evalOpts(`document.querySelector("#browser-grant")?.checked === false`)) === true
+    );
+    console.log(`[debug] browser-control switch before the UI grant ${JSON.stringify({ switchOff, live: await msgValue({ type: "browser-control.get" }) })}`);
 
     // ─────────────────────────────────────────────────────────────
     // GENUINE UI grant: checkbox click + origin textarea typing (the primary
@@ -4756,6 +5237,63 @@ async function main() {
       scopedGrant?.scope === "origins" &&
         Array.isArray(scopedGrant?.origins) &&
         scopedGrant.origins.includes(RED_ORIGIN),
+    );
+    // CAP-FB-20260902-ORIGIN-GRANT-UNION-01: a second site's Allow ADDS to the
+    // set. The Allow handler on an approval card calls the same
+    // browser-control.set route with that card's origin, so allowing a second
+    // origin through it must keep the red origin granted, Settings must list
+    // both with their own Turn off, and turning one off must leave the other.
+    const SECOND_ORIGIN = "http://127.0.0.1:1";
+    await msgValue({ type: "browser-control.set", origins: [SECOND_ORIGIN] });
+    const unionGrant = await msgValue({ type: "browser-control.get" });
+    check(
+      "Browser control: allowing a second origin keeps the first origin granted",
+      unionGrant?.scope === "origins" && Array.isArray(unionGrant?.origins) &&
+        unionGrant.origins.includes(RED_ORIGIN) && unionGrant.origins.includes(SECOND_ORIGIN) &&
+        Array.isArray(unionGrant?.grants) && unionGrant.grants.length === 2,
+    );
+    // The Settings listing follows the storage change without a reload.
+    const listedRows = await pollUntil(async () => {
+      const rows = await listedOrigins();
+      return Array.isArray(rows) && rows.includes(RED_ORIGIN) && rows.includes(SECOND_ORIGIN) ? rows : null;
+    });
+    const everyRowHasTurnOff = await evalOpts(
+      `[...document.querySelectorAll("#grant-origin-rows origin-grant-row")].every((r) => r.shadowRoot?.querySelector("button")?.textContent.trim() === "Turn off")`,
+    );
+    check(
+      "Browser control: Settings lists every allowed origin with its own Turn off",
+      Array.isArray(listedRows) && listedRows.length === 2 && everyRowHasTurnOff === true,
+    );
+    await evalOpts(`document.querySelector("#grant-origin-rows")?.scrollIntoView({ block: "center" })`);
+    await sleep(200);
+    const twoOriginsShot = await captureShot(cdp, optsSession);
+    if (twoOriginsShot) await writeEvidence("browser-control-two-origins.png", twoOriginsShot);
+    // A GENUINE click on the second origin's Turn off (inside the row's shadow tree).
+    const secondRowIndex = Array.isArray(listedRows) ? listedRows.indexOf(SECOND_ORIGIN) : -1;
+    let turnedOff = false;
+    if (secondRowIndex >= 0) {
+      const b = await evalOpts(
+        `(() => { const row = document.querySelectorAll("#grant-origin-rows origin-grant-row")[${secondRowIndex}]; const el = row?.shadowRoot?.querySelector("button"); if (!el) return null; el.scrollIntoView({ block: "center" }); const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
+      );
+      if (b && typeof b.x === "number") {
+        await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: b.x, y: b.y, button: "left", buttons: 1, clickCount: 1 }, optsSession);
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: b.x, y: b.y, button: "left", buttons: 0, clickCount: 1 }, optsSession);
+        turnedOff = true;
+      }
+    }
+    const afterOneOff = await pollUntil(async () => {
+      const g = await msgValue({ type: "browser-control.get" });
+      return Array.isArray(g?.origins) && !g.origins.includes(SECOND_ORIGIN) ? g : null;
+    });
+    const rowsAfterOneOff = await pollUntil(async () => {
+      const rows = await listedOrigins();
+      return Array.isArray(rows) && !rows.includes(SECOND_ORIGIN) ? rows : null;
+    });
+    check(
+      "Browser control: turning off one origin leaves the other origin granted",
+      turnedOff && afterOneOff?.scope === "origins" && afterOneOff.origins.includes(RED_ORIGIN) &&
+        !afterOneOff.origins.includes(SECOND_ORIGIN) && afterOneOff.active === true &&
+        Array.isArray(rowsAfterOneOff) && rowsAfterOneOff.length === 1 && rowsAfterOneOff[0] === RED_ORIGIN,
     );
     const uiGrantShot = await msgValue({ type: "capture.tab", tabId: redTabId });
     // The UI grant flow (checkbox + scoped origin) is genuinely driven above;
@@ -5332,7 +5870,7 @@ async function main() {
     );
     check(
       "Settings: Data & memory shows the run-log retention row",
-      retentionRow !== null && /Run logs/.test(retentionRow.name) && /newest 10 runs per task/.test(retentionRow.bound) && /500 runs overall/.test(retentionRow.bound) && /32 MiB/.test(retentionRow.bound),
+      retentionRow !== null && /Run logs/.test(retentionRow.name) && /newest 50 runs per task/.test(retentionRow.bound) && /500 runs overall/.test(retentionRow.bound) && /32 MiB/.test(retentionRow.bound),
     );
     check(
       "Settings: the run-log retention toggle reports the bounded default (off)",
@@ -5623,10 +6161,19 @@ async function main() {
     // is an end-to-end proof that the injected bootstrap parsed and ran — the
     // exact regression this task fixes (before: SyntaxError, no ready post, no
     // attribute). The locale-application half (apply() setting
-    // document.documentElement.lang) is asserted behaviourally in
-    // tests/frame-guards.test.ts — the srcdoc DOM is intentionally opaque to
-    // every parent realm (double sandbox), so a browser read of the nested
-    // document is not possible by design.
+    // document.documentElement.lang) is then read INSIDE the generated
+    // document: the srcdoc DOM is opaque to every parent realm (double
+    // sandbox), but the debugger is not a parent realm — the manifest-sandbox
+    // host is an out-of-process iframe target, and the nested about:srcdoc
+    // frame is in-process with it, so an isolated world created in that frame
+    // via the host's session reads the real attribute. Auto-attach on the NTP
+    // session is what makes the host observable (frame exceptions included).
+    await cdp.send("Target.setAutoAttach", {
+      autoAttach: true, waitForDebuggerOnStart: false, flatten: true,
+    }, ntpSession);
+    const ownerLocale = await evalIn(
+      cdp, ntpSession, `document.documentElement.lang || navigator.language || ""`,
+    );
     await evalIn(cdp, ntpSession, `(() => {
       const drawer = document.getElementById("artifact-quick-drawer");
       if (!drawer) return false;
@@ -5645,6 +6192,63 @@ async function main() {
       "frame-guards: generated frame announces cap:preference-ready (bootstrap parses)",
       readyAttr === "ready",
     );
+    // Read documentElement.lang from the generated document's own realm.
+    let srcdocLang = null;
+    let srcdocSeen = 0;
+    for (const frameSession of cdp.frameSessions) {
+      let tree = null;
+      try {
+        tree = (await cdp.send("Page.getFrameTree", {}, frameSession))?.result?.frameTree;
+      } catch {
+        continue; // the host already went away (an earlier detached frame)
+      }
+      const walk = (n, out = []) => {
+        out.push(n.frame);
+        for (const c of n.childFrames ?? []) walk(c, out);
+        return out;
+      };
+      for (const frame of walk(tree ?? { frame: {}, childFrames: [] })) {
+        if (frame?.url !== "about:srcdoc") continue;
+        srcdocSeen++;
+        try {
+          const world = await cdp.send("Page.createIsolatedWorld", {
+            frameId: frame.id, worldName: "cap-journey-frame-guards",
+          }, frameSession);
+          const r = await cdp.send("Runtime.evaluate", {
+            expression: "document.documentElement.lang",
+            returnByValue: true, contextId: world?.result?.executionContextId,
+          }, frameSession);
+          srcdocLang = r?.result?.result?.value ?? null;
+        } catch (e) {
+          console.log(`[debug] srcdoc realm read failed: ${String(e?.message ?? e)}`);
+        }
+      }
+    }
+    console.log(`[frame-guards] owner locale=${JSON.stringify(ownerLocale)} srcdoc frames=${srcdocSeen} srcdoc lang=${JSON.stringify(srcdocLang)}`);
+    check(
+      "frame-guards: generated UI frame lang equals the owner locale",
+      typeof ownerLocale === "string" && ownerLocale.length > 0 &&
+        srcdocSeen === 1 && srcdocLang === ownerLocale,
+    );
+    const srcdocExceptions = cdp.consoleErrors.filter((e) =>
+      cdp.frameSessions.has(e.sessionId) && e.url === "about:srcdoc"
+    );
+    for (const e of srcdocExceptions) console.log(`[frame-guards] about:srcdoc exception: ${e.detail.split("\n")[0]}`);
+    check(
+      "frame-guards: no SyntaxError exceptions on any about:srcdoc target during the artifact journey",
+      srcdocExceptions.every((e) => !/SyntaxError/.test(e.detail)),
+    );
+    // Evidence: the rendered artifact with its ready wrapper in the DOM
+    // snapshot log (the screenshot cannot show an attribute).
+    const readyWrapper = await evalIn(cdp, ntpSession, `(() => {
+      const wrap = document.querySelector('.frame[data-cap-preference]');
+      return wrap ? wrap.outerHTML.slice(0, wrap.outerHTML.indexOf(">") + 1) : null;
+    })()`);
+    console.log(`[frame-guards] DOM snapshot: ${readyWrapper}`);
+    await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});
+    await sleep(300);
+    const frameReadyShot = await captureShot(cdp, ntpSession);
+    if (frameReadyShot) await writeEvidence("artifact-frame-ready.png", frameReadyShot);
     await evalIn(cdp, ntpSession, `document.querySelector("agent-dialog")?.close?.()`);
 
     // The PRIMARY Settings entry is the NTP's embedded options iframe. Drive
@@ -6594,6 +7198,13 @@ async function main() {
       check("about: retained a what's-new screenshot", false);
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY demo-path — CAP-FB-20260830-EXEC-DEMO-01. The five-minute exec
+    // demo's steps 1, 4 and 5 driven headless on a SECOND, seeded profile
+    // (its own Chrome, its own fixtures, its own cleanup). See demoPathJourney.
+    // ─────────────────────────────────────────────────────────────
+    await demoPathJourney();
+
     cdp.intentionalClose = true;
     ws.close();
     await withTimeout(fixture.shutdown(), 8000, "fixture.shutdown").catch((e) => {
@@ -6772,10 +7383,318 @@ async function main() {
 
     Deno.exit(
       failed > 0 || !removed || !clean || !tempEvidenceGone || !manifestOk ||
-          fixtureShutdownFailed
+          fixtureShutdownFailed || demoPathLeak
         ? 1
         : 0,
     );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CAP-FB-20260830-EXEC-DEMO-01 — the `demo-path` group.
+//
+// The five-minute exec demo (REVIEW-2026-08-30.md §6) is rehearsed headed with
+// a real key; THIS group keeps its steps 1, 4 and 5 from regressing headless,
+// on the product's own deterministic models, with the script's sentences typed
+// into the real composer:
+//   step 1  "Group my open tabs by topic and give me a two-line summary of
+//           each group" → ONE in-chat grant card (browser control for the
+//           tabs' origins, Allowed with a real click) → real chrome.tabGroups
+//           groups + a paragraph of sentences, none of the six forbidden strings
+//           anywhere in the thread (light DOM + every shadow root, cards open).
+//   step 4  "It worked while I was away": a scheduled agent created before
+//           step 1 (the script's precondition) fires its REAL 1-minute alarm and
+//           the hub timeline shows its row (agent + outcome) on a fresh hub.
+//   step 5  "Make something": an artifact renders IN the thread as an
+//           <artifact-card> whose preview is loaded from the store.
+//
+// Why a second, seeded Chrome: steps 1 and 4 need `tabs` + `tabGroups`, both
+// WARNED optional permissions whose native prompt headless Chrome can never
+// resolve (the main suite proves exactly that in the permissions journey). The
+// owner's two Allow clicks are stood in for the way scripts/keyless-first-
+// result.ts documents: the grant is seeded in the profile's extension prefs
+// BEFORE launch (an unpacked extension's id is sha256(path) in the a–p alphabet
+// — scripts/kat-notify-icon.ts). Nothing else is seeded: no provider, no key,
+// the developer flag OFF, so step 1 runs on the keyless local assistant (the
+// product's fresh-profile path) and step 5 on the marker model behind the flag.
+// The in-chat grant card in step 1 is the extension's OWN browser-control grant
+// (no Chrome prompt), so it is settled with a genuine click — the denial→card→
+// Allow→retry path the demo depends on is driven, not seeded.
+// ─────────────────────────────────────────────────────────────────────────────
+let demoPathLeak = false;
+const DEMO_FORBIDDEN = ["modelContent", "search_tools", "catalogGeneration", "prompt-attestation", "[demo model]", "returned no content"];
+const DEMO_STEP1 = "Group my open tabs by topic and give me a two-line summary of each group";
+const DEMO_SCHEDULED_AGENT = "Reading digest";
+const DEMO_SCHEDULED_TASK = "Summarise my open tabs";
+
+/** Chrome's id for an unpacked extension: sha256 of the absolute path, first
+ * 32 hex digits, each mapped 0-9a-f → a-p. */
+async function unpackedExtensionId(path: string): Promise<string> {
+  const abs = await Deno.realPath(path);
+  const hex = (await sha256Hex(new TextEncoder().encode(abs))).slice(0, 32);
+  return [...hex].map((c) => String.fromCharCode(97 + parseInt(c, 16))).join("");
+}
+
+function demoFixture(label: string) {
+  return Deno.serve({ port: 0, hostname: "127.0.0.1", onListen: () => {} }, (req) => {
+    const u = new URL(req.url);
+    const page = u.pathname.slice(1) || "home";
+    return new Response(
+      `<html><head><title>${label}: ${page}</title></head><body><h1>${label} ${page}</h1><p>An article about ${page}.</p></body></html>`,
+      { headers: { "content-type": "text/html" } },
+    );
+  });
+}
+
+async function demoPathJourney() {
+  const profile = `/home/paulkinlan/.cache/cap-review/j2-demo-${Date.now()}`;
+  const extId = await unpackedExtensionId(EXT);
+  const grant = { api: ["tabs", "tabGroups"], explicit_host: [], manifest_permissions: [], scriptable_host: [] };
+  const prefs = { extensions: { settings: { [extId]: { granted_permissions: grant, active_permissions: grant } } } };
+  await Deno.mkdir(`${profile}/Default`, { recursive: true });
+  await Deno.writeTextFile(`${profile}/Default/Preferences`, JSON.stringify(prefs));
+  await Deno.writeTextFile(`${profile}/Default/Secure Preferences`, JSON.stringify(prefs));
+  const docs = demoFixture("Docs");
+  const shop = demoFixture("Shop");
+  const DOCS = `http://127.0.0.1:${docs.addr.port}`;
+  const SHOP = `http://127.0.0.1:${shop.addr.port}`;
+  const proc = launchChrome(profile);
+  let ws = null;
+  let cdp = null;
+  // Every check is reported exactly once, whatever fails — a thrown step FAILS
+  // the remaining checks honestly instead of leaving them "not reached".
+  const reported = new Set();
+  const report = (name, cond) => { reported.add(name); check(name, cond); };
+  const STEP1_NAME = "demo-path: step 1 groups tabs and renders sentences";
+  const STEP4_NAME = "demo-path: step 4 hub shows the scheduled run summary";
+  const STEP5_NAME = "demo-path: step 5 artifact renders in the thread";
+  try {
+    const port = await withTimeout(waitForPort(proc), 20000, "demo-path: wait for port");
+    const version = await fetchJson(`http://127.0.0.1:${port}/json/version`);
+    ws = new WebSocket(version.webSocketDebuggerUrl);
+    await withTimeout(new Promise((r) => ws.onopen = r), 5000, "demo-path: ws open");
+    cdp = new Cdp(ws);
+    let sw = null;
+    for (let i = 0; i < 60 && !sw; i++) {
+      const targets = await fetchJson(`http://127.0.0.1:${port}/json/list`);
+      sw = targets.find((t) => t.type === "service_worker" && String(t.url).includes(extId));
+      if (!sw) await sleep(200);
+    }
+    if (!sw) throw new Error(`demo-path: the extension (${extId}) never registered its service worker`);
+    const swSession = await attachRuntime(cdp, sw.id);
+    cdp.swSessions.add(swSession);
+    const seeded = await evalIn(cdp, swSession, `chrome.permissions.contains({ permissions: ["tabs", "tabGroups"] })`);
+    if (seeded !== true) throw new Error("demo-path: the seeded tabs + tabGroups grant did not take");
+
+    const ntpPage = await openPage(port, `chrome-extension://${extId}/ntp/ntp.html`);
+    await sleep(2000);
+    const ntp = await attachRuntime(cdp, ntpPage.id);
+    cdp.pageSessions.add(ntp);
+    const msg = async (payload) => {
+      const r = await withTimeout(
+        cdp.send("Runtime.evaluate", {
+          expression: `chrome.runtime.sendMessage(${JSON.stringify(payload)}).then(v => ({v}), e => ({err: e.message}))`,
+          returnByValue: true,
+          awaitPromise: true,
+        }, ntp),
+        15000,
+        `demo-path msg ${payload.type}`,
+      );
+      const inner = r?.result?.result?.value;
+      return inner && typeof inner === "object" && "v" in inner ? inner.v : inner?.err ?? inner;
+    };
+
+    // The script's precondition: a scheduled agent created earlier, so that by
+    // step 4 it has run. A REAL recurring 1-minute schedule; the alarm is not
+    // accelerated — step 4 waits for it.
+    const created = await msg({ type: "named-agent.create", name: DEMO_SCHEDULED_AGENT, role: "Summarise what is open in the browser, concisely." });
+    const agentId = created?.agent?.id;
+    const scheduledAt = Date.now();
+    const scheduled = agentId
+      ? await msg({ type: "named-agent.set-schedule", id: agentId, periodInMinutes: 1, task: DEMO_SCHEDULED_TASK })
+      : null;
+    console.log(`demo-path: scheduled agent ${JSON.stringify({ agentId, ok: scheduled?.ok, name: scheduled?.name })}`);
+
+    // "Two or three real article tabs open": two on one site, one on another,
+    // so grouping by site has something to group and something to leave alone.
+    for (const url of [`${DOCS}/fetch`, `${DOCS}/streams`, `${SHOP}/cart`]) {
+      await cdp.send("Target.createTarget", { url });
+    }
+    await sleep(1200);
+
+    // ── step 1 ──
+    await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});
+    await cdp.send("Page.bringToFront", {}, ntp).catch(() => {});
+    await clickSel(cdp, ntp, "#home").catch(() => false);
+    await sleep(500);
+    const typed = await typeInto(cdp, ntp, "#task-input", DEMO_STEP1);
+    const ran = typed && await clickSel(cdp, ntp, "#run-task");
+    const STATE = `(() => {
+      const conv = document.getElementById('thread-conversation');
+      if (!conv) return JSON.stringify({ agent: [], status: [], cards: [], pending: 0, artifactCards: [] });
+      const agent = [...conv.querySelectorAll('message-bubble[role="agent"]')].map((b) => ((b.shadowRoot ?? b).querySelector('.msg, .body') ?? b).textContent.replace(/\\s+/g, ' ').trim());
+      const status = [...conv.querySelectorAll('conversation-run-status')].map((x) => x.getAttribute('state'));
+      const cards = [...conv.querySelectorAll('permission-approval-card')].map((c) => ({ state: c.getAttribute('state'), allowIsButton: c.shadowRoot?.querySelector('.allow')?.tagName === 'BUTTON' }));
+      const artifactCards = [...conv.querySelectorAll('artifact-card')].map((c) => {
+        const sr = c.shadowRoot ?? c;
+        const kind = sr.querySelector('.preview .html-frame') ? 'html-frame' : sr.querySelector('.preview .img') ? 'img' : sr.querySelector('.preview .text') ? 'text' : sr.querySelector('.preview .placeholder') ? 'placeholder' : 'none';
+        return { name: c.getAttribute('name'), kind, previewLength: typeof c.preview === 'string' ? c.preview.length : 0 };
+      });
+      return JSON.stringify({ agent, status, cards, pending: cards.filter((c) => c.state === null).length, artifactCards });
+    })()`;
+    const readState = async (session) => { try { return JSON.parse(await evalIn(cdp, session, STATE) ?? "{}"); } catch { return {}; } };
+    const busy = (st) => (st.status ?? []).some((s) => s === "working" || s === "queued" || s === "retrying");
+    let st = {};
+    let t0 = Date.now();
+    while (Date.now() - t0 < 60000) {
+      st = await readState(ntp);
+      if ((st.pending ?? 0) > 0) break;
+      if ((st.agent ?? []).length > 0 && !busy(st)) break;
+      await sleep(250);
+    }
+    await sleep(400);
+    st = await readState(ntp);
+    // The single in-chat grant of the script ("Allow the single in-chat grant"):
+    // browser control for the tabs' origins, settled with a GENUINE click.
+    let allowed = false;
+    if ((st.pending ?? 0) > 0) {
+      allowed = await clickShadow(cdp, ntp, "#thread-conversation permission-approval-card", ".allow");
+      t0 = Date.now();
+      while (Date.now() - t0 < 60000) {
+        st = await readState(ntp);
+        if ((st.agent ?? []).length > 0 && (st.pending ?? 0) === 0 && !busy(st) && !(st.status ?? []).includes("waiting-for-permission")) break;
+        await sleep(250);
+      }
+      await sleep(600);
+      st = await readState(ntp);
+    }
+    await evalIn(cdp, ntp, OPEN_ALL_CARDS).catch(() => null);
+    await sleep(300);
+    const threadText = String((await evalIn(cdp, ntp, THREAD_TEXT("#thread-conversation")).catch(() => "")) ?? "");
+    const forbidden = DEMO_FORBIDDEN.filter((s) => threadText.includes(s));
+    const groups = await evalIn(cdp, swSession, `chrome.tabGroups.query({})`).catch(() => []);
+    const paragraph = (st.agent ?? []).join(" | ");
+    const sentences = paragraph.split(/(?<=\.)\s+/).filter((s) => /\S/.test(s));
+    const shot1 = await captureShot(cdp, ntp);
+    if (shot1) await writeEvidence("demo-path-step1-thread.png", shot1);
+    console.log(`demo-path step 1: typed=${typed} ran=${ran} allowed=${allowed} cards=${JSON.stringify(st.cards)} groups=${Array.isArray(groups) ? groups.length : "n/a"} forbidden=${JSON.stringify(forbidden)} text=${JSON.stringify(paragraph).slice(0, 300)}`);
+    report(
+      STEP1_NAME,
+      ran === true && Array.isArray(groups) && groups.length >= 1 &&
+        sentences.length >= 1 && forbidden.length === 0 &&
+        // at most ONE permission card per step, and it was answered here
+        (st.cards ?? []).length <= 1 && (st.cards ?? []).every((c) => c.state === "granted") &&
+        (st.pending ?? 0) === 0,
+    );
+
+    // ── step 4 ──
+    // The real alarm: periodInMinutes 1 → first fire ~60 s after set-schedule.
+    let fired = null;
+    while (Date.now() - scheduledAt < 110000 && agentId) {
+      const list = await msg({ type: "run.list" });
+      fired = (list?.runs ?? []).find((r) => r?.scheduleName === `agent:${agentId}` && (r?.phase === "terminal" || r?.phase === "done")) ?? null;
+      if (fired) break;
+      await sleep(1000);
+    }
+    console.log(`demo-path step 4: scheduled run ${fired ? `terminal after ${Date.now() - scheduledAt} ms` : "did not reach terminal in 110 s"}`);
+    // "Back to the new tab": a FRESH hub, no navigation — the timeline row is
+    // there on open.
+    const hub2 = await openPage(port, `chrome-extension://${extId}/ntp/ntp.html`);
+    const hubSession = await attachRuntime(cdp, hub2.id);
+    cdp.pageSessions.add(hubSession);
+    await cdp.send("Target.activateTarget", { targetId: hub2.id }).catch(() => {});
+    const TIMELINE = `(() => {
+      const el = document.getElementById('hub-timeline');
+      const rows = [...(el?.shadowRoot?.querySelectorAll('.tl-row') ?? [])].map((r) => ({
+        title: (r.querySelector('.tl-title')?.textContent ?? '').trim(),
+        agent: (r.querySelector('.tl-agent')?.textContent ?? '').trim(),
+        outcome: (r.querySelector('.tl-outcome')?.textContent ?? '').trim(),
+        status: (r.querySelector('.tl-sr')?.textContent ?? '').trim(),
+        visible: r.getBoundingClientRect().height > 0,
+      }));
+      return JSON.stringify({ hidden: document.getElementById('timeline-section')?.hasAttribute('hidden') ?? null, rows });
+    })()`;
+    let timeline = { hidden: null, rows: [] };
+    let row = null;
+    t0 = Date.now();
+    while (Date.now() - t0 < 10000) {
+      try { timeline = JSON.parse(await evalIn(cdp, hubSession, TIMELINE) ?? "{}"); } catch { timeline = { hidden: null, rows: [] }; }
+      row = (timeline.rows ?? []).find((r) => r.agent === DEMO_SCHEDULED_AGENT) ?? null;
+      if (row && row.outcome) break;
+      await sleep(400);
+    }
+    const shot4 = await captureShot(cdp, hubSession);
+    if (shot4) await writeEvidence("demo-path-step4-timeline.png", shot4);
+    console.log(`demo-path step 4: timeline ${JSON.stringify({ hidden: timeline.hidden, row })}`);
+    report(
+      STEP4_NAME,
+      fired !== null && timeline.hidden === false && row !== null && row.visible === true &&
+        row.title === DEMO_SCHEDULED_TASK && row.outcome.length > 0 && row.status === "Done" &&
+        DEMO_FORBIDDEN.every((s) => !row.outcome.includes(s)),
+    );
+
+    // ── step 5 ──
+    // "Make something": the provider stand-in is the marker model behind the
+    // developer flag (the suite's deterministic seam); its create + approved
+    // edit lands crumb.html in the thread as an <artifact-card> whose preview is
+    // loaded from the store. A NEW thread from the hub composer, so step 1's
+    // thread stays exactly what the owner saw.
+    await msg({ type: "kv.set", values: { "cap:developerFeatures": true } });
+    await clickSel(cdp, hubSession, "#home").catch(() => false);
+    await sleep(500);
+    const typed5 = await typeInto(cdp, hubSession, "#task-input", "@demo-edit-artifact create crumb.html then edit it");
+    const ran5 = typed5 && await clickSel(cdp, hubSession, "#run-task");
+    let approved = false;
+    t0 = Date.now();
+    while (Date.now() - t0 < 30000 && !approved) {
+      const pending = await evalIn(cdp, hubSession, `(() => !![...document.querySelectorAll('#thread-conversation approval-card')].find((x) => (x.getAttribute('state') || 'pending') === 'pending'))()`).catch(() => false);
+      if (pending === true) {
+        await sleep(800); // the diff region renders after the card
+        approved = await clickShadow(cdp, hubSession, "#thread-conversation approval-card", ".approve");
+        break;
+      }
+      const s5 = await readState(hubSession);
+      if ((s5.agent ?? []).length > 0 && !busy(s5) && !(s5.status ?? []).includes("waiting-for-permission")) break;
+      await sleep(250);
+    }
+    let st5 = {};
+    t0 = Date.now();
+    while (Date.now() - t0 < 30000) {
+      st5 = await readState(hubSession);
+      if ((st5.agent ?? []).length > 0 && !busy(st5) && !(st5.status ?? []).includes("waiting-for-permission")) break;
+      await sleep(250);
+    }
+    // The preview loads from the store after the card mounts — give it a beat.
+    for (let i = 0; i < 10; i++) {
+      st5 = await readState(hubSession);
+      if ((st5.artifactCards ?? []).some((c) => c.kind === "html-frame" && c.previewLength > 0)) break;
+      await sleep(300);
+    }
+    const shot5 = await captureShot(cdp, hubSession);
+    if (shot5) await writeEvidence("demo-path-step5-artifact.png", shot5);
+    console.log(`demo-path step 5: ran=${ran5} approved=${approved} cards=${JSON.stringify(st5.artifactCards)} text=${JSON.stringify((st5.agent ?? []).join(" | ")).slice(0, 200)}`);
+    report(
+      STEP5_NAME,
+      ran5 === true && (st5.artifactCards ?? []).length >= 1 &&
+        (st5.artifactCards ?? []).every((c) => c.name === "crumb.html" && c.kind === "html-frame" && c.previewLength > 0),
+    );
+    cdp.intentionalClose = true;
+  } catch (e) {
+    console.error("demo-path journey failure:", String(e?.message ?? e));
+  } finally {
+    for (const name of [STEP1_NAME, STEP4_NAME, STEP5_NAME]) {
+      if (!reported.has(name)) report(name, false);
+    }
+    try { if (cdp) cdp.intentionalClose = true; ws?.close(); } catch { /* ignore */ }
+    await Promise.all([docs.shutdown(), shop.shutdown()].map((p) => withTimeout(p, 8000, "demo-path fixture.shutdown").catch(() => { demoPathLeak = true; })));
+    try {
+      await killChromiumTree(proc, profile);
+      await runBounded(RM, ["-rf", profile]);
+      if (await Deno.stat(profile).then(() => true).catch(() => false)) demoPathLeak = true;
+    } catch (e) {
+      demoPathLeak = true;
+      console.error("demo-path cleanup failure:", String(e?.message ?? e));
+    }
   }
 }
 

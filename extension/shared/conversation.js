@@ -16,6 +16,7 @@
 import { newId } from "../lib/pure.js";
 import { send } from "../lib/messages.js";
 import { summarizeToolResult, toolResultTruncationNote } from "../lib/tool-summary.js";
+import { formatBudgetProgress } from "../lib/run-budget.js";
 import { safeJsonStringify } from "./tool-tree.js";
 import { artifactIdentityFromPayloads } from "./thread-view.js";
 import { isAuthoritativeThreadResultProjected } from "./thread-projection-authority.js";
@@ -605,6 +606,9 @@ export function createToolCardQueue() {
  * closed to the plain error text, never an approval card for a forged shape).
  * The requirement is only ever a DESCRIPTION — approving it still takes the
  * real owner click on the card. */
+/** The permission card's line once the owner approved AND the runtime re-ran
+ * the paused call (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01). */
+export const APPROVED_THEN_RAN = "Approved by you — the action then ran.";
 const SCRIPT_DETAIL_MAX_SOURCE = 64 * 1024;
 const SCRIPT_DETAIL_MAX_HOSTS = 64;
 /** Bound a script-approval detail for the card; malformed → undefined. */
@@ -958,6 +962,8 @@ export function pairToolJournal(entries) {
       // The structured denial persisted on the result row (§2b), when any.
       permissionRequirement: result?.permissionRequirement ?? null,
       permissionDecision: result?.permissionDecision ?? null,
+      // Approved, then re-run by the runtime (the reopened card says so).
+      reexecuted: result?.reexecuted === true,
       ts,
       duplicate: byCall.get(id)?.duplicate === true,
     });
@@ -1303,6 +1309,7 @@ export function toolRowsFromRunLog(executionId, logs) {
       selectedTool: typeof r.selectedTool === "string" && r.selectedTool ? r.selectedTool : null,
       permissionRequirement: r.permissionRequirement && typeof r.permissionRequirement === "object" ? r.permissionRequirement : null,
       permissionDecision: typeof r.permissionDecision === "string" ? r.permissionDecision : null,
+      reexecuted: r.reexecuted === true,
       ts: typeof r.at === "number" ? r.at : null,
     }));
   const seenApprovals = new Set();
@@ -1353,7 +1360,7 @@ export function toolRowsFromRunLog(executionId, logs) {
       // row) reopens grantable.
       const decision = p.permissionDecision;
       const replayState = decision === "approved"
-        ? { state: "granted", detail: "Approved during the run." }
+        ? { state: "granted", detail: p.reexecuted ? APPROVED_THEN_RAN : "Approved during the run." }
         : decision === "denied"
           ? { state: "denied" }
           : decision === "expired"
@@ -1402,9 +1409,17 @@ function compactedMarker(executionId, logs) {
   if (!row) return null;
   const dropped = Number.isFinite(row.rowsDropped) ? row.rowsDropped : 0;
   const status = row.status === "ok" ? "completed" : row.status === "cancelled" ? "was cancelled" : "failed";
+  // The row says WHAT was folded (CAP-FB-20260901-THREAD-RELOAD-FIDELITY-01):
+  // the owner reads "3 tool calls, 1 approval" in place of the cards, never a
+  // silent gap. Rows written before the breakdown existed carry only the count.
+  const folded = row.folded && typeof row.folded === "object" ? row.folded : null;
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const what = folded
+    ? ` Older tool details were compacted — the run log keeps the summary. Folded: ${plural(Number(folded.toolCalls) || 0, "tool call")}${Number(folded.approvals) > 0 ? `, ${plural(Number(folded.approvals), "approval")}` : ""}.`
+    : " Older tool details were compacted — the run log keeps the summary.";
   return {
     role: "system",
-    content: `Run log compacted: this run ${status}; ${dropped} log ${dropped === 1 ? "row" : "rows"} of tool detail were folded into its summary to bound storage (Settings → Data & memory).`,
+    content: `Run log compacted: this run ${status}; ${dropped} log ${dropped === 1 ? "row" : "rows"} of tool detail were folded into its summary to bound storage (Settings → Data & memory).${what}`,
     ts: typeof row.compactedAt === "number" ? row.compactedAt : (typeof row.at === "number" ? row.at : Date.now()),
     derived: true,
     compacted: true,
@@ -1881,14 +1896,25 @@ export async function runConversationTurn(container, { text, attachments = [], h
     const outcome = approve
       ? await approvePermissionRequirement(requirement)
       : await resolveApprovalRequirement(requirement, false);
-    if (outcome.ok && entry.requestId) {
-      const resolved = await send("run.resolve-inline-approval", {
-        requestId: entry.requestId,
-        approve: approve === true,
-      }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
-      if (resolved?.ok !== true) {
+    // Every paused call waiting behind this card (siblings with the same
+    // requirement share it) gets the owner's one decision
+    // (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01).
+    const waiting = (entry.requestIds ?? []).length ? [...entry.requestIds] : (entry.requestId ? [entry.requestId] : []);
+    if (outcome.ok && waiting.length) {
+      let resolvedAny = false;
+      let lastError = null;
+      for (const requestId of waiting) {
+        const resolved = await send("run.resolve-inline-approval", {
+          requestId,
+          approve: approve === true,
+        }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+        if (resolved?.ok === true) resolvedAny = true;
+        else lastError = resolved?.error ?? "the paused tool request could not be resolved";
+      }
+      entry.requestIds = [];
+      if (!resolvedAny) {
         outcome.ok = false;
-        outcome.errors.push(resolved?.error ?? "the paused tool request could not be resolved");
+        outcome.errors.push(lastError);
       }
     }
     if (outcome.ok) {
@@ -1953,6 +1979,15 @@ export async function runConversationTurn(container, { text, attachments = [], h
     if (!requirement) return;
     const existing = pendingApprovals.get(requirement.key);
     if (existing) {
+      // A SECOND paused call with the SAME requirement (a sibling issued in
+      // the same model step) shares the card: the owner's one click resolves
+      // every waiter behind it, so no sibling is left to expire
+      // (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01).
+      if (requestId) {
+        existing.requestIds = [...(existing.requestIds ?? []).filter((id) => id !== requestId), requestId];
+        existing.requestId = requestId;
+        approvalById.set(requestId, existing);
+      }
       // The SAME requirement denied AGAIN after a grant (the grant did not
       // take effect — e.g. it was set session-only and the worker restarted,
       // or a narrower scope than the tool needs) — re-open the SAME card for
@@ -2015,7 +2050,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
         augmentApprovalCardWithDiff(card, editApproval);
       }
     }
-    const entry = { requirement, status: "pending", card, blocking, requestId };
+    const entry = { requirement, status: "pending", card, blocking, requestId, requestIds: requestId ? [requestId] : [] };
     pendingApprovals.set(requirement.key, entry);
     for (const approval of requirement.approvals) approvalById.set(approval.approvalId, entry);
     if (requestId) approvalById.set(requestId, entry);
@@ -2060,6 +2095,14 @@ export async function runConversationTurn(container, { text, attachments = [], h
   // TOOLS-01); and the authoritative result is that same text with the claim-
   // check correction appended, which belongs IN the bubble, not beside it.
   let streamedAgentBubble = null;
+  // The step counter the budget events feed ("Step N of M") and the last
+  // activity phrase it decorates (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01).
+  let budget = null;
+  let lastActivity = "";
+  const withBudget = (activity) => {
+    const counter = formatBudgetProgress(budget);
+    return counter ? `${activity} · ${counter}` : activity;
+  };
   // The terminal arbiter: settles the queue + unsubscribes EXACTLY ONCE on the
   // first authoritative terminal (the port's done/error or the run response —
   // which carries the final outcome incl. aborted). No timing dependency.
@@ -2092,17 +2135,30 @@ export async function runConversationTurn(container, { text, attachments = [], h
       return;
     }
     switch (ev.type) {
+      case "budget": {
+        // THE VISIBLE BUDGET (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01): one
+        // event per model step; the counter rides every running label from
+        // here on ("Working — reading the page… · Step 12 of 96").
+        if (Number.isFinite(ev.step) && Number.isFinite(ev.total)) budget = { step: ev.step, total: ev.total };
+        if (ev.exhausted === true) break; // the terminal carries the verdict
+        status({ state: attempt > 1 ? "retrying" : "running", activity: withBudget(lastActivity || "Thinking") });
+        break;
+      }
       case "thinking": {
+        // The loop's own iteration counter until the first budget event
+        // arrives; from then on the model-step counter ("Step N of M") wins.
         const step = ev.step != null ? ev.step + 1 : null;
         const total = ev.totalSteps != null ? ` of ${ev.totalSteps}` : "";
+        lastActivity = "Thinking";
         status({
           state: attempt > 1 ? "retrying" : "running",
-          activity: step != null ? `Thinking · step ${step}${total}` : "Thinking…",
+          activity: budget ? withBudget(lastActivity) : (step != null ? `Thinking · step ${step}${total}` : "Thinking…"),
         });
         break;
       }
       case "tool-call": {
-        status({ state: attempt > 1 ? "retrying" : "running", activity: friendlyActivityLabel(ev.toolName, ev.toolArgs) });
+        lastActivity = friendlyActivityLabel(ev.toolName, ev.toolArgs);
+        status({ state: attempt > 1 ? "retrying" : "running", activity: withBudget(lastActivity) });
         // A tool call is a plan step — append it to the top-of-thread checklist
         // (protocol plumbing is never a step).
         if (!isProtocolTool(ev.toolName)) {
@@ -2202,6 +2258,14 @@ export async function runConversationTurn(container, { text, attachments = [], h
           const known = artifactIdentityFromPayloads([src]);
           if (known) c.rememberArtifact(known.id, known.name);
         }
+        // Approved by the owner, then RE-RUN by the runtime: the card that
+        // paused the run says so, and the tool card above shows the real
+        // outcome (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01).
+        if (ev.permissionDecision === "approved" && ev.reexecuted === true && ev.permissionRequirement) {
+          const req = normalizePermissionRequirement({ waitingForPermission: true, permissionRequirement: ev.permissionRequirement });
+          const entry = req ? pendingApprovals.get(req.key) : null;
+          if (entry?.card && entry.status === "granted") entry.card.setAttribute("detail", APPROVED_THEN_RAN);
+        }
         // A structured permission/grant denial surfaces an IN-CONTEXT approval
         // card (one per distinct requirement) instead of only an error card.
         maybeRenderApproval(src);
@@ -2210,7 +2274,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
       case "text-delta":
         // The first visible token replaces "Thinking…" in the live-status row;
         // later deltas only grow the bubble (no per-delta announcement).
-        if (streamer.onDelta(ev)) status({ state: attempt > 1 ? "retrying" : "running", activity: "Writing the answer…" });
+        if (streamer.onDelta(ev)) { lastActivity = "Writing the answer"; status({ state: attempt > 1 ? "retrying" : "running", activity: withBudget(lastActivity) }); }
         break;
       case "text":
         if (ev.hidden === true) { streamer.finalize(ev.step, ""); break; }
@@ -2394,13 +2458,17 @@ export async function runConversationTurn(container, { text, attachments = [], h
     const action = res?.errorAction ?? (res?.aborted ? "the run stopped before completing" : null);
     const category = res?.errorCategory ?? (res?.aborted ? "aborted" : null);
     const msg = res?.error ?? (res?.aborted ? "run aborted" : "unknown error");
-    c.planEvent?.({ type: "fail" });
+    // A budget stop settles the plan strip (the steps that ran are done) and
+    // renders as "Budget reached — Continue" on the status row; the thread's
+    // own terminal row (from the durable log) carries the same sentence.
+    c.planEvent?.({ type: category === "budget" ? "settle" : "fail" });
     status({
       state: res?.aborted ? "cancelled" : "failed",
       message: reason ?? msg,
       errorReason: reason,
       errorAction: action,
       errorCategory: category,
+      ...(res?.executionId ? { executionId: res.executionId } : {}),
     });
     if (typeof c.appendError === "function") {
       c.appendError(msg, { reason, action, category });

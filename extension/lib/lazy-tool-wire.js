@@ -23,7 +23,7 @@ export const LAZY_PROTOCOL_TOOL_WIRE = Object.freeze([
   Object.freeze({
     name: "search_tools",
     description:
-      "Find a bounded set of available tools. Results are references, not permissions.",
+      "Find a bounded set of available tools. Results are references, not permissions. A selectionRef works for every execute_tool call of that tool for the rest of the run (up to 64 calls) — search once per tool, then loop.",
     inputSchema: Object.freeze({
       type: "object",
       additionalProperties: false,
@@ -58,7 +58,7 @@ export const LAZY_PROTOCOL_TOOL_WIRE = Object.freeze([
   Object.freeze({
     name: "execute_tool",
     description:
-      "Resolve one run-bound tool reference and invoke its existing authorized dispatcher.",
+      "Resolve one run-bound tool reference and invoke its existing authorized dispatcher. The same selectionRef may be executed again for the next item; a failed call does not spend it.",
     inputSchema: Object.freeze({
       type: "object",
       additionalProperties: false,

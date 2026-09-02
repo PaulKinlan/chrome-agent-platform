@@ -82,6 +82,7 @@ const BASELINE_ROUTES = [
   "named-agent.refine",
   "named-agent.run",
   "named-agent.history",
+  "agent.history-view",
   // Agent→agent delegation (G5): the delegate_to_agent tool's authority.
   "named-agent.delegate",
   "named-agent.delegations",
@@ -159,6 +160,9 @@ const BASELINE_ROUTES = [
   "run.list",
   "run.cancel",
   "run.resume",
+  // CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01: "Budget reached — Continue"
+  // runs the continuation turn on the stopped run's thread.
+  "run.continue",
   "run.resolve-inline-approval",
   "run.dismissFailed",
   "run.dismissedFailed",
@@ -211,6 +215,7 @@ const BASELINE_ROUTES = [
   "hooks.subscribe",
   "hooks.unsubscribe",
   "browser-control.get",
+  "browser-control.revoke",
   "browser-control.set",
   "agent.create",
   "agent.enroll-origin",

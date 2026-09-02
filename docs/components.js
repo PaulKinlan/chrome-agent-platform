@@ -1849,6 +1849,53 @@ class PermissionRow extends Component {
 }
 customElements.define("permission-row", PermissionRow);
 
+/* <origin-grant-row origin="https://github.com" expires-in-ms="540000">
+ * One row of Settings → Browser control's allowed-origins list
+ * (CAP-FB-20260902-ORIGIN-GRANT-UNION-01): the origin, how long its OWN grant
+ * lasts ("until you turn it off" when persistent), and a Turn off button that
+ * emits `revoke` with `{ origin }` — the page routes it through the service
+ * worker; this row never touches storage. The origin is text, never markup. */
+class OriginGrantRow extends Component {
+  static get observedAttributes() { return ["origin", "expires-in-ms", "disabled"]; }
+  static expiryLabel(expiresInMs) {
+    if (expiresInMs === null || expiresInMs === undefined || expiresInMs === "") {
+      return "Allowed until you turn it off";
+    }
+    const ms = Number(expiresInMs);
+    if (!Number.isFinite(ms) || ms <= 0) return "Expired";
+    const minutes = Math.ceil(ms / 60_000);
+    if (minutes < 1) return "Expires in under a minute";
+    if (minutes === 1) return "Expires in 1 minute";
+    if (minutes < 60) return `Expires in ${minutes} minutes`;
+    const hours = Math.round(minutes / 60);
+    return `Expires in ${hours === 1 ? "1 hour" : `${hours} hours`}`;
+  }
+  _render() {
+    const origin = this.getAttribute("origin") || "";
+    const expiry = OriginGrantRow.expiryLabel(this.getAttribute("expires-in-ms"));
+    const disabled = this.hasAttribute("disabled");
+    mountTemplate(this, `
+      :host { display:block; }
+      .row { display:flex; align-items:center; gap:12px; padding:10px 12px; border:1px solid var(--border,#e3e0d9); border-radius:10px; background:var(--panel,#ffffff); }
+      .info { flex:1; min-width:0; }
+      .origin { font-weight:600; overflow-wrap:anywhere; }
+      .expiry { font-size:12px; color:var(--muted,#635e56); }
+      .btn { border:1px solid var(--border,#e3e0d9); background:transparent; color:var(--text,#1d1b18); border-radius:7px; padding:6px 12px; cursor:pointer; font:inherit; white-space:nowrap; }
+      .btn:disabled { opacity:.5; cursor:not-allowed; }
+      .btn:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+    `, `<div part="row" class="row">
+      <div class="info"><div class="origin">${escapeHtml(origin)}</div><div class="expiry">${escapeHtml(expiry)}</div></div>
+      <button part="revoke" type="button" class="btn"${disabled ? " disabled" : ""} aria-label="Turn off browser control for ${escapeHtml(origin)}">Turn off</button>
+    </div>`);
+  }
+  _wire() {
+    this._root.querySelector(".btn")?.addEventListener("click", () => {
+      this._emit("revoke", { origin: this.getAttribute("origin") || "" });
+    });
+  }
+}
+customElements.define("origin-grant-row", OriginGrantRow);
+
 /* <site-agent-card origin="https://x" tools="[]">
  *
  * Three variants (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01):
@@ -5659,6 +5706,8 @@ class AgentConversation extends Component {
       message: typeof status?.message === "string" && status.message.trim() ? status.message.trim() : null,
       errorReason: typeof status?.errorReason === "string" && status.errorReason.trim() ? status.errorReason.trim() : null,
       actionLabel: typeof status?.actionLabel === "string" && status.actionLabel.trim() ? status.actionLabel.trim() : null,
+      actionKind: typeof status?.actionKind === "string" && status.actionKind.trim() ? status.actionKind.trim() : null,
+      errorCategory: typeof status?.errorCategory === "string" && status.errorCategory.trim() ? status.errorCategory.trim() : null,
       executionId: Object.hasOwn(status ?? {}, "executionId")
         ? (typeof status.executionId === "string" && status.executionId.trim() ? status.executionId.trim() : null)
         : (this._liveStatusRow?.getAttribute("execution-id") || null),
@@ -5674,7 +5723,7 @@ class AgentConversation extends Component {
     }
     row.removeAttribute("hidden");
     row.setAttribute("state", next.state);
-    for (const [name, value] of [["activity", next.activity], ["message", next.message], ["error-reason", next.errorReason], ["action-label", next.actionLabel], ["execution-id", next.executionId]]) {
+    for (const [name, value] of [["activity", next.activity], ["message", next.message], ["error-reason", next.errorReason], ["error-category", next.errorCategory], ["action-label", next.actionLabel], ["action-kind", next.actionKind], ["execution-id", next.executionId]]) {
       if (value) row.setAttribute(name, value);
       else row.removeAttribute(name);
     }
@@ -7186,10 +7235,13 @@ customElements.define("loading-state", LoadingState);
 /* <conversation-run-status state="queued|running|retrying|waiting-for-permission|completed|failed|cancelled">
  * is the ONE lifecycle surface in every task/agent conversation. It uses the
  * preferred pixel grid for every state (animated only while active), one atomic
- * live region, and an optional recovery action. No nested spinner/live region. */
+ * live region, and an optional recovery action. No nested spinner/live region.
+ * `error-category="budget"` + `action-kind="continue"` is the "Budget reached —
+ * Continue" card (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01): the same chrome,
+ * one Continue button; the page routes the `action` event by action-kind. */
 class ConversationRunStatus extends Component {
   static get observedAttributes() {
-    return ["state", "activity", "message", "error-reason", "action-label", "execution-id"];
+    return ["state", "activity", "message", "error-reason", "error-category", "action-label", "action-kind", "execution-id"];
   }
   _render() {
     const status = normalizeConversationRunStatus({
@@ -7197,6 +7249,7 @@ class ConversationRunStatus extends Component {
       activity: this.getAttribute("activity"),
       message: this.getAttribute("message"),
       errorReason: this.getAttribute("error-reason"),
+      errorCategory: this.getAttribute("error-category"),
     });
     if (!status) {
       mountTemplate(this, ":host { display:none; }", "");
@@ -7234,7 +7287,8 @@ class ConversationRunStatus extends Component {
     const executionId = this.getAttribute("execution-id")?.trim() || "";
     this._root.querySelector(".stop")?.addEventListener("click", (sourceEvent) =>
       this._emit("stop", { sourceEvent, executionId }));
-    this._root.querySelector(".action")?.addEventListener("click", () => this._emit("action"));
+    this._root.querySelector(".action")?.addEventListener("click", () =>
+      this._emit("action", { kind: this.getAttribute("action-kind") || "settings", executionId }));
     // The elapsed readout ticks once a second while the run is active — it
     // updates the loader's attribute only (no re-render of the live region,
     // so the announcement is never repeated).
@@ -8081,6 +8135,34 @@ export function confirmActionDialog({ title = "Confirm", body = "", confirmLabel
     (document.body ?? document.documentElement).append(dialog);
     dialog.showModal();
     (destructive ? cancel : accept).focus();
+  });
+}
+
+/** ONE delete-agent confirmation for every surface (the hub, Settings, the
+ * side panel) — CAP-FB-20260830-USER-VOICE-COPY-01. Three call sites used to
+ * hand-roll three bodies in the system's words ("registry entry", "system
+ * prompt override", "recurring alarm"). The body says what the person loses,
+ * in their words, and is destructive + genuine-gesture-only like every other
+ * delete. `kind` is the agent kind ("named" | "background" | "site"/"origin").
+ * Resolves true only on a real click on Delete. */
+export const DELETE_AGENT_COPY = Object.freeze({
+  named: "Its memory and history are removed. Artifacts it made are kept.",
+  background: "Its schedule stops and its history is removed.",
+  site: "It stops working on this site and its page tools are removed. Artifacts it made are kept.",
+});
+export function deleteAgentDialog({ name = "", kind = "named", returnFocusTo = null } = {}) {
+  const body = kind === "background"
+    ? DELETE_AGENT_COPY.background
+    : kind === "site" || kind === "origin"
+      ? DELETE_AGENT_COPY.site
+      : DELETE_AGENT_COPY.named;
+  return confirmActionDialog({
+    title: `Delete ${String(name || "this agent")}?`,
+    body,
+    confirmLabel: "Delete",
+    destructive: true,
+    requireGenuineGesture: true,
+    returnFocusTo,
   });
 }
 
@@ -9577,7 +9659,7 @@ function plainDetailBlock(label, text) {
     const more = document.createElement("button");
     more.type = "button";
     more.className = "aex-plain-more";
-    more.textContent = `show more (${(text.length - AEX_PLAIN_DETAIL_INLINE).toLocaleString()} more chars)`;
+    more.textContent = `show more (${(text.length - AEX_PLAIN_DETAIL_INLINE).toLocaleString()} more characters)`;
     more.addEventListener("click", (ev) => {
       ev.stopPropagation();
       pre.textContent = text;
@@ -10557,6 +10639,9 @@ class JobsBoard extends Component {
 customElements.define("jobs-board", JobsBoard);
 
 
+/* vocab:advanced:start — <system-prompt-editor> renders ONLY inside Settings →
+ * Advanced (options.html#prompts, data-developer), so it may use the system's
+ * words (scripts/check-vocabulary.mjs, docs/COPY.md). */
 /* <system-prompt-editor> — the layered system-prompt viewer + owner-override
  * editor (Settings → Advanced). ONE reusable component: the read-only built-in
  * viewer (id + version + hash), the persistent override editor (append /
@@ -11103,6 +11188,7 @@ class SystemPromptEditor extends Component {
   }
 }
 customElements.define("system-prompt-editor", SystemPromptEditor);
+/* vocab:advanced:end */
 
 export function durableRunActionsForPhase(phase) {
   return {
@@ -11318,6 +11404,9 @@ const TOOL_LIBRARY_AVAILABILITY = Object.freeze({
   disabled: "Disabled",
 });
 
+/* vocab:advanced:start — <tool-library> renders ONLY inside the developer-only
+ * Tool library section (options.html#tool-library, data-developer), so it may
+ * use the system's words (scripts/check-vocabulary.mjs, docs/COPY.md). */
 class ToolLibrary extends Component {
   constructor() {
     super();
@@ -11786,8 +11875,8 @@ class ToolLibrary extends Component {
       const total = document.createElement("p");
       total.className = "meta";
       const gen = typeof s.catalogGeneration === "string" && s.catalogGeneration
-        ? ` · catalog generation ${s.catalogGeneration.slice(0, 12)}` : "";
-      total.textContent = `${s.descriptorCount ?? 0} tools visible to diagnostics${gen}`;
+        ? ` · tool list version ${s.catalogGeneration.slice(0, 12)}` : "";
+      total.textContent = `${s.descriptorCount ?? 0} tools available${gen}`;
       host.append(total);
 
       const packagesMeta = this._root.querySelector(".packages .meta");
@@ -11923,6 +12012,7 @@ class ToolLibrary extends Component {
   // buttons, no actions. The native <details> disclosure works without script.
 }
 customElements.define("tool-library", ToolLibrary);
+/* vocab:advanced:end */
 
 /* ──────────────────────────────────────────────────────────────────────────
  * One call registers everything (idempotent). Extension pages + the docs

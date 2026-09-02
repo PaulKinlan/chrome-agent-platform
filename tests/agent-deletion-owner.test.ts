@@ -222,15 +222,15 @@ Deno.test("agent-deletion UI source contracts: delete buttons and confirmation d
   // NTP thread view header delete button & confirmation
   assert(ntpHtml.includes('id="delete-agent"'), "NTP must have #delete-agent button");
   assert(ntpJs.includes("deleteAgentBtn"), "NTP must wire deleteAgentBtn");
-  assert(ntpJs.includes("confirmActionDialog"), "NTP must use confirmActionDialog for delete confirmation");
+  assert(ntpJs.includes("deleteAgentDialog("), "NTP must use the shared deleteAgentDialog for delete confirmation");
   assert(ntpJs.includes('"named-agent.delete"'), "NTP must call named-agent.delete");
 
   // Sidepanel delete button & confirmation
   assert(sidepanelHtml.includes('id="agent-delete"'), "Sidepanel must have #agent-delete button");
   assert(sidepanelJs.includes("agentDeleteBtn"), "Sidepanel must wire agentDeleteBtn");
-  assert(sidepanelJs.includes("confirmActionDialog"), "Sidepanel must use confirmActionDialog for delete confirmation");
+  assert(sidepanelJs.includes("deleteAgentDialog("), "Sidepanel must use the shared deleteAgentDialog for delete confirmation");
 
   // Options page delete button & confirmation
   assert(optionsJs.includes("delete-named-agent"), "Options must have delete-named-agent button");
-  assert(optionsJs.includes("confirmActionDialog"), "Options must use confirmActionDialog for delete confirmation");
+  assert(optionsJs.includes("deleteAgentDialog("), "Options must use the shared deleteAgentDialog for delete confirmation");
 });

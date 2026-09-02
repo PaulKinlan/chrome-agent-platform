@@ -4,18 +4,65 @@
 // executable authority. Future execution must re-resolve every live source and
 // perform its existing authorization/dispatch checks. This slice deliberately
 // has no execute operation.
+//
+// BOUNDED REUSE (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01): a ref works for
+// EVERY call of its tool within its run until it expires or reaches
+// maxUsesPerSelection. Single-use bought no security — a ref authorizes
+// nothing and every execute re-authorizes live — but it forced a search_tools
+// round-trip before every call (two model steps per action) and turned the
+// model's retry after a failed tool call into `selection-replayed`. A claim
+// counts one use; a call that never dispatched, or dispatched and failed, hands
+// its use back (release). The run/task/agent/origin/document/generation fences
+// and the catalog/source staleness checks are unchanged.
 
 import { hasLoneSurrogates, truncateUtf8, utf8ByteLength } from "./pure.js";
 
 export const TOOL_SELECTION_BOUNDS = Object.freeze({
-  defaultTtlMs: 60 * 1000,
-  maxTtlMs: 5 * 60 * 1000,
-  maxSelectionsPerRun: 32,
+  // A 30-tab loop takes longer than a minute: refs live 10 min (max 15).
+  defaultTtlMs: 10 * 60 * 1000,
+  maxTtlMs: 15 * 60 * 1000,
+  maxSelectionsPerRun: 128,
   maxTotalSelections: 512,
   maxResultsPerSearch: 12,
   maxResponseBytes: 32 * 1024,
   maxFenceBytes: 256,
+  // How many execute calls one ref may serve (a use is given back when the
+  // call never ran or failed).
+  maxUsesPerSelection: 64,
 });
+
+/** Plain-English sibling for every error token — the sentence the model and
+ * the owner read, with the next action. The token stays for tests/logs. */
+const SELECTION_ERROR_MESSAGES = Object.freeze({
+  "selection-replayed":
+    `This selection reference has been used ${TOOL_SELECTION_BOUNDS.maxUsesPerSelection} times; call search_tools once more for a fresh one and continue.`,
+  "selection-missing-or-expired":
+    `This selection reference is unknown or has expired (a reference lasts ${Math.round(TOOL_SELECTION_BOUNDS.defaultTtlMs / 60000)} minutes); call search_tools again for a fresh one.`,
+  "selection-scope-mismatch":
+    "This selection reference belongs to a different run, agent, or page; call search_tools in this run for a fresh one.",
+  "selection-catalog-stale":
+    "The tool catalog changed since this reference was issued; call search_tools again for a fresh one.",
+  "selection-source-stale":
+    "The tool behind this reference changed or is no longer available; call search_tools again to see whether it is still offered.",
+  "missing-selection-fence":
+    "This run has no selection fence (no run, task, agent or catalog identity), so no reference can be issued; retry search_tools from inside a run.",
+  "stale-catalog-generation":
+    "The tool catalog changed while searching; call search_tools again.",
+});
+
+export function selectionErrorMessage(code) {
+  return SELECTION_ERROR_MESSAGES[code] ?? "This selection reference cannot be used; call search_tools again for a fresh one.";
+}
+
+/** The failure shape every selection path returns: the token AND a sentence. */
+export function selectionError(code, extra = null) {
+  return Object.freeze({
+    ok: false,
+    error: code,
+    message: selectionErrorMessage(code),
+    ...(extra && typeof extra === "object" ? extra : {}),
+  });
+}
 
 function ownData(value, key) {
   try {
@@ -88,6 +135,56 @@ function packageIdentity(descriptor) {
   ].map((value) => safeFence(value)).join("\u0000");
 }
 
+/** The tool a descriptor names, INDEPENDENT of the owner's current grants: a
+ * descriptor's stableId hashes its permission/grant digests, so the same tool
+ * gets a new stableId (and the catalog a new generation) the moment the owner
+ * approves a capability. Everything that identifies WHICH closure would run —
+ * source kind, package, tool id, version, package + capability digests, scope,
+ * source and closure generation — is kept; only the grant/permission digests
+ * (re-checked live by the protocol's authority step) and the descriptor
+ * digest that folds them in are left out. Runtime-only: the model never sees
+ * this key (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01). */
+export function toolIdentityKey(descriptor) {
+  if (!descriptor || typeof descriptor !== "object") return "";
+  const scope = descriptor.scope && typeof descriptor.scope === "object" ? descriptor.scope : {};
+  return [
+    descriptor.sourceKind,
+    descriptor.packageId,
+    descriptor.toolId,
+    descriptor.version,
+    descriptor.packageDigest,
+    descriptor.capabilityDigest,
+    descriptor.sourceGeneration,
+    descriptor.closureGeneration,
+    scope.agentId,
+    scope.origin,
+    scope.documentId,
+    scope.hub === true ? "hub" : "",
+  ].map((value) => safeFence(value)).join("\u0000");
+}
+
+/** The run fence of a context WITHOUT the catalog generation — the part of a
+ * selection's scope that an owner grant must never change. */
+function sameRunFence(a, b) {
+  return a.runId === b.runId && a.taskId === b.taskId &&
+    a.agentId === b.agentId && a.origin === b.origin &&
+    a.documentId === b.documentId &&
+    a.runGeneration === b.runGeneration;
+}
+
+/** The single descriptor in `catalog` that names the same tool as
+ * `identityKey` (see toolIdentityKey), or null when none/ambiguous. */
+export function descriptorByIdentity(catalog, identityKey) {
+  if (!identityKey) return null;
+  let found = null;
+  for (const descriptor of catalog?.descriptors ?? []) {
+    if (toolIdentityKey(descriptor) !== identityKey) continue;
+    if (found) return null;
+    found = descriptor;
+  }
+  return found;
+}
+
 export class ToolSelectionAuthority {
   #records = new Map();
   #consumed = new Map();
@@ -124,21 +221,13 @@ export class ToolSelectionAuthority {
       !context.runId || !context.taskId || !context.agentId ||
       !context.runGeneration || !context.catalogGeneration
     ) {
-      return Object.freeze({
-        ok: false,
-        error: "missing-selection-fence",
-        results: [],
-      });
+      return selectionError("missing-selection-fence", { results: [] });
     }
     if (
       context.catalogGeneration !== catalog?.generation ||
       searchOutput?.catalogGeneration !== catalog?.generation
     ) {
-      return Object.freeze({
-        ok: false,
-        error: "stale-catalog-generation",
-        results: [],
-      });
+      return selectionError("stale-catalog-generation", { results: [] });
     }
     const existingForRun =
       [...this.#records.values()].filter((record) =>
@@ -208,9 +297,11 @@ export class ToolSelectionAuthority {
           stableId: descriptor.stableId,
           sourceGeneration: descriptor.sourceGeneration,
           packageIdentity: packageIdentity(descriptor),
+          toolIdentity: toolIdentityKey(descriptor),
           context,
           issuedAt: now,
           expiresAt,
+          uses: 0,
         }),
       );
       responseBytes += bytes;
@@ -237,18 +328,17 @@ export class ToolSelectionAuthority {
     const context = scopeContext(contextInput);
     const record = this.#records.get(selectionRef);
     if (!record) {
-      return Object.freeze({
-        ok: false,
-        error: this.#consumed.has(selectionRef)
+      return selectionError(
+        this.#consumed.has(selectionRef)
           ? "selection-replayed"
           : "selection-missing-or-expired",
-      });
+      );
     }
     if (!sameContext(record.context, context)) {
-      return Object.freeze({ ok: false, error: "selection-scope-mismatch" });
+      return selectionError("selection-scope-mismatch");
     }
     if (catalog?.generation !== context.catalogGeneration) {
-      return Object.freeze({ ok: false, error: "selection-catalog-stale" });
+      return selectionError("selection-catalog-stale");
     }
     const descriptor = catalog.byStableId?.[record.stableId];
     if (
@@ -256,56 +346,81 @@ export class ToolSelectionAuthority {
       packageIdentity(descriptor) !== record.packageIdentity ||
       descriptor.availability !== "ready" || !scopeMatches(descriptor, context)
     ) {
-      return Object.freeze({ ok: false, error: "selection-source-stale" });
+      return selectionError("selection-source-stale");
     }
     return Object.freeze({
       ok: true,
       descriptor,
       selectionRef,
       expiresAt: record.expiresAt,
+      uses: record.uses,
       authorizes: false,
       requiresLiveAuthorization: true,
     });
   }
 
+  /** Count one use of a live reference. The ref STAYS live for the same tool
+   * (bounded reuse); the claim records which use it was so release() can hand
+   * exactly that use back. The maxUsesPerSelection-th use is the last: the next
+   * claim retires the ref into #consumed so the error stays honest
+   * (`selection-replayed`, "used 64 times"), never "missing". */
   claim(selectionRefInput, contextInput, catalog) {
     const resolved = this.resolve(selectionRefInput, contextInput, catalog);
     if (!resolved.ok) return resolved;
     const selectionRef = resolved.selectionRef;
     const record = this.#records.get(selectionRef);
-    if (!record) return Object.freeze({ ok: false, error: "selection-replayed" });
-    this.#records.delete(selectionRef);
-    this.#consumed.set(selectionRef, record.expiresAt);
+    if (!record) return selectionError("selection-replayed");
+    if (record.uses >= TOOL_SELECTION_BOUNDS.maxUsesPerSelection) {
+      this.#records.delete(selectionRef);
+      this.#consumed.set(selectionRef, record.expiresAt);
+      return selectionError("selection-replayed");
+    }
+    const use = record.uses + 1;
+    this.#records.set(selectionRef, Object.freeze({ ...record, uses: use }));
     return Object.freeze({
       ...resolved,
+      uses: use,
       claim: Object.freeze({
         selectionRef,
         stableId: record.stableId,
         sourceGeneration: record.sourceGeneration,
         packageIdentity: record.packageIdentity,
+        toolIdentity: record.toolIdentity,
         context: record.context,
         expiresAt: record.expiresAt,
+        use,
       }),
     });
   }
 
-  /** Hand a claimed reference back when the claim never reached dispatch
-   * (argument validation failed — CAP-FB-20260830-SELECTION-REF-VALIDATE-FIRST-01).
-   * The model repairs its arguments and retries with the SAME ref; the
-   * operating manual forbids a second search. Restores the identical record
-   * exactly once, never after expiry, never for a ref that was not claimed
-   * from this authority. Returns true when the ref is live again. */
+  /** Hand a claimed USE back when the call never reached dispatch (argument
+   * validation failed — CAP-FB-20260830-SELECTION-REF-VALIDATE-FIRST-01) or
+   * dispatched and FAILED (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01): a loop
+   * that fails on 29 of 30 items must not burn its ref on the failures. Only
+   * the LATEST use can come back (a concurrent later claim keeps its count),
+   * exactly once, never after expiry, never for a ref this authority did not
+   * claim. A ref retired at the use bound is restored to its last use when its
+   * final claim is released. Returns true when a use was handed back. */
   release(claimInput) {
     const now = this.#clock();
     this.#purge(now);
     const claim = claimInput && typeof claimInput === "object" ? claimInput : {};
     const selectionRef = safeFence(ownData(claim, "selectionRef"));
     const expiresAt = Number(ownData(claim, "expiresAt"));
+    const use = Number(ownData(claim, "use"));
     if (!/^sel_[a-f0-9]{36}$/u.test(selectionRef)) return false;
     if (!(expiresAt > now)) return false;
-    if (this.#records.has(selectionRef)) return false;
-    // Only a ref this authority consumed with this exact expiry comes back.
+    if (!Number.isInteger(use) || use < 1 || use > TOOL_SELECTION_BOUNDS.maxUsesPerSelection) return false;
+    const live = this.#records.get(selectionRef);
+    if (live) {
+      // Only this exact record (same expiry) and only its latest use.
+      if (live.expiresAt !== expiresAt || live.uses !== use) return false;
+      this.#records.set(selectionRef, Object.freeze({ ...live, uses: use - 1 }));
+      return true;
+    }
+    // Only a ref this authority retired with this exact expiry comes back.
     if (this.#consumed.get(selectionRef) !== expiresAt) return false;
+    if (use !== TOOL_SELECTION_BOUNDS.maxUsesPerSelection) return false;
     const context = scopeContext(ownData(claim, "context"));
     const stableId = ownData(claim, "stableId");
     const sourceGeneration = ownData(claim, "sourceGeneration");
@@ -320,12 +435,100 @@ export class ToolSelectionAuthority {
         stableId,
         sourceGeneration,
         packageIdentity: ownData(claim, "packageIdentity"),
+        toolIdentity: ownData(claim, "toolIdentity"),
         context,
         issuedAt: now,
         expiresAt,
+        uses: use - 1,
       }),
     );
     return true;
+  }
+
+  /** Re-key the live selections of ONE run after an owner grant regenerated
+   * the catalog (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01). Every live
+   * record issued under `previousContext` (the same run fence, the pre-grant
+   * catalog generation) whose tool still exists in `catalog` — the same tool
+   * identity (toolIdentityKey), ready, in scope — is re-recorded under
+   * `nextContext` with the descriptor's NEW stableId/package identity, keeping
+   * its selectionRef and expiry, so the references the model already holds
+   * keep resolving. Records whose tool is gone are left to fail as stale.
+   * Runtime-only: only the protocol's approval-resume path calls this, and
+   * only for the run whose owner just approved. Returns the count re-keyed. */
+  rebindAfterGrant(previousInput, nextInput, catalog) {
+    const now = this.#clock();
+    this.#purge(now);
+    const previous = scopeContext(previousInput);
+    const next = scopeContext(nextInput);
+    if (!sameRunFence(previous, next)) return 0;
+    if (!next.catalogGeneration || catalog?.generation !== next.catalogGeneration) return 0;
+    if (previous.catalogGeneration === next.catalogGeneration) return 0;
+    let rebound = 0;
+    for (const [selectionRef, record] of [...this.#records]) {
+      if (!sameContext(record.context, previous)) continue;
+      const descriptor = descriptorByIdentity(catalog, record.toolIdentity);
+      if (
+        !descriptor || descriptor.availability !== "ready" ||
+        !scopeMatches(descriptor, next)
+      ) continue;
+      this.#records.set(
+        selectionRef,
+        Object.freeze({
+          ...record,
+          stableId: descriptor.stableId,
+          sourceGeneration: descriptor.sourceGeneration,
+          packageIdentity: packageIdentity(descriptor),
+          context: next,
+        }),
+      );
+      rebound++;
+    }
+    return rebound;
+  }
+
+  /** Revalidate a claim ACROSS an owner grant that regenerated the catalog
+   * while the claimed call was in flight (the paused call's sibling — issued
+   * in the same model step, dispatched before the owner clicked Allow, and
+   * revalidated after). Identical to revalidateClaim except that the catalog
+   * generation may differ from the claim's and the descriptor is found by
+   * its grant-independent tool identity rather than its stableId; the run
+   * fence, expiry, availability and scope checks are unchanged, and the
+   * protocol still re-authorizes the call live against the NEW descriptor's
+   * digests before it trusts the outcome. Runtime-only: the protocol uses it
+   * ONLY while the run has a permission pause in progress
+   * (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01). */
+  revalidateClaimAcrossGrant(claimInput, contextInput, catalog) {
+    const now = this.#clock();
+    this.#purge(now);
+    const claim = claimInput && typeof claimInput === "object" ? claimInput : {};
+    const context = scopeContext(contextInput);
+    if (Number(ownData(claim, "expiresAt")) <= now) {
+      return Object.freeze({ ok: false, error: "selection-missing-or-expired" });
+    }
+    const claimed = scopeContext(ownData(claim, "context"));
+    if (!sameRunFence(claimed, context)) {
+      return Object.freeze({ ok: false, error: "selection-scope-mismatch" });
+    }
+    if (catalog?.generation !== context.catalogGeneration) {
+      return Object.freeze({ ok: false, error: "selection-catalog-stale" });
+    }
+    // The identity key is long (two digests plus generations) — never fenced
+    // to maxFenceBytes, or it could not equal any descriptor's key.
+    const toolIdentity = ownData(claim, "toolIdentity");
+    const descriptor = descriptorByIdentity(catalog, typeof toolIdentity === "string" ? toolIdentity : "");
+    if (
+      !descriptor ||
+      descriptor.sourceGeneration !== ownData(claim, "sourceGeneration") ||
+      descriptor.availability !== "ready" || !scopeMatches(descriptor, context)
+    ) {
+      return Object.freeze({ ok: false, error: "selection-source-stale" });
+    }
+    return Object.freeze({
+      ok: true,
+      descriptor,
+      authorizes: false,
+      requiresLiveAuthorization: true,
+    });
   }
 
   revalidateClaim(claimInput, contextInput, catalog) {
@@ -334,13 +537,13 @@ export class ToolSelectionAuthority {
     const claim = claimInput && typeof claimInput === "object" ? claimInput : {};
     const context = scopeContext(contextInput);
     if (Number(ownData(claim, "expiresAt")) <= now) {
-      return Object.freeze({ ok: false, error: "selection-missing-or-expired" });
+      return selectionError("selection-missing-or-expired");
     }
     if (!sameContext(ownData(claim, "context"), context)) {
-      return Object.freeze({ ok: false, error: "selection-scope-mismatch" });
+      return selectionError("selection-scope-mismatch");
     }
     if (catalog?.generation !== context.catalogGeneration) {
-      return Object.freeze({ ok: false, error: "selection-catalog-stale" });
+      return selectionError("selection-catalog-stale");
     }
     const descriptor = catalog.byStableId?.[safeFence(ownData(claim, "stableId"))];
     if (
@@ -349,7 +552,7 @@ export class ToolSelectionAuthority {
       packageIdentity(descriptor) !== ownData(claim, "packageIdentity") ||
       descriptor.availability !== "ready" || !scopeMatches(descriptor, context)
     ) {
-      return Object.freeze({ ok: false, error: "selection-source-stale" });
+      return selectionError("selection-source-stale");
     }
     return Object.freeze({
       ok: true,

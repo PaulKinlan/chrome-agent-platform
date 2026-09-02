@@ -21,6 +21,7 @@ import { perfSpan } from "./cap-perf.js";
 import { maskCredentialShapes } from "./error-report.js";
 import { isToolResultFailure, toolResultFullJson } from "./tool-summary.js";
 import { correctUnsupportedMutationClaims } from "./mutation-claim-check.js";
+import { RUN_BUDGET_DEFAULTS } from "./run-budget.js";
 import {
   anthropicAuthoritativeSearchRequests,
   createAnthropicCallReconciler,
@@ -526,6 +527,22 @@ function summarizeToolResult(result) {
   }
 }
 
+// The run's step budget (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01) — the
+// defaults and every bound live in lib/run-budget.js; re-exported here for
+// the callers that size a run.
+export { RUN_BUDGET_DEFAULTS };
+
+/** A tool's raw return as the model-facing text agent-do itself would have
+ * produced for it (its normaliser JSON-stringifies non-string returns). */
+function summarizeForModel(result) {
+  if (typeof result === "string") return result;
+  try {
+    const s = JSON.stringify(result);
+    if (typeof s === "string") return s;
+  } catch { /* fall through */ }
+  return String(result);
+}
+
 export function createAgent({
   model,
   id = "hub",
@@ -535,7 +552,7 @@ export function createAgent({
   memory = null,
   skills = [],
   taskId = "adhoc",
-  maxIterations = 12,
+  maxIterations = RUN_BUDGET_DEFAULTS.maxIterations,
   iterationGuard = null,
   enrollmentGuard = null,
   // `onProgress` receives normalized progress events (thinking / tool-call /
@@ -734,6 +751,25 @@ export function createAgent({
   let streamStep = -1;
   let streamHold = false;
   let streamDrain = Promise.resolve();
+
+  // THE VISIBLE BUDGET (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01): one model
+  // call = one step. Counted at the provider boundary (the Proxy below), so
+  // the count is exact — a failed attempt that the SDK retries is dropped
+  // again. `budgetTotal` = maxIterations × innerStepLimit; every model call
+  // emits {type:"budget", step, total} so the surface shows "Step N of M".
+  const innerStepLimit = RUN_BUDGET_DEFAULTS.innerStepLimit(maxIterations);
+  const budgetTotal = Math.max(1, Math.trunc(maxIterations)) * innerStepLimit;
+  let budgetStep = 0;
+  let budgetLastStepHadTools = false;
+  let budgetLastStepIndex = -1;
+  const emitBudget = (extra = {}) => {
+    try { progressCb?.({ type: "budget", step: budgetStep, total: budgetTotal, ...extra }); } catch { /* ignore */ }
+  };
+  // Exhausted = the LAST allowed outer iteration still ended in tool calls:
+  // the loop stopped because the budget ran out, not because the model
+  // finished (agent-do breaks the loop only on a no-tool-call step).
+  const budgetExhausted = (aborted) =>
+    aborted !== true && budgetLastStepHadTools === true && budgetLastStepIndex >= Math.trunc(maxIterations) - 1;
   const teeTextDeltas = (value) => {
     if (streamHold || !value || typeof value !== "object" || !(value.stream instanceof ReadableStream)) return value;
     const step = streamStep;
@@ -794,9 +830,14 @@ export function createAgent({
         // continues after). NEVER log options/content (prompts, messages).
         const span = perfSpan(`model:${method}`);
         modelLog.debug(`call attempt ${entry.ordinal}`, method);
+        // One model call = one budget step (dropped again if the call fails
+        // and the SDK retries it).
+        budgetStep = Math.min(budgetTotal, budgetStep + 1);
+        emitBudget();
         const drop = () => {
           const i = attemptQueue.indexOf(entry);
           if (i >= 0) attemptQueue.splice(i, 1);
+          budgetStep = Math.max(0, budgetStep - 1);
         };
         let result;
         try {
@@ -943,10 +984,10 @@ export function createAgent({
     systemPrompt: sysPrompt,
     tools: allTools,
     maxIterations,
-    // The fixed lazy protocol needs two dependent provider steps per logical
-    // tool action. Keep one bounded inner turn large enough for the demo's
-    // write + two reads without dropping its run-local selection sequence.
-    innerStepLimit: Math.max(2, Math.min(maxIterations, 8)),
+    // One inner turn holds up to 24 model steps: with a reusable selection ref
+    // that is one search + ~22 executes — a 30-tab loop in two inner turns
+    // (agent-do keeps the previous turn's tool outputs for one iteration).
+    innerStepLimit,
     usage: { pricing: MODEL_PRICING },
     // Lifecycle bookkeeping for the agent-do logs (bounded: entries are deleted
     // on completion; at most innerStepLimit steps + in-flight tools).
@@ -977,7 +1018,12 @@ export function createAgent({
         const span = perfSpan(`agent-do:step:${e.step}`, { ns: "agent-do" });
         stepSpans.set(e.step, span);
         if (runStartedAt == null) runStartedAt = Date.now();
-        if (!(e.step > 0)) runText = createRunTextTracker();
+        if (!(e.step > 0)) {
+          runText = createRunTextTracker();
+          budgetStep = 0;
+          budgetLastStepHadTools = false;
+          budgetLastStepIndex = -1;
+        }
         streamStep = e.step;
         streamHold = runText.nextStepMayBeNudge();
         streamDrain = Promise.resolve();
@@ -996,6 +1042,8 @@ export function createAgent({
         // for the observed stream branch to drain before emitting the text.
         await Promise.race([streamDrain, sleep(250)]);
         const classified = runText.step({ step: e.step, hasToolCalls: e.hasToolCalls === true, text: e.text });
+        budgetLastStepHadTools = e.hasToolCalls === true;
+        budgetLastStepIndex = Number.isFinite(e.step) ? e.step : budgetLastStepIndex;
         if (classified.hidden) agentDoLog.debug(`step ${e.step} is the continuation reply — hidden`);
         try {
           progressCb?.({
@@ -1043,33 +1091,69 @@ export function createAgent({
         // replaces the envelope text (after it, the name is unrecoverable and
         // the card would be headed "tool call").
         const selectedBeforeRewrite = selectedToolFromResult(e.result);
-        const permissionDenial = permissionDenialFromToolResult(e.result);
+        let permissionDenial = permissionDenialFromToolResult(e.result);
         // The STRUCTURED requirement survives on the progress event (the run
         // log persists it) even though the model-facing modelContent is
         // rewritten below — a reopened thread derives its grant card from it
         // (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 §2b).
-        const permissionRequirement = permissionDenial?.permissionRequirement ?? null;
+        let permissionRequirement = permissionDenial?.permissionRequirement ?? null;
         let permissionDecision = null;
-        if (permissionDenial && typeof onPermissionRequest === "function") {
+        // Approved, then RE-RUN by the runtime with the original arguments —
+        // the model receives the tool's real result, never a retry instruction
+        // (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01). The card records
+        // "approved, then ran" from this flag.
+        let reexecuted = false;
+        // A re-run can pause on a FURTHER requirement (a second capability the
+        // same tool needs): each pause is one card and one decision, bounded.
+        for (let round = 0; permissionDenial && typeof onPermissionRequest === "function" && round < 4; round++) {
           const decision = await onPermissionRequest(permissionDenial);
           permissionDecision = decision;
           // agent-do records this same normalized object after the awaited hook.
-          // Tell the model exactly what happened: deny/timeout is terminal for
-          // this action; approve requires a fresh lazy selection because the
-          // grant digest intentionally changed while the call was paused.
           const selected = selectedToolFromResult(e.result) ?? e.toolName;
-          if (e.result && typeof e.result === "object") {
-            e.result.modelContent = decision === "approved"
-              ? `Error: Owner approved the requested capability, but this attempt did not run. Retry ${selected} now with a fresh search_tools selection.`
-              : decision === "expired"
-                ? `Approval expired. ${selected} was not performed; do not claim it succeeded.`
-                : `Owner denied the requested capability. ${selected} was not performed; do not retry it.`;
-            e.result.userSummary = decision === "approved"
-              ? `[${selected}] BLOCKED — approved; retry required`
-              : decision === "expired"
-                ? `[${selected}] DENIED — approval expired`
-                : `[${selected}] DENIED by owner`;
+          const pausedRef = ownData(lazyEnvelope(e.result), "selectionRef");
+          if (!(e.result && typeof e.result === "object")) break;
+          if (decision !== "approved") {
+            // Deny/timeout is terminal for this action: the call is forgotten
+            // and never executed.
+            if (typeof pausedRef === "string") { try { lazy.settlePausedCall(pausedRef); } catch { /* nothing recorded */ } }
+            e.result.modelContent = decision === "expired"
+              ? `Approval expired. ${selected} was not performed; do not claim it succeeded.`
+              : `Owner denied the requested capability. ${selected} was not performed; do not retry it.`;
+            e.result.userSummary = decision === "expired"
+              ? `[${selected}] DENIED — approval expired`
+              : `[${selected}] DENIED by owner`;
+            break;
           }
+          // Approved: the runtime re-runs the SAME call (same tool, the
+          // original validated arguments, the same run fence, every live
+          // authority check) through the lazy protocol — a runtime-only path
+          // the model cannot reach — and the result REPLACES the denial as if
+          // the call had succeeded first time.
+          let resumed = null;
+          if (typeof pausedRef === "string") {
+            try { resumed = await lazy.resumeApprovedCall(pausedRef); } catch (error) {
+              if (error?.name === "RunAbortedError" || error?.name === "AbortError") throw error;
+              resumed = null;
+            }
+          }
+          const protocolFailure = !resumed || (resumed.ok !== true && typeof resumed.selectedTool !== "string");
+          if (protocolFailure) {
+            // The re-run itself could not be set up (the tool vanished from
+            // the catalog, the run moved on). Plain language, no protocol
+            // vocabulary; the model may call the tool again.
+            agentDoLog.warn("approved call could not be re-run", { tool: selected, error: resumed?.error ?? "unavailable" });
+            e.result.modelContent = `Owner approved the requested capability, but ${selected} could not be run again automatically. Call ${selected} again.`;
+            e.result.userSummary = `[${selected}] approved — not run`;
+            break;
+          }
+          // The tool's REAL outcome (success, or its own ordinary failure) is
+          // what agent-do would have recorded for a first-time success.
+          const text = summarizeForModel(resumed);
+          e.result.modelContent = text;
+          e.result.userSummary = text;
+          reexecuted = true;
+          permissionDenial = permissionDenialFromToolResult(e.result);
+          if (permissionDenial) permissionRequirement = permissionDenial.permissionRequirement ?? permissionRequirement;
         }
         const toolOk = !isToolResultFailure(e.result) && !lazyNestedFailure(e.result);
         if (toolOk) { try { okToolNames.add(selectedToolFromResult(e.result) ?? e.toolName); } catch { /* ignore */ } }
@@ -1100,7 +1184,7 @@ export function createAgent({
             resultFullTruncated: full.truncated,
             resultFullBytes: full.bytes,
             ok: toolOk,
-            ...(permissionRequirement ? { permissionRequirement, permissionDecision } : {}),
+            ...(permissionRequirement ? { permissionRequirement, permissionDecision, ...(reexecuted ? { reexecuted: true } : {}) } : {}),
           });
         } catch { /* ignore */ }
       },
@@ -1116,7 +1200,14 @@ export function createAgent({
           e = { ...e, result: runText.finalText(e.result) };
           const checked = correctUnsupportedMutationClaims(e.result, okToolNames);
           if (checked.corrections.length > 0) agentDoLog.warn(`mutation-claim correction appended (${checked.corrections.length})`);
-          progressCb?.({ type: "done", text: checked.text, totalSteps: e.totalSteps, aborted: e.aborted });
+          // The budget verdict rides BOTH the final budget event and `done`:
+          // the SW settles a "budget reached — Continue" terminal from it
+          // instead of a silent finish (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01).
+          const exhausted = budgetExhausted(e.aborted);
+          const budget = { used: budgetStep, total: budgetTotal, exhausted };
+          if (exhausted) agentDoLog.warn(`step budget exhausted (${budgetStep}/${budgetTotal}) with tool calls still pending`);
+          emitBudget({ exhausted });
+          progressCb?.({ type: "done", text: checked.text, totalSteps: e.totalSteps, aborted: e.aborted, budget });
         } catch { /* ignore */ }
       },
       onUsage: async (record) => {
@@ -1284,6 +1375,9 @@ export function createAgent({
       return result;
     },
     lazyDiagnostics: () => lazy.diagnostics(),
+    // The finite step budget this agent runs under (the run log records it;
+    // the surface counts against it).
+    budget: () => ({ maxIterations, innerStepLimit, total: budgetTotal }),
     abort: () => {
       if (disposable) aborted = true;
       activeRun?.controller.abort();
@@ -1568,6 +1662,8 @@ export function createOrchestrator({
     // Whether the CURRENT run was aborted (the master's controller) — the SW
     // propagates it in the run response.
     isAborted: () => (typeof master.isAborted === "function" ? master.isAborted() : false),
+    // The master's finite step budget (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01).
+    budget: () => (typeof master.budget === "function" ? master.budget() : null),
     // Rebind the live progress callback on the master + every worker. The SW
     // calls this per-run; the cached orchestrator's agents are reused.
     setProgress(cb) {

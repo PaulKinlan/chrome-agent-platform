@@ -162,20 +162,28 @@ every agent run while retaining the public Settings-only shadow capture:
   catalogs of 20, 100, and 1000 rows, and no dynamic descriptor/schema enters
   provider options or prompts;
 - search rebuilds the live bounded lexical catalog and returns only in-scope
-  metadata. Ready rows receive expiring single-use references bound to the full
-  run/task/agent/origin/document/run-generation/catalog/source/closure/package/
-  capability/permission/grant identity; search never executes, approves,
-  installs, requests permission, or creates a grant;
-- execute atomically claims only a returned reference, rejects malformed,
-  invented, expired, restarted, cross-scope, concurrent, or replayed references,
-  and re-resolves every immutable and live authority fence before validation,
-  before dispatch, and after dispatch. A claim that fails ARGUMENT validation
-  (sanitizer or Zod) never reaches dispatch, so it is released: the
-  `lazy-arguments-invalid` error carries the same `selectionRef` and
-  `retryable: true`, and the model's corrected call on that ref succeeds
-  (CAP-FB-20260830-SELECTION-REF-VALIDATE-FIRST-01). A SUCCESSFUL execution
-  still consumes the ref; a concurrent or later reuse stays
-  `selection-replayed`;
+  metadata. Ready rows receive expiring, BOUNDED-REUSE references bound to the
+  full run/task/agent/origin/document/run-generation/catalog/source/closure/
+  package/capability/permission/grant identity; search never executes,
+  approves, installs, requests permission, or creates a grant;
+- execute claims one USE of a returned reference (a ref serves up to
+  `TOOL_SELECTION_BOUNDS.maxUsesPerSelection` = 64 calls of the same tool
+  within its run, for `defaultTtlMs` = 10 min), rejects malformed, invented,
+  expired, restarted, cross-scope, or over-used references, and re-resolves
+  every immutable and live authority fence before validation, before
+  dispatch, and after dispatch — reuse authorizes nothing, every call is
+  re-authorized live. A call that fails ARGUMENT validation (sanitizer or
+  Zod) never reaches dispatch, and a call whose tool fails (a thrown
+  dispatcher, or a result carrying its own `error`) did no work: both hand
+  their use back, so the model's retry or its next item on the SAME ref
+  succeeds (CAP-FB-20260830-SELECTION-REF-VALIDATE-FIRST-01,
+  CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01). Single-use references bought no
+  security (a ref authorizes nothing) but cost a `search_tools` round-trip
+  before every call and turned every retry into `selection-replayed`. Every
+  selection failure token (`selection-replayed`, `selection-missing-or-expired`,
+  `selection-scope-mismatch`, `selection-catalog-stale`,
+  `selection-source-stale`) carries a `message` sibling: a sentence naming
+  the next action;
 - list and search share each tool's provider JSON Schema plus an
   `x-cap-argument-limits` contract (UTF-8 string/payload bytes, depth, nodes,
   keys, and array items). The same contract drives lazy sanitization and the

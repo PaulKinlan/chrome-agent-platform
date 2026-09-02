@@ -36,12 +36,19 @@ function ref() {
 
 /** A fake lazy tool surface. `tools[name](args)` returns the inner result;
  * a returned `{ __denial: "approved"|"denied" }` simulates the agent loop's
- * paused permission card and the modelContent it writes afterwards. */
+ * paused permission card: "denied" writes the terminal sentence the loop
+ * writes; "approved" makes the runtime RE-RUN the same call with the same
+ * arguments and hand the model that real result
+ * (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01). `toolInvocations` counts
+ * the underlying tool runs (the runtime's re-run included); `calls` counts
+ * what the MODEL issued. */
 function fakeSurface(tools) {
   const refs = new Map();
   const calls = [];
+  const toolInvocations = [];
   return {
     calls,
+    toolInvocations,
     async run(name, input) {
       if (name === "search_tools") {
         const tool = tools[input.query] ? input.query : null;
@@ -54,12 +61,16 @@ function fakeSurface(tools) {
       refs.delete(input.selectionRef);
       if (!tool) return { ok: false, error: "lazy-selection-replay" };
       calls.push({ tool, args: input.arguments });
-      const inner = await tools[tool](input.arguments);
+      toolInvocations.push(tool);
+      let inner = await tools[tool](input.arguments);
+      if (inner?.__denial === "approved") {
+        // The runtime re-runs the paused call itself; the model sees the result.
+        toolInvocations.push(tool);
+        inner = await tools[tool](input.arguments);
+      }
       if (inner?.__denial) {
         const selected = tool;
-        const modelContent = inner.__denial === "approved"
-          ? `Error: Owner approved the requested capability, but this attempt did not run. Retry ${selected} now with a fresh search_tools selection.`
-          : `Owner denied the requested capability. ${selected} was not performed; do not retry it.`;
+        const modelContent = `Owner denied the requested capability. ${selected} was not performed; do not retry it.`;
         return { ok: true, selectedTool: tool, result: { waitingForPermission: true, permissionRequirement: { permissions: ["tabs"] } }, modelContent };
       }
       return { ok: true, selectedTool: tool, result: inner };
@@ -155,7 +166,7 @@ Deno.test("local-assistant: a continuation after the answer re-emits the answer 
   assertEquals(out.content[0].text, "Grouped 2 tabs into one group by site: Mozilla (2).");
 });
 
-Deno.test("local-assistant: an owner-approved tabs permission retries list_tabs once; a denial ends honestly", async () => {
+Deno.test("local-assistant: an owner-approved tabs permission is re-run by the runtime (the model never retries); a denial ends honestly", async () => {
   let listCalls = 0;
   const approved = fakeSurface({
     list_tabs: async () => (++listCalls === 1 ? { __denial: "approved" } : { tabs: TABS }),
@@ -163,7 +174,8 @@ Deno.test("local-assistant: an owner-approved tabs permission retries list_tabs 
     create_asset: async () => ({ ok: true, asset: { id: "a1" } }),
   });
   const ok = await drive("group my tabs by topic", approved);
-  assertEquals(approved.calls.filter((c) => c.tool === "list_tabs").length, 2, "denied once, retried once");
+  assertEquals(approved.calls.filter((c) => c.tool === "list_tabs").length, 1, "the model issued list_tabs once — the runtime re-ran it after Allow");
+  assertEquals(approved.toolInvocations.filter((t) => t === "list_tabs").length, 2, "denied once, re-run once by the runtime");
   assertMatch(ok.text, /Grouped 2 tabs/u);
 
   const denied = fakeSurface({ list_tabs: async () => ({ __denial: "denied" }) });

@@ -35,10 +35,57 @@ async function mapBounded(items, limit, fn) {
   return out;
 }
 
-const MAX_VIEW_EXECUTIONS = 25;
+// The last 50 runs of a surface reopen with their full visible history
+// (CAP-FB-20260901-THREAD-RELOAD-FIDELITY-01) — the same bound retention keeps
+// full logs for per thread (`RUN_RETENTION_POLICY.perThread`), so what the
+// view reads is what the store kept. Exported so the tests pin the two bounds
+// together.
+export const MAX_VIEW_EXECUTIONS = 50;
 // Bounded fan-out across executions (each page read is itself bounded).
-const VIEW_READ_CONCURRENCY = 8;
+// 16 since CAP-FB-20260901-THREAD-RELOAD-FIDELITY-01: the view reads up to 50
+// executions (each a lock-shared bounded page read); measured 109 ms for a
+// 60-run thread of 300 tool rows at 8.
+const VIEW_READ_CONCURRENCY = 16;
 const MAX_VIEW_LOG_ROWS = 250;
+
+/** The in-line notice for runs OUTSIDE the view bound — what is not shown is
+ *  stated, never silently dropped. `turnsKept` says whether the surface still
+ *  carries the older runs' turns (a task thread persists them in its body). */
+function viewBoundNotice(viewed, total, { turnsKept = false, at = Date.now() } = {}) {
+  const older = total - viewed;
+  const content = turnsKept
+    ? `Tool details are shown for the last ${viewed} of ${total} runs — the ${older} older ${older === 1 ? "run keeps its turn and answer" : "runs keep their turns and answers"}; their tool details stay in the run log (Settings → Data & memory).`
+    : `Showing the last ${viewed} of ${total} runs — the ${older} older ${older === 1 ? "run stays" : "runs stay"} in the run log (Settings → Data & memory).`;
+  return { role: "system", content, ts: at, derived: true, viewBound: { viewed, total } };
+}
+
+/** Read one execution's bounded log page for a view (shared by the thread and
+ *  agent views): a read failure is captured on the row, never thrown. */
+async function readExecutionLogs(e, listLogs, recordFailure) {
+  let logs = [];
+  let logFailed = false;
+  let truncatedLogs = false;
+  const logSpan = perfSpan(`thread-view:logs:${e.executionId}`);
+  try {
+    logs = await listLogs(e.executionId, MAX_VIEW_LOG_ROWS);
+    // listLogs returns the most-recent `limit` rows (ascending by at); hitting
+    // the cap means there may be older rows omitted — flag it honestly.
+    truncatedLogs = logs.length >= MAX_VIEW_LOG_ROWS;
+  } catch (err) {
+    logFailed = true;
+    recordFailure("thread-view-logs", `could not read run log for ${e.executionId}: ${String(err?.message ?? err).slice(0, 200)}`);
+  }
+  logSpan.end(logFailed ? "error" : "ok");
+  return {
+    executionId: e.executionId,
+    logs,
+    logFailed,
+    truncatedLogs,
+    phase: e.record?.phase ?? null,
+    pause: e.record?.pause ?? null,
+    terminal: e.record?.terminal ?? null,
+  };
+}
 
 /** Build the render-ready thread view.
  * deps:
@@ -80,34 +127,14 @@ export async function buildThreadRunView(thread, deps) {
   // fan-out). Order is restored by index: `withLogs` must stay in execution
   // order, because the projection places each execution's cards relative to its
   // own terminal marker.
-  const withLogs = await mapBounded(viewedExecutions, VIEW_READ_CONCURRENCY, async (e) => {
-    let logs = [];
-    let logFailed = false;
-    let truncatedLogs = false;
-    const logSpan = perfSpan(`thread-view:logs:${e.executionId}`);
-    try {
-      logs = await listLogs(e.executionId, MAX_VIEW_LOG_ROWS);
-      // listLogs returns the most-recent `limit` rows (ascending by at); hitting
-      // the cap means there may be older rows omitted — flag it honestly.
-      truncatedLogs = logs.length >= MAX_VIEW_LOG_ROWS;
-    } catch (err) {
-      logFailed = true;
-      recordFailure("thread-view-logs", `could not read run log for ${e.executionId}: ${String(err?.message ?? err).slice(0, 200)}`);
-    }
-    logSpan.end(logFailed ? "error" : "ok");
-    return {
-      executionId: e.executionId,
-      logs,
-      logFailed,
-      truncatedLogs,
-      phase: e.record?.phase ?? null,
-      pause: e.record?.pause ?? null,
-      terminal: e.record?.terminal ?? null,
-    };
-  });
+  const withLogs = await mapBounded(viewedExecutions, VIEW_READ_CONCURRENCY, (e) => readExecutionLogs(e, listLogs, recordFailure));
   const projectSpan = perfSpan("thread-view:project");
   const { messages, missingTerminals } = projectThreadWithRunLogs(thread, withLogs);
   projectSpan.end("ok");
+  // Runs outside the view bound are stated in-line (never a silent drop).
+  if (truncatedExecutions > 0) {
+    messages.unshift(viewBoundNotice(viewedExecutions.length, totalExecutions, { turnsKept: true, at: viewedExecutions[0]?.at ?? Date.now() }));
+  }
 
   // RECONCILIATION: a terminal-phase execution whose terminal marker never
   // reached the body (the pre-redesign lossy path, or a crash between outbox
@@ -182,6 +209,113 @@ export async function buildThreadRunView(thread, deps) {
     truncatedExecutions,
     ...(withLogs.some((e) => e.truncatedLogs) ? { truncatedLogs: true } : {}),
     ...(repairFailed ? { repairFailed: true } : {}),
+    ...(withLogs.some((e) => e.logFailed) ? { viewDegraded: true } : {}),
+  };
+}
+
+/** The AGENT surface's view (CAP-FB-20260901-THREAD-RELOAD-FIDELITY-01): a
+ * named/background agent's reopened conversation is a VIEW over the SAME
+ * authoritative per-execution durable run logs as a task thread — never the
+ * per-agent journal (a 200 KiB list surface holding 300-char tool summaries
+ * and a 240-char answer preview, which is what lost the owner's transcript).
+ * Per execution, the run log yields the user turn (its `task` row), every
+ * tool card + approval card (its tool rows, projected by the same
+ * projectThreadWithRunLogs the thread uses) and the COMPLETE final answer
+ * (the terminal row's retained payload). The most recent `limit` executions
+ * of the agent are read; older ones are stated in-line.
+ * deps:
+ *  - listRuns() → the registry's public run records (agentId, startedAt, phase, terminal)
+ *  - listLogs(executionId, limit) → durable log rows (payloads hydrated)
+ *  - recordFailure(kind, detail) → diagnostics sink (never swallowed)
+ * Never throws: a failed read degrades to an honest marker.
+ */
+export async function buildAgentRunView({ agentId, limit = MAX_VIEW_EXECUTIONS } = {}, deps) {
+  const { listRuns, listLogs, recordFailure = () => {} } = deps ?? {};
+  const empty = { id: agentId ?? null, messages: [], totalExecutions: 0, truncatedExecutions: 0, viewedExecutions: 0 };
+  if (!agentId || typeof listRuns !== "function" || typeof listLogs !== "function") return empty;
+  let runs = [];
+  try {
+    runs = await listRuns();
+  } catch (e) {
+    recordFailure("agent-view-runs", `could not list runs for ${agentId}: ${String(e?.message ?? e).slice(0, 200)}`);
+    return { ...empty, viewDegraded: true };
+  }
+  const mine = (Array.isArray(runs) ? runs : [])
+    .filter((r) => r && typeof r.executionId === "string" && r.agentId === agentId)
+    .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0) || a.executionId.localeCompare(b.executionId));
+  const totalExecutions = mine.length;
+  const bound = Number.isInteger(limit) && limit > 0 ? limit : MAX_VIEW_EXECUTIONS;
+  const viewed = mine.slice(-bound);
+  const truncatedExecutions = totalExecutions - viewed.length;
+  const withLogs = await mapBounded(
+    viewed.map((record) => ({ executionId: record.executionId, record })),
+    VIEW_READ_CONCURRENCY,
+    (e) => readExecutionLogs(e, listLogs, recordFailure),
+  );
+  // The body: one user turn + one terminal marker per execution, both from
+  // the durable log (the record is the fallback when a row is missing).
+  const body = [];
+  for (let i = 0; i < withLogs.length; i++) {
+    const e = withLogs[i];
+    const record = viewed[i];
+    const taskRow = e.logs.find((r) => r?.type === "task");
+    const task = typeof taskRow?.task === "string" && taskRow.task.trim() ? taskRow.task : String(record.taskPreview ?? "");
+    const attachments = Array.isArray(taskRow?.attachments) && taskRow.attachments.length
+      ? taskRow.attachments.map((a) => ({ name: a?.name ?? "attachment", type: a?.type ?? "", size: a?.size ?? 0, kind: a?.kind ?? "file", dataURL: typeof a?.dataURL === "string" ? a.dataURL : "" }))
+      : undefined;
+    body.push({
+      role: "user",
+      content: task,
+      ts: typeof taskRow?.at === "number" ? taskRow.at : (record.startedAt ?? null),
+      executionId: e.executionId,
+      ...(attachments ? { attachments } : {}),
+    });
+    const terminalRow = [...e.logs].reverse().find((r) => r && (r.type === "terminal" || r.type === "cancelled" || r.type === "compacted")) ?? null;
+    const terminal = terminalRow?.terminal ?? record.terminal ?? null;
+    const terminalPhase = record.phase === "terminal" || record.phase === "cancelled";
+    if (terminal && terminalPhase) {
+      // The retained payload is the ONE authoritative full copy of the answer;
+      // the row's `result` is the 240-char list preview
+      // (CAP-FB-20260830-RUN-LOG-COMPACTION-01) — the view must never show
+      // the preview as the answer.
+      const payload = terminalRow?.payload && typeof terminalRow.payload === "object" ? terminalRow.payload : null;
+      const full = typeof payload?.result === "string" && payload.result ? payload.result : null;
+      const cancelled = terminal.cancelled === true || record.phase === "cancelled";
+      const ok = terminal.ok === true && !cancelled;
+      const content = full ?? terminal.result ?? terminal.summary ?? terminal.reason ?? (ok ? "" : "run failed");
+      body.push({
+        role: ok ? "assistant" : "error",
+        content: String(content ?? ""),
+        ts: typeof terminal.at === "number" ? terminal.at : (typeof terminalRow?.at === "number" ? terminalRow.at : null),
+        executionId: e.executionId,
+        ...(ok ? {} : { category: cancelled ? "cancelled" : (payload?.errorCategory ?? "error"), reason: payload?.errorReason ?? terminal.reason ?? undefined }),
+      });
+    }
+  }
+  const projectSpan = perfSpan("agent-view:project");
+  const { messages } = projectThreadWithRunLogs({ id: agentId, messages: body }, withLogs);
+  projectSpan.end("ok");
+  for (const e of withLogs) {
+    if (e.logFailed) {
+      messages.push({
+        role: "system",
+        content: "Some run logs could not be read — the visible history may be incomplete.",
+        ts: Date.now(),
+        derived: true,
+        executionId: e.executionId,
+      });
+    }
+  }
+  if (truncatedExecutions > 0) {
+    messages.unshift(viewBoundNotice(viewed.length, totalExecutions, { turnsKept: false, at: viewed[0]?.startedAt ?? Date.now() }));
+  }
+  return {
+    id: agentId,
+    messages,
+    totalExecutions,
+    truncatedExecutions,
+    viewedExecutions: viewed.length,
+    ...(withLogs.some((e) => e.truncatedLogs) ? { truncatedLogs: true } : {}),
     ...(withLogs.some((e) => e.logFailed) ? { viewDegraded: true } : {}),
   };
 }

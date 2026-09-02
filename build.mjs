@@ -135,6 +135,13 @@ if (violations.length > 0) {
 }
 console.log(`build assertion: no test controls/oracles in ${shippedJs.length} shipped JS files (AST export + oracle walk)`);
 
+// Reachability gate (CAP-FB-20260830-DEAD-CODE-CUT-01): every shipped source
+// file under extension/ must be reached from a manifest entry point, an esbuild
+// entry below, or a RETAINED root with a reason — an unreferenced file fails
+// the build before anything is bundled (scripts/check-reachability.mjs).
+const { runNode: checkReachability } = await import("./scripts/check-reachability.mjs");
+await checkReachability({ root: ROOT });
+
 // Bundled-lane Wasm ships inventory-only: every content-addressed binary
 // under extension/wasm/cas/ is mapped to its exact manifest executable via
 // the generated bundled inventory (extension/lib/bundled-inventory-data.js).

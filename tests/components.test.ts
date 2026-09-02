@@ -127,6 +127,7 @@ const COMPONENTS = [
   "theme-picker",
   "switch-toggle",
   "permission-row",
+  "origin-grant-row",
   "capability-row",
   "site-agent-card",
   "agent-template-card",

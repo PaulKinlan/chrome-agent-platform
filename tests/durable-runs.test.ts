@@ -671,7 +671,7 @@ Deno.test("durable runs: resolved policy is versioned bounded-by-default (compac
   // CAP-FB-20260830-RUN-LOG-COMPACTION-01: bounded by default, visible, and
   // compaction is not eviction — no execution is ever removed by policy.
   assertEquals(snapshot.retentionPolicy.mode, "bounded");
-  assertEquals(snapshot.retentionPolicy.perThread, 10);
+  assertEquals(snapshot.retentionPolicy.perThread, 50, "the last 50 runs of a thread keep their visible history (CAP-FB-20260901-THREAD-RELOAD-FIDELITY-01)");
   assertEquals(snapshot.retentionPolicy.globalExecutions, 500);
   assertEquals(snapshot.retentionPolicy.globalBytes, 32 * 1024 * 1024);
   assertEquals(snapshot.retentionPolicy.automaticCompaction, true);

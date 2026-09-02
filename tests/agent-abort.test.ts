@@ -415,7 +415,7 @@ Deno.test("agent-abort: STATELESS sequencing — consecutive marker runs + non-m
   }
   // a NON-marker run between resets nothing (stateless) + a normal text result
   const outPlain = await agent.run("hello", "", []);
-  assert(typeof outPlain === "string" && outPlain.includes("Task received"), "the non-marker run is a normal text");
+  assert(typeof outPlain === "string" && outPlain.includes("built-in demo"), "the non-marker run is a normal sentence");
   // MULTI-AGENT isolation: two agents sharing the SAME model instance (the
   // orchestrator's master + worker share the model) cannot consume each
   // other's steps — each gets its own set→get→get
@@ -482,7 +482,7 @@ Deno.test("agent-abort: a PRIOR marker transcript never triggers a later non-mar
     text += p.delta ?? "";
   }
   assertEquals(tools, 0, "the prior marker must not trigger tools for a non-marker run");
-  assert(text.includes("Task received"), "the non-marker run is a normal text");
+  assert(text.includes("built-in demo"), "the non-marker run is a normal sentence");
 });
 
 Deno.test("agent-abort: an INTERVENING non-marker run resets the run boundary", async () => {
