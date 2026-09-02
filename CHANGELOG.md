@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.627] — 2026-09-02
+- Long tasks now go through every item: the agent reuses its tool selections, shows Step N of M while working, and offers Continue when it runs out of steps.
+
 ## [0.2.626] — 2026-09-02
 - Task board: the reopen-a-conversation fix is complete.
 

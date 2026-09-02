@@ -53,6 +53,7 @@ import {
   requireSettingsSender,
 } from "./routes/index.js";
 import { describeError, formatError, errorDetail } from "../lib/error-report.js";
+import { BUDGET_CONTINUE_TASK, boundedIterations, budgetExhaustedTerminal, isBudgetTerminal } from "../lib/run-budget.js";
 import { buildRetryDispatch, retryRunId } from "../lib/run-retry.js";
 import { isMemoryKeyQuotaError, isNativeQuotaExceededError } from "../lib/storage-errors.js";
 import {
@@ -2609,7 +2610,17 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     const callSeq = new Map(); // per-run: toolName -> counter (tool-call side)
     const callQueue = new Map(); // per-run: toolName -> pending callId FIFO (tool-result side)
     const orphanSeq = new Map(); // per-run: toolName -> orphan-result counter (unique ids)
+    // The run's step budget as the loop reports it (CAP-FB-20260901-RUN-BUDGET-
+    // EVERY-ITEM-01): {used,total,exhausted}. `exhausted` turns the terminal
+    // into a "Budget reached — Continue" stop instead of a silent finish.
+    let runBudget = null;
     const journalingProgress = async (event) => {
+      if (event?.type === "budget" && Number.isFinite(event.step) && Number.isFinite(event.total)) {
+        runBudget = { used: event.step, total: event.total, exhausted: event.exhausted === true || runBudget?.exhausted === true };
+      }
+      if (event?.type === "done" && event.budget && typeof event.budget === "object") {
+        runBudget = { used: Number(event.budget.used) || 0, total: Number(event.budget.total) || 0, exhausted: event.budget.exhausted === true };
+      }
       // Redact credentials at the SINGLE progress chokepoint so BOTH the live
       // broadcast and the persisted journal never carry them (the tool-call
       // clarity finding: raw args/results — including credential-shaped
@@ -2836,7 +2847,10 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         promptScope,
         agentRole,
         executionId,
-        delegationState ? delegationState.maxIterations : undefined,
+        // A delegated child's budget is its parent's remaining iterations; a
+        // top-level run may carry its own bounded budget (agent.run
+        // maxIterations), else the default (lib/run-budget.js).
+        delegationState ? delegationState.maxIterations : boundedIterations(maxIterations),
         delegationState ? (step) => canStartDelegationIteration(delegationState, step) : null,
         providerServerAgentId,
       );
@@ -2918,6 +2932,9 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         // Settings → Advanced preview without leaking the prompt text.
         prompt: orch.promptInfo ?? undefined,
         executionId,
+        // The run's finite step budget (model steps) — the run log states it
+        // so an early stop is never a mystery (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01).
+        stepBudget: (() => { try { return orch.budget?.()?.total ?? undefined; } catch { return undefined; } })(),
         attachments: Array.isArray(attachments) ? attachments.map((a) => ({
           name: a?.name ?? "attachment",
           type: a?.type ?? "",
@@ -3021,6 +3038,26 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
           : aborted;
       }
       await fence?.assertOwned?.();
+      // BUDGET STOP (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01): the loop ran
+      // out of steps with tool calls still pending — the task is NOT finished,
+      // so this is never a success. Settle a plain-English budget terminal
+      // whose action is Continue (the status row's button runs the
+      // continuation turn on the same thread). The partial answer is already
+      // in the thread as interim rows; the terminal row states the stop.
+      if (runBudget?.exhausted === true) {
+        const budgetStop = budgetExhaustedTerminal(runBudget);
+        const terminal = await durableRuns.settle(executionId, {
+          ...budgetStop,
+          logicalId: taskId,
+          ...(runToolCalls.length > 0 ? { toolCalls: runToolCalls } : {}),
+          ...(runSkillIds.length > 0 ? { skills: runSkillIds } : {}),
+          ...(runPromptHash ? { promptHash: runPromptHash } : {}),
+        });
+        if (terminal?.phase === "cancelled") {
+          return { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "aborted", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId };
+        }
+        return { ...budgetStop, executionId, result: typeof result === "string" ? result : "" };
+      }
       // The terminal record is authoritative and idempotent: enforce the
       // parent+subtree cap BEFORE committing success, because a later catch
       // cannot replace an already-settled successful record.
@@ -5252,6 +5289,9 @@ const handlers = mergeRouteMaps(
         threadId,
         agentRole: "hub",
         providerServerAgentId: "hub",
+        // An explicit, bounded step budget for THIS run (owner surfaces only;
+        // the default applies when absent — lib/run-budget.js).
+        maxIterations: boundedIterations(m.maxIterations),
         onProgress: (event) => {
           if (event?.type === "tool-call") lastTool = event.toolName ?? null;
           broadcastProgress({
@@ -7001,6 +7041,30 @@ const handlers = mergeRouteMaps(
       await durableRuns.failResumeDispatch(executionId, resumed.token, error?.message ?? error);
       throw error;
     }
+  },
+  async "run.continue"(m, context) {
+    // "Budget reached — Continue" (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01):
+    // a run that stopped on its step budget continues as a NEW TURN on the
+    // SAME thread (the thread history is the context), never a silent finish
+    // and never a replay of the finished execution. Same owner gate as resume.
+    if (!["extension", "owner-options"].includes(context?.principal)) {
+      return { ok: false, error: "owner_extension_required" };
+    }
+    const executionId = String(m?.executionId ?? "");
+    if (!executionId) return { ok: false, error: "executionId is required" };
+    const snapshot = await durableRuns.list();
+    const run = snapshot.runs.find((row) => row.executionId === executionId);
+    if (!run) return { ok: false, error: "run_not_found", executionId };
+    if (run.phase !== "terminal" || !isBudgetTerminal(run.terminal)) {
+      return { ok: false, error: "run_not_budget_stopped", executionId };
+    }
+    if (!run.threadId) return { ok: false, error: "run_has_no_thread", executionId };
+    return await handlers["agent.run"]({
+      threadId: run.threadId,
+      task: BUDGET_CONTINUE_TASK,
+      runId: m?.runId ?? null,
+      continuesExecutionId: executionId,
+    });
   },
   async "run.retry"(m, context) {
     // UX-008 (CAP-FB-20260828-SILENT-DISPATCH-LOSS-01): a failed dispatch must

@@ -27,6 +27,9 @@ export const ERROR_CATEGORY = {
   TIMEOUT: "timeout",
   ABORTED: "aborted",
   STORAGE: "storage",
+  // The run's step budget ran out with work still to do — not a failure of
+  // anything; the recovery is one Continue (lib/run-budget.js).
+  BUDGET: "budget",
   UNKNOWN: "unknown",
 };
 
@@ -56,6 +59,8 @@ const ACTION = {
     "The run was cancelled.",
   [ERROR_CATEGORY.STORAGE]:
     "Free browser storage, then retry. Progressed or uncertain runs remain available for explicit recovery.",
+  [ERROR_CATEGORY.BUDGET]:
+    "Continue",
   [ERROR_CATEGORY.UNKNOWN]:
     "Something went wrong — see the detail below.",
 };

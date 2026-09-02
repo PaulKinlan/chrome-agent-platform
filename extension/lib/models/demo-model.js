@@ -45,6 +45,19 @@ const BOARD_MARKER = "@demo-board";
 // the REAL outcome — a denial reads as not performed, never as success.
 const BROWSER_MARKER = "@demo-browser";
 const BROWSER_TOOLS = new Set(["open_tab", "navigate_tab", "read_page", "capture_screenshot", "list_tabs"]);
+// @demo-every-tab [match=<substring>]: the every-item loop through the REAL
+// lazy protocol (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01) — search_tools
+// (list_tabs) → execute → search_tools(read_page) ONCE → execute read_page for
+// EVERY listed tab (the SAME selectionRef each time, up to EVERY_TAB_MAX) →
+// honest final text naming how many tabs were read and which could not be.
+// `match=` limits the loop to tabs whose url contains the substring (a journey
+// fixture's tabs, not the suite's own extension pages).
+const EVERY_TAB_MARKER = "@demo-every-tab";
+// One inner turn holds 24 model steps (lib/run-budget.js): two searches, the
+// list, up to 20 reads and the final text. agent-do strips the tool history
+// between outer iterations, so the deterministic plan keeps to one turn.
+const EVERY_TAB_MAX = 20;
+const EVERY_TAB_FINAL_RE = /\[demo model\] Every tab:/;
 // @demo-mcp <mcp__server__tool> [json-args]: the demo model drives the REAL
 // remote-MCP path through the lazy protocol (search_tools → execute_tool) so the
 // end-to-end KAT (CAP-FB-20260831-MCP-TOOL-INJECTION-01) attests that a run
@@ -342,8 +355,11 @@ function createAgentSpec(prompt) {
  * task is the last NON-continuation user message. */
 const AGENTDO_CONTINUATION = "continue working on the task";
 
+/** agent-do's synthetic nudge, and the budget Continue turn (lib/run-budget.js
+ * BUDGET_CONTINUE_TASK, "Continue the previous task from where it stopped…"):
+ * both continue the CURRENT task, so the run boundary stays the marker turn. */
 function isAgentDoContinuation(msg) {
-  return msg?.role === "user" && /^continue working on the task/i.test(extractText([msg]).trim());
+  return msg?.role === "user" && /^continue (working on the task|the previous task from where it stopped)/i.test(extractText([msg]).trim());
 }
 
 function latestRunSlice(prompt) {
@@ -364,6 +380,7 @@ function latestRunSlice(prompt) {
       createAgent: lastUser.includes(CREATE_AGENT_MARKER),
       board: lastUser.includes(BOARD_MARKER) || BOARD_WAKE_RE.test(extractText([msgs[lastIdx]])),
       browser: lastUser.includes(BROWSER_MARKER),
+      everyTab: lastUser.includes(EVERY_TAB_MARKER),
       mcp: lastUser.includes(MCP_MARKER),
       siteTool: lastUser.includes(SITE_TOOL_MARKER),
       enumSlip: lastUser.includes(ENUM_SLIP_MARKER),
@@ -1106,6 +1123,121 @@ function browserFinalText(prompt) {
   return `[demo model] Browser tool ${spec.tool} finished without a result.`;
 }
 
+// ── @demo-every-tab helpers (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01) ────────
+function wantsEveryTab(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.everyTab;
+}
+function everyTabMatch(prompt) {
+  const slice = latestRunSlice(prompt);
+  if (!slice) return "";
+  const text = extractText([slice.slice[0]]);
+  return text.match(/@demo-every-tab\s+match=(\S{1,120})/)?.[1] ?? "";
+}
+/** `@demo-every-tab tabs=12,13,14` — an explicit tab-id list skips list_tabs
+ * (a headless journey profile cannot hold the `tabs` permission; `scripting`
+ * is silent and grantable, so the reads still run for real). */
+function everyTabExplicitIds(prompt) {
+  const slice = latestRunSlice(prompt);
+  if (!slice) return null;
+  const text = extractText([slice.slice[0]]);
+  const m = text.match(/@demo-every-tab\s+tabs=([\d,]{1,400})/);
+  if (!m) return null;
+  const ids = m[1].split(",").map((s) => Number(s)).filter((n) => Number.isInteger(n) && n >= 0);
+  return ids.length ? ids.slice(0, EVERY_TAB_MAX) : null;
+}
+function everyTabAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" && Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && EVERY_TAB_FINAL_RE.test(p.text ?? "")));
+}
+/** One execute_tool part's lazy ENVELOPE ({ ok, selectedTool, result }) — it
+ * reaches the model as an object, an agent-do {modelContent} wrapper, or JSON
+ * text; null when the part is not an execute envelope. */
+function everyTabEnvelope(part) {
+  if (part?.type !== "tool-result" || part?.toolName !== "execute_tool") return null;
+  const parse = (v) => {
+    if (typeof v === "string") { try { return JSON.parse(v); } catch { return null; } }
+    return v && typeof v === "object" ? v : null;
+  };
+  let v = parse(part.output?.value ?? part.output);
+  if (v && "modelContent" in v && !("selectedTool" in v)) v = parse(v.modelContent) ?? v;
+  return v && typeof v === "object" && typeof v.selectedTool === "string" ? v : null;
+}
+/** The tab ids the executed list_tabs returned (unfenced; filtered by match=). */
+function everyTabIds(prompt) {
+  const match = everyTabMatch(prompt);
+  for (const part of boardToolParts(prompt)) {
+    const env = everyTabEnvelope(part);
+    if (!env || env.selectedTool !== "list_tabs") continue;
+    const value = unfenceValue(env.result);
+    if (!value || typeof value !== "object" || !Array.isArray(value.tabs)) continue;
+    return value.tabs
+      .filter((t) => Number.isFinite(t?.id) && (!match || String(t?.url ?? "").includes(match)))
+      .map((t) => t.id)
+      .slice(0, EVERY_TAB_MAX);
+  }
+  return null;
+}
+/** Every executed read_page in order: { ok, error }. */
+function everyTabReads(prompt) {
+  const reads = [];
+  for (const part of boardToolParts(prompt)) {
+    if (part?.type === "tool-error" && part?.toolName === "execute_tool") {
+      reads.push({ ok: false, error: String(part.error ?? "error").slice(0, 120) });
+      continue;
+    }
+    const env = everyTabEnvelope(part);
+    if (!env || env.selectedTool !== "read_page") continue;
+    const inner = env.result && typeof env.result === "object" ? env.result : null;
+    const failed = env.ok === false || (inner && (inner.ok === false || typeof inner.error === "string"));
+    reads.push({ ok: !failed, error: failed ? String(inner?.error ?? env.error ?? "error").slice(0, 120) : "" });
+  }
+  return reads;
+}
+/** search(list_tabs) → execute → search(read_page) ONCE → execute read_page per
+ * tab on the SAME selectionRef → null (the final text). A failed read moves on
+ * to the next tab (the ref survives a failure); it is named in the final text. */
+function everyTabCall(prompt) {
+  const parts = boardToolParts(prompt);
+  const searches = parts.filter((p) => p.toolName === "search_tools").length;
+  const executes = parts.filter((p) => p.toolName === "execute_tool").length;
+  const explicit = everyTabExplicitIds(prompt);
+  if (!explicit) {
+    if (searches === 0) return { id: "search_every_list", name: "search_tools", input: { query: "list_tabs", limit: 1 } };
+    if (executes === 0) {
+      const selectionRef = latestSelectionRef(prompt);
+      return selectionRef ? { id: "execute_every_list", name: "execute_tool", input: { selectionRef, arguments: {} } } : null;
+    }
+  }
+  const ids = explicit ?? everyTabIds(prompt);
+  if (!ids || ids.length === 0) return null; // honest stop: the final text says so
+  if (searches < (explicit ? 1 : 2)) return { id: "search_every_read", name: "search_tools", input: { query: "read_page", limit: 1 } };
+  const reads = everyTabReads(prompt);
+  if (reads.length >= ids.length) return null;
+  // The read_page ref: the LAST search's ref (execute envelopes echo it too).
+  const selectionRef = latestSelectionRef(prompt);
+  if (!selectionRef) return null;
+  const tabId = ids[reads.length];
+  return { id: `execute_every_read_${reads.length}`, name: "execute_tool", input: { selectionRef, arguments: { tabId } } };
+}
+function everyTabFinalText(prompt) {
+  const prior = runSlice(prompt)
+    .filter((m) => m?.role === "assistant" && Array.isArray(m?.content))
+    .flatMap((m) => m.content)
+    .find((p) => p?.type === "text" && EVERY_TAB_FINAL_RE.test(p.text ?? ""));
+  if (prior?.text) return prior.text;
+  const ids = everyTabExplicitIds(prompt) ?? everyTabIds(prompt);
+  if (!ids) return "[demo model] Every tab: the tab list was not read, so no tab was read.";
+  const reads = everyTabReads(prompt);
+  const failed = reads.map((r, i) => (r.ok ? null : `${ids[i]} (${r.error})`)).filter(Boolean);
+  const read = reads.filter((r) => r.ok).length;
+  const unreached = ids.slice(reads.length);
+  return `[demo model] Every tab: listed ${ids.length}, read ${read} of ${ids.length}` +
+    (failed.length ? `; could not read ${failed.length}: ${failed.join(", ").slice(0, 400)}` : "") +
+    (unreached.length ? `; not reached: ${unreached.join(", ").slice(0, 200)}` : "") +
+    ".";
+}
+
 // ── @demo-mcp helpers (CAP-FB-20260831-MCP-TOOL-INJECTION-01) ─────────────────
 
 function wantsMcp(prompt) {
@@ -1729,11 +1861,17 @@ export function createDemoModel() {
         ? lazyDemoCall(options.prompt, { board: true })
         : wantsBrowser(options.prompt) && !browserAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { browser: true })
+        : wantsEveryTab(options.prompt) && !everyTabAlreadyFinal(options.prompt)
+        ? everyTabCall(options.prompt)
         : wantsMcp(options.prompt) && !mcpAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { mcp: true })
         : wantsSiteTool(options.prompt) && !siteToolAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { siteTool: true })
-        : wantsDelegate(options.prompt)        ? lazyDemoCall(options.prompt, { delegate: true })
+        // The continuation strips the tool history, so without the
+        // already-final guard the delegate plan restarted EVERY iteration
+        // (12 delegate calls per run; 48 once the budget grew).
+        : wantsDelegate(options.prompt) && !delegateAlreadyFinal(options.prompt)
+        ? lazyDemoCall(options.prompt, { delegate: true })
         : wantsCreateAgent(options.prompt) && !createAgentDone
         ? lazyDemoCall(options.prompt)
         : wantsDemoTools(options.prompt) && !demoAlreadyFinal(options.prompt)
@@ -1835,6 +1973,14 @@ export function createDemoModel() {
       if (wantsBrowser(options.prompt)) {
         return Promise.resolve({
           content: [{ type: "text", text: browserFinalText(options.prompt) }],
+          finishReason: "stop",
+          usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
+          warnings: [],
+        });
+      }
+      if (wantsEveryTab(options.prompt)) {
+        return Promise.resolve({
+          content: [{ type: "text", text: everyTabFinalText(options.prompt) }],
           finishReason: "stop",
           usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
           warnings: [],
@@ -1944,11 +2090,14 @@ export function createDemoModel() {
             ? lazyDemoCall(options.prompt, { board: true })
             : wantsBrowser(options.prompt) && !browserAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { browser: true })
+            : wantsEveryTab(options.prompt) && !everyTabAlreadyFinal(options.prompt)
+            ? everyTabCall(options.prompt)
             : wantsMcp(options.prompt) && !mcpAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { mcp: true })
             : wantsSiteTool(options.prompt) && !siteToolAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { siteTool: true })
-            : wantsDel            ? lazyDemoCall(options.prompt, { delegate: true })
+            : wantsDel && !delegateAlreadyFinal(options.prompt)
+            ? lazyDemoCall(options.prompt, { delegate: true })
             : wantsCreateAgent(options.prompt) && !createAgentDone
             ? lazyDemoCall(options.prompt)
             : wantsTools && !demoAlreadyFinal(options.prompt)
@@ -2125,6 +2274,11 @@ export function createDemoModel() {
               .flatMap((m) => m.content)
               .find((p2) => p2?.type === "text" && /\[demo model\] Browser tool/.test(p2.text ?? ""));
             response = prior?.text ?? browserFinalText(options.prompt);
+          }
+          else if (wantsEveryTab(options.prompt)) {
+            // The every-tab loop's final text counts what was REALLY read; a
+            // continuation re-emits the prior final so the loop ends.
+            response = everyTabFinalText(options.prompt);
           }
           else if (wantsMcp(options.prompt)) {
             // The MCP flow's final text is the REAL outcome of the last execute

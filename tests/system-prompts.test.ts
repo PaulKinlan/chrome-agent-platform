@@ -173,6 +173,11 @@ Deno.test("default prompts: MV3 execution grounding and one-search-then-invoke d
     assertStringIncludes(text, "search_tools\nEXACTLY ONCE", `${scope}: one discovery call`);
     assertStringIncludes(text, "Never search twice for the same capability", `${scope}: no repeated discovery`);
     assertStringIncludes(text, "report its error; do not re-search", `${scope}: first failure is reported`);
+    // CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01: a selectionRef is reusable for
+    // the rest of the run, and "every item" means every item.
+    assertStringIncludes(text, "works for EVERY call of that tool", `${scope}: reusable selection reference`);
+    assertStringIncludes(text, "iterate EVERY item", `${scope}: every-item loops`);
+    assertStringIncludes(text, "which items you could not", `${scope}: unreadable items are reported`);
   }
 });
 

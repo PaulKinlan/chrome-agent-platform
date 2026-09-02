@@ -18,6 +18,7 @@
 import { capLog } from "../../lib/cap-log.js";
 import { journalJson } from "../../shared/tool-tree.js";
 import { redactSecretText } from "../../lib/pure.js";
+import { RUN_BUDGET_BOUNDS, RUN_BUDGET_DEFAULTS } from "../../lib/run-budget.js";
 
 const ALIVE_KEY = "cap:agent-workers:alive";
 
@@ -193,7 +194,7 @@ export function createAgentWorkerRoutes({
         task: String(m?.task ?? "").slice(0, 4000),
         system: String(m?.system ?? "").slice(0, 16000),
         modelKind: String(m?.modelKind ?? "demo").slice(0, 32),
-        maxIterations: Math.min(Number(m?.maxIterations ?? 12) || 12, 64),
+        maxIterations: Math.min(Number(m?.maxIterations ?? RUN_BUDGET_DEFAULTS.maxIterations) || RUN_BUDGET_DEFAULTS.maxIterations, RUN_BUDGET_BOUNDS.maxIterations),
         toolSpecs: Array.isArray(m?.toolSpecs) ? m.toolSpecs.slice(0, 200) : [],
       };
       let posted;
@@ -232,7 +233,7 @@ export function createAgentWorkerRoutes({
         task: String(m?.task ?? "").slice(0, 4000),
         system: String(m?.system ?? "").slice(0, 16000),
         modelKind: String(m?.modelKind ?? "demo").slice(0, 32),
-        maxIterations: Math.min(Number(m?.maxIterations ?? 12) || 12, 64),
+        maxIterations: Math.min(Number(m?.maxIterations ?? RUN_BUDGET_DEFAULTS.maxIterations) || RUN_BUDGET_DEFAULTS.maxIterations, RUN_BUDGET_BOUNDS.maxIterations),
         toolSpecs: Array.isArray(m?.toolSpecs) ? m.toolSpecs.slice(0, 200) : [],
       };
       let posted;
