@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.635] — 2026-09-02
+- Allowing the agent on a second site no longer forgets the first; Settings lists every allowed site and each can be turned off on its own.
+
 ## [0.2.634] — 2026-09-02
 - Task board: the plain-language copy pass is complete.
 

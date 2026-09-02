@@ -204,10 +204,12 @@
         </div>
         <div id="grant-origins" class="grant-origins" hidden>
           <h3>Allowed origins</h3>
-          <label for="grant-origin-list" class="muted">Restrict control to these origins (one per line):</label>
+          <p id="grant-origin-summary" class="muted">Every site you allow keeps its own grant; turn one off without touching the others.</p>
+          <div id="grant-origin-rows" class="grant-origin-rows" aria-live="polite"></div>
+          <label for="grant-origin-list" class="muted">Allow more origins (one per line):</label>
           <textarea id="grant-origin-list" rows="4"
             placeholder="https://github.com"></textarea>
-          <p class="muted">Empty = a global (all-origins) grant.</p>
+          <p class="muted">Adding origins scopes control to the listed sites. To allow every site again, turn the switch off and back on.</p>
         </div>
         <div id="action-policy" class="action-policy">
           <h3>Action policy</h3>

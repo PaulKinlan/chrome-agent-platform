@@ -602,6 +602,7 @@ const EXPECTED = [
   "real red tab resolved (active tab id)",
   "screenshot: denied after revoke (secondary probe)",
   "screenshot: capture SUCCEEDS for the granted origin",
+  "Browser control: revoking one origin through the service worker reports it gone",
   "screenshot: wrong-origin grant is denied (secondary probe)",
   "screenshot: expired grant is denied (secondary probe)",
   "Settings: browser-grant checkbox present",
@@ -613,6 +614,9 @@ const EXPECTED = [
   "Side panel: open_side_panel is absent from the model toolset",
   "screenshot: typed the red origin into the allowed-origins field",
   "screenshot: grant scoped to the red origin via the UI",
+  "Browser control: allowing a second origin keeps the first origin granted",
+  "Browser control: Settings lists every allowed origin with its own Turn off",
+  "Browser control: turning off one origin leaves the other origin granted",
   "screenshot: UI-granted capture SUCCEEDS for the scoped origin",
   "screenshot: revoked via a real checkbox click",
   "Browser control: toggle OFF succeeds while a run holds the lease",
@@ -4922,7 +4926,15 @@ async function main() {
       allowedShot?.error === undefined && typeof allowedShot?.screenshot === "string" &&
         allowedShot.screenshot.length > 0,
     );
-    // (c) wrong-origin (secondary probe).
+    // (c) wrong-origin (secondary probe). Per-origin grants are a SET
+    // (CAP-FB-20260902-ORIGIN-GRANT-UNION-01): allowing another origin no
+    // longer removes the red one, so the red grant is revoked ON ITS OWN first
+    // and only the wrong origin is left allowed.
+    const redRevoke = await msgValue({ type: "browser-control.revoke", origin: RED_ORIGIN });
+    check(
+      "Browser control: revoking one origin through the service worker reports it gone",
+      redRevoke?.grant?.revoked === true && redRevoke?.grant?.origin === RED_ORIGIN,
+    );
     await msgValue({
       type: "browser-control.set",
       origins: ["http://127.0.0.1:1"],
@@ -4945,6 +4957,26 @@ async function main() {
       "screenshot: expired grant is denied (secondary probe)",
       expiredShot?.error !== undefined || expiredShot?.ok === false,
     );
+    // Under the set contract the wrong-origin grant from (c) is STILL live
+    // (the expired red entry sits beside it), and the Settings switch follows
+    // the true state live — so clear every grant before the GENUINE UI grant
+    // below, which must start from off, and wait for the switch to show off.
+    const pollUntil = async (fn, ms = 8000) => {
+      const deadline = Date.now() + ms;
+      while (Date.now() < deadline) {
+        const v = await fn();
+        if (v) return v;
+        await sleep(150);
+      }
+      return null;
+    };
+    const listedOrigins = () =>
+      evalOpts(`[...document.querySelectorAll("#grant-origin-rows origin-grant-row")].map((r) => r.getAttribute("origin"))`);
+    await msgValue({ type: "browser-control.set", granted: false });
+    const switchOff = await pollUntil(async () =>
+      (await evalOpts(`document.querySelector("#browser-grant")?.checked === false`)) === true
+    );
+    console.log(`[debug] browser-control switch before the UI grant ${JSON.stringify({ switchOff, live: await msgValue({ type: "browser-control.get" }) })}`);
 
     // ─────────────────────────────────────────────────────────────
     // GENUINE UI grant: checkbox click + origin textarea typing (the primary
@@ -5047,6 +5079,63 @@ async function main() {
       scopedGrant?.scope === "origins" &&
         Array.isArray(scopedGrant?.origins) &&
         scopedGrant.origins.includes(RED_ORIGIN),
+    );
+    // CAP-FB-20260902-ORIGIN-GRANT-UNION-01: a second site's Allow ADDS to the
+    // set. The Allow handler on an approval card calls the same
+    // browser-control.set route with that card's origin, so allowing a second
+    // origin through it must keep the red origin granted, Settings must list
+    // both with their own Turn off, and turning one off must leave the other.
+    const SECOND_ORIGIN = "http://127.0.0.1:1";
+    await msgValue({ type: "browser-control.set", origins: [SECOND_ORIGIN] });
+    const unionGrant = await msgValue({ type: "browser-control.get" });
+    check(
+      "Browser control: allowing a second origin keeps the first origin granted",
+      unionGrant?.scope === "origins" && Array.isArray(unionGrant?.origins) &&
+        unionGrant.origins.includes(RED_ORIGIN) && unionGrant.origins.includes(SECOND_ORIGIN) &&
+        Array.isArray(unionGrant?.grants) && unionGrant.grants.length === 2,
+    );
+    // The Settings listing follows the storage change without a reload.
+    const listedRows = await pollUntil(async () => {
+      const rows = await listedOrigins();
+      return Array.isArray(rows) && rows.includes(RED_ORIGIN) && rows.includes(SECOND_ORIGIN) ? rows : null;
+    });
+    const everyRowHasTurnOff = await evalOpts(
+      `[...document.querySelectorAll("#grant-origin-rows origin-grant-row")].every((r) => r.shadowRoot?.querySelector("button")?.textContent.trim() === "Turn off")`,
+    );
+    check(
+      "Browser control: Settings lists every allowed origin with its own Turn off",
+      Array.isArray(listedRows) && listedRows.length === 2 && everyRowHasTurnOff === true,
+    );
+    await evalOpts(`document.querySelector("#grant-origin-rows")?.scrollIntoView({ block: "center" })`);
+    await sleep(200);
+    const twoOriginsShot = await captureShot(cdp, optsSession);
+    if (twoOriginsShot) await writeEvidence("browser-control-two-origins.png", twoOriginsShot);
+    // A GENUINE click on the second origin's Turn off (inside the row's shadow tree).
+    const secondRowIndex = Array.isArray(listedRows) ? listedRows.indexOf(SECOND_ORIGIN) : -1;
+    let turnedOff = false;
+    if (secondRowIndex >= 0) {
+      const b = await evalOpts(
+        `(() => { const row = document.querySelectorAll("#grant-origin-rows origin-grant-row")[${secondRowIndex}]; const el = row?.shadowRoot?.querySelector("button"); if (!el) return null; el.scrollIntoView({ block: "center" }); const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
+      );
+      if (b && typeof b.x === "number") {
+        await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: b.x, y: b.y, button: "left", buttons: 1, clickCount: 1 }, optsSession);
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: b.x, y: b.y, button: "left", buttons: 0, clickCount: 1 }, optsSession);
+        turnedOff = true;
+      }
+    }
+    const afterOneOff = await pollUntil(async () => {
+      const g = await msgValue({ type: "browser-control.get" });
+      return Array.isArray(g?.origins) && !g.origins.includes(SECOND_ORIGIN) ? g : null;
+    });
+    const rowsAfterOneOff = await pollUntil(async () => {
+      const rows = await listedOrigins();
+      return Array.isArray(rows) && !rows.includes(SECOND_ORIGIN) ? rows : null;
+    });
+    check(
+      "Browser control: turning off one origin leaves the other origin granted",
+      turnedOff && afterOneOff?.scope === "origins" && afterOneOff.origins.includes(RED_ORIGIN) &&
+        !afterOneOff.origins.includes(SECOND_ORIGIN) && afterOneOff.active === true &&
+        Array.isArray(rowsAfterOneOff) && rowsAfterOneOff.length === 1 && rowsAfterOneOff[0] === RED_ORIGIN,
     );
     const uiGrantShot = await msgValue({ type: "capture.tab", tabId: redTabId });
     // The UI grant flow (checkbox + scoped origin) is genuinely driven above;
