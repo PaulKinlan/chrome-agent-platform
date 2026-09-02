@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.619] — 2026-09-02
+- An open new tab no longer polls the agent worker every few seconds; the shield and console badges and the Settings Usage panel update the moment something changes
+
 ## [0.2.618] — 2026-09-02
 - Task board: three more items are being worked on.
 

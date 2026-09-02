@@ -21,6 +21,21 @@ const securityBuffer = [];
 
 let captureInstalled = false;
 
+// One optional change listener (the SW registers it) — fired after EVERY
+// append or clear on either buffer so the page badges can be push-driven
+// (CAP-FB-20260830-HUB-POLLING-01). Pure: nothing here touches chrome.*.
+let changeListener = null;
+
+/** Register the single "something changed" callback (null to clear). */
+export function onDiagnosticsChanged(fn) {
+  changeListener = typeof fn === "function" ? fn : null;
+}
+
+function notifyChanged() {
+  if (!changeListener) return;
+  try { changeListener(); } catch { /* a listener never breaks the buffer */ }
+}
+
 function now() {
   return Date.now();
 }
@@ -96,6 +111,7 @@ export function push(level, message, source = "service-worker", kind = "runtime"
   entry.message = safeProviderError(String(entry.message ?? ""));
   buffer.push(entry);
   if (buffer.length > MAX_ENTRIES) buffer.splice(0, buffer.length - MAX_ENTRIES);
+  notifyChanged();
   return entry;
 }
 
@@ -140,6 +156,7 @@ export function securityApprovalEvent(decision, action, targetRef) {
   buffer.push(entry);
   if (securityBuffer.length > MAX_ENTRIES) securityBuffer.splice(0, securityBuffer.length - MAX_ENTRIES);
   if (buffer.length > MAX_ENTRIES) buffer.splice(0, buffer.length - MAX_ENTRIES);
+  notifyChanged();
   return entry;
 }
 
@@ -205,6 +222,7 @@ export function diagnosticList() {
 
 export function diagnosticClear() {
   buffer.length = 0;
+  notifyChanged();
   return { ok: true };
 }
 
@@ -217,5 +235,6 @@ export function securityState() {
 
 export function securityClear() {
   securityBuffer.length = 0;
+  notifyChanged();
   return { ok: true };
 }

@@ -95,3 +95,56 @@ Deno.test("diagnostics: entries carry ts, level, source, kind", () => {
   assertEquals(e.source, "service-worker");
   assertEquals(e.kind, "runtime");
 });
+
+// CAP-FB-20260830-HUB-POLLING-01 — the badge counts are PUSH-driven: the SW
+// bumps an integer revision in chrome.storage.session whenever a diagnostic /
+// security / usage entry lands, and the page refreshes on that change. An
+// open hub must never install a periodic timer (it kept the MV3 worker awake
+// for the life of every new tab).
+Deno.test("diagnostics client refreshes on revision change and never installs an interval", async () => {
+  const sent: string[] = [];
+  const listeners: Array<(changes: Record<string, unknown>, area?: string) => void> = [];
+  let intervals = 0;
+  const g = globalThis as Record<string, unknown>;
+  const saved = { chrome: g.chrome, document: g.document, setInterval: g.setInterval };
+  g.chrome = {
+    runtime: {
+      sendMessage: (msg: { type?: string }, cb: (v: unknown) => void) => {
+        sent.push(String(msg?.type));
+        cb({ ok: true, count: 2 });
+      },
+    },
+    storage: { session: { onChanged: { addListener: (fn: (c: Record<string, unknown>, a?: string) => void) => listeners.push(fn) } } },
+  };
+  const attrs = new Map<string, string>();
+  const badge = {
+    setAttribute: (k: string, v: string) => attrs.set(k, v),
+    removeAttribute: (k: string) => attrs.delete(k),
+  };
+  g.document = {
+    visibilityState: "visible",
+    addEventListener() {},
+    removeEventListener() {},
+    querySelector: (sel: string) => (sel === "error-console" || sel === "security-shield" ? badge : null),
+  };
+  g.setInterval = () => { intervals += 1; return 0; };
+  try {
+    const client = await import("../extension/shared/diagnostics-client.js");
+    client.startDiagnosticSubscription();
+    await new Promise((r) => setTimeout(r, 0));
+    sent.length = 0; // the one refresh on start is not the thing under test
+    assertEquals(listeners.length, 1, "subscribes to the session revision exactly once");
+    listeners[0]({ "cap:diagnosticsRevision": { newValue: 7 } });
+    await new Promise((r) => setTimeout(r, 0));
+    assertEquals(sent.filter((t) => t === "diagnostics.list").length, 1, "diagnostics.list sent exactly once on the change");
+    assertEquals(sent.filter((t) => t === "security.state").length, 1, "security.state sent exactly once on the change");
+    assertEquals(attrs.get("count"), "2");
+    assertEquals(attrs.has("attention"), true, "a non-zero shield count sets attention");
+    assertEquals(intervals, 0, "never installs an interval");
+    client.stopDiagnosticSubscription();
+  } finally {
+    g.chrome = saved.chrome;
+    g.document = saved.document;
+    g.setInterval = saved.setInterval;
+  }
+});

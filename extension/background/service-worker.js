@@ -117,12 +117,13 @@ import {
   RunAbortedError,
   takeLastProviderError,
 } from "../lib/agent.js";
-import { clearUsage, getServerToolUsage, getUsage, recordServerToolUsage, recordToolCall, recordUsage } from "../lib/usage.js";
+import { clearUsage, getServerToolUsage, getUsage, onUsageChanged, recordServerToolUsage, recordToolCall, recordUsage } from "../lib/usage.js";
 import { createWebmcpAuthorizationGuard } from "../lib/webmcp-authority.js";
 import {
   diagnosticClear,
   diagnosticList,
   installDiagnosticCapture,
+  onDiagnosticsChanged,
   push as pushDiagnostic,
   securityApprovalEvent,
   securityClear,
@@ -725,6 +726,35 @@ function broadcastRegistryChanged() {
   registryRevision += 1;
   broadcastProgress({ type: "agent-registry-changed", revision: registryRevision });
 }
+// ---- diagnostics revision (CAP-FB-20260830-HUB-POLLING-01) ----
+// The hub badges (<security-shield> / <error-console>) and the Settings Usage
+// panel used to POLL the worker (two routes per hub tab every 5 s, usage.get
+// every 1.5 s from Settings), which kept the MV3 worker awake for the life of
+// every new tab. They are push-driven now: every diagnostic / security / usage
+// append or clear bumps ONE integer in chrome.storage.session, and
+// `storage.onChanged` delivers it to every extension page with no port and no
+// timer. The key carries the integer only — never event content (the entries
+// themselves stay behind the diagnostics-scrubbed routes). Bumps within a
+// burst (a console.error storm, a run's many usage rows) coalesce into one
+// write per 100 ms; the counter is seeded from the wall clock so a worker
+// restart never re-emits a value a page has already seen.
+const DIAGNOSTICS_REVISION_KEY = "cap:diagnosticsRevision";
+let diagnosticsRevision = Date.now();
+let diagnosticsRevisionTimer = null;
+function bumpDiagnosticsRevision() {
+  diagnosticsRevision += 1;
+  if (diagnosticsRevisionTimer) return;
+  diagnosticsRevisionTimer = setTimeout(() => {
+    diagnosticsRevisionTimer = null;
+    try {
+      const write = chrome.storage?.session?.set?.({ [DIAGNOSTICS_REVISION_KEY]: diagnosticsRevision });
+      if (write && typeof write.catch === "function") write.catch(() => {});
+    } catch { /* no session storage in this realm (unit import) — nothing to push */ }
+  }, 100);
+}
+onDiagnosticsChanged(bumpDiagnosticsRevision);
+onUsageChanged(bumpDiagnosticsRevision);
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "agent-progress") return;
   progressPorts.add(port);
