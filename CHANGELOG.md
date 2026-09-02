@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.14] — 2026-09-02
+- restore the stock lockfile with only the release version fields bumped
+
 ## [0.3.13] — 2026-09-02
 - : record the reland candidate and gate evidence
 
