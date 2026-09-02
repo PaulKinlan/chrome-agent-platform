@@ -53,10 +53,12 @@ const BROWSER_TOOLS = new Set(["open_tab", "navigate_tab", "read_page", "capture
 // `match=` limits the loop to tabs whose url contains the substring (a journey
 // fixture's tabs, not the suite's own extension pages).
 const EVERY_TAB_MARKER = "@demo-every-tab";
-// One inner turn holds 24 model steps (lib/run-budget.js): two searches, the
-// list, up to 20 reads and the final text. agent-do strips the tool history
-// between outer iterations, so the deterministic plan keeps to one turn.
-const EVERY_TAB_MAX = 20;
+// The loop may span inner turns: agent-do keeps only an inner turn's last step
+// in its history, and the runtime carries the rest forward as a digest on the
+// continuation message (lib/run-digest.js, CAP-FB-20260902-LOOP-CONTEXT-
+// WINDOW-01). The scripted plan reads that digest like a real model would, so
+// the cap is the run's own iteration bound, not one inner turn.
+const EVERY_TAB_MAX = 64;
 const EVERY_TAB_FINAL_RE = /\[demo model\] Every tab:/;
 // @demo-mcp <mcp__server__tool> [json-args]: the demo model drives the REAL
 // remote-MCP path through the lazy protocol (search_tools → execute_tool) so the
@@ -1163,15 +1165,111 @@ function everyTabEnvelope(part) {
   if (v && "modelContent" in v && !("selectedTool" in v)) v = parse(v.modelContent) ?? v;
   return v && typeof v === "object" && typeof v.selectedTool === "string" ? v : null;
 }
-/** The tab ids the executed list_tabs returned (unfenced; filtered by match=). */
+// ── the runtime digest (CAP-FB-20260902-LOOP-CONTEXT-WINDOW-01) ─────────────
+// agent-do keeps only an inner turn's LAST step in its history. The runtime
+// digests every tool result and attaches each finished turn's digest to the
+// continuation nudge that follows it (lib/run-digest.js): a header with the
+// running counts and the reusable selection refs, then one fenced line per
+// result — `#seq <tool> <args> ok: <excerpt>` / `#seq <tool> <args> failed:
+// <error>`. The scripted model reads it exactly as a real model must.
+const DIGEST_LINE_RE = /^#(\d+) (\S+) (.*?) (ok|failed)(?::\s([\s\S]*))?$/;
+const DIGEST_REF_RE = /([A-Za-z0-9_.-]+)=(sel_[a-f0-9]{36})/g;
+/** The digest lines one continuation nudge carries, in seq order:
+ * { seq, name, args, ok, body, refs }. Empty for a nudge without a digest. */
+function digestEntriesOf(message) {
+  const entries = [];
+  const text = extractText([message]);
+  const open = text.indexOf("<<<UNTRUSTED run:");
+  if (open < 0) return entries;
+  const bodyStart = text.indexOf("\n", open);
+  const close = text.lastIndexOf("<<<END run:");
+  if (bodyStart < 0 || close < bodyStart) return entries;
+  const refs = {};
+  for (const r of text.slice(0, open).matchAll(DIGEST_REF_RE)) refs[r[1]] = r[2];
+  for (const line of text.slice(bodyStart + 1, close).split("\n")) {
+    const lm = line.match(DIGEST_LINE_RE);
+    if (!lm) continue;
+    entries.push({ seq: Number(lm[1]), name: lm[2], args: lm[3], ok: lm[4] === "ok", body: lm[5] ?? "", refs });
+  }
+  return entries.sort((a, b) => a.seq - b.seq);
+}
+/** The tabs a list_tabs digest excerpt names — parsed whole when the JSON
+ * survived the bound, else the `"id":N,"url":"…"` pairs a truncation left. */
+function tabsFromDigestExcerpt(body) {
+  try {
+    const value = JSON.parse(body);
+    if (value && typeof value === "object" && Array.isArray(value.tabs)) return value.tabs;
+  } catch { /* truncated */ }
+  const tabs = [];
+  for (const obj of body.matchAll(/\{[^{}]*\}/g)) {
+    const id = obj[0].match(/"id":(\d+)/)?.[1];
+    const url = obj[0].match(/"url":"((?:[^"\\]|\\.)*)"/)?.[1];
+    if (id !== undefined && url !== undefined) tabs.push({ id: Number(id), url });
+  }
+  return tabs;
+}
+/** The every-tab loop's view of what ran, in chronological order. Walking the
+ * run slice: the tool parts still in the transcript before a continuation
+ * nudge are that turn's LAST step (agent-do keeps exactly that), and the
+ * digest the nudge carries holds the turn's earlier steps — so at each nudge
+ * the digest's rows come first, then the survivors before it; the parts after
+ * the last nudge are the current turn. A one-turn loop is the transcript
+ * alone. Each row: { kind: "search"|"execute", selected, ok, error, tabs, ref }. */
+function everyTabLedger(prompt) {
+  const ledger = [];
+  let pending = [];
+  const pushDigest = (d) => {
+    if (d.name === "search_tools") {
+      ledger.push({ kind: "search", selected: null, ok: d.ok, error: "", tabs: null, ref: d.body.match(/sel_[a-f0-9]{36}/u)?.[0] ?? null });
+      return;
+    }
+    ledger.push({
+      kind: "execute", selected: d.name, ok: d.ok, error: d.ok ? "" : d.body.slice(0, 120),
+      tabs: d.name === "list_tabs" && d.ok ? tabsFromDigestExcerpt(d.body) : null,
+      ref: d.refs[d.name] ?? null,
+    });
+  };
+  const pushPart = (part) => {
+    const ref = (() => { try { return JSON.stringify(part).match(/sel_[a-f0-9]{36}/u)?.[0] ?? null; } catch { return null; } })();
+    if (part.toolName === "search_tools") {
+      ledger.push({ kind: "search", selected: null, ok: part.type !== "tool-error", error: "", tabs: null, ref });
+      return;
+    }
+    if (part.type === "tool-error" && part.toolName === "execute_tool") {
+      ledger.push({ kind: "execute", selected: null, ok: false, error: String(part.error ?? "error").slice(0, 120), tabs: null, ref });
+      return;
+    }
+    const env = everyTabEnvelope(part);
+    if (!env) return;
+    const inner = env.result && typeof env.result === "object" ? env.result : null;
+    const failed = env.ok === false || (inner && (inner.ok === false || typeof inner.error === "string"));
+    const value = env.selectedTool === "list_tabs" && !failed ? unfenceValue(env.result) : null;
+    ledger.push({
+      kind: "execute", selected: env.selectedTool, ok: !failed,
+      error: failed ? String(inner?.error ?? env.error ?? "error").slice(0, 120) : "",
+      tabs: value && typeof value === "object" && Array.isArray(value.tabs) ? value.tabs : null,
+      ref,
+    });
+  };
+  for (const m of runSlice(prompt)) {
+    if (m?.role === "tool") {
+      for (const part of Array.isArray(m.content) ? m.content : [m.content]) if (part && typeof part === "object") pending.push(part);
+      continue;
+    }
+    if (!isAgentDoContinuation(m)) continue;
+    for (const d of digestEntriesOf(m)) pushDigest(d);
+    for (const part of pending) pushPart(part);
+    pending = [];
+  }
+  for (const part of pending) pushPart(part);
+  return ledger;
+}
+/** The tab ids the executed list_tabs returned (filtered by match=). */
 function everyTabIds(prompt) {
   const match = everyTabMatch(prompt);
-  for (const part of boardToolParts(prompt)) {
-    const env = everyTabEnvelope(part);
-    if (!env || env.selectedTool !== "list_tabs") continue;
-    const value = unfenceValue(env.result);
-    if (!value || typeof value !== "object" || !Array.isArray(value.tabs)) continue;
-    return value.tabs
+  for (const row of everyTabLedger(prompt)) {
+    if (row.kind !== "execute" || row.selected !== "list_tabs" || !row.tabs) continue;
+    return row.tabs
       .filter((t) => Number.isFinite(t?.id) && (!match || String(t?.url ?? "").includes(match)))
       .map((t) => t.id)
       .slice(0, EVERY_TAB_MAX);
@@ -1180,33 +1278,27 @@ function everyTabIds(prompt) {
 }
 /** Every executed read_page in order: { ok, error }. */
 function everyTabReads(prompt) {
-  const reads = [];
-  for (const part of boardToolParts(prompt)) {
-    if (part?.type === "tool-error" && part?.toolName === "execute_tool") {
-      reads.push({ ok: false, error: String(part.error ?? "error").slice(0, 120) });
-      continue;
-    }
-    const env = everyTabEnvelope(part);
-    if (!env || env.selectedTool !== "read_page") continue;
-    const inner = env.result && typeof env.result === "object" ? env.result : null;
-    const failed = env.ok === false || (inner && (inner.ok === false || typeof inner.error === "string"));
-    reads.push({ ok: !failed, error: failed ? String(inner?.error ?? env.error ?? "error").slice(0, 120) : "" });
-  }
-  return reads;
+  return everyTabLedger(prompt)
+    .filter((row) => row.kind === "execute" && (row.selected === "read_page" || (row.selected === null && !row.ok)))
+    .map((row) => ({ ok: row.ok, error: row.error }));
 }
 /** search(list_tabs) → execute → search(read_page) ONCE → execute read_page per
  * tab on the SAME selectionRef → null (the final text). A failed read moves on
- * to the next tab (the ref survives a failure); it is named in the final text. */
+ * to the next tab (the ref survives a failure); it is named in the final text.
+ * Across an inner-turn boundary the ref, the ids and the reads so far come
+ * from the runtime digest. */
 function everyTabCall(prompt) {
-  const parts = boardToolParts(prompt);
-  const searches = parts.filter((p) => p.toolName === "search_tools").length;
-  const executes = parts.filter((p) => p.toolName === "execute_tool").length;
+  const ledger = everyTabLedger(prompt);
+  const searches = ledger.filter((row) => row.kind === "search").length;
+  const executes = ledger.filter((row) => row.kind === "execute").length;
+  // The ref to execute on: the last one any row carried (the read_page
+  // search's ref once it was issued; execute rows echo it).
+  const latestRef = [...ledger].reverse().find((row) => row.ref)?.ref ?? null;
   const explicit = everyTabExplicitIds(prompt);
   if (!explicit) {
     if (searches === 0) return { id: "search_every_list", name: "search_tools", input: { query: "list_tabs", limit: 1 } };
     if (executes === 0) {
-      const selectionRef = latestSelectionRef(prompt);
-      return selectionRef ? { id: "execute_every_list", name: "execute_tool", input: { selectionRef, arguments: {} } } : null;
+      return latestRef ? { id: "execute_every_list", name: "execute_tool", input: { selectionRef: latestRef, arguments: {} } } : null;
     }
   }
   const ids = explicit ?? everyTabIds(prompt);
@@ -1214,11 +1306,9 @@ function everyTabCall(prompt) {
   if (searches < (explicit ? 1 : 2)) return { id: "search_every_read", name: "search_tools", input: { query: "read_page", limit: 1 } };
   const reads = everyTabReads(prompt);
   if (reads.length >= ids.length) return null;
-  // The read_page ref: the LAST search's ref (execute envelopes echo it too).
-  const selectionRef = latestSelectionRef(prompt);
-  if (!selectionRef) return null;
+  if (!latestRef) return null;
   const tabId = ids[reads.length];
-  return { id: `execute_every_read_${reads.length}`, name: "execute_tool", input: { selectionRef, arguments: { tabId } } };
+  return { id: `execute_every_read_${reads.length}`, name: "execute_tool", input: { selectionRef: latestRef, arguments: { tabId } } };
 }
 function everyTabFinalText(prompt) {
   const prior = runSlice(prompt)

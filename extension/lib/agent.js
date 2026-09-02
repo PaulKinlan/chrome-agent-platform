@@ -22,6 +22,7 @@ import { maskCredentialShapes } from "./error-report.js";
 import { isToolResultFailure, toolResultFullJson } from "./tool-summary.js";
 import { correctUnsupportedMutationClaims } from "./mutation-claim-check.js";
 import { RUN_BUDGET_DEFAULTS } from "./run-budget.js";
+import { createRunDigest } from "./run-digest.js";
 import {
   anthropicAuthoritativeSearchRequests,
   createAnthropicCallReconciler,
@@ -762,8 +763,18 @@ export function createAgent({
   let budgetStep = 0;
   let budgetLastStepHadTools = false;
   let budgetLastStepIndex = -1;
+  // THE RUNNING DIGEST (CAP-FB-20260902-LOOP-CONTEXT-WINDOW-01): agent-do keeps
+  // only the last step of an inner turn in its history (lib/run-digest.js
+  // explains why), so every tool result is digested as it lands and each
+  // turn's digest rides agent-do's own continuation message at the provider
+  // boundary — bounded, redacted, fenced with the run's untrusted token. The
+  // running counts ride every budget event so the status row can show them.
+  const runDigest = createRunDigest({ token: untrustedToken });
+  let currentOuterStep = 0;
+  let digestTurnsLogged = 0;
+  let digestBytesMax = 0;
   const emitBudget = (extra = {}) => {
-    try { progressCb?.({ type: "budget", step: budgetStep, total: budgetTotal, ...extra }); } catch { /* ignore */ }
+    try { progressCb?.({ type: "budget", step: budgetStep, total: budgetTotal, results: runDigest.counts(), ...extra }); } catch { /* ignore */ }
   };
   // Exhausted = the LAST allowed outer iteration still ended in tool calls:
   // the loop stopped because the budget ran out, not because the model
@@ -825,6 +836,17 @@ export function createAgent({
           catch { serverToolsAuthorized = false; }
         }
         options = injectLatchedServerTools(options, latched, serverToolsAuthorized);
+        // The running digest of earlier inner turns rides agent-do's
+        // continuation message(s) — attached here, on the outgoing copy only
+        // (agent-do's own history is never touched). Bytes are counted so the
+        // model-call economy of the carry-forward is measurable.
+        const carried = runDigest.attach(options, currentOuterStep);
+        options = carried.options;
+        if (carried.bytes > digestBytesMax) digestBytesMax = carried.bytes;
+        if (carried.turns > digestTurnsLogged) {
+          digestTurnsLogged = carried.turns;
+          agentDoLog.info(`run digest carried across an inner-turn boundary`, { turns: carried.turns, bytes: carried.bytes, results: runDigest.counts() });
+        }
         // Model round-trip observability: method + attempt ordinal + call
         // latency (time to the provider's response OBJECT — stream consumption
         // continues after). NEVER log options/content (prompts, messages).
@@ -833,7 +855,7 @@ export function createAgent({
         // One model call = one budget step (dropped again if the call fails
         // and the SDK retries it).
         budgetStep = Math.min(budgetTotal, budgetStep + 1);
-        emitBudget();
+        emitBudget({ digestBytes: carried.bytes });
         const drop = () => {
           const i = attemptQueue.indexOf(entry);
           if (i >= 0) attemptQueue.splice(i, 1);
@@ -985,8 +1007,9 @@ export function createAgent({
     tools: allTools,
     maxIterations,
     // One inner turn holds up to 24 model steps: with a reusable selection ref
-    // that is one search + ~22 executes — a 30-tab loop in two inner turns
-    // (agent-do keeps the previous turn's tool outputs for one iteration).
+    // that is one search + ~22 executes — a 30-tab loop in two inner turns.
+    // agent-do keeps only an inner turn's LAST step in its history, so the
+    // runtime digest (lib/run-digest.js) carries the rest of the turn forward.
     innerStepLimit,
     usage: { pricing: MODEL_PRICING },
     // Lifecycle bookkeeping for the agent-do logs (bounded: entries are deleted
@@ -1023,7 +1046,11 @@ export function createAgent({
           budgetStep = 0;
           budgetLastStepHadTools = false;
           budgetLastStepIndex = -1;
+          runDigest.reset();
+          digestTurnsLogged = 0;
+          digestBytesMax = 0;
         }
+        currentOuterStep = Number.isFinite(e.step) ? e.step : currentOuterStep;
         streamStep = e.step;
         streamHold = runText.nextStepMayBeNudge();
         streamDrain = Promise.resolve();
@@ -1157,6 +1184,11 @@ export function createAgent({
         }
         const toolOk = !isToolResultFailure(e.result) && !lazyNestedFailure(e.result);
         if (toolOk) { try { okToolNames.add(selectedToolFromResult(e.result) ?? e.toolName); } catch { /* ignore */ } }
+        // Digest the result the model is about to receive (after any denial /
+        // re-run rewrite above — the digest mirrors the model's view).
+        try {
+          runDigest.record({ step: e.step, call: budgetStep, tool: toolName, selected: selectedToolFromResult(e.result), args: e.args, ok: toolOk, result: e.result });
+        } catch { /* the digest is telemetry-grade: never breaks a run */ }
         if (tspan) tspan.end(toolOk ? "ok" : "error");
         agentDoLog.debug("tool-call:end", {
           callId: observed.callId,
@@ -1204,7 +1236,7 @@ export function createAgent({
           // the SW settles a "budget reached — Continue" terminal from it
           // instead of a silent finish (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01).
           const exhausted = budgetExhausted(e.aborted);
-          const budget = { used: budgetStep, total: budgetTotal, exhausted };
+          const budget = { used: budgetStep, total: budgetTotal, exhausted, results: runDigest.counts(), digestTurns: digestTurnsLogged, digestBytesMax };
           if (exhausted) agentDoLog.warn(`step budget exhausted (${budgetStep}/${budgetTotal}) with tool calls still pending`);
           emitBudget({ exhausted });
           progressCb?.({ type: "done", text: checked.text, totalSteps: e.totalSteps, aborted: e.aborted, budget });

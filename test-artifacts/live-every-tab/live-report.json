@@ -1,5 +1,11 @@
 {
   "model": "gemini-3.7-flash",
+  "maxIterations": 4,
+  "innerStepLimit": 4,
+  "innerTurns": 3,
+  "digestCarries": [
+    "[info] [cap:agent-do] 2026-09-02T02:51:54.891Z +5ms run digest carried across an inner-turn boundary {\"turns\":2,\"bytes\":10102,\"results\":\"{\\\"count\\\":33,\\\"ok\\\":33,\\\"failed\\\":0}\"}"
+  ],
   "tabsOpened": 30,
   "tabsSeenByChrome": 32,
   "listedByListTabs": 33,
@@ -16,6 +22,6 @@
     "errorCategory": null,
     "budget": null
   },
-  "elapsedS": 75,
+  "elapsedS": 70,
   "logRows": 69
 }

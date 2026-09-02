@@ -9,6 +9,13 @@
 //   CAP_LIVE_MODEL   model id (default gemini-3.7-flash)
 //   CAP_LIVE_TABS    tab count (default 30)
 //   CAP_LIVE_OUT     evidence directory (default test-artifacts/live-every-tab)
+//   CAP_LIVE_MAX_ITERATIONS  force the run's outer-iteration budget (the inner
+//                    step limit follows: max(2, min(n, 24)) — 8 forces a 30-tab
+//                    loop across several inner turns, the context-window check
+//                    of CAP-FB-20260902-LOOP-CONTEXT-WINDOW-01). The composer's
+//                    own agent.run message carries it (the route accepts an
+//                    explicit bounded budget); the screenshot is then named
+//                    every-tab-three-turns.png.
 //
 // Port discipline: Chrome is launched through launchChrome() (kernel-assigned
 // port, endpoint read from this process's own stderr). The extension is the
@@ -22,6 +29,7 @@ const CHROMIUM = Deno.env.get("CAP_CHROMIUM") ?? "/usr/bin/chromium";
 const MODEL_ID = Deno.env.get("CAP_LIVE_MODEL") ?? "gemini-3.7-flash";
 const TAB_COUNT = Math.max(1, Math.min(64, Number(Deno.env.get("CAP_LIVE_TABS") ?? 30) || 30));
 const OUT = Deno.env.get("CAP_LIVE_OUT") ?? `${ROOT}test-artifacts/live-every-tab`;
+const MAX_ITERATIONS = (() => { const n = Number(Deno.env.get("CAP_LIVE_MAX_ITERATIONS") ?? ""); return Number.isFinite(n) && n >= 1 ? Math.trunc(n) : null; })();
 const KEY = Deno.env.get("GEMINI_API_KEY") ?? "";
 if (!KEY) {
   console.error("GEMINI_API_KEY is required (read from the environment, never printed).");
@@ -189,6 +197,13 @@ try {
   const ntp = await attach(`chrome-extension://${extId}/ntp/ntp.html`, 2500);
   await send("Target.activateTarget", { targetId: ntp.t });
   const TASK = `Read every open tab whose URL contains "/page/" and produce a sourced digest: one line per tab with the page number, its title and the FACT-NN sentence it states, citing the tab's URL. Do not stop until every one of those tabs has been read; list any tab you could not read and why.`;
+  if (MAX_ITERATIONS != null) {
+    // The composer's own agent.run message carries the explicit bounded step
+    // budget the route accepts (`maxIterations`), so the run is driven exactly
+    // as the owner drives it — only smaller inner turns.
+    await ntp.ev(`(() => { const send = chrome.runtime.sendMessage.bind(chrome.runtime); chrome.runtime.sendMessage = (m, ...rest) => send(m && typeof m === "object" && m.type === "agent.run" ? { ...m, maxIterations: ${MAX_ITERATIONS} } : m, ...rest); return true; })()`);
+    console.log(`forcing maxIterations=${MAX_ITERATIONS} (innerStepLimit ${Math.max(2, Math.min(MAX_ITERATIONS, 24))}) on the composer's agent.run`);
+  }
   await ntp.click("#task-input");
   await send("Input.insertText", { text: TASK }, ntp.s);
   await sleep(300);
@@ -246,6 +261,11 @@ try {
   const readPageRows = plain.filter((s) => /"type":"tool-result"/.test(s) && /"selectedTool":"read_page"/.test(s));
   const readPageOk = readPageRows.filter((s) => /"ok":true/.test(s) && !/Cannot access|"error":/.test(s)).length;
   const replayed = count(/selection-replayed/);
+  // How many inner turns the tool calls spanned (the outer iteration each
+  // tool-call row records), and the digest carry-over lines the runtime logged
+  // at each boundary (bytes only — never content).
+  const digestLines = swConsole.filter((l) => /run digest carried/.test(l)).map((l) => l.slice(0, 200));
+  const innerTurns = 1 + Math.max(0, ...digestLines.map((l) => Number(l.match(/"turns":(\d+)/)?.[1] ?? 0)));
   const listedCount = (() => {
     for (const s of plain) {
       if (!/"selectedTool":"list_tabs"/.test(s)) continue;
@@ -265,10 +285,13 @@ try {
   const citedUrls = new Set<number>();
   for (const m of digest.matchAll(/\/page\/(\d+)/g)) citedUrls.add(Number(m[1]));
   await Deno.writeTextFile(`${OUT}/live-digest.txt`, digest);
-  await ntp.shot("every-tab-digest.png");
+  await ntp.shot(MAX_ITERATIONS != null ? "every-tab-three-turns.png" : "every-tab-digest.png");
 
   const report = {
     model: MODEL_ID,
+    ...(MAX_ITERATIONS != null ? { maxIterations: MAX_ITERATIONS, innerStepLimit: Math.max(2, Math.min(MAX_ITERATIONS, 24)) } : {}),
+    innerTurns,
+    digestCarries: digestLines,
     tabsOpened: TAB_COUNT,
     tabsSeenByChrome: openTabs,
     listedByListTabs: listedCount,

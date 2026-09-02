@@ -46,12 +46,21 @@ export function boundedIterations(value) {
 export const BUDGET_CONTINUE_TASK =
   "Continue the previous task from where it stopped. Do not repeat items you already handled; finish the remaining items, then give the final answer.";
 
-/** "Step 34 of 80" — the live counter text; empty when nothing is known. */
+/** "Step 34 of 80" — the live counter text; empty when nothing is known.
+ * With the running result counts the runtime digests (CAP-FB-20260902-LOOP-
+ * CONTEXT-WINDOW-01) it reads "Step 34 of 80 · 12 results, 1 failed". */
 export function formatBudgetProgress(budget) {
   const step = Number(budget?.step);
   const total = Number(budget?.total);
   if (!Number.isFinite(step) || !Number.isFinite(total) || total <= 0) return "";
-  return `Step ${Math.max(0, Math.trunc(step))} of ${Math.trunc(total)}`;
+  let text = `Step ${Math.max(0, Math.trunc(step))} of ${Math.trunc(total)}`;
+  const count = Number(budget?.results?.count);
+  if (Number.isFinite(count) && count > 0) {
+    const failed = Number(budget?.results?.failed);
+    text += ` · ${Math.trunc(count)} result${count === 1 ? "" : "s"}`;
+    if (Number.isFinite(failed) && failed > 0) text += `, ${Math.trunc(failed)} failed`;
+  }
+  return text;
 }
 
 /** The terminal a run settles with when its step budget ran out with work

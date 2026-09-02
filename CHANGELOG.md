@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.629] — 2026-09-02
+- Long tasks that read many items no longer forget the first ones partway through: the agent keeps a compact record of everything its tools returned, so the final answer covers every item, and the step counter now shows how many results it has so far.
+
 ## [0.2.628] — 2026-09-02
 - Task board: the every-item run fix is complete; four more items are being worked on.
 

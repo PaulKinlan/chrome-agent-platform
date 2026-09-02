@@ -2139,7 +2139,11 @@ export async function runConversationTurn(container, { text, attachments = [], h
         // THE VISIBLE BUDGET (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01): one
         // event per model step; the counter rides every running label from
         // here on ("Working — reading the page… · Step 12 of 96").
-        if (Number.isFinite(ev.step) && Number.isFinite(ev.total)) budget = { step: ev.step, total: ev.total };
+        // The running tool-result counts the runtime digests ride along
+        // ("· 12 results, 1 failed" — CAP-FB-20260902-LOOP-CONTEXT-WINDOW-01).
+        if (Number.isFinite(ev.step) && Number.isFinite(ev.total)) {
+          budget = { step: ev.step, total: ev.total, ...(ev.results && typeof ev.results === "object" ? { results: ev.results } : {}) };
+        }
         if (ev.exhausted === true) break; // the terminal carries the verdict
         status({ state: attempt > 1 ? "retrying" : "running", activity: withBudget(lastActivity || "Thinking") });
         break;

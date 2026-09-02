@@ -184,6 +184,27 @@ every agent run while retaining the public Settings-only shadow capture:
   `selection-scope-mismatch`, `selection-catalog-stale`,
   `selection-source-stale`) carries a `message` sibling: a sentence naming
   the next action;
+- a loop that spans more than one inner turn keeps every result in reach
+  (CAP-FB-20260902-LOOP-CONTEXT-WINDOW-01). agent-do appends the AI SDK's
+  `result.response.messages` to its history at each inner-turn boundary, and
+  that array holds only the turn's LAST step, so every earlier step's tool
+  calls and results leave the model context the moment the loop continues
+  (the `<tool_output>` stale-history window never applied: the extension's
+  results are fenced with `lib/untrusted-fence.js`, not `<tool_output>`).
+  The runtime digests every tool result as it lands (`lib/run-digest.js`,
+  from `onPostToolUse`) and attaches each finished turn's digest to agent-do's
+  own continuation message at the provider boundary: one line per result the
+  transcript no longer holds — the selected tool, its arguments, ok/failed, a
+  bounded excerpt — under a header with the running counts and the turn's
+  reusable selection refs (the last step's results survive in the transcript
+  and are not repeated). It is runtime-written (never the model's claims),
+  bounded (8 KiB per turn; excerpts shrink together, then the oldest lines
+  collapse into a count; turns older than the four most recent carry counts
+  only), redacted (the credential scrub after the structural key redaction),
+  and fenced (the excerpts sit inside the run's untrusted boundary; the header
+  outside). The running counts ride every `budget` progress event
+  (`results: {count, ok, failed}`), so the status row reads
+  "Step 12 of 96 · 8 results, 1 failed";
 - list and search share each tool's provider JSON Schema plus an
   `x-cap-argument-limits` contract (UTF-8 string/payload bytes, depth, nodes,
   keys, and array items). The same contract drives lazy sanitization and the
