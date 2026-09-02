@@ -2148,11 +2148,10 @@ async function openBackgroundAgentChat(id, name) {
   threadTitle.removeAttribute("aria-label");
   syncComposerScope();
   threadConversation?.resetPlan?.(); // clear the prior surface's plan strip
-  const hRes = await send("background-agent.history", { id }).catch(() => ({ entries: [] }));
-  const hydrated = await hydrateToolResultsFromRunLogs(Array.isArray(hRes.entries) ? hRes.entries : []);
+  const history = await loadAgentSurfaceHistory("background", id);
   if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== "background") return;
   threadTitle.textContent = name || id || "Background agent";
-  renderAgentHistory(threadConversation, hydrated);
+  renderAgentSurfaceHistory(history);
   projectSurfaceRunTranscript();
   showThreadView({ focusAfter: threadComposer });
   renderRunStatus({ state: "idle" });
@@ -2216,6 +2215,34 @@ async function hydrateToolResultsFromRunLogs(entries) {
   });
 }
 
+/** Load what an agent surface reopens with (CAP-FB-20260901-THREAD-RELOAD-FIDELITY-01).
+ * The authority is the durable run-log VIEW (`agent.history-view`): every
+ * non-protocol tool card, every approval card in its decided state and the
+ * COMPLETE final answer for the agent's last 50 runs, with an in-line notice
+ * for older/compacted runs — the same projection a task thread reopens with.
+ * The per-agent journal (a bounded list surface: 300-char tool summaries, a
+ * 240-char answer preview, a 200-row slice) is only the fallback for an agent
+ * whose runs predate the durable log, or an enrolled site (kind `site`, no durable view). */
+async function loadAgentSurfaceHistory(kind, id) {
+  if (kind === "named" || kind === "background") {
+    const r = await send("agent.history-view", { kind, id }).catch(() => null);
+    if (r?.ok === true && r.view && Number(r.view.viewedExecutions) > 0) return { view: r.view };
+  }
+  return { entries: await hydrateToolResultsFromRunLogs(await loadAgentHistoryEntries(kind, id)) };
+}
+
+/** Render the loaded agent history: the run-log view through the SAME
+ * projectThreadMessages a task thread uses (one terminal card per call, the
+ * answer bubble with its full-response expander), else the journal replay. */
+function renderAgentSurfaceHistory(history) {
+  if (history?.view) {
+    threadConversation.setMessages?.(projectThreadMessages(history.view));
+    clearAuthoritativeThreadProjection(threadConversation); // an agent surface is not a task thread
+    return;
+  }
+  renderAgentHistory(threadConversation, Array.isArray(history?.entries) ? history.entries : []);
+}
+
 /** Open the thread surface scoped to ONE agent of ANY kind (the unified agent
  * access, CAP-FB-20260818-AGENT-ACCESS-01): the agent's own history + a
  * composer whose sends run DIRECTLY in that agent (its own memory/skills). */
@@ -2258,10 +2285,10 @@ async function openAgentSurface({ kind, id, name }) {
   threadTitle.removeAttribute("aria-label");
   syncComposerScope();
   threadConversation?.resetPlan?.(); // clear the prior surface's plan strip
-  const entries = await hydrateToolResultsFromRunLogs(await loadAgentHistoryEntries(kind, id));
+  const history = await loadAgentSurfaceHistory(kind, id);
   if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== kind) return;
   threadTitle.textContent = name || id || "Agent";
-  renderAgentHistory(threadConversation, entries);
+  renderAgentSurfaceHistory(history);
   projectSurfaceRunTranscript();
   showThreadView({ focusAfter: threadComposer });
   renderRunStatus({ state: "idle" });

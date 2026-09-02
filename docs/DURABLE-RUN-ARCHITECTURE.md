@@ -131,7 +131,7 @@ reopens honestly).
 Retention is **bounded by default and never evicts** (CAP-FB-20260830-RUN-LOG-
 COMPACTION-01). `RUN_RETENTION_POLICY` (stamp `run-retention-v2`; v1-stamped
 records migrate on read, v1 log rows stay readable) reports the active policy
-through `run.list`: the newest `perThread` (10) executions of a thread keep their
+through `run.list`: the newest `perThread` (50, since CAP-FB-20260901-THREAD-RELOAD-FIDELITY-01 — the reopened thread and agent surfaces render the last 50 runs from the log) executions of a thread keep their
 full log; older ones — and, oldest-first, anything beyond `globalExecutions` (500)
 or `globalBytes` (32 MiB) — are **compacted** by `compactExecution` to one honest
 `type:"compacted"` summary row (terminal status/summary, `rowsDropped`, the

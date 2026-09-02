@@ -50,8 +50,13 @@ const MAX_RESUME_ATTEMPTS = 3;
 // Retention is BOUNDED by default and the bound is visible: the newest
 // `perThread` executions of a thread keep their full log; older ones — and,
 // oldest-first, anything beyond the global caps — are COMPACTED to one honest
-// summary row (`type:"compacted"`, carrying the terminal status/summary and
-// how many rows it replaced). The execution RECORD is never deleted and the
+// summary row (`type:"compacted"`, carrying the terminal status/summary, how
+// many rows it replaced and WHAT was folded — tool calls / approvals).
+// `perThread` is 50 (CAP-FB-20260901-THREAD-RELOAD-FIDELITY-01): the run log
+// is what a reopened thread or agent surface renders (every non-protocol tool
+// card, every approval card, the retained full answer), so the visible
+// history of the last 50 runs of a surface survives a reload; the global
+// byte cap still bounds the whole store. The execution RECORD is never deleted and the
 // thread body (user turns + terminal answers) is untouched: what compaction
 // drops is the replayable tool-card detail of old runs. "Keep every run log"
 // (mode `retain-all`) is the explicit opt-in in Settings → Data & memory and is
@@ -65,7 +70,7 @@ const RETENTION_POLICY_VERSION = "run-retention-v2";
 const KNOWN_RETENTION_VERSIONS = new Set(["run-retention-v1", RETENTION_POLICY_VERSION]);
 const RETENTION_DEFAULTS = Object.freeze({
   mode: "bounded",
-  perThread: 10,
+  perThread: 50,
   globalExecutions: 500,
   globalBytes: 32 * 1024 * 1024,
 });
@@ -1356,6 +1361,14 @@ export function createDurableRunRegistry({
     const status = record.phase === "cancelled" || terminal?.cancelled ? "cancelled" : terminal?.ok === true ? "ok" : "failed";
     const at = terminalRow?.at ?? terminal?.at ?? now();
     const bytesBefore = (await handle.getFile()).size;
+    // WHAT is folded, so the reopened surface can say it in-line (never a
+    // silent drop): the tool calls and the owner's approval decisions the
+    // run's cards carried (CAP-FB-20260901-THREAD-RELOAD-FIDELITY-01).
+    const folded = {
+      rows: rows.length,
+      toolCalls: rows.filter((r) => r?.type === "tool-call").length,
+      approvals: rows.filter((r) => r?.type === "tool-result" && r?.permissionRequirement && typeof r.permissionRequirement === "object").length,
+    };
     const summaryRow = {
       schemaVersion: 1,
       retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
@@ -1365,6 +1378,7 @@ export function createDurableRunRegistry({
       status,
       summary: bounded(terminal?.summary ?? terminal?.reason ?? terminal?.result ?? ""),
       rowsDropped: rows.length,
+      folded,
       compactedAt: now(),
       ...(terminal ? { terminal } : {}),
       ...(terminalRow?.payloadRef ? { payloadRef: terminalRow.payloadRef } : {}),

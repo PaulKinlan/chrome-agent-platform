@@ -1402,9 +1402,17 @@ function compactedMarker(executionId, logs) {
   if (!row) return null;
   const dropped = Number.isFinite(row.rowsDropped) ? row.rowsDropped : 0;
   const status = row.status === "ok" ? "completed" : row.status === "cancelled" ? "was cancelled" : "failed";
+  // The row says WHAT was folded (CAP-FB-20260901-THREAD-RELOAD-FIDELITY-01):
+  // the owner reads "3 tool calls, 1 approval" in place of the cards, never a
+  // silent gap. Rows written before the breakdown existed carry only the count.
+  const folded = row.folded && typeof row.folded === "object" ? row.folded : null;
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const what = folded
+    ? ` Older tool details were compacted — the run log keeps the summary. Folded: ${plural(Number(folded.toolCalls) || 0, "tool call")}${Number(folded.approvals) > 0 ? `, ${plural(Number(folded.approvals), "approval")}` : ""}.`
+    : " Older tool details were compacted — the run log keeps the summary.";
   return {
     role: "system",
-    content: `Run log compacted: this run ${status}; ${dropped} log ${dropped === 1 ? "row" : "rows"} of tool detail were folded into its summary to bound storage (Settings → Data & memory).`,
+    content: `Run log compacted: this run ${status}; ${dropped} log ${dropped === 1 ? "row" : "rows"} of tool detail were folded into its summary to bound storage (Settings → Data & memory).${what}`,
     ts: typeof row.compactedAt === "number" ? row.compactedAt : (typeof row.at === "number" ? row.at : Date.now()),
     derived: true,
     compacted: true,

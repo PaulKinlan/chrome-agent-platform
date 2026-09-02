@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.616] — 2026-09-02
+- Reopening a task or an agent conversation after a reload now shows the whole run again: every tool card, every approval card and the complete final answer (with Show full response and Copy) for the last 50 runs, with an in-line note when older runs were folded away.
+
 ## [0.2.615] — 2026-09-01
 - Task board: the full JSON tool-result view is complete.
 

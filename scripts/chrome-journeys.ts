@@ -562,6 +562,10 @@ const EXPECTED = [
   "Tool card: the expanded tree shows the full result beyond 300 chars (one result block; the tail leaf far past the old cut is a visible row)",
   "Tool card: the full result survives a reload — the pretty JSON view carries the tail leaf and is syntax-coloured from the theme tokens",
   "Run log: every memory_get result row carries the complete redacted result (resultFull > 300 chars with the tail leaf), never flagged truncated",
+  "thread: card count survives reload",
+  "thread: final answer expandable after reload",
+  "agent view: card count survives reload (the run-log view, never the journal's slice)",
+  "agent view: final answer expandable after reload (the retained full answer, never the 240-char preview)",
   "Tool card: a nested error inside an ok:true envelope is the card headline, in the error colour, with the error chip and the card open",
   "Claim check: a failed delegate renders one correction and one final bubble",
   "Thread view: edit approval card names the artifact and shows +n -m",
@@ -4018,6 +4022,101 @@ async function main() {
     );
 
     // ─────────────────────────────────────────────────────────────
+    // JOURNEY 3d1.7 — CAP-FB-20260901-THREAD-RELOAD-FIDELITY-01: reopening a
+    // surface in a FRESH document (the reload) shows the same sequence the
+    // live runs showed — every non-protocol tool card and the final answer
+    // with its Show-full-response expander — on BOTH surfaces the owner
+    // reopens: a task thread (thread.get) and a named agent's view (the
+    // run-log view; the journal's 240-char answer preview and 200-row slice
+    // were what lost the transcript). The expected card count is read from
+    // the durable run logs, so the check never assumes a demo-model shape.
+    // ─────────────────────────────────────────────────────────────
+    const PROTOCOL_TOOLS = new Set(["search_tools", "execute_tool", "list_tools"]);
+    const expectedCardsFor = async (executionIds) => {
+      let n = 0;
+      for (const executionId of executionIds) {
+        const res = await msgValue({ type: "run.logs", executionId }).catch(() => null);
+        for (const r of Array.isArray(res?.logs) ? res.logs : []) {
+          if (r?.type === "tool-result" && !PROTOCOL_TOOLS.has(r.selectedTool ?? r.tool)) n += 1;
+        }
+      }
+      return n;
+    };
+    const RELOAD_READ = `(() => {
+      const conv = document.getElementById('thread-conversation');
+      if (!conv) return JSON.stringify(null);
+      const all = [...conv.querySelectorAll('message-bubble')];
+      const tools = all.filter((b) => b.getAttribute('role') === 'tool').map((b) => b.getAttribute('tool-name'));
+      const agents = all.filter((b) => b.getAttribute('role') === 'agent');
+      const last = agents[agents.length - 1] ?? null;
+      const root = last ? (last.shadowRoot ?? last) : null;
+      const toggle = root?.querySelector('.long-toggle') ?? null;
+      if (toggle) toggle.click();
+      const body = root?.querySelector('.long-response .body') ?? root?.querySelector('.body') ?? null;
+      return JSON.stringify({
+        toolCards: tools.length, toolNames: tools,
+        users: all.filter((b) => b.getAttribute('role') === 'user').length,
+        agents: agents.length,
+        lastLen: last ? (last.getAttribute('content') ?? '').length : 0,
+        hasExpander: !!toggle,
+        opened: toggle ? (root.querySelector('.long-response')?.getAttribute('data-open') === '1') : false,
+        bodyHasTail: !!body && body.textContent.includes(${JSON.stringify(LONG_TAIL)}),
+        systems: all.filter((b) => b.getAttribute('role') === 'system').map((b) => (b.getAttribute('content') ?? '').slice(0, 80)),
+      });
+    })()`;
+    const reopenAndRead = async (url, shotName) => {
+      const created = await cdp.send("Target.createTarget", { url });
+      const targetId = created?.result?.targetId;
+      await sleep(3000);
+      const session = await attachRuntime(cdp, targetId);
+      cdp.pageSessions.add(session);
+      let state = null;
+      try { state = JSON.parse(await evalIn(cdp, session, RELOAD_READ) ?? "null"); } catch { state = null; }
+      await sleep(200);
+      const shot = shotName ? await captureShot(cdp, session).catch(() => null) : null;
+      if (shot) await writeEvidence(shotName, shot);
+      await cdp.send("Target.closeTarget", { targetId }).catch(() => {});
+      cdp.pageSessions.delete(session);
+      return state;
+    };
+    // (a) the task thread: two tool runs + a long answer on ONE thread.
+    const rf1 = await msgValue({ type: "agent.run", task: "@demo-tools reload fidelity run one" });
+    const RF_THREAD_ID = rf1?.threadId ?? null;
+    const rf2 = RF_THREAD_ID ? await msgValue({ type: "agent.run", task: "@demo-tools reload fidelity run two", threadId: RF_THREAD_ID }) : null;
+    const rf3 = RF_THREAD_ID ? await msgValue({ type: "agent.run", task: "@demo-long-answer reload fidelity final", threadId: RF_THREAD_ID }) : null;
+    const rfThreadExpected = await expectedCardsFor([rf1?.executionId, rf2?.executionId, rf3?.executionId].filter(Boolean));
+    const rfThread = RF_THREAD_ID ? await reopenAndRead(`chrome-extension://${extId}/ntp/ntp.html#thread=${encodeURIComponent(RF_THREAD_ID)}`, "thread-after-reload.png") : null;
+    console.log(`reload fidelity (thread): expected ${rfThreadExpected} cards; reopened ${JSON.stringify(rfThread).slice(0, 500)}`);
+    check(
+      "thread: card count survives reload",
+      rf1?.ok === true && rf2?.ok === true && rf3?.ok === true && rfThreadExpected >= 6 &&
+        rfThread?.toolCards === rfThreadExpected && rfThread.users === 3 && rfThread.agents === 3,
+    );
+    check(
+      "thread: final answer expandable after reload",
+      rfThread?.hasExpander === true && rfThread.opened === true && rfThread.bodyHasTail === true && rfThread.lastLen > 4000,
+    );
+    // (b) the named agent's view (the owner's "agent view"): the same three
+    // runs in the agent's own sandbox, reopened at #agent=named:<id>.
+    const rfAgent = await msgValue({ type: "named-agent.create", name: "Reload Fidelity", role: "You are a reload-fidelity fixture." });
+    const RF_AGENT_ID = rfAgent?.agent?.id ?? null;
+    const ra1 = RF_AGENT_ID ? await msgValue({ type: "named-agent.run", id: RF_AGENT_ID, task: "@demo-tools agent reload fidelity run one" }) : null;
+    const ra2 = RF_AGENT_ID ? await msgValue({ type: "named-agent.run", id: RF_AGENT_ID, task: "@demo-tools agent reload fidelity run two" }) : null;
+    const ra3 = RF_AGENT_ID ? await msgValue({ type: "named-agent.run", id: RF_AGENT_ID, task: "@demo-long-answer agent reload fidelity final" }) : null;
+    const rfAgentExpected = await expectedCardsFor([ra1?.executionId, ra2?.executionId, ra3?.executionId].filter(Boolean));
+    const rfAgentView = RF_AGENT_ID ? await reopenAndRead(`chrome-extension://${extId}/ntp/ntp.html#agent=named:${encodeURIComponent(RF_AGENT_ID)}`, "agent-view-after-reload.png") : null;
+    console.log(`reload fidelity (agent view): expected ${rfAgentExpected} cards; reopened ${JSON.stringify(rfAgentView).slice(0, 500)}`);
+    check(
+      "agent view: card count survives reload (the run-log view, never the journal's slice)",
+      ra1?.ok === true && ra2?.ok === true && ra3?.ok === true && rfAgentExpected >= 6 &&
+        rfAgentView?.toolCards === rfAgentExpected && rfAgentView.users === 3 && rfAgentView.agents === 3,
+    );
+    check(
+      "agent view: final answer expandable after reload (the retained full answer, never the 240-char preview)",
+      rfAgentView?.hasExpander === true && rfAgentView.opened === true && rfAgentView.bodyHasTail === true && rfAgentView.lastLen > 4000,
+    );
+
+    // ─────────────────────────────────────────────────────────────
     // JOURNEY 3d2 — CAP-FB-20260830-CLAIM-CHECK-BROWSER-TOOLS-01: delegating to
     // an agent that does not exist FAILS (every delegate_task card reads
     // `error`), but the model's final text still says "Delegation succeeded".
@@ -5174,7 +5273,7 @@ async function main() {
     );
     check(
       "Settings: Data & memory shows the run-log retention row",
-      retentionRow !== null && /Run logs/.test(retentionRow.name) && /newest 10 runs per task/.test(retentionRow.bound) && /500 runs overall/.test(retentionRow.bound) && /32 MiB/.test(retentionRow.bound),
+      retentionRow !== null && /Run logs/.test(retentionRow.name) && /newest 50 runs per task/.test(retentionRow.bound) && /500 runs overall/.test(retentionRow.bound) && /32 MiB/.test(retentionRow.bound),
     );
     check(
       "Settings: the run-log retention toggle reports the bounded default (off)",
