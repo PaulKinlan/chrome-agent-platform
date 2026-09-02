@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.622] — 2026-09-02
+- Task board: the generated-document preview checks are complete.
+
 ## [0.2.621] — 2026-09-02
 - The generated-document preview is now checked for its language and for script errors on every run.
 
