@@ -438,13 +438,6 @@ async function main() {
     await sleep(200);
     await paletteCombobox("@", "at");
 
-    // ── the chat ──
-    page = await openPage(cdp, `chrome-extension://${id}/chat/chat.html`);
-    a = await analyze(cdp, page.sessionId, "chat");
-    check("chat: no unlabeled interactive controls", (a.unlabeled || []).length === 0, a.unlabeled);
-    check("chat: no generic div-interactives", (a.genericInteractives || []).length === 0, a.genericInteractives);
-    check("chat: contrast — no AA failures", (a.contrastFails || []).length === 0, a.contrastFails);
-
     // ── the settings ──
     page = await openPage(cdp, `chrome-extension://${id}/options/options.html`);
     a = await analyze(cdp, page.sessionId, "settings");

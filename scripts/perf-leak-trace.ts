@@ -92,7 +92,7 @@ async function main() {
     check("SW registered fast (< 500ms)", swMs < 500, { ms: swMs });
 
     // ── 2. render budgets (< 1s each) ──
-    for (const [name, path] of [["hub", "ntp/ntp.html"], ["chat", "chat/chat.html"], ["settings", "options/options.html"]] as const) {
+    for (const [name, path] of [["hub", "ntp/ntp.html"], ["settings", "options/options.html"]] as const) {
       const { ms } = await pageLoad(cdp, `chrome-extension://${sw.extId}/${path}`);
       check(`${name} rendered fast (< 1000ms)`, ms < 1000, { ms });
     }

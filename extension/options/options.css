@@ -1,8 +1,19 @@
 /* Options / settings page — a dedicated configuration pane. */
 body {
+  margin: 0;
+  min-height: 100vh;
+  min-inline-size: 0;
+  background: var(--bg);
+}
+.options-shell {
   display: flex;
   min-height: 100vh;
   min-inline-size: 0;
+  width: 100%;
+  max-inline-size: var(--content-max);
+  margin-inline: auto;
+  padding-inline: var(--content-gutter);
+  box-sizing: border-box;
 }
 .side {
   width: 240px;
@@ -18,6 +29,7 @@ body {
   top: 0;
   height: 100vh;
   overflow-y: auto;
+  box-sizing: border-box;
 }
 .brand {
   font-weight: 700;
@@ -67,13 +79,13 @@ nav {
   flex: 1 1 auto;
   min-inline-size: 0;
   padding: var(--space-5) var(--space-6);
-  /* was 760px: inside the full-viewport settings view half the dialog was
-     dead margin (UX-AUDIT-2026-08-28 UX-010). Wide layouts use the space;
-     narrow layouts keep the cap via the media query below. */
   max-width: none;
 }
-@media (min-width: 720px) {
-  .content { max-width: 1080px; }
+[data-embedded] .side .brand {
+  display: none;
+}
+[data-embedded] .head h1 {
+  display: none;
 }
 .head {
   margin-bottom: 24px;
@@ -1284,7 +1296,7 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
    content-driven break (680px), reflow rather than clipping or introducing a
    document-level horizontal scrollbar. Every section and control stays present. */
 @media (max-width: 680px) {
-  body {
+  .options-shell {
     flex-direction: column;
   }
 

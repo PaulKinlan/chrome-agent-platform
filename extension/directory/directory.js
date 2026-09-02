@@ -3,6 +3,10 @@
 
 import { send } from "../lib/messages.js";
 
+if (new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top) {
+  document.documentElement.dataset.embedded = "1";
+}
+
 const rowsEl = document.getElementById("rows");
 
 async function render() {

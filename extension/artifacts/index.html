@@ -6,9 +6,15 @@
     <meta name="color-scheme" content="light dark">
 <title>Artifacts — Chrome Agent Platform</title>
 <link rel="stylesheet" href="../shared/theme.css">
+<script>
+  if (new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top) {
+    document.documentElement.dataset.embedded = "1";
+  }
+</script>
 <script type="module" src="../shared/components.js"></script>
 <style>
-  .wrap { max-width: 1040px; margin: 0 auto; padding: 24px; }
+  .wrap { max-inline-size: var(--content-max); margin-inline: auto; padding-inline: var(--content-gutter); padding-block: 24px; }
+  [data-embedded] .head { display: none; }
   .head { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
   .logo { font-size: var(--text-xl); font-weight: 700; letter-spacing: -0.01em; }
   .logo span { color: var(--accent); }

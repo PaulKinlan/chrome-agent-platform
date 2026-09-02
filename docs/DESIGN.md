@@ -41,6 +41,10 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 ## Run-log affordance
 - A task or agent surface keeps a plainly labelled **Run logs** action after a run settles. Its existing durable registry pages ten retained runs at a time so every run remains reachable without unbounded DOM growth; each row has **View log** and displays at most the latest 200 retained timeline entries with an honest truncation note.
 
+## Content layout tokens
+- `--content-max: 1040px`: shared maximum content width for all primary hub view surfaces (Artifacts, Directory, Skills, Settings).
+- `--content-gutter: clamp(16px, 4vw, 40px)`: responsive inline padding ensuring consistent left-edge alignment across views at all viewports (e.g. 1024px and 1440px).
+
 ## Typography
 - Workhorse system sans (SF/Segoe/Roboto), antialiased, `cv02/cv03/cv04/cv11`.
 - Fixed rem scale: 12 / 13 / 14 / 16 / 20 / 24. Base 14px.
