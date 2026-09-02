@@ -1,19 +1,22 @@
 # Changelog
 
-## [0.2.658] — 2026-09-02
+## [0.3.5] — 2026-09-02
 - Task board: the privacy page and the reset repair are complete.
 
-## [0.2.657] — 2026-09-02
-- The build no longer stops on a leftover generated file.
-
-## [0.2.656] — 2026-09-02
+## [0.3.4] — 2026-09-02
 - A new Privacy page says exactly what the extension sends and stores, and Reset everything now really does clear everything.
 
-## [0.2.655] — 2026-09-02
+## [0.3.3] — 2026-09-02
 - Task board: the running-cost work is complete.
 
-## [0.2.654] — 2026-09-02
+## [0.3.2] — 2026-09-02
 - Tasks now cost less to run: the instructions sent with every message are a quarter of their old size, and a task that stops making progress is stopped instead of looping.
+
+## [0.3.1] — 2026-09-02
+- deduplicate changelog entries and bump version after merge conflict resolution
+
+## [0.3.0] — 2026-09-02
+- Reachability gate fix: skip generated *.bundle.js artifacts
 
 ## [0.2.653] — 2026-09-02
 - Task board: the delegation checks are complete.
@@ -29,6 +32,7 @@
 
 ## [0.2.649] — 2026-09-02
 - A calmer hub: Settings now sits beside Directory and Artifacts instead of looking selected, and whichever one you open is marked as the page you are on. An agent opened from a link shows its name rather than its address. The header lost its permanent status dot and its two developer icons — the status appears only while something is happening, the security shield only when it has something to show, and the console moved into Settings under Advanced. A tool in the Directory can no longer squeeze down to one letter per line.
+- Reachability gate skips generated *.bundle.js artifacts: a stale pre-dist-era bundle under extension/ (gitignored, never a source) no longer fails the build
 
 ## [0.2.648] — 2026-09-02
 - Task board: the test-suite honesty work is complete; one regression was opened and four more items are being worked on.
