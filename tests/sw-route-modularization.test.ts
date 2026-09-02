@@ -11,6 +11,7 @@ import {
   createProviderRoutes,
   createMcpRoutes,
   createSchedulerRoutes,
+  createFsGrantRoutes,
   kvRoutes,
   mergeRouteMaps,
   permLeaseRoutes,
@@ -67,6 +68,7 @@ const BASELINE_ROUTES = [
   "fs-grant.write-file",
   "fs-grant.scan",
   "fs-grant.grep",
+  "fs-grant.write-file-approved",
   "named-agent.list",
   "named-agent.get",
   "named-agent.create",
@@ -88,6 +90,9 @@ const BASELINE_ROUTES = [
   "actions.list",
   "actions.undo",
   "agent.discoverable-tabs",
+  // The hub's composer chip reads this permission-free offer listing
+  // (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01).
+  "agent.tool-offers",
   "agent.directory",
   "system.factoryReset",
   "system.factoryResetEnumerate",
@@ -320,6 +325,16 @@ const SCHEDULER_STUB_DEPS = {
   payloadFields: () => ({}),
 };
 
+// The fs-grant routes (routes/fs-grants.js) take the SW's audit + approval
+// seams; the registration check only needs the route KEYS.
+const FS_GRANT_STUB_DEPS = {
+  securityEvent: () => {},
+  requireOwnerApproval: () => ({ ok: false }),
+  canonicalOperationTarget: () => "",
+  payloadFields: () => ({}),
+  lineDiffSummary: () => ({ added: 0, removed: 0 }),
+};
+
 const AGENT_SCHEDULE_STUB_DEPS = {
   applyAgentSchedule: () => {},
   requireOwnerApproval: () => {},
@@ -379,6 +394,11 @@ Deno.test("sw routes: AST verification of route registration across service-work
         // Per-agent schedule routes (schedules.list / task.pause / task.resume /
         // task.update / task.retry).
         registeredRouteKeys.push(...Object.keys(createSchedulerRoutes(SCHEDULER_STUB_DEPS)));
+      } else if (arg.name === "fsGrantRoutes") {
+        // The persistent local-folder grant routes + the model's approved
+        // write path, extracted to routes/fs-grants.js
+        // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01).
+        registeredRouteKeys.push(...Object.keys(createFsGrantRoutes(FS_GRANT_STUB_DEPS)));
       } else if (arg.name === "agentScheduleRoutes") {
         // The named-agent schedule route (named-agent.set-schedule), extracted
         // for principal-synthetic testing (REVISE-2).

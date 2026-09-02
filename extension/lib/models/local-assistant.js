@@ -27,16 +27,22 @@
 // browser tool that lacks its permission returns { waitingForPermission:true,
 // permissionRequirement } — the agent loop PAUSES the run on that result,
 // the conversation renders ONE Allow card, and the loop only consults this
-// model again once the owner has decided, rewriting the tool result's
-// modelContent to one of three sentences:
-//   "Owner approved … retry with a fresh search_tools selection" → one
-//     bounded retry (a fresh search_tools + execute_tool for the same tool);
+// model again once the owner has decided:
+//   Allow → the RUNTIME re-runs the same call with its original arguments
+//     and this model receives the tool's real result — it never sees that a
+//     pause happened (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01). The
+//     "Owner approved … retry" reading below is kept only as a bounded
+//     defence should an older loop ever hand it that sentence;
 //   "Owner denied …" / "Approval expired …"                        → the
 //     honest no-permission paragraph, never a retry.
 // If this model is ever consulted while a result still carries the pending
 // shape (or the legacy { error, permissionRequired } alias some tools keep
 // for older readers), it answers with the same honest paragraph — it never
 // claims the tool ran and never loops on a permission it cannot obtain.
+
+// The strict HTML escaper (single-sourced in lib/pure.js — dependency-free, so
+// it loads in the agent worker where the components module cannot).
+import { escapeHtml } from "../pure.js";
 
 export const LOCAL_ASSISTANT_MODEL_ID = "local-assistant";
 
@@ -265,14 +271,6 @@ export function duplicateTabs(tabs) {
     seen.get(key).push(t);
   }
   return [...seen.entries()].filter(([, list]) => list.length >= 2).map(([url, list]) => ({ url, count: list.length }));
-}
-
-/** Escape untrusted text for the artifact HTML (tab titles and URLs are
- * page-controlled). Local on purpose: this file runs in the agent worker,
- * where the components module (a DOM custom-element file) cannot load. */
-function escapeHtml(s) {
-  return String(s ?? "").replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
 /** The tab-list artifact: every http(s) tab, by site. Exported for tests. */

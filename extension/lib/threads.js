@@ -81,7 +81,7 @@ export function toolCallsPrefix(toolCalls) {
 }
 
 function newThreadId() {
-  return `t_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  return newId("t");
 }
 
 function utf8Bytes(str) {
@@ -102,7 +102,7 @@ function previewOf(text) {
 // 300 chars for ERROR text, which is wrong for message content
 // (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01: a response was cut to 300 chars
 // at commit). The message-content cap is applied HERE, not inside the redactor.
-import { redactSecretText } from "./pure.js";
+import { newId, redactSecretText } from "./pure.js";
 function boundText(text, max = MAX_MESSAGE_BYTES) {
   const s = redactSecretText(String(text ?? ""));
   // The cap is UTF-8 BYTES (the memory store bound is byte-based): multi-byte

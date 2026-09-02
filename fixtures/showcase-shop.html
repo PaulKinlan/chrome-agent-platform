@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Showcase Shop</title>
+  <!--
+    fixtures/showcase-shop.html — the sites-as-sub-agents SHOWCASE
+    (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01). A small shop that declares five
+    WebMCP tools through document.modelContext (the same registration shape
+    fixtures/webmcp-fixture.html uses) and shows a VISIBLE cart that changes
+    when add_to_cart runs, so "add the cheapest widget to my cart and tell me
+    the total" has something to see. It is served from this repository's
+    fixture server (deno run -A fixtures/webmcp-server.ts → /shop) and says so
+    on the page: it is a demo site, never a third-party one.
+  -->
+  <style>
+    :root { color-scheme: light; --ink: #1f1d1a; --muted: #635e56; --line: #e3e0d9; --accent: #0e6e63; --panel: #fff; --bg: #f6f4ef; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); }
+    header { padding: 20px 24px 8px; }
+    h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; }
+    .note { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+    main { display: grid; grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr); gap: 20px; padding: 12px 24px 32px; max-width: 960px; }
+    @media (max-width: 700px) { main { grid-template-columns: 1fr; } }
+    h2 { font-size: 15px; margin: 0 0 8px; }
+    ul { list-style: none; margin: 0; padding: 0; }
+    .products li { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); margin-bottom: 8px; }
+    .products .name { flex: 1; font-weight: 600; }
+    .products .price { font-variant-numeric: tabular-nums; }
+    .sku { color: var(--muted); font-size: 12px; }
+    button { font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
+    button.ghost { background: transparent; color: var(--accent); }
+    .cart { position: sticky; top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+    .cart li { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+    .cart .empty { color: var(--muted); padding: 6px 0; }
+    .total { display: flex; justify-content: space-between; margin-top: 10px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .tools { margin-top: 18px; padding: 12px; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); font-size: 13px; }
+    .tools code { font-size: 12px; }
+    #last-action { margin-top: 10px; font-size: 13px; color: var(--accent); min-height: 1.5em; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Showcase Shop</h1>
+    <p class="note">A demo site served from this repository's fixture server. It offers five tools to any agent that asks: list, search, add to cart, remove from cart, cart total.</p>
+  </header>
+  <main>
+    <section aria-labelledby="products-title">
+      <h2 id="products-title">Products</h2>
+      <ul class="products" id="products"></ul>
+      <div class="tools" id="tools-note">
+        Tools this page declares through <code>document.modelContext</code>:
+        <code>list_products</code>, <code>search_products</code>, <code>add_to_cart</code>,
+        <code>remove_from_cart</code>, <code>cart_total</code>.
+      </div>
+    </section>
+    <aside class="cart" aria-labelledby="cart-title" aria-live="polite">
+      <h2 id="cart-title">Cart (<span id="cart-count">0</span>)</h2>
+      <ul id="cart-items"><li class="empty" id="cart-empty">Your cart is empty.</li></ul>
+      <div class="total"><span>Total</span><span id="cart-total">$0.00</span></div>
+      <p id="last-action"></p>
+    </aside>
+  </main>
+  <script>
+    (function showcaseShop() {
+      const PRODUCTS = [
+        { sku: "widget-basic", name: "Widget (basic)", category: "widget", price: 4.5 },
+        { sku: "widget-pro", name: "Widget (pro)", category: "widget", price: 12 },
+        { sku: "gizmo", name: "Gizmo", category: "gizmo", price: 7.25 },
+        { sku: "gadget", name: "Gadget", category: "gadget", price: 19.99 },
+        { sku: "widget-mount", name: "Widget mount", category: "accessory", price: 3 },
+      ];
+      const cart = new Map(); // sku → quantity
+      const money = (n) => `$${n.toFixed(2)}`;
+      const total = () => [...cart].reduce((sum, [sku, qty]) => sum + (PRODUCTS.find((p) => p.sku === sku)?.price ?? 0) * qty, 0);
+      const cartRows = () => [...cart].map(([sku, quantity]) => {
+        const p = PRODUCTS.find((x) => x.sku === sku);
+        return { sku, name: p?.name ?? sku, quantity, unitPrice: p?.price ?? 0, lineTotal: Math.round((p?.price ?? 0) * quantity * 100) / 100 };
+      });
+
+      // Everything on the page is rendered with textContent — a page must
+      // never innerHTML data it did not author, and this page keeps the habit.
+      function note(text) {
+        const el = document.getElementById("last-action");
+        if (el) el.textContent = text;
+      }
+      function renderCart() {
+        const items = document.getElementById("cart-items");
+        const count = document.getElementById("cart-count");
+        const sum = document.getElementById("cart-total");
+        items.replaceChildren();
+        const rows = cartRows();
+        if (!rows.length) {
+          const li = document.createElement("li");
+          li.className = "empty";
+          li.id = "cart-empty";
+          li.textContent = "Your cart is empty.";
+          items.append(li);
+        }
+        for (const row of rows) {
+          const li = document.createElement("li");
+          li.dataset.sku = row.sku;
+          const name = document.createElement("span");
+          name.textContent = `${row.name} × ${row.quantity}`;
+          const price = document.createElement("span");
+          price.textContent = money(row.lineTotal);
+          li.append(name, price);
+          items.append(li);
+        }
+        count.textContent = String(rows.reduce((n, r) => n + r.quantity, 0));
+        sum.textContent = money(total());
+        document.title = rows.length ? `Showcase Shop (${count.textContent} in cart)` : "Showcase Shop";
+      }
+      function renderProducts() {
+        const list = document.getElementById("products");
+        list.replaceChildren();
+        for (const p of PRODUCTS) {
+          const li = document.createElement("li");
+          li.dataset.sku = p.sku;
+          const name = document.createElement("span");
+          name.className = "name";
+          name.textContent = p.name;
+          const sku = document.createElement("span");
+          sku.className = "sku";
+          sku.textContent = p.sku;
+          const price = document.createElement("span");
+          price.className = "price";
+          price.textContent = money(p.price);
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = "Add";
+          btn.setAttribute("aria-label", `Add ${p.name} to cart`);
+          btn.addEventListener("click", () => addToCart({ sku: p.sku }));
+          li.append(name, sku, price, btn);
+          list.append(li);
+        }
+      }
+
+      // ── the five tools ──────────────────────────────────────────────────
+      function listProducts() {
+        return { products: PRODUCTS.map((p) => ({ ...p })) };
+      }
+      function searchProducts(args) {
+        const q = String(args?.query ?? "").trim().toLowerCase();
+        const hits = PRODUCTS.filter((p) => !q || p.name.toLowerCase().includes(q) || p.category.includes(q) || p.sku.includes(q));
+        return { query: q, products: hits.map((p) => ({ ...p })) };
+      }
+      function addToCart(args) {
+        const sku = String(args?.sku ?? "");
+        const product = PRODUCTS.find((p) => p.sku === sku);
+        if (!product) return { ok: false, error: `unknown sku ${sku}` };
+        const quantity = Math.max(1, Math.min(99, Math.floor(Number(args?.quantity) || 1)));
+        cart.set(sku, (cart.get(sku) ?? 0) + quantity);
+        renderCart();
+        note(`Added ${product.name} × ${quantity}.`);
+        return { ok: true, added: { sku, name: product.name, quantity, unitPrice: product.price }, cart: cartRows(), total: Math.round(total() * 100) / 100, currency: "USD" };
+      }
+      function removeFromCart(args) {
+        const sku = String(args?.sku ?? "");
+        if (!cart.has(sku)) return { ok: false, error: `${sku} is not in the cart` };
+        const product = PRODUCTS.find((p) => p.sku === sku);
+        cart.delete(sku);
+        renderCart();
+        note(`Removed ${product?.name ?? sku}.`);
+        return { ok: true, removed: sku, cart: cartRows(), total: Math.round(total() * 100) / 100, currency: "USD" };
+      }
+      function cartTotal() {
+        return { total: Math.round(total() * 100) / 100, currency: "USD", items: cartRows() };
+      }
+
+      // The WebMCP registration: the GoogleChromeLabs/webmcp-tools polyfill
+      // shape — document.modelContext.registerTool() + getTools() (async,
+      // stringified inputSchema) + executeTool(tool, args). Same shape as
+      // fixtures/webmcp-fixture.html so the production bridge dispatches
+      // DECLARED tools here, never through a page global.
+      const tools = new Map();
+      function define(name, description, inputSchema, execute) {
+        tools.set(name, { name, description, inputSchema, execute });
+      }
+      define("list_products", "List every product in the Showcase Shop with sku, name, category and price (USD)", { type: "object", properties: {} }, listProducts);
+      define("search_products", "Search the shop's products by name, category or sku", { type: "object", properties: { query: { type: "string", description: "text to match against name, category or sku" } } }, searchProducts);
+      define("add_to_cart", "Add a product to the shopper's cart by sku (optional quantity); returns the updated cart and total", { type: "object", properties: { sku: { type: "string" }, quantity: { type: "integer", minimum: 1 } }, required: ["sku"] }, addToCart);
+      define("remove_from_cart", "Remove a product from the cart by sku; returns the updated cart and total", { type: "object", properties: { sku: { type: "string" } }, required: ["sku"] }, removeFromCart);
+      define("cart_total", "Return the cart's items and total (USD)", { type: "object", properties: {} }, cartTotal);
+
+      document.modelContext = {
+        getTools: async () => Array.from(tools.values()).map((t) => ({
+          name: t.name,
+          description: t.description,
+          inputSchema: JSON.stringify(t.inputSchema ?? { type: "object", properties: {} }),
+          execute: t.execute,
+        })),
+        registerTool: async (t) => {
+          tools.set(t.name, { name: t.name, description: t.description, inputSchema: t.inputSchema ?? {}, execute: t.execute ?? (() => null) });
+          return t;
+        },
+        executeTool: async (tool, args) => {
+          const known = tools.get(tool?.name);
+          if (known?.execute) return known.execute(args);
+          if (tool?.execute) return tool.execute(args);
+          return { ok: false, error: "unknown tool" };
+        },
+      };
+
+      renderProducts();
+      renderCart();
+    })();
+  </script>
+</body>
+</html>

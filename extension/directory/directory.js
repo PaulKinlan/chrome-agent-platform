@@ -12,7 +12,10 @@ async function render() {
   if (!list.length) {
     const empty = document.createElement("p");
     empty.className = "empty";
-    empty.textContent = "No sites enrolled yet. Browse the web with the extension installed; each enrolled origin becomes a Site Agent.";
+    // What actually happens (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01): the
+    // passive detector notices a page's tools, the hub offers them as a chip,
+    // and the owner's one click makes the site a Site Agent listed here.
+    empty.textContent = "No sites yet. When a page you have open offers tools, the hub shows a chip — choose it to add the site here.";
     rowsEl.append(empty);
     return;
   }

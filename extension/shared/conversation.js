@@ -13,8 +13,9 @@
 // The container is an <agent-conversation> element (the Web Component that owns
 // the message rendering: markdown, code blocks, tool cards, thinking traces).
 
+import { newId } from "../lib/pure.js";
 import { send } from "../lib/messages.js";
-import { summarizeToolResult } from "../lib/tool-summary.js";
+import { summarizeToolResult, toolResultTruncationNote } from "../lib/tool-summary.js";
 import { formatBudgetProgress } from "../lib/run-budget.js";
 import { safeJsonStringify } from "./tool-tree.js";
 import { artifactIdentityFromPayloads } from "./thread-view.js";
@@ -361,13 +362,18 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
         const card = toolCards.take(ev.toolName);
         if (card?.protocol === true || (!card && isProtocolTool(ev.toolName))) break;
         // The card shows the SELECTED tool's own result — summary and raw —
-        // never the lazy envelope around it (§9/§10).
-        const inner = lazyInnerResult(ev.result);
-        const shown = inner !== undefined ? inner : ev.result;
-        const resEff = effectiveToolCall(ev.toolName, ev.toolArgs, ev.result);
-        const raw = safeToolResult(shown);
+        // never the lazy envelope around it (§9/§10). The RETAINED FULL copy
+        // (`resultFull`, redacted + bounded to 64 KiB) is the source; the
+        // 300-char `result` summary is only the fallback for an older emitter
+        // (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01).
+        const src = liveToolResultSource(ev);
+        const inner = lazyInnerResult(src);
+        const shown = inner !== undefined ? inner : src;
+        const resEff = effectiveToolCall(ev.toolName, ev.toolArgs, src);
+        const raw = safeToolResultFull(shown);
         const summary = shown != null ? summarizeToolResult(resEff.name, shown) : "";
         const status = isToolErrorEvent(ev) ? "error" : "success";
+        const note = liveToolResultNote(ev);
         // Resolve this call's plan step — and adopt the tool's REAL name, now
         // known from the result, as the corrected checklist label.
         const doneName = (typeof ev.selectedTool === "string" && ev.selectedTool) || resEff.name || ev.toolName;
@@ -376,7 +382,7 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
         // re-renders, so the card (and a later update card) can be titled
         // with the artifact's name (CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01).
         if (status === "success" && typeof c.rememberArtifact === "function") {
-          const known = artifactIdentityFromPayloads([ev.result]);
+          const known = artifactIdentityFromPayloads([src]);
           if (known) c.rememberArtifact(known.id, known.name);
         }
         if (card) {
@@ -396,8 +402,9 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
           if (ev.durationMs != null) card.setAttribute?.("tool-duration", String(ev.durationMs));
           if (summary) card.setAttribute?.("tool-result", summary);
           if (raw && raw !== summary) card.setAttribute?.("tool-detail", raw);
+          if (note) card.setAttribute?.("tool-detail-note", note);
         } else if (typeof c.appendTool === "function") {
-          c.appendTool({ name: ev.toolName, status, result: summary, detail: raw !== summary ? raw : null, durationMs: ev.durationMs });
+          c.appendTool({ name: ev.toolName, status, result: summary, detail: raw !== summary ? raw : null, detailNote: note, durationMs: ev.durationMs });
         }
         break;
       }
@@ -473,11 +480,37 @@ export function safeToolResult(value) {
   }
 }
 
+/** The live card's DETAIL: the selected tool's own result at FULL length
+ * (the retained copy is already redacted + bounded to 64 KiB upstream — this
+ * serialisation must not cut it again to the 2 KB list bound). A string passes
+ * through; a value serialises whole, with the bounded serializer only as the
+ * never-throws fallback (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01). */
+export function safeToolResultFull(value) {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  try {
+    const s = JSON.stringify(value);
+    if (typeof s === "string") return s;
+  } catch { /* cyclic / hostile — fall through to the bounded serializer */ }
+  return safeToolResult(value);
+}
+
+/** The result a live tool-result event carries for the card: the retained
+ * full copy when the runtime emitted one, else the 300-char summary. */
+export function liveToolResultSource(ev) {
+  return typeof ev?.resultFull === "string" && ev.resultFull ? ev.resultFull : ev?.result;
+}
+
+/** The never-silent note for a live event whose retained copy hit the cap. */
+export function liveToolResultNote(ev) {
+  return ev?.resultFullTruncated === true ? toolResultTruncationNote(Number(ev.resultFullBytes) || 0) : null;
+}
+
 /** A per-run client id so the live progress listener renders ONLY its own run
  * (the SW tags events with it; the global port otherwise leaks other threads'
  * tool data). */
 function newRunId() {
-  try { return crypto.randomUUID(); } catch { return `r_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`; }
+  return newId();
 }
 
 /** A human activity label for a tool call, so the live status reads "Working…
@@ -573,6 +606,9 @@ export function createToolCardQueue() {
  * closed to the plain error text, never an approval card for a forged shape).
  * The requirement is only ever a DESCRIPTION — approving it still takes the
  * real owner click on the card. */
+/** The permission card's line once the owner approved AND the runtime re-ran
+ * the paused call (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01). */
+export const APPROVED_THEN_RAN = "Approved by you — the action then ran.";
 const SCRIPT_DETAIL_MAX_SOURCE = 64 * 1024;
 const SCRIPT_DETAIL_MAX_HOSTS = 64;
 /** Bound a script-approval detail for the card; malformed → undefined. */
@@ -595,6 +631,11 @@ export function normalizePermissionRequirement(result) {
       .slice(0, max);
   const permissions = [...new Set(cleanStrings(req.permissions, 8))];
   const grantOrigins = [...new Set(cleanStrings(req.grantOrigins, 50))]
+    .filter((origin) => /^https?:\/\//.test(origin));
+  // Chrome SITE ACCESS for exact http(s) origins (CAP-FB-20260901-READ-PAGE-
+  // HOST-GRANT-01): the owner's Allow requests `<origin>/*` from Chrome. A
+  // forged non-web origin can never be requested, so it is dropped here.
+  const hostOrigins = [...new Set(cleanStrings(req.hostOrigins, 50))]
     .filter((origin) => /^https?:\/\//.test(origin));
   const grantGlobal = req.grantGlobal === true;
   // Owner-approval card requirements (schedule mutations et al.): a bounded
@@ -619,7 +660,7 @@ export function normalizePermissionRequirement(result) {
       }))
     : [];
   if (Array.isArray(req.approvals) && req.approvals.length > 0 && approvals.length === 0) return null;
-  if (!permissions.length && !grantOrigins.length && !grantGlobal && !approvals.length) return null;
+  if (!permissions.length && !grantOrigins.length && !grantGlobal && !approvals.length && !hostOrigins.length) return null;
   const reason = typeof req.reason === "string" && req.reason.trim()
     ? req.reason.trim().slice(0, 240)
     : "perform this action";
@@ -628,10 +669,16 @@ export function normalizePermissionRequirement(result) {
     permissions,
     grantOrigins,
     grantGlobal,
+    hostOrigins,
     approvals,
+    // Site access is its own decision, so it is its own key segment: a site-
+    // access card and a browser-control card for the same origin never
+    // collapse into one, while the SAME ask (re-denied after a grant that did
+    // not take) reopens the SAME card.
     key: approvals.length
       ? "approvals|" + approvals.map((a) => a.approvalId).sort().join(",")
-      : [...permissions].sort().join(",") + "|" + (grantGlobal ? "<global>" : [...grantOrigins].sort().join(",")),
+      : [...permissions].sort().join(",") + "|" + (grantGlobal ? "<global>" : [...grantOrigins].sort().join(",")) +
+        (hostOrigins.length ? "|host:" + [...hostOrigins].sort().join(",") : ""),
   };
 }
 
@@ -642,6 +689,7 @@ export function approvalCardTitle(action) {
     case "script.create": return "Save this script the agent wrote?";
     case "script.run": return "Run this script now?";
     case "task.schedule-script": return "Run this script on a schedule?";
+    case "fs.write": return "Write this file?";
     default: return `Approve ${action}?`;
   }
 }
@@ -673,14 +721,20 @@ export async function resolveApprovalRequirement(requirement, approve, { sendFn 
  * policy grant through the service worker (the single grant authority). Scope
  * is exactly what the tool computed: grantOrigins set an origin-scoped grant;
  * grantGlobal (only when the tool's own semantics already required the global
- * grant) sets the global grant; nothing is silently broadened. If storage is
- * among the requested permissions the grant persists; otherwise it is
- * reported session-only. Returns an honest outcome; every failure is
- * surfaced, never swallowed. */
+ * grant) sets the global grant; nothing is silently broadened. hostOrigins
+ * (CAP-FB-20260901-READ-PAGE-HOST-GRANT-01) are Chrome SITE ACCESS: the exact
+ * `<origin>/*` patterns ride in the SAME chrome.permissions.request as the
+ * permissions — one prompt from one gesture — and are never a browser-control
+ * grant. If storage is among the requested permissions the grant persists;
+ * otherwise it is reported session-only. Returns an honest outcome; every
+ * failure is surfaced, never swallowed. */
 export async function approvePermissionRequirement(requirement, {
   sendFn = send,
-  requestPermissions = async (permissions) => {
-    try { return (await chrome.permissions.request({ permissions })) === true; }
+  requestPermissions = async (permissions, origins = []) => {
+    const query = {};
+    if (permissions.length) query.permissions = permissions;
+    if (origins.length) query.origins = origins;
+    try { return (await chrome.permissions.request(query)) === true; }
     catch { return false; }
   },
 } = {}) {
@@ -695,16 +749,27 @@ export async function approvePermissionRequirement(requirement, {
     out.errors.push(...resolved.errors);
     return out;
   }
-  if (requirement?.permissions?.length) {
+  // The exact site-access patterns the tool named — `<origin>/*` for each
+  // canonical http(s) origin, never a wildcard host. Requested in the SAME
+  // call as the permissions: this must stay the first asynchronous step from
+  // the owner's click (a preflight ahead of it loses Chrome's activation).
+  const hostPatterns = (Array.isArray(requirement?.hostOrigins) ? requirement.hostOrigins : [])
+    .filter((origin) => typeof origin === "string" && /^https?:\/\/[^/]+$/.test(origin))
+    .map((origin) => `${origin}/*`);
+  if (requirement?.permissions?.length || hostPatterns.length) {
     try {
-      out.permissionsGranted = (await requestPermissions([...requirement.permissions])) === true;
+      out.permissionsGranted = (await requestPermissions([...(requirement?.permissions ?? [])], hostPatterns)) === true;
     } catch (e) {
       out.permissionsGranted = false;
       out.errors.push(String(e?.message ?? e));
     }
     if (!out.permissionsGranted) {
       out.ok = false;
-      if (!out.errors.length) out.errors.push("the owner did not grant the permission");
+      if (!out.errors.length) {
+        out.errors.push(hostPatterns.length && !requirement?.permissions?.length
+          ? `site access to ${requirement.hostOrigins.join(", ")} was not granted`
+          : "the owner did not grant the permission");
+      }
       return out;
     }
   }
@@ -713,7 +778,7 @@ export async function approvePermissionRequirement(requirement, {
     // session-only and the retry would deny again after a worker restart. A
     // failed verify is reported, not hidden.
     try {
-      out.storagePersisted = requirement.permissions.includes("storage")
+      out.storagePersisted = (requirement.permissions ?? []).includes("storage")
         ? true // granted in the JIT request above
         : (await chrome.permissions.contains({ permissions: ["storage"] })) === true;
     } catch {
@@ -887,10 +952,18 @@ export function pairToolJournal(entries) {
         try { return typeof eff.args === "string" ? eff.args : safeJsonStringify(eff.args); } catch { return rawArgs; }
       })(),
       result: result?.result ?? null,
+      // The retained FULL result (redacted, ≤ 64 KiB) the durable row carries
+      // beside the list summary, with its never-silent truncation flag
+      // (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01).
+      resultFull: typeof result?.resultFull === "string" && result.resultFull ? result.resultFull : null,
+      resultFullTruncated: result?.resultFullTruncated === true,
+      resultFullBytes: Number.isFinite(result?.resultFullBytes) ? result.resultFullBytes : null,
       ok: result?.ok ?? null,
       // The structured denial persisted on the result row (§2b), when any.
       permissionRequirement: result?.permissionRequirement ?? null,
       permissionDecision: result?.permissionDecision ?? null,
+      // Approved, then re-run by the runtime (the reopened card says so).
+      reexecuted: result?.reexecuted === true,
       ts,
       duplicate: byCall.get(id)?.duplicate === true,
     });
@@ -1226,6 +1299,9 @@ export function toolRowsFromRunLog(executionId, logs) {
       tool: r.tool ?? "tool",
       args: r.args ?? null,
       result: r.result ?? null,
+      resultFull: typeof r.resultFull === "string" && r.resultFull ? r.resultFull : null,
+      resultFullTruncated: r.resultFullTruncated === true,
+      resultFullBytes: Number.isFinite(r.resultFullBytes) ? r.resultFullBytes : null,
       ok: r.ok ?? null,
       // The tool that ACTUALLY ran (the SW persists it on the result row) —
       // pairToolJournal prefers it over the envelope unwrap, and without this
@@ -1233,19 +1309,29 @@ export function toolRowsFromRunLog(executionId, logs) {
       selectedTool: typeof r.selectedTool === "string" && r.selectedTool ? r.selectedTool : null,
       permissionRequirement: r.permissionRequirement && typeof r.permissionRequirement === "object" ? r.permissionRequirement : null,
       permissionDecision: typeof r.permissionDecision === "string" ? r.permissionDecision : null,
+      reexecuted: r.reexecuted === true,
       ts: typeof r.at === "number" ? r.at : null,
     }));
   const seenApprovals = new Set();
   const imageCards = []; // {status, result, artifact} in tool order, for the strip
   const derived = pairToolJournal(rows).flatMap((p) => {
+    // The retained FULL result is what every derivation reads (the artifact
+    // id, the approval requirement, the screenshot id, the selected tool):
+    // the 300-char summary is the fallback for rows persisted before the full
+    // copy existed (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01).
+    const fullResult = p.resultFull ?? p.result;
     // Show the tool that RAN, not the lazy protocol's envelope.
-    const eff = effectiveToolCall(p.tool, p.args, p.result);
+    const eff = effectiveToolCall(p.tool, p.args, fullResult);
     const toolRow = {
       role: "tool",
       toolName: eff.name,
       toolStatus: p.status === "success" ? "done" : p.status === "error" ? "error" : "done",
       toolArgs: eff.args ?? null,
       toolResult: p.result ?? null,
+      // The card's detail: the complete (redacted, bounded) result, and the
+      // never-silent note when the 64 KiB cap bit.
+      toolDetail: p.resultFull ?? null,
+      toolDetailNote: p.resultFullTruncated ? toolResultTruncationNote(p.resultFullBytes) : null,
       toolOk: p.ok ?? null,
       toolDuration: p.durationMs ?? null,
       toolCallId: p.callId ?? null,
@@ -1264,7 +1350,7 @@ export function toolRowsFromRunLog(executionId, logs) {
     // fallback for a tool that denied without pausing.
     const requirement = (p.permissionRequirement
       ? normalizePermissionRequirement({ waitingForPermission: true, permissionRequirement: p.permissionRequirement })
-      : null) ?? approvalRequirementFromToolResult(p.result);
+      : null) ?? approvalRequirementFromToolResult(fullResult);
     if (requirement && !requirement.approvals.length && !seenApprovals.has(requirement.key)) {
       seenApprovals.add(requirement.key);
       // The owner's recorded decision is the card's state — approved reopens
@@ -1274,7 +1360,7 @@ export function toolRowsFromRunLog(executionId, logs) {
       // row) reopens grantable.
       const decision = p.permissionDecision;
       const replayState = decision === "approved"
-        ? { state: "granted", detail: "Approved during the run." }
+        ? { state: "granted", detail: p.reexecuted ? APPROVED_THEN_RAN : "Approved during the run." }
         : decision === "denied"
           ? { state: "denied" }
           : decision === "expired"
@@ -1292,7 +1378,7 @@ export function toolRowsFromRunLog(executionId, logs) {
     }
     // The artifact this call produced renders straight after it, so reopening
     // a thread shows the deliverable in the context that created it.
-    const artifact = p.status === "error" ? null : artifactFromToolResult(p.tool, p.result, p.selectedTool, eff.args);
+    const artifact = p.status === "error" ? null : artifactFromToolResult(p.tool, fullResult, p.selectedTool, eff.args);
     if (artifact) {
       out.push({
         role: "artifact",
@@ -1304,7 +1390,7 @@ export function toolRowsFromRunLog(executionId, logs) {
       });
     }
     // Feed the generated-image strip (screenshots + image assets) in tool order.
-    imageCards.push({ status: p.status, result: p.result, artifact });
+    imageCards.push({ status: p.status, result: fullResult, artifact });
     return out;
   });
   // ONE images row per execution, after its tool rows: every screenshot the run
@@ -1477,11 +1563,16 @@ export function projectThreadMessages(thread) {
       selectedTool: m.selectedTool ?? null,
       args: m.toolArgs ?? null,
       result: m.toolResult ?? null,
+      // The derived row's retained full result rides the pairing as
+      // `resultFull`; its note is carried verbatim (already worded).
+      resultFull: typeof m.toolDetail === "string" && m.toolDetail ? m.toolDetail : null,
       ok: m.toolOk ?? null,
       ts: typeof m.ts === "number" ? m.ts : null,
       executionId: m.executionId ?? null,
     })),
   );
+  const noteByCall = new Map();
+  for (const m of rawTools) if (m.toolCallId && typeof m.toolDetailNote === "string" && m.toolDetailNote) noteByCall.set(m.toolCallId, m.toolDetailNote);
 
   const toolCards = pairedTools.map((t) => {
     const orig = rawTools.find((m) =>
@@ -1494,6 +1585,10 @@ export function projectThreadMessages(thread) {
       status: t.status,
       args: t.args ?? null,
       result: t.result ?? null,
+      // The card's detail is the COMPLETE retained result
+      // (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01).
+      detail: t.resultFull ?? null,
+      detailNote: (t.callId && noteByCall.get(t.callId)) || null,
       // The runtime-authoritative selected tool, so the artifact derivation
       // below keys on the tool that RAN even when a prose summary shadows it.
       selectedTool: t.selectedTool ?? null,
@@ -1627,7 +1722,7 @@ export function projectThreadMessages(thread) {
         // derive from the bounded tool result when the run persisted none.
         const persisted = tc.callId ? bodyArtifactsByCall.get(tc.callId) : null;
         const artifact = persisted?.artifact
-          ?? (tc.status === "error" ? null : artifactFromToolResult(tc.name, tc.result, tc.selectedTool, tc.args));
+          ?? (tc.status === "error" ? null : artifactFromToolResult(tc.name, tc.detail ?? tc.result, tc.selectedTool, tc.args));
         if (artifact) {
           output.push({
             role: "artifact",
@@ -1638,7 +1733,7 @@ export function projectThreadMessages(thread) {
             derived: true,
           });
         }
-        imageCards.push({ status: tc.status === "error" ? "error" : "success", result: tc.result, artifact });
+        imageCards.push({ status: tc.status === "error" ? "error" : "success", result: tc.detail ?? tc.result, artifact });
       }
       // The generated-image strip under this turn: the screenshots it captured
       // and the image assets it produced (CAP-FB-20260830-GENERATED-IMAGE-STRIP-01).
@@ -1694,7 +1789,15 @@ export async function runConversationTurn(container, { text, attachments = [], h
   try {
     const summary = await send("provider.permission-summary");
     if (!summary?.local) {
-      if (!summary?.origin) throw new Error("configured provider origin is invalid");
+      if (!summary?.origin) {
+        // The gate's own reason (a missing vs an invalid base URL) is the
+        // message — never a bare "origin is invalid" that blames the origin
+        // when the config simply has no base URL
+        // (CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01).
+        const configError = new Error(String(summary?.reason || "configured provider origin is invalid"));
+        configError.providerConfigProblem = true;
+        throw configError;
+      }
       const granted = await chrome.permissions.contains({ origins: [summary.origin] }).catch(() => false);
       if (!granted) {
         const err = {
@@ -1719,17 +1822,16 @@ export async function runConversationTurn(container, { text, attachments = [], h
     // PROVIDER-ERROR-TRUTH-01). An invalid/missing endpoint is a provider
     // configuration problem, not a host-permission one.
     const detail = String(e?.message ?? e ?? "unknown");
-    const configProblem = /origin is invalid/i.test(detail);
+    const configProblem = e?.providerConfigProblem === true || /origin is invalid/i.test(detail);
     const err = {
       ok: false,
       failed: true,
       error: configProblem
-        ? "the provider endpoint is not configured — the run did not start"
+        ? `the provider endpoint is not configured — ${detail} — the run did not start`
         : `provider permission preflight failed closed: ${detail}`,
       errorCategory: configProblem ? "provider-config" : "host-permission",
-      errorReason: configProblem
-        ? "the configured provider has no valid https:// endpoint"
-        : detail,
+      // The gate's reason IS the message (a missing vs an invalid base URL).
+      errorReason: detail,
       errorAction: configProblem
         ? "Set the provider endpoint in Settings → Providers (choose a preset or enter a valid base URL), then run the task again."
         : "grant the exact provider origin in Settings, then run this task again",
@@ -1786,14 +1888,25 @@ export async function runConversationTurn(container, { text, attachments = [], h
     const outcome = approve
       ? await approvePermissionRequirement(requirement)
       : await resolveApprovalRequirement(requirement, false);
-    if (outcome.ok && entry.requestId) {
-      const resolved = await send("run.resolve-inline-approval", {
-        requestId: entry.requestId,
-        approve: approve === true,
-      }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
-      if (resolved?.ok !== true) {
+    // Every paused call waiting behind this card (siblings with the same
+    // requirement share it) gets the owner's one decision
+    // (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01).
+    const waiting = (entry.requestIds ?? []).length ? [...entry.requestIds] : (entry.requestId ? [entry.requestId] : []);
+    if (outcome.ok && waiting.length) {
+      let resolvedAny = false;
+      let lastError = null;
+      for (const requestId of waiting) {
+        const resolved = await send("run.resolve-inline-approval", {
+          requestId,
+          approve: approve === true,
+        }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+        if (resolved?.ok === true) resolvedAny = true;
+        else lastError = resolved?.error ?? "the paused tool request could not be resolved";
+      }
+      entry.requestIds = [];
+      if (!resolvedAny) {
         outcome.ok = false;
-        outcome.errors.push(resolved?.error ?? "the paused tool request could not be resolved");
+        outcome.errors.push(lastError);
       }
     }
     if (outcome.ok) {
@@ -1835,9 +1948,14 @@ export async function runConversationTurn(container, { text, attachments = [], h
     const name = typeof detail.name === "string" && detail.name ? detail.name : "this artifact";
     const added = Number.isSafeInteger(detail.added) ? detail.added : 0;
     const removed = Number.isSafeInteger(detail.removed) ? detail.removed : 0;
-    const noun = detail.kind === "script.update" ? "script" : "artifact";
-    card.setAttribute("title", `Update ${name}? (+${added} -${removed})`);
-    card.setAttribute("body", `The agent wants to change this ${noun}. Review the changes, then approve or deny.`);
+    // A local-file write (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01) rides the
+    // SAME card: the file's relative path, the on-disk bytes as "before".
+    const isFileWrite = detail.kind === "fs.write";
+    const noun = detail.kind === "script.update" ? "script" : isFileWrite ? "file" : "artifact";
+    card.setAttribute("title", `${isFileWrite ? "Write" : "Update"} ${name}? (+${added} -${removed})`);
+    card.setAttribute("body", isFileWrite
+      ? "The agent wants to write this file in a folder you granted. Review the changes, then approve or deny."
+      : `The agent wants to change this ${noun}. Review the changes, then approve or deny.`);
     if (card.querySelector?.("artifact-diff")) return;
     const diff = document.createElement("artifact-diff");
     diff.setAttribute("slot", "extra");
@@ -1853,6 +1971,15 @@ export async function runConversationTurn(container, { text, attachments = [], h
     if (!requirement) return;
     const existing = pendingApprovals.get(requirement.key);
     if (existing) {
+      // A SECOND paused call with the SAME requirement (a sibling issued in
+      // the same model step) shares the card: the owner's one click resolves
+      // every waiter behind it, so no sibling is left to expire
+      // (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01).
+      if (requestId) {
+        existing.requestIds = [...(existing.requestIds ?? []).filter((id) => id !== requestId), requestId];
+        existing.requestId = requestId;
+        approvalById.set(requestId, existing);
+      }
       // The SAME requirement denied AGAIN after a grant (the grant did not
       // take effect — e.g. it was set session-only and the worker restarted,
       // or a narrower scope than the tool needs) — re-open the SAME card for
@@ -1879,6 +2006,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
         card.setAttribute("reason", requirement.reason);
         if (requirement.permissions.length) card.setAttribute("permissions", JSON.stringify(requirement.permissions));
         if (requirement.grantOrigins.length) card.setAttribute("origins", JSON.stringify(requirement.grantOrigins));
+        if (requirement.hostOrigins?.length) card.setAttribute("host-origins", JSON.stringify(requirement.hostOrigins));
         if (requirement.grantGlobal) card.setAttribute("global", "true");
       }
       card.addEventListener("approve", (ev) => handleApprovalDecision(requirement, card, ev?.detail?.sourceEvent, true));
@@ -1910,11 +2038,11 @@ export async function runConversationTurn(container, { text, attachments = [], h
       // live behind the SW's `approval.detail` principal gate (never in the
       // model-facing envelope), so they are fetched here, once, for this card.
       const editApproval = actionApproval ? requirement.approvals[0] : null;
-      if (editApproval && (editApproval.action === "asset.update" || editApproval.action === "script.update")) {
+      if (editApproval && (editApproval.action === "asset.update" || editApproval.action === "script.update" || editApproval.action === "fs.write")) {
         augmentApprovalCardWithDiff(card, editApproval);
       }
     }
-    const entry = { requirement, status: "pending", card, blocking, requestId };
+    const entry = { requirement, status: "pending", card, blocking, requestId, requestIds: requestId ? [requestId] : [] };
     pendingApprovals.set(requirement.key, entry);
     for (const approval of requirement.approvals) approvalById.set(approval.approvalId, entry);
     if (requestId) approvalById.set(requestId, entry);
@@ -2067,14 +2195,17 @@ export async function runConversationTurn(container, { text, attachments = [], h
         const card = toolCards.take(ev.toolName);
         if (card?.protocol === true || (!card && isProtocolTool(ev.toolName))) break;
         // The card shows the SELECTED tool's own result — summary and raw —
-        // never the lazy envelope around it (§9/§10).
-        const inner = lazyInnerResult(ev.result);
-        const shown = inner !== undefined ? inner : ev.result;
-        const resEff = effectiveToolCall(ev.toolName, ev.toolArgs, ev.result);
-        const raw = safeToolResult(shown);
+        // never the lazy envelope around it (§9/§10). The retained FULL copy
+        // is the source (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01).
+        const src = liveToolResultSource(ev);
+        const inner = lazyInnerResult(src);
+        const shown = inner !== undefined ? inner : src;
+        const resEff = effectiveToolCall(ev.toolName, ev.toolArgs, src);
+        const raw = safeToolResultFull(shown);
         const summary = shown != null ? summarizeToolResult(resEff.name, shown) : "";
         const err = isToolErrorEvent(ev);
         const status = err ? "error" : "success";
+        const note = liveToolResultNote(ev);
         // Resolve this call's plan step, adopting the tool's REAL name (known
         // now from the result) as the corrected checklist label.
         {
@@ -2098,8 +2229,9 @@ export async function runConversationTurn(container, { text, attachments = [], h
           if (ev.durationMs != null) card.setAttribute?.("tool-duration", String(ev.durationMs));
           if (summary) card.setAttribute?.("tool-result", summary);
           if (raw && raw !== summary) card.setAttribute?.("tool-detail", raw);
+          if (note) card.setAttribute?.("tool-detail-note", note);
         } else if (typeof c.appendTool === "function") {
-          c.appendTool({ name: ev.toolName, status, result: summary, detail: raw !== summary ? raw : null, durationMs: ev.durationMs });
+          c.appendTool({ name: ev.toolName, status, result: summary, detail: raw !== summary ? raw : null, detailNote: note, durationMs: ev.durationMs });
         } else {
           appendBubble(c, "tool", `✓ ${ev.toolName}${summary ? ` — ${summary}` : ""}`);
         }
@@ -2107,7 +2239,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
         // (the same derivation the durable-log replay uses, so the live view
         // and the reopened view cannot disagree).
         if (!err && typeof c.appendArtifact === "function") {
-          const artifact = artifactFromToolResult(ev.toolName, ev.result, ev.selectedTool, resEff.args ?? ev.toolArgs);
+          const artifact = artifactFromToolResult(ev.toolName, src, ev.selectedTool, resEff.args ?? ev.toolArgs);
           if (artifact) c.appendArtifact({ artifact });
         }
         // The conversation remembers id → name from the UNTRUNCATED live result
@@ -2115,12 +2247,20 @@ export async function runConversationTurn(container, { text, attachments = [], h
         // just "done"), so an update card can be titled with the artifact's
         // name (CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01).
         if (!err && typeof c.rememberArtifact === "function") {
-          const known = artifactIdentityFromPayloads([ev.result]);
+          const known = artifactIdentityFromPayloads([src]);
           if (known) c.rememberArtifact(known.id, known.name);
+        }
+        // Approved by the owner, then RE-RUN by the runtime: the card that
+        // paused the run says so, and the tool card above shows the real
+        // outcome (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01).
+        if (ev.permissionDecision === "approved" && ev.reexecuted === true && ev.permissionRequirement) {
+          const req = normalizePermissionRequirement({ waitingForPermission: true, permissionRequirement: ev.permissionRequirement });
+          const entry = req ? pendingApprovals.get(req.key) : null;
+          if (entry?.card && entry.status === "granted") entry.card.setAttribute("detail", APPROVED_THEN_RAN);
         }
         // A structured permission/grant denial surfaces an IN-CONTEXT approval
         // card (one per distinct requirement) instead of only an error card.
-        maybeRenderApproval(ev.result);
+        maybeRenderApproval(src);
         break;
       }
       case "text-delta":

@@ -207,12 +207,14 @@ Deno.test("T12: browserToolset has exactly 136 tools matching BROWSER_TOOL_NAMES
     Object.keys(tools()),
     BROWSER_TOOL_NAMES.filter((name) => !DEVELOPER_ONLY_TOOL_NAMES.includes(name)),
   );
-  assertEquals(BROWSER_TOOL_NAMES.length, 136);
-  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.browserTools, 136);
+  assertEquals(BROWSER_TOOL_NAMES.length, 137);
+  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.browserTools, 137);
   // 159 + delegate_to_agent (G5) + 7 board tools (jobs board, 2026-08-29;
   // board_read_messages 2026-08-30) − open_side_panel (removed 2026-08-30,
-  // CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01) = 167 (+ patch_asset, CAP-FB-20260830-PATCH-ASSET-TOOL-01).
-  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.totalTools, 178);
+  // CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01) = 167 (+ patch_asset, CAP-FB-20260830-PATCH-ASSET-TOOL-01)
+  // + 5 read-only file tools (CAP-FB-20260831-FS-GRANT-TASK-USE-01) + write_file
+  // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01) = 179.
+  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.totalTools, 179);
   for (const name of [
     "register_user_script", "update_user_script", "unregister_user_script", "list_user_scripts",
     "register_content_script", "update_content_script", "unregister_content_script", "list_content_scripts",
@@ -567,7 +569,12 @@ Deno.test("destinations: an http(s) destination still reaches Chrome under a glo
 Deno.test("fence: read_page result carries untrusted === true (page text is data, never instructions)", async () => {
   reset();
   grantedPermissions.add("scripting");
-  const r = await tools().read_page.execute({ tabId: 7 }, {});
+  // Reading needs site access for the tab's exact origin, checked BEFORE the
+  // injection (CAP-FB-20260901-READ-PAGE-HOST-GRANT-01) — a real tab with a
+  // granted origin is the state this fence test is about.
+  const notes = addTab("https://example.com/notes");
+  grantedOrigins.add("https://example.com/*");
+  const r = await tools().read_page.execute({ tabId: notes.id }, {});
   assertEquals(r.untrusted, true, `read_page must tag its result untrusted: ${JSON.stringify(r)}`);
   assertEquals(r.title, "Quarterly planning notes");
   assert(typeof r.text === "string" && r.text.includes("close_tab"), "the page text is still returned in full (the fence is applied by the lazy projection)");

@@ -13,7 +13,8 @@
  * summary string. Pure — the SW uses it to tag the live tool-result event
  * with `ok`, so the UI can mark the card error instead of always success.
  */
-import { redactSecrets, redactSecretText } from "./pure.js";
+import { redactSecrets, redactSecretText, truncateUtf8, utf8ByteLength } from "./pure.js";
+import { safeJsonStringify } from "./tool-tree.js";
 
 export function isToolResultFailure(raw) {
   const d = unwrapToolResult(raw);
@@ -45,13 +46,122 @@ export function summarizeToolResult(name, raw) {
  * prose-collision-safe generic text redactor). A row persisted before
  * write-path redaction can never paint a secret when every reader routes
  * through here. */
-export function redactToolResult(raw) {
-  const d = unwrapToolResult(raw);
+export function redactToolResult(raw, opts = {}) {
+  const d = unwrapToolResult(raw, opts);
   if (d == null) return d;
   // redactSecrets masks secret-NAMED keys; redactResultValue then scrubs
   // every remaining STRING LEAF (nested Bearer/sk-/AKIA/… shapes survive
   // redactSecrets by design — it never touches string values).
   return redactResultValue(redactSecrets(d));
+}
+
+/* ── the RETAINED FULL RESULT (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01) ────
+ * Every tool result used to be cut to 300 characters ONCE, at the source,
+ * before the progress event existed — so the card, the run log and the
+ * reopened thread could never show what a tool returned. The runtime now emits
+ * a second copy beside that summary: the COMPLETE result the model received,
+ * decoded, redacted (secret-shaped keys + credential shapes in every string
+ * leaf), serialised as VALID JSON and bounded to 64 KiB — the lazy protocol's
+ * own `maxResultBytes`, so a protocol-bounded result is never cut again here.
+ * A result over the cap is bounded STRUCTURALLY (containers and strings capped,
+ * still valid JSON — never a mid-string slice) and flagged, so every surface
+ * can say so instead of silently showing a stub. */
+export const TOOL_RESULT_FULL_MAX_BYTES = 64 * 1024;
+
+/** The full, redacted, bounded copy of a raw tool result.
+ * Returns { json, truncated, bytes }: `json` is a JSON document for structured
+ * results (or the plain text for a text result), `bytes` the UTF-8 size of the
+ * complete serialisation BEFORE bounding, `truncated` whether the cap bit. */
+export function toolResultFullJson(raw, { maxBytes = TOOL_RESULT_FULL_MAX_BYTES } = {}) {
+  let d;
+  // The full copy prefers the MODEL-facing content of an agent-do envelope
+  // (the data), not the prose `userSummary` the one-line summary prefers.
+  try { d = redactToolResult(raw, { prefer: "model" }); } catch { d = undefined; }
+  if (d == null) return { json: "", truncated: false, bytes: 0 };
+  if (typeof d === "string") {
+    const bytes = utf8ByteLength(d);
+    if (bytes <= maxBytes) return { json: d, truncated: false, bytes };
+    const marker = `\n\n…(result truncated to ${(maxBytes / 1024).toFixed(0)} KiB for the run log — the tool returned ${(bytes / 1024).toFixed(0)} KiB)`;
+    const cut = truncateUtf8(d, Math.max(1, maxBytes - utf8ByteLength(marker)));
+    return { json: cut + marker, truncated: true, bytes };
+  }
+  let full;
+  try { full = JSON.stringify(d); } catch { full = undefined; }
+  if (typeof full !== "string") return { json: "\"[unserializable result]\"", truncated: true, bytes: 0 };
+  const bytes = utf8ByteLength(full);
+  if (bytes <= maxBytes) return { json: full, truncated: false, bytes };
+  // Over the cap: a structural bound — depth/nodes/strings capped, containers
+  // closed atomically, secret keys redacted again — so the copy stays a tree.
+  let json;
+  try { json = safeJsonStringify(d, { maxBytes, maxNodes: 4000, maxString: 4096, maxDepth: 12 }); } catch { json = "\"[unserializable result]\""; }
+  return { json, truncated: true, bytes };
+}
+
+/** The never-silent note a truncated retained result carries to the card. */
+export function toolResultTruncationNote(bytes, maxBytes = TOOL_RESULT_FULL_MAX_BYTES) {
+  const returned = Number.isFinite(bytes) && bytes > 0 ? ` — the tool returned ${Math.max(1, Math.round(bytes / 1024))} KiB` : "";
+  return `Result truncated to ${(maxBytes / 1024).toFixed(0)} KiB for the run log${returned}. The model received the tool's own bounded result.`;
+}
+
+/* ── the error a failed call carries (owner: "it errors on a tool call and I
+ * can't see the error in the UI") ─────────────────────────────────────────
+ * The lazy protocol's own refusals are one-word codes ({ok:false, error:
+ * "selection-replayed"}); shown bare they explain nothing. Each known code is
+ * paired with what happened and what the agent must do next. */
+const PROTOCOL_ERROR_EXPLANATIONS = Object.freeze({
+  "selection-replayed": "this tool selection had already been used. Each search_tools selection can be executed once; the agent must search again before calling the tool.",
+  "selection-missing-or-expired": "the tool selection was missing or had expired. The agent must run search_tools again before calling the tool.",
+  "selection-scope-mismatch": "the tool selection belongs to a different run or scope. The agent must search again in this run.",
+  "selection-catalog-stale": "the tool catalogue changed after the selection was made. The agent must search again.",
+  "selection-source-stale": "the tool's source changed after the selection was made. The agent must search again.",
+  "lazy-arguments-invalid": "the arguments did not match the tool's schema. The agent must correct them and call the tool again.",
+});
+
+/** A bare protocol code becomes "<code> — <what happened, what next>"; any
+ * other text passes through unchanged. */
+export function explainProtocolError(text) {
+  const code = String(text ?? "").trim();
+  const why = PROTOCOL_ERROR_EXPLANATIONS[code];
+  return why ? `${code} — ${why}` : code;
+}
+
+function looksLikeFailureText(t) {
+  return /^\s*\[[^\]]+\]\s*DENIED/i.test(t) || /^error:/i.test(t) || /^\s*failed\b/i.test(t);
+}
+
+/** The error text of a failed tool result — for ANY of the shapes the runtime
+ * produces: a nested error inside a lazy `ok:true` envelope
+ * ({ok:true, selectedTool, result:{error}}), a bare protocol error
+ * ({ok:false, error:"selection-replayed"} — explained), an agent-do
+ * {modelContent} wrapper around either, a plain {ok:false}/{error} object, or
+ * a failure-shaped string. "" for a success. Pure; never throws. */
+export function toolResultErrorText(raw) {
+  let v;
+  try { v = unwrapToolResult(raw, { prefer: "model" }); } catch { return ""; }
+  const pick = (x, depth) => {
+    if (x == null || depth > 4) return "";
+    if (typeof x === "string") {
+      const t = x.trim();
+      if (!t) return "";
+      if (t.startsWith("{") || t.startsWith("[")) {
+        try { return pick(JSON.parse(t), depth + 1); } catch { return ""; }
+      }
+      return looksLikeFailureText(t) ? t : "";
+    }
+    if (typeof x !== "object" || Array.isArray(x)) return "";
+    if (typeof x.error === "string" && x.error.trim()) return explainProtocolError(x.error);
+    if (x.ok === false || x.blocked === true) {
+      if (typeof x.reason === "string" && x.reason.trim()) return x.reason.trim();
+      if (typeof x.summary === "string" && x.summary.trim()) return x.summary.trim();
+      const inner = pick(x.result, depth + 1) || pick(x.modelContent, depth + 1);
+      return inner || "failed";
+    }
+    // The lazy envelope's inner result, or an agent-do wrapper, may carry it.
+    return pick(x.result, depth + 1) || pick(x.modelContent, depth + 1) || pick(x.userSummary, depth + 1);
+  };
+  let text;
+  try { text = pick(v, 0); } catch { text = ""; }
+  return String(text ?? "").replace(/\s+/g, " ").trim();
 }
 
 /** Result-specific credential SHAPES: bare tokens with no keyword context.
@@ -110,13 +220,17 @@ function redactResultValue(v, seen = new WeakSet()) {
  * envelope), so unwrap ITERATIVELY — bounded at MAX_UNWRAP_DEPTH; at the cap
  * the raw string is returned so the text scrubber still covers it. */
 const MAX_UNWRAP_DEPTH = 4;
-function unwrapToolResult(raw) {
+/** `prefer: "model"` takes the model-facing `modelContent` over the prose
+ * `userSummary` (the retained full copy wants the data; the one-line summary
+ * wants the prose — the default). */
+function unwrapToolResult(raw, { prefer = "summary" } = {}) {
   let v = raw;
   for (let depth = 0; depth <= MAX_UNWRAP_DEPTH; depth++) {
     if (v == null) return null;
     if (typeof v === "object" && !Array.isArray(v)) {
       let next = v;
-      if (v.userSummary != null) next = v.userSummary;
+      if (prefer === "model" && v.modelContent != null) next = v.modelContent;
+      else if (v.userSummary != null) next = v.userSummary;
       else if (v.modelContent != null) next = v.modelContent;
       if (next === v) return v; // no envelope (or a self-reference) — done
       v = next;
@@ -306,6 +420,10 @@ export function describeToolCall(name, args) {
     case "update_asset": return "Updating an artifact";
     case "patch_asset": return "Editing an artifact";
     case "get_asset": return "Reading an artifact";
+    case "write_file": {
+      const p = pickArg(args, ["path"]);
+      return p ? `Writing “${p}”` : "Writing a file";
+    }
     case "list_assets": return "Listing artifacts";
     case "generate_ui": return "Generating UI";
     case "create_script": {

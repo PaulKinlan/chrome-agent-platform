@@ -196,7 +196,10 @@ function scriptTarget(node, knownScripts) {
 // file with ANY direct dynamic WebAssembly call/constructor — and any deviating
 // call shape in the canonical file — is a violation.
 const EXECUTION_HOST_CANONICAL_PATH = "extension/lib/wasm-execution-worker.js";
-const EXECUTION_HOST_CANONICAL_LOCATION = { line: 225, column: 25 };
+// Re-pinned 2026-09-01 (CAP-FB-20260830-ESCAPEHTML-SINGLE-SOURCE-01): the host's
+// instance-id fallback collapsed onto lib/pure.js newId(), shortening the file by
+// one line; the call itself (shape, arguments, column) is unchanged.
+const EXECUTION_HOST_CANONICAL_LOCATION = { line: 224, column: 25 };
 const EXECUTION_HOST_ALLOWED_CALL_RE = /WebAssembly\.instantiate\(/g;
 // The EXACT allowed arguments of the single canonical call: the first argument
 // is the identifier `wasmBytes`, the second is the member `runtime.imports`.

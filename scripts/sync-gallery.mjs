@@ -44,6 +44,9 @@ const FILES = [
   ["extension/lib/board-view-model.js", "docs/board-view-model.js"],
   // The "Next run" projector for a routine (components.js imports it — the gallery must resolve it).
   ["extension/lib/next-run-label.js", "docs/next-run-label.js"],
+  // The Site Agent vocabulary + the composer chip's offer projection
+  // (components.js imports it — the gallery must resolve it).
+  ["extension/shared/site-agent-copy.js", "docs/site-agent-copy.js"],
 ];
 
 export async function syncGallery({ check = false } = {}) {
@@ -71,7 +74,11 @@ export async function syncGallery({ check = false } = {}) {
     if (dst === "docs/components.js") {
       expected = Buffer.from(expected.toString("utf8").replace('../lib/tool-summary.js', './tool-summary.js'));
       expected = Buffer.from(expected.toString("utf8").replace('../lib/attachments.js', './attachments.js'));
-      expected = Buffer.from(expected.toString("utf8").replace('../lib/pure.js', './pure.js'));
+      // components.js imports lib/pure.js MORE than once (the pinned redactor
+      // import, the single-sourced helpers, and the escapeHtml re-export), so
+      // every occurrence is rewritten — a first-match replace left the later
+      // ones escaping docs/ (tests/gallery-imports.test.ts).
+      expected = Buffer.from(expected.toString("utf8").replaceAll('../lib/pure.js', './pure.js'));
       // The activity-kinds allowlist sits in lib/; the gallery copy is beside components.js.
       expected = Buffer.from(expected.toString("utf8").replace('../lib/activity-kinds.js', './activity-kinds.js'));
       // The jobs-board projection sits in lib/; the gallery copy is beside components.js.
@@ -89,6 +96,8 @@ export async function syncGallery({ check = false } = {}) {
     }
     if (dst === "docs/tool-summary.js") {
       expected = Buffer.from(expected.toString("utf8").replace('../lib/pure.js', './pure.js'));
+      // The bounded serializer sits in shared/; the gallery copy is beside tool-summary.js.
+      expected = Buffer.from(expected.toString("utf8").replace('../shared/tool-tree.js', './tool-tree.js'));
     }
     if (check) {
       let actual;

@@ -34,6 +34,7 @@
 //   - `.job`/receipts/`.gc` carry metadata only — never args/secrets.
 
 import { createAssetKeyed } from "./artifacts.js";
+import { sha256HexBytes } from "./pure.js";
 
 export const WORKSPACE_ROOT = "tool-jobs";
 export const MAX_SEGMENT = 128;
@@ -97,12 +98,9 @@ function parseAnchor(raw) {
   }
 }
 
-/** REAL SHA-256 over the bytes (hex). The wrapper's CAS/digest contract is a
- * genuine cryptographic hash — never a hex encoding of the raw bytes. */
-async function sha256Hex(bytes) {
-  const d = await crypto.subtle.digest("SHA-256", new Uint8Array(bytes));
-  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
+// The wrapper's CAS/digest contract is REAL SHA-256 over the bytes (hex) —
+// never a hex encoding of the raw bytes. sha256HexBytes (lib/pure.js) is the
+// one WebCrypto digest helper in the tree.
 
 const HEX64_RE = /^[0-9a-f]{64}$/i;
 
@@ -216,11 +214,11 @@ export class OpfsToolWorkspace {
    * so the NEXT generation's continuity is verifiable too (best-effort — the
    * parent identity already landed first). */
   async _commitNext(dir, parentState, next) {
-    const parentDigest = next.prevDigest ?? await sha256Hex(new TextEncoder().encode(JSON.stringify(parentState)));
+    const parentDigest = next.prevDigest ?? await sha256HexBytes(new TextEncoder().encode(JSON.stringify(parentState)));
     await this._writeJson(dir, ANCHOR_FILE, { seq: parentState.seq, digest: parentDigest });
     await this._moveNext(dir);
     await this._writeJson(dir, ANCHOR_FILE, {
-      seq: next.seq, digest: await sha256Hex(new TextEncoder().encode(JSON.stringify(next))),
+      seq: next.seq, digest: await sha256HexBytes(new TextEncoder().encode(JSON.stringify(next))),
     }).catch(() => {});
   }
 
@@ -258,7 +256,7 @@ export class OpfsToolWorkspace {
         // commit; then re-anchor on the new current's own identity.
         await this._moveNext(dir);
         await this._writeJson(dir, ANCHOR_FILE, {
-          seq: next.seq, digest: await sha256Hex(new TextEncoder().encode(JSON.stringify(next))),
+          seq: next.seq, digest: await sha256HexBytes(new TextEncoder().encode(JSON.stringify(next))),
         }).catch(() => {});
         return await this._readCurrent(dir);
       }
@@ -300,7 +298,7 @@ export class OpfsToolWorkspace {
       if (!(data instanceof Uint8Array) && !(data instanceof ArrayBuffer)) throw failClosed("input_bytes_required");
       const inputBytes = new Uint8Array(data);
       // SHA-256 VERIFY BEFORE the write — the CAS contract.
-      if (await sha256Hex(inputBytes) !== digest) throw failClosed("input_hash_mismatch");
+      if (await sha256HexBytes(inputBytes) !== digest) throw failClosed("input_hash_mismatch");
       const inputs = await dir.getDirectoryHandle("inputs", { create: true });
       const name = `${digest}.bin`;
       const existing = await inputs.getFileHandle(name).catch(() => null);
@@ -309,7 +307,7 @@ export class OpfsToolWorkspace {
         if (prev.byteLength === 0) {
           // an interrupted earlier projection: complete it (never a conflict).
         } else {
-          const prevDigest = await sha256Hex(prev);
+          const prevDigest = await sha256HexBytes(prev);
           if (prevDigest === digest) return { ok: true, deduped: true, sha256: digest };
           throw failClosed("input_conflict", { sha256: digest }); // refuse a different blob
         }
@@ -320,7 +318,7 @@ export class OpfsToolWorkspace {
       await w.close(); // close() is the ONLY completion signal
       // RE-READ + hash-verify the landing.
       const re = new Uint8Array(await (await (await inputs.getFileHandle(name)).getFile()).arrayBuffer());
-      if (await sha256Hex(re) !== digest) throw failClosed("input_write_verify_failed");
+      if (await sha256HexBytes(re) !== digest) throw failClosed("input_write_verify_failed");
       return { ok: true, sha256: digest };
     });
   }
@@ -366,7 +364,7 @@ export class OpfsToolWorkspace {
       const reservationId = `r${state.seq}`;
       const reservation = { id: reservationId, key: idempotencyKey, bytes, files, expiresAt: now + RESERVATION_TTL_MS };
       const next = canonicalState(
-        state.seq + 1, state.seq, await sha256Hex(new TextEncoder().encode(JSON.stringify(state))),
+        state.seq + 1, state.seq, await sha256HexBytes(new TextEncoder().encode(JSON.stringify(state))),
         state.bytesUsed + bytes, state.filesUsed + files,
         [...reservations, reservation], [...applied, idempotencyKey],
       );
@@ -389,7 +387,7 @@ export class OpfsToolWorkspace {
       if (reservations.length === (state.reservations ?? []).length) return { ok: true, deduped: true };
       const released = (state.reservations ?? []).find((r) => r.id === reservationId);
       const next = canonicalState(
-        state.seq + 1, state.seq, await sha256Hex(new TextEncoder().encode(JSON.stringify(state))),
+        state.seq + 1, state.seq, await sha256HexBytes(new TextEncoder().encode(JSON.stringify(state))),
         Math.max(0, state.bytesUsed - (released?.bytes ?? 0)),
         Math.max(0, state.filesUsed - (released?.files ?? 0)),
         reservations, state.appliedKeys ?? [],
@@ -418,7 +416,7 @@ export class OpfsToolWorkspace {
       await w.write(bytes);
       await w.close();
       const next = canonicalState(
-        state.seq + 1, state.seq, await sha256Hex(new TextEncoder().encode(JSON.stringify(state))),
+        state.seq + 1, state.seq, await sha256HexBytes(new TextEncoder().encode(JSON.stringify(state))),
         state.bytesUsed + bytes.length, state.filesUsed + 1,
         state.reservations ?? [], state.appliedKeys ?? [],
       );
@@ -446,7 +444,7 @@ export class OpfsToolWorkspace {
       const fh = await inputs.getFileHandle(`${digest}.bin`);
       const file = await fh.getFile();
       const data = await file.arrayBuffer();
-      const actual = await sha256Hex(data);
+      const actual = await sha256HexBytes(data);
       if (actual !== digest) throw failClosed("input_hash_mismatch", { actual });
       return new Uint8Array(data);
     });
@@ -469,8 +467,8 @@ export class OpfsToolWorkspace {
       // The STABLE promotion key: a bounded digest over the full promotion
       // identity (execution/call/name/digest) — a retry dedupes to the SAME
       // artifact (the keyed WAL create) regardless of the segment lengths.
-      const digest = await sha256Hex(data);
-      const key = `opfs:promote:${await sha256Hex(new TextEncoder().encode(`${executionId}\u0000${callIndex}\u0000${name}\u0000${digest}`))}`;
+      const digest = await sha256HexBytes(data);
+      const key = `opfs:promote:${await sha256HexBytes(new TextEncoder().encode(`${executionId}\u0000${callIndex}\u0000${name}\u0000${digest}`))}`;
       const result = await this._artifactPromote(name, type, content, key);
       if (result?.ok === false) throw failClosed("promotion_failed", { error: result.error });
       return { ok: true, artifactTxRef: result, promotionKey: key };

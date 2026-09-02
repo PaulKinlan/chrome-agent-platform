@@ -20,14 +20,16 @@
 
 import { normalizeHostPattern, requestPermissionBundleFromGesture } from "./permission-orchestration.js";
 import { safeProviderError } from "./pure.js";
-import { PROVIDER_CHOICES } from "./provider.js";
+import { effectiveBaseURL, PROVIDER_CHOICES } from "./provider.js";
 import { defaultModelFor } from "./model-catalog.js";
 
-/** Derive the exact host-permission origin pattern for a provider base URL.
- * Returns null for missing, malformed, credential-bearing, or non-http(s) URLs. */
+/** Derive the exact host-permission origin pattern for a provider config's
+ * EFFECTIVE base URL (the stored one, or the preset's when the stored one is
+ * empty — CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01). Returns null for a
+ * missing, malformed, credential-bearing, or non-http(s) URL. */
 export function providerOriginPattern(cfg) {
   try {
-    const u = new URL(cfg?.baseURL ?? "");
+    const u = new URL(effectiveBaseURL(cfg));
     if ((u.protocol === "http:" || u.protocol === "https:") && !u.username && !u.password && !u.hostname.includes("*")) {
       return normalizeHostPattern(`${u.origin}/*`);
     }
@@ -46,6 +48,22 @@ const LOCAL_PROVIDER_IDS = new Set(["demo", "prompt-api"]);
 export function isLocalProvider(cfg) {
   const id = cfg?.provider ?? cfg?.id ?? "";
   return LOCAL_PROVIDER_IDS.has(String(id).toLowerCase());
+}
+
+/** The user-facing reason for a NETWORK provider whose config cannot derive
+ * an origin, or null when it can. Two distinct problems, named honestly:
+ * no base URL at all (a BYO endpoint saved without one — presets never hit
+ * this, they resolve to their endpoint), or a base URL that is not a valid
+ * http(s) URL. Shared by the run gate, `provider.status` and the run-time
+ * preflight so every surface says the same thing
+ * (CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01). */
+export function providerEndpointProblem(cfg) {
+  if (isLocalProvider(cfg)) return null;
+  if (providerOriginPattern(cfg)) return null;
+  if (!effectiveBaseURL(cfg)) {
+    return { code: "base_url_missing", reason: "this provider needs a base URL — set it in Settings → Providers" };
+  }
+  return { code: "base_url_invalid", reason: "the provider base URL is not a valid http(s) URL — fix it in Settings → Providers" };
 }
 
 /** Whether the provider's origin host permission is currently granted.
@@ -240,6 +258,13 @@ export async function providerRunGate(cfg) {
   if (providerBreakerOpen()) {
     return { ok: false, code: "provider_temporarily_unavailable", reason: `provider is temporarily unavailable (${lastReason || "recent failures"}) — paused, will retry automatically` };
   }
+  // A network provider must be able to derive an origin: a BYO endpoint saved
+  // without a base URL (or any malformed URL) is refused HERE, with the reason
+  // that names the missing/invalid base URL, instead of passing the host check
+  // with no pattern and dying at the run-time preflight as "origin is invalid"
+  // (CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01).
+  const endpoint = providerEndpointProblem(cfg);
+  if (endpoint) return { ok: false, code: endpoint.code, reason: endpoint.reason };
   // A provider that NEEDS a model id must have one — either explicit or the
   // provider's catalogue default. An empty model with no catalogue would run
   // the demo model for a REAL provider id (the silent demo fallback), so the
@@ -260,7 +285,7 @@ export async function providerRunGate(cfg) {
       ok: false,
       code: "permission_required",
       requestedScope: pattern ?? null,
-      reason: `network access to the provider (${pattern ?? cfg?.baseURL ?? "unknown"}) is not granted — click "Use"/"Test connection" in Settings to grant it`,
+      reason: `network access to the provider (${pattern ?? effectiveBaseURL(cfg) ?? "unknown"}) is not granted — click "Use"/"Test connection" in Settings to grant it`,
     };
   }
   return { ok: true, reason: "", code: "ready" };

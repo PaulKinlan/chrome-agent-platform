@@ -25,7 +25,7 @@ import {
   TOOL_ARGUMENT_LIMITS,
   toolArgumentContract,
 } from "./tool-argument-contract.js";
-import { ToolSelectionAuthority } from "./tool-selection.js";
+import { descriptorByIdentity, ToolSelectionAuthority, toolIdentityKey } from "./tool-selection.js";
 import { assertRunOwned } from "./run-fence.js";
 import { observeToolCall } from "./cap-log.js";
 import {
@@ -96,6 +96,28 @@ function isAborted(signal) {
 
 function fixedError(code) {
   return Object.freeze({ ok: false, error: code });
+}
+
+// CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01 — the paused-call memory and
+// the per-run approval window (see LazyToolProtocol#pausedCalls).
+const MAX_PAUSED_CALLS = 8;
+const MAX_APPROVAL_WINDOWS = 32;
+// How long after an approval settles an in-flight sibling may still
+// revalidate across the grant's catalog regeneration.
+const APPROVAL_GRACE_MS = 30 * 1000;
+// The failures a catalog regeneration produces for a claim that pre-dates it.
+const GRANT_DRIFT_ERRORS = new Set([
+  "selection-scope-mismatch",
+  "selection-catalog-stale",
+  "selection-source-stale",
+]);
+
+/** The structured owner-permission denial a tool returns when it lacks a
+ * capability ({ waitingForPermission:true, permissionRequirement }). */
+function isPermissionPause(result) {
+  const requirement = ownData(result, "permissionRequirement");
+  return ownData(result, "waitingForPermission") === true &&
+    typeof requirement === "object" && requirement !== null;
 }
 
 class ArgumentSanitizationError extends Error {
@@ -674,6 +696,21 @@ export class LazyToolProtocol {
   // execution's result. Bounded to the last few calls so a run that screenshots
   // repeatedly can never hold more than a few megabytes of PNG in the worker.
   #attachments = new Map();
+  // The calls PAUSED on an owner permission card (CAP-FB-20260901-APPROVAL-
+  // RESUME-REEXECUTES-01): selectionRef -> { toolIdentity, name, args, context }
+  // recorded when a dispatch returned the structured permission denial. The
+  // runtime (lib/agent.js's post-tool hook, never the model) re-runs exactly
+  // that call once the owner approves — the same tool, the ORIGINAL validated
+  // arguments, a runtime-issued selection — and the model receives the real
+  // result. Single-use, bounded, and only ever consumed for the run fence
+  // that recorded it.
+  #pausedCalls = new Map();
+  // Per-run approval windows: while a run has a pause pending, or for a short
+  // grace period after the owner approved, an owner grant is the EXPECTED
+  // cause of a mid-flight catalog regeneration (the grant changes every
+  // chrome-api stableId), so a claimed call revalidates across it by tool
+  // identity instead of failing as scope-mismatch. runId -> { pending, until }.
+  #approvalWindows = new Map();
 
   constructor({ readSources, selectionAuthority } = {}) {
     if (typeof readSources !== "function") {
@@ -703,6 +740,133 @@ export class LazyToolProtocol {
    * of the model-facing JSON. Returns a (possibly empty) frozen array. */
   attachmentsFor(selectionRef) {
     return this.#attachments.get(selectionRef) ?? EMPTY_ATTACHMENTS;
+  }
+
+  #approvalWindow(runId, now = Date.now()) {
+    for (const [key, window] of this.#approvalWindows) {
+      if (window.pending.size === 0 && window.until <= now) this.#approvalWindows.delete(key);
+    }
+    if (typeof runId !== "string" || !runId) return null;
+    let window = this.#approvalWindows.get(runId);
+    if (!window) {
+      window = { pending: new Set(), until: 0 };
+      this.#approvalWindows.set(runId, window);
+      while (this.#approvalWindows.size > MAX_APPROVAL_WINDOWS) {
+        const oldest = this.#approvalWindows.keys().next().value;
+        if (oldest === runId) break;
+        this.#approvalWindows.delete(oldest);
+      }
+    }
+    return window;
+  }
+
+  /** Whether a claimed call of `context`'s run may revalidate ACROSS a catalog
+   * regeneration right now (a pause pending, or an approval settled within
+   * the grace period) and `error` is the drift a grant produces. */
+  #toleratesGrantDrift(context, error) {
+    if (!GRANT_DRIFT_ERRORS.has(error)) return false;
+    const runId = ownData(context, "runId");
+    const window = typeof runId === "string" && runId ? this.#approvalWindows.get(runId) : null;
+    if (!window) return false;
+    return window.pending.size > 0 || window.until > Date.now();
+  }
+
+  /** revalidateClaim, then — only inside the run's approval window and only
+   * for the drift a grant produces — the across-grant revalidation by tool
+   * identity (tool-selection.js revalidateClaimAcrossGrant). The caller still
+   * re-authorizes live against whatever descriptor comes back. */
+  #revalidateAcrossGrant(claim, context, catalog) {
+    const resolved = this.#selections.revalidateClaim(claim, context, catalog);
+    if (resolved.ok || !this.#toleratesGrantDrift(context, resolved.error)) return resolved;
+    return this.#selections.revalidateClaimAcrossGrant(claim, context, catalog);
+  }
+
+  /** Remember a dispatch that returned the structured permission denial so
+   * the runtime can re-run it after the owner's Allow. Opens the run's
+   * approval window. */
+  #rememberPausedCall(selectionRef, descriptor, args, context, catalogGeneration) {
+    if (typeof selectionRef !== "string" || !selectionRef) return;
+    this.#pausedCalls.set(selectionRef, Object.freeze({
+      selectionRef,
+      toolIdentity: toolIdentityKey(descriptor),
+      name: descriptor.name,
+      args,
+      context: sourceContext(context, catalogGeneration),
+    }));
+    while (this.#pausedCalls.size > MAX_PAUSED_CALLS) {
+      const oldest = this.#pausedCalls.keys().next().value;
+      this.#pausedCalls.delete(oldest);
+    }
+    this.#approvalWindow(ownData(context, "runId"))?.pending.add(selectionRef);
+  }
+
+  /** Forget a paused call the owner did NOT approve (denied / expired /
+   * aborted): the call is never executed, and the run's approval window
+   * closes when no other pause is pending. Runtime-only. */
+  settlePausedCall(selectionRef) {
+    const paused = this.#pausedCalls.get(selectionRef);
+    if (!paused) return false;
+    this.#pausedCalls.delete(selectionRef);
+    this.#approvalWindows.get(paused.context.runId)?.pending.delete(selectionRef);
+    return true;
+  }
+
+  /** RUNTIME-ONLY (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01): after the
+   * owner approved the permission card a dispatch paused on, run THAT call
+   * again — the same tool (by its grant-independent identity, because the
+   * grant just changed its stableId), the ORIGINAL validated arguments, under
+   * the SAME run fence — through the ordinary execute path, so every fence
+   * (claim, live authority before/after dispatch, validation through the live
+   * record, the run signal, the untrusted-content projection) applies exactly
+   * as it does to a model-issued call. The selection it needs is issued here,
+   * by the runtime, never by a model-facing search. The run's other live
+   * selections are re-keyed to the post-grant catalog first, so references
+   * the model already holds keep resolving. Single-use: a paused call resumes
+   * at most once, and a denied/expired call never reaches here. Not on the
+   * tool wire — no model, page or site principal can call it. */
+  async resumeApprovedCall(selectionRef, context = {}) {
+    const paused = this.#pausedCalls.get(selectionRef);
+    if (!paused) return fixedError("lazy-resume-unavailable");
+    this.#pausedCalls.delete(selectionRef);
+    const window = this.#approvalWindows.get(paused.context.runId);
+    // The grant has landed: in-flight siblings finish their revalidation
+    // across it. Opened BEFORE the first await below (a sibling's after-check
+    // can run in any gap) and before this pause stops counting as pending.
+    if (window) window.until = Date.now() + APPROVAL_GRACE_MS;
+    window?.pending.delete(selectionRef);
+    const signal = ownData(context, "signal");
+    if (isAborted(signal)) return fixedError("lazy-run-aborted");
+    const fence = sourceContext(context, paused.context.catalogGeneration);
+    if (
+      fence.runId !== paused.context.runId || fence.taskId !== paused.context.taskId ||
+      fence.agentId !== paused.context.agentId || fence.origin !== paused.context.origin ||
+      fence.documentId !== paused.context.documentId ||
+      fence.runGeneration !== paused.context.runGeneration
+    ) {
+      return fixedError("lazy-resume-scope-mismatch");
+    }
+    let snapshot;
+    try {
+      snapshot = await liveSnapshot(this.#readSources);
+    } catch {
+      return fixedError("lazy-source-unavailable");
+    }
+    if (isAborted(signal)) return fixedError("lazy-run-aborted");
+    const nextContext = sourceContext(context, snapshot.catalog.generation);
+    // Siblings and later steps: the references issued before the grant.
+    this.#selections.rebindAfterGrant(paused.context, nextContext, snapshot.catalog);
+    const descriptor = descriptorByIdentity(snapshot.catalog, paused.toolIdentity);
+    if (!descriptor || descriptor.availability !== "ready") {
+      return fixedError("lazy-resume-tool-unavailable");
+    }
+    const issued = this.#selections.issue(
+      { catalogGeneration: snapshot.catalog.generation, results: [{ stableId: descriptor.stableId, name: descriptor.name }] },
+      nextContext,
+      snapshot.catalog,
+    );
+    const reissued = issued?.ok ? ownData(ownData(issued.results, "0"), "selectionRef") : null;
+    if (typeof reissued !== "string") return issued?.ok ? fixedError("lazy-resume-unavailable") : issued;
+    return this.execute({ selectionRef: reissued, arguments: paused.args }, context);
   }
 
   /** Site-origin (WebMCP) tool descriptions are page-authored: fence them in
@@ -886,7 +1050,7 @@ export class LazyToolProtocol {
     } catch {
       return released(fixedError("lazy-source-unavailable"));
     }
-    const dispatchResolved = this.#selections.revalidateClaim(
+    const dispatchResolved = this.#revalidateAcrossGrant(
       firstResolved.claim,
       sourceContext(context, dispatchSnapshot.catalog.generation),
       dispatchSnapshot.catalog,
@@ -966,7 +1130,13 @@ export class LazyToolProtocol {
     } catch {
       return released(fixedError("lazy-source-unavailable"));
     }
-    const afterResolved = this.#selections.revalidateClaim(
+    // An owner grant that landed while this call was in flight regenerated
+    // the catalog (every chrome-api stableId hashes the grant digest); inside
+    // the run's approval window that is the expected drift, and the call
+    // revalidates by tool identity — then re-authorizes live against the NEW
+    // descriptor's digests below, exactly as before
+    // (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01).
+    const afterResolved = this.#revalidateAcrossGrant(
       firstResolved.claim,
       sourceContext(context, after.catalog.generation),
       after.catalog,
@@ -1024,6 +1194,11 @@ export class LazyToolProtocol {
       token: this.#untrustedToken(context),
     });
     this.#rememberAttachments(selectionRef, projected.attachments);
+    // A structured permission denial pauses the run on an owner card; keep
+    // what it takes to re-run THIS call once the owner approves.
+    if (isPermissionPause(rawResult)) {
+      this.#rememberPausedCall(selectionRef, afterResolved.descriptor, dispatchValidated.data, context, after.catalog.generation);
+    }
     return Object.freeze({
       ok: true,
       selectedTool: afterResolved.descriptor.name,
@@ -1398,6 +1573,16 @@ export function createLazyProviderToolset({
   return Object.freeze({
     tools,
     protocol,
+    // RUNTIME handles (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01) — NOT in
+    // `tools`, so no model can call them: the agent loop re-runs a paused
+    // call after the owner's Allow, or forgets it after a deny/expiry.
+    resumeApprovedCall: async (selectionRef) => {
+      const context = await readContext();
+      return context
+        ? await protocol.resumeApprovedCall(selectionRef, context)
+        : fixedError("lazy-run-context-unavailable");
+    },
+    settlePausedCall: (selectionRef) => protocol.settlePausedCall(selectionRef),
     diagnostics: () => Object.freeze({
       ...protocol.diagnostics(),
       providerBound: true,

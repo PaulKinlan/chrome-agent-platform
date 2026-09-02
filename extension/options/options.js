@@ -60,7 +60,7 @@ import { createNavigationController } from "../lib/navigation-controller.js";
 // permission-row, capability-row, …) so the settings page uses the SAME
 // design-system components as the hub + the docs showcase (one component,
 // everywhere — no hand-rolled duplicates).
-import { confirmActionDialog } from "../shared/components.js";
+import { confirmActionDialog, escapeHtml } from "../shared/components.js";
 import { saveFsGrant, wireLocalFolderPickers, regrantFsGrantAccess } from "../lib/fs-grants.js";
 import { mountGrantBrowser } from "../lib/folder-browser.js";
 import {
@@ -2956,9 +2956,6 @@ function mcpOpenEditor(existing) {
 // ── helpers ──
 function escapeAttr(s) {
   return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
-}
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 let flashTimer;
 function saveFlash(msg) {

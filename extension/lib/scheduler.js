@@ -2,6 +2,7 @@
 // `register-task` route and the `schedule_task` agent tool call into this, so
 // validation, persistence, and alarm creation stay in a single place.
 
+import { newId } from "./pure.js";
 import { kvGet, kvSet } from "./kv.js";
 import { assertRunAlive, assertRunOwned } from "./run-fence.js";
 
@@ -125,10 +126,8 @@ const activeRuns = new Map();
 // `at` predates this instant was acquired by a previous, now-dead worker instance.
 const BOOT_AT = Date.now();
 
-let lockSeq = 0;
 function newToken() {
-  if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
-  return `lock_${Date.now()}_${Math.random().toString(36).slice(2)}_${lockSeq++}`;
+  return newId();
 }
 
 /** A lock value is well-formed only if it carries a unique owner token + finite
@@ -210,7 +209,7 @@ export async function scheduleTask(
       );
     }
     const name = explicitName ??
-      `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      newId("task");
 
     // The abort must be re-checked at EVERY commit boundary, not just once at
     // the tool's start: an abort arriving DURING an await must prevent the

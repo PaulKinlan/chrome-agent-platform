@@ -16,7 +16,7 @@ import { parseEnglishSchedule } from "../shared/schedule-parser.js";
 import { selectFailedRuns } from "../lib/run-retry.js";
 import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript, wireReplayApprovals, isProtocolTool } from "../shared/conversation.js";
 import { createRunSurfaceOwner } from "../shared/run-surface-owner.js";
-import { summarizeToolResult } from "../lib/tool-summary.js";
+import { summarizeToolResult, toolResultTruncationNote } from "../lib/tool-summary.js";
 import { cancelRunFromRenderedStop, projectConversationRunStatus } from "../shared/run-status.js";
 import { BUDGET_CONTINUE_TASK } from "../lib/run-budget.js";
 import { safeJsonStringify } from "../shared/tool-tree.js";
@@ -27,7 +27,9 @@ import {
   wireHtmlFramePreference,
   currentFramePreference,
   confirmActionDialog,
+  escapeHtml,
 } from "../shared/components.js";
+import { sleep, timeAgo } from "../lib/pure.js";
 import { canonicalRef, findAgentByRef } from "../shared/agent-registry.js";
 import { agentScheduleMarker, backgroundAgentsForDisplay } from "../shared/agent-display.js";
 import { buildTemplateSelect } from "../lib/agent-template-select.js";
@@ -62,6 +64,7 @@ import {
   SITE_AGENT_COPY,
   enrollOutcomeState,
   formatWebmcpHubStatus,
+  selectSiteOfferState,
   siteAgentSetupMessage,
 } from "../shared/site-agent-copy.js";
 // The visible find-tools action consumes the centralized authority at runtime
@@ -291,13 +294,6 @@ function setStatus(text, ready = true) {
   }
 }
 
-function escapeHtml(s) {
-  return String(s).replace(
-    /[&<>"]/g,
-    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]),
-  );
-}
-
 function shortOrigin(o) {
   return String(o).replace(/^https?:\/\//, "").replace(/\/.*/, "");
 }
@@ -432,11 +428,18 @@ async function renderSiteAgents() {
   el.replaceChildren();
 
   // Proactive discovery (CAP-FB-20260825-SITE-DISCOVERABILITY-01): check for
-  // open browser tabs that can be enrolled with one click.
+  // open browser tabs that can be enrolled with one click. Read through the
+  // PERMISSION-FREE offers route (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01):
+  // `agent.discoverable-tabs` needs the optional `scripting` permission to
+  // reattest tabs, so on a fresh profile it answered needScripting and this
+  // banner — and with it the whole Agents section and its "Find site tools"
+  // link — never appeared. The offers are the passive detector's reports
+  // intersected with the open tabs; the click still walks the owner-gesture
+  // enrollment that reattests the exact tab before acting on it.
   const enrolledOrigins = new Set((Array.isArray(res.agents) ? res.agents : []).map((a) => a.origin));
-  const discoverable = await send("agent.discoverable-tabs", { toolsOnly: true }).catch(() => ({ ok: false }));
-  const unenrolledTabs = (discoverable?.ok && Array.isArray(discoverable.tabs))
-    ? discoverable.tabs.filter((t) => !enrolledOrigins.has(t.origin))
+  const discoverable = await send("agent.tool-offers").catch(() => ({ ok: false }));
+  const unenrolledTabs = (discoverable?.ok && Array.isArray(discoverable.offers))
+    ? discoverable.offers.filter((t) => t.enrolled !== true && !enrolledOrigins.has(t.origin))
     : [];
 
   if (agents.length > 0) {
@@ -603,7 +606,7 @@ async function discoverActivePage() {
     if (listing?.ok && Array.isArray(listing.tabs) && listing.tabs.length === 0) {
       const deadline = Date.now() + 5000;
       while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 500));
+        await sleep(500);
         listing = await send("agent.discoverable-tabs").catch(() => ({ ok: false }));
         if (!listing?.ok || !Array.isArray(listing.tabs) || listing.tabs.length > 0) break;
       }
@@ -662,6 +665,8 @@ function openDiscoverPicker(tabs) {
   dialog.addEventListener("close", () => dialog.remove(), { once: true });
 }
 
+/** Enroll the EXACT picked tab from the owner's click. Returns true when the
+ * site became a Site Agent (the chip flips to "Using …"), false otherwise. */
 async function discoverTab(tab) {
   // OPTIONAL + JIT model: the discover click IS the user gesture — request
   // the scripting permission + the site's origin here (chrome.permissions
@@ -674,11 +679,11 @@ async function discoverTab(tab) {
     })) === true;
   } catch (e) {
     setStatus(siteAgentSetupMessage("permission-error", tab.origin), false);
-    return;
+    return false;
   }
   if (!granted) {
     setStatus(siteAgentSetupMessage("permission-denied", tab.origin), false);
-    return;
+    return false;
   }
   const res = await send("agent.enroll-origin", {
     origin: tab.origin,
@@ -701,10 +706,125 @@ async function discoverTab(tab) {
     };
     refresh();
     for (const delay of [1200, 3200]) setTimeout(refresh, delay);
-  } else {
-    setStatus(siteAgentSetupMessage("failed", tab.origin), false);
+    return state !== "failed";
+  }
+  setStatus(siteAgentSetupMessage("failed", tab.origin), false);
+  return false;
+}
+
+// ── The site-offer chip above the composer ───────────────────────────────────
+// (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01.) A page the owner has open reports
+// tools through the passive detector; the SW's `agent.tool-offers` (no
+// optional permission needed to READ it) intersects those reports with the
+// open tabs, and the hub offers ONE unenrolled site as "<host> offers N tools
+// — use them?". The click is the single grant: the chip's `select` carries the
+// EXACT tab id, and discoverTab requests scripting + that origin on the
+// gesture, then enrolls that tab — the same path the Find-site-tools picker
+// uses. One honest wrinkle: ARMING a page's detector needs the optional
+// `scripting` permission (armDetectionProbe), so on a profile that never
+// granted it no page can report a count yet. The chip then reads "Check open
+// pages for site tools" and that click grants exactly scripting (warningless,
+// no prompt) — the SW's permissions.onAdded nudge re-arms the already-open
+// pages and their counts arrive within a second, flipping the chip to the
+// offer. Nothing here broadens access quietly: every permission is requested
+// from a named click, and the SW still verifies the picked tab shows the
+// origin before acting on it.
+const siteOffer = document.getElementById("site-offer");
+// The origin the owner just enrolled from the chip — kept as "Using <host>"
+// until the hub is reloaded, so the grant's result stays visible.
+let siteOfferUsing = null;
+let siteOfferBusy = false;
+function setSiteOfferVariant(variant) {
+  for (const v of ["offer", "using", "check"]) {
+    if (v === variant) siteOffer.setAttribute(v, "");
+    else siteOffer.removeAttribute(v);
   }
 }
+async function renderSiteOffer() {
+  if (!siteOffer || siteOfferBusy) return;
+  const [offers, directory] = await Promise.all([
+    send("agent.tool-offers").catch(() => ({ ok: false })),
+    send("agent.directory").catch(() => ({ agents: [] })),
+  ]);
+  const rows = offers?.ok && Array.isArray(offers.offers) ? offers.offers : [];
+  const enrolled = (Array.isArray(directory?.agents) ? directory.agents : []).map((a) => a.origin);
+  if (siteOfferUsing) {
+    // The site the owner just added: show "Using <host> · N tools" while its
+    // tab is still open; drop the chip once that tab is gone.
+    const stillOpen = rows.find((r) => r.origin === siteOfferUsing.origin);
+    if (stillOpen) {
+      setSiteOfferVariant("using");
+      siteOffer.setAttribute("origin", siteOfferUsing.origin);
+      siteOffer.setAttribute("tool-count", String(stillOpen.toolCount ?? siteOfferUsing.toolCount ?? 0));
+      siteOffer.removeAttribute("tab-id");
+      siteOffer.hidden = false;
+      return;
+    }
+    siteOfferUsing = null;
+  }
+  const state = selectSiteOfferState(offers, enrolled);
+  if (!state) {
+    siteOffer.hidden = true;
+    return;
+  }
+  if (state.kind === "check") {
+    setSiteOfferVariant("check");
+    siteOffer.removeAttribute("origin");
+    siteOffer.removeAttribute("tool-count");
+    siteOffer.removeAttribute("tab-id");
+    siteOffer.hidden = false;
+    return;
+  }
+  const offer = state.offer;
+  setSiteOfferVariant("offer");
+  siteOffer.setAttribute("origin", offer.origin);
+  siteOffer.setAttribute("tool-count", String(offer.toolCount));
+  siteOffer.setAttribute("tab-id", String(offer.id));
+  siteOffer.hidden = false;
+}
+siteOffer?.addEventListener("select", async (e) => {
+  if (siteOfferBusy) return;
+  const card = siteOffer.shadowRoot?.querySelector(".card");
+  if (e.detail?.check === true) {
+    // The one-time scripting grant, from THIS click. Nothing else is
+    // requested here — the page's origin is granted only from the offer click.
+    siteOfferBusy = true;
+    card?.setAttribute("aria-busy", "true");
+    let granted = false;
+    try {
+      granted = (await chrome.permissions.request({ permissions: ["scripting"] })) === true;
+    } catch {
+      granted = false;
+    } finally {
+      siteOfferBusy = false;
+      card?.removeAttribute("aria-busy");
+    }
+    if (!granted) {
+      setStatus(siteAgentSetupMessage("scripting-denied"), false);
+      return;
+    }
+    // The grant re-arms the already-open pages; their first counts land
+    // within a second or two. Re-project a few times (the SW also pushes
+    // site-tools-detected as each report arrives).
+    renderSiteOffer();
+    for (const delay of [600, 1500, 3000]) setTimeout(renderSiteOffer, delay);
+    return;
+  }
+  const origin = e.detail?.origin;
+  const tabId = e.detail?.tabId;
+  if (!origin || !Number.isInteger(tabId)) return;
+  siteOfferBusy = true;
+  card?.setAttribute("aria-busy", "true");
+  try {
+    const toolCount = Number(siteOffer.getAttribute("tool-count")) || 0;
+    const ok = await discoverTab({ id: tabId, origin, title: "" });
+    if (ok) siteOfferUsing = { origin, toolCount };
+  } finally {
+    siteOfferBusy = false;
+    card?.removeAttribute("aria-busy");
+  }
+  renderSiteOffer();
+});
 
 // ── named agents (the persistent named agents) ──────────────────────────────
 async function renderNamedAgents() {
@@ -1291,15 +1411,7 @@ async function renderHubUsage() {
 }
 
 // ── Tasks (the distinct task threads) ────────────────────────────────────
-function timeAgo(ts) {
-  const d = Date.now() - (ts ?? 0);
-  const m = Math.floor(d / 60000);
-  if (m < 1) return "just now";
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
+// timeAgo is imported from lib/pure.js (the same one the components use).
 
 const taskSidebarLifecycle = createTaskSidebarLifecycle({
   // A list message can wake a restarting MV3 worker before its routes are
@@ -1307,7 +1419,7 @@ const taskSidebarLifecycle = createTaskSidebarLifecycle({
   // boot grace period; every render remains event/navigation-driven.
   loadThreads: () => loadThreadsWithOneRestartRetry(
     () => send("thread.list"),
-    () => new Promise((resolve) => setTimeout(resolve, 400)),
+    () => sleep(400),
   ),
   commitThreads: renderTaskRows,
 });
@@ -2103,7 +2215,7 @@ async function openThread(id) {
   // retry the read once before settling (the run-lifecycle resilience fix).
   let res = await send("thread.get", { id }).catch(() => ({ ok: false }));
   if (!(res.ok && res.thread)) {
-    await new Promise((r) => setTimeout(r, 400)); // let a restarting SW boot
+    await sleep(400); // let a restarting SW boot
     res = await send("thread.get", { id }).catch(() => ({ ok: false }));
   }
   // Another open/run may have claimed the surface during either await. Fence
@@ -2184,9 +2296,10 @@ async function openBackgroundAgentChat(id, name) {
   syncComposerScope();
   threadConversation?.resetPlan?.(); // clear the prior surface's plan strip
   const hRes = await send("background-agent.history", { id }).catch(() => ({ entries: [] }));
+  const hydrated = await hydrateToolResultsFromRunLogs(Array.isArray(hRes.entries) ? hRes.entries : []);
   if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== "background") return;
   threadTitle.textContent = name || id || "Background agent";
-  renderAgentHistory(threadConversation, Array.isArray(hRes.entries) ? hRes.entries : []);
+  renderAgentHistory(threadConversation, hydrated);
   projectSurfaceRunTranscript();
   showThreadView({ focusAfter: threadComposer });
   renderRunStatus({ state: "idle" });
@@ -2214,6 +2327,40 @@ async function loadAgentHistoryEntries(kind, id) {
     return Array.isArray(journal) ? journal.slice(-200).reverse() : [];
   }
   return [];
+}
+
+/** Hydrate an agent's journal tool rows with the RETAINED FULL results from
+ * the durable run log (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01). The journal
+ * is the bounded list surface (200 KiB for the whole agent) and keeps only the
+ * 300-char summary; the run log is the authority the cards read. Rows are
+ * matched by (executionId, callId); the most recent HYDRATE_MAX_EXECUTIONS
+ * executions are read (one bounded log read each, concurrently). A read
+ * failure leaves that row on its summary — never an empty card. */
+const HYDRATE_MAX_EXECUTIONS = 12;
+async function hydrateToolResultsFromRunLogs(entries) {
+  const rows = Array.isArray(entries) ? entries : [];
+  const execIds = [];
+  for (const r of rows) {
+    if (r?.type !== "tool-result" || typeof r.executionId !== "string" || !r.executionId || typeof r.callId !== "string") continue;
+    if (!execIds.includes(r.executionId)) execIds.push(r.executionId);
+    if (execIds.length >= HYDRATE_MAX_EXECUTIONS) break;
+  }
+  if (!execIds.length) return rows;
+  const logs = await Promise.all(execIds.map((id) => loadDurableRunLogs(id).catch(() => null)));
+  const byKey = new Map();
+  for (const res of logs) {
+    for (const row of Array.isArray(res?.logs) ? res.logs : []) {
+      if (row?.type !== "tool-result" || typeof row.resultFull !== "string" || !row.resultFull || typeof row.callId !== "string") continue;
+      byKey.set(`${row.executionId}::${row.callId}`, row);
+    }
+  }
+  if (!byKey.size) return rows;
+  return rows.map((r) => {
+    const hit = r?.type === "tool-result" ? byKey.get(`${r.executionId}::${r.callId}`) : null;
+    return hit
+      ? { ...r, resultFull: hit.resultFull, resultFullTruncated: hit.resultFullTruncated === true, resultFullBytes: Number.isFinite(hit.resultFullBytes) ? hit.resultFullBytes : null }
+      : r;
+  });
 }
 
 /** Open the thread surface scoped to ONE agent of ANY kind (the unified agent
@@ -2258,7 +2405,7 @@ async function openAgentSurface({ kind, id, name }) {
   threadTitle.removeAttribute("aria-label");
   syncComposerScope();
   threadConversation?.resetPlan?.(); // clear the prior surface's plan strip
-  const entries = await loadAgentHistoryEntries(kind, id);
+  const entries = await hydrateToolResultsFromRunLogs(await loadAgentHistoryEntries(kind, id));
   if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== kind) return;
   threadTitle.textContent = name || id || "Agent";
   renderAgentHistory(threadConversation, entries);
@@ -2316,14 +2463,21 @@ function renderAgentHistory(container, entries) {
       const t = item.t;
       if (typeof container.appendTool !== "function") continue;
       if (isProtocolTool(t.tool)) continue; // protocol plumbing, never a card (§9)
-      const raw = t.result == null ? "" : typeof t.result === "string" ? t.result : safeJsonStringify(t.result);
-      const summary = t.result == null ? "" : summarizeToolResult(t.tool, t.result);
+      // The card's detail is the RETAINED FULL result (hydrated from the
+      // durable run log — the journal row itself is the bounded list surface);
+      // the journal's summary string is the fallback for rows persisted before
+      // the full copy existed (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01).
+      const full = typeof t.resultFull === "string" && t.resultFull ? t.resultFull : null;
+      const source = full ?? t.result;
+      const raw = full ?? (t.result == null ? "" : typeof t.result === "string" ? t.result : safeJsonStringify(t.result));
+      const summary = source == null ? "" : summarizeToolResult(t.tool, source);
       container.appendTool({
         name: t.tool ?? "tool",
         status: t.status ?? "done",
         args: t.args ?? null,
         result: summary || null,
         detail: raw && raw !== summary ? raw : null,
+        detailNote: t.resultFullTruncated ? toolResultTruncationNote(t.resultFullBytes) : null,
         ts: t.ts ?? null,
       });
     }
@@ -3490,6 +3644,7 @@ threadTitle.addEventListener("keydown", (e) => {
 });
 
 renderSiteAgents();
+renderSiteOffer();
 renderWebmcpHubStatus();
 renderNamedAgents();
 renderBackgroundAgents();
@@ -3555,7 +3710,17 @@ subscribeRunRegistry((snapshot) => {
 // chrome.storage.onChanged may never fire).
 subscribeProgress((ev) => {
   if (ev?.type === "named-agent-changed") renderNamedAgents();
+  // A page's passive detector just reported tools, or the open tabs changed
+  // (a page opened/closed/navigated) — re-project the composer chip AND the
+  // Site Agents panel (its discovered-pages banner and the section's
+  // visibility) so the offer appears while the owner is looking at the hub,
+  // without polling.
+  if (ev?.type === "site-tools-detected" || ev?.type === "open-tabs-changed") {
+    renderSiteOffer();
+    renderSiteAgents();
+  }
   if (ev?.type === "agent-registry-changed") {
+    renderSiteOffer();
     // The unified registry changed (named/background/site) — refresh every
     // agent surface + revalidate any composer's selected-agent chip live
     // (a deleted/disabled agent clears its chip; a rename updates it).

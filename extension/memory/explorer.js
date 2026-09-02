@@ -1,6 +1,7 @@
 // memory/explorer.js — render master + per-origin memory + usage.
 
 import { send } from "../lib/messages.js";
+import { escapeHtml } from "../lib/pure.js";
 
 const masterEl = document.getElementById("master");
 const agentsEl = document.getElementById("agents");
@@ -71,8 +72,6 @@ async function renderUsage() {
     usageBody.append(tr);
   }
 }
-
-function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 
 async function renderShots() {
   const res = await send("screenshots.list");

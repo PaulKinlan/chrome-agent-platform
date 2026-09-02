@@ -135,6 +135,56 @@ function packageIdentity(descriptor) {
   ].map((value) => safeFence(value)).join("\u0000");
 }
 
+/** The tool a descriptor names, INDEPENDENT of the owner's current grants: a
+ * descriptor's stableId hashes its permission/grant digests, so the same tool
+ * gets a new stableId (and the catalog a new generation) the moment the owner
+ * approves a capability. Everything that identifies WHICH closure would run —
+ * source kind, package, tool id, version, package + capability digests, scope,
+ * source and closure generation — is kept; only the grant/permission digests
+ * (re-checked live by the protocol's authority step) and the descriptor
+ * digest that folds them in are left out. Runtime-only: the model never sees
+ * this key (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01). */
+export function toolIdentityKey(descriptor) {
+  if (!descriptor || typeof descriptor !== "object") return "";
+  const scope = descriptor.scope && typeof descriptor.scope === "object" ? descriptor.scope : {};
+  return [
+    descriptor.sourceKind,
+    descriptor.packageId,
+    descriptor.toolId,
+    descriptor.version,
+    descriptor.packageDigest,
+    descriptor.capabilityDigest,
+    descriptor.sourceGeneration,
+    descriptor.closureGeneration,
+    scope.agentId,
+    scope.origin,
+    scope.documentId,
+    scope.hub === true ? "hub" : "",
+  ].map((value) => safeFence(value)).join("\u0000");
+}
+
+/** The run fence of a context WITHOUT the catalog generation — the part of a
+ * selection's scope that an owner grant must never change. */
+function sameRunFence(a, b) {
+  return a.runId === b.runId && a.taskId === b.taskId &&
+    a.agentId === b.agentId && a.origin === b.origin &&
+    a.documentId === b.documentId &&
+    a.runGeneration === b.runGeneration;
+}
+
+/** The single descriptor in `catalog` that names the same tool as
+ * `identityKey` (see toolIdentityKey), or null when none/ambiguous. */
+export function descriptorByIdentity(catalog, identityKey) {
+  if (!identityKey) return null;
+  let found = null;
+  for (const descriptor of catalog?.descriptors ?? []) {
+    if (toolIdentityKey(descriptor) !== identityKey) continue;
+    if (found) return null;
+    found = descriptor;
+  }
+  return found;
+}
+
 export class ToolSelectionAuthority {
   #records = new Map();
   #consumed = new Map();
@@ -247,6 +297,7 @@ export class ToolSelectionAuthority {
           stableId: descriptor.stableId,
           sourceGeneration: descriptor.sourceGeneration,
           packageIdentity: packageIdentity(descriptor),
+          toolIdentity: toolIdentityKey(descriptor),
           context,
           issuedAt: now,
           expiresAt,
@@ -334,6 +385,7 @@ export class ToolSelectionAuthority {
         stableId: record.stableId,
         sourceGeneration: record.sourceGeneration,
         packageIdentity: record.packageIdentity,
+        toolIdentity: record.toolIdentity,
         context: record.context,
         expiresAt: record.expiresAt,
         use,
@@ -383,6 +435,7 @@ export class ToolSelectionAuthority {
         stableId,
         sourceGeneration,
         packageIdentity: ownData(claim, "packageIdentity"),
+        toolIdentity: ownData(claim, "toolIdentity"),
         context,
         issuedAt: now,
         expiresAt,
@@ -390,6 +443,92 @@ export class ToolSelectionAuthority {
       }),
     );
     return true;
+  }
+
+  /** Re-key the live selections of ONE run after an owner grant regenerated
+   * the catalog (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01). Every live
+   * record issued under `previousContext` (the same run fence, the pre-grant
+   * catalog generation) whose tool still exists in `catalog` — the same tool
+   * identity (toolIdentityKey), ready, in scope — is re-recorded under
+   * `nextContext` with the descriptor's NEW stableId/package identity, keeping
+   * its selectionRef and expiry, so the references the model already holds
+   * keep resolving. Records whose tool is gone are left to fail as stale.
+   * Runtime-only: only the protocol's approval-resume path calls this, and
+   * only for the run whose owner just approved. Returns the count re-keyed. */
+  rebindAfterGrant(previousInput, nextInput, catalog) {
+    const now = this.#clock();
+    this.#purge(now);
+    const previous = scopeContext(previousInput);
+    const next = scopeContext(nextInput);
+    if (!sameRunFence(previous, next)) return 0;
+    if (!next.catalogGeneration || catalog?.generation !== next.catalogGeneration) return 0;
+    if (previous.catalogGeneration === next.catalogGeneration) return 0;
+    let rebound = 0;
+    for (const [selectionRef, record] of [...this.#records]) {
+      if (!sameContext(record.context, previous)) continue;
+      const descriptor = descriptorByIdentity(catalog, record.toolIdentity);
+      if (
+        !descriptor || descriptor.availability !== "ready" ||
+        !scopeMatches(descriptor, next)
+      ) continue;
+      this.#records.set(
+        selectionRef,
+        Object.freeze({
+          ...record,
+          stableId: descriptor.stableId,
+          sourceGeneration: descriptor.sourceGeneration,
+          packageIdentity: packageIdentity(descriptor),
+          context: next,
+        }),
+      );
+      rebound++;
+    }
+    return rebound;
+  }
+
+  /** Revalidate a claim ACROSS an owner grant that regenerated the catalog
+   * while the claimed call was in flight (the paused call's sibling — issued
+   * in the same model step, dispatched before the owner clicked Allow, and
+   * revalidated after). Identical to revalidateClaim except that the catalog
+   * generation may differ from the claim's and the descriptor is found by
+   * its grant-independent tool identity rather than its stableId; the run
+   * fence, expiry, availability and scope checks are unchanged, and the
+   * protocol still re-authorizes the call live against the NEW descriptor's
+   * digests before it trusts the outcome. Runtime-only: the protocol uses it
+   * ONLY while the run has a permission pause in progress
+   * (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01). */
+  revalidateClaimAcrossGrant(claimInput, contextInput, catalog) {
+    const now = this.#clock();
+    this.#purge(now);
+    const claim = claimInput && typeof claimInput === "object" ? claimInput : {};
+    const context = scopeContext(contextInput);
+    if (Number(ownData(claim, "expiresAt")) <= now) {
+      return Object.freeze({ ok: false, error: "selection-missing-or-expired" });
+    }
+    const claimed = scopeContext(ownData(claim, "context"));
+    if (!sameRunFence(claimed, context)) {
+      return Object.freeze({ ok: false, error: "selection-scope-mismatch" });
+    }
+    if (catalog?.generation !== context.catalogGeneration) {
+      return Object.freeze({ ok: false, error: "selection-catalog-stale" });
+    }
+    // The identity key is long (two digests plus generations) — never fenced
+    // to maxFenceBytes, or it could not equal any descriptor's key.
+    const toolIdentity = ownData(claim, "toolIdentity");
+    const descriptor = descriptorByIdentity(catalog, typeof toolIdentity === "string" ? toolIdentity : "");
+    if (
+      !descriptor ||
+      descriptor.sourceGeneration !== ownData(claim, "sourceGeneration") ||
+      descriptor.availability !== "ready" || !scopeMatches(descriptor, context)
+    ) {
+      return Object.freeze({ ok: false, error: "selection-source-stale" });
+    }
+    return Object.freeze({
+      ok: true,
+      descriptor,
+      authorizes: false,
+      requiresLiveAuthorization: true,
+    });
   }
 
   revalidateClaim(claimInput, contextInput, catalog) {

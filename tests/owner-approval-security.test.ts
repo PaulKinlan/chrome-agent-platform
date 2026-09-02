@@ -478,3 +478,29 @@ Deno.test("boundStagedApprovalDetail drops a malformed or model-forbidden record
   assertEquals(envelope.permissionRequirement.approvals[0].detail, undefined);
   assert(!JSON.stringify(envelope).includes("Opening hours"));
 });
+
+// CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01: a model write to a granted local
+// folder is an approvable, stageable action whose target is the grant + the
+// cleaned relative path.
+Deno.test("fs.write is approvable and stageable; canonicalOperationTarget('fs') binds grant + path and rejects an empty identity", () => {
+  assert(DESTRUCTIVE_ACTIONS.has("fs.write"), "fs.write must be approvable (createPendingApproval refuses anything else)");
+  assert(!OWNER_DIRECT_ACTIONS.has("fs.write"), "a file write is never owner-direct: only the model path reaches it and it always pays the card");
+  const target = canonicalOperationTarget("fs", { grantId: "fsg_1", path: "notes/todo.txt" });
+  assert(target.startsWith("fs:"), target);
+  assert(target !== canonicalOperationTarget("fs", { grantId: "fsg_1", path: "notes/other.txt" }), "a different path is a different target");
+  assert(target !== canonicalOperationTarget("fs", { grantId: "fsg_2", path: "notes/todo.txt" }), "a different grant is a different target");
+  assertEquals(canonicalOperationTarget("fs", { grantId: "", path: "x" }), "");
+  assertEquals(canonicalOperationTarget("fs", { grantId: "fsg_1", path: "" }), "");
+  const store = createApprovalStore();
+  const pending = createPendingApproval(store, "run-fs", "fs.write", target, "b".repeat(64));
+  assert(pending.ok, "fs.write creates a pending approval");
+  const staged = stageApprovalDetail(store, pending.approvalId, {
+    kind: "fs.write", name: "notes/todo.txt", oldContent: "a\n", newContent: "b\n", added: 1, removed: 1,
+  });
+  assertEquals(staged.ok, true, "the fs.write diff stages on the same card path an artifact edit uses");
+  assertEquals(getStagedApprovalDetail(store, pending.approvalId)?.kind, "fs.write");
+  // The model-facing envelope carries no body for a file write either.
+  const envelope = approvalCardDenial({ approvalId: "a2", action: "fs.write", targetRef: "ref" });
+  assert(envelope && envelope.waitingForPermission === true);
+  assertEquals(envelope.permissionRequirement.approvals[0].detail, undefined);
+});

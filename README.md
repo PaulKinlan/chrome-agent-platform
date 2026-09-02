@@ -26,7 +26,10 @@ isolated OPFS memory, run history, skills, and avatar.
   name and attach a result. Text reads are capped at 1 MiB; binary and larger files
   stay metadata-only references, and lapsed access always shows the re-grant path.
 - **Sites as sub-agents** — lightweight detection-only scripts notice WebMCP on every
-  http(s) page, so **Find site tools** lists only open tabs known to expose tools;
+  http(s) page. When an open page offers tools, the hub shows a chip above the composer —
+  **"shop.example offers 5 tools — use them?"** — and that one click is the grant (it names
+  the exact origin) and makes the site a Site Agent; **Find site tools** is the explicit
+  picker for the same path and lists only open tabs known to expose tools;
   plain pages never become setup candidates. Choosing one then installs the authenticated
   invocation bridge (first-run approval per tool). Discovery is observable: enable
   **Settings → Site agents → Diagnostics** for gated `[WebMCP]` logs (page DevTools
@@ -123,6 +126,31 @@ npm run package:store  # same exact Store boundary (explicit alias)
 
 Then in Chrome: `chrome://extensions` → enable **Developer mode** → **Load unpacked**
 → select the `extension/` directory. The new-tab page becomes the hub.
+
+### Demo: a site as a sub-agent, in under a minute
+
+```sh
+deno run -A fixtures/webmcp-server.ts     # serves the Showcase Shop at http://127.0.0.1:8934/shop
+```
+
+1. Open `http://127.0.0.1:8934/shop` in a tab — a small shop that declares five WebMCP
+   tools (`list_products`, `search_products`, `add_to_cart`, `remove_from_cart`,
+   `cart_total`) and shows its cart.
+2. Open a new tab (the hub). Above the composer: **"127.0.0.1:8934 offers 5 tools — use
+   them?"** Nothing has been granted yet.
+3. Click it. That one click grants `scripting` plus that exact origin and adds the site as a
+   Site Agent; the status line names the origin and the chip reads **"Using 127.0.0.1:8934 ·
+   5 tools"**.
+4. Type `@`, choose the site, then ask: *add the cheapest widget to my cart and tell me the
+   total* (with a real model). The task is routed to that site's own sub-agent, whose tools are
+   the page's tools. With **Settings → Developer features** on (the deterministic demo model),
+   append `@demo-site-tool add_to_cart {"sku":"widget-basic"}` to make it call that tool with
+   no API key. The shop's cart changes and the transcript's tool card shows `add_to_cart`.
+
+`npm run test:webmcp` drives exactly this on a fresh profile (chip within 3 s, one-click
+grant naming the origin, the page changing, under 60 s end to end, and the same path after a
+service-worker restart) and keeps the screenshots (`showcase-chip.png`, `showcase-grant.png`,
+`showcase-cart-changed.png`).
 
 Production packaging never copies the local `extension/` tree wholesale. It
 combines Git-tracked regular files with the current generated `dist` and the

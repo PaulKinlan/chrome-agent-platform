@@ -1,7 +1,58 @@
 # Changelog
 
-## [0.2.604] — 2026-09-02
-- A run now goes through every item — a selection reference works for every call of its tool (64 uses, 10 min) and a failed call hands its use back, every selection error is a sentence with the next action, the step budget is 48×24 model steps shown as "Step N of M" with a "Budget reached — Continue" row that runs on from the same thread, list_tabs states its count across windows, and the live 30-tab gemini run reads 30/30 and cites 30/30
+## [0.2.621] — 2026-09-02
+- Every-item runs now work alongside the newest changes: a paused action that you Allow runs by itself, page-access asks with one clear card, tool results show their full JSON, and the site-tools showcase — and a run that stops on its step budget keeps its Continue in the same task.
+
+## [0.2.620] — 2026-09-02
+- Task board: two new defects — allowing a second site forgets the first, and long read loops forget their earliest pages.
+
+## [0.2.619] — 2026-09-02
+- After you click Allow, the paused action now runs by itself — no retry, no protocol words in the conversation.
+
+## [0.2.618] — 2026-09-02
+- Task board: three more items are being worked on.
+
+## [0.2.617] — 2026-09-02
+- Task board: the site-tools demo is complete.
+
+## [0.2.616] — 2026-09-01
+- When an open page offers tools, a chip next to the composer now lets you use them in one click; a demo shop is included to try it.
+
+## [0.2.615] — 2026-09-01
+- Task board: the full JSON tool-result view is complete.
+
+## [0.2.614] — 2026-09-01
+- Tool results now show the complete formatted JSON with a Copy button, errors are shown plainly, and nothing is lost when you reload.
+
+## [0.2.613] — 2026-09-01
+- Task board: the page-access Allow card fix is complete.
+
+## [0.2.612] — 2026-09-01
+- The generated gallery bundle is ignored by git again.
+
+## [0.2.611] — 2026-09-01
+- Reading a page on a site the extension cannot access now asks you with one clear Allow card instead of failing silently.
+
+## [0.2.610] — 2026-09-01
+- Task board: three defects found while rehearsing the demo are now tracked — a tool that stalls after you click Allow, too many permission prompts in one step, and when a site tool should ask first.
+
+## [0.2.609] — 2026-09-01
+- Every screen now escapes untrusted text the same strict way, so a name like O'Brien can never break the page.
+
+## [0.2.608] — 2026-09-01
+- Editing files in a shared folder is now a fully supported agent action.
+
+## [0.2.607] — 2026-09-01
+- The agent can now edit a file in a folder you shared: you see the exact diff and approve it before anything is written.
+
+## [0.2.606] — 2026-09-01
+- Release notes describe the provider base-URL fix in plain language
+
+## [0.2.605] — 2026-09-01
+- Providers without a base URL now use their built-in endpoint.
+
+## [0.2.604] — 2026-09-01
+- A provider saved without a base URL now runs on its built-in endpoint, and a custom endpoint with no URL is refused up front with a clear reason.
 
 ## [0.2.603] — 2026-09-01
 - Task board: four defects seen in a real research run are now tracked — truncated tool results, runs stopping early, page reads failing without an Allow card, and transcript loss on reload.

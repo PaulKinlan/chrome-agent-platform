@@ -1409,3 +1409,66 @@ export function hubUrlForCommand(command, getURL) {
   const base = getURL("ntp/ntp.html");
   return command === "new-task" ? `${base}#compose` : base;
 }
+
+/* ── Single-sourced shared helpers (CAP-FB-20260830-ESCAPEHTML-SINGLE-SOURCE-01)
+ * Every page, worker and the service worker imports THESE. A second copy of any
+ * of them anywhere under extension/ fails tests/single-source-helpers.test.ts
+ * — the hub and Settings each carried an escapeHtml that skipped the single
+ * quote, which is exactly the drift a grep guard exists to stop. This module
+ * is dependency-free so the agent worker (where components.js cannot load)
+ * can import it too. ─────────────────────────────────────────────────────── */
+
+/** Escape untrusted text for an HTML sink. THE STRICT ONE: `& < > " '` — the
+ * single quote too, so a single-quoted attribute built with it cannot be broken
+ * out of. components.js re-exports this for the pages and the gallery. */
+export function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[c]);
+}
+
+/** A relative timestamp label ("just now" / "5m ago" / "3h ago" / "2d ago"). */
+export function timeAgo(ts) {
+  const d = Date.now() - (ts ?? 0);
+  const m = Math.floor(d / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+/** REAL SHA-256 over raw bytes (a Uint8Array / ArrayBuffer) or the UTF-8
+ * encoding of a string → 64-char hex, via WebCrypto. Async, so file-sized
+ * inputs (the OPFS workspace CAS, artifact digests, Wasm package bytes) never
+ * block the thread; the synchronous `sha256Hex(text)` above stays for the
+ * short security fingerprints that must be computable without an await. */
+export async function sha256HexBytes(input) {
+  const bytes = typeof input === "string"
+    ? new TextEncoder().encode(input)
+    : input instanceof Uint8Array
+    ? input
+    : new Uint8Array(input ?? []);
+  return bytesToHex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)));
+}
+
+/** A unique id: `${prefix}_${hex}` (or the bare hex with no prefix), where
+ * hex is a v4 UUID with its hyphens stripped — 32 lowercase `[0-9a-f]`. Every
+ * store-facing id (threads, tasks, screenshots, assets, scripts, board jobs,
+ * grants, lock tokens) mints here, and the charset is the STRICTEST any
+ * consumer in the tree validates: the screenshot-id extractor reads
+ * `shot_[A-Za-z0-9_]{1,64}` out of truncated text (a hyphen would cut the id
+ * short), thread ids are `[A-Za-z0-9_-]{1,200}`. The Date/Math fallback exists
+ * ONLY for a realm without crypto.randomUUID and is the one place that pattern
+ * is allowed to live. */
+export function newId(prefix = "") {
+  const hex = typeof globalThis.crypto?.randomUUID === "function"
+    ? globalThis.crypto.randomUUID().replaceAll("-", "")
+    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}${Math.random().toString(36).slice(2, 10)}`;
+  return prefix ? `${prefix}_${hex}` : hex;
+}
+
+/** Resolve after `ms` milliseconds. */
+export function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

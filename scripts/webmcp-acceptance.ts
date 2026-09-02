@@ -59,13 +59,72 @@
 // bytes (permissionGrant:"jit-silent-no-prompt"; status ATTESTED on success).
 // See docs/WEBMCP-ACCEPTANCE.md.
 //
+import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
 const CHROMIUM = "/usr/bin/chromium";
 const FIXTURE_PORT = 8934;
 const PAGE_ORIGIN = `http://127.0.0.1:${FIXTURE_PORT}`;
+const SHOWCASE_URL = `${PAGE_ORIGIN}/shop`;
 const HEADED = Deno.args.includes("--headed");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** A minimal flat-session CDP client over the browser endpoint launchChrome()
+ * read from Chrome's own stderr (the showcase block below uses it). */
+async function cdpConnect(wsUrl: string) {
+  const ws = new WebSocket(wsUrl);
+  await new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = rej; });
+  let id = 0;
+  const pend = new Map<number, { res: (v: any) => void; rej: (e: Error) => void }>();
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.id && pend.has(m.id)) {
+      const p = pend.get(m.id)!; pend.delete(m.id);
+      m.error ? p.rej(new Error(m.error.message)) : p.res(m.result);
+    }
+  };
+  // Every call is bounded: a CDP command against a stale or backgrounded
+  // target can otherwise hang the whole suite (the 93531db2 finding).
+  const send = (method: string, params: any = {}, sessionId?: string) => new Promise<any>((res, rej) => {
+    const mid = ++id;
+    const timer = setTimeout(() => { pend.delete(mid); rej(new Error(`cdp timeout: ${method}`)); }, 30000);
+    pend.set(mid, { res: (v: any) => { clearTimeout(timer); res(v); }, rej: (e: Error) => { clearTimeout(timer); rej(e); } });
+    ws.send(JSON.stringify({ id: mid, method, params, sessionId }));
+  });
+  const evalIn = async (sess: string, e: string) => {
+    const r = await send("Runtime.evaluate", { expression: e, returnByValue: true, awaitPromise: true }, sess);
+    if (r?.exceptionDetails) return { __exception: r.exceptionDetails.exception?.description ?? r.exceptionDetails.text };
+    return r?.result?.value;
+  };
+  const attach = async (targetId: string) => {
+    const sess = (await send("Target.attachToTarget", { targetId, flatten: true })).sessionId as string;
+    await send("Runtime.enable", {}, sess);
+    return sess;
+  };
+  const click = async (sess: string, box: { x: number; y: number }) => {
+    await send("Input.dispatchMouseEvent", { type: "mousePressed", x: box.x, y: box.y, button: "left", buttons: 1, clickCount: 1 }, sess);
+    await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: box.x, y: box.y, button: "left", buttons: 0, clickCount: 1 }, sess);
+  };
+  /** A GENUINE click on an element found by an expression (may reach into an
+   * open shadow root); returns false when the element is absent. */
+  const clickExpr = async (sess: string, expr: string) => {
+    const box = await evalIn(sess, `(() => { const el = ${expr}; if (!el) return null; el.scrollIntoView({block:"center"}); const r = el.getBoundingClientRect(); return {x:r.x+r.width/2, y:r.y+r.height/2}; })()`);
+    if (!box || typeof box.x !== "number") return false;
+    await click(sess, box);
+    return true;
+  };
+  const until = async (fn: () => any, ms: number, step = 250) => {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      const v = await fn();
+      if (v) return v;
+      await sleep(step);
+    }
+    return null;
+  };
+  return { send, evalIn, attach, click, clickExpr, until, close: () => ws.close() };
+}
 
 let pass = 0, fail = 0;
 const checks: { name: string; pass: boolean; detail?: unknown }[] = [];
@@ -81,8 +140,40 @@ async function sha256Hex(bytes: Uint8Array<ArrayBuffer>) {
   return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function launchFixture() {
-  return new Deno.Command("deno", { args: ["run", "-A", `${ROOT}fixtures/webmcp-server.ts`], stdout: "null", stderr: "null" }).spawn();
+function launchFixture(logPath?: string) {
+  // The server's stderr is copied to the artifact dir (a bind failure — a
+  // stale server holding 8934 — used to be silent and read as a product
+  // failure).
+  const proc = new Deno.Command("deno", {
+    args: ["run", "-A", `${ROOT}fixtures/webmcp-server.ts`],
+    stdout: "null",
+    stderr: logPath ? "piped" : "null",
+  }).spawn();
+  if (logPath) {
+    (async () => {
+      const file = await Deno.open(logPath, { write: true, create: true, truncate: true });
+      try { await proc.stderr.pipeTo(file.writable); } catch { /* the server went away */ }
+    })();
+  }
+  return proc;
+}
+
+/** Wait until the fixture server answers (or report why it does not). */
+async function waitForFixture(ms = 10000): Promise<{ ok: boolean; detail?: string }> {
+  const deadline = Date.now() + ms;
+  let lastError = "";
+  while (Date.now() < deadline) {
+    try {
+      const r = await fetch(`${PAGE_ORIGIN}/shop`, { signal: AbortSignal.timeout(1500) });
+      const text = await r.text();
+      if (r.ok && text.includes("Showcase Shop")) return { ok: true };
+      lastError = `HTTP ${r.status} (${text.slice(0, 60)})`;
+    } catch (e) {
+      lastError = String((e as Error)?.message ?? e);
+    }
+    await sleep(250);
+  }
+  return { ok: false, detail: lastError };
 }
 
 // The TEST VARIANT: byte-identical extension except the manifest pre-holds the
@@ -164,8 +255,14 @@ async function main() {
     return;
   }
 
-  const fixture = launchFixture();
-  await sleep(800);
+  const fixture = launchFixture(`${artifactDir}/webmcp-fixture-server.log`);
+  const fixtureUp = await waitForFixture();
+  check("fixture server answers on 127.0.0.1:8934 (/ and /shop)", fixtureUp.ok, fixtureUp.detail);
+  if (!fixtureUp.ok) {
+    try { fixture.kill("SIGKILL"); } catch { /* already dead */ }
+    console.log(`\nRESULT: ${pass} passed, ${fail} failed — the fixture server never answered; see ${artifactDir}/webmcp-fixture-server.log`);
+    Deno.exit(1);
+  }
 
   // Evidence collectors.
   const scriptParsedUrls: string[] = [];
@@ -245,26 +342,57 @@ async function main() {
       await fsend("Target.createTarget", { url: `${PAGE_ORIGIN}/index.html` });
       await sleep(1500);
 
-      // The hub: the REAL Discover click on a fresh profile.
+      // The hub on a fresh profile. Today's hub hides the Agents section (and
+      // its "Find site tools" link) until it has data, and no page can report
+      // tools before the one-time `scripting` grant (arming the MAIN-world
+      // probe needs it) — so the first reachable gesture is the composer chip
+      // "Check open pages for site tools" (CAP-FB-20260825-SITE-AGENT-
+      // SHOWCASE-01). Its real click settles the JIT scripting grant
+      // (warningless, no prompt), the SW's permissions.onAdded nudge re-arms
+      // the already-open fixture tab's detector, its count lands, the Agents
+      // section appears with the discovered-pages banner, and "Find site
+      // tools" opens the picker listing that tab.
       const fNT = await fsend("Target.createTarget", { url: `chrome-extension://${fExtId}/ntp/ntp.html` });
       const fns = (await fsend("Target.attachToTarget", { targetId: fNT.targetId, flatten: true })).sessionId;
       await fsend("Runtime.enable", {}, fns);
       await fsend("Page.enable", {}, fns);
       await sleep(1600);
       await fsend("Target.activateTarget", { targetId: fNT.targetId });
-      const fBox = await feval(fns, `(() => { const el = document.getElementById("discover-page"); if (!el) return null; el.scrollIntoView({block:"center"}); const r = el.getBoundingClientRect(); return {x:r.x+r.width/2, y:r.y+r.height/2}; })()`);
+      const checkChip = await funtil(() => feval(fns, `(() => {
+        const el = document.getElementById("site-offer");
+        if (!el || el.hidden || !el.hasAttribute("check")) return null;
+        const card = el.shadowRoot?.querySelector(".card");
+        if (!card) return null;
+        card.scrollIntoView({block:"center"});
+        const r = card.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2, text: (el.shadowRoot?.textContent ?? "").replace(/\\s+/g, " ").trim() };
+      })()`), 8000);
+      check("fresh profile: the composer offers the one named first click (\"Check open pages for site tools\") before any grant",
+        !!checkChip && /Check open pages for site tools/.test(String(checkChip.text)), checkChip);
+      if (checkChip) {
+        await fsend("Input.dispatchMouseEvent", { type: "mousePressed", x: checkChip.x, y: checkChip.y, button: "left", buttons: 1, clickCount: 1 }, fns);
+        await fsend("Input.dispatchMouseEvent", { type: "mouseReleased", x: checkChip.x, y: checkChip.y, button: "left", buttons: 0, clickCount: 1 }, fns);
+      }
+      // Host access is install-granted (<all_urls>, owner decision Q18), so
+      // only the API permissions can change here: scripting lands, tabs stays.
+      const jitGranted = await funtil(
+        () => feval(fsws, `Promise.all([
+          chrome.permissions.contains({ permissions: ["scripting"] }),
+          chrome.permissions.contains({ permissions: ["tabs"] }),
+        ]).then(([s, t]) => s && !t ? true : null)`),
+        10000,
+      );
+      check("fresh profile: the check click issued the JIT scripting request and it settled granted (warningless, no prompt) — tabs stays ungranted",
+        jitGranted === true);
+      // The grant re-arms the fixture tab's detector → its count lands → the
+      // Agents section (with the discovered-pages banner) becomes visible and
+      // "Find site tools" is reachable.
+      const fBox = await funtil(() => feval(fns, `(() => { const el = document.getElementById("discover-page"); if (!el) return null; el.scrollIntoView({block:"center"}); const r = el.getBoundingClientRect(); return r.width > 0 ? {x:r.x+r.width/2, y:r.y+r.height/2} : null; })()`), 10000);
       if (fBox && typeof fBox.x === "number") {
         await fsend("Input.dispatchMouseEvent", { type: "mousePressed", x: fBox.x, y: fBox.y, button: "left", buttons: 1, clickCount: 1 }, fns);
         await fsend("Input.dispatchMouseEvent", { type: "mouseReleased", x: fBox.x, y: fBox.y, button: "left", buttons: 0, clickCount: 1 }, fns);
       }
-      check("fresh profile: clicked Discover this page via a real click", !!(fBox && typeof fBox.x === "number"));
-
-      const jitGranted = await funtil(
-        () => feval(fsws, `chrome.permissions.contains({ permissions: ["scripting"] })`),
-        10000,
-      );
-      check("fresh profile: the discover gesture issued the JIT scripting request and it settled granted (warningless, no prompt)",
-        jitGranted === true);
+      check("fresh profile: Find site tools became reachable and was clicked via a real click", !!(fBox && typeof fBox.x === "number"));
 
       // The picker-open proof the review demanded: the SAME first Discover
       // click carries the whole fresh-profile chain — JIT scripting grant →
@@ -291,6 +419,297 @@ async function main() {
     } finally {
       try { freshProc.kill("SIGKILL"); } catch { /* already dead */ }
       await Deno.remove(freshProfile, { recursive: true }).catch(() => {});
+    }
+  }
+
+  // 0.6 THE SHOWCASE (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01): sites as
+  // sub-agents demonstrable in under a minute, on a FRESH profile with the
+  // SHIPPED manifest and no API key. The path an owner walks: open the hub,
+  // open the Showcase Shop, the composer shows "<host> offers 5 tools — use
+  // them?" within 3 s (no permission involved yet), ONE click grants
+  // scripting + that exact origin and enrolls that exact tab (the grant names
+  // the origin), then a task calls the site's add_to_cart through the real
+  // lazy protocol: the page's cart changes and the transcript's tool card
+  // names the site's tool. Timed end to end. Then the service worker is
+  // restarted and the site's tool still runs without re-enrollment.
+  // Enrollment IS the owner's consent for the site's tools (CAP-FB-20260824-
+  // WEBMCP-AUTOAPPROVE-01): the negative asserted here is that BEFORE the click
+  // nothing on the site can be invoked, and no permission is held.
+  if (!HEADED) {
+    const showcaseProfile = `/tmp/cap-webmcp-showcase-${Date.now()}`;
+    await Deno.mkdir(showcaseProfile, { recursive: true });
+    const launched = await launchChrome({
+      binary: CHROMIUM,
+      args: [
+        "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
+        "--silent-debugger-extension-api", `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
+        "--remote-allow-origins=*", "--window-size=1400,1200",
+        `--user-data-dir=${showcaseProfile}`, "about:blank",
+      ],
+    });
+    try {
+      const c = await cdpConnect(launched.wsUrl);
+      // waitForServiceWorker reads `res.result.targetInfos` (the raw CDP
+      // message shape); cdpConnect resolves with the bare result, so wrap it.
+      const rawSend = (method: string, params?: any) => c.send(method, params ?? {}).then((result) => ({ result }));
+      const sw = await waitForServiceWorker(rawSend, { timeoutMs: 20000 });
+      check("showcase: fresh profile (shipped manifest) loaded the extension", !!sw);
+      if (!sw) throw new Error("showcase: no service worker target");
+      const extId = new URL(sw.url).host;
+      const sws = await c.attach(sw.targetId);
+      const perms0 = await c.evalIn(sws, `Promise.all([
+        chrome.permissions.contains({ permissions: ["scripting"] }),
+        chrome.permissions.contains({ permissions: ["tabs"] }),
+      ])`);
+      check("showcase: scripting + tabs start ungranted", Array.isArray(perms0) && perms0[0] === false && perms0[1] === false, perms0);
+
+      // The hub FIRST (t0 = hub load): the chip must appear while the owner is
+      // already looking at the hub, pushed by the page's detection report.
+      const t0 = Date.now();
+      const hubT = await c.send("Target.createTarget", { url: `chrome-extension://${extId}/ntp/ntp.html` });
+      const ns = await c.attach(hubT.targetId);
+      await c.send("Page.enable", {}, ns);
+      const hubReady = await c.until(() => c.evalIn(ns, `(() => { const el = document.getElementById("site-offer"); return el ? { hidden: el.hidden } : null; })()`), 10000);
+      check("showcase: the hub declares the site-offer chip, hidden while nothing offers tools", hubReady?.hidden === true, hubReady);
+      // Real clicks need the tab in front (a user activation comes from a
+      // focused frame), and screenshots of a backgrounded tab are unreliable.
+      const front = async (targetId: string, sess: string) => {
+        await c.send("Target.activateTarget", { targetId }).catch(() => {});
+        await c.send("Page.bringToFront", {}, sess).catch(() => {});
+        await sleep(150);
+      };
+      const shotOf = async (sess: string, name: string) => {
+        const shot = await c.send("Page.captureScreenshot", { format: "png" }, sess).catch(() => null);
+        if (!shot?.data) return;
+        const bytes = Uint8Array.from(atob(shot.data), (ch: string) => ch.charCodeAt(0));
+        await Deno.writeFile(`${artifactDir}/${name}`, bytes);
+        screenshots.push({ name, sha256: await sha256Hex(bytes), bytes: bytes.length });
+      };
+      await front(hubT.targetId, ns);
+
+      // Open the Showcase Shop in another tab, then come back to the hub —
+      // the owner is looking at the hub when the chip appears.
+      const tOpen = Date.now();
+      const shopT = await c.send("Target.createTarget", { url: SHOWCASE_URL });
+      const shop = await c.attach(shopT.targetId);
+      await c.send("Page.enable", {}, shop);
+      await front(hubT.targetId, ns);
+      const shopLoaded = await c.until(() => c.evalIn(shop, `(() => { const c = document.getElementById("cart-count"); const n = document.querySelectorAll("#products li").length; return c && n === 5 && !!document.modelContext ? { cart: c.textContent, products: n } : null; })()`), 8000, 100);
+      check("showcase: the Showcase Shop loaded (5 products, an empty cart, document.modelContext present)", shopLoaded?.products === 5 && shopLoaded?.cart === "0", shopLoaded);
+      // FRESH PROFILE: no page can report a count before the one-time
+      // `scripting` grant (arming the MAIN-world probe needs it), so the chip
+      // first offers exactly that click — "Check open pages for site tools" —
+      // within 3 s, with NOTHING granted yet.
+      const checkText = await c.until(() => c.evalIn(ns, `(() => {
+        const el = document.getElementById("site-offer");
+        if (!el || el.hidden || !el.hasAttribute("check")) return null;
+        return (el.shadowRoot?.textContent ?? "").replace(/\\s+/g, " ").trim();
+      })()`), 8000, 100);
+      const checkMs = Date.now() - tOpen;
+      check("showcase (fresh): the chip offers the named first click (\"Check open pages for site tools\") within 3 s of opening the tab",
+        typeof checkText === "string" && /Check open pages for site tools/.test(checkText) && checkMs <= 3000, { checkText, checkMs });
+      const checkA11y = await c.evalIn(ns, `(() => { const card = document.getElementById("site-offer")?.shadowRoot?.querySelector(".card"); return card ? { role: card.getAttribute("role"), label: card.getAttribute("aria-label") } : null; })()`);
+      check("showcase (fresh): the check chip's accessible name says what the click grants (look for tools on open pages)",
+        checkA11y?.role === "button" && /look for tools on pages you have open/.test(String(checkA11y?.label)), checkA11y);
+      // Host access is install-granted (<all_urls>, owner decision Q18): the
+      // only things a click can change are the API permissions and the
+      // enrollment. Before the check click neither scripting nor tabs is held
+      // and nothing is enrolled.
+      const permsBeforeCheck = await c.evalIn(sws, `Promise.all([
+        chrome.permissions.contains({ permissions: ["scripting"] }),
+        chrome.permissions.contains({ permissions: ["tabs"] }),
+      ])`);
+      const enrolledBefore = await c.evalIn(ns, `chrome.runtime.sendMessage({ type: "agent.list" })`);
+      check("showcase (fresh): no API permission is granted and nothing is enrolled before the check click",
+        Array.isArray(permsBeforeCheck) && permsBeforeCheck.every((p: boolean) => p === false) && Array.isArray(enrolledBefore) && enrolledBefore.length === 0,
+        { permsBeforeCheck, enrolledBefore });
+      await front(hubT.targetId, ns);
+      await shotOf(ns, "showcase-check.png");
+      const checkClicked = await c.clickExpr(ns, `document.getElementById("site-offer")?.shadowRoot?.querySelector(".card")`);
+      check("showcase (fresh): clicked the check chip via a real click", checkClicked);
+      const scriptingOnly = await c.until(() => c.evalIn(sws, `Promise.all([
+        chrome.permissions.contains({ permissions: ["scripting"] }),
+        chrome.permissions.contains({ permissions: ["tabs"] }),
+      ]).then(([s, t]) => s && !t ? true : null)`), 10000, 100);
+      const tGrant = Date.now();
+      const enrolledAfterCheck = await c.evalIn(ns, `chrome.runtime.sendMessage({ type: "agent.list" })`);
+      check("showcase (fresh): the check click granted exactly scripting (silent, no prompt) — tabs stays ungranted, nothing enrolled",
+        scriptingOnly === true && Array.isArray(enrolledAfterCheck) && enrolledAfterCheck.length === 0, { scriptingOnly, enrolledAfterCheck });
+      // The grant re-arms the already-open shop tab's detector; its count
+      // lands and the chip becomes the offer within 3 s of the grant.
+      const chipText = await c.until(() => c.evalIn(ns, `(() => {
+        const el = document.getElementById("site-offer");
+        if (!el || el.hidden || !el.hasAttribute("offer")) return null;
+        const text = (el.shadowRoot?.textContent ?? "").replace(/\\s+/g, " ").trim();
+        return text.includes("offers") ? text : null;
+      })()`), 8000, 100);
+      const chipMs = Date.now() - tGrant;
+      check("showcase: the offer chip appears within 3 s of detection becoming possible (the grant)", typeof chipText === "string" && chipMs <= 3000, { chipText, chipMs, sinceTabOpenMs: Date.now() - tOpen });
+      check("showcase: the chip names the host and the tool count (\"127.0.0.1:8934 offers 5 tools — use them?\")",
+        /127\.0\.0\.1:8934 offers 5 tools — use them\?/.test(String(chipText)), chipText);
+      const chipA11y = await c.evalIn(ns, `(() => { const card = document.getElementById("site-offer")?.shadowRoot?.querySelector(".card"); return card ? { role: card.getAttribute("role"), tabindex: card.getAttribute("tabindex"), label: card.getAttribute("aria-label") } : null; })()`);
+      check("showcase: the chip is a keyboard-operable button whose accessible name names the host",
+        chipA11y?.role === "button" && chipA11y?.tabindex === "0" && /127\.0\.0\.1:8934/.test(String(chipA11y?.label)), chipA11y);
+      const enrolledBeforeOffer = await c.evalIn(ns, `chrome.runtime.sendMessage({ type: "agent.list" })`);
+      check("showcase: the site is NOT a Site Agent before the owner's offer click (offer, not authority)",
+        Array.isArray(enrolledBeforeOffer) && !enrolledBeforeOffer.includes(PAGE_ORIGIN), enrolledBeforeOffer);
+      const invokeBefore = await c.evalIn(ns, `chrome.runtime.sendMessage({ type: "tools.invoke", origin: ${JSON.stringify(PAGE_ORIGIN)}, name: "add_to_cart", args: { sku: "widget-basic" } })`);
+      const cartBefore = await c.evalIn(shop, `document.getElementById("cart-count")?.textContent`);
+      check("showcase: before the click the site's tools cannot be invoked (not enrolled) and the cart is untouched",
+        invokeBefore?.ok === false && cartBefore === "0", { invokeBefore, cartBefore });
+      await front(hubT.targetId, ns);
+      await shotOf(ns, "showcase-chip.png");
+
+      // ONE real click on the chip.
+      const statusSeen: string[] = [];
+      const statusWatch = (async () => {
+        const deadline = Date.now() + 20000;
+        while (Date.now() < deadline) {
+          const s = await c.evalIn(ns, `(() => { const el = document.getElementById("status"); return el && !el.hidden ? el.textContent : null; })()`).catch(() => null);
+          if (typeof s === "string" && s && !statusSeen.includes(s)) statusSeen.push(s);
+          if (statusSeen.some((x) => x.includes(PAGE_ORIGIN))) break;
+          await sleep(80);
+        }
+      })();
+      const clicked = await c.clickExpr(ns, `document.getElementById("site-offer")?.shadowRoot?.querySelector(".card")`);
+      check("showcase: clicked the chip via a real click", clicked);
+      const granted = await c.until(() => c.evalIn(sws, `Promise.all([
+        chrome.permissions.contains({ permissions: ["scripting"] }),
+        chrome.permissions.contains({ origins: [${JSON.stringify(PAGE_ORIGIN + "/*")}] }),
+        chrome.permissions.contains({ permissions: ["tabs"] }),
+      ]).then(([s, o, t]) => s && o && !t ? true : null)`), 10000);
+      check("showcase: after the offer click scripting + host access for the showcase origin are held and tabs stays ungranted (no prompt)", granted === true);
+      const enrolled = await c.until(async () => {
+        const list = await c.evalIn(ns, `chrome.runtime.sendMessage({ type: "agent.list" })`);
+        return Array.isArray(list) && list.includes(PAGE_ORIGIN) ? list : null;
+      }, 15000);
+      check("showcase: one click enrolled the showcase origin as a Site Agent", !!enrolled, enrolled);
+      await statusWatch;
+      check("showcase: the grant names the exact origin in the hub's status", statusSeen.some((s) => s.includes(PAGE_ORIGIN)), statusSeen);
+      const usingText = await c.until(() => c.evalIn(ns, `(() => {
+        const el = document.getElementById("site-offer");
+        if (!el || el.hidden || !el.hasAttribute("using")) return null;
+        const text = (el.shadowRoot?.querySelector(".offer-text")?.textContent ?? "").replace(/\\s+/g, " ").trim();
+        return text.startsWith("Using") ? text : null;
+      })()`), 10000);
+      check("showcase: the chip becomes \"Using 127.0.0.1:8934 · 5 tools\"", /^Using 127\.0\.0\.1:8934 · 5 tools$/.test(String(usingText)), usingText);
+      const injected = await c.until(async () => {
+        const s = await c.evalIn(ns, `chrome.runtime.sendMessage({ type: "webmcp.status" })`);
+        return s?.status?.origin === PAGE_ORIGIN && s.status.scriptStatus === "injected" ? s.status : null;
+      }, 10000);
+      const shopTabId = await c.evalIn(sws, `chrome.tabs.query({}).then(ts => ts.find(t => t.url === ${JSON.stringify(SHOWCASE_URL)})?.id ?? null)`);
+      check("showcase: the EXACT showcase tab was injected (injection.ready contains its tab id)",
+        Array.isArray(injected?.injection?.ready) && injected.injection.ready.includes(shopTabId), { ready: injected?.injection?.ready, shopTabId });
+      const toolNames = await c.until(async () => {
+        const list = await c.evalIn(ns, `chrome.runtime.sendMessage({ type: "tools.list", origin: ${JSON.stringify(PAGE_ORIGIN)} })`);
+        const names = Array.isArray(list) ? list.map((t: any) => t.name) : [];
+        return ["list_products", "search_products", "add_to_cart", "remove_from_cart", "cart_total"].every((n) => names.includes(n)) ? names : null;
+      }, 15000);
+      check("showcase: the five declared tools were discovered through the production bridge", !!toolNames, toolNames);
+      await front(hubT.targetId, ns);
+      await shotOf(ns, "showcase-grant.png");
+
+      // A fresh profile has NO model connected: the keyless default answers
+      // the tab tasks only (CAP-FB-20260830-KEYLESS-FIRST-RESULT-01). The
+      // marker demo model (which honours @demo-site-tool) sits behind the
+      // developer flag — set it from the Settings page, as the MCP KAT does,
+      // so the run genuinely goes through the model loop with no API key.
+      const optT = await c.send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html` });
+      const opts = await c.attach(optT.targetId);
+      await sleep(800);
+      const devFlag = await c.until(async () => {
+        const r = await c.evalIn(opts, `chrome.runtime.sendMessage({ type: "kv.set", values: { "cap:developerFeatures": true } })`);
+        return r?.ok === true ? r : null;
+      }, 10000, 500);
+      check("showcase: the developer-flag demo model is enabled through the Settings route (no API key)", devFlag?.ok === true, devFlag);
+      await c.send("Target.closeTarget", { targetId: optT.targetId }).catch(() => {});
+      await front(hubT.targetId, ns);
+
+      // The task, from the composer, addressed to the SITE AGENT the way an
+      // owner does it — "@" opens the mention popup, the site row is chosen
+      // with a real click — so the run is routed to that site's own worker
+      // (agent.delegate), whose catalog carries the page's tools. The demo
+      // model then calls add_to_cart through the REAL lazy protocol.
+      const focused = await c.clickExpr(ns, `document.querySelector("#task-input")`);
+      check("showcase: focused the composer via a real click", focused);
+      await c.send("Input.insertText", { text: "@127" }, ns);
+      const mentionRow = await c.until(() => c.evalIn(ns, `(() => {
+        const rows = [...document.querySelectorAll('agent-composer#composer .popup .item[role="option"]')];
+        const hit = rows.find((r) => (r.textContent || "").includes("127.0.0.1:8934"));
+        return hit ? (hit.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 120) : null;
+      })()`), 8000, 100);
+      check("showcase: typing @ offers the showcase site as a mention (the site is an agent the owner can address)", typeof mentionRow === "string", mentionRow);
+      const mentionClicked = await c.clickExpr(ns, `[...document.querySelectorAll('agent-composer#composer .popup .item[role="option"]')].find((r) => (r.textContent || "").includes("127.0.0.1:8934"))`);
+      check("showcase: chose the site mention via a real click", mentionClicked);
+      const selected = await c.until(() => c.evalIn(ns, `(() => { const a = document.querySelector("agent-composer#composer")?.selectedAgent; return a && a.kind === "site" ? { kind: a.kind, id: a.id } : null; })()`), 5000, 100);
+      check("showcase: the composer routes this task to the site agent (selected kind = site, id = the origin)", selected?.id === PAGE_ORIGIN, selected);
+      const taskTail = ` add the cheapest widget to my cart and tell me the total @demo-site-tool add_to_cart {"sku":"widget-basic"}`;
+      await c.send("Input.insertText", { text: taskTail }, ns);
+      const typed = await c.evalIn(ns, `document.querySelector("#task-input")?.value`);
+      check("showcase: the task is in the composer", typeof typed === "string" && typed.endsWith(taskTail), typed);
+      const ran = await c.clickExpr(ns, `document.querySelector("#run-task")`);
+      check("showcase: clicked Run task via a real click", ran);
+      const cartChanged = await c.until(() => c.evalIn(shop, `(() => {
+        const count = document.getElementById("cart-count")?.textContent;
+        const total = document.getElementById("cart-total")?.textContent;
+        const line = document.querySelector('#cart-items li[data-sku="widget-basic"]')?.textContent ?? "";
+        return count === "1" && total === "$4.50" ? { count, total, line } : null;
+      })()`), 40000);
+      const tChanged = Date.now();
+      check("showcase: add_to_cart changed the page (cart shows Widget (basic) × 1, total $4.50)", !!cartChanged, cartChanged);
+      check("showcase: under 60 s from hub load to the page changing", tChanged - t0 < 60000, { ms: tChanged - t0 });
+      const toolCard = await c.until(() => c.evalIn(ns, `(() => {
+        const cards = [...document.querySelectorAll('message-bubble[role="tool"]')];
+        const hit = cards.find((b) => (b.getAttribute("tool-name") || "") === "add_to_cart");
+        if (!hit) return null;
+        const status = hit.getAttribute("tool-status");
+        return status === "success" ? { name: hit.getAttribute("tool-name"), status, text: (hit.shadowRoot?.textContent ?? "").replace(/\\s+/g, " ").slice(0, 300) } : null;
+      })()`), 20000);
+      check("showcase: the transcript's tool card shows the site's tool name (add_to_cart) with a successful result", toolCard?.name === "add_to_cart" && toolCard?.status === "success", toolCard);
+      const finalText = await c.until(() => c.evalIn(ns, `(() => {
+        const bubbles = [...document.querySelectorAll('message-bubble')].filter((b) => b.getAttribute("role") !== "tool" && b.getAttribute("role") !== "user");
+        // The visible message text only (the shadow root's <style> is not prose).
+        const hit = bubbles.map((b) => (b.shadowRoot?.querySelector(".msg")?.textContent ?? b.textContent ?? "")).find((t) => t.includes("[demo model] Site tool add_to_cart"));
+        return hit ? hit.replace(/\\s+/g, " ").trim().slice(0, 400) : null;
+      })()`), 20000);
+      check("showcase: the run's final answer reports the site's result (cart total $4.50)", /Site tool add_to_cart succeeded\. Cart total: \$4\.50/.test(String(finalText)), finalText);
+      const visibleLeaks = ["selectionRef", "search_tools", "execute_tool", "catalogGeneration"].filter((s) => String(toolCard?.text ?? "").includes(s));
+      check("showcase: the tool card shows the site's tool, never the protocol plumbing", visibleLeaks.length === 0, visibleLeaks);
+      await front(shopT.targetId, shop);
+      await shotOf(shop, "showcase-cart-changed.png");
+      await front(hubT.targetId, ns);
+      await shotOf(ns, "showcase-tool-card.png");
+      console.log(`showcase timing (ms after hub load): tab opened +${tOpen - t0}; check chip +${tOpen - t0 + checkMs} (${checkMs} after the tab); grant +${tGrant - t0}; offer chip +${tGrant - t0 + chipMs} (${chipMs} after the grant); page changed +${tChanged - t0}`);
+
+      // The same path after a SERVICE-WORKER RESTART: the enrollment and the
+      // detection registry are durable, so the origin is not offered again
+      // and its tools still run without re-enrollment.
+      // Mark THIS worker's execution context; a restarted worker has no mark.
+      await c.evalIn(sws, `globalThis.__showcaseWorkerMark = "before-restart"; true`);
+      const closed = await c.send("Target.closeTarget", { targetId: sw.targetId }).catch(() => null);
+      check("showcase: service worker target closed for the restart", closed?.success === true, closed);
+      await sleep(500);
+      const woke = await c.evalIn(ns, `chrome.runtime.sendMessage({ type: "agent.list" })`);
+      const sw2 = await waitForServiceWorker(rawSend, { timeoutMs: 15000 });
+      const sws2 = sw2 ? await c.attach(sw2.targetId).catch(() => null) : null;
+      const mark = sws2 ? await c.evalIn(sws2, `globalThis.__showcaseWorkerMark ?? null`) : "no-worker";
+      check("showcase: the service worker restarted (a fresh execution context) and answered", !!sw2 && mark === null && Array.isArray(woke) && woke.includes(PAGE_ORIGIN), { sw2: sw2?.targetId, mark, woke });
+      const offersAfter = await c.evalIn(ns, `chrome.runtime.sendMessage({ type: "agent.tool-offers" })`);
+      const shopOffer = Array.isArray(offersAfter?.offers) ? offersAfter.offers.find((o: any) => o.origin === PAGE_ORIGIN) : null;
+      check("showcase: after the restart the enrolled origin is reported enrolled — never offered as new", shopOffer?.enrolled === true && shopOffer?.toolCount === 5, shopOffer);
+      const totalAfter = await c.until(async () => {
+        const r = await c.evalIn(ns, `chrome.runtime.sendMessage({ type: "tools.invoke", origin: ${JSON.stringify(PAGE_ORIGIN)}, name: "cart_total", args: {} })`);
+        return r?.ok === true ? r : null;
+      }, 15000);
+      check("showcase: after the restart the site's tool still runs without re-enrollment (cart_total = 4.5)", totalAfter?.result?.total === 4.5, totalAfter);
+      const addAgain = await c.evalIn(ns, `chrome.runtime.sendMessage({ type: "tools.invoke", origin: ${JSON.stringify(PAGE_ORIGIN)}, name: "add_to_cart", args: { sku: "gizmo" } })`);
+      const cartAfter = await c.evalIn(shop, `({ count: document.getElementById("cart-count")?.textContent, total: document.getElementById("cart-total")?.textContent })`);
+      check("showcase: after the restart a second add_to_cart changes the page again (2 items, $11.75)", addAgain?.ok === true && cartAfter?.count === "2" && cartAfter?.total === "$11.75", { addAgain, cartAfter });
+      c.close();
+    } finally {
+      try { launched.proc.kill("SIGKILL"); } catch { /* already dead */ }
+      try { await launched.proc.status; } catch { /* reaped */ }
+      await Deno.remove(showcaseProfile, { recursive: true }).catch(() => {});
     }
   }
 

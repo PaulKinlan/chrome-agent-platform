@@ -40,6 +40,7 @@ import {
   createProviderRoutes,
   createMcpRoutes,
   createSchedulerRoutes,
+  createFsGrantRoutes,
   createMemoryRoutes,
   resolveMemory,
   awaitMemoryQuiescence,
@@ -69,20 +70,6 @@ import {
 import { BUNDLED_INVENTORY } from "../lib/bundled-inventory-data.js";
 import { BUNDLED_TOOL_PACKAGE_ROWS } from "../lib/bundled-tool-packages.data.js";
 import { executeFactoryReset, enumerateStorageTargets } from "../lib/factory-reset.js";
-import {
-  saveFsGrant,
-  getFsGrant,
-  listFsGrants,
-  deleteFsGrant,
-  queryFsGrantStatus,
-  serializeFsGrantSummary,
-  listFsGrantEntries,
-  readFsGrantFile,
-  writeFsGrantFile,
-  scanFsGrantManifest,
-  searchFsGrantFiles,
-  grepFsGrant,
-} from "../lib/fs-grants.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
 import { attachmentContext, buildMultimodalTask } from "../lib/attachments.js";
 import {
@@ -395,7 +382,7 @@ async function runScriptSandboxed(source) {
   // unavailable (e.g. headless Chrome), the NTP page — the on-demand host —
   // answers the claim instead.
   await ensureOffscreen().catch(() => {});
-  const runId = `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  const runId = newId("run");
   registerScriptRunPolicy(runId, source);
   // Phase 1 — announce + claim: the FIRST host to respond wins (the runtime
   // sendMessage resolves with the first sendResponse).
@@ -610,9 +597,11 @@ import {
   summarizeInjection,
   isExactOptionsSender,
   KEYBOARD_COMMANDS,
-  hubUrlForCommand
+  hubUrlForCommand,
+  newId,
+  sleep
 } from "../lib/pure.js";
-import { redactToolResult } from "../lib/tool-summary.js";
+import { redactToolResult, toolResultFullJson } from "../lib/tool-summary.js";
 import {
   canonicalArray,
   canonicalField,
@@ -929,7 +918,7 @@ async function handleAlarm(alarm) {
     if (task.scriptId) {
       await fence.assertOwned();
       const got = await getScript("master", task.scriptId);
-      const runInstance = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const runInstance = newId();
       if (got.ok) {
         const run = await runScriptSandboxed(got.script.source);
         let result = run?.result ?? null;
@@ -1138,9 +1127,11 @@ const latestExecutionByTask = new Map(); // logical taskId → execId (latest)
 const activeExecutions = new Set(); // execIds currently allowed to record
 const MAX_RUN_ATTESTATIONS = 100;
 function newExecutionId() {
-  const uuid = globalThis.crypto?.randomUUID?.() ??
-    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-  return `exec:${uuid}`;
+  // A GENUINE v4 UUID, never newId(): validExecutionId (lib/durable-runs.js)
+  // and memory.js's EXECUTION_ID_SOURCE check the version/variant nibbles, so
+  // the id must come from crypto.randomUUID itself (fail closed without it —
+  // the old Date/Math fallback could never have passed that validator).
+  return `exec:${crypto.randomUUID()}`;
 }
 function beginExecution(execId, taskId) {
   activeExecutions.add(execId);
@@ -1639,6 +1630,11 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       // set/remove cookie) pays a per-action approval card through the same
       // run-bound dispatcher (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
       destructiveActionGate: (action, payload) => modelManagementDispatch("browser.destructive-action", { action, ...payload }),
+      // write_file pays the owner a diff card (the on-disk bytes vs the
+      // proposed content) through the same run-bound dispatcher; the model
+      // never reaches the raw fs-grant.write-file route
+      // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01).
+      fileWriteGate: (payload) => modelManagementDispatch("fs-grant.write-file-approved", payload),
       // The cookie mutators and the cookie-value reader exist only in the
       // developer build. Read the flag per run so a toggle takes effect on the
       // next run; a read failure resolves false — fail closed.
@@ -2400,7 +2396,7 @@ async function waitForSnapshotBinding(canonical, tabId, { budgetMs = 15_000, int
       // A fresh tools.upsert was accepted for this document (seq advanced).
       if (Number.isInteger(binding.seq) && binding.seq >= 0) return binding;
     }
-    await new Promise((r) => setTimeout(r, intervalMs));
+    await sleep(intervalMs);
   }
   return null;
 }
@@ -2579,7 +2575,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     // what an agent did — even a background agent with no live UI. The journal
     // is bounded (count + bytes); a journal failure never kills the run
     // (best-effort telemetry), and the live broadcast still flows through.
-    const runInstance = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const runInstance = newId();
     const callSeq = new Map(); // per-run: toolName -> counter (tool-call side)
     const callQueue = new Map(); // per-run: toolName -> pending callId FIFO (tool-result side)
     const orphanSeq = new Map(); // per-run: toolName -> orphan-result counter (unique ids)
@@ -2606,6 +2602,21 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
             ...event,
             ...(event.type === "tool-call" ? { toolArgs: redactDeep(event.toolArgs) } : { result: redactDeep(event.result) }),
           };
+          // The retained FULL result (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01)
+          // is redacted AGAIN at this boundary — the write path never trusts
+          // the emitter: the canonical decode+redact seam re-runs on the copy
+          // (idempotent on an already-clean payload), and the emitter's
+          // truncation flag is preserved (this re-run sees a copy that already
+          // fits the cap).
+          if (event.type === "tool-result" && typeof event.resultFull === "string" && event.resultFull) {
+            const again = toolResultFullJson(event.resultFull);
+            event = {
+              ...event,
+              resultFull: again.json,
+              resultFullTruncated: event.resultFullTruncated === true || again.truncated,
+              resultFullBytes: Math.max(Number(event.resultFullBytes) || 0, again.bytes),
+            };
+          }
         } catch { /* redaction failure must never break the run */ }  }
       // Live budget tracking for the delegation guard: each model step emits a
       // thinking event carrying the loop's step counter; the caller's REMAINING
@@ -2694,13 +2705,30 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
               permissions: (Array.isArray(event.permissionRequirement.permissions) ? event.permissionRequirement.permissions : []).filter((x) => typeof x === "string").slice(0, 8),
               grantOrigins: (Array.isArray(event.permissionRequirement.grantOrigins) ? event.permissionRequirement.grantOrigins : []).filter((x) => typeof x === "string").slice(0, 50),
               grantGlobal: event.permissionRequirement.grantGlobal === true,
+              // Site access asks survive the reload too (READ-PAGE-HOST-GRANT-01).
+              ...(Array.isArray(event.permissionRequirement.hostOrigins) && event.permissionRequirement.hostOrigins.length
+                ? { hostOrigins: event.permissionRequirement.hostOrigins.filter((x) => typeof x === "string").slice(0, 50) }
+                : {}),
             },
             permissionDecision: typeof event.permissionDecision === "string" ? event.permissionDecision.slice(0, 16) : null,
+            // Approved, then re-run by the runtime — the reopened card says so
+            // (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01).
+            ...(event.reexecuted === true ? { reexecuted: true } : {}),
           }
           : {};
         const log = { type: "tool-result", id: taskId, executionId, run: runInstance, callId, tool: event.toolName ?? "tool", result, ok: event.ok ?? null, ...(typeof event.selectedTool === "string" && event.selectedTool ? { selectedTool: event.selectedTool } : {}), ...permissionReq };
+        // The per-agent journal is the LIST surface (bounded at 200 KiB for
+        // the whole agent) — it keeps the small row. The durable run log is
+        // the authority the cards read: it carries the retained FULL result
+        // (≤ 64 KiB, already redacted at the chokepoint above; a near-cap row
+        // spills into the run's retained payload store and is lifted back on
+        // read) with its never-silent truncation flag
+        // (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01).
         journalAppend(mem, log).catch(() => {});
-        durableRuns.appendLog(executionId, log, `tool-result:${callId}`).catch(() => {});
+        const durableLog = typeof event.resultFull === "string" && event.resultFull
+          ? { ...log, resultFull: event.resultFull, resultFullTruncated: event.resultFullTruncated === true, resultFullBytes: Number(event.resultFullBytes) || 0 }
+          : log;
+        durableRuns.appendLog(executionId, durableLog, `tool-result:${callId}`).catch(() => {});
         durableRuns.heartbeat(executionId, { progressed: true }).catch(() => {
           heartbeatFailed = true;
           try { orch?.abort?.(); } catch { /* already stopped */ }
@@ -3489,6 +3517,25 @@ async function armDetectionProbe(tabId, documentId) {
 // was absent when the page loaded. Without this, a fresh profile's first
 // Discover click could never see the page it was looking at (arm only runs at
 // document_start). Messaging a tab without the relay simply rejects (caught).
+// The open tabs changed (a page opened/navigated/closed, or the owner
+// switched tabs): what the hub may honestly offer above its composer may have
+// changed with them (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01). Tell the open
+// hub(s) once, debounced — they re-read `agent.tool-offers`; this carries no
+// URL or title. Registered at top level so a restarted worker keeps it.
+let openTabsChangedTimer = null;
+function noteOpenTabsChanged() {
+  clearTimeout(openTabsChangedTimer);
+  openTabsChangedTimer = setTimeout(() => {
+    openTabsChangedTimer = null;
+    broadcastProgress({ type: "open-tabs-changed" });
+  }, 300);
+}
+chrome.tabs?.onUpdated?.addListener((_tabId, info) => {
+  if (info?.status === "complete" || typeof info?.url === "string") noteOpenTabsChanged();
+});
+chrome.tabs?.onRemoved?.addListener(() => noteOpenTabsChanged());
+chrome.tabs?.onActivated?.addListener(() => noteOpenTabsChanged());
+
 chrome.permissions?.onAdded?.addListener((granted) => {
   if (!granted?.permissions?.includes("scripting")) return;
   (async () => {
@@ -3996,6 +4043,19 @@ const schedulerRoutes = createSchedulerRoutes({
   payloadFields,
 });
 
+// Persistent local-folder grant routes (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01)
+// extracted to routes/fs-grants.js for unit-drivability, plus the model's ONLY
+// write path `fs-grant.write-file-approved`, which pays the same diff card an
+// artifact edit does (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01). The raw
+// `fs-grant.write-file` stays owner-surface-only.
+const fsGrantRoutes = createFsGrantRoutes({
+  securityEvent,
+  requireOwnerApproval,
+  canonicalOperationTarget,
+  payloadFields,
+  lineDiffSummary,
+});
+
 // The named-agent schedule route (extracted so tests drive the REAL route with
 // synthetic principals — the approval binds id + period + the normalized
 // recurring prompt).
@@ -4048,6 +4108,9 @@ const GATED_WORKER_TOOLS = new Set([
   // (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
   "close_tab", "close_window", "wipe_browsing_data",
   "remove_bookmark", "set_cookie", "remove_cookie",
+  // write_file pays the diff approval card through the route-bound gate
+  // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01).
+  "write_file",
 ]);
 async function executeWorkerTool(toolName, args, context) {
   const name = String(toolName ?? "").slice(0, 128);
@@ -4061,6 +4124,7 @@ async function executeWorkerTool(toolName, args, context) {
       scheduleScriptGate: (scriptId) => dispatchRoute("task.schedule-script", { scriptId }, context),
       cookieValueGate: (payload) => dispatchRoute("browser.cookie-value", payload, context),
       destructiveActionGate: (action, payload) => dispatchRoute("browser.destructive-action", { action, ...payload }, context),
+      fileWriteGate: (payload) => dispatchRoute("fs-grant.write-file-approved", payload, context),
       developerFeatures,
     })[name]
     : workerBrowserTools(developerFeatures)[name];
@@ -4125,7 +4189,7 @@ async function writeActionLedgerRow(name, args, result, context) {
   const row = ledgerRowFor(name, args, result, extra);
   if (!row) return;
   const record = {
-    id: `act-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    id: `act-${newId()}`,
     ts: Date.now(),
     source: context?.runId ?? context?.executionId ? "agent" : "hub",
     runId: context?.runId ?? context?.executionId ?? null,
@@ -4327,7 +4391,7 @@ async function runDelegatedChild(callerExecutionId, state, targetRef, task, brie
   broadcastProgress({ type: "delegation-admission", parentRunId: callerExecutionId, executionId: childExecutionId, childRunId, agentId: targetAgent.id });
   // Yield before durable admission so an owner cancellation triggered by the
   // observable allocation event can fence the child before any work starts.
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await sleep(0);
   let result = null;
   let thrown = null;
   try {
@@ -4560,6 +4624,7 @@ boardDrainOnce().catch((e) => handleBoardDrainRejection(e, "startup drain"));
 const handlers = mergeRouteMaps(
   activityRoutes,
   schedulerRoutes,
+  fsGrantRoutes,
   boardRoutes.routes,
   createMemoryRoutes(),
   agentScheduleRoutes,
@@ -5306,117 +5371,6 @@ const handlers = mergeRouteMaps(
     return { ok: true, name };
   },
 
-  // ── Persistent File System Access Grants (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01) ──
-  async "fs-grant.list"(m, context) {
-    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
-      securityEvent(
-        "blocked-action",
-        `fs-grant list denied for principal ${context?.principal ?? "unknown"}`,
-      );
-      return { ok: false, error: "fs-grant.list is restricted to extension surfaces" };
-    }
-    const rawGrants = await listFsGrants({ scope: m?.scope });
-    const summaries = await Promise.all(
-      rawGrants.map(async (g) => {
-        const status = await queryFsGrantStatus(g);
-        return serializeFsGrantSummary(g, status);
-      }),
-    );
-    return { ok: true, grants: summaries };
-  },
-
-  async "fs-grant.get"({ grantId }, context) {
-    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
-      return { ok: false, error: "fs-grant.get is restricted to extension surfaces" };
-    }
-    const grant = await getFsGrant(grantId);
-    if (!grant) return { ok: false, error: "grant_not_found" };
-    const status = await queryFsGrantStatus(grant);
-    return { ok: true, grant: serializeFsGrantSummary(grant, status) };
-  },
-
-  async "fs-grant.remove"({ grantId }, context) {
-    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
-      securityEvent(
-        "blocked-action",
-        `fs-grant remove denied for principal ${context?.principal ?? "unknown"}`,
-      );
-      return { ok: false, error: "fs-grant.remove is restricted to extension surfaces" };
-    }
-    const result = await deleteFsGrant(grantId);
-    return { ok: true, ...result };
-  },
-
-  async "fs-grant.list-entries"({ grantId, relativePath, limit }, context) {
-    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
-      securityEvent(
-        "blocked-action",
-        `fs-grant list-entries denied for principal ${context?.principal ?? "unknown"}`,
-      );
-      return { ok: false, error: "fs-grant.list-entries is restricted to extension surfaces" };
-    }
-    const result = await listFsGrantEntries(grantId, { relativePath, limit });
-    return result;
-  },
-
-  async "fs-grant.search"({ query, limit }, context) {
-    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
-      securityEvent(
-        "blocked-action",
-        `fs-grant search denied for principal ${context?.principal ?? "unknown"}`,
-      );
-      return { ok: false, error: "fs-grant.search is restricted to extension surfaces" };
-    }
-    return await searchFsGrantFiles(query, { limit });
-  },
-
-  async "fs-grant.read-file"({ grantId, relativePath, asText, maxBytes }, context) {
-    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
-      securityEvent(
-        "blocked-action",
-        `fs-grant read-file denied for principal ${context?.principal ?? "unknown"}`,
-      );
-      return { ok: false, error: "fs-grant.read-file is restricted to extension surfaces" };
-    }
-    const result = await readFsGrantFile(grantId, { relativePath, asText, maxBytes });
-    return result;
-  },
-
-  async "fs-grant.write-file"({ grantId, relativePath, content, asBinary }, context) {
-    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
-      securityEvent(
-        "blocked-action",
-        `fs-grant write-file denied for principal ${context?.principal ?? "unknown"}`,
-      );
-      return { ok: false, error: "fs-grant.write-file is restricted to extension surfaces" };
-    }
-    const result = await writeFsGrantFile(grantId, { relativePath, content, asBinary });
-    return result;
-  },
-
-  async "fs-grant.scan"({ grantId, maxEntries, maxDepth }, context) {
-    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
-      securityEvent(
-        "blocked-action",
-        `fs-grant scan denied for principal ${context?.principal ?? "unknown"}`,
-      );
-      return { ok: false, error: "fs-grant.scan is restricted to extension surfaces" };
-    }
-    const result = await scanFsGrantManifest(grantId, { maxEntries, maxDepth });
-    return result;
-  },
-
-  async "fs-grant.grep"({ grantId, query, relativePath, regex, ignoreCase, maxMatches }, context) {
-    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
-      securityEvent(
-        "blocked-action",
-        `fs-grant grep denied for principal ${context?.principal ?? "unknown"}`,
-      );
-      return { ok: false, error: "fs-grant.grep is restricted to extension surfaces" };
-    }
-    return await grepFsGrant(grantId, { query, relativePath, regex, ignoreCase, maxMatches });
-  },
-
   // ── named agents (the persistent named agents) ────────────────────────────
   // Each named agent has its OWN OPFS sandbox (memory + history + skills +
   // agents.md), a name + avatar, and can be delegated tasks. The AUTHORITATIVE
@@ -5880,6 +5834,70 @@ const handlers = mergeRouteMaps(
     return { ok: true, tabs: out };
   },
 
+  // `agent.tool-offers` — the OPEN tabs whose page reported tools through the
+  // PASSIVE detector, for the hub's composer chip ("<host> offers N tools —
+  // use them?"; CAP-FB-20260825-SITE-AGENT-SHOWCASE-01). Unlike
+  // `agent.discoverable-tabs` this needs NO optional permission: the detector
+  // is a statically registered content script and tab URLs come from the
+  // install-granted host access, so a FRESH profile can be offered a site
+  // before any grant. It is an OFFER, not an authority: the row is matched on
+  // the browser-attested sender tab id + the tab's CURRENT origin, and the
+  // click still goes through the owner-gesture enrollment, which reattests the
+  // exact tab/document with `scripting` before anything acts on the page.
+  async "agent.tool-offers"() {
+    let tabs = null;
+    try {
+      tabs = await chrome.tabs.query({});
+    } catch {
+      tabs = null;
+    }
+    if (!tabs) return { ok: false, error: "open tabs are not readable" };
+    // Arming the MAIN-world probe needs the optional `scripting` permission
+    // (armDetectionProbe): until the owner grants it once, no page can report
+    // a count. Say so — with how many open http(s) pages could be checked —
+    // so the hub can offer that ONE named click instead of silence.
+    const hasScripting = await chrome.permissions
+      .contains({ permissions: ["scripting"] })
+      .catch(() => false);
+    const known = new Map(
+      (await listKnownWebmcpOrigins().catch(() => [])).map((entry) => [entry.origin, entry]),
+    );
+    const enrolledOrigins = new Set(await listOrigins().catch(() => []));
+    const offers = [];
+    let candidateTabs = 0;
+    for (const t of tabs) {
+      if (t.id == null || !t.url) continue;
+      let origin;
+      try {
+        origin = canonicalOrigin(new URL(t.url).origin);
+      } catch {
+        continue;
+      }
+      if (!origin || !/^https?:/.test(origin)) continue;
+      candidateTabs += 1;
+      const detected = known.get(origin);
+      if (!detected) continue;
+      // The report must come from THIS tab (the sender-attested tab id) and
+      // the tab must still show that origin — another same-origin tab cannot
+      // lend this one its report.
+      const document = detected.documents.find((item) => item.tabId === t.id);
+      if (!document || !(document.toolCount > 0)) continue;
+      offers.push({
+        id: t.id,
+        title: String(t.title ?? "").slice(0, 200),
+        url: String(t.url).slice(0, 500),
+        origin,
+        toolCount: document.toolCount,
+        enrolled: enrolledOrigins.has(origin),
+        active: t.active === true,
+        lastAccessed: typeof t.lastAccessed === "number" ? t.lastAccessed : 0,
+      });
+      if (offers.length >= 50) break;
+    }
+    offers.sort((a, b) => b.lastAccessed - a.lastAccessed);
+    return { ok: true, offers, needScripting: !hasScripting, candidateTabs };
+  },
+
   // `agent.directory` returns the RICH listing (name + tools + memory + enrollment
   // state) the management `list_agents` tool uses, without breaking `agent.list`
   // (the bare origin array the fan-out journeys depend on).
@@ -5984,7 +6002,13 @@ const handlers = mergeRouteMaps(
     for (const o of origins) {
       const info = await agentInfo(o).catch(() => null);
       if (!info?.enrolled) continue; // only the ENROLLED Site Agents are callable
-      const ref = info.path && info.path !== "/" ? `site:${info.origin}${info.path}` : `site:${info.origin}`;
+      // The ref is the CANONICAL `site:<origin>` — never the page path. The
+      // composer's selection contract (selectionFromAgentCandidate) fails
+      // closed when the ref's id disagrees with `id`, so a path-suffixed ref
+      // silently dropped every site @mention (the task ran on the hub, which
+      // has no site tools). The page path stays in the display name.
+      // (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01.)
+      const ref = `site:${info.origin}`;
       site.push({
         ref,
         id: info.origin,
@@ -6146,13 +6170,15 @@ const handlers = mergeRouteMaps(
       typeof __sender.documentId !== "string" ||
       typeof __sender.url !== "string"
     ) return { ok: false, error: "invalid detection document" };
-    return {
-      ok: true,
-      ...(await reportWebmcpDetection(canonical, __sender.url, toolCount, {
-        tabId: __sender.tabId,
-        documentId: __sender.documentId,
-      })),
-    };
+    const report = await reportWebmcpDetection(canonical, __sender.url, toolCount, {
+      tabId: __sender.tabId,
+      documentId: __sender.documentId,
+    });
+    // Tell the open hub(s) a page's tool count changed so the composer chip
+    // re-projects live (the offer appears while the owner is looking at the
+    // hub). Carries only the origin + count — never the URL or the tools.
+    broadcastProgress({ type: "site-tools-detected", origin: canonical, toolCount: report?.toolCount ?? 0 });
+    return { ok: true, ...report };
   },
   async "tools.upsert"({ origin, tools, seq, epoch, pageUrl, title, __sender }) {
     const canonical = canonicalOrigin(origin);
@@ -7252,10 +7278,10 @@ const handlers = mergeRouteMaps(
     const src = await resolveRecipe(id);
     if (!src) return { ok: false, error: `no recipe ${id}` };
     const custom = await getCustomRecipes();
-    const newId = `${src.id}-custom-${Date.now()}`;
+    const customId = `${src.id}-custom-${Date.now()}`;
     const copy = {
       ...src,
-      id: newId,
+      id: customId,
       name: `${src.name} (copy)`,
       mode: "background",
       custom: true,

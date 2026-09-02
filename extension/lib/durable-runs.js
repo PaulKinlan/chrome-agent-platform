@@ -18,7 +18,7 @@ import {
   siteMemory,
 } from "./memory.js";
 import { REPLAY_MUTATING, perCallIdempotencyKey, worstSafety } from "./tool-replay-safety.js";
-import { redactSecretText } from "./pure.js";
+import { newId, redactSecretText } from "./pure.js";
 import { commitThreadCancellation, commitThreadTerminal } from "./threads.js";
 import { isNativeQuotaExceededError } from "./storage-errors.js";
 import {
@@ -230,7 +230,7 @@ function storeForTarget(target) {
 }
 
 function newBootId() {
-  return `boot_${Date.now().toString(36)}_${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`;
+  return newId("boot");
 }
 
 /**
@@ -832,9 +832,20 @@ export function createDurableRunRegistry({
           throw new Error(`unknown durable run log retention policy: ${row?.retentionPolicyVersion}`);
         }
       }
-      const hydrated = await Promise.all(page.records.map(async (row) =>
-        (row?.payloadRef ? { ...row, payload: await readJsonPayload(executionId, row.payloadRef) } : row)
-      ));
+      const hydrated = await Promise.all(page.records.map(async (row) => {
+        if (!row?.payloadRef) return row;
+        const payload = await readJsonPayload(executionId, row.payloadRef);
+        // A row that SPILLED into the retained payload store (appendLog moves
+        // any entry over one chunk there — a near-cap 64 KiB tool result does)
+        // reads back as the row it was written as: its own fields are lifted
+        // from the payload so a reader sees `callId`/`tool`/`resultFull` on
+        // the row exactly as for an inline row. Only a spilled ROW is lifted
+        // (the payload names the same type); a terminal's retained answer
+        // stays under `payload`, as before
+        // (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01).
+        const spilledRow = payload && typeof payload === "object" && !Array.isArray(payload) && payload.type === row.type;
+        return spilledRow ? { ...payload, ...row, payload } : { ...row, payload };
+      }));
       // The byte offset of the first row is the cursor for the previous page.
       // Attached non-enumerably so it cannot leak into a serialized response or
       // change what any existing consumer sees when it iterates the array.

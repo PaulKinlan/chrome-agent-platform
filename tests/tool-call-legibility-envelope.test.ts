@@ -189,7 +189,11 @@ Deno.test("legibility: a live success card renders the selected tool's result �
   const raws = findAll(card, (e) => e.className === "tt-raw");
   assert(raws.length >= 1, "a raw JSON view exists for the result block");
   for (const pre of raws) {
-    assert(!/selectedTool|schemaSummary|selectionRef|replay|authorizes/.test(pre.textContent), `raw view leaks the envelope: ${pre.textContent}`);
+    // The raw view is tokenised into spans (the pretty JSON view): read the
+    // whole text, never just the host node's own textContent.
+    const rawText = allText(pre).join("");
+    assert(rawText.length > 0, "the raw view carries text");
+    assert(!/selectedTool|schemaSummary|selectionRef|replay|authorizes/.test(rawText), `raw view leaks the envelope: ${rawText}`);
   }
   assert(texts.some((t) => t === "bytes" || t.includes("bytes")), "the inner result's own field is rendered");
 });
@@ -222,16 +226,18 @@ const LOGS = [
   { type: "tool-call", callId: "c4", tool: "execute_tool", args: '{"selectionRef":"sel_3","arguments":{}}', at: 1600 },
   { type: "tool-result", callId: "c4", tool: "execute_tool", result: LOG_DENIAL, ok: false, selectedTool: "list_tabs", at: 1700 },
 ];
-/** The shape the run ACTUALLY persists after the owner's inline decision: the
- * model-facing result was rewritten to prose ("Owner denied…"), and the
- * structured requirement rides on the row itself. */
+/** The shape the run ACTUALLY persists after the owner's inline decision: a
+ * denial's model-facing result was rewritten to prose ("Owner denied…"); an
+ * approved call was RE-RUN by the runtime and its row carries the real result
+ * plus `reexecuted` (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01). The
+ * structured requirement rides on the row itself either way. */
 const PAUSED_LOGS = [
   { type: "tool-call", callId: "p1", tool: "execute_tool", args: '{"selectionRef":"sel_3","arguments":{}}', at: 1000 },
   { type: "tool-result", callId: "p1", tool: "execute_tool", result: "[list_tabs] DENIED by owner", ok: false, selectedTool: "list_tabs", at: 1100,
     permissionRequirement: { reason: "list your open tabs", permissions: ["tabs"], grantOrigins: [], grantGlobal: false }, permissionDecision: "denied" },
   { type: "tool-call", callId: "p2", tool: "execute_tool", args: '{"selectionRef":"sel_4","arguments":{"url":"https://a.com/"}}', at: 1200 },
-  { type: "tool-result", callId: "p2", tool: "execute_tool", result: "[open_tab] BLOCKED — approved; retry required", ok: false, selectedTool: "open_tab", at: 1300,
-    permissionRequirement: { reason: "open https://a.com/ in a new tab", permissions: [], grantOrigins: ["https://a.com"], grantGlobal: false }, permissionDecision: "approved" },
+  { type: "tool-result", callId: "p2", tool: "execute_tool", result: '{"ok":true,"selectedTool":"open_tab","result":{"ok":true,"tabId":9}}', ok: true, selectedTool: "open_tab", at: 1300,
+    permissionRequirement: { reason: "open https://a.com/ in a new tab", permissions: [], grantOrigins: ["https://a.com"], grantGlobal: false }, permissionDecision: "approved", reexecuted: true },
 ];
 
 Deno.test("legibility: the requirement persisted on a paused row derives the card — declined stays declined (sticky), approved reopens granted", () => {
@@ -242,6 +248,7 @@ Deno.test("legibility: the requirement persisted on a paused row derives the car
   assertEquals(approvals[0].state, "denied", "a declined decision never reopens as a pending Allow (deny is sticky)");
   assertEquals(approvals[1].requirement.grantOrigins, ["https://a.com"]);
   assertEquals(approvals[1].state, "granted");
+  assertEquals(approvals[1].detail, "Approved by you — the action then ran.", "an approved-then-re-run row reopens saying so");
   const out = projectThreadMessages({ id: "t2", messages: [
     { role: "user", content: "open a.com", ts: 900, executionId: "exec_2" }, ...rows,
     { role: "assistant", content: "done", ts: 2000, executionId: "exec_2" },

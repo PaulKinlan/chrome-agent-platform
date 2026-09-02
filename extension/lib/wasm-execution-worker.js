@@ -21,6 +21,7 @@ import {
   revalidateAuditedMemory,
 } from "./wasi-preview1-runtime.js";
 import { WasiProcExit } from "./wasm-host-types.js";
+import { newId } from "./pure.js";
 import { auditWasmBinary, WASM_PACKAGE_LIMITS } from "./wasm-package-authority.js";
 import { createSyncWorkspace, validateWorkspaceSeed } from "./wasm-sync-workspace.js";
 import { TRANSPORT_MESSAGE_TYPES } from "./wasm-executor.js";
@@ -43,9 +44,7 @@ function utf8Bytes(value) {
   return new TextEncoder().encode(value).byteLength;
 }
 
-const workerInstanceId = (globalThis.crypto?.randomUUID
-  ? crypto.randomUUID()
-  : `worker_${Math.random().toString(36).slice(2)}_${Date.now()}`);
+const workerInstanceId = newId();
 
 const JOB_ENVELOPE_KEYS = Object.freeze(["type", "sessionId", "job", "wasmBytes"]);
 const JOB_INNER_KEYS = Object.freeze(["acceptedExitCodes", "context", "args", "stdin", "quota", "stdoutEncoding", "tier", "workspaceSeed"]);

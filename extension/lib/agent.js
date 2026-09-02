@@ -15,11 +15,11 @@ import { grepAgentMemory } from "./named-agents.js";
 import { assertRunOwned } from "./run-fence.js";
 import { MODEL_PRICING } from "./model-prices.js";
 import { appendSkillsLayer, baselineSystemPrompt } from "./system-prompts.js";
-import { sha256Hex, utf8ByteLength, safeProviderError } from "./pure.js";
+import { sha256Hex, utf8ByteLength, safeProviderError, sleep } from "./pure.js";
 import { capLog } from "./cap-log.js";
 import { perfSpan } from "./cap-perf.js";
 import { maskCredentialShapes } from "./error-report.js";
-import { isToolResultFailure } from "./tool-summary.js";
+import { isToolResultFailure, toolResultFullJson } from "./tool-summary.js";
 import { correctUnsupportedMutationClaims } from "./mutation-claim-check.js";
 import { RUN_BUDGET_DEFAULTS } from "./run-budget.js";
 import {
@@ -510,10 +510,12 @@ export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, 
  * Wrap agent-do's createAgent with our conventions.
  * `model` is the resolved { model: LanguageModel, modelId, providerName } from provider.js.
  */
-// A safe, bounded summary of a tool result for the LIVE progress stream. Full
-// tool results can be huge (file contents, page HTML); the progress events must
-// never leak large bodies into logs/ports. Truncate strings, stringify + cap
-// objects, and never surface secrets.
+// A safe, bounded summary of a tool result for the LIVE progress stream's LIST
+// surfaces (the 300-char `result`). The COMPLETE result rides beside it as
+// `resultFull` — decoded, redacted and byte-bounded to 64 KiB by
+// toolResultFullJson (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01): this summary
+// used to be the ONLY copy, so the card, the run log and the reopened thread
+// could never show what a tool returned.
 function summarizeToolResult(result) {
   try {
     if (result == null) return "";
@@ -529,6 +531,17 @@ function summarizeToolResult(result) {
 // defaults and every bound live in lib/run-budget.js; re-exported here for
 // the callers that size a run.
 export { RUN_BUDGET_DEFAULTS };
+
+/** A tool's raw return as the model-facing text agent-do itself would have
+ * produced for it (its normaliser JSON-stringifies non-string returns). */
+function summarizeForModel(result) {
+  if (typeof result === "string") return result;
+  try {
+    const s = JSON.stringify(result);
+    if (typeof s === "string") return s;
+  } catch { /* fall through */ }
+  return String(result);
+}
 
 export function createAgent({
   model,
@@ -1027,7 +1040,7 @@ export function createAgent({
         // persists it, and it is never the run's result.
         // Every forwarded delta precedes its step's text event: wait (bounded)
         // for the observed stream branch to drain before emitting the text.
-        await Promise.race([streamDrain, new Promise((r) => setTimeout(r, 250))]);
+        await Promise.race([streamDrain, sleep(250)]);
         const classified = runText.step({ step: e.step, hasToolCalls: e.hasToolCalls === true, text: e.text });
         budgetLastStepHadTools = e.hasToolCalls === true;
         budgetLastStepIndex = Number.isFinite(e.step) ? e.step : budgetLastStepIndex;
@@ -1078,33 +1091,69 @@ export function createAgent({
         // replaces the envelope text (after it, the name is unrecoverable and
         // the card would be headed "tool call").
         const selectedBeforeRewrite = selectedToolFromResult(e.result);
-        const permissionDenial = permissionDenialFromToolResult(e.result);
+        let permissionDenial = permissionDenialFromToolResult(e.result);
         // The STRUCTURED requirement survives on the progress event (the run
         // log persists it) even though the model-facing modelContent is
         // rewritten below — a reopened thread derives its grant card from it
         // (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 §2b).
-        const permissionRequirement = permissionDenial?.permissionRequirement ?? null;
+        let permissionRequirement = permissionDenial?.permissionRequirement ?? null;
         let permissionDecision = null;
-        if (permissionDenial && typeof onPermissionRequest === "function") {
+        // Approved, then RE-RUN by the runtime with the original arguments —
+        // the model receives the tool's real result, never a retry instruction
+        // (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01). The card records
+        // "approved, then ran" from this flag.
+        let reexecuted = false;
+        // A re-run can pause on a FURTHER requirement (a second capability the
+        // same tool needs): each pause is one card and one decision, bounded.
+        for (let round = 0; permissionDenial && typeof onPermissionRequest === "function" && round < 4; round++) {
           const decision = await onPermissionRequest(permissionDenial);
           permissionDecision = decision;
           // agent-do records this same normalized object after the awaited hook.
-          // Tell the model exactly what happened: deny/timeout is terminal for
-          // this action; approve requires a fresh lazy selection because the
-          // grant digest intentionally changed while the call was paused.
           const selected = selectedToolFromResult(e.result) ?? e.toolName;
-          if (e.result && typeof e.result === "object") {
-            e.result.modelContent = decision === "approved"
-              ? `Error: Owner approved the requested capability, but this attempt did not run. Retry ${selected} now with a fresh search_tools selection.`
-              : decision === "expired"
-                ? `Approval expired. ${selected} was not performed; do not claim it succeeded.`
-                : `Owner denied the requested capability. ${selected} was not performed; do not retry it.`;
-            e.result.userSummary = decision === "approved"
-              ? `[${selected}] BLOCKED — approved; retry required`
-              : decision === "expired"
-                ? `[${selected}] DENIED — approval expired`
-                : `[${selected}] DENIED by owner`;
+          const pausedRef = ownData(lazyEnvelope(e.result), "selectionRef");
+          if (!(e.result && typeof e.result === "object")) break;
+          if (decision !== "approved") {
+            // Deny/timeout is terminal for this action: the call is forgotten
+            // and never executed.
+            if (typeof pausedRef === "string") { try { lazy.settlePausedCall(pausedRef); } catch { /* nothing recorded */ } }
+            e.result.modelContent = decision === "expired"
+              ? `Approval expired. ${selected} was not performed; do not claim it succeeded.`
+              : `Owner denied the requested capability. ${selected} was not performed; do not retry it.`;
+            e.result.userSummary = decision === "expired"
+              ? `[${selected}] DENIED — approval expired`
+              : `[${selected}] DENIED by owner`;
+            break;
           }
+          // Approved: the runtime re-runs the SAME call (same tool, the
+          // original validated arguments, the same run fence, every live
+          // authority check) through the lazy protocol — a runtime-only path
+          // the model cannot reach — and the result REPLACES the denial as if
+          // the call had succeeded first time.
+          let resumed = null;
+          if (typeof pausedRef === "string") {
+            try { resumed = await lazy.resumeApprovedCall(pausedRef); } catch (error) {
+              if (error?.name === "RunAbortedError" || error?.name === "AbortError") throw error;
+              resumed = null;
+            }
+          }
+          const protocolFailure = !resumed || (resumed.ok !== true && typeof resumed.selectedTool !== "string");
+          if (protocolFailure) {
+            // The re-run itself could not be set up (the tool vanished from
+            // the catalog, the run moved on). Plain language, no protocol
+            // vocabulary; the model may call the tool again.
+            agentDoLog.warn("approved call could not be re-run", { tool: selected, error: resumed?.error ?? "unavailable" });
+            e.result.modelContent = `Owner approved the requested capability, but ${selected} could not be run again automatically. Call ${selected} again.`;
+            e.result.userSummary = `[${selected}] approved — not run`;
+            break;
+          }
+          // The tool's REAL outcome (success, or its own ordinary failure) is
+          // what agent-do would have recorded for a first-time success.
+          const text = summarizeForModel(resumed);
+          e.result.modelContent = text;
+          e.result.userSummary = text;
+          reexecuted = true;
+          permissionDenial = permissionDenialFromToolResult(e.result);
+          if (permissionDenial) permissionRequirement = permissionDenial.permissionRequirement ?? permissionRequirement;
         }
         const toolOk = !isToolResultFailure(e.result) && !lazyNestedFailure(e.result);
         if (toolOk) { try { okToolNames.add(selectedToolFromResult(e.result) ?? e.toolName); } catch { /* ignore */ } }
@@ -1119,6 +1168,11 @@ export function createAgent({
           result: e.result,
         });
         try {
+          // The retained full copy (redacted, valid JSON, ≤ 64 KiB, flagged
+          // when the cap bit) — computed once here so every downstream surface
+          // (the live card, the durable run log, the reopened thread) reads the
+          // same bytes the model received.
+          const full = toolResultFullJson(e.result);
           progressCb?.({
             type: "tool-result",
             toolName: e.toolName,
@@ -1126,8 +1180,11 @@ export function createAgent({
             step: e.step,
             durationMs: e.durationMs,
             result: summarizeToolResult(e.result),
+            resultFull: full.json,
+            resultFullTruncated: full.truncated,
+            resultFullBytes: full.bytes,
             ok: toolOk,
-            ...(permissionRequirement ? { permissionRequirement, permissionDecision } : {}),
+            ...(permissionRequirement ? { permissionRequirement, permissionDecision, ...(reexecuted ? { reexecuted: true } : {}) } : {}),
           });
         } catch { /* ignore */ }
       },

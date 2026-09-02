@@ -154,6 +154,17 @@ export async function getProviderConfig() {
 export async function setProviderConfig(partial) {
   const cur = await getProviderConfig();
   const next = { ...cur, ...partial };
+  // A provider SWITCH that omits the base URL must not inherit the previous
+  // provider's endpoint (an OpenAI save after a BYO save would otherwise run
+  // OpenAI's key against the BYO URL).
+  if (partial?.provider && partial.provider !== cur.provider && partial.baseURL === undefined) {
+    next.baseURL = "";
+  }
+  // Store the EFFECTIVE base URL: a preset provider saved without one gets the
+  // preset endpoint, so the stored config can always derive a real origin; the
+  // BYO endpoint has no preset and stays "" (the gate then says so)
+  // (CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01).
+  next.baseURL = effectiveBaseURL(next);
   await kvSet({ providerConfig: next });
   return next;
 }
@@ -173,7 +184,10 @@ export function effectiveBaseURL(cfg) {
 }
 
 /** The same config with its effective base URL filled in — for every origin
- * derivation (status, permission summary, resume identity), never for storage. */
+ * derivation (status, permission summary, resume identity). Storage applies
+ * the same helper in setProviderConfig, so a stored config already carries it;
+ * this covers configs that never pass through storage (per-agent overrides,
+ * legacy stored values). */
 export function withEffectiveBaseURL(cfg) {
   const baseURL = effectiveBaseURL(cfg);
   return baseURL === String(cfg?.baseURL ?? "") ? cfg : { ...cfg, baseURL };

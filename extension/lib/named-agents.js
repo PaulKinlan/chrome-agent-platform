@@ -14,6 +14,7 @@
 // serialized (the same discipline as the enrollment registry).
 
 import { kvGet, kvSet } from "./kv.js";
+import { sleep } from "./pure.js";
 import { GEMINI_IMAGE_MODEL } from "./model-catalog.js";
 import { namedAgentMemory, purgeStoreDir } from "./memory.js";
 import { deleteAgentPromptOverride } from "./system-prompts.js";
@@ -718,7 +719,7 @@ export async function fenceAgentActiveRuns({ registry, slug, instanceId, timeout
         });
       } catch { /* retried next pass */ }
     }
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await sleep(200);
   }
   return {
     ok: false,

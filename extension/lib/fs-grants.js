@@ -20,6 +20,8 @@
 //     "granted" | "prompt" | "denied". Fails closed before every read/write/list when status != "granted".
 //   - Revocation: deleting the record is the revocation authority and terminates active watchers.
 
+import { newId } from "./pure.js";
+
 export const MAX_FS_LIST_ENTRIES = 500;
 export const MAX_FS_PATH_DEPTH = 16;
 export const MAX_FS_READ_BYTES = 10 * 1024 * 1024; // 10 MiB
@@ -102,10 +104,7 @@ async function openDatabase(customIdb = null) {
 }
 
 function generateGrantId() {
-  if (typeof crypto !== "undefined" && crypto.randomUUID) {
-    return `fsg_${crypto.randomUUID()}`;
-  }
-  return `fsg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  return newId("fsg");
 }
 
 /**

@@ -53,13 +53,18 @@ export const COMMAND_NAMESPACES = ALL_COMMAND_NAMESPACES.filter(
 );
 import { normalizeConversationRunStatus } from "./run-status.js";
 import { emptyPlan, reducePlan, planSummary, isPlanStepStatus } from "./plan-strip.js";
-import { safeParseOnce, buildTree, subtreeJson, safeJsonStringify } from "./tool-tree.js";
+import { safeParseOnce, buildTree, subtreeJson, safeJsonStringify, prettyJson, tokenizeJson, PRETTY_JSON_TOKENISE_MAX_CHARS } from "./tool-tree.js";
 // The CANONICAL secret redactor (lib/pure.js — one semantic, shared with the
 // SW write path): activity journals may predate write-path redaction, so the
 // explorer redacts again at render AND the tree/copy paths only ever see the
 // redacted value.
 import { redactSecrets } from "../lib/pure.js";
-import { describeToolCall, redactToolResult } from "../lib/tool-summary.js";
+// The single-sourced shared helpers (CAP-FB-20260830-ESCAPEHTML-SINGLE-SOURCE-01).
+import { escapeHtml, timeAgo, sleep } from "../lib/pure.js";
+import { describeToolCall, redactToolResult, toolResultErrorText } from "../lib/tool-summary.js";
+// The Site Agent vocabulary: the composer chip's "offers N tools" wording is
+// shared with the hub so the copy cannot drift between the chip and the hub.
+import { SITE_AGENT_COPY, siteOfferHost, siteOfferLabel, siteUsingLabel } from "./site-agent-copy.js";
 import {
   isTextLikeAttachment,
   MAX_LOCAL_TEXT_BYTES,
@@ -96,11 +101,11 @@ export const ICONS = {
 /* ──────────────────────────────────────────────────────────────────────────
  * Shared helpers
  * ────────────────────────────────────────────────────────────────────────── */
-export function escapeHtml(s) {
-  return String(s ?? "").replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  })[c]);
-}
+// escapeHtml is SINGLE-SOURCED in lib/pure.js (the strict one — it escapes the
+// single quote). Re-exported here so every page and the gallery keep importing
+// it from the components module; a second definition anywhere fails
+// tests/single-source-helpers.test.ts.
+export { escapeHtml } from "../lib/pure.js";
 
 export function prefersReducedMotion() {
   try {
@@ -1844,34 +1849,99 @@ class PermissionRow extends Component {
 }
 customElements.define("permission-row", PermissionRow);
 
-/* <site-agent-card origin="https://x" tools="[]"> */
+/* <site-agent-card origin="https://x" tools="[]">
+ *
+ * Three variants (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01):
+ *   (default)  "@host · N tools [status]" — a Site Agent row.
+ *   offer      "<host> offers N tools — use them?" — the hub's composer chip
+ *              for an OPEN tab whose page reports tools and is not yet a Site
+ *              Agent. `tab-id` names the exact tab; `select` carries it so the
+ *              one click enrolls that tab and nothing else.
+ *   using      "Using <host> · N tools" — the same chip after the grant.
+ *   check      "Check open pages for site tools" — before the one-time
+ *              `scripting` grant nothing can be detected; this click grants
+ *              exactly that (silent: no install warning) and nothing else.
+ *              `select` carries { check: true }.
+ * `tool-count` sets the count directly (the offer rows carry a count, not a
+ * tool list); `tools` (a JSON array) still works for the row variant. Host
+ * text comes from the page's URL — escaped, never markup. */
 class SiteAgentCard extends Component {
-  static get observedAttributes() { return ["origin", "tools", "status"]; }
+  static get observedAttributes() { return ["origin", "tools", "tool-count", "status", "offer", "using", "check", "tab-id"]; }
+  _toolCount() {
+    const direct = Number(this.getAttribute("tool-count"));
+    if (this.hasAttribute("tool-count") && Number.isFinite(direct)) return Math.max(0, Math.floor(direct));
+    return parseJSONAttr(this.getAttribute("tools"), []).length;
+  }
   _render() {
     const origin = this.getAttribute("origin") || "";
-    const tools = parseJSONAttr(this.getAttribute("tools"), []);
+    const count = this._toolCount();
     const status = this.getAttribute("status") || "";
-    const short = origin.replace(/^https?:\/\//, "").replace(/\/.*/, "");
-    mountTemplate(this, `
+    const short = siteOfferHost(origin);
+    const offer = this.hasAttribute("offer");
+    const using = this.hasAttribute("using");
+    const check = this.hasAttribute("check");
+    const style = `
       :host { display:block; }
+      :host([hidden]) { display:none; }
       .card { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border,#e3e0d9); border-radius:10px; background:var(--panel,#ffffff); cursor:pointer; }
       .card:hover, .card:focus-visible { border-color:var(--accent,#0e6e63); outline:none; }
-      .badge { width:32px; height:32px; border-radius:8px; background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); display:inline-flex; align-items:center; justify-content:center; font-weight:700; }
+      .card[aria-busy="true"] { cursor:progress; opacity:.7; }
+      :host([using]) .card { cursor:default; border-color:var(--accent,#0e6e63); }
+      .badge { width:32px; height:32px; border-radius:8px; background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); display:inline-flex; align-items:center; justify-content:center; font-weight:700; flex:none; }
       .who { flex:1; min-width:0; }
       .name { font-weight:600; }
       .tools { font-size:12px; color:var(--muted,#635e56); }
       .status { font-size:11px; color:var(--muted,#635e56); }
-    `, `<div class="card" role="button" tabindex="0" aria-label="Use Site Agent ${escapeHtml(short)}">
+      .offer-text { font-weight:500; overflow-wrap:anywhere; }
+      .offer-cta { font-size:12px; color:var(--accent,#0e6e63); font-weight:600; white-space:nowrap; }
+    `;
+    if (check) {
+      mountTemplate(this, style, `<div class="card" role="button" tabindex="0" aria-label="${escapeHtml(SITE_AGENT_COPY.checkOpenPagesName)}">
+        <span class="badge" aria-hidden="true">@</span>
+        <span class="who"><span class="offer-text">${escapeHtml(SITE_AGENT_COPY.checkOpenPages)}</span></span>
+        <span class="offer-cta" aria-hidden="true">Check</span>
+      </div>`);
+      return;
+    }
+    if (offer || using) {
+      const label = using
+        ? siteUsingLabel({ origin, toolCount: count })
+        : siteOfferLabel({ origin, toolCount: count });
+      const name = using
+        ? `Using the ${count} ${count === 1 ? "tool" : "tools"} ${short} offers`
+        : `Use the ${count} ${count === 1 ? "tool" : "tools"} ${short} offers — adds ${short} as a Site Agent`;
+      mountTemplate(this, style, using
+        ? `<div class="card" aria-label="${escapeHtml(name)}">
+        <span class="badge" aria-hidden="true">@</span>
+        <span class="who"><span class="offer-text">${escapeHtml(label)}</span></span>
+      </div>`
+        : `<div class="card" role="button" tabindex="0" aria-label="${escapeHtml(name)}">
+        <span class="badge" aria-hidden="true">@</span>
+        <span class="who"><span class="offer-text">${escapeHtml(label)}</span></span>
+        <span class="offer-cta" aria-hidden="true">Use them</span>
+      </div>`);
+      return;
+    }
+    mountTemplate(this, style, `<div class="card" role="button" tabindex="0" aria-label="Use Site Agent ${escapeHtml(short)}">
       <span class="badge" aria-hidden="true">@</span>
-      <span class="who"><span class="name">@${escapeHtml(short)}</span><span class="tools"> · ${tools.length} tools</span></span>
+      <span class="who"><span class="name">@${escapeHtml(short)}</span><span class="tools"> · ${count} tools</span></span>
       ${status ? `<span class="status">${escapeHtml(status)}</span>` : ""}
     </div>`);
   }
+  _detail() {
+    if (this.hasAttribute("check")) return { check: true };
+    const tabId = Number(this.getAttribute("tab-id"));
+    return {
+      origin: this.getAttribute("origin"),
+      ...(this.hasAttribute("tab-id") && Number.isInteger(tabId) ? { tabId } : {}),
+    };
+  }
   _wire() {
+    if (this.hasAttribute("using")) return;
     const card = this._root.querySelector(".card");
-    card?.addEventListener("click", () => this._emit("select", { origin: this.getAttribute("origin") }));
+    card?.addEventListener("click", () => this._emit("select", this._detail()));
     card?.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this._emit("select", { origin: this.getAttribute("origin") }); }
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this._emit("select", this._detail()); }
     });
   }
 }
@@ -3844,7 +3914,7 @@ export function screenshotFromToolPayload(payload) {
   // slice at 300 characters, so any envelope larger than that arrives as a
   // truncated JSON fragment — the id is right there in the text and no parser
   // will ever reach it. Read it out of the text instead, from a pattern the
-  // product itself minted: `shot_<digits>_<base36>`. Bounded (8 KiB scanned,
+  // product itself minted: `shot_<hex>` (lib/pure.js newId). Bounded (8 KiB scanned,
   // fixed-width captures), read-only, and used for nothing but the id of a file
   // this extension wrote (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01).
   const text = typeof payload === "string" ? payload.slice(0, 8192) : "";
@@ -3942,8 +4012,14 @@ export function toolHeadline(status, result, detail) {
   // detail's extracted error wins; the result stays the fallback when there is
   // no detail (replay rows store the envelope in `result` itself).
   const text = status === "error" ? pick(detail) || pick(result) : pick(result) || pick(detail);
+  return clipHeadline(text);
+}
+
+/** One line, bounded, for the collapsed card's head (the full text rides the
+ * element's title). */
+function clipHeadline(text) {
   if (!text) return "";
-  const oneLine = text.replace(/\s+/g, " ").trim();
+  const oneLine = String(text).replace(/\s+/g, " ").trim();
   return oneLine.length > 140 ? `${oneLine.slice(0, 139)}…` : oneLine;
 }
 
@@ -3972,6 +4048,13 @@ function segKey(segments) {
   return JSON.stringify(segments);
 }
 
+// The block-header control icons: one stroke weight, currentColor, static
+// product-authored markup (no data ever reaches these strings).
+const TT_ICON_BRACES = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1"/><path d="M16 3h1a2 2 0 0 1 2 2v5a2 2 0 0 0 2 2 2 2 0 0 0-2 2v5a2 2 0 0 1-2 2h-1"/></svg>';
+const TT_ICON_COPY = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const TT_ICON_EXPAND = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="7 8 12 3 17 8"/><polyline points="7 16 12 21 17 16"/></svg>';
+const TT_ICON_INFO = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>';
+
 /** A collapsible tree BLOCK (<details> + bounded flat rows) for a parsed value.
  * The expansion state PERSISTS across re-renders (attribute updates rebuild
  * the bubble): `expandedState` is a Map label → Set of segment-address keys. */
@@ -3992,46 +4075,83 @@ function buildToolTreeBlock(label, value, rowsIn, maxNodes, expandedState) {
   if (rows.length >= maxNodes) meta.textContent += " · truncated";
   if (meta.textContent) summary.appendChild(meta);
 
-  // RAW JSON + COPY (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01). The owner asked
-  // for "the ability to see JSON input and response better" — before this there
-  // was no raw view and no copy button anywhere on the normal tool path, only
-  // the structured tree. The toggle lives in the block header so both inputs
-  // and result get one, and the choice is remembered per block for the session.
+  // JSON VIEW + COPY + SHOW ALL (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01;
+  // CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01). The owner asked for "the ability
+  // to see JSON input and response better" and then, once the full result was
+  // retained, for "a nice JSON formatted result": the JSON view is the COMPLETE
+  // pretty-printed document, syntax-coloured from the theme tokens (spans built
+  // with textContent — never innerHTML); Copy takes that same pretty text; Show
+  // all lifts the block's scroll cap so a long result reads as one page. The
+  // toggles live in the block header so inputs and result each get their own,
+  // and every choice is remembered per block for the session.
   const controls = document.createElement("span");
   controls.className = "tt-block-controls";
-  const rawBtn = document.createElement("button");
-  rawBtn.type = "button";
-  rawBtn.className = "tt-raw-toggle";
-  rawBtn.textContent = "JSON";
-  rawBtn.title = "Show the raw JSON";
+  const iconButton = (className, icon, text, title) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = className;
+    btn.title = title;
+    const ic = document.createElement("span");
+    ic.className = "tt-btn-ic";
+    ic.setAttribute("aria-hidden", "true");
+    ic.innerHTML = icon; // a static, product-authored SVG string — never data
+    const lbl = document.createElement("span");
+    lbl.className = "tt-btn-label";
+    lbl.textContent = text;
+    btn.appendChild(ic);
+    btn.appendChild(lbl);
+    return [btn, lbl];
+  };
+  const [rawBtn] = iconButton("tt-raw-toggle", TT_ICON_BRACES, "JSON", "Show the complete result as pretty-printed JSON");
   rawBtn.setAttribute("aria-pressed", "false");
-  const copyBtn = document.createElement("button");
-  copyBtn.type = "button";
-  copyBtn.className = "tt-copy-all";
-  copyBtn.textContent = "Copy";
-  copyBtn.title = `Copy the ${label} as JSON`;
+  const [copyBtn, copyLabel] = iconButton("tt-copy-all", TT_ICON_COPY, "Copy", `Copy the ${label} as pretty-printed JSON`);
+  const [allBtn, allLabel] = iconButton("tt-expand-toggle", TT_ICON_EXPAND, "Show all", "Show the whole block without an inner scroll");
+  allBtn.setAttribute("aria-pressed", "false");
   controls.appendChild(rawBtn);
   controls.appendChild(copyBtn);
+  controls.appendChild(allBtn);
   summary.appendChild(controls);
   details.appendChild(summary);
 
+  // The pretty JSON view. The text is complete; it is TOKENISED into coloured
+  // spans eagerly when small, lazily on first reveal when large, and left as
+  // plain (still complete) text above PRETTY_JSON_TOKENISE_MAX_CHARS — a
+  // bounded DOM for a 64 KiB result, not one span per byte on every card.
   const rawPre = document.createElement("pre");
   rawPre.className = "tt-raw";
-  rawPre.textContent = safeJsonStringify(value);
+  const pretty = prettyJson(value);
+  let prettyBuilt = false;
+  const buildPretty = () => {
+    if (prettyBuilt) return;
+    prettyBuilt = true;
+    if (pretty.length > PRETTY_JSON_TOKENISE_MAX_CHARS) { rawPre.textContent = pretty; return; }
+    rawPre.textContent = "";
+    for (const tok of tokenizeJson(pretty)) {
+      const span = document.createElement("span");
+      span.className = `tt-json-${tok.kind}`;
+      span.textContent = tok.text;
+      rawPre.appendChild(span);
+    }
+  };
+  if (pretty.length <= 24 * 1024) buildPretty();
 
   // Which view the owner last chose, remembered per block. It rides in the same
   // Map as the expansion state under a namespaced key that can never collide
   // with a block label, so the choice survives the attribute updates that
   // rebuild the card while a tool is still running — without a second store.
   const rawStateKey = `__raw__:${label}`;
+  const allStateKey = `__all__:${label}`;
   const rawWanted = expandedState?.get(rawStateKey) === true;
+  const allWanted = expandedState?.get(allStateKey) === true;
   rawPre.hidden = !rawWanted;
+  if (rawWanted) buildPretty();
 
   // A click on a control inside <summary> must not also toggle the <details>.
   const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
   rawBtn.addEventListener("click", (e) => {
     stop(e);
     const showRaw = rawPre.hidden;
+    if (showRaw) buildPretty();
     rawPre.hidden = !showRaw;
     rawBtn.setAttribute("aria-pressed", showRaw ? "true" : "false");
     rawBtn.className = showRaw ? "tt-raw-toggle on" : "tt-raw-toggle";
@@ -4040,21 +4160,36 @@ function buildToolTreeBlock(label, value, rowsIn, maxNodes, expandedState) {
     if (!details.open) details.open = true;
     expandedState?.set(rawStateKey, showRaw);
   });
+  const applyAll = (on) => {
+    details.className = on ? "tt-block tt-unbounded" : "tt-block";
+    allBtn.setAttribute("aria-pressed", on ? "true" : "false");
+    allBtn.className = on ? "tt-expand-toggle on" : "tt-expand-toggle";
+    allLabel.textContent = on ? "Show less" : "Show all";
+  };
+  if (allWanted) applyAll(true);
+  allBtn.addEventListener("click", (e) => {
+    stop(e);
+    const on = allBtn.getAttribute("aria-pressed") !== "true";
+    applyAll(on);
+    if (!details.open) details.open = true;
+    expandedState?.set(allStateKey, on);
+  });
   copyBtn.addEventListener("click", async (e) => {
     stop(e);
-    const text = safeJsonStringify(value);
+    // The COMPLETE pretty JSON — never the bounded tree or a preview.
+    const text = pretty;
     try {
       await navigator.clipboard.writeText(text);
-      copyBtn.textContent = "Copied";
+      copyLabel.textContent = "Copied";
     } catch {
       const ta = document.createElement("textarea");
       ta.value = text;
       document.body.appendChild(ta);
       ta.select();
-      try { document.execCommand("copy"); copyBtn.textContent = "Copied"; } catch { copyBtn.textContent = "Copy"; }
+      try { document.execCommand("copy"); copyLabel.textContent = "Copied"; } catch { copyLabel.textContent = "Copy"; }
       ta.remove();
     }
-    setTimeout(() => { copyBtn.textContent = "Copy"; }, 1600);
+    setTimeout(() => { copyLabel.textContent = "Copy"; }, 1600);
   });
 
   const tree = document.createElement("div");
@@ -4255,7 +4390,17 @@ function buildToolTreeBlock(label, value, rowsIn, maxNodes, expandedState) {
  * The card is a per-card <details> COLLAPSED by default (the name summary +
  * status chip); clicking the head expands ONLY this card. `cardExpanded` +
  * `onCardToggle` persist the per-card open state across re-renders. */
-export function buildToolCardDom({ name, status, args, result, detail, duration, expandedState, cardExpanded = false, onCardToggle }) {
+export function buildToolCardDom({ name, status: statusIn, args, result, detail, detailNote = null, duration, expandedState, cardExpanded = false, onCardToggle }) {
+  // THE ERROR RULE (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01 — owner: "it
+  // errors on a tool call and I can't see the error in the UI"). A failed call
+  // is a failed call whatever the row said: an error nested inside a lazy
+  // `ok:true` envelope, a bare protocol refusal, a plain {ok:false} — if the
+  // result carries an error, the card is an ERROR card (open, red chip) and
+  // its headline is that error, explained when it is a protocol code. The
+  // retained full copy (detail) is read first; the summary is the fallback.
+  let status = statusIn;
+  const errorText = status === "running" ? "" : (toolResultErrorText(detail) || toolResultErrorText(result));
+  if (errorText && status !== "error") status = "error";
   // The card is NOT a live region: re-rendering a 200-row tree would announce
   // the whole card on every attribute update (the a11y finding). The COMPACT
   // status chip is the live region — it carries the compact state text only.
@@ -4297,12 +4442,14 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
   // (the one-line summary was already computed and simply not rendered), and a
   // FAILED call showed no error text at all, which is backwards for the one
   // state the owner most needs to read.
-  const headline = toolHeadline(status, result, detail);
+  const headline = status === "error" && errorText ? clipHeadline(errorText) : toolHeadline(status, result, detail);
   if (headline) {
     const lead = document.createElement("span");
     lead.className = status === "error" ? "tool-lead error" : "tool-lead";
     lead.textContent = headline;
-    lead.title = headline; // the full text on hover when the line is clipped
+    // The full text on hover when the line is clipped (the complete error for
+    // a failure, never its 140-char clip).
+    lead.title = status === "error" && errorText ? errorText : headline;
     summary.appendChild(lead);
   }
 
@@ -4342,6 +4489,23 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
 
   const body = document.createElement("div");
   body.className = "tool-body";
+
+  // The never-silent note: the retained copy hit its 64 KiB cap. Said in the
+  // card, in plain words, before the tree — never a silently shorter result.
+  if (typeof detailNote === "string" && detailNote.trim()) {
+    const note = document.createElement("div");
+    note.className = "tool-note";
+    const ic = document.createElement("span");
+    ic.className = "tool-note-ic";
+    ic.setAttribute("aria-hidden", "true");
+    ic.innerHTML = TT_ICON_INFO; // static product-authored SVG
+    const text = document.createElement("span");
+    text.className = "tool-note-text";
+    text.textContent = detailNote.trim();
+    note.appendChild(ic);
+    note.appendChild(text);
+    body.appendChild(note);
+  }
 
   const addBlock = (label, raw) => {
     if (raw == null || raw === "") return;
@@ -4396,39 +4560,36 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
   const resultParsed = result != null && result !== "" ? safeParseOnce(result) : null;
   const detailParsed = detail != null && detail !== "" ? safeParseOnce(detail) : null;
 
-  if (resultParsed && resultParsed.kind === "json") {
-    // result itself is structured JSON -> render as "result" tree block.
+  // ONE result tree, from the AUTHORITATIVE copy. `detail` is the retained
+  // full result (the live event's raw envelope; the durable row's 64 KiB
+  // copy) and `result` the bounded list summary of the SAME call — when both
+  // are structured, only the full copy renders; the summary is never a second
+  // "detail" tree (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01). Rows persisted
+  // before the full copy existed carry the structure in `result` alone.
+  const fullParsed = detailParsed && detailParsed.kind === "json"
+    ? detailParsed
+    : (resultParsed && resultParsed.kind === "json" ? resultParsed : null);
+  if (fullParsed) {
     // Strip the envelope here too: this branch bypasses addBlock, which is why
     // an error result still rendered `ok false` and repeated its own message as
     // tree rows under the headline that already said it.
-    const shownResult = stripToolEnvelope(resultParsed.value, status);
+    const shownResult = stripToolEnvelope(fullParsed.value, status);
     const tree = shownResult === undefined || typeof shownResult === "string" ? { rows: [], maxNodes: 0 } : buildTree(shownResult);
     if (tree.rows.length >= 1) {
       body.appendChild(buildToolTreeBlock("result", shownResult, tree.rows, tree.maxNodes, expandedState));
     } else if (shownResult === undefined) {
       // Everything the payload carried is already in the head. Render nothing
       // rather than an empty block.
-    } else if (!looksLikeBrokenEnvelope(typeof shownResult === "string" ? shownResult : (resultParsed.value ?? result))) {
+    } else if (!looksLikeBrokenEnvelope(typeof shownResult === "string" ? shownResult : (fullParsed.value ?? ""))) {
       const div = document.createElement("div");
       div.className = "tool-plain tool-plain-result";
-      div.textContent = typeof shownResult === "string" ? shownResult : String(resultParsed.value ?? result ?? "");
+      div.textContent = typeof shownResult === "string" ? shownResult : String(fullParsed.value ?? "");
       body.appendChild(div);
     }
-    if (detail != null && detail !== "" && detail !== result) {
+    // A structured summary with a DIFFERENT, unstructured detail (plain text
+    // that is not this result's own copy) still reads as text below it.
+    if (fullParsed === resultParsed && detail != null && detail !== "" && detail !== result) {
       addBlock("detail", detail);
-    }
-  } else if (detailParsed && detailParsed.kind === "json") {
-    // The live event path stores the raw lazy envelope in detail, so consume
-    // its selected output schema exactly as the direct/replay branch does.
-    const shownDetail = stripToolEnvelope(detailParsed.value, status);
-    const tree = shownDetail === undefined || typeof shownDetail === "string" ? { rows: [], maxNodes: 0 } : buildTree(shownDetail);
-    if (tree.rows.length >= 1) {
-      body.appendChild(buildToolTreeBlock("result", shownDetail, tree.rows, tree.maxNodes, expandedState));
-    } else if (shownDetail !== undefined && !looksLikeBrokenEnvelope(shownDetail)) {
-      const div = document.createElement("div");
-      div.className = "tool-plain tool-plain-result";
-      div.textContent = typeof shownDetail === "string" ? shownDetail : String(detailParsed.value ?? detail ?? "");
-      body.appendChild(div);
     }
   } else {
     // Neither is JSON -> honest plain text fallback
@@ -4480,7 +4641,7 @@ customElements.define("agent-identity", AgentIdentity);
 
 class MessageBubble extends Component {
   static get observedAttributes() {
-    return ["role", "content", "attachments", "tool-name", "tool-status", "tool-args", "tool-result", "tool-detail", "tool-duration", "step", "total-steps", "error-reason", "error-action", "error-category", "author", "author-avatar", "ts"];
+    return ["role", "content", "attachments", "tool-name", "tool-status", "tool-args", "tool-result", "tool-detail", "tool-detail-note", "tool-duration", "step", "total-steps", "error-reason", "error-action", "error-category", "author", "author-avatar", "ts"];
   }
   // A long agent/system response is COLLAPSED to a preview with a
   // Show-full toggle (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01: the owner
@@ -4669,7 +4830,15 @@ class MessageBubble extends Component {
          transcript (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 §7). At the row
          density below this cap holds ~9 rows — the same number the old, looser
          260px cap held, in 60px less. */
-      .tool .tt-tree { padding:2px 6px 6px; max-height:200px; overflow:auto; }
+      .tool .tt-tree { padding:2px 6px 6px; max-height:360px; overflow:auto; }
+      /* Show all lifts the inner scroll: a long result reads as one page
+         (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01). */
+      .tool .tt-block.tt-unbounded .tt-tree, .tool .tt-block.tt-unbounded .tt-raw { max-height:none; }
+      /* The never-silent truncation note: the retained copy hit its cap. */
+      .tool .tool-note { display:flex; align-items:flex-start; gap:8px; padding:8px 10px; border-top:1px solid var(--border,#e3e0d9);
+        font-size:12px; line-height:1.45; color:var(--muted,#635e56); background:var(--panel-2,#efede8); }
+      .tool .tool-note-ic { flex:0 0 auto; display:inline-flex; margin-top:1px; color:var(--accent,#0e6e63); }
+      .tool .tool-note-text { min-width:0; overflow-wrap:anywhere; }
       .tool .tt-row { display:flex; align-items:center; gap:6px; padding:0 4px; border-radius:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; line-height:1.35; min-height:20px; }
       .tool .tt-row:hover { background:var(--panel-2,#efede8); }
       .tool .tt-row[hidden] { display:none; }
@@ -4685,15 +4854,25 @@ class MessageBubble extends Component {
         white-space:nowrap; color:var(--muted,#635e56); font-size:12.5px; }
       .tool .tool-lead.error { color:var(--danger,#b3261e); }
       .tool .tt-block-controls { margin-inline-start:auto; display:inline-flex; gap:4px; }
-      .tool .tt-block-controls button { font:inherit; font-size:11px; line-height:1;
+      .tool .tt-block-controls button { font:inherit; font-size:11px; line-height:1; display:inline-flex; align-items:center; gap:4px;
         padding:3px 7px; border:1px solid var(--border,#e3e0d9); border-radius:999px;
         background:var(--panel,#ffffff); color:var(--muted,#635e56); cursor:pointer; }
       .tool .tt-block-controls button:hover { border-color:var(--accent,#0e6e63); color:var(--ink,#1d1b18); }
       .tool .tt-block-controls button:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .tool .tt-block-controls button.on { background:var(--accent,#0e6e63); border-color:transparent; color:var(--btn-fg,#ffffff); }
+      .tool .tt-btn-ic { display:inline-flex; flex:0 0 auto; }
+      /* The complete pretty-printed JSON, coloured from the theme tokens: keys
+         in the accent, strings in ink, numbers/booleans in the accent, null
+         muted — the same vocabulary the tree rows use. */
       .tool .tt-raw { margin:0; padding:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
         font-size:11.5px; line-height:1.45; color:var(--ink,#1d1b18); background:var(--panel-2,#efede8);
-        white-space:pre-wrap; word-break:break-word; overflow-x:auto; max-height:320px; }
+        white-space:pre-wrap; word-break:break-word; overflow:auto; max-height:360px; tab-size:2; }
+      .tool .tt-raw .tt-json-key { color:var(--accent,#0e6e63); font-weight:600; }
+      .tool .tt-raw .tt-json-string { color:var(--ink,#1d1b18); }
+      .tool .tt-raw .tt-json-number, .tool .tt-raw .tt-json-boolean { color:var(--accent,#0e6e63); }
+      .tool .tt-raw .tt-json-null { color:var(--muted,#635e56); font-style:italic; }
+      .tool .tt-raw .tt-json-punct { color:var(--muted,#635e56); }
+      .tool .tt-raw::selection, .tool .tt-raw *::selection { background:var(--accent,#0e6e63); color:var(--btn-fg,#ffffff); }
       .tool .tt-key { color:var(--accent,#0e6e63); font-weight:600; white-space:nowrap; }
       .tool .tt-val { color:var(--ink,#1d1b18); overflow-wrap:anywhere; min-width:0; }
       .tool .tt-val-string { color:var(--ink,#1d1b18); }
@@ -4733,7 +4912,9 @@ class MessageBubble extends Component {
       // or the envelope's ok:false / error string, unwrapping the nested
       // modelContent/result layers) and fall through to the structured card,
       // which renders the error headline and opens itself.
-      const resultFailed = toolResultSignalsError(status, result);
+      // The retained full copy (detail) is checked too: a nested error inside a
+      // lazy ok:true envelope lives there (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01).
+      const resultFailed = toolResultSignalsError(status, result) || toolResultSignalsError(status, detail);
       // The generative-UI tools (generate_ui / create_asset with type html)
       // or ANY tool outputting an HTML document render their HTML LIVE in the
       // sandboxed double-iframe, inline.
@@ -4816,6 +4997,7 @@ class MessageBubble extends Component {
           args,
           result,
           detail,
+          detailNote: this.getAttribute("tool-detail-note"),
           duration: this.getAttribute("tool-duration"),
           expandedState: this._ttExpanded,
           cardExpanded: this._toolCardExpanded === true,
@@ -5399,6 +5581,7 @@ class AgentConversation extends Component {
     const args = m.args ?? m["tool-args"];
     const result = m.result ?? m["tool-result"];
     const detail = m.detail ?? m["tool-detail"];
+    const detailNote = m.detailNote ?? m["tool-detail-note"];
     const durationMs = m.durationMs ?? m["tool-duration"];
     if (typeof m.ts === "number") this._maybeTsGap(m.ts);
     return this._bubble("tool", null, {
@@ -5407,6 +5590,7 @@ class AgentConversation extends Component {
       "tool-args": toolPayloadAttribute(args),
       "tool-result": toolPayloadAttribute(result),
       "tool-detail": toolPayloadAttribute(detail),
+      "tool-detail-note": typeof detailNote === "string" && detailNote ? detailNote : null,
       "tool-duration": durationMs != null ? String(durationMs) : null,
     });
   }
@@ -5424,13 +5608,14 @@ class AgentConversation extends Component {
     if (!req || typeof req !== "object" || Array.isArray(req)) return null;
     const key = typeof req.key === "string" && req.key
       ? req.key
-      : JSON.stringify([req.permissions ?? [], req.grantOrigins ?? [], req.grantGlobal === true]);
+      : JSON.stringify([req.permissions ?? [], req.grantOrigins ?? [], req.grantGlobal === true, req.hostOrigins ?? []]);
     if (!this._approvalKeys) this._approvalKeys = new Map();
     if (this._approvalKeys.has(key)) return this._approvalKeys.get(key);
     const card = document.createElement("permission-approval-card");
     card.setAttribute("reason", String(req.reason ?? "perform this action").slice(0, 240));
     if (Array.isArray(req.permissions) && req.permissions.length) card.setAttribute("permissions", JSON.stringify(req.permissions.slice(0, 8)));
     if (Array.isArray(req.grantOrigins) && req.grantOrigins.length) card.setAttribute("origins", JSON.stringify(req.grantOrigins.slice(0, 50)));
+    if (Array.isArray(req.hostOrigins) && req.hostOrigins.length) card.setAttribute("host-origins", JSON.stringify(req.hostOrigins.slice(0, 50)));
     if (req.grantGlobal === true) card.setAttribute("global", "true");
     if (typeof m.state === "string" && m.state) card.setAttribute("state", m.state);
     if (typeof m.detail === "string" && m.detail) card.setAttribute("detail", m.detail);
@@ -6431,7 +6616,7 @@ class AgentComposer extends Component {
           video.muted = true;
           video.playsInline = true;
           await video.play();
-          await new Promise((resolve) => setTimeout(resolve, 400)); // let the frame settle
+          await sleep(400); // let the frame settle
           const canvas = document.createElement("canvas");
           canvas.width = video.videoWidth || 640;
           canvas.height = video.videoHeight || 480;
@@ -7168,11 +7353,14 @@ class PlanStrip extends Component {
 customElements.define("plan-strip", PlanStrip);
 
 /* <permission-approval-card reason="…" permissions='["tabs"]' origins='["https://a.com"]'
- * global="true" state="pending|granted|denied|error" detail="…"> — the IN-CONTEXT
+ * host-origins='["https://a.com"]' global="true"
+ * state="pending|granted|denied|error" detail="…"> — the IN-CONTEXT
  * owner approval for a tool's permission/grant denial (owner P0
  * CAP-FB-20260826-PERMISSIONS-SIMPLIFY-01). It DESCRIBES exactly what a click
- * approves (plain-English reason + the exact permissions + the exact sites, or
- * "all sites" only when the tool genuinely needs the global grant) and emits
+ * approves (plain-English reason + the exact permissions + the exact sites
+ * whose Chrome site access is requested (`host-origins`, CAP-FB-20260901-
+ * READ-PAGE-HOST-GRANT-01) + the exact sites for browser control, or "all
+ * sites" only when the tool genuinely needs the global grant) and emits
  * "approve" / "deny" with the real click event — granting happens in the
  * conversation's click handler (a genuine owner gesture), never here.
  * Security: this element grants NOTHING itself; it is a labelled choice. */
@@ -7200,7 +7388,7 @@ const PERMISSION_APPROVAL_LABELS = Object.freeze({
 
 class PermissionApprovalCard extends Component {
   static get observedAttributes() {
-    return ["reason", "permissions", "origins", "global", "state", "detail"];
+    return ["reason", "permissions", "origins", "host-origins", "global", "state", "detail"];
   }
   _jsonList(name) {
     const raw = this.getAttribute(name);
@@ -7214,6 +7402,7 @@ class PermissionApprovalCard extends Component {
     const reason = (this.getAttribute("reason") ?? "perform this action").slice(0, 240);
     const permissions = this._jsonList("permissions");
     const origins = this._jsonList("origins");
+    const hostOrigins = this._jsonList("host-origins");
     const isGlobal = this.getAttribute("global") === "true";
     const state = ["granted", "denied", "expired", "error"].includes(this.getAttribute("state")) ? this.getAttribute("state") : "pending";
     const detail = (this.getAttribute("detail") ?? "").slice(0, 240);
@@ -7221,16 +7410,26 @@ class PermissionApprovalCard extends Component {
     for (const permission of permissions) {
       needs.push(`<li>${escapeHtml(PERMISSION_APPROVAL_LABELS[permission] ?? permission)} permission</li>`);
     }
+    if (hostOrigins.length) {
+      // Chrome site access — Chrome confirms it with its own prompt on Allow.
+      const shown = hostOrigins.slice(0, 6).map((origin) => `<code>${escapeHtml(origin)}</code>`).join(", ");
+      needs.push(`<li>Site access to ${hostOrigins.length === 1 ? "this site" : "these sites"}: ${shown}${hostOrigins.length > 6 ? ` and ${hostOrigins.length - 6} more` : ""} (Chrome will ask you to confirm)</li>`);
+    }
     if (isGlobal) {
       needs.push(`<li>Browser control of <strong>all sites</strong> (one of the tabs has no single site)</li>`);
     } else if (origins.length) {
       const shown = origins.slice(0, 6).map((origin) => `<code>${escapeHtml(origin)}</code>`).join(", ");
       needs.push(`<li>Browser control of ${origins.length === 1 ? "this site" : "these sites"}: ${shown}${origins.length > 6 ? ` and ${origins.length - 6} more` : ""}</li>`);
     }
+    // A declined site-access ask says WHICH site was not read and why (the
+    // owner declined), not a generic line (READ-PAGE-HOST-GRANT-01).
+    const declinedText = hostOrigins.length
+      ? `Not allowed to ${reason} — you declined. The action was not performed.`
+      : "Declined. The action was not performed.";
     const stateText = state === "granted"
       ? (detail || "Approved — continuing…")
       : state === "denied"
-        ? "Declined. The action was not performed."
+        ? declinedText
         : state === "expired"
           ? (detail || "The request expired. The action was not performed.")
         : state === "error"
@@ -9141,15 +9340,7 @@ customElements.define("security-shield", SecurityShield);
  * seed it with demo entries (no extension backend) via the `entries` property.
  * ────────────────────────────────────────────────────────────────────────── */
 
-function timeAgo(ts) {
-  const d = Date.now() - (ts ?? 0);
-  const m = Math.floor(d / 60000);
-  if (m < 1) return "just now";
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
+// timeAgo is imported from lib/pure.js (single source; the hub uses the same one).
 
 // Turn a raw tool result into a short readable one-liner. Decode + redaction
 // go through lib/tool-summary.js's redactToolResult — the canonical seam
