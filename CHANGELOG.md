@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.638] — 2026-09-02
+- Task board: the long-task memory fix is complete; three more items are being worked on.
+
 ## [0.2.637] — 2026-09-02
 - Long multi-step tasks no longer forget their earliest results: the final answer covers every item it read.
 
