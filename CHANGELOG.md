@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.628] — 2026-09-02
+- Task board: the every-item run fix is complete; four more items are being worked on.
+
 ## [0.2.627] — 2026-09-02
 - Long tasks now go through every item: the agent reuses its tool selections, shows Step N of M while working, and offers Continue when it runs out of steps.
 
