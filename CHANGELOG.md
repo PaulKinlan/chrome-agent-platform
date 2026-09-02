@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.644] — 2026-09-02
+- Task board: the finished-on-the-last-step fix is complete.
+
 ## [0.2.643] — 2026-09-02
 - A task that finishes its answer on its final step is now shown as finished instead of asking you to continue.
 
