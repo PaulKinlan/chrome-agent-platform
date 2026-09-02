@@ -278,9 +278,11 @@ import {
   captureTabScreenshot,
   getBrowserControlGrantIdentity,
   isBrowserControlGranted,
+  listOriginBrowserControlGrants,
   recordBrowserEvent,
   recordRequestActivity,
   revokeBrowserControlGrant,
+  revokeOriginBrowserControlGrant,
   setGlobalBrowserControlGrant,
   setOriginBrowserControlGrant,
 } from "../lib/browser-tools.js";
@@ -7590,16 +7592,34 @@ const handlers = mergeRouteMaps(
         (grant.expiresAt === null || grant.expiresAt === undefined ||
           grant.expiresAt > Date.now()),
     );
+    // The per-origin SET (CAP-FB-20260902-ORIGIN-GRANT-UNION-01): every live
+    // origin grant with its OWN remaining time, for the Settings listing.
+    const now = Date.now();
+    const grants = grant?.scope === "origins"
+      ? (await listOriginBrowserControlGrants()).map((g) => ({
+        origin: g.origin,
+        expiresInMs: typeof g.expiresAt === "number" ? Math.max(0, g.expiresAt - now) : null,
+      }))
+      : [];
     return {
       // "active" = a grant EXISTS and is unexpired (regardless of scope).
       // "granted" (global scope) is a separate concept from per-origin authorization.
       active,
       scope: grant?.scope ?? null,
-      origins: grant?.scope === "origins" && Array.isArray(grant.origins)
-        ? grant.origins
-        : null,
+      origins: grant?.scope === "origins" ? grants.map((g) => g.origin) : null,
+      grants,
       expiresInMs,
     };
+  },
+  /** Revoke ONE origin's browser-control grant (`{ origin }`), leaving the
+   * others; with no origin it revokes everything (the same as
+   * `browser-control.set { granted:false }`). The ONLY revoke path — the
+   * Settings page never writes the grant in its own realm. */
+  async "browser-control.revoke"(m) {
+    if (typeof m?.origin === "string" && m.origin.length > 0) {
+      return { grant: await revokeOriginBrowserControlGrant(m.origin) };
+    }
+    return { grant: await revokeBrowserControlGrant() };
   },
   async "browser-control.set"(m) {
     // Explicit grant / revoke: granted=false REVOKES (never creates a fresh grant).

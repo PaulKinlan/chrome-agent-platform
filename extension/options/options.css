@@ -747,6 +747,16 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   width: 100%;
   box-sizing: border-box;
 }
+/* One <origin-grant-row> per allowed origin, each with its own Turn off. */
+.grant-origin-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+.grant-origin-rows:empty {
+  display: none;
+}
 /* Action policy panel (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01): the three
    visible classes + the settable Destructive control. */
 .action-policy {

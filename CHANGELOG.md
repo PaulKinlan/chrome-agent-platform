@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.627] — 2026-09-02
+- Allowing browser control on a second site no longer forgets the first: every site you allow keeps its own grant, Settings → Browser control lists each allowed origin with its own Turn off, and turning one off leaves the others alone.
+
 ## [0.2.626] — 2026-09-02
 - Task board: the reopen-a-conversation fix is complete.
 

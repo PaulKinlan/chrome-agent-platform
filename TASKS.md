@@ -4987,15 +4987,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260902-ORIGIN-GRANT-UNION-01] A second site's Allow replaces the first site's browser-control grant, so the first site denies again
 - Feedback: 2026-09-02 — found by the APPROVAL-RESUME-REEXECUTES-01 worker with a real model: after Allow on site A and then Allow on site B in the same run, a later call on site A is denied again — `setOriginBrowserControlGrant` writes ONE record, so the second grant overwrites the first instead of adding to it.
-- Updated: 2026-09-02 01:40 UTC
-- Status: OPEN
+- Updated: 2026-09-02 (worker)
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: —
-- Candidate: —
+- Owner: worker (origin-grant-union lane)
+- Workspace: durable worktree for the branch
+- Branch: `cap/origin-grant-union`
+- Base: `origin/main@f54d8661`
+- Candidate: this tracker commit
 - Shipping: —
 - Acceptance: Per-origin browser-control grants are a SET: Allow on B keeps A granted; Settings → Browser control lists every granted origin with its own Turn off; revoking one origin leaves the others; the run-scoped/expiring semantics of each grant are unchanged; a multi-site task ("read these three sites") shows at most one card per origin and never re-asks for an origin already allowed in the run.
   - Context: `setOriginBrowserControlGrant` (grep in `extension/lib/browser-tools.js` / `extension/lib/permission-orchestration.js`) stores a single origin record; `isBrowserControlGranted(origin)` reads it. The Allow handler in `extension/shared/conversation.js` (`approvePermissionRequirement`) calls `browser-control.set` with the card's `grantOrigins`. Settings → Browser control (`extension/options/options.js`) renders the single record. What must NOT change: the global grant stays separate; grants keep their expiry; the grant lock (`withGrantLock`) still serialises check + mutate; revoke goes through the service-worker route (SETTINGS-REVOKE-VIA-SW-01).
@@ -5003,17 +5003,18 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - Files: `extension/lib/browser-tools.js` / `permission-orchestration.js` (a `Map`/array of origin grants with per-origin expiry; `isBrowserControlGranted` checks membership; `setOriginBrowserControlGrant` adds; a `revokeOriginBrowserControlGrant(origin)`); `extension/background/routes/*` (`browser-control.set` adds, `browser-control.revoke` takes an origin); `extension/options/options.js` (list rows + per-row Turn off); tests (`tests/browser-control-grant*.test.ts`); one journey: two origins allowed in one run, both remain granted, Settings lists both, revoking one leaves the other.
   - Steps: (1) unit RED-first: "Allow on B keeps A granted", "revoke A leaves B". (2) implement the set. (3) Settings rows. (4) journey + screenshot `browser-control-two-origins.png`.
   - Out of scope: the number of cards per step (ONE-CARD-PER-STEP-01); host-access (Chrome site access) grants, which are already per-origin in Chrome.
-- Review: pending
+- Review: author review 2026-09-02 — falsification gates cleared (RED/GREEN recorded below); no independent review — the review fleet is unavailable.
 - Gates: the falsification gates apply
-  - Unit: as Steps (1); falsification by reverting the set to a single record → "Allow on B keeps A granted" RED → restore → GREEN.
-  - Browser: the journey in Steps (4) added to `EXPECTED`; `browser-control-two-origins.png`.
-  - Full suite: green at the tip.
-  - Constraints: bounded number of origin grants (e.g. 64, oldest expires first); each grant keeps its expiry; grant lock unchanged; revoke via the SW route only.
+  - Unit: `tests/browser-control-grant-set.test.ts` (9 tests) written FIRST against the single-record store → RED: `grant set: Allow on B keeps A granted ... FAILED — AssertionError: Values are not equal: A stays granted after B's Allow — Actual false / Expected true` (`FAILED | 2 passed | 7 failed`); after the set store → GREEN: `ok | 9 passed | 0 failed`. The existing browser-control security files (`tests/browser-control*.test.ts`, `tests/browser-tool*.test.ts`, `tests/chrome-tools-t*.test.ts`, `tests/tools-browser.test.ts`, `tests/page-actions.test.ts`, `tests/permission-approval-in-context.test.ts`) stay green unchanged: `ok | 233 passed | 0 failed`.
+  - Browser: four checks added to `EXPECTED` — "Browser control: revoking one origin through the service worker reports it gone", "Browser control: allowing a second origin keeps the first origin granted", "Browser control: Settings lists every allowed origin with its own Turn off" (a genuine CDP click on the row's Turn off), "Browser control: turning off one origin leaves the other origin granted"; evidence `browser-control-two-origins.png`. Two probes that asserted the single-record replace semantic ("wrong-origin grant is denied" in the journey suite and in `scripts/page-actions-journey.ts`) now revoke the first origin on its own before allowing the wrong one — the properties they protect (a wrong-origin grant never authorises, an expired grant never authorises) are unchanged, and the first run under the set contract showed the old assumption failing (the toggle synced to on because the wrong-origin grant was still live) before the probes were corrected.
+  - Full suite: unit `ok | 3003 passed (14 steps) | 0 failed`; Chrome journeys `327/327 passed`; `scripts/page-actions-journey.ts` `15/15 checks passed`.
+  - Constraints: bounded at 64 origin grants (oldest evicted first, `MAX_ORIGIN_GRANTS`); each entry keeps its own id + expiry (`grant.grants[]`, `grant.origins` stays the derived list every reader uses; a legacy list record is honoured entry by entry); every mutation still runs under `withGrantLock`; per-origin revoke is the new `browser-control.revoke` route only (Settings never writes the grant in its own realm) and confirms absence before reporting success; a global grant stays its own scope (revoking one origin under it is refused; adding origins scopes it down as before). `validateGrantFor` returns the ENTRY id, so a capture of A is discarded only when A's own authority changed.
 - Blockers: —
-- Next: the unit test + the set in the grant store.
+- Next: coordinator merge; a real-model two-site run remains the owner's product check (the card path calls the same `browser-control.set` route the journey drives).
 - Recover: `git log --oneline --all --grep=CAP-FB-20260902-ORIGIN-GRANT-UNION-01`
 - History:
   - 2026-09-02 01:40 UTC — opened from the APPROVAL-RESUME-REEXECUTES-01 worker's live-model finding (adjacent defect b in its report).
+  - 2026-09-02 — worker: the origins scope is a per-origin SET (`extension/lib/browser-tools.js`: `liveOriginGrantEntries`, union in `setOriginBrowserControlGrant`, `revokeOriginBrowserControlGrant`, `listOriginBrowserControlGrants`); `browser-control.get` returns `grants[{origin, expiresInMs}]` and `browser-control.revoke { origin }` is the per-origin revoke route; Settings → Browser control renders one `<origin-grant-row>` (new component, in the gallery) per allowed origin with its own Turn off, the field ADDS origins, and the listing follows storage changes live. Unit RED → GREEN recorded; journeys 327/327; page-actions 15/15. Candidate: this tracker commit.
 
 ## [CAP-FB-20260902-LOOP-CONTEXT-WINDOW-01] A tool loop that spans more than one inner turn loses the first turn's tool results
 - Feedback: 2026-09-02 — found by the RUN-BUDGET-EVERY-ITEM-01 worker: agent-do keeps one iteration's tool outputs (`DEFAULT_HISTORY_KEEP_WINDOW = 1`), so a 30-tab read that spans three inner turns loses the first turn's page text before the digest is written; the digest can only cite what the last window still holds.

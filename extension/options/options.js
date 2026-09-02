@@ -1822,23 +1822,78 @@ async function renderBackgroundAgents() {
 
 
 // ── Browser control ──
+// The per-origin grants are a SET (CAP-FB-20260902-ORIGIN-GRANT-UNION-01):
+// one <origin-grant-row> per allowed origin, each with its OWN remaining time
+// and its own Turn off. Every read comes from the service worker's
+// browser-control.get and every change goes through browser-control.set /
+// browser-control.revoke — this page never writes the grant in its own realm.
+async function renderGrantRows() {
+  const host = $("#grant-origin-rows");
+  const summary = $("#grant-origin-summary");
+  if (!host) return null;
+  const live = await boundedSend("browser-control.get").catch(() => null);
+  host.replaceChildren();
+  const grants = Array.isArray(live?.grants) ? live.grants : [];
+  if (summary) {
+    summary.textContent = live?.scope === "global"
+      ? "Every site is allowed until you turn the switch off. Add origins below to scope control to specific sites."
+      : grants.length
+      ? `${grants.length} ${grants.length === 1 ? "site is" : "sites are"} allowed. Each keeps its own grant; turn one off without touching the others.`
+      : "No sites are allowed yet. Add an origin below, or allow one from an approval card in a chat.";
+  }
+  for (const g of grants) {
+    if (typeof g?.origin !== "string") continue;
+    const row = document.createElement("origin-grant-row");
+    row.setAttribute("origin", g.origin);
+    if (typeof g.expiresInMs === "number") row.setAttribute("expires-in-ms", String(g.expiresInMs));
+    row.addEventListener("revoke", async (e) => {
+      const origin = e.detail?.origin;
+      row.setAttribute("disabled", "");
+      const res = await chrome.runtime.sendMessage({ type: "browser-control.revoke", origin })
+        .catch((err) => ({ grant: { revoked: false, error: String(err?.message ?? err) } }));
+      if (res?.grant?.revoked === true) {
+        saveFlash(`Browser control turned off for ${origin}.`);
+      } else {
+        // A failed revoke is surfaced honestly; the list re-reads the true state.
+        saveFlash(`Could not turn off ${origin}: ${res?.grant?.error ?? "still allowed"}.`);
+      }
+      await syncBrowserGrantState();
+    });
+    host.appendChild(row);
+  }
+  return live;
+}
+
+/** Re-read the grant from the service worker and make the switch, the origins
+ * panel and the rows show the TRUE state (never the last click). */
+async function syncBrowserGrantState() {
+  const live = await renderGrantRows();
+  const toggle = $("#browser-grant");
+  if (toggle && live) {
+    toggle.checked = live.active === true;
+    $("#grant-origins").hidden = !toggle.checked;
+  }
+  return live;
+}
+
 async function renderBrowser() {
-  const s = await storage.get("cap:browserControlGrant");
-  const grant = s["cap:browserControlGrant"];
-  // A PERSISTENT grant (expiresAt null) stays granted until revoked; a numeric
-  // expiresAt is granted until the clock passes it (tracker item 51: the
-  // toggle must STAY toggled).
-  const granted = Boolean(
-    grant &&
-      (grant.expiresAt === null || grant.expiresAt === undefined ||
-        grant.expiresAt > Date.now()),
-  );
+  const live = await boundedSend("browser-control.get").catch(() => null);
+  // A PERSISTENT grant stays granted until revoked; a timed one until the
+  // clock passes it (tracker item 51: the toggle must STAY toggled).
+  const granted = live?.active === true;
   const toggle = $("#browser-grant");
   toggle.checked = granted;
   $("#grant-origins").hidden = !granted;
-  if (grant?.origins?.length) {
-    $("#grant-origin-list").value = grant.origins.join("\n");
-  }
+  await renderGrantRows();
+  // An Allow on an approval card in a chat adds to the set while this page is
+  // open — keep the listing live rather than stale until the next reload.
+  try {
+    chrome.storage?.onChanged?.addListener((changes, area) => {
+      if (area === "local" && changes && Object.hasOwn(changes, "cap:browserControlGrant")) {
+        void syncBrowserGrantState();
+      }
+    });
+  } catch { /* no storage events — the list refreshes on the next action */ }
   toggle.addEventListener("toggle", async (e) => {
     const checked = e.detail.checked;
     if (checked) {
@@ -1871,6 +1926,7 @@ async function renderBrowser() {
         granted: true,
       });
       $("#grant-origins").hidden = false;
+      await renderGrantRows();
       saveFlash(
         captureGranted
           ? "Browser control granted (global, all origins — set origins below to scope it)." +
@@ -1890,6 +1946,7 @@ async function renderBrowser() {
       const revoked = res?.grant?.revoked === true;
       if (revoked) {
         $("#grant-origins").hidden = true;
+        $("#grant-origin-rows")?.replaceChildren();
         saveFlash("Browser control revoked.");
       } else {
         saveFlash(
@@ -1911,22 +1968,24 @@ async function renderBrowser() {
     const origins = e.target.value.split("\n").map((s) => s.trim()).filter(
       Boolean,
     );
-    if (origins.length > 0) {
-      await chrome.runtime.sendMessage({
-        type: "browser-control.set",
-        granted: true,
-        origins,
-      });
+    // The field ADDS to the set (each origin gets its own grant); it never
+    // replaces the origins already allowed. An empty field changes nothing.
+    if (origins.length === 0) return;
+    const res = await chrome.runtime.sendMessage({
+      type: "browser-control.set",
+      granted: true,
+      origins,
+    }).catch((err) => ({ error: String(err?.message ?? err) }));
+    if (res?.grant && typeof res.grant === "object" && typeof res.grant.id === "string") {
+      e.target.value = "";
+      const total = Array.isArray(res.grant.origins) ? res.grant.origins.length : origins.length;
       saveFlash(
-        "Allowed origins saved (scoped to " + origins.length + " origin(s)).",
+        `Allowed ${origins.length} origin${origins.length === 1 ? "" : "s"} (${total} allowed in total).`,
       );
     } else {
-      await chrome.runtime.sendMessage({
-        type: "browser-control.set",
-        granted: true,
-      });
-      saveFlash("No origins listed — reverted to a global grant.");
+      saveFlash("Could not allow those origins: " + (res?.error ?? "no valid origin") + ".");
     }
+    await syncBrowserGrantState();
   });
 }
 

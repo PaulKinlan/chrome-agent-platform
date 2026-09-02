@@ -212,6 +212,7 @@ const BASELINE_ROUTES = [
   "hooks.subscribe",
   "hooks.unsubscribe",
   "browser-control.get",
+  "browser-control.revoke",
   "browser-control.set",
   "agent.create",
   "agent.enroll-origin",

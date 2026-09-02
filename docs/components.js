@@ -1849,6 +1849,53 @@ class PermissionRow extends Component {
 }
 customElements.define("permission-row", PermissionRow);
 
+/* <origin-grant-row origin="https://github.com" expires-in-ms="540000">
+ * One row of Settings → Browser control's allowed-origins list
+ * (CAP-FB-20260902-ORIGIN-GRANT-UNION-01): the origin, how long its OWN grant
+ * lasts ("until you turn it off" when persistent), and a Turn off button that
+ * emits `revoke` with `{ origin }` — the page routes it through the service
+ * worker; this row never touches storage. The origin is text, never markup. */
+class OriginGrantRow extends Component {
+  static get observedAttributes() { return ["origin", "expires-in-ms", "disabled"]; }
+  static expiryLabel(expiresInMs) {
+    if (expiresInMs === null || expiresInMs === undefined || expiresInMs === "") {
+      return "Allowed until you turn it off";
+    }
+    const ms = Number(expiresInMs);
+    if (!Number.isFinite(ms) || ms <= 0) return "Expired";
+    const minutes = Math.ceil(ms / 60_000);
+    if (minutes < 1) return "Expires in under a minute";
+    if (minutes === 1) return "Expires in 1 minute";
+    if (minutes < 60) return `Expires in ${minutes} minutes`;
+    const hours = Math.round(minutes / 60);
+    return `Expires in ${hours === 1 ? "1 hour" : `${hours} hours`}`;
+  }
+  _render() {
+    const origin = this.getAttribute("origin") || "";
+    const expiry = OriginGrantRow.expiryLabel(this.getAttribute("expires-in-ms"));
+    const disabled = this.hasAttribute("disabled");
+    mountTemplate(this, `
+      :host { display:block; }
+      .row { display:flex; align-items:center; gap:12px; padding:10px 12px; border:1px solid var(--border,#e3e0d9); border-radius:10px; background:var(--panel,#ffffff); }
+      .info { flex:1; min-width:0; }
+      .origin { font-weight:600; overflow-wrap:anywhere; }
+      .expiry { font-size:12px; color:var(--muted,#635e56); }
+      .btn { border:1px solid var(--border,#e3e0d9); background:transparent; color:var(--text,#1d1b18); border-radius:7px; padding:6px 12px; cursor:pointer; font:inherit; white-space:nowrap; }
+      .btn:disabled { opacity:.5; cursor:not-allowed; }
+      .btn:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+    `, `<div part="row" class="row">
+      <div class="info"><div class="origin">${escapeHtml(origin)}</div><div class="expiry">${escapeHtml(expiry)}</div></div>
+      <button part="revoke" type="button" class="btn"${disabled ? " disabled" : ""} aria-label="Turn off browser control for ${escapeHtml(origin)}">Turn off</button>
+    </div>`);
+  }
+  _wire() {
+    this._root.querySelector(".btn")?.addEventListener("click", () => {
+      this._emit("revoke", { origin: this.getAttribute("origin") || "" });
+    });
+  }
+}
+customElements.define("origin-grant-row", OriginGrantRow);
+
 /* <site-agent-card origin="https://x" tools="[]">
  *
  * Three variants (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01):
