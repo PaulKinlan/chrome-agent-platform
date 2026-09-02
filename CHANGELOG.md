@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.10] — 2026-09-02
+- Fix embedded Settings Test connection: boot embedded views at their exact canonical URL so the SW binds owner-options, and never blame the API key for a surface refusal
+
+## [0.3.9] — 2026-09-02
+- Fix embedded Settings Test connection: boot embedded views at their exact canonical URL so the SW binds owner-options, and never blame the API key for a surface refusal
+
 ## [0.3.8] — 2026-09-02
 - Embedded views keep their owner identity: the boot strips ?embedded=1 after marking the document, so exact-document authorization matches the real Settings surface again
 

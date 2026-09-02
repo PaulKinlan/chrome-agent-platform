@@ -4,7 +4,7 @@
 // fetch + Prompt API paths need a browser/network, so they're exercised by the
 // options page itself + the Chrome journeys.)
 
-import { assertEquals } from "jsr:@std/assert@1";
+import { assertEquals, assert, assertStringIncludes } from "jsr:@std/assert@1";
 
 import {
   errorKindForStatus,
@@ -136,4 +136,60 @@ Deno.test("toolCheck failure never fails the Test itself", async () => {
   );
   assertEquals(res.ok, true);
   assertEquals(res.toolCheck?.ok, false);
+});
+
+// P0 pek9 (2026-09-02): a network-level Test-connection failure must render
+// HONEST copy (unreachable / host permission), never the "key is missing,
+// invalid, or revoked" key-blame that masked the real failure layer.
+Deno.test("a network-failure Test result is honest copy, never key-blame", async () => {
+  // The fetch cannot reach the endpoint at all (offline / host permission
+  // missing / DNS) — the provider-test layer must report a NETWORK error whose
+  // text says the endpoint could not be reached and never blames the key.
+  const fetchImpl = async () => { throw new TypeError("Failed to fetch"); };
+  const gemini = { id: "gemini", name: "Google Gemini", baseURL: "https://generativelanguage.googleapis.com/v1beta/openai", needsKey: true, needsModel: true };
+  const res = await testProvider(
+    gemini,
+    { baseURL: gemini.baseURL, apiKey: "AIza-not-a-real-key-0000000000000", model: "gemini-3.7-flash" },
+    { fetchImpl },
+  );
+  assertEquals(res.ok, false);
+  assertEquals(res.errorKind, "network");
+  assert(
+    /unreachable|failed to fetch/i.test(String(res.error)),
+    `the error must say the endpoint was unreachable, got: ${res.error}`,
+  );
+  assert(
+    !/missing, invalid, or revoked/.test(String(res.error)),
+    `a network failure must never blame the key, got: ${res.error}`,
+  );
+  assert(
+    !String(res.error).includes("AIza-not-a-real-key-0000000000000"),
+    "the error must not leak the key",
+  );
+});
+
+// P0 pek9: an HTTP 400 key refusal from the provider is a REAL auth answer and
+// the only case that may carry key-directed copy. The provider's own body (the
+// real Gemini OpenAI-compat refusal shape) flows to the UI verbatim-but-safe —
+// and it must NEVER be rewritten into the settings-refusal key-blame line
+// ("key is missing, invalid, or revoked") that masked the real failure layer.
+Deno.test("a provider 400 key refusal carries the provider's own honest message", async () => {
+  const fetchImpl = async () => ({
+    ok: false,
+    status: 400,
+    json: async () => [{ error: { code: 400, message: "API key not valid. Please pass a valid API key.", status: "INVALID_ARGUMENT" } }],
+  });
+  const gemini = { id: "gemini", name: "Google Gemini", baseURL: "https://generativelanguage.googleapis.com/v1beta/openai", needsKey: true, needsModel: true };
+  const res = await testProvider(
+    gemini,
+    { baseURL: gemini.baseURL, apiKey: "AIza-not-a-real-key-0000000000000", model: "gemini-3.7-flash" },
+    { fetchImpl },
+  );
+  assertEquals(res.ok, false);
+  assertEquals(res.errorKind, "http");
+  assertStringIncludes(String(res.error), "Please pass a valid API key");
+  assert(
+    !/missing, invalid, or revoked/.test(String(res.error)),
+    `the provider's own refusal is not the settings key-blame copy, got: ${res.error}`,
+  );
 });
