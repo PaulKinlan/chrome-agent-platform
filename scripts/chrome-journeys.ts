@@ -1725,14 +1725,24 @@ async function main() {
     // (overflow:hidden), clipping the skills section and the footer.
     await evalIn(cdp, ntpSession, `document.querySelector('.agent-config-advanced summary')?.click(); document.querySelector('.skills-collapse summary')?.click(); true`);
     await sleep(250);
+    // Force a REALISTIC viewport for the scroll probe: at the suite's tall
+    // window the dialog never overflows, so the wheel assertions were
+    // vacuous — the owner's laptop (~700px) DOES overflow and the nested
+    // skills-list scroll island (180px cap + overscroll-behavior:contain)
+    // ate the wheel and blocked reaching content below it. Emulate a short
+    // window, wheel over BOTH the body center AND the skills list, then clear.
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1200, height: 700, deviceScaleFactor: 0, mobile: false }, ntpSession);
+    await sleep(300);
     const scrollProbe = await evalIn(cdp, ntpSession, `(() => {
       const el = document.querySelector('.agent-config-scroll');
       const adv = document.querySelector('.agent-config-advanced');
       const sk = document.querySelector('.skills-collapse');
+      const sl = document.querySelector('.skills-list');
       if (!el || !adv || !sk) return { ready: false };
       if (!adv.open || !sk.open) return { ready: false, advOpen: adv.open, skOpen: sk.open };
       const r = el.getBoundingClientRect();
       const before = el.scrollTop;
+      const slCs = sl ? getComputedStyle(sl) : null;
       return {
         ready: true,
         minHeight: getComputedStyle(el).minHeight,
@@ -1742,28 +1752,94 @@ async function main() {
         scrollTopBefore: before,
         wheelX: r.x + r.width / 2,
         wheelY: r.y + r.height / 2,
+        // No nested scroll island: the skills list must NOT cap its height or
+        // contain overscroll — otherwise the wheel scrolls the inner list and
+        // stops, and the dialog never advances past it (owner report).
+        noInnerScrollTrap: slCs != null &&
+          slCs.maxHeight === "none" &&
+          slCs.overflowY !== "auto" &&
+          slCs.overscrollBehavior !== "contain",
         footerVisible: (() => { const f = document.querySelector('.agent-config-footer')?.getBoundingClientRect(); return f ? f.top > 0 && f.bottom <= innerHeight && f.top < f.bottom : null; })(),
       };
     })()`);
     if (scrollProbe?.ready) {
+      // 1) wheel over the body center
       for (let i = 0; i < 5; i++) {
         await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: scrollProbe.wheelX, y: scrollProbe.wheelY, deltaX: 0, deltaY: 400 }, ntpSession);
         await sleep(100);
       }
       scrollProbe.scrollTopAfterWheel = await evalIn(cdp, ntpSession, `document.querySelector('.agent-config-scroll')?.scrollTop ?? null`);
+      // Reset the body scrollTop to 0 between phases so the skills-wheel phase
+      // must INDEPENDENTLY advance the outer scroll — a pass can no longer
+      // ride on the body-wheel phase having already moved it.
+      await evalIn(cdp, ntpSession, `const el = document.querySelector('.agent-config-scroll'); if (el) el.scrollTop = 0;`);
+      const scrolledAfterReset = await evalIn(cdp, ntpSession, `document.querySelector('.agent-config-scroll')?.scrollTop ?? null`);
+      // 2) wheel over the SKILLS LIST — the exact spot that previously trapped
+      // the wheel (inner scroll island). The outer body must advance too. The
+      // wheel coordinate must be VISIBILITY + HIT-TEST validated first: a
+      // coordinate whose element is off-screen or covered would wheel over the
+      // wrong surface and false-pass.
+      const skProbe = await evalIn(cdp, ntpSession, `(() => {
+        const sl = document.querySelector('.skills-list');
+        if (!sl) return null;
+        const rowCount = sl.querySelectorAll('label, input[type=checkbox]').length;
+        sl.scrollIntoView({ block: 'center', inline: 'center' });
+        const r = sl.getBoundingClientRect();
+        const x = r.x + r.width / 2;
+        const y = r.y + r.height / 2;
+        const inViewport = x >= 0 && y >= 0 && x <= innerWidth && y <= innerHeight && r.width > 0 && r.height > 0;
+        const at = document.elementFromPoint(x, y);
+        const inScrollBody = !!at && (at.closest?.('.agent-config-scroll') != null || at.closest?.('.skills-collapse') != null || at.closest?.('.agent-config-advanced') != null);
+        return { x, y, inViewport, hitInside: inScrollBody, rowCount, hitTag: at?.tagName?.toLowerCase?.() ?? null, hitCls: typeof at?.className === 'string' ? at.className.slice(0, 60) : null };
+      })()`);
+      scrollProbe.skInViewport = skProbe?.inViewport === true;
+      scrollProbe.skHitTest = skProbe?.hitInside === true;
+      scrollProbe.skHitTag = skProbe?.hitTag ?? null;
+      scrollProbe.skHitCls = skProbe?.hitCls ?? null;
+      scrollProbe.skRect = skProbe ? { x: Math.round(skProbe.x), y: Math.round(skProbe.y) } : null;
+      if (skProbe && skProbe.inViewport && skProbe.hitInside) {
+        for (let i = 0; i < 5; i++) {
+          await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: skProbe.x, y: skProbe.y, deltaX: 0, deltaY: 400 }, ntpSession);
+          await sleep(100);
+        }
+      }
+      scrollProbe.scrollTopAfterSkillsWheel = await evalIn(cdp, ntpSession, `document.querySelector('.agent-config-scroll')?.scrollTop ?? null`);
+      scrollProbe.scrolledAfterReset = scrolledAfterReset;
+      // Evidence: prove content BELOW the skills list is reachable once the
+      // scroll island is gone. Scroll the outer body deep past the skills
+      // section and capture.
+      await evalIn(cdp, ntpSession, `(() => { const el = document.querySelector('.agent-config-scroll'); if (el) el.scrollTop = el.scrollHeight; return el?.scrollTop ?? null; })()`);
+      await sleep(250);
+      const pastSkills = await captureShot(cdp, ntpSession);
+      if (pastSkills) await writeEvidence("agent-dialog-scroll-past-skills.png", pastSkills);
+      scrollProbe.pastSkillsShot = pastSkills ? pastSkills.length : 0;
+      // restore a scrolled state for the check that follows if needed
+      await evalIn(cdp, ntpSession, `(() => { const el = document.querySelector('.agent-config-scroll'); if (el) el.scrollTop = 0; return true; })()`);
     }
+    await cdp.send("Emulation.clearDeviceMetricsOverride", {}, ntpSession);
+    await sleep(200);
     console.log("create dialog scroll probe:", JSON.stringify(scrollProbe));
     check(
       "create dialog: Advanced+Skills expand and the config body scrolls with them (min-height hardening)",
       scrollProbe?.ready === true &&
         scrollProbe.minHeight === "0px" && scrollProbe.overflowY === "auto" &&
         scrollProbe.footerVisible === true &&
-        // The template SELECT replaced the tall gallery grid, so the dialog may
-        // fit without overflow at this viewport — the hard invariant is that
-        // the body CAN scroll (min-height:0 + overflow-y:auto + footer reachable).
-        (scrollProbe.scrollHeight > scrollProbe.clientHeight
-          ? (scrollProbe.scrollTopAfterWheel ?? 0) > (scrollProbe.scrollTopBefore ?? 0)
-          : true),
+        scrollProbe.noInnerScrollTrap === true &&
+        // At the emulated 1200x700 viewport the dialog MUST overflow and the
+        // wheel MUST move the body — both over the center AND over the skills
+        // list (the previous trap).
+        scrollProbe.scrollHeight > scrollProbe.clientHeight &&
+        (scrollProbe.scrollTopAfterWheel ?? 0) > (scrollProbe.scrollTopBefore ?? 0) &&
+        // Skills-wheel phase starts from a ZERO baseline (reset after the body
+        // phase) — this must advance on its own, proving the skills area does
+        // NOT trap the wheel.
+        (scrollProbe.scrolledAfterReset ?? 0) === 0 &&
+        // The skills-wheel phase must have wheeled over a VISIBLE, HIT-TESTED
+        // skills list — otherwise the coordinate could have been
+        // off-screen/covered and the "no trap" claim is vacuous.
+        scrollProbe.skInViewport === true &&
+        scrollProbe.skHitTest === true &&
+        (scrollProbe.scrollTopAfterSkillsWheel ?? 0) > 0,
     );
 
     // CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01 (Part 1 hardening) — the

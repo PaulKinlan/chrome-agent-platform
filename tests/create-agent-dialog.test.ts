@@ -131,10 +131,19 @@ Deno.test("create-agent dialog: skills section is collapsible to keep footer vis
     "skills must be housed inside a collapsible details component",
   );
 
+  // The skills list is NOT its own scroll island: it flows into the dialog's
+  // single scroll body so every skill and everything below it stays reachable
+  // by ONE scrollbar. The previous 180px cap + overflow-y:auto +
+  // overscroll-behavior:contain ate the wheel over the list and blocked
+  // reaching content beneath it (owner: "nothing underneath it is
+  // accessible"). These assertions are RED if anyone reintroduces the cap.
   assert(
-    /skillsList\.style\.maxHeight = "180px";[\s\S]*?skillsList\.style\.overflowY = "auto";/
-      .test(ntpJs),
-    "skills list must have max-height and overflow-y: auto",
+    !/skillsList\.style\.maxHeight = "180px";/.test(ntpJs),
+    "skills list must NOT cap its height (no inner scroll island — the dialog scrolls as one body)",
+  );
+  assert(
+    !/skillsList\.style\.overflowY = "auto";/.test(ntpJs),
+    "skills list must NOT be its own scroll container",
   );
 });
 
@@ -143,7 +152,13 @@ Deno.test("create-agent dialog: scroll container and inputs have unclipped focus
     new URL("../extension/ntp/ntp.js", import.meta.url),
   );
 
-  // Scroll body has overscroll-behavior: contain and scroll-padding
+  // Scroll body has min-height:0 + overscroll-behavior: contain and scroll-padding
+  // (min-height:0 is what lets the body scroll past Advanced/Skills instead of
+  // growing the container and clipping — RED if regressed to auto).
+  assert(
+    /scrollBody\.style\.minHeight = "0";[\s\S]*?scrollBody\.style\.overflowY = "auto";/.test(ntpJs),
+    "scrollBody must set min-height: 0 and overflow-y: auto so the dialog scrolls as one body",
+  );
   assert(
     /scrollBody\.style\.overscrollBehavior = "contain";[\s\S]*?scrollBody\.style\.scrollPadding = "12px";/
       .test(ntpJs),

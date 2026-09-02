@@ -2988,9 +2988,12 @@ async function buildAgentConfigDialog(opts) {
   const skillsList = document.createElement("div");
   skillsList.className = "skills-list";
   skillsList.style.padding = "8px 12px 10px";
-  skillsList.style.maxHeight = "180px";
-  skillsList.style.overflowY = "auto";
-  skillsList.style.overscrollBehavior = "contain";
+  // The skills list is NOT its own scroll island: it flows into the dialog's
+  // single scroll body (agent-config-scroll, min-height:0) so every skill and
+  // everything below stays reachable by ONE scrollbar. The previous 180px cap
+  // + overflow-y:auto + overscroll-behavior:contain made the wheel scroll the
+  // inner list and then STOP — the outer dialog never advanced past it (the
+  // owner's "nothing underneath it is accessible" report).
   skillsList.style.display = "flex";
   skillsList.style.flexDirection = "column";
   skillsList.style.gap = "6px";

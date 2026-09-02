@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.6] — 2026-09-02
+- Remove the skills-list scroll island so the agent dialog scrolls as one body
+
 ## [0.3.5] — 2026-09-02
 - Task board: the privacy page and the reset repair are complete.
 
