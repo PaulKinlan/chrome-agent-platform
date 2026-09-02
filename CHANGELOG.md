@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.619] — 2026-09-02
+- Generated pages: the automated browser checks now confirm that a generated page picks up your language and that no script error occurs inside it.
+
 ## [0.2.618] — 2026-09-02
 - Task board: three more items are being worked on.
 
