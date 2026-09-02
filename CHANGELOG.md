@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.627] — 2026-09-02
+- The extension package no longer carries code nothing loads: the build refuses an unreferenced file, every module kept on purpose is listed with its reason, and two unused modules were removed.
+
 ## [0.2.626] — 2026-09-02
 - Task board: the reopen-a-conversation fix is complete.
 
