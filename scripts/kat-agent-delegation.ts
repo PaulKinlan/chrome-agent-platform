@@ -20,6 +20,9 @@
 //
 //   deno run -A scripts/kat-agent-delegation.ts <path-to-extension> [<out-dir>]
 import { launchChrome } from "./lib/chrome-launch.ts";
+// The pure delegation guard's own constants — the over-cap checks pin the
+// production floor and child cap, never a copied number.
+import { CHILD_ITERATION_CAP, MIN_REMAINING_ITERATIONS } from "../extension/lib/agent-delegation.js";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -405,11 +408,34 @@ try {
   check("audit: two sequential delegations recorded", settledCaps.length === 2, budgetRun.map((e) => ({ outcome: e.outcome, cap: e.childCap, rem: e.parentRemaining })));
   check("audit: the parent's remaining budget shrinks after child spend", settledRems.length === 2 && settledRems[0] > settledRems[1], settledRems);
   check("terminal budget: parent + subtree never exceeds the root cap", Number.isFinite(budget?.delegationSpend?.total) && budget.delegationSpend.total <= budget.delegationSpend.cap && budget.delegationSpend.cap === 12, budget?.delegationSpend);
+
+  // ── 8b. OVER-CAP: the budget refusal lands at ADMISSION ─────────────────
+  // x4 asks for four sequential delegations, each child running the doubled
+  // tools plan so it consumes its whole child cap. Once the charged child
+  // spend leaves fewer than MIN_REMAINING_ITERATIONS of the root's cap,
+  // evaluateDelegation DENIES the next delegation (delegation-budget), the
+  // denial is audited with the parent's remaining, and the parent finishes
+  // honestly with the structured denial as its answer. The subtree never
+  // spends past the cap, so the terminal fence (assertDelegationSpendWithinCap)
+  // has nothing left to reject. Before the run budget was raised (48×24 model
+  // steps, reusable selection refs) the parent restarted its plan every outer
+  // iteration and its own steps overshot the cap AFTER the children were
+  // charged, so the terminal fence failed the whole run instead — an
+  // accounting artefact, not the contract (CAP-FB-20260902-KAT-AGENT-DELEGATION-RED-01).
   const overCap = await page.ev(`globalThis.__katSend("named-agent.run", { id: "delegator-prime", task: "@demo-delegate-agent helper-bee @demo-delegate-x4" })`);
-  check("over-cap delegation is rejected, never committed successful", overCap?.ok === false && /budget/i.test(String(overCap?.error ?? "")), overCap);
+  check("over-cap: the parent finishes honestly with the structured budget denial, never a fake success", overCap?.ok === true && /not enough of this run's iteration budget remains/i.test(String(overCap?.result ?? "")), overCap);
+  check("over-cap: parent + subtree never spend past the root cap", Number.isFinite(overCap?.delegationSpend?.total) && overCap.delegationSpend.total <= overCap.delegationSpend.cap, overCap?.delegationSpend);
+  const audit5b = await page.ev(`globalThis.__katSend("named-agent.delegations", {})`);
+  const overCapAttempts = (audit5b?.entries ?? []).filter((e: any) => e.parentRunId === overCap?.executionId);
+  const overCapAttemptSummary = overCapAttempts.map((e: any) => ({ to: e.toAgentId, outcome: e.outcome, detail: e.detail, cap: e.childCap, rem: e.parentRemaining })).reverse();
+  console.log("OVER-CAP-ATTEMPTS", JSON.stringify(overCapAttemptSummary));
+  const overCapDenied = overCapAttempts.find((e: any) => e.outcome === "denied" && e.detail === "delegation-budget");
+  check("over-cap: the refused delegation is audited as a budget denial with the parent's remaining below the floor", overCapDenied?.toAgentId === "helper-bee" && Number.isFinite(overCapDenied?.parentRemaining) && overCapDenied.parentRemaining < MIN_REMAINING_ITERATIONS, overCapAttemptSummary);
+  const overCapExecuted = overCapAttempts.filter((e: any) => e.outcome !== "denied");
+  check("over-cap: every executed child was capped inside the parent's remaining (never above CHILD_ITERATION_CAP)", overCapExecuted.length >= 1 && overCapExecuted.every((e: any) => Number.isFinite(e.childCap) && e.childCap <= e.parentRemaining && e.childCap <= CHILD_ITERATION_CAP), overCapAttemptSummary);
   const overCapRuns = await page.ev(`globalThis.__katSend("run.list", {})`);
-  const overCapRecord = (overCapRuns?.runs ?? []).find((r) => r.agentId === "named:delegator-prime" && r.phase === "terminal" && r.terminal?.ok === false && String(r.taskPreview ?? "").includes("@demo-delegate-x4"));
-  check("over-cap durable terminal record is failed", overCapRecord?.phase === "terminal" && overCapRecord?.terminal?.ok === false, overCapRecord ?? overCapRuns);
+  const overCapRecord = (overCapRuns?.runs ?? []).find((r: any) => r.executionId === overCap?.executionId);
+  check("over-cap: the durable terminal record settled with the denial, never left running", overCapRecord?.phase === "terminal" && /iteration budget/i.test(String(overCapRecord?.terminal?.summary ?? "")), overCapRecord ? { phase: overCapRecord.phase, terminal: overCapRecord.terminal } : { runs: (overCapRuns?.runs ?? []).length });
 
   // ── 9. PARALLEL SIBLINGS: two same-step delegations both complete + audit ─
   const parallel = await page.ev(`globalThis.__katSend("named-agent.run", { id: "delegator-prime", task: "@demo-delegate-agent helper-bee @demo-delegate-parallel helper-bee critic" })`);

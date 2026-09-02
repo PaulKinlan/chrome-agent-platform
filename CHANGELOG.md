@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.649] — 2026-09-02
+- The delegation budget guard is verified end to end again — an agent whose iteration budget runs out mid-delegation refuses the next hand-off, says so plainly, and finishes honestly, and every helper it did start stayed inside the budget the parent had left
+
 ## [0.2.648] — 2026-09-02
 - Task board: the test-suite honesty work is complete; one regression was opened and four more items are being worked on.
 
