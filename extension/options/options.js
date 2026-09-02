@@ -3386,6 +3386,13 @@ applyDeveloperVisibility(developerFeaturesEnabled);
 await renderProviders();
 await renderMcpServers();
 await renderLocalFolders();
+// Skills panel: mount EAGERLY at load, exactly like mcp-servers and
+// local-folders. The mount wires the Import button + list; without this,
+// reaching the panel by SCROLLING (no nav event, no hash change) leaves the
+// Import button dead — the nav handler's mount never fires (the skills
+// section is static HTML, so scrolling into view never triggers it). The
+// dataset.skillsMounted guard makes the later nav-handler call a no-op.
+mountSkillsSection(document.getElementById("skills"));
 if (developerFeaturesEnabled) await renderToolLibrary();
 await renderAgents();
 await renderEnroll();

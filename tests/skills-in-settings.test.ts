@@ -76,3 +76,49 @@ Deno.test("skills-in-settings: renderSkillList groups by intent and hands use to
   assert(panel.includes("byIntent"), "skills group by intent");
   assert(panel.includes("skills-broken"), "failed-to-load skills surface in Settings, never silently");
 });
+
+// The Import button was DEAD unless the user reached the Skills panel via a nav
+// event — scrolling into view (the settings sections are one scrollable page)
+// never fired the nav handler's mount, so the click handler was never wired.
+// The mount must be EAGER at init, exactly like mcp-servers and local-folders.
+// Falsification: delete the eager mountSkillsSection call in the init block and
+// this test goes RED; restore it and it goes GREEN.
+Deno.test("skills-in-settings: the Skills panel mounts EAGERLY at init (Import button works on scroll/deep-link load)", async () => {
+  const js = await Deno.readTextFile("extension/options/options.js");
+  // The eager mount sits in the INIT block (the module-level render sequence),
+  // NOT only in the nav handler. Slice the init segment between renderLocalFolders
+  // and the developer-tool-library render, and require the mount call in that
+  // segment — the nav-handler call lives far outside it, so a nav-only mount
+  // (the pre-fix bug) fails this check.
+  const initSegment = js.slice(js.indexOf("await renderLocalFolders();"), js.indexOf("if (developerFeaturesEnabled) await renderToolLibrary();"));
+  assert(
+    initSegment.includes('mountSkillsSection(document.getElementById("skills"));'),
+    "mountSkillsSection must be called eagerly in the init block (between renderLocalFolders and renderToolLibrary), not only in the nav handler",
+  );
+  // The nav handler still calls it (idempotent via the dataset guard) so a nav
+  // click re-renders nothing but stays safe.
+  assert(js.includes('sectionId === "skills"'), "the nav handler still references the skills section");
+  // The panel module wires the Import button inside the mount (the handler the
+  // owner found dead).
+  const panel = await Deno.readTextFile("extension/skills/skills-panel.js");
+  assert(panel.includes('importBtn?.addEventListener("click", doImport)'), "the Import button gets its click handler in the mount");
+  assert(panel.includes('urlInput?.addEventListener("keydown"'), "the Enter-to-import handler is wired");
+  // The section must be static HTML present at load so the eager mount finds it.
+  const html = await Deno.readTextFile("extension/options/options.html");
+  assert(html.includes('id="skills"') && html.includes("import-url"), "the skills section with the import affordance is static HTML");
+});
+
+// GitHub DIRECTORY/blob URLs (owner's https://github.com/mattpocock/skills/blob/
+// main/skills/productivity/teach/) must resolve through the Contents API walk to
+// the SKILL.md + sibling files. The walk logic is covered OFFLINE in
+// tests/skill-import.test.ts; this pins the blob-URL parser shape that the
+// import flow accepts end to end (tree and blob forms both carry /branch/path).
+Deno.test("skills-in-settings: the GitHub blob/directory URL shape is accepted by the import resolver", async () => {
+  const src = await Deno.readTextFile("extension/lib/skill-import.js");
+  assert(src.includes("tree|blob"), "the GitHub URL parser accepts /tree/ and /blob/ forms");
+  assert(src.includes("contents"), "the Contents API walk is the GitHub import path");
+  // The fetch-and-persist route (skill.import) resolves through fetchSkillFromUrl.
+  const sw = await Deno.readTextFile("extension/background/service-worker.js");
+  assert(sw.includes("fetchSkillFromUrl"), "the service worker import route calls fetchSkillFromUrl");
+  assert(sw.includes('"skill.import"'), "the skill.import message route exists");
+});
