@@ -283,3 +283,27 @@ Deno.test("retired surfaces (ONE-SHELL-01): chat/chat.html, chat.js, memory/expl
     assertEquals(exists, false, `${path} must be deleted`);
   }
 });
+
+Deno.test("CSP hygiene: shipped extension pages ship NO inline scripts (MV3 script-src 'self' blocks them)", async () => {
+  const shippedHtml = [
+    "extension/options/options.html",
+    "extension/artifacts/index.html",
+    "extension/directory/directory.html",
+    "extension/ntp/ntp.html",
+    "extension/sidepanel/sidepanel.html",
+    "extension/privacy/privacy.html",
+    "extension/artifact/artifact.html",
+    "extension/sandbox/script-sandbox.html",
+    "extension/sandbox/artifact-preview.html",
+    "extension/offscreen/offscreen.html",
+  ];
+  for (const file of shippedHtml) {
+    const source = await Deno.readTextFile(file);
+    const inline = [...source.matchAll(/<script(?![^>]*\bsrc=)[^>]*>/gi)];
+    assert(inline.length === 0, `${file} ships ${inline.length} inline <script> block(s) — MV3 CSP blocks them; move the code to an external file`);
+  }
+  // The shared boot file exists and sets the embedded attribute (the inline
+  // blocks it replaced all did exactly this).
+  const boot = await Deno.readTextFile("extension/shared/embedded-boot.js");
+  assert(boot.includes('dataset.embedded = "1"'), "embedded-boot.js must set data-embedded");
+});

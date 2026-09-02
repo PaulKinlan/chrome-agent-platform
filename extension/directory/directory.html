@@ -6,11 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent directory — sites as agents</title>
   <link rel="stylesheet" href="../shared/theme.css">
-  <script>
-    if (new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top) {
-      document.documentElement.dataset.embedded = "1";
-    }
-  </script>
+    <script src="../shared/embedded-boot.js"></script>
   <script type="module" src="../shared/components.js"></script>
   <style>
     body { min-inline-size:0; overflow-x:clip; }

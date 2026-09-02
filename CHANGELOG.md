@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.6] — 2026-09-02
+- No shipped page runs an inline script: the embedded boot moves to a shared external file and a lint pins CSP hygiene
+
 ## [0.3.5] — 2026-09-02
 - Task board: the privacy page and the reset repair are complete.
 
