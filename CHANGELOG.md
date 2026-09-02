@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.3.17] — 2026-09-02
+- plain-language release note for the review-round bookkeeping entry
+
 ## [0.3.16] — 2026-09-02
-- review round 1: record the round-1 fixes and gates on the tracker
+- Internal bookkeeping for the review round — no visible changes.
 
 ## [0.3.15] — 2026-09-02
 - review round 1: register the agent-workspace Settings routes and derive workspace keys from slugifyAgentId
