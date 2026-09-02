@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.641] — 2026-09-02
+- A guard now ensures the artifact New tab button opens exactly one tab.
+
 ## [0.2.640] — 2026-09-02
 - Task board: the single-permission-card fix is complete; two product questions were written up for a decision.
 
