@@ -15,7 +15,7 @@
 // A new harness with no entry fails here; a deleted harness with a stale entry
 // fails here; a `gate` that is not actually in `test:all` fails here.
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { HARNESSES, harnessFiles, katFiles, RETIRED_KATS } from "../scripts/lib/harness-registry.ts";
+import { HARNESSES, harnessFiles, katFiles, readKatVerdicts, RETIRED_KATS, staleExpectedReds } from "../scripts/lib/harness-registry.ts";
 
 const ROOT = new URL("../", import.meta.url).pathname;
 const pkg = JSON.parse(Deno.readTextFileSync(`${ROOT}package.json`));
@@ -90,3 +90,37 @@ Deno.test("manual and named entries carry a non-empty reason; expectedRed is kat
   assertEquals(bad, [], bad.join("\n"));
   assert(Object.keys(HARNESSES).length > 0);
 });
+
+// CAP-FB-20260902-KAT-AGENT-DELEGATION-RED-01 — a green KAT is not listed
+// expected-red. The runner fails the moment an owned red passes; this makes
+// `deno test` fail too, from the verdict ledger the runner leaves behind
+// (.cache/kat-verdicts.json). With no ledger on this machine the guard has
+// nothing to judge and says so — the runner remains the always-on check.
+Deno.test("a KAT the runner last saw green is not still listed expected-red", () => {
+  const verdicts = readKatVerdicts();
+  const stale = staleExpectedReds(verdicts);
+  assertEquals(stale, [], `KATs listed expected-red that the runner last saw GREEN — remove their expectedRed/redReason:\n${stale.join("\n")}`);
+  if (Object.keys(verdicts).length === 0) console.log("  (no KAT verdict ledger on this machine yet — run npm run test:kat)");
+});
+
+Deno.test("staleExpectedReds: a green verdict for an expected-red KAT is stale; red verdicts and unlisted greens are not", () => {
+  const at = "2026-09-02T00:00:00.000Z";
+  const unlisted = Object.entries(HARNESSES).find(([f, e]) => isKatEntry(f, e) && !e.expectedRed)?.[0];
+  assert(unlisted, "the registry has at least one KAT with no expectedRed");
+  assertEquals(staleExpectedReds({}), [], "an empty ledger is never stale");
+  assertEquals(staleExpectedReds({ [unlisted]: { exit: 0, at, ms: 1, expectedRed: null } }), [], "a green KAT that is not listed expected-red is fine");
+  const listed = Object.entries(HARNESSES).find(([f, e]) => isKatEntry(f, e) && e.expectedRed)?.[0];
+  // The owned-red list is meant to drain to empty; when it does, the three
+  // listing-dependent cases below have nothing to exercise and the guard above
+  // (plus the ledger-driven test) is the whole contract.
+  if (!listed) return;
+  assertEquals(staleExpectedReds({ [listed]: { exit: 1, at, ms: 1, expectedRed: "x" } }), [], "a red verdict for an owned red is expected, not stale");
+  assertEquals(staleExpectedReds({ [listed]: { exit: 124, at, ms: 1, expectedRed: "x" } }), [], "a killed (hung) verdict is red, not stale");
+  const stale = staleExpectedReds({ [listed]: { exit: 0, at, ms: 1, expectedRed: "x" } });
+  assertEquals(stale.length, 1, "a green verdict for a KAT still listed expected-red IS stale");
+  assert(stale[0].startsWith(`${listed}: green at ${at}`), stale[0]);
+});
+
+function isKatEntry(file: string, e: { class: string }) {
+  return file.startsWith("kat-") && file !== "kat-runner.ts" && e.class === "kat";
+}

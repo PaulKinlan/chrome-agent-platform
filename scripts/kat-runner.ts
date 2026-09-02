@@ -15,7 +15,7 @@
 //   deno run -A scripts/kat-runner.ts --only=mic      # name filter (substring)
 //   deno run -A scripts/kat-runner.ts --green-only    # skip the owned reds (local convenience; the gate runs all)
 
-import { HARNESSES, isKat } from "./lib/harness-registry.ts";
+import { HARNESSES, isKat, KAT_VERDICTS_PATH, readKatVerdicts } from "./lib/harness-registry.ts";
 import { makeChecker } from "./lib/expected-red.ts";
 import { runLockAware } from "./lib/lock-aware-command.ts";
 import { CHROME_LOCK_PATH } from "./lib/chrome-launch.ts";
@@ -70,6 +70,17 @@ for (const [file, entry] of kats) {
   const lastLine = r.tail.trim().split("\n").filter((l) => /RESULT|passed|pass|SUMMARY|checks/.test(l)).pop() ?? r.tail.trim().split("\n").pop() ?? "";
   console.log(`  ${file}: exit ${r.code} in ${(r.ms / 1000).toFixed(0)}s${r.lockWaitMs > 1500 ? ` (queued ${(r.lockWaitMs / 1000).toFixed(0)}s for the browser)` : ""} — ${lastLine.slice(0, 140)}`);
   checker.check(`KAT ${file}`, r.code === 0, { exit: r.code, ms: r.ms, lockWaitMs: r.lockWaitMs, ...(entry.redReason ? { known: entry.redReason } : {}), tail: r.tail.slice(-300) });
+  // Record this KAT's verdict in the durable ledger (after EVERY KAT, so a
+  // killed run still leaves what it saw): tests/harness-registry.test.ts fails
+  // when a KAT listed expected-red was last seen green here.
+  try {
+    const verdicts = readKatVerdicts();
+    verdicts[file] = { exit: r.code, at: new Date().toISOString(), ms: Math.round(r.ms), expectedRed: entry.expectedRed ?? null };
+    await Deno.mkdir(KAT_VERDICTS_PATH.slice(0, KAT_VERDICTS_PATH.lastIndexOf("/")), { recursive: true });
+    await Deno.writeTextFile(KAT_VERDICTS_PATH, JSON.stringify(verdicts, null, 2) + "\n");
+  } catch (e) {
+    console.log(`  (could not record the verdict ledger: ${String(e)})`);
+  }
 }
 console.log(`\n${checker.summary()}`);
 Deno.exit(checker.exitCode());

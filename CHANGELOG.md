@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.652] — 2026-09-02
+- The delegation checks now test the real budget guard, and the test runner notices when a known failure has quietly started passing.
+
 ## [0.2.651] — 2026-09-02
 - Task board: a test count was filled in.
 

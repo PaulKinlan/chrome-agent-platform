@@ -74,7 +74,9 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   // ── KATs (npm run test:kat via scripts/kat-runner.ts) ───────────────────
   "kat-activity-explorer.ts": { class: "kat", ...RED("7/5", "the backend 'ok' scenario renders 1 row with options ['', 'master']") },
   "kat-agent-board.ts": { class: "kat" },
-  "kat-agent-delegation.ts": { class: "kat", budgetMs: 300_000, ...RED("56/2 after the 2026-09-02 merge of main (58/0 before it)", "the over-cap delegation scenario is now refused earlier by the run's iteration budget ('not enough of this run's iteration budget remains to delegate') so 'rejected, never committed successful' and 'durable terminal record is failed' see a different terminal shape", "the run-budget / loop-context-window work that arrived with main (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01 family) — re-baseline the KAT's over-cap expectation") },
+  // 61/0 since CAP-FB-20260902-KAT-AGENT-DELEGATION-RED-01 re-baselined the over-cap
+  // scenario to the admission-time budget refusal (three delegation runs ≈ 3 min).
+  "kat-agent-delegation.ts": { class: "kat", budgetMs: 300_000 },
   "kat-agent-templates.ts": { class: "kat", ...RED("13/24", "the first-run empty state now reads 'Browse starter templates' and seeds nothing automatically — the KAT predates the templates redesign") },
   "kat-artifact-library-capacity.ts": { class: "kat" },
   "kat-artifact-preview.ts": { class: "kat", ...RED("4/2", "the chat no longer renders the restricted artifact-preview host iframe the KAT expects") },
@@ -174,4 +176,36 @@ export function harnessFiles(): string[] {
 
 export function katFiles(): string[] {
   return harnessFiles().filter(isKat);
+}
+
+/** The last verdict the KAT runner recorded for every KAT it executed, keyed
+ * by file: `{ "kat-x.ts": { exit, at, ms, expectedRed } }`. Written by
+ * scripts/kat-runner.ts after each KAT; read by tests/harness-registry.test.ts
+ * so a KAT that has gone green while still listed expected-red fails
+ * `deno test` too, not only the runner (CAP-FB-20260902-KAT-AGENT-DELEGATION-RED-01).
+ * Gitignored (.cache/); absent on a machine that has not run the KATs. */
+export const KAT_VERDICTS_PATH = new URL("../../.cache/kat-verdicts.json", import.meta.url).pathname;
+
+export interface KatVerdict {
+  exit: number;
+  at: string;
+  ms: number;
+  expectedRed: string | null;
+}
+
+export function readKatVerdicts(): Record<string, KatVerdict> {
+  try {
+    const parsed = JSON.parse(Deno.readTextFileSync(KAT_VERDICTS_PATH));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/** The KATs listed expected-red whose LAST recorded runner verdict was green —
+ * each is a stale listing to remove (with its redReason). */
+export function staleExpectedReds(verdicts: Record<string, KatVerdict> = readKatVerdicts()): string[] {
+  return Object.entries(HARNESSES)
+    .filter(([f, e]) => isKat(f) && e.class === "kat" && e.expectedRed && verdicts[f]?.exit === 0)
+    .map(([f, e]) => `${f}: green at ${verdicts[f].at} (listed expected-red, owner: ${e.expectedRed})`);
 }
