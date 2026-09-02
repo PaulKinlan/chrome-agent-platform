@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.651] — 2026-09-02
+- Task board: a test count was filled in.
+
 ## [0.2.650] — 2026-09-02
 - Task board: the hub chrome polish is complete; one counting defect was written up.
 
