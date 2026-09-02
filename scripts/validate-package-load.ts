@@ -3,6 +3,7 @@
 // registers + the options page renders the shared picker. No seam — this is
 // the shipped extension exactly as a user would load it.
 // @ts-nocheck
+import { CHROMIUM, launchChrome } from "./lib/chrome-launch.ts";
 const ROOT = new URL("..", import.meta.url).pathname;
 const archives = [];
 for await (const f of Deno.readDir(ROOT + "dist-archives")) { if (f.name.endsWith(".zip")) archives.push(ROOT + "dist-archives/" + f.name); }
@@ -14,14 +15,17 @@ const unzip = new Deno.Command("unzip", { args: ["-q", zip, "-d", ext] }).output
 if (!(await unzip).success) throw new Error("unzip failed");
 console.log("package:", zip, "->", ext);
 
-const profile = await Deno.makeTempDir();
-const proc = new Deno.Command("/usr/bin/chromium", {
+const profile = await Deno.makeTempDir({ prefix: "cap-pkg-profile-" });
+// The spawn goes through the shared launcher: the debugging port is
+// kernel-assigned and the endpoint is read back from THIS child's own stderr.
+// The argv is this harness's own (the PACKAGED build is what gets loaded).
+const { proc, port } = await launchChrome({
+  binary: CHROMIUM,
   args: ["--headless=new","--no-sandbox","--disable-dev-shm-usage","--disable-gpu","--silent-debugger-extension-api",
-    `--disable-extensions-except=${ext}`,`--load-extension=${ext}`,"--remote-debugging-port=0",`--user-data-dir=${profile}`,"about:blank"],
-  stdout:"piped", stderr:"piped", clearEnv:true }).spawn();
+    `--disable-extensions-except=${ext}`,`--load-extension=${ext}`,`--user-data-dir=${profile}`,"about:blank"],
+  clearEnv: true,
+});
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
-let port=0;
-for (let i=0;i<40;i++){ const rd=proc.stderr.getReader(); const {value}=await rd.read(); rd.releaseLock(); const m=new TextDecoder().decode(value??new Uint8Array()).match(/ws:\/\/127\.0\.0\.1:(\d+)/); if(m){port=+m[1];break;} }
 let sw=null;
 for (let i=0;i<75&&!sw;i++){ const t = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json(); sw = t.find(x=> x.type==="service_worker" && /\/dist\/background\/service-worker\.js$/.test(x.url??"")); if(!sw) await sleep(400); }
 console.log("PRODUCTION PACKAGE SW LOADED:", Boolean(sw));

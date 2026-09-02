@@ -46,7 +46,9 @@ GATE 11-build node build.mjs
 [ "$(grep -oE 'leftovers=[0-9]+' "$OUT/11-build.log" | cut -d= -f2)" -eq 0 ] || note_fail "build leftovers present"
 grep -q "marker=present" "$OUT/11-build.log" || note_fail "dist.complete missing"
 GATE 12-gallery deno run -A scripts/component-gallery-smoke.ts
-GATE 13-security deno run -A scripts/security-suite.ts
+# The suite refuses a direct invocation by design (supervisor nonce + the
+# inherited canonical flock); the supervisor is the only entry point.
+GATE 13-security bash scripts/security-suite-supervisor.sh
 GATE 14-drift-gallery npm run check:gallery
 GATE 15-drift-changelog npm run check:changelog
 GATE 16-picker50 deno run -A scripts/agent-provider-picker.ts

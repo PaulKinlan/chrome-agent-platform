@@ -20,10 +20,12 @@
 // The key is read from the environment, sent once over the local CDP socket,
 // and redacted from every line this script prints. It is never written to disk.
 //
-// Port discipline: this launches with --remote-debugging-port=0 and reads the
-// real port off the DevTools line, so it can never attach to another lane's
+// Port discipline: the browser is started through the shared launcher, which
+// lets the kernel assign the debugging port and reads the real endpoint off
+// this child's own DevTools line, so it can never attach to another lane's
 // browser (CAP-FB-20260829-FIXED-DEBUG-PORTS-01).
-const CHROMIUM = "/usr/bin/chromium";
+import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+
 const EXT = "/home/paulkinlan/chrome-agent-platform/extension";
 const SHOTS = Deno.env.get("CAP_EVIDENCE_DIR") ?? "./evidence/live-run";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -36,50 +38,36 @@ const PROMPT = Deno.args.join(" ") || "List my open tabs, then tell me what is o
 
 await Deno.mkdir(SHOTS, { recursive: true });
 const profile = await Deno.makeTempDir({ prefix: "live-run-" });
-const proc = new Deno.Command(CHROMIUM, {
-  args: [
-    "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
-    "--silent-debugger-extension-api",
-    `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-    "--remote-debugging-port=0", "--window-size=1440,1600",
-    `--user-data-dir=${profile}`, "about:blank",
-  ],
-  stdout: "piped", stderr: "piped", clearEnv: true,
-}).spawn();
-
-let port = 0;
-for (let i = 0; i < 80 && !port; i++) {
-  await sleep(250);
-  const reader = proc.stderr.getReader();
-  const { value, done } = await reader.read();
-  reader.releaseLock();
-  const line = done ? null : new TextDecoder().decode(value);
-  if (line?.includes("DevTools listening")) port = Number(line.match(/ws:\/\/127\.0\.0\.1:(\d+)/)?.[1] ?? 0);
+// The shared launcher: kernel-assigned port, endpoint read from this child's
+// own stderr, honest failure when the browser prints none. The argv it builds
+// is the standard headless set (chromeBaseArgs) — the same flags this script
+// used to pass by hand, plus --remote-allow-origins=* for the local socket.
+let chrome;
+try {
+  chrome = await launchChrome({ extension: EXT, profile, windowSize: "1440,1600", clearEnv: true });
+} catch (e) {
+  console.error(`no devtools port — ${String(e)}`);
+  Deno.exit(1);
 }
-if (!port) { console.error("no devtools port"); proc.kill("SIGKILL"); Deno.exit(1); }
+const proc = chrome.proc;
 
-const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
-const ws = new WebSocket(version.webSocketDebuggerUrl);
-await new Promise((r) => { ws.onopen = r; });
-let id = 0;
-const pending = new Map<number, (v: any) => void>();
+const cdp = await openCdp(chrome.wsUrl);
 const logs: string[] = [];
-ws.onmessage = (e) => {
-  const d = JSON.parse(e.data as string);
-  if (d.id && pending.has(d.id)) { pending.get(d.id)!(d); pending.delete(d.id); return; }
-  // Console + uncaught errors from EVERY attached target — the fastest way to
-  // see why a send is dropped without guessing at the handler.
-  if (d.method === "Runtime.consoleAPICalled") {
-    const args = (d.params?.args ?? []).map((a: any) => a.value ?? a.description ?? a.type).join(" ");
-    logs.push(`[${d.params?.type}] ${args}`.slice(0, 400));
-  }
-  if (d.method === "Runtime.exceptionThrown") {
-    const ex = d.params?.exceptionDetails;
-    logs.push(`[EXCEPTION] ${ex?.exception?.description ?? ex?.text ?? "?"}`.slice(0, 600));
-  }
-};
-const send = (m: string, p: any = {}, s?: string) =>
-  new Promise<any>((res) => { const i = ++id; pending.set(i, res); ws.send(JSON.stringify({ id: i, method: m, params: p, sessionId: s })); });
+// Console + uncaught errors from EVERY attached target — the fastest way to
+// see why a send is dropped without guessing at the handler.
+cdp.on("Runtime.consoleAPICalled", (params: any) => {
+  const args = (params?.args ?? []).map((a: any) => a.value ?? a.description ?? a.type).join(" ");
+  logs.push(`[${params?.type}] ${args}`.slice(0, 400));
+});
+cdp.on("Runtime.exceptionThrown", (params: any) => {
+  const ex = params?.exceptionDetails;
+  logs.push(`[EXCEPTION] ${ex?.exception?.description ?? ex?.text ?? "?"}`.slice(0, 600));
+});
+// This script reads the full CDP envelope (`.result.targetInfos`,
+// `shot?.result?.data`) and never rejected on a protocol error — it resolved
+// the `{ error }` envelope. Keep that contract over the shared client.
+const send = (m: string, p: any = {}, s?: string): Promise<any> =>
+  cdp.send(m, p, s).catch((e: any) => ({ error: { message: String(e?.message ?? e) } }));
 
 // ---- attach to the service worker and configure the provider ----
 let swTarget: any = null;
@@ -256,6 +244,17 @@ if (shot?.result?.data) {
   console.log("captured live-run.png");
 }
 
+// The verdict: the exit code reflects what the run actually showed, not a
+// constant. Two things this script exists to prove — the run settled to a
+// rendered transcript, and no provider/tool envelope leaked into it.
+const failures: string[] = [];
+if (!settled) failures.push("the run never settled (no rendered tool card + reply)");
+let leakHits: string[] = [];
+try { leakHits = JSON.parse(typeof leak === "string" ? leak : "[]"); } catch { leakHits = [`unreadable leak probe: ${String(leak)}`]; }
+if (leakHits.length) failures.push(`envelope leakage in the visible transcript: ${leakHits.join(", ")}`);
+console.log(`\nRESULT: ${2 - failures.length} passed, ${failures.length} failed${failures.length ? " — " + failures.join(" | ") : ""}`);
+
+cdp.close();
 try { proc.kill("SIGKILL"); } catch { /* gone */ }
 await Deno.remove(profile, { recursive: true }).catch(() => {});
-Deno.exit(0);
+Deno.exit(failures.length ? 1 : 0);

@@ -43,22 +43,24 @@ Deno.test("no script hard-codes a Chrome remote-debugging port", () => {
   );
 });
 
-Deno.test("the shared launcher owns the debugging-port flag", () => {
-  // NOTE ON SCOPE, so this test is not read as more than it checks. The
-  // SAFETY property — no script may name a port — is enforced by the test
-  // above, and that is the property that stops a harness driving another
-  // lane's browser. This one only asserts the shared launcher is a writer of
-  // the flag, i.e. that it still owns a spawn path at all.
-  //
-  // It deliberately does NOT assert exclusivity. Roughly thirty scripts spawn
-  // Chrome themselves with the safe `=0` form and were never part of this
-  // defect; migrating them onto launchChrome() is a separate, larger cleanup.
-  // Asserting exclusivity here would fail on all of them and say nothing about
-  // the bug this entry fixed.
+Deno.test("the shared launcher is the ONLY writer of the debugging-port flag", () => {
+  // CAP-FB-20260830-SUITE-HONESTY-01 flipped this from "the launcher is A
+  // writer" to exclusivity. Before the flip, 32 scripts spawned Chrome
+  // themselves with the safe `=0` form; each carried its own stderr-reading
+  // loop (some unbounded, one that could hang on a browser that printed
+  // nothing) and none took part in the launcher's honest-failure path. Every
+  // one now goes through launchChrome(), so a harness that grows a private
+  // spawn again is caught here — the safety property above stays the reason
+  // this file exists; this test keeps the single spawn path from eroding.
   const writers = scriptFiles().filter((rel) =>
     Deno.readTextFileSync(`${SCRIPTS}${rel}`).includes("--remote-debugging-port=0")
   );
-  assert(writers.includes(LAUNCHER), `scripts/${LAUNCHER} must own a spawn path, found: ${writers.join(", ")}`);
+  assert(writers.includes(LAUNCHER), `scripts/${LAUNCHER} must own the spawn path, found: ${writers.join(", ")}`);
+  assertEquals(
+    writers.filter((w) => w !== LAUNCHER),
+    [],
+    `a harness spawns Chrome itself instead of through launchChrome() (scripts/${LAUNCHER}):\n${writers.filter((w) => w !== LAUNCHER).join("\n")}`,
+  );
 });
 
 Deno.test("launchChrome refuses a caller-chosen port rather than overriding it", async () => {

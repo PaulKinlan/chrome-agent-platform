@@ -13,9 +13,10 @@
 //
 //   deno run -A scripts/component-gallery-smoke.ts
 
+import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const DOCS = `${ROOT}docs`;
-const CHROMIUM = "/usr/bin/chromium";
 
 let pass = 0;
 let fail = 0;
@@ -31,23 +32,20 @@ function check(name: string, cond: boolean, detail?: unknown) {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Drift guard: the docs/ component gallery must be byte-identical to the
-// canonical extension/shared/ design-system source (single source of truth).
-// Fails the gate if the deploy copy has drifted from the canonical files.
-const DRIFT_FILES: [string, string][] = [
-  ["extension/shared/components.js", "docs/components.js"],
-  ["extension/shared/theme.css", "docs/theme.css"],
-  ["extension/shared/agent-registry.js", "docs/agent-registry.js"],
-];
-for (const [src, dst] of DRIFT_FILES) {
-  const [a, b] = await Promise.all([
-    Deno.readFile(`${ROOT}${src}`),
-    Deno.readFile(`${ROOT}${dst}`),
-  ]);
-  const identical = a.length === b.length &&
-    a.every((byte, i) => byte === b[i]);
-  check(`gallery sync: ${dst} matches ${src}`, identical, { srcBytes: a.length, dstBytes: b.length });
-}
+// Drift guard: the docs/ component gallery must match the canonical extension/
+// sources AFTER the deterministic import rewrite scripts/sync-gallery.mjs
+// applies (the gallery sits one directory shallower, so a handful of lib/
+// imports are rewritten on the way). The raw byte compare that used to live
+// here ignored that rewrite and failed by design on docs/components.js
+// (CAP-FB-20260830-SUITE-HONESTY-01); the ONE source of truth for drift is
+// the sync script's own --check mode, so this asks it.
+const drift = await new Deno.Command("node", {
+  args: [`${ROOT}scripts/sync-gallery.mjs`, "--check"],
+  stdout: "piped",
+  stderr: "piped",
+}).output();
+const driftOut = (new TextDecoder().decode(drift.stdout) + new TextDecoder().decode(drift.stderr)).trim();
+check("gallery sync: docs/ matches extension/ after the sync rewrite (sync-gallery --check)", drift.code === 0, driftOut.slice(0, 600));
 
 // A tiny static file server for the docs/ gallery (ES modules need HTTP).
 function serve(): Promise<{ url: string; close: () => Promise<void> }> {
@@ -84,64 +82,14 @@ async function main() {
   const { url, close } = await serve();
 
   const tmp = await Deno.makeTempDir({ prefix: "cap-gallery-" });
-  const proc = new Deno.Command(CHROMIUM, {
-    args: [
-      "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
-      "--disable-gpu", "--remote-debugging-port=0", "--remote-allow-origins=*",
-      "--window-size=1440,900", `--user-data-dir=${tmp}`, "about:blank",
-    ],
-    stdout: "null",
-    stderr: "piped",
-  }).spawn();
-
-  let wsUrl = "";
-  const buf = new Uint8Array(1024);
-  // Read stderr until the DevTools URL appears (bounded).
-  const reader = proc.stderr.getReader();
-  const deadline = Date.now() + 15000;
-  let acc = "";
-  while (Date.now() < deadline && !wsUrl) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    acc += new TextDecoder().decode(value);
-    const m = acc.match(/DevTools listening on (ws:\/\/\S+)/);
-    if (m) wsUrl = m[1];
-  }
-
-  if (!wsUrl) {
-    console.log("FAIL: could not find the Chrome DevTools URL");
-    await close();
-    Deno.exit(1);
-  }
-
-  let id = 0;
-  const pend = new Map<number, (v: unknown) => void>();
-  const ws = new WebSocket(wsUrl);
-  await new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = rej; });
-  ws.onmessage = (ev) => {
-    const m = JSON.parse(ev.data);
-    if (m.id && pend.has(m.id)) {
-      const resolve = pend.get(m.id)!;
-      pend.delete(m.id);
-      resolve(m.error ? Promise.reject(new Error(m.error.message)) : m.result);
-    }
-  };
-  const send = (method: string, params: unknown, sessionId?: string): Promise<any> => {
-    const mid = ++id;
-    return new Promise((resolve) => {
-      pend.set(mid, resolve);
-      ws.send(JSON.stringify({ id: mid, method, params, sessionId }));
-    });
-  };
-  const evl = async (s: string, expr: string): Promise<any> => {
-    const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, s);
-    if (r?.exceptionDetails) {
-      throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
-    }
-    // Runtime.evaluate returns { result: RemoteObject, exceptionDetails }; the
-    // RemoteObject carries the actual value.
-    return r?.result?.value;
-  };
+  // The shared launcher: kernel-assigned port, endpoint read from this child's
+  // own stderr, honest failure when the browser prints none.
+  const chrome = await launchChrome({ profile: tmp, windowSize: "1440,900" });
+  const proc = chrome.proc;
+  const cdp = await openCdp(chrome.wsUrl);
+  const send = async (method: string, params: unknown, sessionId?: string): Promise<any> =>
+    (await cdp.send(method, params, sessionId)).result;
+  const evl = (s: string, expr: string): Promise<any> => cdp.eval(s, expr);
 
   try {
     const t = await send("Target.createTarget", { url: `${url}/components.html` });
@@ -374,7 +322,7 @@ async function main() {
     check("activity-explorer renders rows + agent filter", activity.found === true && activity.rows >= 5 && activity.options.length >= 3, activity);
     check("activity-explorer search narrows the list", activity.found === true && activity.filteredRows < activity.rows && activity.filteredRows >= 1, activity);
     // The tool-result summary must be READABLE — never the double-escaped JSON.
-    const readable = (activity.texts || []).every((t) => !t.includes('\\"') && !t.includes('modelContent'));
+    const readable = (activity.texts || []).every((t: string) => !t.includes('\\"') && !t.includes('modelContent'));
     check("activity tool-result renders a readable summary (no escaped JSON)", readable === true, activity.texts || []);
 
     // Regression: clicking the console's own buttons (copy-all / clear) must
@@ -479,7 +427,7 @@ async function main() {
     check("approval-card renders Approve/Deny buttons", bui.approvalButtons === 2, bui);
     check("prompt-bar renders the composer input", bui.promptBarInput === true, bui);
   } finally {
-    try { ws.close(); } catch { /* ignore */ }
+    cdp.close();
     try { proc.kill("SIGKILL"); } catch { /* ignore */ }
     await close();
     try { await Deno.remove(tmp, { recursive: true }); } catch { /* ignore */ }

@@ -13,6 +13,7 @@
 // @ts-nocheck — dynamic CDP scripting (no types for the raw protocol).
 
 import { ensureDir } from "https://deno.land/std@0.224.0/fs/ensure_dir.ts";
+import { launchChrome } from "./lib/chrome-launch.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 
@@ -75,6 +76,7 @@ var metricsWritten = false;
 var PHASE: string = "full";
 var ws: WebSocket | null = null;
 var proc: Deno.ChildProcess | null = null;
+var launched: Awaited<ReturnType<typeof launchChrome>> | null = null;
 var byoServer: { shutdown(): Promise<void> } | null = null;
 var TEST_EXT: string | null = null;
 var testBuildSeamVerified = false;
@@ -200,7 +202,7 @@ async function writeManifest(): Promise<boolean> {
       command: __runCommand, worktreeStatus: STATUS_SNAPSHOT,
       checks: resultsLog, totals: { passed: pass, failed: fail },
       byoServer: { hits: byoHits, sawAuthorization: byoSawAuth },
-      chromium: { exit: chromiumExitState ?? null, logTail: (chromiumLogLines ?? []).slice(-120) },
+      chromium: { exit: chromiumExitState ?? null, logTail: (chromiumLogLines ?? []).slice(-120), stderrTail: launched ? launched.stderrTail().slice(-2000) : null },
       testBuild: { isolatedCopy: TEST_EXT, seamVerified: Boolean(testBuildSeamVerified) },
       postTestProductionRebuild: postTest,
       residualNote: "headless auto-denies the origin-permission prompt; the adapter run is attested FAIL-CLOSED and its HTTP path via provider.test. A headed run with the user granting completes the chain.",
@@ -299,52 +301,40 @@ TEST_EXT = new TextDecoder().decode(testBuild.stdout).trim().split("\n").pop();
 }
 const EXT = `${ROOT}extension`; // production (never loaded by the journey)
 const LOAD_EXT = TEST_EXT; // the isolated test copy IS what Chrome loads
-const CHROMIUM = "/usr/bin/chromium";
 
 
 // ── launch ──────────────────────────────────────────────────────────────────
 profile = await Deno.makeTempDir();
-var proc: ReturnType<typeof Deno.Command> | null = null;
-proc = new Deno.Command(CHROMIUM, {
-  args: [
-    "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
-    "--silent-debugger-extension-api",
-    `--disable-extensions-except=${LOAD_EXT}`, `--load-extension=${LOAD_EXT}`,
-    "--remote-debugging-port=0", "--window-size=1400,2400",
-    `--user-data-dir=${profile}`, "about:blank",
-  ],
-  stdout: "piped", stderr: "piped",
-  // TESTED MINIMAL ALLOWLIST with clearEnv:true — Chromium must NOT inherit
-  // the coordinator's (possibly credential-bearing) parent environment.
-  // Platform needs verified: PATH (exec helpers), HOME (profile/prefs), and
-  // XDG_* pass-through only where present and non-secret.
+// The shared launcher (CAP-FB-20260829-FIXED-DEBUG-PORTS-01): the debugging
+// port is kernel-assigned and the DevTools endpoint is read from THIS child's
+// own stderr — never a probe of a named port. The launcher owns stderr (it
+// keeps draining it; `stderrTail()` feeds the manifest); stdout stays piped so
+// drainChromiumOutput() can log it and record the exit state as before.
+// clearEnv + an explicit allowlist: Chromium must NOT inherit the coordinator's
+// (possibly credential-bearing) parent environment; the platform needs only
+// PATH (exec helpers), HOME (profile/prefs) and the XDG/locale variables.
+launched = await launchChrome({
+  extension: LOAD_EXT,
+  profile,
+  windowSize: "1400,2400",
+  stdout: "piped",
+  clearEnv: true,
   env: (() => {
-    const allow: Record<string, string> = {
+    const env: Record<string, string> = {
       PATH: Deno.env.get("PATH") ?? "/usr/bin:/bin",
       HOME: Deno.env.get("HOME") ?? "/tmp",
     };
     for (const k of ["XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "LANG", "LC_ALL"]) {
       const v = Deno.env.get(k);
-      if (v) allow[k] = v;
+      if (v) env[k] = v;
     }
-    return allow;
+    return env;
   })(),
-  clearEnv: true,
-}).spawn();
+});
+proc = launched.proc;
+discoveredPort = launched.port; // captured by the launcher, not re-parsed here
 drainChromiumOutput();
-
-// Port discovery from the DRAINED log (drainChromiumOutput owns the streams —
-// no competing getReader, no "ReadableStream is locked").
-async function waitForPort() {
-  const deadline = Date.now() + 20_000; // HARD time bound (not just iteration count)
-  for (let i = 0; i < 200 && Date.now() < deadline; i++) {
-    await sleepMs(250);
-    if (currentPort()) return currentPort();
-    if (chromiumExitState) break; // the child died — stop waiting
-  }
-  throw new Error(`no DevTools port (chromium exit: ${JSON.stringify(chromiumExitState)}; log lines: ${(chromiumLogLines ?? []).length}; tail: ${(chromiumLogLines ?? []).slice(-5).join(" | ")})`);
-}
-const port = await waitForPort();
+const port = currentPort();
 let version: any = null;
 {
   const deadline = Date.now() + 10_000; // hard bound for the whole accept phase
@@ -415,8 +405,9 @@ function drainChromiumOutput() {
       flushTerminal(tag); // a terminal partial line is never silently lost
     }
   };
+  // stdout only: the launcher holds stderr's reader (it read the DevTools
+  // endpoint from it and drains it for the manifest's stderrTail).
   void pump(proc.stdout, "stdout");
-  void pump(proc.stderr, "stderr");
   void (async () => {
     try {
       const st = await proc.status;

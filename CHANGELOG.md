@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.619] — 2026-09-02
+- Quality checks: the security checks now run against the real extension, browser checks take turns instead of colliding, and a known problem is shown with its owner rather than hidden.
+
 ## [0.2.618] — 2026-09-02
 - Task board: three more items are being worked on.
 

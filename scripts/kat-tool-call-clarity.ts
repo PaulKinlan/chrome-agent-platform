@@ -13,74 +13,47 @@
 //
 //   deno run -A scripts/kat-tool-call-clarity.ts [extension-dir] [out-dir]
 
+import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `/tmp/cap-tool-call-clarity-evidence-${Date.now()}`;
-const CHROMIUM = "/usr/bin/chromium";
 const SECRET = "sk-kat-redaction-check-123456";
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let pass = 0, fail = 0;
-const failures = [];
-function check(name, cond, detail) {
+const failures: string[] = [];
+function check(name: string, cond: boolean, detail: unknown) {
   if (cond) { pass++; console.log(`PASS: ${name}`); }
   else { fail++; failures.push(name); console.log(`FAIL: ${name} — ${JSON.stringify(detail)?.slice(0, 300)}`); }
 }
-async function fetchJson(url, opts) { const r = await fetch(url, opts); return r.json(); }
+async function fetchJson(url: string, opts?: RequestInit): Promise<any> { const r = await fetch(url, opts); return r.json(); }
 
 async function main() {
   await Deno.mkdir(OUT, { recursive: true });
   const profile = `${OUT}/profile`;
-  const proc = new Deno.Command(CHROMIUM, {
-    args: [
-      "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
-      "--silent-debugger-extension-api",
-      `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-      "--remote-debugging-port=0", "--remote-allow-origins=*",
-      "--window-size=1400,2000", `--user-data-dir=${profile}`, "about:blank",
-    ],
-    stdout: "null", stderr: "piped", clearEnv: true,
-  }).spawn();
+  // The shared launcher: kernel-assigned port, endpoint read from this child's
+  // own stderr, honest failure when the browser prints none
+  // (CAP-FB-20260829-FIXED-DEBUG-PORTS-01).
+  const chrome = await launchChrome({
+    extension: EXT, profile, windowSize: "1400,2000", timeoutMs: 20000, clearEnv: true,
+  });
+  const proc = chrome.proc;
+  const port = chrome.port;
 
-  let port = 0;
-  {
-    const reader = proc.stderr.getReader();
-    const deadline = Date.now() + 20000;
-    let acc = "";
-    while (Date.now() < deadline && !port) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      acc += new TextDecoder().decode(value);
-      const m = acc.match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)/);
-      if (m) port = Number(m[1]);
-    }
-    try { reader.releaseLock(); } catch { /* released */ }
-  }
-  if (!port) throw new Error("chrome did not expose a DevTools port");
-
-  const version = await fetchJson(`http://127.0.0.1:${port}/json/version`);
-  const ws = new WebSocket(version.webSocketDebuggerUrl);
-  await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
-  let idc = 0;
-  const pend = new Map();
-  const consoleErrors = [];
-  ws.onmessage = (ev) => {
-    const m = JSON.parse(ev.data);
-    if (m.id && pend.has(m.id)) { pend.get(m.id)(m); pend.delete(m.id); }
-    if (m.method === "Runtime.exceptionThrown" ||
-        (m.method === "Runtime.consoleAPICalled" && m.params?.type === "error")) {
-      consoleErrors.push(String(m.params?.exceptionDetails?.exception?.description ??
-        m.params?.args?.map((a) => a?.value ?? a?.description).join(" ") ?? "?").slice(0, 200));
-    }
+  const cdp = await openCdp(chrome.wsUrl);
+  const consoleErrors: string[] = [];
+  // Console + uncaught errors from every attached target (the "no page
+  // console errors" assertion at the end).
+  const onConsole = (params: any) => {
+    consoleErrors.push(String(params?.exceptionDetails?.exception?.description ??
+      params?.args?.map((a: any) => a?.value ?? a?.description).join(" ") ?? "?").slice(0, 200));
   };
-  const send = (method, params = {}, sessionId) =>
-    new Promise((resolve, reject) => {
-      const mid = ++idc;
-      const timer = setTimeout(() => { pend.delete(mid); reject(new Error(`cdp timeout: ${method}`)); }, 30000);
-      pend.set(mid, (m) => { clearTimeout(timer); m.error ? reject(new Error(m.error.message)) : resolve(m.result); });
-      ws.send(JSON.stringify({ id: mid, method, params, sessionId }));
-    });
-  const evl = async (session, expression) => {
+  cdp.on("Runtime.exceptionThrown", onConsole);
+  cdp.on("Runtime.consoleAPICalled", (params: any) => { if (params?.type === "error") onConsole(params); });
+  const send = async (method: string, params: any = {}, sessionId?: string): Promise<any> =>
+    (await cdp.send(method, params, sessionId)).result;
+  const evl = async (session: string, expression: string): Promise<any> => {
     const r = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, session);
     if (r?.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
     return r?.result?.value;
@@ -91,7 +64,7 @@ async function main() {
     const deadline = Date.now() + 30000;
     while (Date.now() < deadline && !extId) {
       const targets = await fetchJson(`http://127.0.0.1:${port}/json/list`);
-      const sw = targets.find((t) => t.type === "service_worker");
+      const sw = targets.find((t: any) => t.type === "service_worker");
       if (sw) extId = new URL(sw.url).host;
       else await sleep(500);
     }
@@ -105,16 +78,16 @@ async function main() {
   await send("Page.enable", {}, ntp);
   await sleep(2500);
 
-  const shot = async (name) => {
+  const shot = async (name: string) => {
     const r = await send("Page.captureScreenshot", { format: "png" }, ntp);
     if (r?.data) await Deno.writeFile(`${OUT}/${name}.png`, Uint8Array.from(atob(r.data), (c) => c.charCodeAt(0)));
   };
 
   // Genuine input: click the composer textarea, insert the marker task, click Run.
-  const boxOf = async (expr) => evl(ntp, `(() => { const el = ${expr}; if (!el) return null;
+  const boxOf = async (expr: string) => evl(ntp, `(() => { const el = ${expr}; if (!el) return null;
     el.scrollIntoView({block:'center'}); const r = el.getBoundingClientRect();
     return { x: r.left + r.width / 2, y: r.top + Math.min(r.height / 2, 20) }; })()`);
-  const clickAt = async (x, y) => {
+  const clickAt = async (x: number, y: number) => {
     await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y }, ntp);
     await send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 }, ntp);
     await send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 }, ntp);
@@ -149,7 +122,7 @@ async function main() {
   check("task submitted via genuine input", !!(ibox && rbox), null);
 
   // Wait for the run to settle: the KAT Bot appears in the named-agent registry.
-  let agents = [];
+  let agents: any[] = [];
   {
     const deadline = Date.now() + 90000;
     while (Date.now() < deadline) {
@@ -179,7 +152,7 @@ async function main() {
       .filter(Boolean); })()`;
   // The card arrives with the live tool-call event and is corrected to the
   // real tool name at result time — wait for the corrected card.
-  let cardState = [];
+  let cardState: { name: string; what: string; text: string }[] = [];
   {
     const deadline = Date.now() + 30000;
     while (Date.now() < deadline) {
@@ -229,8 +202,8 @@ async function main() {
   const logs = await evl(ntp, `(async () => {
     const res = await chrome.runtime.sendMessage({ type: "run-log.list" }).catch(() => null);
     return { entries: res?.entries ?? [], raw: JSON.stringify(res ?? {}).slice(0, 8000) }; })()`);
-  const entries = logs?.entries ?? [];
-  const toolCalls = entries.filter((e) => e?.type === "tool-call");
+  const entries: any[] = logs?.entries ?? [];
+  const toolCalls = entries.filter((e: any) => e?.type === "tool-call");
   const journalText = logs?.raw ?? "";
   check("the persisted journal never stores the credential", toolCalls.length > 0 && !journalText.includes(SECRET), { toolCalls: toolCalls.length });
   // The journaled tool-call args must be VALID parseable JSON (the old
@@ -248,8 +221,9 @@ async function main() {
 
   console.log(`\n${pass} passed, ${fail} failed`);
   if (failures.length) console.log("FAILURES:", failures.join(" | "));
+  cdp.close();
   try { proc.kill(); } catch { /* gone */ }
   Deno.exit(fail ? 1 : 0);
 }
 
-main().catch((e) => { console.error("HARNESS ERROR:", e); Deno.exit(1); });
+main().catch((e: unknown) => { console.error("HARNESS ERROR:", e); Deno.exit(1); });

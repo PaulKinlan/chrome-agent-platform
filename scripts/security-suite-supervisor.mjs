@@ -256,12 +256,17 @@ await writeFile(
 
 const observed = new Map();
 let sampling = false;
-await observeDescendants(child.pid, observed);
+// Observation is best-effort sampling: one failed sample must never crash the
+// supervisor (an unhandled rejection in the interval callback did, under
+// process churn — CAP-FB-20260830-SUITE-HONESTY-01).
+await observeDescendants(child.pid, observed).catch(() => {});
 const monitor = setInterval(async () => {
   if (sampling) return;
   sampling = true;
   try {
     await observeDescendants(child.pid, observed);
+  } catch {
+    // A missed sample; the next tick samples again.
   } finally {
     sampling = false;
   }

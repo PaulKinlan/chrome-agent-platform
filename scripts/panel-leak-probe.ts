@@ -6,68 +6,33 @@
 //
 //   deno run -A scripts/panel-leak-probe.ts [cycles=10]
 
+import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
-const CHROMIUM = "/usr/bin/chromium";
 const CYCLES = Number(Deno.args[0] ?? 10);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function launch() {
   const tmp = await Deno.makeTempDir({ prefix: "cap-leak-probe-" });
-  const proc = new Deno.Command(CHROMIUM, {
-    args: [
-      "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
-      "--silent-debugger-extension-api",
-      `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-      "--remote-debugging-port=0", "--remote-allow-origins=*", "--window-size=1440,900",
-      `--user-data-dir=${tmp}`, "about:blank",
-    ],
-    stdout: "null",
-    stderr: "piped",
-  }).spawn();
-
-  let wsUrl = "";
-  const reader = proc.stderr.getReader();
-  const deadline = Date.now() + 20000;
-  let acc = "";
-  while (Date.now() < deadline && !wsUrl) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    acc += new TextDecoder().decode(value);
-    const m = acc.match(/DevTools listening on (ws:\/\/\S+)/);
-    if (m) wsUrl = m[1];
-  }
-  if (!wsUrl) throw new Error("no devtools url");
-  const port = Number(new URL(wsUrl).port);
-
-  let id = 0;
-  const pend = new Map<number, { res: (v: any) => void; rej: (e: any) => void; }>();
-  const ws = new WebSocket(wsUrl);
-  await new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = rej; });
-  ws.onmessage = (ev) => {
-    const m = JSON.parse(ev.data);
-    if (m.id && pend.has(m.id)) {
-      const p = pend.get(m.id);
-      pend.delete(m.id);
-      m.error ? p.rej(new Error(m.error.message)) : p.res(m.result);
-    }
-  };
-  const send = (method: string, params: unknown = {}, sessionId?: string) => {
-    const mid = ++id;
-    return new Promise((res, rej) => {
-      pend.set(mid, { res, rej });
-      ws.send(JSON.stringify({ id: mid, method, params, sessionId }));
-    });
-  };
+  // The shared launcher: kernel-assigned port, endpoint read from this child's
+  // own stderr, honest failure when the browser prints none.
+  const chrome = await launchChrome({ extension: EXT, profile: tmp, windowSize: "1440,900" });
+  const cdp = await openCdp(chrome.wsUrl);
+  // Resolves the CDP result directly (the shape this probe reads); a protocol
+  // error rejects.
+  const send = async (method: string, params: unknown = {}, sessionId?: string) =>
+    (await cdp.send(method, params, sessionId)).result;
   const evl = async (sessionId: string, expr: string) => {
     const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId);
     if (r?.exceptionDetails) throw new Error(r.exceptionDetails?.exception?.description ?? "eval failed");
     return r?.result?.value;
   };
-  return { proc, send, evl, port, tmp };
+  return { proc: chrome.proc, cdp, send, evl, port: chrome.port, tmp };
 }
 
-const { proc, send, evl, port, tmp } = await launch();
+const { proc, cdp, send, evl, port, tmp } = await launch();
+let verdict = null;
 try {
   let extId = "";
   for (let i = 0; i < 60 && !extId; i++) {
@@ -142,6 +107,34 @@ try {
   console.log(JSON.stringify(result, null, 1));
   await Deno.writeTextFile("/tmp/cap-panel-leak-probe.json", JSON.stringify(result, null, 1));
   console.error(`GROWTH docs+${growth.documents} frames+${growth.frames} listeners+${growth.listeners} heap+${growth.jsHeapMB}MB | retained options targets: ${retained}`);
+
+  // The honest pass condition (UX-001: "repeated panel open/close grows
+  // Documents/Frames"): a leak GROWS WITH CYCLES. The first visit to each of
+  // the PANELS legitimately adds its document/frame (the panel cache), so the
+  // measure is the STEADY-STATE slope: from the cycle where every panel has
+  // been visited once to the last cycle, Documents and Frames must not grow
+  // at all — and after the forced GC no options/ target may be retained.
+  const warm = samples[Math.min(PANELS.length, Math.max(CYCLES - 1, 1))];
+  const lastCycle = samples[CYCLES];
+  const steady = {
+    documents: lastCycle.documents - warm.documents,
+    frames: lastCycle.frames - warm.frames,
+    cycles: CYCLES - Math.min(PANELS.length, Math.max(CYCLES - 1, 1)),
+  };
+  const leaked = retained > 0 || steady.documents > 0 || steady.frames > 0;
+  verdict = { pass: !leaked, growth, steady, retained, cycles: CYCLES };
 } finally {
+  cdp.close();
   try { proc.kill("SIGKILL"); } catch { /* done */ }
+  await proc.status.catch(() => {});
+  await Deno.remove(tmp, { recursive: true }).catch(() => {});
 }
+
+// The exit code is derived from the probe's own measurement — a probe that
+// printed a leak and exited 0 read as green to any aggregate.
+if (!verdict) {
+  console.log("RESULT: FAIL — the panel leak probe did not complete its cycles");
+  Deno.exit(1);
+}
+console.log(`RESULT: ${verdict.pass ? "PASS" : "FAIL"} — ${verdict.cycles} panel open/close cycles; steady-state over the last ${verdict.steady.cycles} cycles (every panel already visited once): docs+${verdict.steady.documents} frames+${verdict.steady.frames}; vs baseline after forced GC: docs+${verdict.growth.documents} frames+${verdict.growth.frames} listeners+${verdict.growth.listeners} heap+${verdict.growth.jsHeapMB}MB; retained options targets ${verdict.retained} (pass = steady-state docs/frames growth 0 AND retained 0)`);
+Deno.exit(verdict.pass ? 0 : 1);

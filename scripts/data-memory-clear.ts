@@ -9,7 +9,7 @@
 //
 // This runs on a CLEAN profile so it tests the button rather than whatever
 // global state a long suite has accumulated. Run: npm run test:data-clear
-const CHROMIUM = "/usr/bin/chromium";
+import { launchChrome } from "./lib/chrome-launch.ts";
 const EXT = new URL("../extension", import.meta.url).pathname;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let pass = 0, fail = 0;
@@ -19,27 +19,11 @@ const check = (name: string, ok: boolean, detail = "") => {
 };
 
 const profile = await Deno.makeTempDir({ prefix: "cap-data-clear-" });
-const proc = new Deno.Command(CHROMIUM, {
-  args: [
-    "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
-    `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-    "--remote-debugging-port=0", "--window-size=1400,1400",
-    `--user-data-dir=${profile}`, "about:blank",
-  ],
-  stdout: "piped", stderr: "piped",
-}).spawn();
-
-let port = 0;
-const reader = proc.stderr.getReader();
-const decoder = new TextDecoder();
-let buf = "";
-for (let i = 0; i < 100 && !port; i++) {
-  const { value } = await reader.read();
-  buf += decoder.decode(value ?? new Uint8Array());
-  const m = buf.match(/ws:\/\/127\.0\.0\.1:(\d+)/);
-  if (m) port = Number(m[1]);
-}
-reader.releaseLock();
+// The shared launcher: kernel-assigned debugging port, the endpoint read from
+// this child's own stderr — never a probe of a named port.
+const chrome = await launchChrome({ extension: EXT, profile, windowSize: "1400,1400" });
+const proc = chrome.proc;
+const port = chrome.port;
 
 let sw = null;
 for (let i = 0; i < 60 && !sw; i++) {

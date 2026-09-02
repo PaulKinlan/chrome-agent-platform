@@ -241,10 +241,22 @@ export async function waitUntil(predicate, timeoutMs, intervalMs = 20) {
 
 async function procIdentities() {
   const rows = [];
-  for (const entry of await readdir("/proc", { withFileTypes: true })) {
-    if (!entry.isDirectory() || !/^\d+$/u.test(entry.name)) continue;
+  // A plain name listing: with `withFileTypes` Node lstat()s entries whose
+  // type the kernel does not report, and a process that exits between the
+  // listing and that lstat rejects the WHOLE readdir (ENOENT /proc/<pid>) —
+  // which crashed the supervisor under process churn
+  // (CAP-FB-20260830-SUITE-HONESTY-01). Numeric /proc entries are always
+  // process directories, so no type check is needed.
+  let names;
+  try {
+    names = await readdir("/proc");
+  } catch {
+    return rows;
+  }
+  for (const name of names) {
+    if (!/^\d+$/u.test(name)) continue;
     try {
-      rows.push(await readProcIdentity(Number(entry.name)));
+      rows.push(await readProcIdentity(Number(name)));
     } catch {
       // Process exited while /proc was sampled.
     }

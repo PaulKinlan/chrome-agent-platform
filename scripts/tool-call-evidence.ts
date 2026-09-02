@@ -21,18 +21,18 @@
 
 const ROOT = new URL("..", import.meta.url).pathname;
 import { pairToolJournal } from "../extension/shared/conversation.js";
+import { CHROMIUM, launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 const EXT = `${ROOT}extension`;
 const MODE = Deno.args.includes("--mode=tree") ? "tree" : "raw";
 const EVIDENCE_DIR = `${ROOT}test-artifacts/tool-call`;
-const CHROMIUM = "/usr/bin/chromium";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  let t: number | undefined;
+  let t: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
     p,
-    new Promise((_, rej) => {
+    new Promise<never>((_, rej) => {
       t = setTimeout(() => rej(new Error(`timeout: ${label}`)), ms);
     }),
   ]).finally(() => clearTimeout(t));
@@ -88,27 +88,14 @@ class Cdp {
   }
 }
 
-async function connect(port: number): Promise<Cdp> {
-  const v = await fetchJson(`http://127.0.0.1:${port}/json/version`);
-  const ws = new WebSocket(v.webSocketDebuggerUrl);
+// Connect over the browser endpoint launchChrome() read from Chrome's own
+// stderr (no /json/version probe of a port that might be somebody else's).
+async function connect(wsUrl: string): Promise<Cdp> {
+  const ws = new WebSocket(wsUrl);
   await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
   const cdp = new Cdp(ws);
   cdp.onResponse();
   return cdp;
-}
-
-async function waitForPort(proc: Deno.ChildProcess): Promise<number> {
-  for (let i = 0; i < 100; i++) {
-    await sleep(250);
-    const reader = proc.stderr.getReader();
-    const { value, done } = await reader.read();
-    reader.releaseLock();
-    const line = done ? null : new TextDecoder().decode(value);
-    if (line?.includes("DevTools listening")) {
-      return Number(line.match(/ws:\/\/127\.0\.0\.1:(\d+)/)?.[1] ?? 0);
-    }
-  }
-  throw new Error("chrome did not expose a DevTools port");
 }
 
 async function openPage(port: number, url: string) {
@@ -129,7 +116,7 @@ async function evalIn(cdp: Cdp, session: string, expression: string): Promise<un
   return (r as any)?.result?.result?.value;
 }
 
-async function captureShot(cdp: Cdp, session: string): Promise<Uint8Array | null> {
+async function captureShot(cdp: Cdp, session: string): Promise<Uint8Array<ArrayBuffer> | null> {
   const r = await cdp.send("Page.captureScreenshot", { format: "png" }, session);
   const b64 = (r as any)?.result?.data;
   if (!b64) return null;
@@ -137,7 +124,7 @@ async function captureShot(cdp: Cdp, session: string): Promise<Uint8Array | null
 }
 
 const capturedImages: Record<string, { at: string; sha256: string }> = {};
-async function writeEvidence(name: string, bytes: Uint8Array) {
+async function writeEvidence(name: string, bytes: Uint8Array<ArrayBuffer>) {
   // EVERY listed screenshot is CAPTURED in the current invocation — written
   // DIRECTLY to the (fresh) external output dir, never inherited from an
   // earlier run. The capture event (name + time + content SHA-256) is
@@ -166,37 +153,42 @@ const invocationEndedAt = () => Date.now(); // the upper bound captured at valid
 try {
   Deno.removeSync(EVIDENCE_OUT, { recursive: true });
 } catch (e) {
-  if (!(e instanceof Deno.errors.NotFound)) throw new Error(`evidence: cannot clear ${EVIDENCE_OUT}: ${e?.message ?? e}`);
+  if (!(e instanceof Deno.errors.NotFound)) throw new Error(`evidence: cannot clear ${EVIDENCE_OUT}: ${(e as Error)?.message ?? e}`);
 }
 try {
   Deno.mkdirSync(EVIDENCE_OUT, { recursive: false });
 } catch (e) {
-  throw new Error(`evidence: cannot create a FRESH ${EVIDENCE_OUT} exclusively: ${e?.message ?? e}`);
+  throw new Error(`evidence: cannot create a FRESH ${EVIDENCE_OUT} exclusively: ${(e as Error)?.message ?? e}`);
 }
 
 async function main() {
   await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
   const profile = `/tmp/tool-call-${Date.now()}`;
-  const chrome = new Deno.Command(CHROMIUM, {
+  // The spawn goes through the shared launcher: the debugging port is
+  // kernel-assigned and the endpoint is read back from THIS child's own
+  // stderr. The argv is this harness's own.
+  const chrome = await launchChrome({
+    binary: CHROMIUM,
     args: [
       "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
       `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-      "--remote-debugging-port=0", "--window-size=1400,1000", `--user-data-dir=${profile}`,
+      "--window-size=1400,1000", `--user-data-dir=${profile}`,
       "about:blank",
     ],
-    stdout: "piped", stderr: "piped", clearEnv: true,
-  }).spawn();
+    clearEnv: true,
+  });
 
-  let port = 0;
+  const port = chrome.port;
   try {
-    port = await waitForPort(chrome);
-    const cdp = await connect(port);
-    const targets = await fetchJson(`http://127.0.0.1:${port}/json/list`);
-    let extId = "";
-    for (const t of targets) {
-      const m = String(t?.url ?? "").match(/chrome-extension:\/\/([^/]+)\/dist\/background\/service-worker\.js/);
-      if (m) { extId = m[1]; break; }
-    }
+    const cdp = await connect(chrome.wsUrl);
+    // MV3 registers the worker a beat after the endpoint is reachable — wait
+    // for it explicitly (the old /json/list one-shot only worked because the
+    // stderr polling burned enough wall-clock first).
+    const swTarget = await waitForServiceWorker(
+      (method, params, sessionId) => cdp.send(method, params ?? {}, sessionId),
+      { timeoutMs: 20000, match: (t: any) => /chrome-extension:\/\/[^/]+\/dist\/background\/service-worker\.js/.test(String(t?.url ?? "")) },
+    );
+    const extId = String(swTarget?.url ?? "").match(/chrome-extension:\/\/([^/]+)\/dist\/background\/service-worker\.js/)?.[1] ?? "";
     if (!extId) throw new Error("extension id not found");
     console.log(`extension id ${extId} (mode=${MODE})`);
 
@@ -243,7 +235,7 @@ async function main() {
       window.__gvsToolCard = card;
       return { ok: true, card: !!card };
     })()`);
-    check("appendTool drove a real tool card (running state)", driven?.ok === true, driven);
+    check("appendTool drove a real tool card (running state)", (driven as any)?.ok === true, driven);
 
     const runningShot = await captureShot(cdp, session);
     if (runningShot) await writeEvidence(`${MODE}-1-running.png`, runningShot);
@@ -686,8 +678,8 @@ async function main() {
       try {
         bytes = await Deno.readFile(`${EVIDENCE_OUT}/${shot}`);
       } catch (e) {
-        console.error(`evidence FAIL: ${shot} missing/unreadable: ${e?.message ?? e}`);
-        transcript.push({ name: `evidence: ${shot} readable + hash matches`, pass: false, detail: { error: e?.message } });
+        console.error(`evidence FAIL: ${shot} missing/unreadable: ${(e as Error)?.message ?? e}`);
+        transcript.push({ name: `evidence: ${shot} readable + hash matches`, pass: false, detail: { error: (e as Error)?.message } });
         fail += 1;
         continue;
       }
@@ -713,7 +705,7 @@ async function main() {
     await Deno.writeTextFile(`${EVIDENCE_OUT}/transcript.jsonl`, transcript.map((t) => JSON.stringify(t)).join("\n") + "\n");
     let scriptHash = "unknown";
     try { scriptHash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", await Deno.readFile(new URL(import.meta.url).pathname)))].map((b) => b.toString(16).padStart(2, "0")).join(""); } catch { /* ignore */ }
-    const meta = {
+    const meta: Record<string, unknown> = {
       commit: head,
       generated: new Date().toISOString(),
       mode: MODE,
@@ -733,7 +725,7 @@ async function main() {
     console.log(`tool-call evidence (${MODE}): ${pass}/${pass + fail} passed`);
     if (fail > 0) Deno.exit(1);
   } finally {
-    try { chrome.kill("SIGKILL"); } catch { /* gone */ }
+    try { chrome.proc.kill("SIGKILL"); } catch { /* gone */ }
     await sleep(300);
   }
 }

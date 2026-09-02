@@ -4,35 +4,26 @@
 // worker's `script.run` route (via chrome.runtime.sendMessage from a page
 // context), and asserts the sandboxed script returns its result.
 // @ts-nocheck
+import { launchChrome } from "./lib/chrome-launch.ts";
 
 const CHROMIUM = Deno.env.get("CHROMIUM") || "/usr/bin/chromium";
 const EXT = new URL("../extension", import.meta.url).pathname;
 
 async function sleep(ms) { await new Promise((r) => setTimeout(r, ms)); }
 
+// The spawn goes through the shared launcher: the debugging port is
+// kernel-assigned and the endpoint is read back from THIS child's own stderr.
 function launch(profile) {
-  return new Deno.Command(CHROMIUM, {
+  return launchChrome({
+    binary: CHROMIUM,
     args: [
       "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
       `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-      "--remote-debugging-port=0", "--window-size=1200,900", `--user-data-dir=${profile}`,
+      "--window-size=1200,900", `--user-data-dir=${profile}`,
       "about:blank",
     ],
-    stdout: "piped", stderr: "piped", clearEnv: true,
-  }).spawn();
-}
-
-async function waitPort(proc) {
-  for (let i = 0; i < 100; i++) {
-    await sleep(250);
-    const reader = proc.stderr.getReader();
-    const { value } = await reader.read();
-    reader.releaseLock();
-    const line = value ? new TextDecoder().decode(value) : "";
-    const m = line.match(/DevTools listening on (ws:\/\/\S+)/);
-    if (m) return m[1];
-  }
-  throw new Error("no DevTools port");
+    clearEnv: true,
+  });
 }
 
 class Cdp {
@@ -50,8 +41,7 @@ class Cdp {
 
 async function main() {
   const profile = await Deno.makeTempDir({ prefix: "cap-script-" });
-  const proc = launch(profile);
-  const wsUrl = await waitPort(proc);
+  const { proc, wsUrl } = await launch(profile);
   const cdp = new Cdp(wsUrl);
   await cdp.ready;
   await sleep(1200);

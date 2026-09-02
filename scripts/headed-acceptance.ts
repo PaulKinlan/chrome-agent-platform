@@ -36,9 +36,10 @@
 //      or idle session (monitors: []) cannot show the OS permission prompts.
 //   4. /usr/bin/chromium must exist.
 
+import { CHROMIUM, launchChrome } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
-const CHROMIUM = "/usr/bin/chromium";
 const FIXTURE_PORT = 8934;
 const PAGE_ORIGIN = `http://127.0.0.1:${FIXTURE_PORT}`;
 
@@ -312,6 +313,15 @@ async function writeEvidence(name: string, bytes: Uint8Array) {
 }
 
 // ── chrome launch (HEADED) ───────────────────────────────────────────────────
+// The shared launcher owns the debugging port (kernel-assigned, read back from
+// this child's own stderr — CAP-FB-20260829-FIXED-DEBUG-PORTS-01). This macro
+// keeps its own HEADED argv (no --headless; a real window on the display) and
+// hands it over without any port flag.
+//
+// The launcher has no per-child `env`, so the display variables the pre-flight
+// resolved (WAYLAND_DISPLAY / XDG_RUNTIME_DIR / HYPRLAND_INSTANCE_SIGNATURE or
+// DISPLAY) are exported into this process's environment right before the
+// spawn, which the child then inherits.
 function launchHeadedChrome(profile: string) {
   const args = [
     "--no-sandbox",
@@ -319,7 +329,6 @@ function launchHeadedChrome(profile: string) {
     "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`,
     `--load-extension=${EXT}`,
-    "--remote-debugging-port=0",
     "--window-size=1400,2400",
     `--user-data-dir=${profile}`,
   ];
@@ -327,26 +336,8 @@ function launchHeadedChrome(profile: string) {
     args.push("--ozone-platform=wayland", "--ozone-platform-hint=wayland");
   }
   args.push("about:blank");
-  return new Deno.Command(CHROMIUM, {
-    args,
-    stdout: "piped",
-    stderr: "piped",
-    clearEnv: true,
-    env: displayEnv,
-  }).spawn();
-}
-
-async function waitForPort(proc: Deno.ChildProcess): Promise<number> {
-  for (let i = 0; i < 120; i++) {
-    await sleep(250);
-    const reader = proc.stderr.getReader();
-    const { value, done } = await reader.read();
-    reader.releaseLock();
-    if (done) break;
-    const m = new TextDecoder().decode(value).match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)/);
-    if (m) return Number(m[1]);
-  }
-  throw new Error("chrome DevTools port never appeared");
+  for (const [k, v] of Object.entries(displayEnv)) Deno.env.set(k, v);
+  return launchChrome({ binary: CHROMIUM, args, timeoutMs: 30000 });
 }
 
 // ── the journey ──────────────────────────────────────────────────────────────
@@ -363,10 +354,10 @@ async function main() {
   const fixture = new Deno.Command("deno", { args: ["run", "-A", `${ROOT}fixtures/webmcp-server.ts`], stdout: "null", stderr: "null" }).spawn();
 
   const profile = `${EVIDENCE_DIR}/profile`;
-  const chrome = launchHeadedChrome(profile);
-  const port = await waitForPort(chrome);
-  const version = await fetchJson(`http://127.0.0.1:${port}/json/version`);
-  const cdp = await connectCdp(version.webSocketDebuggerUrl);
+  const launched = await launchHeadedChrome(profile);
+  const chrome = launched.proc;
+  const port = launched.port;
+  const cdp = await connectCdp(launched.wsUrl);
 
   try {
     // Attach the extension service worker (find it by URL).

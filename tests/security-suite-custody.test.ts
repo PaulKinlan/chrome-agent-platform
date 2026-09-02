@@ -5,6 +5,7 @@
 
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { lstat as nodeLstat } from "node:fs/promises";
+import { runLockAware } from "../scripts/lib/lock-aware-command.ts";
 import {
   cleanupExactProfile,
   pidAlive,
@@ -31,29 +32,29 @@ type RunResult = {
   state: Array<Record<string, unknown>>;
 };
 
+// The child's 20 s budget counts ITS OWN time. The supervisor's first act is
+// an exclusive flock on the canonical serialized-Chrome lock; when another lane
+// holds it, the wait used to eat the whole budget and the test reported
+// "supervisor emitted no result marker" for a supervisor that never ran
+// (CAP-FB-20260830-SUITE-HONESTY-01). The supervisor now prints
+// CAP_SECURITY_LOCK_ACQUIRED when it holds the lock and the budget starts
+// there; the queue wait is bounded separately and reported as its own finding.
 async function command(
   executable: string,
   args: string[],
   env: Record<string, string> = {},
   timeoutSeconds = 20,
+  lockMarker: string | undefined = undefined,
 ): Promise<{ code: number; text: string }> {
-  const process = new Deno.Command("/usr/bin/timeout", {
-    args: [
-      "--signal=TERM",
-      "--kill-after=2",
-      String(timeoutSeconds),
-      executable,
-      ...args,
-    ],
-    env: { ...Deno.env.toObject(), ...env },
-    stdout: "piped",
-    stderr: "piped",
-  }).spawn();
-  const output = await process.output();
-  return {
-    code: output.code,
-    text: decoder.decode(output.stdout) + decoder.decode(output.stderr),
-  };
+  const r = await runLockAware({
+    executable,
+    args,
+    env,
+    budgetMs: timeoutSeconds * 1000,
+    lockWaitMs: 10 * 60_000,
+    lockMarker,
+  });
+  return { code: r.code, text: r.text };
 }
 
 async function runSupervisor(
@@ -67,7 +68,7 @@ async function runSupervisor(
     CAP_SECURITY_TEST_SCENARIO: scenario,
     CAP_SECURITY_SELF_TEST_TIMEOUT_MS: String(timeoutMs),
     ...extra,
-  });
+  }, 20, "CAP_SECURITY_LOCK_ACQUIRED");
   const marker = result.text.split("\n").find((line) =>
     line.startsWith("CAP_SECURITY_RESULT ")
   );
@@ -154,7 +155,7 @@ Deno.test("security-suite custody: production mode is immutable and fake runners
     CAP_SECURITY_RUNNER: fake,
     CAP_SECURITY_TEST_SCENARIO: "exit37",
     CAP_SECURITY_SELF_TEST_TIMEOUT_MS: "1000",
-  });
+  }, 20, "CAP_SECURITY_LOCK_ACQUIRED");
   assertEquals(refused.code, 2);
   assert(refused.text.includes("path/hash refused"));
   await Deno.remove(fake);

@@ -43,6 +43,10 @@ const evaluate = async (expr: string, sessionId: string) => {
 };
 
 const report: Record<string, unknown> = { observations: [] };
+// The verdict this probe exits with (CAP-FB-20260830-SUITE-HONESTY-01: it
+// used to set no exit code at all): 0 when the live explorer showed the new
+// activity without a reload, 1 when the bug reproduced or the probe broke.
+let liveOk = false;
 const note = (k: string, v: unknown) => { (report.observations as any[]).push({ [k]: v }); console.log(`OBS ${k}: ${JSON.stringify(v)}`); };
 
 try {
@@ -99,6 +103,7 @@ try {
   await sleep(6000);
   const liveState = await explorerState();
   note("live-explorer-after-second-run", liveState);
+  liveOk = liveState?.mounted === true && (Number(liveState.rows) > 0 || Number(liveState.entries) > 0);
 
   // ── 4. Reload the NTP: does persisted activity render? ────────────────
   await cdp("Page.enable", {}, ui);
@@ -111,3 +116,5 @@ try {
 } finally {
   try { proc.kill(); } catch { /* best effort */ }
 }
+console.log(`RESULT: ${liveOk ? "PASS" : "FAIL"} — the live explorer ${liveOk ? "showed" : "did not show"} new activity without a reload`);
+Deno.exit(liveOk ? 0 : 1);

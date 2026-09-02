@@ -192,15 +192,18 @@ async function makeVariant() {
   return dir;
 }
 
+// Every spawn goes through the shared launcher: the debugging port is
+// kernel-assigned and the endpoint is read back from THIS child's own stderr
+// (never a probe of a port another lane's Chrome might be answering on).
 function launch(profile: string, extDir: string) {
   const args = [
     "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
     "--silent-debugger-extension-api", `--disable-extensions-except=${extDir}`, `--load-extension=${extDir}`,
-    "--remote-debugging-port=0", "--remote-allow-origins=*", "--window-size=1400,1200",
+    "--remote-allow-origins=*", "--window-size=1400,1200",
     `--user-data-dir=${profile}`, "about:blank",
   ];
   if (!HEADED) args.unshift("--headless=new");
-  return new Deno.Command(CHROMIUM, { args, stdout: "null", stderr: "piped" }).spawn();
+  return launchChrome({ binary: CHROMIUM, args });
 }
 
 async function main() {
@@ -280,18 +283,11 @@ async function main() {
   if (!HEADED) {
     const freshProfile = `/tmp/cap-webmcp-fresh-${Date.now()}`;
     await Deno.mkdir(freshProfile, { recursive: true });
-    const freshProc = launch(freshProfile, EXT);
+    const fresh = await launch(freshProfile, EXT);
+    const freshProc = fresh.proc;
     try {
-      let freshPort = 0;
-      for (let i = 0; i < 80 && !freshPort; i++) {
-        await sleep(250);
-        const reader = freshProc.stderr.getReader();
-        const { value, done } = await reader.read(); reader.releaseLock();
-        const m = (done ? null : new TextDecoder().decode(value))?.match(/ws:\/\/127\.0\.0\.1:(\d+)/);
-        if (m) freshPort = Number(m[1]);
-      }
-      const fVersion = await fetchJson(`http://127.0.0.1:${freshPort}/json/version`);
-      const fws = new WebSocket(fVersion.webSocketDebuggerUrl);
+      const freshPort = fresh.port;
+      const fws = new WebSocket(fresh.wsUrl);
       await new Promise<void>((res, rej) => { fws.onopen = () => res(); fws.onerror = rej; });
       let fid = 0; const fpend = new Map();
       fws.onmessage = (ev) => {
@@ -716,23 +712,16 @@ async function main() {
   const extDir = HEADED ? EXT : await makeVariant();
   const profile = `/tmp/cap-webmcp-acc-${Date.now()}`;
   await Deno.mkdir(profile, { recursive: true });
-  const proc = launch(profile, extDir);
+  const variant = await launch(profile, extDir);
+  const proc = variant.proc;
 
   // Evidence may be kept outside the source tree so a post-commit run can
   // attest an EXACT clean commit without dirtying it. The in-repo directory is
   // retained as the convenient default for local/manual runs.
 
   try {
-    let port = 0;
-    for (let i = 0; i < 80 && !port; i++) {
-      await sleep(250);
-      const reader = proc.stderr.getReader();
-      const { value, done } = await reader.read(); reader.releaseLock();
-      const m = (done ? null : new TextDecoder().decode(value))?.match(/ws:\/\/127\.0\.0\.1:(\d+)/);
-      if (m) port = Number(m[1]);
-    }
-    const version = await fetchJson(`http://127.0.0.1:${port}/json/version`);
-    const ws = new WebSocket(version.webSocketDebuggerUrl);
+    const port = variant.port;
+    const ws = new WebSocket(variant.wsUrl);
     await new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = rej; });
     let id = 0; const pend = new Map();
     ws.onmessage = (ev) => {

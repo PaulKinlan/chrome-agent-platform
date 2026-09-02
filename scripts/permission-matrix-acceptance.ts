@@ -45,10 +45,11 @@
 // Evidence: <evidence dir>/permission-matrix-manifest.json + screenshots.
 // Default evidence dir: test-artifacts/ (override: PERMISSION_MATRIX_ARTIFACT_DIR).
 
+import { launchChrome } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
 const { verifyVariantIntegrity } = await import("./permission-variant.mjs");
-const CHROMIUM = "/usr/bin/chromium";
 const HEADED = Deno.args.includes("--headed");
 const EVIDENCE_DIR = Deno.env.get("PERMISSION_MATRIX_ARTIFACT_DIR") ?? `${ROOT}test-artifacts`;
 
@@ -177,36 +178,20 @@ async function writeEvidence(name: string, bytes: Uint8Array) {
 }
 
 // ── chrome lifecycle ─────────────────────────────────────────────────────────
-function launchChrome(profile: string, extDir: string) {
+// The shared launcher owns the spawn: kernel-assigned port, endpoint read from
+// this child's own stderr, honest failure when the browser prints none. This
+// matrix keeps its own argv (the --headed variant drops --headless=new).
+function startChrome(profile: string, extDir: string) {
   const args = [
     "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
     "--silent-debugger-extension-api",
     `--disable-extensions-except=${extDir}`, `--load-extension=${extDir}`,
-    "--remote-debugging-port=0", "--remote-allow-origins=*",
+    "--remote-allow-origins=*",
     "--window-size=1400,2400",
     `--user-data-dir=${profile}`, "about:blank",
   ];
   if (!HEADED) args.unshift("--headless=new");
-  return new Deno.Command(CHROMIUM, { args, stdout: "null", stderr: "piped" }).spawn();
-}
-
-async function waitForPort(proc: Deno.ChildProcess): Promise<number> {
-  const reader = proc.stderr.getReader();
-  let buf = "";
-  for (let i = 0; i < 120; i++) {
-    const { value, done } = await Promise.race([
-      reader.read(),
-      sleep(250).then(() => ({ value: undefined as Uint8Array | undefined, done: false })),
-    ]);
-    if (value) buf += new TextDecoder().decode(value);
-    const m = buf.match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)/);
-    if (m) {
-      reader.releaseLock();
-      return Number(m[1]);
-    }
-    if (done) break;
-  }
-  throw new Error("chrome did not expose a DevTools port");
+  return launchChrome({ args, stdout: "null", timeoutMs: 30000 });
 }
 
 interface Rig {
@@ -233,10 +218,12 @@ async function extensionIdForPath(dir: string): Promise<string> {
 }
 
 async function startRig(profile: string, extDir: string): Promise<{ rig: Rig; proc: Deno.ChildProcess }> {
-  const proc = launchChrome(profile, extDir);
-  const port = await waitForPort(proc);
-  const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
-  const cdp = await connectCdp(version.webSocketDebuggerUrl);
+  const chrome = await startChrome(profile, extDir);
+  const proc = chrome.proc;
+  const port = chrome.port;
+  // The browser endpoint came from THIS child's stderr — connect to it
+  // directly (no /json/version probe of a port that could belong to a stranger).
+  const cdp = await connectCdp(chrome.wsUrl);
   const extId = await extensionIdForPath(extDir);
   const rig: Rig = {
     cdp,
@@ -253,6 +240,7 @@ async function startRig(profile: string, extDir: string): Promise<{ rig: Rig; pr
       return session;
     },
     close() {
+      try { cdp.ws.close(); } catch { /* already closed */ }
       try { proc.kill("SIGKILL"); } catch { /* gone */ }
     },
   };

@@ -156,6 +156,12 @@ try {
   const perms = await opts.ev(`Promise.all([chrome.permissions.contains({permissions:["scripting"]}), chrome.permissions.contains({permissions:["tabs"]})]).then(([s,t]) => JSON.stringify({ scripting: s, tabs: t }))`);
   console.log("permissions held (seeded):", perms);
   console.log("provider.set ->", JSON.stringify(await opts.ev(msg({ type: "provider.set", config: { provider: "demo", apiKey: "" } }))));
+  // The marker demo model only answers when the developer flag is on; without
+  // it the keyless local assistant handles a tabs prompt itself and the
+  // "scripted to obey" run never reaches a model — the gate was red on
+  // origin/main for that reason (control run 1/3 on 2026-09-02). The journey
+  // suite enables the same flag for the same reason (CAP-FB-20260830-SUITE-HONESTY-01).
+  console.log("developer flag ->", JSON.stringify(await opts.ev(msg({ type: "kv.set", values: { "cap:developerFeatures": true } }))));
 
   // (a) passive detection: open the hostile page, let the detector report.
   const hostile = await attach(HOSTILE_URL, 3000);

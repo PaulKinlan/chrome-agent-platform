@@ -15,86 +15,49 @@
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
-const CHROMIUM = "/usr/bin/chromium";
+import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+import { makeChecker } from "./lib/expected-red.ts";
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-let pass = 0;
-let fail = 0;
-function check(name: string, cond: boolean, detail?: unknown) {
-  if (cond) { pass++; console.log(`PASS: ${name}`); }
-  else { fail++; console.log(`FAIL: ${name} — ${JSON.stringify(detail)}`); }
-}
+// Known failures OWNED by another tracker entry (CAP-FB-20260830-SUITE-HONESTY-01).
+// Each is still run and printed as EXPECTED-RED with its owner every time; the
+// run FAILS the moment one passes so the entry is removed here. Never a skip.
+const EXPECTED_RED: Record<string, string> = {
+  // The Usage "7 days" range chip: white on the dark-scheme accent (2.39:1).
+  "settings: contrast — no AA failures": "CAP-FB-20260827-SETTINGS-MONOLITH-01",
+  // The four "Get a … API key" provider links render 69x19 (under the 24px floor).
+  "settings: no interactive element under 24x24 px (canonical switch-toggle allowed)": "CAP-FB-20260830-PROVIDER-DEFAULT-AND-KEY-FLOW-01",
+};
+const checker = makeChecker({ expectedRed: EXPECTED_RED });
+const check = (name: string, cond: boolean, detail?: unknown) => checker.check(name, cond, detail);
 
 type Cdp = {
   send: (method: string, params: unknown, sessionId?: string) => Promise<any>;
   evl: (s: string, expr: string) => Promise<any>;
 };
 
-// Launch Chrome with the extension + connect over the DevTools WebSocket.
-async function launch(): Promise<{ proc: Deno.ChildProcess; cdp: Cdp; port: number }> {
+// Launch Chrome with the extension through the shared launcher (the port is
+// kernel-assigned and read back from this child's own stderr) + connect.
+async function launch(): Promise<{ proc: Deno.ChildProcess; cdp: Cdp; port: number; close: () => void }> {
   const tmp = await Deno.makeTempDir({ prefix: "cap-a11y-" });
-  const proc = new Deno.Command(CHROMIUM, {
-    args: [
-      "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
-      "--silent-debugger-extension-api",
-      `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-      "--remote-debugging-port=0", "--remote-allow-origins=*", "--window-size=1440,900",
-      `--user-data-dir=${tmp}`, "about:blank",
-    ],
-    stdout: "null",
-    stderr: "piped",
-  }).spawn();
-
-  let wsUrl = "";
-  const reader = proc.stderr.getReader();
-  const deadline = Date.now() + 15000;
-  let acc = "";
-  while (Date.now() < deadline && !wsUrl) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    acc += new TextDecoder().decode(value);
-    const m = acc.match(/DevTools listening on (ws:\/\/\S+)/);
-    if (m) wsUrl = m[1];
-  }
-  if (!wsUrl) {
-    console.log("FAIL: could not find the Chrome DevTools URL");
-    try { proc.kill("SIGKILL"); } catch { /* dead */ }
-    Deno.exit(1);
-  }
-  const port = Number(new URL(wsUrl).port);
-
-  let id = 0;
-  const pend = new Map<number, (v: unknown) => void>();
-  const ws = new WebSocket(wsUrl);
-  await new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = rej; });
-  ws.onmessage = (ev) => {
-    const m = JSON.parse(ev.data);
-    if (m.id && pend.has(m.id)) {
-      const resolve = pend.get(m.id)!;
-      pend.delete(m.id);
-      resolve(m.error ? Promise.reject(new Error(m.error.message)) : m.result);
-    }
-  };
-  const send = (method: string, params: unknown, sessionId?: string): Promise<any> => {
-    const mid = ++id;
-    return new Promise((resolve) => { pend.set(mid, resolve); ws.send(JSON.stringify({ id: mid, method, params, sessionId })); });
-  };
+  const chrome = await launchChrome({ extension: EXT, profile: tmp, windowSize: "1440,900" });
+  const client = await openCdp(chrome.wsUrl);
+  const send = async (method: string, params: unknown, sessionId?: string): Promise<any> =>
+    (await client.send(method, params, sessionId)).result;
   const evl = async (s: string, expr: string): Promise<any> => {
     const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, s);
     return r?.result?.value;
   };
-  return { proc, cdp: { send, evl }, port };
+  return { proc: chrome.proc, cdp: { send, evl }, port: chrome.port, close: client.close };
 }
 
 async function extId(cdp: Cdp): Promise<string> {
   // Discover the service worker target (the extension id lives in its URL).
-  const port = (cdp as any).port;
   for (let i = 0; i < 60; i++) {
-    try {
-      const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-      const sw = (targets as any[]).find((t) => t.type === "service_worker");
-      if (sw) return sw.url.split("/")[2];
-    } catch { /* retry */ }
+    const res = await cdp.send("Target.getTargets", {});
+    const sw = (res?.targetInfos ?? []).find((t: any) => t.type === "service_worker");
+    if (sw) return new URL(sw.url).host;
     await sleep(200);
   }
   throw new Error("extension did not load");
@@ -356,7 +319,7 @@ function serveDocs(): Promise<{ url: string; close: () => Promise<void> }> {
 }
 
 async function main() {
-  const { proc, cdp, port } = await launch();
+  const { proc, cdp, port, close } = await launch();
   (cdp as any).port = port;
   const docs = await serveDocs();
   try {
@@ -521,12 +484,13 @@ async function main() {
       }
     }
   } finally {
+    close();
     try { proc.kill("SIGKILL"); } catch { /* dead */ }
     await docs.close();
   }
 
-  console.log(`\nRESULT: ${pass} passed, ${fail} failed`);
-  Deno.exit(fail === 0 ? 0 : 1);
+  console.log(`\n${checker.summary()}`);
+  Deno.exit(checker.exitCode());
 }
 
 await main();

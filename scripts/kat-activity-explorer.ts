@@ -10,8 +10,9 @@
 //
 //   deno run -A scripts/kat-activity-explorer.ts
 
+import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
-const CHROMIUM = "/usr/bin/chromium";
 
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail?: unknown) {
@@ -80,40 +81,20 @@ function serve(pages: Record<string, string>): Promise<{ url: string; close: () 
 async function main() {
   const { url, close } = await serve({ hang: page(STUBS.hang), error: page(STUBS.error), ok: page(STUBS.ok) });
   const tmp = await Deno.makeTempDir({ prefix: "cap-aex-kat-" });
-  const proc = new Deno.Command(CHROMIUM, {
-    args: ["--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
-      "--remote-debugging-port=0", "--remote-allow-origins=*", "--window-size=1200,800",
-      `--user-data-dir=${tmp}`, "about:blank"],
-    stdout: "null", stderr: "piped",
-  }).spawn();
-
-  let wsUrl = "";
-  {
-    const reader = proc.stderr.getReader();
-    let acc = "";
-    const deadline = Date.now() + 15000;
-    while (Date.now() < deadline && !wsUrl) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      acc += new TextDecoder().decode(value);
-      const m = acc.match(/DevTools listening on (ws:\/\/\S+)/);
-      if (m) wsUrl = m[1];
-    }
+  // The shared launcher: kernel-assigned port, endpoint read from this child's
+  // own stderr, honest failure when the browser prints none.
+  let chrome;
+  try {
+    chrome = await launchChrome({ profile: tmp, windowSize: "1200,800" });
+  } catch (e) {
+    console.log(`FAIL: no DevTools URL — ${String(e)}`);
+    await close();
+    Deno.exit(1);
   }
-  if (!wsUrl) { console.log("FAIL: no DevTools URL"); await close(); Deno.exit(1); }
-
-  let id = 0;
-  const pend = new Map<number, (v: unknown) => void>();
-  const ws = new WebSocket(wsUrl);
-  await new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = rej; });
-  ws.onmessage = (ev) => {
-    const m = JSON.parse(ev.data);
-    if (m.id && pend.has(m.id)) { const r = pend.get(m.id)!; pend.delete(m.id); r(m.error ? Promise.reject(new Error(m.error.message)) : m.result); }
-  };
-  const send = (method: string, params: unknown, sessionId?: string): Promise<any> => {
-    const mid = ++id;
-    return new Promise((resolve) => { pend.set(mid, resolve); ws.send(JSON.stringify({ id: mid, method, params, sessionId })); });
-  };
+  const proc = chrome.proc;
+  const cdp = await openCdp(chrome.wsUrl);
+  const send = async (method: string, params: unknown, sessionId?: string): Promise<any> =>
+    (await cdp.send(method, params, sessionId)).result;
   const open = async (path: string) => {
     const t = await send("Target.createTarget", { url: `${url}/${path}` });
     const s = await send("Target.attachToTarget", { targetId: t.targetId, flatten: true });
@@ -224,11 +205,12 @@ async function main() {
       check("ok: 'All agents' restores the full list (1→3)", all === 3, all);
     }
   } finally {
+    cdp.close();
     try { proc.kill(); } catch {}
     await close();
   }
 
   console.log(`\nKAT: ${pass} pass ${fail} fail`);
-  if (fail > 0) Deno.exit(1);
+  Deno.exit(fail > 0 ? 1 : 0);
 }
 await main();

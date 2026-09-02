@@ -13,9 +13,10 @@
 //      revocation and return to #permissions.
 //   5. Captures screenshots, console messages, network activity, and accessibility tree.
 
+import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
-const CHROMIUM = "/usr/bin/chromium";
 const EVIDENCE_DIR = `${ROOT}.cache/kat-permissions-${Date.now()}`;
 await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
 
@@ -45,71 +46,26 @@ console.log(`Evidence directory: ${EVIDENCE_DIR}`);
 const userDataDir = `${ROOT}.cache/kat-permissions-profile-${Date.now()}`;
 await Deno.mkdir(userDataDir, { recursive: true });
 
-const proc = new Deno.Command(CHROMIUM, {
-  args: [
-    "--headless=new",
-    "--no-sandbox",
-    "--disable-gpu",
-    "--disable-dev-shm-usage",
-    "--silent-debugger-extension-api",
-    `--disable-extensions-except=${EXT}`,
-    `--load-extension=${EXT}`,
-    "--remote-debugging-port=0",
-    "--remote-allow-origins=*",
-    "--window-size=1440,900",
-    `--user-data-dir=${userDataDir}`,
-    "about:blank",
-  ],
-  stdout: "null",
-  stderr: "piped",
-}).spawn();
-
-let wsUrl = "";
-let port = 0;
-const reader = proc.stderr.getReader();
-const deadline = Date.now() + 15000;
-let acc = "";
-while (Date.now() < deadline && !wsUrl) {
-  const { value, done } = await reader.read();
-  if (done) break;
-  acc += new TextDecoder().decode(value);
-  const m = acc.match(/DevTools listening on (ws:\/\/\S+)/);
-  if (m) {
-    wsUrl = m[1];
-    const pm = wsUrl.match(/^ws:\/\/[^/:]+:(\d+)\//);
-    if (pm) port = Number(pm[1]);
-  }
-}
-
-if (!wsUrl || !port) {
-  console.error("FAIL: Could not locate Chrome DevTools WebSocket URL");
-  try { proc.kill("SIGKILL"); } catch {}
+// The shared launcher: kernel-assigned port, endpoint read from this child's
+// own stderr, honest failure when the browser prints none
+// (CAP-FB-20260829-FIXED-DEBUG-PORTS-01).
+let chrome;
+try {
+  chrome = await launchChrome({ extension: EXT, profile: userDataDir, windowSize: "1440,900" });
+} catch (e) {
+  console.error(`FAIL: Could not locate Chrome DevTools WebSocket URL — ${String(e)}`);
   Deno.exit(1);
 }
+const proc = chrome.proc;
+const port = chrome.port;
 
-const ws = new WebSocket(wsUrl);
-await new Promise((res, rej) => {
-  ws.onopen = () => res(null);
-  ws.onerror = rej;
-});
-
-let msgId = 0;
-const pending = new Map<number, (v: any) => void>();
-const send = (method: string, params: any = {}, sessionId?: string) =>
-  new Promise<any>((resolve) => {
-    const id = ++msgId;
-    pending.set(id, resolve);
-    ws.send(JSON.stringify({ id, method, params, sessionId }));
-  });
-
-ws.onmessage = (m) => {
-  const j = JSON.parse(m.data as string);
-  if (j.id && pending.has(j.id)) {
-    const cb = pending.get(j.id)!;
-    pending.delete(j.id);
-    cb(j);
-  }
-};
+const ws = await openCdp(chrome.wsUrl);
+// This harness reads the full CDP envelope (`res.result?.data`,
+// `t.result?.targetId`) and never rejected on a protocol error — it resolved
+// the `{ error }` envelope and let the optional chains fall through. Keep that
+// contract over the shared client.
+const send = (method: string, params: any = {}, sessionId?: string): Promise<any> =>
+  ws.send(method, params, sessionId).catch((e: any) => ({ error: { message: String(e?.message ?? e) } }));
 
 async function captureScreenshot(sessionId: string, filename: string) {
   try {
@@ -349,4 +305,4 @@ console.log(`ACCEPTANCE RESULTS: ${passCount} passed, ${failCount} failed`);
 console.log(`Evidence written to: ${EVIDENCE_DIR}`);
 console.log(`======================================================\n`);
 
-if (failCount > 0) Deno.exit(1);
+Deno.exit(failCount > 0 ? 1 : 0);

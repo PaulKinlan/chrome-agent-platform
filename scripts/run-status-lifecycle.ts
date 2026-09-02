@@ -1,6 +1,9 @@
 // run-status-lifecycle.ts — the REAL-Chrome journeys for the visible task/run
 // lifecycle status surface on current main, written
 // FAILING-FIRST from the rejected 0134bff review's blockers:
+// @ts-nocheck — untyped driver (the same pattern as panel-leak-probe.ts); it
+// carried 124 implicit-any errors before the launcher migration and its
+// assertions are runtime checks, not types.
 //
 // SURFACE (2026-08-28): the status surface is the conversation's INLINE
 // live-status row — `#thread-conversation conversation-run-status.live-status`
@@ -34,9 +37,10 @@
 //
 //   deno run -A scripts/run-status-lifecycle.ts
 
+import { launchChrome } from "./lib/chrome-launch.ts";
+
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
-const CHROMIUM = "/usr/bin/chromium";
 const GIT = "/usr/bin/git";
 const EVIDENCE_DIR = `/tmp/cap-run-status-evidence-${Date.now()}`;
 const RUN_ID = `cap-run-status-${Date.now()}`;
@@ -105,18 +109,21 @@ async function fetchJson(url, opts) {
   return await res.json();
 }
 
-function launchChrome(profile) {
-  return new Deno.Command(CHROMIUM, {
+// The shared launcher owns the spawn: kernel-assigned port, endpoint read from
+// this child's own stderr, honest failure when the browser prints none. The
+// journey keeps its own argv (fake media devices for the mic surface).
+function startChrome(profile) {
+  return launchChrome({
     args: [
       "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
       "--silent-debugger-extension-api",
       "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream",
       `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-      "--remote-debugging-port=0", "--remote-allow-origins=*",
+      "--remote-allow-origins=*",
       "--window-size=1400,2000", `--user-data-dir=${profile}`, "about:blank",
     ],
-    stdout: "null", stderr: "piped", clearEnv: true,
-  }).spawn();
+    stdout: "null", clearEnv: true, timeoutMs: 20000,
+  });
 }
 
 // Hard global watchdog: whatever happens below, the suite kills Chrome and
@@ -133,27 +140,16 @@ const watchdog = setTimeout(() => {
 async function main() {
   await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
   const profile = `/tmp/cap-run-status-profile-${Date.now()}`;
-  const proc = launchChrome(profile);
+  const chrome = await startChrome(profile);
+  const proc = chrome.proc;
   watchdogProc = proc;
+  const port = chrome.port;
 
-  let port = 0;
-  {
-    const reader = proc.stderr.getReader();
-    const deadline = Date.now() + 20000;
-    let acc = "";
-    while (Date.now() < deadline && !port) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      acc += new TextDecoder().decode(value);
-      const m = acc.match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)/);
-      if (m) port = Number(m[1]);
-    }
-    try { reader.releaseLock(); } catch { /* already released */ }
-  }
-  if (!port) throw new Error("chrome did not expose a DevTools port");
-
-  const version = await fetchJson(`http://127.0.0.1:${port}/json/version`);
-  const ws = new WebSocket(version.webSocketDebuggerUrl);
+  // The browser endpoint came from THIS child's stderr — connect to it
+  // directly (no /json/version probe of a port that could belong to a
+  // stranger). The journey keeps its own socket: it acks screencast frames
+  // and captures console errors per session.
+  const ws = new WebSocket(chrome.wsUrl);
   await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
 
   let idc = 0;
@@ -908,6 +904,7 @@ async function main() {
     failures.push("journey failure: " + String(e?.message ?? e));
   } finally {
     clearTimeout(watchdog);
+    try { ws.close(); } catch { /* already closed */ }
     try { proc.kill("SIGKILL"); } catch { /* already dead */ }
     await proc.status.catch(() => {});
     try { await Deno.remove(profile, { recursive: true }); } catch { /* best effort */ }
