@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.16] — 2026-09-02
+- review round 1: record the round-1 fixes and gates on the tracker
+
 ## [0.3.15] — 2026-09-02
 - review round 1: register the agent-workspace Settings routes and derive workspace keys from slugifyAgentId
 
