@@ -23,7 +23,8 @@ import {
   MAX_FS_WRITE_BYTES,
 } from "./fs-grants.js";
 import { normalizeHostPattern } from "./permission-orchestration.js";
-import { DEVELOPER_ONLY_TOOL_NAMES } from "./chrome-tool-capabilities.js";
+import { DEVELOPER_ONLY_TOOL_NAMES, requirementFor } from "./chrome-tool-capabilities.js";
+import { permissionPlainName } from "./permission-language.js";
 import { capLog } from "./cap-log.js";
 import { perfSpan } from "./cap-perf.js";
 
@@ -634,6 +635,94 @@ export function permissionDeniedResult(capability, { reason = `enable ${capabili
       permissions: [...perm],
     },
   };
+}
+
+// ── CAP-FB-20260901-ONE-CARD-PER-STEP-01: ONE denial for everything missing ──
+/** The FULL requirement of one tool, filtered to what is actually missing
+ * right now, as ONE structured denial — or null when the tool may proceed.
+ * The requirement comes from the capability table (`requirementFor`), so a
+ * `group_tabs` that lacks the `tabs` and `tabGroups` permissions AND the
+ * browser-control grant for its tabs' sites raises ONE card naming all three,
+ * and the owner's one click requests all of it in ONE chrome.permissions
+ * .request — never a cascade of three cards and two native prompts.
+ *
+ * Invariants: nothing is named beyond the tool's own row; the sites are
+ * exactly the ones the caller computed (never widened); an origin-less tab
+ * (`hasOriginless`) or a browser-wide tool needs the all-sites grant, while a
+ * tab whose address is merely HIDDEN by the missing `tabs` permission is
+ * unknown, not privileged — it is never turned into an all-sites ask. The
+ * result is a DESCRIPTION; granting happens on the owner's click. */
+async function missingRequirement(toolName, reason, { origins = [], hasOriginless = false, hostOrigins = [] } = {}) {
+  const need = requirementFor(toolName, { origins });
+  const permissions = [];
+  for (const permission of need.permissions) {
+    if (!(await hasPermission(permission))) permissions.push(permission);
+  }
+  const missingHosts = [];
+  for (const site of hostOrigins) {
+    if (!(await hasOriginHostPermission(site))) missingHosts.push(site);
+  }
+  let grantOrigins = [];
+  let grantGlobal = false;
+  if (need.browserControl) {
+    if (need.grantGlobal || hasOriginless) {
+      grantGlobal = !(await isBrowserControlGranted(undefined));
+    } else {
+      // The grant must cover EVERY site the tool touches. When any is
+      // uncovered the ask names ALL of them (exactly the tool's need, never
+      // more): the owner's Allow then sets one grant covering the whole set,
+      // so a site approved earlier is never dropped by a narrower record.
+      let uncovered = false;
+      for (const site of need.grantOrigins) {
+        if (!(await isBrowserControlGranted(site))) uncovered = true;
+      }
+      if (uncovered) grantOrigins = [...need.grantOrigins];
+    }
+  }
+  if (!permissions.length && !missingHosts.length && !grantOrigins.length && !grantGlobal) return null;
+  // The model-facing line names each missing thing in plain words.
+  const missing = [
+    ...permissions.map((permission) => `${permissionPlainName(permission)} permission not granted`),
+    ...(missingHosts.length ? [`site access not granted for ${missingHosts.map((site) => `${site}/*`).join(", ")}`] : []),
+    ...(grantGlobal
+      ? ["browser control not granted for all sites (this needs the all-sites grant)"]
+      : grantOrigins.length ? [`browser control not granted for ${grantOrigins.join(", ")}`] : []),
+  ].join("; ");
+  return {
+    ...permissionDenial(
+      `${missing} — allow it in the approval card here, or in Settings`,
+      { reason, permissions, hostOrigins: missingHosts, grantOrigins, grantGlobal },
+    ),
+    // The legacy alias some readers still consult (see permissionDeniedResult):
+    // the first missing Chrome permission, only when one is missing.
+    ...(permissions.length ? { permissionRequired: { capability: permissions[0] } } : {}),
+  };
+}
+
+/** Classify a set of tabs for the browser-control ask: the canonical web
+ * origins present, and whether any tab is genuinely ORIGIN-LESS (a chrome://,
+ * about:, devtools or new-tab page — a browser-level scope only the all-sites
+ * grant may authorize). A tab whose address is absent because the `tabs`
+ * permission is not held is UNKNOWN: it is neither a site nor origin-less, so
+ * the card asks for `tabs` and names the sites it can already see. */
+function tabOriginClasses(tabs, tabsPermission) {
+  let hasOriginless = false;
+  const origins = new Set();
+  for (const tab of tabs) {
+    if (typeof tab?.url !== "string" || tab.url.length === 0) {
+      if (tabsPermission) hasOriginless = true;
+      continue;
+    }
+    let origin = null;
+    try {
+      origin = canonicalOrigin(tab.url);
+    } catch {
+      origin = null;
+    }
+    if (typeof origin === "string") origins.add(origin);
+    else hasOriginless = true;
+  }
+  return { origins: [...origins], hasOriginless };
 }
 
 /** Window-level mutation under the SAME grant discipline as close_tab
@@ -1507,63 +1596,40 @@ async function injectPageAction(tabId, op, params) {
   return r;
 }
 
+/** The infinitive for a tab-groups verb, for the card's "wants to …" line. */
+const TAB_VERB_BASE = Object.freeze({ grouped: "group", ungrouped: "ungroup", moved: "move", updated: "update" });
+
 /** Tab-origin grant discipline for the T3 tabGroups mutations: the affected
  * tabs' origins are read INSIDE the grant lock (a navigation since any earlier
  * read must not smuggle an unauthorized origin past the check); the grant must
  * cover EVERY tab origin (grouping/moving a tab is that tab's mutation); tabs
  * with no origin (new-tab/chrome pages) need a GLOBAL grant. Durable ownership
- * is asserted adjacent to the mutation and re-checked after the await. */
-async function withTabIdsGrant(tabIds, verb, mutate) {
-  if (!(await hasTabsPermission())) {
-    return permissionDenial(
-      "tabs permission not granted — allow it in the approval card here, or in Settings → Permissions",
-      {
-        reason: `${verb === "grouped" ? "group" : verb === "ungrouped" ? "ungroup" : verb === "moved" ? "move" : "control"} your tabs`,
-        permissions: ["tabs"],
-      },
-    );
-  }
+ * is asserted adjacent to the mutation and re-checked after the await.
+ *
+ * ONE-CARD-PER-STEP-01: the permissions (`tabs`, `tabGroups`) and the grant
+ * are checked TOGETHER — the tool's first denial names everything it lacks
+ * (one card, one native prompt). Reading a tab by id needs no permission; its
+ * address is hidden without `tabs`, in which case the card asks for `tabs`
+ * and names only the sites it can already see (never all sites). */
+async function withTabIdsGrant(tabIds, verb, mutate, toolName) {
+  const base = TAB_VERB_BASE[verb] ?? "control";
   return await withGrantLock(async () => {
     const tabs = await Promise.all(
       tabIds.map((id) => chrome.tabs.get(id).catch(() => null)),
     );
     if (tabs.some((t) => t == null)) return { error: "no such tab" };
-    let hasOriginless = false;
-    const origins = [...new Set(
-      tabs
-        .map((t) => {
-          try {
-            return t?.url ? canonicalOrigin(t.url) : null;
-          } catch {
-            return null;
-          }
-        })
-        .filter((o) => {
-          if (typeof o === "string") return true;
-          // A tab with NO canonical origin (chrome://, edge://, devtools, a
-          // fresh new-tab, …) is an origin-less scope: it must NEVER be
-          // authorized by a per-origin grant. Any origin-less tab in the set
-          // forces the GLOBAL grant (review finding, T3/T4 REVISE round).
-          hasOriginless = true;
-          return false;
-        }),
-    )];
-    const covered = (hasOriginless || origins.length === 0)
-      ? await isBrowserControlGranted(undefined)
-      : (await Promise.all(origins.map((o) => isBrowserControlGranted(o)))).every(Boolean);
-    if (!covered) {
-      const needsGlobal = hasOriginless || origins.length === 0;
-      return permissionDenial(
-        "browser control not granted for every tab origin here — the owner can approve it in the approval card here, or in Settings → Browser control",
-        {
-          reason: needsGlobal
-            ? `${verb} tabs (one has no single site — this needs the all-sites browser-control grant)`
-            : `${verb} tabs on ${origins.join(", ")}`,
-          grantOrigins: needsGlobal ? [] : origins,
-          grantGlobal: needsGlobal,
-        },
-      );
-    }
+    // A tab with NO canonical origin (chrome://, edge://, devtools, a fresh
+    // new-tab, …) is an origin-less scope: it must NEVER be authorized by a
+    // per-origin grant. Any origin-less tab in the set forces the GLOBAL
+    // grant (review finding, T3/T4 REVISE round).
+    const { origins, hasOriginless } = tabOriginClasses(tabs, await hasTabsPermission());
+    const reason = hasOriginless
+      ? `${base} tabs (one has no single site — this needs the all-sites browser-control grant)`
+      : origins.length
+        ? `${base} tabs on ${origins.join(", ")}`
+        : `${base} your tabs`;
+    const denial = await missingRequirement(toolName, reason, { origins, hasOriginless });
+    if (denial) return denial;
     try {
       await assertRunOwned();
     } catch {
@@ -1581,57 +1647,35 @@ async function withTabIdsGrant(tabIds, verb, mutate) {
 
 /** A tab group's own tabs are read inside the lock for the same origin
  * discipline (update_tab_group mutates the group = mutates its tabs). */
-async function withTabGroupGrant(groupId, verb, mutate) {
-  if (!(await hasTabsPermission())) {
-    return permissionDenial(
-      "tabs permission not granted — allow it in the approval card here, or in Settings → Permissions",
-      { reason: `${verb} a tab group`, permissions: ["tabs"] },
-    );
-  }
+async function withTabGroupGrant(groupId, verb, mutate, toolName) {
+  const base = TAB_VERB_BASE[verb] ?? "change";
   return await withGrantLock(async () => {
+    const tabsPermission = await hasTabsPermission();
     const tg = tabGroupsApi();
-    if (!tg) return { error: "tab groups API not available in this browser context" };
-    const group = await tg.get(groupId).catch(() => null);
-    if (!group) return { error: "no such tab group" };
-    const tabIds = Array.isArray(group.tabIds) ? group.tabIds : [];
-    const tabs = await Promise.all(
+    // The group's own tabs decide the ask, so the group must be readable: when
+    // the `tabGroups` permission is missing the namespace answers nothing and
+    // the ONE card asks for the permissions (the sites follow on the re-run).
+    const group = tg && (await hasPermission("tabGroups")) ? await tg.get(groupId).catch(() => null) : null;
+    if (!group && tg && (await hasPermission("tabGroups"))) return { error: "no such tab group" };
+    const tabIds = Array.isArray(group?.tabIds) ? group.tabIds : [];
+    const tabs = (await Promise.all(
       tabIds.map((id) => chrome.tabs.get(id).catch(() => null)),
-    );
-    let hasOriginless = false;
-    const origins = [...new Set(
-      tabs
-        .filter((t) => t != null && typeof t?.url === "string")
-        .map((t) => {
-          try {
-            return canonicalOrigin(t.url);
-          } catch {
-            return null;
-          }
-        })
-        .filter((o) => {
-          if (typeof o === "string") return true;
-          // Same rule as withTabIdsGrant: an origin-less tab in the group
-          // forces the GLOBAL grant (review finding, T3/T4 REVISE round).
-          hasOriginless = true;
-          return false;
-        }),
-    )];
-    const covered = (hasOriginless || origins.length === 0)
-      ? await isBrowserControlGranted(undefined)
-      : (await Promise.all(origins.map((o) => isBrowserControlGranted(o)))).every(Boolean);
-    if (!covered) {
-      const needsGlobal = hasOriginless || origins.length === 0;
-      return permissionDenial(
-        "browser control not granted for every tab origin in this group — the owner can approve it in the approval card here, or in Settings → Browser control",
-        {
-          reason: needsGlobal
-            ? `${verb} a tab group (one tab has no single site — this needs the all-sites browser-control grant)`
-            : `${verb} a tab group on ${origins.join(", ")}`,
-          grantOrigins: needsGlobal ? [] : origins,
-          grantGlobal: needsGlobal,
-        },
-      );
-    }
+    )).filter((t) => t != null);
+    // Same rule as withTabIdsGrant: an origin-less tab in the group forces
+    // the GLOBAL grant (review finding, T3/T4 REVISE round); a group with no
+    // readable tab at all is an origin-less scope too.
+    const classes = tabOriginClasses(tabs, tabsPermission);
+    const hasOriginless = classes.hasOriginless || (group != null && tabsPermission && classes.origins.length === 0);
+    const origins = classes.origins;
+    const reason = hasOriginless
+      ? `${base} a tab group (one tab has no single site — this needs the all-sites browser-control grant)`
+      : origins.length
+        ? `${base} a tab group on ${origins.join(", ")}`
+        : `${base} a tab group`;
+    const denial = await missingRequirement(toolName, reason, { origins, hasOriginless });
+    if (denial) return denial;
+    if (!tg) return { error: "tab groups API not available in this browser context" };
+    if (!group) return { error: "no such tab group" };
     try {
       await assertRunOwned();
     } catch {
@@ -2311,9 +2355,6 @@ export function browserToolset(readOnly = false, {
         // never be authorized, so it is refused before any permission check.
         const dest = webDestination(url);
         if (dest.error) return { error: dest.error };
-        if (!(await hasTabsPermission())) {
-          return permissionDeniedResult("tabs", { reason: `open ${url} in a new tab` });
-        }
         // Check the DESTINATION origin against the grant (a per-origin grant
         // only authorizes its own origins; a global grant authorizes all).
         let destOrigin;
@@ -2322,16 +2363,13 @@ export function browserToolset(readOnly = false, {
         } catch {
           return { error: "invalid url" };
         }
-        // Check the grant + perform the mutation under the SAME grant lock: a
-        // revoke can no longer interleave with the checked tabs.create (the
-        // round-17 check-then-act blocker).
+        // Check the `tabs` permission AND the grant together (ONE card —
+        // CAP-FB-20260901-ONE-CARD-PER-STEP-01) + perform the mutation under
+        // the SAME grant lock: a revoke can no longer interleave with the
+        // checked tabs.create (the round-17 check-then-act blocker).
         return await withGrantLock(async () => {
-          if (!(await isBrowserControlGranted(destOrigin))) {
-            return permissionDenial(
-              "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
-              { reason: `open ${destOrigin} in a new tab`, grantOrigins: [destOrigin] },
-            );
-          }
+          const denial = await missingRequirement("open_tab", `open ${destOrigin} in a new tab`, { origins: [destOrigin] });
+          if (denial) return denial;
           try {
             await assertRunOwned();
           } catch {
@@ -2370,9 +2408,6 @@ export function browserToolset(readOnly = false, {
         // privileged or non-web scheme, whatever the grant says.
         const dest = webDestination(url);
         if (dest.error) return { error: dest.error };
-        if (!(await hasTabsPermission())) {
-          return permissionDeniedResult("tabs", { reason: `navigate a tab to ${url}` });
-        }
         // Check the DESTINATION origin (not just the current tab's origin): an
         // approved origin must not be navigated to an unapproved one.
         let destOrigin;
@@ -2383,35 +2418,31 @@ export function browserToolset(readOnly = false, {
         }
         const id = tabId ?? (await activeTab())?.id;
         if (!id) return { error: "no tab" };
-        // Check BOTH origins + perform the mutation under the SAME grant lock
-        // (a revoke can no longer interleave with the checked tabs.update).
+        // Check the `tabs` permission + BOTH origins together (ONE card —
+        // CAP-FB-20260901-ONE-CARD-PER-STEP-01) + perform the mutation under
+        // the SAME grant lock (a revoke can no longer interleave with the
+        // checked tabs.update).
         return await withGrantLock(async () => {
           // Re-read the SOURCE tab INSIDE the grant lock, immediately before the
           // mutation, so the source identity is authorized atomically with the
           // navigate (the round-19 blocker: the source was snapshotted BEFORE the
           // lock, so an authorized-B→unauthorized-C move still navigated C).
+          const tabsPermission = await hasTabsPermission();
           const srcTab = await chrome.tabs.get(id).catch(() => null);
-          const srcOrigin = srcTab?.url
-            ? (() => {
-              try {
-                return canonicalOrigin(srcTab.url);
-              } catch {
-                return undefined;
-              }
-            })()
-            : undefined;
-          if (!(await isBrowserControlGranted(destOrigin))) {
-            return permissionDenial(
-              "browser control not granted for the destination origin — the owner can approve it in the approval card here, or in Settings → Browser control",
-              { reason: `navigate a tab to ${destOrigin}`, grantOrigins: [destOrigin] },
-            );
-          }
-          if (!(await isBrowserControlGranted(srcOrigin))) {
-            return permissionDenial(
-              "browser control not granted for the source tab's origin — the owner can approve it in the approval card here, or in Settings → Browser control",
-              { reason: srcOrigin ? `navigate away from ${srcOrigin}` : "navigate a tab that has no single site (this needs the all-sites browser-control grant)", grantOrigins: srcOrigin ? [srcOrigin] : [], grantGlobal: !srcOrigin },
-            );
-          }
+          const srcTabs = srcTab ? [srcTab] : [];
+          const srcClasses = tabOriginClasses(srcTabs, tabsPermission);
+          const srcOrigin = srcClasses.origins[0];
+          const srcOriginless = srcClasses.hasOriginless || (srcTab == null && tabsPermission);
+          const denial = await missingRequirement(
+            "navigate_tab",
+            srcOriginless
+              ? `navigate a tab that has no single site to ${destOrigin} (this needs the all-sites browser-control grant)`
+              : srcOrigin && srcOrigin !== destOrigin
+                ? `navigate a tab from ${srcOrigin} to ${destOrigin}`
+                : `navigate a tab to ${destOrigin}`,
+            { origins: srcOrigin ? [destOrigin, srcOrigin] : [destOrigin], hasOriginless: srcOriginless },
+          );
+          if (denial) return denial;
           try {
             await assertRunOwned();
           } catch {
@@ -3565,12 +3596,8 @@ export function browserToolset(readOnly = false, {
         windowId: z.number().int().min(1).optional(),
       }),
       execute: async ({ windowId }) => {
-        if (!(await hasPermission("tabGroups"))) {
-          return permissionDenial(
-            "tab groups permission not granted — allow it in the approval card here, or in Settings → Permissions",
-            { reason: "list your tab groups", permissions: ["tabGroups"] },
-          );
-        }
+        const denial = await missingRequirement("list_tab_groups", "list your tab groups");
+        if (denial) return denial;
         const tg = tabGroupsApi();
         if (!tg) return { error: "tab groups API not available in this browser context" };
         const groups = await tg.query(windowId ? { windowId } : {});
@@ -3594,12 +3621,8 @@ export function browserToolset(readOnly = false, {
         color: z.enum(["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"]).optional(),
       }),
       execute: async ({ tabIds, title, color }) => {
-        if (!(await hasPermission("tabGroups"))) {
-          return permissionDenial(
-            "tab groups permission not granted — allow it in the approval card here, or in Settings → Permissions",
-            { reason: "group your tabs", permissions: ["tabGroups", "tabs"] },
-          );
-        }
+        // ONE combined pre-check (permissions + browser control) inside the
+        // grant helper — CAP-FB-20260901-ONE-CARD-PER-STEP-01.
         return await withTabIdsGrant(tabIds, "grouped", async () => {
           const tg = tabGroupsApi();
           const tabsApi = chromeApi("tabs");
@@ -3615,7 +3638,7 @@ export function browserToolset(readOnly = false, {
             await tg.update(groupId, props);
           }
           return { ok: true, groupId, tabIds };
-        });
+        }, "group_tabs");
       },
     }),
     update_tab_group: tool({
@@ -3628,12 +3651,6 @@ export function browserToolset(readOnly = false, {
         collapsed: z.boolean().optional(),
       }).refine((v) => v.title !== undefined || v.color !== undefined || v.collapsed !== undefined, "at least one field is required"),
       execute: async ({ groupId, title, color, collapsed }) => {
-        if (!(await hasPermission("tabGroups"))) {
-          return permissionDenial(
-            "tab groups permission not granted — allow it in the approval card here, or in Settings → Permissions",
-            { reason: "update a tab group", permissions: ["tabGroups", "tabs"] },
-          );
-        }
         return await withTabGroupGrant(groupId, "updated", async () => {
           const props = {};
           if (title !== undefined) props.title = title;
@@ -3649,7 +3666,7 @@ export function browserToolset(readOnly = false, {
             color: group.color ?? null,
             collapsed: Boolean(group.collapsed),
           };
-        });
+        }, "update_tab_group");
       },
     }),
     ungroup_tabs: tool({
@@ -3659,12 +3676,6 @@ export function browserToolset(readOnly = false, {
         tabIds: z.array(z.number().int().min(1)).min(1).max(16),
       }),
       execute: async ({ tabIds }) => {
-        if (!(await hasPermission("tabGroups"))) {
-          return permissionDenial(
-            "tab groups permission not granted — allow it in the approval card here, or in Settings → Permissions",
-            { reason: "ungroup your tabs", permissions: ["tabGroups", "tabs"] },
-          );
-        }
         return await withTabIdsGrant(tabIds, "ungrouped", async () => {
           const tabsApi = chromeApi("tabs");
           if (!tabsApi) return { error: "tab groups API not available in this browser context" };
@@ -3672,7 +3683,7 @@ export function browserToolset(readOnly = false, {
           // does NOT exist).
           await tabsApi.ungroup(tabIds);
           return { ok: true, tabIds };
-        });
+        }, "ungroup_tabs");
       },
     }),
     move_tab_to_group: tool({
@@ -3683,12 +3694,6 @@ export function browserToolset(readOnly = false, {
         groupId: z.number().int().min(1),
       }),
       execute: async ({ tabIds, groupId }) => {
-        if (!(await hasPermission("tabGroups"))) {
-          return permissionDenial(
-            "tab groups permission not granted — allow it in the approval card here, or in Settings → Permissions",
-            { reason: "move tabs into a group", permissions: ["tabGroups", "tabs"] },
-          );
-        }
         return await withTabIdsGrant(tabIds, "moved", async () => {
           const tg = tabGroupsApi();
           const tabsApi = chromeApi("tabs");
@@ -3698,7 +3703,7 @@ export function browserToolset(readOnly = false, {
           // tabGroups.move() is for repositioning the GROUP, with a different signature).
           const gid = await tabsApi.group({ tabIds, groupId });
           return { ok: true, groupId: gid, tabIds };
-        });
+        }, "move_tab_to_group");
       },
     }),
     // ── Tranche-4 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
@@ -3875,7 +3880,7 @@ export function browserToolset(readOnly = false, {
           if (index !== undefined) props.index = index;
           const moved = await chrome.tabs.move(tabId, props);
           return { ok: true, tabId, windowId: moved?.windowId ?? null, index: moved?.index ?? null };
-        }),
+        }, "move_tab"),
     }),
     duplicate_tab: tool({
       description:
@@ -3885,7 +3890,7 @@ export function browserToolset(readOnly = false, {
         t13MutateTabWithGrant(tabId, "duplicated", async () => {
           const copy = await chrome.tabs.duplicate(tabId);
           return { ok: true, tabId, newTabId: copy?.id ?? null };
-        }),
+        }, "duplicate_tab"),
     }),
     set_tab_pinned: tool({
       description:
@@ -3895,7 +3900,7 @@ export function browserToolset(readOnly = false, {
         t13MutateTabWithGrant(tabId, pinned ? "pinned" : "unpinned", async () => {
           await chrome.tabs.update(tabId, { pinned });
           return { ok: true, tabId, pinned };
-        }),
+        }, "set_tab_pinned"),
     }),
     reload_tab: tool({
       description:
@@ -3905,7 +3910,7 @@ export function browserToolset(readOnly = false, {
         t13MutateTabWithGrant(tabId, "reloaded", async () => {
           await chrome.tabs.reload(tabId, { bypassCache: Boolean(bypassCache) });
           return { ok: true, tabId, bypassCache: Boolean(bypassCache) };
-        }),
+        }, "reload_tab"),
     }),
     tab_go_back: tool({
       description:
@@ -3915,7 +3920,7 @@ export function browserToolset(readOnly = false, {
         t13MutateTabWithGrant(tabId, "navigated back", async () => {
           await chrome.tabs.goBack(tabId);
           return { ok: true, tabId };
-        }),
+        }, "tab_go_back"),
     }),
     tab_go_forward: tool({
       description:
@@ -3925,7 +3930,7 @@ export function browserToolset(readOnly = false, {
         t13MutateTabWithGrant(tabId, "navigated forward", async () => {
           await chrome.tabs.goForward(tabId);
           return { ok: true, tabId };
-        }),
+        }, "tab_go_forward"),
     }),
     get_tab_zoom: tool({
       description:
@@ -3954,7 +3959,7 @@ export function browserToolset(readOnly = false, {
         t13MutateTabWithGrant(tabId, "zoomed", async () => {
           await chrome.tabs.setZoom(tabId, zoomFactor);
           return { ok: true, tabId, zoomFactor };
-        }),
+        }, "set_tab_zoom"),
     }),
     discard_tab: tool({
       description:
@@ -3968,7 +3973,7 @@ export function browserToolset(readOnly = false, {
             return { error: `tab not discarded: ${e?.message ?? e}` };
           }
           return { ok: true, tabId };
-        }),
+        }, "discard_tab"),
     }),
     highlight_tabs: tool({
       description:
@@ -6409,22 +6414,26 @@ function t13OriginClass(tab) {
   return typeof o === "string" ? o : null; // null = the origin-less class
 }
 
-async function t13MutateTabWithGrant(tabId, verb, mutate) {
-  if (!(await hasTabsPermission())) {
-    return permissionDeniedResult("tabs", { reason: "control a tab" });
-  }
+async function t13MutateTabWithGrant(tabId, verb, mutate, toolName) {
   return await withGrantLock(async () => {
+    const tabsPermission = await hasTabsPermission();
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     if (!tab) return { error: `no such tab: ${tabId}` };
-    const origin = t13OriginClass(tab);
-    // null (origin-less) reaches isBrowserControlGranted(undefined-equivalent):
-    // a global grant authorizes it, an origins grant never does.
-    if (!(await isBrowserControlGranted(origin))) {
-      return permissionDenial(
-        "browser control not granted for this origin — the owner can approve it in the approval card here, or in Settings → Browser control",
-        { reason: origin ? `control a tab on ${origin}` : "control a tab that has no single site (this needs the all-sites browser-control grant)", grantOrigins: origin ? [origin] : [], grantGlobal: !origin },
-      );
-    }
+    // ONE combined pre-check — the `tabs` permission and the grant together
+    // (CAP-FB-20260901-ONE-CARD-PER-STEP-01). An address hidden by the
+    // missing `tabs` permission is unknown (the card asks for `tabs`); a
+    // genuinely origin-less tab needs the all-sites grant, which a per-origin
+    // grant never authorizes.
+    const classes = tabOriginClasses([tab], tabsPermission);
+    const origin = classes.origins[0] ?? null;
+    const denial = await missingRequirement(
+      toolName,
+      classes.hasOriginless
+        ? "control a tab that has no single site (this needs the all-sites browser-control grant)"
+        : origin ? `control a tab on ${origin}` : "control a tab",
+      { origins: origin ? [origin] : [], hasOriginless: classes.hasOriginless },
+    );
+    if (denial) return denial;
     try {
       await assertRunOwned();
     } catch {

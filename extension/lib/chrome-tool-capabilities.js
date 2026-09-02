@@ -4,6 +4,8 @@
 // The table contains DATA ONLY. It is not a grant, permission request,
 // dispatcher, validator, provider binding, or execution allowlist.
 
+import { permissionUserLanguage, siteLabel } from "./permission-language.js";
+
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
   browserTools: 137,
   managementTools: 42,
@@ -350,15 +352,18 @@ const rows = [
   record("set_content_setting", "chrome-api", ["chrome.content-settings.set.exact-origin"], ["contentSettings"], "destination-origin", "mutating", false, "mutating", "browser.content-settings"),
   record("clear_content_settings", "chrome-api", ["chrome.content-settings.clear.exact-origin"], ["contentSettings"], "destination-origin", "mutating", false, "mutating", "browser.content-settings"),
   // Tranche-3 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
-  // tabGroups — the owner's "sorting hat" unlock. tabGroups itself needs NO
-  // manifest permission; the tab url/title reads for the grant scoping ride the
-  // declared "tabs" permission. Mutations are tab-origin grant-scoped (the same
-  // browser-control grant as the tabs/windows siblings); reads are un-scoped.
-  record("list_tab_groups", "chrome-api", ["chrome.tab-groups.list"], [], "none", "read-only", false, "read", "browser.tab-groups"),
-  record("group_tabs", "chrome-api", ["chrome.tab-groups.group.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tab-groups"),
-  record("update_tab_group", "chrome-api", ["chrome.tab-groups.update.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tab-groups"),
-  record("ungroup_tabs", "chrome-api", ["chrome.tab-groups.ungroup.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tab-groups"),
-  record("move_tab_to_group", "chrome-api", ["chrome.tab-groups.move.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tab-groups"),
+  // tabGroups — the owner's "sorting hat" unlock. The `tabGroups` optional
+  // permission gates the chrome.tabGroups namespace (the tools check it, the
+  // manifest declares it); the tab url/title reads for the grant scoping ride
+  // the declared "tabs" permission. Mutations are tab-origin grant-scoped (the
+  // same browser-control grant as the tabs/windows siblings); reads are
+  // un-scoped. Both permissions are listed so `requirementFor` derives the
+  // FULL ask before the first denial (CAP-FB-20260901-ONE-CARD-PER-STEP-01).
+  record("list_tab_groups", "chrome-api", ["chrome.tab-groups.list"], ["tabGroups"], "none", "read-only", false, "read", "browser.tab-groups"),
+  record("group_tabs", "chrome-api", ["chrome.tab-groups.group.tab-origin"], ["tabGroups", "tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tab-groups"),
+  record("update_tab_group", "chrome-api", ["chrome.tab-groups.update.tab-origin"], ["tabGroups", "tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tab-groups"),
+  record("ungroup_tabs", "chrome-api", ["chrome.tab-groups.ungroup.tab-origin"], ["tabGroups", "tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tab-groups"),
+  record("move_tab_to_group", "chrome-api", ["chrome.tab-groups.move.tab-origin"], ["tabGroups", "tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tab-groups"),
 
   // Tranche-4 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
   // downloads — the "downloads" optional permission is already declared;
@@ -623,6 +628,56 @@ export function capabilitiesByTool(toolMap, sourceKind) {
     throw error;
   }
   return Object.freeze(Object.fromEntries(names.map((name) => [name, chromeToolCapability(name, sourceKind).capabilityTokens])));
+}
+
+// ── CAP-FB-20260901-ONE-CARD-PER-STEP-01: the FULL requirement of one tool ──
+/** Everything a tool may have to ask the owner for, derived from its table
+ * row BEFORE any denial, so a tool's pre-check can raise ONE structured
+ * denial (one card, one native prompt) instead of discovering each missing
+ * piece in sequence. Data only — the caller filters it to what is actually
+ * missing; nothing here is requested, and nothing beyond the tool's own row is
+ * ever named (a `list_tabs` asks for `tabs` alone).
+ *
+ *   permissions   the optional Chrome permissions the tool needs (never
+ *                 `activeTab`, which is Chrome's owner-gesture path and is not
+ *                 requested from the model path);
+ *   hostOrigins   the sites whose Chrome SITE ACCESS the tool needs — only for
+ *                 a page-reaching tool (`chrome.host.exact-origin`), and only
+ *                 the sites the caller names;
+ *   grantOrigins / grantGlobal / browserControl
+ *                 the product browser-control grant: the caller's sites for a
+ *                 tab-/destination-scoped mutation, the all-sites grant for a
+ *                 browser-wide one, nothing for a read;
+ *   reasons       one user-language line per thing asked (the card copy —
+ *                 never a permission token). */
+const WEB_ORIGIN = /^https?:\/\/[^/]+$/;
+export function requirementFor(toolName, { origin = null, origins = [], sourceKind = "chrome-api" } = {}) {
+  const row = chromeToolCapability(toolName, sourceKind);
+  const permissions = row.optionalPermissions.filter((permission) => permission !== "activeTab");
+  const sites = [...new Set([origin, ...(Array.isArray(origins) ? origins : [])]
+    .filter((site) => typeof site === "string" && WEB_ORIGIN.test(site)))];
+  const hostOrigins = row.capabilityTokens.includes("chrome.host.exact-origin") ? sites : [];
+  const scope = row.productGrantScopeKind;
+  const browserControl = scope === "tab-scoped" || scope === "destination-origin" || scope === "global";
+  const grantGlobal = scope === "global";
+  const grantOrigins = browserControl && !grantGlobal ? sites : [];
+  const reasons = [
+    ...permissions.map((permission) => permissionUserLanguage(permission)),
+    ...hostOrigins.map((site) => `access ${siteLabel(site)}`),
+    ...(grantGlobal
+      ? ["control the browser on all sites"]
+      : grantOrigins.map((site) => `control the browser on ${siteLabel(site)}`)),
+  ];
+  return Object.freeze({
+    toolName: row.toolName,
+    permissions: Object.freeze(permissions),
+    hostOrigins: Object.freeze(hostOrigins),
+    grantOrigins: Object.freeze(grantOrigins),
+    grantGlobal,
+    browserControl,
+    grantScope: scope,
+    reasons: Object.freeze(reasons),
+  });
 }
 
 export function selectedCapabilitySummary(name, sourceKind, fallbackCapabilities = [], fallbackReplay = "unknown") {

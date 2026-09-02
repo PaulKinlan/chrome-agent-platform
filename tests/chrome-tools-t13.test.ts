@@ -224,7 +224,12 @@ Deno.test("T13 permission gates: no tabs permission → structured denial; no si
   granted.delete("tabs");
   for (const [name, args] of TAB_MUTATIONS) {
     const r = await tools()[name].execute(args);
-    assertEquals(r.error, "tabs permission not granted — allow it in the approval card here, or in Settings → Permissions", name);
+    // ONE structured denial naming `tabs` (and, since this shim shows the
+    // tab's address, the site's browser control on the SAME card —
+    // CAP-FB-20260901-ONE-CARD-PER-STEP-01), never a bare string.
+    assert(typeof r.error === "string" && r.error.includes("tabs permission not granted"), `${name}: ${r.error}`);
+    assertEquals(r.waitingForPermission, true, name);
+    assertEquals(r.permissionRequirement?.permissions, ["tabs"], name);
   }
   assertEquals((await tools().get_tab_zoom.execute({ tabId: t.id })).error, "tabs permission not granted — allow it in the approval card here, or in Settings → Permissions");
   assertEquals((await tools().highlight_tabs.execute({ tabIds: [t.id] })).error, "tabs permission not granted — allow it in the approval card here, or in Settings → Permissions");

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.639] — 2026-09-02
+- When the agent needs several permissions for one action, you now see a single card in plain words and one Chrome prompt.
+
 ## [0.2.638] — 2026-09-02
 - Task board: the long-task memory fix is complete; three more items are being worked on.
 
