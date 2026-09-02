@@ -36,6 +36,12 @@ export function normalizeConversationRunStatus(input) {
   // EVERY-ITEM-01): the run used its steps with work left. Say so, in the
   // accent tone, and let the Continue action carry on.
   if (state === "failed" && category === "budget") {
+    // A continuation-cap stop (CAP-FB-20260830-MODEL-CALL-ECONOMY-01) is in
+    // the budget family (same Continue action) but its own words: the reason
+    // already reads "Stopped after N steps — …", muted, never "Budget reached".
+    if (/^Stopped after \d+ steps?\b/.test(reason)) {
+      return { state, label: reason, active: false, stoppable: false, tone: "muted" };
+    }
     return { state, label: `Budget reached${reason ? ` — ${reason}` : ""}`, active: false, stoppable: false, tone: "accent" };
   }
 

@@ -29,12 +29,13 @@
 // in `overflow` — a harness asserts `overflow === 0` rather than being handed
 // a silently-invented turn.
 //
-// Budget one extra text step per turn: after any step that called a tool,
-// agent-do sends a synthetic user turn ("Continue working on the task. If you
-// are done, respond with your final summary…") and the run-text tracker hides
-// the reply (extension/lib/run-text-steps.js). A turn that searches, executes
-// and answers is therefore FOUR model calls: search, execute, answer, nudge
-// reply. Measured with a transcript probe on 2026-09-02.
+// A turn that searches, executes and answers is THREE model calls: search,
+// execute, answer. agent-do's synthetic continuation turn ("Continue working
+// on the task…") is no longer sent after a step that already answered
+// (CAP-FB-20260830-MODEL-CALL-ECONOMY-01 — the loop's own onStepStart stop
+// hook declines it), so a fourth request shows up as an overflow. A model that
+// answers a continuation with a tool call and then silence is nudged at most
+// three times, after which the run stops with "Stopped after N steps".
 //
 // Binds to 127.0.0.1 only. Never reads an environment key. Never logs a body.
 

@@ -327,3 +327,65 @@ Deno.test("run budget: the status row offers Continue (not Fix in Settings) for 
   assertEquals(status.tone, "accent");
   assertEquals(status.active, false);
 });
+
+// ── CAP-FB-20260830-MODEL-CALL-ECONOMY-01: the continuation budget ───────────
+import {
+  CONTINUATION_SILENT_CAP,
+  continuationStopDecision,
+  continuationStopTerminal,
+  formatContinuationStop,
+  isContinuationStopTerminal,
+  isSilentIteration,
+} from "../extension/lib/run-budget.js";
+
+Deno.test("continuation budget: the stop rule declines a continuation after an answered iteration, never on an inner-step-limit boundary", () => {
+  // Answered: tools + text + finished on its own → no continuation.
+  assertEquals(continuationStopDecision({ lastIteration: { hasToolCalls: true, text: "Done.", finishedWithToolCalls: false }, silentContinuations: 0 }), "answered");
+  // The inner step limit ended the iteration with tools still queued → continue (the digest rides it).
+  assertEquals(continuationStopDecision({ lastIteration: { hasToolCalls: true, text: "Working on tab 24…", finishedWithToolCalls: true }, silentContinuations: 0 }), "continue");
+  // A first silence gets its nudge.
+  assertEquals(continuationStopDecision({ lastIteration: { hasToolCalls: true, text: "", finishedWithToolCalls: false }, silentContinuations: 1 }), "continue");
+  assertEquals(continuationStopDecision({ lastIteration: { hasToolCalls: true, text: "  ", finishedWithToolCalls: false }, silentContinuations: CONTINUATION_SILENT_CAP - 1 }), "continue");
+  // The cap.
+  assertEquals(continuationStopDecision({ lastIteration: { hasToolCalls: true, text: "", finishedWithToolCalls: false }, silentContinuations: CONTINUATION_SILENT_CAP }), "silent-cap");
+  // No previous iteration (step 0) → continue.
+  assertEquals(continuationStopDecision({ lastIteration: null, silentContinuations: 0 }), "continue");
+  assertEquals(continuationStopDecision(), "continue");
+  assertEquals(CONTINUATION_SILENT_CAP, 3);
+});
+
+Deno.test("continuation budget: a silent iteration called tools, wrote nothing, and finished on its own", () => {
+  assertEquals(isSilentIteration({ hasToolCalls: true, text: "", finishedWithToolCalls: false }), true);
+  assertEquals(isSilentIteration({ hasToolCalls: true, text: " \n", finishedWithToolCalls: false }), true);
+  assertEquals(isSilentIteration({ hasToolCalls: true, text: "", finishedWithToolCalls: true }), false, "an inner-step-limit boundary is not silence");
+  assertEquals(isSilentIteration({ hasToolCalls: true, text: "Done.", finishedWithToolCalls: false }), false);
+  assertEquals(isSilentIteration({ hasToolCalls: false, text: "", finishedWithToolCalls: false }), false, "no tools = agent-do ends the loop itself");
+  assertEquals(isSilentIteration(null), false);
+});
+
+Deno.test("continuation budget: the stop terminal is budget-family with its own words, and the status row reads it as a muted 'Stopped after N steps'", () => {
+  const terminal = continuationStopTerminal({ used: 6, total: 1152, stopped: { reason: "iteration-cap", steps: 6, iterations: 3 } });
+  assertEquals(terminal.ok, false);
+  assertEquals(terminal.errorCategory, "budget", "the same Continue action and run.continue route apply");
+  assertEquals(terminal.errorAction, "Continue");
+  assertStringIncludes(terminal.error, "Stopped after 6 steps");
+  assertStringIncludes(terminal.errorReason, "Stopped after 6 steps — the model answered 3 continuations with tool calls and no text");
+  assertEquals(terminal.budget, { used: 6, total: 1152, exhausted: false, stopped: { reason: "iteration-cap", steps: 6, iterations: 3 } });
+  assertEquals(isBudgetTerminal(terminal), true);
+  assertEquals(isContinuationStopTerminal(terminal), true);
+  assertEquals(isContinuationStopTerminal(budgetExhaustedTerminal({ used: 4, total: 4 })), false);
+  assertEquals(formatContinuationStop({ steps: 1 }), "Stopped after 1 step");
+  assertEquals(formatContinuationStop({}), "Stopped after 0 steps");
+  // The status surface: muted, labelled with the stop itself — never "Budget reached".
+  const status = normalizeConversationRunStatus({ state: "failed", errorReason: terminal.errorReason, errorCategory: terminal.errorCategory });
+  assertEquals(status.tone, "muted");
+  assertEquals(status.label, terminal.errorReason);
+  assert(!/Budget reached/.test(status.label));
+  assertEquals(runStatusActionKind({ state: "failed", errorCategory: "budget" }), "continue");
+  assertEquals(runStatusActionLabel({ state: "failed", errorCategory: "budget" }), "Continue");
+  // The plain budget stop is unchanged.
+  const exhausted = budgetExhaustedTerminal({ used: 4, total: 4 });
+  const plain = normalizeConversationRunStatus({ state: "failed", errorReason: exhausted.errorReason, errorCategory: "budget" });
+  assert(/^Budget reached — /.test(plain.label));
+  assertEquals(plain.tone, "accent");
+});

@@ -158,8 +158,16 @@ export const PROMPT_REGISTRY = [
     // producing an artifact or saving a memory REQUIRES the tool call, so a
     // capable model stops pasting HTML into chat or claiming "saved" with zero
     // tool calls (CAP-FB-20260830-MODEL-TOOL-ADHERENCE-01).
-    version: "1.6.0",
-    release: "0.2.408",
+    // 1.7.0: THE PROMPT BUDGET (CAP-FB-20260830-MODEL-CALL-ECONOMY-01) — the
+    // manual is a summary again (4.1 KB, from 21.7 KB): every doctrine the
+    // tests pin survives (discovery, the chrome.* areas, the wasm suite, the
+    // named-agent distinction, the board, tool adherence, the memory model,
+    // honesty), while per-tool usage rules moved into each tool's own
+    // `description`, which the model reads through search_tools / list_tools
+    // exactly when it needs the tool. The composed hub prompt stays under
+    // PROMPT_BUDGET_BYTES; tests/prompt-budget.test.ts pins it.
+    version: "1.7.0",
+    release: "0.2.649",
     protected: false,
     content: MASTER_SKILL,
   },
@@ -169,8 +177,10 @@ export const PROMPT_REGISTRY = [
     // 1.1.0: the same self-organizing memory doctrine, site-scoped (durable
     // facts about THIS site under entity keys; scratch under `stm:`).
     // 1.2.0: shares the hub's execution-context and tool-call grounding.
-    version: "1.2.0",
-    release: "0.2.408",
+    // 1.3.0: the shared grounding shrank with the hub manual's prompt budget
+    // (CAP-FB-20260830-MODEL-CALL-ECONOMY-01); every pinned rule survives.
+    version: "1.3.0",
+    release: "0.2.649",
     protected: false,
     content: WORKER_BASE_PROMPT,
   },
@@ -809,6 +819,28 @@ export function composeSystemPrompt({
 /** The baseline (no-override) prompt for a base id — lib/agent.js's default. */
 export function baselineSystemPrompt(baseId, registry = PROMPT_REGISTRY) {
   return composeSystemPrompt({ baseId, registry }).text;
+}
+
+/* ── The prompt budget (CAP-FB-20260830-MODEL-CALL-ECONOMY-01) ───────────────
+ * The composed system prompt rides EVERY model call of every run, so its size
+ * is a per-call cost. The hub composition (operating manual + protected
+ * policy) must stay under this many UTF-8 bytes; tests/prompt-budget.test.ts
+ * pins it, and `measurePromptLayers` is the one authority for the per-layer
+ * bytes (a surface can show them; a test can assert them). */
+export const PROMPT_BUDGET_BYTES = 6144;
+
+/** Bytes per composed layer for a scope, plus the total against the budget.
+ * Synchronous and registry-only (no stored override is read): the same
+ * per-run layers `composeSystemPrompt` accepts can be passed to measure a
+ * specific run's composition. An unknown scope measures the protected layer
+ * alone (the fail-closed composition). */
+export function measurePromptLayers(scope, { override = null, role = "", skills = [], runtimeContext = null, registry } = {}) {
+  const composed = composeSystemPrompt({ baseId: baseIdForScope(scope), override, role, skills, runtimeContext, registry });
+  const layers = composed.layers
+    .filter((l) => !l.omitted)
+    .map((l) => ({ id: l.id, label: l.label, bytes: utf8ByteLength(l.text ?? "") }));
+  const total = utf8ByteLength(composed.text ?? "");
+  return { scope: normalizeScope(scope), total, budget: PROMPT_BUDGET_BYTES, withinBudget: total < PROMPT_BUDGET_BYTES, layers };
 }
 
 /** Render the boundary skills layer. Installed skills render as the

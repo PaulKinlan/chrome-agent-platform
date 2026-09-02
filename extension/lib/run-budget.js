@@ -101,3 +101,66 @@ export function budgetExhaustedTerminal({ used, total } = {}) {
 export function isBudgetTerminal(terminal) {
   return !!terminal && typeof terminal === "object" && terminal.errorCategory === "budget";
 }
+
+/* ── THE CONTINUATION BUDGET (CAP-FB-20260830-MODEL-CALL-ECONOMY-01) ────────
+ * agent-do sends "Continue working on the task…" after ANY outer iteration
+ * that called tools. Two of those continuations are waste, and the loop's own
+ * `onStepStart → {decision:"stop"}` hook is where the product declines them:
+ *   - ANSWERED: the iteration called tools, wrote its answer, and its last
+ *     model call finished on its own (finish reason "stop", not the inner
+ *     step limit's "tool-calls") — a continuation could only repeat it.
+ *   - SILENT ×N: the iteration called tools and then said nothing; one nudge
+ *     is fair (the model may need the prompt), CONTINUATION_SILENT_CAP in a
+ *     row is a loop, and the run stops visibly ("Stopped after N steps").
+ * An inner-step-limit boundary is neither: it always continues, carrying the
+ * runtime digest (lib/run-digest.js). Pure; shared by the agent loop, the
+ * worker loop seam, the service worker's terminal and the surfaces. */
+export const CONTINUATION_SILENT_CAP = 3;
+
+/** An iteration that called tools, wrote nothing, and finished on its own. */
+export function isSilentIteration(iteration) {
+  return !!iteration && iteration.hasToolCalls === true &&
+    !String(iteration.text ?? "").trim() && iteration.finishedWithToolCalls !== true;
+}
+
+/** What onStepStart decides before a continuation call:
+ *  "answered" — stop, the previous iteration already answered;
+ *  "silent-cap" — stop visibly, the model keeps calling tools and saying nothing;
+ *  "continue" — send the continuation (a first silence, or an inner-step-limit boundary). */
+export function continuationStopDecision({ lastIteration, silentContinuations } = {}) {
+  const it = lastIteration;
+  if (it && it.hasToolCalls === true && String(it.text ?? "").trim() && it.finishedWithToolCalls !== true) return "answered";
+  if (Number(silentContinuations) >= CONTINUATION_SILENT_CAP) return "silent-cap";
+  return "continue";
+}
+
+/** "Stopped after 6 steps" — steps are model steps, the unit "Step N of M"
+ * already shows the owner. */
+export function formatContinuationStop(stopped) {
+  const steps = Math.max(0, Math.trunc(Number(stopped?.steps) || 0));
+  return `Stopped after ${steps} step${steps === 1 ? "" : "s"}`;
+}
+
+/** The terminal a run settles with when the continuation cap stopped it.
+ * Budget-family (category "budget", `budget.stopped` set) so the status row's
+ * Continue action and the run.continue route apply unchanged; the words say
+ * what happened instead of "Budget reached". */
+export function continuationStopTerminal({ used, total, stopped } = {}) {
+  const u = Number.isFinite(Number(used)) ? Math.trunc(Number(used)) : 0;
+  const t = Number.isFinite(Number(total)) ? Math.trunc(Number(total)) : 0;
+  const steps = Number.isFinite(Number(stopped?.steps)) ? Math.trunc(Number(stopped.steps)) : u;
+  const iterations = Number.isFinite(Number(stopped?.iterations)) ? Math.trunc(Number(stopped.iterations)) : CONTINUATION_SILENT_CAP;
+  const marker = formatContinuationStop({ steps });
+  return {
+    ok: false,
+    error: `${marker} — the model kept calling tools without answering`,
+    errorCategory: "budget",
+    errorReason: `${marker} — the model answered ${iterations} continuation${iterations === 1 ? "" : "s"} with tool calls and no text`,
+    errorAction: "Continue",
+    budget: { used: u, total: t, exhausted: false, stopped: { reason: "iteration-cap", steps, iterations } },
+  };
+}
+
+export function isContinuationStopTerminal(terminal) {
+  return isBudgetTerminal(terminal) && !!terminal.budget?.stopped;
+}

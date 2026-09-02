@@ -42,14 +42,14 @@ export const LAZY_PROTOCOL_TOOL_WIRE = Object.freeze([
   Object.freeze({
     name: "list_tools",
     description:
-      "Enumerate available tools grouped by source category (builtin, browser, management, bundled-wasm). Returns tool inventories and counts.",
+      "Enumerate available tools grouped by source category (builtin, browser, management, bundled-wasm, webmcp, provider-server) with live counts. A provider-server tool runs INSIDE the model call: execute_tool on it (no arguments) activates it for the rest of the run so later answers can be grounded with citations — activate once, never in a loop.",
     inputSchema: Object.freeze({
       type: "object",
       additionalProperties: false,
       properties: Object.freeze({
         source: Object.freeze({
           type: "string",
-          description: "Optional category filter: 'builtin' | 'browser' | 'management' | 'bundled-wasm' | 'webmcp'",
+          description: "Optional category filter: 'builtin' | 'browser' | 'management' | 'bundled-wasm' | 'webmcp' | 'provider-server'",
         }),
       }),
     }),

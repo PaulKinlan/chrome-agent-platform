@@ -855,7 +855,7 @@ Deno.test("upgrade WITH override: flagged, the override still applies, and the d
   const reg = upgradedRegistry();
   const d = await describePrompt("hub", { registry: reg });
   assertEquals(d.builtinChanged, true, "the release-update state is detected");
-  assertEquals(d.override.baseVersion, "1.6.0");
+  assertEquals(d.override.baseVersion, "1.7.0");
   assertEquals(d.base.version, "2.0.0");
   assertStringIncludes(d.effective.text, "MY-CUSTOM");
   assertStringIncludes(d.effective.text, "Always name artifacts clearly.");
@@ -1452,8 +1452,8 @@ Deno.test("prompt registry versions carry the latest built-in grounding", () => 
   // preview surface these versions so existing customizations show the update.
   const hub = PROMPT_REGISTRY.find((p) => p.id === "cap.hub.master");
   const worker = PROMPT_REGISTRY.find((p) => p.id === "cap.worker.base");
-  assertEquals(hub?.version, "1.6.0", "cap.hub.master carries the tool-adherence doctrine bump");
-  assertEquals(worker?.version, "1.2.0", "cap.worker.base carries the environment grounding bump");
+  assertEquals(hub?.version, "1.7.0", "cap.hub.master carries the prompt-budget bump (the tool-adherence doctrine still composes)");
+  assertEquals(worker?.version, "1.3.0", "cap.worker.base carries the shared-grounding prompt-budget bump");
 });
 
 Deno.test("memory doctrine: the HUB prompt teaches the self-organizing store (composed path)", () => {

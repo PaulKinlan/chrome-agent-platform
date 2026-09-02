@@ -91,20 +91,26 @@ Deno.test("streaming: a plain (unpaced) demo answer still streams and concatenat
   assertEquals(deltas.map((d) => d.delta).join(""), events[textIdx].text);
 });
 
-Deno.test("streaming: the hidden nudge reply never streams (no deltas for a hidden step)", async () => {
+Deno.test("streaming: an answered tool step ends the run — no continuation reply exists to hide, and the answer streamed", async () => {
+  // CAP-FB-20260830-MODEL-CALL-ECONOMY-01: the loop no longer sends agent-do's
+  // "Continue working on the task…" after a tool step that already answered,
+  // so the demo tool flow ends on the answer itself. This is the guard that a
+  // returning nudge would trip: a hidden (nudge-reply) text event means an
+  // extra model call was made for nothing.
   const { events } = await runDemo("@demo-tools list my open tabs");
   const hidden = events.filter((e) => e.type === "text" && e.hidden === true);
-  assert(hidden.length >= 1, "the demo tool flow ends on a hidden nudge reply");
-  for (const h of hidden) {
-    const leaked = events.filter((e) => e.type === "text-delta" && e.step === h.step);
-    assertEquals(leaked.length, 0, `hidden step ${h.step} must not stream (got ${leaked.length} deltas)`);
-  }
-  // The substantive tool-step answer DID stream (it is not a nudge candidate).
+  assertEquals(hidden.length, 0, "no continuation call after the tool step's answer — nothing to hide");
+  // The substantive tool-step answer is the run's LAST text event and it streamed.
   const substantive = events.find((e) => e.type === "text" && e.persist === true);
   assert(substantive, "the tool step's answer is the persisted text");
+  const texts = events.filter((e) => e.type === "text");
+  assertEquals(texts.at(-1)?.step, substantive.step, "the answer is the final step — no step follows it");
   const streamed = events.filter((e) => e.type === "text-delta" && e.step === substantive.step);
   assert(streamed.length >= 1, "the substantive answer streams");
   assertEquals(streamed.map((d) => d.delta).join(""), substantive.text);
+  // The stream hold for a would-be nudge step still exists (the tracker unit
+  // below); it simply never engages when no continuation is sent.
+  assert(!events.some((e) => e.type === "text-delta" && e.step > substantive.step), "no deltas after the answer");
 });
 
 Deno.test("coalescer: the first delta flushes immediately; later deltas batch by time and by 8 KiB", async () => {
@@ -125,6 +131,19 @@ Deno.test("coalescer: the first delta flushes immediately; later deltas batch by
   assertEquals(out.at(-1), "tail", "flush drains the remainder");
   c.flush();
   assertEquals(out.length, 4, "an empty flush emits nothing");
+});
+
+Deno.test("run text tracker: a text-only step after an inner-step-limit boundary is the real answer, never hidden (CAP-FB-20260830-MODEL-CALL-ECONOMY-01)", () => {
+  // The boundary step wrote text AND still had tool calls queued (finish
+  // "tool-calls"): the continuation that follows carries the digest and the
+  // model's next text is its answer — the run's result, streamed, persisted.
+  const t = createRunTextTracker();
+  t.step({ step: 0, hasToolCalls: true, text: "Read 24 tabs so far…", finishedWithToolCalls: true });
+  assertEquals(t.nextStepMayBeNudge(), false, "no stream hold after a boundary");
+  const answer = t.step({ step: 1, hasToolCalls: false, text: "Every tab: listed 30, read 30 of 30." });
+  assertEquals(answer.hidden, false, "the answer after a boundary is never hidden");
+  assertEquals(t.finalText("Every tab: listed 30, read 30 of 30."), "Every tab: listed 30, read 30 of 30.");
+  assertEquals(t.endedOnNudge(), false);
 });
 
 Deno.test("run text tracker: the step after a tool step that ended in text is a nudge candidate", () => {
