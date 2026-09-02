@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.642] — 2026-09-02
+- Task board: the artifact quick fixes are complete.
+
 ## [0.2.641] — 2026-09-02
 - A guard now ensures the artifact New tab button opens exactly one tab.
 
