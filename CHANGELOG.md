@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.7] — 2026-09-02
+- Review round 2: workflows approval gates, fail-closed steps, bounds
+
 ## [0.3.6] — 2026-09-02
 - Agents save, recall, and run reusable workflows from their own memory
 

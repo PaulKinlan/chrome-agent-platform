@@ -82,6 +82,12 @@ export const DESTRUCTIVE_ACTIONS = new Set([
   "browser.remove-bookmark",
   "browser.set-cookie",
   "browser.remove-cookie",
+  // A model-initiated run of a saved workflow's script-js body (workflows-to-
+  // memory): the SW's workflow.run route pays the SAME source-digest card as
+  // script.run (sandboxed host + fetch-host list on the card), so the action
+  // must be approvable — without membership here createPendingApproval
+  // refuses and workflow.run could never obtain an approval (no card, no run).
+  "workflow.run",
 ]);
 
 // The three visible policy classes (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
@@ -628,7 +634,7 @@ export function approvalPendingCount(store) {
 // The actions whose card discloses the exact script source + the hosts it
 // fetches. The owner cannot approve code they have not seen, so for these
 // (and only these) the card carries the bounded source and host list.
-export const SOURCE_DISCLOSING_ACTIONS = new Set(["script.create", "script.run", "task.schedule-script"]);
+export const SOURCE_DISCLOSING_ACTIONS = new Set(["script.create", "script.run", "task.schedule-script", "workflow.run"]);
 export const APPROVAL_DETAIL_BOUNDS = Object.freeze({ maxSourceChars: 64 * 1024, maxHosts: 64, maxHostChars: 253 });
 
 /** Bound a script-approval detail ({ source, hosts, dynamic }) for the card;

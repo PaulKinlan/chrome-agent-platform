@@ -30,6 +30,7 @@
 // it only imports other pure modules.
 
 import { validatePipeline, runPipeline } from "./tool-pipeline.js";
+import { isToolResultFailure } from "./tool-summary.js";
 
 export const WORKFLOW_NAMESPACE = "workflows:";
 export const WORKFLOW_KINDS = ["script-js", "script-python", "pipeline", "instructions"];
@@ -83,6 +84,16 @@ export function validateWorkflow({ name, description, kind, content }) {
 export function workflowRunPlan(wf) {
   const kind = String(wf?.kind ?? "");
   const name = String(wf?.name ?? "").slice(0, WORKFLOW_BOUNDS.maxNameLength);
+  // The plan is the choke point BOTH run paths (the agent-side workflow_run
+  // and the SW `workflow.run` route) consume BEFORE any approval card or
+  // sandbox: revalidate the STORED record against the save-time bounds, so a
+  // forged/oversized record (a memory_set write to the workflows: namespace
+  // used to be able to land up to the store's 256 KiB limit) fails closed
+  // here — never reaching the owner-approval card or the sandbox host.
+  const content = String(wf?.content ?? "");
+  if (new TextEncoder().encode(content).length > WORKFLOW_BOUNDS.maxContentBytes) {
+    return { ok: false, error: `workflow "${name}" content exceeds the ${WORKFLOW_BOUNDS.maxContentBytes} UTF-8 byte bound — the stored record is corrupt or forged; re-save the workflow` };
+  }
   if (kind === "pipeline") {
     let parsed;
     try {
@@ -98,7 +109,7 @@ export function workflowRunPlan(wf) {
     return { ok: false, error: "script-python workflows need the Python runtime, which is not admitted yet — save it as script-js or instructions" };
   }
   if (kind === "script-js") {
-    return { ok: true, mode: "script-js", source: String(wf?.content ?? "") };
+    return { ok: true, mode: "script-js", source: content };
   }
   if (kind === "instructions") {
     return { ok: false, error: `workflow "${name}" is kind instructions — read it with workflow_get and follow the instructions; it is never executed` };
@@ -135,6 +146,52 @@ export async function runWorkflowRoute({ name, kind, source, description, gate, 
   return { ok: run?.ok ?? false, result, error: run?.error, logs: run?.logs ?? [] };
 }
 
+/** The exact step-tool names whose model dispatch can RAISE an owner card and
+ * await the decision (REVISE P1): their SW routes call requireOwnerApproval
+ * with the model principal (management deletes/updates/script routes, the
+ * Destructive browser class, the cookie-value reader, the file-write diff
+ * card, per-agent schedule controls) or the run's own workflow_run route.
+ * A pipeline step naming one of these must fail closed BEFORE dispatch — the
+ * executor would otherwise show a card mid-pipeline and EXECUTE once approved
+ * (the fail-closed premise). Keep in lock-step with owner-approval.js's
+ * DESTRUCTIVE_ACTIONS / SOURCE_DISCLOSING_ACTIONS and the browser toolset's
+ * gates: a tool whose route joins the approvable set belongs HERE. Remote MCP
+ * tools (mcp__*) are matched by prefix in the dispatcher (per-server
+ * first-use approval is never reachable from a pipeline step either). */
+export const PIPELINE_STEP_OWNER_APPROVAL_TOOLS = Object.freeze([
+  // management tools routed to owner-approvable actions (agent/asset/named-agent/script/hooks/task)
+  "update_agent",
+  "delete_agent",
+  "update_asset",
+  "delete_asset",
+  "create_named_agent",
+  "update_named_agent",
+  "delete_named_agent",
+  "set_agent_provider",
+  "subscribe_hook",
+  "unsubscribe_hook",
+  "create_script",
+  "update_script",
+  "delete_script",
+  "run_script",
+  "schedules_pause",
+  "schedules_resume",
+  "schedules_update",
+  // the run's own script-js workflow runner (a workflow step that recurses
+  // into workflow_run would raise the workflow.run owner card)
+  "workflow_run",
+  // browser Destructive class + cookie-value reader + file-write diff card
+  "close_tab",
+  "close_window",
+  "wipe_browsing_data",
+  "remove_bookmark",
+  "set_cookie",
+  "remove_cookie",
+  "get_cookie",
+  "write_file",
+  "schedule_task",
+]);
+
 /** The production pipeline run path: parse + validate the record's body, then
  * run the steps through lib/tool-pipeline.js's runner with the caller's
  * dispatcher adapter (`dispatchStep(name, args, stepIndex)` → the runPipeline
@@ -163,9 +220,25 @@ export async function runPipelineWorkflow({ name, kind, content, dispatchStep })
  * call. A step whose result is a structured owner-approval pause FAILS CLOSED
  * naming the tool + requirement (nested execution never shows a silent card,
  * and the paused call is settled so it cannot dangle or be resumed later). */
-export function createWorkflowPipelineDispatcher({ search, execute, settle, context } = {}) {
+export function createWorkflowPipelineDispatcher({ search, execute, settle, context, ownerApprovalTools = PIPELINE_STEP_OWNER_APPROVAL_TOOLS } = {}) {
+  const gated = new Set(ownerApprovalTools && typeof ownerApprovalTools[Symbol.iterator] === "function"
+    ? [...ownerApprovalTools]
+    : []);
   return async (toolName, args, stepIndex) => {
     const want = String(toolName ?? "").slice(0, 200);
+    // PRE-DISPATCH guard (REVISE P1): an owner-approval-gated step must fail
+    // closed BEFORE the executor runs. Model-routed tools (delete_named_agent,
+    // run_script, the Destructive browser class, …) AWAIT the owner decision
+    // inside requireOwnerApproval and would otherwise publish an owner card
+    // mid-pipeline and EXECUTE once approved — the exact behaviour the
+    // fail-closed premise forbids. The guard names the step and the tool;
+    // nothing is searched, executed or settled, so no approval event can fire.
+    if (gated.has(want) || want.startsWith("mcp__")) {
+      return {
+        ok: false,
+        error: `step ${stepIndex} (${want}) needs owner approval — pipeline steps never raise an owner card; run this workflow interactively or run the step directly`,
+      };
+    }
     const ctx = typeof context === "function" ? await context().catch(() => null) : null;
     if (!ctx || typeof search !== "function" || typeof execute !== "function") {
       return { ok: false, error: "pipeline step execution is not available in this context" };
@@ -199,6 +272,18 @@ export function createWorkflowPipelineDispatcher({ search, execute, settle, cont
         ok: false,
         error: `step ${stepIndex} (${want}) needs owner approval (${reason}) — run this workflow interactively or run the step directly`,
       };
+    }
+    // NESTED tool-result failure (REVISE P1): the lazy protocol reports the
+    // OUTER envelope ok:true even when the tool that ran reported its own
+    // failure ({ok:false}/{error}) — its "give the use back" contract. Only
+    // checking the outer envelope turned a denied/failed step into a success
+    // and let the LATER steps execute. Treat the nested failure as the failed
+    // step it is so runPipeline halts here.
+    if (result !== undefined && result !== null && isToolResultFailure(result)) {
+      const msg = result && typeof result === "object" && typeof result.error === "string" && result.error.trim()
+        ? result.error
+        : String(result);
+      return { ok: false, error: `step ${stepIndex} (${want}) failed: ${msg}` };
     }
     return { ok: true, value: result };
   };

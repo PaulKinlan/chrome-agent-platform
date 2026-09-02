@@ -20,6 +20,8 @@ import {
   workflowKey,
   workflowNameFromKey,
   WORKFLOW_KINDS,
+  WORKFLOW_NAMESPACE,
+  WORKFLOW_BOUNDS,
   validateWorkflow,
   workflowRunPlan,
   runPipelineWorkflow,
@@ -336,6 +338,14 @@ export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, 
         "Write a value to the agent's memory. Values are bounded (256 KiB) and reserved registry keys are protected.",
       inputSchema: z.object({ key: z.string().min(1).max(128), value: z.any() }),
       execute: async ({ key, value }) => {
+        // The workflows: namespace is OWNED by save_workflow (its records carry
+        // save-time validation that memory_set cannot reproduce — a forged
+        // oversized workflows:* record would otherwise bypass the 64 KiB
+        // workflow bound up to the store's 256 KiB limit and reach workflow_run).
+        // Refuse honestly instead of silently shadowing save_workflow.
+        if (String(key ?? "").startsWith(WORKFLOW_NAMESPACE)) {
+          return { ok: false, error: `key "${key}" is reserved — save and manage workflows with save_workflow/workflow_get, never memory_set` };
+        }
         // memory_set is a durable side-effecting boundary — fence it BEFORE the
         // write (the round-16 fence coverage finding) AND AFTER the awaited OPFS
         // write (the round-18 finding). On abort AFTER a committed overwrite,
@@ -568,35 +578,99 @@ export function workflowsToolset({
         const key = workflowKey(v.record.name);
         const pre = await enrolledGuard();
         if (pre) return pre;
-        // DUrable ownership before the write (the memory_set round-20 pattern).
+        // The declared per-origin bound (WORKFLOW_BOUNDS.maxWorkflows) is
+        // enforced HERE, on save, when the key is NEW: an overwrite of an
+        // existing workflow never counts against the limit. Count the store's
+        // own workflows:* keys; a store without keys() cannot be counted, so
+        // the save falls through to the fence (honest fail-closed elsewhere).
         try {
-          await assertRunOwned();
-        } catch {
-          return { error: "run aborted — workflow not saved" };
-        }
+          if (typeof memory.has === "function" && !(await memory.has(key))) {
+            const keys = typeof memory.keys === "function" ? await memory.keys() : [];
+            const existing = (Array.isArray(keys) ? keys : [])
+              .map((k) => workflowNameFromKey(String(k)))
+              .filter(Boolean).length;
+            if (existing >= WORKFLOW_BOUNDS.maxWorkflows) {
+              return { ok: false, error: `workflow limit reached (${WORKFLOW_BOUNDS.maxWorkflows} per origin) — no new workflow can be saved until an existing one is removed or overwritten` };
+            }
+          }
+        } catch { /* counting is best-effort; the write fences still apply */ }
+        // DUrable ownership + generation fencing BEFORE the write, mirroring
+        // memory_set exactly (the round-20/22/23 patterns).
+        let prev = undefined;
+        let existed = false;
+        let committed = false;
         let wroteVersion = null;
         try {
-          wroteVersion = await memory.set(key, v.record);
-        } catch (e) {
-          return { ok: false, error: `workflow save failed: ${e?.message ?? e}` };
-        }
-        // POST-write generation revalidation (the memory_set round-24 blocker):
-        // a delete→re-enroll DURING the awaited write must not leave this run's
-        // record in the NEW enrollment's store. Version-scoped CAS removal when
-        // the store offers it (a concurrent legitimate write of the SAME key by
-        // the new enrollment is never clobbered).
-        const post = await enrolledGuard().catch(() => ({ error: "enrollment check failed" }));
-        if (post) {
-          try {
-            if (wroteVersion != null && typeof memory.compareAndDelete === "function") {
-              await memory.compareAndDelete(key, wroteVersion);
-            } else if (typeof memory.delete === "function") {
-              await memory.delete(key);
+          await assertRunOwned();
+          existed = typeof memory.has === "function"
+            ? await memory.has(key)
+            : (await memory.get(key)) !== undefined;
+          prev = await memory.get(key);
+          await assertRunOwned();
+          if (enrollmentGuard) {
+            const g = await enrollmentGuard();
+            const runGen = getRunGen?.() ?? null;
+            if (!g?.ok) {
+              return { error: g?.error ?? "origin not enrolled — workflow not saved" };
             }
-          } catch { /* best-effort compensation */ }
-          return post;
+            if (runGen != null && (g.gen ?? 0) !== runGen) {
+              return { error: "origin re-enrolled during run — workflow not saved" };
+            }
+          }
+          wroteVersion = await memory.set(key, v.record);
+          committed = true;
+          // POST-write durable-ownership fence (the memory_set round-20/24
+          // pattern): an abort/ownership loss DURING the awaited write must not
+          // report success and must not leave this run's record committed. A
+          // throw here lands in the catch below, which compensates.
+          await assertRunOwned();
+          if (enrollmentGuard) {
+            const g = await enrollmentGuard();
+            const runGen = getRunGen?.() ?? null;
+            if (!g?.ok || (runGen != null && (g.gen ?? 0) !== runGen)) {
+              throw new Error("origin re-enrolled during run — workflow save compensated");
+            }
+          }
+          return { ok: true, name: v.record.name, kind: v.record.kind };
+        } catch (e) {
+          // Compensation mirrors memory_set: an abort/ownership-loss AFTER the
+          // write restores the PRIOR record (a same-name overwrite) or removes
+          // the NEW key — never deletes an existing key wholesale. The restore
+          // is version-scoped CAS when the store offers it (a concurrent write
+          // of the SAME key by the same enrollment is never clobbered), and
+          // enrollment-scoped: a delete→re-enroll means the NEW enrollment owns
+          // the store, so only THIS write (CAS by version) is ever removed.
+          if (committed && typeof memory.set === "function") {
+            try {
+              let sameEnrollment = true;
+              if (enrollmentGuard) {
+                const g = await enrollmentGuard();
+                const runGen = getRunGen?.() ?? null;
+                if (!g?.ok || (runGen != null && (g.gen ?? 0) !== runGen)) {
+                  sameEnrollment = false;
+                }
+              }
+              const casDelete = typeof memory.compareAndDelete === "function";
+              const casRestore = typeof memory.compareAndRestore === "function";
+              if (sameEnrollment) {
+                if (existed) {
+                  if (casRestore && wroteVersion != null) await memory.compareAndRestore(key, wroteVersion, prev);
+                  else await memory.set(key, prev);
+                } else {
+                  if (casDelete && wroteVersion != null) await memory.compareAndDelete(key, wroteVersion);
+                  else await memory.delete(key);
+                }
+              } else {
+                if (casDelete && wroteVersion != null) await memory.compareAndDelete(key, wroteVersion);
+                else await memory.delete(key);
+              }
+            } catch { /* best-effort */ }
+          }
+          const aborted = /abort|re-?enroll/i.test(String(e?.message ?? e));
+          return aborted
+            ? { error: String(e?.message ?? e) }
+            : { ok: false, error: `workflow save failed: ${e?.message ?? e}` };
         }
-        return { ok: true, name: v.record.name, kind: v.record.kind };
       },
     }),
     workflow_list: tool({
