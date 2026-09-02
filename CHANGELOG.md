@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.618] — 2026-09-02
+- Task board: three more items are being worked on.
+
 ## [0.2.617] — 2026-09-02
 - Task board: the site-tools demo is complete.
 
