@@ -1,6 +1,6 @@
 {
   "name": "chrome-agent-platform",
-  "version": "0.2.630",
+  "version": "0.2.631",
   "private": true,
   "type": "module",
   "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
@@ -22,7 +22,7 @@
     "test:a11y": "deno run -A scripts/a11y-audit.ts",
     "test:perf": "deno run -A scripts/perf-leak-trace.ts",
     "test:capabilities": "deno run -A scripts/capability-lifecycle.ts",
-    "test:all": "node scripts/check-tasks.mjs && npm run check:vocabulary && npm test && npm run test:security && npm run test:security:injection && npm run test:chrome && npm run test:local-files",
+    "test:all": "node scripts/check-tasks.mjs && npm run check:vocabulary && npm run check:reachability && npm test && npm run test:security && npm run test:security:injection && npm run test:chrome && npm run test:local-files",
     "version:patch": "node scripts/bump-version.mjs patch",
     "version:minor": "node scripts/bump-version.mjs minor",
     "version:major": "node scripts/bump-version.mjs major",
@@ -42,7 +42,8 @@
     "test:security:injection": "deno run -A scripts/security-injection.ts",
     "test:perf:seeded": "deno run -A scripts/perf-seeded-scale.ts 120",
     "test:local-files": "deno run -A scripts/kat-local-files.ts",
-    "test:read-page-host-grant": "deno run -A scripts/read-page-host-grant-acceptance.ts"
+    "test:read-page-host-grant": "deno run -A scripts/read-page-host-grant-acceptance.ts",
+    "check:reachability": "node scripts/check-reachability.mjs"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.45",

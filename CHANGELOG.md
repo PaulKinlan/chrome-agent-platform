@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.631] — 2026-09-02
+- The extension's build now checks that every shipped file is actually used, and two unused modules are gone.
+
 ## [0.2.630] — 2026-09-02
 - Task board: finished items moved to the archive so the open list is easier to read.
 

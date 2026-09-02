@@ -4,8 +4,15 @@ Status: implemented (2026-08-27). This is the final phase of CAP-FB-20260826-AGE
 
 ## What landed in Phase 4
 
-### 1. UI ports (the "pass the port to clients" decision)
-`lib/agent-worker-client.js` — `connectAgentWorker({ agentId, onProgress, onState })`:
+### 1. UI ports (the "pass the port to clients" decision) — client REMOVED (CAP-FB-20260830-DEAD-CODE-CUT-01)
+`lib/agent-worker-client.js` was deleted on 2026-09-02: no page ever imported
+`connectAgentWorker`, no test exercised it, and the build now refuses a shipped
+module nothing reaches (`scripts/check-reachability.mjs`). The design below is
+kept as the record of what the client did; it comes back from history if the
+owner chooses to wire the per-agent SharedWorker into a surface (option A in
+that entry) rather than retire the worker path (option B).
+
+`lib/agent-worker-client.js` — `connectAgentWorker({ agentId, onProgress, onState })` (as shipped until 2026-09-02):
 - calls the SW `agent-worker.ensure` (validated), then constructs the SAME shared
   worker (`new SharedWorker(workerUrl, { type:"module", name: agentId })`) and
   holds its own live `MessagePort`;
