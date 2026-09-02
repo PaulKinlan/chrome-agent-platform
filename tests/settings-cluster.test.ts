@@ -22,7 +22,12 @@ function usageMock() {
 Deno.test("PERM-LAYOUT: the gates span no longer carries the `.muted` class (grid-area hint collision)", async () => {
   const src = await read("extension/options/options.js");
   assert(!src.includes('gates.className = "perm-gates muted"'), "the gates must not carry `muted` (which assigns grid-area:hint)");
-  assert(src.includes('gates.className = "perm-gates"'), "the gates must use the dedicated perm-gates class");
+  // CAP-FB-20260830-SETTINGS-HOOKS-PERMISSIONS-TABLES-01: the Permissions
+  // section no longer builds a gates span at all — the sentence is the
+  // <capability-row>'s `detail`, behind its own disclosure — so the collision
+  // cannot come back through this section.
+  assert(!src.includes('gates.className = "perm-gates'), "Permissions must not hand-roll a gates span");
+  assert(src.includes('row.setAttribute("detail", cap.gates'), "the gates sentence is the capability-row detail");
   const css = await read("extension/options/options.css");
   assert(/\.perm-row \.perm-gates \{[^}]*grid-area: gates/.test(css), "the .perm-gates rule must assign grid-area:gates");
   assert(/\.perm-row \.muted \{[^}]*grid-area: hint/.test(css), "the .muted rule assigns grid-area:hint (the description)");

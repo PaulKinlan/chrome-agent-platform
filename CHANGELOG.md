@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.639] — 2026-09-02
+- Settings: Permissions is now a grouped list (Browsing, Content, System, Always on) with a Turn on button or a switch per permission and the details behind a disclosure; Hooks is a compact table of switches with one Deny all action instead of a wall of red Deny buttons.
+
 ## [0.2.638] — 2026-09-02
 - Task board: the long-task memory fix is complete; three more items are being worked on.
 

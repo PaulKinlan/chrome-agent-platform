@@ -17,6 +17,7 @@ import {
 } from "../shared/agent-display.js";
 import {
   CAPABILITIES,
+  CAPABILITY_GROUPS,
   capabilityState,
   requestCapability,
   capabilityStatus,
@@ -2019,47 +2020,79 @@ async function renderActionPolicy() {
 // platform-unavailable (ChromeOS-only APIs on desktop — saying "reload the
 // extension" there is a lie). Host access (<all_urls>) stays install-granted
 // and is not part of this list.
+// The state glyph in the row's icon column: accent only for state (a granted
+// capability), muted for everything else. Static inline SVG, never owner data.
+const PERMISSION_STATE_ICONS = {
+  on: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true" style="color:var(--accent)"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></svg>',
+  off: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="9"/></svg>',
+  fixed: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
+  unavailable: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></svg>',
+};
+
+// One collapsible group of the Permissions list. The heading is the group
+// name; the count says how many are on without opening it. A group opens by
+// default when something in it is on (you see what you granted), and the
+// owner's open/closed choice survives a re-render.
+function permissionGroupShell(id, label, hint, on, total, open) {
+  const details = document.createElement("details");
+  details.className = "perm-group";
+  details.dataset.group = id;
+  details.open = open;
+  const summary = document.createElement("summary");
+  const h3 = document.createElement("h3");
+  h3.textContent = label;
+  const count = document.createElement("span");
+  count.className = "perm-group-count";
+  count.textContent = id === "required"
+    ? `${total} · always on`
+    : on === 0 ? `none of ${total} on` : `${on} of ${total} on`;
+  const sub = document.createElement("span");
+  sub.className = "perm-group-hint muted";
+  sub.textContent = hint;
+  summary.append(h3, count, sub);
+  const rows = document.createElement("div");
+  rows.className = "perm-group-rows";
+  details.append(summary, rows);
+  return { details, rows };
+}
+
 async function renderPermissions() {
   const list = $("#permission-list");
+  // Preserve the owner's open/closed choice across re-renders (a grant or a
+  // revoke re-renders the whole list; a group snapping shut under the pointer
+  // would be a regression).
+  const openBefore = new Map(
+    [...list.querySelectorAll("details.perm-group")].map((d) => [d.dataset.group, d.open]),
+  );
   list.replaceChildren();
   const mandatory = new Set(chrome.runtime.getManifest().permissions ?? []);
+  const groups = new Map(CAPABILITY_GROUPS.map((g) => [g.id, { ...g, rows: [], on: 0 }]));
   for (const cap of CAPABILITIES) {
     if ((cap.permissions ?? []).every((p) => mandatory.has(p))) continue;
     const st = await capabilityState(cap.id);
-    const row = document.createElement("div");
-    row.className = "perm-row";
-
-    const name = document.createElement("span");
-    name.className = "perm-name";
-    name.textContent = cap.label;
-
-    const state = document.createElement("span");
-    const hint = document.createElement("span");
-    hint.className = "muted";
-    hint.textContent = cap.hint;
-
-    const gates = document.createElement("span");
-    gates.className = "perm-gates";
-    gates.textContent = cap.gates ?? `Gates: ${cap.label.toLowerCase()}.`;
+    const group = groups.get(cap.group) ?? groups.get("system");
+    const row = document.createElement("capability-row");
+    row.dataset.capability = cap.id;
+    row.setAttribute("name", cap.label);
+    row.setAttribute("description", cap.hint);
+    row.setAttribute("detail", cap.gates ?? `Gates: ${cap.label.toLowerCase()}.`);
+    row.setAttribute("detail-label", "What it allows");
 
     if (st.state === "granted") {
-      state.className = "perm-state granted";
-      state.textContent = "Granted";
+      group.on += 1;
+      row.dataset.state = "granted";
+      row.setAttribute("icon", PERMISSION_STATE_ICONS.on);
+      row.setAttribute("action-state", "on");
       // Optional capabilities are runtime-revocable: an honest control. The
       // revoke goes through the service worker's `capability.revoke` route —
       // the single authority for the dependent teardown (the owner approval
       // dialog, storage's snapshot, alarms' disarm, and for scripting the
-      // tombstoning of every enrolled origin's dynamic content script). The
-      // page-realm revoke in lib/capabilities.js only removes the permission and left every
-      // enrolled bridge registered (CAP-FB-20260830-SETTINGS-REVOKE-VIA-SW-01).
-      // Permission REQUESTS stay in the page below: only the click gesture can
-      // call chrome.permissions.request.
-      const off = document.createElement("button");
-      off.className = "btn small ghost";
-      off.textContent = "Turn off";
-      off.setAttribute("aria-label", `Turn off ${cap.label}`);
-      off.addEventListener("click", async () => {
-        off.disabled = true;
+      // tombstoning of every enrolled origin's dynamic content script)
+      // (CAP-FB-20260830-SETTINGS-REVOKE-VIA-SW-01). Permission REQUESTS stay
+      // in the page below: only the click gesture can call
+      // chrome.permissions.request.
+      row.addEventListener("toggle", async (e) => {
+        if (e.detail?.checked) return;
         const res = await runOwnerApprovedMutation({
           message: { type: "capability.revoke", id: cap.id },
           action: "capability.revoke",
@@ -2068,11 +2101,11 @@ async function renderPermissions() {
             title: `Turn off ${cap.label}?`,
             body: cap.id === "scripting"
               ? `${cap.label} will stop for every site you added: their agents are removed and Chrome's access to those sites is released.`
-              : `${cap.label} will be turned off and the agent can no longer use it until you enable it again.`,
+              : `${cap.label} will be turned off and the agent can no longer use it until you turn it on again.`,
             confirmLabel: "Turn off",
             destructive: true,
             requireGenuineGesture: true,
-            returnFocusTo: off,
+            returnFocusTo: row,
           }),
         });
         if (!res.ok) {
@@ -2080,114 +2113,244 @@ async function renderPermissions() {
             ? `${cap.label} stays on; nothing was changed.`
             : `Could not turn off ${cap.label}: ${res.error ?? "unknown error"}`);
         }
+        // Re-render from the verified grant state: a cancelled dialog puts the
+        // switch back on, a completed revoke shows the Turn on button.
         renderPermissions();
       });
-      row.append(name, state, off, hint, gates);
     } else if (st.state === "platform-unavailable" || st.state === "partial-platform-unavailable") {
-      state.className = "perm-state unavailable";
-      state.textContent = "Not available on this platform";
-      hint.textContent = st.state === "partial-platform-unavailable"
+      row.dataset.state = "unavailable";
+      row.setAttribute("icon", PERMISSION_STATE_ICONS.unavailable);
+      row.setAttribute("action", "state");
+      row.setAttribute("action-label", "Not available on this platform");
+      row.setAttribute("description", st.state === "partial-platform-unavailable"
         ? `${cap.hint} The ${st.unavailablePermissions.join(" / ")} API exists only on ChromeOS; the rest works here.`
-        : `${cap.hint} This API exists only on ChromeOS.`;
-      row.append(name, state, hint, gates);
+        : `${cap.hint} This API exists only on ChromeOS.`);
     } else {
-      state.className = "perm-state missing";
-      state.textContent = "Not enabled";
+      row.dataset.state = "requestable";
+      row.setAttribute("icon", PERMISSION_STATE_ICONS.off);
+      row.setAttribute("action", "run");
+      row.setAttribute("action-label", "Turn on");
       // The JIT request affordance: this click handler IS the user gesture
       // chrome.permissions.request requires — never route this through the SW.
-      const enable = document.createElement("button");
-      enable.className = "btn small";
-      enable.textContent = "Enable";
-      enable.addEventListener("click", async () => {
-        enable.disabled = true;
+      row.addEventListener("run", async () => {
         const res = await requestCapability(cap.id).catch(() => ({ granted: false }));
         if (res?.granted) renderPermissions();
-        else { enable.disabled = false; enable.textContent = "Enable failed — try again"; }
+        else {
+          row.setAttribute("action-label", "Try again");
+          saveFlash(`${cap.label} was not turned on. Click Try again to ask Chrome once more.`);
+        }
       });
-      row.append(name, state, enable, hint, gates);
     }
-    list.appendChild(row);
+    group.rows.push(row);
   }
-  // Mandatory boot-critical permissions get an honest fixed row (they are
-  // not runtime-revocable and never appear in the optional list).
+  for (const group of groups.values()) {
+    if (group.rows.length === 0) continue;
+    const { details, rows } = permissionGroupShell(
+      group.id, group.label, group.hint, group.on, group.rows.length,
+      openBefore.get(group.id) ?? group.on > 0,
+    );
+    rows.append(...group.rows);
+    list.appendChild(details);
+  }
+  // Mandatory boot-critical permissions get an honest fixed group (they are
+  // not runtime-revocable and never appear in the optional groups).
   const mandatoryLabels = {
     storage: "Memory & settings (core)",
     alarms: "Scheduled tasks (core)",
     sidePanel: "Side panel (core)",
     offscreen: "Background execution host (internal)",
   };
-  const manifestPerms = chrome.runtime.getManifest().permissions ?? [];
-  for (const p of manifestPerms) {
-    if (!mandatoryLabels[p]) continue;
-    const row = document.createElement("div");
-    row.className = "perm-row";
-    const name = document.createElement("span");
-    name.className = "perm-name";
-    name.textContent = mandatoryLabels[p];
-    const state = document.createElement("span");
-    state.className = "perm-state granted";
-    state.textContent = "Granted at install (required)";
-    const hint = document.createElement("span");
-    hint.className = "muted";
-    hint.textContent = "The hub cannot start without it.";
-    row.append(name, state, hint);
-    list.appendChild(row);
+  const manifestPerms = (chrome.runtime.getManifest().permissions ?? []).filter((p) => mandatoryLabels[p]);
+  if (manifestPerms.length > 0) {
+    const { details, rows } = permissionGroupShell(
+      "required", "Always on", "The hub cannot start without these; they are granted when the extension is installed.",
+      manifestPerms.length, manifestPerms.length, openBefore.get("required") ?? false,
+    );
+    for (const p of manifestPerms) {
+      const row = document.createElement("capability-row");
+      row.dataset.capability = p;
+      row.dataset.state = "required";
+      row.setAttribute("icon", PERMISSION_STATE_ICONS.fixed);
+      row.setAttribute("name", mandatoryLabels[p]);
+      row.setAttribute("description", "Granted at install. The hub cannot start without it.");
+      row.setAttribute("action", "state");
+      row.setAttribute("action-label", "Always on");
+      rows.appendChild(row);
+    }
+    list.appendChild(details);
   }
 }
 
 // ── System hooks (the chrome.* event surface + the deny-list) ──
+// vocab:advanced:start — the Hooks section is developer-only
+// (data-developer="true") and names the chrome.* APIs it lists.
+const HOOK_API_LABELS = {
+  tabs: "Tabs", windows: "Windows", bookmarks: "Bookmarks", history: "History",
+  downloads: "Downloads", webNavigation: "Navigation", contextMenus: "Context menus",
+  commands: "Keyboard commands", notifications: "Notifications", idle: "Idle",
+  alarms: "Alarms", storage: "Storage", runtime: "Runtime", action: "Toolbar button",
+};
+let hooksWired = false;
+
 async function renderHooks() {
   const res = await chrome.runtime
     .sendMessage({ type: "hooks.status" })
     .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
   const hooks = res?.hooks ?? [];
-  const list = $("#hook-list");
-  list.replaceChildren();
+  const table = $("#hook-list");
+  // The owner's expanded/collapsed choice per API group survives a re-render.
+  const openBefore = new Map(
+    [...table.querySelectorAll("tbody[data-api]")].map((b) => [b.dataset.api, b.dataset.open === "true"]),
+  );
+  for (const body of [...table.querySelectorAll("tbody")]) body.remove();
+
+  // One <tbody> per chrome.* API: a group row (the API name, its event count and
+  // how many are denied) that expands the event rows under it. A group opens by
+  // default when something in it is denied or subscribed — that is what the
+  // owner came to look at — and stays collapsed otherwise so 32 events read as
+  // 14 lines.
+  const byApi = new Map();
   for (const h of hooks) {
-    const row = document.createElement("div");
-    row.className = "perm-row"; // SAME row as the Permissions section (one layout)
+    const api = String(h.id).split(".")[0];
+    if (!byApi.has(api)) byApi.set(api, []);
+    byApi.get(api).push(h);
+  }
+  const deniedTotal = hooks.filter((h) => h.denied).length;
+  const summary = $("#hooks-summary");
+  summary.textContent = hooks.length === 0
+    ? "No hooks to show."
+    : deniedTotal === 0
+      ? `${hooks.length} events, all allowed.`
+      : `${hooks.length} events, ${deniedTotal} denied.`;
+  const denyAll = $("#hooks-deny-all");
+  denyAll.disabled = hooks.length === 0 || deniedTotal === hooks.length;
 
+  for (const [api, group] of byApi) {
+    const denied = group.filter((h) => h.denied).length;
+    const subscribed = group.filter((h) => h.subscribers?.length).length;
+    const open = openBefore.get(api) ?? (denied > 0 || subscribed > 0);
+    const body = document.createElement("tbody");
+    body.id = `hook-group-${api}`;
+    body.dataset.api = api;
+    body.dataset.open = String(open);
+
+    const groupRow = document.createElement("tr");
+    groupRow.className = "hook-group";
+    const th = document.createElement("th");
+    th.scope = "rowgroup";
+    th.colSpan = 3;
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "hook-group-toggle";
+    toggle.setAttribute("aria-expanded", String(open));
+    toggle.setAttribute("aria-controls", `hook-group-${api}`);
+    const chevron = document.createElement("span");
+    chevron.className = "hook-group-chevron";
+    chevron.setAttribute("aria-hidden", "true");
     const name = document.createElement("span");
-    name.className = "perm-name";
-    name.textContent = h.label;
+    name.className = "hook-group-name";
+    name.textContent = HOOK_API_LABELS[api] ?? api;
+    const meta = document.createElement("span");
+    meta.className = "hook-group-meta muted";
+    const permissions = [...new Set(group.map((h) => h.permission).filter(Boolean))];
+    meta.textContent = [
+      `${group.length} ${group.length === 1 ? "event" : "events"}`,
+      denied === 0 ? "all allowed" : denied === group.length ? "all denied" : `${denied} denied`,
+      permissions.length ? `needs ${permissions.map((p) => `"${p}"`).join(", ")}` : null,
+    ].filter(Boolean).join(" · ");
+    toggle.append(chevron, name, meta);
+    toggle.addEventListener("click", () => {
+      const next = body.dataset.open !== "true";
+      body.dataset.open = String(next);
+      toggle.setAttribute("aria-expanded", String(next));
+    });
+    th.appendChild(toggle);
+    groupRow.appendChild(th);
+    body.appendChild(groupRow);
 
-    const state = document.createElement("span");
-    const denied = Boolean(h.denied);
-    state.className = "perm-state" + (denied ? " denied" : "");
-    state.textContent = denied ? "Denied" : "Allowed";
+    for (const h of group) {
+      const tr = document.createElement("tr");
+      tr.className = "hook-row";
+      tr.dataset.hook = h.id;
 
-    const hint = document.createElement("span");
-    hint.className = "muted";
-    hint.textContent = [
-      h.id,
-      h.subscribers?.length
-        ? `subscribed: ${h.subscribers.join(", ")}`
-        : (h.permission ? `needs "${h.permission}"` : "no extra permission"),
-    ].join(" · ");
+      const event = document.createElement("td");
+      event.className = "hook-event";
+      const label = document.createElement("span");
+      label.className = "hook-label";
+      label.textContent = h.label;
+      event.appendChild(label);
+      if (h.subscribers?.length) {
+        const subs = document.createElement("span");
+        subs.className = "hook-subs muted";
+        subs.textContent = `subscribed: ${h.subscribers.join(", ")}`;
+        event.appendChild(subs);
+      }
 
-    row.append(name, state, hint);
+      const apiCell = document.createElement("td");
+      apiCell.className = "col-api";
+      const code = document.createElement("code");
+      code.textContent = `chrome.${h.id}`;
+      apiCell.appendChild(code);
 
-    // The deny-toggle is OWNER-ONLY + authoritative: denying stops the agent
-    // ever using the hook (fail-closed). Un-denying restores it (the install grant is still verified at use).
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "btn small " + (denied ? "ghost" : "danger");
-    btn.dataset.hook = h.id;
-    btn.textContent = denied ? "Allow" : "Deny";
-    btn.setAttribute("aria-label", `${denied ? "Allow" : "Deny"} ${h.label}`);
-    btn.addEventListener("click", async () => {
-      const r = await chrome.runtime
-        .sendMessage({ type: "hooks.deny", hookId: h.id, denied: !denied })
-        .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
-      saveFlash(r?.ok
-        ? `${h.label} ${r.denied ? "denied" : "allowed"}.`
-        : `Could not update ${h.label}: ${r?.error ?? "failed"}.`);
+      const stateCell = document.createElement("td");
+      stateCell.className = "col-state";
+      const denied = Boolean(h.denied);
+      // The deny-toggle is OWNER-ONLY + authoritative: denying stops the agent
+      // ever using the hook (fail-closed). Un-denying restores it (the install
+      // grant is still verified at use). One shared switch per row — the only
+      // red control in this section is the Deny-all confirmation.
+      const sw = document.createElement("switch-toggle");
+      sw.setAttribute("label", `Allow ${h.label}`);
+      if (!denied) sw.setAttribute("checked", "");
+      sw.addEventListener("toggle", async (e) => {
+        const allow = Boolean(e.detail?.checked);
+        const r = await chrome.runtime
+          .sendMessage({ type: "hooks.deny", hookId: h.id, denied: !allow })
+          .catch((err) => ({ ok: false, error: String(err?.message ?? err) }));
+        saveFlash(r?.ok
+          ? `${h.label} ${r.denied ? "denied" : "allowed"}.`
+          : `Could not update ${h.label}: ${r?.error ?? "failed"}.`);
+        renderHooks();
+      });
+      stateCell.appendChild(sw);
+
+      tr.append(event, apiCell, stateCell);
+      body.appendChild(tr);
+    }
+    table.appendChild(body);
+  }
+
+  if (!hooksWired) {
+    hooksWired = true;
+    denyAll.addEventListener("click", async () => {
+      const status = await chrome.runtime.sendMessage({ type: "hooks.status" }).catch(() => null);
+      const pending = (status?.hooks ?? []).filter((h) => !h.denied);
+      if (pending.length === 0) return;
+      const confirmed = await confirmActionDialog({
+        title: "Deny every hook?",
+        body: `The agent stops listening to all ${pending.length} browser events. You can allow them again one at a time.`,
+        confirmLabel: "Deny all",
+        destructive: true,
+        requireGenuineGesture: true,
+        returnFocusTo: denyAll,
+      });
+      if (!confirmed) return;
+      denyAll.disabled = true;
+      let failed = 0;
+      for (const h of pending) {
+        const r = await chrome.runtime
+          .sendMessage({ type: "hooks.deny", hookId: h.id, denied: true })
+          .catch(() => ({ ok: false }));
+        if (!r?.ok) failed += 1;
+      }
+      saveFlash(failed === 0
+        ? `All ${pending.length} hooks denied.`
+        : `${pending.length - failed} hooks denied; ${failed} could not be updated.`);
       renderHooks();
     });
-    row.appendChild(btn);
-    list.appendChild(row);
   }
 }
+// vocab:advanced:end
 
 // ── Usage ──
 async function renderUsage(range = currentUsageRange) {

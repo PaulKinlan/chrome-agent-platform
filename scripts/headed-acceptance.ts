@@ -254,18 +254,37 @@ async function clickSel(cdp: Cdp, session: string, selector: string) {
   return true;
 }
 
-async function capabilityButtonSelector(cdp: Cdp, session: string, label: string, text: string) {
-  const index = await evalIn(cdp, session, `(() => [...document.querySelectorAll('#permission-list .perm-row')]
-    .findIndex((row) => row.querySelector('.perm-name')?.textContent === ${JSON.stringify(label)} &&
-      row.querySelector('button')?.textContent === ${JSON.stringify(text)}))()`);
-  return Number.isInteger(index) && index >= 0
-    ? `#permission-list > .perm-row:nth-child(${index + 1}) button`
-    : null;
+// The control lives inside <capability-row>'s shadow root (the ghost "Turn on"
+// button, or the shared <switch-toggle> when on) and its group may be
+// collapsed (CAP-FB-20260830-SETTINGS-HOOKS-PERMISSIONS-TABLES-01).
+async function capabilityControlBox(cdp: Cdp, session: string, label: string, text: string) {
+  const box = await evalIn(cdp, session, `(() => {
+    const row = [...document.querySelectorAll('#permission-list capability-row')]
+      .find((r) => r.getAttribute('name') === ${JSON.stringify(label)});
+    if (!row) return null;
+    const group = row.closest('details');
+    if (group && !group.open) group.open = true;
+    let el = null;
+    if (${JSON.stringify(text)} === 'Turn off') {
+      el = row.shadowRoot?.querySelector('switch-toggle')?.shadowRoot?.querySelector('.sw') ?? null;
+    } else {
+      const btn = row.shadowRoot?.querySelector('button.run');
+      el = btn && btn.textContent.trim() === ${JSON.stringify(text)} ? btn : null;
+    }
+    if (!el) return null;
+    el.scrollIntoView({ block: 'center', inline: 'center' });
+    const r = el.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  })()`);
+  return box && typeof box === "object" && typeof box.x === "number" ? box : null;
 }
 
 async function clickCapability(cdp: Cdp, session: string, label: string, text: string) {
-  const selector = await capabilityButtonSelector(cdp, session, label, text);
-  return selector !== null && await clickSel(cdp, session, selector);
+  const b = await capabilityControlBox(cdp, session, label, text);
+  if (!b) return false;
+  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: b.x, y: b.y, button: "left", buttons: 1, clickCount: 1 }, session);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: b.x, y: b.y, button: "left", buttons: 0, clickCount: 1 }, session);
+  return true;
 }
 
 async function typeText(cdp: Cdp, session: string, text: string) {

@@ -155,10 +155,17 @@ Deno.test("alarm lifecycle: alarms stay mandatory — Settings requests optional
     "await capabilityState(cap.id)",
     "the Permissions section VERIFIES each capability (live three-state display)",
   );
+  // CAP-FB-20260830-SETTINGS-HOOKS-PERMISSIONS-TABLES-01: the mandatory boot
+  // set is the fixed "Always on" group — text, never a control.
   assertStringIncludes(
     optionsSource,
-    "Granted at install (required)",
-    "the mandatory boot set is displayed as fixed install grants",
+    '"required", "Always on"',
+    "the mandatory boot set is displayed as the fixed Always on group",
+  );
+  assertStringIncludes(
+    optionsSource,
+    'row.setAttribute("action-label", "Always on")',
+    "a mandatory permission row shows Always on and no control",
   );
   // The worker-side activation route remains (harmless; the lifecycle listener
   // still owns disarm/re-arm on any permission change).

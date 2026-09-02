@@ -491,9 +491,10 @@ const EXPECTED = [
   "approval: forged NTP owner/activation fields are refused",
   "permissions: optional capabilities start ungranted (JIT) and the mandatory boot set is granted",
   "permissions: Settings panel renders three-state rows + mandatory boot rows",
+  "permissions: the rows are grouped Browsing · Content · System · Always on",
   "permissions: optional capabilities start ungranted (JIT model)",
-  "permissions: Context menus Enable button found in the Settings panel",
-  "permissions: Context menus Enable clicked via a trusted gesture",
+  "permissions: Context menus Turn on button found in the Settings panel",
+  "permissions: Context menus Turn on clicked via a trusted gesture",
   "permissions: Context menus granted after Enable settled",
   "permissions: Context menus Turn off clicked via a trusted gesture",
   "permissions: Turn off raised the owner approval dialog (capability.revoke via the SW)",
@@ -2693,18 +2694,22 @@ async function main() {
     // The Settings panel is the JIT request surface: real per-capability rows
     // with three honest states (granted / requestable with Enable /
     // platform-unavailable) plus the fixed mandatory boot rows.
+    // CAP-FB-20260830-SETTINGS-HOOKS-PERMISSIONS-TABLES-01: the panel is a
+    // grouped list (Browsing · Content · System · Always on) of shared
+    // <capability-row>s; the state is on the row (`data-state`), the request
+    // affordance is the ghost "Turn on" button, a granted row shows the switch.
     const permPanel = await evalOpts(`(async () => {
       for (let i = 0; i < 80; i++) {
-        if (document.querySelectorAll('#permission-list .perm-row').length > 0) break;
+        if (document.querySelectorAll('#permission-list capability-row').length > 0) break;
         await new Promise((r) => setTimeout(r, 250));
       }
+      const rows = [...document.querySelectorAll('#permission-list capability-row')];
       return {
-        rows: document.querySelectorAll('#permission-list .perm-row').length,
-        enableButtons: document.querySelectorAll('#permission-list button').length,
-        states: document.querySelectorAll('#permission-list .perm-state').length,
-        mandatoryRows: [...document.querySelectorAll('#permission-list .perm-state')].filter(
-          (el) => el.textContent?.includes("Granted at install")
-        ).length,
+        rows: rows.length,
+        enableButtons: rows.filter((r) => r.getAttribute('action-label') === 'Turn on').length,
+        states: rows.filter((r) => ['granted', 'requestable', 'unavailable', 'required'].includes(r.dataset.state)).length,
+        mandatoryRows: rows.filter((r) => r.dataset.state === 'required').length,
+        groups: [...document.querySelectorAll('#permission-list details.perm-group h3')].map((h) => h.textContent),
         listExists: !!document.getElementById("permission-list"),
         capCount: (typeof CAPABILITIES !== "undefined") ? CAPABILITIES.length : "undef",
         renderError: window.__permRenderError ?? null,
@@ -2715,6 +2720,10 @@ async function main() {
       "permissions: Settings panel renders three-state rows + mandatory boot rows",
       permPanel?.rows > 0 && permPanel?.enableButtons > 0 && permPanel?.states === permPanel?.rows &&
         permPanel?.mandatoryRows >= 3,
+    );
+    check(
+      "permissions: the rows are grouped Browsing · Content · System · Always on",
+      JSON.stringify(permPanel?.groups) === JSON.stringify(["Browsing", "Content", "System", "Always on"]),
     );
 
     // tabs + notifications are OPTIONAL now — verified NOT granted at boot.
@@ -2732,20 +2741,46 @@ async function main() {
     // its CDP session. Bring Settings to the front before dispatching input.
     await cdp.send("Target.activateTarget", { targetId: optsPage.id });
     await cdp.send("Page.bringToFront", {}, optsSession);
-    // Find the row in-page, then use clickSel for the click itself so Chrome
-    // receives a trusted CDP pointer event (never a synthetic btn.click()).
+    // Find the control in-page, then dispatch a trusted CDP pointer event at
+    // its centre (never a synthetic btn.click()). The control lives inside
+    // <capability-row>'s shadow root — the ghost "Turn on" button, or the
+    // shared <switch-toggle> when the capability is on — and its group may be
+    // collapsed, so the lookup opens the group first.
     const capabilityButtonSelector = async (session, label, text) => {
-      const index = await evalIn(cdp, session, `(() => [...document.querySelectorAll('#permission-list .perm-row')]
-        .findIndex((row) => row.querySelector('.perm-name')?.textContent === ${JSON.stringify(label)} &&
-          row.querySelector('button')?.textContent === ${JSON.stringify(text)}))()`);
-      return Number.isInteger(index) && index >= 0
-        ? `#permission-list > .perm-row:nth-child(${index + 1}) button`
-        : null;
+      const box = await evalIn(cdp, session, `(() => {
+        const row = [...document.querySelectorAll('#permission-list capability-row')]
+          .find((r) => r.getAttribute('name') === ${JSON.stringify(label)});
+        if (!row) return null;
+        const group = row.closest('details');
+        if (group && !group.open) group.open = true;
+        let el = null;
+        if (${JSON.stringify(text)} === 'Turn off') {
+          el = row.shadowRoot?.querySelector('switch-toggle')?.shadowRoot?.querySelector('.sw') ?? null;
+        } else {
+          const btn = row.shadowRoot?.querySelector('button.run');
+          el = btn && btn.textContent.trim() === ${JSON.stringify(text)} ? btn : null;
+        }
+        if (!el) return null;
+        el.scrollIntoView({ block: 'center', inline: 'center' });
+        const r = el.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      })()`);
+      return box && typeof box === "object" && typeof box.x === "number" ? box : null;
+    };
+    const clickCapabilityBox = async (session, box) => {
+      if (!box) return false;
+      await cdp.send("Input.dispatchMouseEvent", {
+        type: "mousePressed", x: box.x, y: box.y, button: "left", buttons: 1, clickCount: 1,
+      }, session);
+      await cdp.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased", x: box.x, y: box.y, button: "left", buttons: 0, clickCount: 1,
+      }, session);
+      return true;
     };
     const clickCapability = async (session, label, text) => {
       for (let i = 0; i < 40; i++) {
-        const selector = await capabilityButtonSelector(session, label, text);
-        if (selector !== null) return await clickSel(cdp, session, selector);
+        const box = await capabilityButtonSelector(session, label, text);
+        if (box !== null) return await clickCapabilityBox(session, box);
         await sleep(250);
       }
       return false;
@@ -2757,10 +2792,13 @@ async function main() {
       for (let i = 0; i < 40; i++) {
         state = await evalIn(cdp, session, `(async () => {
           const granted = await chrome.permissions.contains({ permissions: [${JSON.stringify(permission)}] });
-          const row = [...document.querySelectorAll('#permission-list .perm-row')]
-            .find((r) => r.querySelector('.perm-name')?.textContent === ${JSON.stringify(label)});
-          const button = row?.querySelector('button');
-          return { granted, buttonText: button?.textContent ?? null, disabled: button?.disabled ?? null };
+          const row = [...document.querySelectorAll('#permission-list capability-row')]
+            .find((r) => r.getAttribute('name') === ${JSON.stringify(label)});
+          const on = row?.getAttribute('action-state') === 'on';
+          const button = row?.shadowRoot?.querySelector('button.run');
+          // "Turn off" = the switch is on (the revoke control); otherwise the
+          // ghost button's text ("Turn on" / "Try again").
+          return { granted, buttonText: on ? 'Turn off' : (button?.textContent?.trim() ?? null), disabled: on ? false : (button?.disabled ?? null) };
         })()`);
         if (state?.granted === granted && state?.buttonText === buttonText && state?.disabled === false) {
           return true;
@@ -2775,11 +2813,11 @@ async function main() {
 
     // Context menus is warningless: headless Chrome can grant and revoke it,
     // so drive the complete owner lifecycle instead of deferring it to headed.
-    const contextMenusEnable = await capabilityButtonSelector(optsSession, "Context menus", "Enable");
-    check("permissions: Context menus Enable button found in the Settings panel", contextMenusEnable !== null);
+    const contextMenusEnable = await capabilityButtonSelector(optsSession, "Context menus", "Turn on");
+    check("permissions: Context menus Turn on button found in the Settings panel", contextMenusEnable !== null);
     check(
-      "permissions: Context menus Enable clicked via a trusted gesture",
-      contextMenusEnable !== null && await clickSel(cdp, optsSession, contextMenusEnable),
+      "permissions: Context menus Turn on clicked via a trusted gesture",
+      contextMenusEnable !== null && await clickCapabilityBox(optsSession, contextMenusEnable),
     );
     check(
       "permissions: Context menus granted after Enable settled",
@@ -2800,11 +2838,11 @@ async function main() {
     );
     check(
       "permissions: Context menus absent after Turn off settled",
-      await pollCapability("Context menus", "contextMenus", false, "Enable"),
+      await pollCapability("Context menus", "contextMenus", false, "Turn on"),
     );
     check(
       "permissions: Context menus retry Enable clicked via a trusted gesture",
-      await clickCapability(optsSession, "Context menus", "Enable"),
+      await clickCapability(optsSession, "Context menus", "Turn on"),
     );
     check(
       "permissions: Context menus granted after retry settled",
@@ -2822,7 +2860,7 @@ async function main() {
       cdp.pageSessions.add(session);
       await cdp.send("Target.activateTarget", { targetId: page.id });
       await cdp.send("Page.bringToFront", {}, session);
-      const clicked = await clickCapability(session, label, "Enable");
+      const clicked = await clickCapability(session, label, "Turn on");
       let stayedAbsent = clicked;
       for (let i = 0; i < 12; i++) {
         stayedAbsent &&= (await evalIn(cdp, session,
@@ -2870,18 +2908,18 @@ async function main() {
     let retryAffordance = false;
     for (let i = 0; i < 25 && !retryAffordance; i++) {
       const rows = await evalIn(cdp, afterDenySession, `(() => {
-        const named = (label) => [...document.querySelectorAll('#permission-list .perm-row')]
-          .find((r) => r.querySelector('.perm-name')?.textContent === label);
+        const named = (label) => [...document.querySelectorAll('#permission-list capability-row')]
+          .find((r) => r.getAttribute('name') === label);
         const state = (label) => {
           const row = named(label);
-          const btn = row?.querySelector('button');
-          return row ? { state: row.querySelector('.perm-state')?.textContent, button: btn?.textContent, disabled: btn?.disabled } : null;
+          const btn = row?.shadowRoot?.querySelector('button.run');
+          return row ? { state: row.dataset.state, button: btn?.textContent?.trim(), disabled: btn?.disabled } : null;
         };
         return { bookmarks: state("Bookmarks"), tabGroups: state("Tab groups") };
       })()`).catch(() => null);
-      retryAffordance = rows?.bookmarks?.state === "Not enabled" && rows?.bookmarks?.button === "Enable" &&
+      retryAffordance = rows?.bookmarks?.state === "requestable" && rows?.bookmarks?.button === "Turn on" &&
         rows?.bookmarks?.disabled === false &&
-        rows?.tabGroups?.state === "Not enabled" && rows?.tabGroups?.button === "Enable" &&
+        rows?.tabGroups?.state === "requestable" && rows?.tabGroups?.button === "Turn on" &&
         rows?.tabGroups?.disabled === false;
       if (!retryAffordance) await sleep(400);
     }
@@ -5907,7 +5945,7 @@ async function main() {
     );
     check(
       "scripting Disable: optional permission revoked",
-      await pollCapabilityOn(optsSession2, "Site Agents", "scripting", false, "Enable"),
+      await pollCapabilityOn(optsSession2, "Site Agents", "scripting", false, "Turn on"),
     );
     const settingsAfterDisableShot = await captureShot(cdp, optsSession2);
     if (settingsAfterDisableShot) await writeEvidence("settings-site-agents-after-turn-off.png", settingsAfterDisableShot);

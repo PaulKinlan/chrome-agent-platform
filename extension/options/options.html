@@ -264,8 +264,22 @@
       <section id="hooks" class="panel" data-developer="true">
         <h2>System hooks</h2>
         <p
-          class="muted">Every chrome.* event an agent can listen to + respond to. <strong>Deny</strong> a hook to stop the agent ever using it — the deny-list is authoritative and the agent cannot break past it. A hook's permission is granted at install; the deny-list is the control here.</p>
-        <div id="hook-list" class="hook-list"></div>
+          class="muted">Every chrome.* event an agent can listen to and respond to. Turn a hook off to stop the agent ever using it — the deny-list is authoritative and the agent cannot break past it. A hook's permission is granted at install; the deny-list is the control here.</p>
+        <div class="hooks-toolbar">
+          <span id="hooks-summary" class="muted" role="status"></span>
+          <button id="hooks-deny-all" class="btn small ghost" type="button">Deny all</button>
+        </div>
+        <div class="hooks-table-wrap">
+          <table id="hook-list" class="hooks-table">
+            <thead>
+              <tr>
+                <th scope="col">Event</th>
+                <th scope="col" class="col-api">Chrome API</th>
+                <th scope="col" class="col-state">Allowed</th>
+              </tr>
+            </thead>
+          </table>
+        </div>
       </section>
 
       <section id="prompts" class="panel" data-developer="true">
