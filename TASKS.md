@@ -2255,7 +2255,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Workspace: durable worktree (local path private)
 - Branch: cap-beads-60be
 - Base: origin/main 07645708
-- Candidate: —
+- Candidate: cap-beads-60be@1ee817e5
 - Shipping: —
 - Acceptance: every named/background agent gets a persistent private OPFS workspace (`agent-workspaces/<key>/`, lazy, origin-keyed by the run's agent stamp); the model-facing file tools (list_files/find_files/read_file/write_file/delete_file) fall back to the workspace when no fs-grant is in scope; per-agent quota (20 MiB / 200 files) with honest workspace_quota_exceeded errors; strict isolation (agent A never sees agent B's files; hub/site runs have no workspace); Settings → edit agent → Advanced shows usage + an owner-gesture Clear; AGENTS.md documents it; owner fs-grants remain the shared/global surface (explicit grantId always wins).
   - Context: per-agent OPFS already exists for memory (namedAgentMemory) and skills; the opfs-tool-workspace wrapper is per-JOB, not per-agent. The new module mirrors ChatGPT Work's per-session scratch + shared volume split.
@@ -2266,7 +2266,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Recover: `git log --oneline --all --grep=CAP-FB-20260831-AGENT-PRIVATE-FS-01`
 - History:
   - 2026-09-01 01:00 UTC — implemented + gated on cap-agent-fs; unit 11/11 + fs-tools integration 3 new (21 total), RED→GREEN falsification shown; journey check added.
-  - 2026-09-02 19:30 UTC — reland lane (beads chrome-agent-platform-60be): cherry-picked 13cb927f onto origin/main@07645708 as branch cap-beads-60be; conflicts union-resolved (changelog/package versions renumbered to 0.3.6; tool capability/test drift merged keeping both sides). Gates re-run on the new base before push.
+  - 2026-09-02 19:30 UTC — reland lane (beads chrome-agent-platform-60be): cherry-picked 13cb927f onto origin/main@07645708 as branch cap-beads-60be; conflicts union-resolved (changelog/package versions renumbered to 0.3.6; tool capability/test drift merged keeping both sides). Gates re-run on the new base: unit 3132/0; journeys 355/359 with the SAME 4 failures as clean origin/main (354/358 — left-edge pair tracked by ONE-SHELL-01, approval-deny pair by beads 8jh; the +1 is this lane's new workspace-row check passing); RED→GREEN re-proven on the workspace fallback seam (fallback disabled → the two workspace tool tests RED; restored → 23/23 GREEN).
 
 
 

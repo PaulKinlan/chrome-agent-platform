@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.13] — 2026-09-02
+- : record the reland candidate and gate evidence
+
 ## [0.3.12] — 2026-09-02
 - tidy the release notes after the workspace reland
 
