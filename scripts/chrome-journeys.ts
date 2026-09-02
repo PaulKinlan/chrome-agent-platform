@@ -1784,20 +1784,29 @@ async function main() {
         if (!sl) return null;
         const rowCount = sl.querySelectorAll('label, input[type=checkbox]').length;
         sl.scrollIntoView({ block: 'center', inline: 'center' });
+        // scrollIntoView ITSELF scrolls the outer body to center the list, so
+        // record the post-scroll position: the wheel phase must ADVANCE past
+        // it, or a probe that merely asserts scrollTop > 0 false-passes (the
+        // scrollIntoView did the moving, not the wheel).
+        const sc = document.querySelector('.agent-config-scroll');
         const r = sl.getBoundingClientRect();
         const x = r.x + r.width / 2;
         const y = r.y + r.height / 2;
         const inViewport = x >= 0 && y >= 0 && x <= innerWidth && y <= innerHeight && r.width > 0 && r.height > 0;
         const at = document.elementFromPoint(x, y);
-        const inScrollBody = !!at && (at.closest?.('.agent-config-scroll') != null || at.closest?.('.skills-collapse') != null || at.closest?.('.agent-config-advanced') != null);
-        return { x, y, inViewport, hitInside: inScrollBody, rowCount, hitTag: at?.tagName?.toLowerCase?.() ?? null, hitCls: typeof at?.className === 'string' ? at.className.slice(0, 60) : null };
+        // The wheel point must land ON the skills list itself (the element or
+        // one of its descendants) — a hit anywhere else inside the scroll body
+        // would wheel over a sibling surface and false-pass the no-trap gate.
+        const hitSkillsList = !!at && (sl === at || sl.contains(at));
+        return { x, y, inViewport, hitSkillsList, scrollTopBeforeSkillsWheel: sc?.scrollTop ?? null, rowCount, hitTag: at?.tagName?.toLowerCase?.() ?? null, hitCls: typeof at?.className === 'string' ? at.className.slice(0, 60) : null };
       })()`);
       scrollProbe.skInViewport = skProbe?.inViewport === true;
-      scrollProbe.skHitTest = skProbe?.hitInside === true;
+      scrollProbe.skHitTest = skProbe?.hitSkillsList === true;
       scrollProbe.skHitTag = skProbe?.hitTag ?? null;
       scrollProbe.skHitCls = skProbe?.hitCls ?? null;
+      scrollProbe.scrollTopBeforeSkillsWheel = skProbe?.scrollTopBeforeSkillsWheel ?? null;
       scrollProbe.skRect = skProbe ? { x: Math.round(skProbe.x), y: Math.round(skProbe.y) } : null;
-      if (skProbe && skProbe.inViewport && skProbe.hitInside) {
+      if (skProbe && skProbe.inViewport && skProbe.hitSkillsList) {
         for (let i = 0; i < 5; i++) {
           await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: skProbe.x, y: skProbe.y, deltaX: 0, deltaY: 400 }, ntpSession);
           await sleep(100);
@@ -1807,12 +1816,32 @@ async function main() {
       scrollProbe.scrolledAfterReset = scrolledAfterReset;
       // Evidence: prove content BELOW the skills list is reachable once the
       // scroll island is gone. Scroll the outer body deep past the skills
-      // section and capture.
-      await evalIn(cdp, ntpSession, `(() => { const el = document.querySelector('.agent-config-scroll'); if (el) el.scrollTop = el.scrollHeight; return el?.scrollTop ?? null; })()`);
+      // section and ASSERT the known follower (.agent-mcp-box — appended to
+      // the Advanced body after the skills section) actually intersects the
+      // scroll viewport; a saved screenshot alone asserts nothing.
+      const belowProbe = await evalIn(cdp, ntpSession, `(() => {
+        const el = document.querySelector('.agent-config-scroll');
+        if (!el) return null;
+        el.scrollTop = el.scrollHeight;
+        const er = el.getBoundingClientRect();
+        const mb = document.querySelector('.agent-mcp-box');
+        if (!mb) return { scrolledTo: el.scrollTop, mcpFound: false };
+        const mr = mb.getBoundingClientRect();
+        return {
+          scrolledTo: el.scrollTop,
+          mcpFound: true,
+          mcpIntersects: mr.width > 0 && mr.height > 0 && mr.bottom > er.top && mr.top < er.bottom && mr.right > er.left && mr.left < er.right,
+          mcpTop: Math.round(mr.top), mcpBottom: Math.round(mr.bottom),
+          bodyTop: Math.round(er.top), bodyBottom: Math.round(er.bottom),
+        };
+      })()`);
       await sleep(250);
       const pastSkills = await captureShot(cdp, ntpSession);
       if (pastSkills) await writeEvidence("agent-dialog-scroll-past-skills.png", pastSkills);
       scrollProbe.pastSkillsShot = pastSkills ? pastSkills.length : 0;
+      scrollProbe.mcpFound = belowProbe?.mcpFound === true;
+      scrollProbe.mcpIntersects = belowProbe?.mcpIntersects === true;
+      scrollProbe.belowScrolledTo = belowProbe?.scrolledTo ?? null;
       // restore a scrolled state for the check that follows if needed
       await evalIn(cdp, ntpSession, `(() => { const el = document.querySelector('.agent-config-scroll'); if (el) el.scrollTop = 0; return true; })()`);
     }
@@ -1835,11 +1864,21 @@ async function main() {
         // NOT trap the wheel.
         (scrollProbe.scrolledAfterReset ?? 0) === 0 &&
         // The skills-wheel phase must have wheeled over a VISIBLE, HIT-TESTED
-        // skills list — otherwise the coordinate could have been
-        // off-screen/covered and the "no trap" claim is vacuous.
+        // skills list (hit = the point IS on the list, not merely inside the
+        // scroll body) — otherwise the coordinate could have been
+        // off-screen/covered/on a sibling surface and the "no trap" claim is
+        // vacuous.
         scrollProbe.skInViewport === true &&
         scrollProbe.skHitTest === true &&
-        (scrollProbe.scrollTopAfterSkillsWheel ?? 0) > 0,
+        // Advancement is measured from the post-scrollIntoView position:
+        // scrollIntoView scrolls the outer body itself, so a bare >0 pass
+        // would be moved by the centering, not by the wheel.
+        (scrollProbe.scrollTopAfterSkillsWheel ?? 0) > (scrollProbe.scrollTopBeforeSkillsWheel ?? 0) &&
+        // Below-skills reachability is ASSERTED, not just screenshotted: the
+        // .agent-mcp-box that follows the skills section must exist and
+        // intersect the scroll viewport once the outer body is fully scrolled.
+        scrollProbe.mcpFound === true &&
+        scrollProbe.mcpIntersects === true,
     );
 
     // CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01 (Part 1 hardening) — the

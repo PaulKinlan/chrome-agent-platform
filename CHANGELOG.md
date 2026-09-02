@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.7] — 2026-09-02
+- Harden the create-dialog scroll probes against false passes
+
 ## [0.3.6] — 2026-09-02
 - Remove the skills-list scroll island so the agent dialog scrolls as one body
 
