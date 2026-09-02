@@ -38,6 +38,8 @@ export interface HarnessEntry {
   redReason?: string;
   /** A generator with nothing to assert may opt out of the exit-code gate — with a reason. */
   noVerdict?: string;
+  /** kat only: this KAT's own time budget in the runner, when the default (600 s green / 90 s red) does not fit. */
+  budgetMs?: number;
 }
 
 const RED = (tally: string, mode: string, owner = "unassigned (a fix or a retirement decision is the next action)") => ({
@@ -72,7 +74,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   // ── KATs (npm run test:kat via scripts/kat-runner.ts) ───────────────────
   "kat-activity-explorer.ts": { class: "kat", ...RED("7/5", "the backend 'ok' scenario renders 1 row with options ['', 'master']") },
   "kat-agent-board.ts": { class: "kat" },
-  "kat-agent-delegation.ts": { class: "kat" },
+  "kat-agent-delegation.ts": { class: "kat", budgetMs: 300_000, ...RED("56/2 after the 2026-09-02 merge of main (58/0 before it)", "the over-cap delegation scenario is now refused earlier by the run's iteration budget ('not enough of this run's iteration budget remains to delegate') so 'rejected, never committed successful' and 'durable terminal record is failed' see a different terminal shape", "the run-budget / loop-context-window work that arrived with main (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01 family) — re-baseline the KAT's over-cap expectation") },
   "kat-agent-templates.ts": { class: "kat", ...RED("13/24", "the first-run empty state now reads 'Browse starter templates' and seeds nothing automatically — the KAT predates the templates redesign") },
   "kat-artifact-library-capacity.ts": { class: "kat" },
   "kat-artifact-preview.ts": { class: "kat", ...RED("4/2", "the chat no longer renders the restricted artifact-preview host iframe the KAT expects") },
@@ -121,6 +123,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "focus-shots.ts": { class: "manual", reason: "a screenshot generator for focus-ring evidence (3/0 at the re-inventory: the Tab walk reaches the control, the ring is present, the shot is written)" },
   "headed-acceptance.ts": { class: "manual", reason: "needs a display (headed Chrome); run by hand for the headed acceptance" },
   "keyless-first-result.ts": { class: "manual", reason: "green at the re-inventory (16 s); the behaviour is journey 2k in chrome-journeys.ts (KEYLESS-FIRST-RESULT-01) — kept as the standalone repro" },
+  "live-every-tab.ts": { class: "manual", reason: "needs a real Gemini key (GEMINI_API_KEY); the 30-tab sourced-digest live check for RUN-BUDGET-EVERY-ITEM-01 (arrived from main after the re-inventory; it launches through launchChrome and exits on its own verdict)" },
   "live-run-evidence.ts": { class: "manual", reason: "needs a real provider key; the live model evidence run" },
   "mic-transcript-smoke.ts": { class: "manual", reason: "4/0 at the re-inventory (3 s); the mic transcript smoke, run by hand when the mic path changes" },
   "opfs-wal-probe.ts": { class: "manual", reason: "PASS at the re-inventory; a one-shot OPFS WAL probe in the service worker (it used to load the primary checkout's extension by absolute path; now this tree's)" },

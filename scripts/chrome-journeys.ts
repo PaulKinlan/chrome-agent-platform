@@ -7458,7 +7458,7 @@ async function demoPathJourney() {
   const shop = demoFixture("Shop");
   const DOCS = `http://127.0.0.1:${docs.addr.port}`;
   const SHOP = `http://127.0.0.1:${shop.addr.port}`;
-  const proc = launchChrome(profile);
+  let proc: Deno.ChildProcess | null = null;
   let ws = null;
   let cdp = null;
   // Every check is reported exactly once, whatever fails — a thrown step FAILS
@@ -7469,7 +7469,10 @@ async function demoPathJourney() {
   const STEP4_NAME = "demo-path: step 4 hub shows the scheduled run summary";
   const STEP5_NAME = "demo-path: step 5 artifact renders in the thread";
   try {
-    const port = await withTimeout(waitForPort(proc), 20000, "demo-path: wait for port");
+    // The shared launcher bounds the lock wait and the endpoint wait itself.
+    const launched = await launchJourneyChrome(profile);
+    proc = launched.proc;
+    const port = launched.port;
     const version = await fetchJson(`http://127.0.0.1:${port}/json/version`);
     ws = new WebSocket(version.webSocketDebuggerUrl);
     await withTimeout(new Promise((r) => ws.onopen = r), 5000, "demo-path: ws open");
@@ -7688,7 +7691,7 @@ async function demoPathJourney() {
     try { if (cdp) cdp.intentionalClose = true; ws?.close(); } catch { /* ignore */ }
     await Promise.all([docs.shutdown(), shop.shutdown()].map((p) => withTimeout(p, 8000, "demo-path fixture.shutdown").catch(() => { demoPathLeak = true; })));
     try {
-      await killChromiumTree(proc, profile);
+      if (proc) await killChromiumTree(proc, profile);
       await runBounded(RM, ["-rf", profile]);
       if (await Deno.stat(profile).then(() => true).catch(() => false)) demoPathLeak = true;
     } catch (e) {

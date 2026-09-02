@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.2.638] — 2026-09-02
+- Quality checks: the security check no longer stops when other programs start and exit around it, and the browser checks always run against the build they are meant to test.
+
 ## [0.2.637] — 2026-09-02
-- Merge remote-tracking branch 'origin/main' into cap/suite-honesty
+- Quality checks: the security checks now run against the real extension, browser checks take turns instead of colliding, and a known problem is shown with its owner rather than hidden.
 
 ## [0.2.636] — 2026-09-02
 - Task board: the multi-site permission fix is complete; two small follow-ups were opened.

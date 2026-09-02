@@ -65,7 +65,7 @@ async function runOne(file: string, budgetMs: number): Promise<{ code: number; m
 
 console.log(`kat-runner: ${kats.length} KATs (${Object.keys(expectedRed).length} owned reds) — logs in ${LOG_DIR}`);
 for (const [file, entry] of kats) {
-  const budget = entry.expectedRed ? RED_BUDGET_MS : GREEN_BUDGET_MS;
+  const budget = entry.budgetMs ?? (entry.expectedRed ? RED_BUDGET_MS : GREEN_BUDGET_MS);
   const r = await runOne(file, budget);
   const lastLine = r.tail.trim().split("\n").filter((l) => /RESULT|passed|pass|SUMMARY|checks/.test(l)).pop() ?? r.tail.trim().split("\n").pop() ?? "";
   console.log(`  ${file}: exit ${r.code} in ${(r.ms / 1000).toFixed(0)}s${r.lockWaitMs > 1500 ? ` (queued ${(r.lockWaitMs / 1000).toFixed(0)}s for the browser)` : ""} — ${lastLine.slice(0, 140)}`);
