@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.614] — 2026-09-02
+- Approving a permission card now runs the paused action itself: the tool call runs again with its original arguments and the agent gets the real result, so it never has to search for the tool a second time. Other calls made in the same step are not lost when the grant takes effect, one Allow settles every call waiting on the same request, and the card reads "Approved by you — the action then ran."
+
 ## [0.2.613] — 2026-09-01
 - Task board: the page-access Allow card fix is complete.
 
