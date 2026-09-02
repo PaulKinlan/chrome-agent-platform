@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.646] — 2026-09-02
+- Task board: the compact Permissions and Hooks settings are complete.
+
 ## [0.2.645] — 2026-09-02
 - Settings → Permissions and Hooks are now compact grouped lists with a switch per item instead of hundreds of identical cards.
 
