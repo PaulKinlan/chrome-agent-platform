@@ -1,16 +1,13 @@
 # Changelog
 
+## [0.3.11] — 2026-09-02
+- tidy the release notes and repair the test tail after the workspace reland
+
+## [0.3.10] — 2026-09-02
+- : repair the test tail and release notes after the branch reland
+
 ## [0.3.9] — 2026-09-02
-- (beads 60be): align versions to the 0.3.8 build and keep the stock lockfile
-
-## [0.3.8] — 2026-09-02
-- (beads 60be): every named agent gets a persistent private workspace, beside the owner's global file grants
-
-## [0.3.7] — 2026-09-02
-- Every named agent gets a persistent private workspace, beside the owner's global file grants
-
-## [0.3.8] — 2026-09-02
-- Every named agent gets a persistent private workspace, beside the owner's global file grants.
+- Every named agent gets a persistent private workspace of its own, beside the owner's shared folders: agents can keep and organize files between runs, and Settings shows each agent's workspace usage with a Clear button.
 
 ## [0.3.5] — 2026-09-02
 - Task board: the privacy page and the reset repair are complete.

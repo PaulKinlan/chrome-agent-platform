@@ -278,6 +278,11 @@ Deno.test("write_file tool: passes the resolved grant + path + complete content 
     assertEquals(missing.ok, false);
     assertEquals(missing.code, "grant_not_found");
     assertEquals(calls.length, before, "no gate call for a grant that does not exist");
+  } finally {
+    clearRunContext();
+    await deleteFsGrant(grantId);
+  }
+});
 
 // ── agent private workspaces (CAP-FB-20260831-AGENT-PRIVATE-FS-01) ─────────
 // The file tools fall back to the CURRENT AGENT's private OPFS workspace when
