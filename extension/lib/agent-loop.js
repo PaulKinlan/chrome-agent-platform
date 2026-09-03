@@ -20,10 +20,52 @@ import { z } from "zod";
 // Pure loop-control rule (no authority, no chrome.*): the same continuation
 // decision the SW-side loop makes (CAP-FB-20260830-MODEL-CALL-ECONOMY-01).
 import { continuationStopDecision, isSilentIteration } from "./run-budget.js";
+import { steerTextsToInject } from "./run-control.js";
 
 /** Normalize an agent-do hook event into a redacted progress record. */
 function redactProgress(record) {
   return record ?? null;
+}
+
+/**
+ * Wrap a LanguageModel so every outgoing model call carries the run's pending
+ * STEER guidance (chrome-agent-platform-afiu). `readSteers` is the sync reader
+ * the realm feeds (the worker's steer buffer / the SW's run-control store); it
+ * returns the steer records pending for THIS run. Their text is appended as
+ * trailing user messages on the outgoing call COPY (agent-do's own history is
+ * never touched), so guidance is honored BETWEEN steps: a steer that arrives
+ * mid-tool-call changes the agent's NEXT action. Records keep riding later
+ * calls until the run settles — a redirect stays live, and the fixture agents
+ * in tests/agent-worker-loop.test.ts + run-control.test.ts assert exactly that.
+ * No readSteers → the model passes through untouched. `onCarried(pending)`
+ * fires after an injection with the records just carried (the stop-step
+ * hook uses it to end the loop after the first carrying call).
+ */
+export function withSteerInjection(model, readSteers = null, onCarried = null) {
+  if (!model || typeof readSteers !== "function") return model;
+  // AI SDK 7 delivers the model call as options.prompt (message list) — the
+  // agent.js attestation seam reads the SAME field. Only that list is
+  // touched; every other option passes through untouched.
+  const inject = (options) => {
+    let pending = [];
+    try { pending = readSteers() || []; } catch { return options; }
+    const texts = steerTextsToInject(pending);
+    if (!texts.length) return options;
+    if (!Array.isArray(options?.prompt)) return options;
+    const prompt = [...options.prompt];
+    for (const text of texts) prompt.push({ role: "user", content: text });
+    try { onCarried?.(pending); } catch { /* a control callback never breaks a call */ }
+    return { ...options, prompt };
+  };
+  return new Proxy(model, {
+    get(target, prop, receiver) {
+      if ((prop === "doStream" || prop === "doGenerate") && typeof target[prop] === "function") {
+        const fn = target[prop].bind(target);
+        return (options, ...rest) => fn(inject(options), ...rest);
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  });
 }
 
 /**
@@ -39,6 +81,8 @@ function redactProgress(record) {
  * @param {function=} opts.onProgress (record) => void — redacted lifecycle events
  * @param {AbortSignal=} opts.signal  abort the loop between steps
  * @param {number=} opts.maxIterations
+ * @param {function=} opts.readSteers sync () => steer records — when present,
+ *   every model call carries the pending steer text (between-step delivery)
  * @returns {Promise<string>} the final text
  */
 export async function runAgentLoop({
@@ -49,20 +93,37 @@ export async function runAgentLoop({
   onProgress = null,
   signal = null,
   maxIterations = 12,
+  readSteers = null,
 }) {
+  // chrome-agent-platform-afiu: a steer with mode "stop-step" ends the loop at
+  // the step boundary AFTER the first model call that carried it (the owner
+  // said "take this direction, then wrap up" — the in-flight step finishes,
+  // one more call answers with the steer, no continuation tool loop).
+  let stopStepCarried = false;
+  const injectedModel = withSteerInjection(model, readSteers, (carried) => {
+    if (Array.isArray(carried) && carried.some((s) => s?.mode === "stop-step")) stopStepCarried = true;
+  });
   let lastIteration = null; // { hasToolCalls, text, finishedWithToolCalls }
   let silentContinuations = 0;
   let modelSteps = 0; // one onUsage record per model step
   const agent = agentDoCreateAgent({
     id: "worker-agent",
     name: "worker-agent",
-    model,
+    model: injectedModel,
     systemPrompt: system,
     tools: tools ?? {},
     maxIterations,
     signal: signal ?? undefined,
     hooks: {
       onStepStart: async (e) => {
+        // An owner stop-step steer outranks the continuation economy: the loop
+        // stops at the boundary AFTER the carrying call ran (no continuation
+        // nudge, no further tool loop).
+        if (e.step > 0 && stopStepCarried) {
+          stopStepCarried = false;
+          try { onProgress?.({ type: "stopped", reason: "steer-stop-step", iterations: 0, steps: modelSteps }); } catch { /* ignore */ }
+          return { decision: "stop" };
+        }
         // The continuation economy, mirrored for the worker path so both
         // loops agree (CAP-FB-20260830-MODEL-CALL-ECONOMY-01): no continuation
         // call after an iteration that already answered; a silent tool loop

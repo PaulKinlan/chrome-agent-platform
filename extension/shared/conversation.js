@@ -186,6 +186,7 @@ export function appendBubble(container, role, text, attachments, ts) {
   const c = container;
   if (role === "user" && typeof c.appendUser === "function") return c.appendUser(text, ts, attachments);
   if (role === "agent" && typeof c.appendAgent === "function") return c.appendAgent(text, ts);
+  if (role === "steer" && typeof c.appendSteer === "function") return c.appendSteer(text, ts);
   if (role === "system" && typeof c.appendSystem === "function") return c.appendSystem(text, ts);
   if (role === "error" && typeof c.appendError === "function") return c.appendError(text, { ts });
   if (role === "thinking" && typeof c.appendThinking === "function") return c.appendThinking(text);

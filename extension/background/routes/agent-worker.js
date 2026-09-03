@@ -134,6 +134,7 @@ export function createAgentWorkerRoutes({
   resolveJournalStore = null,
   journalAppend = null,
   resolveAgentIdentity = null,
+  runControl = null,
 }) {
   // Review P1-2: worker identity must be the agent's IMMUTABLE instanceId —
   // a caller-supplied reusable slug would key the host worker + alive-set by
@@ -208,6 +209,9 @@ export function createAgentWorkerRoutes({
         return { ok: false, error: `worker host unreachable: ${e?.message ?? e}` };
       }
       if (!posted?.ok) return { ok: false, error: posted?.error || "worker run not posted" };
+      // chrome-agent-platform-afiu: a live worker run is steerable through the
+      // same run-control plane as an SW run (one protocol for every surface).
+      runControl?.register({ executionId: runId, surface: `agent-worker:${identity}`, kind: "worker" });
       return { ok: true, runId, agentId: identity };
     },
 
@@ -249,6 +253,7 @@ export function createAgentWorkerRoutes({
       if (!posted?.ok) {
         return { ok: false, error: posted?.error || "worker run not posted" };
       }
+      runControl?.register({ executionId: runId, surface: `agent-worker:${identity}`, kind: "worker" });
       return { ok: true, runId, agentId };
     },
 
@@ -293,6 +298,54 @@ export function createAgentWorkerRoutes({
       await writeAliveSet(alive.filter((id) => id !== agentId && id !== identity));
       return { ok: true, agentId: identity, closed: true };
     },
+    /** chrome-agent-platform-afiu: the run protocol's STEER control message
+     * for a live WORKER run. Only a validated extension surface may steer;
+     * the control record is forwarded to the worker (its run loop honors it
+     * between steps). stop-run maps to the worker's abort (clean cancel — the
+     * worker reports the aborted terminal, never an orphaned run). */
+    async "agent-worker.steer"(m, context) {
+      if (!authorized(context)) return { ok: false, error: "unauthorized_principal" };
+      const agentId = String(m?.agentId ?? "").slice(0, 200);
+      const executionId = String(m?.runId ?? m?.executionId ?? "");
+      if (!executionId) return { ok: false, error: "invalid runId" };
+      const mode = String(m?.mode ?? "inject").slice(0, 16);
+      if (!["inject", "stop-step", "stop-run"].includes(mode)) return { ok: false, error: "invalid_steer_mode" };
+      const text = String(m?.text ?? "").slice(0, 1500);
+      // The agent identity comes from the live control record (surface
+      // `agent-worker:<identity>`) when the caller did not name it — a steer
+      // is always keyed to a LIVE run, never to a slug that could re-target
+      // a newer run.
+      let identity = null;
+      const live = runControl?.get?.(executionId) ?? null;
+      if (agentId) identity = await workerIdentity(agentId);
+      else if (live?.surface?.startsWith("agent-worker:")) identity = live.surface.slice("agent-worker:".length);
+      if (!identity) return { ok: false, error: "run_not_live", executionId };
+      try {
+        if (mode === "stop-run") {
+          await chrome.runtime.sendMessage({
+            type: "agent-worker-host:post",
+            agentId: identity,
+            msg: { type: "agent-worker:abort", runId: executionId },
+          });
+          return { ok: true, executionId, stopped: true };
+        }
+        await chrome.runtime.sendMessage({
+          type: "agent-worker-host:post",
+          agentId: identity,
+          msg: {
+            type: "agent-worker:steer",
+            runId: executionId,
+            steerId: m?.steerId ? String(m.steerId).slice(0, 120) : null,
+            mode,
+            text,
+          },
+        });
+        return { ok: true, executionId, steered: true, mode };
+      } catch (e) {
+        return { ok: false, error: `worker host unreachable: ${e?.message ?? e}` };
+      }
+    },
+
     /** Phase 3: Bounded, redacted progress commit from a worker run.
      * Records progress in durable registry logs + updates execution heartbeat
      * + broadcasts live progress to UI ports. */
@@ -346,6 +399,10 @@ export function createAgentWorkerRoutes({
       const logicalId = m?.logicalId ? bounded(m.logicalId, 200) : undefined;
       const scheduleName = m?.scheduleName ? bounded(m.scheduleName, 200) : undefined;
       const aborted = m?.aborted === true;
+
+      // chrome-agent-platform-afiu: the run ended — release it from the live
+      // run-control plane (no orphaned steerable run; a later steer refuses).
+      runControl?.unregister(executionId);
 
       let terminal = null;
       if (durableRegistry) {

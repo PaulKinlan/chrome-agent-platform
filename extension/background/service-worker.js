@@ -53,8 +53,9 @@ import {
   requireSettingsSender,
 } from "./routes/index.js";
 import { describeError, formatError, errorDetail } from "../lib/error-report.js";
-import { BUDGET_CONTINUE_TASK, boundedIterations, budgetExhaustedTerminal, continuationStopTerminal, isBudgetTerminal } from "../lib/run-budget.js";
+import { BUDGET_CONTINUE_TASK, boundedIterations, budgetExhaustedTerminal, continuationStopTerminal, isBudgetTerminal, steerStopTerminal } from "../lib/run-budget.js";
 import { buildRetryDispatch, retryRunId } from "../lib/run-retry.js";
+import { createRunControl, createThreadQueue } from "../lib/run-control.js";
 import { isMemoryKeyQuotaError, isNativeQuotaExceededError } from "../lib/storage-errors.js";
 import {
   PREVIEW_LIMITS,
@@ -669,6 +670,13 @@ function withRunLock(fn) {
   runMutex = run.then(() => {}, () => {});
   return run;
 }
+
+// chrome-agent-platform-afiu — the run-level control plane: live STEER (owner
+// guidance injected into an in-flight run between model steps) + the durable
+// per-thread follow-up QUEUE (FIFO fired one per settled run). One protocol
+// for thread/named/background/site runs — the composer surface drives both.
+const runControl = createRunControl();
+const threadQueues = createThreadQueue({ kvGet, kvSet });
 
 // ---- agent→agent delegation (G5) ----
 // Live state for every delegation-capable run (named-agent runs): identity,
@@ -2796,6 +2804,14 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     // finally, and its slot is FINALIZED so a late emission can never leak
     // into a later run's records.
     beginExecution(executionId, taskId);
+    // chrome-agent-platform-afiu: this run is now steerable/queuable — the
+    // composer's run.control.* routes resolve against THIS live record.
+    runControl.register({
+      executionId,
+      threadId: threadId ?? null,
+      surface: agentSurfaceRef ?? null,
+      kind: runKind ?? (agentRole ? "agent" : "task"),
+    });
     // Everything after beginExecution is inside this try: orchestrator/key
     // establishment can fail too, and even that pre-model failure must seal the
     // slot. This run builds a management toolset that CAPTURES executionId.
@@ -2870,6 +2886,18 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       durableRunAborters.set(executionId, () => {
         try { orch?.abort?.(); } catch { /* already stopped */ }
       });
+      // chrome-agent-platform-afiu: bind the run's steer source (per run, like
+      // setProgress/setAttestation — the cached orchestrator is reused). The
+      // model seam injects pending steer text between steps and acks it.
+      try {
+        orch?.setSteerSource?.((runId) => {
+          const key = String(runId ?? executionId ?? "");
+          return {
+            pending: runControl.pending(key),
+            ack: (ids) => runControl.markInjected(key, ids),
+          };
+        });
+      } catch { /* steering binding must never break a run */ }
       // Close the cancel-before-aborter race: cancellation removes durable
       // ownership before stopping live work, so this immediate check prevents
       // task/tool commits if Cancel landed while the orchestrator initialized.
@@ -3098,7 +3126,11 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // model kept answering continuations with tool calls and no text, so
       // the task is not finished and Continue is the one action.
       if (runBudget?.exhausted === true || runBudget?.stopped) {
-        const budgetStop = runBudget.stopped ? continuationStopTerminal(runBudget) : budgetExhaustedTerminal(runBudget);
+        const budgetStop = runBudget.stopped
+          ? (runBudget.stopped.reason === "steer-stop-step"
+            ? steerStopTerminal(runBudget)
+            : continuationStopTerminal(runBudget))
+          : budgetExhaustedTerminal(runBudget);
         const terminal = await durableRuns.settle(executionId, {
           ...budgetStop,
           logicalId: taskId,
@@ -3311,6 +3343,20 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       }
       // The ROOT run releases the descendant counter on settle.
       if (delegationState && delegationState.depth === 0) delegationRegistry.release(delegationState.rootRunId);
+      // chrome-agent-platform-afiu: release the run from the live control plane.
+      // A steer that never reached the model becomes a queued follow-up on the
+      // run's thread (nothing the owner typed is lost); a settled thread run
+      // then drains its queue one item per run.
+      const endedRun = runControl.unregister(executionId);
+      if (threadId && endedRun?.ok) {
+        for (const steer of endedRun.undelivered) {
+          if (steer.text && steer.mode !== "stop-run") {
+            threadQueues.enqueue(threadId, steer.text).catch(() => {});
+          }
+        }
+        void drainThreadQueueForThread(threadId, executionId).catch((err) =>
+          pushDiagnostic("error", `[thread] queue drain failed: ${String(err?.message ?? err).slice(0, 160)}`));
+      }
       // Seal THIS execution: unbind the attestation callback from the (cached)
       // orchestrator and finalize the execution slot, so no late/duplicate
       // emission can be recorded against this — or a later — run (the ring
@@ -3341,6 +3387,11 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // run's ensureOrchestrator rebinds inside ITS lock.
       try {
         orch?.setProgress?.(null);
+      } catch { /* best-effort */ }
+      // Unbind the per-run steer source the same way (a stale reader would be
+      // inert — its execution is unregistered — but must never linger).
+      try {
+        orch?.setSteerSource?.(null);
       } catch { /* best-effort */ }
       // Remove the abort listener BEFORE the run mutex is released (in the
       // `finally`, which still runs under withRunLock). The scheduled run's
@@ -4567,6 +4618,55 @@ async function cancelExecutionTree(executionId, { reason, requestId = null }) {
   return result;
 }
 
+/** chrome-agent-platform-afiu: after a thread-attributed run settles, fire the
+ * NEXT queued follow-up (FIFO — one item per settled run). Gated:
+ *   - only a live-thread run whose settle was a SUCCESS drains (a cancelled,
+ *     budget-stopped or failed settle PARKS the queue — the owner's Stop or a
+ *     provider failure must not silently cascade the remaining items into more
+ *     paid turns; the chips stay visible for the owner to act on);
+ *   - each drained item runs as its own turn of the SAME thread (agent.run —
+ *     the thread history is its context), so its own settle drains the next.
+ * Fire-and-forget from runTask's finally (never awaited — the run mutex
+ * serializes the next turn behind this one). */
+async function drainThreadQueueForThread(threadId, settledExecutionId) {
+  const id = String(threadId ?? "");
+  if (!id) return;
+  const pending = await threadQueues.list(id);
+  if (pending.length === 0) return;
+  if (settledExecutionId) {
+    try {
+      const snapshot = await durableRuns.list();
+      const run = snapshot.runs.find((row) => row.executionId === settledExecutionId);
+      if (!run) return; // the settle record is gone — never guess
+      const phase = String(run.phase ?? "");
+      if (phase === "cancelled" || phase === "cancel-requested") return;
+      if (phase !== "terminal") return; // still live/paused/quota-uncertain — never guess
+      if (run.terminal?.ok !== true) return;
+    } catch {
+      return; // an unreadable registry parks the queue (never a blind cascade)
+    }
+  }
+  const item = await threadQueues.shift(id);
+  if (!item) return;
+  const runId = retryRunId(); // a fresh per-turn client id for the registry row
+  // FIRE-AND-FORGET: this helper runs inside the settled run's finally (which
+  // still holds the run mutex) — awaiting the next turn here would deadlock.
+  // The next runTask queues behind this one via withRunLock and runs as soon
+  // as the mutex releases; its own settle drains the item after it.
+  try {
+    const runPromise = handlers["agent.run"]({ threadId: id, task: item.text, runId });
+    void Promise.resolve(runPromise).then((result) => {
+      if (result?.ok !== true) {
+        pushDiagnostic("error", `[thread] queued follow-up could not run: ${String(result?.error ?? "unknown").slice(0, 160)}`);
+      }
+    }).catch((e) => {
+      pushDiagnostic("error", `[thread] queued follow-up failed: ${String(e?.message ?? e).slice(0, 160)}`);
+    });
+  } catch (e) {
+    pushDiagnostic("error", `[thread] queued follow-up dispatch failed: ${String(e?.message ?? e).slice(0, 160)}`);
+  }
+}
+
 const boardRoutes = createAgentBoardRoutes({
   memory: masterMemory(),
   withLock: withNamedAgentsLock,
@@ -4719,6 +4819,10 @@ const handlers = mergeRouteMaps(
     // Worker identity = the agent's immutable instanceId (review P1-2):
     // slug-keyed workers would be inherited by a recreated same-name agent.
     resolveAgentIdentity: (agentId) => resolveAgentInstanceId(agentId),
+    // chrome-agent-platform-afiu: worker runs join the same live run-control
+    // plane so the composer's run.control.steer reaches a worker run through
+    // the agent-worker protocol (one steer protocol for every surface).
+    runControl,
     // ── PHASE-2 tool bridge authority ───────────────────────────────────────
     // The worker's RPC proxy (agent-worker.tool) resolves here. The SW is the
     // ONLY tool executor: resolve the tool by name from the SAME toolsets the
@@ -7140,6 +7244,86 @@ const handlers = mergeRouteMaps(
       continuesExecutionId: executionId,
     });
   },
+  // ── run.control.* — the composer's STEER + QUEUE protocol
+  // (chrome-agent-platform-afiu) ────────────────────────────────────────────
+  // The owner surface drives a LIVE run (steer: inject guidance between
+  // steps / stop-step / stop-run) and a durable per-thread follow-up queue
+  // (enqueue while running; the SW drains one item per settled run). All
+  // routes are extension/owner-options only — a model or page principal can
+  // never steer or queue for the owner.
+  async "run.control.steer"(m, context) {
+    if (!["extension", "owner-options"].includes(context?.principal)) {
+      return { ok: false, error: "owner_extension_required" };
+    }
+    const executionId = String(m?.executionId ?? "");
+    if (!executionId) return { ok: false, error: "executionId is required" };
+    const mode = String(m?.mode ?? "inject").slice(0, 16);
+    if (!["inject", "stop-step", "stop-run"].includes(mode)) return { ok: false, error: "invalid_steer_mode" };
+    const text = String(m?.text ?? "").slice(0, 1500);
+    const live = runControl.get(executionId);
+    if (!live) return { ok: false, error: "run_not_live", executionId };
+    // A WORKER run steers through the agent-worker protocol (the worker's own
+    // run loop honors the control message between steps).
+    if (live.kind === "worker") {
+      return await handlers["agent-worker.steer"]({ runId: executionId, mode, text }, context);
+    }
+    if (mode === "stop-run") {
+      // Stop cancels the run cleanly (the existing cancellation tree — no
+      // orphaned durable run). Text the owner typed alongside Stop is queued
+      // on the run's thread so nothing is lost.
+      const cancelled = await cancelExecutionTree(executionId, {
+        reason: m?.reason ?? "owner steer: stop the run",
+        requestId: m?.requestId ?? crypto.randomUUID?.() ?? String(Date.now()),
+      });
+      if (live.threadId && String(text).trim()) {
+        await threadQueues.enqueue(live.threadId, text).catch(() => {});
+      }
+      return { ...(cancelled ?? { ok: true }), stopped: true, executionId };
+    }
+    // inject / stop-step: record against the live run; the run loop's model
+    // seam injects the text between steps and ends the loop at the next step
+    // boundary for stop-step.
+    return await runControl.steer({ executionId, mode, text });
+  },
+
+  async "run.control.queue.list"(m, context) {
+    if (!["extension", "owner-options"].includes(context?.principal)) {
+      return { ok: false, error: "owner_extension_required" };
+    }
+    const threadId = String(m?.threadId ?? "");
+    if (!threadId) return { ok: false, error: "threadId is required" };
+    return { ok: true, threadId, items: await threadQueues.list(threadId) };
+  },
+
+  async "run.control.queue.enqueue"(m, context) {
+    if (!["extension", "owner-options"].includes(context?.principal)) {
+      return { ok: false, error: "owner_extension_required" };
+    }
+    const threadId = String(m?.threadId ?? "");
+    if (!threadId) return { ok: false, error: "threadId is required" };
+    return await threadQueues.enqueue(threadId, String(m?.text ?? ""));
+  },
+
+  async "run.control.queue.remove"(m, context) {
+    if (!["extension", "owner-options"].includes(context?.principal)) {
+      return { ok: false, error: "owner_extension_required" };
+    }
+    const threadId = String(m?.threadId ?? "");
+    if (!threadId) return { ok: false, error: "threadId is required" };
+    return await threadQueues.remove(threadId, String(m?.id ?? ""));
+  },
+
+  async "run.control.queue.move"(m, context) {
+    if (!["extension", "owner-options"].includes(context?.principal)) {
+      return { ok: false, error: "owner_extension_required" };
+    }
+    const threadId = String(m?.threadId ?? "");
+    if (!threadId) return { ok: false, error: "threadId is required" };
+    const delta = Number(m?.delta);
+    if (!Number.isFinite(delta) || delta === 0) return { ok: false, error: "invalid delta" };
+    return await threadQueues.move(threadId, String(m?.id ?? ""), delta);
+  },
+
   async "run.retry"(m, context) {
     // UX-008 (CAP-FB-20260828-SILENT-DISPATCH-LOSS-01): a failed dispatch must
     // be RETRYABLE from its stored prompt, never retyped. The failed run's

@@ -1,6 +1,7 @@
 # Changelog
 
-## [0.3.17] — 2026-09-03
+## [0.3.18] — 2026-09-03
+- Task composer steer + queue (chrome-agent-platform-afiu): while a task runs, sending steers the running agent at its next step (gentle inject / stop-step / stop-run), queues a durable per-thread follow-up drained in order at run end, or sends now after stopping — one run-control protocol across the SW and agent-worker run loops, persisted chips above the composer, with falsification tests for between-step steer delivery, FIFO drain across reloads, and clean stop.
 - The hub's left rail no longer stacks 32px gaps between its sections — flex-gap is the only spacing there
 
 ## [0.3.16] — 2026-09-03

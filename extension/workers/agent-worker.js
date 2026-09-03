@@ -103,9 +103,11 @@ async function handleRun(port, msg) {
   const modelKind = String(msg?.modelKind ?? "demo");
   const maxIterations = Number(msg?.maxIterations ?? 12) || 12;
   const controller = new AbortController();
+  steerBuffer.length = 0; // steers are per-run: each run starts clean
   activeRun = { runId, controller };
 
   const progress = (record) => {
+    if (record?.type === "steer") broadcast("steer", { runId, mode: record.mode, text: record.text });
     broadcast("progress", { runId, ...record });
     try { port.postMessage({ type: "agent-worker:progress", runId, ...record }); } catch { /* ignore */ }
   };
@@ -120,6 +122,9 @@ async function handleRun(port, msg) {
       onProgress: progress,
       signal: controller.signal,
       maxIterations,
+      // The loop reads the worker's local steer buffer at EVERY model call —
+      // a steer that arrives mid-tool-call changes the agent's next action.
+      readSteers: () => [...steerBuffer],
     });
     broadcast("run-complete", { runId, ok: true });
     port.postMessage({ type: "agent-worker:run-done", runId, ok: true, result });
@@ -129,6 +134,7 @@ async function handleRun(port, msg) {
     port.postMessage({ type: "agent-worker:run-done", runId, ok: false, aborted, error: String(e?.message ?? e).slice(0, 200) });
   } finally {
     activeRun = null;
+    steerBuffer.length = 0;
   }
 }
 
@@ -144,6 +150,16 @@ function handleMessage(port, msg) {
       handleRun(port, msg);
       port.postMessage({ type: "agent-worker:run-started", runId: msg?.runId ?? "", agentId: AGENT_ID });
       break;
+    case "agent-worker:steer": {
+      // Owner steer control message (chrome-agent-platform-afiu), forwarded by
+      // the validated SW route (agent-worker.steer): recorded in the buffer
+      // and honored by the run loop between steps. Broadcast so the transcript
+      // can render the owner interruption.
+      pushSteer({ id: msg?.steerId ?? null, mode: msg?.mode ?? "inject", text: msg?.text ?? "" });
+      broadcast("steer", { runId: msg?.runId ?? "", mode: String(msg?.mode ?? "inject"), text: String(msg?.text ?? "").slice(0, 1500) });
+      port.postMessage({ type: "agent-worker:steered", runId: msg?.runId ?? "", agentId: AGENT_ID, mode: msg?.mode ?? "inject" });
+      break;
+    }
     case "agent-worker:abort":
       activeRun?.controller?.abort();
       port.postMessage({ type: "agent-worker:aborted", runId: msg?.runId ?? "", agentId: AGENT_ID });
