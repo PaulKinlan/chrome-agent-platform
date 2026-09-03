@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.4.3] — 2026-09-03
+- pf0k review: a future price refresh no longer loses audited cache pricing
+
 ## [0.4.2] — 2026-09-02
 - pf0k: the model picker gains Gemini 3.8 Flash and Fable 5.1, with every picker's price audited against published sources
 
