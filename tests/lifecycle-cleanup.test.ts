@@ -20,6 +20,7 @@ import {
   autoCloseTabPlan,
   runEndCleanupNote,
   appendRunEndCleanupNote,
+  liveLifecycleSnapshot,
 } from "../extension/lib/lifecycle-cleanup.js";
 
 // ── Gate 1: description cleanup guidance on every lifecycle tool ───────────
@@ -204,6 +205,66 @@ Deno.test("4ffg: a restored tab the run closes again is no longer listed as rest
   const s = t.snapshot();
   assertEquals(s.restoredTabIds, [], "closing the restored tab drops it from the restored set");
   assertEquals(runEndCleanupNote(s), null, "nothing restored and left open → no note");
+});
+
+// ── r6 finding 1: restored-window lifecycle ────────────────────────────────
+Deno.test("4ffg: closing a restored WINDOW drops its child tabs too (restore #77 with tabs #401/#402 then close_window #77 → no note claims them open)", () => {
+  const t = createLifecycleTracker();
+  t.onToolResult("restore_closed", true, JSON.stringify({ ok: true, sessionId: "s-win", kind: "window", restoredTabId: null, restoredWindowId: 77, restoredWindowTabIds: [401, 402] }));
+  t.onToolResult("close_window", true, JSON.stringify({ ok: true, windowId: 77, closed: true }));
+  const s = t.snapshot();
+  assertEquals(s.restoredWindowIds, [], "the closed restored window is released");
+  assertEquals(s.restoredTabIds, [], "the window's child tab ids are released with it — #401/#402 never claimed open after close_window #77");
+  assertEquals(runEndCleanupNote(s), null, "nothing restored and left open → no note");
+  // A separately restored TAB survives the window close — only the window's
+  // own children are dropped.
+  const t2 = createLifecycleTracker();
+  t2.onToolResult("restore_closed", true, JSON.stringify({ ok: true, sessionId: "s-win", kind: "window", restoredTabId: null, restoredWindowId: 77, restoredWindowTabIds: [401, 402] }));
+  t2.onToolResult("restore_closed", true, JSON.stringify({ ok: true, sessionId: "s-tab", kind: "tab", restoredTabId: 301, restoredWindowId: null, restoredWindowTabIds: [] }));
+  t2.onToolResult("close_window", true, JSON.stringify({ ok: true, windowId: 77, closed: true }));
+  assertEquals(t2.snapshot().restoredTabIds, [301], "only the closed window's children are dropped; the independent restored tab stays");
+});
+
+Deno.test("4ffg: owner-closed restored surface is never claimed open — the liveness filter covers restored ids too (r6 finding 1)", async () => {
+  // chrome.tabs.get / chrome.windows.get probes: an id is alive when the
+  // probe resolves with it; a /no … with id/ rejection means the owner
+  // closed it or it vanished. Tab 302 and window 9 are still live; tab 301
+  // and restored window 77 are gone.
+  const tabProbe = async (id) => {
+    if (id === 302 || id === 1) return { id };
+    throw new Error(`No tab with id: ${id}.`);
+  };
+  const windowProbe = async (id) => {
+    if (id === 9) return { id };
+    throw new Error(`No window with id: ${id}.`);
+  };
+  const live = await liveLifecycleSnapshot({
+    openedTabs: [{ id: 1, url: "https://a.example" }],
+    openedWindows: [{ id: 9 }],
+    closedTabIds: [],
+    closedWindowIds: [],
+    restoredTabIds: [301, 302], // 301 externally closed, 302 still open
+    restoredWindowIds: [77], // externally closed
+    restoredSessions: 0,
+  }, tabProbe, windowProbe);
+  assertEquals(live.restoredTabIds, [302], "the owner-closed restored tab is dropped, the live one is kept");
+  assertEquals(live.restoredWindowIds, [], "the owner-closed restored window is dropped");
+  assertEquals(live.openedTabs.map((x) => x.id), [1], "run-opened surface keeps the same liveness treatment");
+  assertEquals(live.openedWindows.map((x) => x.id), [9]);
+  const note = runEndCleanupNote(live);
+  assert(note, "the live restored surface still produces a note");
+  assert(!note.includes("#301") && !note.includes("#77"), "the note never claims the externally-closed restored ids are open");
+});
+
+Deno.test("4ffg: liveness keeps an id on unreadable probe states and drops nothing it cannot judge", async () => {
+  // A permission/context failure (no "no … with id" in the message) is
+  // unreadable, not gone: the honest claim beats a false drop.
+  const live = await liveLifecycleSnapshot({
+    openedTabs: [], openedWindows: [], closedTabIds: [], closedWindowIds: [],
+    restoredTabIds: [301], restoredWindowIds: [77], restoredSessions: 0,
+  }, async () => { throw new Error("chrome.tabs is not available"); }, async () => { throw new Error("context invalidated"); });
+  assertEquals(live.restoredTabIds, [301], "unreadable state keeps the restored tab id");
+  assertEquals(live.restoredWindowIds, [77], "unreadable state keeps the restored window id");
 });
 
 // ── tracker accounting (feeds gates 2 + 3 in the real run) ─────────────────

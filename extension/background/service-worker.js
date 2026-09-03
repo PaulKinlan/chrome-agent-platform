@@ -72,7 +72,7 @@ import { BUNDLED_TOOL_PACKAGE_ROWS } from "../lib/bundled-tool-packages.data.js"
 import { executeFactoryReset, enumerateStorageTargets } from "../lib/factory-reset.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
 import { attachmentContext, buildMultimodalTask } from "../lib/attachments.js";
-import { appendRunEndCleanupNote, autoCloseTabPlan, createLifecycleTracker } from "../lib/lifecycle-cleanup.js";
+import { appendRunEndCleanupNote, autoCloseTabPlan, createLifecycleTracker, liveLifecycleSnapshot } from "../lib/lifecycle-cleanup.js";
 import {
   canonicalOrigin,
   journalAppend,
@@ -3179,41 +3179,15 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // The summary is only as honest as its "still open" claim: ids the run
       // opened but the owner closed mid-run (or that vanished) are dropped by
       // a live re-check before the note is composed — a closed tab is never
-      // reported as open, and auto-close never burns a remove on it.
-      const lifecycleSnapshot = lifecycle.snapshot();
-      const stillOpenTabs = [];
-      if (lifecycleSnapshot.openedTabs.length > 0) {
-        for (const t of lifecycleSnapshot.openedTabs) {
-          try {
-            const live = await chrome.tabs.get(t.id);
-            if (live?.id === t.id) stillOpenTabs.push(t);
-          } catch (error) {
-            if (/no tab with id/i.test(String(error?.message ?? ""))) continue; // gone — dropped
-            stillOpenTabs.push(t); // unreadable state — keep the honest claim
-          }
-        }
-      }
-      const stillOpenWindows = [];
-      if (lifecycleSnapshot.openedWindows.length > 0) {
-        for (const w of lifecycleSnapshot.openedWindows) {
-          try {
-            const live = await chrome.windows.get(w.id);
-            if (live?.id === w.id) stillOpenWindows.push(w);
-          } catch (error) {
-            if (/no window with id/i.test(String(error?.message ?? ""))) continue;
-            stillOpenWindows.push(w);
-          }
-        }
-      }
-      const liveSnapshot = {
-        openedTabs: stillOpenTabs,
-        openedWindows: stillOpenWindows,
-        closedTabIds: lifecycleSnapshot.closedTabIds,
-        closedWindowIds: lifecycleSnapshot.closedWindowIds,
-        restoredTabIds: lifecycleSnapshot.restoredTabIds,
-        restoredWindowIds: lifecycleSnapshot.restoredWindowIds,
-        restoredSessions: lifecycleSnapshot.restoredSessions,
-      };
+      // reported as open, and auto-close never burns a remove on it. The same
+      // filter covers the run's RESTORED tabs/windows (r6 finding 1: restored
+      // ids used to bypass it, so an owner-closed restored surface was still
+      // claimed open).
+      const liveSnapshot = await liveLifecycleSnapshot(
+        lifecycle.snapshot(),
+        (id) => chrome.tabs.get(id),
+        (id) => chrome.windows.get(id),
+      );
       let autoClosedTabIds = [];
       if (liveSnapshot.openedTabs.length > 0) {
         try {

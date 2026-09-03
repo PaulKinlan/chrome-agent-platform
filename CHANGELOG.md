@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.21] — 2026-09-03
+- agents tidy-up r6: closing a restored window now clears its tabs from the tidy-up summary, restored tabs/windows get the same still-open liveness check as ordinary ones, and restore_closed tests drive real Session ids end to end
+
 ## [0.3.20] — 2026-09-03
 - agents tidy-up r5: duplicate_tab never counts its source tab, keep:true tabs survive auto-close, and restore_closed reports the real ids it re-opened
 

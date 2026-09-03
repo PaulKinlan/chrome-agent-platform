@@ -28,6 +28,13 @@
 //     so the run summary names them instead of a generic count (r5 finding
 //     3). Restored surface is never auto-closeable: re-opening is the
 //     deliberate act and the setting must not undo it.
+//   - A restored WINDOW's tabs die with it: restore records which tab ids
+//     belong to which restored window, so a close_window of that window
+//     drops the child ids too — the summary never claims tabs of an
+//     already-closed restored window are still open (r6 finding 1).
+//   - Every "still open" claim (run-opened and restored alike) passes a live
+//     liveness re-check before the note is composed: ids the owner closed
+//     mid-run are dropped, never reported open (r6 finding 1).
 //   - Keepers: open_tab / duplicate_tab accept keep:true (echoed in their
 //     result), the tracker marks that id kept, and autoCloseTabPlan leaves
 //     kept tabs open — "open this article for me" survives a run that also
@@ -154,6 +161,38 @@ export function lifecycleIdsInResult(payload, toolName) {
   return { tabIds, windowIds, restoredTabIds, restoredWindowIds };
 }
 
+/** The restored-window -> child-tab membership restore_closed reported
+ *  (windowId -> Set of tabIds). close_window of a restored window must drop
+ *  the child ids too — closing a window closes every tab in it (r6 finding
+ *  1). Pairs are read from the restore result payload itself. */
+function restoredWindowPairs(payload) {
+  let d = payload;
+  if (typeof d === "string") {
+    const s = d.trim();
+    if (s.startsWith("{") || s.startsWith("[")) {
+      try { d = JSON.parse(s); } catch { d = null; }
+    } else {
+      d = null;
+    }
+  }
+  const out = [];
+  if (d && typeof d === "object") {
+    // Same lazy-envelope descent lifecycleIdsInResult uses: the real result
+    // may sit one level under {ok,selectedTool,result}. A candidate counts
+    // only when it carries BOTH a window id and its tab id array.
+    const candidates = [d];
+    const nested = d && typeof d === "object" ? d.result : null;
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) candidates.push(nested);
+    for (const c of candidates) {
+      if (Number.isInteger(c.restoredWindowId) && c.restoredWindowId > 0 && Array.isArray(c.restoredWindowTabIds)) {
+        const tabIds = c.restoredWindowTabIds.filter((id) => Number.isInteger(id) && id > 0);
+        if (tabIds.length > 0) out.push({ windowId: c.restoredWindowId, tabIds });
+      }
+    }
+  }
+  return out;
+}
+
 /**
  * The per-run tracker. Feed it every tool-result of a run
  * (onToolResult(toolName, ok, payload)); it records what the run opened and
@@ -167,6 +206,7 @@ export function createLifecycleTracker() {
   const closedWindowIds = new Set();
   const restoredTabIds = new Set(); // ids restore_closed actually re-opened
   const restoredWindowIds = new Set();
+  const restoredWindowTabs = new Map(); // restored windowId -> Set(child tabIds)
   let restoredSessions = 0; // restores whose ids Chrome did not report
 
   /** Is `payload` (JSON string or object, lazy envelope allowed) marked keep? */
@@ -206,6 +246,15 @@ export function createLifecycleTracker() {
           const { restoredTabIds: rts, restoredWindowIds: rws } = lifecycleIdsInResult(payload ?? {}, name);
           for (const id of rts) restoredTabIds.add(id);
           for (const id of rws) restoredWindowIds.add(id);
+          // Membership: remember which tab ids each restored window owns so a
+          // later close_window of that window drops them too (a window close
+          // closes every tab in it — the flat restoredTabIds alone would leave
+          // the run-end note claiming those tabs are still open; r6 finding 1).
+          for (const { windowId, tabIds } of restoredWindowPairs(payload)) {
+            const owned = restoredWindowTabs.get(windowId) ?? new Set();
+            for (const id of tabIds) owned.add(id);
+            restoredWindowTabs.set(windowId, owned);
+          }
           if (rts.length === 0 && rws.length === 0) {
             const d = typeof payload === "string" ? (() => { try { return JSON.parse(payload); } catch { return null; } })() : payload;
             if (d?.ok === true || payload == null) restoredSessions += 1;
@@ -239,7 +288,16 @@ export function createLifecycleTracker() {
             openedWindows.delete(id);
             closedWindowIds.add(id);
           }
-          restoredWindowIds.delete(id);
+          if (restoredWindowIds.has(id)) {
+            restoredWindowIds.delete(id);
+            // A close of a restored window closes its tabs too — drop the child
+            // ids recorded at restore time so nothing claims them still open.
+            const owned = restoredWindowTabs.get(id);
+            if (owned) {
+              for (const child of owned) restoredTabIds.delete(child);
+              restoredWindowTabs.delete(id);
+            }
+          }
         }
       }
     },
@@ -325,6 +383,40 @@ export function runEndCleanupNote(snapshot, autoClosedTabIds = []) {
     lines.push(`Restored ${restored} recently closed ${restored === 1 ? "session" : "sessions"} — close it again if it was scratch.`);
   }
   return lines.join(" ");
+}
+
+/**
+ * Live re-check before the run-end note is composed: keep only surface that
+ * is genuinely still in the browser, for EVERY kind the snapshot carries —
+ * run-opened tabs/windows AND restored tabs/windows alike (r6 finding 1:
+ * restored ids used to bypass this filter, so an owner-closed restored
+ * surface was reported open). `tabProbe`/`windowProbe` mirror
+ * chrome.tabs.get / chrome.windows.get: resolve with the live entity (its
+ * id must match) or reject. An id is dropped when the probe rejects with
+ * "no (tab|window) with id" (owner closed it or it vanished); an unreadable
+ * state keeps it — the honest claim beats a false drop. Pure apart from the
+ * injected probes, so the gone/kept rules are Deno-testable.
+ */
+export async function liveLifecycleSnapshot(snapshot, tabProbe, windowProbe) {
+  const s = snapshot ?? {};
+  const alive = async (id, probe) => {
+    if (!Number.isInteger(id)) return false;
+    try {
+      const live = await probe(id);
+      return live?.id === id;
+    } catch (error) {
+      return !/no (tab|window) with id/i.test(String(error?.message ?? ""));
+    }
+  };
+  const openedTabs = [];
+  for (const t of Array.isArray(s.openedTabs) ? s.openedTabs : []) if (await alive(t?.id, tabProbe)) openedTabs.push(t);
+  const openedWindows = [];
+  for (const w of Array.isArray(s.openedWindows) ? s.openedWindows : []) if (await alive(w?.id, windowProbe)) openedWindows.push(w);
+  const restoredTabIds = [];
+  for (const id of Array.isArray(s.restoredTabIds) ? s.restoredTabIds : []) if (await alive(id, tabProbe)) restoredTabIds.push(id);
+  const restoredWindowIds = [];
+  for (const id of Array.isArray(s.restoredWindowIds) ? s.restoredWindowIds : []) if (await alive(id, windowProbe)) restoredWindowIds.push(id);
+  return { ...s, openedTabs, openedWindows, restoredTabIds, restoredWindowIds };
 }
 
 /**
