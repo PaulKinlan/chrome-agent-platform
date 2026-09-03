@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.25] — 2026-09-03
+- no self-imposed size caps in transport and rendering — large files attach with honest refusals, artifacts grow by appending, and the source view renders any size
+
 ## [0.3.24] — 2026-09-03
 - agents tidy up after themselves — restored-window lifecycle tracking, keeper exclusions, and honest run-end notes
 
