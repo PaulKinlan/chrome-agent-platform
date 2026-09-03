@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.39] — 2026-09-03
+- the changelog lockstep check now creates the shipped copy automatically in fresh checkouts, and the version hook strips merge machinery and bare branch ids before they become release notes
+
 ## [0.3.38] — 2026-09-03
 - The changelog reads like release notes instead of a git log — every entry describes what the user gets, not what branch was merged
 

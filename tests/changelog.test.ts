@@ -47,7 +47,21 @@ Deno.test("changelog: parsed entries are unique and strictly descending semver",
 
 Deno.test("changelog: extension/CHANGELOG.md is in exact lockstep with root CHANGELOG.md", async () => {
   const rootChangelog = await Deno.readTextFile(new URL("../CHANGELOG.md", import.meta.url));
-  const extChangelog = await Deno.readTextFile(new URL("../extension/CHANGELOG.md", import.meta.url));
+  // The shipped copy is a GENERATED artifact (gitignored; build.mjs and every
+  // version bump materialize it via scripts/sync-changelog.mjs — the
+  // changelog-shipping test pins that design). In a pristine clone it does not
+  // exist yet, so materialize it exactly the way the build does and then
+  // compare. An EXISTING copy is compared directly — drift between a present
+  // copy and the canonical changelog still fails this test, never masked.
+  let extChangelog: string;
+  try {
+    extChangelog = await Deno.readTextFile(new URL("../extension/CHANGELOG.md", import.meta.url));
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) throw error;
+    const { syncChangelog } = await import("../scripts/sync-changelog.mjs");
+    await syncChangelog({ check: false });
+    extChangelog = await Deno.readTextFile(new URL("../extension/CHANGELOG.md", import.meta.url));
+  }
   assertEquals(rootChangelog, extChangelog, "extension/CHANGELOG.md must be byte-identical to root CHANGELOG.md");
 });
 

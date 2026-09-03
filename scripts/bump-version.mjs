@@ -6,7 +6,7 @@
 // Usage:
 //   node scripts/bump-version.mjs patch                   # 0.2.0 -> 0.2.1
 //   node scripts/bump-version.mjs minor                   # 0.2.0 -> 0.3.0
-//   node scripts/bump-version.mjs major                   # 0.2.0 -> 1.0.0
+//   node scripts/bump-version.mjs major                   # 0.3.0 -> 1.0.0
 //   node scripts/bump-version.mjs 1.2.3                   # set explicit version
 //   node scripts/bump-version.mjs patch --message "..."   # use the commit message as the changelog entry
 //
@@ -14,10 +14,36 @@
 // → no placeholder entry is written (the version is still bumped).
 
 import { readFileSync, writeFileSync, existsSync } from "fs";
-import { join } from "path";
+import { join, resolve } from "path";
 import { execSync } from "child_process";
+import { fileURLToPath } from "url";
 
 const ROOT = new URL("..", import.meta.url).pathname;
+
+/**
+ * Turn a raw commit subject into a user-facing changelog bullet (or "" when
+ * nothing user-facing remains — callers fall back to a generic note). Release
+ * notes are for the person using the extension, not the VCS: strip
+ * conventional-commit prefixes, merge-machinery heads ("Merge branch '…'",
+ * "Merge pull request …"), bare SHAs, CAP-FB tracker ids, and bare
+ * bead/branch tokens (chrome-agent-platform-*, cap-beads-*, cap-*, work-*) —
+ * a tracker id is never a description of what changed
+ * (tests/changelog-entry-sanitize.test.ts pins this).
+ */
+export function sanitizeChangelogEntry(note) {
+  return String(note)
+    .replace(/^(merge|chore|fix(?:\([^)]*\))?|test|ci|docs|tasks|feat|refactor)\s*:\s*/i, "")
+    .replace(/^merge\s+(branch|remote-tracking branch|pull request)\b[^\n]*/i, "")
+    .replace(/\(\s*[0-9a-f]{7,40}\s*\)/gi, "")
+    .replace(/\bCAP-FB-\d{8}-[A-Z0-9-]+\b/g, "")
+    .replace(/\b(?:chrome-agent-platform|cap-beads|cap|work)-[a-z0-9]+(?:-[a-z0-9]+)*\b/gi, "")
+    .replace(/\b\w+ lane\b/gi, "work")
+    .replace(/\bjourneys\b/gi, "checks")
+    .replace(/\bjourney\b/gi, "check")
+    .replace(/\s{2,}/g, " ")
+    .replace(/^[\s—–-]+|[\s—–-]+$/g, "")
+    .trim();
+}
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf-8"));
@@ -38,95 +64,83 @@ function bumpSemver(current, type) {
   }
 }
 
-// Parse argv: the bump type is the first non-flag arg; --message/-m takes the next value.
-const argv = process.argv.slice(2);
-const type = argv.find((a) => !a.startsWith("-")) || "patch";
-const mi = argv.findIndex((a) => a === "--message" || a === "-m");
-const message = mi >= 0 ? argv[mi + 1] : null;
-const uni = argv.findIndex((a) => a === "--user-note" || a === "--note");
-const userNote = uni >= 0 ? argv[uni + 1] : null;
-const finalNote = userNote ? userNote.trim() : (message ? message.replace(/^\[[^\]]*\]\s*/, "").trim() : null);
+async function main() {
+  // Parse argv: the bump type is the first non-flag arg; --message/-m takes the next value.
+  const argv = process.argv.slice(2);
+  const type = argv.find((a) => !a.startsWith("-")) || "patch";
+  const mi = argv.findIndex((a) => a === "--message" || a === "-m");
+  const message = mi >= 0 ? argv[mi + 1] : null;
+  const uni = argv.findIndex((a) => a === "--user-note" || a === "--note");
+  const userNote = uni >= 0 ? argv[uni + 1] : null;
+  const finalNote = userNote ? userNote.trim() : (message ? message.replace(/^\[[^\]]*\]\s*/, "").trim() : null);
 
-const pkgPath = join(ROOT, "package.json");
-const lockPath = join(ROOT, "package-lock.json");
-const manifestPath = join(ROOT, "extension", "manifest.json");
-const pkg = readJson(pkgPath);
-const lock = existsSync(lockPath) ? readJson(lockPath) : null;
-const manifest = readJson(manifestPath);
-const current = manifest.version || pkg.version;
-const next = bumpSemver(current, type);
+  const pkgPath = join(ROOT, "package.json");
+  const lockPath = join(ROOT, "package-lock.json");
+  const manifestPath = join(ROOT, "extension", "manifest.json");
+  const pkg = readJson(pkgPath);
+  const lock = existsSync(lockPath) ? readJson(lockPath) : null;
+  const manifest = readJson(manifestPath);
+  const current = manifest.version || pkg.version;
+  const next = bumpSemver(current, type);
 
-pkg.version = next;
-if (lock) {
-  lock.version = next;
-  if (lock.packages?.[""]) lock.packages[""].version = next;
-}
-manifest.version = next;
-manifest.version_name = next;
-writeJson(pkgPath, pkg);
-if (lock) writeJson(lockPath, lock);
-writeJson(manifestPath, manifest);
-
-// Keep package-lock.json in lockstep (the final review's MEDIUM): the root
-// version + the root packages[""].version entry must match, or release
-// metadata is inconsistent. (Single lockPath declaration — the static review's
-// finding 3; the earlier lock object already syncs, this block stamps version.)
-if (lock) {
-  lock.version = next;
-  if (lock.packages && lock.packages[""]) lock.packages[""].version = next;
-  writeJson(lockPath, lock);
-}
-
-// Prepend a CHANGELOG entry ONLY when we have a user note or commit message.
-const changelogPath = join(ROOT, "CHANGELOG.md");
-if (existsSync(changelogPath) && finalNote) {
-  const date = new Date().toISOString().slice(0, 10);
-  const existing = readFileSync(changelogPath, "utf-8");
-  // Release notes are for the person using the extension, not the VCS: strip
-  // conventional-commit prefixes, bare SHAs and CAP-FB tracker ids so the
-  // automated plain-language check (tests/changelog.test.ts) keeps passing no
-  // matter what the commit subject said (CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01 follow-through).
-  const sanitizeEntry = (note) => String(note)
-    .replace(/^(merge|chore|fix(?:\([^)]*\))?|test|ci|docs|tasks|feat|refactor)\s*:\s*/i, "")
-    .replace(/\(\s*[0-9a-f]{7,40}\s*\)/gi, "")
-    .replace(/\bCAP-FB-\d{8}-[A-Z0-9-]+\b/g, "")
-    .replace(/\b\w+ lane\b/gi, "work")
-    .replace(/\bjourneys\b/gi, "checks")
-    .replace(/\bjourney\b/gi, "check")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-  const cleanNote = sanitizeEntry(finalNote) || "Maintenance and fixes.";
-  const entry = `\n## [${next}] — ${date}\n- ${cleanNote}\n`;
-  const updated = existing.replace(/(#[^\n]*\n)/, `$1${entry}`);
-  writeFileSync(changelogPath, updated);
-}
-
-// Keep the bundled-tool inventory's top-level `release` field in lockstep with the
-// version (CAP-FB-20260825-INVENTORY-DRIFT-01). The generator derives `release` from
-// package.json (scripts/build-bundled-tool-packages.mjs) and
-// tests/bundled-tool-packages.test.ts asserts inventory.release === manifest.version.
-// Without this, every post-commit version bump drifts the committed inventory and
-// `npm run build` fails closed on the bundled-tool verify gate. The top-level
-// `"release"` key is unique (per-package manifests use "version", SBOM refs use "rel"),
-// so a targeted patch is byte-equivalent to a full regeneration for a version-only bump.
-const inventoryPath = join(ROOT, "extension", "lib", "bundled-inventory-data.js");
-if (existsSync(inventoryPath)) {
-  const inv = readFileSync(inventoryPath, "utf-8");
-  const updatedInv = inv.replace(/^(\s*)"release": "[^"]*",/m, `$1"release": "${next}",`);
-  if (updatedInv !== inv) {
-    writeFileSync(inventoryPath, updatedInv);
-    // Stage it so the post-commit hook's `git commit --amend` bundles the resynced
-    // inventory (the hook's explicit `git add` list does not include it). Best-effort.
-    try {
-      execSync("git add extension/lib/bundled-inventory-data.js", { cwd: ROOT, stdio: "ignore" });
-    } catch { /* not a git repo / git unavailable — the file is still written */ }
+  pkg.version = next;
+  if (lock) {
+    lock.version = next;
+    if (lock.packages?.[""]) lock.packages[""].version = next;
   }
+  manifest.version = next;
+  manifest.version_name = next;
+  writeJson(pkgPath, pkg);
+  if (lock) writeJson(lockPath, lock);
+  writeJson(manifestPath, manifest);
+
+  // Prepend a CHANGELOG entry ONLY when we have a user note or commit message.
+  const changelogPath = join(ROOT, "CHANGELOG.md");
+  if (existsSync(changelogPath) && finalNote) {
+    const date = new Date().toISOString().slice(0, 10);
+    const existing = readFileSync(changelogPath, "utf-8");
+    // The automated plain-language check (tests/changelog.test.ts) keeps
+    // passing no matter what the commit subject said
+    // (CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01 follow-through).
+    const cleanNote = sanitizeChangelogEntry(finalNote) || "Maintenance and fixes.";
+    const entry = `\n## [${next}] — ${date}\n- ${cleanNote}\n`;
+    const updated = existing.replace(/(#[^\n]*\n)/, `$1${entry}`);
+    writeFileSync(changelogPath, updated);
+  }
+
+  // Keep the bundled-tool inventory's top-level `release` field in lockstep with the
+  // version (CAP-FB-20260825-INVENTORY-DRIFT-01). The generator derives `release` from
+  // package.json (scripts/build-bundled-tool-packages.mjs) and
+  // tests/bundled-tool-packages.test.ts asserts inventory.release === manifest.version.
+  // Without this, every post-commit version bump drifts the committed inventory and
+  // `npm run build` fails closed on the bundled-tool verify gate. The top-level
+  // `"release"` key is unique (per-package manifests use "version", SBOM refs use "rel"),
+  // so a targeted patch is byte-equivalent to a full regeneration for a version-only bump.
+  const inventoryPath = join(ROOT, "extension", "lib", "bundled-inventory-data.js");
+  if (existsSync(inventoryPath)) {
+    const inv = readFileSync(inventoryPath, "utf-8");
+    const updatedInv = inv.replace(/^(\s*)"release": "[^"]*",/m, `$1"release": "${next}",`);
+    if (updatedInv !== inv) {
+      writeFileSync(inventoryPath, updatedInv, "utf-8");
+      // Stage it so the post-commit hook's `git commit --amend` bundles the resynced
+      // inventory (the hook's explicit `git add` list does not include it). Best-effort.
+      try {
+        execSync("git add extension/lib/bundled-inventory-data.js", { cwd: ROOT, stdio: "ignore" });
+      } catch { /* not a git repo / git unavailable — the file is still written */ }
+    }
+  }
+
+  // Keep the bundled changelog in lockstep + VERIFY (the review's MEDIUM: the
+  // bump must not leave the bundle stale).
+  const { syncChangelog } = await import("./sync-changelog.mjs");
+  await syncChangelog({ check: false });
+  await syncChangelog({ check: true }); // verify — throws (nonzero) on drift
+
+  console.log(`Bumped ${current} → ${next}${message ? ` (changelog: ${message.slice(0, 60)})` : ""}`);
 }
 
-// Keep the bundled changelog in lockstep + VERIFY (the review's MEDIUM: the
-// bump must not leave the bundle stale).
-const { syncChangelog } = await import("./sync-changelog.mjs");
-await syncChangelog({ check: false });
-await syncChangelog({ check: true }); // verify — throws (nonzero) on drift
-
-console.log(`Bumped ${current} → ${next}${message ? ` (changelog: ${message.slice(0, 60)})` : ""}`);
+// CLI guard: the module is also imported by tests/changelog-entry-sanitize.test.ts,
+// which must never trigger a real bump (same pattern as select-tests.mjs).
+if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
+  await main();
+}
