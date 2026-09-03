@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.55] — 2026-09-03
+- Running a single test file through the npm shortcut works for every file, including the one that turns away the slow full sweep
+
 ## [0.3.54] — 2026-09-03
 - The release notes read in plain language again — one entry no longer uses an internal term
 

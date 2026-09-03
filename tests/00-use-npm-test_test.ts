@@ -49,6 +49,7 @@ Deno.test("guard: deno.jsonc hides tests/*.test.ts from raw sweeps; deno.runner.
   const pkg = JSON.parse(await Deno.readTextFile(`${ROOT}package.json`));
   for (const key of ["test:file", "test:tools"]) {
     assertStringIncludes(pkg.scripts[key], "--config deno.runner.jsonc", `${key} must bypass the exclude`);
+    assertStringIncludes(pkg.scripts[key], `${RUNNER_ENV}=1`, `${key} must carry the runner marker so this guard stands down`);
   }
   for (const runner of ["scripts/run-tests.mjs", "scripts/select-tests.mjs"]) {
     const src = await Deno.readTextFile(`${ROOT}${runner}`);
