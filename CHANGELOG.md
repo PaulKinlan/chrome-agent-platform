@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.23] — 2026-09-03
+- dptw phase 2 (tools): remove self-imposed size caps across tool argument contracts, lazy-tool protocol, tool search/catalog, fs-grants, agent/browser tools, wasm host/executor bounds, preview authority, python execution
+
 ## [0.3.22] — 2026-09-03
 - site-tool errors carry the real cause — tool, phase, redacted message/stack, realm, and origin instead of a bare UnknownError
 

@@ -4,17 +4,13 @@
 // mutate source stores, request permissions, or create grants. The index is
 // rebuilt from the canonical catalog whenever its generation changes.
 
-import { redactSecretText, truncateUtf8, utf8ByteLength } from "./pure.js";
+import { redactSecretText, utf8ByteLength } from "./pure.js";
 
 export const TOOL_SEARCH_BOUNDS = Object.freeze({
-  maxQueryBytes: 512,
-  maxQueryTokens: 16,
-  maxIndexedTokensPerTool: 256,
-  maxTopK: 12,
+  // dptw (2026-09-03): the byte/token/topK ceilings are gone — a query of any
+  // size is honored, every match is returned, summaries arrive complete.
+  // defaultTopK remains a DEFAULT (a caller that asks for more gets more).
   defaultTopK: 6,
-  maxResultBytes: 32 * 1024,
-  maxSummaryBytes: 512,
-  maxSchemaSummaryBytes: 4096,
 });
 
 const FORBIDDEN =
@@ -28,13 +24,8 @@ export function normalizeToolQuery(value) {
   } catch {
     return { text: "", tokens: [] };
   }
-  text = truncateUtf8(
-    text.replace(FORBIDDEN, " "),
-    TOOL_SEARCH_BOUNDS.maxQueryBytes,
-  )
-    .trim().replace(/\s+/gu, " ");
-  const tokens = (text.match(/[\p{L}\p{N}_-]+/gu) ?? [])
-    .slice(0, TOOL_SEARCH_BOUNDS.maxQueryTokens);
+  text = text.replace(FORBIDDEN, " ").trim().replace(/\s+/gu, " ");
+  const tokens = text.match(/[\p{L}\p{N}_-]+/gu) ?? [];
   return { text, tokens: [...new Set(tokens)] };
 }
 
@@ -66,8 +57,7 @@ function descriptorTokens(descriptor) {
   }
   return Object.freeze([
     ...new Set(
-      (normalized.match(/[\p{L}\p{N}_-]+/gu) ?? [])
-        .slice(0, TOOL_SEARCH_BOUNDS.maxIndexedTokensPerTool),
+      normalized.match(/[\p{L}\p{N}_-]+/gu) ?? [],
     ),
   ].sort());
 }
@@ -115,8 +105,9 @@ function scoreRow(row, query) {
   return score;
 }
 
-function boundedSearchText(value, maxBytes) {
-  return truncateUtf8(redactSecretText(String(value ?? "")), maxBytes);
+function boundedSearchText(value) {
+  // Redacted, never size-clipped (dptw).
+  return redactSecretText(String(value ?? ""));
 }
 
 export function projectToolSearchResult(descriptor) {
@@ -124,20 +115,11 @@ export function projectToolSearchResult(descriptor) {
     stableId: descriptor.stableId,
     name: descriptor.name,
     aliases: descriptor.aliases,
-    summary: boundedSearchText(
-      descriptor.description,
-      TOOL_SEARCH_BOUNDS.maxSummaryBytes,
-    ),
+    summary: boundedSearchText(descriptor.description),
     // Schema string leaves were already secret-redacted before canonical JSON
     // serialization; do not run text redaction over JSON syntax here.
-    schemaSummary: truncateUtf8(
-      String(descriptor.schemaSummary ?? ""),
-      TOOL_SEARCH_BOUNDS.maxSchemaSummaryBytes,
-    ),
-    outputSchemaSummary: truncateUtf8(
-      String(descriptor.outputSchemaSummary ?? ""),
-      TOOL_SEARCH_BOUNDS.maxSchemaSummaryBytes,
-    ),
+    schemaSummary: String(descriptor.schemaSummary ?? ""),
+    outputSchemaSummary: String(descriptor.outputSchemaSummary ?? ""),
     sourceKind: descriptor.sourceKind,
     packageId: descriptor.packageId,
     version: descriptor.version,
@@ -159,7 +141,7 @@ export function searchToolIndex(index, queryValue, options = {}) {
   const query = normalizeToolQuery(queryValue);
   const requested = Number(ownData(options, "limit"));
   const limit = Number.isFinite(requested)
-    ? Math.max(0, Math.min(Math.trunc(requested), TOOL_SEARCH_BOUNDS.maxTopK))
+    ? Math.max(0, Math.trunc(requested))
     : TOOL_SEARCH_BOUNDS.defaultTopK;
   if (!query.text || limit === 0) {
     return Object.freeze({
@@ -193,9 +175,9 @@ export function searchToolIndex(index, queryValue, options = {}) {
       ...projectToolSearchResult(row.descriptor),
       score: row.score,
     };
-    const bytes = utf8ByteLength(JSON.stringify(projected));
-    if (resultBytes + bytes > TOOL_SEARCH_BOUNDS.maxResultBytes) continue;
-    resultBytes += bytes;
+    // No result byte budget (dptw): every ranked result up to the requested
+    // limit is returned whole.
+    resultBytes += utf8ByteLength(JSON.stringify(projected));
     results.push(Object.freeze(projected));
   }
   return Object.freeze({

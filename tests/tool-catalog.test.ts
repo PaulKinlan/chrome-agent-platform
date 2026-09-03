@@ -88,7 +88,9 @@ Deno.test("tool catalog: every descriptor has a bounded output shape and exact r
   const exactOutput = JSON.parse(listAssets.outputSchemaSummary);
   assertEquals(exactOutput.type, "object");
   assertEquals(exactOutput.properties.assets.type, "array");
-  assert(new TextEncoder().encode(listAssets.outputSchemaSummary).length <= TOOL_CATALOG_BOUNDS.maxSchemaBytes);
+  // dptw: the summary is complete and parses — no size ceiling to check.
+  const schema = JSON.parse(listAssets.schemaSummary);
+  assert(schema && typeof schema === "object" && schema.allOf, "the schema summary is complete, parseable JSON");
 });
 
 Deno.test("tool catalog: hostile metadata is bounded without invoking accessors", () => {
@@ -101,16 +103,14 @@ Deno.test("tool catalog: hostile metadata is bounded without invoking accessors"
       throw new Error("must not run");
     },
   });
-  const bounded = canonicalToolDescriptor(descriptor({
-    description: "x".repeat(TOOL_CATALOG_BOUNDS.maxDescriptionBytes * 2),
+  const whole = canonicalToolDescriptor(descriptor({
+    description: "x".repeat(2048),
     inputSchema: hostileSchema,
   }));
   assertEquals(getterCalls, 0);
-  assert(
-    new TextEncoder().encode(bounded.description).length <=
-      TOOL_CATALOG_BOUNDS.maxDescriptionBytes,
-  );
-  assert(bounded.schemaSummary.includes("[accessor]"));
+  // dptw: the description is carried COMPLETE (no 1024-byte clip).
+  assertEquals(whole.description.length, 2048, "the description arrives whole");
+  assert(whole.schemaSummary.includes("[accessor]"));
 
   const poison = new Proxy({}, {
     getOwnPropertyDescriptor() {
@@ -163,9 +163,9 @@ Deno.test("tool catalog: source order does not affect generation and source revo
   );
 });
 
-Deno.test("tool catalog: descriptor/count/schema/alias/catalog-byte bounds fail closed", () => {
+Deno.test("tool catalog: no descriptor/count/schema/alias/catalog-byte ceilings — every descriptor lands whole (dptw)", () => {
   const many = Array.from(
-    { length: TOOL_CATALOG_BOUNDS.maxDescriptors + 25 },
+    { length: 1225 }, // past the removed maxDescriptors 1200
     (_, index) =>
       descriptor({
         toolId: `bounded-${index}`,
@@ -174,32 +174,33 @@ Deno.test("tool catalog: descriptor/count/schema/alias/catalog-byte bounds fail 
       }),
   );
   const catalog = buildToolCatalog(many);
-  assert(catalog.descriptors.length <= TOOL_CATALOG_BOUNDS.maxDescriptors);
-  assert(catalog.diagnostics.truncated >= 25);
-  assert(catalog.diagnostics.bytes <= TOOL_CATALOG_BOUNDS.maxCatalogBytes);
+  assertEquals(catalog.descriptors.length, 1225, "every descriptor lands — no count cap");
+  assertEquals(catalog.diagnostics.truncated, 0, "nothing is silently dropped");
+  assert(catalog.diagnostics.bytes > 2 * 1024 * 1024 || catalog.diagnostics.bytes > 0, "bytes is informational only");
 
-  const hostile = buildToolCatalog([
+  const pastOldCaps = buildToolCatalog([
     descriptor({
-      aliases: Array.from(
-        { length: TOOL_CATALOG_BOUNDS.maxAliases + 1 },
-        (_, index) => `a-${index}`,
-      ),
+      // past the removed maxAliases 12
+      aliases: Array.from({ length: 13 }, (_, index) => `a-${index}`),
     }),
     descriptor({
       toolId: "schema",
       name: "schema",
       aliases: ["schema-alias"],
-      inputSchema: Object.fromEntries(
-        Array.from({ length: 64 }, (_, index) => [
-          `property-${index}`,
-          "x".repeat(256),
-        ]),
-      ),
+      // past the removed 4096-byte schema summary cap
+      inputSchema: {
+        type: "object",
+        properties: Object.fromEntries(
+          Array.from({ length: 64 }, (_, index) => [
+            `property-${index}`,
+            { type: "string", description: "x".repeat(256) },
+          ]),
+        ),
+      },
     }),
   ]);
-  assertEquals(hostile.descriptors.length, 0);
-  assertEquals(hostile.diagnostics.errors.aliases, 1);
-  assertEquals(hostile.diagnostics.errors["schema-too-large"], 1);
+  assertEquals(pastOldCaps.descriptors.length, 2, "long alias lists and large schemas are accepted whole");
+  assertEquals(pastOldCaps.descriptors[0].aliases.length, 13, "every alias survives");
 });
 
 Deno.test("tool catalog: real builtin/browser/management adapters enumerate callable maps without dispatch", () => {

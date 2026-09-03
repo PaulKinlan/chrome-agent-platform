@@ -10,7 +10,7 @@
 // fixed canonical exemption with the exact allowed call shape.
 // @ts-nocheck
 
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertNotEquals, assertRejects } from "jsr:@std/assert@1";
 import {
   TRANSPORT_MESSAGE_TYPES,
   validateAuthorityRecord,
@@ -22,7 +22,7 @@ import { createOffscreenWasmHost, validateOffscreenRequest } from "../extension/
 import { createSyncWorkspace } from "../extension/lib/wasm-sync-workspace.js";
 import { buildWasiEntryExportWasm, buildWasiFdRoundTripWasm, buildWasiStdoutBytesWasm } from "./wasm-fixture-builder.mjs";
 import { createWasiPreview1Runtime, SUPPORTED_WASI_PREVIEW1_IMPORTS } from "../extension/lib/wasi-preview1-runtime.js";
-import { createWasiJob, WASI_FDFLAGS, WASI_HOST_DEFAULT_QUOTA, WASI_ERRNO, WASI_RIGHTS, WASI_OFLAGS, WasiProcExit } from "../extension/lib/wasm-host-types.js";
+import { createWasiJob, WASI_FDFLAGS, WASI_HOST_DEFAULT_QUOTA, WASI_ERRNO, WASI_RIGHTS, WASI_OFLAGS, WASI_WHENCE, WasiProcExit } from "../extension/lib/wasm-host-types.js";
 import { EXECUTOR_BOUNDS } from "../extension/lib/wasm-executor-bounds.js";
 import { encodeCanonicalBase64 } from "../extension/lib/wasm-base64.js";
 
@@ -898,8 +898,10 @@ Deno.test("B2 text tranche: sort/uniq/tr/grep/toml2json produce the EXACT exampl
     const spec = PREVIEW_SPECS[toolId];
     assert(spec, `${toolId} is in the spec map`);
     const casBytes = new Uint8Array(await Deno.readFile(`${repoRoot}extension/wasm/cas/${spec.casSha}.wasm`));
-    assert(casBytes.byteLength > EXECUTOR_BOUNDS.maxRequestBytes, `${toolId} (${casBytes.byteLength} B) exceeds the old 64 KiB request cap — the 4 MiB wasm cap is what admits it`);
-    assert(casBytes.byteLength <= EXECUTOR_BOUNDS.maxWasmBytes, `${toolId} fits the 4 MiB wasm cap`);
+    // dptw: the 64 KiB request cap and the 4 MiB wasm cap are BOTH gone —
+    // these tools' bytes exceed the old request cap and are admitted whole.
+    assert(casBytes.byteLength > 64 * 1024, `${toolId} (${casBytes.byteLength} B) exceeds the REMOVED 64 KiB request cap`);
+    assertEquals(EXECUTOR_BOUNDS.maxWasmBytes, Number.POSITIVE_INFINITY, "no wasm byte cap remains");
     const job = makeJob({
       stdin: new Uint8Array(new TextEncoder().encode(contract.stdin)),
       quota: { ...WASI_HOST_DEFAULT_QUOTA, hostCalls: 1000, pathCalls: 100, stdinBytes: 64, stdoutBytes: 1024, stderrBytes: 256, fileBytes: 1024, fileSize: 1024, dynamicFds: 4 },
@@ -954,29 +956,31 @@ Deno.test("request budget: a 32.7K wasm byte array + metadata PASSES (JSON infla
   for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 7) & 0xff;
   const request = envelopeFor(bytes);
   const measured = measureRequestBytes(request);
-  assert(measured < EXECUTOR_BOUNDS.maxRequestBytes, `measured ${measured} < 64 KiB`);
   assertEquals(measured, bytes.length + localUtf8Bytes(JSON.stringify({ type: request.type, sessionId: request.sessionId, job: request.job })), "raw length + metadata JSON");
-  // the OLD JSON.stringify of the full envelope would exceed the bound —
-  // proving the inflation no longer governs.
+  // the OLD JSON.stringify of the full envelope exceeds the REMOVED 64 KiB
+  // bound — proving the inflation no longer governs and no cap applies.
   const inflated = localUtf8Bytes(JSON.stringify(request));
-  assert(inflated > EXECUTOR_BOUNDS.maxRequestBytes, `old-style inflation ${inflated} exceeded the 64 KiB bound`);
+  assert(inflated > 64 * 1024, `old-style inflation ${inflated} exceeds the removed 64 KiB bound`);
 });
 
-Deno.test("request budget: METADATA over 64 KiB rejects (the metadata/request JSON cap is preserved) + the run path surfaces request-over-budget", async () => {
+Deno.test("request budget: metadata over the old 64 KiB cap is ACCEPTED whole (dptw — no request byte cap)", async () => {
   const bytes = new Uint8Array(4096);
-  // the metadata JSON alone exceeds the 64 KiB cap → the measure throws
+  // the metadata JSON alone exceeds the REMOVED 64 KiB cap → still measures.
   let caught = null;
-  try { measureRequestBytes(envelopeFor(bytes, { padding: "x".repeat(EXECUTOR_BOUNDS.maxRequestBytes) })); } catch (e) { caught = e?.executorCode ?? null; }
-  assertEquals(caught, "request-over-budget", "metadata over the 64 KiB cap rejects");
-  // a 4 MiB wasm + small metadata MEASURES fine (the wasm cap is independent)
-  const big = new Uint8Array(EXECUTOR_BOUNDS.maxWasmBytes);
+  let measuredPadded = null;
+  try { measuredPadded = measureRequestBytes(envelopeFor(bytes, { padding: "x".repeat(64 * 1024) })); } catch (e) { caught = e?.executorCode ?? null; }
+  assertEquals(caught, null, "metadata over the old 64 KiB cap no longer rejects");
+  assert(typeof measuredPadded === "number" && measuredPadded > 64 * 1024, "the padded envelope measures in full");
+  // a wasm payload over the old 4 MiB cap measures fine too
+  const big = new Uint8Array(4 * 1024 * 1024 + 1);
   const measured = measureRequestBytes(envelopeFor(big));
-  assertEquals(measured, EXECUTOR_BOUNDS.maxWasmBytes + localUtf8Bytes(JSON.stringify({ type: TRANSPORT_MESSAGE_TYPES.JOB, sessionId: "session-1", job: makeJob() })));
-  // and the executor run path surfaces request-over-budget for big metadata
+  assertEquals(measured, big.length + localUtf8Bytes(JSON.stringify({ type: TRANSPORT_MESSAGE_TYPES.JOB, sessionId: "session-1", job: makeJob() })));
+  // and the run path no longer surfaces request-over-budget — an invalid
+  // wasm module fails as a wasm failure, never a size refusal.
   const executor = new WasmExecutor({ workerUrl: WORKER_URL, callMs: 5000 });
   const host = createOffscreenWasmHost({ executor, authority: AUTHORITY });
-  const over = await host.handleJob(makeRequest({ wasmBytes: bytes })).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
-  assert(!over.ok, JSON.stringify(over));
+  const over = await host.handleJob(makeRequest({ wasmBytes: bytes, padding: "x".repeat(64 * 1024) })).catch((e) => ({ ok: false, error: String(e?.message ?? e), executorCode: e?.executorCode ?? null }));
+  assertNotEquals(over.executorCode ?? (typeof over.error === "string" && over.error.includes("request-over-budget") ? "request-over-budget" : null), "request-over-budget", `no budget refusal: ${JSON.stringify(over).slice(0, 200)}`);
 });
 
 Deno.test("request budget: sparse/fractional/out-of-range/short wasm sequences reject (strict dense check)", () => {
@@ -996,19 +1000,21 @@ Deno.test("request budget: sparse/fractional/out-of-range/short wasm sequences r
     try { measureRequestBytes(envelopeFor(wasm)); } catch (e) { caught = e?.executorCode ?? null; }
     assertEquals(caught, "request-wasm", `${label} rejects`);
   }
-  // a wasm array LARGER than maxWasmBytes (the 4 MiB tiny-tier cap) rejects
-  // even though it is dense — the wasm cap is explicit, not unbounded
-  let caught = null;
-  try { measureRequestBytes(envelopeFor(new Uint8Array(EXECUTOR_BOUNDS.maxWasmBytes + 1))); } catch (e) { caught = e?.executorCode ?? null; }
-  assertEquals(caught, "request-wasm", "over-max-wasm-length rejects");
+  // dptw: a wasm array LARGER than the removed 4 MiB cap is dense and valid —
+  // it measures fine (no wasm byte cap).
+  const overOldCap = new Uint8Array(4 * 1024 * 1024 + 1);
+  assertEquals(
+    measureRequestBytes(envelopeFor(overOldCap)),
+    overOldCap.length + localUtf8Bytes(JSON.stringify({ type: TRANSPORT_MESSAGE_TYPES.JOB, sessionId: "session-1", job: makeJob() })),
+    "over-old-cap wasm measures whole",
+  );
 });
 
-Deno.test("request budget: HUGE metadata rejects (metadata JSON counts toward the 64 KiB)", () => {
+Deno.test("request budget: HUGE metadata measures whole (dptw — no metadata byte cap)", () => {
   const bytes = new Uint8Array(4096);
-  const request = envelopeFor(bytes, { bloat: "y".repeat(EXECUTOR_BOUNDS.maxRequestBytes) });
-  let caught = null;
-  try { measureRequestBytes(request); } catch (e) { caught = e?.executorCode ?? null; }
-  assertEquals(caught, "request-over-budget", "huge metadata throws request-over-budget");
+  const request = envelopeFor(bytes, { bloat: "y".repeat(256 * 1024) });
+  const measured = measureRequestBytes(request);
+  assert(measured > 256 * 1024, `the huge envelope measures in full: ${measured}`);
 });
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -1064,10 +1070,12 @@ Deno.test("WASI fd_read STDIN: OOB/overlap iovecs still reject EINVAL (table/poi
   assertEquals(wasi.fd_read(0, 4000, 1, 4100), WASI_ERRNO.EINVAL, "result-overlapping buffer rejects");
 });
 
-Deno.test("WASI fd_read FILE + fd_write: advertised totals > MAX_IO_BYTES_PER_CALL still E2BIG (cap preserved)", () => {
-  // A 2 MiB memory so a 1 MiB+1 advertised total passes the pointer check
-  // and the MAX_IO_BYTES_PER_CALL cap is what's exercised.
-  const { wasi, mem, ws } = directRuntime({}, 2 * 1024 * 1024);
+Deno.test("WASI fd_read FILE + fd_write: advertised totals past the removed 1 MiB/call cap transfer WHOLE (dptw)", () => {
+  // A 4 MiB memory so a 1 MiB+1 advertised total passes the pointer check.
+  // The job carries the default (now byte-unbounded) quota.
+  const { wasi, mem, ws } = directRuntime({
+    quota: { ...WASI_HOST_DEFAULT_QUOTA, hostCalls: 1000, pathCalls: 100, dynamicFds: 4 },
+  }, 4 * 1024 * 1024);
   // open a real file + write a payload.
   const putPath = (ptr, text) => { const b = new TextEncoder().encode(text); mem.set(b, ptr); return b.length; };
   const v = new DataView(mem.buffer);
@@ -1076,14 +1084,17 @@ Deno.test("WASI fd_read FILE + fd_write: advertised totals > MAX_IO_BYTES_PER_CA
   const openErrno = wasi.path_open(3, 0, 1000, pathLen, WASI_OFLAGS.CREAT, rights, 0n, 0, 2000);
   assertEquals(openErrno, WASI_ERRNO.SUCCESS);
   const fd = v.getUint32(2000, true);
-  // fd_write with an advertised total > 1 MiB (1048577, fits the memory) →
-  // E2BIG (unchanged — the write path never gets the stdin exemption).
-  mem.set([0x70, 0x17, 0x00, 0x00, 0x01, 0x00, 0x10, 0x00], 4000); // buf 6000, len 1048577 (> MAX_IO_BYTES_PER_CALL)
-  assertEquals(wasi.fd_write(fd, 4000, 1, 4100), WASI_ERRNO.E2BIG, "write overbound stays E2BIG");
-  // FILE read with an advertised total > 1 MiB → E2BIG (the stdin exemption is
-  // NOT extended to files).
+  // fd_write with an advertised total past the removed 1 MiB/call cap
+  // (1048577, fits the memory) → the WHOLE payload lands, no E2BIG.
+  mem.set([0x70, 0x17, 0x00, 0x00, 0x01, 0x00, 0x10, 0x00], 4000); // buf 6000, len 1048577
+  assertEquals(wasi.fd_write(fd, 4000, 1, 4100), WASI_ERRNO.SUCCESS, "write past the old cap succeeds");
+  assertEquals(v.getUint32(4100, true), 1048577, "every advertised byte written");
+  // FILE read with an advertised total past the old cap → whole read (seek
+  // back to 0 first — the write advanced the offset).
+  assertEquals(wasi.fd_seek(fd, 0n, WASI_WHENCE.SET, 4200), WASI_ERRNO.SUCCESS, "seek to start");
   const readFd = v.getUint32(2000, true);
-  assertEquals(wasi.fd_read(readFd, 4000, 1, 4100), WASI_ERRNO.E2BIG, "file read overbound stays E2BIG");
+  assertEquals(wasi.fd_read(readFd, 4000, 1, 4100), WASI_ERRNO.SUCCESS, "file read past the old cap succeeds");
+  assertEquals(v.getUint32(4100, true), 1048577, "every advertised byte read back");
 });
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -1213,30 +1224,27 @@ Deno.test("FND-1 worker union: UTF-8 stays byte-exact; invalid raw UTF-8 and emp
   assertEquals(empty.stdoutBytes, 0);
 });
 
-Deno.test("FND-1 worker bound: complete 64 KiB base64 succeeds; 64 KiB+1 fails all-or-nothing", async () => {
-  const atCap = new Uint8Array(EXECUTOR_BOUNDS.maxBinaryResponseBytes);
-  for (let index = 0; index < atCap.length; index++) atCap[index] = index & 0xff;
-  const success = await runRealWorker(buildWasiStdoutBytesWasm(atCap), {
-    job: stdoutJob("base64", atCap.byteLength),
+Deno.test("FND-1 worker: 64 KiB base64 AND 64 KiB+1 both succeed whole (dptw — the response byte cap is gone)", async () => {
+  const atOldCap = new Uint8Array(64 * 1024);
+  for (let index = 0; index < atOldCap.length; index++) atOldCap[index] = index & 0xff;
+  const success = await runRealWorker(buildWasiStdoutBytesWasm(atOldCap), {
+    job: stdoutJob("base64", atOldCap.byteLength),
   });
   assertEquals(success.ok, true, JSON.stringify(success));
   assertEquals(success.stdout, null);
-  assertEquals(success.stdoutBase64, encodeCanonicalBase64(atCap));
-  assertEquals(success.stdoutBase64.length, 87_384, "exact maximum canonical character count");
+  assertEquals(success.stdoutBase64, encodeCanonicalBase64(atOldCap));
+  assertEquals(success.stdoutBase64.length, 87_384, "exact canonical character count");
   assertEquals(success.stdoutBytes, 65_536);
 
-  const over = new Uint8Array(EXECUTOR_BOUNDS.maxBinaryResponseBytes + 1);
+  // Past the removed cap: carried whole, never a response-over-budget refusal.
+  const over = new Uint8Array(64 * 1024 + 1);
   over.fill(0xa5);
-  const failure = await runRealWorker(buildWasiStdoutBytesWasm(over), {
+  const overOk = await runRealWorker(buildWasiStdoutBytesWasm(over), {
     job: stdoutJob("base64", over.byteLength),
   });
-  assertEquals(failure.ok, false, JSON.stringify(failure));
-  assert(String(failure.error).includes("response-over-budget"), failure.error);
-  assertEquals(failure.stdout, "");
-  assertEquals(failure.stdoutBase64, null);
-  assertEquals(failure.stdoutBytes, 0);
-  assertEquals(failure.stderrBytes, 0);
-  assertEquals(failure.counters, null);
+  assertEquals(overOk.ok, true, `past the old cap succeeds: ${JSON.stringify(overOk).slice(0, 200)}`);
+  assertEquals(overOk.stdoutBase64, encodeCanonicalBase64(over), "the whole payload arrives");
+  assertEquals(overOk.stdoutBytes, 65_537);
 });
 
 Deno.test("audit: an over-tier memory declaration is rejected BEFORE instantiation (phase memory-rejected)", async () => {
@@ -1409,6 +1417,18 @@ Deno.test("FND-1 executor union rejects missing/extra/both/neither and every non
   const accepted = validateWorkerResult(binaryBase, expected);
   assertEquals(accepted.stdout, null);
   assertEquals(accepted.stdoutBase64, "YQ==", "canonical base64 is preserved unchanged");
+  // dptw: a base64 payload past the removed 87388-char cap is accepted whole
+  // (the declared byte count still has to match — that is integrity, not size).
+  const bigBytes = new Uint8Array(64 * 1024 + 1);
+  const bigBase64 = encodeCanonicalBase64(bigBytes);
+  const bigPayload = {
+    ...binaryBase,
+    stdoutBase64: bigBase64,
+    stdoutBytes: bigBytes.byteLength,
+    counters: { ...binaryBase.counters, stdoutBytes: bigBytes.byteLength },
+  };
+  const acceptedBig = validateWorkerResult(bigPayload, expected);
+  assertEquals(acceptedBig.stdoutBase64, bigBase64, "the whole base64 payload validates");
 
   const { stdoutBase64: _missingArm, ...missingArm } = binaryBase;
   const mutants = [
@@ -1423,7 +1443,6 @@ Deno.test("FND-1 executor union rejects missing/extra/both/neither and every non
     { ...binaryBase, stdoutBase64: "Y===" },
     { ...binaryBase, stdoutBase64: "YR==" },
     { ...binaryBase, stdoutBase64: "YQ" },
-    { ...binaryBase, stdoutBase64: "A".repeat(EXECUTOR_BOUNDS.maxBase64ResponseChars + 4) },
     { ...binaryBase, stdoutBytes: 2, counters: { ...binaryBase.counters, stdoutBytes: 2 } },
     { ...binaryBase, counters: { ...binaryBase.counters, stdoutBytes: 2 } },
   ];
@@ -1699,11 +1718,13 @@ Deno.test("schemas: phase↔ok conflicts and hostile failure fields are rejected
   }
 });
 
-Deno.test("schemas: the offscreen request caps wasmBytes BEFORE the copy", () => {
-  const oversized = makeRequest({ wasmBytes: new Uint8Array(EXECUTOR_BOUNDS.maxWasmBytes + 1) });
+Deno.test("schemas: the offscreen request admits wasmBytes past the removed 4 MiB cap (dptw)", () => {
+  const pastOldCap = makeRequest({ wasmBytes: new Uint8Array(4 * 1024 * 1024 + 1) });
   let caught = null;
-  try { validateOffscreenRequest(oversized); } catch (e) { caught = e; }
-  assert(caught && caught.executorCode === "request-wasm-over-budget", String(caught?.executorCode));
+  let validated = null;
+  try { validated = validateOffscreenRequest(pastOldCap); } catch (e) { caught = e; }
+  assertEquals(caught, null, "no wasm byte refusal");
+  assert(validated, "the request validates");
 });
 
 // ──────────────────────────────────────────────────────────────────────────

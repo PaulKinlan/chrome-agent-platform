@@ -22,7 +22,6 @@ import {
 } from "./tool-catalog.js";
 import { buildToolSearchIndex, searchToolIndex } from "./tool-search.js";
 import {
-  TOOL_ARGUMENT_LIMITS,
   toolArgumentContract,
 } from "./tool-argument-contract.js";
 import { descriptorByIdentity, ToolSelectionAuthority, toolIdentityKey } from "./tool-selection.js";
@@ -50,29 +49,13 @@ import {
   compileSchemaToZod,
   schemaToZod,
   SECRET_KEY_RE,
-  truncateUtf8,
-  utf8ByteLength,
 } from "./pure.js";
 
-export const LAZY_TOOL_PROTOCOL_BOUNDS = Object.freeze({
-  maxSources: TOOL_CATALOG_BOUNDS.maxDescriptors * 2,
-  maxArgumentBytes: TOOL_ARGUMENT_LIMITS.maxJsonUtf8Bytes,
-  maxArgumentDepth: TOOL_ARGUMENT_LIMITS.maxDepth,
-  maxArgumentNodes: TOOL_ARGUMENT_LIMITS.maxNodes,
-  maxObjectKeys: TOOL_ARGUMENT_LIMITS.maxObjectKeys,
-  maxArrayItems: TOOL_ARGUMENT_LIMITS.maxArrayItems,
-  maxKeyBytes: TOOL_ARGUMENT_LIMITS.maxKeyUtf8Bytes,
-  maxStringBytes: TOOL_ARGUMENT_LIMITS.maxStringUtf8Bytes,
-  // Deliberate large-content channel: only product-owned fields named by the
-  // shared argument contract may use their backing store's real body bound.
-  maxLargeContentBytes: TOOL_ARGUMENT_LIMITS.maxAssetContentUtf8Bytes,
-  maxLargeArgumentBytes: TOOL_ARGUMENT_LIMITS.maxLargeJsonUtf8Bytes,
-  maxResultBytes: 64 * 1024,
-  maxResultDepth: 8,
-  maxResultNodes: 512,
-  maxErrorBytes: 1024,
-  maxContextBytes: 256,
-});
+// dptw (2026-09-03): no size limits on arguments, results, or source counts.
+// Sanitization keeps its SHAPE checks (plain JSON data: finite numbers, no
+// lone surrogates, no symbol/proto keys, no accessors) — every size ceiling
+// is gone and a provider-side limit surfaces as the provider's honest error.
+const NO_LIMIT = Number.POSITIVE_INFINITY;
 
 function ownData(value, key) {
   try {
@@ -137,7 +120,7 @@ function sanitizationFailure(error, prefix = "") {
   if (error instanceof ArgumentSanitizationError) {
     return validationError(error.reason, `${prefix}${error.detail}`);
   }
-  return validationError("bad-data", `${prefix}arguments must be a plain, finite JSON object within the published x-cap-argument-limits`);
+  return validationError("bad-data", `${prefix}arguments must be a plain, finite JSON object`);
 }
 
 /** The lazy-arguments-invalid error, enriched with a NAMED reason + bounded,
@@ -152,22 +135,19 @@ function validationError(reason, detail) {
     reason: String(reason ?? "parse-rejected"),
   };
   if (typeof detail === "string" && detail) {
-    out.detail = truncateUtf8(redactSecretText(detail), 600);
+    // Secret-redacted, never size-clipped: the model needs the WHOLE reason
+    // to repair its arguments (dptw — the 600-char clip hid real causes).
+    out.detail = redactSecretText(detail);
   }
   return Object.freeze(out);
 }
 
 /** The lazy-arguments-invalid error with the un-consumed selectionRef and an
- * explicit retry signal, bounded to maxErrorBytes. */
+ * explicit retry signal. The detail is complete (secret-redacted, never
+ * size-clipped). */
 function retryableArgumentFailure(failure, selectionRef) {
   if (ownData(failure, "error") !== "lazy-arguments-invalid") return failure;
-  const out = { ...failure, selectionRef, retryable: true };
-  const budget = LAZY_TOOL_PROTOCOL_BOUNDS.maxErrorBytes;
-  if (typeof out.detail === "string" && utf8ByteLength(JSON.stringify(out)) > budget) {
-    const overhead = utf8ByteLength(JSON.stringify({ ...out, detail: "" }));
-    out.detail = truncateUtf8(out.detail, Math.max(0, budget - overhead));
-  }
-  return Object.freeze(out);
+  return Object.freeze({ ...failure, selectionRef, retryable: true });
 }
 
 function safeKey(key) {
@@ -178,12 +158,7 @@ function safeKey(key) {
   } catch {
     return "";
   }
-  if (
-    !normalized ||
-    utf8ByteLength(normalized) > LAZY_TOOL_PROTOCOL_BOUNDS.maxKeyBytes
-  ) {
-    return "";
-  }
+  if (!normalized) return "";
   if (["__proto__", "prototype", "constructor"].includes(normalized)) return "";
   return normalized;
 }
@@ -218,20 +193,11 @@ function projectData(value, limits, state, depth = 0, path = []) {
         `${argumentPath(path)} contains an unpaired Unicode surrogate; send valid Unicode text.`,
       );
     }
-    const fieldLimit = limits.stringLimit?.(path) ?? limits.maxStringBytes;
+    // No size limit (dptw): strings pass whole. preserveString marks the
+    // contract's exact-content fields (write_file.content, asset bodies) so
+    // their bytes are carried without Unicode normalization.
     const preserve = limits.preserveString?.(path) === true;
-    const normalized = preserve ? value : value.normalize("NFKC");
-    const actualBytes = utf8ByteLength(normalized);
-    if (!limits.truncateStrings && actualBytes > fieldLimit) {
-      const remediation = preserve
-        ? `Reduce the complete content to ≤${fieldLimit} UTF-8 bytes; it will never be silently truncated.`
-        : `Shorten this field to ≤${fieldLimit} UTF-8 bytes, or use the designated create_asset.content large-content path for a complete document.`;
-      throw new ArgumentSanitizationError(
-        "string-limit-exceeded",
-        `${argumentPath(path)} is ${actualBytes} UTF-8 bytes; limit ${fieldLimit}. ${remediation}`,
-      );
-    }
-    return truncateUtf8(normalized, fieldLimit);
+    return preserve ? value : value.normalize("NFKC");
   }
   if (
     value === undefined || typeof value === "bigint" ||
@@ -249,13 +215,10 @@ function projectData(value, limits, state, depth = 0, path = []) {
     } catch {
       throw new Error("data-hostile");
     }
-    if (
-      !Number.isSafeInteger(length) || length < 0 ||
-      length > limits.maxArrayItems
-    ) {
+    if (!Number.isSafeInteger(length) || length < 0) {
       throw new ArgumentSanitizationError(
-        "array-limit-exceeded",
-        `${argumentPath(path)} has ${length} items; limit ${limits.maxArrayItems}. Split it into smaller calls.`,
+        "invalid-shape",
+        `${argumentPath(path)} must be an array of plain data values.`,
       );
     }
     const out = [];
@@ -303,7 +266,7 @@ function projectData(value, limits, state, depth = 0, path = []) {
       if (!key) {
         throw new ArgumentSanitizationError(
           "invalid-key",
-          `${argumentPath([...path, rawKey])} is forbidden, invalid Unicode, or exceeds ${LAZY_TOOL_PROTOCOL_BOUNDS.maxKeyBytes} UTF-8 bytes; rename the field.`,
+          `${argumentPath([...path, rawKey])} is forbidden or invalid Unicode; rename the field.`,
         );
       }
       if (!("value" in descriptor)) {
@@ -328,27 +291,15 @@ export function sanitizeLazyToolArguments(value, descriptor) {
   }
   const contract = toolArgumentContract(descriptor?.sourceKind, descriptor?.toolId);
   const contentField = contract.largeContent?.field ?? null;
-  const contentLimit = contract.largeContent?.maxUtf8Bytes ?? LAZY_TOOL_PROTOCOL_BOUNDS.maxStringBytes;
+  // Shape-only projection (dptw): plain JSON data of ANY size passes; the
+  // designated content field keeps its exact bytes (no NFKC normalization).
   const projected = projectData(value, {
-    maxNodes: LAZY_TOOL_PROTOCOL_BOUNDS.maxArgumentNodes,
-    maxDepth: LAZY_TOOL_PROTOCOL_BOUNDS.maxArgumentDepth,
-    maxObjectKeys: LAZY_TOOL_PROTOCOL_BOUNDS.maxObjectKeys,
-    maxArrayItems: LAZY_TOOL_PROTOCOL_BOUNDS.maxArrayItems,
-    maxStringBytes: LAZY_TOOL_PROTOCOL_BOUNDS.maxStringBytes,
-    stringLimit: (path) => path.length === 1 && path[0] === contentField
-      ? contentLimit
-      : LAZY_TOOL_PROTOCOL_BOUNDS.maxStringBytes,
+    maxNodes: NO_LIMIT,
+    maxDepth: NO_LIMIT,
+    maxObjectKeys: NO_LIMIT,
+    maxArrayItems: NO_LIMIT,
     preserveString: (path) => path.length === 1 && path[0] === contentField,
-    truncateStrings: false,
   }, { nodes: 0 });
-  const maxArgumentBytes = contract.maxJsonUtf8Bytes;
-  const actualArgumentBytes = utf8ByteLength(JSON.stringify(projected));
-  if (actualArgumentBytes > maxArgumentBytes) {
-    throw new ArgumentSanitizationError(
-      "payload-limit-exceeded",
-      `(arguments) is ${actualArgumentBytes} JSON UTF-8 bytes; limit ${maxArgumentBytes}. Split the operation into smaller calls${contentField ? ` while keeping ${contentField} complete and ≤${contentLimit} bytes` : ", or use the designated large-content path for documents"}.`,
-    );
-  }
   return projected;
 }
 
@@ -366,22 +317,14 @@ function isUntrustedResult(value, descriptor) {
 
 /* ── the binary side channel (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01) ────────
  *
- * A screenshot is PNG bytes, and bytes are not JSON. Before this, the capture
- * tool returned `screenshot: "data:image/png;base64,…"` inside its result and
- * the projection below did the only thing it could with a 300 KiB string: cut
- * it at the 16 KiB string bound and hand the model a base64 fragment as TEXT.
- * The 2026-08-30 live lane measured the consequence on the wire — 16,867
- * characters of truncated base64; one model invented a description of it, the
- * other correctly said it cannot see images.
- *
- * So image bytes leave the JSON entirely. `projectResultWithAttachments` lifts
- * any top-level `data:image/*;base64,` field OUT of the result — the model
+ * A screenshot is PNG bytes, and bytes are not JSON. `projectResultWithAttachments`
+ * lifts any top-level `data:image/*;base64,` field OUT of the result — the model
  * JSON keeps the id, the URL and the dimensions — and returns it beside the
  * projection as an attachment. The provider toolset re-attaches it as a real
  * image content part on lanes whose transport carries one. Nothing is
- * truncated: an attachment is either carried whole or not carried at all. */
+ * truncated: an attachment is carried whole (dptw: at any size; a provider
+ * image limit surfaces as the provider's honest error). */
 const IMAGE_ATTACHMENT_FIELD = "screenshot";
-const MAX_IMAGE_ATTACHMENT_BYTES = 4 * 1024 * 1024; // the screenshot store's own bound
 const IMAGE_DATA_URL_RE = /^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/i;
 
 /** Lift the image bytes out of a raw dispatch result. Returns the result with
@@ -402,11 +345,6 @@ function liftImageAttachments(value) {
     if (!("value" in descriptor)) continue;
     stripped[key] = descriptor.value;
   }
-  // Over the store's own bound the bytes are dropped rather than clipped: half
-  // an image is worse than none, because the model would describe the half.
-  if (utf8ByteLength(dataUrl) > MAX_IMAGE_ATTACHMENT_BYTES) {
-    return { value: { ...stripped, imageOmitted: "image exceeded the attachment bound" }, attachments: [] };
-  }
   const screenshotId = ownData(value, "screenshotId");
   return {
     value: stripped,
@@ -420,8 +358,6 @@ function liftImageAttachments(value) {
 }
 
 const EMPTY_ATTACHMENTS = Object.freeze([]);
-/** How many executions' image parts stay live at once. */
-const MAX_LIVE_ATTACHMENT_ENTRIES = 4;
 
 /** `projectResult` plus the lifted image attachments (see above).
  *
@@ -441,49 +377,33 @@ function projectResultWithAttachments(value, options) {
   };
 }
 
-/** Project a raw dispatch result for the model: bound, redact, and — for
+/** Project a raw dispatch result for the model: redact secrets and — for
  * untrusted content — wrap every string leaf in the run's boundary
  * (lib/untrusted-fence.js, CAP-FB-20260830-UNTRUSTED-CONTENT-FENCING-01).
- * The fence is applied AFTER truncation + redaction and BEFORE the byte bound
- * so an over-bound untrusted result degrades fenced, never raw. */
+ * No size limits (dptw): the complete result reaches the model; a result that
+ * cannot be serialized at all degrades honestly (see degradeResult). */
 function projectResult(value, { untrusted = false, token = null } = {}) {
   const fence = (projected) => untrusted ? fenceUntrustedValue(projected, token) : projected;
   try {
     const projected = projectData(value, {
-      maxNodes: LAZY_TOOL_PROTOCOL_BOUNDS.maxResultNodes,
-      maxDepth: LAZY_TOOL_PROTOCOL_BOUNDS.maxResultDepth,
-      maxObjectKeys: LAZY_TOOL_PROTOCOL_BOUNDS.maxObjectKeys,
-      maxArrayItems: LAZY_TOOL_PROTOCOL_BOUNDS.maxArrayItems,
-      maxStringBytes: LAZY_TOOL_PROTOCOL_BOUNDS.maxStringBytes,
-      truncateStrings: true,
+      maxNodes: NO_LIMIT,
+      maxDepth: NO_LIMIT,
+      maxObjectKeys: NO_LIMIT,
+      maxArrayItems: NO_LIMIT,
     }, { nodes: 0 });
-    const redacted = fence(redactResultStrings(projected));
-    if (
-      utf8ByteLength(JSON.stringify(redacted)) >
-        LAZY_TOOL_PROTOCOL_BOUNDS.maxResultBytes
-    ) {
-      return fence(degradeResult(value, "result exceeded the lazy protocol output bound"));
-    }
-    return redacted;
+    return fence(redactResultStrings(projected));
   } catch {
     return fence(degradeResult(value, "result was not safely serializable in full"));
   }
 }
 
-/** BOUNDING MUST DEGRADE, NOT ERASE (CAP-FB-20260828-TOOL-RESULT-ENVELOPE-01).
+/** SERIALIZATION-FAILURE FALLBACK (CAP-FB-20260828-TOOL-RESULT-ENVELOPE-01).
  *
- * This previously replaced an over-bound result with a bare summary string, so
- * a `create_asset` whose payload tripped a bound came back as
- * `{bounded:true, summary:"tool completed; result was not safely serializable"}`
- * — the model never learned the id of the artifact it had just made, and the UI
- * had nothing to render. The bound is there to stop unbounded data reaching the
- * provider; it was never meant to destroy the answer.
- *
- * So keep what is small and identifying — the top-level scalars, which is where
- * `ok`, `id`, `error` and counts live — drop the bulk, and say plainly that the
- * rest was dropped. Everything kept still goes through the same redaction and
- * truncation, and the whole thing is re-checked against the byte bound; if even
- * this does not fit, THEN fall back to the summary. */
+ * Runs only when a result cannot be projected as plain JSON at all (hostile
+ * accessors, circular shapes). Never a size path — results of any size pass
+ * whole (dptw). Keep what is small and identifying — the top-level scalars,
+ * which is where `ok`, `id`, `error` and counts live — and say plainly that
+ * the rest could not be carried. */
 function degradeResult(value, why) {
   const summary = `tool completed; ${why} — identifying fields kept, bulk omitted`;
   try {
@@ -497,18 +417,12 @@ function degradeResult(value, why) {
         typeof child === "number" || typeof child === "boolean";
       if (!scalar) { dropped += 1; continue; }
       if (typeof child === "number" && !Number.isFinite(child)) { dropped += 1; continue; }
-      if (utf8ByteLength(String(key)) > LAZY_TOOL_PROTOCOL_BOUNDS.maxKeyBytes) { dropped += 1; continue; }
-      if (Object.keys(kept).length >= LAZY_TOOL_PROTOCOL_BOUNDS.maxObjectKeys) { dropped += 1; continue; }
       kept[key] = typeof child === "string"
-        ? redactSecretText(truncateUtf8(child.normalize("NFKC"), LAZY_TOOL_PROTOCOL_BOUNDS.maxStringBytes))
+        ? redactSecretText(child.normalize("NFKC"))
         : child;
       if (SECRET_KEY_RE.test(key)) kept[key] = "[REDACTED]";
     }
-    const out = { ...kept, bounded: true, droppedFields: dropped, summary };
-    if (utf8ByteLength(JSON.stringify(out)) > LAZY_TOOL_PROTOCOL_BOUNDS.maxResultBytes) {
-      return Object.freeze({ bounded: true, summary });
-    }
-    return Object.freeze(out);
+    return Object.freeze({ ...kept, bounded: true, droppedFields: dropped, summary });
   } catch {
     return Object.freeze({ bounded: true, summary });
   }
@@ -558,9 +472,7 @@ function inputForRecord(record) {
 
 async function liveSnapshot(readSources) {
   const raw = await readSources();
-  if (
-    !Array.isArray(raw) || raw.length > LAZY_TOOL_PROTOCOL_BOUNDS.maxSources
-  ) {
+  if (!Array.isArray(raw)) {
     throw new Error("lazy-source-bound");
   }
   const records = [];
@@ -725,14 +637,10 @@ export class LazyToolProtocol {
     return isUntrustedToken(token) ? token : this.#fallbackToken;
   }
 
-  /** Record one execution's lifted image parts, oldest evicted first. */
+  /** Record one execution's lifted image parts. */
   #rememberAttachments(selectionRef, attachments) {
     if (!attachments?.length || typeof selectionRef !== "string") return;
     this.#attachments.set(selectionRef, attachments);
-    while (this.#attachments.size > MAX_LIVE_ATTACHMENT_ENTRIES) {
-      const oldest = this.#attachments.keys().next().value;
-      this.#attachments.delete(oldest);
-    }
   }
 
   /** The image parts belonging to one completed execution — the side channel
@@ -927,12 +835,9 @@ export class LazyToolProtocol {
       "provider-server": [],
     };
 
-    const maxPerCategory = 50;
-    const maxDescBytes = 256;
-    const MAX_RESULT_BYTES = 32 * 1024;
-    let currentEstimatedBytes = 256; // envelope baseline
-    let truncated = false;
-
+    // dptw: no per-category cap, no description clipping, no envelope byte
+    // budget — the listing carries every descriptor, complete. `truncated`
+    // stays in the shape (always false) for older consumers.
     for (const desc of descriptors) {
       const srcKind = desc.sourceKind;
       let group = "builtin";
@@ -946,29 +851,16 @@ export class LazyToolProtocol {
         continue;
       }
 
-      if (bySource[group].length >= maxPerCategory) {
-        truncated = true;
-        continue;
-      }
-
-      const itemDesc = truncateUtf8(String(desc.description ?? ""), maxDescBytes);
       const entry = this.#fenceWebMcpListing({
         name: String(desc.name ?? ""),
-        description: itemDesc,
-        capabilities: Array.isArray(desc.capabilities) ? desc.capabilities.slice(0, 8) : [],
+        description: String(desc.description ?? ""),
+        capabilities: Array.isArray(desc.capabilities) ? desc.capabilities : [],
         availability: desc.availability ?? "ready",
         sourceKind: desc.sourceKind ?? "extension-builtin",
-        schemaSummary: truncateUtf8(String(desc.schemaSummary ?? ""), 4096),
-        outputSchemaSummary: truncateUtf8(String(desc.outputSchemaSummary ?? ""), 4096),
+        schemaSummary: String(desc.schemaSummary ?? ""),
+        outputSchemaSummary: String(desc.outputSchemaSummary ?? ""),
       }, context, "description");
 
-      const entryBytes = utf8ByteLength(JSON.stringify(entry));
-      if (currentEstimatedBytes + entryBytes > MAX_RESULT_BYTES) {
-        truncated = true;
-        break;
-      }
-
-      currentEstimatedBytes += entryBytes;
       bySource[group].push(entry);
     }
 
@@ -985,7 +877,7 @@ export class LazyToolProtocol {
     return Object.freeze({
       ok: true,
       counts,
-      truncated,
+      truncated: false,
       tools: bySource,
       summary: `Total tools: ${descriptors.length} (builtin: ${counts.builtin}, browser: ${counts.browser}, management: ${counts.management}, bundled-wasm: ${counts.bundledWasm}, webmcp: ${counts.webmcp}, provider-server: ${counts.providerServer}). Use search_tools to get an executable selectionRef for a tool.`,
     });
@@ -1154,15 +1046,14 @@ export class LazyToolProtocol {
     if (!afterAuthority.ok) return released(afterAuthority);
     if (dispatchError) {
       const toolName = afterResolved.descriptor.name;
-      const detail = truncateUtf8(
-        safeProviderError(
-          typeof dispatchError === "string"
-            ? dispatchError
-            : (typeof ownData(dispatchError, "message") === "string" && ownData(dispatchError, "message"))
-              ? ownData(dispatchError, "message")
-              : "lazy dispatcher failed",
-        ),
-        LAZY_TOOL_PROTOCOL_BOUNDS.maxErrorBytes,
+      // Complete (secret-safe) failure text — a provider's own limit error
+      // must reach the model verbatim, not clipped to 1024 bytes (dptw).
+      const detail = safeProviderError(
+        typeof dispatchError === "string"
+          ? dispatchError
+          : (typeof ownData(dispatchError, "message") === "string" && ownData(dispatchError, "message"))
+            ? ownData(dispatchError, "message")
+            : "lazy dispatcher failed",
       );
       // The failed call's use goes back to the ref: the SAME selectionRef is
       // valid for the next item, and the sentence says so (no bare token).
@@ -1171,10 +1062,7 @@ export class LazyToolProtocol {
         selectedTool: toolName,
         error: detail,
         selectionRef,
-        message: truncateUtf8(
-          `${toolName} failed: ${detail}. The same selectionRef is still valid — fix the arguments or move on to the next item and call execute_tool again; do not search again.`,
-          LAZY_TOOL_PROTOCOL_BOUNDS.maxErrorBytes,
-        ),
+        message: `${toolName} failed: ${detail}. The same selectionRef is still valid — fix the arguments or move on to the next item and call execute_tool again; do not search again.`,
       }));
     }
     // A tool that reports its own failure ({error} / ok:false) ran but did no
@@ -1509,8 +1397,8 @@ export function createLazyProviderToolset({
     search_tools: tool({
       description: LAZY_PROTOCOL_TOOL_WIRE[0].description,
       inputSchema: z.object({
-        query: z.string().max(512),
-        limit: z.number().int().min(1).max(12).optional(),
+        query: z.string(),
+        limit: z.number().int().min(1).optional(),
       }).strict(),
       outputSchema: jsonSchema(LAZY_PROTOCOL_TOOL_WIRE[0].outputSchema),
       execute: async (request) => {
@@ -1625,10 +1513,7 @@ export function executableWebMcpToolRecords(tools, context, dispatch) {
       validator = async (args) => {
         const parsed = compiled.zodSchema.safeParse(args);
         if (parsed.success) return { ok: true, data: parsed.data };
-        const detail = truncateUtf8(
-          redactSecretText(validationIssueDetail(args, parsed.error?.issues)),
-          600,
-        );
+        const detail = redactSecretText(validationIssueDetail(args, parsed.error?.issues));
         deny("parse-rejected", detail);
         return { ok: false, reason: "parse-rejected", detail };
       };

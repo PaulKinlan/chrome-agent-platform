@@ -190,12 +190,9 @@ export function isAbortShape(value) {
   return false;
 }
 
-// One skill_read response carries at most this many bytes of file text — the
-// lazy protocol's per-string projection bound (TOOL_ARGUMENT_LIMITS.
-// maxStringUtf8Bytes, 16KiB) hard-caps what the model can receive in one
-// result, so requesting more would be silently truncated. The tool returns
-// EXACTLY what the model can read, with pagination (`truncated`/`nextOffset`)
-// for larger bodies.
+// The skill_read DEFAULT page size. Pagination (offset/limit +
+// `truncated`/`nextOffset`) is a feature, not a ceiling (dptw): a caller may
+// request any limit and receives exactly that window, whole.
 const SKILL_READ_LIMIT = 16 * 1024;
 
 /**
@@ -221,10 +218,10 @@ export function skillReadToolset(skillStore = null) {
       description:
         "Read an imported skill's SKILL.md body or one of its files. A large skill's body is NOT composed into the system prompt; call this to load the body or a supporting file (scripts/, references/) on demand. Args: skill (the /skill: id), path (default SKILL.md), offset+limit for pagination. Returns the text chunk with totalBytes and nextOffset when more remains.",
       inputSchema: z.object({
-        skill: z.string().min(1).max(64),
-        path: z.string().min(1).max(512).optional(),
+        skill: z.string().min(1),
+        path: z.string().min(1).optional(),
         offset: z.number().int().min(0).optional(),
-        limit: z.number().int().min(1).max(SKILL_READ_LIMIT).optional(),
+        limit: z.number().int().min(1).optional(),
       }),
       execute: async ({ skill, path = "SKILL.md", offset = 0, limit = SKILL_READ_LIMIT }) => {
         const rawKey = String(path ?? "SKILL.md");
@@ -325,7 +322,7 @@ export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, 
     memory_set: tool({
       description:
         "Write a value to the agent's memory. Values are bounded (256 KiB) and reserved registry keys are protected.",
-      inputSchema: z.object({ key: z.string().min(1).max(128), value: z.any() }),
+      inputSchema: z.object({ key: z.string().min(1), value: z.any() }),
       execute: async ({ key, value }) => {
         // memory_set is a durable side-effecting boundary — fence it BEFORE the
         // write (the round-16 fence coverage finding) AND AFTER the awaited OPFS
@@ -486,7 +483,7 @@ export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, 
       description:
         "Search this agent's own memory (key-value store) AND run history (journal) for a substring. Returns matching keys + a bounded excerpt of each match, never the full store.",
       inputSchema: z.object({
-        query: z.string().min(1).max(200).describe("the substring to search for"),
+        query: z.string().min(1).describe("the substring to search for"),
       }),
       execute: async ({ query }) => {
         const err = await enrolledGuard();

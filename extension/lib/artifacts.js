@@ -41,7 +41,6 @@
 // existing bodies (valid-body identity — never resurrects stale metadata).
 
 import { masterMemory, siteMemory, canonicalOrigin } from "./memory.js";
-import { TOOL_ARGUMENT_LIMITS } from "./tool-argument-contract.js";
 import { newId, sha256Hex } from "./pure.js";
 // The ONE diff core (jsdiff via ./shared/diff-core.js → dist bundle). The build
 // rewrites this dist import to the source wrapper for every bundle (build.mjs
@@ -417,7 +416,6 @@ async function repairPendingLocked(store, origin) {
 }
 
 export const ASSET_BOUNDS = {
-  maxContentBytes: TOOL_ARGUMENT_LIMITS.maxAssetContentUtf8Bytes,
   maxNameLength: 200,
   maxAssetsPerOrigin: 200,
   // The index byte bound used to be PER ORIGIN. The library is now one shared
@@ -712,7 +710,6 @@ function boundAssetMeta({ type, name, content }) {
   if (nm.length > ASSET_BOUNDS.maxNameLength) return { error: `asset name exceeds ${ASSET_BOUNDS.maxNameLength} chars` };
   if (typeof content !== "string") return { error: "asset content must be a string" };
   const size = utf8Bytes(content);
-  if (size > ASSET_BOUNDS.maxContentBytes) return { error: `asset content exceeds ${ASSET_BOUNDS.maxContentBytes} bytes` };
   return { ok: true, type: at, name: nm, size };
 }
 

@@ -14,7 +14,6 @@ import { tool } from "ai";
 import { z } from "zod";
 import { ASSET_BOUNDS, ASSET_TYPES } from "./artifacts.js";
 import { tagUntrusted } from "./untrusted-fence.js";
-import { SCRIPT_BOUNDS } from "./scripts.js";
 
 /** The fixed management tool names (for the orchestrator introspection route). */
 export const MANAGEMENT_TOOL_NAMES = [
@@ -388,8 +387,8 @@ export function managementToolset({ callRoute }) {
       description:
         "Create a reusable JavaScript script (an async function body) that runs sandboxed + repeatedly without re-invoking the model. The script gets a controlled api: await fetch(url, opts) (reads a PUBLIC http/https page, returns {status, text}) + log(...). Return a value as the result. No DOM/extension/network access of its own. REQUIRES OWNER APPROVAL: the owner sees the full source and every host it fetches before it is saved; use plain string-literal URLs so the hosts are visible — a computed URL is flagged and only the listed hosts are ever reachable; localhost and private addresses are always refused.",
       inputSchema: z.object({
-        name: z.string().max(SCRIPT_BOUNDS.maxNameLength).describe("a short, clear name for the script"),
-        source: z.string().describe(`the complete JavaScript function body (max ${SCRIPT_BOUNDS.maxSourceBytes} UTF-8 bytes)`),
+        name: z.string().min(1).describe("a short, clear name for the script"),
+        source: z.string().describe("the complete JavaScript function body (no size limit)"),
         origin: z.string().default("master").describe("'master' (hub-level script)"),
       }),
       execute: ({ name, source, origin }) => call("script.create", { origin, name, source }),
@@ -398,8 +397,8 @@ export function managementToolset({ callRoute }) {
       description: "Update a script's name/source.",
       inputSchema: z.object({
         id: z.string(),
-        name: z.string().max(SCRIPT_BOUNDS.maxNameLength).optional(),
-        source: z.string().optional().describe(`complete replacement source (max ${SCRIPT_BOUNDS.maxSourceBytes} UTF-8 bytes)`),
+        name: z.string().min(1).optional(),
+        source: z.string().optional().describe("complete replacement source (no size limit)"),
         origin: z.string().default("master"),
       }),
       execute: ({ id, name, source, origin }) => call("script.update", { origin, id, name, source }),

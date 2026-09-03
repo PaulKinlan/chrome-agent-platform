@@ -6,7 +6,6 @@
 
 import { TOOL_SEARCH_BOUNDS } from "./tool-search.js";
 import { selectedCapabilitySummary } from "./chrome-tool-capabilities.js";
-import { TOOL_CATALOG_BOUNDS } from "./tool-catalog.js";
 import { toolArgumentContract, toolOutputSchema } from "./tool-argument-contract.js";
 
 function ownData(value, key) {
@@ -70,7 +69,7 @@ export const LAZY_PROTOCOL_TOOL_WIRE = Object.freeze([
         }),
         arguments: Object.freeze({
           type: "object",
-          description: "Arguments must match the selected tool's schemaSummary exactly. Its x-cap-argument-limits names the UTF-8 byte and shape bounds; designated largeContent fields are the only exception to ordinary limits.",
+          description: "Arguments must match the selected tool's schemaSummary exactly. There are no size limits — plain JSON data of any size is accepted; a provider-side limit fails with the provider's own error.",
           "x-cap-default-argument-limits": toolArgumentContract(),
         }),
       }),
@@ -132,10 +131,7 @@ export function buildLazyProviderCapture(searchResult, options = {}) {
     ? Number(rawNonSelected)
     : 0;
   const nonSelectedCount = Number.isFinite(requestedNonSelected)
-    ? Math.max(0, Math.min(
-      Math.trunc(requestedNonSelected),
-      TOOL_CATALOG_BOUNDS.maxDescriptors,
-    ))
+    ? Math.max(0, Math.trunc(requestedNonSelected))
     : 0;
   return Object.freeze({
     ok: searchResult?.ok === true,
