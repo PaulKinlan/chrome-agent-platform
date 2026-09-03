@@ -25,6 +25,7 @@ import { DEVELOPER_ONLY_TOOL_NAMES, requirementFor } from "./chrome-tool-capabil
 import { permissionPlainName } from "./permission-language.js";
 import { capLog } from "./cap-log.js";
 import { perfSpan } from "./cap-perf.js";
+import { cleanupGuidanceFor } from "./lifecycle-cleanup.js";
 
 const grantLog = capLog("browser:grant");
 const toolDispatchLog = capLog("tool");
@@ -2350,9 +2351,12 @@ export function browserToolset(readOnly = false, {
     }),
     open_tab: tool({
       description:
-        "Open a URL in a new browser tab. Requires browser-control permission (scoped + expiring).",
-      inputSchema: z.object({ url: z.string().url() }),
-      execute: async ({ url }) => {
+        "Open a URL in a new browser tab. Requires browser-control permission (scoped + expiring). " +
+        "Pass keep:true when this tab IS the task's result and you intend it to stay open for the user " +
+        "(a default-off run-end auto-close then leaves it alone). " +
+        cleanupGuidanceFor("open_tab"),
+      inputSchema: z.object({ url: z.string().url(), keep: z.boolean().optional() }),
+      execute: async ({ url, keep }) => {
         // Scheme guard FIRST: a chrome:/file:/about:/data: destination can
         // never be authorized, so it is refused before any permission check.
         const dest = webDestination(url);
@@ -2394,7 +2398,7 @@ export function browserToolset(readOnly = false, {
           // the Act class (no destructive card); a tab the run did NOT open is
           // Destructive (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
           if (typeof tab?.id === "number") openedTabIds.add(tab.id);
-          return { ok: true, tabId: tab.id, url };
+          return { ok: true, tabId: tab.id, url, ...(keep === true ? { keep: true } : {}) };
         });
       },
     }),
@@ -2713,7 +2717,8 @@ export function browserToolset(readOnly = false, {
     }),
     create_window: tool({
       description:
-        "Open a new browser window, optionally at a URL. Requires browser-control permission (scoped + expiring); a URL destination must be inside the granted origin(s).",
+        "Open a new browser window, optionally at a URL. Requires browser-control permission (scoped + expiring); a URL destination must be inside the granted origin(s). " +
+        cleanupGuidanceFor("create_window"),
       inputSchema: z.object({
         url: z.string().url().max(2048).optional(),
         focused: z.boolean().optional(),
@@ -3886,12 +3891,19 @@ export function browserToolset(readOnly = false, {
     }),
     duplicate_tab: tool({
       description:
-        "Duplicate a tab (the copy opens next to it). Requires browser-control permission (scoped + expiring) for the tab's origin.",
-      inputSchema: z.object({ tabId: z.number().int() }),
-      execute: async ({ tabId }) =>
+        "Duplicate a tab (the copy opens next to it). Requires browser-control permission (scoped + expiring) for the tab's origin. " +
+        "Pass keep:true when the copy IS the task's result and you intend it to stay open for the user " +
+        "(a default-off run-end auto-close then leaves it alone). " +
+        cleanupGuidanceFor("duplicate_tab"),
+      inputSchema: z.object({ tabId: z.number().int(), keep: z.boolean().optional() }),
+      execute: async ({ tabId, keep }) =>
         t13MutateTabWithGrant(tabId, "duplicated", async () => {
           const copy = await chrome.tabs.duplicate(tabId);
-          return { ok: true, tabId, newTabId: copy?.id ?? null };
+          // The copy is a NEW tab this run created — closing it is Act (no
+          // destructive card), exactly like a tab this run opened via open_tab
+          // (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
+          if (typeof copy?.id === "number") openedTabIds.add(copy.id);
+          return { ok: true, tabId, newTabId: copy?.id ?? null, ...(keep === true ? { keep: true } : {}) };
         }, "duplicate_tab"),
     }),
     set_tab_pinned: tool({
@@ -4599,7 +4611,8 @@ export function browserToolset(readOnly = false, {
     }),
     restore_closed: tool({
       description:
-        "Restore a recently closed tab or window by sessionId (from list_recently_closed). Requires browser-control permission (scoped + expiring) covering every origin being restored; if ANY restored entry has no canonical origin (chrome://, data:, file:, about:, view-source:, or a missing url) — or the set has no origins — a GLOBAL grant is required.",
+        "Restore a recently closed tab or window by sessionId (from list_recently_closed). Requires browser-control permission (scoped + expiring) covering every origin being restored; if ANY restored entry has no canonical origin (chrome://, data:, file:, about:, view-source:, or a missing url) — or the set has no origins — a GLOBAL grant is required. " +
+        cleanupGuidanceFor("restore_closed"),
       inputSchema: z.object({ sessionId: z.string().min(1).max(128) }),
       execute: async ({ sessionId }) =>
         await withGrantLock(async () => {
@@ -4658,7 +4671,26 @@ export function browserToolset(readOnly = false, {
           } catch {
             return { error: "run aborted — session restored then aborted" };
           }
-          return { ok: true, sessionId, restored: Boolean(restored), kind: item.tab ? "tab" : "window" };
+          // The restored Session carries the REAL ids Chrome re-opened: a tab
+          // (restored.tab.id) or a window (restored.window.id + its tabs) — the
+          // run-end summary lists them instead of a count (review finding: the
+          // old Boolean reduction left the tracker with no ids to report).
+          const restoredSession = restored && typeof restored === "object" ? restored : null;
+          const restoredTabId = Number.isInteger(restoredSession?.tab?.id) ? restoredSession.tab.id : null;
+          const restoredWindow = restoredSession?.window && typeof restoredSession.window === "object" ? restoredSession.window : null;
+          const restoredWindowId = Number.isInteger(restoredWindow?.id) ? restoredWindow.id : null;
+          const restoredWindowTabIds = Array.isArray(restoredWindow?.tabs)
+            ? restoredWindow.tabs.map((t) => (t && Number.isInteger(t.id) ? t.id : null)).filter(Number.isInteger)
+            : [];
+          return {
+            ok: true,
+            sessionId,
+            kind: item.tab ? "tab" : "window",
+            restoredTabId,
+            restoredWindowId,
+            restoredWindowTabIds,
+            restored: Boolean(restoredSession),
+          };
         }),
     }),
     list_synced_devices: tool({

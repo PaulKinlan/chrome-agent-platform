@@ -1,10 +1,31 @@
 # Changelog
 
+## [0.3.36] — 2026-09-03
+- Merge remote-tracking branch 'origin/main' into cap-beads-9ve7
+
+## [0.3.35] — 2026-09-03
+- cap-beads-9ve7
+
+## [0.3.34] — 2026-09-03
+- work-p45y-r5
+
+## [0.3.33] — 2026-09-03
+- cap-beads-znx9
+
+## [0.3.32] — 2026-09-03
+- cap-beads-yop8
+
+## [0.3.31] — 2026-09-03
+- cap-beads-afiu
+
+## [0.3.30] — 2026-09-03
+- cap-beads-dptw-tr
+
 ## [0.3.29] — 2026-09-03
-- Saved workflows have no size or count ceilings: a workflow of any name length or body size saves and runs whole, and a profile keeps as many workflows as its storage holds — names are never truncated (two long names sharing a prefix stay distinct), and workflow results are no longer clipped. Shape validation (a name, a known kind, parseable pipeline steps) is unchanged, and every approval gate still applies.
+- cap-beads-60be
 
 ## [0.3.28] — 2026-09-03
-- Merge remote-tracking branch 'origin/main' into cap-beads-9ve7
+- cap-beads-4ffg
 
 ## [0.3.27] — 2026-09-03
 - no self-imposed size caps in tools and storage — argument contracts, catalogs, fs-grants, memory, journals (archive-to-file), profiles, and usage all read and write without artificial bounds
