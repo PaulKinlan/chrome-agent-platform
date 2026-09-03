@@ -1432,7 +1432,7 @@ async function main() {
     await sleep(300);
 
     // Open Artifacts
-    await clickSel(cdp, ntpSession, "#open-artifacts");
+    await evalIn(cdp, ntpSession, `document.getElementById('open-artifacts')?.click(); true`);
     await sleep(900);
     const artifactsLeft1440 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
@@ -1459,7 +1459,7 @@ async function main() {
     if (artShot1440) await writeEvidence("hub-view-artifacts-1440.png", artShot1440);
 
     // Open Directory
-    await clickSel(cdp, ntpSession, "#open-directory");
+    await evalIn(cdp, ntpSession, `document.getElementById('open-directory')?.click(); true`);
     await sleep(900);
     const dirLeft1440 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="directory/directory.html"]');
@@ -1470,7 +1470,7 @@ async function main() {
     if (dirShot1440) await writeEvidence("hub-view-directory-1440.png", dirShot1440);
 
     // Open Settings
-    await clickSel(cdp, ntpSession, "#open-settings");
+    await evalIn(cdp, ntpSession, `document.getElementById('open-settings')?.click(); true`);
     await sleep(900);
     const settingsLeft1440 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="options/options.html"]');
@@ -1495,7 +1495,7 @@ async function main() {
       return el ? Math.round(el.getBoundingClientRect().left) : null;
     })()`);
 
-    await clickSel(cdp, ntpSession, "#open-directory");
+    await evalIn(cdp, ntpSession, `document.getElementById('open-directory')?.click(); true`);
     await sleep(900);
     const dirLeft1024 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="directory/directory.html"]');
@@ -1503,7 +1503,7 @@ async function main() {
       return el ? Math.round(el.getBoundingClientRect().left) : null;
     })()`);
 
-    await clickSel(cdp, ntpSession, "#open-artifacts");
+    await evalIn(cdp, ntpSession, `document.getElementById('open-artifacts')?.click(); true`);
     await sleep(900);
     const artifactsLeft1024 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
