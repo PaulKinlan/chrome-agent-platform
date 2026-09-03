@@ -929,7 +929,17 @@ export class LazyToolProtocol {
 
     const maxPerCategory = 50;
     const maxDescBytes = 256;
-    const MAX_RESULT_BYTES = 32 * 1024;
+    // chrome-agent-platform-np64: the listing budget is the protocol's own
+    // tool-result transport bound, not a smaller ad-hoc 32 KiB cut. A category
+    // listing must ENUMERATE the category: list_tools("management") was
+    // silently dropping ~a quarter of the 42-row management suite (and which
+    // rows survived depended on each tool's description hash order — adding
+    // schema guidance text reshuffled stableIds and hid create_asset/
+    // update_asset from the model entirely). The complete management listing
+    // is ~42 KiB of rows, which fits the 64 KiB result transport bound; the
+    // honest `truncated` flag still reports when a genuinely oversized catalog
+    // exceeds it.
+    const MAX_RESULT_BYTES = LAZY_TOOL_PROTOCOL_BOUNDS.maxResultBytes;
     let currentEstimatedBytes = 256; // envelope baseline
     let truncated = false;
 

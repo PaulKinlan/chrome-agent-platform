@@ -345,6 +345,42 @@ export function stripNavigationMeta(html) {
 }
 
 /**
+ * chrome-agent-platform-np64 (2026-09-03): the runtime teaching guard injected
+ * into every generated-document frame. The artifact runs in an origin-opaque
+ * allow-scripts-only frame, so the storage/persistence APIs a normal page
+ * takes for granted THROW raw SecurityErrors there ('The document is sandboxed
+ * and lacks the 'allow-same-origin' flag' — owner report: generated UIs break
+ * at runtime and the agent never learns why). This guard redefines the
+ * known-broken surfaces so the thrown error TEACHES what to do instead — the
+ * exact moment of failure is the teaching moment. Surfaces wrapped (verified
+ * against a real allow-scripts frame): window.localStorage / sessionStorage,
+ * document.cookie writes, indexedDB, caches, OPFS (navigator.storage.
+ * getDirectory), and fetch (the frame CSP connect-src 'none' makes every
+ * fetch fail with an opaque 'Failed to fetch'). Permission-gated APIs are not
+ * enumerable and stay guidance-only (the constraint text + tool schemas);
+ * XHR/EventSource/WebSocket fail under the same CSP and are left to the
+ * native TypeError for now (ponytail: add teaching wrappers if artifacts keep
+ * using them).
+ */
+export function sandboxApiGuardScript() {
+  return `<script data-cap-sandboxguard>${[
+    "(function(){",
+    "var fix='keep state in a variable, or store it with the platform\\'s asset/memory tools';",
+    "function teach(api,msg){return new Error(api+' is unavailable inside sandboxed artifacts - '+msg);}",
+    "function denyStore(host,prop){try{Object.defineProperty(host,prop,{configurable:true,get:function(){throw teach(prop,fix);}});}catch(e){}}",
+    "function denyApi(host,prop,methods){try{Object.defineProperty(host,prop,{configurable:true,get:function(){var o={};for(var i=0;i<methods.length;i++){(function(m){o[m]=function(){throw teach(prop+'.'+m,'the frame has no origin-keyed storage - '+fix);};})(methods[i]);}return o;}});}catch(e){}}",
+    "denyStore(window,'localStorage');",
+    "denyStore(window,'sessionStorage');",
+    "denyApi(window,'indexedDB',['open','deleteDatabase']);",
+    "denyApi(window,'caches',['open','keys','delete','match','has']);",
+    "try{Object.defineProperty(document,'cookie',{configurable:true,get:function(){return '';},set:function(){throw teach('document.cookie','cookies are blocked - '+fix);}});}catch(e){}",
+    "try{if(navigator.storage&&navigator.storage.getDirectory){navigator.storage.getDirectory=function(){return Promise.reject(teach('navigator.storage.getDirectory (OPFS)','the frame has no origin-keyed storage - '+fix));};}}catch(e){}",
+    "try{window.fetch=function(){return Promise.reject(new Error('fetch is unavailable inside sandboxed artifacts - the frame CSP allows no network egress; ask the agent to fetch the data and embed it in the artifact instead'));};}catch(e){}",
+    "})();",
+  ].join("")}</script>`;
+}
+
+/**
  * Inject the CSP <meta> + the navigation guard as early as possible into an
  * untrusted HTML document — PREPENDED before ANY content (never after <head>,
  * so no remote load or navigation can precede them). Returns the guarded HTML.
@@ -403,7 +439,10 @@ export function preferenceBootstrapScript(nonce) {
 export function injectFrameGuards(html, nonce) {
   // injectCspMeta already PREPENDS the navigation guard + the CSP before any
   // content. Prepend the preference bootstrap too (after the guard/CSP, before
-  // the attacker content) — never after a <head>.
+  // the attacker content) — never after a <head>. The sandbox-constraints
+  // guard rides after the bootstrap and before ANY generated code, so every
+  // script in the artifact frame throws teaching errors on the unavailable
+  // storage/network APIs instead of raw SecurityErrors.
   const guarded = injectCspMeta(html);
   const s = String(guarded ?? "");
   // The nav guard + CSP are at the very start; insert the bootstrap after them
@@ -412,9 +451,11 @@ export function injectFrameGuards(html, nonce) {
   if (s.startsWith(navGuard)) {
     const rest = s.slice(navGuard.length);
     const m = rest.match(/^<meta[^>]*Content-Security-Policy[^>]*>/i);
-    if (m) return navGuard + m[0] + preferenceBootstrapScript(nonce) + rest.slice(m[0].length);
+    if (m) {
+      return navGuard + m[0] + preferenceBootstrapScript(nonce) + sandboxApiGuardScript() + rest.slice(m[0].length);
+    }
   }
-  return preferenceBootstrapScript(nonce) + s;
+  return preferenceBootstrapScript(nonce) + sandboxApiGuardScript() + s;
 }
 
 /**

@@ -16,6 +16,53 @@ window.addEventListener("message", (event) => {
   runScript(String(d.source ?? ""), String(d.runId ?? ""), String(d.nonce ?? ""));
 });
 
+// chrome-agent-platform-np64 (2026-09-03): the manifest-sandbox page is an
+// opaque origin (no allow-same-origin), so a script source that reaches for
+// localStorage/sessionStorage/indexedDB/cookies/OPFS gets a raw SecurityError
+// and the agent — who often guesses those APIs to cache state between runs —
+// learns nothing. Redefine the known-broken storage surfaces so the thrown
+// error TEACHES: a sandboxed script shares no state between runs, so compute
+// and return the value; durable state lives with the platform (the agent's
+// memory_set / create_asset), never in the script. window.fetch is NOT touched
+// — it IS the script's controlled host-bridged api.
+(function installScriptSandboxTeachGuards() {
+  const fix = "a sandboxed script keeps no state between runs - compute and return the value; store durable data with the platform (memory_set / create_asset) from the agent side";
+  const teach = (api) => new Error(api + " is unavailable inside the script sandbox - " + fix);
+  const denyStore = (prop) => {
+    try {
+      Object.defineProperty(window, prop, { configurable: true, get: () => { throw teach(prop); } });
+    } catch { /* surface already defined by a caller */ }
+  };
+  const denyApi = (prop, methods) => {
+    try {
+      Object.defineProperty(window, prop, {
+        configurable: true,
+        get: () => {
+          const o = {};
+          for (const m of methods) o[m] = () => { throw teach(prop + "." + m); };
+          return o;
+        },
+      });
+    } catch { /* surface already defined by a caller */ }
+  };
+  denyStore("localStorage");
+  denyStore("sessionStorage");
+  denyApi("indexedDB", ["open", "deleteDatabase"]);
+  denyApi("caches", ["open", "keys", "delete", "match", "has"]);
+  try {
+    Object.defineProperty(document, "cookie", {
+      configurable: true,
+      get: () => "",
+      set: () => { throw teach("document.cookie"); },
+    });
+  } catch { /* surface already defined by a caller */ }
+  try {
+    if (navigator.storage && navigator.storage.getDirectory) {
+      navigator.storage.getDirectory = () => Promise.reject(teach("navigator.storage.getDirectory (OPFS)"));
+    }
+  } catch { /* storage manager absent */ }
+})();
+
 function runScript(source, runId, nonce) {
   const post = (type, extra) => {
     try { window.parent.postMessage({ type, runId, nonce, ...extra }, "*"); } catch { /* parent gone */ }

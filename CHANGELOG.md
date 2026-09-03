@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.18] — 2026-09-03
+- Generated UI artifacts learn the sandbox's API limits: the schemas and the system prompt state the constraint up front, the frame and script sandboxes throw teaching errors instead of raw SecurityErrors, and the eval proves a localStorage-using generation gets flagged
+
 ## [0.3.17] — 2026-09-03
 - The hub's left rail no longer stacks 32px gaps between its sections — flex-gap is the only spacing there
 
