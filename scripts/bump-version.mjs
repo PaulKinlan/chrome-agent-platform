@@ -93,6 +93,8 @@ if (existsSync(changelogPath) && finalNote) {
     .replace(/\b\w+ lane\b/gi, "work")
     .replace(/\bjourneys\b/gi, "checks")
     .replace(/\bjourney\b/gi, "check")
+    .replace(/^\s*(Merge remote-tracking branch|Merge branch)\b.*$/i, "")
+    .replace(/^\s*(cap-beads-|cap-|work-)[a-z0-9-]+\s*$/i, "")
     .replace(/\s{2,}/g, " ")
     .trim();
   const cleanNote = sanitizeEntry(finalNote) || "Maintenance and fixes.";
