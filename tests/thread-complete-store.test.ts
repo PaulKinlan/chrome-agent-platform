@@ -181,3 +181,48 @@ Deno.test("complete store: migration — a legacy truncated terminal row back-fi
   const answers = view.messages.filter((m) => m.role === "assistant");
   assertEquals(answers.at(-1).content, BIG_TEXT, "the legacy truncated row is back-filled with the complete journal text");
 });
+
+Deno.test("complete store: migration — a legacy truncated row with NO readable journal becomes an honest loss marker, never a false run-log claim", async () => {
+  // kmpq P1: a legacy (pre-kmpq) truncated row says "…the complete text is in
+  // the run log", and hydration replaces it only when a full payload exists.
+  // If the journal is GONE (no durable run log / no retained payload), that
+  // claim is a lie. The reopened view must rewrite the marker to say the
+  // remainder was lost. (The journal-present twin test above proves the
+  // back-fill path; this test proves the honest fallback when it cannot run.)
+  const store = new FakeStore();
+  const registry = makeRegistry(store, (id, execId, terminal) => commitThreadTerminal(id, execId, terminal));
+  const t = await createThread("migration missing journal");
+  // A PRE-kmpq thread body row: truncated content + legacy marker, no
+  // retainedPayloadRef, and NO durable run behind it (listThreadExecutions
+  // sees the executionId only in the body row; the run log was purged).
+  await seedHugeRun(registry, "exec_missing_journal", { threadId: t.id, result: BIG_TEXT });
+  const legacyThread = await getThread(t.id);
+  const legacyRowIndex = legacyThread.messages.findIndex(
+    (m) => m.role === "assistant" && m.executionId === "exec_missing_journal" && !Number.isInteger(m.step));
+  legacyThread.messages[legacyRowIndex] = {
+    ...legacyThread.messages[legacyRowIndex],
+    content: MIGRATE_LEGACY,
+    retainedPayloadRef: undefined,
+  };
+  const { masterMemory } = await import("../extension/lib/memory.js");
+  await masterMemory().setTrusted(`thread:${t.id}`, legacyThread);
+  // Wipe the durable journal the registry reads from: the run RECORD, its
+  // log, outbox, resume rows and payload chunks all go (the thread-runs
+  // reverse index stays, so the execution is still listed — but listLogs can
+  // no longer produce a terminal payload). The thread body row survives;
+  // only the authority that could back-fill it is gone — exactly the
+  // "legacy truncated row without a readable journal" case.
+  const journalKeys = (await store.keys()).filter((k) =>
+    !k.startsWith("thread-runs:") && k.startsWith("run"));
+  for (const key of journalKeys) await store.delete(key);
+
+  // Reopen: the row must no longer claim the complete text is in the run log.
+  const view = await threadView(registry, t.id);
+  const answers = view.messages.filter((m) => m.role === "assistant");
+  const terminal = answers.find((m) => m.executionId === "exec_missing_journal");
+  assert(terminal, "the legacy terminal row is present in the reopened view");
+  assert(!terminal.content.includes("the complete text is in the run log"),
+    "a row with no readable journal must not keep claiming the full text is in the run log");
+  assert(terminal.content.includes("could not be recovered"),
+    `the marker is rewritten to say the remainder was lost (got: ${terminal.content.slice(-160)})`);
+});

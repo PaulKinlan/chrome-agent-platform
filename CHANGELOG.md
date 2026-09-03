@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.16] — 2026-09-03
+- Agent responses stay complete: retained payloads get their own store family, outbox ids are bounded, and unreadable legacy rows say what was lost
+
 ## [0.3.15] — 2026-09-03
 - Agent responses are stored complete in the run journal — reopened tasks show the full answer, never a memory-store slice
 

@@ -29,6 +29,7 @@ import {
 } from "./run-log-wal.js";
 import {
   durableExecutionDirSegments,
+  durablePayloadDirSegments,
   durableThreadDirSegments,
   purgeStoreDir,
 } from "./memory.js";
@@ -45,6 +46,17 @@ const RESUME_CHUNK_CHARS = 64 * 1024;
 const LOG_READ_CONCURRENCY = 32;
 const MAX_PREVIEW_CHARS = 240;
 const MAX_RESUME_ATTEMPTS = 3;
+// journalEntry.id is copied into the outbox record, which must stay far under
+// the store's per-value bound; a hostile run-task can pass a 256KiB+ logicalId
+// (service-worker run-task → runTask id → settle payload.logicalId). Bound it
+// at construction so an oversized id can never make setTrusted(outbox) fail.
+const MAX_JOURNAL_ENTRY_ID = 200;
+
+/** The legacy-compatibility journal's entry id, bounded so the outbox record
+ *  (which embeds journalEntry) stays small by design for ANY caller input. */
+function boundedJournalId(value) {
+  return bounded(String(value ?? ""), MAX_JOURNAL_ENTRY_ID);
+}
 
 // ── run-log retention (CAP-FB-20260830-RUN-LOG-COMPACTION-01) ────────────
 // Retention is BOUNDED by default and the bound is visible: the newest
@@ -1432,7 +1444,7 @@ export function createDurableRunRegistry({
       terminal: { ok: false, cancelled: true, aborted: true, at: reconciledAt, requestedAt, reconciledAt, summary: "Run cancelled by owner", reason },
       journalEntry: {
         type: "cancelled",
-        id: record.scheduleName ?? record.threadId ?? record.clientCorrelationId ?? record.executionId,
+        id: boundedJournalId(record.scheduleName ?? record.threadId ?? record.clientCorrelationId ?? record.executionId),
         result: "Run cancelled by owner",
         ok: false,
         cancelled: true,
@@ -1723,7 +1735,7 @@ export function createDurableRunRegistry({
       await store.setTrusted(key, {
         kind: "resume-failure", executionId, createdAt: at, journalTarget: record.journalTarget, threadId: record.threadId,
         terminal: { ok: false, at, summary: "Run could not be resumed after three attempts", error: bounded(error, 2 * 1024) },
-        journalEntry: { type: "result", id: record.threadId ?? record.clientCorrelationId ?? executionId, result: `Run could not be resumed: ${bounded(error, 2 * 1024)}`, ok: false },
+        journalEntry: { type: "result", id: boundedJournalId(record.threadId ?? record.clientCorrelationId ?? executionId), result: `Run could not be resumed: ${bounded(error, 2 * 1024)}`, ok: false },
         threadTerminal: record.threadId ? { role: "error", content: "Run could not be resumed after three attempts", status: "error", category: "resume-failed", reason: bounded(error, 2 * 1024), action: "Inspect retained logs and start a new run." } : null,
       });
     }
@@ -1852,7 +1864,7 @@ export function createDurableRunRegistry({
           },
           journalEntry: {
             type: "result",
-            id: payload?.logicalId ?? record.scheduleName ?? record.threadId ?? record.clientCorrelationId ?? executionId,
+            id: boundedJournalId(payload?.logicalId ?? record.scheduleName ?? record.threadId ?? record.clientCorrelationId ?? executionId),
             // The LEGACY compatibility journal keeps a small bounded preview
             // (the full bytes live in the retainedPayloadRef —
             // CAP-FB-20260830-RUN-LOG-COMPACTION-01).
@@ -2178,6 +2190,11 @@ export function createDurableRunRegistry({
         await removeFromIndexExact(executionId, null);
         const dir = await purgeStoreDir(durableExecutionDirSegments(executionId));
         if (dir?.ok === false) throw new Error(`execution dir purge failed: ${executionId}`);
+        // kmpq P0: retained payload chunks live in their own store family
+        // (durable-runs/payloads/<execId>) — purge them with the execution or
+        // they outlive their run.
+        const payloadDir = await purgeStoreDir(durablePayloadDirSegments(executionId));
+        if (payloadDir?.ok === false) throw new Error(`payload dir purge failed: ${executionId}`);
       }
       let threadsRemoved = 0;
       for (const threadId of threadIds) {
@@ -2256,7 +2273,7 @@ export async function sweepOrphanAgentData({ listAgents, listTasks, registry = n
     throw new Error("sweepOrphanAgentData requires listAgents + listTasks");
   }
   const reg = registry ?? durableRuns;
-  const swept = { agentDirs: 0, backgroundDirs: 0, executionDirs: 0, threadDirs: 0 };
+  const swept = { agentDirs: 0, backgroundDirs: 0, executionDirs: 0, payloadDirs: 0, threadDirs: 0 };
   const failures = [];
   // FAIL-CLOSED authority resolution: a read failure or a malformed snapshot
   // must NEVER be read as "nothing is live" — that would turn a transient
@@ -2353,6 +2370,16 @@ export async function sweepOrphanAgentData({ listAgents, listTasks, registry = n
       const r = await purgeStoreDir(["memory", "durable-runs", "executions", dirName]);
       if (r.ok) swept.executionDirs += 1;
       else failures.push(`executions/${dirName}: ${r.error}`);
+    }
+    // kmpq P0: retained-payload dirs (durable-runs/payloads/<execId>) are
+    // orphaned together with their execution — same registry-liveness test.
+    for (const dirName of await listDirsUnder(["memory", "durable-runs", "payloads"])) {
+      let executionId;
+      try { executionId = decodeURIComponent(dirName); } catch { continue; }
+      if (liveExecutions.has(executionId)) continue;
+      const r = await purgeStoreDir(["memory", "durable-runs", "payloads", dirName]);
+      if (r.ok) swept.payloadDirs += 1;
+      else failures.push(`payloads/${dirName}: ${r.error}`);
     }
   }
   // 4. thread dirs whose reverse-index is DEFINITELY absent/empty. A read

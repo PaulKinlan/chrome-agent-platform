@@ -48,6 +48,26 @@ export const MAX_VIEW_EXECUTIONS = 50;
 const VIEW_READ_CONCURRENCY = 16;
 const MAX_VIEW_LOG_ROWS = 250;
 
+// kmpq P1 — legacy truncated rows whose journal can no longer be read must not
+// stay dishonest. A pre-kmpq thread row's truncation marker claimed "the
+// complete text is in the run log"; hydration replaces that row only when a
+// full payload actually exists. When NO payload is available (the run log is
+// gone, purged, or unreadable) the old claim is a lie, so the view rewrites the
+// marker to say the remainder was lost — never "in the run log" when it
+// demonstrably is not.
+export function rewriteUnavailablePayloadMarker(content) {
+  const s = String(content ?? "");
+  // Both the legacy pre-kmpq truncation marker ("the complete text is in the
+  // run log") and the kmpq digest marker ("the complete response is in the run
+  // log and opens in full") assert the full text is recoverable from the log.
+  const claimMarker = /\n\n…\([^)]*(?:the complete text|the complete response) is in the run log[^)]*\)/u;
+  if (!claimMarker.test(s)) return s;
+  const idx = s.search(claimMarker);
+  if (idx <= 0) return s;
+  const head = s.slice(0, idx);
+  return `${head}\n\n…(response truncated — the complete response could not be recovered from the run log)`;
+}
+
 /** The in-line notice for runs OUTSIDE the view bound — what is not shown is
  *  stated, never silently dropped. `turnsKept` says whether the surface still
  *  carries the older runs' turns (a task thread persists them in its body). */
@@ -229,6 +249,14 @@ export async function buildThreadRunView(thread, deps) {
     const full = terminalRow?.payload?.result ?? null;
     if (typeof full === "string" && full.length > 0) payloadByExec.set(e.executionId, full);
   }
+  // Executions READ this pass whose log could not supply the terminal payload
+  // (logFailed, or the log rows carry no retained payload). Only those may
+  // have their legacy/digest marker rewritten — an execution OUTSIDE the read
+  // window still has its payload in the log; claiming loss there would lie the
+  // other way.
+  const readWithoutPayload = new Set(
+    withLogs.filter((e) => !payloadByExec.has(e.executionId)).map((e) => e.executionId),
+  );
   const hydrateTerminals = (list) => {
     const out = [];
     for (const m of list) {
@@ -245,6 +273,19 @@ export async function buildThreadRunView(thread, deps) {
         if (typeof full === "string" && full.length > m.content.length) {
           out.push({ ...m, content: full });
           continue;
+        }
+        // kmpq P1: this execution WAS read and no payload is available (the
+        // run log is gone or unreadable). A legacy/digest marker that still
+        // claims the complete text is in the run log is a lie — say the
+        // remainder was lost instead of promising content that cannot be
+        // recovered. Rows whose content already admits the loss (the kmpq
+        // boundText "remainder was not retained" marker) are untouched.
+        if (readWithoutPayload.has(m.executionId)) {
+          const honest = rewriteUnavailablePayloadMarker(m.content);
+          if (honest !== m.content) {
+            out.push({ ...m, content: honest });
+            continue;
+          }
         }
       }
       out.push(m);
