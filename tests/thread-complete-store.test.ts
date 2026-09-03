@@ -7,8 +7,7 @@
 // stays under the store bound (digest + ref, never a giant slice), the outbox
 // record never approaches 256KiB, reload/cold-start hydrates complete, and a
 // legacy truncated row back-fills from the journal. (Realistic heterogeneous
-// content: homogeneous runs trip the redactor's URL-userinfo regex
-// catastrophically — a pre-existing quirk unrelated to the store contract.)
+// content by habit; the homogeneous-run redactor quadratic was fixed in vj4s.)
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { createMemoryRunLogHandles } from "../extension/lib/run-log-wal-memory.js";
 

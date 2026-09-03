@@ -1,6 +1,6 @@
 {
   "name": "chrome-agent-platform",
-  "version": "0.3.39",
+  "version": "0.3.40",
   "private": true,
   "type": "module",
   "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
@@ -13,7 +13,7 @@
     "check:gallery": "node scripts/sync-gallery.mjs --check",
     "check:vocabulary": "node scripts/check-vocabulary.mjs",
     "watch": "node build.mjs --watch",
-    "test": "deno test -A tests/",
+    "test": "node scripts/run-tests.mjs",
     "test:changed": "node scripts/select-tests.mjs",
     "test:fast": "node scripts/select-tests.mjs",
     "test:file": "deno test -A",

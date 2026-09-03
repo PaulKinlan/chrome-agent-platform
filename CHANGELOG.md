@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.40] — 2026-09-03
+- The unit test suite finishes in about a quarter of the time: test files run in parallel, and very long text no longer stalls secret redaction
+
 ## [0.3.39] — 2026-09-03
 - The targeted npm run test:changed, test:fast and test:file shortcuts work again, and provider host-access checks no longer leave an 8-second timer running after a fast grant
 
